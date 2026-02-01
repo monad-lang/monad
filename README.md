@@ -1,0 +1,19 @@
+# Monad language
+
+A purely functional systems programming language compatible with Rust made just for fun.
+It is inspired by the languages Rust, Haskell, Idris, Lean and Elm.
+
+## Feature goals
+
+- Dependent types
+- Linear types (borrowing)
+- Provably correct programs and invariants
+- Not a proof assistant
+- Managed side effects using monads
+- Egonomic, expressive and efficient system programming
+- Hygenic macros
+- Practical programming
+- Quantum lambda calculus support
+- Minimal features
+  - No clutter and unecessary features. Keep it simple.
+

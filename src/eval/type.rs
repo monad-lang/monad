@@ -1,0 +1,1178 @@
+use std::fmt::Display;
+
+use crate::{
+  Map, Set, empty_set, set_of,
+  term::{
+    Ann, ClassDefRef, Decl, Def, Identifier, Inductive, InductiveVariant, Instance, InstanceKey,
+    Named, SourceContext,
+    Term::{Forall, Hole, Pi},
+    TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, def, forall, lam_par,
+    module::{LoadedModules, names_of_decls},
+    mpvar, param, pi, pi_typs, type_u, type0, typed_term, var,
+  },
+  vec_fmt,
+};
+
+use super::*;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeError {
+  MismatchingBranches(Term, Term),
+  ConstructorMismatch {
+    params: Vec<Param>,
+    args: Vec<Identifier>,
+  },
+  InductiveMismatch {
+    name: ModulePath,
+    params: Vec<Param>,
+    args: Vec<Term>,
+  },
+  ConstructorUnknown(Identifier),
+  Scope(ScopeError),
+  ExpectedInductive(Term),
+  ExpectedPi(Term),
+  ExpectedType(Term),
+  Context {
+    name: Option<ModulePath>,
+    loc: SourceRange,
+    err: Box<TypeError>,
+  },
+  InstanceDecl(String),
+  Instance(InstanceError),
+  MissingField(Identifier),
+  Generic(String),
+  ArgumentMismatch {
+    expected: Term,
+    actual: Term,
+  },
+  TypeMismatch {
+    expected: Term,
+    actual: Term,
+  },
+  FreeVarMismatch {
+    name: NameRef,
+    expected: Term,
+    actual: Term,
+    locals: Map<Identifier, Term>,
+  },
+  Many(Vec<TypeError>),
+}
+
+impl From<ScopeError> for TypeError {
+  fn from(value: ScopeError) -> Self {
+    Self::Scope(value)
+  }
+}
+
+impl Display for TypeError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      TypeError::MismatchingBranches(t1, t2) => write!(f, "Mismatching branches {t1} != {t2}"),
+      TypeError::Scope(scope_error) => write!(f, "{scope_error}"),
+      TypeError::ExpectedPi(s) => write!(f, "Expected function type found: {}", s),
+      TypeError::Context { loc, err, name } => {
+        write!(f, "{} at {}:{}", err, loc.start.line, loc.start.line_offset)?;
+        if let Some(name) = name {
+          write!(f, " in {name}")?;
+        }
+        Ok(())
+      }
+      TypeError::InstanceDecl(i) => write!(f, "{}", i),
+      TypeError::Generic(s) => write!(f, "{}", s),
+      TypeError::Many(type_errors) => {
+        for (i, t) in type_errors.iter().enumerate() {
+          write!(f, "{}. {}\n", i + 1, t)?;
+        }
+        Ok(())
+      }
+      TypeError::ConstructorMismatch { params, args } => {
+        write!(
+          f,
+          "Constructor mismatch {} != {}",
+          vec_fmt(params),
+          vec_fmt(args)
+        )
+      }
+      TypeError::ExpectedType(e) => write!(f, "Expected Type found {e}"),
+      TypeError::FreeVarMismatch {
+        name,
+        expected,
+        actual,
+        locals,
+      } => write!(
+        f,
+        "Variable mismatch, expected {name} to be {expected} found {actual} with local vars [{}]",
+        locals
+          .into_iter()
+          .map(|(name, typ)| format!("{name} : {typ}"))
+          .collect::<Vec<_>>()
+          .join(", ")
+      ),
+      TypeError::TypeMismatch { expected, actual } => {
+        write!(f, "Type mismatch, expected {expected} found {actual}")
+      }
+      TypeError::MissingField(identifier) => write!(f, "Missing field {identifier}"),
+      TypeError::ArgumentMismatch { expected, actual } => {
+        write!(f, "Argument mismatch, expected {expected} found {actual}")
+      }
+      TypeError::Instance(instance_error) => write!(f, "instance {instance_error}"),
+      TypeError::InductiveMismatch { name, params, args } => write!(
+        f,
+        "Inductive {name} params mismatch {} != {}",
+        vec_fmt(params),
+        vec_fmt(args)
+      ),
+      TypeError::ConstructorUnknown(identifier) => write!(f, "Unknown constructor {identifier}"),
+      TypeError::ExpectedInductive(term) => write!(f, "Expected inductive found {term}"),
+    }
+  }
+}
+
+fn generic_terr(s: String) -> TypeError {
+  TypeError::Generic(s)
+}
+
+fn t_context(err: TypeError, name: Option<ModulePath>, loc: SourceRange) -> TypeError {
+  TypeError::Context {
+    loc,
+    err: Box::new(err),
+    name,
+  }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InstanceError {
+  MissingTypeArgs(Vec<Identifier>),
+  MissingImplementation(Identifier),
+  Generic(String),
+}
+
+impl Display for InstanceError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      InstanceError::MissingTypeArgs(identifiers) => {
+        write!(f, "missing type args {}", vec_fmt(identifiers))
+      }
+      InstanceError::MissingImplementation(identifier) => {
+        write!(f, "missing implementation of {identifier}")
+      }
+      InstanceError::Generic(s) => write!(f, "{s}"),
+    }
+  }
+}
+
+impl From<InstanceError> for TypeError {
+  fn from(value: InstanceError) -> Self {
+    TypeError::Instance(value)
+  }
+}
+
+pub fn derive_instance_key(class_def: &ClassDefRef, typ: &Term) -> Result<InstanceKey, TypeError> {
+  use FreeVar::*;
+  use InstanceError::*;
+  let free_vars: FreeVars = class_def
+    .class
+    .params
+    .iter()
+    .map(|p| (&p.name, Unknown { typ: &*p.typ }))
+    .collect();
+  let param_names: Set<Identifier> = free_vars.names();
+  let type_args = match_determine_type_vars(class_def.typ(), typ, free_vars)?;
+  let (args, errs) = join_many_results(
+    param_names
+      .into_iter()
+      .map(|name| {
+        if let Some(Detected { typ: _, term }) = type_args.get_free_var(&name) {
+          Ok(param(name, (*term).clone()))
+        } else {
+          Err(name)
+        }
+      })
+      .collect::<Vec<Result<Param, Identifier>>>(),
+  );
+  if !errs.is_empty() {
+    return Err(MissingTypeArgs(errs))?;
+  }
+
+  let key = InstanceKey::new(
+    class_def.class.name().clone(),
+    class_def.class.constraints.clone(),
+    args,
+  );
+  Ok(key)
+}
+
+pub fn type_check_inductive(inductive: Inductive, _scope: &Scope) -> Result<Inductive, TypeError> {
+  for _cons in inductive.constructors.iter() {
+    //
+  }
+
+  Ok(inductive)
+}
+pub fn type_check_instance<'a>(
+  mut instance: Instance,
+  class: &'a Inductive,
+  scope: &Scope<'a>,
+) -> Result<Instance, TypeError> {
+  use InstanceError::*;
+  if &instance.class_name != class.name() {
+    return Err(Generic("wrong class name".into()))?;
+  }
+
+  for (param, arg) in class.params.iter().zip(instance.args.iter()) {
+    type_check(arg.clone(), *param.typ.clone(), scope)?;
+  }
+
+  let cons = class
+    .constructors
+    .first()
+    .expect("Class needs to have at least one constructor");
+  let class_defs = cons.params.iter();
+  for param in class_defs {
+    if let Some(impl_def) = instance.impls_map.get_mut(&param.name) {
+      let class_def_type = param.typ();
+      let typ = match_resolve_type(class_def_type, &impl_def.typ, scope)?;
+      let (term, typ) = type_check(impl_def.term.clone(), typ, scope)?.to_tuple();
+      impl_def.term = term;
+      impl_def.typ = typ;
+    } else {
+      return Err(MissingImplementation(param.name.clone()))?;
+    }
+  }
+  Ok(instance)
+}
+
+pub fn join_many_results<T, E>(list: Vec<Result<T, E>>) -> (Vec<T>, Vec<E>) {
+  let mut oks = Vec::new();
+  let mut errs = Vec::new();
+  for r in list {
+    match r {
+      Ok(o) => oks.push(o),
+      Err(e) => errs.push(e),
+    }
+  }
+  (oks, errs)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FreeVar<'a> {
+  Unknown { typ: &'a Term },
+  Detected { typ: &'a Term, term: &'a Term },
+}
+
+impl<'a> Display for FreeVar<'a> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      FreeVar::Unknown { typ } => write!(f, "unknown {typ}"),
+      FreeVar::Detected { typ, term } => write!(f, "detected {typ} => {term}"),
+    }
+  }
+}
+
+impl<'a> From<&'a (Term, Option<Term>)> for FreeVar<'a> {
+  fn from((typ, value): &'a (Term, Option<Term>)) -> Self {
+    use FreeVar::*;
+    match value {
+      Some(term) => Detected { typ, term },
+      None => Unknown { typ },
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreeVars<'a> {
+  vars: Map<&'a Identifier, FreeVar<'a>>,
+  keep_vars: Map<&'a Identifier, &'a Term>,
+}
+
+impl<'a> Display for FreeVars<'a> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let vars = self
+      .vars
+      .iter()
+      .map(|(n, f)| format!("{n} => ({f})"))
+      .collect::<Vec<_>>()
+      .join(", ");
+    let keep = self
+      .keep_vars
+      .iter()
+      .map(|(n, v)| format!("{n} => ({v})"))
+      .collect::<Vec<_>>()
+      .join(", ");
+    write!(f, "vars=[{vars}] keep=[{keep}]")
+  }
+}
+
+impl<'a> FromIterator<(&'a Identifier, FreeVar<'a>)> for FreeVars<'a> {
+  fn from_iter<T: IntoIterator<Item = (&'a Identifier, FreeVar<'a>)>>(iter: T) -> Self {
+    let map = iter.into_iter().collect();
+    FreeVars {
+      vars: map,
+      keep_vars: Map::new(),
+    }
+  }
+}
+
+impl<'a> FreeVars<'a> {
+  pub fn new() -> Self {
+    Self {
+      vars: Map::new(),
+      keep_vars: Map::new(),
+    }
+  }
+  pub fn from_locals(scope: &'a Scope<'a>) -> FreeVars<'a> {
+    let keep_vars = scope
+      .local_foralls()
+      .into_iter()
+      .map(|(i, local)| (i, local.typ()))
+      .collect();
+    FreeVars {
+      vars: Map::new(),
+      keep_vars,
+    }
+  }
+  pub fn get_free_var(&self, name: &Identifier) -> Option<&FreeVar<'a>> {
+    self.vars.get(name)
+  }
+
+  fn insert_free_var(&mut self, name: &'a Identifier, var: FreeVar<'a>) {
+    self.vars.insert(name, var);
+  }
+  fn add_var_to_keep(&mut self, name: &'a Identifier, typ: &'a Term) {
+    self.keep_vars.insert(name, typ);
+  }
+
+  fn names(&self) -> Set<Identifier> {
+    self.vars.keys().map(|&k| k.clone()).collect()
+  }
+
+  fn keep_vars(&self) -> &Map<&Identifier, &Term> {
+    &self.keep_vars
+  }
+
+  fn contains_name_ref(&self, nref: &NameRef) -> bool {
+    if nref.is_id() {
+      let id = nref.as_id().unwrap();
+      self.vars.contains_key(id)
+    } else {
+      false
+    }
+  }
+}
+
+/// Match left with right and resolve the type
+pub fn match_resolve_type<'a>(
+  left: &'a Term,
+  right: &'a Term,
+  scope: &Scope<'a>,
+) -> Result<Term, TypeError> {
+  if !right.is_known() {
+    return Ok(left.clone());
+  }
+  let free_vars = FreeVars::from_locals(scope);
+  let free_vars = match_determine_type_vars(left, right, free_vars)
+    .inspect_err(|_| eprintln!("types not matched {left} :> {right}"))?;
+  let typ = apply_free_type_vars(left.clone(), &free_vars);
+  Ok(typ)
+}
+
+pub fn match_determine_type_vars<'a>(
+  left: &'a Term,
+  right: &'a Term,
+  mut free_vars: FreeVars<'a>,
+) -> Result<FreeVars<'a>, TypeError> {
+  let similar = match_resolve_type_inner(left, right, &mut free_vars);
+  if similar {
+    Ok(free_vars)
+  } else {
+    Err(TypeError::TypeMismatch {
+      expected: left.clone(),
+      actual: right.clone(),
+    })
+  }
+}
+
+fn apply_free_type_vars<'a>(typ: Term, free_vars: &FreeVars) -> Term {
+  let typ = substitute_forall(typ, free_vars);
+  let typ = add_forall_to_type(typ, free_vars.keep_vars());
+  typ
+}
+
+/// Is previously encountered type arg
+fn check_free_vars<'a>(
+  name: &'a Identifier,
+  current_type: &'a Term,
+  free_vars: &mut FreeVars<'a>,
+) -> bool {
+  use FreeVar::*;
+  if let Some(free_var) = free_vars.get_free_var(name) {
+    match free_var {
+      Detected { term: detected, .. } => {
+        let b = compare_types(detected, current_type, free_vars);
+        if !b {
+          println!("{detected} != {current_type}");
+        }
+        b
+      }
+      Unknown { typ } => {
+        free_vars.insert_free_var(
+          name,
+          Detected {
+            typ,
+            term: current_type,
+          },
+        );
+        true
+      }
+    }
+  } else {
+    false
+  }
+}
+
+pub fn compare_types(left: &Term, right: &Term, free_vars: &FreeVars) -> bool {
+  match (left, right) {
+    (App { fun: f1, arg: a1 }, App { fun: f2, arg: a2 }) => {
+      let f_res = compare_types(f1, f2, free_vars);
+      let a_res = compare_types(a1, a2, free_vars);
+      f_res && a_res
+    }
+    (
+      Pi {
+        ret: r1, arg: a1, ..
+      },
+      Pi {
+        ret: f2, arg: a2, ..
+      },
+    ) => {
+      let f_res = compare_types(r1, f2, free_vars);
+      let a_res = compare_types(a1, a2, free_vars);
+      f_res && a_res
+    }
+    (Var { name: n1 }, Var { name: n2 }) => {
+      if free_vars.contains_name_ref(n1) || free_vars.contains_name_ref(n2) {
+        return true;
+      }
+      if n1.is_name() {
+        n1.clone().to_path() == n2.clone().to_path()
+      } else {
+        n1 == n2
+      }
+    }
+    _ => left == right,
+  }
+}
+fn match_resolve_type_inner<'a>(
+  left: &'a Term,
+  right: &'a Term,
+  free_vars: &mut FreeVars<'a>,
+) -> bool {
+  use FreeVar::*;
+  match (left, right) {
+    (Forall { name, typ, body }, _) => {
+      free_vars.insert_free_var(name, Unknown { typ });
+      match_resolve_type_inner(&*body, right, free_vars)
+    }
+    (_, Forall { name, typ, body }) => {
+      free_vars.add_var_to_keep(name, typ);
+      let res = match_resolve_type_inner(left, &*body, free_vars);
+      res
+    }
+    (
+      Pi {
+        arg: a_arg,
+        ret: a_ret,
+        arg_name: _, // TODO
+      },
+      Pi {
+        arg: b_arg,
+        ret: b_ret,
+        arg_name: _,
+      },
+    ) => {
+      let arg = match_resolve_type_inner(a_arg, b_arg, free_vars);
+      let ret = match_resolve_type_inner(a_ret, b_ret, free_vars);
+      let b = arg && ret;
+      if !b {
+        println!("{left} != {right} arg={arg} ret={ret} vars={free_vars}");
+      }
+      b
+    }
+    (App { fun: f1, arg: a1 }, App { fun: f2, arg: a2 }) => {
+      let f_res = match_resolve_type_inner(f1, f2, free_vars);
+      let a_res = match_resolve_type_inner(a1, a2, free_vars);
+      let b = f_res && a_res;
+      if !b {
+        println!("app {left} != {right}");
+      }
+      b
+    }
+    (Hole, _) => true,
+    (_, Hole) => true,
+    (Ctx { loc: _, term }, _) => match_resolve_type_inner(term, right, free_vars),
+    (_, Ctx { loc: _, term }) => match_resolve_type_inner(left, term, free_vars),
+    (Var { name: n1 }, Var { name: n2 }) => {
+      if n1.is_name() {
+        if check_free_vars(n1.as_id().unwrap(), right, free_vars) {
+          true
+        } else {
+          n1.clone().to_path() == n2.clone().to_path()
+        }
+      } else {
+        n1 == n2
+      }
+    }
+    (Type { universe: _ }, Var { name: Id(name) }) => name.as_str() == "Type",
+    (Var { name: Id(name) }, Type { universe: _ }) => name.as_str() == "Type",
+    (Var { name: Id(name) }, _) => check_free_vars(name, right, free_vars),
+    _ => compare_types(left, right, free_vars),
+  }
+}
+
+pub fn type_check_free_var<'a>(
+  mut term: Term,
+  expected_type: Term,
+  nref: &NameRef,
+  scope: &Scope,
+) -> Result<TypedTerm, TypeError> {
+  use TypeError::*;
+  let defined = scope.find_var_ref_of(nref, &expected_type)?;
+  if let VarRef::UpdateRef {
+    new_path,
+    term: _,
+    typ: _,
+  } = defined
+  {
+    term = Var {
+      name: new_path.clone().into(),
+    };
+  }
+  let defined_type = defined.typ();
+  if !expected_type.is_known() {
+    let typ = defined_type.clone();
+    Ok(typed_term(term, typ))
+  } else if let Ok(typ) = match_resolve_type(defined_type, &expected_type, scope) {
+    Ok(typed_term(term, typ))
+  } else {
+    Err(FreeVarMismatch {
+      name: nref.clone(),
+      actual: defined_type.clone(),
+      expected: expected_type,
+      locals: scope.local_bindings(),
+    })
+  }
+}
+
+fn extract_first_name(term: &Term) -> Option<(ModulePath, Vec<Term>)> {
+  match term {
+    Var { name } => name.clone().to_path().map(|p| (p, Vec::new())),
+    App { fun, arg } => extract_first_name(fun).map(|(p, mut args)| {
+      args.push(*arg.clone());
+      (p, args)
+    }),
+    _ => None,
+  }
+}
+
+/// Find unknown identifiers in a type
+pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> {
+  match typ {
+    Pi { arg, ret, arg_name } => {
+      let mut a = free_vars(&*arg, known_names);
+      if let Some(name) = arg_name {
+        let mut known_names = known_names.clone();
+        let name = name.clone().to_path();
+        known_names.insert(&name);
+        let r = free_vars(&*ret, &known_names);
+        a.extend(r);
+      } else {
+        let r = free_vars(&*ret, known_names);
+        a.extend(r);
+      }
+      a
+    }
+    Var { name } if name.is_name() && !known_names.contains(&name.to_path().unwrap()) => {
+      set_of(vec![name.as_id().unwrap().clone()].into_iter())
+    }
+    App { fun, arg } => {
+      let mut f = free_vars(&**fun, known_names);
+      let a = free_vars(&**arg, known_names);
+      f.extend(a);
+      f
+    }
+    Forall { name, typ: _, body } => {
+      let mut known_names = known_names.clone();
+      let name = ModulePath::single(name.clone());
+      known_names.insert(&name);
+      free_vars(&body, &known_names)
+    }
+    _ => empty_set(),
+  }
+}
+
+pub fn add_forall_to_scope<'a>(typ: &'a Term, scope: Scope<'a>) -> Scope<'a> {
+  match typ {
+    Forall { name, typ, body } => {
+      add_forall_to_scope(&**body, scope.with_forall(name, typ.as_ref()))
+    }
+    _ => scope,
+  }
+}
+
+pub fn unwrap_forall(typ: Term) -> (Map<Identifier, Term>, Term) {
+  match typ {
+    Forall { name, typ, body } => {
+      let (mut map, term) = unwrap_forall(*body);
+      map.insert(name, *typ);
+      (map, term)
+    }
+    _ => (Map::new(), typ),
+  }
+}
+/// Substitue forall variable in expression given scope
+pub fn substitute_forall(typ_: Term, free_vars: &FreeVars) -> Term {
+  match typ_ {
+    Forall { name, typ, body } => {
+      if let Some(FreeVar::Detected { typ: _, term }) = free_vars.get_free_var(&name) {
+        let res = substitute(*body, &Id(name), term);
+
+        substitute_forall(res, free_vars)
+      } else {
+        let res = substitute_forall(*body, free_vars);
+        forall(param(name, *typ), res)
+      }
+    }
+    _ => typ_,
+  }
+}
+
+pub fn substitute_params(mut term: Term, params: &Vec<Param>, args: &Vec<Term>) -> Term {
+  for (param, arg) in params.iter().zip(args.iter()) {
+    let name = param.name.clone();
+    term = substitute(term, &Id(name), &arg);
+  }
+  term
+}
+pub fn add_params_to_scope<'a>(
+  params: &Vec<Param>,
+  args: &Vec<Term>,
+  scope: Scope<'a>,
+) -> Scope<'a> {
+  for (param, arg) in params.iter().zip(args.iter()) {
+    scope.with_local_var(&param.name, &arg);
+  }
+  scope
+}
+
+pub fn pi_of_forall_types(arg_type: Term, return_type: Term) -> Term {
+  let (return_foralls, return_type) = unwrap_forall(return_type);
+  let (arg_foralls, arg_type) = unwrap_forall(arg_type);
+  let (forall_vars, return_type) = return_foralls.into_iter().fold(
+    (arg_foralls, return_type),
+    |(mut vars, return_type), (name, typ)| {
+      if vars.contains_key(&name) {
+        let new_name = name.rename();
+        let return_type = rename_variable(return_type, new_name.clone(), name);
+        vars.insert(new_name, typ);
+        (vars, return_type)
+      } else {
+        vars.insert(name, typ);
+        (vars, return_type)
+      }
+    },
+  );
+  let fun_type = pi(arg_type, return_type);
+  let forall_vars = forall_vars.iter().collect();
+  let fun_type = add_forall_to_type(fun_type, &forall_vars);
+  fun_type
+}
+
+/// Check and compute the Type of a Term
+/// Resolves type classes
+pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<TypedTerm, TypeError> {
+  use TypeError::*;
+  let scope = add_forall_to_scope(&expected_type, scope.clone());
+  match term {
+    App { fun, arg } => {
+      let arg = *arg;
+      let (mut arg, arg_type_first) = type_check(arg.clone(), Hole, &scope)
+        .map(|tt| tt.to_tuple())
+        .unwrap_or_else(|_| (arg, Hole));
+      let fun_type = pi_of_forall_types(arg_type_first.clone(), expected_type.clone());
+      let (fun, fun_type) = type_check(*fun, fun_type, &scope)?.to_tuple();
+      let (fun_vars, fun_typ_pi) = unwrap_forall(fun_type);
+      if let Pi {
+        arg: arg_type,
+        ret,
+        arg_name: _,
+      } = fun_typ_pi
+      {
+        let fun_forall_vars: Map<&Identifier, &Term> = fun_vars.iter().collect();
+        let mut arg_type = *arg_type.clone();
+        arg_type = add_forall_to_type(arg_type, &fun_forall_vars);
+        if !arg_type_first.is_known() {
+          let (arg_, _arg_type) = type_check(arg, arg_type, &scope)?.to_tuple();
+          arg = arg_;
+        }
+        let term = app(fun, arg);
+        let ret_type = *ret.clone();
+        let ret_type = add_forall_to_type(ret_type, &fun_forall_vars);
+        Ok(typed_term(term, ret_type))
+      } else {
+        Err(ExpectedPi(fun_typ_pi.clone()))
+      }
+    }
+    Let {
+      name,
+      value,
+      body,
+      typ,
+    } => {
+      let let_t = type_check(*value, *typ, &scope)?;
+      let new_scope = scope.with_local_var(&name, let_t.typ());
+      let bt = type_check(*body, expected_type.clone(), &new_scope)?;
+      Ok(bt)
+    }
+    Lit {
+      value: Litteral::Map { ref value },
+    } => {
+      if let Var { name } = &expected_type
+        && let Some(name) = name.to_path()
+      {
+        let ind = scope.find_inductive(&name)?;
+        let stru = ind
+          .constructors
+          .first()
+          .ok_or_else(|| generic_terr(format!("Structs must have at least one constructor")))?;
+        let map = &value.value;
+        // TODO default values
+        if map.len() != stru.params.len() {
+          return Err(generic_terr(format!(
+            "to few args in struct {:?} {:?}",
+            map, stru.params
+          )));
+        }
+        for Param { name, typ } in stru.params.iter() {
+          let term = map.get(&name).ok_or_else(|| MissingField(name.clone()))?;
+          type_check(term.clone(), *typ.clone(), &scope)?;
+        }
+        return Ok(typed_term(term, expected_type.clone()));
+      } else {
+        return Err(generic_terr(format!(
+          "Expected name for struct found {expected_type}"
+        )));
+      }
+    }
+    Lit {
+      value: Litteral::Match {
+        ref value,
+        ref cases,
+      },
+    } => {
+      let con = type_check(*value.clone(), Hole, &scope)?;
+
+      if let Some((ind_name, ind_args)) = extract_first_name(con.typ()) {
+        let ind = scope.find_inductive(&ind_name)?;
+        let ind_params = &ind.params;
+        if ind_params.len() != ind_args.len() {
+          return Err(InductiveMismatch {
+            name: ind_name,
+            params: ind_params.clone(),
+            args: ind_args,
+          });
+        }
+        let mut branch_t = expected_type.clone();
+        for case in cases {
+          if let Some(ind_cons) = ind.find_cons(&case.name) {
+            let mut scope = scope.clone();
+            if ind_cons.params.len() != case.args.len() {
+              return Err(ConstructorMismatch {
+                params: ind_cons.params.clone(),
+                args: case.args.clone(),
+              });
+            }
+            for (name, param) in case.args.iter().zip(ind_cons.params.iter()) {
+              let typ = substitute_params(*param.typ.clone(), ind_params, &ind_args);
+              scope = add_params_to_scope(ind_params, &ind_args, scope);
+              scope = scope.with_type_owned(name, typ);
+            }
+            let t = type_check(*case.value.clone(), branch_t.clone(), &scope)?;
+            if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
+              branch_t = typ;
+            } else {
+              return Err(MismatchingBranches(branch_t, t.typ().clone()));
+            }
+          } else {
+            return Err(ConstructorUnknown(case.name.clone()));
+          }
+        }
+        return Ok(typed_term(term, branch_t.clone()));
+      } else {
+        return Err(ExpectedInductive(con.typ().clone()));
+      }
+    }
+    Lit {
+      value: Litteral::If {
+        ref value,
+        ref then,
+        ref els,
+      },
+    } => {
+      let _b = type_check(*value.clone(), var("Bool"), &scope)?;
+      let t1 = type_check(*then.clone(), expected_type.clone(), &scope)?;
+      let t2 = type_check(*els.clone(), expected_type.clone(), &scope)?;
+      if let Ok(typ) = match_resolve_type(t1.typ(), t2.typ(), &scope) {
+        return Ok(typed_term(term, typ));
+      } else {
+        return Err(TypeError::MismatchingBranches(
+          t1.typ().clone(),
+          t2.typ().clone(),
+        ));
+      }
+    }
+    Lit { ref value } => {
+      let primitive_type = match value {
+        Litteral::Str { value: _ } => var("String"),
+        Litteral::Num { value: _ } => var("I64"),
+        _ => panic!("Lit branch not covered {value}"),
+      };
+      let typ = match_resolve_type(&primitive_type, &expected_type, &scope)?;
+      Ok(typed_term(term, typ))
+    }
+    Var { ref name } => {
+      let name = name.clone();
+      type_check_free_var(term, expected_type.clone(), &name, &scope)
+    }
+    Lam { param, body } => {
+      let (vars, typ) = unwrap_forall(expected_type.clone());
+      let vars = vars.iter().collect();
+      if let Pi {
+        arg,
+        ret,
+        arg_name: _,
+      } = typ
+      {
+        let arg_type = *arg.clone();
+        let arg_type = add_forall_to_type(arg_type, &vars);
+        let param_type = param.typ();
+        let arg_type = match_resolve_type(&arg_type, param_type, &scope).map_err(|_| {
+          TypeError::ArgumentMismatch {
+            expected: *arg.clone(),
+            actual: param.typ().clone(),
+          }
+        })?;
+        let scope = scope.with_param(&param);
+        let return_type = *ret.clone();
+        let return_type = add_forall_to_type(return_type, &vars);
+        let (body, return_type) = type_check(*body.clone(), return_type, &scope)?.to_tuple();
+        let lam_type = pi_of_forall_types(arg_type.clone(), return_type);
+        let term = lam_par(param.with_type(arg_type), body);
+        Ok(typed_term(term, lam_type))
+      } else {
+        Err(TypeError::ExpectedPi(typ.clone()))
+      }
+    }
+    Type { universe } => {
+      if let Type { universe: u2 } = expected_type
+        && u2 > universe
+      {
+        let universe = universe.clone() + 1;
+        Ok(typed_term(term, type_u(universe)))
+      } else {
+        Err(TypeError::ExpectedType(term))
+      }
+    }
+    Ntv { native: _ } => Ok(typed_term(term.clone(), expected_type.clone())),
+    Con(Constructor {
+      ref typ_name,
+      ref args,
+      ref name,
+      num_args: _,
+    }) => {
+      let inductive = scope.find_inductive(&typ_name)?;
+      let cons = inductive
+        .find_cons(name)
+        .ok_or_else(|| ConstructorUnknown(name.clone()))?;
+      let (arg_res, errs) = join_many_results(
+        args
+          .iter()
+          .zip(cons.params.iter())
+          .filter_map(|(o_arg, param)| {
+            if let Some(arg) = o_arg {
+              Some(type_check(arg.clone(), *param.typ.clone(), &scope))
+            } else {
+              None
+            }
+          })
+          .collect(),
+      );
+      if !errs.is_empty() {
+        return Err(Many(errs));
+      }
+      let ind_type = apps(
+        mpvar(inductive.name().clone()),
+        inductive.params().iter().map(|_| Hole).collect(),
+      );
+      let lam_types: Vec<Term> = arg_res.into_iter().map(|tt| tt.to_tuple().1).collect();
+      let cons_type = if !lam_types.is_empty() {
+        pi_typs(lam_types, ind_type)
+      } else {
+        ind_type
+      };
+      let cons_type = match_resolve_type(&cons_type, &expected_type, &scope)?;
+      Ok(typed_term(term.clone(), cons_type))
+    }
+    Ctx { ref loc, term } => {
+      let mut tt = type_check(*term, expected_type.clone(), &scope)
+        .map_err(|err| t_context(err, None, loc.clone()))?;
+
+      *tt.mut_term() = ctx(tt.term().clone(), loc.clone());
+      Ok(tt)
+    }
+    Forall {
+      name: _,
+      typ: _,
+      body: _,
+    } => Ok(typed_term(term, expected_type)),
+    Pi {
+      ref arg,
+      ref ret,
+      arg_name: _,
+    } => {
+      if expected_type.is_type() {
+        let _arg = type_check(*arg.clone(), type0(), &scope)?;
+        let _ret = type_check(*ret.clone(), type0(), &scope)?;
+        Ok(typed_term(term.clone(), type0()))
+      } else {
+        Err(TypeError::ExpectedType(expected_type.clone()))
+      }
+    }
+    Term::Prop => Ok(typed_term(term, type0())),
+    Hole => Ok(typed_term(term, expected_type)),
+    Ann { term, typ: _ } => Ok(typed_term(*term, expected_type)), // TODO
+  }
+}
+
+/// Replace local var identifiers with index
+pub fn substitute_local_var_with_index(term: Term, name: &Identifier) -> Term {
+  substitute_var_with_index_inner(term, name, 1)
+}
+
+fn substitute_var_with_index_inner(term: Term, name: &Identifier, index: usize) -> Term {
+  match &term {
+    Var {
+      name: NameRef::Id(id),
+    } if id == name => bvar(index),
+    Lam { param, body } => match param {
+      Par::P(param) if &param.name == name => term,
+      _ => {
+        let body = substitute_var_with_index_inner(*body.clone(), name, index + 1);
+        Lam {
+          param: param.clone(),
+          body: Box::new(body),
+        }
+      }
+    },
+    // TODO
+    _ => term,
+  }
+}
+
+pub fn type_check_decl(decl: Decl, scope: &Scope) -> Result<Decl, TypeError> {
+  match decl {
+    Decl::Use(ref u) => {
+      scope
+        .global()
+        .get_module(&u.module_path)
+        .ok_or_else(|| TypeError::Scope(ScopeError::PathNotFound(u.module_path.clone())))?;
+      Ok(decl)
+    }
+    Decl::Def(def) => type_check_def(def, scope).map(Decl::Def),
+    Decl::Ins(instance) => {
+      let class = scope.find_inductive(&instance.class_name)?;
+      type_check_instance(instance, class, scope).map(Decl::Ins)
+    }
+    Decl::Infix(_) => Ok(decl), // TODO
+    _ => Ok(decl),
+  }
+}
+
+pub fn elaborate_type(
+  typ: Term,
+  type_constraints: &Vec<TypeConstraint>,
+  known_names: &Set<&ModulePath>,
+) -> Term {
+  let constraint_vars: Set<Identifier> = type_constraints
+    .iter()
+    .flat_map(|cons| cons.vars().iter().map(|v| v.clone()))
+    .collect();
+  let free_vars = free_vars(&typ, known_names);
+  let free_vars: Set<&Identifier> = free_vars.union(&constraint_vars).collect();
+  let default_type = type0();
+  let free_vars_map: Map<&Identifier, &Term> =
+    free_vars.into_iter().map(|i| (i, &default_type)).collect();
+
+  let typ = add_forall_to_type(typ, &free_vars_map);
+  typ
+}
+pub fn elaborate_def(mut def: Def, known_names: &Set<&ModulePath>) -> Def {
+  let typ = def.typ.clone();
+  let typ = elaborate_type(typ, &def.type_constraints, known_names);
+  def.typ = typ;
+  def
+}
+
+pub fn add_forall_to_type(mut typ: Term, vars: &Map<&Identifier, &Term>) -> Term {
+  let free_vars = free_vars(&typ, &empty_set());
+  for (&name, &param_typ) in vars {
+    if free_vars.contains(name) {
+      typ = forall(param(name.clone(), param_typ.clone()), typ);
+    }
+  }
+  typ
+}
+
+fn type_check_def(def_: Def, scope: &Scope) -> Result<Def, TypeError> {
+  let (term, typ) = type_check(def_.term, def_.typ, &scope)?.to_tuple();
+  Ok(def(def_.name, def_.type_constraints, typ, term))
+}
+
+fn type_check_decls(
+  decls: Vec<SourceContext<Decl>>,
+  scope: &Scope,
+) -> (Vec<SourceContext<Decl>>, Vec<TypeError>) {
+  let res = decls
+    .into_iter()
+    .map(|ctx| {
+      let decl = ctx.value();
+      type_check_decl(decl.clone(), scope)
+        .map(|d| ctx.with(d))
+        .map_err(|err| TypeError::Context {
+          name: Some(decl.to_ref().clone()),
+          loc: ctx.loc.clone(),
+          err: Box::new(err),
+        })
+    })
+    .collect();
+  join_many_results(res)
+}
+
+pub fn pi_to_vec(mut typ: Term) -> (Vec<Term>, Term) {
+  let mut res = Vec::new();
+  while let Pi {
+    arg,
+    ret,
+    arg_name: _,
+  } = typ
+  {
+    res.push(*arg);
+    typ = *ret;
+  }
+  (res, typ)
+}
+
+pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -> Inductive {
+  let is_class = ind.variant() == &InductiveVariant::Class;
+  let default_type = type0();
+  let params: Map<Identifier, Term> = ind
+    .params()
+    .iter()
+    .map(|p| {
+      (
+        p.name.clone(),
+        (*p.typ).clone().replace_hole(|| default_type.clone()),
+      )
+    })
+    .collect();
+  let param_paths: Set<ModulePath> = params
+    .iter()
+    .map(|(name, _)| name.clone().to_path())
+    .collect();
+  let known_names: Set<&ModulePath> = param_paths
+    .iter()
+    .chain(known_names.iter().map(|&p| p))
+    .collect();
+  for cons in ind.constructors.iter_mut() {
+    let typ = cons.typ().clone();
+    cons.typ = if is_class {
+      let (mut class_defs, ret) = pi_to_vec(typ);
+      for (typ, param) in class_defs.iter_mut().zip(cons.params.iter_mut()) {
+        let free_vars = free_vars(&typ, &known_names);
+        let vars = free_vars
+          .iter()
+          .map(|i| (i, &default_type))
+          .chain(params.iter())
+          .collect();
+        *typ = add_forall_to_type(typ.clone(), &vars);
+        *param.typ = typ.clone();
+      }
+      pi_typs(class_defs, ret)
+    } else {
+      let free_vars = free_vars(&typ, &known_names);
+      let default_type = type0();
+      let vars = free_vars
+        .iter()
+        .map(|i| (i, &default_type))
+        .chain(params.iter())
+        .collect();
+      add_forall_to_type(typ, &vars)
+    }
+  }
+  ind
+}
+pub fn elaborate_instance(mut ins: Instance, known_names: &Set<&ModulePath>) -> Instance {
+  for imp in ins.impls_map.values_mut() {
+    let typ = imp.typ.clone();
+    let free_vars = free_vars(&typ, known_names);
+    let default_type = type0();
+    let vars = free_vars.iter().map(|i| (i, &default_type)).collect();
+    imp.typ = add_forall_to_type(typ, &vars);
+  }
+  ins
+}
+
+pub fn elaborate_decl(decl: Decl, known_names: &Set<&ModulePath>) -> Decl {
+  use Decl::*;
+  let i = match decl {
+    Def(def) => Def(elaborate_def(def, known_names)),
+    Type(ind) => Type(elaborate_inductive(ind, known_names)),
+    Ins(ins) => Ins(elaborate_instance(ins, known_names)),
+    _ => decl,
+  };
+  i
+}
+
+pub fn elaborate_decls(
+  decls: Vec<SourceContext<Decl>>,
+  loaded: &LoadedModules,
+) -> Vec<SourceContext<Decl>> {
+  let path = mpt("_");
+  let global = loaded.scope_of_decls(&path, &decls);
+  let mut known_names: Set<ModulePath> = global
+    .all_known_names()
+    .into_iter()
+    .map(|n| n.clone())
+    .collect();
+  known_names.extend(names_of_decls(&decls));
+  let known_names = known_names.iter().map(|n| n).collect();
+  decls
+    .into_iter()
+    .map(|ctx| ctx.map(|decl| elaborate_decl(decl, &known_names)))
+    .collect()
+}
+
+pub fn type_check_module_decls(
+  path: &ModulePath,
+  decls: Vec<SourceContext<Decl>>,
+  loaded: &LoadedModules,
+) -> Result<Vec<SourceContext<Decl>>, TypeError> {
+  let decls = elaborate_decls(decls, &loaded);
+  let global = loaded.scope_of_decls(&path, &decls);
+
+  let (oks, errs) = type_check_decls(decls.clone(), &global.scope());
+  if !errs.is_empty() {
+    Err(TypeError::Many(errs))
+  } else {
+    Ok(oks)
+  }
+}
