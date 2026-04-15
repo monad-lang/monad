@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monad REPL</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Monad REPL</h1>
+      <div id="status">Loading...</div>
+    </header>
+    
+    <main>
+      <div id="editor-container">
+        <textarea id="code" spellcheck="false" placeholder="Enter code here...
+use init
+
+def main (args : List String) : I64 := 42"></textarea>
+        <div id="line-numbers"></div>
+      </div>
+      
+      <div id="controls">
+        <button id="run" disabled>Run</button>
+        <button id="clear">Clear</button>
+      </div>
+      
+      <div id="output-container">
+        <h2>Output</h2>
+        <pre id="output"></pre>
+      </div>
+      
+      <div id="examples">
+        <h2>Examples</h2>
+        <button class="example-btn" data-example="use init&#10;&#10;def x : I64 := 42&#10;&#10;def main (args : List String) : I64 := x">x : I64 := 42</button>
+        <button class="example-btn" data-example="use init&#10;&#10;def add (x : I64) (y : I64) : I64 := x + y&#10;&#10;def main (args : List String) : I64 := add 1 2">add (x : I64) (y : I64)</button>
+        <button class="example-btn" data-example="use init&#10;&#10;def factorial (n : I64) : I64 :=&#10;  match n with&#10;  | 0 => 1&#10;  | _ => n * factorial (n - 1)&#10;&#10;def main (args : List String) : I64 := factorial 5">factorial</button>
+        <button class="example-btn" data-example="use init&#10;&#10;def fib (n : I64) : I64 :=&#10;  match n with&#10;  | 0 => 0&#10;  | 1 => 1&#10;  | _ => fib (n - 1) + fib (n - 2)&#10;&#10;def main (args : List String) : I64 := fib 10">fibonacci</button>
+        <button class="example-btn" data-example="use init&#10;&#10;def len (xs : List a) : I64 :=&#10;  match xs with&#10;  | empty => 0&#10;  | cons a tail => 1 + len tail&#10;&#10;def main (args : List String) : I64 := len (cons 1 (cons 2 (cons 3 empty)))">list length</button>
+        <button class="example-btn" data-example="use init&#10;&#10;def double (x : I64) : I64 := x * 2&#10;&#10;def map (f : I64 -> I64) (xs : List I64) : List I64 :=&#10;  match xs with&#10;  | empty => empty&#10;  | cons a tail => cons (f a) (map f tail)&#10;&#10;def main (args : List String) : List I64 := map double (cons 1 (cons 2 (cons 3 empty)))">map list</button>
+      </div>
+    </main>
+  </div>
+  
+  <script type="module" src="main.js"></script>
+</body>
+</html>

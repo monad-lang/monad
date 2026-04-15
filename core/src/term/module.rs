@@ -155,18 +155,13 @@ impl LoadedModules {
     self.modules.extend(ms.modules);
   }
   /// Use type_check_module to add modules
-  pub(crate) fn add_module(&mut self, module: Module) {
+  pub fn add_module(&mut self, module: Module) {
     self.modules.insert(module.path().clone(), module);
   }
   pub fn global<'a>(&'a self, for_module: &'a ModulePath) -> Option<GlobalScope<'a>> {
     let global = GlobalScope::for_module(for_module, self);
     global
   }
-
-  // pub fn scope<'a>(&'a self, for_module: &'a ModulePath) -> Option<Scope<'a>> {
-  //   let global = self.global(for_module)?;
-  //   Some(Scope::new(global))
-  // }
 
   pub fn empty() -> LoadedModules {
     let native = load_native_funs();
@@ -847,31 +842,44 @@ pub fn load_decls(path: &ModulePath) -> Result<Vec<SourceContext<Decl>>, String>
 }
 
 pub fn load_decls_from_text(text: &str) -> Result<Vec<SourceContext<Decl>>, String> {
-  let decls = parse_file(text).map_err(|e| format!("parse error {:?}", e))?;
+  let decls = parse_file(text).map_err(|e| format!("{e}"))?;
   Ok(decls)
 }
 
-pub fn prelude() -> Result<LoadedModules, LoadingError> {
-  let text = include_str!("../prelude.mo");
-  let decls = parse_file(text).expect("prelude");
-  let mut loaded = LoadedModules::empty();
-  let path = ModulePath::top("'prelude");
-  let decls = type_check_module_decls(&path, decls, &loaded)
-    .inspect_err(|e| eprintln!("type_check prelude errors:\n{e}"))?;
-  let prelude = module(path, decls);
-  loaded.add_module(prelude);
+pub fn load_module_from_text(
+  text: &str,
+  path: ModulePath,
+  loaded: &mut LoadedModules,
+) -> Result<(), LoadingError> {
+  let init_decls =
+    load_decls_from_text(text).map_err(|e| format!("parse error for {}: {e}", path))?;
+  let init_decls = type_check_module_decls(&path, init_decls, &loaded)?;
+  loaded.add_module(module(path, init_decls));
+  Ok(())
+}
+
+pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingError> {
+  let prelude_path = ModulePath::top("'prelude");
+  let io_path = ModulePath::top("io");
+  let init_path = ModulePath::top("init");
+  let math_path = ModulePath::top("math");
+
+  let prelude_text = include_str!("../../../init/prelude.mo");
+  let io_text = include_str!("../../../init/io.mo");
+  let math_text = include_str!("../../../init/math.mo");
+  let init_text = include_str!("../../../init/init.mo");
+
+  load_module_from_text(prelude_text, prelude_path, &mut loaded)?;
+  load_module_from_text(io_text, io_path, &mut loaded)?;
+  load_module_from_text(math_text, math_path, &mut loaded)?;
+  load_module_from_text(init_text, init_path, &mut loaded)?;
 
   Ok(loaded)
 }
 
-pub fn init_module(prelude_loaded: LoadedModules) -> Result<LoadedModules, LoadingError> {
-  load_module_files(&ModulePath::top("init"), prelude_loaded)
-}
-
 pub fn default_modules() -> Result<LoadedModules, LoadingError> {
-  let prelude = prelude()?;
-  let init = init_module(prelude)?;
-  Ok(init)
+  let prelude = LoadedModules::empty();
+  init_module(prelude)
 }
 
 #[derive(Clone, Debug, PartialEq)]

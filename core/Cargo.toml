@@ -1,0 +1,24 @@
+[package]
+name = "monad-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nom.workspace = true
+clap = { version = "4", features = ["derive"] }
+bytecount.workspace = true
+lazy_static.workspace = true
+thiserror.workspace = true
+console_error_panic_hook = { version = "0.1", optional = true }
+rustyline = { version = "17.0.2", optional = true }
+
+[features]
+default = ["repl"]
+console_error_panic_hook = ["dep:console_error_panic_hook"]
+repl = ["dep:rustyline"]
+
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"

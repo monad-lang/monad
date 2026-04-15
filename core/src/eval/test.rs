@@ -5,11 +5,11 @@ use crate::eval::r#type::{
 };
 use crate::parser::parse_file;
 use crate::parser::{ReplInput, repl_parser, term, test::parse_type};
-use crate::term::module::{LoadedModules, default_modules, module, prelude};
+use crate::term::module::{LoadedModules, default_modules, module};
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
-  Hole, Identifier, SourceContext, Typed, app, app2, b_false, b_true, forall, lams, list_cons,
-  list_empty, mp, mpt, mpvar, num, par, param, pi, some, str, typ, type0, unit, var,
+  Hole, Identifier, SourceContext, Typed, app, app2, b_false, b_true, forall, io_term, lams,
+  list_cons, list_empty, mp, mpt, mpvar, num, par, param, pi, some, str, typ, type0, unit, var,
 };
 use crate::{set_of, similar};
 use nom::Finish;
@@ -247,8 +247,6 @@ fn test_type_check() {
     apply_fun.typ(),
     apply_fun.typ().similar(&expected_type)
   );
-
-  let _module = prelude();
 }
 
 fn eval_test(main_term: Term, scope: &Scope) -> Result<Term, String> {
@@ -370,7 +368,7 @@ fn test_simple_instance() {
 
 #[test]
 fn complex_monad_eval() {
-  let unit = unit();
+  let res = io_term(unit()); // IO Unit
   let mut loaded = default_modules().unwrap();
   let init_path = mpt("init");
   let global = loaded.global(&init_path).unwrap();
@@ -381,7 +379,7 @@ fn complex_monad_eval() {
     ),
     vec![str("Hello")],
   );
-  assert_eq!(eval_test(e, &global.scope()).unwrap(), unit);
+  assert_eq!(eval_test(e, &global.scope()).unwrap(), res);
 
   let path = ModulePath::top("_");
   let decls = parse_file(
@@ -420,5 +418,5 @@ fn complex_monad_eval() {
   let global = loaded.global(&path).unwrap();
   let scope = Scope::new(&global);
   let (_, e) = term::<()>("main".into()).finish().unwrap();
-  assert_eq!(eval_test(e, &scope).unwrap(), unit);
+  assert_eq!(eval_test(e, &scope).unwrap(), res);
 }

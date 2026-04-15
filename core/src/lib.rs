@@ -1,5 +1,3 @@
-use rustyline::DefaultEditor;
-use rustyline::error::ReadlineError;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Display;
 use std::hash::{BuildHasherDefault, DefaultHasher, Hash};
@@ -7,15 +5,23 @@ use std::path::PathBuf;
 
 use crate::eval::r#type::type_check;
 use crate::eval::{EvalOptions, eval};
+#[cfg(feature = "repl")]
 use crate::parser::{ReplInput, repl_parser};
+#[cfg(feature = "repl")]
+use crate::term::Decl;
 use crate::term::Term::Hole;
-use crate::term::module::{default_modules, load_module_files, module};
-use crate::term::{Decl, Term, app, to_list_term};
+#[cfg(feature = "repl")]
+use crate::term::module::module;
+use crate::term::module::{default_modules, load_module_files};
 use crate::term::{ModulePath, mpt};
+use crate::term::{Term, app, to_list_term};
 
 pub mod eval;
 pub mod parser;
 pub mod term;
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "repl"))]
+use rustyline::{DefaultEditor, error::ReadlineError};
 
 pub type Set<T> = HashSet<T, BuildHasherDefault<DefaultHasher>>;
 pub fn empty_set<T: Eq + Hash>() -> Set<T> {
@@ -33,6 +39,7 @@ pub fn set_of<T: Eq + Hash>(vals: impl Iterator<Item = T>) -> Set<T> {
 
 pub type Map<K, V> = BTreeMap<K, V>;
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "repl"))]
 pub fn repl(options: EvalOptions) -> Result<(), String> {
   let mut rl = DefaultEditor::new().map_err(|e| format!("{e}"))?;
 

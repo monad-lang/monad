@@ -7,7 +7,7 @@ pub mod test;
 use std::fmt::Display;
 
 use crate::{
-  parser::error::ParseError,
+  parser::error::{ParseError, ReplParserError},
   term::{
     ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance, LetVar,
     Litteral, MatchCase, ModulePath, NameRef, Open, Operator, Param, SourceContext, SourceRange,
@@ -30,7 +30,7 @@ use nom::{
 };
 use string::parse_string;
 
-pub type OwnedError = ParseError<LocatedSpan<String>>;
+pub use error::{OwnedError, ParseFileError, ParseTermError};
 pub type Span<'a, X = ()> = LocatedSpan<&'a str, X>;
 type E<'a, X = ()> = ParseError<Span<'a, X>>;
 type Res<'a, O, X = ()> = IResult<Span<'a, X>, O, E<'a, X>>;
@@ -891,7 +891,22 @@ impl Display for ReplInput {
   }
 }
 
-pub fn repl_parser(input: &str) -> Result<ReplInput, String> {
+pub fn parse_term(input: &str) -> Result<Term, ParseTermError> {
+  let span: Span = input.into();
+  let (_, t) = delimited(ws0, term, ws0)
+    .parse(span)
+    .finish()
+    .map_err(|e| {
+      let err: OwnedError = e.into();
+      ParseTermError {
+        source: input.to_string(),
+        error: err,
+      }
+    })?;
+  Ok(t)
+}
+
+pub fn repl_parser(input: &str) -> Result<ReplInput, ReplParserError> {
   let (_, r) = delimited(
     ws0,
     alt((
@@ -902,7 +917,10 @@ pub fn repl_parser(input: &str) -> Result<ReplInput, String> {
   )
   .parse(input.into())
   .finish()
-  .map_err(|e| format!("{e:?}"))?;
+  .map_err(|r| ReplParserError {
+    source: input.to_string(),
+    error: r.into(),
+  })?;
   Ok(r)
 }
 
@@ -912,8 +930,16 @@ fn decls_parser(input: Span) -> Res<Vec<SourceContext<Decl>>> {
   Ok((input, decls))
 }
 
-pub fn parse_file(input: &str) -> Result<Vec<SourceContext<Decl>>, OwnedError> {
+pub fn parse_file(input: &str) -> Result<Vec<SourceContext<Decl>>, ParseFileError> {
   let span = Span::new(input);
-  let (_, decls) = decls_parser(span).finish()?;
-  Ok(decls)
+  match decls_parser(span).finish() {
+    Ok((_, decls)) => Ok(decls),
+    Err(e) => {
+      let err: OwnedError = e.into();
+      Err(ParseFileError {
+        source: input.to_string(),
+        error: err,
+      })
+    }
+  }
 }

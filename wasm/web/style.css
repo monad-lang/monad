@@ -1,0 +1,204 @@
+:root {
+  --bg: #1a1a2e;
+  --bg-light: #16213e;
+  --text: #eee;
+  --text-dim: #888;
+  --accent: #e94560;
+  --accent-hover: #ff6b6b;
+  --success: #4ecca3;
+  --error: #ff5555;
+  --border: #2a2a4a;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding: 1rem;
+}
+
+#app {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  color: var(--accent);
+}
+
+#status {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+#status.ready {
+  color: var(--success);
+}
+
+#status.error {
+  color: var(--error);
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+#editor-container {
+  position: relative;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+#line-numbers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3rem;
+  padding: 1rem 0.5rem;
+  text-align: right;
+  color: var(--text-dim);
+  background: var(--bg-light);
+  user-select: none;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+#code {
+  width: 100%;
+  min-height: 200px;
+  padding: 1rem 1rem 1rem 3.5rem;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+#code::placeholder {
+  color: var(--text-dim);
+}
+
+#controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+button {
+  padding: 0.5rem 1.5rem;
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: var(--accent);
+  color: var(--text);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button#clear {
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+}
+
+#output-container {
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+#output-container h2 {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#output {
+  min-height: 2rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+#output.error {
+  color: var(--error);
+}
+
+#output.success {
+  color: var(--success);
+}
+
+#examples {
+  margin-top: 1rem;
+}
+
+#examples h2 {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  margin-bottom: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#examples button {
+  margin: 0.25rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+#examples button:hover {
+  border-color: var(--accent);
+}
+
+.example-code {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  body {
+    padding: 0.5rem;
+  }
+  
+  #code {
+    min-height: 150px;
+  }
+}

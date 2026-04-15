@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use monad::{eval::EvalOptions, repl, run};
+use monad_core::{eval::EvalOptions, run};
+
+#[cfg(feature = "repl")]
+use monad_core::repl;
 
 #[derive(Subcommand, Debug)]
 enum Commands {
@@ -11,7 +14,6 @@ enum Commands {
   },
 
   Run {
-    /// Path to the input file
     #[arg(value_name = "FILE")]
     input: PathBuf,
     #[arg(short, long, default_value_t = false)]
@@ -21,9 +23,8 @@ enum Commands {
   },
 }
 
-/// Simple CLI that reads a file and prints its contents (or basic stats).
 #[derive(Debug, Parser)]
-#[command(name = "file-reader", version, about = "Read a file from disk")]
+#[command(name = "monad", version, about = "Monad language interpreter")]
 struct Cli {
   #[command(subcommand)]
   command: Commands,
@@ -33,7 +34,12 @@ fn main() -> Result<(), String> {
   let cli = Cli::parse();
 
   match cli.command {
+    #[cfg(feature = "repl")]
     Commands::Repl { debug } => repl(EvalOptions { debug }).map_err(|e| format!("{e}")),
+    #[cfg(not(feature = "repl"))]
+    Commands::Repl { .. } => {
+      Err("REPL support was not compiled in. Install with repl feature enabled.".into())
+    }
     Commands::Run { input, debug, args } => {
       run(input, args, EvalOptions { debug }).map_err(|e| format!("{e}"))
     }

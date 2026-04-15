@@ -1188,7 +1188,7 @@ pub fn unit() -> Term {
 
 /// pure : A -> IO A
 pub fn io_term(term: Term) -> Term {
-  constructor_term(id("some"), mpt("Option"), vec![term])
+  constructor_term(id("io"), mpt("IO"), vec![term])
 }
 
 pub fn some(term: Term) -> Term {
@@ -1536,7 +1536,7 @@ impl ModulePath {
   /// Check if ModulePath is a prefix
   /// # Examples
   /// ```rust
-  /// use monad::term::mp;
+  /// use monad_core::term::mp;
   /// let p = mp(vec!["a", "b", "cfun"]);
   /// assert!(p.is_prefix(&mp(vec!["a", "b"])));
   /// assert!(p.is_prefix(&mp(vec!["a"])));
@@ -1554,7 +1554,7 @@ impl ModulePath {
   /// Remove a prefix and return a new path if possible
   /// # Examples
   /// ```rust
-  /// use monad::term::mp;
+  /// use monad_core::term::mp;
   /// let p = mp(vec!["a", "b", "cfun"]);
   /// assert_eq!(p.remove_prefix(&mp(vec!["a", "b"])), Some(mp(vec!["cfun"])));
   /// assert_eq!(p.remove_prefix(&mp(vec!["cfun"])), None);

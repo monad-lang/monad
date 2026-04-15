@@ -142,6 +142,19 @@ impl<T, X> LocatedSpan<T, X> {
   pub fn extra(&self) -> &X {
     &self.info.extra
   }
+
+  pub fn get_line(&self) -> u32 {
+    self.info.line
+  }
+
+  pub fn location_line(&self) -> u32 {
+    self.info.line
+  }
+
+  pub fn location_offset(&self) -> usize {
+    self.info.offset
+  }
+
   /// Create a span for a particular input with default `offset` and
   /// `line` values. You can compute the column through the `get_column` or `get_utf8_column`
   /// methods.
@@ -197,7 +210,7 @@ impl<T, X> LocatedSpan<T, X> {
   ///
   /// # Example of use
   /// ```
-  /// # use monad::parser::locate::LocatedSpan;
+  /// # use monad_core::parser::locate::LocatedSpan;
   /// # extern crate nom;
   ///
   /// use nom::{
@@ -245,7 +258,7 @@ impl<T, X> LocatedSpan<T, X> {
   ///     bytes::complete::{take_till, tag},
   ///     combinator::rest,
   /// };
-  /// use monad::parser::locate::LocatedSpan;
+  /// use monad_core::parser::locate::LocatedSpan;
   ///
   /// fn parse_pair<'a>(input: LocatedSpan<&'a str>) -> IResult<LocatedSpan<&'a str>, (&'a str, &'a str)> {
   ///     let (input, key) = take_till(|c| c == '=')(input)?;
