@@ -13,9 +13,10 @@ use crate::{
     Litteral, MatchCase, ModulePath, NameRef, Open, Operator, Param, SourceContext, SourceRange,
     StructField,
     Term::{self, Hole, Var},
-    TypeConstraint, Use, apps, case, class, class_def, ctx, def, def_native, forall, foralls, id,
-    if_term, induct_constructor, inductive, infix, instance, lams, lets, map_term, match_term,
-    mpvar, num, opr, param, pi_name, pi_typs, stru, stru_field, ty, type_constraint, var_id,
+    TypeConstraint, Use, app, apps, case, class, class_def, ctx, def, def_native, forall, foralls,
+    id, if_term, induct_constructor, inductive, infix, instance, lam, lams, lets, map_term,
+    match_term, mpvar, num, opr, param, pi_name, pi_typs, pvar, stru, stru_field, ty,
+    type_constraint, var_id,
   },
 };
 use locate::{LocatedSpan, info};
@@ -53,7 +54,7 @@ pub fn set_res_extra<X: Clone, Y: Clone, T>(res: Res<T, X>, extra: Y) -> Res<T, 
 
 const RESERVED_KEYWORDS: &'static [&str] = &[
   "def", "let", "in", "use", "open", "class", "struct", "instance", "type", "fn", "ꟛ", "match",
-  "if", "then", "else", "infix", "return", "for",
+  "if", "then", "else", "infix", "return", "for", "do",
 ];
 const RESERVED_NAMES: &'static [&str] = &["Type", "Pred"];
 
@@ -378,6 +379,106 @@ fn match_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   Ok((input, match_term(value, cases)))
 }
 
+enum DoStatement {
+  Let { name: Identifier, value: Term },
+  Bind { name: Identifier, value: Term },
+  Return { value: Term },
+}
+
+fn do_statement<X: Clone>(input: Span<X>) -> Res<DoStatement, X> {
+  alt((
+    map(
+      preceded((tag("return"), ws1), (term, opt(char(';')))),
+      |(value, _)| DoStatement::Return { value },
+    ),
+    map(
+      (name, ws0, tag("<-"), ws0, term, opt(char(';'))),
+      |(name, _, _, _, value, _)| DoStatement::Bind { name, value },
+    ),
+    map(
+      (
+        tag("let"),
+        ws1,
+        name,
+        ws0,
+        assignment_operator,
+        ws0,
+        term,
+        opt(char(';')),
+      ),
+      |(_, _, name, _, _, _, value, _)| DoStatement::Let { name, value },
+    ),
+  ))
+  .parse(input)
+}
+
+fn do_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, _) = tag("do")(input)?;
+  let (input, _) = ws1(input)?;
+  let (input, _) = char('{')(input)?;
+  let (input, _) = ws0(input)?;
+
+  let (input, stmts) = many0(preceded(ws0, do_statement)).parse(input)?;
+
+  let (input, _) = ws0(input)?;
+  let (input, _) = char('}')(input)?;
+
+  let body = desugar_do_statements(stmts);
+  Ok((input, body))
+}
+
+fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
+  let mut stmts_iter = stmts.into_iter().rev();
+
+  let mut body = match stmts_iter.next() {
+    Some(DoStatement::Return { value }) => value,
+    Some(DoStatement::Let { name, value }) => lets(
+      vec![LetVar {
+        name,
+        typ: Term::Hole,
+        value,
+      }],
+      Term::Hole,
+    ),
+    Some(DoStatement::Bind { name, value }) => {
+      let body = Term::Hole;
+      let lambda_body = lets(
+        vec![LetVar {
+          name: name.clone(),
+          typ: Term::Hole,
+          value: Term::Hole,
+        }],
+        body,
+      );
+      let lambda = lam(param(name, Term::Hole), lambda_body);
+      app(pvar(vec!["Monad", "bind"]), app(value, lambda))
+    }
+    None => Term::Hole,
+  };
+
+  for stmt in stmts_iter {
+    match stmt {
+      DoStatement::Return { .. } => panic!("return must be last statement"),
+      DoStatement::Let { name, value } => {
+        body = lets(
+          vec![LetVar {
+            name,
+            typ: Term::Hole,
+            value,
+          }],
+          body,
+        );
+      }
+      DoStatement::Bind { name, value } => {
+        let lambda = lam(param(name, Term::Hole), body);
+        body = app(pvar(vec!["Monad", "bind"]), app(value, lambda));
+      }
+    }
+  }
+
+  body
+}
+
 fn if_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, _) = tag("if")(input)?;
   let (input, _) = ws1(input)?;
@@ -492,6 +593,7 @@ fn litteral<X: Clone>(input: Span<X>) -> Res<Term, X> {
 pub fn term<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, start) = info(input)?;
   let (input, term) = alt((
+    do_parser,
     binop,
     application,
     let_parser,

@@ -2,7 +2,8 @@ use super::*;
 use crate::{
   Map, similar,
   term::{
-    app, app2, dpar, forall, induct_constructor, mp, mpt, mpv, oper, par, pi, pi_var, pvar, str,
+    LetVar, Term, app, app2, dpar, forall, induct_constructor, mp, mpt, mpv, oper, par, pi, pi_var,
+    pvar, str,
     test::{decl_def, decl_inductive, decl_infix, decl_open, decl_use, defs_class},
     typ, var,
   },
@@ -806,4 +807,83 @@ fn module_test() {
       )
     ]
   );
+}
+
+#[test]
+fn test_do_parser_simple_return() {
+  let do_block = |s: &'static str| do_parser::<()>(s.into());
+  let (_, r) = do_block(r#"do { return 1 }"#).unwrap();
+  similar!(r, num(1));
+}
+
+#[test]
+fn test_do_parser_simple_bind() {
+  let do_block = |s: &'static str| do_parser::<()>(s.into());
+  let (_, r) = do_block(r#"do { x <- monadic; return x }"#).unwrap();
+  let expected = app(
+    pvar(vec!["Monad", "bind"]),
+    app(var("monadic"), lam(par("x"), var("x"))),
+  );
+  similar!(r, expected);
+}
+
+#[test]
+fn test_do_parser_let_and_bind() {
+  let do_block = |s: &'static str| do_parser::<()>(s.into());
+  let (_, r) = do_block(r#"do { let x := 1; y <- monadic; return y }"#).unwrap();
+  let expected = lets(
+    vec![LetVar {
+      name: id("x"),
+      typ: Term::Hole,
+      value: num(1),
+    }],
+    app(
+      pvar(vec!["Monad", "bind"]),
+      app(var("monadic"), lam(par("y"), var("y"))),
+    ),
+  );
+  similar!(r, expected);
+}
+
+#[test]
+fn test_do_parser_multiple_binds() {
+  let do_block = |s: &'static str| do_parser::<()>(s.into());
+  let (_, r) = do_block(r#"do { a <- ma; b <- mb; return b }"#).unwrap();
+  let inner = app(
+    pvar(vec!["Monad", "bind"]),
+    app(var("mb"), lam(par("b"), var("b"))),
+  );
+  let expected = app(
+    pvar(vec!["Monad", "bind"]),
+    app(var("ma"), lam(par("a"), inner)),
+  );
+  similar!(r, expected);
+}
+
+#[test]
+fn test_do_parser_with_spaces() {
+  let do_block = |s: &'static str| do_parser::<()>(s.into());
+  let (_, r) = do_block(r#"do { x <- monadic; return x }"#).unwrap();
+  let (_, r2) = do_block(r#"do { x <- monadic; return x }"#).unwrap();
+  similar!(r, r2);
+}
+
+#[test]
+fn test_do_parser_complex_desugar() {
+  let do_block = |s: &'static str| do_parser::<()>(s.into());
+  let input = r#"do { let x := 1; y <- get; return y }"#;
+  let (_, r) = do_block(input).unwrap();
+  let middle_bind = app(
+    pvar(vec!["Monad", "bind"]),
+    app(var("get"), lam(par("y"), var("y"))),
+  );
+  let expected = lets(
+    vec![LetVar {
+      name: id("x"),
+      typ: Term::Hole,
+      value: num(1),
+    }],
+    middle_bind,
+  );
+  similar!(r, expected);
 }
