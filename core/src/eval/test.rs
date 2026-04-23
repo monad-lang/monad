@@ -9,7 +9,8 @@ use crate::term::module::{LoadedModules, default_modules, module};
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
   Hole, Identifier, SourceContext, Typed, app, app2, b_false, b_true, forall, io_term, lams,
-  list_cons, list_empty, mp, mpt, mpvar, num, par, param, pi, some, str, typ, type0, unit, var,
+  list_cons, list_empty, mp, mpt, mpvar, num, par, param, pi, some, str, to_list_term, typ, type0,
+  unit, var,
 };
 use crate::{set_of, similar};
 use nom::Finish;
@@ -70,7 +71,7 @@ fn test_compare_determine_type_vars() {
   ];
   let free_vars: FreeVars = to_free_vars(&vars);
   let res = match_determine_type_vars(&defined, &computed, free_vars.clone());
-  assert_eq!(res, Ok(free_vars));
+  similar!(res, Ok(free_vars));
 
   let defined = pi(var("A"), var("B"));
   let computed = pi(app2("List", "A"), var("Bool"));
@@ -80,7 +81,19 @@ fn test_compare_determine_type_vars() {
   ];
   let free_vars: FreeVars = to_free_vars(&vars);
   let res = match_determine_type_vars(&defined, &computed, free_vars.clone());
-  assert_eq!(res, Ok(free_vars));
+  similar!(res, Ok(free_vars));
+
+  let vars = [];
+  let free_vars: FreeVars = to_free_vars(&vars);
+  let left = parse_type("{A : Type} -> {L : Type -> Type} -> A -> L A -> L A");
+  let right = parse_type("_ -> _ -> List I64");
+  let res = match_determine_type_vars(&left, &right, free_vars.clone());
+  let vars = [
+    (id("L"), (pi(type0(), type0()), Some(var("List")))),
+    (id("A"), (type0(), Some(var("I64")))),
+  ];
+  let free_vars: FreeVars = to_free_vars(&vars);
+  similar!(res, Ok(free_vars));
 }
 
 #[test]
@@ -334,6 +347,45 @@ fn term_eval() {
 }
 
 #[test]
+fn test_list_literal_eval() {
+  let path = ModulePath::top("_");
+  let decls = parse_file(
+    r#"
+    type List X {
+        empty,
+        cons (a : X) (List X) : List X
+    }
+    def test1 : List I64 := [1]
+    def test2 : List String := ["a" , "test"]
+    def test3 : List (List I64) := [[1], [2]]
+    "#
+    .into(),
+  )
+  .unwrap();
+  let mut loaded = default_modules().unwrap();
+  let decls = type_check_module_decls(&path, decls, &mut loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let global = loaded.scope_of_decls(&path, &decls);
+
+  let (_, e) = term::<()>("test1".into()).finish().unwrap();
+  similar!(
+    eval_test(e, &global.scope()).unwrap(),
+    to_list_term(vec![num(1)])
+  );
+  let (_, e) = term::<()>("test2".into()).finish().unwrap();
+  similar!(
+    eval_test(e, &global.scope()).unwrap(),
+    to_list_term(vec![str("a"), str("test")])
+  );
+  let (_, e) = term::<()>("test3".into()).finish().unwrap();
+  similar!(
+    eval_test(e, &global.scope()).unwrap(),
+    to_list_term(vec![to_list_term(vec![num(1)]), to_list_term(vec![num(2)])])
+  );
+}
+
+#[test]
 fn test_simple_instance() {
   let mut loaded = LoadedModules::empty();
 
@@ -343,7 +395,7 @@ fn test_simple_instance() {
     class HAdd A B C {
       def add (a: A) (b : B) : C
     }
-    infix:13 (+) := HAdd.add
+    infix (+) := HAdd.add
     type I64 {}
 
     @[native num_add]
@@ -391,7 +443,7 @@ fn complex_monad_eval() {
     }
     open Monad
     open IO
-    infix:13 (>>=) := Monad.bind
+    infix (>>=) := Monad.bind
 
     type IO A {
       io (a : A)

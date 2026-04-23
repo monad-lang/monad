@@ -1,3 +1,4 @@
+use crate::eval::r#type::{FreeVar, FreeVars};
 use crate::term::module::Module;
 
 use super::*;
@@ -56,6 +57,24 @@ impl<T: Similar, E> Similar for Result<T, E> {
     }
   }
 }
+impl<'a> Similar for FreeVar<'a> {
+  fn similar(&self, other: &Self) -> bool {
+    use FreeVar::*;
+    match (self, other) {
+      (Unknown { typ: t1 }, Unknown { typ: t2 }) => t1.similar(t2),
+      (Detected { typ: ty1, term: t1 }, Detected { typ: ty2, term: t2 }) => {
+        ty1.similar(ty2) && t1.similar(t2)
+      }
+      _ => false,
+    }
+  }
+}
+
+impl<'a> Similar for FreeVars<'a> {
+  fn similar(&self, other: &Self) -> bool {
+    self.free_vars().similar(other.free_vars()) && self.keep_vars().similar(other.keep_vars())
+  }
+}
 
 impl Similar for Identifier {
   fn similar(&self, other: &Identifier) -> bool {
@@ -90,9 +109,7 @@ impl Similar for ClassDef {
 }
 impl Similar for Infix {
   fn similar(&self, other: &Infix) -> bool {
-    self.name == other.name
-      && self.operator == other.operator
-      && self.precedence == other.precedence
+    self.name == other.name && self.operator == other.operator
   }
 }
 
@@ -163,9 +180,9 @@ impl Similar for MatchCase {
   }
 }
 
-impl Similar for Litteral {
+impl Similar for Literal {
   fn similar(&self, other: &Self) -> bool {
-    use Litteral::{If, Map, Match};
+    use Literal::{If, Map, Match};
     match (self, other) {
       (
         Match {
@@ -372,12 +389,8 @@ pub fn decl_inductive(
   Decl::Type(inductive(name, constraints, params, typ, constructors))
 }
 
-pub fn decl_infix(operator: Operator, precedence: u8, name: ModulePath) -> Decl {
-  Decl::Infix(Infix {
-    operator,
-    precedence,
-    name,
-  })
+pub fn decl_infix(operator: Operator, name: ModulePath) -> Decl {
+  Decl::Infix(Infix { operator, name })
 }
 
 pub fn decl_def(name: ModulePath, type_cons: Vec<TypeConstraint>, typ: Term, term: Term) -> Decl {

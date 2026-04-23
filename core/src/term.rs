@@ -753,7 +753,7 @@ pub fn case(name: Identifier, args: Vec<Identifier>, value: Term) -> MatchCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
-pub enum Litteral {
+pub enum Literal {
   Str {
     value: String,
   },
@@ -777,7 +777,7 @@ pub enum Litteral {
 
 pub fn match_term(value: Term, cases: Vec<MatchCase>) -> Term {
   Term::Lit {
-    value: Litteral::Match {
+    value: Literal::Match {
       value: Box::new(value),
       cases,
     },
@@ -785,7 +785,7 @@ pub fn match_term(value: Term, cases: Vec<MatchCase>) -> Term {
 }
 pub fn if_term(value: Term, then: Term, els: Term) -> Term {
   Term::Lit {
-    value: Litteral::If {
+    value: Literal::If {
       value: Box::new(value),
       then: Box::new(then),
       els: Box::new(els),
@@ -793,13 +793,13 @@ pub fn if_term(value: Term, then: Term, els: Term) -> Term {
   }
 }
 
-impl Display for Litteral {
+impl Display for Literal {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
-      Litteral::Str { value } => write!(f, "{value:?}"),
-      Litteral::Num { value } => write!(f, "{value}"),
-      Litteral::Map { value } => write!(f, "{value}"),
-      Litteral::Match { value, cases } => {
+      Literal::Str { value } => write!(f, "{value:?}"),
+      Literal::Num { value } => write!(f, "{value}"),
+      Literal::Map { value } => write!(f, "{value}"),
+      Literal::Match { value, cases } => {
         let cs = cases
           .iter()
           .map(|c| format!("{c}"))
@@ -807,14 +807,14 @@ impl Display for Litteral {
           .join(",\n ");
         write!(f, "match {value} {{\n {}\n}}", cs)
       }
-      Litteral::If { value, then, els } => write!(f, "if {value} then {then} else {els}"),
+      Literal::If { value, then, els } => write!(f, "if {value} then {then} else {els}"),
     }
   }
 }
 
 pub fn map_term(value: Map<Identifier, Term>) -> Term {
   Term::Lit {
-    value: Litteral::Map {
+    value: Literal::Map {
       value: MapTerm { value },
     },
   }
@@ -941,13 +941,14 @@ pub enum Term {
     value: Box<Term>,
     body: Box<Term>,
   },
+  // Type annotation
   Ann {
     term: Box<Term>,
     typ: Box<Term>,
   },
-  /// Litteral value
+  /// Literal value
   Lit {
-    value: Litteral,
+    value: Literal,
   },
   /// Native term
   Ntv {
@@ -1033,7 +1034,7 @@ impl Term {
   pub fn is_num(&self) -> bool {
     match self {
       Term::Lit {
-        value: Litteral::Num { value: _ },
+        value: Literal::Num { value: _ },
       } => true,
       _ => false,
     }
@@ -1041,7 +1042,7 @@ impl Term {
   pub fn is_str(&self) -> bool {
     match self {
       Term::Lit {
-        value: Litteral::Str { value: _ },
+        value: Literal::Str { value: _ },
       } => true,
       _ => false,
     }
@@ -1049,7 +1050,7 @@ impl Term {
   pub fn is_map(&self) -> bool {
     match self {
       Term::Lit {
-        value: Litteral::Map { value: _ },
+        value: Literal::Map { value: _ },
       } => true,
       _ => false,
     }
@@ -1067,11 +1068,11 @@ impl Term {
         typ: _,
       } => "let",
       Lit { value } => match value {
-        Litteral::Str { value: _ } => "str",
-        Litteral::Num { value: _ } => "num",
-        Litteral::Map { value: _ } => "map",
-        Litteral::Match { value: _, cases: _ } => "match",
-        Litteral::If {
+        Literal::Str { value: _ } => "str",
+        Literal::Num { value: _ } => "num",
+        Literal::Map { value: _ } => "map",
+        Literal::Match { value: _, cases: _ } => "match",
+        Literal::If {
           value: _,
           then: _,
           els: _,
@@ -1287,7 +1288,13 @@ pub fn list_cons(head: Term, tail: Term) -> Term {
   constructor_term(id("cons"), mpt("List"), vec![head, tail])
 }
 
-pub fn to_list_term(v: Vec<String>) -> Term {
+pub fn to_list_term(v: Vec<Term>) -> Term {
+  let init = list_empty();
+  let l = |tail: Term, head: Term| list_cons(head, tail);
+  v.into_iter().rev().fold(init, l)
+}
+
+pub fn strings_to_list_term(v: Vec<String>) -> Term {
   let init = list_empty();
   let l = |tail: Term, head: String| list_cons(str(&head), tail);
   v.into_iter().rev().fold(init, l)
@@ -1354,7 +1361,7 @@ pub fn bvar(index: usize) -> Term {
 
 pub fn str(s: &str) -> Term {
   Term::Lit {
-    value: Litteral::Str {
+    value: Literal::Str {
       value: s.to_string(),
     },
   }
@@ -1362,7 +1369,7 @@ pub fn str(s: &str) -> Term {
 
 pub fn num(value: i64) -> Term {
   Term::Lit {
-    value: Litteral::Num { value },
+    value: Literal::Num { value },
   }
 }
 
@@ -1783,26 +1790,17 @@ impl<'a> Named for DefRef<'a> {
 pub struct Infix {
   operator: Operator,
   name: ModulePath,
-  precedence: u8,
 }
 
 impl Display for Infix {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let Infix {
-      operator,
-      name,
-      precedence,
-    } = self;
-    write!(f, "({operator}):{precedence} := {name}")
+    let Infix { operator, name } = self;
+    write!(f, "({operator}) := {name}")
   }
 }
 
-pub fn infix(operator: Operator, name: ModulePath, precedence: u8) -> Infix {
-  Infix {
-    operator,
-    name,
-    precedence,
-  }
+pub fn infix(operator: Operator, name: ModulePath) -> Infix {
+  Infix { operator, name }
 }
 
 /// Declarations in a module

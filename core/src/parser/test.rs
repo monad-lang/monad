@@ -2,8 +2,8 @@ use super::*;
 use crate::{
   Map, similar,
   term::{
-    LetVar, Term, app, app2, dpar, forall, induct_constructor, mp, mpt, mpv, oper, par, pi, pi_var,
-    pvar, str,
+    LetVar, Term, app, app2, dpar, forall, induct_constructor, mp, mpt, mpv, num, oper, par, pi,
+    pi_var, pvar, str,
     test::{decl_def, decl_inductive, decl_infix, decl_open, decl_use, defs_class},
     typ, var,
   },
@@ -11,7 +11,7 @@ use crate::{
 
 #[test]
 fn test_string_litteral() {
-  let p = |i: Span<'static, ()>| string_litteral::<()>(i);
+  let p = |i: Span<'static, ()>| string_literal::<()>(i);
   let (_, r) = p(r#""It's a test \"Hello, World\"""#.into()).unwrap();
   similar!(r, str(r#"It's a test "Hello, World""#.into()));
   assert!(p("abc".into()).is_err());
@@ -70,10 +70,10 @@ pub fn parse_type(input: &str) -> Term {
 
 #[test]
 fn test_infix() {
-  let s = r#"infix:123 (+) := add"#.into();
+  let s = r#"infix (+) := add"#.into();
   let (_, res) = infix_parser(s).unwrap();
 
-  similar!(res, infix("+".into(), mpt("add"), 123));
+  similar!(res, infix("+".into(), mpt("add")));
 }
 
 #[test]
@@ -496,6 +496,14 @@ fn test_term() {
   );
 }
 #[test]
+fn test_ann_term() {
+  let term = |s: &'static str| term::<()>(s.into());
+  let result = term(r#"(x : String)"#);
+  assert!(result.is_ok(), "parse failed: {:?}", result);
+  let result = term(r#"(1 : I64)"#);
+  assert!(result.is_ok(), "parse failed: {:?}", result);
+}
+#[test]
 fn test_inductive() {
   let s = r#"type Solo {
         solo
@@ -752,7 +760,7 @@ fn module_test() {
         println "Hello, world!"
     def fun2 : String := "test"
     def append (a b : List A) : List A := todo
-    infix:90 (++) := append
+    infix (++) := append
 
     class Functor (F: Type -> Type) {
     	def map (f: A -> B) : (F A) -> F B
@@ -794,7 +802,7 @@ fn module_test() {
           var("todo"),
         )
       ),
-      decl_infix("++".into(), 90, mpt("append")),
+      decl_infix("++".into(), mpt("append")),
       defs_class(
         mpt("Functor"),
         vec![],
@@ -885,5 +893,49 @@ fn test_do_parser_complex_desugar() {
     }],
     middle_bind,
   );
+  similar!(r, expected);
+}
+
+#[test]
+fn test_list_literal_empty() {
+  let list = |s: &'static str| list_literal::<()>(s.into());
+  let (_, r) = list("[]").unwrap();
+  let expected = pvar(vec!["FromListLiteral", "empty"]);
+  similar!(r, expected);
+}
+
+#[test]
+fn test_list_literal_single() {
+  let list = |s: &'static str| list_literal::<()>(s.into());
+  let (_, r) = list("[x]").unwrap();
+  let expected = app(
+    app(pvar(vec!["FromListLiteral", "cons"]), var("x")),
+    pvar(vec!["FromListLiteral", "empty"]),
+  );
+  similar!(r, expected);
+}
+
+#[test]
+fn test_list_literal_multiple() {
+  let list = |s: &'static str| list_literal::<()>(s.into());
+  let (_, r) = list("[a, b, c]").unwrap();
+  let inner = app(
+    app(pvar(vec!["FromListLiteral", "cons"]), var("c")),
+    pvar(vec!["FromListLiteral", "empty"]),
+  );
+  let middle = app(app(pvar(vec!["FromListLiteral", "cons"]), var("b")), inner);
+  let expected = app(app(pvar(vec!["FromListLiteral", "cons"]), var("a")), middle);
+  similar!(r, expected);
+}
+
+#[test]
+fn test_list_literal_spaces() {
+  let list = |s: &'static str| list_literal::<()>(s.into());
+  let (_, r) = list("[ a , b ]").unwrap();
+  let inner = app(
+    app(pvar(vec!["FromListLiteral", "cons"]), var("b")),
+    pvar(vec!["FromListLiteral", "empty"]),
+  );
+  let expected = app(app(pvar(vec!["FromListLiteral", "cons"]), var("a")), inner);
   similar!(r, expected);
 }

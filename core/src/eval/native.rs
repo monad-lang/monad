@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{
   Map,
-  term::{Identifier, Litteral, Native, Term, id, io_term, module::Scope, unit},
+  term::{Identifier, Literal, Native, Term, id, io_term, module::Scope, unit},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,7 +33,7 @@ impl Display for NativeError {
 fn extract_string_at(terms: &Vec<Term>, index: usize) -> Result<String, NativeError> {
   if terms.len() > index {
     if let Term::Lit {
-      value: Litteral::Str { value: s },
+      value: Literal::Str { value: s },
     } = &terms[index]
     {
       Ok(s.clone())
@@ -56,10 +56,10 @@ pub fn println(terms: Vec<Term>) -> Result<Term, NativeError> {
 fn extract_num_pair(terms: Vec<Term>) -> Result<(i64, i64), NativeError> {
   if terms.len() >= 2 {
     if let Term::Lit {
-      value: Litteral::Num { value: a },
+      value: Literal::Num { value: a },
     } = &terms[0]
       && let Term::Lit {
-        value: Litteral::Num { value: b },
+        value: Literal::Num { value: b },
       } = &terms[1]
     {
       Ok((*a, *b))
@@ -81,21 +81,21 @@ pub fn num_add(terms: Vec<Term>) -> Result<Term, NativeError> {
   let (a, b) = extract_num_pair(terms)?;
   let value = a + b;
   Ok(Term::Lit {
-    value: Litteral::Num { value },
+    value: Literal::Num { value },
   })
 }
 pub fn num_mul(terms: Vec<Term>) -> Result<Term, NativeError> {
   let (a, b) = extract_num_pair(terms)?;
   let value = a * b;
   Ok(Term::Lit {
-    value: Litteral::Num { value },
+    value: Literal::Num { value },
   })
 }
 pub fn num_sub(terms: Vec<Term>) -> Result<Term, NativeError> {
   let (a, b) = extract_num_pair(terms)?;
   let value = a - b;
   Ok(Term::Lit {
-    value: Litteral::Num { value },
+    value: Literal::Num { value },
   })
 }
 

@@ -1203,13 +1203,9 @@ pub fn module(path: ModulePath, decls: Vec<SourceContext<Decl>>) -> Module {
   let infix = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
-      Decl::Infix(
-        infix @ Infix {
-          operator,
-          name: _,
-          precedence: _,
-        },
-      ) => Some((operator.clone(), ctx.with(infix.clone()))),
+      Decl::Infix(infix @ Infix { operator, name: _ }) => {
+        Some((operator.clone(), ctx.with(infix.clone())))
+      }
       _ => None,
     })
     .fold(Map::new(), merge_detect);

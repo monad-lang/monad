@@ -14,7 +14,7 @@ use crate::term::{
   lam_index, let_term, match_term, mpt, param, pi_name,
 };
 use crate::term::{
-  Litteral,
+  Literal,
   NameRef::{self, Id, Index},
   Param,
   Term::{self, Ann, App, Con, Ctx, Lam, Let, Lit, Ntv, Pi, Type, Var},
@@ -89,7 +89,7 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
       Var { name } => resolve_name(&name, scope)?.clone(),
       Ntv { native } => native_execute(native, scope).map_err(|e| Error::Native(e))?,
       Lit {
-        value: Litteral::Match { value, cases },
+        value: Literal::Match { value, cases },
       } => {
         let value = eval(*value, scope, &options)?;
         if let Con(Constructor {
@@ -119,7 +119,7 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
         }
       }
       Lit {
-        value: Litteral::If { value, then, els },
+        value: Literal::If { value, then, els },
       } => {
         let value = eval(*value, scope, &options)?;
         let b = recognize_bool(&value)?;
@@ -332,7 +332,7 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       }
     }
     Lit {
-      value: Litteral::Match { value, cases },
+      value: Literal::Match { value, cases },
     } => {
       let value = substitute(*value, nref, new_term);
       let cases = cases
@@ -348,7 +348,7 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       match_term(value, cases)
     }
     Lit {
-      value: Litteral::If { value, then, els },
+      value: Literal::If { value, then, els },
     } => {
       let value = substitute(*value, nref, new_term);
       let then = substitute(*then, nref, new_term);

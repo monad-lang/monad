@@ -3,7 +3,7 @@ use monad_core::eval::{EvalOptions, eval};
 use monad_core::parser::parse_term;
 use monad_core::term::Term::Hole;
 use monad_core::term::module::{default_modules, load_module_files, module};
-use monad_core::term::{ModulePath, Term, mpt, to_list_term};
+use monad_core::term::{ModulePath, Term, mpt, strings_to_list_term};
 use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "console_error_panic_hook")]
@@ -97,7 +97,7 @@ pub fn run_file(path: String, args: JsValue) -> WasmResult {
     }
   };
 
-  let arg: Term = to_list_term(args);
+  let arg: Term = strings_to_list_term(args);
   let input_term = if def.value().term.is_lam() {
     monad_core::term::app(def.value().term.clone(), arg)
   } else {

@@ -48,7 +48,7 @@ type Term {
  lam (param: Param) (body: Term),
  app (fun: Term) (arg: Term),
  let_ (let_: Let),
- lit (lit: Litteral),
+ lit (lit: Literal),
  match_ (value: Term) (cases: MatchCase),
  con (constructor: Con)
  ntv (native: Native),

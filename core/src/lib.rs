@@ -13,8 +13,8 @@ use crate::term::Term::Hole;
 #[cfg(feature = "repl")]
 use crate::term::module::module;
 use crate::term::module::{default_modules, load_module_files};
-use crate::term::{ModulePath, mpt};
-use crate::term::{Term, app, to_list_term};
+use crate::term::{ModulePath, mpt, strings_to_list_term};
+use crate::term::{Term, app};
 
 pub mod eval;
 pub mod parser;
@@ -139,7 +139,7 @@ pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<()
   if options.debug {
     println!("{global}");
   }
-  let arg: Term = to_list_term(args);
+  let arg: Term = strings_to_list_term(args);
 
   let def = module
     .get_def(&mpt("main"))

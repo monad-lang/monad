@@ -232,7 +232,7 @@ pub fn type_check_instance<'a>(
     if let Some(impl_def) = instance.impls_map.get_mut(&param.name) {
       let class_def_type = param.typ();
       let typ = match_resolve_type(class_def_type, &impl_def.typ, scope)?;
-      let (term, typ) = type_check(impl_def.term.clone(), typ, scope)?.to_tuple();
+      let (term, _) = type_check(impl_def.term.clone(), typ.clone(), scope)?.to_tuple();
       impl_def.term = term;
       impl_def.typ = typ;
     } else {
@@ -346,8 +346,12 @@ impl<'a> FreeVars<'a> {
     self.vars.keys().map(|&k| k.clone()).collect()
   }
 
-  fn keep_vars(&self) -> &Map<&Identifier, &Term> {
+  pub fn keep_vars(&self) -> &Map<&Identifier, &Term> {
     &self.keep_vars
+  }
+
+  pub fn free_vars(&self) -> &Map<&Identifier, FreeVar<'_>> {
+    &self.vars
   }
 
   fn contains_name_ref(&self, nref: &NameRef) -> bool {
@@ -482,7 +486,7 @@ fn match_resolve_type_inner<'a>(
       Pi {
         arg: a_arg,
         ret: a_ret,
-        arg_name: _, // TODO
+        arg_name,
       },
       Pi {
         arg: b_arg,
@@ -490,6 +494,9 @@ fn match_resolve_type_inner<'a>(
         arg_name: _,
       },
     ) => {
+      if let Some(name) = arg_name {
+        free_vars.insert_free_var(name, Unknown { typ: a_arg });
+      }
       let arg = match_resolve_type_inner(a_arg, b_arg, free_vars);
       let ret = match_resolve_type_inner(a_ret, b_ret, free_vars);
       let b = arg && ret;
@@ -734,7 +741,7 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
       Ok(bt)
     }
     Lit {
-      value: Litteral::Map { ref value },
+      value: Literal::Map { ref value },
     } => {
       if let Var { name } = &expected_type
         && let Some(name) = name.to_path()
@@ -764,7 +771,7 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
       }
     }
     Lit {
-      value: Litteral::Match {
+      value: Literal::Match {
         ref value,
         ref cases,
       },
@@ -812,7 +819,7 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
       }
     }
     Lit {
-      value: Litteral::If {
+      value: Literal::If {
         ref value,
         ref then,
         ref els,
@@ -832,8 +839,8 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
     }
     Lit { ref value } => {
       let primitive_type = match value {
-        Litteral::Str { value: _ } => var("String"),
-        Litteral::Num { value: _ } => var("I64"),
+        Literal::Str { value: _ } => var("String"),
+        Literal::Num { value: _ } => var("I64"),
         _ => panic!("Lit branch not covered {value}"),
       };
       let typ = match_resolve_type(&primitive_type, &expected_type, &scope)?;
@@ -949,7 +956,11 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
     }
     Term::Prop => Ok(typed_term(term, type0())),
     Hole => Ok(typed_term(term, expected_type)),
-    Ann { term, typ: _ } => Ok(typed_term(*term, expected_type)), // TODO
+    Ann { term, typ } => {
+      let tt = type_check(*term, *typ, &scope)?;
+      let typ = match_resolve_type(tt.typ(), &expected_type, &scope)?;
+      Ok(typed_term(tt.term, typ))
+    }
   }
 }
 

@@ -7,6 +7,11 @@ class Functor (F: Type -> Type) {
 	def map (f: A -> B) : (F A) -> F B
 }
 
+class FromListLiteral (L: Type -> Type) {
+	def cons (a : A) (L A) : L A
+	def empty : L A 
+}
+
 /// Hetrogenous addition class
 class HAdd A B C {
 	def add : A -> B -> C
@@ -26,7 +31,7 @@ class [Applicative M] Monad (M: Type -> Type) {
     def bind (a : M A) (f : A -> M B) : M B
 }
 
-infix:13 (>>=) := Monad.bind
+infix (>>=) := Monad.bind
 
 type Void {}
 
@@ -65,11 +70,11 @@ def Bool.not (b : Bool) : Bool := if b then false else true
 
 def Bool.and (a b : Bool) : Bool := if a then b else false
 
-infix:10 (&&) := Bool.and
+infix (&&) := Bool.and
 
 def Bool.or (a b : Bool) : Bool := if a then true else b
 
-infix:10 (||) := Bool.or
+infix (||) := Bool.or
 
 type Result E A {
 	ok (a: A),
@@ -104,6 +109,11 @@ type List A {
 	cons (a : A) (List A) : List A
 }
 
+instance FromListLiteral List {
+	def cons (a: A) (l : List A) : List A := List.cons a l
+	def empty : List A := List.empty
+}
+
 def List.is_empty (self : List A) : Bool :=
 	match self {
 		empty => true,
@@ -116,7 +126,7 @@ def List.append (a b : List A) : List A :=
 		cons el_a tail => List.cons el_a (List.append tail b)
 	}
 
-infix:20 (++) := append
+infix (++) := append
 
 def List.first (self : List A) : Option A :=
 	match self {
@@ -172,8 +182,8 @@ type Vec (len : Nat) A {
 
 def fun_apply (f : A -> B) (a : A) : B := f a 
 
-infix:80 (<|) := fun_apply
+infix (<|) := fun_apply
 
 def apply_fun (a : A) (f : A -> B) : B := f a 
 
-infix:80 (|>) := apply_fun
+infix (|>) := apply_fun

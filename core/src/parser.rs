@@ -10,7 +10,7 @@ use crate::{
   parser::error::{ParseError, ReplParserError},
   term::{
     ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance, LetVar,
-    Litteral, MatchCase, ModulePath, NameRef, Open, Operator, Param, SourceContext, SourceRange,
+    Literal, MatchCase, ModulePath, NameRef, Open, Operator, Param, SourceContext, SourceRange,
     StructField,
     Term::{self, Hole, Var},
     TypeConstraint, Use, app, apps, case, class, class_def, ctx, def, def_native, forall, foralls,
@@ -24,7 +24,7 @@ use nom::{
   Finish, IResult, Parser,
   branch::alt,
   bytes::complete::{tag, take_until, take_while},
-  character::complete::{alpha1, char, i64, multispace1, not_line_ending, u8},
+  character::complete::{alpha1, char, i64, multispace1, not_line_ending},
   combinator::{eof, map, opt, recognize, success, verify},
   multi::{fold_many0, many0, many1},
   sequence::{delimited, preceded, separated_pair, terminated},
@@ -209,7 +209,7 @@ fn opt_type_annotation<X: Clone>(input: Span<X>) -> Res<Term, X> {
   alt((type_annotation, success(Hole))).parse(input)
 }
 
-fn string_litteral<X: Clone>(input: Span<X>) -> Res<Term, X> {
+fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let extra = input.extra().clone();
   let input = input.map_extra(|_| ());
   let (input, value) = set_res_extra(
@@ -221,12 +221,12 @@ fn string_litteral<X: Clone>(input: Span<X>) -> Res<Term, X> {
   Ok((
     input.into(),
     Term::Lit {
-      value: Litteral::Str { value },
+      value: Literal::Str { value },
     },
   ))
 }
 
-fn num_litteral<X: Clone>(input: Span<X>) -> Res<Term, X> {
+fn num_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, value) = i64(input)?;
   Ok((input, num(value)))
 }
@@ -323,7 +323,7 @@ fn def_params<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
 }
 
 fn single_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((variable, litteral, parens)).parse(input)
+  alt((variable, literal, parens)).parse(input)
 }
 
 fn application<X: Clone>(input: Span<X>) -> Res<Term, X> {
@@ -479,6 +479,21 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
   body
 }
 
+fn ann_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  delimited(
+    (char('('), ws0),
+    map(
+      separated_pair(term, (ws0, char(':'), ws0), type_expression),
+      |(term, typ)| Term::Ann {
+        term: Box::new(term),
+        typ: Box::new(typ),
+      },
+    ),
+    (ws0, char(')')),
+  )
+  .parse(input)
+}
+
 fn if_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, _) = tag("if")(input)?;
   let (input, _) = ws1(input)?;
@@ -577,7 +592,7 @@ fn path_expression<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
 fn binop<X: Clone>(input: Span<X>) -> Res<Term, X> {
   map(
     (
-      terminated(alt((variable, litteral, application, parens)), ws0),
+      terminated(alt((variable, literal, application, parens)), ws0),
       operator,
       preceded(ws0, term),
     ),
@@ -586,8 +601,27 @@ fn binop<X: Clone>(input: Span<X>) -> Res<Term, X> {
   .parse(input)
 }
 
-fn litteral<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((string_litteral, num_litteral, struct_val_parser)).parse(input)
+fn literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  alt((list_literal, string_literal, num_literal, struct_val_parser)).parse(input)
+}
+
+fn list_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  delimited(
+    (char('['), ws0),
+    map(
+      many0(terminated(term, (ws0, opt(char(',')), ws0))),
+      |elements: Vec<Term>| desugar_list_literal(elements),
+    ),
+    (ws0, char(']')),
+  )
+  .parse(input)
+}
+
+fn desugar_list_literal(elements: Vec<Term>) -> Term {
+  let empty = pvar(vec!["FromListLiteral", "empty"]);
+  elements.into_iter().rev().fold(empty, |acc, elem| {
+    app(app(pvar(vec!["FromListLiteral", "cons"]), elem), acc)
+  })
 }
 
 pub fn term<X: Clone>(input: Span<X>) -> Res<Term, X> {
@@ -600,9 +634,10 @@ pub fn term<X: Clone>(input: Span<X>) -> Res<Term, X> {
     if_parser,
     match_parser,
     type_expression,
+    ann_parser,
     variable,
     operator_var,
-    litteral,
+    literal,
     lambda,
     parens,
   ))
@@ -673,8 +708,7 @@ fn native_parser(input: Span) -> Res<Def> {
 }
 
 fn infix_parser(input: Span) -> Res<Infix> {
-  let (input, _) = tag("infix:")(input)?;
-  let (input, prec) = u8(input)?;
+  let (input, _) = tag("infix")(input)?;
   let (input, _) = ws1(input)?;
   let (input, operator) = operator_parens(input)?;
   let (input, _) = ws0(input)?;
@@ -682,7 +716,7 @@ fn infix_parser(input: Span) -> Res<Infix> {
   let (input, _) = ws0(input)?;
   let (input, name) = def_name(input)?;
 
-  Ok((input, infix(operator, name, prec)))
+  Ok((input, infix(operator, name)))
 }
 
 fn class_def_parser<X: Clone>(input: Span<X>) -> Res<ClassDef, X> {
