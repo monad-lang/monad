@@ -133,15 +133,13 @@ def List.first (self : List A) : Option A :=
 		empty => none,
 		cons a tail => some a
 	}
-/*
 def List.last (self : List A) : Option A :=
 	match self {
 		empty => none,
-		cons a tail => if tail |> List.is_empty
+		cons a tail => if List.is_empty tail
 			then some a
 			else List.last tail
 	}
-*/
 def List.flatten (self : List (List A)) : List A :=
 	match self {
 		empty => List.empty,

@@ -18,7 +18,7 @@ enum Commands {
     input: PathBuf,
     #[arg(short, long, default_value_t = false)]
     debug: bool,
-    #[arg(value_name = "ARGS")]
+    #[arg(value_name = "ARGS", trailing_var_arg = true)]
     args: Vec<String>,
   },
 }

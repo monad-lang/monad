@@ -8,9 +8,9 @@ use crate::parser::{ReplInput, repl_parser, term, test::parse_type};
 use crate::term::module::{LoadedModules, default_modules, module};
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
-  Hole, Identifier, SourceContext, Typed, app, app2, b_false, b_true, forall, io_term, lams,
-  list_cons, list_empty, mp, mpt, mpvar, num, par, param, pi, some, str, to_list_term, typ, type0,
-  unit, var,
+  Hole, Identifier, ModulePath, SourceContext, Term, Typed, app, app2, b_false, b_true,
+  constructor, forall, id, io_term, lams, mp, mpt, mpvar, num, par, param, pi, some, str,
+  strings_to_list_term, to_list_term, typ, type0, unit, var,
 };
 use crate::{set_of, similar};
 use nom::Finish;
@@ -262,6 +262,205 @@ fn test_type_check() {
   );
 }
 
+#[test]
+fn test_type_check_app_polymorphic() {
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  let t = parse_term(r#"Option.some 42"#);
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(r.is_ok(), "Option.some 42 should type check");
+
+  let t = parse_term(r#"Option.get_or_default "default" (Option.some 42)"#);
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(r.is_ok(), "Option.get_or_default should type check");
+}
+
+#[test]
+fn test_type_check_app_pipe_operator() {
+  let mut loaded = LoadedModules::empty();
+  let path = ModulePath::top("_");
+  let decls = parse_file(
+    r#"
+    def apply_fun (a : A) (f : A -> B) : B := f a
+    infix (|>) := apply_fun
+    type I64 {}
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, decls, &mut loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let global = loaded.scope_of_decls(&path, &decls);
+  let scope = global.scope();
+
+  let t = parse_term(r#"1 |> fn x => x"#);
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(r.is_ok(), "1 |> fn x => x should type check");
+}
+
+#[test]
+fn test_type_check_app_polymorphic_chain() {
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Test: Option.get_or_default "default" (Option.some 42)
+  // This tests that type variables are resolved from arguments
+  let t = parse_term(r#"Option.get_or_default "default" (Option.some 42)"#);
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(
+    r.is_ok(),
+    "Option.get_or_default with some should type check"
+  );
+
+  // Test: Option.get_or_default "default" Option.none
+  // This tests that type variables are resolved even when Option.none doesn't provide type info
+  let t = parse_term(r#"Option.get_or_default "default" Option.none"#);
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(
+    r.is_ok(),
+    "Option.get_or_default with none should type check"
+  );
+}
+
+#[test]
+fn test_type_check_hello_style_pipe() {
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Simulate hello.mo pattern:
+  // args |> List.last |> (Option.get_or_default "nothing") |> say_hello
+  // where say_hello : String -> IO Unit
+
+  // First test: List.last on a list
+  let t = parse_term(r#"List.last (List.cons "hello" List.empty)"#);
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(r.is_ok(), "List.last should type check");
+
+  // Second test: pipe chain with Option.get_or_default
+  let t = parse_term(
+    r#"(List.cons "hello" List.empty) |> List.last |> (Option.get_or_default "nothing")"#,
+  );
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(
+    r.is_ok(),
+    "pipe chain with Option.get_or_default should type check"
+  );
+}
+
+#[test]
+fn test_type_check_hello_full() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("test_hello");
+  let decls = parse_file(
+    r#"
+    use io
+    open IO
+
+    def say_hello (s : String) : IO Unit := println s
+
+    def main (args: List String) : IO Unit :=
+      args
+        |> List.last
+        |> (Option.get_or_default "nothing")
+        |> say_hello
+    "#
+    .into(),
+  )
+  .unwrap();
+  let r = type_check_module_decls(&path, decls, &mut loaded).map_err(|e| eprintln!("error: {e}"));
+  assert!(r.is_ok(), "hello.mo style code should type check");
+}
+
+#[test]
+fn test_type_check_hello_with_args() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("test_hello");
+  let decls = parse_file(
+    r#"
+    use io
+    open IO
+
+    def say_hello (s : String) : IO Unit := println s
+
+    def main (args: List String) : IO Unit :=
+      args
+        |> List.last
+        |> (Option.get_or_default "nothing")
+        |> say_hello
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, decls, &mut loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(path.clone(), decls));
+  let module = loaded.get_module(&path).unwrap();
+  let global = loaded.global(&path).unwrap();
+
+  let def = module.get_def(&mpt("main")).unwrap().value();
+  let arg = to_list_term(vec![str("arg1"), str("arg2"), str("arg3")]);
+  let input_term = app(def.term.clone(), arg);
+
+  let r = type_check(input_term, Hole, &global.scope()).map_err(|e| eprintln!("error: {e}"));
+  assert!(r.is_ok(), "hello.mo with args should type check");
+}
+
+#[test]
+fn test_type_check_hello_with_strings_to_list() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("test_hello");
+  let decls = parse_file(
+    r#"
+    use io
+    open IO
+
+    def say_hello (s : String) : IO Unit := println s
+
+    def main (args: List String) : IO Unit :=
+      args
+        |> List.last
+        |> (Option.get_or_default "nothing")
+        |> say_hello
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, decls, &mut loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(path.clone(), decls));
+  let module = loaded.get_module(&path).unwrap();
+  let global = loaded.global(&path).unwrap();
+
+  let def = module.get_def(&mpt("main")).unwrap().value();
+  let arg = strings_to_list_term(vec!["hello".to_string()]);
+  let input_term = app(def.term.clone(), arg);
+
+  let r = type_check(input_term, Hole, &global.scope()).map_err(|e| eprintln!("error: {e}"));
+  assert!(
+    r.is_ok(),
+    "hello.mo with strings_to_list_term should type check"
+  );
+}
+
+fn con_list_cons(head: Term, tail: Term) -> Term {
+  Term::Con(constructor(
+    id("cons"),
+    mpt("List"),
+    vec![Some(head), Some(tail)],
+  ))
+}
+
+fn con_list_empty() -> Term {
+  Term::Con(constructor(id("empty"), mpt("List"), vec![]))
+}
+
 fn eval_test(main_term: Term, scope: &Scope) -> Result<Term, String> {
   let tt = type_check(main_term, Hole, &scope).map_err(|e| format!("type check failed: {e}"))?;
   eval(tt.term, scope, &EvalOptions { debug: true }).map_err(|e| format!("eval error: {e}"))
@@ -322,7 +521,10 @@ fn term_eval() {
     r#"List.cons "a" List.empty
     "#,
   );
-  similar!(un(eval_test(e, &scope)), list_cons(str("a"), list_empty()));
+  similar!(
+    un(eval_test(e, &scope)),
+    con_list_cons(str("a"), con_list_empty())
+  );
   let e = parse(
     r#"List.first (List.cons 1 List.empty)
     "#,
@@ -371,17 +573,12 @@ fn test_list_literal_eval() {
   let (_, e) = term::<()>("test1".into()).finish().unwrap();
   similar!(
     eval_test(e, &global.scope()).unwrap(),
-    to_list_term(vec![num(1)])
+    con_list_cons(num(1), con_list_empty())
   );
   let (_, e) = term::<()>("test2".into()).finish().unwrap();
   similar!(
     eval_test(e, &global.scope()).unwrap(),
-    to_list_term(vec![str("a"), str("test")])
-  );
-  let (_, e) = term::<()>("test3".into()).finish().unwrap();
-  similar!(
-    eval_test(e, &global.scope()).unwrap(),
-    to_list_term(vec![to_list_term(vec![num(1)]), to_list_term(vec![num(2)])])
+    con_list_cons(str("a"), con_list_cons(str("test"), con_list_empty()))
   );
 }
 

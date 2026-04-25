@@ -373,9 +373,13 @@ pub fn match_resolve_type<'a>(
   if !right.is_known() {
     return Ok(left.clone());
   }
+  if let Var { name } = right
+    && name.is_id()
+  {
+    return Ok(left.clone());
+  }
   let free_vars = FreeVars::from_locals(scope);
-  let free_vars = match_determine_type_vars(left, right, free_vars)
-    .inspect_err(|_| eprintln!("types not matched {left} :> {right}"))?;
+  let free_vars = match_determine_type_vars(left, right, free_vars)?;
   let typ = apply_free_type_vars(left.clone(), &free_vars);
   Ok(typ)
 }
@@ -702,10 +706,10 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
   match term {
     App { fun, arg } => {
       let arg = *arg;
-      let (mut arg, arg_type_first) = type_check(arg.clone(), Hole, &scope)
+      let (arg, arg_type) = type_check(arg.clone(), Hole, &scope)
         .map(|tt| tt.to_tuple())
         .unwrap_or_else(|_| (arg, Hole));
-      let fun_type = pi_of_forall_types(arg_type_first.clone(), expected_type.clone());
+      let fun_type = pi_of_forall_types(arg_type.clone(), expected_type.clone());
       let (fun, fun_type) = type_check(*fun, fun_type, &scope)?.to_tuple();
       let (fun_vars, fun_typ_pi) = unwrap_forall(fun_type);
       if let Pi {
@@ -717,10 +721,11 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
         let fun_forall_vars: Map<&Identifier, &Term> = fun_vars.iter().collect();
         let mut arg_type = *arg_type.clone();
         arg_type = add_forall_to_type(arg_type, &fun_forall_vars);
-        if !arg_type_first.is_known() {
-          let (arg_, _arg_type) = type_check(arg, arg_type, &scope)?.to_tuple();
-          arg = arg_;
-        }
+        let (arg, _) = if arg_type.is_known() {
+          type_check(arg, arg_type, &scope)?.to_tuple()
+        } else {
+          (arg, arg_type)
+        };
         let term = app(fun, arg);
         let ret_type = *ret.clone();
         let ret_type = add_forall_to_type(ret_type, &fun_forall_vars);
@@ -851,32 +856,41 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
       type_check_free_var(term, expected_type.clone(), &name, &scope)
     }
     Lam { param, body } => {
-      let (vars, typ) = unwrap_forall(expected_type.clone());
-      let vars = vars.iter().collect();
-      if let Pi {
-        arg,
-        ret,
-        arg_name: _,
-      } = typ
-      {
-        let arg_type = *arg.clone();
-        let arg_type = add_forall_to_type(arg_type, &vars);
-        let param_type = param.typ();
-        let arg_type = match_resolve_type(&arg_type, param_type, &scope).map_err(|_| {
-          TypeError::ArgumentMismatch {
-            expected: *arg.clone(),
-            actual: param.typ().clone(),
-          }
-        })?;
-        let scope = scope.with_param(&param);
-        let return_type = *ret.clone();
-        let return_type = add_forall_to_type(return_type, &vars);
-        let (body, return_type) = type_check(*body.clone(), return_type, &scope)?.to_tuple();
-        let lam_type = pi_of_forall_types(arg_type.clone(), return_type);
-        let term = lam_par(param.with_type(arg_type), body);
-        Ok(typed_term(term, lam_type))
+      if expected_type.is_known() {
+        let (vars, typ) = unwrap_forall(expected_type.clone());
+        let vars = vars.iter().collect();
+        if let Pi {
+          arg,
+          ret,
+          arg_name: _,
+        } = typ
+        {
+          let arg_type = *arg.clone();
+          let arg_type = add_forall_to_type(arg_type, &vars);
+          let param_type = param.typ();
+          let arg_type = match_resolve_type(&arg_type, param_type, &scope).map_err(|_| {
+            TypeError::ArgumentMismatch {
+              expected: *arg.clone(),
+              actual: param.typ().clone(),
+            }
+          })?;
+          let scope = scope.with_param(&param);
+          let return_type = *ret.clone();
+          let return_type = add_forall_to_type(return_type, &vars);
+          let (body, return_type) = type_check(*body.clone(), return_type, &scope)?.to_tuple();
+          let lam_type = pi_of_forall_types(arg_type.clone(), return_type);
+          let term = lam_par(param.with_type(arg_type), body);
+          Ok(typed_term(term, lam_type))
+        } else {
+          Err(TypeError::ExpectedPi(typ.clone()))
+        }
       } else {
-        Err(TypeError::ExpectedPi(typ.clone()))
+        let param_type = param.typ();
+        let scope = scope.with_param(&param);
+        let (body, body_type) = type_check(*body.clone(), Hole, &scope)?.to_tuple();
+        let lam_type = pi(param_type.clone(), body_type);
+        let term = lam_par(param, body);
+        Ok(typed_term(term, lam_type))
       }
     }
     Type { universe } => {

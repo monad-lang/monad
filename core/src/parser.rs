@@ -561,6 +561,31 @@ fn infix_symbol<X: Clone>(input: Span<X>) -> Res<Operator, X> {
   Ok((input, Operator::new(op.into_fragment().into())))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Associativity {
+  Left,
+  Right,
+}
+
+fn operator_precedence(op: &Operator) -> Option<(u8, Associativity)> {
+  match op.as_str() {
+    "|>" => Some((5, Associativity::Left)),
+    "<|" => Some((5, Associativity::Right)),
+    ">>=" => Some((10, Associativity::Right)),
+    "." => Some((12, Associativity::Right)),
+    "<*>" => Some((15, Associativity::Left)),
+    "<|>" => Some((20, Associativity::Left)),
+    "||" => Some((25, Associativity::Right)),
+    "&&" => Some((30, Associativity::Right)),
+    "==" | "!=" | "=" => Some((40, Associativity::Left)),
+    "++" => Some((50, Associativity::Right)),
+    ">>" | "<<" => Some((60, Associativity::Left)),
+    "+" | "-" => Some((65, Associativity::Left)),
+    "*" | "/" => Some((70, Associativity::Left)),
+    _ => None,
+  }
+}
+
 fn operator<X: Clone>(input: Span<X>) -> Res<NameRef, X> {
   alt((
     map(infix_symbol, |op| NameRef::Op(op)),
@@ -589,16 +614,64 @@ fn path_expression<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
   .parse(input)
 }
 
-fn binop<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  map(
-    (
-      terminated(alt((variable, literal, application, parens)), ws0),
-      operator,
-      preceded(ws0, term),
-    ),
-    |(left, op, right)| opr(left, op, right),
-  )
+fn base_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  alt((
+    do_parser,
+    let_parser,
+    if_parser,
+    match_parser,
+    type_expression,
+    ann_parser,
+    variable,
+    operator_var,
+    literal,
+    lambda,
+    application,
+    parens,
+  ))
   .parse(input)
+}
+
+fn parse_expr<X: Clone>(input: Span<X>, min_prec: u8) -> Res<Term, X> {
+  let (input, mut lhs) = base_term(input)?;
+  let (mut input, _) = ws0(input)?;
+
+  loop {
+    let peek_input = input.clone();
+    let (_, op_name) = match operator(peek_input) {
+      Ok(r) => r,
+      Err(_) => break,
+    };
+
+    let NameRef::Op(op) = op_name else { break };
+    let Some((prec, assoc)) = operator_precedence(&op) else {
+      break;
+    };
+
+    if prec < min_prec {
+      break;
+    }
+
+    let (new_input, _) = operator(input)?;
+    let (new_input, _) = ws0(new_input)?;
+
+    let next_prec = match assoc {
+      Associativity::Left => prec + 1,
+      Associativity::Right => prec,
+    };
+
+    let (new_input, rhs) = parse_expr(new_input, next_prec)?;
+    let (new_input, _) = ws0(new_input)?;
+
+    lhs = opr(lhs, NameRef::Op(op), rhs);
+    input = new_input;
+  }
+
+  Ok((input, lhs))
+}
+
+fn binop<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  parse_expr(input, 0)
 }
 
 fn literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
@@ -626,22 +699,7 @@ fn desugar_list_literal(elements: Vec<Term>) -> Term {
 
 pub fn term<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, start) = info(input)?;
-  let (input, term) = alt((
-    do_parser,
-    binop,
-    application,
-    let_parser,
-    if_parser,
-    match_parser,
-    type_expression,
-    ann_parser,
-    variable,
-    operator_var,
-    literal,
-    lambda,
-    parens,
-  ))
-  .parse(input)?;
+  let (input, term) = binop(input)?;
   let (input, end) = info(input)?;
   let loc = SourceRange::new(start.into(), end.into());
   Ok((input, ctx(term, loc)))

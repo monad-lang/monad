@@ -149,8 +149,8 @@ infix:20 (++) := List.append
 use prelude
 use io
 
-// Open module (bring into scope)
-open prelude
+// Open namespace. Make defs available without given prefix.
+open IO
 ```
 
 ## Key Language Features
@@ -173,6 +173,14 @@ def add (a: I64) (b: I64) : I64
 ### Parser (`core/src/parser.rs`)
 - Add new syntax in the parser combinators
 - Reserved keywords are defined in `RESERVED_KEYWORDS`
+
+### List Literal Desugaring
+List literals `[a, b, c]` are desugared in `desugar_list_literal` (parser.rs:620) to nested `FromListLiteral` calls:
+```
+[a, b, c]  =>  (FromListLiteral.cons a) ((FromListLiteral.cons b) ((FromListLiteral.cons c) FromListLiteral.empty))
+```
+The AST structure is `app(app(cons, elem), acc)` — **NOT** `app(cons, app(elem, acc))`.
+For a single element: `[x]` => `app(app(cons, var("x")), empty)`
 
 ### Evaluator (`core/src/eval.rs`)
 - Beta reduction happens in the `eval` function

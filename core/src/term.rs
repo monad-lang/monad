@@ -1285,7 +1285,7 @@ pub fn list_empty() -> Term {
   constructor_term(id("empty"), mpt("List"), vec![])
 }
 pub fn list_cons(head: Term, tail: Term) -> Term {
-  constructor_term(id("cons"), mpt("List"), vec![head, tail])
+  app(app(pvar(vec!["List", "cons"]), head), tail)
 }
 
 pub fn to_list_term(v: Vec<Term>) -> Term {
