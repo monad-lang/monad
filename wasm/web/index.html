@@ -35,11 +35,11 @@ def main (args : List String) : I64 := 42"></textarea>
       <div id="examples">
         <h2>Examples</h2>
         <button class="example-btn" data-example="use init&#10;&#10;def x : I64 := 42&#10;&#10;def main (args : List String) : I64 := x">x : I64 := 42</button>
-        <button class="example-btn" data-example="use init&#10;&#10;def add (x : I64) (y : I64) : I64 := x + y&#10;&#10;def main (args : List String) : I64 := add 1 2">add (x : I64) (y : I64)</button>
-        <button class="example-btn" data-example="use init&#10;&#10;def factorial (n : I64) : I64 :=&#10;  match n with&#10;  | 0 => 1&#10;  | _ => n * factorial (n - 1)&#10;&#10;def main (args : List String) : I64 := factorial 5">factorial</button>
-        <button class="example-btn" data-example="use init&#10;&#10;def fib (n : I64) : I64 :=&#10;  match n with&#10;  | 0 => 0&#10;  | 1 => 1&#10;  | _ => fib (n - 1) + fib (n - 2)&#10;&#10;def main (args : List String) : I64 := fib 10">fibonacci</button>
-        <button class="example-btn" data-example="use init&#10;&#10;def len (xs : List a) : I64 :=&#10;  match xs with&#10;  | empty => 0&#10;  | cons a tail => 1 + len tail&#10;&#10;def main (args : List String) : I64 := len (cons 1 (cons 2 (cons 3 empty)))">list length</button>
-        <button class="example-btn" data-example="use init&#10;&#10;def double (x : I64) : I64 := x * 2&#10;&#10;def map (f : I64 -> I64) (xs : List I64) : List I64 :=&#10;  match xs with&#10;  | empty => empty&#10;  | cons a tail => cons (f a) (map f tail)&#10;&#10;def main (args : List String) : List I64 := map double (cons 1 (cons 2 (cons 3 empty)))">map list</button>
+        <button class="example-btn" data-example="use init&#10;use math&#10;&#10;def add (x : I64) (y : I64) : I64 := x + y&#10;&#10;def main (args : List String) : I64 := add 1 2">add (x : I64) (y : I64)</button>
+        <button class="example-btn" data-example="use init&#10;use math&#10;&#10;def factorial (n : I64) : I64 :=&#10;  if n == 0&#10;  then 1&#10;  else n * factorial (n - 1)&#10;&#10;def main (args : List String) : I64 := factorial 5">factorial</button>
+        <button class="example-btn" data-example="use init&#10;&#10;def is_empty (self : List A) : Bool :=&#10;  match self {&#10;    empty => true,&#10;    cons a tail => false&#10;  }&#10;&#10;def main (args : List String) : Bool := is_empty (List.cons 1 (List.cons 2 List.empty))">list is_empty</button>
+        <button class="example-btn" data-example="use init&#10;&#10;def first (self : List A) : Option A :=&#10;  match self {&#10;    empty => none,&#10;    cons a tail => some a&#10;  }&#10;&#10;def main (args : List String) : Option I64 := first (List.cons 42 List.empty)">list first</button>
+        <button class="example-btn" data-example="use io&#10;open IO&#10;&#10;def main (args : List String) : IO Unit :=&#10;  println &quot;Hello, World!&quot;">hello world</button>
       </div>
     </main>
   </div>
