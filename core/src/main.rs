@@ -41,7 +41,14 @@ fn main() -> Result<(), String> {
       Err("REPL support was not compiled in. Install with repl feature enabled.".into())
     }
     Commands::Run { input, debug, args } => {
-      run(input, args, EvalOptions { debug }).map_err(|e| format!("{e}"))
+      let result = run(input, args, EvalOptions { debug });
+      match result {
+        Ok(_) => (),
+        Err(ref e) => {
+          println!("error: {e}")
+        }
+      }
+      result
     }
   }
 }

@@ -39,6 +39,10 @@ type String {
 	of_bytes U8
 }
 
+class ToString A {
+	def to_string (a : A) : String
+}
+
 /// Primitive number types
 
 type I64 {}
@@ -61,6 +65,19 @@ type Bool {
 }
 
 open Bool
+
+/// Equals
+class BEq A {
+	def beq : A -> B -> Bool
+}
+
+instance BEq Bool {
+	def beq (a b : Bool) : Bool :=
+		if a then b
+		else (Bool.not b)
+}
+
+infix (==) := BEq.beq
 
 type DefaultValue (A: Type) (default : A) {
 	default

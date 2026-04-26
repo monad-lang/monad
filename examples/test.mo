@@ -1,9 +1,12 @@
+use io
 use init
+use math
+open IO
 
 def factorial (n : I64) : I64 :=
-match n with {
-  zero => 1,
-  succ pred => n * factorial pred
-}
+    if n == 0
+    then 1
+    else n * factorial (n - 1)
 
-def main (args : List String) : I64 := factorial (succ (succ (succ (succ (succ zero)))))
+def main (args : List String) : IO Unit :=
+    println <| ToString.to_string (factorial 5)

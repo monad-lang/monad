@@ -2,12 +2,14 @@ use std::fmt::Display;
 
 use crate::{
   Map,
-  term::{Identifier, Literal, Native, Term, id, io_term, module::Scope, unit},
+  term::{Identifier, Literal, Native, Term, b_false, b_true, id, io_term, module::Scope, unit},
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NativeError {
   MissingArgs { expected: usize, actual: usize },
+  ExpectedString { actual: Term },
+  ExpectedNum { actual: Term },
   NotFound(Identifier),
   Custom(String),
 }
@@ -26,6 +28,8 @@ impl Display for NativeError {
       }
       NotFound(identifier) => write!(f, "native {identifier} not found"),
       Custom(c) => write!(f, "{c}"),
+      ExpectedString { actual } => write!(f, "expected String found {actual}"),
+      ExpectedNum { actual } => write!(f, "expected I64 found {actual}"),
     }
   }
 }
@@ -39,6 +43,25 @@ fn extract_string_at(terms: &Vec<Term>, index: usize) -> Result<String, NativeEr
       Ok(s.clone())
     } else {
       Err(Custom(format!("wrong type of args first={}", terms[index])))
+    }
+  } else {
+    Err(MissingArgs {
+      expected: index + 1,
+      actual: terms.len(),
+    })
+  }
+}
+fn extract_num_at(terms: &Vec<Term>, index: usize) -> Result<i64, NativeError> {
+  if terms.len() > index {
+    if let Term::Lit {
+      value: Literal::Num { value: s },
+    } = &terms[index]
+    {
+      Ok(s.clone())
+    } else {
+      Err(ExpectedNum {
+        actual: terms[index].clone(),
+      })
     }
   } else {
     Err(MissingArgs {
@@ -84,6 +107,16 @@ pub fn num_add(terms: Vec<Term>) -> Result<Term, NativeError> {
     value: Literal::Num { value },
   })
 }
+
+fn bool_to_term(b: bool) -> Term {
+  if b { b_true() } else { b_false() }
+}
+
+pub fn i64_eq(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let (a, b) = extract_num_pair(terms)?;
+  let value = a == b;
+  Ok(bool_to_term(value))
+}
 pub fn num_mul(terms: Vec<Term>) -> Result<Term, NativeError> {
   let (a, b) = extract_num_pair(terms)?;
   let value = a * b;
@@ -98,11 +131,25 @@ pub fn num_sub(terms: Vec<Term>) -> Result<Term, NativeError> {
     value: Literal::Num { value },
   })
 }
+pub fn num_to_str(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let n = extract_num_at(&terms, 0)?;
+  let value = n.to_string();
+  Ok(Term::Lit {
+    value: Literal::Str { value },
+  })
+}
 
 pub type NativeFun = fn(Vec<Term>) -> Result<Term, NativeError>;
 
 pub fn load_native_funs() -> Map<Identifier, NativeFun> {
-  let v: Vec<(Identifier, NativeFun)> = vec![(id("println"), println), (id("num_add"), num_add)];
+  let v: Vec<(Identifier, NativeFun)> = vec![
+    (id("println"), println),
+    (id("num_add"), num_add),
+    (id("num_sub"), num_sub),
+    (id("num_mul"), num_mul),
+    (id("num_to_str"), num_to_str),
+    (id("i64_eq"), i64_eq),
+  ];
   v.into_iter().collect()
 }
 

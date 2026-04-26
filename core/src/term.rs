@@ -453,14 +453,6 @@ impl Instance {
       return false;
     }
     // TODO constraints
-    println!(
-      "instance match class {} key={key}\ninstance={} args:{}\nkey args: {} class params: {}",
-      class.name,
-      self.name,
-      vec_fmt(&self.args),
-      vec_fmt(&key.args),
-      vec_fmt(class.params())
-    );
     let res = key.args.iter().all(|key_arg| {
       if let Some((index, _c_param)) = class
         .params
@@ -474,7 +466,6 @@ impl Instance {
           .expect("instance args did not match class");
         arg == &*key_arg.typ
       } else {
-        println!("key arg {} irrelevant", key_arg.name);
         true // irrelevant
       }
     });

@@ -669,3 +669,48 @@ fn complex_monad_eval() {
   let (_, e) = term::<()>("main".into()).finish().unwrap();
   assert_eq!(eval_test(e, &scope).unwrap(), res);
 }
+
+#[test]
+fn test_i64_eq_comparison() {
+  let mut loaded = LoadedModules::empty();
+
+  let path = ModulePath::top("_");
+  let decls = parse_file(
+    r#"
+    type Bool {
+      true,
+      false
+    }
+
+    class BEq A {
+      def beq : A -> B -> Bool
+    }
+
+    infix (==) := BEq.beq
+
+    type I64 {}
+
+    @[native i64_eq]
+    def I64.beq (a b : I64) : Bool
+
+    instance BEq I64 {
+      def beq (a b : I64) : Bool := I64.beq a b
+    }
+
+    def eq_true : Bool := 5 == 5
+    def eq_false : Bool := 5 == 3
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, decls, &mut loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let global = loaded.scope_of_decls(&path, &decls);
+
+  let (_, e) = term::<()>("eq_true".into()).finish().unwrap();
+  similar!(eval_test(e, &global.scope()).unwrap(), b_true());
+
+  let (_, e) = term::<()>("eq_false".into()).finish().unwrap();
+  similar!(eval_test(e, &global.scope()).unwrap(), b_false());
+}
