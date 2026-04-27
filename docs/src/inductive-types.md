@@ -65,8 +65,8 @@ Monad supports list literal syntax `[a, b, c]`, which desugars using the `FromLi
 
 ```monad
 def nums := [1, 2, 3]
--- Desugars to:
--- FromListLiteral.cons 1 (FromListLiteral.cons 2 (FromListLiteral.cons 3 FromListLiteral.empty))
+// Desugars to:
+// FromListLiteral.cons 1 (FromListLiteral.cons 2 (FromListLiteral.cons 3 FromListLiteral.empty))
 ```
 
 ## Result Type

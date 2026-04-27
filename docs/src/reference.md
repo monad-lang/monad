@@ -33,15 +33,15 @@ fn x => x + 1
 ## Let Expressions
 
 ```monad
--- Inline style
+// Inline style
 let x := 10 in x + 1
 
--- Semicolon style
+// Semicolon style
 let x := 10;
 let y := 20;
 in x + y
 
--- With type annotation
+// With type annotation
 let x : I64 := 10 in x + 1
 ```
 
@@ -62,13 +62,34 @@ if condition then thenBranch else elseBranch
 
 ## Do Notation
 
+Two equivalent syntaxes are available:
+
 ```monad
-do {
+// Standard syntax
+def example : IO Unit := do {
+    name <- action;
+    let x := value;
+    return value
+}
+
+// Inline do block (equivalent)
+def example : IO Unit {
     name <- action;
     let x := value;
     return value
 }
 ```
+
+### Statement Types
+
+| Statement | Syntax | Desugars To |
+|-----------|--------|-------------|
+| Bind | `x <- action` | `Monad.bind action (fn x => ...)` |
+| Let | `let x := value` | `let x := value in ...` |
+| Return | `return value` | `Monad.pure value` |
+| Expression | `expr` | `Monad.bind expr (fn _ => ...)` |
+
+Multiple statements are separated by semicolons.
 
 ## Struct Values
 
@@ -110,13 +131,13 @@ infix (operator) := functionName
 
 | Operator | Precedence | Associativity | Function |
 |----------|------------|---------------|----------|
-| `|>` | 5 | Left | `apply_fun` |
-| `<|` | 5 | Right | `fun_apply` |
+| `\|>` | 5 | Left | `apply_fun` |
+| `<\|` | 5 | Right | `fun_apply` |
 | `>>=` | 10 | Right | `Monad.bind` |
 | `.` | 12 | Right | Dot macro (path) |
 | `<*>` | 15 | Left | `Applicative.apply` |
-| `<|>` | 20 | Left | - |
-| `||` | 25 | Right | `Bool.or` |
+| `<\|>` | 20 | Left | - |
+| `\|\|` | 25 | Right | `Bool.or` |
 | `&&` | 30 | Right | `Bool.and` |
 | `==`, `!=` | 40 | Left | - |
 | `++` | 50 | Right | `List.append` |
@@ -127,25 +148,25 @@ infix (operator) := functionName
 ## Type Definitions
 
 ```monad
--- Simple type
+// Simple type
 type Bool {
     true,
     false
 }
 
--- Type with parameters
+// Type with parameters
 type Result E A {
     ok (a : A),
     err (e : E)
 }
 
--- Type with constructors carrying data
+// Type with constructors carrying data
 type Option A {
     some (a : A),
     none
 }
 
--- Empty type
+// Empty type
 type Void {}
 ```
 
@@ -161,12 +182,12 @@ struct Point {
 ## Class Definitions
 
 ```monad
--- Simple class
+// Simple class
 class Functor (F : Type -> Type) {
     def map (f : A -> B) : (F A) -> F B
 }
 
--- Class with constraints
+// Class with constraints
 class [Functor F] Applicative (F : Type -> Type) {
     def pure : A -> F A
     def apply : F (A -> B) -> F A -> F B
@@ -176,13 +197,13 @@ class [Functor F] Applicative (F : Type -> Type) {
 ## Instance Definitions
 
 ```monad
--- Simple instance
+// Simple instance
 instance FromListLiteral List {
     def cons (a : A) (l : List A) : List A := List.cons a l
     def empty : List A := List.empty
 }
 
--- Instance with constraints
+// Instance with constraints
 instance [Add A] Add (List A) {
     def add (a b : List A) : List A := List.append a b
 }
@@ -191,16 +212,27 @@ instance [Add A] Add (List A) {
 ## Function Definitions
 
 ```monad
--- Basic function
+// Basic function
 def add (a : I64) (b : I64) : I64 := a + b
 
--- With implicit parameters
+// With implicit parameters
 def identity {A : Type} (x : A) : A := x
 
--- With constraints
+// With constraints
 def double [Add A] (x : A) : A := HAdd.add x x
 
--- Native function
+// Do block syntax (alternative to :=)
+def greet (name : String) : IO Unit {
+    println name
+}
+
+// Do block with multiple statements
+def multiStep : IO Unit {
+    println "Step 1";
+    println "Step 2"
+}
+
+// Native function
 @[native println]
 def IO.println (s : String) : IO Unit
 ```
@@ -208,13 +240,13 @@ def IO.println (s : String) : IO Unit
 ## Modules
 
 ```monad
--- Import module
+// Import module
 use io
 
--- Open module (no prefix needed)
+// Open module (no prefix needed)
 open IO
 
--- Access by path
+// Access by path
 IO.println "hello"
 ```
 
@@ -283,8 +315,8 @@ IO.println "hello"
 
 ### Pipeline
 
-- `fun_apply (f : A -> B) (a : A) : B` -- `f <| a`
-- `apply_fun (a : A) (f : A -> B) : B` -- `a |> f`
+- `fun_apply (f : A -> B) (a : A) : B` — `f <| a`
+- `apply_fun (a : A) (f : A -> B) : B` — `a |> f`
 
 ## CLI Usage
 

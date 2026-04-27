@@ -44,10 +44,10 @@ Every Monad program follows this basic structure:
 Monad supports explicit type annotations. The basic types include:
 
 ```monad
-def x : I64 := 42            -- 64-bit integer
-def name : String := "Monad" -- String
-def flag : Bool := true      -- Boolean
-def nothing : Unit := unit   -- Unit type (single value)
+def x : I64 := 42            // 64-bit integer
+def name : String := "Monad" // String
+def flag : Bool := true      // Boolean
+def nothing : Unit := unit   // Unit type (single value)
 ```
 
 You can also use other integer types: `I32`, `U64`, `U32`, `U16`, `U8`.
@@ -57,13 +57,13 @@ You can also use other integer types: `I32`, `U64`, `U32`, `U16`, `U8`.
 Functions are defined using `def` with curried parameters:
 
 ```monad
--- Simple function
+// Simple function
 def double (n : I64) : I64 := n + n
 
--- Multi-parameter function (curried)
+// Multi-parameter function (curried)
 def add (a : I64) (b : I64) : I64 := a + b
 
--- With type annotation on the result
+// With type annotation on the result
 def greeting : String := "Hello"
 ```
 
@@ -72,7 +72,7 @@ def greeting : String := "Hello"
 Function application is written with spaces:
 
 ```monad
-def result := double (add 3 4)  -- result = 14
+def result := double (add 3 4)  // result = 14
 ```
 
 ### Anonymous Functions (Lambdas)
@@ -96,7 +96,7 @@ def isZero (n : Nat) : Bool :=
     succ _ => false
   }
 
--- Pattern matching on booleans
+// Pattern matching on booleans
 def not (b : Bool) : Bool :=
   match b {
     true => false,
@@ -141,18 +141,18 @@ Monad supports infix operators with defined precedence:
 use init
 use math
 
-def result : I64 := 3 + 4 * 2  -- 11 (multiplication binds tighter)
+def result : I64 := 3 + 4 * 2  // 11 (multiplication binds tighter)
 ```
 
 Built-in operators include:
-- `(+)` -- Addition (via `I64.add`)
-- `(*)` -- Multiplication (via `HMul.mul`)
-- `(++)` -- List append
-- `(&&)` -- Boolean and
-- `(||)` -- Boolean or
-- `(>>=)` -- Monad bind
-- `(<|)` -- Function application (reverse)
-- `(|>)` -- Pipeline (forward application)
+- `(+)` // Addition (via `I64.add`)
+- `(*)` // Multiplication (via `HMul.mul`)
+- `(++)` // List append
+- `(&&)` // Boolean and
+- `(||)` // Boolean or
+- `(>>=)` // Monad bind
+- `(<|)` // Function application (reverse)
+- `(|>)` // Pipeline (forward application)
 
 ## Summary
 

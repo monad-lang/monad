@@ -16,3 +16,8 @@ instance Monad IO {
 
 @[native println]
 def IO.println (s: String) : IO Unit
+
+// TODO support constraints
+// def IO.println [ToString A] (a: A) : IO Unit :=
+//   IO.println_raw (ToString.to_string a)
+

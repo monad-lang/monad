@@ -51,7 +51,9 @@ instance Monad IO {
 
 ## Do Notation
 
-The `do` block sequences IO actions:
+The `do` block sequences IO actions. Two equivalent syntaxes are available:
+
+### Standard `do { ... }` syntax
 
 ```monad
 use io
@@ -60,9 +62,47 @@ open IO
 def greet : IO Unit :=
     do {
         println "Enter your name:"
-        // name <- getLine  -- Note: getLine not yet implemented
+        // name <- getLine  // Note: getLine not yet implemented
         println "Hello!"
     }
+```
+
+### Inline do block syntax
+
+Functions can use `{ ... }` directly instead of `:= do { ... }`:
+
+```monad
+use io
+open IO
+
+def greet : IO Unit {
+    println "Enter your name:"
+    println "Hello!"
+}
+
+def greetWithName (name : String) : IO Unit {
+    let greeting := "Hello, " ++ name
+    println greeting
+}
+```
+
+### Do Block Statements
+
+| Statement | Syntax | Desugars To |
+|-----------|--------|-------------|
+| Bind | `x <- action` | `Monad.bind action (fn x => ...)` |
+| Let | `let x := value` | `let x := value in ...` |
+| Return | `return value` | `Monad.pure value` |
+| Expression | `expr` | `Monad.bind expr (fn _ => ...)` |
+
+Multiple statements are separated by semicolons:
+
+```monad
+def multiStep : IO Unit {
+    println "Step 1";
+    let value := 42
+    println "Step 2"
+}
 ```
 
 ## Native Functions

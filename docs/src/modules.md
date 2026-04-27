@@ -42,10 +42,10 @@ Now `println` is available directly instead of `IO.println`.
 The prelude opens several types by default:
 
 ```monad
-open Unit    -- makes `unit` available
-open Bool    -- makes `true`, `false` available
-open Result  -- makes `ok`, `err` available
-open Option  -- makes `some`, `none` available
+open Unit    // makes `unit` available
+open Bool    // makes `true`, `false` available
+open Result  // makes `ok`, `err` available
+open Option  // makes `some`, `none` available
 ```
 
 ## Module Paths

@@ -108,6 +108,56 @@ def factorial (n: I64) : I64 :=
 
 // With implicit parameters
 def identity {A : Type} (x: A) : A := x
+
+// Do block syntax (alternative to :=)
+def greet (name : String) : IO Unit {
+    println name
+}
+
+// Do block with multiple statements
+def multi_step : IO Unit {
+    println "Step 1";
+    let value := 42
+    println "Done"
+}
+```
+
+### Do Notation
+
+Do notation provides syntactic sugar for monadic operations. It can be used with the `do { ... }` syntax or directly in function definitions using `{ ... }`.
+
+```monad
+// Standard do notation
+def example : IO Unit := do {
+    x <- get_value
+    let y := x + 1
+    return y
+}
+
+// Do block in function definition (equivalent)
+def example : IO Unit {
+    x <- get_value
+    let y := x + 1
+    return y
+}
+```
+
+Do blocks support three kinds of statements:
+
+| Statement | Syntax | Desugars To |
+|-----------|--------|-------------|
+| Bind | `x <- monadic_expr` | `Monad.bind monadic_expr (fn x => ...)` |
+| Let | `let x := value` | `let x := value in ...` |
+| Return | `return value` | `Monad.pure value` |
+| Expression | `expr` | `Monad.bind expr (fn _ => ...)` |
+
+Multiple expressions must be separated by semicolons:
+
+```monad
+def multi : IO Unit {
+    println "first";
+    println "second"
+}
 ```
 
 ### Lambda Expressions
@@ -225,4 +275,4 @@ def function_name (args: Types) : ReturnType
 - Lowercase identifiers for functions/variables
 - Uppercase for types/type classes
 - Prefer descriptive names
-- Comment with `//`
+- Comment with `//` (never `--`)

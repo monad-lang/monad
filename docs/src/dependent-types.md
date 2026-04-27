@@ -17,8 +17,8 @@ The `{A : Type}` syntax introduces implicit arguments that are inferred by the t
 ```monad
 def identity {A : Type} (x : A) : A := x
 
--- Called without specifying A:
-def result := identity 42  -- A is inferred as I64
+// Called without specifying A:
+def result := identity 42  // A is inferred as I64
 ```
 
 ## Type Annotations
@@ -34,7 +34,7 @@ def x : I64 := 42
 The `_` placeholder (Hole) tells the type checker to infer the type:
 
 ```monad
-def x := _  -- Type will be inferred
+def x := _  // Type will be inferred
 ```
 
 ## Universe Levels
@@ -42,9 +42,9 @@ def x := _  -- Type will be inferred
 `Type` represents the universe of types (universe 0). You can also use higher universes:
 
 ```monad
-Type      -- Universe 0
-Type 1    -- Universe 1
-Type 2    -- Universe 2
+Type      // Universe 0
+Type 1    // Universe 1
+Type 2    // Universe 2
 ```
 
 ## Prop
@@ -65,7 +65,7 @@ type Result E A {
     err (e : E)
 }
 
--- Result takes type parameters E and A
+// Result takes type parameters E and A
 def success : Result String I64 := ok 42
 ```
 

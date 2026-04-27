@@ -55,7 +55,7 @@ Type class parameters can be implicit and auto-resolved:
 
 ```monad
 def doubleList [Add A] (xs : List A) : List A :=
-    -- Uses Add.add through instance resolution
+    // Uses Add.add through instance resolution
     ...
 ```
 
@@ -75,7 +75,7 @@ Once an instance is defined, its methods are available through the class:
 use init
 use math
 
-def result : I64 := 3 + 4  -- Uses I64.add via Add instance
+def result : I64 := 3 + 4  // Uses I64.add via Add instance
 ```
 
 ## Summary
