@@ -1,15 +1,13 @@
 use core::slice;
+use nom::{
+  AsBytes, Compare, CompareResult, FindSubstring, FindToken, IResult, Input, Offset, ParseTo,
+  Parser, error::ParseError,
+};
 use std::{
   borrow::Borrow,
   fmt::{self, Display, Formatter},
   hash::{Hash, Hasher},
   str::FromStr,
-};
-
-use bytecount::num_chars;
-use nom::{
-  AsBytes, Compare, CompareResult, FindSubstring, FindToken, IResult, Input, Offset, ParseTo,
-  Parser, error::ParseError,
 };
 
 /// Parser info
@@ -411,17 +409,10 @@ impl<T: AsBytes, X> LocatedSpan<T, X> {
     self.get_columns_and_bytes_before().0
   }
 
-  /// Return the column index for UTF8 text. Return value is unspecified for non-utf8 text.
-  ///
-  /// This version uses bytecount's hyper algorithm to count characters. This is much faster
-  /// for long lines, but is non-negligibly slower for short slices (below around 100 bytes).
-  /// This is also sped up significantly more depending on architecture and enabling the simd
-  /// feature gates. If you expect primarily short lines, you may get a noticeable speedup in
-  /// parsing by using `naive_get_utf8_column` instead. Benchmark your specific use case!
-  ///
   pub fn get_utf8_column(&self) -> usize {
     let before_self = self.get_columns_and_bytes_before().1;
-    num_chars(before_self) + 1
+    let s = std::str::from_utf8(before_self).unwrap_or("");
+    s.chars().count() + 1
   }
 
   // Helper for `Input::take()` and `Input::take_from()` implementations.

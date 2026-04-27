@@ -7,17 +7,20 @@ authors.workspace = true
 
 [dependencies]
 nom.workspace = true
-clap = { version = "4", features = ["derive"] }
-bytecount.workspace = true
-lazy_static.workspace = true
-thiserror.workspace = true
+clap = { version = "4", features = ["derive"], optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 rustyline = { version = "17.0.2", optional = true }
 
 [features]
-default = ["repl"]
+default = ["repl", "cli"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 repl = ["dep:rustyline"]
+cli = ["dep:clap"]
+
+[[bin]]
+name = "monad"
+path = "src/main.rs"
+required-features = ["cli"]
 
 
 [dev-dependencies]
