@@ -228,6 +228,17 @@ fn eval_app(fun: Term, arg: Term, scope: &Scope, options: &EvalOptions) -> Resul
   match fun {
     Var { name } => unwrap_decl_lambda(arg, &name, scope),
     Lam { param, body } => Ok(substitute_lam(param, *body, &arg)),
+    Ntv { native } => {
+      let index = native.args.iter().filter(|a| a.is_some()).count() + 1;
+      if let Some(result) = native_apply_arg(native, index, arg) {
+        let result_eval = eval(result, scope, options)?;
+        Ok(result_eval)
+      } else {
+        Err(err(format!(
+          "native function applied to too many arguments"
+        )))
+      }
+    }
     App {
       fun: fun2,
       arg: arg_internal,

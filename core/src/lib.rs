@@ -84,19 +84,24 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
                 }
               }
               ReplInput::Decls(Decl::Use(u)) => {
-                let loaded = loaded_modules.clone();
-                let res = load_module_files(&u.module_path, loaded);
-                match res {
-                  Ok(loaded) => {
-                    if options.debug {
-                      for module in loaded.modules() {
-                        println!("Adding module {} to scope", module.path());
+                if loaded_modules.get_module(&u.module_path).is_some() {
+                  // Module already loaded, just update scope
+                  global = loaded_modules.global(&module_path).unwrap();
+                } else {
+                  let loaded = loaded_modules.clone();
+                  let res = load_module_files(&u.module_path, loaded);
+                  match res {
+                    Ok(loaded) => {
+                      if options.debug {
+                        for module in loaded.modules() {
+                          println!("Adding module {} to scope", module.path());
+                        }
                       }
+                      loaded_modules = loaded;
+                      global = loaded_modules.global(&module_path).unwrap();
                     }
-                    loaded_modules = loaded;
-                    global = loaded_modules.global(&module_path).unwrap();
+                    Err(e) => eprintln!("loading error {e}"),
                   }
-                  Err(e) => eprintln!("loading error {e}"),
                 }
               }
               ReplInput::Decls(decl) => {

@@ -276,3 +276,11 @@ def function_name (args: Types) : ReturnType
 - Uppercase for types/type classes
 - Prefer descriptive names
 - Comment with `//` (never `--`)
+
+## Formatting
+
+Always format Rust code according to `rustfmt.toml` before committing:
+
+```bash
+cargo fmt
+```

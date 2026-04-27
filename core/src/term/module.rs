@@ -295,29 +295,54 @@ impl<'a> GlobalScope<'a> {
   pub fn for_module(path: &'a ModulePath, loaded: &'a LoadedModules) -> Option<GlobalScope<'a>> {
     let builtins = &loaded.builtins;
     let current_module = loaded.modules.iter().find(|(k, _)| k == &path)?.1;
-    let uses: Vec<&Use> = current_module
-      .get_uses()
-      .iter()
-      .map(|ctx| ctx.value())
-      .collect();
+
+    // Collect opens from current module and prelude only
     let mut opens: Vec<&Open> = current_module
       .get_opens()
       .iter()
       .map(|ctx| ctx.value())
       .collect();
     let prelude = loaded.get_module(&builtins.prelude_path);
-    let implicit = if let Some(prelude) = prelude {
+    if let Some(prelude) = prelude {
       opens = opens
         .into_iter()
         .chain(prelude.get_opens().iter().map(|ctx| ctx.value()))
         .collect();
-      vec![(path, current_module), (&builtins.prelude_path, prelude)]
-    } else {
-      vec![(path, current_module)]
-    };
-    let implicit: Map<&ModulePath, &Module> = implicit.into_iter().collect();
-    let mut modules = Self::load_modules(&uses, loaded);
-    modules.extend(implicit);
+    }
+
+    // Collect explicitly used modules
+    let uses: Vec<&Use> = current_module
+      .get_uses()
+      .iter()
+      .map(|ctx| ctx.value())
+      .collect();
+
+    let mut modules: Map<&ModulePath, &Module> = Map::new();
+
+    // Always include current module
+    modules.insert(path, current_module);
+
+    // Include explicitly used modules
+    for use_decl in uses {
+      if let Some(mo) = loaded.get_module(&use_decl.module_path) {
+        modules.insert(&use_decl.module_path, mo);
+      }
+    }
+
+    // Include default implicit modules: prelude, init, io, math
+    let default_names: Vec<ModulePath> = vec![
+      builtins.prelude_path.clone(),
+      ModulePath::top("init"),
+      ModulePath::top("io"),
+      ModulePath::top("math"),
+    ];
+    for default_name in default_names {
+      if let Some(mo) = loaded.get_module(&default_name) {
+        let mo_path = mo.path();
+        modules.insert(mo_path, mo);
+      }
+    }
+
     Some(GlobalScope::from_modules(path, modules, opens, loaded))
   }
   fn from_modules(
