@@ -1,5 +1,8 @@
 # Monad language
 
+> [!WARNING]
+> Monad is in **alpha release** and under heavy development. Many features are not implemented yet and are not tested properly. Expect breaking changes, incomplete functionality, and potential bugs.
+
 A purely functional systems programming language compatible with Rust made just for fun.
 It is inspired by the languages Rust, Haskell, Idris, Lean and Elm.
 

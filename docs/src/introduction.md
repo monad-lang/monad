@@ -2,6 +2,9 @@
 
 The Monad language is a dependently typed programming language with compatibility with Rust.
 
+> [!WARNING]
+> Monad is in **alpha release** and under heavy development. Many features are not implemented yet and are not tested properly. Expect breaking changes, incomplete functionality, and potential bugs.
+
 ![The Monad Logo](images/monad-lang-background.png)
 
 ## Hello World
