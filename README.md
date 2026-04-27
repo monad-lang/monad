@@ -6,6 +6,8 @@
 A purely functional systems programming language compatible with Rust made just for fun.
 It is inspired by the languages Rust, Haskell, Idris, Lean and Elm.
 
+🌐 **[Homepage](https://monad-lang.org)** · **[Documentation](docs/src/introduction.md)**
+
 ## Feature goals
 
 - Dependent types
