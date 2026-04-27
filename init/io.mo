@@ -7,7 +7,7 @@ type IO A {
 
 instance Monad IO {
   def pure (a: A) : IO A :=
-    a
+    IO.io a
   def bind (a : IO A) (f : A -> IO B) : IO B :=
     match a {
       io a => f a

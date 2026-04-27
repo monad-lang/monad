@@ -41,7 +41,7 @@ type IO A {
 
 ```monad
 instance Monad IO {
-    def pure (a : A) : IO A := a
+    def pure (a : A) : IO A := IO.io a
     def bind (a : IO A) (f : A -> IO B) : IO B :=
         match a {
             io a => f a
@@ -60,7 +60,7 @@ open IO
 def greet : IO Unit :=
     do {
         println "Enter your name:"
-        -- name <- getLine  -- Note: getLine not yet implemented
+        // name <- getLine  -- Note: getLine not yet implemented
         println "Hello!"
     }
 ```

@@ -383,6 +383,7 @@ enum DoStatement {
   Let { name: Identifier, value: Term },
   Bind { name: Identifier, value: Term },
   Return { value: Term },
+  Expr { value: Term },
 }
 
 fn do_statement<X: Clone>(input: Span<X>) -> Res<DoStatement, X> {
@@ -408,6 +409,9 @@ fn do_statement<X: Clone>(input: Span<X>) -> Res<DoStatement, X> {
       ),
       |(_, _, name, _, _, _, value, _)| DoStatement::Let { name, value },
     ),
+    map((term, opt(char(';'))), |(value, _)| DoStatement::Expr {
+      value,
+    }),
   ))
   .parse(input)
 }
@@ -432,6 +436,7 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
 
   let mut body = match stmts_iter.next() {
     Some(DoStatement::Return { value }) => value,
+    Some(DoStatement::Expr { value }) => value,
     Some(DoStatement::Let { name, value }) => lets(
       vec![LetVar {
         name,
@@ -458,7 +463,14 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
 
   for stmt in stmts_iter {
     match stmt {
-      DoStatement::Return { .. } => panic!("return must be last statement"),
+      DoStatement::Return { value } => {
+        body = app(pvar(vec!["Monad", "pure"]), value);
+      }
+      DoStatement::Expr { value } => {
+        let underscore = param(id("_"), Term::Hole);
+        let lambda = lam(underscore, body);
+        body = app(pvar(vec!["Monad", "bind"]), app(value, lambda));
+      }
       DoStatement::Let { name, value } => {
         body = lets(
           vec![LetVar {
@@ -722,9 +734,21 @@ fn def_parser(input: Span) -> Res<Def> {
   let (input, params) = def_params(input)?;
   let (input, return_typ) = def_type_annotation(input)?;
   let (input, _) = ws0(input)?;
-  let (input, _) = assignment_operator(input)?;
-  let (input, _) = ws0(input)?;
-  let (input, term) = term(input)?;
+
+  let (input, term) = if input.fragment().starts_with("{") {
+    let (input, _) = char('{')(input)?;
+    let (input, _) = ws0(input)?;
+    let (input, stmts) = many0(preceded(ws0, do_statement)).parse(input)?;
+    let (input, _) = ws0(input)?;
+    let (input, _) = char('}')(input)?;
+    let body = desugar_do_statements(stmts);
+    (input, body)
+  } else {
+    let (input, _) = assignment_operator(input)?;
+    let (input, _) = ws0(input)?;
+    let (input, term) = term(input)?;
+    (input, term)
+  };
 
   if params.is_empty() {
     Ok((input, def(name, type_cons, return_typ, term)))

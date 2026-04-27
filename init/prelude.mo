@@ -29,6 +29,7 @@ class [Functor F] Applicative (F: Type -> Type) {
 
 class [Applicative M] Monad (M: Type -> Type) {
     def bind (a : M A) (f : A -> M B) : M B
+    def pure : A -> M A
 }
 
 infix (>>=) := Monad.bind
