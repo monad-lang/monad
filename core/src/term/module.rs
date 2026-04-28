@@ -588,8 +588,10 @@ impl<'a> GlobalScope<'a> {
                 .map(|c| (c.full_name.clone(), c))
                 .collect::<Vec<(ModulePath, ClassDefRef)>>();
               self.class_defs.extend(class_refs);
+              vec![]
+            } else {
+              refs
             }
-            refs
           })
           .chain([DefRef {
             name: ind.name.clone(),
@@ -657,16 +659,22 @@ impl<'a> Scope<'a> {
   pub fn resolve_name(&self, nref: &NameRef) -> Result<&Term, ScopeError> {
     let global = self.global();
     if let Some(name) = nref.clone().to_path() {
-      let def = global
-        .find_ref(&name)
-        .ok_or_else(|| ScopeError::PathNotFound(name))?;
-      Ok(&def.term)
+      if let Some(def) = global.find_ref(&name) {
+        Ok(&def.term)
+      } else if let Some(class_def) = global.find_class_def(&name) {
+        Ok(class_def.typ())
+      } else {
+        Err(ScopeError::PathNotFound(name))
+      }
     } else if let NameRef::Op(op) = nref {
       let infix = global.find_infix(op)?;
-      let def = global
-        .find_ref(&infix.name)
-        .ok_or_else(|| ScopeError::PathNotFound(infix.name.clone()))?;
-      Ok(&def.term)
+      if let Some(def) = global.find_ref(&infix.name) {
+        Ok(&def.term)
+      } else if let Some(class_def) = global.find_class_def(&infix.name) {
+        Ok(class_def.typ())
+      } else {
+        Err(ScopeError::PathNotFound(infix.name.clone()))
+      }
     } else {
       Err(ScopeError::Generic(format!("{nref} not found")))
     }
@@ -1036,38 +1044,49 @@ impl Module {
       .iter()
       .flat_map(|(_, ctx)| {
         let ind = ctx.value();
-        ind
-          .constructors
-          .iter()
-          .flat_map(|cons| {
-            let name = &cons.name;
-
-            let names = name.open(&opens);
-            names
-              .iter()
-              .map(|name| DefRef {
-                name: name.clone(),
-                typ: &cons.typ,
-                term: &cons.term,
-                module: &self.path,
-                loc: &ctx.loc,
-              })
-              .chain([DefRef {
-                name: name.clone(),
-                typ: &cons.typ,
-                term: &cons.term,
-                module: &self.path,
-                loc: &ctx.loc,
-              }])
-              .collect::<Vec<DefRef>>()
-          })
-          .chain([DefRef {
+        if ind.variant == InductiveVariant::Class {
+          vec![DefRef {
             name: ind.name.clone(),
             typ: &ind.typ,
             term: &ind.term,
             module: &self.path,
             loc: &ctx.loc,
-          }])
+          }]
+        } else {
+          ind
+            .constructors
+            .iter()
+            .flat_map(|cons| {
+              let name = &cons.name;
+
+              let names = name.open(&opens);
+              names
+                .iter()
+                .map(|name| DefRef {
+                  name: name.clone(),
+                  typ: &cons.typ,
+                  term: &cons.term,
+                  module: &self.path,
+                  loc: &ctx.loc,
+                })
+                .chain([DefRef {
+                  name: name.clone(),
+                  typ: &cons.typ,
+                  term: &cons.term,
+                  module: &self.path,
+                  loc: &ctx.loc,
+                }])
+                .collect::<Vec<DefRef>>()
+            })
+            .chain([DefRef {
+              name: ind.name.clone(),
+              typ: &ind.typ,
+              term: &ind.term,
+              module: &self.path,
+              loc: &ctx.loc,
+            }])
+            .collect()
+        }
       })
       .collect();
     self

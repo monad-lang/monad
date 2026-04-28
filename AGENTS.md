@@ -277,6 +277,45 @@ def function_name (args: Types) : ReturnType
 - Prefer descriptive names
 - Comment with `//` (never `--`)
 
+## Troubleshooting & Known Issues
+
+### Class Method Resolution in `def_refs`
+
+**Problem**: Class methods (e.g., `BEq.beq`) were being added to `def_refs` with their type signature as the term. This caused `find_ref` to find them before instance resolution could happen in `find_any_ref`, resulting in "expected function found for {A : Type} -> ..." errors at evaluation time.
+
+**Root cause**: Two places were adding class methods to `def_refs`:
+1. `load_decl` (line ~558) — when loading `Decl::Type` for classes
+2. `get_def_refs` (line ~1123) — via `get_class_method_defs`
+
+**Fix**: Class constructors should NOT be added to `def_refs`. Only the class name itself should be in `def_refs`. Class methods should only be in `class_defs`, so that `find_any_ref` falls through to instance resolution.
+
+**Key invariant**: `def_refs` should contain concrete terms (implementations), NOT type signatures. Class methods are abstract — their concrete terms come from instances.
+
+### Instance Resolution Flow
+
+When resolving a name like `BEq.beq` or `==`:
+1. `resolve_name` → `find_any_name_ref` → `find_any_ref`
+2. `find_any_ref` first tries `find_ref` (def_refs) — if found, returns immediately
+3. If not in def_refs, tries `find_class_def` (class_defs) — if found, derives instance key and calls `find_instance`
+4. `find_instance` matches the instance key against registered instances
+
+**If a class method is in def_refs, step 2 returns the type signature term and instance resolution never happens.**
+
+### BEq Type Signature Bug
+
+The `BEq` class in `init/prelude.mo` originally had:
+```monad
+class BEq A {
+    def beq : A -> B -> Bool  // WRONG: B is unbound
+}
+```
+Should be:
+```monad
+class BEq A {
+    def beq : A -> A -> Bool  // CORRECT
+}
+```
+
 ## Formatting
 
 Always format Rust code according to `rustfmt.toml` before committing:

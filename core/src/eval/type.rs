@@ -824,17 +824,20 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
       }
     }
     Lit {
-      value: Literal::If {
-        ref value,
-        ref then,
-        ref els,
-      },
+      value: Literal::If { value, then, els },
     } => {
-      let _b = type_check(*value.clone(), var("Bool"), &scope)?;
-      let t1 = type_check(*then.clone(), expected_type.clone(), &scope)?;
-      let t2 = type_check(*els.clone(), expected_type.clone(), &scope)?;
+      let b = type_check(*value, var("Bool"), &scope)?;
+      let t1 = type_check(*then, expected_type.clone(), &scope)?;
+      let t2 = type_check(*els, expected_type.clone(), &scope)?;
       if let Ok(typ) = match_resolve_type(t1.typ(), t2.typ(), &scope) {
-        return Ok(typed_term(term, typ));
+        let new_term = Lit {
+          value: Literal::If {
+            value: Box::new(b.term().clone()),
+            then: Box::new(t1.term().clone()),
+            els: Box::new(t2.term().clone()),
+          },
+        };
+        return Ok(typed_term(new_term, typ));
       } else {
         return Err(TypeError::MismatchingBranches(
           t1.typ().clone(),

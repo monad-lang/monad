@@ -69,7 +69,7 @@ open Bool
 
 /// Equals
 class BEq A {
-	def beq : A -> B -> Bool
+	def beq : A -> A -> Bool
 }
 
 instance BEq Bool {

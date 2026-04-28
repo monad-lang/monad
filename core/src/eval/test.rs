@@ -714,3 +714,36 @@ fn test_i64_eq_comparison() {
   let (_, e) = term::<()>("eq_false".into()).finish().unwrap();
   similar!(eval_test(e, &global.scope()).unwrap(), b_false());
 }
+
+#[test]
+fn test_i64_eq_with_default_modules() {
+  // Test == operator using the actual prelude + init modules
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("_");
+  let decls = parse_file(
+    r#"
+    use init
+    use math
+    open IO
+
+    def eq_true : Bool := 42 == 42
+    def eq_false : Bool := 42 == 13
+    def neq_test : Bool := 1 == 2
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, decls, &mut loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let global = loaded.scope_of_decls(&path, &decls);
+
+  let (_, e) = term::<()>("eq_true".into()).finish().unwrap();
+  similar!(eval_test(e, &global.scope()).unwrap(), b_true());
+
+  let (_, e) = term::<()>("eq_false".into()).finish().unwrap();
+  similar!(eval_test(e, &global.scope()).unwrap(), b_false());
+
+  let (_, e) = term::<()>("neq_test".into()).finish().unwrap();
+  similar!(eval_test(e, &global.scope()).unwrap(), b_false());
+}
