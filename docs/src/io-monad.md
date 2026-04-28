@@ -90,7 +90,7 @@ def greetWithName (name : String) : IO Unit {
 
 | Statement | Syntax | Desugars To |
 |-----------|--------|-------------|
-| Bind | `x <- action` | `Monad.bind action (fn x => ...)` |
+| Bind | `let x <- action` | `Monad.bind action (fn x => ...)` |
 | Let | `let x := value` | `let x := value in ...` |
 | Return | `return value` | `Monad.pure value` |
 | Expression | `expr` | `Monad.bind expr (fn _ => ...)` |

@@ -393,8 +393,17 @@ fn do_statement<X: Clone>(input: Span<X>) -> Res<DoStatement, X> {
       |(value, _)| DoStatement::Return { value },
     ),
     map(
-      (name, ws0, tag("<-"), ws0, term, opt(char(';'))),
-      |(name, _, _, _, value, _)| DoStatement::Bind { name, value },
+      (
+        tag("let"),
+        ws1,
+        name,
+        ws0,
+        tag("<-"),
+        ws0,
+        term,
+        opt(char(';')),
+      ),
+      |(_, _, name, _, _, _, value, _)| DoStatement::Bind { name, value },
     ),
     map(
       (

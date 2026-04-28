@@ -827,7 +827,7 @@ fn test_do_parser_simple_return() {
 #[test]
 fn test_do_parser_simple_bind() {
   let do_block = |s: &'static str| do_parser::<()>(s.into());
-  let (_, r) = do_block(r#"do { x <- monadic; return x }"#).unwrap();
+  let (_, r) = do_block(r#"do { let x <- monadic; return x }"#).unwrap();
   let expected = app(
     pvar(vec!["Monad", "bind"]),
     app(var("monadic"), lam(par("x"), var("x"))),
@@ -838,7 +838,7 @@ fn test_do_parser_simple_bind() {
 #[test]
 fn test_do_parser_let_and_bind() {
   let do_block = |s: &'static str| do_parser::<()>(s.into());
-  let (_, r) = do_block(r#"do { let x := 1; y <- monadic; return y }"#).unwrap();
+  let (_, r) = do_block(r#"do { let x := 1; let y <- monadic; return y }"#).unwrap();
   let expected = lets(
     vec![LetVar {
       name: id("x"),
@@ -856,7 +856,7 @@ fn test_do_parser_let_and_bind() {
 #[test]
 fn test_do_parser_multiple_binds() {
   let do_block = |s: &'static str| do_parser::<()>(s.into());
-  let (_, r) = do_block(r#"do { a <- ma; b <- mb; return b }"#).unwrap();
+  let (_, r) = do_block(r#"do { let a <- ma; let b <- mb; return b }"#).unwrap();
   let inner = app(
     pvar(vec!["Monad", "bind"]),
     app(var("mb"), lam(par("b"), var("b"))),
@@ -871,15 +871,15 @@ fn test_do_parser_multiple_binds() {
 #[test]
 fn test_do_parser_with_spaces() {
   let do_block = |s: &'static str| do_parser::<()>(s.into());
-  let (_, r) = do_block(r#"do { x <- monadic; return x }"#).unwrap();
-  let (_, r2) = do_block(r#"do { x <- monadic; return x }"#).unwrap();
+  let (_, r) = do_block(r#"do { let x <- monadic; return x }"#).unwrap();
+  let (_, r2) = do_block(r#"do { let x <- monadic; return x }"#).unwrap();
   similar!(r, r2);
 }
 
 #[test]
 fn test_do_parser_complex_desugar() {
   let do_block = |s: &'static str| do_parser::<()>(s.into());
-  let input = r#"do { let x := 1; y <- get; return y }"#;
+  let input = r#"do { let x := 1; let y <- get; return y }"#;
   let (_, r) = do_block(input).unwrap();
   let middle_bind = app(
     pvar(vec!["Monad", "bind"]),
@@ -995,7 +995,7 @@ fn test_def_do_block_with_params() {
 #[test]
 fn test_def_do_block_bind() {
   let s = r#"def read_val : IO I64 {
-    x <- get_value
+    let x <- get_value
     return x
   }"#
     .into();

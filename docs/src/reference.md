@@ -67,14 +67,14 @@ Two equivalent syntaxes are available:
 ```monad
 // Standard syntax
 def example : IO Unit := do {
-    name <- action;
+    let name <- action;
     let x := value;
     return value
 }
 
 // Inline do block (equivalent)
 def example : IO Unit {
-    name <- action;
+    let name <- action;
     let x := value;
     return value
 }
@@ -84,7 +84,7 @@ def example : IO Unit {
 
 | Statement | Syntax | Desugars To |
 |-----------|--------|-------------|
-| Bind | `x <- action` | `Monad.bind action (fn x => ...)` |
+| Bind | `let x <- action` | `Monad.bind action (fn x => ...)` |
 | Let | `let x := value` | `let x := value in ...` |
 | Return | `return value` | `Monad.pure value` |
 | Expression | `expr` | `Monad.bind expr (fn _ => ...)` |

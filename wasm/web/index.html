@@ -40,6 +40,7 @@ def main (args : List String) : I64 := 42"></textarea>
         <button class="example-btn" data-example="use init&#10;&#10;def is_empty (self : List A) : Bool :=&#10;  match self {&#10;    empty => true,&#10;    cons a tail => false&#10;  }&#10;&#10;def main (args : List String) : Bool := is_empty (List.cons 1 (List.cons 2 List.empty))">list is_empty</button>
         <button class="example-btn" data-example="use init&#10;&#10;def first (self : List A) : Option A :=&#10;  match self {&#10;    empty => none,&#10;    cons a tail => some a&#10;  }&#10;&#10;def main (args : List String) : Option I64 := first (List.cons 42 List.empty)">list first</button>
         <button class="example-btn" data-example="use io&#10;open IO&#10;&#10;def main (args : List String) : IO Unit :=&#10;  println &quot;Hello, World!&quot;">hello world</button>
+        <button class="example-btn" data-example="use io&#10;open IO&#10;&#10;def main (args : List String) : IO Unit {&#10;  println &quot;Hello&quot;;&#10;  let x := 42&#10;  println (ToString.to_string x)&#10;}">do block</button>
       </div>
     </main>
   </div>

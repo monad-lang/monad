@@ -129,14 +129,14 @@ Do notation provides syntactic sugar for monadic operations. It can be used with
 ```monad
 // Standard do notation
 def example : IO Unit := do {
-    x <- get_value
+    let x <- get_value
     let y := x + 1
     return y
 }
 
 // Do block in function definition (equivalent)
 def example : IO Unit {
-    x <- get_value
+    let x <- get_value
     let y := x + 1
     return y
 }
@@ -146,7 +146,7 @@ Do blocks support three kinds of statements:
 
 | Statement | Syntax | Desugars To |
 |-----------|--------|-------------|
-| Bind | `x <- monadic_expr` | `Monad.bind monadic_expr (fn x => ...)` |
+| Bind | `let x <- monadic_expr` | `Monad.bind monadic_expr (fn x => ...)` |
 | Let | `let x := value` | `let x := value in ...` |
 | Return | `return value` | `Monad.pure value` |
 | Expression | `expr` | `Monad.bind expr (fn _ => ...)` |
