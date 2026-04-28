@@ -3,10 +3,12 @@ resolver = "2"
 members = ["core", "wasm"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 authors = ["Anders Christiansen Sørby <anders@sorby.xyz>"]
+homepage = "https://monad-lang.org"
+repository = "https://tangled.org/monad-lang/monad"
 
 [workspace.dependencies]
 nom = "8.0.0"
