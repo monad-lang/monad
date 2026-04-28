@@ -243,20 +243,6 @@ impl Similar for Term {
       (Term::App { fun: f1, arg: a1 }, Term::App { fun: f2, arg: a2 }) => {
         (*f1).similar(&**f2) && (*a1).similar(&**a2)
       }
-      (
-        Let {
-          name: n1,
-          typ: t1,
-          value: v1,
-          body: b1,
-        },
-        Let {
-          name: n2,
-          typ: t2,
-          value: v2,
-          body: b2,
-        },
-      ) => n1.similar(n2) && t1.similar(t2) && (*v1).similar(&**v2) && (*b1).similar(&**b2),
       (Lit { value: v1 }, Lit { value: v2 }) => v1.similar(v2),
       (
         Pi {

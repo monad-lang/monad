@@ -11,13 +11,13 @@ use crate::term::Term::Forall;
 use crate::term::module::{Scope, ScopeError};
 use crate::term::{
   Constructor, Identifier, ModulePath, Native, Par, SourceRange, ann, case, forall, if_term, lam,
-  lam_index, let_term, match_term, mpt, param, pi_name,
+  lam_index, match_term, mpt, param, pi_name,
 };
 use crate::term::{
   Literal,
   NameRef::{self, Id, Index},
   Param,
-  Term::{self, Ann, App, Con, Ctx, Lam, Let, Lit, Ntv, Pi, Type, Var},
+  Term::{self, Ann, App, Con, Ctx, Lam, Lit, Ntv, Pi, Type, Var},
   apps, id,
 };
 
@@ -80,12 +80,6 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
     main_term = apply_dot_macro(main_term);
     main_term = match main_term {
       App { fun, arg } => eval_app(*fun, *arg, scope, &options)?,
-      Let {
-        name,
-        value,
-        body,
-        typ: _,
-      } => substitute(*body, &Id(name), &value),
       Var { name } => resolve_name(&name, scope)?.clone(),
       Ntv { native } => native_execute(native, scope).map_err(|e| Error::Native(e))?,
       Lit {
@@ -375,17 +369,6 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       let typ = substitute(*typ, nref, new_term);
       let body = substitute(*body, nref, new_term);
       forall(param(name, typ), body)
-    }
-    Let {
-      name,
-      typ,
-      value,
-      body,
-    } => {
-      let typ = substitute(*typ, nref, new_term);
-      let value = substitute(*value, nref, new_term);
-      let body = substitute(*body, nref, new_term);
-      let_term(name, typ, value, body)
     }
     Term::Prop => term,
     Type { universe: _ } => term,

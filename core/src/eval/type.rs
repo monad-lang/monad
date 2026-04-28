@@ -734,17 +734,6 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
         Err(ExpectedPi(fun_typ_pi.clone()))
       }
     }
-    Let {
-      name,
-      value,
-      body,
-      typ,
-    } => {
-      let let_t = type_check(*value, *typ, &scope)?;
-      let new_scope = scope.with_local_var(&name, let_t.typ());
-      let bt = type_check(*body, expected_type.clone(), &new_scope)?;
-      Ok(bt)
-    }
     Lit {
       value: Literal::Map { ref value },
     } => {

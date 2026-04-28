@@ -925,13 +925,6 @@ pub enum Term {
     fun: Box<Term>,
     arg: Box<Term>,
   },
-  /// Let expression
-  Let {
-    name: Identifier,
-    typ: Box<Term>,
-    value: Box<Term>,
-    body: Box<Term>,
-  },
   // Type annotation
   Ann {
     term: Box<Term>,
@@ -1052,12 +1045,6 @@ impl Term {
       Var { name: _ } => "var",
       Lam { param: _, body: _ } => "lam",
       App { fun: _, arg: _ } => "app",
-      Let {
-        name: _,
-        value: _,
-        body: _,
-        typ: _,
-      } => "let",
       Lit { value } => match value {
         Literal::Str { value: _ } => "str",
         Literal::Num { value: _ } => "num",
@@ -1095,7 +1082,7 @@ pub trait Typed {
   fn typ(&self) -> &Term;
 }
 
-pub use Term::{Ann, App, Con, Ctx, Forall, Hole, Lam, Let, Lit, Ntv, Pi, Prop, Type, Var};
+pub use Term::{Ann, App, Con, Ctx, Forall, Hole, Lam, Lit, Ntv, Pi, Prop, Type, Var};
 
 impl Display for Term {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1103,12 +1090,6 @@ impl Display for Term {
       Var { name } => write!(f, "{name}"),
       Lam { param, body } => write!(f, "(fn {param} => {body})"),
       App { fun, arg } => write!(f, "({fun} {arg})"),
-      Let {
-        name,
-        value,
-        body,
-        typ: _,
-      } => write!(f, "let {name} := {value}\nin\n{body}"),
       Lit { value } => write!(f, "{value}"),
       Type { universe } => {
         if universe > &0 {
@@ -1301,23 +1282,15 @@ pub fn lets(vars: Vec<LetVar>, body: Term) -> Term {
   assert!(vars.len() >= 1);
   let mut body = body;
   for var in vars.into_iter().rev() {
-    body = Term::Let {
-      name: var.name,
-      typ: Box::new(var.typ),
-      value: Box::new(var.value),
-      body: Box::new(body),
-    }
+    let lam_term = lam(param(var.name, var.typ), body);
+    body = app(lam_term, var.value);
   }
   body
 }
 
 pub fn let_term(name: Identifier, typ: Term, value: Term, body: Term) -> Term {
-  Term::Let {
-    name: name,
-    typ: Box::new(typ),
-    value: Box::new(value),
-    body: Box::new(body),
-  }
+  let lam_term = lam(param(name, typ), body);
+  app(lam_term, value)
 }
 
 pub fn ann(term: Term, typ: Term) -> Term {
