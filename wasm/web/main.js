@@ -1,6 +1,7 @@
-import init, { eval_term } from './monad_wasm.js';
+import init, { WasmRepl } from './monad_wasm.js';
 
 let wasmReady = false;
+let repl = null;
 
 async function main() {
   const status = document.getElementById('status');
@@ -12,6 +13,7 @@ async function main() {
   
   try {
     await init();
+    repl = new WasmRepl();
     wasmReady = true;
     status.textContent = 'Ready';
     status.className = 'ready';
@@ -29,7 +31,7 @@ async function main() {
   }
   
   function runCode() {
-    if (!wasmReady) return;
+    if (!wasmReady || !repl) return;
     
     const source = code.value.trim();
     if (!source) {
@@ -39,7 +41,7 @@ async function main() {
     }
     
     try {
-      const result = eval_term(source);
+      const result = repl.eval(source);
       if (result.is_ok) {
         output.textContent = result.value;
         output.className = 'success';
@@ -79,6 +81,7 @@ async function main() {
     code.value = '';
     output.textContent = '';
     output.className = '';
+    repl = new WasmRepl();
     updateLineNumbers();
   });
   
@@ -87,6 +90,7 @@ async function main() {
       const example = btn.dataset.example.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
       code.value = example;
       updateLineNumbers();
+      repl = new WasmRepl();
       runCode();
     });
   });

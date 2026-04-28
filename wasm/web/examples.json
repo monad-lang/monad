@@ -1,0 +1,26 @@
+[
+  {
+    "name": "x : I64 := 42",
+    "code": "use init\n\ndef x : I64 := 42\n\ndef main (args : List String) : I64 := x"
+  },
+  {
+    "name": "add (x : I64) (y : I64)",
+    "code": "use init\n\nuse math\n\ndef add (x : I64) (y : I64) : I64 := x + y\n\ndef main (args : List String) : I64 := add 1 2"
+  },
+  {
+    "name": "factorial",
+    "code": "use init\n\nuse math\n\ndef factorial (n : I64) : I64 :=\n  if n == 0\n  then 1\n  else n * factorial (n - 1)\n\ndef main (args : List String) : I64 := factorial 5"
+  },
+  {
+    "name": "list is_empty",
+    "code": "use init\n\ndef is_empty (self : List A) : Bool :=\n  match self {\n    empty => true,\n    cons a tail => false\n  }\n\ndef main (args : List String) : Bool := is_empty (List.cons 1 (List.cons 2 List.empty))"
+  },
+  {
+    "name": "list first",
+    "code": "use init\n\ndef first (self : List A) : Option A :=\n  match self {\n    empty => none,\n    cons a tail => some a\n  }\n\ndef main (args : List String) : Option I64 := first (List.cons 42 List.empty)"
+  },
+  {
+    "name": "hello world",
+    "code": "use io\n\nopen IO\n\ndef main (args : List String) : IO Unit :=\n  println \"Hello, World!\""
+  }
+]

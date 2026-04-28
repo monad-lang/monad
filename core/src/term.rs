@@ -1551,10 +1551,22 @@ pub struct Use {
   pub(crate) module_path: ModulePath,
 }
 
+impl Use {
+  pub fn module_path(&self) -> &ModulePath {
+    &self.module_path
+  }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Open {
   pub source_location: SourceRange,
   pub(crate) module_path: ModulePath,
+}
+
+impl Open {
+  pub fn module_path(&self) -> &ModulePath {
+    &self.module_path
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
