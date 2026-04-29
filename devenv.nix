@@ -12,6 +12,8 @@
   packages = with pkgs; [
     wasm-pack
     lld
+    llvm
+    clang
   ];
 
   # https://devenv.sh/languages/

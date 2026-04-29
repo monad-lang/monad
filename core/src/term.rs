@@ -306,6 +306,15 @@ impl InductConstructor {
   pub fn typ(&self) -> &Term {
     &self.typ
   }
+  pub fn params(&self) -> &Vec<Param> {
+    &self.params
+  }
+  pub fn term(&self) -> &Term {
+    &self.term
+  }
+  pub fn inductive_name(&self) -> &ModulePath {
+    &self.inductive_name
+  }
 }
 
 pub fn induct_constructor(
@@ -578,6 +587,9 @@ impl Inductive {
   }
   pub fn variant(&self) -> &InductiveVariant {
     &self.variant
+  }
+  pub fn constructors(&self) -> &Vec<InductConstructor> {
+    &self.constructors
   }
 }
 
@@ -936,6 +948,21 @@ pub struct Constructor {
   pub(crate) args: Vec<Option<Term>>,
 }
 
+impl Constructor {
+  pub fn name(&self) -> &Identifier {
+    &self.name
+  }
+  pub fn typ_name(&self) -> &ModulePath {
+    &self.typ_name
+  }
+  pub fn num_args(&self) -> usize {
+    self.num_args
+  }
+  pub fn args(&self) -> &Vec<Option<Term>> {
+    &self.args
+  }
+}
+
 pub fn constructor(name: Identifier, typ_name: ModulePath, args: Vec<Option<Term>>) -> Constructor {
   let num_args = args.len();
   Constructor {
@@ -1180,6 +1207,71 @@ impl Term {
       Hole => "hole",
       Ann { .. } => "ann",
     }
+  }
+
+  pub fn as_lam(&self) -> Option<(&Par, &Term)> {
+    match self {
+      Lam { param, body } => Some((param, body)),
+      Ctx { term, .. } => term.as_lam(),
+      _ => None,
+    }
+  }
+
+  pub fn as_app(&self) -> Option<(&Term, &Term)> {
+    match self {
+      App { fun, arg } => Some((fun, arg)),
+      Ctx { term, .. } => term.as_app(),
+      _ => None,
+    }
+  }
+
+  pub fn as_if(&self) -> Option<(&Term, &Term, &Term)> {
+    match self {
+      Lit {
+        value:
+          Literal::If {
+            value,
+            then,
+            els,
+          },
+      } => Some((value, then, els)),
+      Ctx { term, .. } => term.as_if(),
+      _ => None,
+    }
+  }
+
+  pub fn as_var(&self) -> Option<&NameRef> {
+    match self {
+      Var { name } => Some(name),
+      Ctx { term, .. } => term.as_var(),
+      _ => None,
+    }
+  }
+
+  pub fn as_con(&self) -> Option<&Constructor> {
+    match self {
+      Con(c) => Some(c),
+      Ctx { term, .. } => term.as_con(),
+      _ => None,
+    }
+  }
+
+  pub fn as_native(&self) -> Option<&Native> {
+    match self {
+      Ntv { native } => Some(native),
+      Ctx { term, .. } => term.as_native(),
+      _ => None,
+    }
+  }
+
+  pub fn collect_params(&self) -> Vec<&Par> {
+    let mut params = vec![];
+    let mut current = self;
+    while let Some((param, body)) = current.as_lam() {
+      params.push(param);
+      current = body;
+    }
+    params
   }
 }
 
@@ -1486,6 +1578,15 @@ impl Def {
   pub fn has_test_attr(&self) -> bool {
     self.attributes.iter().any(|a| a.name.as_str() == "test")
   }
+  pub fn name(&self) -> &ModulePath {
+    &self.name
+  }
+  pub fn typ(&self) -> &Term {
+    &self.typ
+  }
+  pub fn type_constraints(&self) -> &Vec<TypeConstraint> {
+    &self.type_constraints
+  }
 }
 impl AsVarRef for Def {
   fn as_var_ref<'a>(&'a self) -> VarRef<'a> {
@@ -1532,6 +1633,15 @@ pub enum AttrArg {
 pub struct Attribute {
   pub name: Identifier,
   pub args: Vec<AttrArg>,
+}
+
+impl Native {
+  pub fn num_args(&self) -> usize {
+    self.num_args
+  }
+  pub fn args(&self) -> &Vec<Option<Term>> {
+    &self.args
+  }
 }
 
 /// Construct a def with a native body from attribute args
