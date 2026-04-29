@@ -47,7 +47,6 @@ type Term {
  var (name: NameRef),
  lam (param: Param) (body: Term),
  app (fun: Term) (arg: Term),
- let_ (let_: Let),
  lit (lit: Literal),
  match_ (value: Term) (cases: MatchCase),
  con (constructor: Con)

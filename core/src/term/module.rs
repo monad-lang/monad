@@ -17,6 +17,12 @@ use std::collections::HashSet;
 use std::fs::read_to_string;
 use std::{fmt::Display, hash::Hash};
 
+fn default_source_range() -> &'static SourceRange {
+  use std::sync::OnceLock;
+  static DEFAULT: OnceLock<SourceRange> = OnceLock::new();
+  DEFAULT.get_or_init(SourceRange::default)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScopeError {
   Type(Box<TypeError>),
@@ -159,8 +165,7 @@ impl LoadedModules {
     self.modules.insert(module.path().clone(), module);
   }
   pub fn global<'a>(&'a self, for_module: &'a ModulePath) -> Option<GlobalScope<'a>> {
-    let global = GlobalScope::for_module(for_module, self);
-    global
+    GlobalScope::for_module(for_module, self)
   }
 
   pub fn empty() -> LoadedModules {
@@ -187,6 +192,10 @@ impl LoadedModules {
   ) -> GlobalScope<'a> {
     let global = GlobalScope::from_decls(path, decls, self);
     global
+  }
+
+  pub fn scopes(&self) -> LoadedScopes<'_> {
+    LoadedScopes::new(self)
   }
 }
 #[derive(Debug, Clone)]
@@ -225,6 +234,216 @@ impl Builtins {
   }
 }
 
+/// Owned scope data for a module, built from the module and its dependencies
+#[derive(Debug, Clone)]
+pub struct GlobalScopeData {
+  pub module_path: ModulePath,
+  def_refs: Map<ModulePath, (Term, Term, ModulePath)>,
+  class_defs: Map<ModulePath, (Identifier, Term, ModulePath)>,
+  instances: Map<ModulePath, Vec<Instance>>,
+  inductives: Map<ModulePath, Inductive>,
+  classes: Map<ModulePath, Inductive>,
+  infixes: Map<Operator, Infix>,
+}
+
+impl GlobalScopeData {
+  pub fn from_module(module: &Module, loaded: &LoadedModules) -> Self {
+    let builtins = &loaded.builtins;
+
+    // Collect opens from current module and prelude
+    let mut opens: Vec<&Open> = module.get_opens().iter().map(|ctx| ctx.value()).collect();
+    let prelude = loaded.get_module(&builtins.prelude_path);
+    if let Some(prelude) = prelude {
+      opens = opens
+        .into_iter()
+        .chain(prelude.get_opens().iter().map(|ctx| ctx.value()))
+        .collect();
+    }
+
+    // Build visible modules set: current + used + implicit
+    let mut visible_modules: Map<&ModulePath, &Module> = Map::new();
+    visible_modules.insert(module.path(), module);
+
+    // Include explicitly used modules
+    for use_decl in module.get_uses() {
+      if let Some(mo) = loaded.get_module(&use_decl.module_path) {
+        visible_modules.insert(mo.path(), mo);
+      }
+    }
+
+    // Include default implicit modules: prelude, init, io, math
+    let default_names: Vec<ModulePath> = vec![
+      builtins.prelude_path.clone(),
+      ModulePath::top("init"),
+      ModulePath::top("io"),
+      ModulePath::top("math"),
+    ];
+    for default_name in &default_names {
+      if let Some(mo) = loaded.get_module(default_name) {
+        visible_modules.insert(mo.path(), mo);
+      }
+    }
+
+    // Build def_refs from all visible modules
+    let def_refs: Map<ModulePath, (Term, Term, ModulePath)> = visible_modules
+      .iter()
+      .flat_map(|(_mod_path, modu)| {
+        modu
+          .get_def_refs(&opens)
+          .into_iter()
+          .flat_map(|d| {
+            // For defs from other modules (not current), add with module prefix
+            let is_current = modu.path() == module.path();
+            let is_used = module
+              .get_uses()
+              .iter()
+              .any(|u| &u.module_path == modu.path());
+            let is_default = default_names.iter().any(|n| n == modu.path());
+
+            if !is_current && is_used {
+              // Used module: add with module prefix
+              let prefixed_name = modu.path().clone().extend(d.name.clone());
+              vec![
+                (
+                  d.name.clone(),
+                  (d.typ.clone(), d.term.clone(), d.module.clone()),
+                ),
+                (
+                  prefixed_name,
+                  (d.typ.clone(), d.term.clone(), d.module.clone()),
+                ),
+              ]
+            } else {
+              // Current module or implicit: just use original name
+              vec![(
+                d.name.clone(),
+                (d.typ.clone(), d.term.clone(), d.module.clone()),
+              )]
+            }
+          })
+          .collect::<Vec<_>>()
+      })
+      .chain([(
+        mpt("Type"),
+        (
+          builtins.get_type_0().typ.clone(),
+          builtins.get_type_0().term.clone(),
+          builtins.get_type_0().module.clone(),
+        ),
+      )])
+      .collect();
+
+    // Build class_defs from all visible modules
+    let class_defs: Map<ModulePath, (Identifier, Term, ModulePath)> = visible_modules
+      .iter()
+      .flat_map(|(_path, modu)| {
+        modu
+          .get_class_def_refs(&opens)
+          .into_iter()
+          .map(|d| {
+            (
+              d.full_name.clone(),
+              (d.name.clone(), d.typ.clone(), module.path().clone()),
+            )
+          })
+          .collect::<Vec<_>>()
+      })
+      .collect();
+
+    // Build instances from all visible modules
+    let instances: Map<ModulePath, Vec<Instance>> = visible_modules
+      .iter()
+      .flat_map(|(_path, modu)| {
+        modu
+          .instances
+          .iter()
+          .map(|ins| (ins.class_name.clone(), ins.value().clone()))
+      })
+      .fold(Map::new(), merge_push_instance);
+
+    // Build inductives from all visible modules
+    let inductives: Map<ModulePath, Inductive> = visible_modules
+      .iter()
+      .flat_map(|(_path, modu)| {
+        modu
+          .inductives()
+          .into_iter()
+          .map(|ind| (ind.name.clone(), ind.clone()))
+      })
+      .collect();
+
+    // Build classes from all visible modules
+    let classes: Map<ModulePath, Inductive> = visible_modules
+      .iter()
+      .flat_map(|(_path, modu)| {
+        modu
+          .classes()
+          .into_iter()
+          .map(|class| (class.name.clone(), class.clone()))
+      })
+      .collect();
+
+    // Build infixes from all visible modules
+    let infixes: Map<Operator, Infix> = visible_modules
+      .iter()
+      .flat_map(|(_path, modu)| {
+        modu
+          .infix()
+          .into_iter()
+          .map(|ctx| (ctx.value.operator.clone(), ctx.value().clone()))
+      })
+      .collect();
+
+    GlobalScopeData {
+      module_path: module.path().clone(),
+      def_refs,
+      class_defs,
+      instances,
+      inductives,
+      classes,
+      infixes,
+    }
+  }
+}
+
+fn merge_push_instance<K, V>(mut map: Map<K, Vec<V>>, (key, value): (K, V)) -> Map<K, Vec<V>>
+where
+  K: Display + Eq + Ord + Hash + Clone,
+{
+  if let Some(v) = map.get_mut(&key) {
+    v.push(value);
+  } else {
+    map.insert(key, vec![value]);
+  }
+  map
+}
+
+/// Owner of all loaded scope data, built eagerly from LoadedModules
+pub struct LoadedScopes<'a> {
+  loaded: &'a LoadedModules,
+  scopes: Map<ModulePath, GlobalScopeData>,
+}
+
+impl<'a> LoadedScopes<'a> {
+  pub fn new(loaded: &'a LoadedModules) -> Self {
+    let mut scopes = Map::new();
+    let module_paths: Vec<ModulePath> = loaded.modules.keys().cloned().collect();
+    for path in module_paths {
+      if let Some(module) = loaded.get_module(&path) {
+        let data = GlobalScopeData::from_module(module, loaded);
+        scopes.insert(path, data);
+      }
+    }
+    Self { loaded, scopes }
+  }
+
+  pub fn global(&'a self, path: &'a ModulePath) -> Option<GlobalScope<'a>> {
+    let data = self.scopes.get(path)?;
+    let all_scopes = self.scopes.iter().map(|(k, v)| (k, v)).collect();
+    Some(GlobalScope::from_data(path, data, self.loaded, all_scopes))
+  }
+}
+
 /// Scope for a module
 #[derive(Debug, Clone)]
 pub struct GlobalScope<'a> {
@@ -237,6 +456,7 @@ pub struct GlobalScope<'a> {
   inductives: Map<&'a ModulePath, &'a Inductive>,
   classes: Map<&'a ModulePath, &'a Inductive>,
   infixes: Map<&'a Operator, &'a Infix>,
+  all_scopes: Map<&'a ModulePath, &'a GlobalScopeData>,
 }
 
 impl<'a> GlobalScope<'a> {
@@ -274,7 +494,9 @@ impl<'a> GlobalScope<'a> {
     let mut modules = Self::load_modules(&uses, loaded);
     modules.extend(implicit);
 
-    let mut global = GlobalScope::from_modules(path, modules, opens.clone(), loaded);
+    let empty_all_scopes: Map<&ModulePath, &GlobalScopeData> = Map::new();
+    let mut global =
+      GlobalScope::from_modules(path, modules, opens.clone(), loaded, empty_all_scopes);
     for ctx in decls {
       global.load_decl(ctx, &opens, path);
     }
@@ -343,13 +565,21 @@ impl<'a> GlobalScope<'a> {
       }
     }
 
-    Some(GlobalScope::from_modules(path, modules, opens, loaded))
+    let empty_all_scopes: Map<&ModulePath, &GlobalScopeData> = Map::new();
+    Some(GlobalScope::from_modules(
+      path,
+      modules,
+      opens,
+      loaded,
+      empty_all_scopes,
+    ))
   }
   fn from_modules(
     current_path: &'a ModulePath,
     modules: Map<&'a ModulePath, &'a Module>,
     opens: Vec<&'a Open>,
     loaded: &'a LoadedModules,
+    all_scopes: Map<&'a ModulePath, &'a GlobalScopeData>,
   ) -> Self {
     let builtins = &loaded.builtins;
     let def_refs = modules
@@ -401,7 +631,100 @@ impl<'a> GlobalScope<'a> {
       instances,
       classes,
       inductives,
+      all_scopes,
     }
+  }
+
+  fn from_data(
+    current_path: &'a ModulePath,
+    data: &'a GlobalScopeData,
+    loaded: &'a LoadedModules,
+    all_scopes: Map<&'a ModulePath, &'a GlobalScopeData>,
+  ) -> Self {
+    // Build borrowed DefRefs from owned data
+    let def_refs: Map<ModulePath, DefRef<'a>> = data
+      .def_refs
+      .iter()
+      .map(|(name, (typ, term, module))| {
+        (
+          name.clone(),
+          DefRef {
+            name: name.clone(),
+            typ,
+            term,
+            module,
+            loc: default_source_range(),
+          },
+        )
+      })
+      .collect();
+
+    // Build borrowed ClassDefRefs from owned data
+    let class_defs: Map<ModulePath, ClassDefRef<'a>> = data
+      .class_defs
+      .iter()
+      .filter_map(|(name, (short_name, typ, _module_path))| {
+        let class = data
+          .classes
+          .get(name)
+          .or_else(|| data.classes.values().find(|c| c.name == *name))?;
+        Some((
+          name.clone(),
+          ClassDefRef {
+            full_name: name.clone(),
+            name: short_name,
+            typ,
+            class,
+          },
+        ))
+      })
+      .collect();
+
+    // Build borrowed references from owned data
+    let inductives: Map<&'a ModulePath, &'a Inductive> = data
+      .inductives
+      .iter()
+      .map(|(name, ind)| (name, ind))
+      .collect();
+
+    let classes: Map<&'a ModulePath, &'a Inductive> = data
+      .classes
+      .iter()
+      .map(|(name, class)| (name, class))
+      .collect();
+
+    let instances: Map<&'a ModulePath, Vec<&'a Instance>> = data
+      .instances
+      .iter()
+      .map(|(class_name, instances)| (class_name, instances.iter().collect()))
+      .collect();
+
+    let infixes: Map<&'a Operator, &'a Infix> =
+      data.infixes.iter().map(|(op, infix)| (op, infix)).collect();
+
+    GlobalScope {
+      infixes,
+      modules: Map::new(),
+      loaded,
+      current_path,
+      def_refs,
+      class_defs,
+      instances,
+      classes,
+      inductives,
+      all_scopes,
+    }
+  }
+
+  pub fn get_module_scope(&self, module_path: &'a ModulePath) -> Option<GlobalScope<'a>> {
+    let data = self.all_scopes.get(module_path)?;
+    let all_scopes = self.all_scopes.clone();
+    Some(GlobalScope::from_data(
+      module_path,
+      data,
+      self.loaded,
+      all_scopes,
+    ))
   }
 
   pub fn scope(&'a self) -> Scope<'a> {

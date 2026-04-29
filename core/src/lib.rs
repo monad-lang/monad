@@ -50,7 +50,8 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
   let module_path = ModulePath::top("'repl");
   let module = module(module_path.clone(), vec![]);
   loaded_modules.add_module(module);
-  let mut global = loaded_modules.global(&module_path).unwrap();
+  let mut loaded_scopes = loaded_modules.scopes();
+  let mut global = loaded_scopes.global(&module_path).unwrap();
   loop {
     let readline = rl.readline(">> ");
     match readline {
@@ -86,7 +87,8 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
               ReplInput::Decls(Decl::Use(u)) => {
                 if loaded_modules.get_module(&u.module_path).is_some() {
                   // Module already loaded, just update scope
-                  global = loaded_modules.global(&module_path).unwrap();
+                  loaded_scopes = loaded_modules.scopes();
+                  global = loaded_scopes.global(&module_path).unwrap();
                 } else {
                   let loaded = loaded_modules.clone();
                   let res = load_module_files(&u.module_path, loaded);
@@ -98,7 +100,8 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
                         }
                       }
                       loaded_modules = loaded;
-                      global = loaded_modules.global(&module_path).unwrap();
+                      loaded_scopes = loaded_modules.scopes();
+                      global = loaded_scopes.global(&module_path).unwrap();
                     }
                     Err(e) => eprintln!("loading error {e}"),
                   }
@@ -109,7 +112,8 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
                   .get_module_mut(&module_path)
                   .unwrap()
                   .add_decl(decl.clone());
-                global = loaded_modules.global(&module_path).unwrap();
+                loaded_scopes = loaded_modules.scopes();
+                global = loaded_scopes.global(&module_path).unwrap();
               }
             }
           }
@@ -140,7 +144,8 @@ pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<()
   let module = loaded
     .get_module(&path)
     .ok_or_else(|| format!("Module {path} not loaded"))?;
-  let global = loaded.global(&path).expect("Module not loaded");
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&path).expect("Module not loaded");
   if options.debug {
     println!("{global}");
   }

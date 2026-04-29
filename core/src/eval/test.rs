@@ -747,3 +747,165 @@ fn test_i64_eq_with_default_modules() {
   let (_, e) = term::<()>("neq_test".into()).finish().unwrap();
   similar!(eval_test(e, &global.scope()).unwrap(), b_false());
 }
+
+#[test]
+fn test_cross_module_operator_resolution() {
+  // Test that operators from another module resolve correctly
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("test_cross_op");
+  let decls = parse_file(
+    r#"
+    use init
+    use math
+
+    def add_test : I64 := 10 + 20
+    def eq_test : Bool := 10 == 10
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, decls, &mut loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(path.clone(), decls));
+
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&path).expect("scope should exist");
+  let scope = Scope::new(&global);
+
+  let (_, e) = term::<()>("add_test".into()).finish().unwrap();
+  similar!(eval_test(e, &scope).unwrap(), num(30));
+
+  let (_, e) = term::<()>("eq_test".into()).finish().unwrap();
+  similar!(eval_test(e, &scope).unwrap(), b_true());
+}
+
+#[test]
+fn test_cross_module_def_resolution() {
+  // Test that defs from another module are accessible when used
+  let mut loaded = default_modules().unwrap();
+
+  // First module defines a helper function
+  let helper_path = ModulePath::top("helper");
+  let helper_decls = parse_file(
+    r#"
+    use init
+    use math
+
+    def helper_fun (x : I64) : I64 := x * 2
+    "#
+    .into(),
+  )
+  .unwrap();
+  let helper_decls = type_check_module_decls(&helper_path, helper_decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(helper_path.clone(), helper_decls));
+
+  // Second module uses the helper (access via open or direct name after use)
+  let path = ModulePath::top("test_cross_def");
+  let decls = parse_file(
+    r#"
+    use helper
+    use init
+
+    def use_helper : I64 := helper_fun 21
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(path.clone(), decls));
+
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&path).expect("scope should exist");
+  let scope = Scope::new(&global);
+
+  let (_, e) = term::<()>("use_helper".into()).finish().unwrap();
+  similar!(eval_test(e, &scope).unwrap(), num(42));
+}
+
+#[test]
+fn test_module_scope_isolation() {
+  // Test that defs with same name in different modules are isolated
+  let mut loaded = default_modules().unwrap();
+
+  // Module A defines a value
+  let mod_a = ModulePath::top("mod_a");
+  let decls_a = parse_file(
+    r#"
+    def local_val : I64 := 100
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_a = type_check_module_decls(&mod_a, decls_a, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(mod_a.clone(), decls_a));
+
+  // Module B defines a different value with same name
+  let mod_b = ModulePath::top("mod_b");
+  let decls_b = parse_file(
+    r#"
+    def local_val : I64 := 200
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_b = type_check_module_decls(&mod_b, decls_b, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(mod_b.clone(), decls_b));
+
+  // Module C uses only mod_a
+  let path_a = ModulePath::top("test_uses_a");
+  let decls_a = parse_file(
+    r#"
+    use mod_a
+
+    def val : I64 := local_val
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_a = type_check_module_decls(&path_a, decls_a, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(path_a.clone(), decls_a));
+
+  // Module D uses only mod_b
+  let path_b = ModulePath::top("test_uses_b");
+  let decls_b = parse_file(
+    r#"
+    use mod_b
+
+    def val : I64 := local_val
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_b = type_check_module_decls(&path_b, decls_b, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(path_b.clone(), decls_b));
+
+  // Verify module A's scope has val = 100
+  let loaded_scopes = loaded.scopes();
+  let global_a = loaded_scopes.global(&path_a).expect("scope should exist");
+  let scope_a = Scope::new(&global_a);
+
+  let (_, e) = term::<()>("val".into()).finish().unwrap();
+  similar!(eval_test(e, &scope_a).unwrap(), num(100));
+
+  // Verify module B's scope has val = 200
+  let global_b = loaded_scopes.global(&path_b).expect("scope should exist");
+  let scope_b = Scope::new(&global_b);
+
+  let (_, e) = term::<()>("val".into()).finish().unwrap();
+  similar!(eval_test(e, &scope_b).unwrap(), num(200));
+}
