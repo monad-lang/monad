@@ -10,3 +10,7 @@ monad-core = { path = "../core" }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+
+[[test]]
+name = "codegen_tests"
+path = "tests/codegen_tests.rs"
