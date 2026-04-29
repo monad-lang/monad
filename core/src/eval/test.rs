@@ -595,7 +595,7 @@ fn test_simple_instance() {
     infix (+) := HAdd.add
     type I64 {}
 
-    @[native num_add]
+    @[native i64_add]
     def I64.add (a b : I64) : I64
 
     instance HAdd I64 I64 I64 {
@@ -783,7 +783,7 @@ fn test_cross_module_operator_resolution() {
 #[test]
 fn test_cross_module_def_resolution() {
   // Test that defs from another module are accessible when used
-  let mut loaded = default_modules().unwrap();
+  let loaded = default_modules().unwrap();
 
   // First module defines a helper function
   let helper_path = ModulePath::top("helper");
@@ -831,7 +831,7 @@ fn test_cross_module_def_resolution() {
 #[test]
 fn test_module_scope_isolation() {
   // Test that defs with same name in different modules are isolated
-  let mut loaded = default_modules().unwrap();
+  let loaded = default_modules().unwrap();
 
   // Module A defines a value
   let mod_a = ModulePath::top("mod_a");

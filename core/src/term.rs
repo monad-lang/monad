@@ -743,6 +743,90 @@ pub fn case(name: Identifier, args: Vec<Identifier>, value: Term) -> MatchCase {
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, PartialOrd, Ord)]
+pub enum NumSuffix {
+  I8,
+  I16,
+  I32,
+  I64,
+  U8,
+  U16,
+  U32,
+  U64,
+  F32,
+  F64,
+}
+
+impl NumSuffix {
+  pub fn type_name(&self) -> &'static str {
+    match self {
+      NumSuffix::I8 => "I8",
+      NumSuffix::I16 => "I16",
+      NumSuffix::I32 => "I32",
+      NumSuffix::I64 => "I64",
+      NumSuffix::U8 => "U8",
+      NumSuffix::U16 => "U16",
+      NumSuffix::U32 => "U32",
+      NumSuffix::U64 => "U64",
+      NumSuffix::F32 => "F32",
+      NumSuffix::F64 => "F64",
+    }
+  }
+
+  pub fn is_float(&self) -> bool {
+    matches!(self, NumSuffix::F32 | NumSuffix::F64)
+  }
+
+  pub fn is_int(&self) -> bool {
+    !self.is_float()
+  }
+
+  pub fn from_suffix(s: &str) -> Option<NumSuffix> {
+    match s {
+      "i8" => Some(NumSuffix::I8),
+      "i16" => Some(NumSuffix::I16),
+      "i32" => Some(NumSuffix::I32),
+      "i64" => Some(NumSuffix::I64),
+      "u8" => Some(NumSuffix::U8),
+      "u16" => Some(NumSuffix::U16),
+      "u32" => Some(NumSuffix::U32),
+      "u64" => Some(NumSuffix::U64),
+      "f32" => Some(NumSuffix::F32),
+      "f64" => Some(NumSuffix::F64),
+      _ => None,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct F64Wrap(pub f64);
+
+impl PartialEq for F64Wrap {
+  fn eq(&self, other: &Self) -> bool {
+    self.0.to_bits() == other.0.to_bits()
+  }
+}
+
+impl Eq for F64Wrap {}
+
+impl std::hash::Hash for F64Wrap {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    self.0.to_bits().hash(state)
+  }
+}
+
+impl PartialOrd for F64Wrap {
+  fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    self.0.to_bits().partial_cmp(&other.0.to_bits())
+  }
+}
+
+impl Ord for F64Wrap {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    self.0.to_bits().cmp(&other.0.to_bits())
+  }
+}
+
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum Literal {
   Str {
@@ -750,6 +834,11 @@ pub enum Literal {
   },
   Num {
     value: i64,
+    suffix: NumSuffix,
+  },
+  Float {
+    value: F64Wrap,
+    suffix: NumSuffix,
   },
   Map {
     value: MapTerm,
@@ -788,7 +877,14 @@ impl Display for Literal {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Literal::Str { value } => write!(f, "{value:?}"),
-      Literal::Num { value } => write!(f, "{value}"),
+      Literal::Num { value, suffix } => write!(f, "{value}{}", suffix.type_name().to_lowercase()),
+      Literal::Float { value, suffix } => {
+        if suffix == &NumSuffix::F64 {
+          write!(f, "{}", value.0)
+        } else {
+          write!(f, "{}{}", value.0, suffix.type_name().to_lowercase())
+        }
+      }
       Literal::Map { value } => write!(f, "{value}"),
       Literal::Match { value, cases } => {
         let cs = cases
@@ -1016,12 +1112,14 @@ impl Term {
     }
   }
   pub fn is_num(&self) -> bool {
-    match self {
+    matches!(
+      self,
       Term::Lit {
-        value: Literal::Num { value: _ },
-      } => true,
-      _ => false,
-    }
+        value: Literal::Num { .. }
+      } | Term::Lit {
+        value: Literal::Float { .. }
+      }
+    )
   }
   pub fn is_str(&self) -> bool {
     match self {
@@ -1046,15 +1144,12 @@ impl Term {
       Lam { param: _, body: _ } => "lam",
       App { fun: _, arg: _ } => "app",
       Lit { value } => match value {
-        Literal::Str { value: _ } => "str",
-        Literal::Num { value: _ } => "num",
-        Literal::Map { value: _ } => "map",
-        Literal::Match { value: _, cases: _ } => "match",
-        Literal::If {
-          value: _,
-          then: _,
-          els: _,
-        } => "if",
+        Literal::Str { .. } => "str",
+        Literal::Num { .. } => "num",
+        Literal::Float { .. } => "float",
+        Literal::Map { .. } => "map",
+        Literal::Match { .. } => "match",
+        Literal::If { .. } => "if",
       },
       Ntv { native: _ } => "ntv",
       Con(_) => "con",
@@ -1333,7 +1428,34 @@ pub fn str(s: &str) -> Term {
 
 pub fn num(value: i64) -> Term {
   Term::Lit {
-    value: Literal::Num { value },
+    value: Literal::Num {
+      value,
+      suffix: NumSuffix::I64,
+    },
+  }
+}
+
+pub fn num_suffix(value: i64, suffix: NumSuffix) -> Term {
+  Term::Lit {
+    value: Literal::Num { value, suffix },
+  }
+}
+
+pub fn float(value: f64) -> Term {
+  Term::Lit {
+    value: Literal::Float {
+      value: F64Wrap(value),
+      suffix: NumSuffix::F64,
+    },
+  }
+}
+
+pub fn float_suffix(value: f64, suffix: NumSuffix) -> Term {
+  Term::Lit {
+    value: Literal::Float {
+      value: F64Wrap(value),
+      suffix,
+    },
   }
 }
 

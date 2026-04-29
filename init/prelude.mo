@@ -22,6 +22,16 @@ class [HAdd A A A] Add A {
 	def add : A -> A -> A
 }
 
+/// Heterogeneous multiplication
+class HMul A B C {
+	def mul : A -> B -> C
+}
+
+/// Subtraction
+class Sub A {
+	def sub : A -> A -> A
+}
+
 class [Functor F] Applicative (F: Type -> Type) {
     def pure : A -> F A
     def apply : F (A -> B) -> F A -> F B
@@ -48,11 +58,16 @@ class ToString A {
 
 type I64 {}
 type I32 {}
+type I16 {}
+type I8 {}
 
 type U64 {}
 type U32 {}
 type U16 {}
 type U8 {}
+
+type F64 {}
+type F32 {}
 
 type Unit {
 	unit

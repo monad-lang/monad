@@ -10,13 +10,13 @@ use crate::{
   parser::error::{ParseError, ReplParserError},
   term::{
     ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance, LetVar,
-    Literal, MatchCase, ModulePath, NameRef, Open, Operator, Param, SourceContext, SourceRange,
-    StructField,
+    Literal, MatchCase, ModulePath, NameRef, NumSuffix, Open, Operator, Param, SourceContext,
+    SourceRange, StructField,
     Term::{self, Hole, Var},
-    TypeConstraint, Use, app, apps, case, class, class_def, ctx, def, def_native, forall, foralls,
-    id, if_term, induct_constructor, inductive, infix, instance, lam, lams, lets, map_term,
-    match_term, mpvar, num, opr, param, pi_name, pi_typs, pvar, stru, stru_field, ty,
-    type_constraint, var_id,
+    TypeConstraint, Use, app, apps, case, class, class_def, ctx, def, def_native, float_suffix,
+    forall, foralls, id, if_term, induct_constructor, inductive, infix, instance, lam, lams, lets,
+    map_term, match_term, mpvar, num_suffix, opr, param, pi_name, pi_typs, pvar, stru, stru_field,
+    ty, type_constraint, var_id,
   },
 };
 use locate::{LocatedSpan, info};
@@ -226,9 +226,55 @@ fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   ))
 }
 
+fn num_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
+  let suffixes = alt((
+    tag("i8"),
+    tag("i16"),
+    tag("i32"),
+    tag("i64"),
+    tag("u8"),
+    tag("u16"),
+    tag("u32"),
+    tag("u64"),
+    tag("f32"),
+    tag("f64"),
+  ));
+  let (input, s) = recognize(opt(suffixes)).parse(input)?;
+  let suffix = if s.fragment().is_empty() {
+    NumSuffix::I64
+  } else {
+    NumSuffix::from_suffix(s.fragment()).unwrap_or(NumSuffix::I64)
+  };
+  Ok((input, suffix))
+}
+
 fn num_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, value) = i64(input)?;
-  Ok((input, num(value)))
+  let (input, suffix) = num_suffix_parser(input)?;
+  Ok((input, num_suffix(value, suffix)))
+}
+
+fn float_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, s) = recognize((
+    opt(char('-')),
+    take_while(|c: char| c.is_ascii_digit()),
+    char('.'),
+    take_while(|c: char| c.is_ascii_digit()),
+  ))
+  .parse(input)?;
+  let value: f64 = s.fragment().parse().unwrap_or(0.0);
+  let (input, suffix) = float_suffix_parser(input)?;
+  Ok((input, float_suffix(value, suffix)))
+}
+
+fn float_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
+  let (input, s) = recognize(opt(alt((tag("f32"), tag("f64"))))).parse(input)?;
+  let suffix = if s.fragment().is_empty() {
+    NumSuffix::F64
+  } else {
+    NumSuffix::from_suffix(s.fragment()).unwrap_or(NumSuffix::F64)
+  };
+  Ok((input, suffix))
 }
 
 fn lam_param<X: Clone>(input: Span<X>) -> Res<Param, X> {
@@ -696,7 +742,14 @@ fn binop<X: Clone>(input: Span<X>) -> Res<Term, X> {
 }
 
 fn literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((list_literal, string_literal, num_literal, struct_val_parser)).parse(input)
+  alt((
+    list_literal,
+    string_literal,
+    float_literal,
+    num_literal,
+    struct_val_parser,
+  ))
+  .parse(input)
 }
 
 fn list_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {

@@ -4,11 +4,11 @@ use crate::{
   Map, Set, empty_set, set_of,
   term::{
     Ann, ClassDefRef, Decl, Def, Identifier, Inductive, InductiveVariant, Instance, InstanceKey,
-    Named, SourceContext,
+    Literal, NameRef, Named, NumSuffix, SourceContext,
     Term::{Forall, Hole, Pi},
     TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, def, forall, lam_par,
     module::{LoadedModules, names_of_decls},
-    mpvar, param, pi, pi_typs, type_u, type0, typed_term, var,
+    mpvar, num_suffix, param, pi, pi_typs, type_u, type0, typed_term, var,
   },
   vec_fmt,
 };
@@ -54,6 +54,10 @@ pub enum TypeError {
     expected: Term,
     actual: Term,
     locals: Map<Identifier, Term>,
+  },
+  Overflow {
+    value: i64,
+    target: &'static str,
   },
   Many(Vec<TypeError>),
 }
@@ -124,6 +128,9 @@ impl Display for TypeError {
       ),
       TypeError::ConstructorUnknown(identifier) => write!(f, "Unknown constructor {identifier}"),
       TypeError::ExpectedInductive(term) => write!(f, "Expected inductive found {term}"),
+      TypeError::Overflow { value, target } => {
+        write!(f, "Integer overflow: {value} does not fit in {target}")
+      }
     }
   }
 }
@@ -698,6 +705,94 @@ pub fn pi_of_forall_types(arg_type: Term, return_type: Term) -> Term {
   fun_type
 }
 
+const INT_SUFFIXES: [NumSuffix; 8] = [
+  NumSuffix::I8,
+  NumSuffix::I16,
+  NumSuffix::I32,
+  NumSuffix::I64,
+  NumSuffix::U8,
+  NumSuffix::U16,
+  NumSuffix::U32,
+  NumSuffix::U64,
+];
+
+const FLOAT_SUFFIXES: [NumSuffix; 2] = [NumSuffix::F32, NumSuffix::F64];
+
+fn is_number_type_name(name: &str) -> bool {
+  INT_SUFFIXES.iter().any(|s| s.type_name() == name)
+    || FLOAT_SUFFIXES.iter().any(|s| s.type_name() == name)
+}
+
+fn suffix_from_type_name(name: &str) -> Option<NumSuffix> {
+  INT_SUFFIXES
+    .iter()
+    .chain(FLOAT_SUFFIXES.iter())
+    .find(|s| s.type_name() == name)
+    .copied()
+}
+
+fn resolve_num_literal_type(
+  expected: &Term,
+  _default: NumSuffix,
+  _scope: &Scope,
+) -> Result<NumSuffix, TypeError> {
+  if let Term::Var { name } = expected {
+    if let NameRef::Id(id) = name {
+      let name_str = id.as_str();
+      if is_number_type_name(name_str) {
+        if let Some(suffix) = suffix_from_type_name(name_str) {
+          if suffix.is_int() {
+            return Ok(suffix);
+          }
+        }
+      }
+    }
+  }
+  Ok(NumSuffix::I64)
+}
+
+fn resolve_float_literal_type(
+  expected: &Term,
+  _default: NumSuffix,
+  _scope: &Scope,
+) -> Result<NumSuffix, TypeError> {
+  if let Term::Var { name } = expected {
+    if let NameRef::Id(id) = name {
+      let name_str = id.as_str();
+      if is_number_type_name(name_str) {
+        if let Some(suffix) = suffix_from_type_name(name_str) {
+          if suffix.is_float() {
+            return Ok(suffix);
+          }
+        }
+      }
+    }
+  }
+  Ok(NumSuffix::F64)
+}
+
+fn convert_int_literal(value: i64, suffix: NumSuffix) -> Result<Term, TypeError> {
+  let fits = match suffix {
+    NumSuffix::I8 => value >= i64::from(i8::MIN) && value <= i64::from(i8::MAX),
+    NumSuffix::I16 => value >= i64::from(i16::MIN) && value <= i64::from(i16::MAX),
+    NumSuffix::I32 => value >= i64::from(i32::MIN) && value <= i64::from(i32::MAX),
+    NumSuffix::I64 => true,
+    NumSuffix::U8 => value >= 0 && value <= i64::from(u8::MAX),
+    NumSuffix::U16 => value >= 0 && value <= i64::from(u16::MAX),
+    NumSuffix::U32 => value >= 0 && value <= i64::from(u32::MAX),
+    NumSuffix::U64 => value >= 0,
+    _ => return Ok(num_suffix(value, suffix)),
+  };
+  if fits {
+    Ok(num_suffix(value, suffix))
+  } else {
+    Err(TypeError::Overflow {
+      value,
+      target: suffix.type_name(),
+    })
+  }
+}
+
 /// Check and compute the Type of a Term
 /// Resolves type classes
 pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<TypedTerm, TypeError> {
@@ -834,15 +929,40 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
         ));
       }
     }
-    Lit { ref value } => {
-      let primitive_type = match value {
-        Literal::Str { value: _ } => var("String"),
-        Literal::Num { value: _ } => var("I64"),
-        _ => panic!("Lit branch not covered {value}"),
-      };
-      let typ = match_resolve_type(&primitive_type, &expected_type, &scope)?;
-      Ok(typed_term(term, typ))
-    }
+    Lit { ref value } => match value {
+      Literal::Str { value: _ } => {
+        let typ = match_resolve_type(&var("String"), &expected_type, &scope)?;
+        Ok(typed_term(term, typ))
+      }
+      Literal::Num { value, suffix } => {
+        if suffix.is_int() {
+          let target = resolve_num_literal_type(&expected_type, *suffix, &scope)?;
+          let converted = convert_int_literal(*value, target)?;
+          Ok(typed_term(converted, var(target.type_name())))
+        } else {
+          let typ = match_resolve_type(&var("F64"), &expected_type, &scope)?;
+          Ok(typed_term(term, typ))
+        }
+      }
+      Literal::Float { value, suffix } => {
+        if suffix.is_float() {
+          let target = resolve_float_literal_type(&expected_type, *suffix, &scope)?;
+          Ok(typed_term(
+            Term::Lit {
+              value: Literal::Float {
+                value: *value,
+                suffix: target,
+              },
+            },
+            var(target.type_name()),
+          ))
+        } else {
+          let typ = match_resolve_type(&var("F64"), &expected_type, &scope)?;
+          Ok(typed_term(term, typ))
+        }
+      }
+      _ => panic!("Lit branch not covered {value}"),
+    },
     Var { ref name } => {
       let name = name.clone();
       type_check_free_var(term, expected_type.clone(), &name, &scope)

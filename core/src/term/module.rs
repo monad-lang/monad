@@ -271,12 +271,14 @@ impl GlobalScopeData {
       }
     }
 
-    // Include default implicit modules: prelude, init, io, math
+    // Include default implicit modules: prelude, init, io, math, string, number
     let default_names: Vec<ModulePath> = vec![
       builtins.prelude_path.clone(),
       ModulePath::top("init"),
       ModulePath::top("io"),
       ModulePath::top("math"),
+      ModulePath::top("string"),
+      ModulePath::top("number"),
     ];
     for default_name in &default_names {
       if let Some(mo) = loaded.get_module(default_name) {
@@ -298,7 +300,6 @@ impl GlobalScopeData {
               .get_uses()
               .iter()
               .any(|u| &u.module_path == modu.path());
-            let is_default = default_names.iter().any(|n| n == modu.path());
 
             if !is_current && is_used {
               // Used module: add with module prefix
@@ -481,16 +482,26 @@ impl<'a> GlobalScope<'a> {
       .collect();
     let builtins = &loaded.builtins;
     let prelude = loaded.get_module(&builtins.prelude_path);
-    let implicit = if let Some(prelude) = prelude {
+    let mut implicit: Map<&ModulePath, &Module> = Map::new();
+    if let Some(prelude) = prelude {
       opens = opens
         .into_iter()
         .chain(prelude.get_opens().iter().map(|ctx| ctx.value()))
         .collect();
-      vec![(&builtins.prelude_path, prelude)]
-    } else {
-      vec![]
-    };
-    let implicit: Map<&ModulePath, &Module> = implicit.into_iter().collect();
+      implicit.insert(&builtins.prelude_path, prelude);
+    }
+    let default_implicit = vec![
+      ModulePath::top("init"),
+      ModulePath::top("io"),
+      ModulePath::top("math"),
+      ModulePath::top("string"),
+      ModulePath::top("number"),
+    ];
+    for name in default_implicit {
+      if let Some(mo) = loaded.get_module(&name) {
+        implicit.insert(mo.path(), mo);
+      }
+    }
     let mut modules = Self::load_modules(&uses, loaded);
     modules.extend(implicit);
 
@@ -551,12 +562,14 @@ impl<'a> GlobalScope<'a> {
       }
     }
 
-    // Include default implicit modules: prelude, init, io, math
+    // Include default implicit modules: prelude, init, io, math, string, number
     let default_names: Vec<ModulePath> = vec![
       builtins.prelude_path.clone(),
       ModulePath::top("init"),
       ModulePath::top("io"),
       ModulePath::top("math"),
+      ModulePath::top("string"),
+      ModulePath::top("number"),
     ];
     for default_name in default_names {
       if let Some(mo) = loaded.get_module(&default_name) {
@@ -1219,16 +1232,22 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
   let io_path = ModulePath::top("io");
   let init_path = ModulePath::top("init");
   let math_path = ModulePath::top("math");
+  let string_path = ModulePath::top("string");
+  let number_path = ModulePath::top("number");
 
   let prelude_text = include_str!("../../../init/prelude.mo");
   let io_text = include_str!("../../../init/io.mo");
   let math_text = include_str!("../../../init/math.mo");
   let init_text = include_str!("../../../init/init.mo");
+  let string_text = include_str!("../../../init/string.mo");
+  let number_text = include_str!("../../../init/number.mo");
 
   load_module_from_text(prelude_text, prelude_path, &mut loaded)?;
   load_module_from_text(io_text, io_path, &mut loaded)?;
+  load_module_from_text(number_text, number_path, &mut loaded)?;
   load_module_from_text(math_text, math_path, &mut loaded)?;
   load_module_from_text(init_text, init_path, &mut loaded)?;
+  load_module_from_text(string_text, string_path, &mut loaded)?;
 
   Ok(loaded)
 }

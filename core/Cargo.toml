@@ -7,6 +7,7 @@ authors.workspace = true
 
 [dependencies]
 nom.workspace = true
+paste.workspace = true
 clap = { version = "4", features = ["derive"], optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 rustyline = { version = "17.0.2", optional = true }
