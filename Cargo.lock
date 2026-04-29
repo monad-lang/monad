@@ -254,6 +254,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "monad-llvm-codegen"
+version = "0.1.1"
+dependencies = [
+ "monad-core",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "monad-wasm"
 version = "0.1.1"
 dependencies = [
