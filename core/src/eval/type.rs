@@ -1171,7 +1171,13 @@ pub fn add_forall_to_type(mut typ: Term, vars: &Map<&Identifier, &Term>) -> Term
 
 fn type_check_def(def_: Def, scope: &Scope) -> Result<Def, TypeError> {
   let (term, typ) = type_check(def_.term, def_.typ, &scope)?.to_tuple();
-  Ok(def(def_.name, def_.type_constraints, typ, term))
+  Ok(def(
+    def_.name,
+    def_.type_constraints,
+    typ,
+    term,
+    def_.attributes,
+  ))
 }
 
 fn type_check_decls(

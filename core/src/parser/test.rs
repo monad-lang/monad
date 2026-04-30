@@ -2,8 +2,8 @@ use super::*;
 use crate::{
   Map, similar,
   term::{
-    LetVar, Term, app, app2, dpar, forall, induct_constructor, mp, mpt, mpv, num, oper, par, pi,
-    pi_var, pvar, str,
+    AttrArg, Attribute, Decl, LetVar, Native, Par, Term, app, app2, dpar, forall,
+    induct_constructor, mp, mpt, mpv, num, oper, par, pi, pi_var, pvar, str,
     test::{decl_def, decl_inductive, decl_infix, decl_open, decl_use, defs_class},
     typ, var,
   },
@@ -227,8 +227,10 @@ fn test_class() {
       vec![class_def(
         id("map"),
         pi(pi(typ("A"), typ("B")), pi(app2("F", "A"), app2("F", "B"))),
-        None
-      )]
+        None,
+        vec![]
+      )],
+      vec![]
     )
   );
   let s = r#"class [Functor F] Applicative F {
@@ -246,16 +248,18 @@ fn test_class() {
       vec![type_constraint(mpt("Functor"), vec![id("F")])],
       vec![par("F")],
       vec![
-        class_def(id("pure"), pi(typ("A"), app2("F", "A")), None),
+        class_def(id("pure"), pi(typ("A"), app2("F", "A")), None, vec![]),
         class_def(
           id("apply"),
           pi(
             app(typ("F"), pi(typ("A"), typ("B"))),
             pi(app2("F", "A"), app2("F", "B"))
           ),
-          None
+          None,
+          vec![]
         )
-      ]
+      ],
+      vec![]
     )
   );
   let s = r#"class [Applicative M] Monad (M: Type -> Type) {
@@ -273,16 +277,18 @@ fn test_class() {
       vec![type_constraint(mpt("Applicative"), vec![id("M")])],
       vec![dpar("M", pi(typ("Type"), typ("Type")))],
       vec![
-        class_def(id("pure"), pi(typ("A"), app2("M", "A")), None),
+        class_def(id("pure"), pi(typ("A"), app2("M", "A")), None, vec![]),
         class_def(
           id("bind"),
           pi(
             app2("M", "A"),
             pi(pi(typ("A"), app2("M", "B")), app2("M", "B"))
           ),
-          None
+          None,
+          vec![]
         )
-      ]
+      ],
+      vec![]
     )
   );
 }
@@ -524,7 +530,8 @@ fn test_inductive() {
         id("solo"),
         mpv("Solo"),
         vec![]
-      )]
+      )],
+      vec![]
     )
   );
   let s = r#"type Result E A  {
@@ -555,7 +562,8 @@ fn test_inductive() {
           pi(typ("E"), res_t),
           vec![dpar("", typ("E"))]
         )
-      ]
+      ],
+      vec![]
     )
   );
 }
@@ -584,8 +592,10 @@ fn test_instance() {
         lams(
           vec![dpar("f", pi(typ("A"), typ("B"))), dpar("v", app2("F", "A"))],
           oper(var("f"), "|>", var("v"))
-        )
-      )]
+        ),
+        vec![]
+      )],
+      vec![]
     )
   );
 }
@@ -612,7 +622,8 @@ fn test_struct() {
         stru_field(id("data"), typ("MyData"), None),
         stru_field(id("field_type"), typ("Type"), None),
         stru_field(id("text"), typ("String"), Some(str("default")))
-      ]
+      ],
+      vec![]
     )
   );
   let s = r#"struct [Serialize M] MyData (M: Type) {
@@ -632,7 +643,8 @@ fn test_struct() {
       vec![
         stru_field(id("data"), typ("M"), None),
         stru_field(id("text"), typ("String"), Some(str("default")))
-      ]
+      ],
+      vec![]
     )
   );
 }
@@ -643,17 +655,39 @@ fn test_native() {
     def add (a b : I64) : I64
     "#
   .into();
-  let (_, res) = native_parser(s).unwrap();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let native_term = Term::Ntv {
+    native: Native {
+      native_name: id("num_add"),
+      num_args: 2,
+      args: vec![None, None],
+    },
+  };
+  let expected_term = Term::Lam {
+    param: Par::I {
+      typ: Box::new(typ("I64")),
+    },
+    body: Box::new(Term::Lam {
+      param: Par::I {
+        typ: Box::new(typ("I64")),
+      },
+      body: Box::new(native_term),
+    }),
+  };
 
   similar!(
-    res,
-    def_native(
-      id("num_add"),
+    res.value(),
+    &Decl::Def(def(
       mpt("add"),
-      vec![dpar("a", typ("I64")), dpar("b", typ("I64"))],
-      typ("I64"),
-    )
-    .unwrap()
+      vec![],
+      pi(typ("I64"), pi(typ("I64"), typ("I64"))),
+      expected_term,
+      vec![Attribute {
+        name: id("native"),
+        args: vec![AttrArg::Ident(id("num_add"))]
+      }]
+    ))
   );
 }
 
@@ -681,7 +715,8 @@ fn test_def() {
           ">>=",
           lams(vec![par("_")], app(var("pure"), var("unit")))
         )
-      )
+      ),
+      vec![]
     )
   );
   let s = r#"def main (args : List String) : IO Unit :=
@@ -699,7 +734,8 @@ fn test_def() {
       lams(
         vec![dpar("args", app2("List", "String"))],
         apps(var("println"), vec![str("Hello, world!")])
-      )
+      ),
+      vec![]
     )
   );
   let s = r#"def IO.say.hello : IO Unit :=
@@ -714,7 +750,8 @@ fn test_def() {
       mp(vec!["IO", "say", "hello"]),
       vec![],
       app2("IO", "Unit"),
-      apps(var("println"), vec![str("Hello, world!")])
+      apps(var("println"), vec![str("Hello, world!")]),
+      vec![]
     )
   );
   let s = r#"def Lens [Functor F] (S: Type) (T: Type) (A: Type) (B : Type) : Type :=
@@ -741,7 +778,8 @@ fn test_def() {
           dpar("B", typ("Type")),
         ],
         pi(pi(typ("A"), app2("F", "B")), pi(typ("S"), app2("F", "T")))
-      )
+      ),
+      vec![]
     )
   );
 }
@@ -810,7 +848,8 @@ fn module_test() {
         vec![class_def(
           id("map"),
           pi(pi(typ("A"), typ("B")), pi(app2("F", "A"), app2("F", "B"))),
-          None
+          None,
+          vec![]
         )]
       )
     ]
@@ -954,7 +993,8 @@ fn test_def_do_block_simple_expr() {
       mpt("hello"),
       vec![],
       app2("IO", "Unit"),
-      apps(var("println"), vec![str("Hello")])
+      apps(var("println"), vec![str("Hello")]),
+      vec![]
     )
   );
 }
@@ -967,7 +1007,10 @@ fn test_def_do_block_return() {
     .into();
   let (_, res) = def_parser(s).unwrap();
 
-  similar!(res, def(mpt("get_one"), vec![], app2("IO", "I64"), num(1)));
+  similar!(
+    res,
+    def(mpt("get_one"), vec![], app2("IO", "I64"), num(1), vec![])
+  );
 }
 
 #[test]
@@ -987,7 +1030,8 @@ fn test_def_do_block_with_params() {
       lams(
         vec![dpar("name", typ("String"))],
         apps(var("println"), vec![var("name")])
-      )
+      ),
+      vec![]
     )
   );
 }
@@ -1007,7 +1051,13 @@ fn test_def_do_block_bind() {
   );
   similar!(
     res,
-    def(mpt("read_val"), vec![], app2("IO", "I64"), expected_body)
+    def(
+      mpt("read_val"),
+      vec![],
+      app2("IO", "I64"),
+      expected_body,
+      vec![]
+    )
   );
 }
 
@@ -1030,7 +1080,13 @@ fn test_def_do_block_let() {
   );
   similar!(
     res,
-    def(mpt("with_let"), vec![], app2("IO", "I64"), expected_body)
+    def(
+      mpt("with_let"),
+      vec![],
+      app2("IO", "I64"),
+      expected_body,
+      vec![]
+    )
   );
 }
 
@@ -1052,7 +1108,13 @@ fn test_def_do_block_multiple_exprs() {
   );
   similar!(
     res,
-    def(mpt("multi"), vec![], app2("IO", "Unit"), expected_body)
+    def(
+      mpt("multi"),
+      vec![],
+      app2("IO", "Unit"),
+      expected_body,
+      vec![]
+    )
   );
 }
 
@@ -1080,7 +1142,253 @@ fn test_def_do_block_with_constraints() {
           ">>=",
           lams(vec![par("_")], app(var("pure"), var("unit")))
         )
-      )
+      ),
+      vec![]
     )
   );
+}
+
+#[test]
+fn test_attr_arg_named() {
+  let s = r#"@[deprecated {since := "1.0", reason := "use new"}]
+    def foo : IO Unit := println "hi"
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("deprecated"),
+    args: vec![
+      AttrArg::Named {
+        name: id("since"),
+        value: Box::new(AttrArg::Str("1.0".to_string())),
+      },
+      AttrArg::Named {
+        name: id("reason"),
+        value: Box::new(AttrArg::Str("use new".to_string())),
+      },
+    ],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_arg_nested() {
+  let s = r#"@[custom {outer := {inner := value}}]
+    def foo : IO Unit := println "hi"
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("custom"),
+    args: vec![AttrArg::Named {
+      name: id("outer"),
+      value: Box::new(AttrArg::Named {
+        name: id("inner"),
+        value: Box::new(AttrArg::Ident(id("value"))),
+      }),
+    }],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_arg_mixed() {
+  let s = r#"@[custom "arg1" {key := 42} another_arg]
+    def foo : IO Unit := println "hi"
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("custom"),
+    args: vec![
+      AttrArg::Str("arg1".to_string()),
+      AttrArg::Named {
+        name: id("key"),
+        value: Box::new(AttrArg::Num(42)),
+      },
+      AttrArg::Ident(id("another_arg")),
+    ],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_native_with_named_arg() {
+  let s = r#"@[native {name := num_add}]
+    def add (a b : I64) : I64
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let native_term = Term::Ntv {
+    native: Native {
+      native_name: id("num_add"),
+      num_args: 2,
+      args: vec![None, None],
+    },
+  };
+  let expected_term = Term::Lam {
+    param: Par::I {
+      typ: Box::new(typ("I64")),
+    },
+    body: Box::new(Term::Lam {
+      param: Par::I {
+        typ: Box::new(typ("I64")),
+      },
+      body: Box::new(native_term),
+    }),
+  };
+
+  similar!(
+    res.value(),
+    &Decl::Def(def(
+      mpt("add"),
+      vec![],
+      pi(typ("I64"), pi(typ("I64"), typ("I64"))),
+      expected_term,
+      vec![Attribute {
+        name: id("native"),
+        args: vec![AttrArg::Named {
+          name: id("name"),
+          value: Box::new(AttrArg::Ident(id("num_add")))
+        }]
+      }]
+    ))
+  );
+}
+
+#[test]
+fn test_attr_arg_group() {
+  let s = r#"@[custom [1, "hello", ident]]
+    def foo : IO Unit := println "hi"
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("custom"),
+    args: vec![AttrArg::Group(vec![
+      AttrArg::Num(1),
+      AttrArg::Str("hello".to_string()),
+      AttrArg::Ident(id("ident")),
+    ])],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_arg_group_trailing_comma() {
+  let s = r#"@[custom [1, 2,]]
+    def foo : IO Unit := println "hi"
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("custom"),
+    args: vec![AttrArg::Group(vec![AttrArg::Num(1), AttrArg::Num(2)])],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_arg_nested_group() {
+  let s = r#"@[custom {outer := {a := 1, b := 2}}]
+    def foo : IO Unit := println "hi"
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("custom"),
+    args: vec![AttrArg::Named {
+      name: id("outer"),
+      value: Box::new(AttrArg::Group(vec![
+        AttrArg::Named {
+          name: id("a"),
+          value: Box::new(AttrArg::Num(1)),
+        },
+        AttrArg::Named {
+          name: id("b"),
+          value: Box::new(AttrArg::Num(2)),
+        },
+      ])),
+    }],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_arg_named_with_group() {
+  let s = r#"@[custom {outer := [1, 2, 3]}]
+    def foo : IO Unit := println "hi"
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("custom"),
+    args: vec![AttrArg::Named {
+      name: id("outer"),
+      value: Box::new(AttrArg::Group(vec![
+        AttrArg::Num(1),
+        AttrArg::Num(2),
+        AttrArg::Num(3),
+      ])),
+    }],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_arg_nested_groups() {
+  let s = r#"@[custom [[1, 2], [3, 4]]]
+    def foo : IO Unit := println "hi"
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("custom"),
+    args: vec![AttrArg::Group(vec![
+      AttrArg::Group(vec![AttrArg::Num(1), AttrArg::Num(2)]),
+      AttrArg::Group(vec![AttrArg::Num(3), AttrArg::Num(4)]),
+    ])],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
 }

@@ -1507,6 +1507,7 @@ pub fn extract_constructors(
       typ: _,
       variant,
       term: _,
+      attributes: _,
     }) => match variant {
       InductiveVariant::Generic => constructors
         .into_iter()

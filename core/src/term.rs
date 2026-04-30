@@ -274,6 +274,7 @@ pub fn stru(
   constraints: Vec<TypeConstraint>,
   params: Vec<Param>,
   fields: Vec<StructField>,
+  attributes: Vec<Attribute>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, type0());
   let con_params = fields
@@ -299,6 +300,7 @@ pub fn stru(
     typ,
     variant: InductiveVariant::Struct,
     term,
+    attributes,
   }
 }
 
@@ -370,6 +372,7 @@ pub fn inductive(
   params: Vec<Param>,
   typ: Term,
   constructors: Vec<InductConstructor>,
+  attributes: Vec<Attribute>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, typ.replace_hole(type0));
 
@@ -382,6 +385,7 @@ pub fn inductive(
     typ,
     constructors,
     term,
+    attributes,
   }
 }
 
@@ -390,10 +394,21 @@ pub struct ClassDef {
   pub(crate) name: Identifier,
   pub(crate) typ: Term,
   pub default: Option<Term>,
+  pub attributes: Vec<Attribute>,
 }
 
-pub fn class_def(name: Identifier, typ: Term, default: Option<Term>) -> ClassDef {
-  ClassDef { name, typ, default }
+pub fn class_def(
+  name: Identifier,
+  typ: Term,
+  default: Option<Term>,
+  attributes: Vec<Attribute>,
+) -> ClassDef {
+  ClassDef {
+    name,
+    typ,
+    default,
+    attributes,
+  }
 }
 
 pub fn class(
@@ -401,6 +416,7 @@ pub fn class(
   constraints: Vec<TypeConstraint>,
   params: Vec<Param>,
   defs: Vec<ClassDef>,
+  attributes: Vec<Attribute>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, type0());
   let con_typs = defs.iter().map(|d| d.typ.clone()).collect();
@@ -428,6 +444,7 @@ pub fn class(
     constraints,
     typ,
     term,
+    attributes,
   }
 }
 
@@ -440,6 +457,7 @@ pub struct Instance {
   pub(crate) impls_map: Map<Identifier, Def>,
   cons: Constructor,
   typ: Term,
+  pub attributes: Vec<Attribute>,
 }
 
 impl Instance {
@@ -479,6 +497,7 @@ pub fn instance(
   constraints: Vec<TypeConstraint>,
   args: Vec<Term>,
   impls: Vec<Def>,
+  attributes: Vec<Attribute>,
 ) -> Instance {
   let num_args = impls.len();
   let impls_map = impls
@@ -512,6 +531,7 @@ pub fn instance(
     impls_map,
     constraints,
     typ,
+    attributes,
   }
 }
 
@@ -538,6 +558,7 @@ pub struct Inductive {
   term: Term,
   typ: Term,
   pub(crate) constructors: Vec<InductConstructor>,
+  pub attributes: Vec<Attribute>,
 }
 
 pub trait AsVarRef {
@@ -1465,6 +1486,7 @@ pub struct Def {
   pub(crate) typ: Term,
   pub term: Term,
   pub(crate) type_constraints: Vec<TypeConstraint>,
+  pub attributes: Vec<Attribute>,
 }
 
 impl Def {
@@ -1478,12 +1500,19 @@ impl AsVarRef for Def {
   }
 }
 
-pub fn def(name: ModulePath, type_cons: Vec<TypeConstraint>, typ: Term, term: Term) -> Def {
+pub fn def(
+  name: ModulePath,
+  type_cons: Vec<TypeConstraint>,
+  typ: Term,
+  term: Term,
+  attributes: Vec<Attribute>,
+) -> Def {
   Def {
     name,
     type_constraints: type_cons,
     typ,
     term,
+    attributes,
   }
 }
 
@@ -1494,12 +1523,31 @@ pub struct Native {
   pub(crate) args: Vec<Option<Term>>,
 }
 
-/// Construct a valid native def
-pub fn def_native(
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrArg {
+  Ident(Identifier),
+  Str(String),
+  Num(i64),
+  Named {
+    name: Identifier,
+    value: Box<AttrArg>,
+  },
+  Group(Vec<AttrArg>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attribute {
+  pub name: Identifier,
+  pub args: Vec<AttrArg>,
+}
+
+/// Construct a def with a native body from attribute args
+pub fn def_with_native(
   native_name: Identifier,
   name: ModulePath,
   params: Vec<Param>,
   return_typ: Term,
+  attributes: Vec<Attribute>,
 ) -> Result<Def, String> {
   let typ = if params.is_empty() {
     return_typ
@@ -1519,7 +1567,7 @@ pub fn def_native(
   };
 
   let term = lam_indecies(params, body);
-  Ok(def(name, vec![], typ, term))
+  Ok(def(name, vec![], typ, term, attributes))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -372,7 +372,14 @@ pub fn decl_inductive(
   typ: Term,
   constructors: Vec<InductConstructor>,
 ) -> Decl {
-  Decl::Type(inductive(name, constraints, params, typ, constructors))
+  Decl::Type(inductive(
+    name,
+    constraints,
+    params,
+    typ,
+    constructors,
+    vec![],
+  ))
 }
 
 pub fn decl_infix(operator: Operator, name: ModulePath) -> Decl {
@@ -380,7 +387,7 @@ pub fn decl_infix(operator: Operator, name: ModulePath) -> Decl {
 }
 
 pub fn decl_def(name: ModulePath, type_cons: Vec<TypeConstraint>, typ: Term, term: Term) -> Decl {
-  Decl::Def(def(name, type_cons, typ, term))
+  Decl::Def(def(name, type_cons, typ, term, vec![]))
 }
 
 pub fn defs_class(
@@ -389,7 +396,7 @@ pub fn defs_class(
   args: Vec<Param>,
   funs: Vec<ClassDef>,
 ) -> Decl {
-  Decl::Type(class(name, constraints, args, funs))
+  Decl::Type(class(name, constraints, args, funs, vec![]))
 }
 
 #[test]
