@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use monad_core::{eval::EvalOptions, run};
+use monad_core::{eval::EvalOptions, run, run_tests};
 
 #[cfg(feature = "repl")]
 use monad_core::repl;
@@ -20,6 +20,13 @@ enum Commands {
     debug: bool,
     #[arg(value_name = "ARGS", trailing_var_arg = true)]
     args: Vec<String>,
+  },
+
+  Test {
+    #[arg(value_name = "FILE")]
+    input: PathBuf,
+    #[arg(short, long, default_value_t = false)]
+    debug: bool,
   },
 }
 
@@ -42,6 +49,16 @@ fn main() -> Result<(), String> {
     }
     Commands::Run { input, debug, args } => {
       let result = run(input, args, EvalOptions { debug });
+      match result {
+        Ok(_) => (),
+        Err(ref e) => {
+          println!("error: {e}")
+        }
+      }
+      result
+    }
+    Commands::Test { input, debug } => {
+      let result = run_tests(input, EvalOptions { debug });
       match result {
         Ok(_) => (),
         Err(ref e) => {

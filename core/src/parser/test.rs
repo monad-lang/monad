@@ -1392,3 +1392,23 @@ fn test_attr_arg_nested_groups() {
     _ => panic!("expected Def"),
   }
 }
+
+#[test]
+fn test_attr_test() {
+  let s = r#"@[test]
+    def test_addition : Bool :=
+      1 + 1 == 2
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("test"),
+    args: vec![],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}

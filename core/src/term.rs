@@ -1493,6 +1493,9 @@ impl Def {
   pub fn to_typed_term(self) -> TypedTerm {
     typed_term(self.term, self.typ)
   }
+  pub fn has_test_attr(&self) -> bool {
+    self.attributes.iter().any(|a| a.name.as_str() == "test")
+  }
 }
 impl AsVarRef for Def {
   fn as_var_ref<'a>(&'a self) -> VarRef<'a> {

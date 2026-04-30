@@ -9,12 +9,12 @@ use crate::eval::{EvalOptions, eval};
 use crate::parser::{ReplInput, repl_parser};
 #[cfg(feature = "repl")]
 use crate::term::Decl;
-use crate::term::Term::Hole;
+use crate::term::Term::{self, Con, Hole};
 #[cfg(feature = "repl")]
 use crate::term::module::module;
 use crate::term::module::{default_modules, load_module_files};
-use crate::term::{ModulePath, mpt, strings_to_list_term};
-use crate::term::{Term, app};
+use crate::term::{Constructor, ModulePath, mpt, strings_to_list_term};
+use crate::term::{app, id};
 
 pub mod eval;
 pub mod parser;
@@ -181,4 +181,145 @@ pub fn vec_fmt<T: Display>(v: &Vec<T>) -> String {
     .map(|t| format!("{t}"))
     .collect::<Vec<String>>()
     .join(", ")
+}
+
+enum TestResult {
+  Pass,
+  Fail,
+  FailWithMessage(String),
+}
+
+fn detect_test_result(term: &Term) -> TestResult {
+  match term {
+    Term::Ctx { term, .. } => detect_test_result(term),
+    Con(Constructor {
+      name,
+      typ_name,
+      args,
+      ..
+    }) => {
+      if typ_name == &mpt("Bool") {
+        if name == &id("true") {
+          return TestResult::Pass;
+        } else if name == &id("false") {
+          return TestResult::Fail;
+        }
+      }
+      if typ_name == &mpt("IO") {
+        if let Some(Some(inner)) = args.first() {
+          return detect_test_result(inner);
+        }
+      }
+      if typ_name == &mpt("Result") {
+        if name == &id("ok") {
+          return TestResult::Pass;
+        } else if name == &id("err") {
+          if let Some(Some(msg_term)) = args.first() {
+            let msg = extract_string_literal(msg_term);
+            return TestResult::FailWithMessage(msg.unwrap_or_else(|| msg_term.to_string()));
+          }
+          return TestResult::Fail;
+        }
+      }
+      TestResult::FailWithMessage(format!("unexpected result: {term}"))
+    }
+    _ => TestResult::FailWithMessage(format!("unexpected result: {term}")),
+  }
+}
+
+fn extract_string_literal(term: &Term) -> Option<String> {
+  match term {
+    Term::Ctx { term, .. } => extract_string_literal(term),
+    Term::Lit {
+      value: crate::term::Literal::Str { value },
+    } => Some(value.clone()),
+    _ => None,
+  }
+}
+
+pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
+  let path: ModulePath = input.into();
+  let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
+  let test_path = ModulePath::new(vec![id("std"), id("test")]);
+  loaded = load_module_files(&test_path, loaded).map_err(|e| format!("{e}"))?;
+  loaded = load_module_files(&path, loaded).map_err(|e| format!("{e}"))?;
+  let module = loaded
+    .get_module(&path)
+    .ok_or_else(|| format!("Module {path} not loaded"))?;
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&path).expect("Module not loaded");
+  if options.debug {
+    println!("{global}");
+  }
+
+  let test_defs: Vec<_> = module
+    .defs()
+    .into_iter()
+    .filter(|ctx| ctx.value().has_test_attr())
+    .collect();
+
+  if test_defs.is_empty() {
+    return Err("No tests found".to_string());
+  }
+
+  let mut passed = 0;
+  let mut failed = 0;
+  let mut failures: Vec<(String, String)> = Vec::new();
+
+  for ctx in &test_defs {
+    let def = ctx.value();
+    let name = def.name.to_string();
+    let term = def.term.clone();
+
+    let (term, typ) = match type_check(term, Hole, &global.scope()) {
+      Ok(tt) => tt.to_tuple(),
+      Err(e) => {
+        failed += 1;
+        failures.push((name.clone(), format!("type error: {e}")));
+        continue;
+      }
+    };
+
+    if options.debug {
+      println!("test {name} : {typ}");
+    }
+
+    let result = match eval(term, &global.scope(), &options) {
+      Ok(t) => t,
+      Err(e) => {
+        failed += 1;
+        failures.push((name.clone(), format!("eval error: {e}")));
+        continue;
+      }
+    };
+
+    if options.debug {
+      println!("  eval: {result}");
+    }
+
+    match detect_test_result(&result) {
+      TestResult::Pass => {
+        passed += 1;
+        println!("PASS {name}");
+      }
+      TestResult::Fail => {
+        failed += 1;
+        println!("FAIL {name}");
+      }
+      TestResult::FailWithMessage(msg) => {
+        failed += 1;
+        println!("FAIL {name}: {msg}");
+        failures.push((name.clone(), msg));
+      }
+    }
+  }
+
+  let total = passed + failed;
+  println!("{passed}/{total} tests passed");
+
+  if failed > 0 {
+    Err(format!("{failed} test(s) failed"))
+  } else {
+    Ok(())
+  }
 }
