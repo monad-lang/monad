@@ -27,7 +27,9 @@ instance Add String {
 	def add (a b : String) : String := String.concat a b
 }
 
-infix (++) := String.concat
+instance Append String {
+	def append (a b : String) : String := String.concat a b
+}
 
 def String.is_empty (s : String) : Bool :=
 	I64.beq (String.length s) 0

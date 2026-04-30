@@ -32,6 +32,17 @@ class Sub A {
 	def sub : A -> A -> A
 }
 
+class Div A {
+	def div : A -> A -> A
+}
+
+infix (/) := Div.div
+
+infix (*) := HMul.mul
+
+infix (-) := Sub.sub
+
+
 class [Functor F] Applicative (F: Type -> Type) {
     def pure : A -> F A
     def apply : F (A -> B) -> F A -> F B
@@ -159,7 +170,17 @@ def List.append (a b : List A) : List A :=
 		cons el_a tail => List.cons el_a (List.append tail b)
 	}
 
-infix (++) := append
+/// Append b to value a
+class Append A {
+	def append (a b : A) : A
+}
+
+// TODO
+// instance [A] Append (List A) {
+// 	def append (a b : List A) : List A = List.append a b
+// }
+
+infix (++) := Append.append
 
 def List.first (self : List A) : Option A :=
 	match self {

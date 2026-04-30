@@ -188,7 +188,7 @@ macro_rules! int_ops {
         let n = extract_num_at(&terms, 0)?;
         Ok(Term::Lit {
           value: Literal::Str {
-            value: (n as $ty).to_string(),
+            value: n.to_string(),
           },
         })
       }

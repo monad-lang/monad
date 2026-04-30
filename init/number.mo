@@ -1,16 +1,6 @@
 
 /// Number types and operations
 
-class Div A {
-	def div : A -> A -> A
-}
-
-infix (/) := Div.div
-
-infix (*) := HMul.mul
-
-infix (-) := Sub.sub
-
 // I8
 
 @[native i8_add]
