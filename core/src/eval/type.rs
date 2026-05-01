@@ -624,15 +624,25 @@ pub fn type_check_free_var(
 ) -> Result<TypedTerm, TypeError> {
   use TypeError::*;
   let defined = scope.find_var_ref_of(nref, &expected_type)?;
-  if let VarRef::UpdateRef {
-    new_path,
-    term: _,
-    typ: _,
-  } = defined
-  {
-    term = Var {
-      name: new_path.clone().into(),
-    };
+  match defined {
+    VarRef::UpdateRef {
+      new_path,
+      term: _,
+      typ: _,
+    } => {
+      term = Var {
+        name: new_path.clone().into(),
+      };
+    }
+    _ => {
+      if let NameRef::Op(op) = nref {
+        if let Ok(infix) = scope.global().find_infix(op) {
+          term = Var {
+            name: NameRef::P(infix.name().clone()),
+          };
+        }
+      }
+    }
   }
   let defined_type = defined.typ();
   if !expected_type.is_known() {

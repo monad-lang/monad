@@ -1933,6 +1933,12 @@ pub struct Infix {
   name: ModulePath,
 }
 
+impl Infix {
+  pub fn name(&self) -> &ModulePath {
+    &self.name
+  }
+}
+
 impl Display for Infix {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let Infix { operator, name } = self;
