@@ -44,22 +44,28 @@ impl<'a> ConstraintSolver<'a> {
 
   /// Check if all constraints of an instance are satisfiable.
   ///
-  /// Builds a substitution from the matched key args against class params,
-  /// then resolves each constraint recursively.
+  /// The key contains the concrete type args (e.g., `{A → I64}`).
+  /// For each constraint like `[Add A]`, we look up `A` in the key's args
+  /// to get the concrete type, then check that an instance exists.
   pub fn check_instance(
     &mut self,
     instance: &'a Instance,
     key: &InstanceKey,
-    class: &'a Inductive,
+    _class: &'a Inductive,
   ) -> bool {
     if instance.constraints.is_empty() {
       return true;
     }
 
-    let subst = build_substitution(key, class, instance);
+    // Build a map from type variable names to concrete types from the key
+    let key_args: Map<Identifier, &Term> = key
+      .args
+      .iter()
+      .map(|p| (p.name.clone(), p.typ.as_ref()))
+      .collect();
 
     for constraint in &instance.constraints {
-      if !self.check_constraint(constraint, &subst) {
+      if !self.check_constraint(constraint, &key_args) {
         return false;
       }
     }
@@ -70,13 +76,22 @@ impl<'a> ConstraintSolver<'a> {
   fn check_constraint(
     &mut self,
     constraint: &TypeConstraint,
-    subst: &Map<Identifier, Term>,
+    key_args: &Map<Identifier, &Term>,
   ) -> bool {
-    let Some(concrete_type) = constraint.resolve_type(subst) else {
+    // Get the concrete type for each constraint var from the key args
+    let concrete_types: Vec<Term> = constraint
+      .vars()
+      .iter()
+      .filter_map(|v| key_args.get(v).map(|t| (*t).clone()))
+      .collect();
+
+    // If we couldn't resolve all vars, skip (will be caught elsewhere)
+    if concrete_types.is_empty() {
       return true;
-    };
+    }
 
     let class_name = constraint.class();
+    let concrete_type = &concrete_types[0];
     let visit_key = format!("{class_name}({concrete_type})");
 
     if self.visiting.contains(&visit_key) {
@@ -84,7 +99,7 @@ impl<'a> ConstraintSolver<'a> {
     }
     self.visiting.insert(visit_key.clone());
 
-    let result = self.resolve_constraint(class_name, &concrete_type);
+    let result = self.resolve_constraint(class_name, concrete_type);
 
     self.visiting.remove(&visit_key);
     result
@@ -104,28 +119,6 @@ impl<'a> ConstraintSolver<'a> {
 
     self.check_instance(instance, &key, class)
   }
-}
-
-/// Build a substitution map from InstanceKey args → instance args,
-/// using class params as the bridge.
-fn build_substitution(
-  key: &InstanceKey,
-  class: &Inductive,
-  instance: &Instance,
-) -> Map<Identifier, Term> {
-  let mut subst = Map::new();
-  for key_arg in &key.args {
-    if let Some((idx, class_param)) = class
-      .params
-      .iter()
-      .enumerate()
-      .find(|(_, p)| p.name == key_arg.name)
-      && let Some(inst_arg) = instance.args.get(idx)
-    {
-      subst.insert(class_param.name.clone(), inst_arg.clone());
-    }
-  }
-  subst
 }
 
 /// Build an InstanceKey for a constraint like `Add I64`.

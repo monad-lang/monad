@@ -22,6 +22,11 @@ class [HAdd A A A] Add A {
 	def add : A -> A -> A
 }
 
+// TODO: Fix scoping of type variables in constrained instances
+// instance [Add A] HAdd A A A {
+// 	def add (a b : A) : A := Add.add a b
+// }
+
 /// Heterogeneous multiplication
 class HMul A B C {
 	def mul : A -> B -> C
