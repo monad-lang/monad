@@ -277,6 +277,12 @@ def function_name (args: Types) : ReturnType
 - Prefer descriptive names
 - Comment with `//` (never `--`)
 
+### Rust Code Style
+
+- Always use `use` statements at the top of the file instead of fully qualified paths
+- Group `use` statements logically (standard library, external crates, local modules)
+- Example: prefer `use crate::term::{Identifier, Term, param};` over `crate::term::Identifier`
+
 ## Troubleshooting & Known Issues
 
 ### Class Method Resolution in `def_refs`
