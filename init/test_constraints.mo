@@ -103,3 +103,8 @@ def test_beq_bool_false2 : Bool :=
 @[test]
 def test_beq_bool_true2 : Bool :=
     false == false
+
+// Test 9: Append String instance works
+@[test]
+def test_append_string : Bool :=
+    "a" ++ "b" == "ab"

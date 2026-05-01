@@ -682,10 +682,17 @@ impl<'a> GlobalScope<'a> {
       .class_defs
       .iter()
       .filter_map(|(name, (short_name, typ, _module_path))| {
+        // Extract class name from full name (first component)
+        let class_name = if name.len() > 1 {
+          let ids = name.clone().to_vec();
+          ModulePath::new(ids[..1].to_vec())
+        } else {
+          name.clone()
+        };
         let class = data
           .classes
-          .get(name)
-          .or_else(|| data.classes.values().find(|c| c.name == *name))?;
+          .get(&class_name)
+          .or_else(|| data.classes.values().find(|c| c.name == class_name))?;
         Some((
           name.clone(),
           ClassDefRef {
@@ -784,8 +791,7 @@ impl<'a> GlobalScope<'a> {
   }
 
   pub fn find_class_def(&'_ self, name: &ModulePath) -> Option<&'_ ClassDefRef<'_>> {
-    let class_def = self.class_defs.get(name)?;
-    Some(class_def)
+    self.class_defs.get(name)
   }
 
   pub fn find_inductive(&self, name: &ModulePath) -> Option<&Inductive> {
