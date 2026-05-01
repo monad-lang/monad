@@ -86,3 +86,20 @@ def test_option_operations : Bool :=
       some _ => true,
       none => false
     }
+
+// Test 8: BEq Bool instance works
+@[test]
+def test_beq_bool_true : Bool :=
+    true == true
+
+@[test]
+def test_beq_bool_false : Bool :=
+    not (true == false)
+
+@[test]
+def test_beq_bool_false2 : Bool :=
+    not (false == true)
+
+@[test]
+def test_beq_bool_true2 : Bool :=
+    false == false

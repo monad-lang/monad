@@ -463,7 +463,16 @@ impl Instance {
           .args
           .get(index)
           .expect("instance args did not match class");
-        arg == &*key_arg.typ
+        // Compare by converting both to ModulePath to handle Id vs P variants
+        let arg_path = match arg {
+          Term::Var { name } => name.to_path(),
+          _ => None,
+        };
+        let key_path = match &*key_arg.typ {
+          Term::Var { name } => name.to_path(),
+          _ => None,
+        };
+        arg_path == key_path
       } else {
         true // irrelevant
       }
