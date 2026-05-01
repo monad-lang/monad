@@ -1228,12 +1228,7 @@ impl Term {
   pub fn as_if(&self) -> Option<(&Term, &Term, &Term)> {
     match self {
       Lit {
-        value:
-          Literal::If {
-            value,
-            then,
-            els,
-          },
+        value: Literal::If { value, then, els },
       } => Some((value, then, els)),
       Ctx { term, .. } => term.as_if(),
       _ => None,

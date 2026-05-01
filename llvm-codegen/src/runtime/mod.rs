@@ -1,15 +1,15 @@
 pub struct RuntimeBuilder;
 
 impl RuntimeBuilder {
-    pub fn c_source() -> &'static str {
-        r#"#include <stdlib.h>
+  pub fn c_source() -> &'static str {
+    r#"#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdatomic.h>
 
 typedef struct {
-    int64_t refcount;
+    _Atomic(int64_t) refcount;
     uint16_t tag;
     uint16_t flags;
 } Header;
@@ -95,13 +95,9 @@ StringObj* alloc_string(char* data, int64_t length) {
     return s;
 }
 
-void monad_print_i64(int64_t n) {
-    printf("%ld\n", n);
-}
-
 void monad_print_str(char* s) {
     printf("%s\n", s);
 }
 "#
-    }
+  }
 }

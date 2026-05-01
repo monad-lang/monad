@@ -310,7 +310,7 @@ pub type NativeFun = fn(Vec<Term>) -> Result<Term, NativeError>;
 
 pub fn load_native_funs() -> Map<Identifier, NativeFun> {
   let v: Vec<(Identifier, NativeFun)> = vec![
-    (id("println"), println),
+    (id("print_str"), println),
     (id("i8_add"), i8_add),
     (id("i8_sub"), i8_sub),
     (id("i8_mul"), i8_mul),
