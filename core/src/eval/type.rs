@@ -4,7 +4,7 @@ use crate::{
   Map, Set, empty_set, set_of,
   term::{
     Ann, ClassDefRef, Decl, Def, Identifier, Inductive, InductiveVariant, Instance, InstanceKey,
-    Literal, NameRef, Named, NumSuffix, SourceContext,
+    Literal, ModulePath, NameRef, Named, NumSuffix, SourceContext,
     Term::{Forall, Hole, Pi},
     TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, def, forall, lam_par,
     module::{LoadedModules, names_of_decls},
@@ -14,6 +14,14 @@ use crate::{
 };
 
 use super::*;
+
+use crate::term::module::Scope;
+
+fn is_known_type_name(name: &ModulePath, scope: &Scope) -> bool {
+  scope.find_inductive(name).is_ok()
+    || scope.global().find_ref(name).is_some()
+    || scope.global().find_class_def(name).is_some()
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeError {
@@ -226,8 +234,48 @@ pub fn type_check_instance<'a>(
     Err(Generic("wrong class name".into()))?;
   }
 
+  // Collect type variables from constraints and instance args FIRST
+  let mut type_vars: crate::Map<Identifier, Term> = crate::Map::new();
+  let default_type = Term::Type { universe: 0 };
+  for constraint in &instance.constraints {
+    for var in constraint.vars() {
+      type_vars.insert(var.clone(), default_type.clone());
+    }
+  }
+  for arg in &instance.args {
+    if let Term::Var { name } = arg {
+      if let Some(id) = name.as_id() {
+        let path = id.clone().to_path();
+        if !is_known_type_name(&path, scope) {
+          type_vars.entry(id.clone()).or_insert(default_type.clone());
+        }
+      }
+    }
+  }
+
+  // Also collect free type variables from class constructor param types
+  let cons = class
+    .constructors
+    .first()
+    .expect("Class needs to have at least one constructor");
+  for param in &cons.params {
+    let param_typ = param.typ();
+    for fv in free_vars(param_typ, &empty_set()) {
+      let path = fv.clone().to_path();
+      if !is_known_type_name(&path, scope) {
+        type_vars.entry(fv).or_insert(default_type.clone());
+      }
+    }
+  }
+
+  // Add type variables to scope BEFORE type checking args
+  let mut scope = scope.clone();
+  for (var, typ) in &type_vars {
+    scope = scope.with_forall(var, typ);
+  }
+
   for (param, arg) in class.params.iter().zip(instance.args.iter()) {
-    type_check(arg.clone(), *param.typ.clone(), scope)?;
+    type_check(arg.clone(), *param.typ.clone(), &scope)?;
   }
 
   let cons = class
@@ -238,15 +286,30 @@ pub fn type_check_instance<'a>(
   for param in class_defs {
     if let Some(impl_def) = instance.impls_map.get_mut(&param.name) {
       let class_def_type = param.typ();
-      let typ = match_resolve_type(class_def_type, &impl_def.typ, scope)?;
-      let (term, _) = type_check(impl_def.term.clone(), typ.clone(), scope)?.to_tuple();
+      let typ = match_resolve_type(class_def_type, &impl_def.typ, &scope)?;
+      let (term, _) = type_check(impl_def.term.clone(), typ.clone(), &scope)?.to_tuple();
       impl_def.term = term;
-      impl_def.typ = typ;
+      // Wrap type with forall bindings for type variables
+      impl_def.typ = wrap_with_foralls(typ, &type_vars);
     } else {
       Err(MissingImplementation(param.name.clone()))?;
     }
   }
   Ok(instance)
+}
+
+/// Wrap a type with forall bindings for the given type variables.
+fn wrap_with_foralls(typ: Term, vars: &crate::Map<Identifier, Term>) -> Term {
+  use crate::term::Term::Forall;
+  let mut result = typ;
+  for (name, param_typ) in vars {
+    result = Forall {
+      name: name.clone(),
+      typ: Box::new(param_typ.clone()),
+      body: Box::new(result),
+    };
+  }
+  result
 }
 
 pub fn join_many_results<T, E>(list: Vec<Result<T, E>>) -> (Vec<T>, Vec<E>) {

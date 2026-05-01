@@ -50,6 +50,22 @@
   git-hooks.hooks = {
     rustfmt.enable = true;
     clippy.enable = true;
+    rust-tests = {
+      enable = true;
+      entry = ''
+        cargo test
+      '';
+      pass_filenames = false;
+      files = "\\.(rs|mo)$";
+    };
+    monad-tests = {
+      enable = true;
+      entry = ''
+        cargo run -- test init/tests.mo
+      '';
+      pass_filenames = false;
+      files = "\\.(rs|mo)$";
+    };
   };
 
   # See full reference at https://devenv.sh/reference/options/

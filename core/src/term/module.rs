@@ -947,13 +947,13 @@ impl<'a> GlobalScope<'a> {
           .impls_map
           .iter()
           .map(|(name, imp)| {
-            let name = instance
+            let full_name = instance
               .name
               .clone()
               .extend(ModulePath::single(name.clone()));
 
             DefRef {
-              name,
+              name: full_name,
               typ: &imp.typ,
               term: &imp.term,
               module,

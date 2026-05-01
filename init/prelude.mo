@@ -18,14 +18,18 @@ class HAdd A B C {
 }
 
 /// Homogenous addition
-class [HAdd A A A] Add A {
+class Add A {
 	def add : A -> A -> A
 }
 
-// TODO: Fix scoping of type variables in constrained instances
-// instance [Add A] HAdd A A A {
-// 	def add (a b : A) : A := Add.add a b
-// }
+// TODO: Circular instances - Add/HAdd bridging is handled by concrete instances in number.mo
+ // instance [HAdd A A A] Add A {
+ // 	def add (a b : A) : A := HAdd.add a b
+ // }
+
+ // instance [Add A] HAdd A A A {
+ // 	def add (a b : A) : A := Add.add a b
+ // }
 
 /// Heterogeneous multiplication
 class HMul A B C {
