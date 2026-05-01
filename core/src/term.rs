@@ -2,7 +2,10 @@ pub mod module;
 #[cfg(test)]
 pub mod test;
 
-use crate::{Map, parser::locate::Info, term::module::GlobalScope, vec_fmt};
+use crate::{
+  Map, eval::constraint::check_instance_constraints, parser::locate::Info,
+  term::module::GlobalScope, vec_fmt,
+};
 use std::{
   fmt::Display,
   hash::Hash,
@@ -237,6 +240,11 @@ impl TypeConstraint {
   pub fn class(&self) -> &ModulePath {
     &self.class
   }
+  /// Get the concrete type for this constraint's first var from a substitution map.
+  /// For `[Add A]` with `subst {A → I64}`, returns `Some(I64)`.
+  pub fn resolve_type(&self, subst: &Map<Identifier, Term>) -> Option<Term> {
+    self.vars.first().and_then(|v| subst.get(v).cloned())
+  }
 }
 
 pub fn type_constraint(class: ModulePath, vars: Vec<Identifier>) -> TypeConstraint {
@@ -466,12 +474,11 @@ impl Instance {
   }
 
   /// Check instance if match the InstanceKey
-  pub fn matches(&self, key: &InstanceKey, class: &Inductive, _global: &GlobalScope) -> bool {
+  pub fn matches(&self, key: &InstanceKey, class: &Inductive, global: &GlobalScope) -> bool {
     if key.args.len() != self.args.len() {
       return false;
     }
-    // TODO constraints
-    let res = key.args.iter().all(|key_arg| {
+    let matches_key = key.args.iter().all(|key_arg| {
       if let Some((index, _c_param)) = class
         .params
         .iter()
@@ -487,7 +494,16 @@ impl Instance {
         true // irrelevant
       }
     });
-    res
+    if !matches_key {
+      return false;
+    }
+
+    // Check that all instance constraints are satisfiable
+    if self.constraints.is_empty() {
+      return true;
+    }
+
+    check_instance_constraints(global, self, key, class)
   }
 }
 

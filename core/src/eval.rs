@@ -1,3 +1,4 @@
+pub mod constraint;
 pub mod native;
 #[cfg(test)]
 pub mod test;
