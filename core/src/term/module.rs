@@ -128,9 +128,9 @@ pub struct LoadedModules {
 
 impl Display for LoadedModules {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "Loaded Modules:\n")?;
+    writeln!(f, "Loaded Modules:")?;
     for module in self.modules.values() {
-      write!(f, "{}\n", module)?;
+      writeln!(f, "{}", module)?;
     }
     Ok(())
   }
@@ -190,8 +190,7 @@ impl LoadedModules {
     path: &'a ModulePath,
     decls: &'a Vec<SourceContext<Decl>>,
   ) -> GlobalScope<'a> {
-    let global = GlobalScope::from_decls(path, decls, self);
-    global
+    GlobalScope::from_decls(path, decls, self)
   }
 
   pub fn scopes(&self) -> LoadedScopes<'_> {
@@ -206,6 +205,12 @@ pub struct Builtins {
   pub(crate) type_map: Map<u64, Term>,
   pub(crate) prelude_path: ModulePath,
 }
+impl Default for Builtins {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl Builtins {
   pub fn new() -> Self {
     Builtins {
@@ -440,7 +445,7 @@ impl<'a> LoadedScopes<'a> {
 
   pub fn global(&'a self, path: &'a ModulePath) -> Option<GlobalScope<'a>> {
     let data = self.scopes.get(path)?;
-    let all_scopes = self.scopes.iter().map(|(k, v)| (k, v)).collect();
+    let all_scopes = self.scopes.iter().collect();
     Some(GlobalScope::from_data(path, data, self.loaded, all_scopes))
   }
 }
@@ -694,17 +699,9 @@ impl<'a> GlobalScope<'a> {
       .collect();
 
     // Build borrowed references from owned data
-    let inductives: Map<&'a ModulePath, &'a Inductive> = data
-      .inductives
-      .iter()
-      .map(|(name, ind)| (name, ind))
-      .collect();
+    let inductives: Map<&'a ModulePath, &'a Inductive> = data.inductives.iter().collect();
 
-    let classes: Map<&'a ModulePath, &'a Inductive> = data
-      .classes
-      .iter()
-      .map(|(name, class)| (name, class))
-      .collect();
+    let classes: Map<&'a ModulePath, &'a Inductive> = data.classes.iter().collect();
 
     let instances: Map<&'a ModulePath, Vec<&'a Instance>> = data
       .instances
@@ -712,8 +709,7 @@ impl<'a> GlobalScope<'a> {
       .map(|(class_name, instances)| (class_name, instances.iter().collect()))
       .collect();
 
-    let infixes: Map<&'a Operator, &'a Infix> =
-      data.infixes.iter().map(|(op, infix)| (op, infix)).collect();
+    let infixes: Map<&'a Operator, &'a Infix> = data.infixes.iter().collect();
 
     GlobalScope {
       infixes,
@@ -745,7 +741,7 @@ impl<'a> GlobalScope<'a> {
   }
 
   pub fn get_native(&self, native_name: &Identifier) -> Option<&NativeFun> {
-    self.loaded.native.get(&native_name)
+    self.loaded.native.get(native_name)
   }
 
   pub fn builtins(&self) -> &Builtins {
@@ -763,17 +759,17 @@ impl<'a> GlobalScope<'a> {
   }
 
   pub fn get_module(&self, path: &ModulePath) -> Option<&Module> {
-    self.modules.get(path).map(|v| *v)
+    self.modules.get(path).copied()
   }
 
   pub fn inductives(&self) -> Vec<&Inductive> {
-    self.inductives.values().map(|v| *v).collect()
+    self.inductives.values().copied().collect()
   }
   pub fn classes(&self) -> Vec<&Inductive> {
-    self.classes.values().map(|v| *v).collect()
+    self.classes.values().copied().collect()
   }
   pub fn modules(&self) -> Vec<&Module> {
-    self.modules.values().map(|v| *v).collect()
+    self.modules.values().copied().collect()
   }
   pub fn all_known_names(&self) -> Set<&ModulePath> {
     self.def_refs.keys().collect()
@@ -814,20 +810,20 @@ impl<'a> GlobalScope<'a> {
     Ok(infix)
   }
   pub fn find_ref(&'_ self, name: &ModulePath) -> Option<&DefRef<'_>> {
-    self.def_refs.get(&name)
+    self.def_refs.get(name)
   }
   pub fn find_any_ref(&'_ self, name: &ModulePath, typ: &Term) -> Result<VarRef<'_>, ScopeError> {
-    if let Some(def) = self.find_ref(&name) {
+    if let Some(def) = self.find_ref(name) {
       Ok(def.to_var_ref())
-    } else if let Some(def) = self.find_class_def(&name) {
+    } else if let Some(def) = self.find_class_def(name) {
       let key = derive_instance_key(def, typ)?;
       let instance = self
         .find_instance(&key)
-        .ok_or_else(|| ScopeError::InstanceNotFound(key))?;
+        .ok_or(ScopeError::InstanceNotFound(key))?;
       let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
       let ins_def = self
         .find_ref(&ins_def_name)
-        .ok_or_else(|| ScopeError::PathNotFound(ins_def_name))?;
+        .ok_or(ScopeError::PathNotFound(ins_def_name))?;
       Ok(ins_def.to_update_ref())
     } else {
       Err(ScopeError::PathNotFound(name.clone()))
@@ -855,7 +851,7 @@ impl<'a> GlobalScope<'a> {
     match ctx.value() {
       Decl::Def(def) => {
         let name = &def.name;
-        let names = name.open(&opens);
+        let names = name.open(opens);
         let def_refs: Map<ModulePath, DefRef> = names
           .iter()
           .map(|name| DefRef {
@@ -884,7 +880,7 @@ impl<'a> GlobalScope<'a> {
           .flat_map(|cons| {
             let name = &cons.name;
 
-            let names = name.open(&opens);
+            let names = name.open(opens);
             let refs = names
               .iter()
               .map(|name| DefRef {
@@ -909,7 +905,7 @@ impl<'a> GlobalScope<'a> {
                 .iter()
                 .flat_map(|class_def| {
                   let def_name = ind.name.clone().extend(class_def.name.clone().to_path());
-                  let names = def_name.open(&opens);
+                  let names = def_name.open(opens);
                   names
                     .into_iter()
                     .map(|path| class_def_ref(path, &class_def.name, &class_def.typ, ind))
@@ -969,7 +965,7 @@ impl<'a> GlobalScope<'a> {
         self.def_refs.extend(def_refs);
       }
       Decl::Infix(infix) => {
-        self.infixes.insert(&infix.operator, &infix);
+        self.infixes.insert(&infix.operator, infix);
       }
       _ => (),
     };
@@ -996,7 +992,7 @@ impl<'a> Scope<'a> {
     let global = self.global();
     if let Some(name) = nref.clone().to_path() {
       if let Some(def) = global.find_ref(&name) {
-        Ok(&def.term)
+        Ok(def.term)
       } else if let Some(class_def) = global.find_class_def(&name) {
         Ok(class_def.typ())
       } else {
@@ -1005,7 +1001,7 @@ impl<'a> Scope<'a> {
     } else if let NameRef::Op(op) = nref {
       let infix = global.find_infix(op)?;
       if let Some(def) = global.find_ref(&infix.name) {
-        Ok(&def.term)
+        Ok(def.term)
       } else if let Some(class_def) = global.find_class_def(&infix.name) {
         Ok(class_def.typ())
       } else {
@@ -1019,7 +1015,7 @@ impl<'a> Scope<'a> {
   pub fn find_inductive(&self, name: &ModulePath) -> Result<&Inductive, ScopeError> {
     let ind = self
       .global()
-      .find_inductive(&name)
+      .find_inductive(name)
       .ok_or_else(|| ScopeError::PathNotFound(name.clone()))?;
     Ok(ind)
   }
@@ -1093,7 +1089,7 @@ impl<'a> Scope<'a> {
       }
       Top { global } => {
         let def = global.find_any_name_ref(nref, given_type)?;
-        Ok(def.into())
+        Ok(def)
       }
     }
   }
@@ -1137,10 +1133,8 @@ impl<'a> Scope<'a> {
   }
 }
 
-pub fn find_builtin(name: &ModulePath) -> Option<&Decl> {
-  match name {
-    _ => None,
-  }
+pub fn find_builtin(_name: &ModulePath) -> Option<&Decl> {
+  None
 }
 
 #[derive(Clone, Debug)]
@@ -1170,7 +1164,7 @@ impl From<TypeError> for LoadingError {
 }
 
 fn load_decl_uses_modules(
-  decls: &Vec<SourceContext<Decl>>,
+  decls: &[SourceContext<Decl>],
   loaded: LoadedModules,
 ) -> Result<LoadedModules, LoadingError> {
   let mut uses = decls.iter().filter_map(|ctx| match ctx.value() {
@@ -1222,7 +1216,7 @@ pub fn load_module_from_text(
 ) -> Result<(), LoadingError> {
   let init_decls =
     load_decls_from_text(text).map_err(|e| format!("parse error for {}: {e}", path))?;
-  let init_decls = type_check_module_decls(&path, init_decls, &loaded)?;
+  let init_decls = type_check_module_decls(&path, init_decls, loaded)?;
   loaded.add_module(module(path, init_decls));
   Ok(())
 }
@@ -1281,8 +1275,8 @@ impl Module {
     let instances = self.instances.iter().map(|ctx| ctx.clone().map(Decl::Ins));
     let infix = self
       .infix
-      .iter()
-      .map(|(_operator, ctx)| ctx.with(Decl::Infix(ctx.value().clone())));
+      .values()
+      .map(|ctx| ctx.with(Decl::Infix(ctx.value().clone())));
     let uses = self.uses.into_iter().map(|ctx| ctx.map(Decl::Use));
     let opens = self.opens.into_iter().map(|ctx| ctx.map(Decl::Open));
     self
@@ -1401,7 +1395,7 @@ impl Module {
             .flat_map(|cons| {
               let name = &cons.name;
 
-              let names = name.open(&opens);
+              let names = name.open(opens);
               names
                 .iter()
                 .map(|name| DefRef {
@@ -1435,7 +1429,7 @@ impl Module {
       .defs
       .iter()
       .flat_map(|(name, def)| {
-        let names = name.open(&opens);
+        let names = name.open(opens);
         names
           .iter()
           .map(|name| DefRef {
@@ -1454,8 +1448,8 @@ impl Module {
           }])
           .collect::<Vec<DefRef>>()
       })
-      .chain(instance_defs.into_iter())
-      .chain(ind_defs.into_iter())
+      .chain(instance_defs)
+      .chain(ind_defs)
       .collect()
   }
 
@@ -1473,7 +1467,7 @@ impl Module {
           .iter()
           .flat_map(|class_def| {
             let def_name = class.name.clone().extend(class_def.name.clone().to_path());
-            let names = def_name.open(&opens);
+            let names = def_name.open(opens);
             names
               .into_iter()
               .map(|path| class_def_ref(path, &class_def.name, &class_def.typ, class))
@@ -1501,24 +1495,16 @@ pub fn extract_constructors(
   match &d.value {
     Decl::Type(Inductive {
       constructors,
-      name: _,
-      constraints: _,
-      params: _,
-      typ: _,
-      variant,
-      term: _,
-      attributes: _,
-    }) => match variant {
-      InductiveVariant::Generic => constructors
-        .into_iter()
-        .flat_map(|c| {
-          let cons_name = c.name().clone();
-          let path_cons = d.with(c.clone());
-          vec![(cons_name, path_cons)]
-        })
-        .collect(),
-      _ => vec![],
-    },
+      variant: InductiveVariant::Generic,
+      ..
+    }) => constructors
+      .iter()
+      .flat_map(|c| {
+        let cons_name = c.name().clone();
+        let path_cons = d.with(c.clone());
+        vec![(cons_name, path_cons)]
+      })
+      .collect(),
     _ => vec![],
   }
 }
@@ -1547,7 +1533,7 @@ where
   map
 }
 
-pub fn names_of_decls(decls: &Vec<SourceContext<Decl>>) -> HashSet<ModulePath> {
+pub fn names_of_decls(decls: &[SourceContext<Decl>]) -> HashSet<ModulePath> {
   decls
     .iter()
     .map(|ctx| ctx.value().to_ref().clone())
@@ -1656,13 +1642,13 @@ impl Display for Module {
 }
 impl<'a> Display for GlobalScope<'a> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "modules:\n")?;
+    writeln!(f, "modules:")?;
     for m in self.modules() {
-      write!(f, "{m}\n")?;
+      writeln!(f, "{m}")?;
     }
-    write!(
+    writeln!(
       f,
-      "inductives: {}\n",
+      "inductives: {}",
       self
         .inductives
         .keys()
@@ -1707,7 +1693,7 @@ impl<'a> Display for GlobalScope<'a> {
 }
 impl<'a> Display for Scope<'a> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "global: {}\n", self.global())?;
+    writeln!(f, "global: {}", self.global())?;
     write!(
       f,
       "locals: {}",

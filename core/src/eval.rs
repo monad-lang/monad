@@ -80,13 +80,13 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
   loop {
     main_term = apply_dot_macro(main_term);
     main_term = match main_term {
-      App { fun, arg } => eval_app(*fun, *arg, scope, &options)?,
+      App { fun, arg } => eval_app(*fun, *arg, scope, options)?,
       Var { name } => resolve_name(&name, scope)?.clone(),
-      Ntv { native } => native_execute(native, scope).map_err(|e| Error::Native(e))?,
+      Ntv { native } => native_execute(native, scope).map_err(Error::Native)?,
       Lit {
         value: Literal::Match { value, cases },
       } => {
-        let value = eval(*value, scope, &options)?;
+        let value = eval(*value, scope, options)?;
         if let Con(Constructor {
           name,
           typ_name: _,
@@ -100,7 +100,7 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
             let mut term = *case.value.clone();
             for (ide, arg) in case.args.clone().into_iter().zip(args) {
               if let Some(arg) = arg {
-                term = substitute(term, &Id(ide), &arg);
+                term = substitute(term, &Id(ide), arg);
               } else {
                 return Err(err(format!("incomplete con {}", value)));
               }
@@ -116,7 +116,7 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
       Lit {
         value: Literal::If { value, then, els },
       } => {
-        let value = eval(*value, scope, &options)?;
+        let value = eval(*value, scope, options)?;
         let b = recognize_bool(&value)?;
         if b { *then } else { *els }
       }
@@ -137,13 +137,12 @@ pub fn recognize_bool(value: &Term) -> Result<bool, Error> {
     args: _,
     num_args: _,
   }) = &value
+    && typ_name == &mpt("Bool")
   {
-    if typ_name == &mpt("Bool") {
-      if name == &id("true") {
-        return Ok(true);
-      } else if name == &id("false") {
-        return Ok(false);
-      }
+    if name == &id("true") {
+      return Ok(true);
+    } else if name == &id("false") {
+      return Ok(false);
     }
   }
   Err(err(format!("expected Bool found: {value}")))
@@ -151,14 +150,8 @@ pub fn recognize_bool(value: &Term) -> Result<bool, Error> {
 
 fn substitute_lam(param: Par, body: Term, arg: &Term) -> Term {
   match param {
-    Par::P(param) => {
-      let term = substitute(body, &Id(param.name.clone()), arg);
-      term
-    }
-    Par::I { typ: _ } => {
-      let term = substitute(body, &Index(1), arg);
-      term
-    }
+    Par::P(param) => substitute(body, &Id(param.name.clone()), arg),
+    Par::I { typ: _ } => substitute(body, &Index(1), arg),
   }
 }
 fn native_apply_arg(mut native: Native, index: usize, term: Term) -> Option<Term> {
@@ -207,7 +200,7 @@ fn apply_dot_macro(term: Term) -> Term {
 }
 
 fn unwrap_decl_lambda(arg: Term, name: &NameRef, scope: &Scope) -> Result<Term, Error> {
-  let term = scope.resolve_name(&name).map_err(Error::Scope)?;
+  let term = scope.resolve_name(name).map_err(Error::Scope)?;
   match term {
     Lam { param, body } => Ok(substitute_lam(param.clone(), *body.clone(), &arg)),
     _ => Err(err(format!("expected lambda def found {term}"))),
@@ -229,9 +222,9 @@ fn eval_app(fun: Term, arg: Term, scope: &Scope, options: &EvalOptions) -> Resul
         let result_eval = eval(result, scope, options)?;
         Ok(result_eval)
       } else {
-        Err(err(format!(
-          "native function applied to too many arguments"
-        )))
+        Err(err(
+          "native function applied to too many arguments".to_string(),
+        ))
       }
     }
     App {
@@ -251,14 +244,13 @@ fn eval_app(fun: Term, arg: Term, scope: &Scope, options: &EvalOptions) -> Resul
 }
 
 pub fn rename_variable(body: Term, new_name: Identifier, old_name: Identifier) -> Term {
-  let new_body = substitute(
+  substitute(
     body,
     &NameRef::Id(old_name),
     &Var {
       name: NameRef::Id(new_name),
     },
-  );
-  new_body
+  )
 }
 
 fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
@@ -274,7 +266,7 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
             typ: param.typ.clone(),
           };
           let new_body = rename_variable(*body, new_name, old_name.clone());
-          let term = substitute(new_body, nref, &new_term);
+          let term = substitute(new_body, nref, new_term);
           lam(new_param, term)
         } else {
           let term = substitute(*body, nref, new_term);
@@ -304,8 +296,8 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       pi_name(arg_name, arg, ret)
     }
     App { fun, arg } => apps(
-      substitute(*fun, nref, &new_term),
-      vec![substitute(*arg, nref, &new_term)],
+      substitute(*fun, nref, new_term),
+      vec![substitute(*arg, nref, new_term)],
     ),
     Ntv { ref native } => {
       if let Index(index) = nref {

@@ -120,10 +120,9 @@ fn build_substitution(
       .iter()
       .enumerate()
       .find(|(_, p)| p.name == key_arg.name)
+      && let Some(inst_arg) = instance.args.get(idx)
     {
-      if let Some(inst_arg) = instance.args.get(idx) {
-        subst.insert(class_param.name.clone(), inst_arg.clone());
-      }
+      subst.insert(class_param.name.clone(), inst_arg.clone());
     }
   }
   subst

@@ -384,7 +384,7 @@ pub fn native_execute(native: Native, scope: &Scope) -> Result<Term, NativeError
     .global()
     .get_native(&native.native_name)
     .ok_or_else(|| NativeError::NotFound(native.native_name.clone()))?;
-  let args: Vec<Term> = native.args.into_iter().filter_map(|f| f).collect();
+  let args: Vec<Term> = native.args.into_iter().flatten().collect();
   if args.len() == native.num_args {
     (native_fun)(args)
   } else {

@@ -25,8 +25,7 @@ use rustyline::{DefaultEditor, error::ReadlineError};
 
 pub type Set<T> = HashSet<T, BuildHasherDefault<DefaultHasher>>;
 pub fn empty_set<T: Eq + Hash>() -> Set<T> {
-  let set = HashSet::with_hasher(BuildHasherDefault::new());
-  set
+  HashSet::with_hasher(BuildHasherDefault::new())
 }
 
 pub fn set_of<T: Eq + Hash>(vals: impl Iterator<Item = T>) -> Set<T> {
@@ -176,7 +175,7 @@ pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<()
   Ok(())
 }
 
-pub fn vec_fmt<T: Display>(v: &Vec<T>) -> String {
+pub fn vec_fmt<T: Display>(v: &[T]) -> String {
   v.iter()
     .map(|t| format!("{t}"))
     .collect::<Vec<String>>()
@@ -199,16 +198,18 @@ fn detect_test_result(term: &Term) -> TestResult {
       ..
     }) => {
       if typ_name == &mpt("Bool") {
-        if name == &id("true") {
-          return TestResult::Pass;
+        return if name == &id("true") {
+          TestResult::Pass
         } else if name == &id("false") {
-          return TestResult::Fail;
-        }
+          TestResult::Fail
+        } else {
+          TestResult::FailWithMessage(format!("unexpected result: {term}"))
+        };
       }
-      if typ_name == &mpt("IO") {
-        if let Some(Some(inner)) = args.first() {
-          return detect_test_result(inner);
-        }
+      if typ_name == &mpt("IO")
+        && let Some(Some(inner)) = args.first()
+      {
+        return detect_test_result(inner);
       }
       if typ_name == &mpt("Result") {
         if name == &id("ok") {

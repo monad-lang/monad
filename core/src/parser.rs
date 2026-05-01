@@ -52,11 +52,11 @@ pub fn set_res_extra<X: Clone, Y: Clone, T>(res: Res<T, X>, extra: Y) -> Res<T, 
     .map_err(|e| e.map(|e| e.map_input(|i| i.map_extra(|_| extra))))
 }
 
-const RESERVED_KEYWORDS: &'static [&str] = &[
+const RESERVED_KEYWORDS: &[&str] = &[
   "def", "let", "in", "use", "open", "class", "struct", "instance", "type", "fn", "ꟛ", "match",
   "if", "then", "else", "infix", "return", "for", "do",
 ];
-const RESERVED_NAMES: &'static [&str] = &["Type", "Pred"];
+const RESERVED_NAMES: &[&str] = &["Type", "Pred"];
 
 fn is_reserved_keyword(s: &str) -> bool {
   RESERVED_KEYWORDS.contains(&s)
@@ -219,7 +219,7 @@ fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
     extra,
   )?;
   Ok((
-    input.into(),
+    input,
     Term::Lit {
       value: Literal::Str { value },
     },
@@ -655,7 +655,7 @@ fn operator_precedence(op: &Operator) -> Option<(u8, Associativity)> {
 
 fn operator<X: Clone>(input: Span<X>) -> Res<NameRef, X> {
   alt((
-    map(infix_symbol, |op| NameRef::Op(op)),
+    map(infix_symbol, NameRef::Op),
     map(delimited(char('`'), identifier, char('`')), |i| {
       NameRef::Id(i)
     }),
@@ -780,7 +780,7 @@ pub fn term<X: Clone>(input: Span<X>) -> Res<Term, X> {
 }
 
 fn def_name<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
-  alt((path_expression, map(name, |i| ModulePath::single(i)))).parse(input)
+  alt((path_expression, map(name, ModulePath::single))).parse(input)
 }
 
 fn wrap_args(args: Vec<AttrArg>) -> AttrArg {
@@ -1011,7 +1011,7 @@ fn class_parser(input: Span) -> Res<Inductive> {
     input,
     class(
       name,
-      constraints.unwrap_or_else(|| Vec::new()),
+      constraints.unwrap_or_else(Vec::new),
       params,
       defs,
       attrs,
@@ -1051,7 +1051,7 @@ fn instance_parser(input: Span) -> Res<Instance> {
     instance(
       name,
       class_name,
-      constraints.unwrap_or_else(|| Vec::new()),
+      constraints.unwrap_or_else(Vec::new),
       args,
       defs,
       attrs,
@@ -1138,7 +1138,7 @@ fn inductive_parser(input: Span) -> Res<Inductive> {
     input,
     inductive(
       name,
-      constraints.unwrap_or_else(|| Vec::new()),
+      constraints.unwrap_or_else(Vec::new),
       params,
       typ,
       constructors,
@@ -1209,7 +1209,7 @@ fn use_parser(input: Span) -> Res<Use> {
   let (input, _) = tag("use")(input)?;
   let (input, _) = ws1(input)?;
   let (input, module_path) =
-    alt((path_expression, map(identifier, |i| ModulePath::single(i)))).parse(input)?;
+    alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
   let (input, end) = info(input)?;
   let source_location = SourceRange::new(start.into(), end.into());
   Ok((
@@ -1226,7 +1226,7 @@ fn open_parser(input: Span) -> Res<Open> {
   let (input, _) = tag("open")(input)?;
   let (input, _) = ws1(input)?;
   let (input, module_path) =
-    alt((path_expression, map(identifier, |i| ModulePath::single(i)))).parse(input)?;
+    alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
   let (input, end) = info(input)?;
   let source_location = SourceRange::new(start.into(), end.into());
 
@@ -1248,10 +1248,10 @@ fn decl_parser(input: Span) -> Res<SourceContext<Decl>> {
       |input| def_with_attrs_parser(attrs.clone(), input),
       Decl::Def,
     ),
-    map(class_parser, |c| Decl::Type(c)),
-    map(instance_parser, |i| Decl::Ins(i)),
-    map(struct_parser, |s| Decl::Type(s)),
-    map(inductive_parser, |i| Decl::Type(i)),
+    map(class_parser, Decl::Type),
+    map(instance_parser, Decl::Ins),
+    map(struct_parser, Decl::Type),
+    map(inductive_parser, Decl::Type),
     map(infix_parser, Decl::Infix),
   ))
   .parse(input)?;
@@ -1295,7 +1295,7 @@ pub fn repl_parser(input: &str) -> Result<ReplInput, ReplParserError> {
   let (_, r) = delimited(
     ws0,
     alt((
-      map(term, |t| ReplInput::Term(t)),
+      map(term, ReplInput::Term),
       map(decl_parser, |t| ReplInput::Decls(t.value)),
     )),
     ws0,

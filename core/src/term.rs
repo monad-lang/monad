@@ -9,11 +9,10 @@ use crate::{
 use std::{
   fmt::Display,
   hash::Hash,
-  iter::repeat,
   path::{Component, Path, PathBuf},
 };
 
-#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord, Default)]
 pub struct Location {
   /// Offset relative to the start of a line
   pub line_offset: usize,
@@ -32,7 +31,7 @@ impl<X> From<Info<X>> for Location {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord, Default)]
 pub struct SourceRange {
   pub start: Location,
   pub end: Location,
@@ -41,23 +40,6 @@ pub struct SourceRange {
 impl SourceRange {
   pub(crate) fn new(start: Location, end: Location) -> Self {
     Self { start, end }
-  }
-}
-
-impl Default for Location {
-  fn default() -> Self {
-    Self {
-      line_offset: Default::default(),
-      line: Default::default(),
-    }
-  }
-}
-impl Default for SourceRange {
-  fn default() -> Self {
-    Self {
-      start: Default::default(),
-      end: Default::default(),
-    }
   }
 }
 
@@ -124,11 +106,7 @@ pub enum NameRef {
 
 impl NameRef {
   pub fn is_name(&self) -> bool {
-    match self {
-      Id(_) => true,
-      NameRef::P(_) => true,
-      _ => false,
-    }
+    matches!(self, Id(_) | NameRef::P(_))
   }
   pub fn as_id(&self) -> Option<&Identifier> {
     match self {
@@ -147,10 +125,7 @@ impl NameRef {
   }
 
   pub fn is_id(&self) -> bool {
-    match self {
-      Id(_) => true,
-      _ => false,
-    }
+    matches!(self, Id(_))
   }
 }
 
@@ -342,7 +317,7 @@ pub fn induct_constructor(
   let num_args = params.len();
   let mut term = Term::Con(Constructor {
     typ_name: inductive_name.clone(),
-    args: repeat(None).take(num_args).collect(),
+    args: std::iter::repeat_n(None, num_args).collect(),
     name: name.clone(),
     num_args,
   });
@@ -359,19 +334,18 @@ pub fn induct_constructor(
   }
 }
 
-fn params_to_inductive_type(params: &Vec<Param>, typ: Term) -> Term {
-  let typ = if params.is_empty() {
+fn params_to_inductive_type(params: &[Param], typ: Term) -> Term {
+  if params.is_empty() {
     type0()
   } else {
     pi_typs(
       params
-        .into_iter()
-        .map(|p| p.typ.to_owned().replace_hole(|| type0()))
+        .iter()
+        .map(|p| p.typ.to_owned().replace_hole(type0))
         .collect(),
       typ,
     )
-  };
-  typ
+  }
 }
 
 pub fn inductive(
@@ -746,9 +720,9 @@ pub struct MapTerm {
 
 impl Display for MapTerm {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{{\n")?;
+    writeln!(f, "{{")?;
     for (key, value) in self.value.iter() {
-      write!(f, "{key} := {value},\n")?;
+      writeln!(f, "{key} := {value},")?;
     }
     write!(f, "}}")
   }
@@ -854,7 +828,7 @@ impl std::hash::Hash for F64Wrap {
 
 impl PartialOrd for F64Wrap {
   fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-    self.0.to_bits().partial_cmp(&other.0.to_bits())
+    Some(self.cmp(other))
   }
 }
 
@@ -1012,13 +986,13 @@ pub enum VarRef<'a> {
 impl<'a> Typed for VarRef<'a> {
   fn typ(&self) -> &Term {
     match self {
-      VarRef::Local { typ } => &typ,
-      VarRef::Free { term: _, typ } => &typ,
+      VarRef::Local { typ } => typ,
+      VarRef::Free { term: _, typ } => typ,
       VarRef::UpdateRef {
         new_path: _,
         typ,
         term: _,
-      } => &typ,
+      } => typ,
     }
   }
 }
@@ -1090,10 +1064,7 @@ pub enum Term {
 
 impl Term {
   pub fn is_known(&self) -> bool {
-    match self {
-      Hole => false,
-      _ => true,
-    }
+    !matches!(self, Hole)
   }
 
   pub fn replace_hole(self, f: impl FnOnce() -> Term) -> Term {
@@ -1137,16 +1108,10 @@ impl Term {
     }
   }
   pub fn is_lam(&self) -> bool {
-    match self {
-      Term::Lam { param: _, body: _ } => true,
-      _ => false,
-    }
+    matches!(self, Term::Lam { param: _, body: _ })
   }
   pub fn is_lit(&self) -> bool {
-    match self {
-      Term::Lit { value: _ } => true,
-      _ => false,
-    }
+    matches!(self, Term::Lit { value: _ })
   }
   pub fn is_num(&self) -> bool {
     matches!(
@@ -1159,20 +1124,20 @@ impl Term {
     )
   }
   pub fn is_str(&self) -> bool {
-    match self {
+    matches!(
+      self,
       Term::Lit {
         value: Literal::Str { value: _ },
-      } => true,
-      _ => false,
-    }
+      }
+    )
   }
   pub fn is_map(&self) -> bool {
-    match self {
+    matches!(
+      self,
       Term::Lit {
         value: Literal::Map { value: _ },
-      } => true,
-      _ => false,
-    }
+      }
+    )
   }
 
   pub fn node_type(&self) -> &str {
@@ -1330,7 +1295,7 @@ pub fn app(fun: Term, arg: Term) -> Term {
 }
 
 pub fn apps(fun: Term, args: Vec<Term>) -> Term {
-  assert!(args.len() >= 1);
+  assert!(!args.is_empty());
   let mut term = fun;
   for arg in args {
     term = app(term, arg);
@@ -1346,7 +1311,7 @@ pub fn lam_index(typ: Term, body: Term) -> Term {
 }
 
 pub fn lam_indecies(params: Vec<Param>, body: Term) -> Term {
-  assert!(params.len() >= 1);
+  assert!(!params.is_empty());
   let mut body = body;
   for param in params.into_iter().rev() {
     body = Term::Lam {
@@ -1369,7 +1334,7 @@ pub fn lam_par(param: Par, body: Term) -> Term {
 }
 
 pub fn lams(params: Vec<Param>, body: Term) -> Term {
-  assert!(params.len() >= 1);
+  assert!(!params.is_empty());
   let mut body = body;
   for param in params.into_iter().rev() {
     body = lam(param, body);
@@ -1411,7 +1376,7 @@ pub struct LetVar {
 }
 
 pub fn lets(vars: Vec<LetVar>, body: Term) -> Term {
-  assert!(vars.len() >= 1);
+  assert!(!vars.is_empty());
   let mut body = body;
   for var in vars.into_iter().rev() {
     let lam_term = lam(param(var.name, var.typ), body);
@@ -1581,7 +1546,7 @@ pub fn def_with_native(
     native: Native {
       native_name,
       num_args,
-      args: repeat(None).take(num_args).collect(),
+      args: std::iter::repeat_n(None, num_args).collect(),
     },
   };
 
@@ -1668,6 +1633,9 @@ impl ModulePath {
   pub fn len(&self) -> usize {
     self.0.len()
   }
+  pub fn is_empty(&self) -> bool {
+    self.0.is_empty()
+  }
   pub fn as_str(&self) -> Option<&str> {
     self.as_identifier().map(|i| i.as_str())
   }
@@ -1705,8 +1673,7 @@ impl ModulePath {
   /// ```
   pub fn is_prefix(&self, prefix: &ModulePath) -> bool {
     if prefix.len() < self.len() {
-      let matches = prefix.0.iter().zip(self.0.iter()).all(|(a, b)| a == b);
-      matches
+      prefix.0.iter().zip(self.0.iter()).all(|(a, b)| a == b)
     } else {
       false
     }
@@ -1877,7 +1844,7 @@ impl<'a> Named for ClassDefRef<'a> {
 
 impl<'a> ClassDefRef<'a> {
   pub fn typ(&self) -> &Term {
-    &self.typ
+    self.typ
   }
 
   pub fn with_path(&self, path: ModulePath) -> ClassDefRef<'_> {

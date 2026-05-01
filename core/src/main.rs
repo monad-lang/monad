@@ -42,7 +42,7 @@ fn main() -> Result<(), String> {
 
   match cli.command {
     #[cfg(feature = "repl")]
-    Commands::Repl { debug } => repl(EvalOptions { debug }).map_err(|e| format!("{e}")),
+    Commands::Repl { debug } => repl(EvalOptions { debug }).map_err(|e| e.to_string()),
     #[cfg(not(feature = "repl"))]
     Commands::Repl { .. } => {
       Err("REPL support was not compiled in. Install with repl feature enabled.".into())

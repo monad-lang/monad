@@ -177,9 +177,12 @@ impl<T, X> LocatedSpan<T, X> {
   }
 
   /// Similar to `new_extra`, but allows overriding offset and line.
-  /// This is unsafe, because giving an offset too large may result in
-  /// undefined behavior, as some methods move back along the fragment
-  /// assuming any negative index within the offset is valid.
+  ///
+  /// # Safety
+  ///
+  /// Giving an offset too large may result in undefined behavior, as some
+  /// methods move back along the fragment assuming any negative index within
+  /// the offset is valid.
   pub unsafe fn new_from_raw_offset(
     offset: usize,
     line_offset: usize,
@@ -371,10 +374,7 @@ impl<T: AsBytes, X> LocatedSpan<T, X> {
     let self_bytes = self.fragment.as_bytes();
     let self_ptr = self_bytes.as_ptr();
     unsafe {
-      assert!(
-        self.info.offset <= isize::max_value() as usize,
-        "offset is too big"
-      );
+      assert!(self.info.offset <= isize::MAX as usize, "offset is too big");
       let orig_input_ptr = self_ptr.offset(-(self.info.offset as isize));
       slice::from_raw_parts(orig_input_ptr, self.info.offset + self_bytes.len())
     }

@@ -85,7 +85,7 @@ impl Display for TypeError {
       TypeError::Generic(s) => write!(f, "{}", s),
       TypeError::Many(type_errors) => {
         for (i, t) in type_errors.iter().enumerate() {
-          write!(f, "{}. {}\n", i + 1, t)?;
+          writeln!(f, "{}. {}", i + 1, t)?;
         }
         Ok(())
       }
@@ -107,7 +107,7 @@ impl Display for TypeError {
         f,
         "Variable mismatch, expected {name} to be {expected} found {actual} with local vars [{}]",
         locals
-          .into_iter()
+          .iter()
           .map(|(name, typ)| format!("{name} : {typ}"))
           .collect::<Vec<_>>()
           .join(", ")
@@ -181,7 +181,7 @@ pub fn derive_instance_key(class_def: &ClassDefRef, typ: &Term) -> Result<Instan
     .class
     .params
     .iter()
-    .map(|p| (&p.name, Unknown { typ: &*p.typ }))
+    .map(|p| (&p.name, Unknown { typ: &p.typ }))
     .collect();
   let param_names: Set<Identifier> = free_vars.names();
   let type_args = match_determine_type_vars(class_def.typ(), typ, free_vars)?;
@@ -198,7 +198,7 @@ pub fn derive_instance_key(class_def: &ClassDefRef, typ: &Term) -> Result<Instan
       .collect::<Vec<Result<Param, Identifier>>>(),
   );
   if !errs.is_empty() {
-    return Err(MissingTypeArgs(errs))?;
+    Err(MissingTypeArgs(errs))?;
   }
 
   let key = InstanceKey::new(
@@ -223,7 +223,7 @@ pub fn type_check_instance<'a>(
 ) -> Result<Instance, TypeError> {
   use InstanceError::*;
   if &instance.class_name != class.name() {
-    return Err(Generic("wrong class name".into()))?;
+    Err(Generic("wrong class name".into()))?;
   }
 
   for (param, arg) in class.params.iter().zip(instance.args.iter()) {
@@ -243,7 +243,7 @@ pub fn type_check_instance<'a>(
       impl_def.term = term;
       impl_def.typ = typ;
     } else {
-      return Err(MissingImplementation(param.name.clone()))?;
+      Err(MissingImplementation(param.name.clone()))?;
     }
   }
   Ok(instance)
@@ -317,6 +317,12 @@ impl<'a> FromIterator<(&'a Identifier, FreeVar<'a>)> for FreeVars<'a> {
       vars: map,
       keep_vars: Map::new(),
     }
+  }
+}
+
+impl<'a> Default for FreeVars<'a> {
+  fn default() -> Self {
+    Self::new()
   }
 }
 
@@ -407,10 +413,10 @@ pub fn match_determine_type_vars<'a>(
   }
 }
 
-fn apply_free_type_vars<'a>(typ: Term, free_vars: &FreeVars) -> Term {
+fn apply_free_type_vars(typ: Term, free_vars: &FreeVars) -> Term {
   let typ = substitute_forall(typ, free_vars);
-  let typ = add_forall_to_type(typ, free_vars.keep_vars());
-  typ
+
+  add_forall_to_type(typ, free_vars.keep_vars())
 }
 
 /// Is previously encountered type arg
@@ -486,12 +492,12 @@ fn match_resolve_type_inner<'a>(
   match (left, right) {
     (Forall { name, typ, body }, _) => {
       free_vars.insert_free_var(name, Unknown { typ });
-      match_resolve_type_inner(&*body, right, free_vars)
+      match_resolve_type_inner(body, right, free_vars)
     }
     (_, Forall { name, typ, body }) => {
       free_vars.add_var_to_keep(name, typ);
-      let res = match_resolve_type_inner(left, &*body, free_vars);
-      res
+
+      match_resolve_type_inner(left, body, free_vars)
     }
     (
       Pi {
@@ -547,7 +553,7 @@ fn match_resolve_type_inner<'a>(
   }
 }
 
-pub fn type_check_free_var<'a>(
+pub fn type_check_free_var(
   mut term: Term,
   expected_type: Term,
   nref: &NameRef,
@@ -596,15 +602,15 @@ fn extract_first_name(term: &Term) -> Option<(ModulePath, Vec<Term>)> {
 pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> {
   match typ {
     Pi { arg, ret, arg_name } => {
-      let mut a = free_vars(&*arg, known_names);
+      let mut a = free_vars(arg, known_names);
       if let Some(name) = arg_name {
         let mut known_names = known_names.clone();
         let name = name.clone().to_path();
         known_names.insert(&name);
-        let r = free_vars(&*ret, &known_names);
+        let r = free_vars(ret, &known_names);
         a.extend(r);
       } else {
-        let r = free_vars(&*ret, known_names);
+        let r = free_vars(ret, known_names);
         a.extend(r);
       }
       a
@@ -613,8 +619,8 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
       set_of(vec![name.as_id().unwrap().clone()].into_iter())
     }
     App { fun, arg } => {
-      let mut f = free_vars(&**fun, known_names);
-      let a = free_vars(&**arg, known_names);
+      let mut f = free_vars(fun, known_names);
+      let a = free_vars(arg, known_names);
       f.extend(a);
       f
     }
@@ -622,7 +628,7 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
       let mut known_names = known_names.clone();
       let name = ModulePath::single(name.clone());
       known_names.insert(&name);
-      free_vars(&body, &known_names)
+      free_vars(body, &known_names)
     }
     _ => empty_set(),
   }
@@ -630,9 +636,7 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
 
 pub fn add_forall_to_scope<'a>(typ: &'a Term, scope: Scope<'a>) -> Scope<'a> {
   match typ {
-    Forall { name, typ, body } => {
-      add_forall_to_scope(&**body, scope.with_forall(name, typ.as_ref()))
-    }
+    Forall { name, typ, body } => add_forall_to_scope(body, scope.with_forall(name, typ.as_ref())),
     _ => scope,
   }
 }
@@ -664,20 +668,16 @@ pub fn substitute_forall(typ_: Term, free_vars: &FreeVars) -> Term {
   }
 }
 
-pub fn substitute_params(mut term: Term, params: &Vec<Param>, args: &Vec<Term>) -> Term {
+pub fn substitute_params(mut term: Term, params: &[Param], args: &[Term]) -> Term {
   for (param, arg) in params.iter().zip(args.iter()) {
     let name = param.name.clone();
-    term = substitute(term, &Id(name), &arg);
+    term = substitute(term, &Id(name), arg);
   }
   term
 }
-pub fn add_params_to_scope<'a>(
-  params: &Vec<Param>,
-  args: &Vec<Term>,
-  scope: Scope<'a>,
-) -> Scope<'a> {
+pub fn add_params_to_scope<'a>(params: &[Param], args: &[Term], scope: Scope<'a>) -> Scope<'a> {
   for (param, arg) in params.iter().zip(args.iter()) {
-    scope.with_local_var(&param.name, &arg);
+    scope.with_local_var(&param.name, arg);
   }
   scope
 }
@@ -701,8 +701,8 @@ pub fn pi_of_forall_types(arg_type: Term, return_type: Term) -> Term {
   );
   let fun_type = pi(arg_type, return_type);
   let forall_vars = forall_vars.iter().collect();
-  let fun_type = add_forall_to_type(fun_type, &forall_vars);
-  fun_type
+
+  add_forall_to_type(fun_type, &forall_vars)
 }
 
 const INT_SUFFIXES: [NumSuffix; 8] = [
@@ -736,16 +736,15 @@ fn resolve_num_literal_type(
   _default: NumSuffix,
   _scope: &Scope,
 ) -> Result<NumSuffix, TypeError> {
-  if let Term::Var { name } = expected {
-    if let NameRef::Id(id) = name {
-      let name_str = id.as_str();
-      if is_number_type_name(name_str) {
-        if let Some(suffix) = suffix_from_type_name(name_str) {
-          if suffix.is_int() {
-            return Ok(suffix);
-          }
-        }
-      }
+  if let Term::Var { name } = expected
+    && let NameRef::Id(id) = name
+  {
+    let name_str = id.as_str();
+    if is_number_type_name(name_str)
+      && let Some(suffix) = suffix_from_type_name(name_str)
+      && suffix.is_int()
+    {
+      return Ok(suffix);
     }
   }
   Ok(NumSuffix::I64)
@@ -756,16 +755,15 @@ fn resolve_float_literal_type(
   _default: NumSuffix,
   _scope: &Scope,
 ) -> Result<NumSuffix, TypeError> {
-  if let Term::Var { name } = expected {
-    if let NameRef::Id(id) = name {
-      let name_str = id.as_str();
-      if is_number_type_name(name_str) {
-        if let Some(suffix) = suffix_from_type_name(name_str) {
-          if suffix.is_float() {
-            return Ok(suffix);
-          }
-        }
-      }
+  if let Term::Var { name } = expected
+    && let NameRef::Id(id) = name
+  {
+    let name_str = id.as_str();
+    if is_number_type_name(name_str)
+      && let Some(suffix) = suffix_from_type_name(name_str)
+      && suffix.is_float()
+    {
+      return Ok(suffix);
     }
   }
   Ok(NumSuffix::F64)
@@ -839,7 +837,7 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
         let stru = ind
           .constructors
           .first()
-          .ok_or_else(|| generic_terr(format!("Structs must have at least one constructor")))?;
+          .ok_or_else(|| generic_terr("Structs must have at least one constructor".to_string()))?;
         let map = &value.value;
         // TODO default values
         if map.len() != stru.params.len() {
@@ -849,14 +847,14 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
           )));
         }
         for Param { name, typ } in stru.params.iter() {
-          let term = map.get(&name).ok_or_else(|| MissingField(name.clone()))?;
+          let term = map.get(name).ok_or_else(|| MissingField(name.clone()))?;
           type_check(term.clone(), *typ.clone(), &scope)?;
         }
-        return Ok(typed_term(term, expected_type.clone()));
+        Ok(typed_term(term, expected_type.clone()))
       } else {
-        return Err(generic_terr(format!(
+        Err(generic_terr(format!(
           "Expected name for struct found {expected_type}"
-        )));
+        )))
       }
     }
     Lit {
@@ -902,9 +900,9 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
             return Err(ConstructorUnknown(case.name.clone()));
           }
         }
-        return Ok(typed_term(term, branch_t.clone()));
+        Ok(typed_term(term, branch_t.clone()))
       } else {
-        return Err(ExpectedInductive(con.typ().clone()));
+        Err(ExpectedInductive(con.typ().clone()))
       }
     }
     Lit {
@@ -921,12 +919,12 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
             els: Box::new(t2.term().clone()),
           },
         };
-        return Ok(typed_term(new_term, typ));
+        Ok(typed_term(new_term, typ))
       } else {
-        return Err(TypeError::MismatchingBranches(
+        Err(TypeError::MismatchingBranches(
           t1.typ().clone(),
           t2.typ().clone(),
-        ));
+        ))
       }
     }
     Lit { ref value } => match value {
@@ -1009,7 +1007,7 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
       if let Type { universe: u2 } = expected_type
         && u2 > universe
       {
-        let universe = universe.clone() + 1;
+        let universe = universe + 1;
         Ok(typed_term(term, type_u(universe)))
       } else {
         Err(TypeError::ExpectedType(term))
@@ -1022,7 +1020,7 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
       ref name,
       num_args: _,
     }) => {
-      let inductive = scope.find_inductive(&typ_name)?;
+      let inductive = scope.find_inductive(typ_name)?;
       let cons = inductive
         .find_cons(name)
         .ok_or_else(|| ConstructorUnknown(name.clone()))?;
@@ -1031,11 +1029,9 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
           .iter()
           .zip(cons.params.iter())
           .filter_map(|(o_arg, param)| {
-            if let Some(arg) = o_arg {
-              Some(type_check(arg.clone(), *param.typ.clone(), &scope))
-            } else {
-              None
-            }
+            o_arg
+              .as_ref()
+              .map(|arg| type_check(arg.clone(), *param.typ.clone(), &scope))
           })
           .collect(),
       );
@@ -1136,12 +1132,12 @@ pub fn type_check_decl(decl: Decl, scope: &Scope) -> Result<Decl, TypeError> {
 
 pub fn elaborate_type(
   typ: Term,
-  type_constraints: &Vec<TypeConstraint>,
+  type_constraints: &[TypeConstraint],
   known_names: &Set<&ModulePath>,
 ) -> Term {
   let constraint_vars: Set<Identifier> = type_constraints
     .iter()
-    .flat_map(|cons| cons.vars().iter().map(|v| v.clone()))
+    .flat_map(|cons| cons.vars().iter().cloned())
     .collect();
   let free_vars = free_vars(&typ, known_names);
   let free_vars: Set<&Identifier> = free_vars.union(&constraint_vars).collect();
@@ -1149,8 +1145,7 @@ pub fn elaborate_type(
   let free_vars_map: Map<&Identifier, &Term> =
     free_vars.into_iter().map(|i| (i, &default_type)).collect();
 
-  let typ = add_forall_to_type(typ, &free_vars_map);
-  typ
+  add_forall_to_type(typ, &free_vars_map)
 }
 pub fn elaborate_def(mut def: Def, known_names: &Set<&ModulePath>) -> Def {
   let typ = def.typ.clone();
@@ -1170,7 +1165,7 @@ pub fn add_forall_to_type(mut typ: Term, vars: &Map<&Identifier, &Term>) -> Term
 }
 
 fn type_check_def(def_: Def, scope: &Scope) -> Result<Def, TypeError> {
-  let (term, typ) = type_check(def_.term, def_.typ, &scope)?.to_tuple();
+  let (term, typ) = type_check(def_.term, def_.typ, scope)?.to_tuple();
   Ok(def(
     def_.name,
     def_.type_constraints,
@@ -1227,20 +1222,17 @@ pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -
       )
     })
     .collect();
-  let param_paths: Set<ModulePath> = params
-    .iter()
-    .map(|(name, _)| name.clone().to_path())
-    .collect();
+  let param_paths: Set<ModulePath> = params.keys().map(|name| name.clone().to_path()).collect();
   let known_names: Set<&ModulePath> = param_paths
     .iter()
-    .chain(known_names.iter().map(|&p| p))
+    .chain(known_names.iter().copied())
     .collect();
   for cons in ind.constructors.iter_mut() {
     let typ = cons.typ().clone();
     cons.typ = if is_class {
       let (mut class_defs, ret) = pi_to_vec(typ);
       for (typ, param) in class_defs.iter_mut().zip(cons.params.iter_mut()) {
-        let free_vars = free_vars(&typ, &known_names);
+        let free_vars = free_vars(typ, &known_names);
         let vars = free_vars
           .iter()
           .map(|i| (i, &default_type))
@@ -1276,13 +1268,13 @@ pub fn elaborate_instance(mut ins: Instance, known_names: &Set<&ModulePath>) -> 
 
 pub fn elaborate_decl(decl: Decl, known_names: &Set<&ModulePath>) -> Decl {
   use Decl::*;
-  let i = match decl {
+
+  match decl {
     Def(def) => Def(elaborate_def(def, known_names)),
     Type(ind) => Type(elaborate_inductive(ind, known_names)),
     Ins(ins) => Ins(elaborate_instance(ins, known_names)),
     _ => decl,
-  };
-  i
+  }
 }
 
 pub fn elaborate_decls(
@@ -1291,13 +1283,9 @@ pub fn elaborate_decls(
 ) -> Vec<SourceContext<Decl>> {
   let path = mpt("_");
   let global = loaded.scope_of_decls(&path, &decls);
-  let mut known_names: Set<ModulePath> = global
-    .all_known_names()
-    .into_iter()
-    .map(|n| n.clone())
-    .collect();
+  let mut known_names: Set<ModulePath> = global.all_known_names().into_iter().cloned().collect();
   known_names.extend(names_of_decls(&decls));
-  let known_names = known_names.iter().map(|n| n).collect();
+  let known_names = known_names.iter().collect();
   decls
     .into_iter()
     .map(|ctx| ctx.map(|decl| elaborate_decl(decl, &known_names)))
@@ -1309,8 +1297,8 @@ pub fn type_check_module_decls(
   decls: Vec<SourceContext<Decl>>,
   loaded: &LoadedModules,
 ) -> Result<Vec<SourceContext<Decl>>, TypeError> {
-  let decls = elaborate_decls(decls, &loaded);
-  let global = loaded.scope_of_decls(&path, &decls);
+  let decls = elaborate_decls(decls, loaded);
+  let global = loaded.scope_of_decls(path, &decls);
 
   let (oks, errs) = type_check_decls(decls.clone(), &global.scope());
   if !errs.is_empty() {
