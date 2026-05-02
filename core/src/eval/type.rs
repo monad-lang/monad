@@ -6,7 +6,7 @@ use crate::{
     Ann, ClassDefRef, Decl, Def, Identifier, Inductive, InductiveVariant, Instance, InstanceKey,
     Literal, ModulePath, NameRef, Named, NumSuffix, SourceContext,
     Term::{Forall, Hole, Pi},
-    TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, def, forall, lam_par,
+    TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, forall, lam_par,
     module::{LoadedModules, names_of_decls},
     mpvar, num_suffix, param, pi, pi_typs, type_u, type0, typed_term, var,
   },
@@ -1237,15 +1237,11 @@ pub fn add_forall_to_type(mut typ: Term, vars: &Map<&Identifier, &Term>) -> Term
   typ
 }
 
-fn type_check_def(def_: Def, scope: &Scope) -> Result<Def, TypeError> {
+fn type_check_def(mut def_: Def, scope: &Scope) -> Result<Def, TypeError> {
   let (term, typ) = type_check(def_.term, def_.typ, scope)?.to_tuple();
-  Ok(def(
-    def_.name,
-    def_.type_constraints,
-    typ,
-    term,
-    def_.attributes,
-  ))
+  def_.term = term;
+  def_.typ = typ;
+  Ok(def_)
 }
 
 fn type_check_decls(

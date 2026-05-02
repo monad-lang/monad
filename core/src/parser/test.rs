@@ -228,9 +228,11 @@ fn test_class() {
         id("map"),
         pi(pi(typ("A"), typ("B")), pi(app2("F", "A"), app2("F", "B"))),
         None,
-        vec![]
+        vec![],
+        None
       )],
-      vec![]
+      vec![],
+      None,
     )
   );
   let s = r#"class [Functor F] Applicative F {
@@ -248,7 +250,7 @@ fn test_class() {
       vec![type_constraint(mpt("Functor"), vec![id("F")])],
       vec![par("F")],
       vec![
-        class_def(id("pure"), pi(typ("A"), app2("F", "A")), None, vec![]),
+        class_def(id("pure"), pi(typ("A"), app2("F", "A")), None, vec![], None),
         class_def(
           id("apply"),
           pi(
@@ -256,10 +258,12 @@ fn test_class() {
             pi(app2("F", "A"), app2("F", "B"))
           ),
           None,
-          vec![]
+          vec![],
+          None
         )
       ],
-      vec![]
+      vec![],
+      None
     )
   );
   let s = r#"class [Applicative M] Monad (M: Type -> Type) {
@@ -277,7 +281,7 @@ fn test_class() {
       vec![type_constraint(mpt("Applicative"), vec![id("M")])],
       vec![dpar("M", pi(typ("Type"), typ("Type")))],
       vec![
-        class_def(id("pure"), pi(typ("A"), app2("M", "A")), None, vec![]),
+        class_def(id("pure"), pi(typ("A"), app2("M", "A")), None, vec![], None),
         class_def(
           id("bind"),
           pi(
@@ -285,10 +289,12 @@ fn test_class() {
             pi(pi(typ("A"), app2("M", "B")), app2("M", "B"))
           ),
           None,
-          vec![]
+          vec![],
+          None
         )
       ],
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -531,7 +537,8 @@ fn test_inductive() {
         mpv("Solo"),
         vec![]
       )],
-      vec![]
+      vec![],
+      None
     )
   );
   let s = r#"type Result E A  {
@@ -563,7 +570,8 @@ fn test_inductive() {
           vec![dpar("", typ("E"))]
         )
       ],
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -593,9 +601,11 @@ fn test_instance() {
           vec![dpar("f", pi(typ("A"), typ("B"))), dpar("v", app2("F", "A"))],
           oper(var("f"), "|>", var("v"))
         ),
-        vec![]
+        vec![],
+        None
       )],
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -623,7 +633,8 @@ fn test_struct() {
         stru_field(id("field_type"), typ("Type"), None),
         stru_field(id("text"), typ("String"), Some(str("default")))
       ],
-      vec![]
+      vec![],
+      None
     )
   );
   let s = r#"struct [Serialize M] MyData (M: Type) {
@@ -644,7 +655,8 @@ fn test_struct() {
         stru_field(id("data"), typ("M"), None),
         stru_field(id("text"), typ("String"), Some(str("default")))
       ],
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -686,7 +698,8 @@ fn test_native() {
       vec![Attribute {
         name: id("native"),
         args: vec![AttrArg::Ident(id("num_add"))]
-      }]
+      }],
+      None
     ))
   );
 }
@@ -716,7 +729,8 @@ fn test_def() {
           lams(vec![par("_")], app(var("pure"), var("unit")))
         )
       ),
-      vec![]
+      vec![],
+      None
     )
   );
   let s = r#"def main (args : List String) : IO Unit :=
@@ -735,7 +749,8 @@ fn test_def() {
         vec![dpar("args", app2("List", "String"))],
         apps(var("println"), vec![str("Hello, world!")])
       ),
-      vec![]
+      vec![],
+      None
     )
   );
   let s = r#"def IO.say.hello : IO Unit :=
@@ -751,7 +766,8 @@ fn test_def() {
       vec![],
       app2("IO", "Unit"),
       apps(var("println"), vec![str("Hello, world!")]),
-      vec![]
+      vec![],
+      None
     )
   );
   let s = r#"def Lens [Functor F] (S: Type) (T: Type) (A: Type) (B : Type) : Type :=
@@ -779,7 +795,8 @@ fn test_def() {
         ],
         pi(pi(typ("A"), app2("F", "B")), pi(typ("S"), app2("F", "T")))
       ),
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -849,7 +866,8 @@ fn module_test() {
           id("map"),
           pi(pi(typ("A"), typ("B")), pi(app2("F", "A"), app2("F", "B"))),
           None,
-          vec![]
+          vec![],
+          None
         )]
       )
     ]
@@ -994,7 +1012,8 @@ fn test_def_do_block_simple_expr() {
       vec![],
       app2("IO", "Unit"),
       apps(var("println"), vec![str("Hello")]),
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -1009,7 +1028,14 @@ fn test_def_do_block_return() {
 
   similar!(
     res,
-    def(mpt("get_one"), vec![], app2("IO", "I64"), num(1), vec![])
+    def(
+      mpt("get_one"),
+      vec![],
+      app2("IO", "I64"),
+      num(1),
+      vec![],
+      None
+    )
   );
 }
 
@@ -1031,7 +1057,8 @@ fn test_def_do_block_with_params() {
         vec![dpar("name", typ("String"))],
         apps(var("println"), vec![var("name")])
       ),
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -1056,7 +1083,8 @@ fn test_def_do_block_bind() {
       vec![],
       app2("IO", "I64"),
       expected_body,
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -1085,7 +1113,8 @@ fn test_def_do_block_let() {
       vec![],
       app2("IO", "I64"),
       expected_body,
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -1113,7 +1142,8 @@ fn test_def_do_block_multiple_exprs() {
       vec![],
       app2("IO", "Unit"),
       expected_body,
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -1143,7 +1173,8 @@ fn test_def_do_block_with_constraints() {
           lams(vec![par("_")], app(var("pure"), var("unit")))
         )
       ),
-      vec![]
+      vec![],
+      None
     )
   );
 }
@@ -1267,7 +1298,8 @@ fn test_native_with_named_arg() {
           name: id("name"),
           value: Box::new(AttrArg::Ident(id("num_add")))
         }]
-      }]
+      }],
+      None
     ))
   );
 }

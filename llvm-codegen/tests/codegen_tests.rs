@@ -22,7 +22,7 @@ fn make_def(name: &str, params: Vec<Param>, body: Term) -> Decl {
   } else {
     lams(params.clone(), body)
   };
-  Decl::Def(def(mpt(name), vec![], full_type, term, vec![]))
+  Decl::Def(def(mpt(name), vec![], full_type, term, vec![], None))
 }
 
 #[test]

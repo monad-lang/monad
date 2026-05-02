@@ -9,9 +9,9 @@ use std::fmt::Display;
 use crate::{
   parser::error::{ParseError, ReplParserError},
   term::{
-    AttrArg, Attribute, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
-    Instance, LetVar, Literal, MatchCase, ModulePath, NameRef, NumSuffix, Open, Operator, Param,
-    SourceContext, SourceRange, StructField,
+    AttrArg, Attribute, ClassDef, Decl, Def, Documentation, Identifier, InductConstructor,
+    Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath, NameRef, NumSuffix, Open,
+    Operator, Param, SourceContext, SourceRange, StructField,
     Term::{self, Hole, Var},
     TypeConstraint, Use, app, apps, case, class, class_def, ctx, def, def_with_native,
     float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
@@ -24,7 +24,9 @@ use nom::{
   Finish, IResult, Parser,
   branch::alt,
   bytes::complete::{tag, take_until, take_while},
-  character::complete::{alpha1, char, i64, multispace1, not_line_ending},
+  character::complete::{
+    alpha1, char, i64, line_ending, multispace0, multispace1, not_line_ending,
+  },
   combinator::{eof, map, opt, recognize, success, verify},
   multi::{fold_many0, many0, many1},
   sequence::{delimited, preceded, separated_pair, terminated},
@@ -96,6 +98,17 @@ fn ws0<X: Clone>(input: Span<X>) -> Res<Span<X>, X> {
 
 fn ws1<X: Clone>(input: Span<X>) -> Res<Span<X>, X> {
   recognize(many1(alt((multispace1, line_comment, block_comment)))).parse(input)
+}
+
+fn doc_comment<X: Clone>(input: Span<X>) -> Res<Documentation, X> {
+  map(
+    many1(terminated(
+      preceded(tag("///"), not_line_ending),
+      line_ending,
+    )),
+    |lines| Documentation::new(lines.join("\n")),
+  )
+  .parse(input)
 }
 
 fn variable<X: Clone>(input: Span<X>) -> Res<Term, X> {
@@ -862,6 +875,7 @@ fn def_parser(input: Span) -> Res<Def> {
 }
 
 fn def_with_attrs_parser(attrs: Vec<Attribute>, input: Span) -> Res<Def> {
+  let (input, doc) = opt(doc_comment).parse(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("def")(input)?;
   let (input, _) = ws1(input)?;
@@ -902,13 +916,20 @@ fn def_with_attrs_parser(attrs: Vec<Attribute>, input: Span) -> Res<Def> {
         ))
       })?;
 
-    let def = def_with_native(native_name, name.clone(), params.clone(), return_typ, attrs)
-      .map_err(|e| {
-        nom::Err::Failure(ParseError::new(
-          input.clone(),
-          error::ParseErrorKind::Native(e),
-        ))
-      })?;
+    let def = def_with_native(
+      native_name,
+      name.clone(),
+      params.clone(),
+      return_typ,
+      attrs,
+      doc,
+    )
+    .map_err(|e| {
+      nom::Err::Failure(ParseError::new(
+        input.clone(),
+        error::ParseErrorKind::Native(e),
+      ))
+    })?;
     return Ok((input, def));
   } else if input.fragment().starts_with("{") {
     let (input, _) = char('{')(input)?;
@@ -926,7 +947,7 @@ fn def_with_attrs_parser(attrs: Vec<Attribute>, input: Span) -> Res<Def> {
   };
 
   if params.is_empty() {
-    Ok((input, def(name, type_cons, return_typ, term, attrs)))
+    Ok((input, def(name, type_cons, return_typ, term, attrs, doc)))
   } else {
     let mut full_typ = pi_typs(
       params.iter().map(|p| *p.typ.clone()).collect::<Vec<_>>(),
@@ -936,7 +957,7 @@ fn def_with_attrs_parser(attrs: Vec<Attribute>, input: Span) -> Res<Def> {
       full_typ = foralls(implicit_params, full_typ);
     }
     let body = lams(params, term);
-    Ok((input, def(name, type_cons, full_typ, body, attrs)))
+    Ok((input, def(name, type_cons, full_typ, body, attrs, doc)))
   }
 }
 
@@ -953,6 +974,8 @@ fn infix_parser(input: Span) -> Res<Infix> {
 }
 
 fn class_def_parser<X: Clone>(input: Span<X>) -> Res<ClassDef, X> {
+  let (input, doc) = opt(doc_comment).parse(input)?;
+  let (input, _) = multispace0(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("def")(input)?;
   let (input, _) = ws1(input)?;
@@ -964,14 +987,14 @@ fn class_def_parser<X: Clone>(input: Span<X>) -> Res<ClassDef, X> {
   let (input, default) = opt(preceded((assignment_operator, ws0), term)).parse(input)?;
 
   if params.is_empty() {
-    Ok((input, class_def(name, return_typ, default, attrs)))
+    Ok((input, class_def(name, return_typ, default, attrs, doc)))
   } else {
     let full_typ = pi_typs(
       params.iter().map(|p| *p.typ.clone()).collect::<Vec<_>>(),
       return_typ,
     );
     let default_term = default.map(|d| lams(params, d));
-    Ok((input, class_def(name, full_typ, default_term, attrs)))
+    Ok((input, class_def(name, full_typ, default_term, attrs, doc)))
   }
 }
 
@@ -997,6 +1020,8 @@ fn all_type_cons_parser<X: Clone>(input: Span<X>) -> Res<Vec<TypeConstraint>, X>
 }
 
 fn class_parser(input: Span) -> Res<Inductive> {
+  let (input, doc) = opt(doc_comment).parse(input)?;
+  let (input, _) = multispace0(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("class")(input)?;
   let (input, _) = ws0(input)?;
@@ -1015,6 +1040,7 @@ fn class_parser(input: Span) -> Res<Inductive> {
       params,
       defs,
       attrs,
+      doc,
     ),
   ))
 }
@@ -1034,6 +1060,8 @@ fn def_with_attrs_inner_parser(input: Span) -> Res<Def> {
 }
 
 fn instance_parser(input: Span) -> Res<Instance> {
+  let (input, doc) = opt(doc_comment).parse(input)?;
+  let (input, _) = multispace0(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("instance")(input)?;
   let (input, _) = ws0(input)?;
@@ -1055,6 +1083,7 @@ fn instance_parser(input: Span) -> Res<Instance> {
       args,
       defs,
       attrs,
+      doc,
     ),
   ))
 }
@@ -1108,6 +1137,8 @@ fn inductive_inner_parser<'a>(
 }
 
 fn inductive_parser(input: Span) -> Res<Inductive> {
+  let (input, doc) = opt(doc_comment).parse(input)?;
+  let (input, _) = multispace0(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("type")(input)?;
   let (input, _) = ws0(input)?;
@@ -1143,6 +1174,7 @@ fn inductive_parser(input: Span) -> Res<Inductive> {
       typ,
       constructors,
       attrs,
+      doc,
     ),
   ))
 }
@@ -1167,6 +1199,8 @@ fn struct_inner_parser<X: Clone>(input: Span<X>) -> Res<Vec<StructField>, X> {
 }
 
 fn struct_parser<X: Clone>(input: Span<X>) -> Res<Inductive, X> {
+  let (input, doc) = opt(doc_comment).parse(input)?;
+  let (input, _) = multispace0(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("struct")(input)?;
   let (input, _) = ws0(input)?;
@@ -1178,7 +1212,7 @@ fn struct_parser<X: Clone>(input: Span<X>) -> Res<Inductive, X> {
   let (input, params) = cons_params(input)?;
   let (input, fields) = struct_inner_parser(input)?;
 
-  Ok((input, stru(name, constraints, params, fields, attrs)))
+  Ok((input, stru(name, constraints, params, fields, attrs, doc)))
 }
 
 fn struct_val_field_parser<X: Clone>(input: Span<X>) -> Res<(Identifier, Term), X> {

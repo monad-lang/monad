@@ -312,7 +312,7 @@ mod tests {
     } else {
       lams(params.clone(), body)
     };
-    Decl::Def(def(mpt(name), vec![], full_type, term, vec![]))
+    Decl::Def(def(mpt(name), vec![], full_type, term, vec![], None))
   }
 
   use monad_core::term::Term;

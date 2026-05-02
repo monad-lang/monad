@@ -43,8 +43,21 @@ impl SourceRange {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Identifier(String);
+
+/// Documentation for a declaration (function, type, class, etc.)
+/// Wraps a markdown string that documents the declaration.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Documentation {
+  pub value: String,
+}
+
+impl Documentation {
+  pub fn new(value: String) -> Self {
+    Documentation { value }
+  }
+}
 
 impl Identifier {
   pub fn new(s: String) -> Self {
@@ -258,6 +271,7 @@ pub fn stru(
   params: Vec<Param>,
   fields: Vec<StructField>,
   attributes: Vec<Attribute>,
+  doc: Option<Documentation>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, type0());
   let con_params = fields
@@ -284,6 +298,7 @@ pub fn stru(
     variant: InductiveVariant::Struct,
     term,
     attributes,
+    doc,
   }
 }
 
@@ -364,6 +379,7 @@ pub fn inductive(
   typ: Term,
   constructors: Vec<InductConstructor>,
   attributes: Vec<Attribute>,
+  doc: Option<Documentation>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, typ.replace_hole(type0));
 
@@ -377,6 +393,7 @@ pub fn inductive(
     constructors,
     term,
     attributes,
+    doc,
   }
 }
 
@@ -385,6 +402,7 @@ pub struct ClassDef {
   pub(crate) name: Identifier,
   pub(crate) typ: Term,
   pub default: Option<Term>,
+  pub doc: Option<Documentation>,
   pub attributes: Vec<Attribute>,
 }
 
@@ -393,11 +411,13 @@ pub fn class_def(
   typ: Term,
   default: Option<Term>,
   attributes: Vec<Attribute>,
+  doc: Option<Documentation>,
 ) -> ClassDef {
   ClassDef {
     name,
     typ,
     default,
+    doc,
     attributes,
   }
 }
@@ -408,6 +428,7 @@ pub fn class(
   params: Vec<Param>,
   defs: Vec<ClassDef>,
   attributes: Vec<Attribute>,
+  doc: Option<Documentation>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, type0());
   let con_typs = defs.iter().map(|d| d.typ.clone()).collect();
@@ -435,6 +456,7 @@ pub fn class(
     constraints,
     typ,
     term,
+    doc,
     attributes,
   }
 }
@@ -449,6 +471,7 @@ pub struct Instance {
   cons: Constructor,
   typ: Term,
   pub attributes: Vec<Attribute>,
+  pub doc: Option<Documentation>,
 }
 
 impl Instance {
@@ -506,6 +529,7 @@ pub fn instance(
   args: Vec<Term>,
   impls: Vec<Def>,
   attributes: Vec<Attribute>,
+  doc: Option<Documentation>,
 ) -> Instance {
   let num_args = impls.len();
   let impls_map = impls
@@ -540,6 +564,7 @@ pub fn instance(
     constraints,
     typ,
     attributes,
+    doc,
   }
 }
 
@@ -567,6 +592,7 @@ pub struct Inductive {
   typ: Term,
   pub(crate) constructors: Vec<InductConstructor>,
   pub attributes: Vec<Attribute>,
+  pub doc: Option<Documentation>,
 }
 
 pub trait AsVarRef {
@@ -1563,6 +1589,7 @@ pub struct Def {
   pub(crate) typ: Term,
   pub term: Term,
   pub(crate) type_constraints: Vec<TypeConstraint>,
+  pub doc: Option<Documentation>,
   pub attributes: Vec<Attribute>,
 }
 
@@ -1595,12 +1622,14 @@ pub fn def(
   typ: Term,
   term: Term,
   attributes: Vec<Attribute>,
+  doc: Option<Documentation>,
 ) -> Def {
   Def {
     name,
     type_constraints: type_cons,
     typ,
     term,
+    doc,
     attributes,
   }
 }
@@ -1646,6 +1675,7 @@ pub fn def_with_native(
   params: Vec<Param>,
   return_typ: Term,
   attributes: Vec<Attribute>,
+  doc: Option<Documentation>,
 ) -> Result<Def, String> {
   let typ = if params.is_empty() {
     return_typ
@@ -1665,7 +1695,7 @@ pub fn def_with_native(
   };
 
   let term = lam_indecies(params, body);
-  Ok(def(name, vec![], typ, term, attributes))
+  Ok(def(name, vec![], typ, term, attributes, doc))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
