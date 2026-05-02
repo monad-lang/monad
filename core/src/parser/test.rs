@@ -698,10 +698,12 @@ fn test_native() {
   let expected_term = Term::Lam {
     param: Par::I {
       typ: Box::new(typ("I64")),
+      mult: Multiplicity::Many,
     },
     body: Box::new(Term::Lam {
       param: Par::I {
         typ: Box::new(typ("I64")),
+        mult: Multiplicity::Many,
       },
       body: Box::new(native_term),
     }),
@@ -1278,10 +1280,12 @@ fn test_native_with_named_arg() {
   let expected_term = Term::Lam {
     param: Par::I {
       typ: Box::new(typ("I64")),
+      mult: Multiplicity::Many,
     },
     body: Box::new(Term::Lam {
       param: Par::I {
         typ: Box::new(typ("I64")),
+        mult: Multiplicity::Many,
       },
       body: Box::new(native_term),
     }),

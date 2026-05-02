@@ -4,7 +4,7 @@ pub mod test;
 use super::*;
 use crate::Set;
 use crate::eval::native::{NativeFun, load_native_funs};
-use crate::eval::r#type::{TypeError, derive_instance_key, type_check_module_decls};
+use crate::eval::r#type::{TypeError, UsageEnv, derive_instance_key, type_check_module_decls};
 use crate::term::{Inductive, Instance, InstanceKey, ModulePath, SourceContext, Term};
 use crate::{
   parser::parse_file,
@@ -982,16 +982,37 @@ impl<'a> GlobalScope<'a> {
 pub enum Scope<'a> {
   Top {
     global: &'a GlobalScope<'a>,
+    usage_env: UsageEnv,
   },
   Sub {
     local: LocalVar<'a>,
     parent: Box<Scope<'a>>,
+    usage_env: UsageEnv,
   },
 }
 
 impl<'a> Scope<'a> {
   pub fn new(global: &'a GlobalScope<'a>) -> Scope<'a> {
-    Scope::Top { global }
+    Scope::Top {
+      global,
+      usage_env: UsageEnv::new(),
+    }
+  }
+
+  /// Get a reference to the usage environment
+  pub fn usage_env(&self) -> &UsageEnv {
+    match self {
+      Scope::Top { usage_env, .. } => usage_env,
+      Scope::Sub { usage_env, .. } => usage_env,
+    }
+  }
+
+  /// Get a mutable reference to the usage environment
+  pub fn usage_env_mut(&mut self) -> &mut UsageEnv {
+    match self {
+      Scope::Top { usage_env, .. } => usage_env,
+      Scope::Sub { usage_env, .. } => usage_env,
+    }
   }
   /// Extract term of NameRef
   pub fn resolve_name(&self, nref: &NameRef) -> Result<&Term, ScopeError> {
@@ -1028,8 +1049,8 @@ impl<'a> Scope<'a> {
 
   pub fn find_local(&'a self, local_name: &Identifier) -> Option<&'a LocalVar<'a>> {
     match self {
-      Scope::Top { global: _ } => None,
-      Scope::Sub { local, parent } => {
+      Scope::Top { global: _, .. } => None,
+      Scope::Sub { local, parent, .. } => {
         if let Some(name) = local.name()
           && name == local_name
         {
@@ -1044,8 +1065,8 @@ impl<'a> Scope<'a> {
   /// Named local variables
   pub fn locals(&'a self) -> Map<&'a Identifier, &'a LocalVar<'a>> {
     match self {
-      Scope::Top { global: _ } => Map::new(),
-      Scope::Sub { local, parent } => {
+      Scope::Top { global: _, .. } => Map::new(),
+      Scope::Sub { local, parent, .. } => {
         let mut loc = parent.locals();
         if let Some(name) = local.name() {
           loc.insert(name, local);
@@ -1056,8 +1077,8 @@ impl<'a> Scope<'a> {
   }
   pub fn local_foralls(&'a self) -> Map<&'a Identifier, &'a LocalVar<'a>> {
     match self {
-      Scope::Top { global: _ } => Map::new(),
-      Scope::Sub { local, parent } => {
+      Scope::Top { global: _, .. } => Map::new(),
+      Scope::Sub { local, parent, .. } => {
         let mut loc = parent.local_foralls();
         if let LocalVar::Forall { .. } = local
           && let Some(name) = local.name()
@@ -1083,7 +1104,7 @@ impl<'a> Scope<'a> {
   ) -> Result<VarRef<'a>, ScopeError> {
     use Scope::{Sub, Top};
     match self {
-      Sub { local, parent } => {
+      Sub { local, parent, .. } => {
         if let Some(name) = nref.as_id()
           && let Some(local_name) = local.name()
           && name == local_name
@@ -1093,7 +1114,7 @@ impl<'a> Scope<'a> {
           parent.find_var_ref_of(nref, given_type)
         }
       }
-      Top { global } => {
+      Top { global, .. } => {
         let def = global.find_any_name_ref(nref, given_type)?;
         Ok(def)
       }
@@ -1101,40 +1122,62 @@ impl<'a> Scope<'a> {
   }
 
   pub fn with_param(&self, param: &'a Par) -> Scope<'a> {
+    let mult = param.multiplicity();
+    let mut usage_env = self.usage_env().clone();
     match param {
-      Par::P(param) => self.with_local_var(&param.name, param.typ.as_ref()),
-      Par::I { typ } => self.with_local_index_var(typ.as_ref()),
+      Par::P(param) => {
+        usage_env.register(param.name.clone(), mult.clone());
+        Scope::Sub {
+          local: local_var(&param.name, param.typ.as_ref()),
+          parent: Box::new(self.clone()),
+          usage_env,
+        }
+      }
+      Par::I { typ, .. } => {
+        // Anonymous implicit param - no name to register
+        Scope::Sub {
+          local: local_index_var(typ.as_ref()),
+          parent: Box::new(self.clone()),
+          usage_env,
+        }
+      }
     }
   }
   pub fn with_local_var(&self, name: &'a Identifier, typ: &'a Term) -> Scope<'a> {
     Scope::Sub {
       local: local_var(name, typ),
       parent: Box::new(self.clone()),
+      usage_env: self.usage_env().clone(),
     }
   }
   pub fn with_forall(&self, name: &'a Identifier, typ: &'a Term) -> Scope<'a> {
     Scope::Sub {
       local: local_forall(name, typ),
       parent: Box::new(self.clone()),
+      usage_env: self.usage_env().clone(),
     }
   }
   pub fn with_local_index_var(&self, typ: &'a Term) -> Scope<'a> {
     Scope::Sub {
       local: local_index_var(typ),
       parent: Box::new(self.clone()),
+      usage_env: self.usage_env().clone(),
     }
   }
   pub fn with_type_owned(&self, name: &'a Identifier, typ: Term) -> Scope<'a> {
     Scope::Sub {
       local: local_var_owned(name, typ),
       parent: Box::new(self.clone()),
+      usage_env: self.usage_env().clone(),
     }
   }
 
   pub fn global(&self) -> &GlobalScope<'a> {
     match self {
-      Scope::Top { global } => global,
-      Scope::Sub { local: _, parent } => parent.global(),
+      Scope::Top { global, .. } => global,
+      Scope::Sub {
+        local: _, parent, ..
+      } => parent.global(),
     }
   }
 }

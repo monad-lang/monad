@@ -151,7 +151,7 @@ pub fn recognize_bool(value: &Term) -> Result<bool, Error> {
 fn substitute_lam(param: Par, body: Term, arg: &Term) -> Term {
   match param {
     Par::P(param) => substitute(body, &Id(param.name.clone()), arg),
-    Par::I { typ: _ } => substitute(body, &Index(1), arg),
+    Par::I { typ: _, .. } => substitute(body, &Index(1), arg),
   }
 }
 fn native_apply_arg(mut native: Native, index: usize, term: Term) -> Option<Term> {
@@ -264,6 +264,7 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
           let new_param = Param {
             name: new_name.clone(),
             typ: param.typ.clone(),
+            mult: param.mult.clone(),
           };
           let new_body = rename_variable(*body, new_name, old_name.clone());
           let term = substitute(new_body, nref, new_term);
@@ -273,7 +274,7 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
           lam(param.clone(), term)
         }
       }
-      Par::I { typ } => {
+      Par::I { typ, .. } => {
         if let Index(i) = nref {
           let term = substitute(*body, &Index(i + 1), new_term);
           lam_index(*typ, term)
@@ -290,7 +291,9 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
         term.clone()
       }
     }
-    Pi { arg, ret, arg_name } => {
+    Pi {
+      arg, ret, arg_name, ..
+    } => {
       let arg = substitute(*arg, nref, new_term);
       let ret = substitute(*ret, nref, new_term);
       pi_name(arg_name, arg, ret)

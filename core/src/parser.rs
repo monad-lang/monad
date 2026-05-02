@@ -10,15 +10,15 @@ use crate::{
   parser::error::{ParseError, ReplParserError},
   term::{
     AttrArg, Attribute, ClassDef, Decl, Def, Documentation, Identifier, InductConstructor,
-    Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath, NameRef, NumSuffix, Open,
-    Operator, Param, SourceContext, SourceRange, StructField,
+    Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath, Multiplicity, NameRef,
+    NumSuffix, Open, Operator, Param, SourceContext, SourceRange, StructField,
     Term::{self, Hole, Var},
     TypeConstraint, Use, app, apps, case, class, class_def, ctx, def, def_with_native,
     float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
-    lam, lams, lets, map_term, match_term,
+    ivar, lam, lams, lets, map_term, match_term,
     module::ParsedModule,
-    mpvar, num_suffix, opr, param, pi_name, pi_typs, pvar, stru, stru_field, ty, type_constraint,
-    var_id,
+    mpvar, num_suffix, opr, param, param_with_mult, pi_name, pi_typs, pvar, stru, stru_field,
+    type_constraint, var_id,
   },
 };
 use locate::{LocatedSpan, info};
@@ -31,7 +31,7 @@ use nom::{
   },
   combinator::{eof, map, not, opt, recognize, success, verify},
   multi::{fold_many0, many0, many1},
-  sequence::{delimited, preceded, separated_pair, terminated},
+  sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
 use string::parse_string;
 
@@ -297,14 +297,27 @@ fn float_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
   Ok((input, suffix))
 }
 
+/// Parse multiplicity prefix: "!" = Linear, "?" = Affine, none = Many
+fn multiplicity_prefix<X: Clone>(input: Span<X>) -> Res<Multiplicity, X> {
+  map(opt(alt((char('!'), char('?')))), |m| match m {
+    Some('!') => Multiplicity::Linear,
+    Some('?') => Multiplicity::Affine,
+    _ => Multiplicity::Many,
+  })
+  .parse(input)
+}
+
 fn lam_param<X: Clone>(input: Span<X>) -> Res<Param, X> {
   alt((
     map(identifier, |i| param(i, Hole)),
     delimited(
       (char('('), ws0),
       map(
-        separated_pair(identifier, ws0, opt_type_annotation),
-        |(name, typ)| param(name, typ),
+        pair(
+          multiplicity_prefix,
+          separated_pair(identifier, ws0, opt_type_annotation),
+        ),
+        |(mult, (name, typ))| param_with_mult(name, typ, mult),
       ),
       (ws0, char(')')),
     ),
@@ -314,7 +327,7 @@ fn lam_param<X: Clone>(input: Span<X>) -> Res<Param, X> {
 
 fn cons_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
   alt((
-    map(identifier, |t| vec![param(id(""), ty(t))]),
+    map(identifier, |t| vec![param(id(""), ivar(t))]),
     delimited(
       (char('('), ws0),
       alt((
@@ -345,8 +358,16 @@ fn implicit_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
   delimited(
     (char('{'), ws0),
     map(
-      separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
-      |(ids, typ)| ids.into_iter().map(|i| param(i, typ.clone())).collect(),
+      pair(
+        multiplicity_prefix,
+        separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
+      ),
+      |(mult, (ids, typ))| {
+        ids
+          .into_iter()
+          .map(|i| param_with_mult(i, typ.clone(), mult.clone()))
+          .collect()
+      },
     ),
     (ws0, char('}')),
   )
@@ -369,8 +390,16 @@ fn def_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
   delimited(
     (char('('), ws0),
     map(
-      separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
-      |(ids, typ)| ids.into_iter().map(|i| param(i, typ.clone())).collect(),
+      pair(
+        multiplicity_prefix,
+        separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
+      ),
+      |(mult, (ids, typ))| {
+        ids
+          .into_iter()
+          .map(|i| param_with_mult(i, typ.clone(), mult.clone()))
+          .collect()
+      },
     ),
     (ws0, char(')')),
   )
@@ -876,12 +905,7 @@ fn opt_attributes<X: Clone>(input: Span<X>) -> Res<Vec<Attribute>, X> {
   many0(attribute_parser).parse(input)
 }
 
-#[cfg(test)]
 fn def_parser(input: Span) -> Res<Def> {
-  def_with_attrs_parser(input)
-}
-
-fn def_with_attrs_parser(input: Span) -> Res<Def> {
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("def")(input)?;
@@ -1045,7 +1069,7 @@ fn class_parser(input: Span) -> Res<Inductive> {
 fn instance_inner_parser(input: Span) -> Res<Vec<Def>> {
   delimited(
     (char('{'), ws0),
-    many1(delimited(ws0, def_with_attrs_parser, ws0)),
+    many1(delimited(ws0, def_parser, ws0)),
     (ws0, char('}')),
   )
   .parse(input)
@@ -1263,7 +1287,7 @@ fn decl_parser(input: Span) -> Res<SourceContext<Decl>> {
   let (input, decl) = alt((
     map(use_parser, Decl::Use),
     map(open_parser, Decl::Open),
-    map(def_with_attrs_parser, Decl::Def),
+    map(def_parser, Decl::Def),
     map(class_parser, Decl::Type),
     map(instance_parser, Decl::Ins),
     map(struct_parser, Decl::Type),

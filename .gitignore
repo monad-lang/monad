@@ -12,3 +12,6 @@ devenv.local.yaml
 # pre-commit
 .pre-commit-config.yaml
 docs/book
+
+# Plans directory for implementation planning
+plans/

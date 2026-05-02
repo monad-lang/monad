@@ -191,6 +191,7 @@ pub fn pi_var(name: Identifier, arg: Term, ret: Term) -> Term {
     arg_name: Some(name),
     arg: Box::new(arg),
     ret: Box::new(ret),
+    mult: Multiplicity::default(),
   }
 }
 
@@ -201,6 +202,7 @@ pub fn type_count_args(typ: &Term) -> u8 {
     arg: _,
     ret,
     arg_name: _,
+    ..
   } = t
   {
     t = ret;
@@ -619,17 +621,51 @@ impl Named for Inductive {
   }
 }
 
+/// Multiplicity for linear type system (Rust-style syntax)
+/// - Many: unrestricted (default), can be used any number of times
+/// - Linear: must be used exactly once (syntax: !x)
+/// - Affine: can be used 0 or 1 time (syntax: ?x)
+#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
+pub enum Multiplicity {
+  Many,   // ω - unrestricted (default)
+  Linear, // 1 - must use exactly once
+  Affine, // ≤1 - can use 0 or 1 time
+}
+
+impl Default for Multiplicity {
+  fn default() -> Self {
+    Multiplicity::Many
+  }
+}
+
+impl Display for Multiplicity {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Multiplicity::Many => write!(f, "ω"),
+      Multiplicity::Linear => write!(f, "!"),
+      Multiplicity::Affine => write!(f, "?"),
+    }
+  }
+}
+
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum Par {
-  P(Param),
-  I { typ: Box<Term> },
+  P(Param),                                 // explicit param (has mult in Param)
+  I { typ: Box<Term>, mult: Multiplicity }, // implicit param with multiplicity
 }
 
 impl Par {
   pub fn typ(&self) -> &Term {
     match self {
       Par::P(param) => &param.typ,
-      Par::I { typ } => typ,
+      Par::I { typ, .. } => typ,
+    }
+  }
+
+  pub fn multiplicity(&self) -> &Multiplicity {
+    match self {
+      Par::P(param) => &param.mult,
+      Par::I { mult, .. } => mult,
     }
   }
 
@@ -637,7 +673,10 @@ impl Par {
     use Par::*;
     match self {
       P(param_) => P(param(param_.name.clone(), *param_.typ.clone())),
-      I { typ: _ } => I { typ: Box::new(typ) },
+      I { typ: _, mult } => I {
+        typ: Box::new(typ),
+        mult: mult.clone(),
+      },
     }
   }
 }
@@ -646,7 +685,7 @@ impl Display for Par {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Par::P(p) => write!(f, "{p}"),
-      Par::I { typ } => write!(f, "(' : {typ})"),
+      Par::I { typ, .. } => write!(f, "(' : {typ})"),
     }
   }
 }
@@ -654,6 +693,7 @@ impl Display for Par {
 pub struct Param {
   pub name: Identifier,
   pub typ: Box<Term>,
+  pub mult: Multiplicity, // NEW: Many (default), Linear (!), or Affine (?)
 }
 
 impl Typed for Param {
@@ -665,9 +705,9 @@ impl Typed for Param {
 impl Display for Param {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     if self.typ.is_known() {
-      write!(f, "({} : {})", self.name, self.typ)
+      write!(f, "({}{} : {})", self.mult, self.name, self.typ)
     } else {
-      write!(f, "{}", self.name)
+      write!(f, "{}{}", self.mult, self.name)
     }
   }
 }
@@ -680,6 +720,15 @@ pub fn param(name: Identifier, typ: Term) -> Param {
   Param {
     name,
     typ: Box::new(typ),
+    mult: Multiplicity::default(),
+  }
+}
+
+pub fn param_with_mult(name: Identifier, typ: Term, mult: Multiplicity) -> Param {
+  Param {
+    name,
+    typ: Box::new(typ),
+    mult,
   }
 }
 
@@ -692,7 +741,7 @@ pub fn mpvar(name: ModulePath) -> Term {
     name: NameRef::P(name),
   }
 }
-pub fn ty(name: Identifier) -> Term {
+pub fn ivar(name: Identifier) -> Term {
   Var {
     name: NameRef::Id(name),
   }
@@ -702,7 +751,7 @@ pub fn mpv(s: &str) -> Term {
 }
 
 pub fn typ(s: &str) -> Term {
-  ty(id(s))
+  ivar(id(s))
 }
 
 pub fn forall(param: Param, body: Term) -> Term {
@@ -737,6 +786,7 @@ pub fn pi(arg: Term, ret: Term) -> Term {
     arg_name: None,
     arg: Box::new(arg),
     ret: Box::new(ret),
+    mult: Multiplicity::default(),
   }
 }
 pub fn pi_name(arg_name: Option<Identifier>, arg: Term, ret: Term) -> Term {
@@ -744,6 +794,7 @@ pub fn pi_name(arg_name: Option<Identifier>, arg: Term, ret: Term) -> Term {
     arg_name,
     arg: Box::new(arg),
     ret: Box::new(ret),
+    mult: Multiplicity::default(),
   }
 }
 
@@ -1069,6 +1120,7 @@ pub enum Term {
     arg_name: Option<Identifier>,
     arg: Box<Term>,
     ret: Box<Term>,
+    mult: Multiplicity, // NEW: Many, Linear (!), or Affine (?)
   },
   /// Variable
   Var {
@@ -1137,6 +1189,7 @@ impl Term {
         arg,
         ret: _,
         arg_name: _,
+        ..
       } => arg.is_forall(),
       _ => false,
     }
@@ -1149,6 +1202,7 @@ impl Term {
         arg: _,
         ret: _,
         arg_name: _,
+        ..
       } => true,
       Forall {
         name: _,
@@ -1217,6 +1271,7 @@ impl Term {
         arg: _,
         ret: _,
         arg_name: _,
+        ..
       } => "pi",
       Prop => "prop",
       Type { universe: _ } => "type",
@@ -1329,7 +1384,9 @@ impl Display for Term {
         }
       }
       Ctx { loc: _, term } => write!(f, "{term}"),
-      Pi { arg, ret, arg_name } => {
+      Pi {
+        arg, ret, arg_name, ..
+      } => {
         if let Some(name) = arg_name {
           write!(f, "({name} : {arg} -> {ret})")
         } else {
@@ -1417,7 +1474,10 @@ pub fn apps(fun: Term, args: Vec<Term>) -> Term {
 
 pub fn lam_index(typ: Term, body: Term) -> Term {
   Term::Lam {
-    param: Par::I { typ: Box::new(typ) },
+    param: Par::I {
+      typ: Box::new(typ),
+      mult: Multiplicity::default(),
+    },
     body: Box::new(body),
   }
 }
@@ -1427,7 +1487,10 @@ pub fn lam_indecies(params: Vec<Param>, body: Term) -> Term {
   let mut body = body;
   for param in params.into_iter().rev() {
     body = Term::Lam {
-      param: Par::I { typ: param.typ },
+      param: Par::I {
+        typ: param.typ,
+        mult: Multiplicity::default(),
+      },
       body: Box::new(body),
     }
   }

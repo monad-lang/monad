@@ -286,7 +286,7 @@ mod tests {
   use std::fs;
   use std::sync::atomic::{AtomicU64, Ordering};
 
-  use monad_core::term::{Decl, def, id, lams, mpt, num, param, type0};
+  use monad_core::term::{Decl, def, id, lams, mpt, num, param, pi, type0};
 
   static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -305,11 +305,7 @@ mod tests {
     } else {
       let mut typ = type0();
       for pt in param_types.into_iter().rev() {
-        typ = Term::Pi {
-          arg_name: None,
-          arg: Box::new(pt),
-          ret: Box::new(typ),
-        };
+        typ = pi(pt, typ);
       }
       typ
     };

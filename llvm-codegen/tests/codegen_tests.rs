@@ -1,4 +1,4 @@
-use monad_core::term::{Decl, Param, Term, def, id, lam, lams, mpt, num, param, type0};
+use monad_core::term::{Decl, Param, Term, def, id, lam, lams, mpt, num, param, pi, type0};
 
 use monad_llvm_codegen::compile_decls;
 
@@ -9,11 +9,7 @@ fn make_def(name: &str, params: Vec<Param>, body: Term) -> Decl {
   } else {
     let mut typ = type0();
     for pt in param_types.into_iter().rev() {
-      typ = Term::Pi {
-        arg_name: None,
-        arg: Box::new(pt),
-        ret: Box::new(typ),
-      };
+      typ = pi(pt, typ);
     }
     typ
   };
