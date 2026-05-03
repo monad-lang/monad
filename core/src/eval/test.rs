@@ -5,7 +5,7 @@ use crate::eval::r#type::{
 };
 use crate::parser::parse_file;
 use crate::parser::{ReplInput, repl_parser, term, test::parse_type};
-use crate::term::module::{LoadedModules, default_modules, module};
+use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
   Hole, Identifier, ModulePath, SourceContext, Term, Typed, app, app2, b_false, b_true,
@@ -241,14 +241,14 @@ fn test_type_check() {
   let mut loaded = LoadedModules::empty();
 
   let path = ModulePath::top("_");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     def apply_fun (a : A) (f : A -> B) : B := f a
     "#
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let global = loaded.scope_of_decls(&path, &decls);
@@ -281,7 +281,7 @@ fn test_type_check_app_polymorphic() {
 fn test_type_check_app_pipe_operator() {
   let mut loaded = LoadedModules::empty();
   let path = ModulePath::top("_");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     def apply_fun (a : A) (f : A -> B) : B := f a
     infix (|>) := apply_fun
@@ -290,7 +290,7 @@ fn test_type_check_app_pipe_operator() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let global = loaded.scope_of_decls(&path, &decls);
@@ -356,7 +356,7 @@ fn test_type_check_hello_style_pipe() {
 fn test_type_check_hello_full() {
   let mut loaded = default_modules().unwrap();
   let path = ModulePath::top("test_hello");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use io
     open IO
@@ -372,7 +372,8 @@ fn test_type_check_hello_full() {
     .into(),
   )
   .unwrap();
-  let r = type_check_module_decls(&path, decls, &mut loaded).map_err(|e| eprintln!("error: {e}"));
+  let r =
+    type_check_module_decls(&path, parsed.decls, &mut loaded).map_err(|e| eprintln!("error: {e}"));
   assert!(r.is_ok(), "hello.mo style code should type check");
 }
 
@@ -380,7 +381,7 @@ fn test_type_check_hello_full() {
 fn test_type_check_hello_with_args() {
   let mut loaded = default_modules().unwrap();
   let path = ModulePath::top("test_hello");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use io
     open IO
@@ -396,10 +397,16 @@ fn test_type_check_hello_with_args() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  loaded.add_module(module(path.clone(), decls));
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
   let module = loaded.get_module(&path).unwrap();
   let global = loaded.global(&path).unwrap();
 
@@ -415,7 +422,7 @@ fn test_type_check_hello_with_args() {
 fn test_type_check_hello_with_strings_to_list() {
   let mut loaded = default_modules().unwrap();
   let path = ModulePath::top("test_hello");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use io
     open IO
@@ -431,10 +438,16 @@ fn test_type_check_hello_with_strings_to_list() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  loaded.add_module(module(path.clone(), decls));
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
   let module = loaded.get_module(&path).unwrap();
   let global = loaded.global(&path).unwrap();
 
@@ -483,12 +496,15 @@ fn simple_eval() {
   let path = ModulePath::top("_");
   let empty_module = module(
     path.clone(),
-    vec![SourceContext::no_ctx(decl_def(
-      mpt("y"),
-      vec![],
-      typ("String"),
-      str("y"),
-    ))],
+    ParsedModule {
+      decls: vec![SourceContext::no_ctx(decl_def(
+        mpt("y"),
+        vec![],
+        typ("String"),
+        str("y"),
+      ))],
+      module_doc: None,
+    },
   );
   let loaded = LoadedModules::from(vec![empty_module]);
   let global = loaded.global(&path).unwrap();
@@ -551,7 +567,7 @@ fn term_eval() {
 #[test]
 fn test_list_literal_eval() {
   let path = ModulePath::top("_");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     type List X {
         empty,
@@ -565,7 +581,7 @@ fn test_list_literal_eval() {
   )
   .unwrap();
   let mut loaded = default_modules().unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let global = loaded.scope_of_decls(&path, &decls);
@@ -587,7 +603,7 @@ fn test_simple_instance() {
   let mut loaded = LoadedModules::empty();
 
   let path = ModulePath::top("_");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     class HAdd A B C {
       def add (a: A) (b : B) : C
@@ -606,7 +622,7 @@ fn test_simple_instance() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let global = loaded.scope_of_decls(&path, &decls);
@@ -631,7 +647,7 @@ fn complex_monad_eval() {
   assert_eq!(eval_test(e, &global.scope()).unwrap(), res);
 
   let path = ModulePath::top("_");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use io
     class Monad (M: Type -> Type) {
@@ -659,10 +675,16 @@ fn complex_monad_eval() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  let m = module(path.clone(), decls);
+  let m = module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  );
   loaded.add_module(m);
   let global = loaded.global(&path).unwrap();
   let scope = Scope::new(&global);
@@ -675,7 +697,7 @@ fn test_i64_eq_comparison() {
   let mut loaded = LoadedModules::empty();
 
   let path = ModulePath::top("_");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     type Bool {
       true,
@@ -703,7 +725,7 @@ fn test_i64_eq_comparison() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let global = loaded.scope_of_decls(&path, &decls);
@@ -720,7 +742,7 @@ fn test_i64_eq_with_default_modules() {
   // Test == operator using the actual prelude + init modules
   let mut loaded = default_modules().unwrap();
   let path = ModulePath::top("_");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use init
     use math
@@ -733,7 +755,7 @@ fn test_i64_eq_with_default_modules() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let global = loaded.scope_of_decls(&path, &decls);
@@ -753,7 +775,7 @@ fn test_cross_module_operator_resolution() {
   // Test that operators from another module resolve correctly
   let mut loaded = default_modules().unwrap();
   let path = ModulePath::top("test_cross_op");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use init
     use math
@@ -764,10 +786,16 @@ fn test_cross_module_operator_resolution() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  loaded.add_module(module(path.clone(), decls));
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
 
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path).expect("scope should exist");
@@ -787,7 +815,7 @@ fn test_cross_module_def_resolution() {
 
   // First module defines a helper function
   let helper_path = ModulePath::top("helper");
-  let helper_decls = parse_file(
+  let parsed_helper = parse_file(
     r#"
     use init
     use math
@@ -797,15 +825,21 @@ fn test_cross_module_def_resolution() {
     .into(),
   )
   .unwrap();
-  let helper_decls = type_check_module_decls(&helper_path, helper_decls, &loaded)
+  let helper_decls = type_check_module_decls(&helper_path, parsed_helper.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let mut loaded = loaded;
-  loaded.add_module(module(helper_path.clone(), helper_decls));
+  loaded.add_module(module(
+    helper_path.clone(),
+    ParsedModule {
+      decls: helper_decls,
+      module_doc: None,
+    },
+  ));
 
   // Second module uses the helper (access via open or direct name after use)
   let path = ModulePath::top("test_cross_def");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use helper
     use init
@@ -815,10 +849,16 @@ fn test_cross_module_def_resolution() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  loaded.add_module(module(path.clone(), decls));
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
 
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path).expect("scope should exist");
@@ -835,36 +875,48 @@ fn test_module_scope_isolation() {
 
   // Module A defines a value
   let mod_a = ModulePath::top("mod_a");
-  let decls_a = parse_file(
+  let parsed_a = parse_file(
     r#"
     def local_val : I64 := 100
     "#
     .into(),
   )
   .unwrap();
-  let decls_a = type_check_module_decls(&mod_a, decls_a, &loaded)
+  let decls_a = type_check_module_decls(&mod_a, parsed_a.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let mut loaded = loaded;
-  loaded.add_module(module(mod_a.clone(), decls_a));
+  loaded.add_module(module(
+    mod_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
 
   // Module B defines a different value with same name
   let mod_b = ModulePath::top("mod_b");
-  let decls_b = parse_file(
+  let parsed_b = parse_file(
     r#"
     def local_val : I64 := 200
     "#
     .into(),
   )
   .unwrap();
-  let decls_b = type_check_module_decls(&mod_b, decls_b, &loaded)
+  let decls_b = type_check_module_decls(&mod_b, parsed_b.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  loaded.add_module(module(mod_b.clone(), decls_b));
+  loaded.add_module(module(
+    mod_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
 
   // Module C uses only mod_a
   let path_a = ModulePath::top("test_uses_a");
-  let decls_a = parse_file(
+  let parsed_a = parse_file(
     r#"
     use mod_a
 
@@ -873,14 +925,20 @@ fn test_module_scope_isolation() {
     .into(),
   )
   .unwrap();
-  let decls_a = type_check_module_decls(&path_a, decls_a, &loaded)
+  let decls_a = type_check_module_decls(&path_a, parsed_a.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  loaded.add_module(module(path_a.clone(), decls_a));
+  loaded.add_module(module(
+    path_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
 
   // Module D uses only mod_b
   let path_b = ModulePath::top("test_uses_b");
-  let decls_b = parse_file(
+  let parsed_b = parse_file(
     r#"
     use mod_b
 
@@ -889,10 +947,16 @@ fn test_module_scope_isolation() {
     .into(),
   )
   .unwrap();
-  let decls_b = type_check_module_decls(&path_b, decls_b, &loaded)
+  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  loaded.add_module(module(path_b.clone(), decls_b));
+  loaded.add_module(module(
+    path_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
 
   // Verify module A's scope has val = 100
   let loaded_scopes = loaded.scopes();

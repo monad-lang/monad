@@ -4,7 +4,7 @@ fn test_simple_instance() {
   let mut loaded = LoadedModules::empty();
 
   let path = ModulePath::top("_");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     class HAdd A B C {
       def add (a: A) (b : B) : C
@@ -21,10 +21,16 @@ fn test_simple_instance() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &mut loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  let modu = module(path.clone(), decls);
+  let modu = module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  );
   loaded.add_module(modu);
   let global = loaded.global(&path).unwrap();
   let ins_key = InstanceKey::new(
@@ -44,7 +50,7 @@ fn test_loaded_scopes_builds_all_scopes() {
   let mut loaded = LoadedModules::empty();
 
   let path = ModulePath::top("test_mod");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     type MyType {
       constructor
@@ -54,10 +60,16 @@ fn test_loaded_scopes_builds_all_scopes() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
-  loaded.add_module(module(path.clone(), decls));
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
 
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path).expect("scope should exist");
@@ -71,7 +83,7 @@ fn test_global_scope_data_includes_implicit_modules() {
   let loaded = default_modules().unwrap();
 
   let path = ModulePath::top("test_mod");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use io
     open IO
@@ -81,11 +93,17 @@ fn test_global_scope_data_includes_implicit_modules() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let mut loaded = loaded;
-  loaded.add_module(module(path.clone(), decls));
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
 
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path).expect("scope should exist");
@@ -101,7 +119,7 @@ fn test_global_scope_data_applies_opens() {
   let loaded = default_modules().unwrap();
 
   let path = ModulePath::top("test_mod");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use io
     open IO
@@ -111,11 +129,17 @@ fn test_global_scope_data_applies_opens() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let mut loaded = loaded;
-  loaded.add_module(module(path.clone(), decls));
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
 
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path).expect("scope should exist");
@@ -129,7 +153,7 @@ fn test_get_module_scope_returns_correct_scope() {
   let loaded = default_modules().unwrap();
 
   let path = ModulePath::top("test_mod");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use io
     open IO
@@ -139,11 +163,17 @@ fn test_get_module_scope_returns_correct_scope() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let mut loaded = loaded;
-  loaded.add_module(module(path.clone(), decls));
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
 
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path).expect("scope should exist");
@@ -164,7 +194,7 @@ fn test_instance_resolution_module_restricted() {
   let loaded = default_modules().unwrap();
 
   let path = ModulePath::top("test_mod");
-  let decls = parse_file(
+  let parsed = parse_file(
     r#"
     use init
     use math
@@ -174,11 +204,17 @@ fn test_instance_resolution_module_restricted() {
     .into(),
   )
   .unwrap();
-  let decls = type_check_module_decls(&path, decls, &loaded)
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
   let mut loaded = loaded;
-  loaded.add_module(module(path.clone(), decls));
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
 
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path).expect("scope should exist");

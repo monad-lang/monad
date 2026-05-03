@@ -1199,7 +1199,13 @@ pub fn load_module_files(
   let decls = load_decls(path)?;
   let mut loaded = load_decl_uses_modules(&decls, loaded)?;
   let decls = type_check_module_decls(path, decls, &loaded)?;
-  let mo = module(path.clone(), decls);
+  let mo = module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  );
   loaded.add_module(mo);
 
   Ok(loaded)
@@ -1211,8 +1217,8 @@ pub fn load_decls(path: &ModulePath) -> Result<Vec<SourceContext<Decl>>, String>
 }
 
 pub fn load_decls_from_text(text: &str) -> Result<Vec<SourceContext<Decl>>, String> {
-  let decls = parse_file(text).map_err(|e| format!("{e}"))?;
-  Ok(decls)
+  let parsed = parse_file(text).map_err(|e| format!("{e}"))?;
+  Ok(parsed.decls)
 }
 
 pub fn load_module_from_text(
@@ -1223,7 +1229,13 @@ pub fn load_module_from_text(
   let init_decls =
     load_decls_from_text(text).map_err(|e| format!("parse error for {}: {e}", path))?;
   let init_decls = type_check_module_decls(&path, init_decls, loaded)?;
-  loaded.add_module(module(path, init_decls));
+  loaded.add_module(module(
+    path,
+    ParsedModule {
+      decls: init_decls,
+      module_doc: None,
+    },
+  ));
   Ok(())
 }
 
@@ -1257,6 +1269,11 @@ pub fn default_modules() -> Result<LoadedModules, LoadingError> {
   init_module(prelude)
 }
 
+pub struct ParsedModule {
+  pub decls: Vec<SourceContext<Decl>>,
+  pub module_doc: Option<Documentation>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
   path: ModulePath,
@@ -1266,6 +1283,7 @@ pub struct Module {
   defs: Map<ModulePath, SourceContext<Def>>,
   infix: Map<Operator, SourceContext<Infix>>,
   instances: Vec<SourceContext<Instance>>,
+  doc: Option<Documentation>,
 }
 
 impl Module {
@@ -1547,7 +1565,8 @@ pub fn names_of_decls(decls: &[SourceContext<Decl>]) -> HashSet<ModulePath> {
 }
 
 /// Create a new module
-pub fn module(path: ModulePath, decls: Vec<SourceContext<Decl>>) -> Module {
+pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
+  let decls = parsed.decls;
   let defs = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
@@ -1604,6 +1623,7 @@ pub fn module(path: ModulePath, decls: Vec<SourceContext<Decl>>) -> Module {
     uses,
     opens,
     infix,
+    doc: parsed.module_doc,
   }
 }
 impl Display for Module {

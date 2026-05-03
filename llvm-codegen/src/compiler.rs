@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use monad_core::term::module::default_modules;
+use monad_core::term::module::{ParsedModule, default_modules};
 use monad_core::term::{Decl, ModulePath};
 
 use crate::codegen::compile_decls;
@@ -74,7 +74,13 @@ pub fn compile_to_ir(input_path: &Path) -> Result<LLVMModule, String> {
     .map_err(|e| format!("Failed to parse {}: {e}", abs_path.display()))?;
   let decls = monad_core::eval::r#type::type_check_module_decls(&module_path, decls, &loaded)
     .map_err(|e| format!("Type check failed: {e}"))?;
-  let module = monad_core::term::module::module(module_path.clone(), decls);
+  let module = monad_core::term::module::module(
+    module_path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  );
   loaded.add_module(module);
 
   let mut all_decls: Vec<Decl> = Vec::new();
@@ -312,7 +318,7 @@ mod tests {
     } else {
       lams(params.clone(), body)
     };
-    Decl::Def(def(mpt(name), vec![], full_type, term, vec![], None))
+    Decl::Def(def(mpt(name), vec![], full_type, term, vec![]))
   }
 
   use monad_core::term::Term;

@@ -271,7 +271,6 @@ pub fn stru(
   params: Vec<Param>,
   fields: Vec<StructField>,
   attributes: Vec<Attribute>,
-  doc: Option<Documentation>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, type0());
   let con_params = fields
@@ -298,7 +297,6 @@ pub fn stru(
     variant: InductiveVariant::Struct,
     term,
     attributes,
-    doc,
   }
 }
 
@@ -379,7 +377,6 @@ pub fn inductive(
   typ: Term,
   constructors: Vec<InductConstructor>,
   attributes: Vec<Attribute>,
-  doc: Option<Documentation>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, typ.replace_hole(type0));
 
@@ -393,7 +390,6 @@ pub fn inductive(
     constructors,
     term,
     attributes,
-    doc,
   }
 }
 
@@ -428,7 +424,6 @@ pub fn class(
   params: Vec<Param>,
   defs: Vec<ClassDef>,
   attributes: Vec<Attribute>,
-  doc: Option<Documentation>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, type0());
   let con_typs = defs.iter().map(|d| d.typ.clone()).collect();
@@ -456,7 +451,6 @@ pub fn class(
     constraints,
     typ,
     term,
-    doc,
     attributes,
   }
 }
@@ -471,7 +465,6 @@ pub struct Instance {
   cons: Constructor,
   typ: Term,
   pub attributes: Vec<Attribute>,
-  pub doc: Option<Documentation>,
 }
 
 impl Instance {
@@ -529,7 +522,6 @@ pub fn instance(
   args: Vec<Term>,
   impls: Vec<Def>,
   attributes: Vec<Attribute>,
-  doc: Option<Documentation>,
 ) -> Instance {
   let num_args = impls.len();
   let impls_map = impls
@@ -564,7 +556,6 @@ pub fn instance(
     constraints,
     typ,
     attributes,
-    doc,
   }
 }
 
@@ -592,7 +583,6 @@ pub struct Inductive {
   typ: Term,
   pub(crate) constructors: Vec<InductConstructor>,
   pub attributes: Vec<Attribute>,
-  pub doc: Option<Documentation>,
 }
 
 pub trait AsVarRef {
@@ -1589,7 +1579,6 @@ pub struct Def {
   pub(crate) typ: Term,
   pub term: Term,
   pub(crate) type_constraints: Vec<TypeConstraint>,
-  pub doc: Option<Documentation>,
   pub attributes: Vec<Attribute>,
 }
 
@@ -1622,14 +1611,12 @@ pub fn def(
   typ: Term,
   term: Term,
   attributes: Vec<Attribute>,
-  doc: Option<Documentation>,
 ) -> Def {
   Def {
     name,
     type_constraints: type_cons,
     typ,
     term,
-    doc,
     attributes,
   }
 }
@@ -1675,7 +1662,6 @@ pub fn def_with_native(
   params: Vec<Param>,
   return_typ: Term,
   attributes: Vec<Attribute>,
-  doc: Option<Documentation>,
 ) -> Result<Def, String> {
   let typ = if params.is_empty() {
     return_typ
@@ -1695,7 +1681,7 @@ pub fn def_with_native(
   };
 
   let term = lam_indecies(params, body);
-  Ok(def(name, vec![], typ, term, attributes, doc))
+  Ok(def(name, vec![], typ, term, attributes))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1907,6 +1893,7 @@ impl InstanceKey {
 #[derive(Clone, PartialEq, Debug)]
 pub struct SourceContext<V> {
   pub(crate) loc: SourceRange,
+  pub(crate) doc: Option<Documentation>,
   pub(crate) value: V,
 }
 
@@ -1929,14 +1916,15 @@ impl<V: Display> Display for SourceContext<V> {
 }
 
 impl<V> SourceContext<V> {
-  pub fn new(loc: SourceRange, value: V) -> Self {
-    Self { loc, value }
+  pub fn new(loc: SourceRange, value: V, doc: Option<Documentation>) -> Self {
+    Self { loc, value, doc }
   }
   pub fn map<R>(self, f: impl FnOnce(V) -> R) -> SourceContext<R> {
     let value = f(self.value);
     SourceContext {
       loc: self.loc,
       value,
+      doc: self.doc,
     }
   }
 
@@ -1944,12 +1932,14 @@ impl<V> SourceContext<V> {
     SourceContext {
       loc: Default::default(),
       value,
+      doc: None,
     }
   }
   pub fn with<B>(&self, v: B) -> SourceContext<B> {
     SourceContext {
       loc: self.loc.clone(),
       value: v,
+      doc: self.doc.clone(),
     }
   }
 

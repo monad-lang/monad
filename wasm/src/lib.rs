@@ -3,7 +3,7 @@ use monad_core::eval::{EvalOptions, eval};
 use monad_core::parser::{ReplInput, repl_parser};
 use monad_core::term::Decl;
 use monad_core::term::Term::Hole;
-use monad_core::term::module::{default_modules, load_module_files, module};
+use monad_core::term::module::{ParsedModule, default_modules, load_module_files, module};
 use monad_core::term::{ModulePath, Term, mpt, strings_to_list_term};
 use wasm_bindgen::prelude::*;
 
@@ -140,7 +140,13 @@ impl WasmRepl {
   pub fn new() -> WasmRepl {
     let mut loaded = default_modules().unwrap();
     let module_path = ModulePath::top("'wasm");
-    let module = module(module_path.clone(), vec![]);
+    let module = module(
+      module_path.clone(),
+      ParsedModule {
+        decls: vec![],
+        module_doc: None,
+      },
+    );
     loaded.add_module(module);
     WasmRepl {
       loaded,
@@ -240,7 +246,7 @@ mod test {
   use monad_core::parser::{ReplInput, repl_parser};
   use monad_core::term::Decl;
   use monad_core::term::Term::Hole;
-  use monad_core::term::module::{default_modules, load_module_files, module};
+  use monad_core::term::module::{ParsedModule, default_modules, load_module_files, module};
   use monad_core::term::{ModulePath, SourceContext, Term, app, mpt, strings_to_list_term};
 
   #[derive(serde::Deserialize)]
@@ -252,7 +258,13 @@ mod test {
   fn run_example_repl(code: &str) -> Result<Term, String> {
     let mut loaded = default_modules().unwrap();
     let module_path = ModulePath::top("'test");
-    let modl = module(module_path.clone(), vec![]);
+    let modl = module(
+      module_path.clone(),
+      ParsedModule {
+        decls: vec![],
+        module_doc: None,
+      },
+    );
     loaded.add_module(modl);
 
     let mut decls: Vec<SourceContext<Decl>> = vec![];
@@ -281,7 +293,13 @@ mod test {
 
     let decls = type_check_module_decls(&module_path, decls, &mut loaded)
       .map_err(|e| format!("type error: {e}"))?;
-    let modl = module(module_path.clone(), decls);
+    let modl = module(
+      module_path.clone(),
+      ParsedModule {
+        decls,
+        module_doc: None,
+      },
+    );
     loaded.add_module(modl);
 
     let global = loaded.global(&module_path).ok_or("global scope failed")?;

@@ -12,7 +12,7 @@ use crate::term::Decl;
 use crate::term::Term::{self, Con, Hole};
 #[cfg(feature = "repl")]
 use crate::term::module::module;
-use crate::term::module::{default_modules, load_module_files};
+use crate::term::module::{ParsedModule, default_modules, load_module_files};
 use crate::term::{Constructor, ModulePath, mpt, strings_to_list_term};
 use crate::term::{app, id};
 
@@ -47,7 +47,13 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
   }
   let mut loaded_modules = default_modules().map_err(|e| format!("{e}"))?;
   let module_path = ModulePath::top("'repl");
-  let module = module(module_path.clone(), vec![]);
+  let module = module(
+    module_path.clone(),
+    ParsedModule {
+      decls: vec![],
+      module_doc: None,
+    },
+  );
   loaded_modules.add_module(module);
   let mut loaded_scopes = loaded_modules.scopes();
   let mut global = loaded_scopes.global(&module_path).unwrap();

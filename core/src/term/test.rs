@@ -104,7 +104,11 @@ impl Similar for TypeConstraint {
 }
 impl Similar for ClassDef {
   fn similar(&self, other: &ClassDef) -> bool {
-    self.name == other.name && self.typ.similar(&other.typ) && self.default.similar(&other.default)
+    self.name == other.name
+      && self.typ.similar(&other.typ)
+      && self.default.similar(&other.default)
+      && self.doc == other.doc
+      && self.attributes == other.attributes
   }
 }
 impl Similar for Infix {
@@ -121,6 +125,7 @@ impl Similar for Inductive {
       && self.constraints.similar(&other.constraints)
       && self.params.similar(&other.params)
       && self.constructors.similar(&other.constructors)
+      && self.attributes == other.attributes
   }
 }
 impl Similar for InductConstructor {
@@ -303,6 +308,7 @@ impl Similar for Instance {
       && self.constraints.similar(&other.constraints)
       && self.args.similar(&other.args)
       && self.impls_map.similar(&other.impls_map)
+      && self.attributes == other.attributes
   }
 }
 
@@ -312,6 +318,7 @@ impl Similar for Def {
       && self.typ.similar(&other.typ)
       && self.term.similar(&other.term)
       && self.type_constraints.similar(&other.type_constraints)
+      && self.attributes == other.attributes
   }
 }
 impl Similar for Use {
@@ -379,7 +386,24 @@ pub fn decl_inductive(
     typ,
     constructors,
     vec![],
-    None,
+  ))
+}
+
+pub fn decl_inductive_with_doc(
+  name: ModulePath,
+  constraints: Vec<TypeConstraint>,
+  params: Vec<Param>,
+  typ: Term,
+  constructors: Vec<InductConstructor>,
+  _doc: Option<Documentation>,
+) -> Decl {
+  Decl::Type(inductive(
+    name,
+    constraints,
+    params,
+    typ,
+    constructors,
+    vec![],
   ))
 }
 
@@ -388,7 +412,7 @@ pub fn decl_infix(operator: Operator, name: ModulePath) -> Decl {
 }
 
 pub fn decl_def(name: ModulePath, type_cons: Vec<TypeConstraint>, typ: Term, term: Term) -> Decl {
-  Decl::Def(def(name, type_cons, typ, term, vec![], None))
+  Decl::Def(def(name, type_cons, typ, term, vec![]))
 }
 
 pub fn defs_class(
@@ -397,7 +421,17 @@ pub fn defs_class(
   args: Vec<Param>,
   funs: Vec<ClassDef>,
 ) -> Decl {
-  Decl::Type(class(name, constraints, args, funs, vec![], None))
+  Decl::Type(class(name, constraints, args, funs, vec![]))
+}
+
+pub fn defs_class_with_doc(
+  name: ModulePath,
+  constraints: Vec<TypeConstraint>,
+  args: Vec<Param>,
+  funs: Vec<ClassDef>,
+  _doc: Option<Documentation>,
+) -> Decl {
+  Decl::Type(class(name, constraints, args, funs, vec![]))
 }
 
 #[test]

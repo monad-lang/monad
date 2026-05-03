@@ -2,7 +2,7 @@ use super::*;
 use crate::{
   Map, similar,
   term::{
-    AttrArg, Attribute, Decl, LetVar, Native, Par, Term, app, app2, dpar, forall,
+    AttrArg, Attribute, Decl, LetVar, Named, Native, Par, Term, app, app2, dpar, forall,
     induct_constructor, mp, mpt, mpv, num, oper, par, pi, pi_var, pvar, str,
     test::{decl_def, decl_inductive, decl_infix, decl_open, decl_use, defs_class},
     typ, var,
@@ -52,6 +52,34 @@ fn test_blank() {
     )
     .unwrap();
   assert!(ws1::<()>("".into()).is_err());
+}
+
+#[test]
+fn test_decl_space() {
+  use nom::combinator::all_consuming;
+  assert!(
+    all_consuming(line_comment_not_doc::<()>)
+      .parse("// test".into())
+      .is_ok()
+  );
+  assert!(
+    all_consuming(line_comment_not_doc::<()>)
+      .parse("/// test".into())
+      .is_err()
+  );
+  // Test: doc comment followed by // comments consumed, returns Some(doc)
+  let (_, r) = all_consuming(decls_space_parser::<()>)
+    .parse(
+      r#"/// test
+    //
+    //
+
+  "#
+      .into(),
+    )
+    .unwrap();
+  assert!(r.is_some());
+  assert_eq!(r.unwrap().value, "test");
 }
 
 #[test]
@@ -231,8 +259,7 @@ fn test_class() {
         vec![],
         None
       )],
-      vec![],
-      None,
+      vec![]
     )
   );
   let s = r#"class [Functor F] Applicative F {
@@ -262,8 +289,7 @@ fn test_class() {
           None
         )
       ],
-      vec![],
-      None
+      vec![]
     )
   );
   let s = r#"class [Applicative M] Monad (M: Type -> Type) {
@@ -293,8 +319,7 @@ fn test_class() {
           None
         )
       ],
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -537,14 +562,13 @@ fn test_inductive() {
         mpv("Solo"),
         vec![]
       )],
-      vec![],
-      None
+      vec![]
     )
   );
   let s = r#"type Result E A  {
-        ok (a:A), err E
-    }
-    "#
+         ok (a:A), err E
+     }
+     "#
   .into();
   let (_, res) = inductive_parser(s).unwrap();
 
@@ -570,8 +594,7 @@ fn test_inductive() {
           vec![dpar("", typ("E"))]
         )
       ],
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -601,11 +624,9 @@ fn test_instance() {
           vec![dpar("f", pi(typ("A"), typ("B"))), dpar("v", app2("F", "A"))],
           oper(var("f"), "|>", var("v"))
         ),
-        vec![],
-        None
+        vec![]
       )],
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -633,15 +654,14 @@ fn test_struct() {
         stru_field(id("field_type"), typ("Type"), None),
         stru_field(id("text"), typ("String"), Some(str("default")))
       ],
-      vec![],
-      None
+      vec![]
     )
   );
   let s = r#"struct [Serialize M] MyData (M: Type) {
-        data : M,
-        text : String := "default",
-    }
-    "#
+         data : M,
+         text : String := "default",
+     }
+     "#
   .into();
   let (_, res) = struct_parser(s).unwrap();
 
@@ -655,8 +675,7 @@ fn test_struct() {
         stru_field(id("data"), typ("M"), None),
         stru_field(id("text"), typ("String"), Some(str("default")))
       ],
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -698,8 +717,7 @@ fn test_native() {
       vec![Attribute {
         name: id("native"),
         args: vec![AttrArg::Ident(id("num_add"))]
-      }],
-      None
+      }]
     ))
   );
 }
@@ -729,13 +747,12 @@ fn test_def() {
           lams(vec![par("_")], app(var("pure"), var("unit")))
         )
       ),
-      vec![],
-      None
+      vec![]
     )
   );
   let s = r#"def main (args : List String) : IO Unit :=
-        println "Hello, world!"
-    "#
+         println "Hello, world!"
+     "#
   .into();
   let (_, res) = def_parser(s).unwrap();
 
@@ -749,13 +766,12 @@ fn test_def() {
         vec![dpar("args", app2("List", "String"))],
         apps(var("println"), vec![str("Hello, world!")])
       ),
-      vec![],
-      None
+      vec![]
     )
   );
   let s = r#"def IO.say.hello : IO Unit :=
-        println "Hello, world!"
-    "#
+         println "Hello, world!"
+     "#
   .into();
   let (_, res) = def_parser(s).unwrap();
 
@@ -766,13 +782,12 @@ fn test_def() {
       vec![],
       app2("IO", "Unit"),
       apps(var("println"), vec![str("Hello, world!")]),
-      vec![],
-      None
+      vec![]
     )
   );
   let s = r#"def Lens [Functor F] (S: Type) (T: Type) (A: Type) (B : Type) : Type :=
-	(A -> F B) -> S -> F T
-	"#
+ 	(A -> F B) -> S -> F T
+ 	"#
   .into();
 
   let (_, res) = def_parser(s).unwrap();
@@ -795,8 +810,7 @@ fn test_def() {
         ],
         pi(pi(typ("A"), app2("F", "B")), pi(typ("S"), app2("F", "T")))
       ),
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -823,6 +837,7 @@ fn module_test() {
     "#;
   let m: Vec<Decl> = parse_file(s.into())
     .unwrap()
+    .decls
     .into_iter()
     .map(|f| f.value().clone())
     .collect();
@@ -1012,8 +1027,7 @@ fn test_def_do_block_simple_expr() {
       vec![],
       app2("IO", "Unit"),
       apps(var("println"), vec![str("Hello")]),
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -1028,14 +1042,7 @@ fn test_def_do_block_return() {
 
   similar!(
     res,
-    def(
-      mpt("get_one"),
-      vec![],
-      app2("IO", "I64"),
-      num(1),
-      vec![],
-      None
-    )
+    def(mpt("get_one"), vec![], app2("IO", "I64"), num(1), vec![])
   );
 }
 
@@ -1057,8 +1064,7 @@ fn test_def_do_block_with_params() {
         vec![dpar("name", typ("String"))],
         apps(var("println"), vec![var("name")])
       ),
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -1083,8 +1089,7 @@ fn test_def_do_block_bind() {
       vec![],
       app2("IO", "I64"),
       expected_body,
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -1113,8 +1118,7 @@ fn test_def_do_block_let() {
       vec![],
       app2("IO", "I64"),
       expected_body,
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -1142,8 +1146,7 @@ fn test_def_do_block_multiple_exprs() {
       vec![],
       app2("IO", "Unit"),
       expected_body,
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -1173,8 +1176,7 @@ fn test_def_do_block_with_constraints() {
           lams(vec![par("_")], app(var("pure"), var("unit")))
         )
       ),
-      vec![],
-      None
+      vec![]
     )
   );
 }
@@ -1298,8 +1300,7 @@ fn test_native_with_named_arg() {
           name: id("name"),
           value: Box::new(AttrArg::Ident(id("num_add")))
         }]
-      }],
-      None
+      }]
     ))
   );
 }
@@ -1429,7 +1430,7 @@ fn test_attr_arg_nested_groups() {
 fn test_attr_test() {
   let s = r#"@[test]
     def test_addition : Bool :=
-      1 + 1 == 2
+        1 + 1 == 2
     "#
   .into();
   let (_, res) = decl_parser(s).unwrap();
@@ -1442,5 +1443,212 @@ fn test_attr_test() {
   match res.value() {
     Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
     _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_docstring_def() {
+  let s: Span<'static, ()> = r#"/// Adds two integers
+def add (a b: I64) : I64 := a + b
+"#
+  .into();
+  let (_, res) = def_parser(s).unwrap();
+  let expected_body = oper(var("a"), "+", var("b"));
+  similar!(
+    res,
+    def(
+      mpt("add"),
+      vec![],
+      pi(typ("I64"), pi(typ("I64"), typ("I64"))),
+      lams(
+        vec![dpar("a", typ("I64")), dpar("b", typ("I64"))],
+        expected_body
+      ),
+      vec![]
+    )
+  );
+}
+
+#[test]
+fn test_docstring_class() {
+  let s: Span<'static, ()> = r#"/// The Functor class
+class Functor (F: Type -> Type) {
+    def map (f: A -> B) : F A -> F B
+}
+"#
+  .into();
+  let (_, ctx) = decl_parser(s).unwrap();
+  similar!(
+    ctx.value(),
+    &Decl::Type(class(
+      mpt("Functor"),
+      vec![],
+      vec![dpar("F", pi(typ("Type"), typ("Type")))],
+      vec![class_def(
+        id("map"),
+        pi(pi(typ("A"), typ("B")), pi(app2("F", "A"), app2("F", "B"))),
+        None,
+        vec![],
+        None
+      )],
+      vec![]
+    ))
+  );
+  assert!(ctx.doc.is_some());
+}
+
+#[test]
+fn test_docstring_struct() {
+  let s: Span<'static, ()> = r#"/// A point in 2D space
+struct Point {
+    x: I64,
+    y: I64,
+}
+"#
+  .into();
+  let (_, ctx) = decl_parser(s).unwrap();
+  similar!(
+    ctx.value(),
+    &Decl::Type(stru(
+      mpt("Point"),
+      vec![],
+      vec![],
+      vec![
+        stru_field(id("x"), typ("I64"), None),
+        stru_field(id("y"), typ("I64"), None),
+      ],
+      vec![]
+    ))
+  );
+  assert!(ctx.doc.is_some());
+}
+
+#[test]
+fn test_docstring_inductive() {
+  let s: Span<'static, ()> = r#"/// Optional values
+type Option A {
+    some (a: A),
+    none
+}
+"#
+  .into();
+  let (_, ctx) = decl_parser(s).unwrap();
+  let option_typ = app(mpv("Option"), var("A"));
+  similar!(
+    ctx.value(),
+    &Decl::Type(inductive(
+      mpt("Option"),
+      vec![],
+      vec![par("A")],
+      Hole,
+      vec![
+        induct_constructor(
+          mpt("Option"),
+          id("some"),
+          pi(typ("A"), option_typ.clone()),
+          vec![dpar("a", typ("A"))]
+        ),
+        induct_constructor(mpt("Option"), id("none"), option_typ, vec![])
+      ],
+      vec![]
+    ))
+  );
+  assert!(ctx.doc.is_some());
+}
+
+#[test]
+fn test_docstring_instance() {
+  let s: Span<'static, ()> = r#"/// Instance for lists
+instance Functor List {
+    def map (f: A -> B) (v: List A) : List B := v |> map f
+}
+"#
+  .into();
+  let (_, ctx) = decl_parser(s).unwrap();
+  similar!(
+    ctx.value(),
+    &Decl::Ins(instance(
+      None,
+      mpt("Functor"),
+      vec![],
+      vec![var("List")],
+      vec![def(
+        mpt("map"),
+        vec![],
+        pi(
+          pi(typ("A"), typ("B")),
+          pi(app2("List", "A"), app2("List", "B"))
+        ),
+        lams(
+          vec![
+            dpar("f", pi(typ("A"), typ("B"))),
+            dpar("v", app2("List", "A"))
+          ],
+          oper(var("v"), "|>", app(var("map"), var("f")))
+        ),
+        vec![]
+      )],
+      vec![]
+    ))
+  );
+  assert!(ctx.doc.is_some());
+}
+
+#[test]
+fn test_module_with_docstrings() {
+  let s: Span<'static, ()> = r#"/// The Option type represents an optional value
+type Option A {
+    some (a: A),
+    none
+}
+
+/// The Functor class for mapping over wrapped values
+class Functor (F: Type -> Type) {
+    /// Map a function over a functor
+    def map (f: A -> B) : F A -> F B
+}
+
+/// Functor instance for Option
+instance Functor (Option A) {
+    def map (f: A -> B) (v: Option A) : Option B :=
+        match v {
+            some a => some (f a),
+            none => none
+        }
+}
+"#
+  .into();
+
+  let (_, parsed) = decls_parser(s).unwrap();
+  let decls = &parsed.decls;
+  assert_eq!(decls.len(), 3);
+
+  // Check first decl - Option type
+  let opt_decl = &decls[0];
+  match opt_decl.value() {
+    Decl::Type(ind) => {
+      assert_eq!(ind.name().as_str(), Some("Option"));
+    }
+    _ => panic!("Expected Type decl"),
+  }
+
+  // Check second decl - Functor class
+  let functor_decl = &decls[1];
+  match functor_decl.value() {
+    Decl::Type(ind) => {
+      assert_eq!(ind.name().as_str(), Some("Functor"));
+      // Check class method doc
+      // Note: class methods are stored in a special way, need to verify doc parsing
+    }
+    _ => panic!("Expected Type decl for class"),
+  }
+
+  // Check third decl - Functor instance
+  let instance_decl = &decls[2];
+  match instance_decl.value() {
+    Decl::Ins(inst) => {
+      assert_eq!(inst.class_name.as_str(), Some("Functor"));
+    }
+    _ => panic!("Expected Ins decl"),
   }
 }
