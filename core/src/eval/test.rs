@@ -8,9 +8,9 @@ use crate::parser::{ReplInput, repl_parser, term, test::parse_type};
 use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
-  Hole, Identifier, ModulePath, SourceContext, Term, Typed, app, app2, b_false, b_true,
-  constructor, forall, id, io_term, lams, mp, mpt, mpvar, num, par, param, pi, some, str,
-  strings_to_list_term, to_list_term, typ, type0, unit, var,
+  Hole, Identifier, ModulePath, Multiplicity, SourceContext, Term, Typed, app, app2, b_false,
+  b_true, constructor, forall, id, io_term, lams, mp, mpt, mpvar, num, par, param, param_with_mult,
+  pi, some, str, strings_to_list_term, to_list_term, typ, type0, unit, var,
 };
 use crate::{set_of, similar};
 use nom::Finish;
@@ -1351,4 +1351,392 @@ fn test_type_check_method_call_with_args_int() {
     "error should mention add (desugared form), got: {}",
     err_str
   );
+}
+
+// ===== Quantitative Type Rule Tests =====
+
+#[test]
+fn test_linear_used_exactly_once() {
+  // Linear variable (!x) used exactly once should succeed
+  let mut loaded = LoadedModules::empty();
+  let path = ModulePath::top("_");
+  let parsed = parse_file(
+    r#"
+    type I64 {}
+    def f (!x : I64) : I64 := x
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls =
+    type_check_module_decls(&path, parsed.decls, &mut loaded).inspect_err(|e| eprintln!("{e}"));
+  assert!(decls.is_ok(), "Linear variable used once should type check");
+}
+
+#[test]
+fn test_linear_unused_fails() {
+  // Linear variable (!x) not used should fail with LinearUnused
+  let mut loaded = LoadedModules::empty();
+  let path = ModulePath::top("_");
+  let parsed = parse_file(
+    r#"
+    type I64 {}
+    def f (!x : I64) : I64 := 42
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded);
+  assert!(decls.is_err(), "Linear variable unused should fail");
+  let err = decls.unwrap_err().to_string();
+  assert!(
+    err.contains("must be used exactly once"),
+    "Expected LinearUnused error, got: {err}"
+  );
+}
+
+#[test]
+fn test_linear_used_twice_fails() {
+  // Linear variable (!x) used twice should fail with LinearUsedMultipleTimes
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create: \!x : I64 => app x x  (uses x twice)
+  let param = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  let body = app(var("x"), var("x"));
+  let t = Term::Lam {
+    param: Par::P(param),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope);
+  assert!(r.is_err(), "Linear variable used twice should fail");
+  let err = r.unwrap_err().to_string();
+  assert!(
+    err.contains("used more than once"),
+    "Expected LinearUsedMultipleTimes error, got: {err}"
+  );
+}
+
+#[test]
+fn test_affine_used_once() {
+  // Affine variable (?x) used once should succeed
+  let mut loaded = LoadedModules::empty();
+  let path = ModulePath::top("_");
+  let parsed = parse_file(
+    r#"
+    type I64 {}
+    def f (?x : I64) : I64 := x
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls =
+    type_check_module_decls(&path, parsed.decls, &mut loaded).inspect_err(|e| eprintln!("{e}"));
+  assert!(decls.is_ok(), "Affine variable used once should type check");
+}
+
+#[test]
+fn test_affine_unused() {
+  // Affine variable (?x) not used should succeed (0 or 1 usage is valid)
+  let mut loaded = LoadedModules::empty();
+  let path = ModulePath::top("_");
+  let parsed = parse_file(
+    r#"
+    type I64 {}
+    def f (?x : I64) : I64 := 42
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls =
+    type_check_module_decls(&path, parsed.decls, &mut loaded).inspect_err(|e| eprintln!("{e}"));
+  assert!(decls.is_ok(), "Affine variable unused should type check");
+}
+
+#[test]
+fn test_affine_used_twice_fails() {
+  // Affine variable (?x) used twice should fail with AffineUsedMultipleTimes
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create: \?x : I64 => app x x  (uses x twice)
+  let param = param_with_mult(id("x"), var("I64"), Multiplicity::Affine);
+  let body = app(var("x"), var("x"));
+  let t = Term::Lam {
+    param: Par::P(param),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope);
+  assert!(r.is_err(), "Affine variable used twice should fail");
+  let err = r.unwrap_err().to_string();
+  assert!(
+    err.contains("used more than once"),
+    "Expected AffineUsedMultipleTimes error, got: {err}"
+  );
+}
+
+#[test]
+fn test_many_unrestricted() {
+  // Regular variable (Many) can be used any number of times
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create: \x : I64 => (I64.add x) x  (uses x twice, type-checks via I64.add)
+  let param = param(id("x"), var("I64"));
+  let body = app(app(mpvar(mp(vec!["I64", "add"])), var("x")), var("x"));
+  let t = Term::Lam {
+    param: Par::P(param),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope);
+  assert!(
+    r.is_ok(),
+    "Unrestricted variable can be used multiple times"
+  );
+}
+
+#[test]
+fn test_linear_in_lambda() {
+  // Test linear parameter in a lambda expression
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create: \!x : I64 => x
+  let param = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  let body = var("x");
+  let t = Term::Lam {
+    param: Par::P(param),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(
+    r.is_ok(),
+    "Lambda with linear param used once should type check"
+  );
+}
+
+#[test]
+fn test_linear_in_lambda_unused_fails() {
+  // Test linear parameter in lambda, unused
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create: \!x : I64 => 0
+  let param = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  let body = num(0);
+  let t = Term::Lam {
+    param: Par::P(param),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope);
+  assert!(r.is_err(), "Lambda with linear param unused should fail");
+}
+
+#[test]
+fn test_linear_in_lambda_used_twice_fails() {
+  // Test linear parameter in lambda, used twice
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create a Pair type to use the linear variable twice
+  let param = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  // body: pair x x (uses x twice)
+  let body = app(app(var("pair"), var("x")), var("x"));
+  let t = Term::Lam {
+    param: Par::P(param),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope);
+  assert!(
+    r.is_err(),
+    "Lambda with linear param used twice should fail"
+  );
+}
+
+#[test]
+fn test_affine_in_lambda() {
+  // Test affine parameter in lambda, used once
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create: \?x : I64 => x
+  let param = param_with_mult(id("x"), var("I64"), Multiplicity::Affine);
+  let body = var("x");
+  let t = Term::Lam {
+    param: Par::P(param),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(
+    r.is_ok(),
+    "Lambda with affine param used once should type check"
+  );
+}
+
+#[test]
+fn test_affine_in_lambda_unused() {
+  // Test affine parameter in lambda, unused (should succeed)
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create: \?x : I64 => 0
+  let param = param_with_mult(id("x"), var("I64"), Multiplicity::Affine);
+  let body = num(0);
+  let t = Term::Lam {
+    param: Par::P(param),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope).map_err(|e| eprintln!("error: {e}"));
+  assert!(
+    r.is_ok(),
+    "Lambda with affine param unused should type check"
+  );
+}
+
+#[test]
+fn test_multiple_linear_params() {
+  // Multiple linear params, all used exactly once
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create: \!x : I64 => \!y : I64 => (I64.add x) y  (uses x once, y once)
+  let param_x = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  let param_y = param_with_mult(id("y"), var("I64"), Multiplicity::Linear);
+  let body = app(app(mpvar(mp(vec!["I64", "add"])), var("x")), var("y"));
+  let inner = Term::Lam {
+    param: Par::P(param_y),
+    body: Box::new(body),
+  };
+  let outer = Term::Lam {
+    param: Par::P(param_x),
+    body: Box::new(inner),
+  };
+  let r = type_check(outer, Hole, &scope);
+  assert!(
+    r.is_ok(),
+    "Multiple linear params, all used once, should type check"
+  );
+}
+
+#[test]
+fn test_multiple_linear_params_one_unused_fails() {
+  // Multiple linear params, one unused
+  let mut loaded = LoadedModules::empty();
+  let path = ModulePath::top("_");
+  let parsed = parse_file(
+    r#"
+    type I64 {}
+    def f (!x : I64) (!y : I64) : I64 := x
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded);
+  assert!(
+    decls.is_err(),
+    "Multiple linear params with one unused should fail"
+  );
+}
+
+#[test]
+fn test_mixed_multiplicity_params() {
+  // Mix of linear, affine, and many params
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // Create: \!x : I64 => \?y : I64 => \z : I64 => x
+  // Uses linear x once, affine y unused (OK), many z unused (OK)
+  let param_x = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  let param_y = param_with_mult(id("y"), var("I64"), Multiplicity::Affine);
+  let param_z = param_with_mult(id("z"), var("I64"), Multiplicity::Many);
+  let inner2 = Term::Lam {
+    param: Par::P(param_z),
+    body: Box::new(var("x")),
+  };
+  let inner1 = Term::Lam {
+    param: Par::P(param_y),
+    body: Box::new(inner2),
+  };
+  let outer = Term::Lam {
+    param: Par::P(param_x),
+    body: Box::new(inner1),
+  };
+  let r = type_check(outer, Hole, &scope);
+  assert!(
+    r.is_ok(),
+    "Mixed multiplicity params with correct usage should type check"
+  );
+}
+
+#[test]
+fn test_nested_lambda_scope_linear_outer_used_after() {
+  // A function with linear param (!x) containing a nested lambda.
+  // x is used AFTER the inner lambda body, NOT inside it.
+  // The inner lambda's verify_linear_usage should NOT check x.
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // def f (!x : I64) : I64 :=
+  //   let inner := \y : I64 => y  in
+  //   x
+  //
+  // Equivalent to: (\!x : I64 => (\y : I64 => y) x)   WRONG, that changes semantics
+  // Actually: f = \!x : I64 => ((\y : I64 => y), x)
+  // But we want the inner lambda to not use x, and x used after.
+  // So: f = \!x : I64 => app(lam(\y : I64 => y), x)? No...
+  //
+  // The pattern: outer function with linear param, inner lambda with its own param,
+  // where outer linear param is used in the outer scope (after the inner lambda).
+  // Construct: \!x : I64 => ((\y : I64 => pair x y), x) -- no that uses x inside
+  //
+  // Better approach: use an application where the inner lambda doesn't reference x
+  // f = \!x : I64 => app((\y : I64 => 42), x)
+  // Here inner lambda's body is just 42 (doesn't use x), and x is consumed as argument.
+
+  let param_x = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  let inner_lam = lam(param(id("y"), var("I64")), num(42));
+  let body = app(inner_lam, var("x"));
+  let t = Term::Lam {
+    param: Par::P(param_x),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope);
+  if let Err(ref e) = r {
+    eprintln!("error: {e}");
+  }
+  assert!(
+    r.is_ok(),
+    "Scope leak: outer linear param should not be checked at inner lambda boundary"
+  );
+}
+
+#[test]
+fn test_nested_lambda_linear_outer_unused_in_inner_should_fail() {
+  // Linear param (!x) NOT used at all (not in inner lambda, not after).
+  // This should still fail - the outer function's verify should catch it.
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // f = \!x : I64 => (\y : I64 => 42)    -- x completely unused
+  let param_x = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  let inner_lam = lam(param(id("y"), var("I64")), num(42));
+  let body = app(inner_lam, num(0));
+  let t = Term::Lam {
+    param: Par::P(param_x),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope);
+  assert!(r.is_err(), "Outer linear param unused at all should fail");
 }

@@ -249,6 +249,18 @@ cargo test
 cargo test eval::test
 ```
 
+## Development Workflow
+
+Always use Test-Driven Development (TDD):
+1. Write a **failing test** first
+2. Implement the fix/feature
+3. Run tests to confirm pass
+4. Run `cargo fmt && cargo test` to ensure formatting and all tests pass
+5. Make a **small, focused commit** with a descriptive message
+
+Always make small, incremental changes. Each commit should be a single logical change.
+After each commit, confirm the test suite still passes.
+
 ## Common Patterns
 
 ### Creating New Types

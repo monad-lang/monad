@@ -343,8 +343,9 @@ pub fn type_check_instance<'a>(
     scope = scope.with_forall(var, typ);
   }
 
+  let mut usage = UsageEnv::new();
   for (param, arg) in class.params.iter().zip(instance.args.iter()) {
-    type_check_with_env(arg.clone(), *param.typ.clone(), &scope)?;
+    type_check_with_env(arg.clone(), *param.typ.clone(), &scope, &mut usage, true)?;
   }
 
   let cons = class
@@ -356,7 +357,9 @@ pub fn type_check_instance<'a>(
     if let Some(impl_def) = instance.impls_map.get_mut(&param.name) {
       let class_def_type = param.typ();
       let typ = match_resolve_type(class_def_type, &impl_def.typ, &scope)?;
-      let (term, _) = type_check_with_env(impl_def.term.clone(), typ.clone(), &scope)?.to_tuple();
+      let (term, _) =
+        type_check_with_env(impl_def.term.clone(), typ.clone(), &scope, &mut usage, true)?
+          .to_tuple();
       impl_def.term = term;
       // Wrap type with forall bindings for type variables
       impl_def.typ = wrap_with_foralls(typ, &type_vars);
@@ -697,7 +700,7 @@ pub fn try_desugar_method_call(term: Term, scope: &Scope) -> Option<Term> {
   match term {
     // Pattern: x.fun (no args)
     Var { name: P(path) } if path.len() >= 2 => {
-      let (type_name, method_path, receiver_id) = get_method_call_info(&path, scope)?;
+      let (_type_name, method_path, receiver_id) = get_method_call_info(&path, scope)?;
       Some(app(
         Var {
           name: P(method_path),
@@ -711,7 +714,7 @@ pub fn try_desugar_method_call(term: Term, scope: &Scope) -> Option<Term> {
     App { fun, arg } => {
       if let Var { name: P(path) } = *fun {
         if path.len() >= 2 {
-          let (type_name, method_path, receiver_id) = get_method_call_info(&path, scope)?;
+          let (_type_name, method_path, receiver_id) = get_method_call_info(&path, scope)?;
           return Some(app(
             app(
               Var {
@@ -1025,18 +1028,23 @@ fn convert_int_literal(value: i64, suffix: NumSuffix) -> Result<Term, TypeError>
 /// Resolves type classes
 /// Public wrapper that creates a fresh UsageEnv if not present
 pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<TypedTerm, TypeError> {
-  type_check_with_env(term, expected_type, scope)
+  let mut usage = UsageEnv::new();
+  type_check_with_env(term, expected_type, scope, &mut usage, true)
 }
 
 /// Internal type check with UsageEnv for linear type tracking
-/// Uses the UsageEnv stored in the Scope
+/// `usage` is passed separately from Scope to avoid cloning issues.
+/// `track_usage` controls whether linear/affine usage is counted
+/// (false for verification-only passes that should not re-count).
 fn type_check_with_env(
   term: Term,
   expected_type: Term,
   scope: &Scope,
+  usage: &mut UsageEnv,
+  track_usage: bool,
 ) -> Result<TypedTerm, TypeError> {
   use TypeError::*;
-  let mut scope = add_forall_to_scope(&expected_type, scope.clone());
+  let scope = add_forall_to_scope(&expected_type, scope.clone());
   match term {
     App { fun, arg } => {
       // Try desugaring method calls with args (x.fun arg -> A.fun arg x)
@@ -1050,11 +1058,14 @@ fn type_check_with_env(
         return type_check(desugared, expected_type.clone(), &scope);
       }
       let arg = *arg;
-      let (arg, arg_type) = type_check_with_env(arg.clone(), Hole, &scope)
+      // First check: infer arg type (counts usage for linear tracking)
+      let (arg, arg_type) = type_check_with_env(arg.clone(), Hole, &scope, usage, true)
         .map(|tt| tt.to_tuple())
         .unwrap_or_else(|_| (arg, Hole));
       let fun_type = pi_of_forall_types(arg_type.clone(), expected_type.clone());
-      let (fun, fun_type) = type_check_with_env(*fun, fun_type, &scope)?.to_tuple();
+      // Check function against expected type with the inferred arg type
+      let (fun, fun_type) =
+        type_check_with_env(*fun, fun_type, &scope, usage, track_usage)?.to_tuple();
       let (fun_vars, fun_typ_pi) = unwrap_forall(fun_type);
       if let Pi {
         arg: arg_type,
@@ -1066,8 +1077,9 @@ fn type_check_with_env(
         let fun_forall_vars: Map<&Identifier, &Term> = fun_vars.iter().collect();
         let mut arg_type = *arg_type.clone();
         arg_type = add_forall_to_type(arg_type, &fun_forall_vars);
+        // Second check: verify arg against expected type (DON'T count usage again)
         let (arg, _) = if arg_type.is_known() {
-          type_check_with_env(arg, arg_type, &scope)?.to_tuple()
+          type_check_with_env(arg, arg_type, &scope, usage, false)?.to_tuple()
         } else {
           (arg, arg_type)
         };
@@ -1100,7 +1112,7 @@ fn type_check_with_env(
         }
         for Param { name, typ, .. } in stru.params.iter() {
           let term = map.get(name).ok_or_else(|| MissingField(name.clone()))?;
-          type_check_with_env(term.clone(), *typ.clone(), &scope)?;
+          type_check_with_env(term.clone(), *typ.clone(), &scope, usage, track_usage)?;
         }
         Ok(typed_term(term, expected_type.clone()))
       } else {
@@ -1115,7 +1127,7 @@ fn type_check_with_env(
         ref cases,
       },
     } => {
-      let con = type_check_with_env(*value.clone(), Hole, &scope)?;
+      let con = type_check_with_env(*value.clone(), Hole, &scope, usage, track_usage)?;
 
       if let Some((ind_name, ind_args)) = extract_first_name(con.typ()) {
         let ind = scope.find_inductive(&ind_name)?;
@@ -1142,7 +1154,13 @@ fn type_check_with_env(
               scope = add_params_to_scope(ind_params, &ind_args, scope);
               scope = scope.with_type_owned(name, typ);
             }
-            let t = type_check_with_env(*case.value.clone(), branch_t.clone(), &scope)?;
+            let t = type_check_with_env(
+              *case.value.clone(),
+              branch_t.clone(),
+              &scope,
+              usage,
+              track_usage,
+            )?;
             if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
               branch_t = typ;
             } else {
@@ -1160,9 +1178,9 @@ fn type_check_with_env(
     Lit {
       value: Literal::If { value, then, els },
     } => {
-      let b = type_check_with_env(*value, var("Bool"), &scope)?;
-      let t1 = type_check_with_env(*then, expected_type.clone(), &scope)?;
-      let t2 = type_check_with_env(*els, expected_type.clone(), &scope)?;
+      let b = type_check_with_env(*value, var("Bool"), &scope, usage, track_usage)?;
+      let t1 = type_check_with_env(*then, expected_type.clone(), &scope, usage, track_usage)?;
+      let t2 = type_check_with_env(*els, expected_type.clone(), &scope, usage, track_usage)?;
       if let Ok(typ) = match_resolve_type(t1.typ(), t2.typ(), &scope) {
         let new_term = Lit {
           value: Literal::If {
@@ -1223,23 +1241,16 @@ fn type_check_with_env(
         }
       }
       let name = name.clone();
-      // Check usage for linear/affine variables
-      if let NameRef::Id(ref id) = name {
-        scope.usage_env().check_usage(id)?;
-        scope.usage_env_mut().mark_used(id);
+      // Check usage for linear/affine variables (only when tracking)
+      if track_usage {
+        if let NameRef::Id(ref id) = name {
+          usage.check_usage(id)?;
+          usage.mark_used(id);
+        }
       }
       type_check_free_var(term, expected_type.clone(), &name, &scope)
     }
     Lam { param, body } => {
-      // Register parameter in usage environment
-      let mult = param.multiplicity();
-      let param_name = match &param {
-        Par::P(p) => Some(p.name.clone()),
-        Par::I { .. } => None, // Anonymous implicit param
-      };
-      if let Some(ref name) = param_name {
-        scope.usage_env_mut().register(name.clone(), mult.clone());
-      }
       if expected_type.is_known() {
         let (vars, typ) = unwrap_forall(expected_type.clone());
         let vars = vars.iter().collect();
@@ -1259,15 +1270,17 @@ fn type_check_with_env(
               actual: param.typ().clone(),
             }
           })?;
+          // Register param in usage env (before body check)
+          if let Par::P(ref p) = param {
+            usage.register(p.name.clone(), p.mult.clone());
+          }
           let scope = scope.with_param(&param);
           let return_type = *ret.clone();
           let return_type = add_forall_to_type(return_type, &vars);
           let (body, return_type) =
-            type_check_with_env(*body.clone(), return_type, &scope)?.to_tuple();
+            type_check_with_env(*body.clone(), return_type, &scope, usage, track_usage)?.to_tuple();
           // Verify linear params were used
-          if let Some(_name) = param_name {
-            scope.usage_env().verify_linear_usage()?;
-          }
+          usage.verify_linear_usage()?;
           let lam_type = pi_of_forall_types(arg_type.clone(), return_type);
           let term = lam_par(param.with_type(arg_type), body);
           Ok(typed_term(term, lam_type))
@@ -1276,8 +1289,15 @@ fn type_check_with_env(
         }
       } else {
         let param_type = param.typ();
+        // Register param in usage env (before body check)
+        if let Par::P(ref p) = param {
+          usage.register(p.name.clone(), p.mult.clone());
+        }
         let scope = scope.with_param(&param);
-        let (body, body_type) = type_check_with_env(*body.clone(), Hole, &scope)?.to_tuple();
+        let (body, body_type) =
+          type_check_with_env(*body.clone(), Hole, &scope, usage, track_usage)?.to_tuple();
+        // Verify linear params were used
+        usage.verify_linear_usage()?;
         let lam_type = pi(param_type.clone(), body_type);
         let term = lam_par(param, body);
         Ok(typed_term(term, lam_type))
@@ -1309,9 +1329,9 @@ fn type_check_with_env(
           .iter()
           .zip(cons.params.iter())
           .filter_map(|(o_arg, param)| {
-            o_arg
-              .as_ref()
-              .map(|arg| type_check_with_env(arg.clone(), *param.typ.clone(), &scope))
+            o_arg.as_ref().map(|arg| {
+              type_check_with_env(arg.clone(), *param.typ.clone(), &scope, usage, track_usage)
+            })
           })
           .collect(),
       );
@@ -1332,7 +1352,7 @@ fn type_check_with_env(
       Ok(typed_term(term.clone(), cons_type))
     }
     Ctx { ref loc, term } => {
-      let mut tt = type_check_with_env(*term, expected_type.clone(), &scope)
+      let mut tt = type_check_with_env(*term, expected_type.clone(), &scope, usage, track_usage)
         .map_err(|err| t_context(err, None, loc.clone()))?;
 
       *tt.mut_term() = ctx(tt.term().clone(), loc.clone());
@@ -1350,8 +1370,8 @@ fn type_check_with_env(
       ..
     } => {
       if expected_type.is_type() {
-        let _arg = type_check_with_env(*arg.clone(), type0(), &scope)?;
-        let _ret = type_check_with_env(*ret.clone(), type0(), &scope)?;
+        let _arg = type_check_with_env(*arg.clone(), type0(), &scope, usage, track_usage)?;
+        let _ret = type_check_with_env(*ret.clone(), type0(), &scope, usage, track_usage)?;
         Ok(typed_term(term.clone(), type0()))
       } else {
         Err(TypeError::ExpectedType(expected_type.clone()))
@@ -1360,7 +1380,7 @@ fn type_check_with_env(
     Term::Prop => Ok(typed_term(term, type0())),
     Hole => Ok(typed_term(term, expected_type)),
     Ann { term, typ } => {
-      let tt = type_check_with_env(*term, *typ, &scope)?;
+      let tt = type_check_with_env(*term, *typ, &scope, usage, track_usage)?;
       let typ = match_resolve_type(tt.typ(), &expected_type, &scope)?;
       Ok(typed_term(tt.term, typ))
     }
