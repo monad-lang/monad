@@ -617,43 +617,74 @@ fn match_resolve_type_inner<'a>(
 }
 
 /// Try to desugar a method call pattern `x.fun` to `A.fun x` where `x: A`.
+/// Also handles `x.fun arg` -> `A.fun arg x`.
 /// Returns `None` if the term is not a method call pattern.
 pub fn try_desugar_method_call(term: Term, scope: &Scope) -> Option<Term> {
   use NameRef::P;
   use Term::Var;
 
   match term {
+    // Pattern: x.fun (no args)
     Var { name: P(path) } if path.len() >= 2 => {
-      let parts = path.clone().to_vec();
-      let receiver_id = &parts[0];
-
-      // Check if receiver is a local variable
-      let local_var = scope.find_local(receiver_id)?;
-      let receiver_type = local_var.typ().clone();
-
-      // Extract the type name from the receiver's type
-      let type_name = extract_type_name(&receiver_type)?;
-
-      // Build the method path: A.fun
-      let method_parts: Vec<Identifier> = parts[1..].to_vec();
-      let method_path = ModulePath::new(
-        std::iter::once(type_name)
-          .chain(method_parts.into_iter())
-          .collect(),
-      );
-
-      // Build the desugared term: A.fun x
+      let (type_name, method_path, receiver_id) = get_method_call_info(&path, scope)?;
       Some(app(
         Var {
           name: P(method_path),
         },
         Var {
-          name: NameRef::Id(parts[0].clone()),
+          name: NameRef::Id(receiver_id),
         },
       ))
     }
+    // Pattern: x.fun arg (with args)
+    App { fun, arg } => {
+      if let Var { name: P(path) } = *fun {
+        if path.len() >= 2 {
+          let (type_name, method_path, receiver_id) = get_method_call_info(&path, scope)?;
+          return Some(app(
+            app(
+              Var {
+                name: P(method_path),
+              },
+              *arg,
+            ),
+            Var {
+              name: NameRef::Id(receiver_id),
+            },
+          ));
+        }
+      }
+      None
+    }
     _ => None,
   }
+}
+
+/// Helper to extract method call info from a path, checking the receiver is a local var.
+/// Returns (type_name, method_path, receiver_id).
+fn get_method_call_info(
+  path: &ModulePath,
+  scope: &Scope,
+) -> Option<(Identifier, ModulePath, Identifier)> {
+  let parts = path.clone().to_vec();
+  let receiver_id = &parts[0];
+
+  // Check if receiver is a local variable
+  let local_var = scope.find_local(receiver_id)?;
+  let receiver_type = local_var.typ().clone();
+
+  // Extract the type name from the receiver's type
+  let type_name = extract_type_name(&receiver_type)?;
+
+  // Build the method path: A.fun
+  let method_parts: Vec<Identifier> = parts[1..].to_vec();
+  let method_path = ModulePath::new(
+    std::iter::once(type_name.clone())
+      .chain(method_parts.into_iter())
+      .collect(),
+  );
+
+  Some((type_name, method_path, receiver_id.clone()))
 }
 
 /// Extract the type name from a type term.
@@ -924,6 +955,16 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
   let scope = add_forall_to_scope(&expected_type, scope.clone());
   match term {
     App { fun, arg } => {
+      // Try desugaring method calls with args (x.fun arg -> A.fun arg x)
+      if let Some(desugared) = try_desugar_method_call(
+        App {
+          fun: fun.clone(),
+          arg: arg.clone(),
+        },
+        &scope,
+      ) {
+        return type_check(desugared, expected_type.clone(), &scope);
+      }
       let arg = *arg;
       let (arg, arg_type) = type_check(arg.clone(), Hole, &scope)
         .map(|tt| tt.to_tuple())

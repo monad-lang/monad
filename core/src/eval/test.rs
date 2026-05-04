@@ -1232,3 +1232,123 @@ fn test_type_check_module_path_works() {
     );
   }
 }
+
+/// Test 7: Method call with args: x.fun arg -> A.fun arg x
+#[test]
+fn test_desugar_method_call_with_args() {
+  let path = ModulePath::top("_test_args1");
+  let parsed = parse_file(
+    r#"
+    type MyType {
+        MkMyType
+    }
+    def add (n : I64) (self : MyType) : MyType := self
+    "#
+    .into(),
+  )
+  .unwrap();
+  let mut loaded = default_modules().unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let global = loaded.global(&path).unwrap();
+  let scope = Scope::new(&global);
+  let x_id = id("x");
+  let x_type = mpvar(mpt("MyType"));
+  let scope_with_x = scope.with_local_var(&x_id, &x_type);
+
+  // Construct App { fun: Var { P([x, add]) }, arg: 5 }
+  // This is what the parser produces for "x.add 5"
+  let app_term = app(
+    Var {
+      name: NameRef::P(ModulePath::new(vec![id("x"), id("add")])),
+    },
+    num(5),
+  );
+
+  // Desugar: x.add 5 -> MyType.add 5 x
+  let result = crate::eval::r#type::try_desugar_method_call(app_term, &scope_with_x);
+
+  assert!(result.is_some(), "x.add 5 should desugar to MyType.add 5 x");
+  let desugared = result.unwrap();
+
+  // Expected: App { fun: App { fun: Var { P(["MyType", "add"]) }, arg: 5 }, arg: Var { Id("x") } }
+  let expected = app(
+    app(
+      Var {
+        name: NameRef::P(ModulePath::new(vec![id("MyType"), id("add")])),
+      },
+      num(5),
+    ),
+    Var {
+      name: NameRef::Id(id("x")),
+    },
+  );
+  assert_eq!(
+    desugared, expected,
+    "desugared form should be MyType.add 5 x"
+  );
+}
+
+/// Test 8: Integration - type_check desugars x.add 5 -> MyType.add 5 x
+/// Verifies the desugaring by checking the error mentions MyType.add
+#[test]
+fn test_type_check_method_call_with_args_int() {
+  let path = ModulePath::top("_test_args2");
+  let parsed = parse_file(
+    r#"
+    type MyType {
+        MkMyType
+    }
+    def add (n : I64) (self : MyType) : MyType := self
+    "#
+    .into(),
+  )
+  .unwrap();
+  let mut loaded = default_modules().unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let global = loaded.global(&path).unwrap();
+  let scope = Scope::new(&global);
+  let x_id = id("x");
+  let x_type = mpvar(mpt("MyType"));
+  let scope_with_x = scope.with_local_var(&x_id, &x_type);
+
+  // Parse "x.add 5" and type check it
+  // Should desugar to MyType.add 5 x, then fail because MyType.add is not in scope
+  let term = parse_term("x.add 5");
+  let result = type_check(term, Hole, &scope_with_x);
+
+  // The error should mention MyType (proving desugaring happened)
+  let err = result
+    .err()
+    .expect("should fail because MyType.add is not in scope");
+  let err_str = format!("{}", err);
+  assert!(
+    err_str.contains("MyType"),
+    "error should mention MyType (desugared form), got: {}",
+    err_str
+  );
+  assert!(
+    err_str.contains("add"),
+    "error should mention add (desugared form), got: {}",
+    err_str
+  );
+}
