@@ -5,6 +5,7 @@ use super::value::LLVMValue;
 pub struct LLVMFunction {
   pub name: String,
   pub params: Vec<(String, LLVMType)>,
+  pub param_attrs: Vec<Vec<String>>, // per-parameter LLVM attributes (noalias, etc.)
   pub return_type: LLVMType,
   pub blocks: Vec<LLVMBasicBlock>,
   pub is_ghc_cc: bool,
@@ -14,10 +15,17 @@ impl LLVMFunction {
   pub fn new(name: &str, params: Vec<(String, LLVMType)>, return_type: LLVMType) -> Self {
     LLVMFunction {
       name: name.to_string(),
+      param_attrs: vec![vec![]; params.len()],
       params,
       return_type,
       blocks: vec![],
       is_ghc_cc: true,
+    }
+  }
+
+  pub fn set_param_attr(&mut self, index: usize, attr: &str) {
+    if index < self.param_attrs.len() {
+      self.param_attrs[index].push(attr.to_string());
     }
   }
 
@@ -44,7 +52,19 @@ impl LLVMFunction {
         let params: Vec<String> = self
           .params
           .iter()
-          .map(|(name, typ)| format!("{} %{}", typ, name))
+          .enumerate()
+          .map(|(i, (name, typ))| {
+            let attrs = self
+              .param_attrs
+              .get(i)
+              .map(|a| a.join(" "))
+              .unwrap_or_default();
+            if attrs.is_empty() {
+              format!("{} %{}", typ, name)
+            } else {
+              format!("{} {} %{}", typ, attrs, name)
+            }
+          })
           .collect();
         params.join(", ")
       }

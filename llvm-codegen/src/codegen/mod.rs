@@ -95,6 +95,13 @@ fn compile_def(ctx: &mut CodegenCtx, def: &Def) -> Result<(), String> {
 
   let mut func = LLVMFunction::new(&name, llvm_params, return_type);
 
+  // Set noalias for linear parameters
+  for (i, param) in params.iter().enumerate() {
+    if param.multiplicity() == &monad_core::term::Multiplicity::Linear {
+      func.set_param_attr(i, "noalias");
+    }
+  }
+
   let entry_block = crate::ir::LLVMBasicBlock::new("entry");
   func.add_block(entry_block);
 
@@ -259,6 +266,13 @@ fn compile_constructor_decl(
   let return_type = LLVMType::I64;
 
   let mut func = LLVMFunction::new(&name, llvm_params, return_type);
+
+  // Set noalias for linear constructor params
+  for (i, param) in cons.params().iter().enumerate() {
+    if param.mult == monad_core::term::Multiplicity::Linear {
+      func.set_param_attr(i, "noalias");
+    }
+  }
 
   let entry_block = LLVMBasicBlock::new("entry");
   func.add_block(entry_block);

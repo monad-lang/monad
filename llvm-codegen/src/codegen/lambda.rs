@@ -21,6 +21,11 @@ pub fn compile_lambda(
     return_type,
   );
 
+  // Set noalias if lambda param is linear
+  if param.multiplicity() == &monad_core::term::Multiplicity::Linear {
+    func.set_param_attr(0, "noalias");
+  }
+
   let entry_block = LLVMBasicBlock::new("entry");
   func.add_block(entry_block);
 
