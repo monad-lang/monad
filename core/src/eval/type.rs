@@ -8,7 +8,7 @@ use crate::{
     Term::{Forall, Hole, Pi},
     TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, forall, lam_par,
     module::{LoadedModules, names_of_decls},
-    mpvar, num_suffix, param, pi, pi_typs, type_u, type0, typed_term, var,
+    mpvar, num_suffix, param, pi, pi_typs, pi_with_mult, type_u, type0, typed_term, var,
   },
   vec_fmt,
 };
@@ -925,6 +925,10 @@ pub fn add_params_to_scope<'a>(
 }
 
 pub fn pi_of_forall_types(arg_type: Term, return_type: Term) -> Term {
+  pi_of_forall_types_with_mult(arg_type, return_type, Multiplicity::Many)
+}
+
+pub fn pi_of_forall_types_with_mult(arg_type: Term, return_type: Term, mult: Multiplicity) -> Term {
   let (return_foralls, return_type) = unwrap_forall(return_type);
   let (arg_foralls, arg_type) = unwrap_forall(arg_type);
   let (forall_vars, return_type) = return_foralls.into_iter().fold(
@@ -941,7 +945,7 @@ pub fn pi_of_forall_types(arg_type: Term, return_type: Term) -> Term {
       }
     },
   );
-  let fun_type = pi(arg_type, return_type);
+  let fun_type = pi_with_mult(arg_type, return_type, mult);
   let forall_vars = forall_vars.iter().collect();
 
   add_forall_to_type(fun_type, &forall_vars)
@@ -1309,7 +1313,11 @@ fn type_check_with_env(
             type_check_with_env(*body.clone(), return_type, &scope, usage, track_usage)?.to_tuple();
           // Verify linear params were used
           usage.verify_linear_usage()?;
-          let lam_type = pi_of_forall_types(arg_type.clone(), return_type);
+          let lam_type = pi_of_forall_types_with_mult(
+            arg_type.clone(),
+            return_type,
+            param.multiplicity().clone(),
+          );
           let term = lam_par(param.with_type(arg_type), body);
           Ok(typed_term(term, lam_type))
         } else {
@@ -1326,7 +1334,7 @@ fn type_check_with_env(
           type_check_with_env(*body.clone(), Hole, &scope, usage, track_usage)?.to_tuple();
         // Verify linear params were used
         usage.verify_linear_usage()?;
-        let lam_type = pi(param_type.clone(), body_type);
+        let lam_type = pi_with_mult(param_type.clone(), body_type, param.multiplicity().clone());
         let term = lam_par(param, body);
         Ok(typed_term(term, lam_type))
       }

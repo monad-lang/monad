@@ -2107,3 +2107,48 @@ fn test_struct_linear_field_used_twice_fails() {
   let msg = r.unwrap_err().to_string();
   assert!(msg.contains("used more than once"), "got: {msg}");
 }
+
+// ===== Pi Multiplicity and Subsumption Tests =====
+
+#[test]
+fn test_subsumption_many_arg_to_linear_param() {
+  let r = type_check_mo(
+    r#"
+    def f (!x : I64) : I64 := x
+    def g (x : I64) : I64 := x
+    def main (y : I64) : I64 := f (g y)
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Many value passed to linear param should be allowed"
+  );
+}
+
+#[test]
+fn test_linear_arg_to_linear_param() {
+  let r = type_check_mo(
+    r#"
+    def f (!x : I64) : I64 := x
+    def g (!y : I64) : I64 := f y
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Linear value passed to linear param should be allowed"
+  );
+}
+
+#[test]
+fn test_linear_param_consumed_by_app() {
+  let r = type_check_mo(
+    r#"
+    def id (x : I64) : I64 := x
+    def f (!x : I64) : I64 := id x
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Linear param consumed by function call should pass"
+  );
+}

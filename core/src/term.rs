@@ -802,7 +802,16 @@ pub fn pi(arg: Term, ret: Term) -> Term {
     arg_name: None,
     arg: Box::new(arg),
     ret: Box::new(ret),
-    mult: Multiplicity::default(),
+    mult: Multiplicity::Many,
+  }
+}
+
+pub fn pi_with_mult(arg: Term, ret: Term, mult: Multiplicity) -> Term {
+  Term::Pi {
+    arg_name: None,
+    arg: Box::new(arg),
+    ret: Box::new(ret),
+    mult,
   }
 }
 pub fn pi_name(arg_name: Option<Identifier>, arg: Term, ret: Term) -> Term {
