@@ -17,7 +17,7 @@ use crate::{
     float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
     ivar, lam, lams, lets, map_term, match_term,
     module::ParsedModule,
-    mpvar, num_suffix, opr, param, param_with_mult, pi_name, pi_typs, pvar, stru, stru_field,
+    mpvar, num_suffix, opr, param, param_with_mult, pi_name, pi_typs, pvar, stru,
     stru_field_with_mult, type_constraint, var_id,
   },
 };

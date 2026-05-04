@@ -8,9 +8,9 @@ use crate::parser::{ReplInput, repl_parser, term, test::parse_type};
 use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
-  Decl, Hole, Identifier, ModulePath, Multiplicity, SourceContext, StructField, Term, Typed, app,
-  app2, b_false, b_true, constructor, forall, id, io_term, lams, mp, mpt, mpvar, num, par, param,
-  param_with_mult, pi, some, str, strings_to_list_term, to_list_term, typ, type0, unit, var,
+  Decl, Hole, Identifier, ModulePath, Multiplicity, SourceContext, Term, Typed, app, app2, b_false,
+  b_true, constructor, forall, id, io_term, lams, mp, mpt, mpvar, num, par, param, param_with_mult,
+  pi, some, str, strings_to_list_term, to_list_term, typ, type0, unit, var,
 };
 use crate::term::{stru, stru_field, stru_field_with_mult};
 use crate::{set_of, similar};

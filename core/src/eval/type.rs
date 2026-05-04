@@ -8,7 +8,7 @@ use crate::{
     Term::{Forall, Hole, Pi},
     TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, forall, lam_par,
     module::{LoadedModules, names_of_decls},
-    mpvar, num_suffix, param, pi, pi_typs, pi_with_mult, type_u, type0, typed_term, var,
+    mpvar, num_suffix, param, pi_typs, pi_with_mult, type_u, type0, typed_term, var,
   },
   vec_fmt,
 };
