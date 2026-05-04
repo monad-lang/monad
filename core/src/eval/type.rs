@@ -1058,10 +1058,23 @@ fn type_check_with_env(
         return type_check(desugared, expected_type.clone(), &scope);
       }
       let arg = *arg;
-      // First check: infer arg type (counts usage for linear tracking)
-      let (arg, arg_type) = type_check_with_env(arg.clone(), Hole, &scope, usage, true)
-        .map(|tt| tt.to_tuple())
-        .unwrap_or_else(|_| (arg, Hole));
+      // First check: infer arg type (counts usage only when tracking is active)
+      let (arg, arg_type) = match type_check_with_env(arg.clone(), Hole, &scope, usage, track_usage)
+      {
+        Ok(tt) => tt.to_tuple(),
+        Err(err) => {
+          // Propagate linear type errors; suppress other (type inference) errors
+          if matches!(
+            err,
+            TypeError::LinearUsedMultipleTimes(_)
+              | TypeError::LinearUnused(_)
+              | TypeError::AffineUsedMultipleTimes(_)
+          ) {
+            return Err(err);
+          }
+          (arg, Hole)
+        }
+      };
       let fun_type = pi_of_forall_types(arg_type.clone(), expected_type.clone());
       // Check function against expected type with the inferred arg type
       let (fun, fun_type) =
