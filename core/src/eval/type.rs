@@ -908,9 +908,13 @@ pub fn substitute_params(mut term: Term, params: &[Param], args: &[Term]) -> Ter
   }
   term
 }
-pub fn add_params_to_scope<'a>(params: &[Param], args: &[Term], scope: Scope<'a>) -> Scope<'a> {
+pub fn add_params_to_scope<'a>(
+  params: &'a [Param],
+  args: &'a [Term],
+  mut scope: Scope<'a>,
+) -> Scope<'a> {
   for (param, arg) in params.iter().zip(args.iter()) {
-    scope.with_local_var(&param.name, arg);
+    scope = scope.with_local_var(&param.name, arg);
   }
   scope
 }
