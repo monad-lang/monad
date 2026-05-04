@@ -18,7 +18,7 @@ use crate::{
     ivar, lam, lams, lets, map_term, match_term,
     module::ParsedModule,
     mpvar, num_suffix, opr, param, param_with_mult, pi_name, pi_typs, pvar, stru, stru_field,
-    type_constraint, var_id,
+    stru_field_with_mult, type_constraint, var_id,
   },
 };
 use locate::{LocatedSpan, info};
@@ -1190,13 +1190,14 @@ fn inductive_parser(input: Span) -> Res<Inductive> {
 }
 
 fn struct_field_parser<X: Clone>(input: Span<X>) -> Res<StructField, X> {
+  let (input, mult) = multiplicity_prefix(input)?;
   let (input, name) = identifier(input)?;
   let (input, _) = ws0(input)?;
   let (input, typ) = def_type_annotation(input)?;
   let (input, _) = ws0(input)?;
   let (input, default) = opt(preceded((assignment_operator, ws0), term)).parse(input)?;
 
-  Ok((input, stru_field(name, typ, default)))
+  Ok((input, stru_field_with_mult(name, typ, default, mult)))
 }
 
 fn struct_inner_parser<X: Clone>(input: Span<X>) -> Res<Vec<StructField>, X> {

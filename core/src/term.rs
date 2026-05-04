@@ -246,6 +246,7 @@ pub struct StructField {
   name: Identifier,
   typ: Term,
   default_value: Option<Term>,
+  pub mult: Multiplicity,
 }
 
 pub fn stru_field(name: Identifier, typ: Term, default_value: Option<Term>) -> StructField {
@@ -253,6 +254,21 @@ pub fn stru_field(name: Identifier, typ: Term, default_value: Option<Term>) -> S
     name,
     typ,
     default_value,
+    mult: Multiplicity::Many,
+  }
+}
+
+pub fn stru_field_with_mult(
+  name: Identifier,
+  typ: Term,
+  default_value: Option<Term>,
+  mult: Multiplicity,
+) -> StructField {
+  StructField {
+    name,
+    typ,
+    default_value,
+    mult,
   }
 }
 
@@ -278,8 +294,8 @@ pub fn stru(
   let con_params = fields
     .into_iter()
     .map(|d| {
-      param(
-        d.name, d.typ, // TODO default value
+      param_with_mult(
+        d.name, d.typ, d.mult, // TODO default value
       )
     })
     .collect();

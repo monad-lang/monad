@@ -240,6 +240,11 @@ impl UsageEnv {
     }
   }
 
+  /// Remove a variable from tracking (used to clean up after match branches)
+  pub fn remove(&mut self, name: &Identifier) {
+    self.usages.remove(name);
+  }
+
   /// Verify all linear variables were used exactly once
   pub fn verify_linear_usage(&self) -> Result<(), TypeError> {
     for (name, (mult, count)) in &self.usages {
@@ -1170,6 +1175,8 @@ fn type_check_with_env(
               let typ = substitute_params(*param.typ.clone(), ind_params, &ind_args);
               scope = add_params_to_scope(ind_params, &ind_args, scope);
               scope = scope.with_type_owned(name, typ);
+              // Register pattern variable with its constructor param's multiplicity
+              usage.register(name.clone(), param.mult.clone());
             }
             let t = type_check_with_env(
               *case.value.clone(),
@@ -1178,6 +1185,10 @@ fn type_check_with_env(
               usage,
               track_usage,
             )?;
+            // Remove pattern variables from usage tracking after each branch
+            for (name, _) in case.args.iter().zip(ind_cons.params.iter()) {
+              usage.remove(name);
+            }
             if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
               branch_t = typ;
             } else {
