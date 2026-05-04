@@ -616,6 +616,59 @@ fn match_resolve_type_inner<'a>(
   }
 }
 
+/// Try to desugar a method call pattern `x.fun` to `A.fun x` where `x: A`.
+/// Returns `None` if the term is not a method call pattern.
+pub fn try_desugar_method_call(term: Term, scope: &Scope) -> Option<Term> {
+  use NameRef::P;
+  use Term::Var;
+
+  match term {
+    Var { name: P(path) } if path.len() >= 2 => {
+      let parts = path.clone().to_vec();
+      let receiver_id = &parts[0];
+
+      // Check if receiver is a local variable
+      let local_var = scope.find_local(receiver_id)?;
+      let receiver_type = local_var.typ().clone();
+
+      // Extract the type name from the receiver's type
+      let type_name = extract_type_name(&receiver_type)?;
+
+      // Build the method path: A.fun
+      let method_parts: Vec<Identifier> = parts[1..].to_vec();
+      let method_path = ModulePath::new(
+        std::iter::once(type_name)
+          .chain(method_parts.into_iter())
+          .collect(),
+      );
+
+      // Build the desugared term: A.fun x
+      Some(app(
+        Var {
+          name: P(method_path),
+        },
+        Var {
+          name: NameRef::Id(parts[0].clone()),
+        },
+      ))
+    }
+    _ => None,
+  }
+}
+
+/// Extract the type name from a type term.
+/// Returns `None` for complex types like `App(List, A)` or `Hole`.
+fn extract_type_name(typ: &Term) -> Option<Identifier> {
+  match typ {
+    Term::Var { name } => match name {
+      NameRef::Id(id) => Some(id.clone()),
+      NameRef::P(path) if path.len() == 1 => Some(path.last().clone()),
+      _ => None,
+    },
+    _ => None,
+  }
+}
+
 pub fn type_check_free_var(
   mut term: Term,
   expected_type: Term,
@@ -1035,6 +1088,14 @@ pub fn type_check(term: Term, expected_type: Term, scope: &Scope) -> Result<Type
       _ => panic!("Lit branch not covered {value}"),
     },
     Var { ref name } => {
+      // Try desugaring method calls (x.fun -> A.fun x)
+      if let NameRef::P(path) = name {
+        if path.len() >= 2
+          && let Some(desugared) = try_desugar_method_call(term.clone(), &scope)
+        {
+          return type_check(desugared, expected_type.clone(), &scope);
+        }
+      }
       let name = name.clone();
       type_check_free_var(term, expected_type.clone(), &name, &scope)
     }

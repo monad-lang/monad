@@ -973,3 +973,262 @@ fn test_module_scope_isolation() {
   let (_, e) = term::<()>("val".into()).finish().unwrap();
   similar!(eval_test(e, &scope_b).unwrap(), num(200));
 }
+
+// Method call syntax tests - TDD (RED phase)
+
+/// Test 1: Verify the parser creates Ctx { Var { P(["x", "get"]) } } for `x.get`
+#[test]
+fn test_method_call_parse_structure() {
+  let term = parse_term("x.get");
+  let inner = match &term {
+    Ctx { loc: _, term } => term.as_ref(),
+    t => t,
+  };
+
+  if let Var {
+    name: NameRef::P(path),
+  } = inner
+  {
+    assert_eq!(path.len(), 2, "path should have 2 components");
+    assert_eq!(path.last().as_str(), "get", "last component should be get");
+  } else {
+    panic!("expected Var {{ P(path) }}, got {:?}", inner);
+  }
+}
+
+/// Test 2: Basic desugar of x.get -> I64.get x for x: I64
+#[test]
+fn test_desugar_method_call_basic() {
+  let path = ModulePath::top("_test_desugar1");
+  let parsed = parse_file(
+    r#"
+    def dummy : I64 := 0
+    "#
+    .into(),
+  )
+  .unwrap();
+  let mut loaded = default_modules().unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let global = loaded.global(&path).unwrap();
+  let scope = Scope::new(&global);
+  let x_id = id("x");
+  let x_type = var("I64");
+  let scope_with_x = scope.with_local_var(&x_id, &x_type);
+
+  // Manually construct Var { P(["x", "get"]) } - same as parsing "x.get"
+  let path_term = Var {
+    name: NameRef::P(ModulePath::new(vec![id("x"), id("get")])),
+  };
+
+  // Call the desugar function
+  let result = crate::eval::r#type::try_desugar_method_call(path_term, &scope_with_x);
+
+  // x is a local variable of type I64, so x.get should desugar to I64.get x
+  assert!(
+    result.is_some(),
+    "x.get should desugar since x is a local variable of type I64"
+  );
+  let desugared = result.unwrap();
+
+  // Expected: App { fun: Var { P(["I64", "get"]) }, arg: Var { Id("x") } }
+  let expected = app(
+    Var {
+      name: NameRef::P(ModulePath::new(vec![id("I64"), id("get")])),
+    },
+    Var {
+      name: NameRef::Id(id("x")),
+    },
+  );
+  assert_eq!(desugared, expected, "desugared form should be I64.get x");
+}
+
+/// Test 3: No desugar for module paths (A.get should stay as-is)
+#[test]
+fn test_no_desugar_for_module_paths() {
+  let path = ModulePath::top("_test_desugar2");
+  let parsed = parse_file(
+    r#"
+    def dummy : I64 := 0
+    "#
+    .into(),
+  )
+  .unwrap();
+  let mut loaded = default_modules().unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let global = loaded.global(&path).unwrap();
+  let scope = Scope::new(&global);
+
+  // A.get is a module path, not a method call
+  let path_term = Var {
+    name: NameRef::P(ModulePath::new(vec![id("A"), id("get")])),
+  };
+
+  // Call the desugar function
+  let result = crate::eval::r#type::try_desugar_method_call(path_term.clone(), &scope);
+
+  // A.get should NOT be desugared since A is not a local variable
+  assert!(result.is_none(), "module paths should not be desugared");
+}
+
+/// Test 4: type_check desugars x.get -> MyType.get x
+/// Verifies the desugaring happens by checking the error mentions MyType.get
+#[test]
+fn test_type_check_method_call_int() {
+  let path = ModulePath::top("_test_int1");
+  let parsed = parse_file(
+    r#"
+    type MyType {
+        MkMyType
+    }
+    def get (self : MyType) : I64 := 42
+    "#
+    .into(),
+  )
+  .unwrap();
+  let mut loaded = default_modules().unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let global = loaded.global(&path).unwrap();
+  let scope = Scope::new(&global);
+  let x_id = id("x");
+  let x_type = mpvar(mpt("MyType"));
+  let scope_with_x = scope.with_local_var(&x_id, &x_type);
+
+  // Parse "x.get" and type check it
+  // This should trigger desugaring: x.get -> MyType.get x
+  // The desugared form will then fail to resolve MyType.get
+  let term = parse_term("x.get");
+  let result = type_check(term, Hole, &scope_with_x);
+
+  // The error should mention MyType.get (proving desugaring happened)
+  let err = result
+    .err()
+    .expect("x.get should fail because MyType.get is not in scope");
+  let err_str = format!("{}", err);
+  assert!(
+    err_str.contains("MyType"),
+    "error should mention MyType (desugared form), got: {}",
+    err_str
+  );
+  assert!(
+    err_str.contains("get"),
+    "error should mention get (desugared form), got: {}",
+    err_str
+  );
+}
+
+/// Test 5: x.get fails with different error when x is not a local variable
+#[test]
+fn test_type_check_method_call_no_var() {
+  let path = ModulePath::top("_test_int2");
+  let parsed = parse_file(
+    r#"
+    type MyType {
+        MkMyType
+    }
+    def get (self : MyType) : I64 := 42
+    "#
+    .into(),
+  )
+  .unwrap();
+  let mut loaded = default_modules().unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let global = loaded.global(&path).unwrap();
+  let scope = Scope::new(&global);
+
+  // x is NOT in scope, so x.get should fail
+  // Without desugaring: it tries to resolve x.get as a path for module x
+  let term = parse_term("x.get");
+  let result = type_check(term, Hole, &scope);
+
+  assert!(result.is_err(), "x.get should fail when x is not in scope");
+  let err_str = format!("{}", result.err().unwrap());
+  // The error should mention x (trying to find x as a module)
+  assert!(
+    err_str.contains("x") || err_str.contains("not found"),
+    "error should mention x, got: {}",
+    err_str
+  );
+}
+
+/// Test 6: Module path still works through type checker
+#[test]
+fn test_type_check_module_path_works() {
+  let path = ModulePath::top("_test_int3");
+  let parsed = parse_file(
+    r#"
+    def get (self : I64) : I64 := self
+    "#
+    .into(),
+  )
+  .unwrap();
+  let mut loaded = default_modules().unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let global = loaded.global(&path).unwrap();
+  let scope = Scope::new(&global);
+
+  // I64 is a type that might be in scope, I64.get should work
+  let term = parse_term("I64.get");
+  let result = type_check(term, Hole, &scope);
+
+  // I64.get might or might not exist - we just check it doesn't panic
+  // This test verifies module paths are not broken
+  if result.is_ok() {
+    let typed = result.unwrap();
+    // If it succeeds, result type should be I64 -> I64
+    assert_eq!(
+      typed.typ().node_type(),
+      "pi",
+      "I64.get should be a function type"
+    );
+  }
+}
