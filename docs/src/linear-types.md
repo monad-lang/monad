@@ -87,7 +87,6 @@ def bad (!x : I64) : I64 :=
 ## Current Limitations
 
 - Pattern matching with linear constructor fields is not yet enforced
-- Struct fields do not yet support multiplicity annotations
 - Arrow multiplicity (`Pi.mult`) is not yet checked at application sites
 - Let-bound variables are not yet tracked for linearity
 - No subtyping/subsumption rules (Many subsumes Linear/Affine)
@@ -106,6 +105,5 @@ def bad (!x : I64) : I64 :=
 
 - Subtyping: Many subsumes both Linear and Affine
 - Pattern matching with linear constructor fields
-- Struct field multiplicity annotations
 - LLVM codegen: `noalias` attributes for linear parameters
 - In-place update optimization for linear values

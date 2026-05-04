@@ -20,6 +20,17 @@ Reserved names: `Type`, `Pred`
    comment */
 ```
 
+## Docstrings
+
+```monad
+/// Documentation for the following declaration
+def greet (name : String) : IO Unit := println name
+
+/// Module-level documentation (at top of file)
+```
+
+Docstrings are parsed and stored on declarations, retained through module loading for tooling and inspection.
+
 ## Lambda Expressions
 
 Three equivalent syntaxes:
@@ -29,6 +40,14 @@ fn x => x + 1
 \ x => x + 1
 ꟛ x => x + 1
 ```
+
+## Backtick Operators
+
+```monad
+x `f` y   // Equivalent to f x y
+```
+
+Identifiers in backticks are treated as infix operators (like Haskell).
 
 ## Let Expressions
 
@@ -44,6 +63,40 @@ in x + y
 // With type annotation
 let x : I64 := 10 in x + 1
 ```
+
+## Numeric Literals
+
+```monad
+42        // I64 (default)
+42i8      // I8
+42i16     // I16
+42i32     // I32
+42i64     // I64
+42u8      // U8
+42u16     // U16
+42u32     // U32
+42u64     // U64
+3.14      // F64 (default)
+3.14f32   // F32
+3.14f64   // F64
+```
+
+## Type Annotations
+
+```monad
+(expr : Type)
+```
+
+Any term can be annotated with its type using `(term : Type)` syntax.
+
+## Method Call Syntax
+
+```monad
+x.fun        // Desugared to A.fun x (where A is the type of x)
+x.fun args   // Desugared to A.fun args x
+```
+
+Method calls are desugared in the type checker. The receiver type is extracted and prepended to the method name.
 
 ## Match Expressions
 
@@ -100,6 +153,15 @@ struct Point {
 }
 
 def p := { x := 3, y := 4 }
+```
+
+## Attributes
+
+Declarations can be annotated with `@[...]` attributes:
+
+```monad
+@[native "function_name"]   // Declare a Rust-native function
+@[test]                     // Mark as a test (run via `cargo run -- test <file>`)
 ```
 
 ## Native Functions
@@ -175,7 +237,9 @@ type Void {}
 ```monad
 struct Point {
     x : I64,
-    y : I64
+    y : I64,
+    z : I64 := 0,   // default value
+    !name : String  // linear field (!) or affine (?)
 }
 ```
 
@@ -250,6 +314,14 @@ open IO
 IO.println "hello"
 ```
 
+## Dot Macro
+
+The `.` operator (`x.y.z`) is treated as a compile-time macro that concatenates module paths into a single variable reference. This is how module paths like `List.append` work.
+
+## Constraint Solver
+
+Recursive instance constraints (e.g., `instance [Show A] Show (List A) { ... }`) are handled by the constraint solver. It uses a visiting set to detect and resolve cyclic constraint dependencies during instance resolution.
+
 ## Standard Library Types
 
 | Type | Constructors | Description |
@@ -281,8 +353,16 @@ IO.println "hello"
 | `FromListLiteral` | `L : Type -> Type` | List literal desugaring |
 | `HAdd` | `A, B, C` | Heterogeneous addition |
 | `Add` | `A` | Homogeneous addition |
+| `Sub` | `A` | Subtraction |
+| `Mul` | `A` | Homogeneous multiplication |
+| `Div` | `A` | Division |
 | `HMul` | `A, B, C` | Heterogeneous multiplication |
+| `BEq` | `A` | Boolean equality |
+| `BOrd` | `A` | Ordering |
+| `Show` | `A` | String conversion |
+| `Append` | `A` | Append/concatenation |
 | `From` | `T, A` | Type conversion |
+| `DefaultValue` | `A` | Default/empty value |
 
 ## Standard Library Functions
 
@@ -321,12 +401,21 @@ IO.println "hello"
 ## CLI Usage
 
 ```bash
+# Build the compiler
+cargo build --package monad-core
+
 # Run a Monad file
 cargo run -- run file.mo
 
 # Run with debug output
 cargo run -- run file.mo -- --debug
 
-# Start the REPL
+# Run @[test] annotated definitions
+cargo run -- test file.mo
+
+# Compile to native binary (requires llvm feature)
+cargo run -- compile file.mo
+
+# Start the REPL (requires repl feature)
 cargo run -- repl
 ```

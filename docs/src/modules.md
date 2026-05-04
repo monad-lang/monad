@@ -68,8 +68,11 @@ Monad ships with several standard modules:
 | `init` | Initialization, I64.add, From class |
 | `io` | IO monad and IO.println |
 | `math` | HMul class and (*) operator |
+| `string` | String operations (concat, length, get) |
 | `term` | Meta-representation of Monad's AST |
 | `parser` | Parser combinators |
+| `tests` | Standard library tests |
+| `std/test` | Test utilities (Test.assert) |
 
 ## Complete Example
 

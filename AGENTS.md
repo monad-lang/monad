@@ -11,14 +11,25 @@ This document explains how to modify the Monad language codebase and write corre
 │   │   ├── parser.rs    # Lexer/parser
 │   │   ├── term.rs     # AST and term definitions
 │   │   ├── eval.rs     # Evaluator
-│   │   └── main.rs     # CLI entry point
+│   │   │   ├── type.rs    # Type checker
+│   │   │   ├── native.rs  # Native function implementations
+│   │   │   └── constraint.rs # Constraint solver
+│   │   └── main.rs     # CLI entry point (deprecated, use cli/)
 │   └── Cargo.toml
+├── cli/              # CLI entry point
+│   └── src/main.rs
 ├── wasm/             # WebAssembly bindings
+├── llvm-codegen/     # LLVM native compilation backend
 ├── init/             # Standard library
 │   ├── prelude.mo     # Basic types (Bool, List, Option, etc.)
 │   ├── io.mo         # IO operations
 │   ├── term.mo        # Term manipulation
-│   └── parser.mo      # Parser combinators
+│   ├── parser.mo      # Parser combinators
+│   ├── string.mo      # String operations
+│   ├── init.mo        # Init module with From class
+│   └── tests.mo       # Standard library tests
+├── std/
+│   └── test.mo        # Test utilities (Test.assert)
 └── examples/         # Example programs
 ```
 
@@ -34,7 +45,13 @@ cargo run -- run examples/hello.mo
 # Run with debug output
 cargo run -- run examples/hello.mo -- --debug
 
-# Use the REPL (interactive)
+# Run @[test] annotated definitions
+cargo run -- test init/tests.mo
+
+# Compile to native binary (requires llvm feature)
+cargo run -- compile examples/hello.mo
+
+# Use the REPL (interactive, requires repl feature)
 cargo run -- repl
 ```
 
@@ -52,10 +69,12 @@ type Maybe A {
     none
 }
 
-// Struct-like type
+// Struct-like type (with field default and multiplicity)
 struct Point {
     x : I64,
-    y : I64
+    y : I64,
+    z : I64 := 0,   // default value
+    !name : String  // linear field (!) or affine (?)
 }
 
 // Type with type parameter
@@ -77,6 +96,11 @@ class Functor (F: Type -> Type) {
 class [Functor M] Monad (M: Type -> Type) {
     def bind (a: M A) (f: A -> M B) : M B
 }
+
+// With default implementation
+class Show A {
+    def show (a: A) : String := "<generic>"
+}
 ```
 
 ### Instance Definitions
@@ -93,6 +117,11 @@ instance Functor Maybe {
 // With type arguments
 instance [Add A] Add (List A) {
     ...
+}
+
+// Named instance
+instance myShow : Show I64 {
+    def show x := "int"
 }
 ```
 
@@ -160,6 +189,26 @@ def multi : IO Unit {
 }
 ```
 
+### Comments
+
+```monad
+// Line comment
+/* Block comment */
+```
+
+### Docstrings
+
+```monad
+/// Documentation for the following declaration
+def greet (name : String) : IO Unit {
+    println name
+}
+
+/// Module-level documentation (at top of file)
+```
+
+Docstrings (`///`) are parsed and stored on declarations. They are retained through module loading for tooling and inspection.
+
 ### Lambda Expressions
 
 ```monad
@@ -168,12 +217,49 @@ fn x => x + 1
 ꟛ x => x + 1
 ```
 
+### Backtick Operators
+
+```monad
+x `f` y   // Equivalent to f x y
+```
+
+Identifiers in backticks are treated as infix operators (like Haskell).
+
+### Type Annotations
+
+```monad
+(expr : Type)
+```
+
+Any term can be annotated with its type using `(term : Type)` syntax.
+
 ### Let Expressions
 
 ```monad
 let x := 10 in
-let y := x * 2 in
+let x + y := 10 in
 x + y
+
+// With type annotation
+let x : I64 := 10 in
+x + 1
+```
+
+### Numeric Literals
+
+```monad
+42        // I64 (default)
+42i8      // I8
+42i16     // I16
+42i32     // I32
+42i64     // I64
+42u8      // U8
+42u16     // U16
+42u32     // U32
+42u64     // U64
+3.14      // F64 (default)
+3.14f32   // F32
+3.14f64   // F64
 ```
 
 ### Match Expressions
@@ -183,6 +269,12 @@ match value {
     some a => a,
     none => default
 }
+```
+
+### Record / Struct Literals
+
+```monad
+{ x := 1, y := 2 }
 ```
 
 ### Operator Declarations
@@ -203,6 +295,61 @@ use io
 open IO
 ```
 
+### Native Functions
+
+Call Rust functions from Monad using the `@[native "..."]` attribute:
+
+```monad
+@[native "add"]
+def add (a: I64) (b: I64) : I64
+```
+
+## Attributes
+
+Declarations can be annotated with `@[...]` attributes:
+
+```monad
+@[native "function_name"]   // Declare a Rust-native function
+@[test]                     // Mark as a test (run via `cargo run -- test <file>`)
+```
+
+## Operators
+
+All operators and their precedences:
+
+| Operator | Precedence | Assoc | Description |
+|----------|-----------|-------|-------------|
+| `.` | 12 | Right | Dot macro (path concatenation / method call) |
+| `\|>` | 5 | Left | Forward pipe (`x \|> f`) |
+| `<\|` | 5 | Right | Backward pipe (`f <\| x`) |
+| `>>=` | 10 | Right | Monad bind |
+| `<*>` | 15 | Left | Applicative apply |
+| `<\ | >` | 20 | Left | Alt/choice |
+| `\|\|` | 25 | Right | Boolean OR |
+| `&&` | 30 | Right | Boolean AND |
+| `==`, `!=`, `=` | 40 | Left | Equality / assignment |
+| `++` | 50 | Right | Append |
+| `>>`, `<<` | 60 | Left | Shift / fork |
+| `+`, `-` | 65 | Left | Add / subtract |
+| `*`, `/` | 70 | Left | Multiply / divide |
+
+## Method Call Syntax
+
+```monad
+x.fun        // Desugared to A.fun x (where A is the type of x)
+x.fun args   // Desugared to A.fun args x
+```
+
+Method calls are desugared in the type checker at `type.rs:701-740`. The receiver type is extracted and prepended to the method name.
+
+## Dot Macro
+
+The `.` operator (`x.y.z`) is treated as a compile-time macro that concatenates module paths into a single `Var` reference (at `eval.rs:167-200`). This is how module paths like `List.append` work.
+
+## Constraint Solver
+
+Recursive instance constraints (e.g., `instance [Show A] Show (List A) { ... }`) are handled by the constraint solver at `core/src/eval/constraint.rs`. It uses a visiting set to detect and resolve cyclic constraint dependencies during instance resolution.
+
 ## Key Language Features
 
 1. **Dependent Types**: Types can depend on values (using `{x : Type}` forall syntax)
@@ -210,13 +357,6 @@ open IO
 2. **Type Classes**: Like Haskell, with automatic instance resolution
 
 3. **Linear Types**: Compile-time enforcement via `!` (linear) and `?` (affine) multiplicity annotations on parameters
-
-4. **Native Functions**: Call Rust functions from Monad
-
-```monad
-@[native "add"]
-def add (a: I64) (b: I64) : I64
-```
 
 ## Modifying the Compiler
 
@@ -249,6 +389,14 @@ cargo test
 cargo test eval::test
 ```
 
+### Running Monad Tests
+
+```bash
+cargo run -- test init/tests.mo
+```
+
+This runs all definitions annotated with `@[test]` in the given file, evaluating them and reporting pass/fail.
+
 ## Development Workflow
 
 Always use Test-Driven Development (TDD):
@@ -280,6 +428,23 @@ type MyType {
 @[native "function_name"]
 def function_name (args: Types) : ReturnType
 ```
+
+## Standard Library
+
+### `init/prelude.mo`
+- Basic types: `Bool`, `I64`, `I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`, `String`, `Void`, `Any`, `Nat`, `List`, `Option`
+- Type classes: `Add`, `Sub`, `Mul`, `Div`, `BEq`, `BOrd`, `Functor`, `Applicative`, `Monad`, `Show`, `Append`, `FromListLiteral`, `DefaultValue`
+- Operators: `+`, `-`, `*`, `/`, `==`, `!=`, `&&`, `||`, `++`, `|>`, `<|`, `>>=`, `<*>`, `<|>`
+- Functions: `Bool.not`, `Bool.and`, `Bool.or`, `Option.get_or_default`, `List.is_empty`, `List.append`, `List.first`, `List.last`, `List.tail`, `List.flatten`, `fun_apply`, `apply_fun`
+
+### `init/string.mo`
+- `String.concat`, `String.length`, `String.get`, `String.is_empty`
+
+### `init/init.mo`
+- `From` class for type conversion
+
+### `std/test.mo`
+- `Test.assert` for assertion-based testing
 
 ## Style Conventions
 

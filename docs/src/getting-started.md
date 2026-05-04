@@ -124,6 +124,17 @@ def hypotenuse (a : I64) (b : I64) : I64 :=
   in a2 + b2
 ```
 
+## Docstrings
+
+Document your declarations with `///` docstrings. They are retained through module loading for tooling and inspection:
+
+```monad
+/// Greet a user by name
+def greet (name : String) : IO Unit := println name
+
+/// Module-level documentation (at top of file)
+```
+
 ## Comments
 
 ```monad
@@ -145,14 +156,20 @@ def result : I64 := 3 + 4 * 2  // 11 (multiplication binds tighter)
 ```
 
 Built-in operators include:
-- `(+)` // Addition (via `I64.add`)
-- `(*)` // Multiplication (via `HMul.mul`)
-- `(++)` // List append
-- `(&&)` // Boolean and
-- `(||)` // Boolean or
-- `(>>=)` // Monad bind
-- `(<|)` // Function application (reverse)
-- `(|>)` // Pipeline (forward application)
+| Operator | Description |
+|----------|-------------|
+| `+`, `-` | Add / subtract |
+| `*`, `/` | Multiply / divide |
+| `++` | Append (list concat, etc.) |
+| `&&`, `\|\|` | Boolean and / or |
+| `==`, `!=` | Equality / inequality |
+| `>>=` | Monad bind |
+| `\|>` | Forward pipe (`x \|> f`) |
+| `<\|` | Backward pipe (`f <\| x`) |
+| `<*>` | Applicative apply |
+| `<\ | >` | Alt / choice |
+| `.` | Dot macro (path concatenation) |
+| `>>`, `<<` | Shift / fork |
 
 ## Summary
 

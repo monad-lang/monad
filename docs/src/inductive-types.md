@@ -152,12 +152,16 @@ Monad provides several built-in types in the prelude:
 |------|-------------|
 | `Unit` | Single value `unit` |
 | `Bool` | `true` or `false` |
-| `I64` | 64-bit signed integer |
+| `I64` | 64-bit signed integer (default for integer literals) |
 | `I32` | 32-bit signed integer |
+| `I16` | 16-bit signed integer |
+| `I8` | 8-bit signed integer |
 | `U64` | 64-bit unsigned integer |
 | `U32` | 32-bit unsigned integer |
 | `U16` | 16-bit unsigned integer |
 | `U8` | 8-bit unsigned integer |
+| `F64` | 64-bit float (default for float literals) |
+| `F32` | 32-bit float |
 | `String` | UTF-8 string |
 | `Nat` | Natural numbers (`zero`, `succ`) |
 | `List A` | Linked list |

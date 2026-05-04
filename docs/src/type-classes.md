@@ -12,6 +12,28 @@ class Functor (F : Type -> Type) {
 }
 ```
 
+## Default Implementations
+
+Class methods can provide default implementations using `:=`:
+
+```monad
+class Show A {
+    def show (a : A) : String := "<generic>"
+}
+```
+
+Instances can override defaults:
+
+```monad
+instance Show I64 {
+    def show x := "int"  // overrides the default
+}
+
+instance Show Bool {
+    // uses default "<generic>"
+}
+```
+
 ## Classes with Constraints
 
 Type classes can require other classes as constraints:
@@ -114,6 +136,62 @@ class From T A {
 ```monad
 class HMul A B C {
     def mul : A -> B -> C
+}
+```
+
+### BEq
+
+```monad
+class BEq A {
+    def beq : A -> A -> Bool
+}
+```
+
+### BOrd
+
+```monad
+class BOrd A {
+    def cmp : A -> A -> I64
+}
+```
+
+### Show
+
+```monad
+class Show A {
+    def show (a : A) : String := "<generic>"
+}
+```
+
+### Sub
+
+```monad
+class Sub A {
+    def sub : A -> A -> A
+}
+```
+
+### Div
+
+```monad
+class Div A {
+    def div : A -> A -> A
+}
+```
+
+### Append
+
+```monad
+class Append A {
+    def append : A -> A -> A
+}
+```
+
+### DefaultValue
+
+```monad
+class DefaultValue A {
+    def default : A
 }
 ```
 

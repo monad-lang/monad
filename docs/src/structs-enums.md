@@ -13,6 +13,33 @@ struct Point {
 }
 ```
 
+## Field Default Values
+
+Fields can have default values using `:=`:
+
+```monad
+struct Point3D {
+    x : I64,
+    y : I64,
+    z : I64 := 0
+}
+
+def origin := { x := 0, y := 0 }
+// z defaults to 0
+```
+
+## Linear and Affine Fields
+
+Field access can be restricted with multiplicity annotations `!` (linear, exactly once) or `?` (affine, at most once):
+
+```monad
+struct Resource {
+    !handle : FileHandle,   // linear — must be used exactly once
+    ?label : String,        // affine — may be unused
+    metadata : I64          // unrestricted (default)
+}
+```
+
 ## Creating Struct Values
 
 Struct values are created with brace syntax:
