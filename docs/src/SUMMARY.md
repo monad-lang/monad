@@ -8,6 +8,7 @@
 - [Dependent Types](./dependent-types.md)
 - [Structs](./structs-enums.md)
 - [Error Handling](./error-handling.md)
+- [Linear Types](./linear-types.md)
 - [Modules and Imports](./modules.md)
 - [The IO Monad](./io-monad.md)
 - [Reference](./reference.md)

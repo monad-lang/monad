@@ -30,6 +30,7 @@ cargo run -- run hello.mo
 
 - **Dependent types**: Types can depend on values
 - **Type classes**: Ad-hoc polymorphism with constraints
+- **Linear types**: Resource-safe programming with compile-time enforcement
 - **Pattern matching**: Destructure data with `match`
 - **Native functions**: Call Rust code from Monad
 - **IO monad**: Safe side effects

@@ -209,7 +209,7 @@ open IO
 
 2. **Type Classes**: Like Haskell, with automatic instance resolution
 
-3. **Linear Types**: Currently managed via the `!` convention (not fully implemented)
+3. **Linear Types**: Compile-time enforcement via `!` (linear) and `?` (affine) multiplicity annotations on parameters
 
 4. **Native Functions**: Call Rust functions from Monad
 
