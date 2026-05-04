@@ -8,7 +8,7 @@ use crate::parser::{ReplInput, repl_parser, term, test::parse_type};
 use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
-  Hole, Identifier, ModulePath, Multiplicity, SourceContext, Term, Typed, app, app2, b_false,
+  Decl, Hole, Identifier, ModulePath, Multiplicity, SourceContext, Term, Typed, app, app2, b_false,
   b_true, constructor, forall, id, io_term, lams, mp, mpt, mpvar, num, par, param, param_with_mult,
   pi, some, str, strings_to_list_term, to_list_term, typ, type0, unit, var,
 };
@@ -1891,4 +1891,78 @@ fn test_linear_affine_diff_error_messages() {
     msg3.contains("used more than once"),
     "Affine overuse error should have specific message: {msg3}"
   );
+}
+
+// ===== .mo-Style Integration Tests =====
+
+fn type_check_mo(input: &str) -> Result<Vec<SourceContext<Decl>>, TypeError> {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("test_linear");
+  let parsed = parse_file(input.into()).unwrap();
+  type_check_module_decls(&path, parsed.decls, &mut loaded)
+    .inspect_err(|e| eprintln!("type error: {e}"))
+}
+
+#[test]
+fn test_mo_linear_simple_pass() {
+  let r = type_check_mo(r#"def f (!x : I64) : I64 := x"#);
+  assert!(r.is_ok(), "Linear simple should pass");
+}
+
+#[test]
+fn test_mo_linear_unused_fails() {
+  let r = type_check_mo(r#"def f (!x : I64) : I64 := 42"#);
+  assert!(r.is_err(), "Linear unused should fail");
+  let msg = r.unwrap_err().to_string();
+  assert!(msg.contains("must be used exactly once"), "got: {msg}");
+}
+
+#[test]
+fn test_mo_linear_used_twice_fails() {
+  let r = type_check_mo(r#"def f (!x : I64) : I64 := x + x"#);
+  assert!(r.is_err(), "Linear used twice should fail");
+  let msg = r.unwrap_err().to_string();
+  assert!(msg.contains("used more than once"), "got: {msg}");
+}
+
+#[test]
+fn test_mo_affine_simple_pass() {
+  let r = type_check_mo(r#"def f (?x : I64) : I64 := x"#);
+  assert!(r.is_ok(), "Affine simple should pass");
+}
+
+#[test]
+fn test_mo_affine_unused_pass() {
+  let r = type_check_mo(r#"def f (?x : I64) : I64 := 42"#);
+  assert!(r.is_ok(), "Affine unused should pass");
+}
+
+#[test]
+fn test_mo_mixed_multiplicity() {
+  let r = type_check_mo(
+    r#"
+    def f (!x : I64) (?y : I64) (z : I64) : I64 := x
+    "#,
+  );
+  assert!(r.is_ok(), "Mixed multiplicity should pass");
+}
+
+#[test]
+fn test_mo_multiple_linear_params_pass() {
+  let r = type_check_mo(
+    r#"
+    def f (!x : I64) (!y : I64) : I64 := x + y
+    "#,
+  );
+  assert!(r.is_ok(), "Multiple linear params used once should pass");
+}
+
+#[test]
+fn test_mo_linear_in_lambda() {
+  let r = type_check_mo(
+    r#"
+    def compose (!f : I64 -> I64) (x : I64) : I64 := f x
+    "#,
+  );
+  assert!(r.is_ok(), "Linear higher-order function should pass");
 }
