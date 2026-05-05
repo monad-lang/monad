@@ -439,7 +439,6 @@ fn test_macro_expanded_in_type_position_fails() {
 // ===== Section 8: Hygiene =====
 
 #[test]
-#[ignore = "type checker error with List.cons in expanded expression, needs investigation"]
 fn test_hygiene_no_capture_of_user_var() {
   let r = expand_and_type_check(
     "defmacro wrap x := quote { let y := 1 in unquote x + y }\ndef main : I64 := let y := 100 in wrap! (y + 2)\n",
@@ -451,7 +450,6 @@ fn test_hygiene_no_capture_of_user_var() {
 }
 
 #[test]
-#[ignore = "type checker error with List.cons in expanded expression, needs investigation"]
 fn test_hygiene_user_var_captured_by_macro() {
   let r = expand_and_type_check(
     "defmacro add_one x := quote { unquote x + 1 }\ndef main : I64 := let x := 10 in add_one! x\n",
@@ -463,7 +461,6 @@ fn test_hygiene_user_var_captured_by_macro() {
 }
 
 #[test]
-#[ignore = "type checker error with List.cons in expanded expression, needs investigation"]
 fn test_hygiene_multiple_expansions_independent() {
   let r = expand_and_type_check(
     "defmacro wrap x := quote { let y := 1 in unquote x + y }\ndef main : I64 := let y := 100 in wrap! (wrap! (y + 2))\n",

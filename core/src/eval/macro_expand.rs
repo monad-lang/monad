@@ -1,7 +1,7 @@
 use crate::Map;
 use crate::term::module::LoadedModules;
 use crate::term::{
-  Constructor, Decl, Def, Identifier, Literal, ModulePath, NameRef, Par, SourceContext,
+  Constructor, Decl, Def, Identifier, Literal, ModulePath, NameRef, Par, Param, SourceContext,
   Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Pi, Quote, Var},
   app, apps, case, forall, lam, match_term, param, pi_name,
 };
@@ -397,12 +397,248 @@ fn apply_macro(
   let body = strip_ctx(body);
   match body {
     Quote { term } => {
-      let expanded = resolve_quote(*term, macro_defs, depth)?;
+      // Hygiene: rename macro-introduced binders with gensym names
+      let term = alpha_rename_body(*term);
+      let expanded = resolve_quote(term, macro_defs, depth)?;
       expand_term(expanded, macro_defs, depth + 1)
     }
     _ => Err(MacroError::NonTermReturn {
       name: def.name.to_string(),
     }),
+  }
+}
+
+/// Rename a variable reference in a term (like substitute but replaces with
+/// a Var of the new name instead of an arbitrary term).
+fn rename_macro_var(term: Term, old: &Identifier, new: &Identifier) -> Term {
+  match term {
+    Var {
+      name: NameRef::Id(n),
+    } if &n == old => Var {
+      name: NameRef::Id(new.clone()),
+    },
+    Lam { param: p, body: b } => {
+      let should_skip = match &p {
+        Par::P(p_name) => &p_name.name == old,
+        _ => false,
+      };
+      if should_skip {
+        Lam { param: p, body: b }
+      } else {
+        Lam {
+          param: p,
+          body: Box::new(rename_macro_var(*b, old, new)),
+        }
+      }
+    }
+    App { fun, arg } => {
+      // Don't rename inside unquote — those are user-supplied terms
+      if let Var {
+        name: NameRef::Id(n),
+      } = &*fun
+        && n.as_str() == "unquote"
+      {
+        App { fun, arg }
+      } else {
+        App {
+          fun: Box::new(rename_macro_var(*fun, old, new)),
+          arg: Box::new(rename_macro_var(*arg, old, new)),
+        }
+      }
+    }
+    Pi {
+      arg_name,
+      arg,
+      ret,
+      mult,
+    } => Pi {
+      arg_name,
+      arg: Box::new(rename_macro_var(*arg, old, new)),
+      ret: Box::new(rename_macro_var(*ret, old, new)),
+      mult,
+    },
+    Forall {
+      name: n,
+      typ,
+      body: b,
+    } => {
+      if &n == old {
+        Forall {
+          name: n,
+          typ,
+          body: b,
+        }
+      } else {
+        Forall {
+          name: n,
+          typ: Box::new(rename_macro_var(*typ, old, new)),
+          body: Box::new(rename_macro_var(*b, old, new)),
+        }
+      }
+    }
+    Quote { term: t } => Quote {
+      term: Box::new(rename_macro_var(*t, old, new)),
+    },
+    Ctx { loc, term: t } => Ctx {
+      loc,
+      term: Box::new(rename_macro_var(*t, old, new)),
+    },
+    Ann { term: t, typ } => Ann {
+      term: Box::new(rename_macro_var(*t, old, new)),
+      typ: Box::new(rename_macro_var(*typ, old, new)),
+    },
+    Con(Constructor {
+      typ_name,
+      args,
+      name: n,
+      num_args,
+    }) => Con(Constructor {
+      name: n,
+      typ_name,
+      num_args,
+      args: args
+        .into_iter()
+        .map(|a| a.map(|t| rename_macro_var(t, old, new)))
+        .collect(),
+    }),
+    Lit {
+      value: Literal::Match { value, cases },
+    } => {
+      let value = rename_macro_var(*value, old, new);
+      let cases = cases
+        .into_iter()
+        .map(|c| case(c.name, c.args, rename_macro_var(*c.value, old, new)))
+        .collect();
+      match_term(value, cases)
+    }
+    Lit {
+      value: Literal::If { value, then, els },
+    } => Term::Lit {
+      value: Literal::If {
+        value: Box::new(rename_macro_var(*value, old, new)),
+        then: Box::new(rename_macro_var(*then, old, new)),
+        els: Box::new(rename_macro_var(*els, old, new)),
+      },
+    },
+    other => other,
+  }
+}
+
+/// Rename all local binders (Lam, Forall params) in a term with gensym names.
+/// This prevents macro-introduced bindings from capturing user variables.
+fn alpha_rename_body(term: Term) -> Term {
+  match term {
+    Lam { param: p, body: b } => {
+      let (new_param, new_body) = match p {
+        Par::P(param) => {
+          let new_name = Identifier::gensym(param.name.as_str());
+          let body = rename_macro_var(*b, &param.name, &new_name);
+          (
+            Par::P(Param {
+              name: new_name,
+              typ: Box::new(alpha_rename_body(*param.typ)),
+              mult: param.mult,
+            }),
+            alpha_rename_body(body),
+          )
+        }
+        Par::I { typ, mult } => (
+          Par::I {
+            typ: Box::new(alpha_rename_body(*typ)),
+            mult,
+          },
+          alpha_rename_body(*b),
+        ),
+      };
+      Lam {
+        param: new_param,
+        body: Box::new(new_body),
+      }
+    }
+    App { fun, arg } => {
+      // Don't rename inside unquote — those are user-supplied terms
+      if let Var {
+        name: NameRef::Id(n),
+      } = &*fun
+        && n.as_str() == "unquote"
+      {
+        App { fun, arg }
+      } else {
+        App {
+          fun: Box::new(alpha_rename_body(*fun)),
+          arg: Box::new(alpha_rename_body(*arg)),
+        }
+      }
+    }
+    Pi {
+      arg_name,
+      arg,
+      ret,
+      mult,
+    } => Pi {
+      arg_name,
+      arg: Box::new(alpha_rename_body(*arg)),
+      ret: Box::new(alpha_rename_body(*ret)),
+      mult,
+    },
+    Forall {
+      name: n,
+      typ,
+      body: b,
+    } => {
+      let new_name = Identifier::gensym(n.as_str());
+      let body = alpha_rename_body(rename_macro_var(*b, &n, &new_name));
+      Forall {
+        name: new_name,
+        typ: Box::new(alpha_rename_body(*typ)),
+        body: Box::new(body),
+      }
+    }
+    Quote { term: t } => Quote {
+      term: Box::new(alpha_rename_body(*t)),
+    },
+    Ctx { loc, term: t } => Ctx {
+      loc,
+      term: Box::new(alpha_rename_body(*t)),
+    },
+    Ann { term: t, typ } => Ann {
+      term: Box::new(alpha_rename_body(*t)),
+      typ: Box::new(alpha_rename_body(*typ)),
+    },
+    Con(Constructor {
+      typ_name,
+      args,
+      name: n,
+      num_args,
+    }) => Con(Constructor {
+      name: n,
+      typ_name,
+      num_args,
+      args: args
+        .into_iter()
+        .map(|a| a.map(|t| alpha_rename_body(t)))
+        .collect(),
+    }),
+    Lit {
+      value: Literal::Match { value, cases },
+    } => {
+      let value = alpha_rename_body(*value);
+      let cases = cases
+        .into_iter()
+        .map(|c| case(c.name, c.args, alpha_rename_body(*c.value)))
+        .collect();
+      match_term(value, cases)
+    }
+    Lit {
+      value: Literal::If { value, then, els },
+    } => Term::Lit {
+      value: Literal::If {
+        value: Box::new(alpha_rename_body(*value)),
+        then: Box::new(alpha_rename_body(*then)),
+        els: Box::new(alpha_rename_body(*els)),
+      },
+    },
+    other => other,
   }
 }
 
