@@ -26,7 +26,7 @@ pub fn compile_term(ctx: &mut CodegenCtx, term: &Term) -> Result<LLVMValue, Stri
     } => compile_if(ctx, value, then, els),
 
     Lit {
-      value: Literal::Match { .. } | Literal::Map { .. },
+      value: Literal::Match { .. },
     } => Err(format!("Literal not yet supported: {:?}", term)),
 
     Var { name } => {

@@ -121,6 +121,13 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
         if b { *then } else { *els }
       }
       Ctx { loc: _, term } => *term,
+      Lit {
+        value: Literal::StructLit { .. },
+      } => {
+        return Err(err(
+          "struct literal reached evaluator without being desugared".to_string(),
+        ));
+      }
       _ => break,
     };
     if options.debug {
@@ -164,7 +171,7 @@ fn native_apply_arg(mut native: Native, index: usize, term: Term) -> Option<Term
   }
 }
 
-fn apply_dot_macro(term: Term) -> Term {
+pub fn apply_dot_macro(term: Term) -> Term {
   use NameRef::{Id, Op, P};
   if let App {
     ref fun,
@@ -197,6 +204,112 @@ fn apply_dot_macro(term: Term) -> Term {
   } else {
     term
   }
+}
+
+/// Recursively apply the dot macro to all subterms
+pub fn apply_dot_macro_recursive(term: Term) -> Term {
+  use crate::term::{
+    Literal,
+    Term::{Ann, App, Ctx, Lam, Lit, Pi},
+  };
+  let term = match term {
+    App { fun, arg } => {
+      let fun = apply_dot_macro_recursive(*fun);
+      let arg = apply_dot_macro_recursive(*arg);
+      App {
+        fun: Box::new(fun),
+        arg: Box::new(arg),
+      }
+    }
+    Lam { param, body } => {
+      let body = apply_dot_macro_recursive(*body);
+      Lam {
+        param,
+        body: Box::new(body),
+      }
+    }
+    Lit {
+      value: Literal::Match { value, cases },
+    } => {
+      let value = apply_dot_macro_recursive(*value);
+      let cases = cases
+        .into_iter()
+        .map(|c| case(c.name, c.args, apply_dot_macro_recursive(*c.value)))
+        .collect();
+      Lit {
+        value: Literal::Match {
+          value: Box::new(value),
+          cases,
+        },
+      }
+    }
+    Lit {
+      value: Literal::If { value, then, els },
+    } => {
+      let value = apply_dot_macro_recursive(*value);
+      let then = apply_dot_macro_recursive(*then);
+      let els = apply_dot_macro_recursive(*els);
+      Lit {
+        value: Literal::If {
+          value: Box::new(value),
+          then: Box::new(then),
+          els: Box::new(els),
+        },
+      }
+    }
+    Forall { name, typ, body } => {
+      let typ = apply_dot_macro_recursive(*typ);
+      let body = apply_dot_macro_recursive(*body);
+      Forall {
+        name,
+        typ: Box::new(typ),
+        body: Box::new(body),
+      }
+    }
+    Pi {
+      arg,
+      ret,
+      arg_name,
+      mult,
+    } => {
+      let arg = apply_dot_macro_recursive(*arg);
+      let ret = apply_dot_macro_recursive(*ret);
+      Pi {
+        arg: Box::new(arg),
+        ret: Box::new(ret),
+        arg_name,
+        mult,
+      }
+    }
+    Ann { term, typ } => {
+      let term = apply_dot_macro_recursive(*term);
+      let typ = apply_dot_macro_recursive(*typ);
+      Ann {
+        term: Box::new(term),
+        typ: Box::new(typ),
+      }
+    }
+    Lit {
+      value: Literal::StructLit { fields },
+    } => {
+      let fields = fields
+        .into_iter()
+        .map(|(k, v)| (k, apply_dot_macro_recursive(v)))
+        .collect();
+      Term::Lit {
+        value: Literal::StructLit { fields },
+      }
+    }
+    Ctx { loc, term } => {
+      let term = apply_dot_macro_recursive(*term);
+      Ctx {
+        loc,
+        term: Box::new(term),
+      }
+    }
+    t => t,
+  };
+  apply_dot_macro(term)
 }
 
 fn unwrap_decl_lambda(arg: Term, name: &NameRef, scope: &Scope) -> Result<Term, Error> {
@@ -355,6 +468,17 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       let then = substitute(*then, nref, new_term);
       let els = substitute(*els, nref, new_term);
       if_term(value, then, els)
+    }
+    Lit {
+      value: Literal::StructLit { fields },
+    } => {
+      let fields = fields
+        .into_iter()
+        .map(|(k, v)| (k, substitute(v, nref, new_term)))
+        .collect();
+      Term::Lit {
+        value: Literal::StructLit { fields },
+      }
     }
     Lit { value: _ } => term,
     Ctx { loc, term } => Ctx {

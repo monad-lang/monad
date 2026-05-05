@@ -11,8 +11,10 @@ use crate::parser::{ReplInput, repl_parser};
 use crate::term::Decl;
 use crate::term::Term::{self, Con, Hole};
 #[cfg(feature = "repl")]
+use crate::term::module::ParsedModule;
+#[cfg(feature = "repl")]
 use crate::term::module::module;
-use crate::term::module::{ParsedModule, default_modules, load_module_files};
+use crate::term::module::{default_modules, load_module_files};
 use crate::term::{Constructor, ModulePath, mpt, strings_to_list_term};
 use crate::term::{app, id};
 
@@ -296,6 +298,10 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
       Err(e) => {
         failed += 1;
         failures.push((name.clone(), format!("eval error: {e}")));
+        failed += 1;
+        failures.push((name.clone(), format!("eval error: {e}")));
+        failed += 1;
+        failures.push((name.clone(), format!("eval error: {e}")));
         continue;
       }
     };
@@ -325,6 +331,9 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
   println!("{passed}/{total} tests passed");
 
   if failed > 0 {
+    for (name, msg) in &failures {
+      eprintln!("FAIL {name}: {msg}");
+    }
     Err(format!("{failed} test(s) failed"))
   } else {
     Ok(())

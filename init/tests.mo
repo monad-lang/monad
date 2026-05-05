@@ -186,3 +186,17 @@ def test_unit : Bool :=
     match unit {
         unit => true
     }
+
+// Struct tests
+
+struct Point {
+    x: I64,
+    y: I64,
+}
+
+@[test]
+def test_struct_construct_and_match : Bool :=
+    let pt : Point := { x := 1, y := 2 } in
+    match pt {
+        mk x y => true
+    }

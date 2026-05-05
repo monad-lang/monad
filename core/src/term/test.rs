@@ -187,7 +187,7 @@ impl Similar for MatchCase {
 
 impl Similar for Literal {
   fn similar(&self, other: &Self) -> bool {
-    use Literal::{If, Map, Match};
+    use Literal::{If, Match, StructLit};
     match (self, other) {
       (
         Match {
@@ -199,13 +199,6 @@ impl Similar for Literal {
           cases: c2,
         },
       ) => (*v1).similar(&**v2) && c1.iter().zip(c2).all(|(a, b)| a.similar(b)),
-      (Map { value: v1 }, Map { value: v2 }) => v1.value.keys().all(|i| {
-        v1.value
-          .get(i)
-          .and_then(|a| v2.value.get(i).map(|b| (a, b)))
-          .map(|(a, b)| a.similar(b))
-          .unwrap_or(false)
-      }),
       (
         If {
           value: v1,
@@ -218,6 +211,12 @@ impl Similar for Literal {
           els: e2,
         },
       ) => (*v1).similar(&**v2) && (*t1).similar(&**t2) && (*e1).similar(&**e2),
+      (StructLit { fields: f1 }, StructLit { fields: f2 }) => {
+        f1.len() == f2.len()
+          && f1
+            .iter()
+            .all(|(k, v)| f2.get(k).map(|v2| v.similar(v2)).unwrap_or(false))
+      }
       _ => self == other,
     }
   }
@@ -225,6 +224,7 @@ impl Similar for Literal {
 
 impl Similar for Term {
   fn similar(&self, other: &Self) -> bool {
+    use Term::{Ctx, Forall, Lam, Lit, Pi, Var};
     match (self, other) {
       (
         Ctx { loc: _, term },

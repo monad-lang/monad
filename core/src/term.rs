@@ -291,7 +291,7 @@ pub fn stru(
   attributes: Vec<Attribute>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, type0());
-  let con_params = fields
+  let con_params: Vec<Param> = fields
     .into_iter()
     .map(|d| {
       param_with_mult(
@@ -299,10 +299,19 @@ pub fn stru(
       )
     })
     .collect();
+  let struct_type = mpvar(name.clone());
+  let con_typ = if con_params.is_empty() {
+    struct_type.clone()
+  } else {
+    pi_typs(
+      con_params.iter().map(|p| *p.typ.clone()).collect(),
+      struct_type.clone(),
+    )
+  };
   let constructors = vec![induct_constructor(
     name.clone(),
-    name.last().clone(),
-    mpvar(name.clone()),
+    id("mk"),
+    con_typ,
     con_params,
   )];
   let term = inductive_term(name.clone(), params.clone());
@@ -827,21 +836,6 @@ pub fn app2(s: &str, s2: &str) -> Term {
   app(var(s), var(s2))
 }
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
-pub struct MapTerm {
-  pub(crate) value: Map<Identifier, Term>,
-}
-
-impl Display for MapTerm {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    writeln!(f, "{{")?;
-    for (key, value) in self.value.iter() {
-      writeln!(f, "{key} := {value},")?;
-    }
-    write!(f, "}}")
-  }
-}
-
-#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct MatchCase {
   pub(crate) name: Identifier,
   pub(crate) args: Vec<Identifier>,
@@ -964,9 +958,6 @@ pub enum Literal {
     value: F64Wrap,
     suffix: NumSuffix,
   },
-  Map {
-    value: MapTerm,
-  },
   Match {
     value: Box<Term>,
     cases: Vec<MatchCase>,
@@ -976,6 +967,9 @@ pub enum Literal {
     value: Box<Term>,
     then: Box<Term>,
     els: Box<Term>,
+  },
+  StructLit {
+    fields: Map<Identifier, Term>,
   },
 }
 
@@ -1009,7 +1003,6 @@ impl Display for Literal {
           write!(f, "{}{}", value.0, suffix.type_name().to_lowercase())
         }
       }
-      Literal::Map { value } => write!(f, "{value}"),
       Literal::Match { value, cases } => {
         let cs = cases
           .iter()
@@ -1019,15 +1012,15 @@ impl Display for Literal {
         write!(f, "match {value} {{\n {}\n}}", cs)
       }
       Literal::If { value, then, els } => write!(f, "if {value} then {then} else {els}"),
+      Literal::StructLit { fields } => {
+        let fields_str = fields
+          .iter()
+          .map(|(k, v)| format!("{k} := {v}"))
+          .collect::<Vec<_>>()
+          .join(", ");
+        write!(f, "{{ {fields_str} }}")
+      }
     }
-  }
-}
-
-pub fn map_term(value: Map<Identifier, Term>) -> Term {
-  Term::Lit {
-    value: Literal::Map {
-      value: MapTerm { value },
-    },
   }
 }
 
@@ -1262,15 +1255,6 @@ impl Term {
       }
     )
   }
-  pub fn is_map(&self) -> bool {
-    matches!(
-      self,
-      Term::Lit {
-        value: Literal::Map { value: _ },
-      }
-    )
-  }
-
   pub fn node_type(&self) -> &str {
     match self {
       Var { name: _ } => "var",
@@ -1280,9 +1264,9 @@ impl Term {
         Literal::Str { .. } => "str",
         Literal::Num { .. } => "num",
         Literal::Float { .. } => "float",
-        Literal::Map { .. } => "map",
         Literal::Match { .. } => "match",
         Literal::If { .. } => "if",
+        Literal::StructLit { .. } => "struct_lit",
       },
       Ntv { native: _ } => "ntv",
       Con(_) => "con",
@@ -1489,7 +1473,9 @@ pub fn app(fun: Term, arg: Term) -> Term {
 }
 
 pub fn apps(fun: Term, args: Vec<Term>) -> Term {
-  assert!(!args.is_empty());
+  if args.is_empty() {
+    return fun;
+  }
   let mut term = fun;
   for arg in args {
     term = app(term, arg);

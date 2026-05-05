@@ -2,7 +2,7 @@ use super::*;
 use crate::{
   Map, similar,
   term::{
-    AttrArg, Attribute, Decl, LetVar, Named, Native, Par, Term, app, app2, dpar, forall,
+    AttrArg, Attribute, Decl, LetVar, Literal, Named, Native, Par, Term, app, app2, dpar, forall,
     induct_constructor, mp, mpt, mpv, num, oper, par, pi, pi_var, pvar, str, stru_field,
     test::{decl_def, decl_inductive, decl_infix, decl_open, decl_use, defs_class},
     typ, var,
@@ -476,16 +476,39 @@ fn test_let() {
 fn test_struct_val() {
   let struct_val_parser = |s: &'static str| struct_val_parser::<()>(s.into());
   let (_, r) = struct_val_parser(r#"{}"#.into()).unwrap();
-  similar!(r, map_term(Map::new()));
+  similar!(
+    r,
+    Term::Lit {
+      value: Literal::StructLit { fields: Map::new() }
+    }
+  );
   let (_, r) = struct_val_parser(r#"{a := b}"#.into()).unwrap();
-  similar!(r, map_term(Map::from([(id("a"), var("b"))])));
+  similar!(
+    r,
+    Term::Lit {
+      value: Literal::StructLit {
+        fields: Map::from([(id("a"), var("b"))])
+      }
+    }
+  );
   let (_, r) = struct_val_parser(r#"{a := b, b:={c:=0},}"#.into()).unwrap();
   similar!(
     r,
-    map_term(Map::from([
-      (id("a"), var("b")),
-      (id("b"), map_term(Map::from([(id("c"), num(0))])))
-    ]))
+    Term::Lit {
+      value: Literal::StructLit {
+        fields: Map::from([
+          (id("a"), var("b")),
+          (
+            id("b"),
+            Term::Lit {
+              value: Literal::StructLit {
+                fields: Map::from([(id("c"), num(0))])
+              }
+            }
+          )
+        ])
+      }
+    }
   );
 }
 
@@ -524,11 +547,20 @@ fn test_term() {
     r,
     lams(
       vec![par("b")],
-      map_term(Map::from([
-        (id("a"), var("b")),
-        (id("c"), str("Hello")),
-        (id("map"), map_term(Map::new()))
-      ]))
+      Term::Lit {
+        value: Literal::StructLit {
+          fields: Map::from([
+            (id("a"), var("b")),
+            (id("c"), str("Hello")),
+            (
+              id("map"),
+              Term::Lit {
+                value: Literal::StructLit { fields: Map::new() }
+              }
+            )
+          ])
+        }
+      }
     )
   );
 }

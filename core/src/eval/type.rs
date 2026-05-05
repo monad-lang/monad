@@ -1058,6 +1058,7 @@ fn type_check_with_env(
 ) -> Result<TypedTerm, TypeError> {
   use TypeError::*;
   let scope = add_forall_to_scope(&expected_type, scope.clone());
+  let term = crate::eval::apply_dot_macro_recursive(term);
   match term {
     App { fun, arg } => {
       // Try desugaring method calls with args (x.fun arg -> A.fun arg x)
@@ -1104,7 +1105,13 @@ fn type_check_with_env(
         let mut arg_type = *arg_type.clone();
         arg_type = add_forall_to_type(arg_type, &fun_forall_vars);
         // Second check: verify arg against expected type (DON'T count usage again)
-        let (arg, _) = if arg_type.is_known() {
+        let (arg, _) = if arg_type.is_known()
+          || matches!(
+            arg,
+            Term::Lit {
+              value: Literal::StructLit { .. }
+            }
+          ) {
           type_check_with_env(arg, arg_type, &scope, usage, false)?.to_tuple()
         } else {
           (arg, arg_type)
@@ -1118,33 +1125,53 @@ fn type_check_with_env(
       }
     }
     Lit {
-      value: Literal::Map { ref value },
+      value: Literal::StructLit { ref fields },
     } => {
-      if let Var { name } = &expected_type
-        && let Some(name) = name.to_path()
-      {
-        let ind = scope.find_inductive(&name)?;
-        let stru = ind
+      let struct_type = {
+        if let Var { name } = &expected_type
+          && let Some(name) = name.to_path()
+        {
+          Some(name.clone())
+        } else {
+          None
+        }
+      };
+      if struct_type.is_none() && expected_type.is_known() {
+        return Err(generic_terr(format!(
+          "Expected name for struct found {expected_type}"
+        )));
+      }
+      if let Some(ref struct_name) = struct_type {
+        let ind = scope.find_inductive(struct_name)?;
+        let mk_cons = ind
           .constructors
           .first()
           .ok_or_else(|| generic_terr("Structs must have at least one constructor".to_string()))?;
-        let map = &value.value;
         // TODO default values
-        if map.len() != stru.params.len() {
+        if fields.len() != mk_cons.params.len() {
           return Err(generic_terr(format!(
-            "to few args in struct {:?} {:?}",
-            map, stru.params
+            "too few args in struct {:?} {:?}",
+            fields, mk_cons.params
           )));
         }
-        for Param { name, typ, .. } in stru.params.iter() {
-          let term = map.get(name).ok_or_else(|| MissingField(name.clone()))?;
+        for Param { name, typ, .. } in mk_cons.params.iter() {
+          let term = fields.get(name).ok_or_else(|| MissingField(name.clone()))?;
           type_check_with_env(term.clone(), *typ.clone(), &scope, usage, track_usage)?;
         }
-        Ok(typed_term(term, expected_type.clone()))
+        let args: Vec<Option<Term>> = mk_cons
+          .params
+          .iter()
+          .map(|p| Some(fields.get(&p.name).unwrap().clone()))
+          .collect();
+        let con = Term::Con(Constructor {
+          name: id("mk"),
+          typ_name: struct_name.clone(),
+          args,
+          num_args: mk_cons.params.len(),
+        });
+        Ok(typed_term(con, expected_type.clone()))
       } else {
-        Err(generic_terr(format!(
-          "Expected name for struct found {expected_type}"
-        )))
+        Ok(typed_term(term, expected_type))
       }
     }
     Lit {
@@ -1295,13 +1322,18 @@ fn type_check_with_env(
         {
           let arg_type = *arg.clone();
           let arg_type = add_forall_to_type(arg_type, &vars);
-          let param_type = param.typ();
-          let arg_type = match_resolve_type(&arg_type, param_type, &scope).map_err(|_| {
+          let param_type = param.typ().clone();
+          let arg_type = match_resolve_type(&arg_type, &param_type, &scope).map_err(|_| {
             TypeError::ArgumentMismatch {
               expected: *arg.clone(),
-              actual: param.typ().clone(),
+              actual: param_type.clone(),
             }
           })?;
+          let arg_type = if !arg_type.is_known() {
+            param_type
+          } else {
+            arg_type
+          };
           // Register param in usage env (before body check)
           if let Par::P(ref p) = param {
             usage.register(p.name.clone(), p.mult.clone());

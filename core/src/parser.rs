@@ -15,7 +15,7 @@ use crate::{
     Term::{self, Hole, Var},
     TypeConstraint, Use, app, apps, case, class, class_def, ctx, def, def_with_native,
     float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
-    ivar, lam, lams, lets, map_term, match_term,
+    ivar, lam, lams, lets, match_term,
     module::ParsedModule,
     mpvar, num_suffix, opr, param, param_with_mult, pi_name, pi_typs, pvar, stru,
     stru_field_with_mult, type_constraint, var_id,
@@ -1242,7 +1242,11 @@ fn struct_val_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
       )),
       (ws0, char('}')),
     ),
-    |fields| map_term(fields.into_iter().collect()),
+    |fields| Term::Lit {
+      value: Literal::StructLit {
+        fields: fields.into_iter().collect(),
+      },
+    },
   )
   .parse(input)
 }

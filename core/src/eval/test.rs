@@ -2046,7 +2046,7 @@ fn test_struct_linear_field_used_once() {
 
     def run (!buf : Buffer) : I64 :=
         match buf {
-            Buffer data size => data
+            mk data size => data
         }
     "#,
   );
@@ -2071,7 +2071,7 @@ fn test_struct_linear_field_unused_fails() {
 
     def run (!buf : Buffer) : I64 :=
         match buf {
-            Buffer data size => size
+            mk data size => size
         }
     "#,
   );
@@ -2096,7 +2096,7 @@ fn test_struct_linear_field_used_twice_fails() {
 
     def run (!buf : Buffer) : I64 :=
         match buf {
-            Buffer data size => data + data
+            mk data size => data + data
         }
     "#,
   );
@@ -2106,6 +2106,46 @@ fn test_struct_linear_field_used_twice_fails() {
   );
   let msg = r.unwrap_err().to_string();
   assert!(msg.contains("used more than once"), "got: {msg}");
+}
+
+// ===== Struct End-to-End Tests =====
+
+#[test]
+fn test_struct_value_and_match_type_check() {
+  // Create a struct via { ... } syntax, match on it (type check only)
+  let r = type_check_mo(
+    r#"
+    struct Point { x: I64, y: I64, }
+
+    def run (pt : Point) : I64 :=
+        match pt { mk x y => x + y }
+
+    def main : I64 :=
+        run { x := 1, y := 2 }
+    "#,
+  );
+  assert!(r.is_ok(), "Struct value + match should type check");
+}
+
+#[test]
+fn test_struct_constructor_via_mk() {
+  // Create a struct using the Point.mk constructor via
+  // a helper that creates it internally
+  let r = type_check_mo(
+    r#"
+    struct Point { x: I64, y: I64, }
+
+    def make (a: I64) (b: I64) : Point :=
+        { x := a, y := b }
+
+    def run (pt : Point) : I64 :=
+        match pt { mk x y => x + y }
+
+    def main : I64 :=
+        run (make 1 2)
+    "#,
+  );
+  assert!(r.is_ok(), "Struct via helper should type check");
 }
 
 // ===== Pi Multiplicity and Subsumption Tests =====
