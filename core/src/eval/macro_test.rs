@@ -317,7 +317,6 @@ fn expand_fails(input: &str) -> String {
 }
 
 #[test]
-#[ignore = "expand_macros is a stub"]
 fn test_macro_identity() {
   let r = expand_and_type_check(
     r#"
@@ -325,18 +324,20 @@ fn test_macro_identity() {
         def main : I64 := id! 42
         "#,
   );
+  if let Err(e) = &r {
+    eprintln!("identity error: {e}");
+  }
   assert!(r.is_ok(), "identity macro should succeed");
 }
 
 #[test]
-#[ignore = "expand_macros is a stub"]
 fn test_macro_add_one() {
   let r = expand_and_type_check(
-    r#"
-        defmacro add1 x := quote { unquote(x) + 1 }
-        def main : I64 := add1! 41
-        "#,
+    "defmacro add1 x := quote { unquote x + 1 }\ndef main : I64 := add1! 41\n",
   );
+  if let Err(e) = &r {
+    eprintln!("add1 error: {e}");
+  }
   assert!(r.is_ok(), "add1 macro should succeed");
 }
 
@@ -345,7 +346,7 @@ fn test_macro_add_one() {
 fn test_macro_multiple_args() {
   let r = expand_and_type_check(
     r#"
-        defmacro pair a b := quote { (unquote(a), unquote(b)) }
+        defmacro pair a b := quote { (unquote a, unquote b) }
         def main : (I64, I64) := pair! 1 2
         "#,
   );
@@ -357,7 +358,7 @@ fn test_macro_multiple_args() {
 fn test_macro_in_let_binding() {
   let r = expand_and_type_check(
     r#"
-        defmacro add1 x := quote { unquote(x) + 1 }
+        defmacro add1 x := quote { unquote x + 1 }
         def main : I64 :=
             let x := add1! 1
             x + 1
@@ -397,7 +398,7 @@ fn test_macro_not_found_fails() {
 fn test_macro_depth_limit_exceeded() {
   let msg = expand_fails(
     r#"
-        defmacro recurse x := quote { recurse! unquote(x) }
+        defmacro recurse x := quote { recurse! unquote x }
         def main : I64 := recurse! 0
         "#,
   );
@@ -409,8 +410,8 @@ fn test_macro_depth_limit_exceeded() {
 fn test_macro_nested_calls() {
   let r = expand_and_type_check(
     r#"
-        defmacro add1 x := quote { unquote(x) + 1 }
-        defmacro add2 x := quote { add1! (add1! unquote(x)) }
+        defmacro add1 x := quote { unquote x + 1 }
+        defmacro add2 x := quote { add1! (add1! unquote x) }
         def main : I64 := add2! 5
         "#,
   );
@@ -422,7 +423,7 @@ fn test_macro_nested_calls() {
 fn test_macro_as_function_arg() {
   let r = expand_and_type_check(
     r#"
-        defmacro wrap x := quote { unquote(x) }
+        defmacro wrap x := quote { unquote x }
         def id (x : I64) : I64 := x
         def main : I64 := id (wrap! 42)
         "#,
@@ -451,7 +452,7 @@ fn test_macro_expanded_in_type_position_fails() {
 fn test_hygiene_no_capture_of_user_var() {
   let r = expand_and_type_check(
     r#"
-        defmacro wrap x := quote { let y := 1 in unquote(x) + y }
+        defmacro wrap x := quote { let y := 1 in unquote x + y }
         def main : I64 :=
             let y := 100
             wrap! (y + 2)
@@ -465,7 +466,7 @@ fn test_hygiene_no_capture_of_user_var() {
 fn test_hygiene_user_var_captured_by_macro() {
   let r = expand_and_type_check(
     r#"
-        defmacro add_one x := quote { unquote(x) + 1 }
+        defmacro add_one x := quote { unquote x + 1 }
         def main : I64 :=
             let x := 10
             add_one! x
@@ -479,7 +480,7 @@ fn test_hygiene_user_var_captured_by_macro() {
 fn test_hygiene_multiple_expansions_independent() {
   let r = expand_and_type_check(
     r#"
-        defmacro wrap x := quote { let y := 1 in unquote(x) + y }
+        defmacro wrap x := quote { let y := 1 in unquote x + y }
         def main : I64 :=
             let y := 100
             wrap! (wrap! (y + 2))
@@ -496,7 +497,7 @@ fn test_macro_unless_example() {
   let r = expand_and_type_check(
     r#"
         defmacro unless cond body :=
-            quote { if Bool.not unquote(cond) then unquote(body) else () }
+            quote { if Bool.not unquote cond then unquote body else () }
         def main : IO Unit :=
             unless! (Bool.true) { println "should not print" }
         "#,
@@ -526,8 +527,8 @@ fn test_macro_define_getter() {
 fn test_macro_twice() {
   let r = expand_and_type_check(
     r#"
-        defmacro twice f x := quote { unquote(f) (unquote(f) unquote(x)) }
-        defmacro add1 x := quote { unquote(x) + 1 }
+        defmacro twice f x := quote { unquote f) (unquote f) unquote x) }
+        defmacro add1 x := quote { unquote x + 1 }
         def main : I64 := twice! add1! 5
         "#,
   );

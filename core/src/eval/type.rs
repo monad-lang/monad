@@ -1,7 +1,9 @@
 use std::fmt::Display;
 
 use crate::{
-  Map, Set, empty_set, set_of,
+  Map, Set, empty_set,
+  eval::macro_expand,
+  set_of,
   term::{
     Ann, ClassDefRef, Decl, Def, Identifier, Inductive, InductiveVariant, Instance, InstanceKey,
     Literal, ModulePath, Multiplicity, NameRef, Named, NumSuffix, SourceContext,
@@ -1768,6 +1770,8 @@ pub fn type_check_module_decls(
   loaded: &LoadedModules,
 ) -> Result<Vec<SourceContext<Decl>>, TypeError> {
   let decls = elaborate_decls(decls, loaded);
+  let decls = macro_expand::expand_macros(decls, loaded)
+    .map_err(|e| TypeError::Generic(format!("macro expansion failed: {e}")))?;
   let global = loaded.scope_of_decls(path, &decls);
 
   let (oks, errs) = type_check_decls(decls.clone(), &global.scope());

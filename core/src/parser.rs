@@ -759,11 +759,11 @@ fn base_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
     match_parser,
     type_expression,
     ann_parser,
+    application,
     variable,
     operator_var,
     literal,
     lambda,
-    application,
     parens,
   ))
   .parse(input)
