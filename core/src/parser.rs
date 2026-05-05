@@ -418,7 +418,7 @@ fn def_params<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
 }
 
 fn single_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((variable, literal, parens)).parse(input)
+  alt((macro_call, variable, literal, parens)).parse(input)
 }
 
 fn macro_call<X: Clone>(input: Span<X>) -> Res<Term, X> {
