@@ -200,3 +200,16 @@ def test_struct_construct_and_match : Bool :=
     match pt {
         mk x y => true
     }
+
+@[test]
+def test_struct_eq_in_match : Bool :=
+    let pt : Point := { x := 1, y := 2 } in
+    match pt {
+        mk x y => x + y == 3
+    }
+
+@[test]
+def test_eq_in_plain_match : Bool :=
+    match List.cons 5 List.empty {
+        cons x _ => x == 5
+    }

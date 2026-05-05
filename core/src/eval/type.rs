@@ -1193,16 +1193,17 @@ fn type_check_with_env(
           });
         }
         let mut branch_t = expected_type.clone();
-        for case in cases {
-          if let Some(ind_cons) = ind.find_cons(&case.name) {
+        let mut new_cases = Vec::new();
+        for mcase in cases {
+          if let Some(ind_cons) = ind.find_cons(&mcase.name) {
             let mut scope = scope.clone();
-            if ind_cons.params.len() != case.args.len() {
+            if ind_cons.params.len() != mcase.args.len() {
               return Err(ConstructorMismatch {
                 params: ind_cons.params.clone(),
-                args: case.args.clone(),
+                args: mcase.args.clone(),
               });
             }
-            for (name, param) in case.args.iter().zip(ind_cons.params.iter()) {
+            for (name, param) in mcase.args.iter().zip(ind_cons.params.iter()) {
               let typ = substitute_params(*param.typ.clone(), ind_params, &ind_args);
               scope = add_params_to_scope(ind_params, &ind_args, scope);
               scope = scope.with_type_owned(name, typ);
@@ -1210,14 +1211,14 @@ fn type_check_with_env(
               usage.register(name.clone(), param.mult.clone());
             }
             let t = type_check_with_env(
-              *case.value.clone(),
+              *mcase.value.clone(),
               branch_t.clone(),
               &scope,
               usage,
               track_usage,
             )?;
             // Remove pattern variables from usage tracking after each branch
-            for (name, _) in case.args.iter().zip(ind_cons.params.iter()) {
+            for (name, _) in mcase.args.iter().zip(ind_cons.params.iter()) {
               usage.remove(name);
             }
             if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
@@ -1225,11 +1226,19 @@ fn type_check_with_env(
             } else {
               return Err(MismatchingBranches(branch_t, t.typ().clone()));
             }
+            new_cases.push(case(
+              mcase.name.clone(),
+              mcase.args.clone(),
+              t.term().clone(),
+            ));
           } else {
-            return Err(ConstructorUnknown(case.name.clone()));
+            return Err(ConstructorUnknown(mcase.name.clone()));
           }
         }
-        Ok(typed_term(term, branch_t.clone()))
+        Ok(typed_term(
+          match_term(con.term().clone(), new_cases),
+          branch_t.clone(),
+        ))
       } else {
         Err(ExpectedInductive(con.typ().clone()))
       }
