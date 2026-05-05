@@ -291,13 +291,13 @@ pub fn stru(
   attributes: Vec<Attribute>,
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, type0());
+  let defaults: Map<Identifier, Term> = fields
+    .iter()
+    .filter_map(|d| d.default_value.clone().map(|v| (d.name.clone(), v)))
+    .collect();
   let con_params: Vec<Param> = fields
     .into_iter()
-    .map(|d| {
-      param_with_mult(
-        d.name, d.typ, d.mult, // TODO default value
-      )
-    })
+    .map(|d| param_with_mult(d.name, d.typ, d.mult))
     .collect();
   let struct_type = mpvar(name.clone());
   let con_typ = if con_params.is_empty() {
@@ -324,6 +324,7 @@ pub fn stru(
     variant: InductiveVariant::Struct,
     term,
     attributes,
+    defaults,
   }
 }
 
@@ -417,6 +418,7 @@ pub fn inductive(
     constructors,
     term,
     attributes,
+    defaults: Map::new(),
   }
 }
 
@@ -479,6 +481,7 @@ pub fn class(
     typ,
     term,
     attributes,
+    defaults: Map::new(),
   }
 }
 
@@ -610,6 +613,7 @@ pub struct Inductive {
   typ: Term,
   pub(crate) constructors: Vec<InductConstructor>,
   pub attributes: Vec<Attribute>,
+  pub defaults: Map<Identifier, Term>,
 }
 
 pub trait AsVarRef {
@@ -971,6 +975,10 @@ pub enum Literal {
   StructLit {
     fields: Map<Identifier, Term>,
   },
+  StructUpdate {
+    base: Identifier,
+    fields: Map<Identifier, Term>,
+  },
 }
 
 pub fn match_term(value: Term, cases: Vec<MatchCase>) -> Term {
@@ -1019,6 +1027,14 @@ impl Display for Literal {
           .collect::<Vec<_>>()
           .join(", ");
         write!(f, "{{ {fields_str} }}")
+      }
+      Literal::StructUpdate { base, fields } => {
+        let fields_str = fields
+          .iter()
+          .map(|(k, v)| format!("{k} := {v}"))
+          .collect::<Vec<_>>()
+          .join(", ");
+        write!(f, "{{ {base} with {fields_str} }}")
       }
     }
   }
@@ -1267,6 +1283,7 @@ impl Term {
         Literal::Match { .. } => "match",
         Literal::If { .. } => "if",
         Literal::StructLit { .. } => "struct_lit",
+        Literal::StructUpdate { .. } => "struct_update",
       },
       Ntv { native: _ } => "ntv",
       Con(_) => "con",

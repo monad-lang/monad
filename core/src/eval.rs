@@ -99,6 +99,9 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
           {
             let mut term = *case.value.clone();
             for (ide, arg) in case.args.clone().into_iter().zip(args) {
+              if ide.as_str() == "_" {
+                continue;
+              }
               if let Some(arg) = arg {
                 term = substitute(term, &Id(ide), arg);
               } else {
@@ -126,6 +129,13 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
       } => {
         return Err(err(
           "struct literal reached evaluator without being desugared".to_string(),
+        ));
+      }
+      Lit {
+        value: Literal::StructUpdate { .. },
+      } => {
+        return Err(err(
+          "struct update reached evaluator without being desugared".to_string(),
         ));
       }
       _ => break,
@@ -300,6 +310,17 @@ pub fn apply_dot_macro_recursive(term: Term) -> Term {
         value: Literal::StructLit { fields },
       }
     }
+    Lit {
+      value: Literal::StructUpdate { base, fields },
+    } => {
+      let fields = fields
+        .into_iter()
+        .map(|(k, v)| (k, apply_dot_macro_recursive(v)))
+        .collect();
+      Term::Lit {
+        value: Literal::StructUpdate { base, fields },
+      }
+    }
     Ctx { loc, term } => {
       let term = apply_dot_macro_recursive(*term);
       Ctx {
@@ -441,6 +462,17 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
           args,
           num_args,
         })
+      } else if let Id(_) = nref {
+        let args = args
+          .iter()
+          .map(|a| a.as_ref().map(|a| substitute(a.clone(), nref, new_term)))
+          .collect();
+        Con(Constructor {
+          name: name.clone(),
+          typ_name: typ_name.clone(),
+          args,
+          num_args,
+        })
       } else {
         term
       }
@@ -478,6 +510,17 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
         .collect();
       Term::Lit {
         value: Literal::StructLit { fields },
+      }
+    }
+    Lit {
+      value: Literal::StructUpdate { base, fields },
+    } => {
+      let fields = fields
+        .into_iter()
+        .map(|(k, v)| (k, substitute(v, nref, new_term)))
+        .collect();
+      Term::Lit {
+        value: Literal::StructUpdate { base, fields },
       }
     }
     Lit { value: _ } => term,

@@ -250,8 +250,12 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
   let path: ModulePath = input.into();
   let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
   let test_path = ModulePath::new(vec![id("std"), id("test")]);
-  loaded = load_module_files(&test_path, loaded).map_err(|e| format!("{e}"))?;
-  loaded = load_module_files(&path, loaded).map_err(|e| format!("{e}"))?;
+  if loaded.get_module(&test_path).is_none() {
+    loaded = load_module_files(&test_path, loaded).map_err(|e| format!("{e}"))?;
+  }
+  if loaded.get_module(&path).is_none() {
+    loaded = load_module_files(&path, loaded).map_err(|e| format!("{e}"))?;
+  }
   let module = loaded
     .get_module(&path)
     .ok_or_else(|| format!("Module {path} not loaded"))?;

@@ -201,6 +201,14 @@ def test_struct_construct_and_match : Bool :=
         mk x y => true
     }
 
+
+
+@[test]
+def test_eq_in_plain_match : Bool :=
+    match List.cons 5 List.empty {
+        cons x _ => x == 5
+    }
+
 @[test]
 def test_struct_eq_in_match : Bool :=
     let pt : Point := { x := 1, y := 2 } in
@@ -209,7 +217,28 @@ def test_struct_eq_in_match : Bool :=
     }
 
 @[test]
-def test_eq_in_plain_match : Bool :=
-    match List.cons 5 List.empty {
-        cons x _ => x == 5
+def test_struct_wildcard : Bool :=
+    let pt : Point := { x := 10, y := 20 } in
+    match pt {
+        mk x _ => x == 10
+    }
+
+struct Rect {
+    w: I64,
+    h: I64 := 100,
+}
+
+@[test]
+def test_struct_default_value : Bool :=
+    let r : Rect := { w := 50 } in
+    match r {
+        mk w h => h == 100
+    }
+
+@[test]
+def test_struct_update_syntax : Bool :=
+    let p1 : Point := { x := 1, y := 2 } in
+    let p2 : Point := { p1 with x := 10 } in
+    match p2 {
+        mk x y => x == 10 && y == 2
     }

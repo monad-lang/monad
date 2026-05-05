@@ -187,7 +187,7 @@ impl Similar for MatchCase {
 
 impl Similar for Literal {
   fn similar(&self, other: &Self) -> bool {
-    use Literal::{If, Match, StructLit};
+    use Literal::{If, Match, StructLit, StructUpdate};
     match (self, other) {
       (
         Match {
@@ -216,6 +216,22 @@ impl Similar for Literal {
           && f1
             .iter()
             .all(|(k, v)| f2.get(k).map(|v2| v.similar(v2)).unwrap_or(false))
+      }
+      (
+        StructUpdate {
+          base: b1,
+          fields: f1,
+        },
+        StructUpdate {
+          base: b2,
+          fields: f2,
+        },
+      ) => {
+        b1 == b2
+          && f1.len() == f2.len()
+          && f1
+            .iter()
+            .all(|(k, v): (&Identifier, &Term)| f2.get(k).map(|v2| v.similar(v2)).unwrap_or(false))
       }
       _ => self == other,
     }

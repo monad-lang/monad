@@ -474,15 +474,15 @@ fn test_let() {
 
 #[test]
 fn test_struct_val() {
-  let struct_val_parser = |s: &'static str| struct_val_parser::<()>(s.into());
-  let (_, r) = struct_val_parser(r#"{}"#.into()).unwrap();
+  let p = |s: &'static str| struct_or_update_parser::<()>(s.into());
+  let (_, r) = p(r#"{}"#.into()).unwrap();
   similar!(
     r,
     Term::Lit {
       value: Literal::StructLit { fields: Map::new() }
     }
   );
-  let (_, r) = struct_val_parser(r#"{a := b}"#.into()).unwrap();
+  let (_, r) = p(r#"{a := b}"#.into()).unwrap();
   similar!(
     r,
     Term::Lit {
@@ -491,7 +491,7 @@ fn test_struct_val() {
       }
     }
   );
-  let (_, r) = struct_val_parser(r#"{a := b, b:={c:=0},}"#.into()).unwrap();
+  let (_, r) = p(r#"{a := b, b:={c:=0},}"#.into()).unwrap();
   similar!(
     r,
     Term::Lit {

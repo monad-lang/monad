@@ -1147,22 +1147,32 @@ fn type_check_with_env(
           .constructors
           .first()
           .ok_or_else(|| generic_terr("Structs must have at least one constructor".to_string()))?;
-        // TODO default values
-        if fields.len() != mk_cons.params.len() {
+        if fields.len() > mk_cons.params.len() {
           return Err(generic_terr(format!(
-            "too few args in struct {:?} {:?}",
+            "too many fields in struct {:?} {:?}",
             fields, mk_cons.params
           )));
         }
         for Param { name, typ, .. } in mk_cons.params.iter() {
-          let term = fields.get(name).ok_or_else(|| MissingField(name.clone()))?;
-          type_check_with_env(term.clone(), *typ.clone(), &scope, usage, track_usage)?;
+          if let Some(term) = fields.get(name) {
+            type_check_with_env(term.clone(), *typ.clone(), &scope, usage, track_usage)?;
+          } else if !ind.defaults.contains_key(name) {
+            return Err(MissingField(name.clone()));
+          }
         }
         let args: Vec<Option<Term>> = mk_cons
           .params
           .iter()
-          .map(|p| Some(fields.get(&p.name).unwrap().clone()))
-          .collect();
+          .map(|p| {
+            Ok(Some(
+              fields
+                .get(&p.name)
+                .cloned()
+                .or_else(|| ind.defaults.get(&p.name).cloned())
+                .ok_or_else(|| MissingField(p.name.clone()))?,
+            ))
+          })
+          .collect::<Result<Vec<_>, TypeError>>()?;
         let con = Term::Con(Constructor {
           name: id("mk"),
           typ_name: struct_name.clone(),
@@ -1173,6 +1183,69 @@ fn type_check_with_env(
       } else {
         Ok(typed_term(term, expected_type))
       }
+    }
+    Lit {
+      value: Literal::StructUpdate { base, fields },
+    } => {
+      // Desugar { id with field := val, ... } to:
+      //   match id { mk orig_fields => mk new_fields }
+      let base_term = Term::Var {
+        name: NameRef::Id(base),
+      };
+      let (base, base_type) =
+        type_check_with_env(base_term, Hole, &scope, usage, track_usage)?.to_tuple();
+      if let Some((ind_name, _ind_args)) = extract_first_name(&base_type) {
+        let ind = scope.find_inductive(&ind_name)?;
+        let mk_cons = ind
+          .constructors
+          .first()
+          .ok_or_else(|| generic_terr("Struct update requires a struct type".to_string()))?;
+        // Generate fresh pattern variables
+        let fresh_names: Map<Identifier, Identifier> = mk_cons
+          .params
+          .iter()
+          .map(|p| {
+            let fresh = p.name.rename();
+            (p.name.clone(), fresh)
+          })
+          .collect();
+        let pat_args: Vec<Identifier> = mk_cons
+          .params
+          .iter()
+          .map(|p| fresh_names.get(&p.name).unwrap().clone())
+          .collect();
+        // Build body with fresh variable references (will be bound by match pattern)
+        let mut body_args: Vec<Option<Term>> = Vec::new();
+        for param in mk_cons.params.iter() {
+          let fresh = fresh_names.get(&param.name).unwrap();
+          let val: Term = if let Some(override_term) = fields.get(&param.name) {
+            override_term.clone()
+          } else {
+            Term::Var {
+              name: NameRef::Id(fresh.clone()),
+            }
+          };
+          body_args.push(Some(val));
+        }
+        let body = Term::Con(Constructor {
+          name: id("mk"),
+          typ_name: ind_name.clone(),
+          args: body_args,
+          num_args: mk_cons.params.len(),
+        });
+        let match_case = case(id("mk"), pat_args, body);
+        let match_expr = match_term(base, vec![match_case]);
+        return type_check_with_env(
+          match_expr,
+          expected_type.clone(),
+          &scope,
+          usage,
+          track_usage,
+        );
+      }
+      Err(generic_terr(format!(
+        "Struct update requires an inductive type, found {base_type}"
+      )))
     }
     Lit {
       value: Literal::Match {
@@ -1204,6 +1277,9 @@ fn type_check_with_env(
               });
             }
             for (name, param) in mcase.args.iter().zip(ind_cons.params.iter()) {
+              if name.as_str() == "_" {
+                continue;
+              }
               let typ = substitute_params(*param.typ.clone(), ind_params, &ind_args);
               scope = add_params_to_scope(ind_params, &ind_args, scope);
               scope = scope.with_type_owned(name, typ);
@@ -1219,7 +1295,9 @@ fn type_check_with_env(
             )?;
             // Remove pattern variables from usage tracking after each branch
             for (name, _) in mcase.args.iter().zip(ind_cons.params.iter()) {
-              usage.remove(name);
+              if name.as_str() != "_" {
+                usage.remove(name);
+              }
             }
             if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
               branch_t = typ;
@@ -1420,10 +1498,11 @@ fn type_check_with_env(
         inductive.params().iter().map(|_| Hole).collect(),
       );
       let lam_types: Vec<Term> = arg_res.into_iter().map(|tt| tt.to_tuple().1).collect();
-      let cons_type = if !lam_types.is_empty() {
-        pi_typs(lam_types, ind_type)
-      } else {
+      let num_present = args.iter().filter(|a| a.is_some()).count();
+      let cons_type = if lam_types.is_empty() || num_present == args.len() {
         ind_type
+      } else {
+        pi_typs(lam_types, ind_type)
       };
       let cons_type = match_resolve_type(&cons_type, &expected_type, &scope)?;
       Ok(typed_term(term.clone(), cons_type))

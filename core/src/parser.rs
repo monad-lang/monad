@@ -58,7 +58,7 @@ pub fn set_res_extra<X: Clone, Y: Clone, T>(res: Res<T, X>, extra: Y) -> Res<T, 
 
 const RESERVED_KEYWORDS: &[&str] = &[
   "def", "let", "in", "use", "open", "class", "struct", "instance", "type", "fn", "ꟛ", "match",
-  "if", "then", "else", "infix", "return", "for", "do",
+  "if", "then", "else", "infix", "return", "for", "do", "with",
 ];
 const RESERVED_NAMES: &[&str] = &["Type", "Pred"];
 
@@ -796,7 +796,7 @@ fn literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
     string_literal,
     float_literal,
     num_literal,
-    struct_val_parser,
+    struct_or_update_parser,
   ))
   .parse(input)
 }
@@ -1232,22 +1232,49 @@ fn struct_val_field_parser<X: Clone>(input: Span<X>) -> Res<(Identifier, Term), 
   Ok((input, (name, value)))
 }
 
-fn struct_val_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  map(
-    delimited(
-      (char('{'), ws0),
-      many0(terminated(
-        struct_val_field_parser,
-        (ws0, opt(char(',')), ws0),
-      )),
-      (ws0, char('}')),
-    ),
-    |fields| Term::Lit {
-      value: Literal::StructLit {
+fn parse_struct_update<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, id) = identifier(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, _) = tag("with")(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, fields) = many0(terminated(
+    struct_val_field_parser,
+    (ws0, opt(char(',')), ws0),
+  ))
+  .parse(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, _) = char('}')(input)?;
+  Ok((
+    input,
+    Term::Lit {
+      value: Literal::StructUpdate {
+        base: id,
         fields: fields.into_iter().collect(),
       },
     },
-  )
+  ))
+}
+
+fn struct_or_update_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, _) = char('{')(input)?;
+  let (input, _) = ws0(input)?;
+  alt((
+    parse_struct_update,
+    map(
+      pair(
+        many0(terminated(
+          struct_val_field_parser,
+          (ws0, opt(char(',')), ws0),
+        )),
+        preceded(ws0, char('}')),
+      ),
+      |(fields, _)| Term::Lit {
+        value: Literal::StructLit {
+          fields: fields.into_iter().collect(),
+        },
+      },
+    ),
+  ))
   .parse(input)
 }
 
