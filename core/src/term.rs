@@ -114,6 +114,7 @@ pub enum NameRef {
   P(ModulePath),
   Id(Identifier),
   Op(Operator),
+  Macro(Identifier),
   Index(usize),
 }
 
@@ -133,12 +134,17 @@ impl NameRef {
     match self {
       NameRef::P(module_path) => Some(module_path.clone()),
       Id(identifier) => Some(ModulePath::single(identifier.clone())),
+      NameRef::Macro(identifier) => Some(ModulePath::single(identifier.clone())),
       _ => None,
     }
   }
 
   pub fn is_id(&self) -> bool {
     matches!(self, Id(_))
+  }
+
+  pub fn is_macro(&self) -> bool {
+    matches!(self, NameRef::Macro(_))
   }
 }
 
@@ -165,7 +171,8 @@ impl Display for NameRef {
     match self {
       NameRef::Id(identifier) => write!(f, "{}", identifier),
       NameRef::Op(op) => write!(f, "({op})"),
-      NameRef::Index(i) => write!(f, "'{i}"),
+      NameRef::Macro(identifier) => write!(f, "{}!", identifier),
+      NameRef::Index(i) => write!(f, "#{i}"),
       NameRef::P(module_path) => write!(f, "{module_path}"),
     }
   }
@@ -979,6 +986,8 @@ pub enum Literal {
     base: Identifier,
     fields: Map<Identifier, Term>,
   },
+  /// Runtime term value (produced by eval of Quote)
+  Term(Box<Term>),
 }
 
 pub fn match_term(value: Term, cases: Vec<MatchCase>) -> Term {
@@ -1036,6 +1045,7 @@ impl Display for Literal {
           .join(", ");
         write!(f, "{{ {base} with {fields_str} }}")
       }
+      Literal::Term(t) => write!(f, "term({t})"),
     }
   }
 }
@@ -1198,6 +1208,10 @@ pub enum Term {
   },
   /// Hole, bottom
   Hole,
+  /// Quoted term (syntax as data)
+  Quote {
+    term: Box<Term>,
+  },
 }
 
 impl Term {
@@ -1284,6 +1298,7 @@ impl Term {
         Literal::If { .. } => "if",
         Literal::StructLit { .. } => "struct_lit",
         Literal::StructUpdate { .. } => "struct_update",
+        Literal::Term(_) => "term",
       },
       Ntv { native: _ } => "ntv",
       Con(_) => "con",
@@ -1303,6 +1318,7 @@ impl Term {
       Type { universe: _ } => "type",
       Hole => "hole",
       Ann { .. } => "ann",
+      Quote { .. } => "quote",
     }
   }
 
@@ -1372,7 +1388,7 @@ pub trait Typed {
   fn typ(&self) -> &Term;
 }
 
-pub use Term::{Ann, App, Con, Ctx, Forall, Hole, Lam, Lit, Ntv, Pi, Prop, Type, Var};
+pub use Term::{Ann, App, Con, Ctx, Forall, Hole, Lam, Lit, Ntv, Pi, Prop, Quote, Type, Var};
 
 impl Display for Term {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1423,6 +1439,7 @@ impl Display for Term {
       Prop => write!(f, "Prop"),
       Hole => write!(f, "_"),
       Ann { term, typ } => write!(f, "{term} : {typ}"),
+      Quote { term } => write!(f, "quote {{ {term} }}"),
     }
   }
 }
@@ -2172,6 +2189,7 @@ pub enum Decl {
   Use(Use),
   Open(Open),
   Def(Def),
+  DefMacro(Def),
   Type(Inductive),
   /// Instance
   Ins(Instance),
@@ -2182,6 +2200,7 @@ impl Decl {
   pub fn to_ref(&self) -> &ModulePath {
     match self {
       Decl::Def(def) => &def.name,
+      Decl::DefMacro(def) => &def.name,
       Decl::Type(induct) => induct.name(),
       Decl::Infix(i) => &i.name,
       Decl::Use(use_) => &use_.module_path,

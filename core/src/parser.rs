@@ -57,8 +57,8 @@ pub fn set_res_extra<X: Clone, Y: Clone, T>(res: Res<T, X>, extra: Y) -> Res<T, 
 }
 
 const RESERVED_KEYWORDS: &[&str] = &[
-  "def", "let", "in", "use", "open", "class", "struct", "instance", "type", "fn", "ꟛ", "match",
-  "if", "then", "else", "infix", "return", "for", "do", "with",
+  "def", "defmacro", "let", "in", "use", "open", "class", "struct", "instance", "type", "fn", "ꟛ",
+  "match", "if", "then", "else", "infix", "return", "for", "do", "quote", "with",
 ];
 const RESERVED_NAMES: &[&str] = &["Type", "Pred"];
 
@@ -421,8 +421,19 @@ fn single_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
   alt((variable, literal, parens)).parse(input)
 }
 
+fn macro_call<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, name) = identifier(input)?;
+  let (input, _) = char('!')(input)?;
+  Ok((
+    input,
+    Term::Var {
+      name: NameRef::Macro(name),
+    },
+  ))
+}
+
 fn application<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  let (input, fun) = alt((variable, parens)).parse(input)?;
+  let (input, fun) = alt((macro_call, variable, parens)).parse(input)?;
   let (input, args) = many1(preceded(ws1, single_term)).parse(input)?;
 
   Ok((input, apps(fun, args)))
@@ -730,8 +741,18 @@ fn path_expression<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
   .parse(input)
 }
 
+fn quote_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  preceded(
+    (tag("quote"), ws1, char('{'), ws0),
+    terminated(term, (ws0, char('}'))),
+  )
+  .map(|t| Term::Quote { term: Box::new(t) })
+  .parse(input)
+}
+
 fn base_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
   alt((
+    quote_parser,
     do_parser,
     let_parser,
     if_parser,
@@ -982,6 +1003,61 @@ fn def_parser(input: Span) -> Res<Def> {
     }
     let body = lams(params, term);
     Ok((input, def(name, type_cons, full_typ, body, attrs)))
+  }
+}
+
+fn macro_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
+  alt((
+    // Untyped param: identifier
+    map(identifier, |i| vec![param(i, Hole)]),
+    // Typed param in parens: (x : Type) — for disambiguation
+    delimited(
+      (char('('), ws0),
+      map(
+        pair(
+          multiplicity_prefix,
+          separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
+        ),
+        |(mult, (ids, typ))| {
+          ids
+            .into_iter()
+            .map(|i| param_with_mult(i, typ.clone(), mult.clone()))
+            .collect()
+        },
+      ),
+      (ws0, char(')')),
+    ),
+  ))
+  .parse(input)
+}
+
+fn macro_params<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
+  fold_many0(
+    terminated(macro_param, ws0),
+    Vec::new,
+    |mut acc: Vec<_>, mut items: Vec<_>| {
+      acc.append(&mut items);
+      acc
+    },
+  )
+  .parse(input)
+}
+
+fn defmacro_parser(input: Span) -> Res<Def> {
+  let (input, _) = tag("defmacro")(input)?;
+  let (input, _) = ws1(input)?;
+  let (input, name) = def_name(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, params) = macro_params(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, _) = assignment_operator(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, term) = term(input)?;
+  if params.is_empty() {
+    Ok((input, def(name, vec![], Hole, term, vec![])))
+  } else {
+    let body = lams(params, term);
+    Ok((input, def(name, vec![], Hole, body, vec![])))
   }
 }
 
@@ -1319,6 +1395,7 @@ fn decl_parser(input: Span) -> Res<SourceContext<Decl>> {
   let (input, decl) = alt((
     map(use_parser, Decl::Use),
     map(open_parser, Decl::Open),
+    map(defmacro_parser, Decl::DefMacro),
     map(def_parser, Decl::Def),
     map(class_parser, Decl::Type),
     map(instance_parser, Decl::Ins),

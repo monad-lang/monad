@@ -44,6 +44,7 @@ fn nref_error(nref: NameRef) -> ScopeError {
   match nref {
     NameRef::P(module_path) => PathNotFound(module_path),
     Id(identifier) => IdNotFound(identifier),
+    NameRef::Macro(identifier) => Generic(format!("macro {identifier} not found")),
     NameRef::Op(operator) => OperatorNotDefined(operator),
     NameRef::Index(i) => Generic(format!("index var {i} not resolved")),
   }
@@ -843,6 +844,10 @@ impl<'a> GlobalScope<'a> {
       let infix = self.find_infix(op)?;
       let var = self.find_any_ref(&infix.name, typ)?;
       Ok(var)
+    } else if let NameRef::Macro(name) = nref {
+      let path = ModulePath::single(name.clone());
+      let var = self.find_any_ref(&path, typ)?;
+      Ok(var)
     } else {
       Err(nref_error(nref.clone()))
     }
@@ -855,7 +860,7 @@ impl<'a> GlobalScope<'a> {
     module: &'a ModulePath,
   ) {
     match ctx.value() {
-      Decl::Def(def) => {
+      Decl::Def(def) | Decl::DefMacro(def) => {
         let name = &def.name;
         let names = name.open(opens);
         let def_refs: Map<ModulePath, DefRef> = names
@@ -1324,6 +1329,7 @@ pub struct Module {
   uses: Vec<SourceContext<Use>>,
   opens: Vec<SourceContext<Open>>,
   defs: Map<ModulePath, SourceContext<Def>>,
+  macro_defs: Map<ModulePath, SourceContext<Def>>,
   infix: Map<Operator, SourceContext<Infix>>,
   instances: Vec<SourceContext<Instance>>,
   doc: Option<Documentation>,
@@ -1332,6 +1338,9 @@ pub struct Module {
 impl Module {
   pub fn defs(&self) -> Vec<&SourceContext<Def>> {
     self.defs.values().collect()
+  }
+  pub fn get_macro_defs(&self) -> Vec<&SourceContext<Def>> {
+    self.macro_defs.values().collect()
   }
   /// Convert module back to Decls again
   pub fn to_decls(self) -> Vec<SourceContext<Decl>> {
@@ -1350,6 +1359,12 @@ impl Module {
       .defs
       .values()
       .map(|ctx| ctx.clone().map(Decl::Def))
+      .chain(
+        self
+          .macro_defs
+          .values()
+          .map(|ctx| ctx.clone().map(Decl::DefMacro)),
+      )
       .chain(uses)
       .chain(opens)
       .chain(inductives)
@@ -1400,6 +1415,11 @@ impl Module {
       Decl::Def(def) => {
         self
           .defs
+          .insert(def.name.clone(), SourceContext::no_ctx(def));
+      }
+      Decl::DefMacro(def) => {
+        self
+          .macro_defs
           .insert(def.name.clone(), SourceContext::no_ctx(def));
       }
       Decl::Type(ind) => {
@@ -1617,6 +1637,13 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
       _ => None,
     })
     .fold(Map::new(), merge_detect);
+  let macro_defs = decls
+    .iter()
+    .filter_map(|ctx| match ctx.value() {
+      Decl::DefMacro(def) => Some((def.name.clone(), ctx.with(def.clone()))),
+      _ => None,
+    })
+    .fold(Map::new(), merge_detect);
   let inductives = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
@@ -1662,6 +1689,7 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
     instances,
     path,
     defs,
+    macro_defs,
     inductives,
     uses,
     opens,

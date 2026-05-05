@@ -1,4 +1,7 @@
 pub mod constraint;
+pub mod macro_expand;
+#[cfg(test)]
+pub mod macro_test;
 pub mod native;
 #[cfg(test)]
 pub mod test;
@@ -18,7 +21,7 @@ use crate::term::{
   Literal,
   NameRef::{self, Id, Index},
   Param,
-  Term::{self, Ann, App, Con, Ctx, Lam, Lit, Ntv, Pi, Type, Var},
+  Term::{self, Ann, App, Con, Ctx, Lam, Lit, Ntv, Pi, Quote, Type, Var},
   apps, id,
 };
 
@@ -124,6 +127,9 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
         if b { *then } else { *els }
       }
       Ctx { loc: _, term } => *term,
+      Quote { term } => Term::Lit {
+        value: Literal::Term(term),
+      },
       Lit {
         value: Literal::StructLit { .. },
       } => {
@@ -182,6 +188,10 @@ fn native_apply_arg(mut native: Native, index: usize, term: Term) -> Option<Term
 }
 
 pub fn apply_dot_macro(term: Term) -> Term {
+  // Quote bodies are data — do not expand dots inside them
+  if let Quote { .. } = term {
+    return term;
+  }
   use NameRef::{Id, Op, P};
   if let App {
     ref fun,
@@ -540,6 +550,12 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       let term = substitute(*term, nref, new_term);
       let typ = substitute(*typ, nref, new_term);
       ann(term, typ)
+    }
+    Quote { term } => {
+      let term = substitute(*term, nref, new_term);
+      Term::Quote {
+        term: Box::new(term),
+      }
     }
   }
 }

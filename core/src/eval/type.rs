@@ -5,7 +5,7 @@ use crate::{
   term::{
     Ann, ClassDefRef, Decl, Def, Identifier, Inductive, InductiveVariant, Instance, InstanceKey,
     Literal, ModulePath, Multiplicity, NameRef, Named, NumSuffix, SourceContext,
-    Term::{Forall, Hole, Pi},
+    Term::{Forall, Hole, Pi, Quote},
     TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, forall, lam_par,
     module::{LoadedModules, names_of_decls},
     mpvar, num_suffix, param, pi_typs, pi_with_mult, type_u, type0, typed_term, var,
@@ -868,6 +868,10 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
       known_names.insert(&name);
       free_vars(body, &known_names)
     }
+    Term::Quote { term } => free_vars(term, known_names),
+    Lit {
+      value: Literal::Term(t),
+    } => free_vars(t, known_names),
     _ => empty_set(),
   }
 }
@@ -1375,6 +1379,10 @@ fn type_check_with_env(
           Ok(typed_term(term, typ))
         }
       }
+      Literal::Term(_t) => {
+        // Term values are evaluated at expansion time; not type-checked here
+        Ok(typed_term(term, Hole))
+      }
       _ => panic!("Lit branch not covered {value}"),
     },
     Var { ref name } => {
@@ -1540,6 +1548,12 @@ fn type_check_with_env(
       let typ = match_resolve_type(tt.typ(), &expected_type, &scope)?;
       Ok(typed_term(tt.term, typ))
     }
+    Quote { term } => {
+      // Quote terms should be consumed by macro expansion before reaching the type checker
+      // Return Hole type as a placeholder
+      let _ = type_check_with_env((*term).clone(), Hole, &scope, usage, track_usage)?;
+      Ok(typed_term(*term, Hole))
+    }
   }
 }
 
@@ -1582,6 +1596,7 @@ pub fn type_check_decl(decl: Decl, scope: &Scope) -> Result<Decl, TypeError> {
       let class = scope.find_inductive(&instance.class_name)?;
       type_check_instance(instance, class, scope).map(Decl::Ins)
     }
+    Decl::DefMacro(_) => Ok(decl),
     Decl::Infix(_) => Ok(decl), // TODO
     _ => Ok(decl),
   }
@@ -1628,7 +1643,7 @@ fn type_check_def(mut def_: Def, scope: &Scope) -> Result<Def, TypeError> {
   Ok(def_)
 }
 
-fn type_check_decls(
+pub fn type_check_decls(
   decls: Vec<SourceContext<Decl>>,
   scope: &Scope,
 ) -> (Vec<SourceContext<Decl>>, Vec<TypeError>) {
@@ -1725,6 +1740,7 @@ pub fn elaborate_decl(decl: Decl, known_names: &Set<&ModulePath>) -> Decl {
 
   match decl {
     Def(def) => Def(elaborate_def(def, known_names)),
+    DefMacro(def) => DefMacro(elaborate_def(def, known_names)),
     Type(ind) => Type(elaborate_inductive(ind, known_names)),
     Ins(ins) => Ins(elaborate_instance(ins, known_names)),
     _ => decl,

@@ -189,6 +189,7 @@ impl Similar for Literal {
   fn similar(&self, other: &Self) -> bool {
     use Literal::{If, Match, StructLit, StructUpdate};
     match (self, other) {
+      (Literal::Term(t1), Literal::Term(t2)) => t1.similar(t2),
       (
         Match {
           value: v1,
@@ -304,6 +305,7 @@ impl Similar for Term {
           name: NameRef::Id(i),
         },
       ) if i.as_str() == "Type" => true,
+      (Term::Quote { term: t1 }, Term::Quote { term: t2 }) => t1.similar(t2),
       _ => self == other,
     }
   }
@@ -353,6 +355,7 @@ impl Similar for Decl {
   fn similar(&self, other: &Self) -> bool {
     match (self, other) {
       (Decl::Def(def), Decl::Def(odef)) => def.similar(odef),
+      (Decl::DefMacro(def), Decl::DefMacro(odef)) => def.similar(odef),
       (Decl::Type(inductive), Decl::Type(o_ind)) => inductive.similar(o_ind),
       (Decl::Use(u1), Decl::Use(u2)) => u1.similar(u2),
       (Decl::Open(o1), Decl::Open(o2)) => o1.similar(o2),
