@@ -72,6 +72,14 @@ impl Identifier {
   pub fn to_path(self) -> ModulePath {
     ModulePath::single(self)
   }
+  /// Generate a unique identifier with the given prefix.
+  /// Uses an atomic counter for thread safety.
+  pub fn gensym(prefix: &str) -> Identifier {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_GENSYM: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_GENSYM.fetch_add(1, Ordering::SeqCst);
+    Identifier(format!("{prefix}#{id}"))
+  }
 }
 
 impl From<Identifier> for ModulePath {

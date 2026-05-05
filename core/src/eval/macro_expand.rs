@@ -15,7 +15,7 @@ fn strip_ctx(term: Term) -> Term {
 }
 
 /// Maximum macro expansion depth to prevent infinite recursion
-const MAX_EXPANSION_DEPTH: u64 = 64;
+const MAX_EXPANSION_DEPTH: u64 = 32;
 
 /// Error type for macro expansion failures
 #[derive(Debug, Clone)]
@@ -204,6 +204,9 @@ fn resolve_quote(
   macro_defs: &Map<ModulePath, Def>,
   depth: u64,
 ) -> Result<Term, MacroError> {
+  if depth > MAX_EXPANSION_DEPTH {
+    return Err(MacroError::DepthLimitExceeded);
+  }
   match term {
     App { fun, arg } => {
       // Check for unquote
@@ -225,7 +228,7 @@ fn resolve_quote(
           let path = ModulePath::single(name.clone());
           if let Some(def) = macro_defs.get(&path) {
             let arg = resolve_quote(*arg, macro_defs, depth)?;
-            return apply_macro(def, vec![arg], macro_defs, depth);
+            return apply_macro(def, vec![arg], macro_defs, depth + 1);
           }
         }
         // Check for chained name! a b macro call
@@ -239,7 +242,7 @@ fn resolve_quote(
                 let old = std::mem::replace(a, Term::Hole);
                 *a = resolve_quote(old, macro_defs, depth)?;
               }
-              return apply_macro(def, args, macro_defs, depth);
+              return apply_macro(def, args, macro_defs, depth + 1);
             }
           }
         }
@@ -393,7 +396,10 @@ fn apply_macro(
   // Strip Ctx wrappers and find the Quote body
   let body = strip_ctx(body);
   match body {
-    Quote { term } => resolve_quote(*term, macro_defs, depth),
+    Quote { term } => {
+      let expanded = resolve_quote(*term, macro_defs, depth)?;
+      expand_term(expanded, macro_defs, depth + 1)
+    }
     _ => Err(MacroError::NonTermReturn {
       name: def.name.to_string(),
     }),
