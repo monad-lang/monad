@@ -1342,6 +1342,9 @@ impl Module {
   pub fn get_macro_defs(&self) -> Vec<&SourceContext<Def>> {
     self.macro_defs.values().collect()
   }
+  pub fn macro_defs_map(&self) -> &Map<ModulePath, SourceContext<Def>> {
+    &self.macro_defs
+  }
   /// Convert module back to Decls again
   pub fn to_decls(self) -> Vec<SourceContext<Decl>> {
     let inductives = self

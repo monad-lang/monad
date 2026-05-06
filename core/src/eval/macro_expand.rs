@@ -3,7 +3,7 @@ use crate::term::module::LoadedModules;
 use crate::term::{
   Constructor, Decl, Def, Identifier, Literal, ModulePath, NameRef, Par, Param, SourceContext,
   Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Pi, Quote, Var},
-  app, apps, case, forall, lam, match_term, param, pi_name,
+  case, match_term,
 };
 
 /// Recursively strip Ctx wrappers from a term.
@@ -39,19 +39,37 @@ impl std::fmt::Display for MacroError {
   }
 }
 
+/// Collect macro definitions from loaded modules, keyed by ModulePath.
+fn collect_loaded_macro_defs(loaded: &LoadedModules) -> Map<ModulePath, Def> {
+  let mut all = Map::new();
+  for module in loaded.modules() {
+    for (path, ctx) in module.macro_defs_map() {
+      all.insert(path.clone(), ctx.value().clone());
+    }
+  }
+  all
+}
+
 /// Expand all macro calls in declarations.
 /// Runs between elaboration and type checking.
 pub fn expand_macros(
   decls: Vec<SourceContext<Decl>>,
-  _loaded: &LoadedModules,
+  loaded: &LoadedModules,
 ) -> Result<Vec<SourceContext<Decl>>, MacroError> {
-  let macro_defs: Map<ModulePath, Def> = decls
+  // Collect macros from current module
+  let mut macro_defs: Map<ModulePath, Def> = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
       Decl::DefMacro(def) => Some((def.name.clone(), def.clone())),
       _ => None,
     })
     .collect();
+
+  // Also collect macros from all loaded modules (cross-module support)
+  // Current module's macros take priority
+  for (path, def) in collect_loaded_macro_defs(loaded) {
+    macro_defs.entry(path).or_insert(def);
+  }
 
   decls
     .into_iter()
@@ -85,10 +103,12 @@ fn expand_term(
   }
   match term {
     App { fun, arg } => {
+      // Strip Ctx wrappers from fun for macro detection (Ctx carries source locations)
+      let fun_inner = strip_ctx(*fun.clone());
       // Check for name! macro call
       if let Var {
         name: NameRef::Macro(name),
-      } = &*fun
+      } = &fun_inner
       {
         let path = ModulePath::single(name.clone());
         if let Some(def) = macro_defs.get(&path) {
@@ -97,18 +117,14 @@ fn expand_term(
         }
       }
       // Check for chained name! a b macro call
-      if let App { .. } = &*fun {
-        let child_fun = fun.clone();
-        let child_arg = arg.clone();
-        if let Some((name, mut args)) = collect_macro_args(*child_fun, *child_arg) {
+      if let App { .. } = &fun_inner {
+        if let Some((name, mut args)) = collect_macro_args(fun_inner, *arg.clone()) {
           let path = ModulePath::single(name.clone());
           if let Some(def) = macro_defs.get(&path) {
             for a in args.iter_mut() {
               let old = std::mem::replace(a, Term::Hole);
               *a = expand_term(old, macro_defs, depth)?;
             }
-            // Now args has the original fun and arg, so we continue with the next iteration
-            // but the macro has already been looked up, so this won't match again
             return apply_macro(def, args, macro_defs, depth);
           }
         }
@@ -209,10 +225,12 @@ fn resolve_quote(
   }
   match term {
     App { fun, arg } => {
+      // Strip Ctx wrappers from fun for macro/unquote detection
+      let fun_inner = strip_ctx(*fun.clone());
       // Check for unquote
       if let Var {
         name: NameRef::Id(n),
-      } = &*fun
+      } = &fun_inner
         && n.as_str() == "unquote"
       {
         // unquote(arg): splice arg into the output, then expand it
@@ -223,7 +241,7 @@ fn resolve_quote(
         // Check for name! macro call
         if let Var {
           name: NameRef::Macro(name),
-        } = &*fun
+        } = &fun_inner
         {
           let path = ModulePath::single(name.clone());
           if let Some(def) = macro_defs.get(&path) {
@@ -232,10 +250,8 @@ fn resolve_quote(
           }
         }
         // Check for chained name! a b macro call
-        if let App { .. } = &*fun {
-          let child_fun = fun.clone();
-          let child_arg = arg.clone();
-          if let Some((name, mut args)) = collect_macro_args(*child_fun, *child_arg) {
+        if let App { .. } = &fun_inner {
+          if let Some((name, mut args)) = collect_macro_args(fun_inner, *arg.clone()) {
             let path = ModulePath::single(name.clone());
             if let Some(def) = macro_defs.get(&path) {
               for a in args.iter_mut() {
@@ -335,21 +351,11 @@ fn resolve_quote(
   }
 }
 
-/// Check if a term has a macro call somewhere in a chain of Apps.
-fn has_macro_in_chain(term: &Term) -> bool {
-  match term {
-    Var {
-      name: NameRef::Macro(_),
-    } => true,
-    App { fun, arg: _ } => has_macro_in_chain(fun),
-    _ => false,
-  }
-}
-
 /// Collect arguments from a chained App, checking if it's a macro call.
 /// Returns None if not a macro call.
 /// Returns Some((name, args)) if it is, with args in left-to-right order.
 fn collect_macro_args(fun: Term, arg: Term) -> Option<(Identifier, Vec<Term>)> {
+  let fun = strip_ctx(fun);
   match fun {
     Var {
       name: NameRef::Macro(name),

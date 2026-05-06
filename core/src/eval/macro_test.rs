@@ -13,12 +13,12 @@
 
 use super::*;
 use crate::eval::macro_expand::expand_macros;
-use crate::eval::r#type::{elaborate_decls, type_check, type_check_decls};
+use crate::eval::r#type::{elaborate_decls, type_check, type_check_decls, type_check_module_decls};
 use crate::parser::parse_file;
 use crate::parser::{ReplInput, repl_parser};
 use crate::term::module::{GlobalScope, Scope};
 use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
-use crate::term::{Decl, Hole, Literal, ModulePath, NameRef, Term, app, id, mpt, num, var};
+use crate::term::{Decl, Hole, Literal, ModulePath, NameRef, Term, app, mpt, num, var};
 
 fn parse_term(input: &str) -> Term {
   let ReplInput::Term(e) = repl_parser(input).unwrap() else {
@@ -47,15 +47,6 @@ fn prelude_scope() -> Scope<'static> {
   let path: &'static ModulePath = Box::leak(Box::new(loaded.builtins().prelude_path.clone()));
   let global: &'static GlobalScope<'static> = Box::leak(Box::new(loaded.global(path).unwrap()));
   Scope::new(global)
-}
-
-fn expect_term_value(result: Term) -> Term {
-  match result {
-    Term::Lit {
-      value: Literal::Term(t),
-    } => *t,
-    other => panic!("expected Lit::Term, got: {other}"),
-  }
 }
 
 // ===== Section 1: Quote parsing & display =====
@@ -484,13 +475,120 @@ fn test_hygiene_multiple_expansions_independent() {
   assert!(r.is_ok(), "nested hygiene expansions should be independent");
 }
 
-// ===== Section 9: Integration examples =====
+// ===== Section 9: Cross-module macros =====
+
+/// Run the full pipeline (elaborate → expand → type_check) using an existing LoadedModules.
+fn expand_and_type_check_with_loaded(input: &str, loaded: &LoadedModules) -> Result<(), String> {
+  let parsed = parse_file(input.into()).map_err(|e| format!("{e}"))?;
+  let decls = elaborate_decls(parsed.decls, loaded);
+  let decls = expand_macros(decls, loaded).map_err(|e| format!("{e}"))?;
+  let path = ModulePath::top("test_macro");
+  let global = loaded.scope_of_decls(&path, &decls);
+  let (_oks, errs) = type_check_decls(decls.clone(), &global.scope());
+  if !errs.is_empty() {
+    return Err(
+      errs
+        .into_iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n"),
+    );
+  }
+  Ok(())
+}
 
 #[test]
-#[ignore = "type checker issue with Bool.not type inference in expanded if-expression"]
+fn test_cross_module_macro_simple() {
+  let loaded = default_modules().unwrap();
+
+  // Helper module defines a macro
+  let helper_path = ModulePath::top("macro_helper");
+  let parsed_helper = parse_file(
+    r#"
+    use init
+
+    defmacro add1 x := quote { unquote x + 1 }
+    "#,
+  )
+  .unwrap();
+  let helper_decls = type_check_module_decls(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    helper_path.clone(),
+    ParsedModule {
+      decls: helper_decls,
+      module_doc: None,
+    },
+  ));
+
+  // Main module uses the helper macro
+  let r = expand_and_type_check_with_loaded(
+    r#"
+    use macro_helper
+    use init
+
+    def main : I64 := add1! 41
+    "#,
+    &loaded,
+  );
+  if let Err(e) = &r {
+    eprintln!("cross-module macro error: {e}");
+  }
+  assert!(r.is_ok(), "cross-module macro should succeed");
+}
+
+#[test]
+fn test_cross_module_macro_calls_same_module_def() {
+  let loaded = default_modules().unwrap();
+
+  // Helper module defines a macro and a regular def
+  let helper_path = ModulePath::top("macro_helper2");
+  let parsed_helper = parse_file(
+    r#"
+    use init
+
+    def base : I64 := 40
+    defmacro add_base x := quote { unquote x + base }
+    "#,
+  )
+  .unwrap();
+  let helper_decls = type_check_module_decls(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    helper_path.clone(),
+    ParsedModule {
+      decls: helper_decls,
+      module_doc: None,
+    },
+  ));
+
+  // Main module uses macro that references defs from its own module
+  let r = expand_and_type_check_with_loaded(
+    r#"
+    use macro_helper2
+    use init
+
+    def main : I64 := add_base! 2
+    "#,
+    &loaded,
+  );
+  if let Err(e) = &r {
+    eprintln!("cross-module macro with def reference error: {e}");
+  }
+  assert!(
+    r.is_ok(),
+    "cross-module macro referencing own defs should succeed"
+  );
+}
+
+// ===== Section 10: Integration examples (unless!, twice!, define_getter!) =====
+
+#[test]
 fn test_macro_unless_example() {
+  // NOTE: Bool.not unquote cond requires parentheses because
+  // Bool.not unquote cond parses as ((Bool.not unquote) cond), not (Bool.not (unquote cond))
   let r = expand_and_type_check(
-    "defmacro unless cond body := quote { if Bool.not unquote cond then unquote body else Unit.unit }\ndef main : Unit := unless! Bool.true Unit.unit\n",
+    "defmacro unless cond body := quote { if Bool.not (unquote cond) then (unquote body) else Unit.unit }\ndef main : Unit := unless! Bool.true Unit.unit\n",
   );
   if let Err(e) = &r {
     eprintln!("unless error: {e}");
@@ -511,7 +609,6 @@ fn test_macro_define_getter() {
 }
 
 #[test]
-#[ignore = "type checker issue with expected function type after nested macro expansion"]
 fn test_macro_twice() {
   let r = expand_and_type_check(
     "defmacro twice f x := quote { (unquote f) ((unquote f) (unquote x)) }\ndefmacro add1 x := quote { unquote x + 1 }\ndef main : I64 := twice! add1! 5\n",
