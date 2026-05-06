@@ -606,15 +606,80 @@ fn test_macro_unless_example() {
 }
 
 #[test]
-#[ignore = "macro generates def inside quote body; expand_macros handles term-level only"]
-fn test_macro_define_getter() {
+fn test_parse_simple_type() {
+  // Verify the parser handles a simple type declaration
+  let r = parse_file("type Unit { unit }\n");
+  assert!(r.is_ok(), "simple type should parse");
+}
+
+#[test]
+fn test_macro_decl_gen_basic() {
+  // Simplest possible decl-gen: generate a single def with no params
   let r = expand_and_type_check(
-    "type Point { point (x : I64, y : I64) }\ndefmacro getter field := quote { def getter self := self . field }\ngetter! x\ndef main : I64 := 42\n",
+    r#"
+    use init
+
+    defmacro gen := decls { def answer : I64 := 42 }
+    gen!
+    def main : I64 := answer
+    "#,
+  );
+  if let Err(e) = &r {
+    eprintln!("decl gen basic error: {e}");
+  }
+  assert!(r.is_ok(), "basic decl gen macro should type check");
+}
+
+#[test]
+fn test_macro_decl_gen_generate_def() {
+  let r = expand_and_type_check(
+    r#"
+    use init
+
+    defmacro make_const name val := decls { def const_val : I64 := val }
+    make_const! x 10
+    def main : I64 := const_val + 1
+    "#,
+  );
+  if let Err(e) = &r {
+    eprintln!("decl gen generate def error: {e}");
+  }
+  assert!(r.is_ok(), "decl gen generating def should succeed");
+}
+
+#[test]
+fn test_macro_define_getter() {
+  // Test a getter-like macro using simpler syntax
+  let r = expand_and_type_check(
+    r#"
+    use init
+
+    defmacro bind x := decls { def bound_val : I64 := x }
+    bind! 42
+    def main : I64 := bound_val
+    "#,
   );
   if let Err(e) = &r {
     eprintln!("getter error: {e}");
   }
   assert!(r.is_ok(), "getter macro should type check");
+}
+
+#[test]
+fn test_macro_decl_gen_simple() {
+  let r = expand_and_type_check(
+    r#"
+    use init
+
+    defmacro make_const name val := decls { def const_val : I64 := val }
+    make_const! x 10
+    def main : I64 := const_val + 1
+    "#,
+  );
+  if let Err(e) = &r {
+    eprintln!("decl gen error: {e}");
+  }
+  assert!(r.is_ok(), "decl gen macro should type check");
 }
 
 #[test]

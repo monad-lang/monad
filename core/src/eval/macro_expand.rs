@@ -1,7 +1,8 @@
 use crate::Map;
 use crate::term::module::LoadedModules;
 use crate::term::{
-  Constructor, Decl, Def, Identifier, Literal, ModulePath, NameRef, Par, Param, SourceContext,
+  Constructor, Decl, DeclGenDef, Def, Identifier, Literal, ModulePath, NameRef, Par, Param,
+  SourceContext,
   Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Pi, Quote, Var},
   case, match_term,
 };
@@ -71,24 +72,117 @@ pub fn expand_macros(
     macro_defs.entry(path).or_insert(def);
   }
 
-  decls
-    .into_iter()
-    .map(|ctx| expand_decl(ctx, &macro_defs))
-    .collect()
+  // Collect DeclGen definitions from current module
+  let mut decl_gen_defs: Map<ModulePath, DeclGenDef> = decls
+    .iter()
+    .filter_map(|ctx| match ctx.value() {
+      Decl::DeclGen(gd) => Some((gd.name.clone(), gd.clone())),
+      _ => None,
+    })
+    .collect();
+
+  // Expand macro calls and flatten generated declarations
+  let pending = flatten_generated(decls);
+  let mut batch = Vec::new();
+
+  for ctx in pending {
+    let decl = ctx.value().clone();
+    match decl {
+      Decl::MacroCall { name, args } => {
+        let expanded = expand_macro_call(&name, &args, &decl_gen_defs)?;
+        for d in &expanded {
+          if let Decl::DeclGen(gd) = d {
+            decl_gen_defs.insert(gd.name.clone(), gd.clone());
+          }
+        }
+        batch.extend(expanded.into_iter().map(|d| SourceContext::no_ctx(d)));
+      }
+      Decl::Generated(inner) => {
+        batch.extend(inner.into_iter().map(|d| SourceContext::no_ctx(d)));
+      }
+      Decl::DefMacro(_) | Decl::DeclGen(_) => {
+        batch.push(ctx);
+      }
+      Decl::Def(mut def) => {
+        def.term = expand_term(def.term, &macro_defs, 0)?;
+        batch.push(ctx.map(|_| Decl::Def(def)));
+      }
+      other => {
+        batch.push(ctx.map(|_| other));
+      }
+    }
+  }
+
+  Ok(flatten_generated_ctx(batch))
 }
 
-fn expand_decl(
-  ctx: SourceContext<Decl>,
-  macro_defs: &Map<ModulePath, Def>,
-) -> Result<SourceContext<Decl>, MacroError> {
-  let decl = ctx.value().clone();
-  match decl {
-    Decl::DefMacro(_) => Ok(ctx),
-    Decl::Def(mut def) => {
-      def.term = expand_term(def.term, macro_defs, 0)?;
-      Ok(ctx.map(|_| Decl::Def(def)))
+/// Flatten `Decl::Generated` wrappers in a list of decls.
+fn flatten_generated(decls: Vec<SourceContext<Decl>>) -> Vec<SourceContext<Decl>> {
+  let mut result = Vec::new();
+  for ctx in decls {
+    match ctx.value() {
+      Decl::Generated(inner) => {
+        for d in inner.clone() {
+          result.push(SourceContext::no_ctx(d));
+        }
+      }
+      _ => result.push(ctx),
     }
-    other => Ok(ctx.map(|_| other)),
+  }
+  result
+}
+
+/// Flatten `Decl::Generated` wrappers in a list of context-wrapped decls.
+fn flatten_generated_ctx(decls: Vec<SourceContext<Decl>>) -> Vec<SourceContext<Decl>> {
+  flatten_generated(decls)
+}
+
+/// Expand a top-level macro call into declarations.
+fn expand_macro_call(
+  name: &Identifier,
+  args: &[Term],
+  decl_gen_defs: &Map<ModulePath, DeclGenDef>,
+) -> Result<Vec<Decl>, MacroError> {
+  let path = ModulePath::single(name.clone());
+  let gen_def = decl_gen_defs
+    .get(&path)
+    .ok_or_else(|| MacroError::MacroNotFound {
+      name: name.to_string(),
+    })?;
+
+  if args.len() != gen_def.params.len() {
+    return Err(MacroError::Generic(format!(
+      "macro `{}` expects {} arguments, got {}",
+      name,
+      gen_def.params.len(),
+      args.len()
+    )));
+  }
+
+  // Substitute each parameter in each template declaration
+  let mut expanded = gen_def.decls.clone();
+  for (param, arg) in gen_def.params.iter().zip(args.iter()) {
+    let param_name = &param.name;
+    for decl in expanded.iter_mut() {
+      *decl = subst_decl_var(decl.clone(), param_name, arg);
+    }
+  }
+
+  Ok(expanded)
+}
+
+/// Substitute a variable in a declaration template (for decl-level macro expansion).
+fn subst_decl_var(decl: Decl, name: &Identifier, replacement: &Term) -> Decl {
+  match decl {
+    Decl::Def(mut def) => {
+      def.term = subst_macro(def.term, &NameRef::Id(name.clone()), replacement);
+      Decl::Def(def)
+    }
+    Decl::DefMacro(mut def) => {
+      def.term = subst_macro(def.term, &NameRef::Id(name.clone()), replacement);
+      Decl::DefMacro(def)
+    }
+    other => other,
   }
 }
 

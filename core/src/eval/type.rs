@@ -5,8 +5,8 @@ use crate::{
   eval::macro_expand,
   set_of,
   term::{
-    Ann, ClassDefRef, Decl, Def, Identifier, Inductive, InductiveVariant, Instance, InstanceKey,
-    Literal, ModulePath, Multiplicity, NameRef, Named, NumSuffix, SourceContext,
+    Ann, ClassDefRef, Decl, DeclGenDef, Def, Identifier, Inductive, InductiveVariant, Instance,
+    InstanceKey, Literal, ModulePath, Multiplicity, NameRef, Named, NumSuffix, SourceContext,
     Term::{Forall, Hole, Pi, Quote},
     TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, forall, lam_par,
     module::{LoadedModules, names_of_decls},
@@ -1599,6 +1599,15 @@ pub fn type_check_decl(decl: Decl, scope: &Scope) -> Result<Decl, TypeError> {
       type_check_instance(instance, class, scope).map(Decl::Ins)
     }
     Decl::DefMacro(_) => Ok(decl),
+    Decl::DeclGen(_) => Ok(decl),
+    Decl::Generated(inner) => {
+      let mut checked = Vec::new();
+      for d in inner {
+        checked.push(type_check_decl(d, scope)?);
+      }
+      Ok(Decl::Generated(checked))
+    }
+    Decl::MacroCall { .. } => Ok(decl),
     Decl::Infix(_) => Ok(decl), // TODO
     _ => Ok(decl),
   }
@@ -1743,6 +1752,22 @@ pub fn elaborate_decl(decl: Decl, known_names: &Set<&ModulePath>) -> Decl {
   match decl {
     Def(def) => Def(elaborate_def(def, known_names)),
     DefMacro(def) => DefMacro(elaborate_def(def, known_names)),
+    DeclGen(gd) => DeclGen(DeclGenDef {
+      name: gd.name,
+      params: gd.params,
+      decls: gd
+        .decls
+        .into_iter()
+        .map(|d| elaborate_decl(d, known_names))
+        .collect(),
+      attributes: gd.attributes,
+    }),
+    Generated(inner) => Generated(
+      inner
+        .into_iter()
+        .map(|d| elaborate_decl(d, known_names))
+        .collect(),
+    ),
     Type(ind) => Type(elaborate_inductive(ind, known_names)),
     Ins(ins) => Ins(elaborate_instance(ins, known_names)),
     _ => decl,

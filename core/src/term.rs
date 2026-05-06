@@ -1698,6 +1698,16 @@ pub struct Def {
   pub attributes: Vec<Attribute>,
 }
 
+/// A declaration-generating macro definition.
+/// Defined with `defmacro name params := decls { ... }`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeclGenDef {
+  pub name: ModulePath,
+  pub params: Vec<Param>,
+  pub decls: Vec<Decl>,
+  pub attributes: Vec<Attribute>,
+}
+
 impl Def {
   pub fn to_typed_term(self) -> TypedTerm {
     typed_term(self.term, self.typ)
@@ -2202,6 +2212,15 @@ pub enum Decl {
   /// Instance
   Ins(Instance),
   Infix(Infix),
+  /// Top-level macro invocation (parsed, not yet expanded)
+  MacroCall {
+    name: Identifier,
+    args: Vec<Term>,
+  },
+  /// Declaration-generating macro definition
+  DeclGen(DeclGenDef),
+  /// Generated declarations (transparent wrapper, flattened during module creation)
+  Generated(Vec<Decl>),
 }
 
 impl Decl {
@@ -2214,6 +2233,16 @@ impl Decl {
       Decl::Use(use_) => &use_.module_path,
       Decl::Ins(instance) => &instance.name,
       Decl::Open(open) => &open.module_path,
+      Decl::MacroCall { .. } => {
+        use std::sync::OnceLock;
+        static PLACEHOLDER: OnceLock<ModulePath> = OnceLock::new();
+        PLACEHOLDER.get_or_init(|| ModulePath::new(vec![id("__macro_call__")]))
+      }
+      Decl::DeclGen(gd) => &gd.name,
+      Decl::Generated(inner_decls) => inner_decls
+        .first()
+        .map(|d| d.to_ref())
+        .expect("Generated decls cannot be empty"),
     }
   }
 }

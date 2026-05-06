@@ -9,9 +9,10 @@ use std::fmt::Display;
 use crate::{
   parser::error::{ParseError, ReplParserError},
   term::{
-    AttrArg, Attribute, ClassDef, Decl, Def, Documentation, Identifier, InductConstructor,
-    Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath, Multiplicity, NameRef,
-    NumSuffix, Open, Operator, Param, SourceContext, SourceRange, StructField,
+    AttrArg, Attribute, ClassDef, Decl, DeclGenDef, Def, Documentation, Identifier,
+    InductConstructor, Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath,
+    Multiplicity, NameRef, NumSuffix, Open, Operator, Param, SourceContext, SourceRange,
+    StructField,
     Term::{self, Hole, Var},
     TypeConstraint, Use, app, apps, case, class, class_def, ctx, def, def_with_native,
     float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
@@ -29,7 +30,7 @@ use nom::{
   character::complete::{
     alpha1, char, i64, line_ending, multispace0, multispace1, not_line_ending,
   },
-  combinator::{eof, map, not, opt, recognize, success, verify},
+  combinator::{eof, map, not, opt, peek, recognize, success, verify},
   multi::{fold_many0, many0, many1},
   sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
@@ -1044,6 +1045,70 @@ fn macro_params<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
   .parse(input)
 }
 
+fn defs_block_parser(input: Span) -> Res<Vec<Decl>> {
+  let (input, _) = tag("decls")(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, _) = char('{')(input)?;
+  let (input, _) = ws0(input)?;
+  let (decls, remaining) = decls_until_end(input);
+  let (remaining, _) = ws0(remaining)?;
+  let (remaining, _) = char('}')(remaining)?;
+  Ok((remaining, decls))
+}
+
+/// Parse declarations until the input no longer starts with a valid declaration.
+fn decls_until_end(mut input: Span) -> (Vec<Decl>, Span) {
+  let mut decls = Vec::new();
+  loop {
+    let saved = input.clone();
+    match decl_parser_no_macro(input) {
+      Ok((rest, decl)) => {
+        decls.push(decl);
+        input = rest;
+      }
+      Err(_) => return (decls, saved),
+    }
+  }
+}
+
+fn decl_gen_parser(input: Span) -> Res<Decl> {
+  let (input, _) = tag("defmacro")(input)?;
+  let (input, _) = ws1(input)?;
+  let (input, name) = def_name(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, params) = macro_params(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, _) = assignment_operator(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, decls) = defs_block_parser(input)?;
+  Ok((
+    input,
+    Decl::DeclGen(DeclGenDef {
+      name,
+      params,
+      decls,
+      attributes: vec![],
+    }),
+  ))
+}
+
+fn macro_call_decl_parser(input: Span) -> Res<Decl> {
+  // Use peek to check that the identifier is followed by `!` before consuming
+  let (input, _) = peek(pair(identifier, char('!'))).parse(input)?;
+  let (input, name) = identifier(input)?;
+  let (input, _) = char('!')(input)?;
+  let (input, args) = fold_many0(
+    preceded(ws1, single_term),
+    Vec::new,
+    |mut acc: Vec<Term>, arg| {
+      acc.push(arg);
+      acc
+    },
+  )
+  .parse(input)?;
+  Ok((input, Decl::MacroCall { name, args }))
+}
+
 fn defmacro_parser(input: Span) -> Res<Def> {
   let (input, _) = tag("defmacro")(input)?;
   let (input, _) = ws1(input)?;
@@ -1389,13 +1454,11 @@ fn open_parser(input: Span) -> Res<Open> {
     },
   ))
 }
-fn decl_parser(input: Span) -> Res<SourceContext<Decl>> {
-  let (input, opt_doc) = decls_space_parser(input)?;
-  let (input, _) = ws0(input)?;
-  let (input, start) = info(input)?;
+fn decl_parser_no_macro(input: Span) -> Res<Decl> {
   let (input, decl) = alt((
     map(use_parser, Decl::Use),
     map(open_parser, Decl::Open),
+    decl_gen_parser,
     map(defmacro_parser, Decl::DefMacro),
     map(def_parser, Decl::Def),
     map(class_parser, Decl::Type),
@@ -1403,6 +1466,27 @@ fn decl_parser(input: Span) -> Res<SourceContext<Decl>> {
     map(struct_parser, Decl::Type),
     map(inductive_parser, Decl::Type),
     map(infix_parser, Decl::Infix),
+  ))
+  .parse(input)?;
+  Ok((input, decl))
+}
+
+fn decl_parser(input: Span) -> Res<SourceContext<Decl>> {
+  let (input, opt_doc) = decls_space_parser(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, start) = info(input)?;
+  let (input, decl) = alt((
+    map(use_parser, Decl::Use),
+    map(open_parser, Decl::Open),
+    decl_gen_parser,
+    map(defmacro_parser, Decl::DefMacro),
+    map(def_parser, Decl::Def),
+    map(class_parser, Decl::Type),
+    map(instance_parser, Decl::Ins),
+    map(struct_parser, Decl::Type),
+    map(inductive_parser, Decl::Type),
+    map(infix_parser, Decl::Infix),
+    macro_call_decl_parser,
   ))
   .parse(input)?;
   let (input, end) = info(input)?;

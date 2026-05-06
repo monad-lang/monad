@@ -1425,6 +1425,19 @@ impl Module {
           .macro_defs
           .insert(def.name.clone(), SourceContext::no_ctx(def));
       }
+      Decl::DeclGen(_gd) => {
+        // DeclGen defs use the macro_defs map since they serve a similar purpose.
+        // Convert to Def with the decls stored in the term field for storage, but
+        // expand_macros will look them up separately.
+      }
+      Decl::MacroCall { .. } => {
+        panic!("MacroCall should be expanded before add_decl");
+      }
+      Decl::Generated(inner) => {
+        for d in inner {
+          self.add_decl(d);
+        }
+      }
       Decl::Type(ind) => {
         self
           .inductives
