@@ -13,12 +13,13 @@
 
 use super::*;
 use crate::eval::macro_expand::expand_macros;
+use crate::eval::native::native_execute;
 use crate::eval::r#type::{elaborate_decls, type_check, type_check_decls, type_check_module_decls};
 use crate::parser::parse_file;
 use crate::parser::{ReplInput, repl_parser};
 use crate::term::module::{GlobalScope, Scope};
 use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
-use crate::term::{Decl, Hole, Literal, ModulePath, NameRef, Term, app, mpt, num, var};
+use crate::term::{Decl, Hole, Literal, ModulePath, NameRef, Native, Term, app, id, mpt, num, var};
 
 fn parse_term(input: &str) -> Term {
   let ReplInput::Term(e) = repl_parser(input).unwrap() else {
@@ -132,35 +133,43 @@ fn test_quote_content_unbound_var_ok() {
 // ===== Section 3: eval_term — requires scope-aware native function =====
 
 #[test]
-#[ignore = "eval_term needs scope-aware native function; eval loop can't evaluate Lit::Term directly"]
 fn test_eval_term_arithmetic() {
   let scope = prelude_scope();
-  let inner = app(app(var("+"), num(1)), num(2));
-  let term = Term::Lit {
+  // Parse: quote { I64.add 1 2 }
+  let inner = parse_term("I64.add 1 2");
+  let quoted = Term::Lit {
     value: Literal::Term(Box::new(inner)),
   };
-  // Lit::Term is a runtime value; eval doesn't evaluate it automatically
-  let result = eval(term, &scope, &EvalOptions::default()).unwrap();
-  assert!(matches!(
-    result,
-    Term::Lit {
-      value: Literal::Term(_)
-    }
-  ));
+  // eval_term is a scope-aware native function
+  let result = native_execute(
+    Native {
+      native_name: id("eval_term"),
+      num_args: 1,
+      args: vec![Some(quoted)],
+    },
+    &scope,
+  )
+  .unwrap();
+  assert_eq!(result, num(3), "eval_term should evaluate I64.add 1 2 to 3");
 }
 
 #[test]
-#[ignore = "eval_term needs scope-aware native function"]
-fn test_eval_term_invalid_term_fails() {
-  let scope = prelude_scope();
-  let term = Term::Lit {
-    value: Literal::Term(Box::new(var("unbound_x"))),
-  };
-  let r = eval(term, &scope, &EvalOptions::default());
-  assert!(
-    r.is_ok(),
-    "Lit::Term is not evaluated, so unbound var is fine"
+fn test_eval_term_with_macro() {
+  let r = expand_and_type_check(
+    r#"
+    use init
+
+    @[native "eval_term"]
+    def eval_term (t : A) : A
+
+    defmacro twice x := quote { unquote x + unquote x }
+    def main : I64 := eval_term (quote { 1 + twice! 2 })
+    "#,
   );
+  if let Err(e) = &r {
+    eprintln!("eval_term with macro error: {e}");
+  }
+  assert!(r.is_ok(), "eval_term with macro should type check");
 }
 
 // ===== Section 4: unquote context recognition (expansion time) =====

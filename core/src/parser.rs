@@ -951,6 +951,7 @@ fn def_parser(input: Span) -> Res<Def> {
       .and_then(|a| {
         a.args.iter().find_map(|arg| match arg {
           AttrArg::Ident(id) => Some(id.clone()),
+          AttrArg::Str(s) => Some(Identifier::new(s.clone())),
           AttrArg::Named { name, value } if name.as_str() == "name" => {
             if let AttrArg::Ident(id) = value.as_ref() {
               Some(id.clone())
