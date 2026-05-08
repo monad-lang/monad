@@ -179,6 +179,50 @@ def double (x : I64) : I64 :=
 def test_apply_back : Bool :=
     double 3 == 6
 
+// String slice/drop tests
+
+@[test]
+def test_string_slice_basic : Bool :=
+    String.slice "hello" 0 3 == "hel"
+
+@[test]
+def test_string_slice_middle : Bool :=
+    String.slice "hello" 1 3 == "ell"
+
+@[test]
+def test_string_slice_past_end : Bool :=
+    String.slice "hi" 0 10 == "hi"
+
+@[test]
+def test_string_drop_basic : Bool :=
+    String.drop 3 "hello" == "lo"
+
+@[test]
+def test_string_drop_none : Bool :=
+    String.drop 0 "hello" == "hello"
+
+@[test]
+def test_string_drop_all : Bool :=
+    String.drop 10 "hi" == ""
+
+// String starts_with tests
+
+@[test]
+def test_string_starts_with : Bool :=
+    String.starts_with "hel" "hello"
+
+@[test]
+def test_string_not_starts_with : Bool :=
+    not (String.starts_with "world" "hello")
+
+@[test]
+def test_string_starts_with_empty : Bool :=
+    String.starts_with "" "hello"
+
+@[test]
+def test_empty_starts_with_empty : Bool :=
+    String.starts_with "" ""
+
 // Unit tests
 
 @[test]

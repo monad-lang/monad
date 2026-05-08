@@ -615,12 +615,41 @@ class BEq A {
 }
 ```
 
-## Formatting
+## Parser Combinator Library (init/parser.mo)
 
-Always format Rust code according to `rustfmt.toml` before committing:
+### Status: In Progress
+
+Working: `tag`, `eof`, `alt`/`<|>` — 6/6 tests pass.
+
+### ~~Known Parser Limitation (FIXED)~~
+
+The operator precedence parser (`parse_expr` in `parser.rs:751`) did **not** consume function application (juxtaposition) arguments before `match`. This was **fixed** in commit 3a20c69 by reordering `base_term` to try `application` before `non_app_term`, creating a `term_inner`/`non_app_term` hierarchy.
+
+Tests: `test_match_with_app_scrutinee`, `test_match_with_two_var_scrutinee` in `core/src/parser/test/regression.rs`.
+
+### ~~Match Type Checker Bug (FIXED)~~
+
+The match type-checker was returning the original un-type-checked match expression, discarding the type-checked case bodies. This meant operator resolutions like `==` → `instance-BEq-I64.beq` inside match bodies were lost, causing Forall types to reach the evaluator.
+
+**Fixed** in commit 48cd5fe: match now returns a new `match_term` with type-checked case bodies.
+
+Tests: `test_struct_eq_in_match`, `test_eq_in_plain_match` in `init/tests.mo`.
+
+### Known Type Checker Issues
+
+1. **`List.cons` forall inference**: `List.cons x List.empty` creates `{A : Type} -> ...` forall params that can't be inferred at call sites. Blocks `many0`, `many1`.
+2. **`def` type aliases**: `def Parser (O : Type) : Type := String -> ParseResult O` — type checker doesn't reduce `def` aliases during type comparison. Use inline types.
+3. **`FromListLiteral` class methods**: List literals `[x]` desugar to `FromListLiteral.cons` which hits the class-method-in-def_refs issue.
+4. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Tests must live inside `parser.mo`.
+5. **`==` operator**: Resolves to `BEq.beq` class method before instance dispatch. Use `String.beq` directly.
+
+## Formatting and Warnings
+
+Always format Rust code and fix all compiler warnings before committing:
 
 ```bash
 cargo fmt
+cargo build --package monad-core 2>&1 | grep -E "warning:|error"
 ```
 
 ## Coding Agent Guide

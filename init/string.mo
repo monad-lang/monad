@@ -12,6 +12,15 @@ def String.concat (a b : String) : String
 @[native string_length]
 def String.length (s : String) : I64
 
+@[native string_slice]
+def String.slice (s : String) (start : I64) (len : I64) : String
+
+@[native string_drop]
+def String.drop (n : I64) (s : String) : String
+
+@[native string_starts_with]
+def String.starts_with (prefix : String) (s : String) : Bool
+
 @[native string_get]
 def String.get (s : String) (i : I64) : Option U8
 

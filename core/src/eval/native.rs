@@ -285,6 +285,53 @@ pub fn string_length(terms: Vec<Term>) -> Result<Term, NativeError> {
   Ok(num_suffix(s.len() as i64, NumSuffix::I64))
 }
 
+pub fn string_slice(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let s = extract_string_at(&terms, 0)?;
+  let start = extract_num_at(&terms, 1)?;
+  let len = extract_num_at(&terms, 2)?;
+  let start = start.max(0) as usize;
+  let len = len.max(0) as usize;
+  let end = (start + len).min(s.len());
+  if start <= s.len() {
+    Ok(Term::Lit {
+      value: Literal::Str {
+        value: s[start..end].to_string(),
+      },
+    })
+  } else {
+    Ok(Term::Lit {
+      value: Literal::Str {
+        value: String::new(),
+      },
+    })
+  }
+}
+
+pub fn string_drop(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let n = extract_num_at(&terms, 0)?;
+  let s = extract_string_at(&terms, 1)?;
+  let n = n.max(0) as usize;
+  if n >= s.len() {
+    Ok(Term::Lit {
+      value: Literal::Str {
+        value: String::new(),
+      },
+    })
+  } else {
+    Ok(Term::Lit {
+      value: Literal::Str {
+        value: s[n..].to_string(),
+      },
+    })
+  }
+}
+
+pub fn string_starts_with(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let prefix = extract_string_at(&terms, 0)?;
+  let s = extract_string_at(&terms, 1)?;
+  Ok(bool_to_term(s.starts_with(&prefix)))
+}
+
 pub fn string_get(terms: Vec<Term>) -> Result<Term, NativeError> {
   let s = extract_string_at(&terms, 0)?;
   let i = extract_num_at(&terms, 1)?;
@@ -497,6 +544,9 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("string_eq"), s(string_eq)),
     (id("string_concat"), s(string_concat)),
     (id("string_length"), s(string_length)),
+    (id("string_slice"), s(string_slice)),
+    (id("string_drop"), s(string_drop)),
+    (id("string_starts_with"), s(string_starts_with)),
     (id("string_get"), s(string_get)),
     (id("string_to_list"), s(string_to_list)),
     (id("string_from_list"), s(string_from_list)),
