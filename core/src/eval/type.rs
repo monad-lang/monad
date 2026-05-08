@@ -534,7 +534,7 @@ pub fn match_resolve_type<'a>(
     return Ok(left.clone());
   }
   let free_vars = FreeVars::from_locals(scope);
-  let free_vars = match_determine_type_vars(left, right, free_vars)?;
+  let free_vars = match_determine_type_vars_with_scope(left, right, free_vars, scope)?;
   let typ = apply_free_type_vars(left.clone(), &free_vars);
   Ok(typ)
 }
@@ -544,7 +544,26 @@ pub fn match_determine_type_vars<'a>(
   right: &'a Term,
   mut free_vars: FreeVars<'a>,
 ) -> Result<FreeVars<'a>, TypeError> {
-  let similar = match_resolve_type_inner(left, right, &mut free_vars);
+  let similar = match_resolve_type_inner(left, right, &mut free_vars, None, &mut empty_set());
+  if similar {
+    Ok(free_vars)
+  } else {
+    Err(TypeError::TypeMismatch {
+      expected: left.clone(),
+      actual: right.clone(),
+    })
+  }
+}
+
+/// Version of `match_determine_type_vars` with scope access for def alias resolution.
+pub fn match_determine_type_vars_with_scope<'a>(
+  left: &'a Term,
+  right: &'a Term,
+  mut free_vars: FreeVars<'a>,
+  scope: &'a Scope<'a>,
+) -> Result<FreeVars<'a>, TypeError> {
+  let similar =
+    match_resolve_type_inner(left, right, &mut free_vars, Some(scope), &mut empty_set());
   if similar {
     Ok(free_vars)
   } else {
@@ -559,6 +578,30 @@ fn apply_free_type_vars(typ: Term, free_vars: &FreeVars) -> Term {
   let typ = substitute_forall(typ, free_vars);
 
   add_forall_to_type(typ, free_vars.keep_vars())
+}
+
+/// Try to resolve a `NameRef` through def_refs to expand type aliases.
+/// Returns `None` if the name can't be resolved, is a function (Lam), or
+/// the definition is already being resolved (recursion guard).
+/// Returns a cloned Term for comparison (caller must own it).
+fn resolve_def_alias(
+  name: &NameRef,
+  scope: Option<&Scope>,
+  visiting: &mut Set<ModulePath>,
+) -> Option<Term> {
+  let path = name.clone().to_path()?;
+  if !visiting.insert(path.clone()) {
+    // Already visiting this path — cycle detected, stop
+    return None;
+  }
+  let scope = scope?;
+  let def_ref = scope.global().find_ref(&path)?;
+  match def_ref.term() {
+    // Lam means it's a function definition, not a type alias — don't expand
+    Term::Lam { .. } => None,
+    // Type alias body: clone for comparison
+    body => Some(body.clone()),
+  }
 }
 
 /// Is previously encountered type arg
@@ -629,17 +672,18 @@ fn match_resolve_type_inner<'a>(
   left: &'a Term,
   right: &'a Term,
   free_vars: &mut FreeVars<'a>,
+  scope: Option<&Scope<'a>>,
+  visiting: &mut Set<ModulePath>,
 ) -> bool {
   use FreeVar::*;
   match (left, right) {
     (Forall { name, typ, body }, _) => {
       free_vars.insert_free_var(name, Unknown { typ });
-      match_resolve_type_inner(body, right, free_vars)
+      match_resolve_type_inner(body, right, free_vars, scope, visiting)
     }
     (_, Forall { name, typ, body }) => {
       free_vars.add_var_to_keep(name, typ);
-
-      match_resolve_type_inner(left, body, free_vars)
+      match_resolve_type_inner(left, body, free_vars, scope, visiting)
     }
     (
       Pi {
@@ -658,8 +702,8 @@ fn match_resolve_type_inner<'a>(
       if let Some(name) = arg_name {
         free_vars.insert_free_var(name, Unknown { typ: a_arg });
       }
-      let arg = match_resolve_type_inner(a_arg, b_arg, free_vars);
-      let ret = match_resolve_type_inner(a_ret, b_ret, free_vars);
+      let arg = match_resolve_type_inner(a_arg, b_arg, free_vars, scope, visiting);
+      let ret = match_resolve_type_inner(a_ret, b_ret, free_vars, scope, visiting);
       let b = arg && ret;
       if !b {
         println!("{left} != {right} arg={arg} ret={ret} vars={free_vars}");
@@ -667,8 +711,8 @@ fn match_resolve_type_inner<'a>(
       b
     }
     (App { fun: f1, arg: a1 }, App { fun: f2, arg: a2 }) => {
-      let f_res = match_resolve_type_inner(f1, f2, free_vars);
-      let a_res = match_resolve_type_inner(a1, a2, free_vars);
+      let f_res = match_resolve_type_inner(f1, f2, free_vars, scope, visiting);
+      let a_res = match_resolve_type_inner(a1, a2, free_vars, scope, visiting);
       let b = f_res && a_res;
       if !b {
         println!("app {left} != {right}");
@@ -677,10 +721,10 @@ fn match_resolve_type_inner<'a>(
     }
     (Hole, _) => true,
     (_, Hole) => true,
-    (Ctx { loc: _, term }, _) => match_resolve_type_inner(term, right, free_vars),
-    (_, Ctx { loc: _, term }) => match_resolve_type_inner(left, term, free_vars),
+    (Ctx { loc: _, term }, _) => match_resolve_type_inner(term, right, free_vars, scope, visiting),
+    (_, Ctx { loc: _, term }) => match_resolve_type_inner(left, term, free_vars, scope, visiting),
     (Var { name: n1 }, Var { name: n2 }) => {
-      if n1.is_name() {
+      let name_eq = if n1.is_name() {
         if check_free_vars(n1.as_id().unwrap(), right, free_vars) {
           true
         } else {
@@ -688,11 +732,31 @@ fn match_resolve_type_inner<'a>(
         }
       } else {
         n1 == n2
+      };
+      if name_eq {
+        true
+      } else {
+        // Try resolving left as a type alias using compare_types
+        // (compare_types doesn't require `'a` lifetimes)
+        match resolve_def_alias(n1, scope, visiting) {
+          Some(body) => compare_types(&body, right, free_vars),
+          None => false,
+        }
       }
     }
     (Type { universe: _ }, Var { name: Id(name) }) => name.as_str() == "Type",
     (Var { name: Id(name) }, Type { universe: _ }) => name.as_str() == "Type",
-    (Var { name: Id(name) }, _) => check_free_vars(name, right, free_vars),
+    (Var { name: Id(name) }, _) => {
+      if check_free_vars(name, right, free_vars) {
+        true
+      } else {
+        // Try resolving as a type alias using compare_types
+        match resolve_def_alias(&NameRef::Id(name.clone()), scope, visiting) {
+          Some(body) => compare_types(&body, right, free_vars),
+          None => false,
+        }
+      }
+    }
     _ => compare_types(left, right, free_vars),
   }
 }

@@ -2132,6 +2132,10 @@ impl<'a> Typed for DefRef<'a> {
 }
 
 impl<'a> DefRef<'a> {
+  pub fn term(&self) -> &Term {
+    self.term
+  }
+
   pub fn with_name(&self, name: ModulePath) -> DefRef<'_> {
     DefRef {
       name,

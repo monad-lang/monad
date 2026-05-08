@@ -418,10 +418,6 @@ fn def_params<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
   .parse(input)
 }
 
-fn single_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((macro_call, variable, literal, parens)).parse(input)
-}
-
 fn macro_call<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, name) = identifier(input)?;
   let (input, _) = char('!')(input)?;
@@ -433,9 +429,40 @@ fn macro_call<X: Clone>(input: Span<X>) -> Res<Term, X> {
   ))
 }
 
+/// An atomic term that does NOT include juxtaposition application, operator_var,
+/// or type_expression. Guaranteed to terminate without recursive application parsing.
+/// Used for application function and args.
+fn term_inner<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  alt((
+    quote_parser,
+    do_parser,
+    let_parser,
+    if_parser,
+    match_parser,
+    ann_parser,
+    macro_call,
+    variable,
+    literal,
+    lambda,
+    parens,
+  ))
+  .parse(input)
+}
+
+/// A non-application term — `type_expression`, `term_inner`, plus standalone operator references.
+/// `type_expression` is tried before `term_inner` to match the old `base_term` ordering
+/// where `type_expression` was before `variable`, ensuring type expressions like `A -> B`
+/// are parsed correctly inside parens.
+fn non_app_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  alt((type_expression, term_inner, operator_var)).parse(input)
+}
+
 fn application<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  // The function position must be a name/path, macro call, or parenthesized expression.
+  // Literals, lambdas, etc. cannot be function heads — without this restriction,
+  // `12 x` would parse as `App(12, x)` instead of just `12` followed by `x`.
   let (input, fun) = alt((macro_call, variable, parens)).parse(input)?;
-  let (input, args) = many1(preceded(ws1, single_term)).parse(input)?;
+  let (input, args) = many1(preceded(ws1, term_inner)).parse(input)?;
 
   Ok((input, apps(fun, args)))
 }
@@ -752,22 +779,7 @@ fn quote_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
 }
 
 fn base_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((
-    quote_parser,
-    do_parser,
-    let_parser,
-    if_parser,
-    match_parser,
-    type_expression,
-    ann_parser,
-    application,
-    variable,
-    operator_var,
-    literal,
-    lambda,
-    parens,
-  ))
-  .parse(input)
+  alt((application, non_app_term)).parse(input)
 }
 
 fn parse_expr<X: Clone>(input: Span<X>, min_prec: u8) -> Res<Term, X> {
@@ -1098,7 +1110,7 @@ fn macro_call_decl_parser(input: Span) -> Res<Decl> {
   let (input, name) = identifier(input)?;
   let (input, _) = char('!')(input)?;
   let (input, args) = fold_many0(
-    preceded(ws1, single_term),
+    preceded(ws1, term_inner),
     Vec::new,
     |mut acc: Vec<Term>, arg| {
       acc.push(arg);
@@ -1227,7 +1239,7 @@ fn instance_parser(input: Span) -> Res<Instance> {
   let (input, _) = ws0(input)?;
   let (input, class_name) = def_name(input)?;
   let (input, _) = ws0(input)?;
-  let (input, args) = many0(terminated(single_term, ws0)).parse(input)?;
+  let (input, args) = many0(terminated(term_inner, ws0)).parse(input)?;
   let (input, defs) = instance_inner_parser(input)?;
 
   Ok((
