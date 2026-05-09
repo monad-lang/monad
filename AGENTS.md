@@ -631,9 +631,14 @@ class BEq A {
 
 Working: `tag`, `eof`, `alt`/`<|>`, `many0`, `many1`, `char_in_string`, `is_digit`, `is_alpha`, `is_alphanumeric`, `is_space`, `is_ident_char`, `satisfy`, `char`, `digit`, `alpha`, `space`, `take_while`, `opt`, `preceded`, `terminated`, `delimited`, `recognize` — 23/23 tests pass.
 
-Key pattern: when matching on a generic type with forall parameters (e.g., `ParseResult A`), bind the expression to a parameter with the explicit type signature first (`many0_step (r : ParseResult A) ...`), then match on that parameter. Direct `match expr { ... }` on a generic-typed application fails forall resolution.
+The self-hosted parser at `lang/parser.mo` provides a self-contained copy of the foundation types (`ParseResult`, `ParseError`) and combinators (`tag`, `alt`, `many0`, `many1`, `take_while`), char predicates, keyword check, identifier parser, whitespace skimmer, and number parser — 7/7 tests pass.
 
-**Important type checker limitation**: matches on `ParseResult A` must avoid nested matches on `ParseResult B` where `B != A`. The type checker cannot resolve forall variables across nested matches with different type parameters. Use separate functions to extract values at each level (see `delimited_body`/`delimited_after`/`delimited_ok` pattern in `init/parser.mo`).
+Key patterns when writing self-hosted Monad code:
+1. **Avoid long `||` chains** (>10 operations) — the operator precedence climber slows down exponentially. Use nested `if/else` chains or split into helper functions (see `is_alpha_lower`/`is_alpha_lower2` pattern in `lang/parser.mo`).
+2. **Avoid deep `else if` chains** (>15 levels) — the parser depth causes extreme slowdown. Split into multiple helper functions (max ~14 `if/else` per function).
+3. **Avoid `use` for `init/parser`** — module loading produces "duplicate key" warnings that break `String.starts_with` and other native functions in test contexts. Make the parser file self-contained instead.
+4. **Use `open TypeName`** — constructor names (like `success`/`fail`) are not available without opening the type.
+5. **Type checker limitation with `ParseResult`** — matches on `ParseResult A` must avoid nested matches on `ParseResult B` where `B != A` (different type variables). Use separate functions to extract values at each level.
 
 ### ~~Known Parser Limitation (FIXED)~~
 
