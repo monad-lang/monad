@@ -39,6 +39,32 @@ def alt_step2 (r : ParseResult A) (e1 : ParseError) : ParseResult A :=
 
 infix (<|>) := alt
 
+def many0 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
+	many0_step (p input) p input
+
+def many0_step (r : ParseResult A) (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
+	match r {
+		success rem out =>
+			match many0 p rem {
+				success rem2 rest => success rem2 (List.cons out rest),
+				fail _ => success rem (List.cons out List.empty)
+			},
+		fail _ => success input List.empty
+	}
+
+def many1 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
+	many1_step (p input) p input
+
+def many1_step (r : ParseResult A) (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
+	match r {
+		success rem out =>
+			match many0 p rem {
+				success rem2 rest => success rem2 (List.cons out rest),
+				fail _ => success rem (List.cons out List.empty)
+			},
+		fail e => fail e
+	}
+
 @[test]
 def test_tag_success : Bool :=
 	match tag "hel" "hello" {
@@ -82,4 +108,41 @@ def test_alt_infix : Bool :=
 	match (tag "foo" <|> tag "bar") "bar" {
 		success _ output => String.beq output "bar",
 		fail _ => false
+	}
+
+@[test]
+def test_many0_no_match : Bool :=
+	match many0 (tag "x") "hello" {
+		success remaining list =>
+			List.is_empty list && String.beq remaining "hello",
+		fail _ => false
+	}
+
+@[test]
+def test_many0_one_match : Bool :=
+	match many0 (tag "h") "hello" {
+		success remaining list =>
+			not (List.is_empty list) && String.beq remaining "ello",
+		fail _ => false
+	}
+
+@[test]
+def test_many0_multi_match : Bool :=
+	match many0 (tag "a") "aaab" {
+		success remaining list => true,
+		fail _ => false
+	}
+
+@[test]
+def test_many1_success : Bool :=
+	match many1 (tag "a") "aabc" {
+		success remaining list => true,
+		fail _ => false
+	}
+
+@[test]
+def test_many1_fail : Bool :=
+	match many1 (tag "x") "abc" {
+		success _ _ => false,
+		fail _ => true
 	}

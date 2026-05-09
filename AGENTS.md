@@ -629,7 +629,8 @@ class BEq A {
 
 ### Status: In Progress
 
-Working: `tag`, `eof`, `alt`/`<|>` — 6/6 tests pass.
+Working: `tag`, `eof`, `alt`/`<|>`, `many0`, `many1` — 11/11 tests pass.
+Key pattern: when matching on a generic type with forall parameters (e.g., `ParseResult A`), bind the expression to a parameter with the explicit type signature first (`many0_step (r : ParseResult A) ...`), then match on that parameter. Direct `match expr { ... }` on a generic-typed application fails forall resolution.
 
 ### ~~Known Parser Limitation (FIXED)~~
 
@@ -647,11 +648,11 @@ Tests: `test_struct_eq_in_match`, `test_eq_in_plain_match` in `init/tests.mo`.
 
 ### Known Type Checker Issues
 
-1. **`List.cons` forall inference**: `List.cons x List.empty` creates `{A : Type} -> ...` forall params that can't be inferred at call sites. Blocks `many0`, `many1`.
-2. **`def` type aliases**: `def Parser (O : Type) : Type := String -> ParseResult O` — type checker doesn't reduce `def` aliases during type comparison. Use inline types.
-3. **`FromListLiteral` class methods**: List literals `[x]` desugar to `FromListLiteral.cons` which hits the class-method-in-def_refs issue.
-4. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Tests must live inside `parser.mo`.
-5. **`==` operator**: Resolves to `BEq.beq` class method before instance dispatch. Use `String.beq` directly.
+1. **~~`List.cons` forall inference~~** (FIXED): `List.cons x List.empty` now infers `A` from argument types. Verified: `List.cons 5 (List.cons 3 List.empty)` evaluates as `(List I64)`.
+2. **~~`def` type aliases~~** (FIXED): `def Parser (O : Type) : Type := String -> ParseResult O` — type checker now reduces `def` aliases during type comparison via `resolve_def_alias` in `match_resolve_type_inner`.
+3. **~~`FromListLiteral` class methods~~** (FIXED): List literals `[x]` desugar correctly. Verified: `[1, 2, 3]` evaluates as `(List I64)`.
+4. **~~`==` operator~~** (FIXED): `5 == 5` now resolves through `BEq.beq` instance dispatch. Verified: works correctly.
+5. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Inner opens are not applied to module exports. Functions using `open`-ed constructors must be defined inside the same module. Workaround: bind results to a typed parameter before matching (see `many0`/`many1` implementation pattern in `init/parser.mo`).
 
 ## Committing Changes
 
