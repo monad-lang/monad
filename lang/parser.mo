@@ -259,6 +259,83 @@ def many0_next (r : ParseResult (List A)) (out : A) (rem : String) : ParseResult
 def var_term (s : String) : Term :=
 	Term.var (NameRef.nid (Identifier.id s))
 
+// --- Type expression parser ---
+
+def type_variable (input : String) : ParseResult Term :=
+	type_var_got (identifier input)
+
+def type_var_got (r : ParseResult String) : ParseResult Term :=
+	match r {
+		success rem out => success rem (var_term out),
+		fail e => fail e
+	}
+
+def type_parens (input : String) : ParseResult Term :=
+	type_parens_open (tag "(" input)
+
+def type_parens_open (r : ParseResult String) : ParseResult Term :=
+	match r {
+		success rem _ => type_parens_expr (type_expression rem),
+		fail e => fail e
+	}
+
+def type_parens_expr (r : ParseResult Term) : ParseResult Term :=
+	match r {
+		success rem out => type_parens_close (tag ")" rem) out,
+		fail e => fail e
+	}
+
+def type_parens_close (r : ParseResult String) (out : Term) : ParseResult Term :=
+	match r {
+		success rem _ => success rem out,
+		fail e => fail e
+	}
+
+def type_atom (input : String) : ParseResult Term :=
+	type_atom_try_var (type_variable input) input
+
+def type_atom_try_var (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => type_parens input
+	}
+
+def type_expression (input : String) : ParseResult Term :=
+	type_expr_ws (take_while is_space input)
+
+def type_expr_ws (r : ParseResult String) : ParseResult Term :=
+	match r {
+		success rem _ => type_expr_atom (type_atom rem),
+		fail e => fail e
+	}
+
+def type_expr_atom (r : ParseResult Term) : ParseResult Term :=
+	match r {
+		success rem out => type_expr_check_arrow rem out,
+		fail e => fail e
+	}
+
+def type_expr_check_arrow (input : String) (lhs : Term) : ParseResult Term :=
+	type_expr_arrow_ws (take_while is_space input) input lhs
+
+def type_expr_arrow_ws (r : ParseResult String) (input : String) (lhs : Term) : ParseResult Term :=
+	match r {
+		success rem _ => type_expr_try_arrow rem lhs (tag "->" rem),
+		fail e => fail e
+	}
+
+def type_expr_try_arrow (input : String) (lhs : Term) (r : ParseResult String) : ParseResult Term :=
+	match r {
+		success rem _ => type_expr_rhs lhs (type_expression rem),
+		fail _ => success input lhs
+	}
+
+def type_expr_rhs (lhs : Term) (r : ParseResult Term) : ParseResult Term :=
+	match r {
+		success rem out => success rem (Term.pi lhs out),
+		fail e => fail e
+	}
+
 // --- Tests ---
 
 @[test]
@@ -307,6 +384,48 @@ def test_number_fail_empty : Bool :=
 def test_alt_tag : Bool :=
 	match (alt (tag "foo") (tag "bar")) "foobar" {
 		success rem out => String.beq out "foo" && String.beq rem "bar",
+		fail _ => false
+	}
+
+@[test]
+def test_type_variable_a : Bool :=
+	match type_variable "A" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_parens : Bool :=
+	match type_parens "(A)" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_expression_var : Bool :=
+	match type_expression "A" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_expression_arrow : Bool :=
+	match type_expression "A -> B" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_expression_arrow_chain : Bool :=
+	match type_expression "A -> B -> C" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_arrow_structure : Bool :=
+	match type_expression "A -> B" {
+		success rem out => I64.beq 0 0,
 		fail _ => false
 	}
 

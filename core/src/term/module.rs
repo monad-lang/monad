@@ -930,7 +930,10 @@ impl<'a> GlobalScope<'a> {
     self.modules.values().copied().collect()
   }
   pub fn all_known_names(&self) -> Set<&ModulePath> {
-    self.def_refs.keys().collect()
+    let mut names: Set<&ModulePath> = self.def_refs.keys().collect();
+    names.extend(self.inductives.keys().copied());
+    names.extend(self.class_defs.keys());
+    names
   }
 
   pub fn infix(&self) -> Vec<(&Operator, &SourceContext<Infix>)> {
