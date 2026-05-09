@@ -1,7 +1,9 @@
 // Init module
 
-use io
-use number
+pub use io
+pub use number
+pub use math
+pub use string
 
 infix (+) := I64.add
 

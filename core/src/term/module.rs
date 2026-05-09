@@ -290,18 +290,31 @@ impl GlobalScopeData {
       }
     }
 
-    // Include default implicit modules: prelude, init, io, math, string, number
-    let default_names: Vec<ModulePath> = vec![
-      builtins.prelude_path.clone(),
-      ModulePath::top("init"),
-      ModulePath::top("io"),
-      ModulePath::top("math"),
-      ModulePath::top("string"),
-      ModulePath::top("number"),
-    ];
+    // Include default implicit modules: prelude, init
+    let default_names: Vec<ModulePath> =
+      vec![builtins.prelude_path.clone(), ModulePath::top("init")];
     for default_name in &default_names {
       if let Some(mo) = loaded.get_module(default_name) {
         visible_modules.insert(mo.path(), mo);
+      }
+    }
+
+    // Include re-exported modules from all visible modules
+    {
+      let re_exports: Vec<(ModulePath, ModulePath)> = visible_modules
+        .values()
+        .flat_map(|modu| {
+          modu
+            .get_pub_uses()
+            .into_iter()
+            .map(|use_| (modu.path().clone(), use_.module_path.clone()))
+        })
+        .collect();
+      for (through_module, re_export_path) in re_exports {
+        let _ = through_module; // TODO: prefix re-exported defs with through_module path
+        if let Some(mo) = loaded.get_module(&re_export_path) {
+          visible_modules.insert(mo.path(), mo);
+        }
       }
     }
 
@@ -537,13 +550,7 @@ impl<'a> GlobalScope<'a> {
         .collect();
       implicit.insert(&builtins.prelude_path, prelude);
     }
-    let default_implicit = vec![
-      ModulePath::top("init"),
-      ModulePath::top("io"),
-      ModulePath::top("math"),
-      ModulePath::top("string"),
-      ModulePath::top("number"),
-    ];
+    let default_implicit = vec![ModulePath::top("init")];
     for name in default_implicit {
       if let Some(mo) = loaded.get_module(&name) {
         implicit.insert(mo.path(), mo);
@@ -551,6 +558,23 @@ impl<'a> GlobalScope<'a> {
     }
     let mut modules = Self::load_modules(&uses, loaded);
     modules.extend(implicit);
+    // Include re-exported modules from all visible modules
+    {
+      let re_exports: Vec<(ModulePath, ModulePath)> = modules
+        .values()
+        .flat_map(|modu| {
+          modu
+            .get_pub_uses()
+            .into_iter()
+            .map(|use_| (modu.path().clone(), use_.module_path.clone()))
+        })
+        .collect();
+      for (_through_module, re_export_path) in re_exports {
+        if let Some(mo) = loaded.get_module(&re_export_path) {
+          modules.insert(mo.path(), mo);
+        }
+      }
+    }
 
     let empty_all_scopes: Map<&ModulePath, &GlobalScopeData> = Map::new();
     let used_set: Set<ModulePath> = uses.iter().map(|u| u.module_path.clone()).collect();
@@ -617,19 +641,30 @@ impl<'a> GlobalScope<'a> {
       }
     }
 
-    // Include default implicit modules: prelude, init, io, math, string, number
-    let default_names: Vec<ModulePath> = vec![
-      builtins.prelude_path.clone(),
-      ModulePath::top("init"),
-      ModulePath::top("io"),
-      ModulePath::top("math"),
-      ModulePath::top("string"),
-      ModulePath::top("number"),
-    ];
+    // Include default implicit modules: prelude, init
+    let default_names: Vec<ModulePath> =
+      vec![builtins.prelude_path.clone(), ModulePath::top("init")];
     for default_name in default_names {
       if let Some(mo) = loaded.get_module(&default_name) {
         let mo_path = mo.path();
         modules.insert(mo_path, mo);
+      }
+    }
+    // Include re-exported modules from all visible modules
+    {
+      let re_exports: Vec<(ModulePath, ModulePath)> = modules
+        .values()
+        .flat_map(|modu| {
+          modu
+            .get_pub_uses()
+            .into_iter()
+            .map(|use_| (modu.path().clone(), use_.module_path.clone()))
+        })
+        .collect();
+      for (_through_module, re_export_path) in re_exports {
+        if let Some(mo) = loaded.get_module(&re_export_path) {
+          modules.insert(mo.path(), mo);
+        }
       }
     }
 
@@ -1429,8 +1464,8 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
   load_module_from_text(io_text, io_path, &mut loaded)?;
   load_module_from_text(number_text, number_path, &mut loaded)?;
   load_module_from_text(math_text, math_path, &mut loaded)?;
-  load_module_from_text(init_text, init_path, &mut loaded)?;
   load_module_from_text(string_text, string_path, &mut loaded)?;
+  load_module_from_text(init_text, init_path, &mut loaded)?;
 
   Ok(loaded)
 }
@@ -1527,6 +1562,19 @@ impl Module {
   }
   pub fn get_opens(&self) -> &Vec<SourceContext<Open>> {
     &self.opens
+  }
+  pub fn get_pub_uses(&self) -> Vec<&Use> {
+    self
+      .uses
+      .iter()
+      .filter_map(|ctx| {
+        if ctx.value().public {
+          Some(ctx.value())
+        } else {
+          None
+        }
+      })
+      .collect()
   }
 
   pub fn add_decl(&mut self, decl: Decl) {

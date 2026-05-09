@@ -1987,6 +1987,7 @@ pub struct Use {
   pub source_location: SourceRange,
   pub(crate) module_path: ModulePath,
   pub(crate) filter: UseFilter,
+  pub(crate) public: bool,
 }
 
 impl Use {
@@ -2246,17 +2247,10 @@ pub enum Decl {
   Def(Def),
   DefMacro(Def),
   Type(Inductive),
-  /// Instance
   Ins(Instance),
   Infix(Infix),
-  /// Top-level macro invocation (parsed, not yet expanded)
-  MacroCall {
-    name: Identifier,
-    args: Vec<Term>,
-  },
-  /// Declaration-generating macro definition
+  MacroCall { name: Identifier, args: Vec<Term> },
   DeclGen(DeclGenDef),
-  /// Generated declarations (transparent wrapper, flattened during module creation)
   Generated(Vec<Decl>),
 }
 

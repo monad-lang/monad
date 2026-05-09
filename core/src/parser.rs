@@ -1476,6 +1476,8 @@ fn use_opt_filter(input: Span) -> Res<Option<UseFilter>> {
 
 fn use_parser(input: Span) -> Res<Use> {
   let (input, start) = info(input)?;
+  let (input, public) = opt(terminated(tag("pub"), ws1)).parse(input)?;
+  let public = public.is_some();
   let (input, _) = tag("use")(input)?;
   let (input, _) = ws1(input)?;
   let (input, module_path) =
@@ -1490,6 +1492,7 @@ fn use_parser(input: Span) -> Res<Use> {
       module_path,
       source_location,
       filter,
+      public,
     },
   ))
 }

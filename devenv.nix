@@ -56,7 +56,6 @@
       enable = true;
       entry = ''
         cargo test
-        cargo fix
       '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";
