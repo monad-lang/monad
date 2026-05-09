@@ -1,5 +1,7 @@
 /// Self-hosted Monad grammar parser.
-/// Self-contained: defines its own types to avoid init.parser module loading conflicts
+/// Self-contained: defines local types to avoid module loading issues.
+
+use lang.types
 
 type ParseError {
 	tag String,
@@ -13,17 +15,19 @@ type ParseResult O {
 
 open ParseResult
 
-// --- Basic combinators ---
+// --- Helper ---
 
 def is_empty (s : String) : Bool := I64.beq (String.length s) 0
 
-def is_prefix (pre : String) (s : String) : Bool :=
-	String.beq pre (String.slice s 0 (String.length pre))
+// --- Combinators ---
 
 def tag (s : String) (input : String) : ParseResult String :=
 	if is_prefix s input
 	then success (String.drop (String.length s) input) s
 	else fail (ParseError.tag s)
+
+def is_prefix (pre : String) (s : String) : Bool :=
+	String.beq pre (String.slice s 0 (String.length pre))
 
 def alt (a : String -> ParseResult A) (b : String -> ParseResult A) (input : String) : ParseResult A :=
 	alt_body (a input) b input
@@ -38,45 +42,6 @@ def alt_second (r : ParseResult A) (e1 : ParseError) : ParseResult A :=
 	match r {
 		success rem out => success rem out,
 		fail e2 => fail (ParseError.custom "both alt failed")
-	}
-
-def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
-	take_while_loop pred "" input
-
-def take_while_loop (pred : String -> Bool) (acc : String) (input : String) : ParseResult String :=
-	if is_empty input
-	then success input acc
-	else take_while_check pred acc input (String.slice input 0 1) (String.drop 1 input)
-
-def take_while_check (pred : String -> Bool) (acc : String) (input : String) (ch : String) (rest : String) : ParseResult String :=
-	if pred ch
-	then take_while_loop pred (String.concat acc ch) rest
-	else success input acc
-
-def many0 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
-	many0_body (p input) p input
-
-def many0_body (r : ParseResult A) (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
-	match r {
-		success rem out =>
-			many0_next (many0 p rem) out rem,
-		fail _ => success input List.empty
-	}
-
-def many0_next (r : ParseResult (List A)) (out : A) (rem : String) : ParseResult (List A) :=
-	match r {
-		success rem2 rest => success rem2 (List.cons out rest),
-		fail _ => success rem (List.cons out List.empty)
-	}
-
-def many1 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
-	many1_body (p input) p input
-
-def many1_body (r : ParseResult A) (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
-	match r {
-		success rem out =>
-			many0_next (many0 p rem) out rem,
-		fail e => fail e
 	}
 
 // --- Char predicates ---
@@ -228,12 +193,20 @@ def identifier_check_kw (s : String) (rem : String) : ParseResult String :=
 	then fail (ParseError.custom ("reserved keyword: " ++ s))
 	else success rem s
 
-// --- Whitespace ---
-
-def spaces (input : String) : ParseResult String :=
-	take_while is_space input
-
 // --- Number parser ---
+
+def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
+	take_while_loop pred "" input
+
+def take_while_loop (pred : String -> Bool) (acc : String) (input : String) : ParseResult String :=
+	if is_empty input
+	then success input acc
+	else take_while_check pred acc input (String.slice input 0 1) (String.drop 1 input)
+
+def take_while_check (pred : String -> Bool) (acc : String) (input : String) (ch : String) (rest : String) : ParseResult String :=
+	if pred ch
+	then take_while_loop pred (String.concat acc ch) rest
+	else success input acc
 
 def is_digit_or_underscore (c : String) : Bool :=
 	if is_digit c then true
@@ -257,6 +230,34 @@ def number_parse (s : String) (rem : String) : ParseResult I64 :=
 	else if is_digit (String.slice s 0 1)
 	then success rem 42
 	else fail (ParseError.custom "number must start with digit")
+
+// --- Whitespace ---
+
+def spaces (input : String) : ParseResult String :=
+	take_while is_space input
+
+// --- many0 / many1 ---
+
+def many0 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
+	many0_body (p input) p input
+
+def many0_body (r : ParseResult A) (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
+	match r {
+		success rem out =>
+			many0_next (many0 p rem) out rem,
+		fail _ => success input List.empty
+	}
+
+def many0_next (r : ParseResult (List A)) (out : A) (rem : String) : ParseResult (List A) :=
+	match r {
+		success rem2 rest => success rem2 (List.cons out rest),
+		fail _ => success rem (List.cons out List.empty)
+	}
+
+// --- Type helpers ---
+
+def var_term (s : String) : Term :=
+	Term.var (NameRef.nid (Identifier.id s))
 
 // --- Tests ---
 

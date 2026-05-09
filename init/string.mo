@@ -88,11 +88,8 @@ def list_contains (haystack : List U8) (needle : List U8) : Bool :=
 
 // ── Prefix / Suffix ──
 
-def String.starts_with (s : String) (prefix : String) : Bool :=
-	list_starts_with (String.to_list s) (String.to_list prefix)
-
 def String.ends_with (s : String) (suffix : String) : Bool :=
-	String.starts_with (String.reverse s) (String.reverse suffix)
+	String.starts_with (String.reverse suffix) (String.reverse s)
 
 // ── Repetition ──
 
