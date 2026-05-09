@@ -1650,15 +1650,24 @@ where
   map
 }
 
-pub fn merge_detect<K, V>(mut map: Map<K, V>, (k, v): (K, V)) -> Map<K, V>
+pub fn merge_detect<K, V>(mut map: Map<K, V>, (k, v): (K, V)) -> Result<Map<K, V>, String>
 where
   K: Display + Eq + Ord + Hash + Clone,
 {
   let r = map.insert(k.clone(), v);
-  if r.is_some() {
-    eprintln!("duplicate key {}", k);
+  match r {
+    None => Ok(map),
+    Some(_) => Err(format!("duplicate definition in module: {}", k)),
   }
-  map
+}
+fn merge_dup_detect<K, V>(map: Map<K, V>, (k, v): (K, V)) -> Map<K, V>
+where
+  K: Display + Eq + Ord + Hash + Clone,
+{
+  match merge_detect(map, (k, v)) {
+    Ok(m) => m,
+    Err(e) => panic!("{e}"),
+  }
 }
 
 pub fn names_of_decls(decls: &[SourceContext<Decl>]) -> HashSet<ModulePath> {
@@ -1677,14 +1686,14 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
       Decl::Def(def) => Some((def.name.clone(), ctx.with(def.clone()))),
       _ => None,
     })
-    .fold(Map::new(), merge_detect);
+    .fold(Map::new(), merge_dup_detect);
   let macro_defs = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
       Decl::DefMacro(def) => Some((def.name.clone(), ctx.with(def.clone()))),
       _ => None,
     })
-    .fold(Map::new(), merge_detect);
+    .fold(Map::new(), merge_dup_detect);
   let inductives = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
@@ -1694,7 +1703,7 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
       }
       _ => None,
     })
-    .fold(Map::new(), merge_detect);
+    .fold(Map::new(), merge_dup_detect);
   let uses = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
@@ -1717,7 +1726,7 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
       }
       _ => None,
     })
-    .fold(Map::new(), merge_detect);
+    .fold(Map::new(), merge_dup_detect);
   let instances = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {

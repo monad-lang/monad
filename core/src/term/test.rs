@@ -527,3 +527,33 @@ fn test_no_cycle_detection_normal() {
     "Expected no cycle error, got: {err}"
   );
 }
+
+#[test]
+fn test_merge_detect_accepts_unique() {
+  use crate::Map;
+  use crate::term::module::merge_detect;
+
+  let mut map: Map<ModulePath, Term> = Map::new();
+  let path_a = mpt("a");
+  let path_b = mpt("b");
+  let term_a = var("x");
+  let term_b = var("y");
+
+  map = merge_detect(map, (path_a.clone(), term_a.clone())).unwrap();
+  map = merge_detect(map, (path_b.clone(), term_b.clone())).unwrap();
+  assert_eq!(map.get(&path_a), Some(&term_a));
+  assert_eq!(map.get(&path_b), Some(&term_b));
+}
+
+#[test]
+fn test_merge_detect_rejects_duplicate() {
+  use crate::Map;
+  use crate::term::module::merge_detect;
+
+  let path = mpt("duplicate");
+  let map: Map<ModulePath, Term> = Map::new();
+  let map = merge_detect(map, (path.clone(), var("x"))).unwrap();
+  let result = merge_detect(map, (path.clone(), var("y")));
+  assert!(result.is_err());
+  assert!(result.unwrap_err().contains("duplicate"));
+}
