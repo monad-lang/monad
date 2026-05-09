@@ -1220,6 +1220,7 @@ impl From<TypeError> for LoadingError {
 fn load_decl_uses_modules(
   decls: &[SourceContext<Decl>],
   loaded: LoadedModules,
+  in_progress: &mut Set<ModulePath>,
 ) -> Result<LoadedModules, LoadingError> {
   let mut uses = decls.iter().filter_map(|ctx| match ctx.value() {
     Decl::Use(u) => Some(u),
@@ -1229,7 +1230,7 @@ fn load_decl_uses_modules(
     loaded,
     |loaded, use_| -> Result<LoadedModules, LoadingError> {
       let loaded = if loaded.get_module(&use_.module_path).is_none() {
-        load_module_files(&use_.module_path, loaded)?
+        load_module_files_inner(&use_.module_path, loaded, in_progress)?
       } else {
         loaded
       };
@@ -1244,8 +1245,33 @@ pub fn load_module_files(
   path: &ModulePath,
   loaded: LoadedModules,
 ) -> Result<LoadedModules, LoadingError> {
+  let mut in_progress = crate::empty_set();
+  load_module_files_inner(path, loaded, &mut in_progress)
+}
+
+pub fn load_module_files_inner(
+  path: &ModulePath,
+  loaded: LoadedModules,
+  in_progress: &mut Set<ModulePath>,
+) -> Result<LoadedModules, LoadingError> {
+  if !in_progress.insert(path.clone()) {
+    return Err(format!("module cycle detected: {}", path).into());
+  }
+  let result = load_module_files_impl(path, loaded, in_progress);
+  in_progress.remove(path);
+  result
+}
+
+fn load_module_files_impl(
+  path: &ModulePath,
+  loaded: LoadedModules,
+  in_progress: &mut Set<ModulePath>,
+) -> Result<LoadedModules, LoadingError> {
+  if let Some(_) = loaded.get_module(path) {
+    return Ok(loaded);
+  }
   let decls = load_decls(path)?;
-  let mut loaded = load_decl_uses_modules(&decls, loaded)?;
+  let mut loaded = load_decl_uses_modules(&decls, loaded, in_progress)?;
   let decls = type_check_module_decls(path, decls, &loaded)?;
   let mo = module(
     path.clone(),
@@ -1255,7 +1281,6 @@ pub fn load_module_files(
     },
   );
   loaded.add_module(mo);
-
   Ok(loaded)
 }
 

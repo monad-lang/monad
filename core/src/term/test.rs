@@ -474,3 +474,56 @@ fn test_module_path_remove_prefix() {
   assert!(!p.is_prefix(&mp(vec!["a", "b", "cfun"])));
   assert_eq!(p.remove_prefix(&mp(vec!["a", "b"])), Some(mp(vec!["cfun"])));
 }
+
+#[test]
+fn test_module_cycle_detection_direct() {
+  use crate::empty_set;
+  use crate::term::module::{LoadedModules, load_module_files_inner};
+
+  let path = ModulePath::top("self_cycle");
+  let loaded = LoadedModules::empty();
+  let mut in_progress: crate::Set<ModulePath> = empty_set();
+
+  in_progress.insert(path.clone());
+  let result = load_module_files_inner(&path, loaded, &mut in_progress);
+  assert!(result.is_err());
+  let err = result.unwrap_err().to_string();
+  assert!(err.contains("cycle"), "Expected cycle error, got: {err}");
+}
+
+#[test]
+fn test_module_cycle_detection_indirect() {
+  use crate::empty_set;
+  use crate::term::module::{LoadedModules, load_module_files_inner};
+
+  let path_a = ModulePath::top("cycle_a");
+  let path_b = ModulePath::top("cycle_b");
+  let loaded = LoadedModules::empty();
+  let mut in_progress: crate::Set<ModulePath> = empty_set();
+
+  in_progress.insert(path_a.clone());
+  in_progress.insert(path_b.clone());
+  let result = load_module_files_inner(&path_a, loaded, &mut in_progress);
+  assert!(result.is_err());
+  let err = result.unwrap_err().to_string();
+  assert!(err.contains("cycle"), "Expected cycle error, got: {err}");
+}
+
+#[test]
+fn test_no_cycle_detection_normal() {
+  use crate::empty_set;
+  use crate::term::module::{LoadedModules, load_module_files_inner};
+
+  let path = ModulePath::top("normal_module");
+  let loaded = LoadedModules::empty();
+  let mut in_progress: crate::Set<ModulePath> = empty_set();
+
+  let result = load_module_files_inner(&path, loaded, &mut in_progress);
+  assert!(in_progress.is_empty());
+  assert!(result.is_err());
+  let err = result.unwrap_err().to_string();
+  assert!(
+    !err.contains("cycle"),
+    "Expected no cycle error, got: {err}"
+  );
+}
