@@ -515,3 +515,144 @@ Always format Rust code according to `rustfmt.toml` before committing:
 ```bash
 cargo fmt
 ```
+
+## Coding Agent Guide
+
+### Problem-Solving Workflow
+
+1. **Reproduce first** — Before any change, confirm you can reproduce the bug or observe the missing behavior. Run the exact command the user provides.
+
+2. **Search evidence, not guesses** — When investigating a bug, anchor every hypothesis in code. Search for the error message string in the source. Search for the function name mentioned in stack traces. Never assume — verify.
+
+3. **Isolate the failure** — Minimize the failing case. Reduce a complex Monad program to the smallest example that still fails. This tells you which language feature is involved and narrows which compiler pass to modify.
+
+4. **Trace the pipeline** — A Monad program goes through: parsing → elaboration → type checking → evaluation. Identify which stage fails:
+   - **Parser errors** mention `parse` or show unexpected tokens
+   - **Elaboration errors** mention free variables or implicit binding
+   - **Type errors** mention `TypeError` and expected/found types
+   - **Eval errors** mention `EvalError`, stack overflow, or missing native
+   - **Panics** mean an `unreachable!()` was hit — often a missing case in a match
+
+### Fast Iteration
+
+```bash
+# Fastest: build just the core crate (avoids CLI/WASM/LLVM)
+cargo build -p monad-core 2>&1 | head -20
+
+# Run a single test by name
+cargo test eval::test::some_test_name
+
+# Run all parser tests
+cargo test parser
+
+# Run Monad stdlib tests (fast feedback on language semantics)
+cargo run -- test init/tests.mo
+
+# Run a specific example
+cargo run -- run examples/specific.mo
+```
+
+Prefer `cargo test parser::test_do_parser` over `cargo test` when working
+on the parser — it saves minutes per iteration.
+
+### Finding the Right Code
+
+| Symptom | Look In |
+|---|---|
+| Parse error / wrong syntax accepted | `core/src/parser.rs` — search for the relevant parse function |
+| Wrong type inferred / type error missing | `core/src/eval/type.rs` — search for the type form |
+| Wrong evaluation result / runtime error | `core/src/eval.rs` — search for the term variant |
+| Native function wrong / missing | `core/src/eval/native.rs` — search for the function name |
+| Term representation / new AST node | `core/src/term.rs` — add new `Term` variants here |
+| Constraint solving / instance resolution | `core/src/eval/constraint.rs` |
+| Module loading / use/open | `core/src/term/module.rs` |
+| CLI flags / command handling | `cli/src/main.rs` |
+
+Use `rg` (ripgrep) to search — it respects `.gitignore` and is fast:
+
+```bash
+# Find where an error message is emitted
+rg "expected function"
+
+# Find all references to a function
+rg "fn type_check_free_var"
+
+# Find Monad code using a feature
+rg "linear\|affine" init/ --include "*.mo"
+```
+
+### Common Bug Patterns in Compiler Development
+
+**1. Missing match arm on a new Term variant.**
+
+When you add a `Term::Foo` variant, every `match` on `Term` in the codebase
+needs handling. The Rust compiler catches this — follow the compilation
+errors. The most common locations: `eval.rs` (evaluation), `type.rs` (type
+checking), `module.rs` (scope building), `term.rs` (Display, substitution).
+
+**2. Forgetting to add a new Term variant to `substitute()` or
+`free_vars()`.**
+
+These are in `eval.rs` / `term.rs`. If substitution doesn't handle the new
+variant, variables won't be replaced and evaluation will use stale bindings.
+**Check these even if the Rust compiler doesn't force you to** (some
+`substitute` impls have a catch-all `_ => term`).
+
+**3. Adding a parser test but not testing the desugared AST.**
+
+Parser tests compare against expected ASTs. If a test passes but produces
+wrong output, check that the expected AST in the test matches what the
+evaluator expects. The desugaring is often in a separate function from the
+parser.
+
+**4. Instance resolution loops.**
+
+Recursive instances (`instance [Show A] Show (List A)`) can cause infinite
+resolution. The constraint solver at `constraint.rs` has a visiting set.
+If it doesn't, or the visiting set misses a path, the compiler hangs.
+Always check the visiting set when modifying instance resolution.
+
+**5. The evaluator and type checker use different `Scope` types.**
+
+`eval.rs` uses `scope.resolve_name()` which goes through `GlobalScope`.
+`type.rs` uses `find_var_ref_of` which walks the linked-list `Scope`.
+A def that's visible to one may not be visible to the other. When a name
+resolves in the type checker but not the evaluator (or vice versa), the
+scope builder (`module.rs`) is usually the culprit.
+
+### Writing Tests for Bug Fixes
+
+1. **Add a parser test** (`core/src/parser/test/`) if the bug involves syntax
+2. **Add an eval test** (`core/src/eval/test.rs`) if the bug involves evaluation
+3. **Add a Monad test** (`@[test]` in `init/tests.mo`) if the bug involves
+   language semantics end-to-end
+4. **Test the failing case first** — confirm it fails before your fix, then
+   confirm it passes after
+
+Follow the existing test patterns exactly. Parser tests use the `similar!`
+macro with `do_parser()`/`def_parser()`. Eval tests use `run_test()`/`run_test_err()`.
+
+### Incremental Changes
+
+Always take the smallest possible step:
+
+1. One failing test → one fix → one commit
+2. Don't refactor unrelated code while fixing a bug
+3. Don't add new features while fixing a bug
+4. If you need to refactor to fix, do it in a separate commit
+
+When a change touches multiple files, commit after each file if the
+intermediate state compiles and passes tests. This makes `git bisect`
+precise.
+
+### Debugging the Evaluator
+
+When a Monad program produces the wrong result:
+
+1. Add `--debug` to see evaluation steps: `cargo run -- run file.mo -- --debug`
+2. Or insert `println` in the Rust evaluator at `eval.rs` around the
+   relevant term case
+3. Check that native functions match their declarations — the Monad type
+   signature and the Rust handler must agree on argument count and types
+4. Verify that substitution produces the expected term — many eval bugs
+   are actually substitution bugs
