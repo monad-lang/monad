@@ -629,8 +629,11 @@ class BEq A {
 
 ### Status: In Progress
 
-Working: `tag`, `eof`, `alt`/`<|>`, `many0`, `many1` — 11/11 tests pass.
+Working: `tag`, `eof`, `alt`/`<|>`, `many0`, `many1`, `char_in_string`, `is_digit`, `is_alpha`, `is_alphanumeric`, `is_space`, `is_ident_char`, `satisfy`, `char`, `digit`, `alpha`, `space`, `take_while`, `opt`, `preceded`, `terminated`, `delimited`, `recognize` — 23/23 tests pass.
+
 Key pattern: when matching on a generic type with forall parameters (e.g., `ParseResult A`), bind the expression to a parameter with the explicit type signature first (`many0_step (r : ParseResult A) ...`), then match on that parameter. Direct `match expr { ... }` on a generic-typed application fails forall resolution.
+
+**Important type checker limitation**: matches on `ParseResult A` must avoid nested matches on `ParseResult B` where `B != A`. The type checker cannot resolve forall variables across nested matches with different type parameters. Use separate functions to extract values at each level (see `delimited_body`/`delimited_after`/`delimited_ok` pattern in `init/parser.mo`).
 
 ### ~~Known Parser Limitation (FIXED)~~
 
