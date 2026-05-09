@@ -140,6 +140,8 @@ When writing Monad source files:
 - The prelude is imported automatically — no explicit `use prelude` needed
 - Module paths for the standard library: `std.test` for testing, `io` for IO, etc.
 
+⚠️ **Reserved keywords cannot be used as field names** in `type` constructor parameters (`(name: Type)`) or `struct` field names (`name: Type`). The parser's `identifier` combinator rejects reserved keywords. Common offenders: `class`, `type`, `match`, `if`, `def`, `let`, `in`, `use`, `open`, `struct`, `instance`, `fn`, `do`, `return`, `for`, `quote`, `with`, `infix`, `else`, `then`. Use a synonym instead (e.g., `cls` for `class`, `kind` for `type`). The reserved keyword list is in `RESERVED_KEYWORDS` at `parser.rs:60-63`.
+
 ### Class Definitions (Type Classes)
 
 ```monad
@@ -615,6 +617,14 @@ class BEq A {
 }
 ```
 
+### Reserved Keywords in Field Names Cause Cascading Parse Errors
+
+**Problem**: Using a reserved keyword (e.g., `class`) as a constructor field name in `type` or `struct` declarations causes a misleading parse error. The error appears at the *next* declaration with "unexpected: Eof", because the parser rejects the keyword inside `(name: Type)` syntax, fails to find the closing `}`, and consumes all remaining input looking for it.
+
+**Root cause**: `cons_param` (`parser.rs:329`) and `struct_field_parser` (`parser.rs:1346`) both use `identifier`, which rejects reserved keywords. When a field like `(class: ModulePath)` is encountered, the keyword fails to parse, the branch backtracks, and `type_expression` consumes the `:` as a type annotation instead, leaving the `}` unsatisfied.
+
+**Fix**: Rename the field (e.g., `class` → `cls`). See the warning under [Type Definitions](#type-definitions) for the full list of reserved keywords.
+
 ## Parser Combinator Library (init/parser.mo)
 
 ### Status: In Progress
@@ -643,13 +653,24 @@ Tests: `test_struct_eq_in_match`, `test_eq_in_plain_match` in `init/tests.mo`.
 4. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Tests must live inside `parser.mo`.
 5. **`==` operator**: Resolves to `BEq.beq` class method before instance dispatch. Use `String.beq` directly.
 
-## Formatting and Warnings
+## Committing Changes
 
-Always format Rust code and fix all compiler warnings before committing:
+### Pre-commit Hooks
 
+Always commit with pre-commit hooks enabled. **Never** use `git commit --no-verify` — the pre-commit hooks ensure clippy, rustfmt, `cargo test`, and `cargo run -- test init/tests.mo` all pass before each commit. If a hook fails:
+1. Read the error message to identify the issue
+2. Fix the underlying problem (code warnings, test failures, formatting)
+3. Stage the fix and retry the commit
+
+### Pre-commit Checklist
+
+Before committing, ensure:
 ```bash
 cargo fmt
 cargo build --package monad-core 2>&1 | grep -E "warning:|error"
+cargo test
+cargo run -- test init/tests.mo
+cargo run -- test init/parser.mo
 ```
 
 ## Coding Agent Guide
