@@ -955,6 +955,25 @@ impl<'a> GlobalScope<'a> {
   pub fn find_ref(&'_ self, name: &ModulePath) -> Option<&DefRef<'_>> {
     self.def_refs.get(name)
   }
+  /// Try to resolve a class method reference for the given name and type.
+  /// Returns the instance definition reference, or an error.
+  fn resolve_class_method(
+    &self,
+    _name: &ModulePath,
+    typ: &Term,
+    def: &ClassDefRef,
+  ) -> Result<VarRef<'_>, ScopeError> {
+    let key = derive_instance_key(def, typ)?;
+    let instance = self
+      .find_instance(&key)
+      .ok_or_else(|| ScopeError::InstanceNotFound(key.clone()))?;
+    let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
+    let ins_def = self
+      .find_ref(&ins_def_name)
+      .ok_or(ScopeError::PathNotFound(ins_def_name))?;
+    Ok(ins_def.to_update_ref())
+  }
+
   pub fn find_any_ref(&'_ self, name: &ModulePath, typ: &Term) -> Result<VarRef<'_>, ScopeError> {
     if let Some(candidates) = self.conflicts.get(name) {
       return Err(ScopeError::AmbiguousName {
@@ -965,15 +984,16 @@ impl<'a> GlobalScope<'a> {
     if let Some(def) = self.find_ref(name) {
       Ok(def.to_var_ref())
     } else if let Some(def) = self.find_class_def(name) {
-      let key = derive_instance_key(def, typ)?;
-      let instance = self
-        .find_instance(&key)
-        .ok_or(ScopeError::InstanceNotFound(key))?;
-      let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
-      let ins_def = self
-        .find_ref(&ins_def_name)
-        .ok_or(ScopeError::PathNotFound(ins_def_name))?;
-      Ok(ins_def.to_update_ref())
+      let result = self.resolve_class_method(name, typ, def);
+      // Fallback: if IndexedMonad resolution fails, try Monad
+      if result.is_err() && is_indexed_monad_method(name) {
+        if let Some(monad_name) = to_monad_name(name) {
+          if let Some(monad_def) = self.find_class_def(&monad_name) {
+            return self.resolve_class_method(&monad_name, typ, monad_def);
+          }
+        }
+      }
+      result
     } else {
       Err(ScopeError::PathNotFound(name.clone()))
     }
@@ -2007,4 +2027,18 @@ impl<'a> Display for Scope<'a> {
         .join(", ")
     )
   }
+}
+
+/// Check if a ModulePath refers to an IndexedMonad class method (e.g., `IndexedMonad.bind`).
+fn is_indexed_monad_method(name: &ModulePath) -> bool {
+  let prefix = ModulePath::single(Identifier::new("IndexedMonad".to_string()));
+  name.is_prefix(&prefix)
+}
+
+/// Convert an IndexedMonad method name to the corresponding Monad method name.
+/// e.g., `IndexedMonad.bind` -> `Monad.bind`
+fn to_monad_name(name: &ModulePath) -> Option<ModulePath> {
+  let prefix = ModulePath::single(Identifier::new("IndexedMonad".to_string()));
+  let rest = name.remove_prefix(&prefix)?;
+  Some(ModulePath::single(Identifier::new("Monad".to_string())).extend(rest))
 }

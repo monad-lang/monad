@@ -12,7 +12,7 @@ fn test_do_parser_simple_bind() {
   let do_block = |s: &'static str| do_parser::<()>(s.into());
   let (_, r) = do_block(r#"do { let x <- monadic; return x }"#).unwrap();
   let expected = app(
-    pvar(vec!["Monad", "bind"]),
+    pvar(vec!["IndexedMonad", "bind"]),
     app(var("monadic"), lam(par("x"), var("x"))),
   );
   similar!(r, expected);
@@ -29,7 +29,7 @@ fn test_do_parser_let_and_bind() {
       value: num(1),
     }],
     app(
-      pvar(vec!["Monad", "bind"]),
+      pvar(vec!["IndexedMonad", "bind"]),
       app(var("monadic"), lam(par("y"), var("y"))),
     ),
   );
@@ -41,11 +41,11 @@ fn test_do_parser_multiple_binds() {
   let do_block = |s: &'static str| do_parser::<()>(s.into());
   let (_, r) = do_block(r#"do { let a <- ma; let b <- mb; return b }"#).unwrap();
   let inner = app(
-    pvar(vec!["Monad", "bind"]),
+    pvar(vec!["IndexedMonad", "bind"]),
     app(var("mb"), lam(par("b"), var("b"))),
   );
   let expected = app(
-    pvar(vec!["Monad", "bind"]),
+    pvar(vec!["IndexedMonad", "bind"]),
     app(var("ma"), lam(par("a"), inner)),
   );
   similar!(r, expected);
@@ -65,7 +65,7 @@ fn test_do_parser_complex_desugar() {
   let input = r#"do { let x := 1; let y <- get; return y }"#;
   let (_, r) = do_block(input).unwrap();
   let middle_bind = app(
-    pvar(vec!["Monad", "bind"]),
+    pvar(vec!["IndexedMonad", "bind"]),
     app(var("get"), lam(par("y"), var("y"))),
   );
   let expected = lets(
@@ -146,7 +146,7 @@ fn test_def_do_block_bind() {
   let (_, res) = def_parser(s).unwrap();
 
   let expected_body = app(
-    pvar(vec!["Monad", "bind"]),
+    pvar(vec!["IndexedMonad", "bind"]),
     app(var("get_value"), lam(par("x"), var("x"))),
   );
   similar!(
@@ -200,7 +200,7 @@ fn test_def_do_block_multiple_exprs() {
   let (_, res) = def_parser(s).unwrap();
 
   let expected_body = app(
-    pvar(vec!["Monad", "bind"]),
+    pvar(vec!["IndexedMonad", "bind"]),
     app(
       apps(var("println"), vec![str("first")]),
       lam(par("_"), apps(var("println"), vec![str("second")])),
