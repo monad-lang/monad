@@ -291,7 +291,7 @@ fn test_module_conflict_detection_bare_name_ambiguous() {
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path_c).expect("scope should exist");
 
-  let result = global.find_any_ref(&mpt("shared_name"), &Term::Type { universe: 0 });
+  let result = global.find_any_ref(&mpt("shared_name"), &sort1());
   assert!(result.is_err());
   if let Err(ScopeError::AmbiguousName { name, candidates }) = result {
     assert_eq!(name, mpt("shared_name"));
@@ -355,6 +355,6 @@ fn test_selective_use_only_filter() {
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path_b).expect("scope should exist");
 
-  assert!(global.find_any_ref(&mpt("foo"), &type0()).is_ok());
-  assert!(global.find_any_ref(&mpt("bar"), &type0()).is_err());
+  assert!(global.find_any_ref(&mpt("foo"), &sort1()).is_ok());
+  assert!(global.find_any_ref(&mpt("bar"), &sort1()).is_err());
 }

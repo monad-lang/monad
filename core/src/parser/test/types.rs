@@ -132,3 +132,32 @@ fn test_cons_param() {
   let (_, r) = cons_param::<()>(r#"(String -> Option Int)"#.into()).unwrap();
   similar!(r, vec![dpar("", pi(typ("String"), app2("Option", "Int")))]);
 }
+
+#[test]
+fn test_parse_sort() {
+  let (_, result) = type_base_expression::<()>("Sort 0".into()).unwrap();
+  similar!(result, crate::term::Term::Sort { level: 0 });
+
+  let (_, result) = type_base_expression::<()>("Sort 1".into()).unwrap();
+  similar!(result, crate::term::Term::Sort { level: 1 });
+
+  let (_, result) = type_base_expression::<()>("Sort 42".into()).unwrap();
+  similar!(result, crate::term::Term::Sort { level: 42 });
+}
+
+#[test]
+fn test_parse_sort_in_type_position() {
+  // Sort used as a type annotation (via parse_type)
+  let result = super::parse_type("Sort 1");
+  similar!(result, crate::term::Term::Sort { level: 1 });
+
+  // Sort used in Pi type
+  let (_, result) = type_top_expression::<()>("Sort 1 -> Sort 0".into()).unwrap();
+  similar!(
+    result,
+    crate::term::pi(
+      crate::term::Term::Sort { level: 1 },
+      crate::term::Term::Sort { level: 0 }
+    )
+  );
+}

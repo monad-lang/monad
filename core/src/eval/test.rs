@@ -10,7 +10,7 @@ use crate::term::test::{Similar, decl_def};
 use crate::term::{
   Decl, Hole, Identifier, ModulePath, Multiplicity, SourceContext, Term, Typed, app, app2, b_false,
   b_true, constructor, forall, id, io_term, lams, mp, mpt, mpvar, num, par, param, param_with_mult,
-  pi, some, str, strings_to_list_term, to_list_term, typ, type0, unit, var,
+  pi, some, sort1, str, strings_to_list_term, to_list_term, typ, unit, var,
 };
 use crate::term::{stru, stru_field, stru_field_with_mult};
 use crate::{set_of, similar};
@@ -67,8 +67,8 @@ fn test_compare_determine_type_vars() {
   let defined = var("A");
   let computed = app2("List", "A");
   let vars = [
-    (id("A"), (type0(), Some(app2("List", "A")))),
-    (id("B"), (type0(), Some(var("Bool")))),
+    (id("A"), (sort1(), Some(app2("List", "A")))),
+    (id("B"), (sort1(), Some(var("Bool")))),
   ];
   let free_vars: FreeVars = to_free_vars(&vars);
   let res = match_determine_type_vars(&defined, &computed, free_vars.clone());
@@ -77,8 +77,8 @@ fn test_compare_determine_type_vars() {
   let defined = pi(var("A"), var("B"));
   let computed = pi(app2("List", "A"), var("Bool"));
   let vars = [
-    (id("A"), (type0(), Some(app2("List", "A")))),
-    (id("B"), (type0(), Some(var("Bool")))),
+    (id("A"), (sort1(), Some(app2("List", "A")))),
+    (id("B"), (sort1(), Some(var("Bool")))),
   ];
   let free_vars: FreeVars = to_free_vars(&vars);
   let res = match_determine_type_vars(&defined, &computed, free_vars.clone());
@@ -90,8 +90,8 @@ fn test_compare_determine_type_vars() {
   let right = parse_type("_ -> _ -> List I64");
   let res = match_determine_type_vars(&left, &right, free_vars.clone());
   let vars = [
-    (id("L"), (pi(type0(), type0()), Some(var("List")))),
-    (id("A"), (type0(), Some(var("I64")))),
+    (id("L"), (pi(sort1(), sort1()), Some(var("List")))),
+    (id("A"), (sort1(), Some(var("I64")))),
   ];
   let free_vars: FreeVars = to_free_vars(&vars);
   similar!(res, Ok(free_vars));
@@ -162,13 +162,13 @@ fn test_compare_types() {
   let b = parse_type("{A : Type} -> {B : Type} -> A");
   similar!(
     match_resolve_type(&a, &b, &scope).unwrap(),
-    forall(param(id("A"), type0()), var("A"))
+    forall(param(id("A"), sort1()), var("A"))
   );
   let left = parse_type("{A : Type} -> A");
   let right = parse_type("{A : Type} -> List A");
   similar!(
     match_resolve_type(&left, &right, &scope).unwrap(),
-    forall(param(id("A"), type0()), app2("List", "A"))
+    forall(param(id("A"), sort1()), app2("List", "A"))
   );
   let a = parse_type("{A : Type} -> List A");
   let b = parse_type("{A : Type} -> A");
@@ -178,7 +178,7 @@ fn test_compare_types() {
   similar!(
     match_resolve_type(&a, &b, &scope).unwrap(),
     forall(
-      param(id("A"), type0()),
+      param(id("A"), sort1()),
       pi(
         app2("List", "A"),
         pi(pi(app2("List", "A"), var("Bool")), var("Bool"))
@@ -189,7 +189,7 @@ fn test_compare_types() {
   let right = parse_type("{A : Type} -> List A -> Bool");
   similar!(
     match_resolve_type(&left, &right, &scope).unwrap(),
-    forall(param(id("A"), type0()), pi(app2("List", "A"), var("Bool")))
+    forall(param(id("A"), sort1()), pi(app2("List", "A"), var("Bool")))
   );
   let left = parse_type("{A : Type} -> A -> List A -> List A");
   let right = parse_type("{B : Type} -> {A : Type} -> _ -> List A -> List B");
@@ -212,9 +212,9 @@ fn test_elaborate_type() {
   similar!(
     t_ano,
     forall(
-      param(id("B"), type0()),
+      param(id("B"), sort1()),
       forall(
-        param(id("A"), type0()),
+        param(id("A"), sort1()),
         pi(var("A"), pi(var("B"), var("String")))
       )
     )

@@ -297,14 +297,14 @@ impl Similar for Term {
         Var {
           name: NameRef::Id(i),
         },
-        Type { universe: _ },
-      ) if i.as_str() == "Type" => true,
+        Sort { level: _ },
+      ) if i.as_str() == "Type" || i.as_str() == "Prop" || i.as_str() == "Sort" => true,
       (
-        Type { universe: _ },
+        Sort { level: _ },
         Var {
           name: NameRef::Id(i),
         },
-      ) if i.as_str() == "Type" => true,
+      ) if i.as_str() == "Type" || i.as_str() == "Prop" || i.as_str() == "Sort" => true,
       (Term::Quote { term: t1 }, Term::Quote { term: t2 }) => t1.similar(t2),
       _ => self == other,
     }

@@ -7,10 +7,10 @@ use crate::{
   term::{
     Ann, ClassDefRef, Decl, DeclGenDef, Def, Identifier, Inductive, InductiveVariant, Instance,
     InstanceKey, Literal, ModulePath, Multiplicity, NameRef, Named, NumSuffix, SourceContext,
-    Term::{Forall, Hole, Pi, Quote},
+    Term::{Forall, Hole, Pi, Quote, Sort},
     TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, forall, lam_par,
     module::{LoadedModules, names_of_decls},
-    mpvar, num_suffix, param, pi_typs, pi_with_mult, type_u, type0, typed_term, var,
+    mpvar, num_suffix, param, pi_typs, pi_with_mult, sort_u, sort1, typed_term, var,
   },
   vec_fmt,
 };
@@ -312,7 +312,7 @@ pub fn type_check_instance<'a>(
 
   // Collect type variables from constraints and instance args FIRST
   let mut type_vars: crate::Map<Identifier, Term> = crate::Map::new();
-  let default_type = Term::Type { universe: 0 };
+  let default_type = sort1();
   for constraint in &instance.constraints {
     for var in constraint.vars() {
       type_vars.insert(var.clone(), default_type.clone());
@@ -744,8 +744,14 @@ fn match_resolve_type_inner<'a>(
         }
       }
     }
-    (Type { universe: _ }, Var { name: Id(name) }) => name.as_str() == "Type",
-    (Var { name: Id(name) }, Type { universe: _ }) => name.as_str() == "Type",
+    (Sort { level: _ }, Var { name: Id(name) }) => {
+      let s = name.as_str();
+      s == "Type" || s == "Prop" || s == "Sort"
+    }
+    (Var { name: Id(name) }, Sort { level: _ }) => {
+      let s = name.as_str();
+      s == "Type" || s == "Prop" || s == "Sort"
+    }
     (Var { name: Id(name) }, _) => {
       if check_free_vars(name, right, free_vars) {
         true
@@ -1541,16 +1547,13 @@ fn type_check_with_env(
         Ok(typed_term(term, lam_type))
       }
     }
-    Type { universe } => {
-      if let Type { universe: u2 } = expected_type
-        && u2 > universe
-      {
-        let universe = universe + 1;
-        Ok(typed_term(term, type_u(universe)))
-      } else {
-        Err(TypeError::ExpectedType(term))
-      }
-    }
+    Sort { level } => match &expected_type {
+      Hole => Ok(typed_term(term, sort_u(level + 1))),
+      Sort {
+        level: expected_level,
+      } if *expected_level > level => Ok(typed_term(term, sort_u(level + 1))),
+      _ => Err(TypeError::ExpectedType(term)),
+    },
     Ntv { native: _ } => Ok(typed_term(term.clone(), expected_type.clone())),
     Con(Constructor {
       ref typ_name,
@@ -1609,14 +1612,13 @@ fn type_check_with_env(
       ..
     } => {
       if expected_type.is_type() {
-        let _arg = type_check_with_env(*arg.clone(), type0(), &scope, usage, track_usage)?;
-        let _ret = type_check_with_env(*ret.clone(), type0(), &scope, usage, track_usage)?;
-        Ok(typed_term(term.clone(), type0()))
+        let _arg = type_check_with_env(*arg.clone(), sort1(), &scope, usage, track_usage)?;
+        let _ret = type_check_with_env(*ret.clone(), sort1(), &scope, usage, track_usage)?;
+        Ok(typed_term(term.clone(), sort1()))
       } else {
         Err(TypeError::ExpectedType(expected_type.clone()))
       }
     }
-    Term::Prop => Ok(typed_term(term, type0())),
     Hole => Ok(typed_term(term, expected_type)),
     Ann { term, typ } => {
       let tt = type_check_with_env(*term, *typ, &scope, usage, track_usage)?;
@@ -1697,7 +1699,7 @@ pub fn elaborate_type(
     .collect();
   let free_vars = free_vars(&typ, known_names);
   let free_vars: Set<&Identifier> = free_vars.union(&constraint_vars).collect();
-  let default_type = type0();
+  let default_type = sort1();
   let free_vars_map: Map<&Identifier, &Term> =
     free_vars.into_iter().map(|i| (i, &default_type)).collect();
 
@@ -1764,7 +1766,7 @@ pub fn pi_to_vec(mut typ: Term) -> (Vec<Term>, Term) {
 
 pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -> Inductive {
   let is_class = ind.variant() == &InductiveVariant::Class;
-  let default_type = type0();
+  let default_type = sort1();
   let params: Map<Identifier, Term> = ind
     .params()
     .iter()
@@ -1797,7 +1799,7 @@ pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -
       pi_typs(class_defs, ret)
     } else {
       let free_vars = free_vars(&typ, &known_names);
-      let default_type = type0();
+      let default_type = sort1();
       let vars = free_vars
         .iter()
         .map(|i| (i, &default_type))
@@ -1812,7 +1814,7 @@ pub fn elaborate_instance(mut ins: Instance, known_names: &Set<&ModulePath>) -> 
   for imp in ins.impls_map.values_mut() {
     let typ = imp.typ.clone();
     let free_vars = free_vars(&typ, known_names);
-    let default_type = type0();
+    let default_type = sort1();
     let vars = free_vars.iter().map(|i| (i, &default_type)).collect();
     imp.typ = add_forall_to_type(typ, &vars);
   }

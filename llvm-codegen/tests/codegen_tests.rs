@@ -1,13 +1,13 @@
-use monad_core::term::{Decl, Param, Term, def, id, lam, lams, mpt, num, param, pi, type0};
+use monad_core::term::{Decl, Param, Term, def, id, lam, lams, mpt, num, param, pi, sort1};
 
 use monad_llvm_codegen::compile_decls;
 
 fn make_def(name: &str, params: Vec<Param>, body: Term) -> Decl {
   let param_types: Vec<Term> = params.iter().map(|p| (*p.typ).clone()).collect();
   let full_type = if param_types.is_empty() {
-    type0()
+    sort1()
   } else {
-    let mut typ = type0();
+    let mut typ = sort1();
     for pt in param_types.into_iter().rev() {
       typ = pi(pt, typ);
     }
@@ -40,7 +40,7 @@ fn test_compile_lambda() {
   let body = Term::Var {
     name: monad_core::term::NameRef::Id(id("x")),
   };
-  let decls = vec![make_def("identity", vec![param(id("x"), type0())], body)];
+  let decls = vec![make_def("identity", vec![param(id("x"), sort1())], body)];
 
   let module = compile_decls(&decls).unwrap();
   let output = module.emit();
@@ -123,7 +123,7 @@ fn test_compile_nested_lambdas() {
   let inner_body = Term::Var {
     name: monad_core::term::NameRef::Id(id("x")),
   };
-  let inner_lam = lam(param(id("x"), type0()), inner_body);
+  let inner_lam = lam(param(id("x"), sort1()), inner_body);
   let outer_body = Term::App {
     fun: Box::new(inner_lam),
     arg: Box::new(num(42)),

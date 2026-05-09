@@ -1,6 +1,6 @@
 use monad_core::term::{
   Literal,
-  Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Ntv, Pi, Type, Var},
+  Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Ntv, Pi, Sort, Var},
 };
 
 use crate::ir::{LLVMType, LLVMValue};
@@ -51,7 +51,7 @@ pub fn compile_term(ctx: &mut CodegenCtx, term: &Term) -> Result<LLVMValue, Stri
 
     Ann { term, .. } => compile_term(ctx, term),
 
-    Forall { .. } | Pi { .. } | Type { .. } => Ok(LLVMValue::Unit),
+    Forall { .. } | Pi { .. } | Sort { .. } => Ok(LLVMValue::Unit),
 
     Ctx { term, .. } => compile_term(ctx, term),
 

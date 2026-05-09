@@ -21,7 +21,7 @@ use crate::term::{
   Literal,
   NameRef::{self, Id, Index},
   Param,
-  Term::{self, Ann, App, Con, Ctx, Lam, Lit, Ntv, Pi, Quote, Type, Var},
+  Term::{self, Ann, App, Con, Ctx, Lam, Lit, Ntv, Pi, Quote, Sort, Var},
   apps, id,
 };
 
@@ -543,8 +543,7 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       let body = substitute(*body, nref, new_term);
       forall(param(name, typ), body)
     }
-    Term::Prop => term,
-    Type { universe: _ } => term,
+    Sort { .. } => term,
     Term::Hole => term,
     Ann { term, typ } => {
       let term = substitute(*term, nref, new_term);

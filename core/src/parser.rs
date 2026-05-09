@@ -28,7 +28,7 @@ use nom::{
   branch::alt,
   bytes::complete::{tag, take_until, take_while},
   character::complete::{
-    alpha1, char, i64, line_ending, multispace0, multispace1, not_line_ending,
+    alpha1, char, digit1, i64, line_ending, multispace0, multispace1, not_line_ending,
   },
   combinator::{eof, map, not, opt, peek, recognize, success, verify},
   multi::{fold_many0, many0, many1},
@@ -61,7 +61,7 @@ const RESERVED_KEYWORDS: &[&str] = &[
   "def", "defmacro", "let", "in", "use", "open", "class", "struct", "instance", "type", "fn", "ꟛ",
   "match", "if", "then", "else", "infix", "return", "for", "do", "quote", "with",
 ];
-const RESERVED_NAMES: &[&str] = &["Type", "Pred"];
+const RESERVED_NAMES: &[&str] = &["Type", "Pred", "Sort"];
 
 fn is_reserved_keyword(s: &str) -> bool {
   RESERVED_KEYWORDS.contains(&s)
@@ -171,7 +171,15 @@ fn forall_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
 }
 
 fn type_base_expression<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((application, variable, type_parens)).parse(input)
+  alt((sort_parser, application, variable, type_parens)).parse(input)
+}
+
+fn sort_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, _) = tag("Sort")(input)?;
+  let (input, _) = ws1(input)?;
+  let (input, level_str) = digit1(input)?;
+  let level: u64 = level_str.fragment().parse().unwrap_or(0);
+  Ok((input, Term::Sort { level }))
 }
 
 fn pi_type_expression<X: Clone>(input: Span<X>) -> Res<Term, X> {

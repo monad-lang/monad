@@ -214,7 +214,8 @@ impl LoadedModules {
 pub struct Builtins {
   path: ModulePath,
   loc: SourceRange,
-  type_0: Term,
+  sort_0: Term,
+  sort_1: Term,
   pub(crate) type_map: Map<u64, Term>,
   pub(crate) prelude_path: ModulePath,
 }
@@ -229,25 +230,36 @@ impl Builtins {
     Builtins {
       path: mpt("'builtins"),
       loc: Default::default(),
-      type_0: type0(),
+      sort_0: sort0(),
+      sort_1: sort1(),
       type_map: Map::new(),
       prelude_path: mpt("'prelude"),
     }
   }
-  pub fn get_type_u_term(&mut self, universe: u64) -> &Term {
-    if self.type_map.contains_key(&universe) {
-      self.type_map.insert(universe, type_u(universe));
+  pub fn get_sort_u_term(&mut self, level: u64) -> &Term {
+    if !self.type_map.contains_key(&level) {
+      self.type_map.insert(level, sort_u(level));
     }
-    self.type_map.get(&universe).unwrap()
+    self.type_map.get(&level).unwrap()
   }
 
-  fn get_type_0(&self) -> DefRef<'_> {
+  fn get_sort_0(&self) -> DefRef<'_> {
+    DefRef {
+      module: &self.path,
+      name: mpt("Prop"),
+      term: &self.sort_0,
+      typ: &self.sort_0,
+      loc: &self.loc,
+    }
+  }
+
+  fn get_sort_1(&self) -> DefRef<'_> {
     DefRef {
       module: &self.path,
       name: mpt("Type"),
-      term: &self.type_0,
-      typ: &self.type_0,
-      loc: &self.loc, // TODO fix
+      term: &self.sort_1,
+      typ: &self.sort_1,
+      loc: &self.loc,
     }
   }
 }
@@ -386,9 +398,17 @@ impl GlobalScopeData {
     def_refs.insert(
       mpt("Type"),
       (
-        builtins.get_type_0().typ.clone(),
-        builtins.get_type_0().term.clone(),
-        builtins.get_type_0().module.clone(),
+        builtins.get_sort_1().typ.clone(),
+        builtins.get_sort_1().term.clone(),
+        builtins.get_sort_1().module.clone(),
+      ),
+    );
+    def_refs.insert(
+      mpt("Prop"),
+      (
+        builtins.get_sort_0().typ.clone(),
+        builtins.get_sort_0().term.clone(),
+        builtins.get_sort_0().module.clone(),
       ),
     );
 
@@ -728,7 +748,8 @@ impl<'a> GlobalScope<'a> {
       }
     }
 
-    def_refs.insert(mpt("Type"), builtins.get_type_0());
+    def_refs.insert(mpt("Type"), builtins.get_sort_1());
+    def_refs.insert(mpt("Prop"), builtins.get_sort_0());
 
     let class_defs = modules
       .iter()

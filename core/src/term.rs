@@ -193,12 +193,16 @@ pub fn mpt(s: &str) -> ModulePath {
   ModulePath::top(s)
 }
 
-pub fn type_u(universe: u64) -> Term {
-  Term::Type { universe }
+pub fn sort_u(level: u64) -> Term {
+  Term::Sort { level }
 }
 
-pub fn type0() -> Term {
-  Term::Type { universe: 0 }
+pub fn sort0() -> Term {
+  Term::Sort { level: 0 }
+}
+
+pub fn sort1() -> Term {
+  Term::Sort { level: 1 }
 }
 
 pub fn pi_var(name: Identifier, arg: Term, ret: Term) -> Term {
@@ -305,7 +309,7 @@ pub fn stru(
   fields: Vec<StructField>,
   attributes: Vec<Attribute>,
 ) -> Inductive {
-  let typ = params_to_inductive_type(&params, type0());
+  let typ = params_to_inductive_type(&params, sort1());
   let defaults: Map<Identifier, Term> = fields
     .iter()
     .filter_map(|d| d.default_value.clone().map(|v| (d.name.clone(), v)))
@@ -401,12 +405,12 @@ pub fn induct_constructor(
 
 fn params_to_inductive_type(params: &[Param], typ: Term) -> Term {
   if params.is_empty() {
-    type0()
+    sort1()
   } else {
     pi_typs(
       params
         .iter()
-        .map(|p| p.typ.to_owned().replace_hole(type0))
+        .map(|p| p.typ.to_owned().replace_hole(sort1))
         .collect(),
       typ,
     )
@@ -421,7 +425,7 @@ pub fn inductive(
   constructors: Vec<InductConstructor>,
   attributes: Vec<Attribute>,
 ) -> Inductive {
-  let typ = params_to_inductive_type(&params, typ.replace_hole(type0));
+  let typ = params_to_inductive_type(&params, typ.replace_hole(sort1));
 
   let term = inductive_term(name.clone(), params.clone());
   Inductive {
@@ -469,7 +473,7 @@ pub fn class(
   defs: Vec<ClassDef>,
   attributes: Vec<Attribute>,
 ) -> Inductive {
-  let typ = params_to_inductive_type(&params, type0());
+  let typ = params_to_inductive_type(&params, sort1());
   let con_typs = defs.iter().map(|d| d.typ.clone()).collect();
   let con_params = defs
     .into_iter()
@@ -1215,10 +1219,8 @@ pub enum Term {
     term: Box<Term>,
   },
   /// Propositions
-  Prop,
-  /// Type of types
-  Type {
-    universe: u64,
+  Sort {
+    level: u64,
   },
   /// Hole, bottom
   Hole,
@@ -1258,8 +1260,11 @@ impl Term {
   }
   pub fn is_type(&self) -> bool {
     match self {
-      Term::Type { universe: _ } => true,
-      Var { name } if name.is_name() => name.to_path().unwrap() == mpt("Type"),
+      Term::Sort { .. } => true,
+      Var { name } if name.is_name() => {
+        let path = name.to_path().unwrap();
+        matches!(path.as_str(), Some("Type" | "Prop" | "Sort"))
+      }
       Pi {
         arg: _,
         ret: _,
@@ -1328,8 +1333,8 @@ impl Term {
         arg_name: _,
         ..
       } => "pi",
-      Prop => "prop",
-      Type { universe: _ } => "type",
+      Sort { level: 0 } => "prop",
+      Sort { .. } => "type",
       Hole => "hole",
       Ann { .. } => "ann",
       Quote { .. } => "quote",
@@ -1402,7 +1407,7 @@ pub trait Typed {
   fn typ(&self) -> &Term;
 }
 
-pub use Term::{Ann, App, Con, Ctx, Forall, Hole, Lam, Lit, Ntv, Pi, Prop, Quote, Type, Var};
+pub use Term::{Ann, App, Con, Ctx, Forall, Hole, Lam, Lit, Ntv, Pi, Quote, Sort, Var};
 
 impl Display for Term {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1411,13 +1416,11 @@ impl Display for Term {
       Lam { param, body } => write!(f, "(fn {param} => {body})"),
       App { fun, arg } => write!(f, "({fun} {arg})"),
       Lit { value } => write!(f, "{value}"),
-      Type { universe } => {
-        if universe > &0 {
-          write!(f, "Type {universe}")
-        } else {
-          write!(f, "Type")
-        }
-      }
+      Sort { level } => match level {
+        0 => write!(f, "Prop"),
+        1 => write!(f, "Type"),
+        n => write!(f, "Type {}", n - 1),
+      },
       Ntv { native: _ } => write!(f, "native"),
       Con(Constructor {
         typ_name,
@@ -1450,7 +1453,6 @@ impl Display for Term {
         }
       }
       Forall { name, typ, body } => write!(f, "{{{name} : {typ}}} -> {body}"),
-      Prop => write!(f, "Prop"),
       Hole => write!(f, "_"),
       Ann { term, typ } => write!(f, "{term} : {typ}"),
       Quote { term } => write!(f, "quote {{ {term} }}"),

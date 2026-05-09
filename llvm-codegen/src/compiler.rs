@@ -286,7 +286,7 @@ mod tests {
   use std::fs;
   use std::sync::atomic::{AtomicU64, Ordering};
 
-  use monad_core::term::{Decl, def, id, lams, mpt, num, param, pi, type0};
+  use monad_core::term::{Decl, def, id, lams, mpt, num, param, pi, sort1};
 
   static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -301,9 +301,9 @@ mod tests {
     use monad_core::term::Term;
     let param_types: Vec<Term> = params.iter().map(|p| (*p.typ).clone()).collect();
     let full_type = if param_types.is_empty() {
-      type0()
+      sort1()
     } else {
-      let mut typ = type0();
+      let mut typ = sort1();
       for pt in param_types.into_iter().rev() {
         typ = pi(pt, typ);
       }
@@ -356,7 +356,7 @@ mod tests {
     let decls = vec![
       make_def(
         "add",
-        vec![param(id("a"), type0()), param(id("b"), type0())],
+        vec![param(id("a"), sort1()), param(id("b"), sort1())],
         add_body,
       ),
       make_def("main", vec![], main_body),
