@@ -1,6 +1,6 @@
 use crate::term::module::GlobalScope;
 use crate::term::{
-  Identifier, Inductive, Instance, InstanceKey, ModulePath, Term, TypeConstraint, param,
+  Identifier, Inductive, Instance, InstanceKey, ModulePath, Param, Term, TypeConstraint, param,
 };
 use crate::{Map, empty_set};
 
@@ -78,11 +78,11 @@ impl<'a> ConstraintSolver<'a> {
     constraint: &TypeConstraint,
     key_args: &Map<Identifier, &Term>,
   ) -> bool {
-    // Get the concrete type for each constraint var from the key args
-    let concrete_types: Vec<Term> = constraint
+    // Get (var_name, concrete_type) pairs for each constraint var from the key args
+    let concrete_types: Vec<(Identifier, Term)> = constraint
       .vars()
       .iter()
-      .filter_map(|v| key_args.get(v).map(|t| (*t).clone()))
+      .filter_map(|v| key_args.get(v).map(|t| (v.clone(), (*t).clone())))
       .collect();
 
     // If we couldn't resolve all vars, skip (will be caught elsewhere)
@@ -91,28 +91,36 @@ impl<'a> ConstraintSolver<'a> {
     }
 
     let class_name = constraint.class();
-    let concrete_type = &concrete_types[0];
-    let visit_key = format!("{class_name}({concrete_type})");
+    let types_str = concrete_types
+      .iter()
+      .map(|(_, t)| format!("{t}"))
+      .collect::<Vec<_>>()
+      .join(",");
+    let visit_key = format!("{class_name}({types_str})");
 
     if self.visiting.contains(&visit_key) {
       return true;
     }
     self.visiting.insert(visit_key.clone());
 
-    let result = self.resolve_constraint(class_name, concrete_type);
+    let result = self.resolve_constraint(class_name, &concrete_types);
 
     self.visiting.remove(&visit_key);
     result
   }
 
-  /// Try to find an instance for the given class and concrete type,
+  /// Try to find an instance for the given class and concrete type args,
   /// then recursively check that instance's constraints.
-  fn resolve_constraint(&mut self, class_name: &ModulePath, concrete_type: &Term) -> bool {
+  fn resolve_constraint(
+    &mut self,
+    class_name: &ModulePath,
+    concrete_types: &[(Identifier, Term)],
+  ) -> bool {
     let Some(class) = self.global.find_inductive(class_name) else {
       return false;
     };
 
-    let key = build_constraint_key(class_name.clone(), concrete_type.clone(), class);
+    let key = build_constraint_key(class_name.clone(), concrete_types, class);
     let Some(instance) = self.global.find_instance(&key) else {
       return false;
     };
@@ -121,23 +129,27 @@ impl<'a> ConstraintSolver<'a> {
   }
 }
 
-/// Build an InstanceKey for a constraint like `Add I64`.
+/// Build an InstanceKey for a constraint like `Add I64` or `HAdd I64 I64 I64`.
+/// Matches all class params to their concrete types by name.
 fn build_constraint_key(
   class_name: ModulePath,
-  concrete_type: Term,
+  concrete_types: &[(Identifier, Term)],
   class: &Inductive,
 ) -> InstanceKey {
-  let param_name = class
+  let args: Vec<Param> = class
     .params
-    .first()
-    .map(|p| p.name.clone())
-    .unwrap_or_else(|| Identifier::new("A".to_string()));
+    .iter()
+    .map(|p| {
+      let typ = concrete_types
+        .iter()
+        .find(|(name, _)| name == &p.name)
+        .map(|(_, typ)| typ.clone())
+        .unwrap_or_else(|| (*p.typ).clone());
+      param(p.name.clone(), typ)
+    })
+    .collect();
 
-  InstanceKey::new(
-    class_name,
-    Vec::new(),
-    vec![param(param_name, concrete_type)],
-  )
+  InstanceKey::new(class_name, Vec::new(), args)
 }
 
 /// Top-level function: check if an instance's constraints are satisfied.

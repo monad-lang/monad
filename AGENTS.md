@@ -30,7 +30,8 @@ This document explains how to modify the Monad language codebase and write corre
 │   └── tests.mo       # Standard library tests
 ├── std/
 │   └── test.mo        # Test utilities (Test.assert)
-└── examples/         # Example programs
+├── examples/         # Example programs
+└── plans/            # Symlink to external repo with design plans
 ```
 
 ## Building and Running
