@@ -30,6 +30,10 @@ pub enum ScopeError {
   IdNotFound(Identifier),
   OperatorNotDefined(Operator),
   InstanceNotFound(InstanceKey),
+  AmbiguousName {
+    name: ModulePath,
+    candidates: Vec<ModulePath>,
+  },
   Generic(String),
 }
 
@@ -59,6 +63,14 @@ impl Display for ScopeError {
       }
       InstanceNotFound(instance_key) => {
         write!(f, "instance not found {}", instance_key)
+      }
+      AmbiguousName { name, candidates } => {
+        let modules = candidates
+          .iter()
+          .map(|c| format!("{name} available as {c}"))
+          .collect::<Vec<String>>()
+          .join(", ");
+        write!(f, "ambiguous name `{name}`, {}", modules)
       }
       Generic(s) => write!(f, "{s}"),
       OperatorNotDefined(s) => write!(f, "operator {s} not defined"),
@@ -250,6 +262,7 @@ pub struct GlobalScopeData {
   inductives: Map<ModulePath, Inductive>,
   classes: Map<ModulePath, Inductive>,
   infixes: Map<Operator, Infix>,
+  conflicts: Map<ModulePath, Vec<ModulePath>>,
 }
 
 impl GlobalScopeData {
@@ -293,52 +306,61 @@ impl GlobalScopeData {
     }
 
     // Build def_refs from all visible modules
-    let def_refs: Map<ModulePath, (Term, Term, ModulePath)> = visible_modules
-      .iter()
-      .flat_map(|(_mod_path, modu)| {
-        modu
-          .get_def_refs(&opens)
-          .into_iter()
-          .flat_map(|d| {
-            // For defs from other modules (not current), add with module prefix
-            let is_current = modu.path() == module.path();
-            let is_used = module
-              .get_uses()
-              .iter()
-              .any(|u| &u.module_path == modu.path());
+    let mut def_refs: Map<ModulePath, (Term, Term, ModulePath)> = Map::new();
+    let mut bare_names: Map<ModulePath, ModulePath> = Map::new();
+    let mut conflicts: Map<ModulePath, Vec<ModulePath>> = Map::new();
 
-            if !is_current && is_used {
-              // Used module: add with module prefix
-              let prefixed_name = modu.path().clone().extend(d.name.clone());
-              vec![
-                (
-                  d.name.clone(),
-                  (d.typ.clone(), d.term.clone(), d.module.clone()),
-                ),
-                (
-                  prefixed_name,
-                  (d.typ.clone(), d.term.clone(), d.module.clone()),
-                ),
-              ]
-            } else {
-              // Current module or implicit: just use original name
-              vec![(
-                d.name.clone(),
-                (d.typ.clone(), d.term.clone(), d.module.clone()),
-              )]
+    for (_mod_path, modu) in &visible_modules {
+      let is_current = modu.path() == module.path();
+      let is_used = module
+        .get_uses()
+        .iter()
+        .any(|u| &u.module_path == modu.path());
+
+      for d in modu.get_def_refs(&opens) {
+        if !is_current && is_used {
+          let prefixed_name = modu.path().clone().extend(d.name.clone());
+          def_refs.insert(
+            prefixed_name,
+            (d.typ.clone(), d.term.clone(), d.module.clone()),
+          );
+
+          let bare_name = d.name.clone();
+          match bare_names.get(&bare_name) {
+            Some(prev_module) if prev_module != modu.path() => {
+              def_refs.remove(&bare_name);
+              conflicts
+                .entry(bare_name.clone())
+                .or_default()
+                .push(prev_module.clone());
+              conflicts
+                .entry(bare_name)
+                .or_default()
+                .push(modu.path().clone());
             }
-          })
-          .collect::<Vec<_>>()
-      })
-      .chain([(
-        mpt("Type"),
-        (
-          builtins.get_type_0().typ.clone(),
-          builtins.get_type_0().term.clone(),
-          builtins.get_type_0().module.clone(),
-        ),
-      )])
-      .collect();
+            None => {
+              bare_names.insert(bare_name.clone(), modu.path().clone());
+              def_refs.insert(bare_name, (d.typ.clone(), d.term.clone(), d.module.clone()));
+            }
+            _ => {}
+          }
+        } else {
+          def_refs.insert(
+            d.name.clone(),
+            (d.typ.clone(), d.term.clone(), d.module.clone()),
+          );
+        }
+      }
+    }
+
+    def_refs.insert(
+      mpt("Type"),
+      (
+        builtins.get_type_0().typ.clone(),
+        builtins.get_type_0().term.clone(),
+        builtins.get_type_0().module.clone(),
+      ),
+    );
 
     // Build class_defs from all visible modules
     let class_defs: Map<ModulePath, (Identifier, Term, ModulePath)> = visible_modules
@@ -409,6 +431,7 @@ impl GlobalScopeData {
       inductives,
       classes,
       infixes,
+      conflicts,
     }
   }
 }
@@ -464,6 +487,7 @@ pub struct GlobalScope<'a> {
   classes: Map<&'a ModulePath, &'a Inductive>,
   infixes: Map<&'a Operator, &'a Infix>,
   all_scopes: Map<&'a ModulePath, &'a GlobalScopeData>,
+  conflicts: Map<ModulePath, Vec<ModulePath>>,
 }
 
 impl<'a> GlobalScope<'a> {
@@ -512,8 +536,15 @@ impl<'a> GlobalScope<'a> {
     modules.extend(implicit);
 
     let empty_all_scopes: Map<&ModulePath, &GlobalScopeData> = Map::new();
-    let mut global =
-      GlobalScope::from_modules(path, modules, opens.clone(), loaded, empty_all_scopes);
+    let used_set: Set<ModulePath> = uses.iter().map(|u| u.module_path.clone()).collect();
+    let mut global = GlobalScope::from_modules(
+      path,
+      modules,
+      opens.clone(),
+      loaded,
+      empty_all_scopes,
+      &used_set,
+    );
     for ctx in decls {
       global.load_decl(ctx, &opens, path);
     }
@@ -555,6 +586,7 @@ impl<'a> GlobalScope<'a> {
       .iter()
       .map(|ctx| ctx.value())
       .collect();
+    let used_set: Set<ModulePath> = uses.iter().map(|u| u.module_path.clone()).collect();
 
     let mut modules: Map<&ModulePath, &Module> = Map::new();
 
@@ -591,6 +623,7 @@ impl<'a> GlobalScope<'a> {
       opens,
       loaded,
       empty_all_scopes,
+      &used_set,
     ))
   }
   fn from_modules(
@@ -599,14 +632,52 @@ impl<'a> GlobalScope<'a> {
     opens: Vec<&'a Open>,
     loaded: &'a LoadedModules,
     all_scopes: Map<&'a ModulePath, &'a GlobalScopeData>,
+    used_modules: &Set<ModulePath>,
   ) -> Self {
     let builtins = &loaded.builtins;
-    let def_refs = modules
-      .iter()
-      .flat_map(|(_path, module)| module.get_def_refs(&opens).into_iter())
-      .chain([builtins.get_type_0()])
-      .map(|d| (d.name.clone(), d))
-      .collect();
+
+    let mut def_refs: Map<ModulePath, DefRef<'a>> = Map::new();
+    let mut bare_names: Map<ModulePath, ModulePath> = Map::new();
+    let mut conflicts: Map<ModulePath, Vec<ModulePath>> = Map::new();
+
+    for (mp_mod, module) in &modules {
+      let is_used = **mp_mod != *current_path && used_modules.contains(mp_mod);
+
+      for d in module.get_def_refs(&opens) {
+        if is_used {
+          let prefixed_name = module.path().clone().extend(d.name.clone());
+          let prefixed_def = DefRef {
+            name: prefixed_name,
+            typ: d.typ,
+            term: d.term,
+            module: d.module,
+            loc: d.loc,
+          };
+          def_refs.insert(prefixed_def.name.clone(), prefixed_def);
+
+          let bare_name = d.name.clone();
+          match bare_names.get(&bare_name) {
+            Some(prev_mod) if prev_mod != module.path() => {
+              def_refs.remove(&bare_name);
+              conflicts
+                .entry(bare_name.clone())
+                .or_default()
+                .extend([prev_mod.clone(), module.path().clone()]);
+            }
+            None => {
+              bare_names.insert(bare_name.clone(), module.path().clone());
+              def_refs.insert(bare_name, d);
+            }
+            _ => {}
+          }
+        } else {
+          def_refs.insert(d.name.clone(), d);
+        }
+      }
+    }
+
+    def_refs.insert(mpt("Type"), builtins.get_type_0());
+
     let class_defs = modules
       .iter()
       .flat_map(|(_path, module)| module.get_class_def_refs(&opens).into_iter())
@@ -651,6 +722,7 @@ impl<'a> GlobalScope<'a> {
       classes,
       inductives,
       all_scopes,
+      conflicts,
     }
   }
 
@@ -719,6 +791,8 @@ impl<'a> GlobalScope<'a> {
 
     let infixes: Map<&'a Operator, &'a Infix> = data.infixes.iter().collect();
 
+    let conflicts = data.conflicts.clone();
+
     GlobalScope {
       infixes,
       modules: Map::new(),
@@ -730,6 +804,7 @@ impl<'a> GlobalScope<'a> {
       classes,
       inductives,
       all_scopes,
+      conflicts,
     }
   }
 
@@ -820,6 +895,12 @@ impl<'a> GlobalScope<'a> {
     self.def_refs.get(name)
   }
   pub fn find_any_ref(&'_ self, name: &ModulePath, typ: &Term) -> Result<VarRef<'_>, ScopeError> {
+    if let Some(candidates) = self.conflicts.get(name) {
+      return Err(ScopeError::AmbiguousName {
+        name: name.clone(),
+        candidates: candidates.clone(),
+      });
+    }
     if let Some(def) = self.find_ref(name) {
       Ok(def.to_var_ref())
     } else if let Some(def) = self.find_class_def(name) {
