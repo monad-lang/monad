@@ -1918,7 +1918,20 @@ impl ModulePath {
   pub fn open(&self, opens: &Vec<&Open>) -> Vec<ModulePath> {
     opens
       .iter()
-      .filter_map(|open| self.remove_prefix(&open.module_path))
+      .filter_map(|open| {
+        self
+          .remove_prefix(&open.module_path)
+          .and_then(|opened| match &open.filter {
+            OpenFilter::All => Some(opened),
+            OpenFilter::Only(names) => {
+              if names.contains(opened.last()) {
+                Some(opened)
+              } else {
+                None
+              }
+            }
+          })
+      })
       .collect()
   }
   /// Check if ModulePath is a prefix
@@ -1983,9 +1996,16 @@ impl Use {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum OpenFilter {
+  All,
+  Only(Vec<Identifier>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Open {
   pub source_location: SourceRange,
   pub(crate) module_path: ModulePath,
+  pub(crate) filter: OpenFilter,
 }
 
 impl Open {

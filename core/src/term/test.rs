@@ -348,7 +348,7 @@ impl Similar for Use {
 }
 impl Similar for Open {
   fn similar(&self, other: &Self) -> bool {
-    self.module_path == other.module_path
+    self.module_path == other.module_path && self.filter == other.filter
   }
 }
 impl Similar for Decl {
@@ -391,6 +391,7 @@ pub fn decl_open(name_path: Vec<&str>) -> Decl {
   Decl::Open(Open {
     source_location: Default::default(),
     module_path: ModulePath::new(ids),
+    filter: OpenFilter::All,
   })
 }
 

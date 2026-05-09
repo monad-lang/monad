@@ -11,8 +11,8 @@ use crate::{
   term::{
     AttrArg, Attribute, ClassDef, Decl, DeclGenDef, Def, Documentation, Identifier,
     InductConstructor, Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath,
-    Multiplicity, NameRef, NumSuffix, Open, Operator, Param, SourceContext, SourceRange,
-    StructField,
+    Multiplicity, NameRef, NumSuffix, Open, OpenFilter, Operator, Param, SourceContext,
+    SourceRange, StructField,
     Term::{self, Hole, Var},
     TypeConstraint, Use, UseFilter, app, apps, case, class, class_def, ctx, def, def_with_native,
     float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
@@ -1500,6 +1500,15 @@ fn open_parser(input: Span) -> Res<Open> {
   let (input, _) = ws1(input)?;
   let (input, module_path) =
     alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
+  let (input, filter) = opt(preceded(
+    (ws0, tag("using"), ws0),
+    delimited(char('('), many1(terminated(identifier, ws0)), char(')')),
+  ))
+  .parse(input)?;
+  let filter = match filter {
+    Some(names) => OpenFilter::Only(names),
+    None => OpenFilter::All,
+  };
   let (input, end) = info(input)?;
   let source_location = SourceRange::new(start.into(), end.into());
 
@@ -1508,6 +1517,7 @@ fn open_parser(input: Span) -> Res<Open> {
     Open {
       module_path,
       source_location,
+      filter,
     },
   ))
 }
