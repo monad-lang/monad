@@ -312,20 +312,37 @@ impl GlobalScopeData {
 
     for (_mod_path, modu) in &visible_modules {
       let is_current = modu.path() == module.path();
-      let is_used = module
+      let use_decl = module
         .get_uses()
         .iter()
-        .any(|u| &u.module_path == modu.path());
+        .find(|u| &u.module_path == modu.path());
+      let is_used = use_decl.is_some();
+      let filter = use_decl.map(|u| &u.filter);
 
       for d in modu.get_def_refs(&opens) {
+        let bare_name = d.name.clone();
+
+        let included = match filter {
+          Some(UseFilter::All) => true,
+          Some(UseFilter::Only(names)) => names.contains(bare_name.last()),
+          Some(UseFilter::Hiding(names)) => !names.contains(bare_name.last()),
+          Some(UseFilter::Rename(pairs)) => pairs
+            .iter()
+            .any(|(_, new_name)| new_name == bare_name.last()),
+          None => true,
+        };
+
+        if !included {
+          continue;
+        }
+
         if !is_current && is_used {
-          let prefixed_name = modu.path().clone().extend(d.name.clone());
+          let prefixed_name = modu.path().clone().extend(bare_name.clone());
           def_refs.insert(
             prefixed_name,
             (d.typ.clone(), d.term.clone(), d.module.clone()),
           );
 
-          let bare_name = d.name.clone();
           match bare_names.get(&bare_name) {
             Some(prev_module) if prev_module != modu.path() => {
               def_refs.remove(&bare_name);

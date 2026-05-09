@@ -1962,9 +1962,18 @@ pub fn mp(v: Vec<&str>) -> ModulePath {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum UseFilter {
+  All,
+  Only(Vec<Identifier>),
+  Hiding(Vec<Identifier>),
+  Rename(Vec<(Identifier, Identifier)>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Use {
   pub source_location: SourceRange,
   pub(crate) module_path: ModulePath,
+  pub(crate) filter: UseFilter,
 }
 
 impl Use {

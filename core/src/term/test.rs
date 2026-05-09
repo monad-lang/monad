@@ -343,7 +343,7 @@ impl Similar for Def {
 }
 impl Similar for Use {
   fn similar(&self, other: &Self) -> bool {
-    self.module_path == other.module_path
+    self.module_path == other.module_path && self.filter == other.filter
   }
 }
 impl Similar for Open {
@@ -382,6 +382,7 @@ pub fn decl_use(name_path: Vec<&str>) -> Decl {
   Decl::Use(Use {
     source_location: Default::default(),
     module_path: ModulePath::new(ids),
+    filter: UseFilter::All,
   })
 }
 

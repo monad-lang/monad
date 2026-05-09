@@ -14,7 +14,7 @@ use crate::{
     Multiplicity, NameRef, NumSuffix, Open, Operator, Param, SourceContext, SourceRange,
     StructField,
     Term::{self, Hole, Var},
-    TypeConstraint, Use, app, apps, case, class, class_def, ctx, def, def_with_native,
+    TypeConstraint, Use, UseFilter, app, apps, case, class, class_def, ctx, def, def_with_native,
     float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
     ivar, lam, lams, lets, match_term,
     module::ParsedModule,
@@ -1432,12 +1432,56 @@ fn struct_or_update_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   .parse(input)
 }
 
+fn use_hiding_filter(input: Span) -> Res<UseFilter> {
+  let (input, _) = preceded((ws0, tag("hiding"), ws0), char('(')).parse(input)?;
+  let (input, names) = many1(terminated(identifier, ws0)).parse(input)?;
+  let (input, _) = char(')').parse(input)?;
+  Ok((input, UseFilter::Hiding(names)))
+}
+
+fn use_paren_filter(input: Span) -> Res<UseFilter> {
+  let (input, _) = char('(').parse(input)?;
+  let (input, items) = many1(terminated(
+    alt((
+      map(
+        separated_pair(identifier, (ws0, tag("as"), ws0), identifier),
+        |(a, b)| (a, b),
+      ),
+      map(identifier, |i: Identifier| (i.clone(), i)),
+    )),
+    (ws0, opt(char(',')), ws0),
+  ))
+  .parse(input)?;
+  let (input, _) = char(')').parse(input)?;
+  if items.iter().any(|(a, b)| a != b) {
+    Ok((input, UseFilter::Rename(items)))
+  } else {
+    Ok((
+      input,
+      UseFilter::Only(items.into_iter().map(|(a, _)| a).collect()),
+    ))
+  }
+}
+
+fn use_opt_filter(input: Span) -> Res<Option<UseFilter>> {
+  let (input, _) = ws0(input)?;
+  if let Ok((input, filter)) = use_hiding_filter.parse(input.clone()) {
+    return Ok((input, Some(filter)));
+  }
+  if let Ok((input, filter)) = use_paren_filter.parse(input.clone()) {
+    return Ok((input, Some(filter)));
+  }
+  Ok((input, None))
+}
+
 fn use_parser(input: Span) -> Res<Use> {
   let (input, start) = info(input)?;
   let (input, _) = tag("use")(input)?;
   let (input, _) = ws1(input)?;
   let (input, module_path) =
     alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
+  let (input, filter) = use_opt_filter(input)?;
+  let filter = filter.unwrap_or(UseFilter::All);
   let (input, end) = info(input)?;
   let source_location = SourceRange::new(start.into(), end.into());
   Ok((
@@ -1445,6 +1489,7 @@ fn use_parser(input: Span) -> Res<Use> {
     Use {
       module_path,
       source_location,
+      filter,
     },
   ))
 }

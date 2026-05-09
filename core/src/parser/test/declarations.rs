@@ -448,3 +448,45 @@ fn module_test() {
     ]
   );
 }
+
+#[test]
+fn test_selective_use_only() {
+  use crate::term::{UseFilter, id};
+  let s = "use IO (println, print)".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(res.module_path, mpt("IO"));
+  assert_eq!(
+    res.filter,
+    UseFilter::Only(vec![id("println"), id("print")])
+  );
+}
+
+#[test]
+fn test_selective_use_hiding() {
+  use crate::term::{UseFilter, id};
+  let s = "use IO hiding (readFile)".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(res.module_path, mpt("IO"));
+  assert_eq!(res.filter, UseFilter::Hiding(vec![id("readFile")]));
+}
+
+#[test]
+fn test_selective_use_rename() {
+  use crate::term::{UseFilter, id};
+  let s = "use IO (println as show)".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(res.module_path, mpt("IO"));
+  assert_eq!(
+    res.filter,
+    UseFilter::Rename(vec![(id("println"), id("show"))])
+  );
+}
+
+#[test]
+fn test_selective_use_all() {
+  use crate::term::UseFilter;
+  let s = "use IO".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(res.module_path, mpt("IO"));
+  assert_eq!(res.filter, UseFilter::All);
+}

@@ -222,3 +222,139 @@ fn test_instance_resolution_module_restricted() {
   // Should find BEq instance for I64
   assert!(global.find_ref(&mpt("test_eq")).is_some());
 }
+
+#[test]
+fn test_module_conflict_detection_bare_name_ambiguous() {
+  let loaded = default_modules().unwrap();
+
+  let path_a = ModulePath::top("test_conflict_a");
+  let path_b = ModulePath::top("test_conflict_b");
+
+  let parsed_a = parse_file(
+    r#"
+    def shared_name : I64 := 1
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_a = type_check_module_decls(&path_a, parsed_a.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
+
+  let parsed_b = parse_file(
+    r#"
+    def shared_name : I64 := 2
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
+
+  let path_c = ModulePath::top("test_conflict_c");
+  let parsed_c = parse_file(&format!(
+    r#"
+    use {}
+    use {}
+    "#,
+    path_a.as_str().unwrap(),
+    path_b.as_str().unwrap(),
+  ))
+  .unwrap();
+  let decls_c = type_check_module_decls(&path_c, parsed_c.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_c.clone(),
+    ParsedModule {
+      decls: decls_c,
+      module_doc: None,
+    },
+  ));
+
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&path_c).expect("scope should exist");
+
+  let result = global.find_any_ref(&mpt("shared_name"), &Term::Type { universe: 0 });
+  assert!(result.is_err());
+  if let Err(ScopeError::AmbiguousName { name, candidates }) = result {
+    assert_eq!(name, mpt("shared_name"));
+    assert_eq!(candidates.len(), 2);
+    assert!(
+      candidates.contains(&path_a),
+      "Expected {path_a} in candidates: {candidates:?}"
+    );
+    assert!(
+      candidates.contains(&path_b),
+      "Expected {path_b} in candidates: {candidates:?}"
+    );
+  } else {
+    panic!("Expected AmbiguousName error, got: {result:?}");
+  }
+
+  let prefixed_a = path_a.clone().extend(mpt("shared_name"));
+  assert!(global.find_ref(&prefixed_a).is_some());
+  let prefixed_b = path_b.clone().extend(mpt("shared_name"));
+  assert!(global.find_ref(&prefixed_b).is_some());
+}
+
+#[test]
+fn test_selective_use_only_filter() {
+  let loaded = default_modules().unwrap();
+
+  let path_a = ModulePath::top("test_sel_a");
+  let parsed_a = parse_file(
+    r#"
+    def foo : I64 := 1
+    def bar : I64 := 2
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_a = type_check_module_decls(&path_a, parsed_a.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
+
+  let path_b = ModulePath::top("test_sel_b");
+  let parsed_b = parse_file(&format!("use {} (foo)", path_a.as_str().unwrap())).unwrap();
+  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
+
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&path_b).expect("scope should exist");
+
+  assert!(global.find_any_ref(&mpt("foo"), &type0()).is_ok());
+  assert!(global.find_any_ref(&mpt("bar"), &type0()).is_err());
+}
