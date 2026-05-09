@@ -253,3 +253,21 @@ infix (<|) := fun_apply
 def apply_fun (a : A) (f : A -> B) : B := f a 
 
 infix (|>) := apply_fun
+
+/// Indexed monad: M I J A
+/// I = initial index, J = final index, A = value
+class IndexedMonad (M : Type -> Type -> Type -> Type) {
+    def pure (a : A) : M I I A
+    def bind (a : M I J A) (f : A -> M J K B) : M I K B
+
+    /// Map across the value (preserving indices)
+    def map (f : A -> B) (ma : M I J A) : M I J B :=
+        bind ma (fn a => pure (f a))
+
+    /// Sequence two actions, discarding the first value
+    def and_then (first : M I J A) (second : M J K B) : M I K B :=
+        bind first (fn _ => second)
+
+    /// Lift a pure value into the indexed monad at any index
+    def lift (a : A) : M I I A := pure a
+}
