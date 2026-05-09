@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Display;
 use std::hash::{BuildHasherDefault, DefaultHasher, Hash};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::eval::r#type::type_check;
 use crate::eval::{EvalOptions, eval};
@@ -246,99 +246,169 @@ fn extract_string_literal(term: &Term) -> Option<String> {
   }
 }
 
+/// Recursively find all .mo files in a directory.
+fn collect_mo_files(dir: &Path) -> Vec<PathBuf> {
+  let mut files = Vec::new();
+  if dir.is_dir() {
+    for entry in std::fs::read_dir(dir).unwrap_or_else(|_| panic!("cannot read dir {dir:?}")) {
+      let entry = entry.unwrap();
+      let path = entry.path();
+      if path.is_dir() {
+        files.extend(collect_mo_files(&path));
+      } else if path.extension().is_some_and(|e| e == "mo") {
+        files.push(path);
+      }
+    }
+  }
+  files
+}
+
 pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
-  let path: ModulePath = input.into();
-  let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
-  let test_path = ModulePath::new(vec![id("std"), id("test")]);
-  if loaded.get_module(&test_path).is_none() {
-    loaded = load_module_files(&test_path, loaded).map_err(|e| format!("{e}"))?;
-  }
-  if loaded.get_module(&path).is_none() {
-    loaded = load_module_files(&path, loaded).map_err(|e| format!("{e}"))?;
-  }
-  let module = loaded
-    .get_module(&path)
-    .ok_or_else(|| format!("Module {path} not loaded"))?;
-  let loaded_scopes = loaded.scopes();
-  let global = loaded_scopes.global(&path).expect("Module not loaded");
-  if options.debug {
-    println!("{global}");
+  let files: Vec<PathBuf> = if input.is_dir() {
+    let mut files = collect_mo_files(&input);
+    files.sort();
+    files
+  } else {
+    vec![input]
+  };
+
+  let mut total_passed = 0;
+  let mut total_failed = 0;
+  let mut overall_errors: Vec<String> = Vec::new();
+
+  for file in &files {
+    let path: ModulePath = file.clone().into();
+    let mut loaded = match default_modules() {
+      Ok(m) => m,
+      Err(e) => return Err(format!("{e}")),
+    };
+    // Ensure std/test is loaded
+    let test_path = ModulePath::new(vec![id("std"), id("test")]);
+    if loaded.get_module(&test_path).is_none() {
+      loaded = match load_module_files(&test_path, loaded) {
+        Ok(l) => l,
+        Err(e) => {
+          eprintln!("Skipping std/test: {e}");
+          return Err(format!("Failed to load std/test: {e}"));
+        }
+      };
+    }
+    // Skip files that are already part of the default modules
+    if loaded.get_module(&path).is_some() {
+      continue;
+    }
+    // Try loading the test file; skip if it fails to compile
+    let loaded = match load_module_files(&path, loaded) {
+      Ok(l) => l,
+      Err(e) => {
+        eprintln!("Skipping {}: {e}", file.display());
+        continue;
+      }
+    };
+    let module = match loaded.get_module(&path) {
+      Some(m) => m,
+      None => continue,
+    };
+    let loaded_scopes = loaded.scopes();
+    let global = loaded_scopes.global(&path).expect("Module not loaded");
+    if options.debug {
+      println!("{global}");
+    }
+
+    let test_defs: Vec<_> = module
+      .defs()
+      .into_iter()
+      .filter(|ctx| ctx.value().has_test_attr())
+      .collect();
+
+    if test_defs.is_empty() {
+      continue;
+    }
+
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut failures: Vec<(String, String)> = Vec::new();
+
+    for ctx in &test_defs {
+      let def = ctx.value();
+      let name = def.name.to_string();
+      let term = def.term.clone();
+
+      let (term, typ) = match type_check(term, Hole, &global.scope()) {
+        Ok(tt) => tt.to_tuple(),
+        Err(e) => {
+          failed += 1;
+          failures.push((name.clone(), format!("type error: {e}")));
+          continue;
+        }
+      };
+
+      if options.debug {
+        println!("test {name} : {typ}");
+      }
+
+      let result = match eval(term, &global.scope(), &options) {
+        Ok(t) => t,
+        Err(e) => {
+          failed += 1;
+          failures.push((name.clone(), format!("eval error: {e}")));
+          continue;
+        }
+      };
+
+      if options.debug {
+        println!("  eval: {result}");
+      }
+
+      match detect_test_result(&result) {
+        TestResult::Pass => {
+          passed += 1;
+          println!("PASS {name}");
+        }
+        TestResult::Fail => {
+          failed += 1;
+          println!("FAIL {name}");
+        }
+        TestResult::FailWithMessage(msg) => {
+          failed += 1;
+          println!("FAIL {name}: {msg}");
+          failures.push((name.clone(), msg));
+        }
+      }
+    }
+
+    let total = passed + failed;
+    total_passed += passed;
+    total_failed += failed;
+
+    if failed > 0 {
+      for (name, msg) in &failures {
+        eprintln!("FAIL {name}: {msg}");
+      }
+      overall_errors.push(format!(
+        "{}/{} tests passed in {}: FAILED",
+        passed,
+        total,
+        file.display()
+      ));
+    } else if passed > 0 {
+      println!("{passed}/{total} tests passed in {}", file.display());
+    }
   }
 
-  let test_defs: Vec<_> = module
-    .defs()
-    .into_iter()
-    .filter(|ctx| ctx.value().has_test_attr())
-    .collect();
-
-  if test_defs.is_empty() {
+  let total_tests = total_passed + total_failed;
+  if total_tests == 0 {
     return Err("No tests found".to_string());
   }
 
-  let mut passed = 0;
-  let mut failed = 0;
-  let mut failures: Vec<(String, String)> = Vec::new();
+  println!("{total_passed}/{total_tests} total tests passed");
 
-  for ctx in &test_defs {
-    let def = ctx.value();
-    let name = def.name.to_string();
-    let term = def.term.clone();
-
-    let (term, typ) = match type_check(term, Hole, &global.scope()) {
-      Ok(tt) => tt.to_tuple(),
-      Err(e) => {
-        failed += 1;
-        failures.push((name.clone(), format!("type error: {e}")));
-        continue;
-      }
-    };
-
-    if options.debug {
-      println!("test {name} : {typ}");
-    }
-
-    let result = match eval(term, &global.scope(), &options) {
-      Ok(t) => t,
-      Err(e) => {
-        failed += 1;
-        failures.push((name.clone(), format!("eval error: {e}")));
-        failed += 1;
-        failures.push((name.clone(), format!("eval error: {e}")));
-        failed += 1;
-        failures.push((name.clone(), format!("eval error: {e}")));
-        continue;
-      }
-    };
-
-    if options.debug {
-      println!("  eval: {result}");
-    }
-
-    match detect_test_result(&result) {
-      TestResult::Pass => {
-        passed += 1;
-        println!("PASS {name}");
-      }
-      TestResult::Fail => {
-        failed += 1;
-        println!("FAIL {name}");
-      }
-      TestResult::FailWithMessage(msg) => {
-        failed += 1;
-        println!("FAIL {name}: {msg}");
-        failures.push((name.clone(), msg));
-      }
-    }
-  }
-
-  let total = passed + failed;
-  println!("{passed}/{total} tests passed");
-
-  if failed > 0 {
-    for (name, msg) in &failures {
-      eprintln!("FAIL {name}: {msg}");
-    }
-    Err(format!("{failed} test(s) failed"))
+  if total_failed > 0 {
+    Err(format!(
+      "{} test(s) failed\n{}",
+      total_failed,
+      overall_errors.join("\n")
+    ))
   } else {
     Ok(())
   }

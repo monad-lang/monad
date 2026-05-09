@@ -599,7 +599,7 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
         body,
       );
       let lambda = lam(param(name, Term::Hole), lambda_body);
-      app(pvar(vec!["IndexedMonad", "bind"]), app(value, lambda))
+      app(pvar(vec!["Monad", "bind"]), app(value, lambda))
     }
     None => Term::Hole,
   };
@@ -607,12 +607,12 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
   for stmt in stmts_iter {
     match stmt {
       DoStatement::Return { value } => {
-        body = app(pvar(vec!["IndexedMonad", "pure"]), value);
+        body = app(pvar(vec!["Monad", "pure"]), value);
       }
       DoStatement::Expr { value } => {
         let underscore = param(id("_"), Term::Hole);
         let lambda = lam(underscore, body);
-        body = app(pvar(vec!["IndexedMonad", "bind"]), app(value, lambda));
+        body = app(pvar(vec!["Monad", "bind"]), app(value, lambda));
       }
       DoStatement::Let { name, value } => {
         body = lets(
@@ -626,7 +626,7 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
       }
       DoStatement::Bind { name, value } => {
         let lambda = lam(param(name, Term::Hole), body);
-        body = app(pvar(vec!["IndexedMonad", "bind"]), app(value, lambda));
+        body = app(pvar(vec!["Monad", "bind"]), app(value, lambda));
       }
     }
   }

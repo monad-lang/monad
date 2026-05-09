@@ -393,10 +393,21 @@ cargo test eval::test
 ### Running Monad Tests
 
 ```bash
+# Run tests from a single file
 cargo run -- test init/tests.mo
+
+# Run tests from an entire directory (recursively finds all .mo files with @[test])
+cargo run -- test init/
+
+# Run all test suites
+cargo run -- test init/ && cargo run -- test examples/
 ```
 
-This runs all definitions annotated with `@[test]` in the given file, evaluating them and reporting pass/fail.
+The test runner supports both files and directories. When given a directory, it recursively scans for `.mo` files and runs any definitions annotated with `@[test]`, reporting pass/fail.
+
+### Pre-commit
+
+The pre-commit config (`.pre-commit-config.yaml`) is managed by Nix via `git-hooks.nix`. Do NOT edit it directly. Instead, modify the Nix configuration that generates it. The `monad-tests` hook currently runs `cargo run -- test init/tests.mo`. If this hook fails, run `cargo run -- test init/` to see all test failures.
 
 ## Development Workflow
 
