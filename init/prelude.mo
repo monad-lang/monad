@@ -115,6 +115,12 @@ instance BEq Bool {
 
 infix (==) := BEq.beq
 
+/// Ordered comparison
+class BOrd A {
+	def lt (a b : A) : Bool
+	def gt (a b : A) : Bool
+}
+
 type DefaultValue (A: Type) (default : A) {
 	default
 }

@@ -1047,15 +1047,25 @@ fn suffix_from_type_name(name: &str) -> Option<NumSuffix> {
     .copied()
 }
 
+fn type_name_from_var(name: &NameRef) -> Option<&str> {
+  match name {
+    NameRef::Id(id) => Some(id.as_str()),
+    NameRef::P(path) if path.len() == 1 => Some(path.last().as_str()),
+    _ => None,
+  }
+}
+
 fn resolve_num_literal_type(
   expected: &Term,
-  _default: NumSuffix,
+  default: NumSuffix,
   _scope: &Scope,
 ) -> Result<NumSuffix, TypeError> {
+  if default != NumSuffix::I64 {
+    return Ok(default);
+  }
   if let Term::Var { name } = expected
-    && let NameRef::Id(id) = name
+    && let Some(name_str) = type_name_from_var(name)
   {
-    let name_str = id.as_str();
     if is_number_type_name(name_str)
       && let Some(suffix) = suffix_from_type_name(name_str)
       && suffix.is_int()
@@ -1072,9 +1082,8 @@ fn resolve_float_literal_type(
   _scope: &Scope,
 ) -> Result<NumSuffix, TypeError> {
   if let Term::Var { name } = expected
-    && let NameRef::Id(id) = name
+    && let Some(name_str) = type_name_from_var(name)
   {
-    let name_str = id.as_str();
     if is_number_type_name(name_str)
       && let Some(suffix) = suffix_from_type_name(name_str)
       && suffix.is_float()

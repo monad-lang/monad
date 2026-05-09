@@ -4,8 +4,8 @@ use crate::{
   Map,
   eval::EvalOptions,
   term::{
-    F64Wrap, Identifier, Literal, Native, NumSuffix, Term, app, b_false, b_true, id, io_term,
-    module::Scope, num_suffix, unit,
+    Constructor, F64Wrap, Identifier, Literal, Native, NumSuffix, Term, app, b_false, b_true, id,
+    io_term, module::Scope, num_suffix, to_list_term, unit,
   },
 };
 
@@ -307,6 +307,83 @@ pub fn string_get(terms: Vec<Term>) -> Result<Term, NativeError> {
   }
 }
 
+pub fn string_to_list(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let s = extract_string_at(&terms, 0)?;
+  let bytes: Vec<Term> = s
+    .bytes()
+    .map(|b| num_suffix(b as i64, NumSuffix::U8))
+    .collect();
+  Ok(to_list_term(bytes))
+}
+
+fn collect_bytes_from_list(term: &Term) -> Result<Vec<u8>, NativeError> {
+  match term {
+    Term::Con(Constructor { name, .. }) if name == &id("empty") => Ok(vec![]),
+    Term::Con(Constructor { name, args, .. }) if name == &id("cons") => {
+      let mut bytes = vec![];
+      if let Some(Some(head)) = args.first() {
+        let b = extract_u8_from_term(head)?;
+        bytes.push(b);
+      } else {
+        return Err(Custom("List.cons missing head argument".into()));
+      }
+      if let Some(Some(tail)) = args.get(1) {
+        bytes.extend(collect_bytes_from_list(tail)?);
+      }
+      Ok(bytes)
+    }
+    other => Err(Custom(format!("expected List U8, got {other}"))),
+  }
+}
+
+fn extract_u8_from_term(term: &Term) -> Result<u8, NativeError> {
+  match term {
+    Term::Lit {
+      value: Literal::Num {
+        value,
+        suffix: NumSuffix::U8,
+      },
+    } => Ok(*value as u8),
+    other => Err(ExpectedNum {
+      actual: other.clone(),
+    }),
+  }
+}
+
+pub fn string_from_list(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let list = &terms[0];
+  let bytes = collect_bytes_from_list(list)?;
+  let s = String::from_utf8(bytes).map_err(|e| Custom(format!("invalid UTF-8: {e}")))?;
+  Ok(Term::Lit {
+    value: Literal::Str { value: s },
+  })
+}
+
+pub fn bench_report(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let label = extract_string_at(&terms, 0)?;
+  let elapsed = extract_num_at(&terms, 1)?;
+  println!("  BENCH {label}: {elapsed}ms");
+  Ok(b_true())
+}
+
+pub fn bench_now(_terms: Vec<Term>) -> Result<Term, NativeError> {
+  let now = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_millis() as i64;
+  Ok(num_suffix(now, NumSuffix::I64))
+}
+
+pub fn u8_lt(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let (a, b) = extract_num_pair(&terms)?;
+  Ok(bool_to_term((a as u8) < (b as u8)))
+}
+
+pub fn u8_gt(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let (a, b) = extract_num_pair(&terms)?;
+  Ok(bool_to_term((a as u8) > (b as u8)))
+}
+
 /// Simple native function: takes args, returns result.
 pub type SimpleNativeFun = fn(Vec<Term>) -> Result<Term, NativeError>;
 /// Scope-aware native function: takes args and the current scope.
@@ -403,6 +480,12 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("string_concat"), s(string_concat)),
     (id("string_length"), s(string_length)),
     (id("string_get"), s(string_get)),
+    (id("string_to_list"), s(string_to_list)),
+    (id("string_from_list"), s(string_from_list)),
+    (id("bench_now"), s(bench_now)),
+    (id("bench_report"), s(bench_report)),
+    (id("u8_lt"), s(u8_lt)),
+    (id("u8_gt"), s(u8_gt)),
     (id("eval_term"), sa(eval_term)),
   ];
   v.into_iter().collect()

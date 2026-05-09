@@ -194,6 +194,12 @@ def U8.div (a b : U8) : U8
 @[native u8_eq]
 def U8.beq (a b : U8) : Bool
 
+@[native u8_lt]
+def U8.lt (a b : U8) : Bool
+
+@[native u8_gt]
+def U8.gt (a b : U8) : Bool
+
 @[native u8_to_string]
 def U8.to_string (a : U8) : String
 
@@ -215,6 +221,11 @@ instance Div U8 {
 
 instance BEq U8 {
 	def beq (a b : U8) : Bool := U8.beq a b
+}
+
+instance BOrd U8 {
+	def lt (a b : U8) : Bool := U8.lt a b
+	def gt (a b : U8) : Bool := U8.gt a b
 }
 
 instance ToString U8 {

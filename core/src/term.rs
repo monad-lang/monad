@@ -1806,7 +1806,11 @@ pub fn def_with_native(
     },
   };
 
-  let term = lam_indecies(params, body);
+  let term = if params.is_empty() {
+    body
+  } else {
+    lam_indecies(params, body)
+  };
   Ok(def(name, vec![], typ, term, attributes))
 }
 
