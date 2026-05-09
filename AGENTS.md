@@ -461,6 +461,14 @@ def function_name (args: Types) : ReturnType
 - Group `use` statements logically (standard library, external crates, local modules)
 - Example: prefer `use crate::term::{Identifier, Term, param};` over `crate::term::Identifier`
 
+## Workflow
+
+When assumptions fail, tests break unexpectedly, or you hit hard errors:
+1. **Explain the root cause** to the user before proceeding
+2. **Ask for input** on how to resolve — don't silently pick a fix
+3. Present options with tradeoffs when there are multiple approaches
+4. Only proceed once the user confirms direction
+
 ## Troubleshooting & Known Issues
 
 ### Class Method Resolution in `def_refs`

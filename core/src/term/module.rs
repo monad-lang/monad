@@ -928,11 +928,20 @@ impl<'a> GlobalScope<'a> {
   }
 
   pub fn find_instance(&self, ins_key: &InstanceKey) -> Option<&Instance> {
+    let mut visiting = Set::default();
+    self.find_instance_with_visiting(ins_key, &mut visiting)
+  }
+
+  pub fn find_instance_with_visiting(
+    &self,
+    ins_key: &InstanceKey,
+    visiting: &mut Set<String>,
+  ) -> Option<&Instance> {
     let class = &self.find_inductive(&ins_key.class)?;
     let instance = self.instances.get(&ins_key.class).and_then(|instances| {
       instances
         .iter()
-        .find(|ins| ins.matches(ins_key, class, self))
+        .find(|ins| ins.matches(ins_key, class, self, visiting))
     })?;
     Some(instance)
   }

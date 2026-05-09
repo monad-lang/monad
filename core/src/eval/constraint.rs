@@ -2,7 +2,7 @@ use crate::term::module::GlobalScope;
 use crate::term::{
   Identifier, Inductive, Instance, InstanceKey, ModulePath, Param, Term, TypeConstraint, param,
 };
-use crate::{Map, empty_set};
+use crate::{Map, Set};
 
 /// Error when a constraint cannot be satisfied.
 #[derive(Debug, Clone)]
@@ -26,25 +26,21 @@ impl std::fmt::Display for ConstraintError {
 
 /// Solver for type class constraints during instance resolution.
 ///
-/// Uses a visiting set to prevent infinite recursion when checking
-/// constraints that themselves have constraints.
+/// Takes a visiting set as a parameter so that cycle detection works
+/// across nested solver instances (since Instance::matches calls
+/// check_instance_constraints which creates a new solver).
 pub struct ConstraintSolver<'a> {
   global: &'a GlobalScope<'a>,
-  /// Tracks constraint keys currently being resolved to detect cycles.
-  visiting: crate::Set<String>,
 }
 
 impl<'a> ConstraintSolver<'a> {
   pub fn new(global: &'a GlobalScope<'a>) -> Self {
-    Self {
-      global,
-      visiting: empty_set(),
-    }
+    Self { global }
   }
 
   /// Check if all constraints of an instance are satisfiable.
   ///
-  /// The key contains the concrete type args (e.g., `{A → I64}`).
+  /// The key contains the concrete type args (e.g., `{A -> I64}`).
   /// For each constraint like `[Add A]`, we look up `A` in the key's args
   /// to get the concrete type, then check that an instance exists.
   pub fn check_instance(
@@ -52,6 +48,7 @@ impl<'a> ConstraintSolver<'a> {
     instance: &'a Instance,
     key: &InstanceKey,
     _class: &'a Inductive,
+    visiting: &mut Set<String>,
   ) -> bool {
     if instance.constraints.is_empty() {
       return true;
@@ -65,7 +62,7 @@ impl<'a> ConstraintSolver<'a> {
       .collect();
 
     for constraint in &instance.constraints {
-      if !self.check_constraint(constraint, &key_args) {
+      if !self.check_constraint(constraint, &key_args, visiting) {
         return false;
       }
     }
@@ -77,6 +74,7 @@ impl<'a> ConstraintSolver<'a> {
     &mut self,
     constraint: &TypeConstraint,
     key_args: &Map<Identifier, &Term>,
+    visiting: &mut Set<String>,
   ) -> bool {
     // Get (var_name, concrete_type) pairs for each constraint var from the key args
     let concrete_types: Vec<(Identifier, Term)> = constraint
@@ -98,14 +96,15 @@ impl<'a> ConstraintSolver<'a> {
       .join(",");
     let visit_key = format!("{class_name}({types_str})");
 
-    if self.visiting.contains(&visit_key) {
+    // Check visiting set for cycle detection.
+    if visiting.contains(&visit_key) {
       return true;
     }
-    self.visiting.insert(visit_key.clone());
+    visiting.insert(visit_key.clone());
 
-    let result = self.resolve_constraint(class_name, &concrete_types);
+    let result = self.resolve_constraint(class_name, &concrete_types, visiting);
 
-    self.visiting.remove(&visit_key);
+    visiting.remove(&visit_key);
     result
   }
 
@@ -115,22 +114,24 @@ impl<'a> ConstraintSolver<'a> {
     &mut self,
     class_name: &ModulePath,
     concrete_types: &[(Identifier, Term)],
+    visiting: &mut Set<String>,
   ) -> bool {
     let Some(class) = self.global.find_inductive(class_name) else {
       return false;
     };
 
     let key = build_constraint_key(class_name.clone(), concrete_types, class);
-    let Some(instance) = self.global.find_instance(&key) else {
+    let Some(instance) = self.global.find_instance_with_visiting(&key, visiting) else {
       return false;
     };
 
-    self.check_instance(instance, &key, class)
+    self.check_instance(instance, &key, class, visiting)
   }
 }
 
 /// Build an InstanceKey for a constraint like `Add I64` or `HAdd I64 I64 I64`.
-/// Matches all class params to their concrete types by name.
+/// Matches all class params to concrete types by position (the constraint var
+/// at position i maps to the class param at position i).
 fn build_constraint_key(
   class_name: ModulePath,
   concrete_types: &[(Identifier, Term)],
@@ -139,10 +140,10 @@ fn build_constraint_key(
   let args: Vec<Param> = class
     .params
     .iter()
-    .map(|p| {
+    .enumerate()
+    .map(|(i, p)| {
       let typ = concrete_types
-        .iter()
-        .find(|(name, _)| name == &p.name)
+        .get(i)
         .map(|(_, typ)| typ.clone())
         .unwrap_or_else(|| (*p.typ).clone());
       param(p.name.clone(), typ)
@@ -152,13 +153,27 @@ fn build_constraint_key(
   InstanceKey::new(class_name, Vec::new(), args)
 }
 
+/// Check instance constraints with a shared visiting set for cycle detection.
+/// Internal — called from Instance::matches during instance resolution.
+pub fn check_instance_constraints_with_visiting(
+  global: &GlobalScope,
+  instance: &Instance,
+  key: &InstanceKey,
+  class: &Inductive,
+  visiting: &mut Set<String>,
+) -> bool {
+  let mut solver = ConstraintSolver::new(global);
+  solver.check_instance(instance, key, class, visiting)
+}
+
 /// Top-level function: check if an instance's constraints are satisfied.
+/// Creates a fresh visiting set (no cycle sharing with callers).
 pub fn check_instance_constraints(
   global: &GlobalScope,
   instance: &Instance,
   key: &InstanceKey,
   class: &Inductive,
 ) -> bool {
-  let mut solver = ConstraintSolver::new(global);
-  solver.check_instance(instance, key, class)
+  let mut visiting = Set::default();
+  check_instance_constraints_with_visiting(global, instance, key, class, &mut visiting)
 }

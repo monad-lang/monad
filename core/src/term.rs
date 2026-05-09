@@ -3,7 +3,7 @@ pub mod module;
 pub mod test;
 
 use crate::{
-  Map, eval::constraint::check_instance_constraints, parser::locate::Info,
+  Map, Set, eval::constraint::check_instance_constraints_with_visiting, parser::locate::Info,
   term::module::GlobalScope, vec_fmt,
 };
 use std::{
@@ -518,7 +518,13 @@ impl Instance {
   }
 
   /// Check instance if match the InstanceKey
-  pub fn matches(&self, key: &InstanceKey, class: &Inductive, global: &GlobalScope) -> bool {
+  pub fn matches(
+    &self,
+    key: &InstanceKey,
+    class: &Inductive,
+    global: &GlobalScope,
+    visiting: &mut Set<String>,
+  ) -> bool {
     if key.args.len() != self.args.len() {
       return false;
     }
@@ -556,7 +562,7 @@ impl Instance {
       return true;
     }
 
-    check_instance_constraints(global, self, key, class)
+    check_instance_constraints_with_visiting(global, self, key, class, visiting)
   }
 }
 
