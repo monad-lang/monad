@@ -727,19 +727,18 @@ fn collect_apps(term: &Term) -> (&Term, Vec<Term>) {
 
 /// Substitute arguments for Lam params: Lam(x, Lam(y, body)) + [a, b] → body[x:=a, y:=b]
 fn substitute_lam_args(body: &Term, args: &[Term]) -> Term {
-  let mut result = body.clone();
+  let mut current = body.clone();
   for arg in args.iter().rev() {
-    let (next, replaced) = match result {
+    current = match current {
       Term::Lam {
-        param: Par::P(ref p),
+        param: Par::P(p),
         body,
         ..
-      } => (p.name.clone(), *body.clone()),
+      } => substitute((*body).clone(), &NameRef::Id(p.name.clone()), arg),
       _ => break,
     };
-    result = substitute(replaced, &NameRef::Id(next), arg);
   }
-  result
+  current
 }
 
 /// Is previously encountered type arg
@@ -894,7 +893,6 @@ fn match_resolve_type_inner<'a>(
       if check_free_vars(name, right, free_vars) {
         true
       } else {
-        // Try resolving as a type alias using compare_types
         match resolve_def_alias(&NameRef::Id(name.clone()), scope, visiting) {
           Some(body) => compare_types(&body, right, free_vars),
           None => false,
