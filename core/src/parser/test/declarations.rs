@@ -173,6 +173,7 @@ fn test_instance() {
       None,
       mpt("Functor"),
       vec![],
+      vec![],
       vec![var("F")],
       vec![def(
         mpt("map"),
@@ -515,6 +516,27 @@ fn test_parse_erased_def_param() {
     }
     _ => panic!("Expected Def"),
   }
+}
+
+#[test]
+fn test_parse_instance_with_forall_params() {
+  // instance {R : Type} Functor (Const R) — with explicit forall params
+  let s = r#"instance {R : Type} Functor (Const R) { def map (f : A -> B) (a : Const R A) : Const R B := a }"#.into();
+  let (_, res) = instance_parser(s).unwrap();
+  assert_eq!(res.params.len(), 1);
+  assert_eq!(res.params[0].name, id("R"));
+  assert_eq!(*res.params[0].typ, var("Type"));
+  assert_eq!(res.class_name, mpt("Functor"));
+}
+
+#[test]
+fn test_parse_instance_with_multiple_forall_params() {
+  // instance {R : Type} {E : Type} Functor (Const R) — multiple foralls
+  let s = r#"instance {R : Type} {E : Type} Functor (Const R) { def map (f : A -> B) (a : Const R A) : Const R B := a }"#.into();
+  let (_, res) = instance_parser(s).unwrap();
+  assert_eq!(res.params.len(), 2);
+  assert_eq!(res.params[0].name, id("R"));
+  assert_eq!(res.params[1].name, id("E"));
 }
 
 #[test]

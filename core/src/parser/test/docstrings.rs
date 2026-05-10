@@ -125,6 +125,7 @@ instance Functor List {
       None,
       mpt("Functor"),
       vec![],
+      vec![],
       vec![var("List")],
       vec![def(
         mpt("map"),

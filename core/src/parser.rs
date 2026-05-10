@@ -1242,6 +1242,8 @@ fn instance_parser(input: Span) -> Res<Instance> {
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("instance")(input)?;
   let (input, _) = ws0(input)?;
+  let (input, implicit_params) = implicit_params(input)?;
+  let (input, _) = ws0(input)?;
   let (input, constraints) = opt(all_type_cons_parser).parse(input)?;
   let (input, _) = ws0(input)?;
   let (input, name) = opt(terminated(def_name, (ws0, char(':')))).parse(input)?;
@@ -1257,6 +1259,7 @@ fn instance_parser(input: Span) -> Res<Instance> {
       name,
       class_name,
       constraints.unwrap_or_else(Vec::new),
+      implicit_params,
       args,
       defs,
       attrs,

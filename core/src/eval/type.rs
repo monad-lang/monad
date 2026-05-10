@@ -381,20 +381,30 @@ pub fn type_check_instance<'a>(
     Err(Generic("wrong class name".into()))?;
   }
 
-  // Collect type variables from constraints and instance args FIRST
+  // Collect type variables from explicit params (e.g. instance {R : Type} ...)
+  // or infer them from instance args and constraints
   let mut type_vars: crate::Map<Identifier, Term> = crate::Map::new();
   let default_type = sort1();
-  for constraint in &instance.constraints {
-    for var in constraint.vars() {
-      type_vars.insert(var.clone(), default_type.clone());
+
+  if !instance.params.is_empty() {
+    // Use explicitly declared forall params
+    for param in &instance.params {
+      type_vars.insert(param.name.clone(), (*param.typ).clone());
     }
-  }
-  for arg in &instance.args {
-    if let Term::Var { name } = arg {
-      if let Some(id) = name.as_id() {
-        let path = id.clone().to_path();
-        if !is_known_type_name(&path, scope) {
-          type_vars.entry(id.clone()).or_insert(default_type.clone());
+  } else {
+    // Infer type variables from constraints and instance args
+    for constraint in &instance.constraints {
+      for var in constraint.vars() {
+        type_vars.insert(var.clone(), default_type.clone());
+      }
+    }
+    for arg in &instance.args {
+      if let Term::Var { name } = arg {
+        if let Some(id) = name.as_id() {
+          let path = id.clone().to_path();
+          if !is_known_type_name(&path, scope) {
+            type_vars.entry(id.clone()).or_insert(default_type.clone());
+          }
         }
       }
     }

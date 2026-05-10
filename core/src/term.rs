@@ -509,6 +509,7 @@ pub struct Instance {
   name: ModulePath,
   pub(crate) class_name: ModulePath,
   pub(crate) constraints: Vec<TypeConstraint>,
+  pub(crate) params: Vec<Param>,
   pub(crate) args: Vec<Term>,
   pub(crate) impls_map: Map<Identifier, Def>,
   cons: Constructor,
@@ -574,6 +575,7 @@ pub fn instance(
   name: Option<ModulePath>,
   class_name: ModulePath,
   constraints: Vec<TypeConstraint>,
+  params: Vec<Param>,
   args: Vec<Term>,
   impls: Vec<Def>,
   attributes: Vec<Attribute>,
@@ -609,6 +611,7 @@ pub fn instance(
     cons,
     impls_map,
     constraints,
+    params,
     typ,
     attributes,
   }
