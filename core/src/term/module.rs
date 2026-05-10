@@ -1489,6 +1489,8 @@ pub fn load_module_from_text(
 ) -> Result<(), LoadingError> {
   let init_decls =
     load_decls_from_text(text).map_err(|e| format!("parse error for {}: {e}", path))?;
+  let mut in_progress = crate::empty_set();
+  *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
   let init_decls = type_check_module_decls(&path, init_decls, loaded).map_err(|e| {
     let rendered = render_type_error_with_source(text, &e);
     LoadingError::Generic(rendered)

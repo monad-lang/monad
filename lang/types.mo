@@ -2,6 +2,10 @@ type Identifier {
     id String
 }
 
+type Operator {
+    operator String
+}
+
 type ModulePath {
     mp (List Identifier)
 }
