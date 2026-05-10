@@ -1021,6 +1021,9 @@ pub fn type_check_free_var(
     Ok(typed_term(term, typ))
   } else if let Ok(typ) = match_resolve_type(&defined_type, &expected_type, scope) {
     Ok(typed_term(term, typ))
+  } else if let Some(expanded) = try_expand_def_alias(&defined_type, scope) {
+    let typ = match_resolve_type(&expanded, &expected_type, scope)?;
+    Ok(typed_term(term, typ))
   } else {
     Err(FreeVarMismatch {
       name: nref.clone(),
