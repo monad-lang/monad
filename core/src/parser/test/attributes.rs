@@ -266,3 +266,22 @@ fn test_attr_test() {
     _ => panic!("expected Def"),
   }
 }
+
+#[test]
+fn test_attr_native_string() {
+  let s = r#"@[native "eq_rec"]
+    def eq_rec {A : Sort 1} {a : A} {b : A} (P : (b : A) -> Eq A a b -> Sort 1) (h : P a (Eq.refl a)) (e : Eq A a b) : P b e
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("native"),
+    args: vec![AttrArg::Str("eq_rec".to_string())],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}

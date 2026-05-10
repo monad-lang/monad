@@ -4,8 +4,8 @@ use crate::{
   Map,
   eval::EvalOptions,
   term::{
-    Constructor, F64Wrap, Identifier, Literal, Native, NumSuffix, Term, app, b_false, b_true, id,
-    io_term, module::Scope, num_suffix, to_list_term, unit,
+    Constructor, F64Wrap, Identifier, Literal, Native, NumSuffix, Term, app, apps, b_false, b_true,
+    id, io_term, module::Scope, num_suffix, pvar, to_list_term, unit,
   },
 };
 
@@ -404,6 +404,24 @@ impl std::fmt::Debug for NativeFun {
   }
 }
 
+/// J eliminator for Eq. Args: A, a, P, h, b, e
+/// If e is Eq.refl a, return h (since b = a and e = refl a).
+/// Otherwise, the term is stuck (can't reduce further).
+pub fn eq_rec(args: Vec<Term>) -> Result<Term, NativeError> {
+  if args.len() < 6 {
+    return Err(NativeError::MissingArgs {
+      expected: 6,
+      actual: args.len(),
+    });
+  }
+  if let Term::Con(Constructor { name, .. }) = &args[5] {
+    if name.as_str() == "refl" {
+      return Ok(args[3].clone());
+    }
+  }
+  Ok(apps(pvar(vec!["Eq", "rec"]), args))
+}
+
 pub fn load_native_funs() -> Map<Identifier, NativeFun> {
   /// Helper to wrap a simple native function into NativeFun::Simple
   fn s(f: SimpleNativeFun) -> NativeFun {
@@ -487,6 +505,7 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("u8_lt"), s(u8_lt)),
     (id("u8_gt"), s(u8_gt)),
     (id("eval_term"), sa(eval_term)),
+    (id("eq_rec"), s(eq_rec)),
   ];
   v.into_iter().collect()
 }

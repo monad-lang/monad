@@ -101,6 +101,18 @@ type Bool {
 
 open Bool
 
+/// Trivially true proposition (unit in Prop)
+type True : Prop {
+    trivial
+}
+
+open True
+
+/// Propositional equality: Eq A a b lives in Prop (Sort 0)
+type Eq (A : Sort 1) (a : A) (b : A) : Prop {
+    refl : Eq A a a
+}
+
 /// Equals
 class BEq A {
 	def beq : A -> A -> Bool

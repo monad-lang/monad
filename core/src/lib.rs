@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Display;
+use std::fs;
 use std::hash::{BuildHasherDefault, DefaultHasher, Hash};
 use std::path::{Path, PathBuf};
 
@@ -14,7 +15,9 @@ use crate::term::Term::{self, Con, Hole};
 use crate::term::module::ParsedModule;
 #[cfg(feature = "repl")]
 use crate::term::module::module;
-use crate::term::module::{default_modules, load_module_files};
+use crate::term::module::{
+  LoadedModules, default_modules, load_module_files, load_module_from_text,
+};
 use crate::term::{Constructor, ModulePath, mpt, strings_to_list_term};
 use crate::term::{app, id};
 
@@ -144,10 +147,20 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
   Ok(())
 }
 
+pub fn load_module(
+  file: &PathBuf,
+  path: &ModulePath,
+  mut loaded: LoadedModules,
+) -> Result<LoadedModules, String> {
+  let text = fs::read_to_string(file).map_err(|e| format!("{e}"))?;
+  load_module_from_text(&text, path.clone(), &mut loaded).map_err(|e| format!("{e}"))?;
+  Ok(loaded)
+}
+
 pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<(), String> {
-  let path: ModulePath = input.into();
+  let path: ModulePath = input.clone().into();
   let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
-  loaded = load_module_files(&path, loaded).map_err(|e| format!("{e}"))?;
+  loaded = load_module(&input, &path, loaded).map_err(|e| format!("{e}"))?;
   let module = loaded
     .get_module(&path)
     .ok_or_else(|| format!("Module {path} not loaded"))?;
@@ -298,7 +311,7 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
       continue;
     }
     // Try loading the test file; skip if it fails to compile
-    let loaded = match load_module_files(&path, loaded) {
+    let loaded = match load_module(file, &path, loaded) {
       Ok(l) => l,
       Err(e) => {
         eprintln!("Skipping {}: {e}", file.display());

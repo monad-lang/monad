@@ -85,6 +85,61 @@ type Either E A {
 }
 ```
 
+### Sort Universe Hierarchy
+
+Monad has a cumulative Russell-style universe hierarchy. Every valid type lives at some
+`Sort n` level. The hierarchy prevents paradoxes like Type : Type.
+
+| Sort level | Surface syntax | Meaning |
+|---|---|---|
+| `Sort 0` | `Prop` | Universe of propositions (proofs, equality statements) |
+| `Sort 1` | `Type` | Universe of small types (data, functions, i.e., `Bool`, `I64`, `List A`) |
+| `Sort 2` | `Type 1` | Universe of larger types (`Sort 0`, `Sort 1`, type families) |
+| `Sort n` | `Type (n-1)` | nth universe level |
+
+**Formation rule**: `Sort n : Sort (n+1)` — every sort is itself a term of the next higher sort.
+
+**Cumulativity**: A term of type `Sort n` can be used where `Sort m` is expected, for any `m ≥ n`.
+
+#### Propositions vs Booleans
+
+This is a critical distinction in dependent type theory:
+
+| Concept | Type | Values | What it means |
+|---|---|---|---|
+| `Prop` (Sort 0) | `Sort 1` (Type) | Types like `True`, `Eq A a b` | A **type** of proofs / a proposition |
+| `Bool` | `Sort 1` (Type) | `true`, `false` | A **computational** boolean |
+| `True` (the proposition) | `Prop` (Sort 0) | `trivial` | The trivially true proposition (unit type in Prop) |
+| `Eq A a b` | `Prop` (Sort 0) | `refl a` | Proof that `a = b` |
+
+- **`True` is a TYPE, not a Bool value.** It lives in `Prop` (`Sort 0`). Its constructor is `trivial : True`. Use `True.trivial` to construct a trivial proof.
+- **`Bool` is a computational type with values `true` and `false`** (note lowercase). `Bool : Type` (`Sort 1`).
+- In test functions, the return type is `Bool` (a computational value that can be asserted), not `True` (a proof that cannot be evaluated at runtime).
+- All definitions return types that live in `Sort 1` (Type) or higher unless explicitly annotated with `: Prop`.
+
+```monad
+// Bool is a regular inductive type in Sort 1 (Type)
+type Bool {
+    true,
+    false
+}
+
+// True is a proposition in Sort 0 (Prop) — it's a TYPE, not a value
+type True : Prop {
+    trivial
+}
+
+// Eq is propositional equality in Sort 0 (Prop)
+type Eq (A : Sort 1) (a : A) (b : A) : Prop {
+    refl : Eq A a a
+}
+```
+
+When writing Monad source files:
+- Test files use `use std.test` (not `use prelude` — the prelude is auto-loaded as `'prelude`)
+- The prelude is imported automatically — no explicit `use prelude` needed
+- Module paths for the standard library: `std.test` for testing, `io` for IO, etc.
+
 ### Class Definitions (Type Classes)
 
 ```monad
@@ -236,14 +291,53 @@ Any term can be annotated with its type using `(term : Type)` syntax.
 
 ### Let Expressions
 
+`let` expressions come in two forms depending on context:
+
+**Outside do-notation** (in `:=` def bodies): the `in` keyword is REQUIRED.
+
 ```monad
 let x := 10 in
-let x + y := 10 in
-x + y
+x + 1
 
 // With type annotation
 let x : I64 := 10 in
 x + 1
+
+// Chained lets: each let needs its own `in`, nesting rightward
+let x := 10 in
+let y := x + 5 in
+x + y
+```
+
+**Inside do-blocks** (`{ ... }` def bodies): statements use `;` separation, NO `in`.
+
+```monad
+def example : I64 {
+  let x : I64 := 10;
+  let y : I64 := x + 5;
+  x + y
+}
+```
+
+**Common mistake**: using `:=` body syntax with multi-statement `let ... ; let ... ; expr` without `in`.
+This is invalid. Either use `{ }` do-block syntax or nest with `in`.
+
+```monad
+// WRONG — no `in`, no `{ }`:
+def example : I64 :=
+  let x : I64 := 10;
+  x + 1
+
+// CORRECT — do-block:
+def example : I64 {
+  let x : I64 := 10;
+  x + 1
+}
+
+// CORRECT — let ... in:
+def example : I64 :=
+  let x : I64 := 10 in
+  x + 1
 ```
 
 ### Numeric Literals

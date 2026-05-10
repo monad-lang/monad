@@ -80,6 +80,17 @@ fn test_parse_simple_def_with_parser() {
 }
 
 #[test]
+fn test_parse_def_with_use_and_empty_line() {
+  let input = "use prelude\nuse std.test\n\n@[test]\ndef test_x : Bool := True\n";
+  let r = parse_file(input);
+  assert!(
+    r.is_ok(),
+    "should parse def with use and empty line: {:?}",
+    r.err()
+  );
+}
+
+#[test]
 fn test_parse_simple_def_file() {
   let input = "def main : I64 := 42\n";
   let r = parse_file(input);
