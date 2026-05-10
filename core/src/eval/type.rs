@@ -678,11 +678,68 @@ fn resolve_def_alias(
   let scope = scope?;
   let def_ref = scope.global().find_ref(&path)?;
   match def_ref.term() {
-    // Lam means it's a function definition, not a type alias — don't expand
+    // Lam means it's a function definition, not a simple type alias — don't expand
     Term::Lam { .. } => None,
     // Type alias body: clone for comparison
     body => Some(body.clone()),
   }
+}
+
+/// Strip implicit (Forall) params from a term, returning the underlying body.
+fn strip_implicit_params(term: &Term) -> Term {
+  match term {
+    Term::Forall { body, .. } => strip_implicit_params(body),
+    _ => term.clone(),
+  }
+}
+
+/// Try to expand a def type alias applied to arguments.
+/// e.g., Lens S T A B → (A -> F B) -> S -> F T
+fn try_expand_def_alias(typ: &Term, scope: &Scope) -> Option<Term> {
+  // Collect the head Var and args from App chain
+  let (head, args) = collect_apps(typ);
+  let head_name = match head {
+    Term::Var { name } => name.clone(),
+    _ => return None,
+  };
+  let path = head_name.to_path()?;
+  let def_ref = scope.global().find_ref(&path)?;
+
+  // Get the body term, stripping implicit Forall layers
+  let body = strip_implicit_params(def_ref.term());
+
+  // Substitute the explicit args into the body
+  // args should match the Lam params in order
+  Some(substitute_lam_args(&body, &args))
+}
+
+/// Collect the head and arguments of an App chain: App(App(head, a1), a2) → (head, [a1, a2])
+fn collect_apps(term: &Term) -> (&Term, Vec<Term>) {
+  match term {
+    Term::App { fun, arg } => {
+      let (head, mut args) = collect_apps(fun);
+      args.push(*arg.clone());
+      (head, args)
+    }
+    _ => (term, vec![]),
+  }
+}
+
+/// Substitute arguments for Lam params: Lam(x, Lam(y, body)) + [a, b] → body[x:=a, y:=b]
+fn substitute_lam_args(body: &Term, args: &[Term]) -> Term {
+  let mut result = body.clone();
+  for arg in args.iter().rev() {
+    let (next, replaced) = match result {
+      Term::Lam {
+        param: Par::P(ref p),
+        body,
+        ..
+      } => (p.name.clone(), *body.clone()),
+      _ => break,
+    };
+    result = substitute(replaced, &NameRef::Id(next), arg);
+  }
+  result
 }
 
 /// Is previously encountered type arg
@@ -964,7 +1021,7 @@ pub fn type_check_free_var(
   if !expected_type.is_known() {
     let typ = defined_type.clone();
     Ok(typed_term(term, typ))
-  } else if let Ok(typ) = match_resolve_type(defined_type, &expected_type, scope) {
+  } else if let Ok(typ) = match_resolve_type(&defined_type, &expected_type, scope) {
     Ok(typed_term(term, typ))
   } else {
     Err(FreeVarMismatch {
@@ -1261,6 +1318,7 @@ fn type_check_with_env(
       let (fun, fun_type) =
         type_check_with_env(*fun, fun_type, &scope, usage, track_usage)?.to_tuple();
       let (fun_vars, fun_typ_pi) = unwrap_forall(fun_type);
+      let fun_typ_pi = try_expand_def_alias(&fun_typ_pi, &scope).unwrap_or(fun_typ_pi);
       if let Pi {
         arg: arg_type,
         ret,
@@ -1571,6 +1629,8 @@ fn type_check_with_env(
       if expected_type.is_known() {
         let (vars, typ) = unwrap_forall(expected_type.clone());
         let vars = vars.iter().collect();
+        // Expand def type aliases (e.g. Lens S T A B -> (A -> F B) -> S -> F T)
+        let typ = try_expand_def_alias(&typ, &scope).unwrap_or(typ);
         if let Pi {
           arg,
           ret,
