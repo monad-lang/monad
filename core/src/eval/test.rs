@@ -1939,6 +1939,98 @@ fn test_erased_used_at_runtime_fails() {
   );
 }
 
+// Scope isolation tests — inner lambda params don't leak to outer verify
+
+#[test]
+fn test_linear_nested_scopes_isolated() {
+  // Outer: \!x : I64 => (\y : I64 => x)   — x used once in inner, y is Many (no check)
+  // The outer lambda verifies x (count=1, ok). Inner lambda doesn't interfere.
+  // This should pass — each scope verifies its own params independently.
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  let param_y = param(id("y"), var("I64")); // Many — no linear check
+  let inner_body = var("x"); // x used once
+  let inner = Term::Lam {
+    param: Par::P(param_y),
+    body: Box::new(inner_body),
+  };
+  let param_x = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  let outer = Term::Lam {
+    param: Par::P(param_x),
+    body: Box::new(inner),
+  };
+  let r = type_check(outer, Hole, &scope);
+  assert!(
+    r.is_ok(),
+    "Each scope verifies its own params: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_linear_nested_inner_unused_fails() {
+  // Outer: \x : I64 => (\!y : I64 => x)   — y is Linear and unused in inner
+  // The INNER lambda should fail (y unused), outer should not report it.
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  let param_y = param_with_mult(id("y"), var("I64"), Multiplicity::Linear);
+  let inner_body = var("x"); // x used, y unused
+  let inner = Term::Lam {
+    param: Par::P(param_y),
+    body: Box::new(inner_body),
+  };
+  let param_x = param(id("x"), var("I64")); // Many
+  let outer = Term::Lam {
+    param: Par::P(param_x),
+    body: Box::new(inner),
+  };
+  let r = type_check(outer, Hole, &scope);
+  assert!(
+    r.is_err(),
+    "Inner lambda should catch its own unused linear param"
+  );
+  let msg = r.unwrap_err().to_string();
+  assert!(
+    msg.contains("y") && msg.contains("must be used exactly once"),
+    "Error should mention y is unused linear: {msg}"
+  );
+}
+
+#[test]
+fn test_linear_nested_outer_unused_fails() {
+  // Outer: \!x : I64 => (\y : I64 => y)   — x is Linear and unused in outer
+  // The OUTER lambda should fail (x unused), inner uses y (Many, fine).
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  let param_y = param(id("y"), var("I64")); // Many
+  let inner_body = var("y");
+  let inner = Term::Lam {
+    param: Par::P(param_y),
+    body: Box::new(inner_body),
+  };
+  let param_x = param_with_mult(id("x"), var("I64"), Multiplicity::Linear);
+  let outer = Term::Lam {
+    param: Par::P(param_x),
+    body: Box::new(inner),
+  };
+  let r = type_check(outer, Hole, &scope);
+  assert!(
+    r.is_err(),
+    "Outer lambda should catch its own unused linear param"
+  );
+  let msg = r.unwrap_err().to_string();
+  assert!(
+    msg.contains("x") && msg.contains("must be used exactly once"),
+    "Error should mention x is unused linear: {msg}"
+  );
+}
+
 // ===== .mo-Style Integration Tests =====
 
 fn type_check_mo(input: &str) -> Result<Vec<SourceContext<Decl>>, TypeError> {

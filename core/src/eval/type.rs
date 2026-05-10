@@ -316,6 +316,17 @@ impl UsageEnv {
     }
     Ok(())
   }
+
+  /// Verify a single variable was used according to its multiplicity.
+  /// Used in Lam branches to avoid checking inner lambda params (scope leak fix).
+  pub fn verify_var(&self, name: &Identifier) -> Result<(), TypeError> {
+    if let Some((mult, count)) = self.usages.get(name) {
+      if *mult == Multiplicity::Linear && *count != 1 {
+        return Err(TypeError::LinearUnused(name.clone()));
+      }
+    }
+    Ok(())
+  }
 }
 
 pub fn derive_instance_key(class_def: &ClassDefRef, typ: &Term) -> Result<InstanceKey, TypeError> {
@@ -1572,16 +1583,21 @@ fn type_check_with_env(
             arg_type
           };
           // Register param in usage env (before body check)
-          if let Par::P(ref p) = param {
+          let registered_name = if let Par::P(ref p) = param {
             usage.register(p.name.clone(), p.mult.clone());
-          }
+            Some(p.name.clone())
+          } else {
+            None
+          };
           let scope = scope.with_param(&param);
           let return_type = *ret.clone();
           let return_type = add_forall_to_type(return_type, &vars);
           let (body, return_type) =
             type_check_with_env(*body.clone(), return_type, &scope, usage, track_usage)?.to_tuple();
-          // Verify linear params were used
-          usage.verify_linear_usage()?;
+          // Verify only this lambda's param — inner lambdas verify their own
+          if let Some(name) = registered_name {
+            usage.verify_var(&name)?;
+          }
           let lam_type = pi_of_forall_types_with_mult(
             arg_type.clone(),
             return_type,
@@ -1595,14 +1611,19 @@ fn type_check_with_env(
       } else {
         let param_type = param.typ();
         // Register param in usage env (before body check)
-        if let Par::P(ref p) = param {
+        let registered_name = if let Par::P(ref p) = param {
           usage.register(p.name.clone(), p.mult.clone());
-        }
+          Some(p.name.clone())
+        } else {
+          None
+        };
         let scope = scope.with_param(&param);
         let (body, body_type) =
           type_check_with_env(*body.clone(), Hole, &scope, usage, track_usage)?.to_tuple();
-        // Verify linear params were used
-        usage.verify_linear_usage()?;
+        // Verify only this lambda's param — inner lambdas verify their own
+        if let Some(name) = registered_name {
+          usage.verify_var(&name)?;
+        }
         let lam_type = pi_with_mult(param_type.clone(), body_type, param.multiplicity().clone());
         let term = lam_par(param, body);
         Ok(typed_term(term, lam_type))
