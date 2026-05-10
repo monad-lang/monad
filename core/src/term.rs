@@ -1167,6 +1167,17 @@ impl<'a> Typed for VarRef<'a> {
   }
 }
 
+impl<'a> VarRef<'a> {
+  /// The underlying term for Free and UpdateRef variants, or None
+  pub fn term(&self) -> Option<&Term> {
+    match self {
+      VarRef::Free { term, .. } => Some(term),
+      VarRef::UpdateRef { term, .. } => Some(term),
+      VarRef::Local { .. } => None,
+    }
+  }
+}
+
 pub fn free_var_ref<'a>(term: &'a Term, typ: &'a Term) -> VarRef<'a> {
   VarRef::Free { term, typ }
 }

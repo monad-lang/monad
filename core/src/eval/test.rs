@@ -2064,6 +2064,47 @@ fn test_mo_linear_used_twice_fails() {
 }
 
 #[test]
+#[ignore = "Blocked: match_resolve_type_inner treats constructor Forall as free vars"]
+fn test_constructor_in_instance_body() {
+  // Id.id in instance body should type-check (alpha-rename clash)
+  let r = type_check_mo(
+    r#"
+    type Id A {
+      id (a : A)
+    }
+    instance Functor Id {
+      def map (f : A -> B) (a : Id A) : Id B :=
+        match a { id a_ => Id.id (f a_) }
+    }
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Id.id in instance body should type-check: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_const_constructor_in_instance_body() {
+  // Const.const with {R : Type} forall should type-check
+  let r = type_check_mo(
+    r#"
+    type Const (R : Type) (A : Type) { const R }
+    instance {R : Type} Functor (Const R) {
+      def map (f : A -> B) (a : Const R A) : Const R B :=
+        match a { const r => Const.const r }
+    }
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Const.const in instance body should type-check: {:?}",
+    r.err()
+  );
+}
+
+#[test]
 fn test_mo_affine_simple_pass() {
   let r = type_check_mo(r#"def f (?x : I64) : I64 := x"#);
   assert!(r.is_ok(), "Affine simple should pass");

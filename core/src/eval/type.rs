@@ -461,15 +461,52 @@ pub fn type_check_instance<'a>(
 /// Wrap a type with forall bindings for the given type variables.
 fn wrap_with_foralls(typ: Term, vars: &crate::Map<Identifier, Term>) -> Term {
   use crate::term::Term::Forall;
+  // Collect bound names from the type to avoid clashes
+  let reserved = collect_bound_names(&typ);
   let mut result = typ;
   for (name, param_typ) in vars {
+    let name = if reserved.contains(name) {
+      let mut fresh = Identifier::new(format!("{}_i", name.as_str()));
+      while reserved.contains(&fresh) {
+        fresh = fresh.rename();
+      }
+      fresh
+    } else {
+      name.clone()
+    };
     result = Forall {
-      name: name.clone(),
+      name,
       typ: Box::new(param_typ.clone()),
       body: Box::new(result),
     };
   }
   result
+}
+
+/// Collect all Forall-bound variable names in a term.
+fn collect_bound_names(term: &Term) -> crate::Set<Identifier> {
+  let mut names = crate::empty_set();
+  collect_bound_names_inner(term, &mut names);
+  names
+}
+
+fn collect_bound_names_inner(term: &Term, names: &mut crate::Set<Identifier>) {
+  match term {
+    Term::Forall { name, typ, body } => {
+      names.insert(name.clone());
+      collect_bound_names_inner(typ, names);
+      collect_bound_names_inner(body, names);
+    }
+    Term::Pi { arg, ret, .. } => {
+      collect_bound_names_inner(arg, names);
+      collect_bound_names_inner(ret, names);
+    }
+    Term::App { fun, arg } => {
+      collect_bound_names_inner(fun, names);
+      collect_bound_names_inner(arg, names);
+    }
+    _ => {}
+  }
 }
 
 pub fn join_many_results<T, E>(list: Vec<Result<T, E>>) -> (Vec<T>, Vec<E>) {
