@@ -515,6 +515,8 @@ Always use Test-Driven Development (TDD):
 Always make small, incremental changes. Each commit should be a single logical change.
 After each commit, confirm the test suite still passes.
 
+When a feature or bug fix is implemented, update the relevant plan in `plans/` to reflect the completed work. Mark completed tasks, add notes on the approach taken, and capture any design decisions or tradeoffs discovered during implementation.
+
 ## Common Patterns
 
 ### Creating New Types
