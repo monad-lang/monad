@@ -31,6 +31,7 @@ use nom::{
     alpha1, char, digit1, i64, line_ending, multispace0, multispace1, not_line_ending,
   },
   combinator::{eof, map, not, opt, peek, recognize, success, verify},
+  error::context,
   multi::{fold_many0, many0, many1},
   sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
@@ -131,7 +132,12 @@ fn variable<X: Clone>(input: Span<X>) -> Res<Term, X> {
 }
 
 fn operator_parens<X: Clone>(input: Span<X>) -> Res<Operator, X> {
-  delimited(char('('), infix_symbol, char(')')).parse(input)
+  delimited(
+    char('('),
+    infix_symbol,
+    context("closing parenthesis for operator reference", char(')')),
+  )
+  .parse(input)
 }
 
 fn operator_var<X: Clone>(input: Span<X>) -> Res<Term, X> {
@@ -162,7 +168,16 @@ fn forall_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
       (
         terminated(identifier, (ws0, char(':'), ws0)),
         type_expression,
-        preceded((ws0, char('}'), ws0, tag("->"), ws0), type_top_expression),
+        preceded(
+          (
+            ws0,
+            context("closing brace for forall type", char('}')),
+            ws0,
+            tag("->"),
+            ws0,
+          ),
+          type_top_expression,
+        ),
       ),
     ),
     |(name, typ, body)| forall(param(name, typ), body),
@@ -190,7 +205,10 @@ fn pi_type_expression<X: Clone>(input: Span<X>) -> Res<Term, X> {
           delimited(
             (char('('), ws0),
             separated_pair(identifier, (ws0, char(':'), ws0), type_base_expression),
-            (ws0, char(')')),
+            (
+              ws0,
+              context("closing parenthesis for function type parameter", char(')')),
+            ),
           ),
           |(n, t)| (Some(n), t),
         ),
@@ -208,7 +226,10 @@ fn type_parens<X: Clone>(input: Span<X>) -> Res<Term, X> {
   delimited(
     terminated(tag("("), ws0),
     type_expression,
-    preceded(ws0, tag(")")),
+    preceded(
+      ws0,
+      context("closing parenthesis for type expression", tag(")")),
+    ),
   )
   .parse(input)
 }
@@ -329,7 +350,10 @@ fn lam_param<X: Clone>(input: Span<X>) -> Res<Param, X> {
         ),
         |(mult, (name, typ))| param_with_mult(name, typ, mult),
       ),
-      (ws0, char(')')),
+      (
+        ws0,
+        context("closing parenthesis for function parameter", char(')')),
+      ),
     ),
   ))
   .parse(input)
@@ -347,7 +371,10 @@ fn cons_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
         ),
         map(type_expression, |t| vec![param(id(""), t)]),
       )),
-      (ws0, char(')')),
+      (
+        ws0,
+        context("closing parenthesis for constructor parameter", char(')')),
+      ),
     ),
   ))
   .parse(input)
@@ -379,7 +406,10 @@ fn implicit_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
           .collect()
       },
     ),
-    (ws0, char('}')),
+    (
+      ws0,
+      context("closing brace for implicit parameters", char('}')),
+    ),
   )
   .parse(input)
 }
@@ -411,7 +441,10 @@ fn def_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
           .collect()
       },
     ),
-    (ws0, char(')')),
+    (
+      ws0,
+      context("closing parenthesis for function parameters", char(')')),
+    ),
   )
   .parse(input)
 }
@@ -493,7 +526,12 @@ fn assignment_operator<X: Clone>(input: Span<X>) -> Res<(), X> {
 }
 
 fn parens<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  delimited(terminated(tag("("), ws0), term, preceded(ws0, tag(")"))).parse(input)
+  delimited(
+    terminated(tag("("), ws0),
+    term,
+    preceded(ws0, context("closing parenthesis for expression", tag(")"))),
+  )
+  .parse(input)
 }
 
 fn match_case_parser<X: Clone>(input: Span<X>) -> Res<MatchCase, X> {
@@ -517,7 +555,7 @@ fn match_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, cases) =
     many1(delimited(ws0, match_case_parser, (ws0, opt(char(','))))).parse(input)?;
   let (input, _) = ws0(input)?;
-  let (input, _) = tag("}").parse(input)?;
+  let (input, _) = context("closing brace for match body", tag("}")).parse(input)?;
 
   Ok((input, match_term(value, cases)))
 }
@@ -577,7 +615,7 @@ fn do_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, stmts) = many0(preceded(ws0, do_statement)).parse(input)?;
 
   let (input, _) = ws0(input)?;
-  let (input, _) = char('}')(input)?;
+  let (input, _) = context("closing brace for do block", char('}')).parse(input)?;
 
   let body = desugar_do_statements(stmts);
   Ok((input, body))
@@ -653,7 +691,10 @@ fn ann_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
         typ: Box::new(typ),
       },
     ),
-    (ws0, char(')')),
+    (
+      ws0,
+      context("closing parenthesis for type annotation", char(')')),
+    ),
   )
   .parse(input)
 }
@@ -781,7 +822,13 @@ fn path_expression<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
 fn quote_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   preceded(
     (tag("quote"), ws1, char('{'), ws0),
-    terminated(term, (ws0, char('}'))),
+    terminated(
+      term,
+      (
+        ws0,
+        context("closing brace for quoted expression", char('}')),
+      ),
+    ),
   )
   .map(|t| Term::Quote { term: Box::new(t) })
   .parse(input)
@@ -851,7 +898,7 @@ fn list_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
       many0(terminated(term, (ws0, opt(char(',')), ws0))),
       |elements: Vec<Term>| desugar_list_literal(elements),
     ),
-    (ws0, char(']')),
+    (ws0, context("closing bracket for list literal", char(']'))),
   )
   .parse(input)
 }
@@ -900,13 +947,19 @@ fn attr_arg_parser<X: Clone>(input: Span<X>) -> Res<Vec<AttrArg>, X> {
         ),
         opt(char(',')),
       )),
-      (ws0, char('}')),
+      (
+        ws0,
+        context("closing brace for attribute named arguments", char('}')),
+      ),
     ),
     // Group block: [item1, item2,] — each item parsed with full attr_arg_parser
     delimited(
       (char('['), ws0),
       many1(terminated(preceded(ws0, attr_arg_parser), opt(char(',')))),
-      (ws0, char(']')),
+      (
+        ws0,
+        context("closing bracket for attribute group", char(']')),
+      ),
     )
     .map(|vecs| vec![AttrArg::Group(vecs.into_iter().flatten().collect())]),
     // Single positional arg: "string", 42, ident
@@ -935,7 +988,7 @@ fn attribute_parser<X: Clone>(input: Span<X>) -> Res<Attribute, X> {
   delimited(
     (tag("@["), ws0),
     (name, many0(preceded(ws1, attr_arg_parser))),
-    (ws0, tag("]")),
+    (ws0, context("closing bracket for attribute", tag("]"))),
   )
   .map(|(name, args_vecs)| Attribute {
     name,
@@ -1004,7 +1057,7 @@ fn def_parser(input: Span) -> Res<Def> {
     let (input, _) = ws0(input)?;
     let (input, stmts) = many0(preceded(ws0, do_statement)).parse(input)?;
     let (input, _) = ws0(input)?;
-    let (input, _) = char('}')(input)?;
+    let (input, _) = context("closing brace for function body", char('}')).parse(input)?;
     let body = desugar_do_statements(stmts);
     (input, body)
   } else {
@@ -1048,7 +1101,10 @@ fn macro_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
             .collect()
         },
       ),
-      (ws0, char(')')),
+      (
+        ws0,
+        context("closing parenthesis for macro parameter", char(')')),
+      ),
     ),
   ))
   .parse(input)
@@ -1073,7 +1129,7 @@ fn defs_block_parser(input: Span) -> Res<Vec<Decl>> {
   let (input, _) = ws0(input)?;
   let (decls, remaining) = decls_until_end(input);
   let (remaining, _) = ws0(remaining)?;
-  let (remaining, _) = char('}')(remaining)?;
+  let (remaining, _) = context("closing brace for decls block", char('}')).parse(remaining)?;
   Ok((remaining, decls))
 }
 
@@ -1186,7 +1242,12 @@ fn class_def_parser<X: Clone>(input: Span<X>) -> Res<ClassDef, X> {
 }
 
 fn class_inner_parser(input: Span) -> Res<Vec<ClassDef>> {
-  delimited((char('{'), ws0), many1(class_def_parser), (ws0, char('}'))).parse(input)
+  delimited(
+    (char('{'), ws0),
+    many1(class_def_parser),
+    (ws0, context("closing brace for class body", char('}'))),
+  )
+  .parse(input)
 }
 
 fn type_cons_parser<X: Clone>(input: Span<X>) -> Res<TypeConstraint, X> {
@@ -1201,7 +1262,10 @@ fn all_type_cons_parser<X: Clone>(input: Span<X>) -> Res<Vec<TypeConstraint>, X>
   delimited(
     (char('['), ws0),
     many1(terminated(type_cons_parser, (ws0, opt(char(',')), ws0))),
-    (ws0, char(']')),
+    (
+      ws0,
+      context("closing bracket for type constraints", char(']')),
+    ),
   )
   .parse(input)
 }
@@ -1233,7 +1297,7 @@ fn instance_inner_parser(input: Span) -> Res<Vec<Def>> {
   delimited(
     (char('{'), ws0),
     many1(delimited(ws0, def_parser, ws0)),
-    (ws0, char('}')),
+    (ws0, context("closing brace for instance body", char('}'))),
   )
   .parse(input)
 }
@@ -1310,7 +1374,10 @@ fn inductive_inner_parser<'a>(
   delimited(
     (char('{'), ws0),
     many0(terminated(constructor_parser, (ws0, opt(char(',')), ws0))),
-    (ws0, char('}')),
+    (
+      ws0,
+      context("closing brace for type constructors", char('}')),
+    ),
   )
   .parse(input)
 }
@@ -1370,7 +1437,7 @@ fn struct_inner_parser<X: Clone>(input: Span<X>) -> Res<Vec<StructField>, X> {
   delimited(
     (char('{'), ws0),
     many1(terminated(struct_field_parser, (ws0, char(','), ws0))),
-    (ws0, char('}')),
+    (ws0, context("closing brace for struct fields", char('}'))),
   )
   .parse(input)
 }
@@ -1409,7 +1476,7 @@ fn parse_struct_update<X: Clone>(input: Span<X>) -> Res<Term, X> {
   ))
   .parse(input)?;
   let (input, _) = ws0(input)?;
-  let (input, _) = char('}')(input)?;
+  let (input, _) = context("closing brace for struct update", char('}')).parse(input)?;
   Ok((
     input,
     Term::Lit {
@@ -1432,7 +1499,7 @@ fn struct_or_update_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
           struct_val_field_parser,
           (ws0, opt(char(',')), ws0),
         )),
-        preceded(ws0, char('}')),
+        preceded(ws0, context("closing brace for struct literal", char('}'))),
       ),
       |(fields, _)| Term::Lit {
         value: Literal::StructLit {
@@ -1447,7 +1514,7 @@ fn struct_or_update_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
 fn use_hiding_filter(input: Span) -> Res<UseFilter> {
   let (input, _) = preceded((ws0, tag("hiding"), ws0), char('(')).parse(input)?;
   let (input, names) = many1(terminated(identifier, ws0)).parse(input)?;
-  let (input, _) = char(')').parse(input)?;
+  let (input, _) = context("closing parenthesis for use hiding filter", char(')')).parse(input)?;
   Ok((input, UseFilter::Hiding(names)))
 }
 
@@ -1464,7 +1531,7 @@ fn use_paren_filter(input: Span) -> Res<UseFilter> {
     (ws0, opt(char(',')), ws0),
   ))
   .parse(input)?;
-  let (input, _) = char(')').parse(input)?;
+  let (input, _) = context("closing parenthesis for use filter", char(')')).parse(input)?;
   if items.iter().any(|(a, b)| a != b) {
     Ok((input, UseFilter::Rename(items)))
   } else {
@@ -1517,7 +1584,11 @@ fn open_parser(input: Span) -> Res<Open> {
     alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
   let (input, filter) = opt(preceded(
     (ws0, tag("using"), ws0),
-    delimited(char('('), many1(terminated(identifier, ws0)), char(')')),
+    delimited(
+      char('('),
+      many1(terminated(identifier, ws0)),
+      context("closing parenthesis for open using filter", char(')')),
+    ),
   ))
   .parse(input)?;
   let filter = match filter {
@@ -1623,8 +1694,22 @@ pub fn repl_parser(input: &str) -> Result<ReplInput, ReplParserError> {
 
 fn decls_parser(input: Span) -> Res<ParsedModule> {
   let (input, module_doc) = opt(doc_comment).parse(input)?;
-  let (input, decls) = many0(decl_parser).parse(input)?;
+  let (input, mut decls) = many0(decl_parser).parse(input)?;
   let (input, _) = ws0(input)?;
+  // many0 discards the inner error from the last failed decl_parser.
+  // If there's remaining input, re-run decl_parser to capture its error
+  // (which includes context from inner delimiter parsers) for display.
+  if !input.fragment().is_empty() {
+    return match decl_parser(input) {
+      Err(e) => Err(e),
+      Ok((rest, decl)) => {
+        decls.push(decl);
+        let (rest, _) = ws0(rest)?;
+        let (rest, _) = eof(rest)?;
+        Ok((rest, ParsedModule { decls, module_doc }))
+      }
+    };
+  }
   let (input, _) = eof(input)?;
   Ok((input, ParsedModule { decls, module_doc }))
 }

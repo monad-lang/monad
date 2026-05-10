@@ -733,6 +733,11 @@ fn strip_implicit_params(term: &Term) -> Term {
 /// Try to expand a def type alias applied to arguments.
 /// e.g., Lens S T A B → (A -> F B) -> S -> F T
 fn try_expand_def_alias(typ: &Term, scope: &Scope) -> Option<Term> {
+  // Unwrap Ctx wrapper
+  let typ = match typ {
+    Term::Ctx { term, .. } => term,
+    _ => typ,
+  };
   // Collect the head Var and args from App chain
   let (head, args) = collect_apps(typ);
   let head_name = match head {
@@ -743,11 +748,19 @@ fn try_expand_def_alias(typ: &Term, scope: &Scope) -> Option<Term> {
   let def_ref = scope.global().find_ref(&path)?;
 
   // Get the body term, stripping implicit Forall layers
-  let body = strip_implicit_params(def_ref.term());
+  let mut body = strip_implicit_params(def_ref.term());
+  // Also try stripping Forall from term (some defs have Forall in term)
+  while let Term::Forall { body: b, .. } = body {
+    body = *b;
+  }
 
   // Substitute the explicit args into the body
-  // args should match the Lam params in order
-  Some(substitute_lam_args(&body, &args))
+  let mut result = substitute_lam_args(&body, &args);
+  // Strip a single Ctx wrapper from the result
+  if let Term::Ctx { term, .. } = result {
+    result = *term;
+  }
+  Some(result)
 }
 
 /// Collect the head and arguments of an App chain: App(App(head, a1), a2) → (head, [a1, a2])
@@ -758,6 +771,7 @@ fn collect_apps(term: &Term) -> (&Term, Vec<Term>) {
       args.push(*arg.clone());
       (head, args)
     }
+    Term::Ctx { term, .. } => collect_apps(term),
     _ => (term, vec![]),
   }
 }
@@ -1356,7 +1370,11 @@ fn type_check_with_env(
       let (fun, fun_type) =
         type_check_with_env(*fun, fun_type, &scope, usage, track_usage)?.to_tuple();
       let (fun_vars, fun_typ_pi) = unwrap_forall(fun_type);
-      let fun_typ_pi = try_expand_def_alias(&fun_typ_pi, &scope).unwrap_or(fun_typ_pi);
+      let mut fun_typ_pi = try_expand_def_alias(&fun_typ_pi, &scope).unwrap_or(fun_typ_pi);
+      // Unwrap a single Ctx wrapper from the result
+      if let Term::Ctx { term, .. } = &fun_typ_pi {
+        fun_typ_pi = (**term).clone();
+      }
       if let Pi {
         arg: arg_type,
         ret,
@@ -1668,7 +1686,11 @@ fn type_check_with_env(
         let (vars, typ) = unwrap_forall(expected_type.clone());
         let vars = vars.iter().collect();
         // Expand def type aliases (e.g. Lens S T A B -> (A -> F B) -> S -> F T)
-        let typ = try_expand_def_alias(&typ, &scope).unwrap_or(typ);
+        let mut typ = try_expand_def_alias(&typ, &scope).unwrap_or(typ);
+        // Unwrap a single Ctx wrapper from the result
+        if let Term::Ctx { term, .. } = &typ {
+          typ = (**term).clone();
+        }
         if let Pi {
           arg,
           ret,

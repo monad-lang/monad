@@ -2105,6 +2105,24 @@ fn test_const_constructor_in_instance_body() {
 }
 
 #[test]
+#[ignore = "Blocked: try_expand_def_alias returns None for Lens (scope lookup fails)"]
+fn test_def_returning_lens_type_checks() {
+  // A def with Lens return type annotation should type-check
+  // (body returns expanded Pi, annotation is unexpanded App chain)
+  let r = type_check_mo(
+    r#"
+    def pair_lens : Lens I64 I64 I64 I64 :=
+      fn f => fn s => f s
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Def with Lens annotation should type-check: {:?}",
+    r.err()
+  );
+}
+
+#[test]
 fn test_mo_affine_simple_pass() {
   let r = type_check_mo(r#"def f (?x : I64) : I64 := x"#);
   assert!(r.is_ok(), "Affine simple should pass");
