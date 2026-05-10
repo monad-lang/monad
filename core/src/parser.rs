@@ -306,9 +306,10 @@ fn float_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
   Ok((input, suffix))
 }
 
-/// Parse multiplicity prefix: "!" = Linear, "?" = Affine, none = Many
+/// Parse multiplicity prefix: "%" = Erased, "!" = Linear, "?" = Affine, none = Many
 fn multiplicity_prefix<X: Clone>(input: Span<X>) -> Res<Multiplicity, X> {
-  map(opt(alt((char('!'), char('?')))), |m| match m {
+  map(opt(alt((char('%'), char('!'), char('?')))), |m| match m {
+    Some('%') => Multiplicity::Zero,
     Some('!') => Multiplicity::Linear,
     Some('?') => Multiplicity::Affine,
     _ => Multiplicity::Many,

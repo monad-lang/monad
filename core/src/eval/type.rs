@@ -74,6 +74,7 @@ pub enum TypeError {
   LinearUsedMultipleTimes(Identifier),
   LinearUnused(Identifier),
   AffineUsedMultipleTimes(Identifier),
+  ErasedUsedAtRuntime(Identifier),
 }
 
 impl From<ScopeError> for TypeError {
@@ -153,6 +154,13 @@ impl Display for TypeError {
       }
       TypeError::AffineUsedMultipleTimes(id) => {
         write!(f, "Affine variable '{}' used more than once", id)
+      }
+      TypeError::ErasedUsedAtRuntime(id) => {
+        write!(
+          f,
+          "Erased variable '{}' used at runtime (erased vars are compile-time only)",
+          id
+        )
       }
     }
   }
@@ -266,6 +274,9 @@ impl UsageEnv {
   pub fn check_usage(&self, name: &Identifier) -> Result<(), TypeError> {
     if let Some((mult, count)) = self.usages.get(name) {
       match mult {
+        Multiplicity::Zero => {
+          return Err(TypeError::ErasedUsedAtRuntime(name.clone()));
+        }
         Multiplicity::Linear => {
           if *count >= 1 {
             return Err(TypeError::LinearUsedMultipleTimes(name.clone()));
@@ -1217,6 +1228,7 @@ fn type_check_with_env(
             TypeError::LinearUsedMultipleTimes(_)
               | TypeError::LinearUnused(_)
               | TypeError::AffineUsedMultipleTimes(_)
+              | TypeError::ErasedUsedAtRuntime(_)
           ) {
             return Err(err);
           }

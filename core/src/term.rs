@@ -681,6 +681,7 @@ impl Named for Inductive {
 /// - Affine: can be used 0 or 1 time (syntax: ?x)
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum Multiplicity {
+  Zero,   // 0 — erased at compile time, no runtime representation
   Many,   // ω - unrestricted (default)
   Linear, // 1 - must use exactly once
   Affine, // ≤1 - can use 0 or 1 time
@@ -695,6 +696,7 @@ impl Default for Multiplicity {
 impl Display for Multiplicity {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
+      Multiplicity::Zero => write!(f, "0"),
       Multiplicity::Many => write!(f, "ω"),
       Multiplicity::Linear => write!(f, "!"),
       Multiplicity::Affine => write!(f, "?"),

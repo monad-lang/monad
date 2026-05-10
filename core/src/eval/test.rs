@@ -1894,6 +1894,51 @@ fn test_linear_affine_diff_error_messages() {
   );
 }
 
+// Erased (Zero) tests
+
+#[test]
+fn test_erased_not_used_ok() {
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // \%x : I64 => 42   — erased param not used in body
+  let param_x = param_with_mult(id("x"), var("I64"), Multiplicity::Zero);
+  let body = num(42);
+  let t = Term::Lam {
+    param: Par::P(param_x),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope);
+  assert!(
+    r.is_ok(),
+    "Erased param not used in body should type check: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_erased_used_at_runtime_fails() {
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+
+  // \%x : I64 => x   — erased param used at runtime
+  let param_x = param_with_mult(id("x"), var("I64"), Multiplicity::Zero);
+  let body = var("x");
+  let t = Term::Lam {
+    param: Par::P(param_x),
+    body: Box::new(body),
+  };
+  let r = type_check(t, Hole, &scope);
+  assert!(r.is_err(), "Erased param used at runtime should fail");
+  let msg = r.unwrap_err().to_string();
+  assert!(
+    msg.contains("Erased variable"),
+    "Error should mention erased variable: {msg}"
+  );
+}
+
 // ===== .mo-Style Integration Tests =====
 
 fn type_check_mo(input: &str) -> Result<Vec<SourceContext<Decl>>, TypeError> {

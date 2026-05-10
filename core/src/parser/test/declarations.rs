@@ -490,3 +490,39 @@ fn test_selective_use_all() {
   assert_eq!(res.module_path, mpt("IO"));
   assert_eq!(res.filter, UseFilter::All);
 }
+
+#[test]
+fn test_parse_erased_param() {
+  // %x : I64 — erased prefix parses as Zero
+  let s: Span<()> = "(%x : I64)".into();
+  let (_, res) = lam_param(s).unwrap();
+  assert_eq!(res.name, id("x"));
+  assert_eq!(*res.typ, typ("I64"));
+  assert_eq!(res.mult, Multiplicity::Zero);
+}
+
+#[test]
+fn test_parse_erased_def_param() {
+  // def f (%x : I64) : I64 — erased in def
+  let s = r#"def f (%x : I64) : I64 := 42"#.into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::Def(def) => {
+      // The lam param should be erased
+      if let Term::Lam { param, .. } = &def.term {
+        assert_eq!(param.multiplicity(), &Multiplicity::Zero);
+      }
+    }
+    _ => panic!("Expected Def"),
+  }
+}
+
+#[test]
+fn test_parse_mixed_multiplicity_params() {
+  let s = r#"def f (!x : I64) (?y : I64) (%z : I64) (w : I64) : I64 := x"#.into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::Def(_) => {} // Just verify it parses
+    _ => panic!("Expected Def"),
+  }
+}
