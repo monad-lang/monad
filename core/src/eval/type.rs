@@ -2137,8 +2137,9 @@ fn type_check_with_env(
       },
     } => {
       let con = type_check_with_env(*value.clone(), Hole, &scope, usage, track_usage)?;
+      let (_, con_type) = unwrap_forall(con.typ().clone());
 
-      if let Some((ind_name, ind_args)) = extract_first_name(con.typ()) {
+      if let Some((ind_name, ind_args)) = extract_first_name(&con_type) {
         let ind = scope.find_inductive(&ind_name)?;
         let ind_params = &ind.params;
         if ind_params.len() != ind_args.len() {
