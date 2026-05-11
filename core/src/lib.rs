@@ -4,6 +4,7 @@ use std::fs;
 use std::hash::{BuildHasherDefault, DefaultHasher, Hash};
 use std::path::{Path, PathBuf};
 
+use crate::eval::r#type::render_type_error_with_source;
 use crate::eval::r#type::type_check;
 use crate::eval::{EvalOptions, eval};
 #[cfg(feature = "repl")]
@@ -159,8 +160,9 @@ pub fn load_module(
 
 pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<(), String> {
   let path: ModulePath = input.clone().into();
+  let source = fs::read_to_string(&input).map_err(|e| format!("{e}"))?;
   let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
-  loaded = load_module(&input, &path, loaded).map_err(|e| format!("{e}"))?;
+  load_module_from_text(&source, path.clone(), &mut loaded).map_err(|e| format!("{e}"))?;
   let module = loaded
     .get_module(&path)
     .ok_or_else(|| format!("Module {path} not loaded"))?;
@@ -182,8 +184,7 @@ pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<()
   };
 
   let (term, typ) = type_check(input_term, Hole, &global.scope())
-    .map_err(|e| format!("{e}"))
-    .inspect_err(|e| eprintln!("{e}"))?
+    .map_err(|e| render_type_error_with_source(&source, &e))?
     .to_tuple();
   println!("Eval type {typ}");
   let term = eval(term, &global.scope(), &options)

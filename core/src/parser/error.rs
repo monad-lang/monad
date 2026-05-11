@@ -120,24 +120,24 @@ pub fn get_error_line_column(source: &str, error: &OwnedError) -> (usize, usize)
   (line_num, column)
 }
 
-pub fn display_parse_error(
+pub fn display_source_context(
   source: &str,
-  error: &OwnedError,
-  f: &mut std::fmt::Formatter<'_>,
+  path: Option<&str>,
+  line_num: usize,
+  column: usize,
+  f: &mut impl std::fmt::Write,
 ) -> std::fmt::Result {
-  let (line_num, column) = get_error_line_column(source, error);
-
   let source_lines: Vec<&str> = source.lines().collect();
   let total_lines = source_lines.len();
 
-  writeln!(f, "error: parse error")?;
-
-  if line_num == 0 || line_num > total_lines {
-    writeln!(f, "  --> :{}:{}", line_num, column)?;
-    return Ok(());
+  match path {
+    Some(path) => writeln!(f, "  --> {}:{}:{}", path, line_num, column)?,
+    None => writeln!(f, "  --> :{}:{}", line_num, column)?,
   }
 
-  writeln!(f, "  --> :{}:{}", line_num, column)?;
+  if line_num == 0 || line_num > total_lines {
+    return Ok(());
+  }
 
   let start_line = if line_num > 1 { line_num - 1 } else { 1 };
   let end_line = if line_num < total_lines {
@@ -154,15 +154,28 @@ pub fn display_parse_error(
     let marker = if i == line_num { " |" } else { "  " };
     writeln!(f, "{}{}", marker, line_content)?;
 
-    if i == line_num {
-      let caret_indent = " ".repeat(column);
-      writeln!(
-        f,
-        "{}{}^ error here",
-        caret_indent,
-        if i == line_num { "^" } else { "-" }
-      )?;
+    if i == line_num && column > 0 {
+      let indent = " ".repeat(column.saturating_sub(1));
+      writeln!(f, "{}^---", indent)?;
     }
+  }
+
+  Ok(())
+}
+
+pub fn display_parse_error(
+  source: &str,
+  error: &OwnedError,
+  f: &mut impl std::fmt::Write,
+) -> std::fmt::Result {
+  let (line_num, column) = get_error_line_column(source, error);
+
+  writeln!(f, "error: parse error")?;
+
+  if line_num == 0 || line_num > source.lines().count() {
+    writeln!(f, "  --> :{}:{}", line_num, column)?;
+  } else {
+    display_source_context(source, None, line_num, column, f)?;
   }
 
   if let Some(ctx) = &error.expected {

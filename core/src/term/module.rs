@@ -4,7 +4,9 @@ pub mod test;
 use super::*;
 use crate::Set;
 use crate::eval::native::{NativeFun, load_native_funs};
-use crate::eval::r#type::{TypeError, UsageEnv, derive_instance_key, type_check_module_decls};
+use crate::eval::r#type::{
+  TypeError, UsageEnv, derive_instance_key, render_type_error_with_source, type_check_module_decls,
+};
 use crate::term::{Inductive, Instance, InstanceKey, ModulePath, SourceContext, Term};
 use crate::{
   parser::parse_file,
@@ -1484,7 +1486,10 @@ pub fn load_module_from_text(
 ) -> Result<(), LoadingError> {
   let init_decls =
     load_decls_from_text(text).map_err(|e| format!("parse error for {}: {e}", path))?;
-  let init_decls = type_check_module_decls(&path, init_decls, loaded)?;
+  let init_decls = type_check_module_decls(&path, init_decls, loaded).map_err(|e| {
+    let rendered = render_type_error_with_source(text, &e);
+    LoadingError::Generic(rendered)
+  })?;
   loaded.add_module(module(
     path,
     ParsedModule {

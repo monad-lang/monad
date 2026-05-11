@@ -170,6 +170,55 @@ fn t_context(err: TypeError, name: Option<ModulePath>, loc: SourceRange) -> Type
   }
 }
 
+pub fn render_type_error_with_source(source: &str, error: &TypeError) -> String {
+  let mut output = String::new();
+  let _ = display_type_error_with_source_impl(source, error, &mut output);
+  output
+}
+
+fn display_type_error_with_source_impl(
+  source: &str,
+  error: &TypeError,
+  f: &mut impl std::fmt::Write,
+) -> std::fmt::Result {
+  match error {
+    TypeError::Context { loc, err, name } => {
+      let inner_loc = unwrap_innermost_context(err);
+      let display_loc = inner_loc.unwrap_or(loc);
+      writeln!(f, "type error")?;
+      crate::parser::display_source_context(
+        source,
+        None,
+        display_loc.start.line as usize,
+        display_loc.start.line_offset,
+        f,
+      )?;
+      write!(f, "  = {}", err)?;
+      if let Some(name) = name {
+        write!(f, " (in {name})")?;
+      }
+      writeln!(f)
+    }
+    TypeError::Many(errs) => {
+      for err in errs {
+        display_type_error_with_source_impl(source, err, f)?;
+      }
+      Ok(())
+    }
+    _ => writeln!(f, "type error\n  = {}", error),
+  }
+}
+
+fn unwrap_innermost_context<'a>(err: &'a TypeError) -> Option<&'a SourceRange> {
+  match err {
+    TypeError::Context { loc, err, .. } => {
+      let inner = unwrap_innermost_context(err);
+      Some(inner.unwrap_or(loc))
+    }
+    _ => None,
+  }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstanceError {
   MissingTypeArgs(Vec<Identifier>),

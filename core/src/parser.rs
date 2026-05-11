@@ -36,7 +36,7 @@ use nom::{
 };
 use string::parse_string;
 
-pub use error::{OwnedError, ParseFileError, ParseTermError};
+pub use error::{OwnedError, ParseFileError, ParseTermError, display_source_context};
 pub type Span<'a, X = ()> = LocatedSpan<&'a str, X>;
 type E<'a, X = ()> = ParseError<Span<'a, X>>;
 type Res<'a, O, X = ()> = IResult<Span<'a, X>, O, E<'a, X>>;
