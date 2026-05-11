@@ -7,6 +7,7 @@ use crate::{
   term::{
     Ann, ClassDefRef, Decl, DeclGenDef, Def, Identifier, Inductive, InductiveVariant, Instance,
     InstanceKey, Literal, ModulePath, Multiplicity, NameRef, Named, NumSuffix, SourceContext,
+    SourceRange,
     Term::{Forall, Hole, Pi, Quote, Sort},
     TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, forall, lam_par,
     module::{LoadedModules, names_of_decls},
@@ -27,68 +28,83 @@ fn is_known_type_name(name: &ModulePath, scope: &Scope) -> bool {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeError {
-  MismatchingBranches(Term, Term),
+  MismatchingBranches(Term, Term, SourceRange),
   ConstructorMismatch {
     params: Vec<Param>,
     args: Vec<Identifier>,
+    loc: SourceRange,
   },
   InductiveMismatch {
     name: ModulePath,
     params: Vec<Param>,
     args: Vec<Term>,
+    loc: SourceRange,
   },
-  ConstructorUnknown(Identifier),
-  Scope(ScopeError),
-  ExpectedInductive(Term),
-  ExpectedPi(Term),
-  ExpectedType(Term),
+  ConstructorUnknown(Identifier, SourceRange),
+  Scope(ScopeError, SourceRange),
+  ExpectedInductive(Term, SourceRange),
+  ExpectedPi(Term, SourceRange),
+  ExpectedType(Term, SourceRange),
   Context {
     name: Option<ModulePath>,
     loc: SourceRange,
     err: Box<TypeError>,
   },
-  InstanceDecl(String),
-  Instance(InstanceError),
-  MissingField(Identifier),
-  Generic(String),
+  InstanceDecl(String, SourceRange),
+  Instance(InstanceError, SourceRange),
+  MissingField(Identifier, SourceRange),
+  Generic(String, SourceRange),
   ArgumentMismatch {
     expected: Term,
     actual: Term,
+    loc: SourceRange,
   },
   TypeMismatch {
     expected: Term,
     actual: Term,
+    loc: SourceRange,
   },
   FreeVarMismatch {
     name: NameRef,
     expected: Term,
     actual: Term,
     locals: Map<Identifier, Term>,
+    loc: SourceRange,
   },
   Overflow {
     value: i64,
     target: &'static str,
+    loc: SourceRange,
   },
   Many(Vec<TypeError>),
   // Linear type errors
-  LinearUsedMultipleTimes(Identifier),
-  LinearUnused(Identifier),
-  AffineUsedMultipleTimes(Identifier),
-  ErasedUsedAtRuntime(Identifier),
+  LinearUsedMultipleTimes(Identifier, SourceRange),
+  LinearUnused(Identifier, SourceRange),
+  AffineUsedMultipleTimes(Identifier, SourceRange),
+  ErasedUsedAtRuntime(Identifier, SourceRange),
 }
 
 impl From<ScopeError> for TypeError {
   fn from(value: ScopeError) -> Self {
-    Self::Scope(value)
+    Self::Scope(value, SourceRange::default())
   }
 }
 
 impl Display for TypeError {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
-      TypeError::MismatchingBranches(t1, t2) => write!(f, "Mismatching branches {t1} != {t2}"),
-      TypeError::Scope(scope_error) => write!(f, "{scope_error}"),
-      TypeError::ExpectedPi(s) => write!(f, "Expected function type found: {}", s),
+      TypeError::MismatchingBranches(t1, t2, loc) => {
+        write!(f, "Mismatching branches {t1} != {t2}")?;
+        fmt_loc(loc, f)
+      }
+      TypeError::Scope(scope_error, loc) => {
+        write!(f, "{scope_error}")?;
+        fmt_loc(loc, f)
+      }
+      TypeError::ExpectedPi(s, loc) => {
+        write!(f, "Expected function type found: {}", s)?;
+        fmt_loc(loc, f)
+      }
       TypeError::Context { loc, err, name } => {
         write!(f, "{} at {}:{}", err, loc.start.line, loc.start.line_offset)?;
         if let Some(name) = name {
@@ -96,78 +112,135 @@ impl Display for TypeError {
         }
         Ok(())
       }
-      TypeError::InstanceDecl(i) => write!(f, "{}", i),
-      TypeError::Generic(s) => write!(f, "{}", s),
+      TypeError::InstanceDecl(i, loc) => {
+        write!(f, "{}", i)?;
+        fmt_loc(loc, f)
+      }
+      TypeError::Generic(s, loc) => {
+        write!(f, "{}", s)?;
+        fmt_loc(loc, f)
+      }
       TypeError::Many(type_errors) => {
         for (i, t) in type_errors.iter().enumerate() {
           writeln!(f, "{}. {}", i + 1, t)?;
         }
         Ok(())
       }
-      TypeError::ConstructorMismatch { params, args } => {
+      TypeError::ConstructorMismatch { params, args, loc } => {
         write!(
           f,
           "Constructor mismatch {} != {}",
           vec_fmt(params),
           vec_fmt(args)
-        )
+        )?;
+        fmt_loc(loc, f)
       }
-      TypeError::ExpectedType(e) => write!(f, "Expected Type found {e}"),
+      TypeError::ExpectedType(e, loc) => {
+        write!(f, "Expected Type found {e}")?;
+        fmt_loc(loc, f)
+      }
       TypeError::FreeVarMismatch {
         name,
         expected,
         actual,
         locals,
-      } => write!(
-        f,
-        "Variable mismatch, expected {name} to be {expected} found {actual} with local vars [{}]",
-        locals
-          .iter()
-          .map(|(name, typ)| format!("{name} : {typ}"))
-          .collect::<Vec<_>>()
-          .join(", ")
-      ),
-      TypeError::TypeMismatch { expected, actual } => {
-        write!(f, "Type mismatch, expected {expected} found {actual}")
+        loc,
+      } => {
+        write!(
+          f,
+          "Variable mismatch, expected {name} to be {expected} found {actual} with local vars [{}]",
+          locals
+            .iter()
+            .map(|(name, typ)| format!("{name} : {typ}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+        )?;
+        fmt_loc(loc, f)
       }
-      TypeError::MissingField(identifier) => write!(f, "Missing field {identifier}"),
-      TypeError::ArgumentMismatch { expected, actual } => {
-        write!(f, "Argument mismatch, expected {expected} found {actual}")
+      TypeError::TypeMismatch {
+        expected,
+        actual,
+        loc,
+      } => {
+        write!(f, "Type mismatch, expected {expected} found {actual}")?;
+        fmt_loc(loc, f)
       }
-      TypeError::Instance(instance_error) => write!(f, "instance {instance_error}"),
-      TypeError::InductiveMismatch { name, params, args } => write!(
-        f,
-        "Inductive {name} params mismatch {} != {}",
-        vec_fmt(params),
-        vec_fmt(args)
-      ),
-      TypeError::ConstructorUnknown(identifier) => write!(f, "Unknown constructor {identifier}"),
-      TypeError::ExpectedInductive(term) => write!(f, "Expected inductive found {term}"),
-      TypeError::Overflow { value, target } => {
-        write!(f, "Integer overflow: {value} does not fit in {target}")
+      TypeError::MissingField(identifier, loc) => {
+        write!(f, "Missing field {identifier}")?;
+        fmt_loc(loc, f)
       }
-      TypeError::LinearUsedMultipleTimes(id) => {
-        write!(f, "Linear variable '{}' used more than once", id)
+      TypeError::ArgumentMismatch {
+        expected,
+        actual,
+        loc,
+      } => {
+        write!(f, "Argument mismatch, expected {expected} found {actual}")?;
+        fmt_loc(loc, f)
       }
-      TypeError::LinearUnused(id) => {
-        write!(f, "Linear variable '{}' must be used exactly once", id)
+      TypeError::Instance(instance_error, loc) => {
+        write!(f, "instance {instance_error}")?;
+        fmt_loc(loc, f)
       }
-      TypeError::AffineUsedMultipleTimes(id) => {
-        write!(f, "Affine variable '{}' used more than once", id)
+      TypeError::InductiveMismatch {
+        name,
+        params,
+        args,
+        loc,
+      } => {
+        write!(
+          f,
+          "Inductive {name} params mismatch {} != {}",
+          vec_fmt(params),
+          vec_fmt(args)
+        )?;
+        fmt_loc(loc, f)
       }
-      TypeError::ErasedUsedAtRuntime(id) => {
+      TypeError::ConstructorUnknown(identifier, loc) => {
+        write!(f, "Unknown constructor {identifier}")?;
+        fmt_loc(loc, f)
+      }
+      TypeError::ExpectedInductive(term, loc) => {
+        write!(f, "Expected inductive found {term}")?;
+        fmt_loc(loc, f)
+      }
+      TypeError::Overflow { value, target, loc } => {
+        write!(f, "Integer overflow: {value} does not fit in {target}")?;
+        fmt_loc(loc, f)
+      }
+      TypeError::LinearUsedMultipleTimes(id, loc) => {
+        write!(f, "Linear variable '{}' used more than once", id)?;
+        fmt_loc(loc, f)
+      }
+      TypeError::LinearUnused(id, loc) => {
+        write!(f, "Linear variable '{}' must be used exactly once", id)?;
+        fmt_loc(loc, f)
+      }
+      TypeError::AffineUsedMultipleTimes(id, loc) => {
+        write!(f, "Affine variable '{}' used more than once", id)?;
+        fmt_loc(loc, f)
+      }
+      TypeError::ErasedUsedAtRuntime(id, loc) => {
         write!(
           f,
           "Erased variable '{}' used at runtime (erased vars are compile-time only)",
           id
-        )
+        )?;
+        fmt_loc(loc, f)
       }
     }
   }
 }
 
+fn fmt_loc(loc: &SourceRange, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+  if loc.start.line > 0 {
+    write!(f, " at {}:{}", loc.start.line, loc.start.line_offset)
+  } else {
+    Ok(())
+  }
+}
+
 fn generic_terr(s: String) -> TypeError {
-  TypeError::Generic(s)
+  TypeError::Generic(s, SourceRange::default())
 }
 
 fn t_context(err: TypeError, name: Option<ModulePath>, loc: SourceRange) -> TypeError {
@@ -227,6 +300,13 @@ fn unwrap_innermost_context<'a>(err: &'a TypeError) -> Option<&'a SourceRange> {
   }
 }
 
+/// Extract SourceRange from a Term if it is Ctx-wrapped, otherwise default.
+fn extract_loc(term: &Term) -> SourceRange {
+  match term {
+    Term::Ctx { loc, .. } => loc.clone(),
+    _ => SourceRange::default(),
+  }
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstanceError {
   MissingTypeArgs(Vec<Identifier>),
@@ -250,7 +330,7 @@ impl Display for InstanceError {
 
 impl From<InstanceError> for TypeError {
   fn from(value: InstanceError) -> Self {
-    TypeError::Instance(value)
+    TypeError::Instance(value, SourceRange::default())
   }
 }
 
@@ -275,16 +355,25 @@ impl UsageEnv {
     if let Some((mult, count)) = self.usages.get(name) {
       match mult {
         Multiplicity::Zero => {
-          return Err(TypeError::ErasedUsedAtRuntime(name.clone()));
+          return Err(TypeError::ErasedUsedAtRuntime(
+            name.clone(),
+            SourceRange::default(),
+          ));
         }
         Multiplicity::Linear => {
           if *count >= 1 {
-            return Err(TypeError::LinearUsedMultipleTimes(name.clone()));
+            return Err(TypeError::LinearUsedMultipleTimes(
+              name.clone(),
+              SourceRange::default(),
+            ));
           }
         }
         Multiplicity::Affine => {
           if *count >= 1 {
-            return Err(TypeError::AffineUsedMultipleTimes(name.clone()));
+            return Err(TypeError::AffineUsedMultipleTimes(
+              name.clone(),
+              SourceRange::default(),
+            ));
           }
         }
         Multiplicity::Many => {
@@ -311,7 +400,10 @@ impl UsageEnv {
   pub fn verify_linear_usage(&self) -> Result<(), TypeError> {
     for (name, (mult, count)) in &self.usages {
       if *mult == Multiplicity::Linear && *count != 1 {
-        return Err(TypeError::LinearUnused(name.clone()));
+        return Err(TypeError::LinearUnused(
+          name.clone(),
+          SourceRange::default(),
+        ));
       }
     }
     Ok(())
@@ -322,7 +414,10 @@ impl UsageEnv {
   pub fn verify_var(&self, name: &Identifier) -> Result<(), TypeError> {
     if let Some((mult, count)) = self.usages.get(name) {
       if *mult == Multiplicity::Linear && *count != 1 {
-        return Err(TypeError::LinearUnused(name.clone()));
+        return Err(TypeError::LinearUnused(
+          name.clone(),
+          SourceRange::default(),
+        ));
       }
     }
     Ok(())
@@ -646,6 +741,9 @@ pub fn match_resolve_type<'a>(
   if !right.is_known() {
     return Ok(left.clone());
   }
+  if !left.is_known() {
+    return Ok(right.clone());
+  }
   if let Var { name } = right
     && name.is_id()
   {
@@ -669,6 +767,7 @@ pub fn match_determine_type_vars<'a>(
     Err(TypeError::TypeMismatch {
       expected: left.clone(),
       actual: right.clone(),
+      loc: SourceRange::default(),
     })
   }
 }
@@ -688,6 +787,7 @@ pub fn match_determine_type_vars_with_scope<'a>(
     Err(TypeError::TypeMismatch {
       expected: left.clone(),
       actual: right.clone(),
+      loc: SourceRange::default(),
     })
   }
 }
@@ -747,20 +847,83 @@ fn try_expand_def_alias(typ: &Term, scope: &Scope) -> Option<Term> {
   let path = head_name.to_path()?;
   let def_ref = scope.global().find_ref(&path)?;
 
-  // Get the body term, stripping implicit Forall layers
-  let mut body = strip_implicit_params(def_ref.term());
-  // Also try stripping Forall from term (some defs have Forall in term)
+  // Get the body term, stripping Forall and Ctx layers from the term
+  let body = strip_implicit_params(def_ref.term());
+  let mut body = {
+    let mut b = body.clone();
+    while let Term::Ctx { term, .. } = &b {
+      b = (**term).clone();
+    }
+    b
+  };
   while let Term::Forall { body: b, .. } = body {
     body = *b;
   }
 
-  // Substitute the explicit args into the body
-  let mut result = substitute_lam_args(&body, &args);
+  // Try substitution via Lambdas (for defs with explicit params)
+  let lambda_result = substitute_lam_args(&body, &args);
+
+  // If substitution didn't change the body (no Lam params), try
+  // substituting args into Forall-bound variables positionally
+  let mut result = if lambda_result == body && !args.is_empty() {
+    substitute_forall_params(&body, scope, &args)
+  } else {
+    lambda_result
+  };
+
   // Strip a single Ctx wrapper from the result
   if let Term::Ctx { term, .. } = result {
     result = *term;
   }
+
+  // After type-checking, the def's type loses Forall bindings for phantom
+  // type params. Reconstruct them from free vars in the expanded body.
+  let binding_vars = expand_forall_bindings(&result, scope);
+  if !binding_vars.is_empty() {
+    result = wrap_with_foralls(result, &binding_vars);
+  }
+
   Some(result)
+}
+
+/// Try substitution via positional args into free Forall variables when
+/// the def has no Lam params but has forall-bound vars in the body.
+fn substitute_forall_params(body: &Term, scope: &Scope, args: &[Term]) -> Term {
+  // Strip Ctx wrapper from body (type-checked terms have Ctx wrappers)
+  let body = match body {
+    Term::Ctx { term, .. } => term,
+    _ => body,
+  };
+  let binding_vars = expand_forall_bindings(body, scope);
+  if binding_vars.is_empty() {
+    return body.clone();
+  }
+  let mut result = body.clone();
+  let forall_names: Vec<Identifier> = binding_vars.keys().cloned().collect();
+  for (param_name, arg) in forall_names.iter().zip(args.iter()) {
+    result = substitute(result, &NameRef::Id(param_name.clone()), arg);
+  }
+  result
+}
+
+/// Given an expanded type, find the free variables that should be
+/// Forall-bound (i.e., type variables, not known types).
+fn expand_forall_bindings(term: &Term, scope: &Scope) -> crate::Map<Identifier, Term> {
+  let known_names: crate::Set<ModulePath> = scope
+    .global()
+    .all_known_names()
+    .into_iter()
+    .cloned()
+    .collect();
+  let free = free_vars(term, &empty_set());
+  let mut bindings = crate::Map::new();
+  for id in free {
+    let path = ModulePath::single(id.clone());
+    if !known_names.contains(&path) {
+      bindings.insert(id, sort1());
+    }
+  }
+  bindings
 }
 
 /// Collect the head and arguments of an App chain: App(App(head, a1), a2) → (head, [a1, a2])
@@ -780,6 +943,10 @@ fn collect_apps(term: &Term) -> (&Term, Vec<Term>) {
 fn substitute_lam_args(body: &Term, args: &[Term]) -> Term {
   let mut current = body.clone();
   for arg in args.iter().rev() {
+    // Strip any Ctx wrappers that might have been added by type checking
+    while let Term::Ctx { term, .. } = &current {
+      current = (**term).clone();
+    }
     current = match current {
       Term::Lam {
         param: Par::P(p),
@@ -1081,6 +1248,7 @@ pub fn type_check_free_var(
       actual: defined_type.clone(),
       expected: expected_type,
       locals: scope.local_bindings(),
+      loc: SourceRange::default(),
     })
   }
 }
@@ -1308,6 +1476,7 @@ fn convert_int_literal(value: i64, suffix: NumSuffix) -> Result<Term, TypeError>
     Err(TypeError::Overflow {
       value,
       target: suffix.type_name(),
+      loc: SourceRange::default(),
     })
   }
 }
@@ -1355,10 +1524,10 @@ fn type_check_with_env(
           // Propagate linear type errors; suppress other (type inference) errors
           if matches!(
             err,
-            TypeError::LinearUsedMultipleTimes(_)
-              | TypeError::LinearUnused(_)
-              | TypeError::AffineUsedMultipleTimes(_)
-              | TypeError::ErasedUsedAtRuntime(_)
+            TypeError::LinearUsedMultipleTimes(..)
+              | TypeError::LinearUnused(..)
+              | TypeError::AffineUsedMultipleTimes(..)
+              | TypeError::ErasedUsedAtRuntime(..)
           ) {
             return Err(err);
           }
@@ -1402,7 +1571,7 @@ fn type_check_with_env(
         let ret_type = add_forall_to_type(ret_type, &fun_forall_vars);
         Ok(typed_term(term, ret_type))
       } else {
-        Err(ExpectedPi(fun_typ_pi.clone()))
+        Err(ExpectedPi(fun_typ_pi.clone(), SourceRange::default()))
       }
     }
     Lit {
@@ -1438,7 +1607,7 @@ fn type_check_with_env(
           if let Some(term) = fields.get(name) {
             type_check_with_env(term.clone(), *typ.clone(), &scope, usage, track_usage)?;
           } else if !ind.defaults.contains_key(name) {
-            return Err(MissingField(name.clone()));
+            return Err(MissingField(name.clone(), SourceRange::default()));
           }
         }
         let args: Vec<Option<Term>> = mk_cons
@@ -1450,7 +1619,7 @@ fn type_check_with_env(
                 .get(&p.name)
                 .cloned()
                 .or_else(|| ind.defaults.get(&p.name).cloned())
-                .ok_or_else(|| MissingField(p.name.clone()))?,
+                .ok_or_else(|| MissingField(p.name.clone(), SourceRange::default()))?,
             ))
           })
           .collect::<Result<Vec<_>, TypeError>>()?;
@@ -1544,6 +1713,7 @@ fn type_check_with_env(
             name: ind_name,
             params: ind_params.clone(),
             args: ind_args,
+            loc: SourceRange::default(),
           });
         }
         let mut branch_t = expected_type.clone();
@@ -1555,6 +1725,7 @@ fn type_check_with_env(
               return Err(ConstructorMismatch {
                 params: ind_cons.params.clone(),
                 args: mcase.args.clone(),
+                loc: SourceRange::default(),
               });
             }
             for (name, param) in mcase.args.iter().zip(ind_cons.params.iter()) {
@@ -1583,7 +1754,11 @@ fn type_check_with_env(
             if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
               branch_t = typ;
             } else {
-              return Err(MismatchingBranches(branch_t, t.typ().clone()));
+              return Err(MismatchingBranches(
+                branch_t,
+                t.typ().clone(),
+                SourceRange::default(),
+              ));
             }
             new_cases.push(case(
               mcase.name.clone(),
@@ -1591,7 +1766,10 @@ fn type_check_with_env(
               t.term().clone(),
             ));
           } else {
-            return Err(ConstructorUnknown(mcase.name.clone()));
+            return Err(ConstructorUnknown(
+              mcase.name.clone(),
+              SourceRange::default(),
+            ));
           }
         }
         Ok(typed_term(
@@ -1599,7 +1777,7 @@ fn type_check_with_env(
           branch_t.clone(),
         ))
       } else {
-        Err(ExpectedInductive(con.typ().clone()))
+        Err(ExpectedInductive(con.typ().clone(), SourceRange::default()))
       }
     }
     Lit {
@@ -1621,6 +1799,7 @@ fn type_check_with_env(
         Err(TypeError::MismatchingBranches(
           t1.typ().clone(),
           t2.typ().clone(),
+          SourceRange::default(),
         ))
       }
     }
@@ -1683,10 +1862,19 @@ fn type_check_with_env(
     }
     Lam { param, body } => {
       if expected_type.is_known() {
-        let (vars, typ) = unwrap_forall(expected_type.clone());
-        let vars = vars.iter().collect();
-        // Expand def type aliases (e.g. Lens S T A B -> (A -> F B) -> S -> F T)
-        let mut typ = try_expand_def_alias(&typ, &scope).unwrap_or(typ);
+        // Unwrap initial Foralls, expand def aliases, unwrap again
+        let (initial_vars, inner_typ) = unwrap_forall(expected_type.clone());
+        let mut typ = try_expand_def_alias(&inner_typ, &scope).unwrap_or(inner_typ);
+        let (extra_vars, unwrapped) = unwrap_forall(typ);
+        typ = unwrapped;
+        // Merge initial and expansion forall owned bindings
+        let mut owned_vars = initial_vars;
+        for (k, v) in extra_vars {
+          if !owned_vars.contains_key(&k) {
+            owned_vars.insert(k, v);
+          }
+        }
+        let vars = owned_vars.iter().collect();
         // Unwrap a single Ctx wrapper from the result
         if let Term::Ctx { term, .. } = &typ {
           typ = (**term).clone();
@@ -1705,6 +1893,7 @@ fn type_check_with_env(
             TypeError::ArgumentMismatch {
               expected: *arg.clone(),
               actual: param_type.clone(),
+              loc: SourceRange::default(),
             }
           })?;
           let arg_type = if !arg_type.is_known() {
@@ -1736,7 +1925,7 @@ fn type_check_with_env(
           let term = lam_par(param.with_type(arg_type), body);
           Ok(typed_term(term, lam_type))
         } else {
-          Err(TypeError::ExpectedPi(typ.clone()))
+          Err(TypeError::ExpectedPi(typ.clone(), SourceRange::default()))
         }
       } else {
         let param_type = param.typ();
@@ -1764,7 +1953,7 @@ fn type_check_with_env(
       Sort {
         level: expected_level,
       } if *expected_level > level => Ok(typed_term(term, sort_u(level + 1))),
-      _ => Err(TypeError::ExpectedType(term)),
+      _ => Err(TypeError::ExpectedType(term, SourceRange::default())),
     },
     Ntv { native: _ } => Ok(typed_term(term.clone(), expected_type.clone())),
     Con(Constructor {
@@ -1776,7 +1965,7 @@ fn type_check_with_env(
       let inductive = scope.find_inductive(typ_name)?;
       let cons = inductive
         .find_cons(name)
-        .ok_or_else(|| ConstructorUnknown(name.clone()))?;
+        .ok_or_else(|| ConstructorUnknown(name.clone(), SourceRange::default()))?;
       let (arg_res, errs) = join_many_results(
         args
           .iter()
@@ -1828,7 +2017,10 @@ fn type_check_with_env(
         let _ret = type_check_with_env(*ret.clone(), sort1(), &scope, usage, track_usage)?;
         Ok(typed_term(term.clone(), sort1()))
       } else {
-        Err(TypeError::ExpectedType(expected_type.clone()))
+        Err(TypeError::ExpectedType(
+          expected_type.clone(),
+          SourceRange::default(),
+        ))
       }
     }
     Hole => Ok(typed_term(term, expected_type)),
@@ -1874,10 +2066,12 @@ fn substitute_var_with_index_inner(term: Term, name: &Identifier, index: usize) 
 pub fn type_check_decl(decl: Decl, scope: &Scope) -> Result<Decl, TypeError> {
   match decl {
     Decl::Use(ref u) => {
-      scope
-        .global()
-        .get_module(&u.module_path)
-        .ok_or_else(|| TypeError::Scope(ScopeError::PathNotFound(u.module_path.clone())))?;
+      scope.global().get_module(&u.module_path).ok_or_else(|| {
+        TypeError::Scope(
+          ScopeError::PathNotFound(u.module_path.clone()),
+          SourceRange::default(),
+        )
+      })?;
       Ok(decl)
     }
     Decl::Def(def) => type_check_def(def, scope).map(Decl::Def),
@@ -2082,8 +2276,12 @@ pub fn type_check_module_decls(
   loaded: &LoadedModules,
 ) -> Result<Vec<SourceContext<Decl>>, TypeError> {
   let decls = elaborate_decls(decls, loaded);
-  let decls = macro_expand::expand_macros(decls, loaded)
-    .map_err(|e| TypeError::Generic(format!("macro expansion failed: {e}")))?;
+  let decls = macro_expand::expand_macros(decls, loaded).map_err(|e| {
+    TypeError::Generic(
+      format!("macro expansion failed: {e}"),
+      SourceRange::default(),
+    )
+  })?;
   let global = loaded.scope_of_decls(path, &decls);
 
   let (oks, errs) = type_check_decls(decls.clone(), &global.scope());

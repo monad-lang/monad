@@ -2105,7 +2105,6 @@ fn test_const_constructor_in_instance_body() {
 }
 
 #[test]
-#[ignore = "Blocked: try_expand_def_alias returns None for Lens (scope lookup fails)"]
 fn test_def_returning_lens_type_checks() {
   // A def with Lens return type annotation should type-check
   // (body returns expanded Pi, annotation is unexpanded App chain)
@@ -2118,6 +2117,53 @@ fn test_def_returning_lens_type_checks() {
   assert!(
     r.is_ok(),
     "Def with Lens annotation should type-check: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_simple_def_alias() {
+  let r = type_check_mo(
+    r#"
+    def MyI64 : Type := I64
+    def x : MyI64 := 42
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Simple def alias should type-check: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_def_alias_with_forall() {
+  let r = type_check_mo(
+    r#"
+    def MyFunc {A : Type} : Type := A -> A
+    def id : MyFunc := fn x => x
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Def alias with forall should type-check: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_def_alias_with_type_param() {
+  // I64 is Type, so F should be Type -> Type (which I64 is not)
+  // Simplify: test with just {A : Type}
+  let r = type_check_mo(
+    r#"
+    def WithId {A : Type} : Type := (A -> A) -> A
+    def use_id : WithId I64 := fn f => f 42
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Def alias with type param should type-check: {:?}",
     r.err()
   );
 }

@@ -1068,7 +1068,11 @@ fn def_parser(input: Span) -> Res<Def> {
   };
 
   if params.is_empty() {
-    Ok((input, def(name, type_cons, return_typ, term, attrs)))
+    let mut typ = return_typ;
+    if !implicit_params.is_empty() {
+      typ = foralls(implicit_params, typ);
+    }
+    Ok((input, def(name, type_cons, typ, term, attrs)))
   } else {
     let mut full_typ = pi_typs(
       params.iter().map(|p| *p.typ.clone()).collect::<Vec<_>>(),
