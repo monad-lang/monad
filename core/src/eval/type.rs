@@ -40,7 +40,7 @@ pub enum TypeError {
     args: Vec<Term>,
     loc: SourceRange,
   },
-  ConstructorUnknown(Identifier, SourceRange),
+  ConstructorUnknown(Identifier, Vec<Identifier>, SourceRange),
   Scope(ScopeError, SourceRange),
   ExpectedInductive(Term, SourceRange),
   ExpectedPi(Term, SourceRange),
@@ -195,8 +195,12 @@ impl Display for TypeError {
         )?;
         fmt_loc(loc, f)
       }
-      TypeError::ConstructorUnknown(identifier, loc) => {
+      TypeError::ConstructorUnknown(identifier, constructors, loc) => {
         write!(f, "Unknown constructor {identifier}")?;
+        if let Some(suggestion) = did_you_mean(identifier.as_str(), &names_to_strings(constructors))
+        {
+          write!(f, "\n  = help: did you mean '{}'?", suggestion)?;
+        }
         fmt_loc(loc, f)
       }
       TypeError::ExpectedInductive(term, loc) => {
@@ -241,6 +245,52 @@ fn fmt_loc(loc: &SourceRange, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Resu
 
 fn generic_terr(s: String) -> TypeError {
   TypeError::Generic(s, SourceRange::default())
+}
+
+fn names_to_strings(names: &[Identifier]) -> Vec<String> {
+  names.iter().map(|n| n.to_string()).collect()
+}
+
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+  let a_chars: Vec<char> = a.chars().collect();
+  let b_chars: Vec<char> = b.chars().collect();
+  let a_len = a_chars.len();
+  let b_len = b_chars.len();
+  if a_len == 0 {
+    return b_len;
+  }
+  if b_len == 0 {
+    return a_len;
+  }
+  let mut prev_row: Vec<usize> = (0..=b_len).collect();
+  let mut curr_row = vec![0; b_len + 1];
+  for i in 1..=a_len {
+    curr_row[0] = i;
+    for j in 1..=b_len {
+      let cost = if a_chars[i - 1] == b_chars[j - 1] {
+        0
+      } else {
+        1
+      };
+      curr_row[j] = (curr_row[j - 1] + 1)
+        .min(prev_row[j] + 1)
+        .min(prev_row[j - 1] + cost);
+    }
+    std::mem::swap(&mut prev_row, &mut curr_row);
+  }
+  prev_row[b_len]
+}
+
+fn did_you_mean(name: &str, candidates: &[String]) -> Option<String> {
+  let name_lower = name.to_lowercase();
+  candidates
+    .iter()
+    .filter_map(|c| {
+      let d = levenshtein_distance(&name_lower, &c.to_lowercase());
+      if d <= 3 { Some((d, c.clone())) } else { None }
+    })
+    .min_by_key(|(d, _)| *d)
+    .map(|(_, c)| c)
 }
 
 fn t_context(err: TypeError, name: Option<ModulePath>, loc: SourceRange) -> TypeError {
@@ -1759,8 +1809,14 @@ fn type_check_with_env(
               t.term().clone(),
             ));
           } else {
+            let ctor_names: Vec<Identifier> = ind
+              .constructors
+              .iter()
+              .map(|c| c.name().last().clone())
+              .collect();
             return Err(ConstructorUnknown(
               mcase.name.clone(),
+              ctor_names,
               SourceRange::default(),
             ));
           }
@@ -1956,9 +2012,14 @@ fn type_check_with_env(
       num_args: _,
     }) => {
       let inductive = scope.find_inductive(typ_name)?;
-      let cons = inductive
-        .find_cons(name)
-        .ok_or_else(|| ConstructorUnknown(name.clone(), SourceRange::default()))?;
+      let cons = inductive.find_cons(name).ok_or_else(|| {
+        let ctor_names: Vec<Identifier> = inductive
+          .constructors
+          .iter()
+          .map(|c| c.name().last().clone())
+          .collect();
+        ConstructorUnknown(name.clone(), ctor_names, SourceRange::default())
+      })?;
       let (arg_res, errs) = join_many_results(
         args
           .iter()
