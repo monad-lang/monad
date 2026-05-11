@@ -306,6 +306,7 @@ fn extract_loc(term: &Term) -> SourceRange {
     Term::Ctx { loc, .. } => loc.clone(),
     _ => SourceRange::default(),
   }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstanceError {
