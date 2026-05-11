@@ -559,10 +559,20 @@ fn parens<X: Clone>(input: Span<X>) -> Res<Term, X> {
   .parse(input)
 }
 
+fn constructor_name<X: Clone>(input: Span<X>) -> Res<Identifier, X> {
+  let (input, first) = identifier(input)?;
+  let (input, rest) = many0(preceded((ws0, char('.'), ws0), identifier)).parse(input)?;
+  if rest.is_empty() {
+    Ok((input, first))
+  } else {
+    Ok((input, rest.last().unwrap().clone()))
+  }
+}
+
 fn match_case_parser<X: Clone>(input: Span<X>) -> Res<MatchCase, X> {
   map(
     separated_pair(
-      separated_pair(identifier, ws0, many0(terminated(identifier, ws0))),
+      separated_pair(constructor_name, ws0, many0(terminated(identifier, ws0))),
       (ws0, tag("=>"), ws0),
       term,
     ),

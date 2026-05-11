@@ -58,6 +58,29 @@ fn test_match() {
 }
 
 #[test]
+fn test_match_with_dot_paths() {
+  let match_parser = |s: &'static str| match_parser::<()>(s.into());
+  let (_, r) = match_parser(
+    "match Option.none {
+      Option.some val => val,
+      Option.none => 42
+    }"
+    .into(),
+  )
+  .unwrap();
+  similar!(
+    r,
+    match_term(
+      pvar(vec!["Option", "none"]),
+      vec![
+        case(id("some"), vec![id("val")], var("val")),
+        case(id("none"), vec![], num(42))
+      ]
+    )
+  );
+}
+
+#[test]
 fn test_if() {
   let if_parser = |s: &'static str| if_parser::<()>(s.into());
   let (_, r) = if_parser("if var || var2 then a b else c".into()).unwrap();
