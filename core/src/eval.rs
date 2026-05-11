@@ -28,10 +28,107 @@ use crate::term::{
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
   Scope(ScopeError),
-  Eval { message: String },
+  Eval(EvalError),
   Type(TypeError),
   Native(NativeError),
   Context { loc: SourceRange, err: Box<Error> },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalError {
+  IncompleteConstructor { value: Term },
+  NoMatchingBranch { value: Term },
+  NotAnInductive { value: Term },
+  NotABool { value: Term },
+  NotALambda { term: Term },
+  NotAFunction { term: Term },
+  StructLiteralNotDesugared,
+  StructUpdateNotDesugared,
+  NativeArgumentOverflow,
+}
+
+impl Display for EvalError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      EvalError::IncompleteConstructor { value } => {
+        write!(f, "incomplete constructor application: {value}")
+      }
+      EvalError::NoMatchingBranch { value } => {
+        write!(f, "no matching branch for: {value}")
+      }
+      EvalError::NotAnInductive { value } => {
+        write!(f, "can only match on inductives, found: {value}")
+      }
+      EvalError::NotABool { value } => {
+        write!(f, "expected Bool found: {value}")
+      }
+      EvalError::NotALambda { term } => {
+        write!(f, "expected lambda definition found: {term}")
+      }
+      EvalError::NotAFunction { term } => {
+        write!(f, "expected function found: {term}")
+      }
+      EvalError::StructLiteralNotDesugared => {
+        write!(
+          f,
+          "struct literal reached evaluator without being desugared"
+        )
+      }
+      EvalError::StructUpdateNotDesugared => {
+        write!(f, "struct update reached evaluator without being desugared")
+      }
+      EvalError::NativeArgumentOverflow => {
+        write!(f, "native function applied to too many arguments")
+      }
+    }
+  }
+}
+
+impl Display for Error {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Error::Scope(scope_error) => write!(f, "scope: {scope_error}"),
+      Error::Eval(eval_error) => write!(f, "eval: {eval_error}"),
+      Error::Type(type_error) => write!(f, "type: {type_error}"),
+      Error::Native(native_error) => write!(f, "native: {native_error}"),
+      Error::Context { loc, err } => {
+        write!(f, "{err} at {}:{}", loc.start.line, loc.start.line_offset)
+      }
+    }
+  }
+}
+
+fn wrap_error(error: Error, loc: Option<SourceRange>) -> Error {
+  match loc {
+    Some(loc) => Error::Context {
+      loc,
+      err: Box::new(error),
+    },
+    None => error,
+  }
+}
+
+pub fn recognize_bool(value: &Term, loc: Option<SourceRange>) -> Result<bool, Error> {
+  if let Con(Constructor {
+    name,
+    typ_name,
+    args: _,
+    num_args: _,
+  }) = &value
+    && typ_name == &mpt("Bool")
+  {
+    if name == &id("true") {
+      return Ok(true);
+    } else if name == &id("false") {
+      return Ok(false);
+    }
+  }
+  Err(wrap_error(
+    Error::Eval(EvalError::NotABool {
+      value: value.clone(),
+    }),
+    loc,
+  ))
 }
 
 impl From<TypeError> for Error {
@@ -50,24 +147,6 @@ impl From<NativeError> for Error {
   }
 }
 
-impl Display for Error {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    match self {
-      Error::Scope(scope_error) => write!(f, "scope: {scope_error}"),
-      Error::Eval { message } => write!(f, "eval: {message}"),
-      Error::Type(type_error) => write!(f, "type: {type_error}"),
-      Error::Native(native_error) => write!(f, "native: {native_error}"),
-      Error::Context { loc, err } => {
-        write!(f, "{err} at {}:{}", loc.start.line, loc.start.line_offset)
-      }
-    }
-  }
-}
-
-fn err(message: String) -> Error {
-  Error::Eval { message }
-}
-
 #[derive(Clone, PartialEq, Default)]
 pub struct EvalOptions {
   pub debug: bool,
@@ -79,17 +158,39 @@ fn resolve_name<'a>(name: &'a NameRef, scope: &'a Scope<'a>) -> Result<&'a Term,
 }
 
 /// Run a beta reduction
-pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result<Term, Error> {
+pub fn eval(main_term: Term, scope: &Scope, options: &EvalOptions) -> Result<Term, Error> {
+  eval_inner(main_term, scope, options, None)
+}
+
+fn eval_inner(
+  mut main_term: Term,
+  scope: &Scope,
+  options: &EvalOptions,
+  mut current_loc: Option<SourceRange>,
+) -> Result<Term, Error> {
   loop {
     main_term = apply_dot_macro(main_term);
     main_term = match main_term {
-      App { fun, arg } => eval_app(*fun, *arg, scope, options)?,
+      Ctx { loc, term } => {
+        if current_loc.is_none() {
+          current_loc = Some(loc);
+        }
+        *term
+      }
+      App { fun, arg } => {
+        let loc = current_loc.take();
+        eval_app(*fun, *arg, scope, options, loc)?
+      }
       Var { name } => resolve_name(&name, scope)?.clone(),
-      Ntv { native } => native_execute(native, scope).map_err(Error::Native)?,
+      Ntv { native } => {
+        let loc = current_loc.take();
+        native_execute(native, scope).map_err(|e| wrap_error(Error::Native(e), loc))?
+      }
       Lit {
         value: Literal::Match { value, cases },
       } => {
-        let value = eval(*value, scope, options)?;
+        let loc = current_loc.take();
+        let value = eval_inner(*value, scope, options, loc.clone())?;
         if let Con(Constructor {
           name,
           typ_name: _,
@@ -108,40 +209,59 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
               if let Some(arg) = arg {
                 term = substitute(term, &Id(ide), arg);
               } else {
-                return Err(err(format!("incomplete con {}", value)));
+                return Err(wrap_error(
+                  Error::Eval(EvalError::IncompleteConstructor {
+                    value: value.clone(),
+                  }),
+                  loc.clone(),
+                ));
               }
             }
             term
           } else {
-            return Err(err(format!("no matching branch for: {}", value)));
+            return Err(wrap_error(
+              Error::Eval(EvalError::NoMatchingBranch {
+                value: value.clone(),
+              }),
+              loc.clone(),
+            ));
           }
         } else {
-          return Err(err(format!("can only match on inductives, found: {value}")));
+          return Err(wrap_error(
+            Error::Eval(EvalError::NotAnInductive {
+              value: value.clone(),
+            }),
+            loc.clone(),
+          ));
         }
       }
       Lit {
         value: Literal::If { value, then, els },
       } => {
-        let value = eval(*value, scope, options)?;
-        let b = recognize_bool(&value)?;
+        let loc = current_loc.take();
+        let value = eval_inner(*value, scope, options, loc.clone())?;
+        let b = recognize_bool(&value, loc)?;
         if b { *then } else { *els }
       }
-      Ctx { loc: _, term } => *term,
       Quote { term } => Term::Lit {
         value: Literal::Term(term),
       },
       Lit {
         value: Literal::StructLit { .. },
       } => {
-        return Err(err(
-          "struct literal reached evaluator without being desugared".to_string(),
+        let loc = current_loc.take();
+        return Err(wrap_error(
+          Error::Eval(EvalError::StructLiteralNotDesugared),
+          loc,
         ));
       }
       Lit {
         value: Literal::StructUpdate { .. },
       } => {
-        return Err(err(
-          "struct update reached evaluator without being desugared".to_string(),
+        let loc = current_loc.take();
+        return Err(wrap_error(
+          Error::Eval(EvalError::StructUpdateNotDesugared),
+          loc,
         ));
       }
       _ => break,
@@ -151,24 +271,6 @@ pub fn eval(mut main_term: Term, scope: &Scope, options: &EvalOptions) -> Result
     }
   }
   Ok(main_term)
-}
-
-pub fn recognize_bool(value: &Term) -> Result<bool, Error> {
-  if let Con(Constructor {
-    name,
-    typ_name,
-    args: _,
-    num_args: _,
-  }) = &value
-    && typ_name == &mpt("Bool")
-  {
-    if name == &id("true") {
-      return Ok(true);
-    } else if name == &id("false") {
-      return Ok(false);
-    }
-  }
-  Err(err(format!("expected Bool found: {value}")))
 }
 
 fn substitute_lam(param: Par, body: Term, arg: &Term) -> Term {
@@ -343,31 +445,46 @@ pub fn apply_dot_macro_recursive(term: Term) -> Term {
   apply_dot_macro(term)
 }
 
-fn unwrap_decl_lambda(arg: Term, name: &NameRef, scope: &Scope) -> Result<Term, Error> {
+fn unwrap_decl_lambda(
+  arg: Term,
+  name: &NameRef,
+  scope: &Scope,
+  loc: Option<SourceRange>,
+) -> Result<Term, Error> {
   let term = scope.resolve_name(name).map_err(Error::Scope)?;
   match term {
     Lam { param, body } => Ok(substitute_lam(param.clone(), *body.clone(), &arg)),
-    _ => Err(err(format!("expected lambda def found {term}"))),
+    _ => Err(wrap_error(
+      Error::Eval(EvalError::NotALambda { term: term.clone() }),
+      loc,
+    )),
   }
 }
 
-fn eval_app(fun: Term, arg: Term, scope: &Scope, options: &EvalOptions) -> Result<Term, Error> {
-  let fun = eval(fun, scope, options)?;
-  let arg = eval(arg, scope, options)?;
+fn eval_app(
+  fun: Term,
+  arg: Term,
+  scope: &Scope,
+  options: &EvalOptions,
+  loc: Option<SourceRange>,
+) -> Result<Term, Error> {
+  let fun = eval_inner(fun, scope, options, loc.clone())?;
+  let arg = eval_inner(arg, scope, options, loc.clone())?;
   if options.debug {
     println!("eval_app: fun={} arg={}", fun, arg);
   }
   match fun {
-    Var { name } => unwrap_decl_lambda(arg, &name, scope),
+    Var { name } => unwrap_decl_lambda(arg, &name, scope, loc.clone()),
     Lam { param, body } => Ok(substitute_lam(param, *body, &arg)),
     Ntv { native } => {
       let index = native.args.iter().filter(|a| a.is_some()).count() + 1;
       if let Some(result) = native_apply_arg(native, index, arg) {
-        let result_eval = eval(result, scope, options)?;
+        let result_eval = eval_inner(result, scope, options, loc.clone())?;
         Ok(result_eval)
       } else {
-        Err(err(
-          "native function applied to too many arguments".to_string(),
+        Err(wrap_error(
+          Error::Eval(EvalError::NativeArgumentOverflow),
+          loc.clone(),
         ))
       }
     }
@@ -375,15 +492,14 @@ fn eval_app(fun: Term, arg: Term, scope: &Scope, options: &EvalOptions) -> Resul
       fun: fun2,
       arg: arg_internal,
     } => {
-      let f = eval_app(*fun2, *arg_internal, scope, options)?;
-      let f2 = eval_app(f, arg, scope, options)?;
+      let f = eval_app(*fun2, *arg_internal, scope, options, loc.clone())?;
+      let f2 = eval_app(f, arg, scope, options, loc.clone())?;
       Ok(f2)
     }
-    _ => Err(err(format!(
-      "expected function found {} {}",
-      fun.node_type(),
-      fun
-    ))),
+    _ => Err(wrap_error(
+      Error::Eval(EvalError::NotAFunction { term: fun.clone() }),
+      loc.clone(),
+    )),
   }
 }
 

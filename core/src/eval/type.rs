@@ -300,14 +300,6 @@ fn unwrap_innermost_context<'a>(err: &'a TypeError) -> Option<&'a SourceRange> {
   }
 }
 
-/// Extract SourceRange from a Term if it is Ctx-wrapped, otherwise default.
-fn extract_loc(term: &Term) -> SourceRange {
-  match term {
-    Term::Ctx { loc, .. } => loc.clone(),
-    _ => SourceRange::default(),
-  }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum InstanceError {
   MissingTypeArgs(Vec<Identifier>),
