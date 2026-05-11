@@ -1422,6 +1422,12 @@ pub fn compare_types(left: &Term, right: &Term, free_vars: &FreeVars) -> bool {
       if free_vars.contains_name_ref(n1) || free_vars.contains_name_ref(n2) {
         return true;
       }
+      // Both are Forall-bound names from the same scope context — unifiable
+      if let (NameRef::Id(id1), NameRef::Id(id2)) = (n1, n2) {
+        if free_vars.keep_vars().contains_key(id1) && free_vars.keep_vars().contains_key(id2) {
+          return true;
+        }
+      }
       if n1.is_name() {
         n1.clone().to_path() == n2.clone().to_path()
       } else {
@@ -1441,8 +1447,20 @@ fn match_resolve_type_inner<'a>(
   use FreeVar::*;
   match (left, right) {
     (Forall { name, typ, body }, _) => {
-      free_vars.insert_free_var(name, Unknown { typ });
-      match_resolve_type_inner(body, right, free_vars, scope, visiting)
+      // When both sides have Forall, strip them pairwise
+      if let Term::Forall {
+        name: r_name,
+        typ: r_typ,
+        body: r_body,
+      } = right
+      {
+        free_vars.insert_free_var(name, Unknown { typ });
+        free_vars.add_var_to_keep(r_name, r_typ);
+        match_resolve_type_inner(body, r_body, free_vars, scope, visiting)
+      } else {
+        free_vars.insert_free_var(name, Unknown { typ });
+        match_resolve_type_inner(body, right, free_vars, scope, visiting)
+      }
     }
     (_, Forall { name, typ, body }) => {
       free_vars.add_var_to_keep(name, typ);

@@ -2072,7 +2072,6 @@ fn test_mo_linear_used_twice_fails() {
 }
 
 #[test]
-#[ignore = "Blocked: match_resolve_type_inner treats constructor Forall as free vars"]
 fn test_constructor_in_instance_body() {
   // Id.id in instance body should type-check (alpha-rename clash)
   let r = type_check_mo(
