@@ -71,7 +71,7 @@ fn is_reserved_name(s: &str) -> bool {
   RESERVED_NAMES.contains(&s)
 }
 
-/// Accepts letters/num/_ as identifier
+/// Accepts letters/num/_ as identifier, rejecting reserved keywords with a nom error.
 fn identifier<X: Clone>(input: Span<X>) -> Res<Identifier, X> {
   let (input, name) = verify(
     recognize((
@@ -84,8 +84,27 @@ fn identifier<X: Clone>(input: Span<X>) -> Res<Identifier, X> {
   Ok((input, id(name.into_fragment())))
 }
 
+/// Like identifier but produces native errors for reserved keywords/names.
 fn name<X: Clone>(input: Span<X>) -> Res<Identifier, X> {
-  verify(identifier, |id| !is_reserved_name(id.as_str())).parse(input)
+  let (input, name) = recognize((
+    alt((alpha1, tag("_"))),
+    take_while(|c: char| c.is_alphanumeric() || c == '_'),
+  ))
+  .parse(input)?;
+  let id_str = name.fragment();
+  if is_reserved_keyword(id_str) {
+    return Err(nom::Err::Error(ParseError::new(
+      input,
+      error::ParseErrorKind::Native(format!("'{id_str}' is a reserved keyword")),
+    )));
+  }
+  if is_reserved_name(id_str) {
+    return Err(nom::Err::Error(ParseError::new(
+      input,
+      error::ParseErrorKind::Native(format!("'{id_str}' is a reserved name")),
+    )));
+  }
+  Ok((input, id(name.into_fragment())))
 }
 
 fn line_comment<X: Clone>(input: Span<X>) -> Res<Span<X>, X> {
@@ -299,7 +318,13 @@ fn num_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
 }
 
 fn num_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  let (input, value) = i64(input)?;
+  let (input, num_str) = recognize(pair(opt(char('-')), digit1)).parse(input)?;
+  let value: i64 = num_str.fragment().parse().map_err(|_| {
+    nom::Err::Failure(ParseError::new(
+      input.clone(),
+      error::ParseErrorKind::Native(format!("invalid numeric literal '{}'", num_str.fragment())),
+    ))
+  })?;
   let (input, suffix) = num_suffix_parser(input)?;
   Ok((input, num_suffix(value, suffix)))
 }
