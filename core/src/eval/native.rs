@@ -483,6 +483,42 @@ pub fn eq_rec(args: Vec<Term>) -> Result<Term, NativeError> {
   Ok(apps(pvar(vec!["Eq", "rec"]), args))
 }
 
+/// Convert a Nat Con chain to u64. Returns None if not a valid Nat.
+fn nat_to_u64(term: &Term) -> Option<u64> {
+  match term {
+    Term::Con(Constructor { name, args, .. }) if name.as_str() == "zero" => Some(0),
+    Term::Con(Constructor { name, args, .. }) if name.as_str() == "succ" => args
+      .first()
+      .and_then(|a| a.as_ref())
+      .and_then(nat_to_u64)
+      .map(|n| n + 1),
+    _ => None,
+  }
+}
+
+fn extract_nat_at(terms: &[Term], index: usize) -> Result<u64, NativeError> {
+  if terms.len() > index {
+    nat_to_u64(&terms[index]).ok_or(ExpectedNum {
+      actual: terms[index].clone(),
+    })
+  } else {
+    Err(MissingArgs {
+      expected: index + 1,
+      actual: terms.len(),
+    })
+  }
+}
+
+pub fn nat_to_string(terms: Vec<Term>) -> Result<Term, NativeError> {
+  // TODO Replace with pure Monad code
+  let n = extract_nat_at(&terms, 0)?;
+  Ok(Term::Lit {
+    value: Literal::Str {
+      value: n.to_string(),
+    },
+  })
+}
+
 pub fn load_native_funs() -> Map<Identifier, NativeFun> {
   /// Helper to wrap a simple native function into NativeFun::Simple
   fn s(f: SimpleNativeFun) -> NativeFun {
@@ -570,6 +606,7 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("u8_gt"), s(u8_gt)),
     (id("eval_term"), sa(eval_term)),
     (id("eq_rec"), s(eq_rec)),
+    (id("nat_to_string"), s(nat_to_string)),
   ];
   v.into_iter().collect()
 }

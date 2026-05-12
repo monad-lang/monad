@@ -305,3 +305,64 @@ def test_lens_expansion_in_def_type : Bool :=
 def test_indexed_monad_class_exists : Bool :=
     // Verify IndexedMonad class compiles
     true
+
+// Nat arithmetic tests
+
+@[test]
+def test_nat_add_zero : Bool :=
+    Nat.eq (Nat.add Nat.zero Nat.zero) Nat.zero
+
+@[test]
+def test_nat_add_one_one : Bool :=
+    let one := Nat.succ Nat.zero in
+    let two := Nat.succ (Nat.succ Nat.zero) in
+    Nat.eq (Nat.add one one) two
+
+@[test]
+def test_nat_sub_self : Bool :=
+    let one := Nat.succ Nat.zero in
+    Nat.eq (Nat.sub one one) Nat.zero
+
+@[test]
+def test_nat_eq_false : Bool :=
+    Bool.not (Nat.eq Nat.zero (Nat.succ Nat.zero))
+
+// Vec dependent type tests
+
+@[test]
+def test_vec_nil_match : Bool :=
+    match Vec.nil {
+        nil => true
+    }
+
+@[test]
+def test_vec_nil_type : Bool :=
+    let v : Vec Nat.zero I64 := Vec.nil in
+    true
+
+@[test]
+def test_vec_cons_type : Bool :=
+    let v : Vec (Nat.succ Nat.zero) I64 := Vec.cons 42 Vec.nil in
+    true
+
+@[test]
+def test_vec_cons_pattern : Bool :=
+    let v : Vec (Nat.succ Nat.zero) I64 := Vec.cons 42 Vec.nil in
+    match v {
+        cons h t => h == 42
+    }
+
+@[test]
+def test_vec_cons_head : Bool :=
+    match Vec.cons 42 Vec.nil {
+        cons h t => h == 42
+    }
+
+@[test]
+def test_vec_cons_tail_nil : Bool :=
+    match Vec.cons 42 Vec.nil {
+        cons h t =>
+            match t {
+                nil => true
+            }
+    }

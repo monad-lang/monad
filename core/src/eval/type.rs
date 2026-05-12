@@ -1506,10 +1506,9 @@ fn match_resolve_type_inner<'a>(
     (_, Ctx { loc: _, term }) => match_resolve_type_inner(left, term, free_vars, scope, visiting),
     (Var { name: n1 }, Var { name: n2 }) => {
       let name_eq = if n1.is_name() {
-        if check_free_vars(n1.as_id().unwrap(), right, free_vars) {
-          true
-        } else {
-          n1.clone().to_path() == n2.clone().to_path()
+        match n1.as_id() {
+          Some(id) if check_free_vars(id, right, free_vars) => true,
+          _ => n1.clone().to_path() == n2.clone().to_path(),
         }
       } else {
         n1 == n2
@@ -1709,9 +1708,10 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
       }
       a
     }
-    Var { name } if name.is_name() && !known_names.contains(&name.to_path().unwrap()) => {
-      set_of(vec![name.as_id().unwrap().clone()].into_iter())
-    }
+    Var { name } if name.is_name() && !known_names.contains(&name.to_path().unwrap()) => name
+      .as_id()
+      .map(|id| set_of(vec![id.clone()].into_iter()))
+      .unwrap_or(empty_set()),
     App { fun, arg } => {
       let mut f = free_vars(fun, known_names);
       let a = free_vars(arg, known_names);
@@ -2425,16 +2425,64 @@ fn type_check_with_env(
       if !errs.is_empty() {
         return Err(Many(errs));
       }
+      let lam_types: Vec<Term> = arg_res.into_iter().map(|tt| tt.to_tuple().1).collect();
+      let num_present = args.iter().filter(|a| a.is_some()).count();
       let ind_type = apps(
         mpvar(inductive.name().clone()),
         inductive.params().iter().map(|_| Hole).collect(),
       );
-      let lam_types: Vec<Term> = arg_res.into_iter().map(|tt| tt.to_tuple().1).collect();
-      let num_present = args.iter().filter(|a| a.is_some()).count();
-      let cons_type = if lam_types.is_empty() || num_present == args.len() {
-        ind_type
+      // Use the constructor's declared type as the base
+      let mut cons_type = cons.typ().clone();
+      // Strip forall bindings (implicit type parameters)
+      while let Forall { body, .. } = &cons_type {
+        cons_type = *body.clone();
+      }
+      // Peel off Pi layers for each provided arg to get the return type
+      for _ in 0..num_present {
+        if let Pi { ret, .. } = cons_type {
+          cons_type = *ret;
+        } else {
+          break;
+        }
+      }
+      // For non-dependent constructors (return type = apps(name, param_refs)),
+      // use the old ind_type with holes to allow type inference.
+      // For dependent constructors (return type has specific values for indices),
+      // keep the actual return type.
+      let is_dependent = {
+        let (actual_name, actual_args) = extract_first_name(&cons_type)
+          .map(|(n, a)| (n, a))
+          .unwrap_or((ModulePath::single(id("_")), vec![]));
+        if actual_name == *inductive.name() && actual_args.len() == inductive.params().len() {
+          // Check if any arg differs from a simple param variable reference
+          actual_args
+            .iter()
+            .zip(inductive.params().iter())
+            .any(|(arg, param)| match arg {
+              Var { name: nref } => match nref.as_id() {
+                Some(id) => id != &param.name,
+                None => true,
+              },
+              _ => true,
+            })
+        } else {
+          true
+        }
+      };
+      let cons_type = if is_dependent {
+        // Use the actual constructor type for dependent constructors
+        if !lam_types.is_empty() && num_present < args.len() {
+          pi_typs(lam_types, cons_type)
+        } else {
+          cons_type
+        }
       } else {
-        pi_typs(lam_types, ind_type)
+        // Use the old behavior for non-dependent constructors
+        if lam_types.is_empty() || num_present == args.len() {
+          ind_type
+        } else {
+          pi_typs(lam_types, ind_type)
+        }
       };
       let cons_type = match_resolve_type(&cons_type, &expected_type, &scope)?;
       Ok(typed_term(term.clone(), cons_type))

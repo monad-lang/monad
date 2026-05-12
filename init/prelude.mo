@@ -171,6 +171,54 @@ type Nat {
 	succ (n : Nat)
 }
 
+def Nat.add (a b : Nat) : Nat :=
+	match a {
+		zero => b,
+		succ n => Nat.succ (Nat.add n b)
+	}
+
+def Nat.sub (a b : Nat) : Nat :=
+	match b {
+		zero => a,
+		succ n => match a {
+			zero => Nat.zero,
+			succ m => Nat.sub m n
+		}
+	}
+
+def Nat.mul (a b : Nat) : Nat :=
+	match a {
+		zero => Nat.zero,
+		succ n => Nat.add b (Nat.mul n b)
+	}
+
+def Nat.eq (a b : Nat) : Bool :=
+	match a {
+		zero => match b {
+			zero => true,
+			succ _ => false
+		},
+		succ n => match b {
+			zero => false,
+			succ m => Nat.eq n m
+		}
+	}
+
+@[native "nat_to_string"]
+def Nat.to_string (n : Nat) : String
+
+instance BEq Nat {
+	def beq (a b : Nat) : Bool := Nat.eq a b
+}
+
+instance Add Nat {
+	def add (a b : Nat) : Nat := Nat.add a b
+}
+
+instance Sub Nat {
+	def sub (a b : Nat) : Nat := Nat.sub a b
+}
+
 def Lens [Functor F] {F : Type -> Type} (S: Type) (T: Type) (A: Type) (B : Type) : Type :=
 	(A -> F B) -> S -> F T
 
@@ -257,6 +305,12 @@ type Vec (len : Nat) A {
 	nil : Vec Nat.zero A,
 	vcons (a : A) (Vec m A) : Vec (Nat.succ m) A
 }*/
+
+/// A length-indexed vector: Vec len A is a list of exactly len elements of type A
+type Vec (len : Nat) A {
+	nil : Vec Nat.zero A,
+	cons (head : A) (tail : Vec len A) : Vec (Nat.succ len) A
+}
 
 def fun_apply (f : A -> B) (a : A) : B := f a 
 
