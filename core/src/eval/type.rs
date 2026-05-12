@@ -284,6 +284,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::Scope(scope_error, loc) => Diagnostic {
       severity: Severity::Error,
@@ -292,6 +293,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::ExpectedPi(s, loc) => Diagnostic {
       severity: Severity::Error,
@@ -300,14 +302,12 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::Context { loc, err, name } => {
       let mut diag = err_to_diagnostic(err);
       if let Some(name) = name {
-        diag.sub_diagnostics.push(SubDiagnostic {
-          severity: Severity::Note,
-          message: format!("in {name}"),
-        });
+        diag.context_name = Some(format!("{name}"));
       }
       if diag.location.is_none() {
         diag.location = loc_opt(loc);
@@ -321,6 +321,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::Generic(s, loc) => Diagnostic {
       severity: Severity::Error,
@@ -329,6 +330,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::ConstructorMismatch { params, args, loc } => Diagnostic {
       severity: Severity::Error,
@@ -341,6 +343,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::ExpectedType(e, loc) => Diagnostic {
       severity: Severity::Error,
@@ -349,6 +352,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::FreeVarMismatch {
       name,
@@ -370,6 +374,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::TypeMismatch {
       expected,
@@ -391,6 +396,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
         },
       ],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::MissingField(identifier, loc) => Diagnostic {
       severity: Severity::Error,
@@ -399,6 +405,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::ArgumentMismatch {
       expected,
@@ -420,6 +427,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
         },
       ],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::Instance(instance_error, loc) => Diagnostic {
       severity: Severity::Error,
@@ -428,6 +436,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::InductiveMismatch {
       name,
@@ -445,6 +454,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::ConstructorUnknown(identifier, constructors, loc) => {
       let mut diag = Diagnostic {
@@ -454,6 +464,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
         path: None,
         sub_diagnostics: vec![],
         suggestions: vec![],
+        context_name: None,
       };
       if !constructors.is_empty() {
         let names: Vec<String> = constructors.iter().map(|n| n.to_string()).collect();
@@ -476,6 +487,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::Overflow { value, target, loc } => Diagnostic {
       severity: Severity::Error,
@@ -484,6 +496,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::LinearUsedMultipleTimes(id, loc) => Diagnostic {
       severity: Severity::Error,
@@ -492,6 +505,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::LinearUnused(id, loc) => Diagnostic {
       severity: Severity::Error,
@@ -500,6 +514,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::AffineUsedMultipleTimes(id, loc) => Diagnostic {
       severity: Severity::Error,
@@ -508,6 +523,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::ErasedUsedAtRuntime(id, loc) => Diagnostic {
       severity: Severity::Error,
@@ -518,6 +534,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::Many(_errs) => Diagnostic {
       severity: Severity::Error,
@@ -526,6 +543,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::StructNoConstructors { loc } => Diagnostic {
       severity: Severity::Error,
@@ -534,6 +552,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::ExpectedStructName { found, loc } => Diagnostic {
       severity: Severity::Error,
@@ -542,6 +561,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::StructUpdateExpectedInductive { found, loc } => Diagnostic {
       severity: Severity::Error,
@@ -550,6 +570,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::StructTooManyFields { max, found, loc } => Diagnostic {
       severity: Severity::Error,
@@ -558,6 +579,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
     TypeError::MacroExpansion(err) => Diagnostic {
       severity: Severity::Error,
@@ -566,6 +588,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     },
   }
 }
@@ -599,6 +622,7 @@ fn fmt_loc(loc: &SourceRange, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Resu
   }
 }
 
+#[allow(dead_code)]
 fn generic_terr(s: String) -> TypeError {
   TypeError::Generic(s, SourceRange::default())
 }

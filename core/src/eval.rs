@@ -93,6 +93,7 @@ impl From<&EvalError> for crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
     }
   }
 }

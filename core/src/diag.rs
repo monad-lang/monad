@@ -41,6 +41,7 @@ pub struct Diagnostic {
   pub path: Option<PathBuf>,
   pub sub_diagnostics: Vec<SubDiagnostic>,
   pub suggestions: Vec<Suggestion>,
+  pub context_name: Option<String>,
 }
 
 struct Colorizer {
@@ -92,6 +93,10 @@ fn render_impl(
   f: &mut impl std::fmt::Write,
 ) -> std::fmt::Result {
   let c = Colorizer { use_colors };
+
+  if let Some(name) = &diag.context_name {
+    writeln!(f, "{}In {}:{}", c.bold(), name, c.reset())?;
+  }
 
   write!(f, "{}{}{}: ", c.error(), c.bold(), diag.severity.label())?;
   write!(f, "{}{}", diag.message, c.reset())?;

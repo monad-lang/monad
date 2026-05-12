@@ -176,6 +176,7 @@ pub fn parse_error_to_diagnostic(source: &str, error: &OwnedError) -> Diagnostic
     path: None,
     sub_diagnostics,
     suggestions: vec![],
+    context_name: None,
   }
 }
 
