@@ -91,6 +91,49 @@ fn test_parse_def_with_use_and_empty_line() {
 }
 
 #[test]
+fn test_application_parens_no_space() {
+  // f(x) without space should parse as application
+  let app = |s: &'static str| application::<()>(s.into());
+  let (_, r) = app("f(x)").unwrap();
+  similar!(r, apps(var("f"), vec![var("x")]));
+  let (_, r) = app("f(g(x))").unwrap();
+  similar!(r, apps(var("f"), vec![apps(var("g"), vec![var("x")])]));
+  let (_, r) = app("f(x)(y)").unwrap();
+  similar!(r, apps(var("f"), vec![var("x"), var("y")]));
+}
+
+#[test]
+fn test_application_parens_mixed() {
+  // f (x) still works, f(x) y works too
+  let app = |s: &'static str| application::<()>(s.into());
+  let (_, r) = app("f (x)").unwrap();
+  similar!(r, apps(var("f"), vec![var("x")]));
+  let (_, r) = app("f(x) y").unwrap();
+  similar!(r, apps(var("f"), vec![var("x"), var("y")]));
+  // f12 should still be a single variable (not app(f, 12))
+  let r = app("f12");
+  assert!(r.is_err(), "f12 should fail as application");
+}
+
+#[test]
+fn test_parse_def_with_parens_app() {
+  let input = "def f (x : I64) : I64 := x\ndef g : I64 := f(42)\n";
+  let r = parse_file(input);
+  assert!(r.is_ok(), "should parse def with parens app: {:?}", r.err());
+}
+
+#[test]
+fn test_parse_def_file_with_parens_match() {
+  let input = "type Maybe A { some (a: A), none }\ndef main : Maybe I64 := match some (fn x => x) { some f => some(f 42), none => none }\n";
+  let r = parse_file(input);
+  assert!(
+    r.is_ok(),
+    "should parse match with parens app: {:?}",
+    r.err()
+  );
+}
+
+#[test]
 fn test_parse_simple_def_file() {
   let input = "def main : I64 := 42\n";
   let r = parse_file(input);

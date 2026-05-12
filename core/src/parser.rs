@@ -539,7 +539,7 @@ fn application<X: Clone>(input: Span<X>) -> Res<Term, X> {
   // Literals, lambdas, etc. cannot be function heads — without this restriction,
   // `12 x` would parse as `App(12, x)` instead of just `12` followed by `x`.
   let (input, fun) = alt((macro_call, variable, parens)).parse(input)?;
-  let (input, args) = many1(preceded(ws1, term_inner)).parse(input)?;
+  let (input, args) = many1(alt((preceded(ws1, term_inner), parens))).parse(input)?;
 
   Ok((input, apps(fun, args)))
 }
