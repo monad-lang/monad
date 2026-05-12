@@ -38,6 +38,19 @@ impl Display for NativeError {
   }
 }
 
+impl From<&NativeError> for crate::diag::Diagnostic {
+  fn from(err: &NativeError) -> Self {
+    crate::diag::Diagnostic {
+      severity: crate::diag::Severity::Error,
+      message: err.to_string(),
+      location: None,
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    }
+  }
+}
+
 fn extract_string_at(terms: &[Term], index: usize) -> Result<String, NativeError> {
   if terms.len() > index {
     if let Term::Lit {

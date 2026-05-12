@@ -82,6 +82,20 @@ impl Display for ScopeError {
   }
 }
 
+impl From<&ScopeError> for crate::diag::Diagnostic {
+  fn from(err: &ScopeError) -> Self {
+    use crate::diag::{Diagnostic, Severity};
+    Diagnostic {
+      severity: Severity::Error,
+      message: err.to_string(),
+      location: None,
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    }
+  }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LocalVar<'a> {
   Owned { name: &'a Identifier, typ: Term },
@@ -1492,7 +1506,7 @@ pub fn load_module_from_text(
   let mut in_progress = crate::empty_set();
   *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
   let init_decls = type_check_module_decls(&path, init_decls, loaded).map_err(|e| {
-    let rendered = render_type_error_with_source(text, &e);
+    let rendered = render_type_error_with_source(text, &e, false);
     LoadingError::Generic(rendered)
   })?;
   loaded.add_module(module(

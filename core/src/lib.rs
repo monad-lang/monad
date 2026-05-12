@@ -22,6 +22,7 @@ use crate::term::module::{
 use crate::term::{Constructor, ModulePath, mpt, strings_to_list_term};
 use crate::term::{app, id};
 
+pub mod diag;
 pub mod eval;
 pub mod parser;
 pub mod term;
@@ -184,7 +185,7 @@ pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<()
   };
 
   let (term, typ) = type_check(input_term, Hole, &global.scope())
-    .map_err(|e| render_type_error_with_source(&source, &e))?
+    .map_err(|e| render_type_error_with_source(&source, &e, options.use_colors))?
     .to_tuple();
   println!("Eval type {typ}");
   let term = eval(term, &global.scope(), &options)

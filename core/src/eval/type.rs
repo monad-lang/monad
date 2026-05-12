@@ -82,6 +82,23 @@ pub enum TypeError {
   LinearUnused(Identifier, SourceRange),
   AffineUsedMultipleTimes(Identifier, SourceRange),
   ErasedUsedAtRuntime(Identifier, SourceRange),
+  StructNoConstructors {
+    loc: SourceRange,
+  },
+  ExpectedStructName {
+    found: Term,
+    loc: SourceRange,
+  },
+  StructUpdateExpectedInductive {
+    found: Term,
+    loc: SourceRange,
+  },
+  StructTooManyFields {
+    max: usize,
+    found: usize,
+    loc: SourceRange,
+  },
+  MacroExpansion(crate::eval::macro_expand::MacroError),
 }
 
 impl From<ScopeError> for TypeError {
@@ -231,7 +248,346 @@ impl Display for TypeError {
         )?;
         fmt_loc(loc, f)
       }
+      TypeError::StructNoConstructors { loc } => {
+        write!(f, "Structs must have at least one constructor")?;
+        fmt_loc(loc, f)
+      }
+      TypeError::ExpectedStructName { found, loc } => {
+        write!(f, "Expected struct type, found {found}")?;
+        fmt_loc(loc, f)
+      }
+      TypeError::StructUpdateExpectedInductive { found, loc } => {
+        write!(f, "Struct update requires an inductive type, found {found}")?;
+        fmt_loc(loc, f)
+      }
+      TypeError::StructTooManyFields { max, found, loc } => {
+        write!(
+          f,
+          "Too many fields in struct literal (max {max}, found {found})"
+        )?;
+        fmt_loc(loc, f)
+      }
+      TypeError::MacroExpansion(err) => {
+        write!(f, "macro expansion failed: {err}")
+      }
     }
+  }
+}
+
+fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
+  use crate::diag::{Diagnostic, Severity, SubDiagnostic, Suggestion};
+  match err {
+    TypeError::MismatchingBranches(t1, t2, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Mismatching branches {t1} != {t2}"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::Scope(scope_error, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: scope_error.to_string(),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::ExpectedPi(s, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Expected function type found: {s}"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::Context { loc, err, name } => {
+      let mut diag = err_to_diagnostic(err);
+      if let Some(name) = name {
+        diag.sub_diagnostics.push(SubDiagnostic {
+          severity: Severity::Note,
+          message: format!("in {name}"),
+        });
+      }
+      if diag.location.is_none() {
+        diag.location = loc_opt(loc);
+      }
+      diag
+    }
+    TypeError::InstanceDecl(i, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: i.clone(),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::Generic(s, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: s.clone(),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::ConstructorMismatch { params, args, loc } => Diagnostic {
+      severity: Severity::Error,
+      message: format!(
+        "Constructor mismatch {} != {}",
+        crate::vec_fmt(params),
+        crate::vec_fmt(args)
+      ),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::ExpectedType(e, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Expected Type found {e}"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::FreeVarMismatch {
+      name,
+      expected,
+      actual,
+      locals,
+      loc,
+    } => Diagnostic {
+      severity: Severity::Error,
+      message: format!(
+        "Variable mismatch, expected {name} to be {expected} found {actual} with local vars [{}]",
+        locals
+          .iter()
+          .map(|(n, t)| format!("{n} : {t}"))
+          .collect::<Vec<_>>()
+          .join(", ")
+      ),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::TypeMismatch {
+      expected,
+      actual,
+      loc,
+    } => Diagnostic {
+      severity: Severity::Error,
+      message: "Type mismatch".to_string(),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![
+        SubDiagnostic {
+          severity: Severity::Note,
+          message: format!("expected: {expected}"),
+        },
+        SubDiagnostic {
+          severity: Severity::Note,
+          message: format!("found:    {actual}"),
+        },
+      ],
+      suggestions: vec![],
+    },
+    TypeError::MissingField(identifier, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Missing field {identifier}"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::ArgumentMismatch {
+      expected,
+      actual,
+      loc,
+    } => Diagnostic {
+      severity: Severity::Error,
+      message: "Argument mismatch".to_string(),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![
+        SubDiagnostic {
+          severity: Severity::Note,
+          message: format!("expected: {expected}"),
+        },
+        SubDiagnostic {
+          severity: Severity::Note,
+          message: format!("found:    {actual}"),
+        },
+      ],
+      suggestions: vec![],
+    },
+    TypeError::Instance(instance_error, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("instance {instance_error}"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::InductiveMismatch {
+      name,
+      params,
+      args,
+      loc,
+    } => Diagnostic {
+      severity: Severity::Error,
+      message: format!(
+        "Inductive {name} params mismatch {} != {}",
+        crate::vec_fmt(params),
+        crate::vec_fmt(args)
+      ),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::ConstructorUnknown(identifier, constructors, loc) => {
+      let mut diag = Diagnostic {
+        severity: Severity::Error,
+        message: format!("Unknown constructor {identifier}"),
+        location: loc_opt(loc),
+        path: None,
+        sub_diagnostics: vec![],
+        suggestions: vec![],
+      };
+      if !constructors.is_empty() {
+        let names: Vec<String> = constructors.iter().map(|n| n.to_string()).collect();
+        diag.sub_diagnostics.push(SubDiagnostic {
+          severity: Severity::Note,
+          message: format!("available constructors: {}", names.join(", ")),
+        });
+        if let Some(suggestion) = did_you_mean(identifier.as_str(), &names) {
+          diag.suggestions.push(Suggestion {
+            message: format!("did you mean '{suggestion}'?"),
+          });
+        }
+      }
+      diag
+    }
+    TypeError::ExpectedInductive(term, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Expected inductive found {term}"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::Overflow { value, target, loc } => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Integer overflow: {value} does not fit in {target}"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::LinearUsedMultipleTimes(id, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Linear variable '{id}' used more than once"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::LinearUnused(id, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Linear variable '{id}' must be used exactly once"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::AffineUsedMultipleTimes(id, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Affine variable '{id}' used more than once"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::ErasedUsedAtRuntime(id, loc) => Diagnostic {
+      severity: Severity::Error,
+      message: format!(
+        "Erased variable '{id}' used at runtime (erased vars are compile-time only)"
+      ),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::Many(_errs) => Diagnostic {
+      severity: Severity::Error,
+      message: "Multiple type errors".to_string(),
+      location: None,
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::StructNoConstructors { loc } => Diagnostic {
+      severity: Severity::Error,
+      message: "Structs must have at least one constructor".to_string(),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::ExpectedStructName { found, loc } => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Expected struct type, found {found}"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::StructUpdateExpectedInductive { found, loc } => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Struct update requires an inductive type, found {found}"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::StructTooManyFields { max, found, loc } => Diagnostic {
+      severity: Severity::Error,
+      message: format!("Too many fields in struct literal (max {max}, found {found})"),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+    TypeError::MacroExpansion(err) => Diagnostic {
+      severity: Severity::Error,
+      message: format!("macro expansion failed: {err}"),
+      location: None,
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    },
+  }
+}
+
+pub fn type_error_as_diagnostics(err: &TypeError) -> Vec<crate::diag::Diagnostic> {
+  match err {
+    TypeError::Many(errs) => errs.iter().map(err_to_diagnostic).collect(),
+    single => vec![err_to_diagnostic(single)],
+  }
+}
+
+impl From<&TypeError> for crate::diag::Diagnostic {
+  fn from(err: &TypeError) -> Self {
+    err_to_diagnostic(err)
+  }
+}
+
+fn loc_opt(loc: &SourceRange) -> Option<SourceRange> {
+  if loc.start.line > 0 {
+    Some(loc.clone())
+  } else {
+    None
   }
 }
 
@@ -301,53 +657,9 @@ fn t_context(err: TypeError, name: Option<ModulePath>, loc: SourceRange) -> Type
   }
 }
 
-pub fn render_type_error_with_source(source: &str, error: &TypeError) -> String {
-  let mut output = String::new();
-  let _ = display_type_error_with_source_impl(source, error, &mut output);
-  output
-}
-
-fn display_type_error_with_source_impl(
-  source: &str,
-  error: &TypeError,
-  f: &mut impl std::fmt::Write,
-) -> std::fmt::Result {
-  match error {
-    TypeError::Context { loc, err, name } => {
-      let inner_loc = unwrap_innermost_context(err);
-      let display_loc = inner_loc.unwrap_or(loc);
-      writeln!(f, "type error")?;
-      crate::parser::display_source_context(
-        source,
-        None,
-        display_loc.start.line as usize,
-        display_loc.start.line_offset,
-        f,
-      )?;
-      write!(f, "  = {}", err)?;
-      if let Some(name) = name {
-        write!(f, " (in {name})")?;
-      }
-      writeln!(f)
-    }
-    TypeError::Many(errs) => {
-      for err in errs {
-        display_type_error_with_source_impl(source, err, f)?;
-      }
-      Ok(())
-    }
-    _ => writeln!(f, "type error\n  = {}", error),
-  }
-}
-
-fn unwrap_innermost_context<'a>(err: &'a TypeError) -> Option<&'a SourceRange> {
-  match err {
-    TypeError::Context { loc, err, .. } => {
-      let inner = unwrap_innermost_context(err);
-      Some(inner.unwrap_or(loc))
-    }
-    _ => None,
-  }
+pub fn render_type_error_with_source(source: &str, error: &TypeError, use_colors: bool) -> String {
+  let diags = type_error_as_diagnostics(error);
+  crate::diag::render_diagnostics(&diags, Some(source), use_colors)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1630,21 +1942,25 @@ fn type_check_with_env(
         }
       };
       if struct_type.is_none() && expected_type.is_known() {
-        return Err(generic_terr(format!(
-          "Expected name for struct found {expected_type}"
-        )));
+        return Err(TypeError::ExpectedStructName {
+          found: expected_type.clone(),
+          loc: SourceRange::default(),
+        });
       }
       if let Some(ref struct_name) = struct_type {
         let ind = scope.find_inductive(struct_name)?;
         let mk_cons = ind
           .constructors
           .first()
-          .ok_or_else(|| generic_terr("Structs must have at least one constructor".to_string()))?;
+          .ok_or_else(|| TypeError::StructNoConstructors {
+            loc: SourceRange::default(),
+          })?;
         if fields.len() > mk_cons.params.len() {
-          return Err(generic_terr(format!(
-            "too many fields in struct {:?} {:?}",
-            fields, mk_cons.params
-          )));
+          return Err(TypeError::StructTooManyFields {
+            max: mk_cons.params.len(),
+            found: fields.len(),
+            loc: SourceRange::default(),
+          });
         }
         for Param { name, typ, .. } in mk_cons.params.iter() {
           if let Some(term) = fields.get(name) {
@@ -1692,7 +2008,9 @@ fn type_check_with_env(
         let mk_cons = ind
           .constructors
           .first()
-          .ok_or_else(|| generic_terr("Struct update requires a struct type".to_string()))?;
+          .ok_or_else(|| TypeError::StructNoConstructors {
+            loc: SourceRange::default(),
+          })?;
         // Generate fresh pattern variables
         let fresh_names: Map<Identifier, Identifier> = mk_cons
           .params
@@ -1736,9 +2054,10 @@ fn type_check_with_env(
           track_usage,
         );
       }
-      Err(generic_terr(format!(
-        "Struct update requires an inductive type, found {base_type}"
-      )))
+      Err(TypeError::StructUpdateExpectedInductive {
+        found: base_type,
+        loc: SourceRange::default(),
+      })
     }
     Lit {
       value: Literal::Match {
@@ -2330,12 +2649,7 @@ pub fn type_check_module_decls(
   loaded: &LoadedModules,
 ) -> Result<Vec<SourceContext<Decl>>, TypeError> {
   let decls = elaborate_decls(decls, loaded);
-  let decls = macro_expand::expand_macros(decls, loaded).map_err(|e| {
-    TypeError::Generic(
-      format!("macro expansion failed: {e}"),
-      SourceRange::default(),
-    )
-  })?;
+  let decls = macro_expand::expand_macros(decls, loaded).map_err(TypeError::MacroExpansion)?;
   let global = loaded.scope_of_decls(path, &decls);
 
   let (oks, errs) = type_check_decls(decls.clone(), &global.scope());

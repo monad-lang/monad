@@ -14,6 +14,10 @@ enum Commands {
   Repl {
     #[arg(short, long, default_value_t = false)]
     debug: bool,
+    #[arg(long, default_value_t = false, overrides_with = "no_color")]
+    color: bool,
+    #[arg(long = "no-color", default_value_t = false)]
+    no_color: bool,
   },
 
   Run {
@@ -23,6 +27,10 @@ enum Commands {
     debug: bool,
     #[arg(value_name = "ARGS", trailing_var_arg = true)]
     args: Vec<String>,
+    #[arg(long, default_value_t = false, overrides_with = "no_color")]
+    color: bool,
+    #[arg(long = "no-color", default_value_t = false)]
+    no_color: bool,
   },
 
   Test {
@@ -30,6 +38,10 @@ enum Commands {
     input: PathBuf,
     #[arg(short, long, default_value_t = false)]
     debug: bool,
+    #[arg(long, default_value_t = false, overrides_with = "no_color")]
+    color: bool,
+    #[arg(long = "no-color", default_value_t = false)]
+    no_color: bool,
   },
 
   #[cfg(feature = "llvm")]
@@ -65,13 +77,27 @@ fn main() -> Result<(), String> {
 
   match cli.command {
     #[cfg(feature = "repl")]
-    Commands::Repl { debug } => repl(EvalOptions { debug }).map_err(|e| e.to_string()),
+    Commands::Repl {
+      debug,
+      color,
+      no_color,
+    } => {
+      let use_colors = color && !no_color;
+      repl(EvalOptions { debug, use_colors }).map_err(|e| e.to_string())
+    }
     #[cfg(not(feature = "repl"))]
     Commands::Repl { .. } => {
       Err("REPL support was not compiled in. Install with repl feature enabled.".into())
     }
-    Commands::Run { input, debug, args } => {
-      let result = run(input, args, EvalOptions { debug });
+    Commands::Run {
+      input,
+      debug,
+      args,
+      color,
+      no_color,
+    } => {
+      let use_colors = color && !no_color;
+      let result = run(input, args, EvalOptions { debug, use_colors });
       match result {
         Ok(_) => (),
         Err(ref e) => {
@@ -80,8 +106,14 @@ fn main() -> Result<(), String> {
       }
       result
     }
-    Commands::Test { input, debug } => {
-      let result = run_tests(input, EvalOptions { debug });
+    Commands::Test {
+      input,
+      debug,
+      color,
+      no_color,
+    } => {
+      let use_colors = color && !no_color;
+      let result = run_tests(input, EvalOptions { debug, use_colors });
       match result {
         Ok(_) => (),
         Err(ref e) => {

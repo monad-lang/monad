@@ -19,7 +19,7 @@ fn strip_ctx(term: Term) -> Term {
 const MAX_EXPANSION_DEPTH: u64 = 32;
 
 /// Error type for macro expansion failures
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MacroError {
   DepthLimitExceeded,
   NonTermReturn { name: String },
@@ -36,6 +36,19 @@ impl std::fmt::Display for MacroError {
       }
       MacroError::MacroNotFound { name } => write!(f, "macro `{name}` not found"),
       MacroError::Generic(msg) => write!(f, "{msg}"),
+    }
+  }
+}
+
+impl From<&MacroError> for crate::diag::Diagnostic {
+  fn from(err: &MacroError) -> Self {
+    crate::diag::Diagnostic {
+      severity: crate::diag::Severity::Error,
+      message: err.to_string(),
+      location: None,
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
     }
   }
 }

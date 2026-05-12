@@ -477,7 +477,15 @@ fn con_list_empty() -> Term {
 
 fn eval_test(main_term: Term, scope: &Scope) -> Result<Term, String> {
   let tt = type_check(main_term, Hole, &scope).map_err(|e| format!("type check failed: {e}"))?;
-  eval(tt.term, scope, &EvalOptions { debug: true }).map_err(|e| format!("eval error: {e}"))
+  eval(
+    tt.term,
+    scope,
+    &EvalOptions {
+      debug: true,
+      use_colors: false,
+    },
+  )
+  .map_err(|e| format!("eval error: {e}"))
 }
 
 fn un<T, E>(r: Result<T, E>) -> T

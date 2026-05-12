@@ -84,6 +84,19 @@ impl Display for EvalError {
   }
 }
 
+impl From<&EvalError> for crate::diag::Diagnostic {
+  fn from(err: &EvalError) -> Self {
+    crate::diag::Diagnostic {
+      severity: crate::diag::Severity::Error,
+      message: err.to_string(),
+      location: None,
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    }
+  }
+}
+
 impl Display for Error {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
@@ -147,9 +160,40 @@ impl From<NativeError> for Error {
   }
 }
 
+impl From<&Error> for crate::diag::Diagnostic {
+  fn from(err: &Error) -> Self {
+    match err {
+      Error::Scope(se) => {
+        let mut diag: crate::diag::Diagnostic = se.into();
+        if diag.message.starts_with("scope: ") {
+          diag.message = diag.message["scope: ".len()..].to_string();
+        }
+        diag
+      }
+      Error::Eval(ee) => {
+        let mut diag: crate::diag::Diagnostic = ee.into();
+        diag.message = format!("eval: {}", diag.message);
+        diag
+      }
+      Error::Type(te) => te.into(),
+      Error::Native(ne) => {
+        let mut diag: crate::diag::Diagnostic = ne.into();
+        diag.message = format!("native: {}", diag.message);
+        diag
+      }
+      Error::Context { loc, err } => {
+        let mut diag: crate::diag::Diagnostic = err.as_ref().into();
+        diag.location = Some(loc.clone());
+        diag
+      }
+    }
+  }
+}
+
 #[derive(Clone, PartialEq, Default)]
 pub struct EvalOptions {
   pub debug: bool,
+  pub use_colors: bool,
 }
 
 fn resolve_name<'a>(name: &'a NameRef, scope: &'a Scope<'a>) -> Result<&'a Term, Error> {

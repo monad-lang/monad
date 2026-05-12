@@ -24,6 +24,19 @@ impl std::fmt::Display for ConstraintError {
   }
 }
 
+impl From<&ConstraintError> for crate::diag::Diagnostic {
+  fn from(err: &ConstraintError) -> Self {
+    crate::diag::Diagnostic {
+      severity: crate::diag::Severity::Error,
+      message: err.to_string(),
+      location: None,
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+    }
+  }
+}
+
 /// Solver for type class constraints during instance resolution.
 ///
 /// Takes a visiting set as a parameter so that cycle detection works

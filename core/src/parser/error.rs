@@ -5,7 +5,9 @@ use nom::{
   error::{ContextError, ErrorKind},
 };
 
+use crate::diag::{self, Diagnostic, Severity, SubDiagnostic};
 use crate::parser::locate::LocatedSpan;
+use crate::term::{Location, SourceRange};
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum ParseErrorKind {
@@ -120,6 +122,63 @@ pub fn get_error_line_column(source: &str, error: &OwnedError) -> (usize, usize)
   (line_num, column)
 }
 
+fn describe_nom_error(kind: &ErrorKind) -> &'static str {
+  match kind {
+    ErrorKind::Tag => "unexpected token",
+    ErrorKind::Char => "unexpected character",
+    ErrorKind::Alpha => "unexpected letter",
+    ErrorKind::Digit => "unexpected digit",
+    ErrorKind::Eof => "unexpected end of file",
+    _ => "syntax error",
+  }
+}
+
+pub fn parse_error_to_diagnostic(source: &str, error: &OwnedError) -> Diagnostic {
+  let (line_num, column) = get_error_line_column(source, error);
+
+  let mut sub_diagnostics: Vec<SubDiagnostic> = Vec::new();
+  if let Some(ctx) = &error.expected {
+    sub_diagnostics.push(SubDiagnostic {
+      severity: Severity::Note,
+      message: format!("expected: {ctx}"),
+    });
+  }
+  for err in &error.errors {
+    let msg = match err {
+      ParseErrorKind::Native(msg) => msg.clone(),
+      ParseErrorKind::Nom(kind) => describe_nom_error(kind).to_string(),
+    };
+    sub_diagnostics.push(SubDiagnostic {
+      severity: Severity::Note,
+      message: msg,
+    });
+  }
+
+  let location = if line_num > 0 {
+    Some(SourceRange::new(
+      Location {
+        line: line_num as u32,
+        line_offset: column,
+      },
+      Location {
+        line: line_num as u32,
+        line_offset: column,
+      },
+    ))
+  } else {
+    None
+  };
+
+  Diagnostic {
+    severity: Severity::Error,
+    message: "parse error".to_string(),
+    location,
+    path: None,
+    sub_diagnostics,
+    suggestions: vec![],
+  }
+}
+
 pub fn display_source_context(
   source: &str,
   path: Option<&str>,
@@ -168,34 +227,8 @@ pub fn display_parse_error(
   error: &OwnedError,
   f: &mut impl std::fmt::Write,
 ) -> std::fmt::Result {
-  let (line_num, column) = get_error_line_column(source, error);
-
-  writeln!(f, "error: parse error")?;
-
-  if line_num == 0 || line_num > source.lines().count() {
-    writeln!(f, "  --> :{}:{}", line_num, column)?;
-  } else {
-    display_source_context(source, None, line_num, column, f)?;
-  }
-
-  if let Some(ctx) = &error.expected {
-    writeln!(f, "  = expected: {}", ctx)?;
-  }
-
-  if !error.errors.is_empty() {
-    for err in &error.errors {
-      match err {
-        ParseErrorKind::Native(msg) => {
-          writeln!(f, "  = {}", msg)?;
-        }
-        ParseErrorKind::Nom(kind) => {
-          writeln!(f, "  = unexpected: {:?}", kind)?;
-        }
-      }
-    }
-  }
-
-  Ok(())
+  let diag = parse_error_to_diagnostic(source, error);
+  write!(f, "{}", diag::render_diagnostic(&diag, Some(source), false))
 }
 
 #[derive(Clone, Debug)]

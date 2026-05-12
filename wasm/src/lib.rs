@@ -45,7 +45,10 @@ impl WasmResult {
 #[wasm_bindgen]
 pub fn run_file(path: String, args: JsValue) -> WasmResult {
   let args: Vec<String> = serde_wasm_bindgen::from_value(args).unwrap_or_default();
-  let options = EvalOptions { debug: false };
+  let options = EvalOptions {
+    debug: false,
+    use_colors: false,
+  };
 
   let path: ModulePath = ModulePath::top(&path);
   let mut loaded = match default_modules() {
@@ -155,7 +158,10 @@ impl WasmRepl {
   }
 
   pub fn eval(&mut self, source: String) -> WasmResult {
-    let options = EvalOptions { debug: false };
+    let options = EvalOptions {
+      debug: false,
+      use_colors: false,
+    };
 
     let parsed = match repl_parser(&source) {
       Ok(r) => r,
@@ -318,8 +324,15 @@ mod test {
       .map_err(|e| format!("type check error: {e}"))?
       .to_tuple();
 
-    eval(term, &global.scope(), &EvalOptions { debug: false })
-      .map_err(|e| format!("eval error: {e}"))
+    eval(
+      term,
+      &global.scope(),
+      &EvalOptions {
+        debug: false,
+        use_colors: false,
+      },
+    )
+    .map_err(|e| format!("eval error: {e}"))
   }
 
   #[test]
