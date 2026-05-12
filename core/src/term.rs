@@ -14,8 +14,8 @@ use std::{
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord, Default)]
 pub struct Location {
-  /// Offset relative to the start of a line
-  pub line_offset: usize,
+  /// Column offset relative to the start of a line (1-indexed).
+  pub column: usize,
 
   /// The line number of the fragment relatively to the input of the
   /// parser. It starts at line 1.
@@ -25,7 +25,7 @@ pub struct Location {
 impl<X> From<Info<X>> for Location {
   fn from(value: Info<X>) -> Self {
     Location {
-      line_offset: value.line_offset,
+      column: value.line_offset,
       line: value.line,
     }
   }
@@ -35,11 +35,16 @@ impl<X> From<Info<X>> for Location {
 pub struct SourceRange {
   pub start: Location,
   pub end: Location,
+  pub path: Option<PathBuf>,
 }
 
 impl SourceRange {
   pub(crate) fn new(start: Location, end: Location) -> Self {
-    Self { start, end }
+    Self {
+      start,
+      end,
+      path: None,
+    }
   }
 }
 
@@ -2094,7 +2099,7 @@ impl<V: Display> Display for SourceContext<V> {
     write!(
       f,
       "{} at {}:{}",
-      self.value, self.loc.start.line, self.loc.start.line_offset
+      self.value, self.loc.start.line, self.loc.start.column
     )
   }
 }

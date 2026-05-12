@@ -123,7 +123,7 @@ impl Display for TypeError {
         fmt_loc(loc, f)
       }
       TypeError::Context { loc, err, name } => {
-        write!(f, "{} at {}:{}", err, loc.start.line, loc.start.line_offset)?;
+        write!(f, "{} at {}:{}", err, loc.start.line, loc.start.column)?;
         if let Some(name) = name {
           write!(f, " in {name}")?;
         }
@@ -593,17 +593,45 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
   }
 }
 
-pub fn type_error_as_diagnostics(err: &TypeError) -> Vec<crate::diag::Diagnostic> {
-  match err {
+pub fn type_error_as_diagnostics(
+  err: &TypeError,
+  path: Option<&std::path::PathBuf>,
+) -> Vec<crate::diag::Diagnostic> {
+  let diags: Vec<_> = match err {
     TypeError::Many(errs) => errs.iter().map(err_to_diagnostic).collect(),
     single => vec![err_to_diagnostic(single)],
+  };
+  if let Some(path) = path {
+    diags
+      .into_iter()
+      .map(|mut d| {
+        d.path = Some(path.clone());
+        if let Some(ref loc) = d.location {
+          if loc.path.is_some() {
+            d.path = loc.path.clone();
+          }
+        }
+        d
+      })
+      .collect()
+  } else {
+    diags
   }
 }
 
-impl From<&TypeError> for crate::diag::Diagnostic {
-  fn from(err: &TypeError) -> Self {
-    err_to_diagnostic(err)
-  }
+pub fn render_type_error_with_source(
+  source: &str,
+  error: &TypeError,
+  use_colors: bool,
+  path: Option<&std::path::PathBuf>,
+) -> String {
+  let diags = type_error_as_diagnostics(error, path);
+  crate::diag::render_diagnostics(&diags, Some(source), use_colors)
+}
+
+// Keep the old 3-arg version for small compat cases
+pub fn render_type_error_with_source_simple(source: &str, error: &TypeError) -> String {
+  render_type_error_with_source(source, error, false, None)
 }
 
 fn loc_opt(loc: &SourceRange) -> Option<SourceRange> {
@@ -614,9 +642,15 @@ fn loc_opt(loc: &SourceRange) -> Option<SourceRange> {
   }
 }
 
+impl From<&TypeError> for crate::diag::Diagnostic {
+  fn from(err: &TypeError) -> Self {
+    err_to_diagnostic(err)
+  }
+}
+
 fn fmt_loc(loc: &SourceRange, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
   if loc.start.line > 0 {
-    write!(f, " at {}:{}", loc.start.line, loc.start.line_offset)
+    write!(f, " at {}:{}", loc.start.line, loc.start.column)
   } else {
     Ok(())
   }
@@ -679,11 +713,6 @@ fn t_context(err: TypeError, name: Option<ModulePath>, loc: SourceRange) -> Type
     err: Box::new(err),
     name,
   }
-}
-
-pub fn render_type_error_with_source(source: &str, error: &TypeError, use_colors: bool) -> String {
-  let diags = type_error_as_diagnostics(error);
-  crate::diag::render_diagnostics(&diags, Some(source), use_colors)
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -9,7 +9,7 @@ use crate::eval::r#type::{
 };
 use crate::term::{Inductive, Instance, InstanceKey, ModulePath, SourceContext, Term};
 use crate::{
-  parser::parse_file,
+  parser::parse_file_with_path,
   term::{
     Decl, Identifier,
     NameRef::{self},
@@ -1488,12 +1488,20 @@ fn load_module_files_impl(
 }
 
 pub fn load_decls(path: &ModulePath) -> Result<Vec<SourceContext<Decl>>, String> {
-  let text = read_to_string(path.to_file_path()).map_err(|e| e.to_string())?;
-  load_decls_from_text(&text)
+  let file_path = path.to_file_path();
+  let text = read_to_string(&file_path).map_err(|e| e.to_string())?;
+  load_decls_from_text_with_path(&text, Some(&file_path))
 }
 
 pub fn load_decls_from_text(text: &str) -> Result<Vec<SourceContext<Decl>>, String> {
-  let parsed = parse_file(text).map_err(|e| format!("{e}"))?;
+  load_decls_from_text_with_path(text, None)
+}
+
+pub fn load_decls_from_text_with_path(
+  text: &str,
+  path: Option<&std::path::PathBuf>,
+) -> Result<Vec<SourceContext<Decl>>, String> {
+  let parsed = parse_file_with_path(text, path).map_err(|e| format!("{e}"))?;
   Ok(parsed.decls)
 }
 
@@ -1502,12 +1510,14 @@ pub fn load_module_from_text(
   path: ModulePath,
   loaded: &mut LoadedModules,
 ) -> Result<(), LoadingError> {
-  let init_decls =
-    load_decls_from_text(text).map_err(|e| format!("parse error for {}: {e}", path))?;
+  let file_path = path.to_file_path();
+  let init_decls = load_decls_from_text_with_path(text, Some(&file_path))
+    .map_err(|e| format!("parse error for {}: {e}", path))?;
   let mut in_progress = crate::empty_set();
   *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
   let init_decls = type_check_module_decls(&path, init_decls, loaded).map_err(|e| {
-    let rendered = render_type_error_with_source(text, &e, false);
+    let file_path = path.to_file_path();
+    let rendered = render_type_error_with_source(text, &e, false, Some(&file_path));
     LoadingError::Generic(rendered)
   })?;
   loaded.add_module(module(

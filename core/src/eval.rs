@@ -106,7 +106,7 @@ impl Display for Error {
       Error::Type(type_error) => write!(f, "type: {type_error}"),
       Error::Native(native_error) => write!(f, "native: {native_error}"),
       Error::Context { loc, err } => {
-        write!(f, "{err} at {}:{}", loc.start.line, loc.start.line_offset)
+        write!(f, "{err} at {}:{}", loc.start.line, loc.start.column)
       }
     }
   }

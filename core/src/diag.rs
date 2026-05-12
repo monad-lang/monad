@@ -103,14 +103,14 @@ fn render_impl(
 
   if let Some(loc) = &diag.location {
     if loc.start.line > 0 {
-      write!(f, " at {}:{}", loc.start.line, loc.start.line_offset)?;
+      write!(f, " at {}:{}", loc.start.line, loc.start.column)?;
     }
   }
   writeln!(f)?;
 
   if let Some(loc) = &diag.location {
     let line_num = loc.start.line as usize;
-    let column = loc.start.line_offset;
+    let column = loc.start.column;
 
     if let Some(path) = &diag.path {
       writeln!(f, "  --> {}:{}:{}", path.display(), line_num, column)?;

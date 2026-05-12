@@ -1,4 +1,5 @@
 use super::*;
+use crate::parser::parse_file;
 #[test]
 fn test_simple_instance() {
   let mut loaded = LoadedModules::empty();

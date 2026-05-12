@@ -133,7 +133,11 @@ fn describe_nom_error(kind: &ErrorKind) -> &'static str {
   }
 }
 
-pub fn parse_error_to_diagnostic(source: &str, error: &OwnedError) -> Diagnostic {
+pub fn parse_error_to_diagnostic(
+  source: &str,
+  error: &OwnedError,
+  path: Option<&std::path::PathBuf>,
+) -> Diagnostic {
   let (line_num, column) = get_error_line_column(source, error);
 
   let mut sub_diagnostics: Vec<SubDiagnostic> = Vec::new();
@@ -158,11 +162,11 @@ pub fn parse_error_to_diagnostic(source: &str, error: &OwnedError) -> Diagnostic
     Some(SourceRange::new(
       Location {
         line: line_num as u32,
-        line_offset: column,
+        column,
       },
       Location {
         line: line_num as u32,
-        line_offset: column,
+        column,
       },
     ))
   } else {
@@ -173,7 +177,7 @@ pub fn parse_error_to_diagnostic(source: &str, error: &OwnedError) -> Diagnostic
     severity: Severity::Error,
     message: "parse error".to_string(),
     location,
-    path: None,
+    path: path.cloned(),
     sub_diagnostics,
     suggestions: vec![],
     context_name: None,
@@ -228,7 +232,7 @@ pub fn display_parse_error(
   error: &OwnedError,
   f: &mut impl std::fmt::Write,
 ) -> std::fmt::Result {
-  let diag = parse_error_to_diagnostic(source, error);
+  let diag = parse_error_to_diagnostic(source, error, None);
   write!(f, "{}", diag::render_diagnostic(&diag, Some(source), false))
 }
 
@@ -236,11 +240,17 @@ pub fn display_parse_error(
 pub struct ParseFileError {
   pub source: String,
   pub error: OwnedError,
+  pub path: Option<std::path::PathBuf>,
 }
 
 impl std::fmt::Display for ParseFileError {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    display_parse_error(&self.source, &self.error, f)
+    let diag = parse_error_to_diagnostic(&self.source, &self.error, self.path.as_ref());
+    write!(
+      f,
+      "{}",
+      diag::render_diagnostic(&diag, Some(&self.source), false)
+    )
   }
 }
 

@@ -185,7 +185,7 @@ pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<()
   };
 
   let (term, typ) = type_check(input_term, Hole, &global.scope())
-    .map_err(|e| render_type_error_with_source(&source, &e, options.use_colors))?
+    .map_err(|e| render_type_error_with_source(&source, &e, options.use_colors, Some(&input)))?
     .to_tuple();
   println!("Eval type {typ}");
   let term = eval(term, &global.scope(), &options)

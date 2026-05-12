@@ -1719,6 +1719,13 @@ fn decls_parser(input: Span) -> Res<ParsedModule> {
 }
 
 pub fn parse_file(input: &str) -> Result<ParsedModule, ParseFileError> {
+  parse_file_with_path(input, None)
+}
+
+pub fn parse_file_with_path(
+  input: &str,
+  path: Option<&std::path::PathBuf>,
+) -> Result<ParsedModule, ParseFileError> {
   let span = Span::new(input);
   match decls_parser(span).finish() {
     Ok((_, decls)) => Ok(decls),
@@ -1727,6 +1734,7 @@ pub fn parse_file(input: &str) -> Result<ParsedModule, ParseFileError> {
       Err(ParseFileError {
         source: input.to_string(),
         error: err,
+        path: path.cloned(),
       })
     }
   }
