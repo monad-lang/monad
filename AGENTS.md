@@ -684,6 +684,16 @@ cargo run -- test init/parser.mo
 
 ## Coding Agent Guide
 
+### Agent Skills
+
+Look in `plans/.opencode/skills/` for skill documents. Read the relevant
+skill before starting any task — they contain checklists, command templates,
+and anti-patterns that prevent common errors. List available skills with:
+
+```bash
+ls plans/.opencode/skills/
+```
+
 ### Problem-Solving Workflow
 
 1. **Reproduce first** — Before any change, confirm you can reproduce the bug or observe the missing behavior. Run the exact command the user provides.
