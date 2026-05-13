@@ -98,4 +98,48 @@ def param_name (p : Param) : Identifier := match p {
     Param.mk name typ_ => name,
 }
 
+
+@[test]
+def test_compile_lit_num : Bool :=
+    match (compile_term_ir empty_ctx (Term.lit (Literal.num 42 NumSuffix.i64))) {
+        CompileResult.ok c val =>
+            String.beq (lang.codegen.ir.show_llvm_value val) "42",
+    }
+
+@[test]
+def test_compile_var_unbound : Bool :=
+    let id := Identifier.id "x" in
+    match (compile_term_ir empty_ctx (Term.var (NameRef.nid id))) {
+        CompileResult.ok c val =>
+            String.beq (lang.codegen.ir.show_llvm_value val) "%x",
+    }
+
+@[test]
+def test_compile_var_bound : Bool :=
+    let id := Identifier.id "x" in
+    let ctx := ctx_bind_local empty_ctx id (LLVMValue.int_ 10) in
+    match (compile_term_ir ctx (Term.var (NameRef.nid id))) {
+        CompileResult.ok c val =>
+            String.beq (lang.codegen.ir.show_llvm_value val) "10",
+    }
+
+@[test]
+def test_compile_lam : Bool :=
+    let id := Identifier.id "x" in
+    let param := Param.mk id (Term.type_ 1) in
+    match (compile_term_ir empty_ctx (Term.lam param (Term.var (NameRef.nid id)))) {
+        CompileResult.ok c val =>
+            String.beq (lang.codegen.ir.show_llvm_value val) "%p0",
+    }
+
+@[test]
+def test_compile_app : Bool :=
+    let id := Identifier.id "f" in
+    let arg := Term.lit (Literal.num 1 NumSuffix.i64) in
+    match (compile_term_ir empty_ctx (Term.app (Term.var (NameRef.nid id)) arg)) {
+        CompileResult.ok c val =>
+            let s := lang.codegen.ir.show_llvm_value val in
+            String.beq (String.slice s 0 1) "%",
+    }
+
 def main : I64 := 42
