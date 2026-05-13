@@ -366,3 +366,44 @@ def test_vec_cons_tail_nil : Bool :=
                 nil => true
             }
     }
+
+// Tuple tests
+
+@[test]
+def test_tuple_pair_construct : Bool :=
+    let t : Pair I64 Bool := (1, true) in
+    true
+
+@[test]
+def test_tuple_pair_match : Bool :=
+    let t : Pair I64 Bool := (1, true) in
+    match t {
+        Pair.pair a b => (a == 1) && (b == true)
+    }
+
+@[test]
+def test_tuple_triple_construct : Bool :=
+    let t : Pair I64 (Pair Bool String) := (1, true, "hi") in
+    true
+
+@[test]
+def test_tuple_triple_nested_match : Bool :=
+    let t : Pair I64 (Pair Bool String) := (1, true, "hi") in
+    match t {
+        Pair.pair a rest =>
+            match rest {
+                Pair.pair b c => (a == 1) && (b == true) && (c == "hi")
+            }
+    }
+
+@[test]
+def test_tuple_parens_expr : Bool :=
+    let x := (1 + 2) in
+    x == 3
+
+@[test]
+def test_tuple_nested_expr : Bool :=
+    let t : Pair I64 Bool := (1 + 1, 2 == 2) in
+    match t {
+        Pair.pair a b => (a == 2) && b
+    }

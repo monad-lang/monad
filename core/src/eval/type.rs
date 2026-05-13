@@ -1685,6 +1685,7 @@ fn extract_first_name(term: &Term) -> Option<(ModulePath, Vec<Term>)> {
       args.push(*arg.clone());
       (p, args)
     }),
+    Ctx { term, .. } => extract_first_name(term),
     _ => None,
   }
 }

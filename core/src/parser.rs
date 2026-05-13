@@ -511,7 +511,7 @@ fn term_inner<X: Clone>(input: Span<X>) -> Res<Term, X> {
     variable,
     literal,
     lambda,
-    parens,
+    tuple_or_parens,
   ))
   .parse(input)
 }
@@ -557,6 +557,35 @@ fn parens<X: Clone>(input: Span<X>) -> Res<Term, X> {
     preceded(ws0, context("closing parenthesis for expression", tag(")"))),
   )
   .parse(input)
+}
+
+fn tuple_or_parens<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, _) = (char('('), ws0).parse(input)?;
+  let (input, first) = term(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, has_comma) = opt(char(',')).parse(input)?;
+  if has_comma.is_some() {
+    let (input, _) = ws0(input)?;
+    let (input, mut rest) = many0(terminated(term, (ws0, opt(char(',')), ws0))).parse(input)?;
+    let mut elements = vec![first];
+    elements.append(&mut rest);
+    let (input, _) = (ws0, char(')')).parse(input)?;
+    Ok((input, desugar_tuple_literal(elements)))
+  } else {
+    let (input, _) = char(')')(input)?;
+    Ok((input, first))
+  }
+}
+
+fn desugar_tuple_literal(elements: Vec<Term>) -> Term {
+  let pair = pvar(vec!["Pair", "pair"]);
+  let mut iter = elements.into_iter().rev();
+  let last = iter.next().unwrap();
+  let mut acc = last;
+  for elem in iter {
+    acc = app(app(pair.clone(), elem), acc);
+  }
+  acc
 }
 
 fn constructor_name<X: Clone>(input: Span<X>) -> Res<Identifier, X> {

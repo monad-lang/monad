@@ -151,6 +151,10 @@ type Result E A {
 	err (e: E)
 }
 
+type Pair A B {
+	pair (first : A) (second : B)
+}
+
 open Result
 
 type Option A {

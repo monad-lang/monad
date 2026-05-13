@@ -22,4 +22,5 @@ mod docstrings;
 mod expressions;
 mod lists;
 mod regression;
+mod tuples;
 mod types;
