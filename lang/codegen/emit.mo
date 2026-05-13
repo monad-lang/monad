@@ -147,7 +147,7 @@ def join_ids_rest (hd : Identifier) (rest : List Identifier) : String :=
 def build_llvm_params (params : List Param) : List ParamPair := match params {
     List.empty => List.empty,
     List.cons p rest =>
-        let pp := ParamPair.mk (param_name p) LLVMType.i64_ in
+        let pp := ParamPair.mk (show_identifier (param_name p)) LLVMType.i64_ in
         List.cons pp (build_llvm_params rest),
 }
 
