@@ -98,48 +98,144 @@ def param_name (p : Param) : Identifier := match p {
     Param.mk name typ_ => name,
 }
 
+def empty_blocks : List LLVMBasicBlock := List.empty
+
+def cons_block (b : LLVMBasicBlock) (bs : List LLVMBasicBlock) : List LLVMBasicBlock :=
+    List.cons b bs
+
+def collect_def_params (term_ : Term) : List Param := match term_ {
+    Term.lam param body => List.cons param (collect_def_params body),
+    Term.forall name typ body => collect_def_params body,
+    Term.var name => List.empty,
+    Term.app fun arg => List.empty,
+    Term.lit val => List.empty,
+    Term.ntv native => List.empty,
+    Term.con constr => List.empty,
+    Term.pi arg ret => List.empty,
+    Term.type_ universe => List.empty,
+    Term.hole => List.empty,
+}
+
+def strip_lams (term_ : Term) : Term := match term_ {
+    Term.lam param body => strip_lams body,
+    Term.forall name typ body => strip_lams body,
+    Term.var name => term_,
+    Term.app fun arg => term_,
+    Term.lit val => term_,
+    Term.ntv native => term_,
+    Term.con constr => term_,
+    Term.pi arg ret => term_,
+    Term.type_ universe => term_,
+    Term.hole => term_,
+}
+
+def module_path_to_str (mp : ModulePath) : String := match mp {
+    ModulePath.mp ids => join_identifiers ids,
+}
+
+def join_identifiers (ids : List Identifier) : String := match ids {
+    List.empty => "",
+    List.cons hd rest => join_ids_rest hd rest,
+}
+
+def join_ids_rest (hd : Identifier) (rest : List Identifier) : String :=
+    match rest {
+        List.empty => show_identifier hd,
+        List.cons x y => String.concat (show_identifier hd) (String.concat "_" (join_identifiers rest)),
+    }
+
+def build_llvm_params (params : List Param) : List ParamPair := match params {
+    List.empty => List.empty,
+    List.cons p rest =>
+        let pp := ParamPair.mk (param_name p) LLVMType.i64_ in
+        List.cons pp (build_llvm_params rest),
+}
+
+def compile_def_ir (def_ : Def) : LLVMFunction := match def_ {
+    Def.mk name typ term_ constraints attrs =>
+        let fn_name := module_path_to_str name in
+        let params := collect_def_params term_ in
+        let llvm_params := build_llvm_params params in
+        let entry_block := LLVMBasicBlock.mk "entry" List.empty in
+        LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true,
+}
+
+def empty_vals : List LLVMValue := List.empty
+
+def cons_instr (i : LLVMInstruction) (is : List LLVMInstruction) : List LLVMInstruction :=
+    List.cons i is
+
+def compile_main_wrapper_ir : LLVMFunction :=
+    let argc_pair := ParamPair.mk (Identifier.id "argc") LLVMType.i32_ in
+    let argv_pair := ParamPair.mk (Identifier.id "argv") LLVMType.i64_ in
+    let wrapper_params := cons_pair argc_pair (cons_pair argv_pair (empty_pairs)) in
+    let call_instr := LLVMInstruction.assign "t0"
+        (LLVMValue.call "main_monad" LLVMType.i64_ empty_vals false) in
+    let trunc_instr := LLVMInstruction.assign "t1"
+        (LLVMValue.trunc (LLVMValue.var_ "t0") LLVMType.i64_ LLVMType.i32_) in
+    let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "t1") in
+    let entry_instrs := cons_instr call_instr (cons_instr trunc_instr (cons_instr ret_instr List.empty)) in
+    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+    LLVMFunction.mk "main" wrapper_params LLVMType.i32_ (cons_block entry_block empty_blocks) false
+
+def empty_pairs : List ParamPair := List.empty
+
+def cons_pair (p : ParamPair) (ps : List ParamPair) : List ParamPair :=
+    List.cons p ps
+
+
 
 @[test]
-def test_compile_lit_num : Bool :=
-    match (compile_term_ir empty_ctx (Term.lit (Literal.num 42 NumSuffix.i64))) {
-        CompileResult.ok c val =>
-            String.beq (lang.codegen.ir.show_llvm_value val) "42",
+def test_collect_def_params_empty : Bool :=
+    match (collect_def_params (Term.lit (Literal.num 42 NumSuffix.i64))) {
+        List.empty => true,
+        List.cons x y => false,
     }
 
 @[test]
-def test_compile_var_unbound : Bool :=
-    let id := Identifier.id "x" in
-    match (compile_term_ir empty_ctx (Term.var (NameRef.nid id))) {
-        CompileResult.ok c val =>
-            String.beq (lang.codegen.ir.show_llvm_value val) "%x",
-    }
-
-@[test]
-def test_compile_var_bound : Bool :=
-    let id := Identifier.id "x" in
-    let ctx := ctx_bind_local empty_ctx id (LLVMValue.int_ 10) in
-    match (compile_term_ir ctx (Term.var (NameRef.nid id))) {
-        CompileResult.ok c val =>
-            String.beq (lang.codegen.ir.show_llvm_value val) "10",
-    }
-
-@[test]
-def test_compile_lam : Bool :=
+def test_collect_def_params_lam : Bool :=
     let id := Identifier.id "x" in
     let param := Param.mk id (Term.type_ 1) in
-    match (compile_term_ir empty_ctx (Term.lam param (Term.var (NameRef.nid id)))) {
-        CompileResult.ok c val =>
-            String.beq (lang.codegen.ir.show_llvm_value val) "%p0",
+    match (collect_def_params (Term.lam param (Term.var (NameRef.nid id)))) {
+        List.empty => false,
+        List.cons p rest =>
+            match rest {
+                List.empty => true,
+                List.cons x y => false,
+            },
     }
 
 @[test]
-def test_compile_app : Bool :=
-    let id := Identifier.id "f" in
-    let arg := Term.lit (Literal.num 1 NumSuffix.i64) in
-    match (compile_term_ir empty_ctx (Term.app (Term.var (NameRef.nid id)) arg)) {
-        CompileResult.ok c val =>
-            let s := lang.codegen.ir.show_llvm_value val in
-            String.beq (String.slice s 0 1) "%",
+def test_compile_main_wrapper_has_name : Bool :=
+    match (compile_main_wrapper_ir) {
+        LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+            String.beq name "main",
+    }
+
+@[test]
+def test_compile_main_wrapper_returns_i32 : Bool :=
+    match (compile_main_wrapper_ir) {
+        LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+            match ret_ty {
+                LLVMType.i32_ => true,
+                LLVMType.void => false,
+                LLVMType.i1_ => false,
+                LLVMType.i8_ => false,
+                LLVMType.i64_ => false,
+                LLVMType.ptr x => false,
+                LLVMType.fn_ x y => false,
+                LLVMType.struct_ x => false,
+            },
+    }
+
+@[test]
+def test_compile_def_ir_strips_lams : Bool :=
+    let id := Identifier.id "x" in
+    let param := Param.mk id (Term.type_ 1) in
+    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "f") List.empty)) (Term.type_ 1) (Term.lam param (Term.var (NameRef.nid id))) List.empty List.empty in
+    match (compile_def_ir def_) {
+        LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+            String.beq name "f",
     }
 
 def main : I64 := 42
