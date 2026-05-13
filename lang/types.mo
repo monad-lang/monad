@@ -98,4 +98,292 @@ type Instance {
     mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term)
 }
 
+// --- Similar class for structural comparison ---
+
+class Similar A {
+    def similar (a : A) (b : A) : Bool
+}
+
+instance Similar Identifier {
+    def similar (a : Identifier) (b : Identifier) : Bool :=
+        match a {
+            id s1 => match b {
+                id s2 => String.beq s1 s2
+            }
+        }
+}
+
+instance Similar Operator {
+    def similar (a : Operator) (b : Operator) : Bool :=
+        match a {
+            operator s1 => match b {
+                operator s2 => String.beq s1 s2
+            }
+        }
+}
+
+// List helpers (avoid generic constrained instance due to solver limitation)
+def id_list_similar (a : List Identifier) (b : List Identifier) : Bool :=
+    match a {
+        List.cons x xs => match b {
+            List.cons y ys => Similar.similar x y && id_list_similar xs ys,
+            List.empty => false
+        },
+        List.empty => match b {
+            List.empty => true,
+            List.cons _ _ => false
+        }
+    }
+
+def mc_list_similar (a : List MatchCase) (b : List MatchCase) : Bool :=
+    match a {
+        List.cons x xs => match b {
+            List.cons y ys => Similar.similar x y && mc_list_similar xs ys,
+            List.empty => false
+        },
+        List.empty => match b {
+            List.empty => true,
+            List.cons _ _ => false
+        }
+    }
+
+def param_list_similar (a : List Param) (b : List Param) : Bool :=
+    match a {
+        List.cons x xs => match b {
+            List.cons y ys => Similar.similar x y && param_list_similar xs ys,
+            List.empty => false
+        },
+        List.empty => match b {
+            List.empty => true,
+            List.cons _ _ => false
+        }
+    }
+
+def opt_term_similar (a : Option Term) (b : Option Term) : Bool :=
+    match a {
+        Option.some x => match b {
+            Option.some y => Similar.similar x y,
+            Option.none => false
+        },
+        Option.none => match b {
+            Option.none => true,
+            Option.some _ => false
+        }
+    }
+
+def opt_term_list_similar (a : List (Option Term)) (b : List (Option Term)) : Bool :=
+    match a {
+        List.cons x xs => match b {
+            List.cons y ys => opt_term_similar x y && opt_term_list_similar xs ys,
+            List.empty => false
+        },
+        List.empty => match b {
+            List.empty => true,
+            List.cons _ _ => false
+        }
+    }
+
+instance Similar ModulePath {
+    def similar (a : ModulePath) (b : ModulePath) : Bool :=
+        match a {
+            mp ids1 => match b {
+                mp ids2 => id_list_similar ids1 ids2
+            }
+        }
+}
+
+instance Similar NameRef {
+    def similar (a : NameRef) (b : NameRef) : Bool :=
+        match a {
+            nid id1 => match b {
+                nid id2 => Similar.similar id1 id2,
+                nmp _ => false,
+                nop _ => false
+            },
+            nmp mp1 => match b {
+                nmp mp2 => Similar.similar mp1 mp2,
+                nid _ => false,
+                nop _ => false
+            },
+            nop op1 => match b {
+                nop op2 => Similar.similar op1 op2,
+                nid _ => false,
+                nmp _ => false
+            }
+        }
+}
+
+instance Similar NumSuffix {
+    def similar (a : NumSuffix) (b : NumSuffix) : Bool :=
+        match a {
+            i8 => match b {
+                i8 => true, i16 => false, i32 => false, i64 => false,
+                u8 => false, u16 => false, u32 => false, u64 => false,
+                f32 => false, f64 => false
+            },
+            i16 => match b {
+                i8 => false, i16 => true, i32 => false, i64 => false,
+                u8 => false, u16 => false, u32 => false, u64 => false,
+                f32 => false, f64 => false
+            },
+            i32 => match b {
+                i8 => false, i16 => false, i32 => true, i64 => false,
+                u8 => false, u16 => false, u32 => false, u64 => false,
+                f32 => false, f64 => false
+            },
+            i64 => match b {
+                i8 => false, i16 => false, i32 => false, i64 => true,
+                u8 => false, u16 => false, u32 => false, u64 => false,
+                f32 => false, f64 => false
+            },
+            u8 => match b {
+                i8 => false, i16 => false, i32 => false, i64 => false,
+                u8 => true, u16 => false, u32 => false, u64 => false,
+                f32 => false, f64 => false
+            },
+            u16 => match b {
+                i8 => false, i16 => false, i32 => false, i64 => false,
+                u8 => false, u16 => true, u32 => false, u64 => false,
+                f32 => false, f64 => false
+            },
+            u32 => match b {
+                i8 => false, i16 => false, i32 => false, i64 => false,
+                u8 => false, u16 => false, u32 => true, u64 => false,
+                f32 => false, f64 => false
+            },
+            u64 => match b {
+                i8 => false, i16 => false, i32 => false, i64 => false,
+                u8 => false, u16 => false, u32 => false, u64 => true,
+                f32 => false, f64 => false
+            },
+            f32 => match b {
+                i8 => false, i16 => false, i32 => false, i64 => false,
+                u8 => false, u16 => false, u32 => false, u64 => false,
+                f32 => true, f64 => false
+            },
+            f64 => match b {
+                i8 => false, i16 => false, i32 => false, i64 => false,
+                u8 => false, u16 => false, u32 => false, u64 => false,
+                f32 => false, f64 => true
+            }
+        }
+}
+
+instance Similar Con {
+    def similar (a : Con) (b : Con) : Bool :=
+        match a {
+            mk name1 typ1 nargs1 args1 => match b {
+                mk name2 typ2 nargs2 args2 =>
+                    Similar.similar name1 name2 && Similar.similar typ1 typ2 && I64.beq nargs1 nargs2 && opt_term_list_similar args1 args2
+            }
+        }
+}
+
+instance Similar Native {
+    def similar (a : Native) (b : Native) : Bool :=
+        match a {
+            mk name1 nargs1 args1 => match b {
+                mk name2 nargs2 args2 =>
+                    Similar.similar name1 name2 && I64.beq nargs1 nargs2 && opt_term_list_similar args1 args2
+            }
+        }
+}
+
+instance Similar MatchCase {
+    def similar (a : MatchCase) (b : MatchCase) : Bool :=
+        match a {
+            mc name1 args1 val1 => match b {
+                mc name2 args2 val2 =>
+                    Similar.similar name1 name2 && id_list_similar args1 args2 && Similar.similar val1 val2
+            }
+        }
+}
+
+instance Similar Param {
+    def similar (a : Param) (b : Param) : Bool :=
+        match a {
+            mk name1 typ1 => match b {
+                mk name2 typ2 => Similar.similar name1 name2 && Similar.similar typ1 typ2
+            }
+        }
+}
+
+instance Similar Literal {
+    def similar (a : Literal) (b : Literal) : Bool :=
+        match a {
+            str s1 => match b {
+                str s2 => String.beq s1 s2,
+                num _ _ => false, if_ _ _ _ => false, match_ _ _ => false
+            },
+            num v1 s1 => match b {
+                num v2 s2 => I64.beq v1 v2 && Similar.similar s1 s2,
+                str _ => false, if_ _ _ _ => false, match_ _ _ => false
+            },
+            if_ o1 t1 th1 => match b {
+                if_ o2 t2 th2 => Similar.similar o1 o2 && Similar.similar t1 t2 && Similar.similar th1 th2,
+                str _ => false, num _ _ => false, match_ _ _ => false
+            },
+            match_ v1 cs1 => match b {
+                match_ v2 cs2 => Similar.similar v1 v2 && mc_list_similar cs1 cs2,
+                str _ => false, num _ _ => false, if_ _ _ _ => false
+            }
+        }
+}
+
+instance Similar Term {
+    def similar (a : Term) (b : Term) : Bool :=
+        match a {
+            forall n1 t1 bd1 => match b {
+                forall n2 t2 bd2 => Similar.similar n1 n2 && Similar.similar t1 t2 && Similar.similar bd1 bd2,
+                pi _ _ => false, var _ => false, lam _ _ => false, app _ _ => false,
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+            },
+            pi a1 r1 => match b {
+                pi a2 r2 => Similar.similar a1 a2 && Similar.similar r1 r2,
+                forall _ _ _ => false, var _ => false, lam _ _ => false, app _ _ => false,
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+            },
+            var n1 => match b {
+                var n2 => Similar.similar n1 n2,
+                forall _ _ _ => false, pi _ _ => false, lam _ _ => false, app _ _ => false,
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+            },
+            lam p1 bd1 => match b {
+                lam p2 bd2 => Similar.similar p1 p2 && Similar.similar bd1 bd2,
+                forall _ _ _ => false, pi _ _ => false, var _ => false, app _ _ => false,
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+            },
+            app f1 a1 => match b {
+                app f2 a2 => Similar.similar f1 f2 && Similar.similar a1 a2,
+                forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+            },
+            lit v1 => match b {
+                lit v2 => Similar.similar v1 v2,
+                forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
+                app _ _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+            },
+            ntv n1 => match b {
+                ntv n2 => Similar.similar n1 n2,
+                forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
+                app _ _ => false, lit _ => false, con _ => false, type_ _ => false, hole => false
+            },
+            con c1 => match b {
+                con c2 => Similar.similar c1 c2,
+                forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
+                app _ _ => false, lit _ => false, ntv _ => false, type_ _ => false, hole => false
+            },
+            type_ u1 => match b {
+                type_ u2 => I64.beq u1 u2,
+                forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
+                app _ _ => false, lit _ => false, ntv _ => false, con _ => false, hole => false
+            },
+            hole => match b {
+                hole => true,
+                forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
+                app _ _ => false, lit _ => false, ntv _ => false, con _ => false, type_ _ => false
+            }
+        }
+}
+
 def main : I64 := 42
