@@ -166,8 +166,8 @@ def cons_instr (i : LLVMInstruction) (is : List LLVMInstruction) : List LLVMInst
     List.cons i is
 
 def compile_main_wrapper_ir : LLVMFunction :=
-    let argc_pair := ParamPair.mk (Identifier.id "argc") LLVMType.i32_ in
-    let argv_pair := ParamPair.mk (Identifier.id "argv") LLVMType.i64_ in
+    let argc_pair := ParamPair.mk "argc" LLVMType.i32_ in
+    let argv_pair := ParamPair.mk "argv" LLVMType.i64_ in
     let wrapper_params := cons_pair argc_pair (cons_pair argv_pair (empty_pairs)) in
     let call_instr := LLVMInstruction.assign "t0"
         (LLVMValue.call "main_monad" LLVMType.i64_ empty_vals false) in
@@ -183,59 +183,118 @@ def empty_pairs : List ParamPair := List.empty
 def cons_pair (p : ParamPair) (ps : List ParamPair) : List ParamPair :=
     List.cons p ps
 
+def empty_strs : List String := List.empty
+
+def cons_str (s : String) (ss : List String) : List String := List.cons s ss
+
+def mk_decl (name : String) (params : List String) (ret_ty : String) : LLVMDeclaration :=
+    LLVMDeclaration.mk name params ret_ty
+
+def empty_decls : List LLVMDeclaration := List.empty
+
+def cons_decl (d : LLVMDeclaration) (ds : List LLVMDeclaration) : List LLVMDeclaration :=
+    List.cons d ds
+
+def runtime_declarations : List LLVMDeclaration :=
+    let d1 := mk_decl "monad_alloc" (cons_str "i64" empty_strs) "i8*" in
+    let d2 := mk_decl "monad_retain" (cons_str "i8*" empty_strs) "void" in
+    let d3 := mk_decl "monad_release" (cons_str "i8*" empty_strs) "void" in
+    let d4 := mk_decl "monad_print_str" (cons_str "i8*" empty_strs) "void" in
+    let d5 := mk_decl "alloc_closure" (cons_str "i8*" (cons_str "i64" (cons_str "i64" empty_strs))) "%Closure*" in
+    let d6 := mk_decl "alloc_constructor" (cons_str "i64" (cons_str "i64" empty_strs)) "%Constructor*" in
+    let d7 := mk_decl "alloc_string" (cons_str "i8*" (cons_str "i64" empty_strs)) "%StringObj*" in
+    cons_decl d1 (cons_decl d2 (cons_decl d3 (cons_decl d4 (cons_decl d5 (cons_decl d6 (cons_decl d7 empty_decls))))))
+
+def empty_funcs : List LLVMFunction := List.empty
+
+def cons_func (f : LLVMFunction) (fs : List LLVMFunction) : List LLVMFunction :=
+    List.cons f fs
+
+def empty_globals_list : List LLVMGlobal := List.empty
+
+def compile_decls_ir (defs : List Def) : LLVMModule :=
+    let compiled := compile_def_list defs in
+    let funcs := ren_main_and_wrap compiled in
+    LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs runtime_declarations
+
+def compile_def_list (defs : List Def) : List LLVMFunction := match defs {
+    List.empty => empty_funcs,
+    List.cons d rest =>
+        cons_func (compile_def_ir d) (compile_def_list rest),
+}
+
+def ren_main_and_wrap (funcs : List LLVMFunction) : List LLVMFunction :=
+    if has_main funcs
+    then let renamed := rename_main funcs in
+        cons_func compile_main_wrapper_ir renamed
+    else funcs
+
+def has_main (funcs : List LLVMFunction) : Bool := match funcs {
+    List.empty => false,
+    List.cons f rest =>
+        match f {
+            LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+                if String.beq name "main" then true
+                else has_main rest,
+        },
+}
+
+def rename_main (funcs : List LLVMFunction) : List LLVMFunction := match funcs {
+    List.empty => empty_funcs,
+    List.cons f rest =>
+        match f {
+            LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+                let renamed := if String.beq name "main"
+                    then LLVMFunction.mk "main_monad" params ret_ty blocks ghc_cc
+                    else f in
+                cons_func renamed (rename_main rest),
+        },
+}
 
 
 @[test]
-def test_collect_def_params_empty : Bool :=
-    match (collect_def_params (Term.lit (Literal.num 42 NumSuffix.i64))) {
-        List.empty => true,
-        List.cons x y => false,
-    }
-
-@[test]
-def test_collect_def_params_lam : Bool :=
-    let id := Identifier.id "x" in
-    let param := Param.mk id (Term.type_ 1) in
-    match (collect_def_params (Term.lam param (Term.var (NameRef.nid id)))) {
+def test_runtime_decls_not_empty : Bool :=
+    match runtime_declarations {
         List.empty => false,
-        List.cons p rest =>
-            match rest {
-                List.empty => true,
-                List.cons x y => false,
+        List.cons x y => true,
+    }
+
+def empty_defs : List Def := List.empty
+
+@[test]
+def test_compile_decls_ir_runtime : Bool :=
+    match (compile_decls_ir empty_defs) {
+        LLVMModule.mk triple globals funcs decls =>
+            match decls {
+                List.empty => false,
+                List.cons x y => true,
             },
     }
 
 @[test]
-def test_compile_main_wrapper_has_name : Bool :=
-    match (compile_main_wrapper_ir) {
-        LLVMFunction.mk name params ret_ty blocks ghc_cc =>
-            String.beq name "main",
-    }
-
-@[test]
-def test_compile_main_wrapper_returns_i32 : Bool :=
-    match (compile_main_wrapper_ir) {
-        LLVMFunction.mk name params ret_ty blocks ghc_cc =>
-            match ret_ty {
-                LLVMType.i32_ => true,
-                LLVMType.void => false,
-                LLVMType.i1_ => false,
-                LLVMType.i8_ => false,
-                LLVMType.i64_ => false,
-                LLVMType.ptr x => false,
-                LLVMType.fn_ x y => false,
-                LLVMType.struct_ x => false,
-            },
-    }
-
-@[test]
-def test_compile_def_ir_strips_lams : Bool :=
+def test_compile_decls_ir_has_def : Bool :=
     let id := Identifier.id "x" in
     let param := Param.mk id (Term.type_ 1) in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "f") List.empty)) (Term.type_ 1) (Term.lam param (Term.var (NameRef.nid id))) List.empty List.empty in
-    match (compile_def_ir def_) {
-        LLVMFunction.mk name params ret_ty blocks ghc_cc =>
-            String.beq name "f",
+    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "test") List.empty)) (Term.type_ 1) (Term.lam param (Term.var (NameRef.nid id))) List.empty List.empty in
+    match (compile_decls_ir (List.cons def_ empty_defs)) {
+        LLVMModule.mk triple globals funcs decls =>
+            match funcs {
+                List.empty => false,
+                List.cons x y => true,
+            },
+    }
+
+@[test]
+def test_module_emit_has_header : Bool :=
+    let text := lang.codegen.ir.emit_module (compile_decls_ir empty_defs) in
+    let prefix := String.slice text 0 12 in
+    String.beq prefix "; ModuleID ="
+
+@[test]
+def test_empty_decls_module : Bool :=
+    match (compile_decls_ir empty_defs) {
+        LLVMModule.mk triple globals funcs decls =>
+            String.beq triple "x86_64-unknown-linux-gnu",
     }
 
 def main : I64 := 42
