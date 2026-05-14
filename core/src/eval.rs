@@ -3,6 +3,7 @@ pub mod macro_expand;
 #[cfg(test)]
 pub mod macro_test;
 pub mod native;
+pub mod termination;
 #[cfg(test)]
 pub mod test;
 pub mod r#type;
