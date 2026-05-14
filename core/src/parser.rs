@@ -699,7 +699,7 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
   let mut stmts_iter = stmts.into_iter().rev();
 
   let mut body = match stmts_iter.next() {
-    Some(DoStatement::Return { value }) => value,
+    Some(DoStatement::Return { value }) => app(pvar(vec!["Monad", "pure"]), value),
     Some(DoStatement::Expr { value }) => value,
     Some(DoStatement::Let { name, value }) => lets(
       vec![LetVar {

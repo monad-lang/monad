@@ -4,7 +4,7 @@ use super::*;
 fn test_do_parser_simple_return() {
   let do_block = |s: &'static str| do_parser::<()>(s.into());
   let (_, r) = do_block(r#"do { return 1 }"#).unwrap();
-  similar!(r, num(1));
+  similar!(r, app(pvar(vec!["Monad", "pure"]), num(1)));
 }
 
 #[test]
@@ -13,7 +13,7 @@ fn test_do_parser_simple_bind() {
   let (_, r) = do_block(r#"do { let x <- monadic; return x }"#).unwrap();
   let expected = app(
     app(pvar(vec!["Monad", "bind"]), var("monadic")),
-    lam(par("x"), var("x")),
+    lam(par("x"), app(pvar(vec!["Monad", "pure"]), var("x"))),
   );
   similar!(r, expected);
 }
@@ -30,7 +30,7 @@ fn test_do_parser_let_and_bind() {
     }],
     app(
       app(pvar(vec!["Monad", "bind"]), var("monadic")),
-      lam(par("y"), var("y")),
+      lam(par("y"), app(pvar(vec!["Monad", "pure"]), var("y"))),
     ),
   );
   similar!(r, expected);
@@ -42,7 +42,7 @@ fn test_do_parser_multiple_binds() {
   let (_, r) = do_block(r#"do { let a <- ma; let b <- mb; return b }"#).unwrap();
   let inner = app(
     app(pvar(vec!["Monad", "bind"]), var("mb")),
-    lam(par("b"), var("b")),
+    lam(par("b"), app(pvar(vec!["Monad", "pure"]), var("b"))),
   );
   let expected = app(
     app(pvar(vec!["Monad", "bind"]), var("ma")),
@@ -66,7 +66,7 @@ fn test_do_parser_complex_desugar() {
   let (_, r) = do_block(input).unwrap();
   let middle_bind = app(
     app(pvar(vec!["Monad", "bind"]), var("get")),
-    lam(par("y"), var("y")),
+    lam(par("y"), app(pvar(vec!["Monad", "pure"]), var("y"))),
   );
   let expected = lets(
     vec![LetVar {
@@ -109,7 +109,13 @@ fn test_def_do_block_return() {
 
   similar!(
     res,
-    def(mpt("get_one"), vec![], app2("IO", "I64"), num(1), vec![])
+    def(
+      mpt("get_one"),
+      vec![],
+      app2("IO", "I64"),
+      app(pvar(vec!["Monad", "pure"]), num(1)),
+      vec![]
+    )
   );
 }
 
@@ -147,7 +153,7 @@ fn test_def_do_block_bind() {
 
   let expected_body = app(
     app(pvar(vec!["Monad", "bind"]), var("get_value")),
-    lam(par("x"), var("x")),
+    lam(par("x"), app(pvar(vec!["Monad", "pure"]), var("x"))),
   );
   similar!(
     res,
@@ -176,7 +182,7 @@ fn test_def_do_block_let() {
       typ: Term::Hole,
       value: num(42),
     }],
-    var("x"),
+    app(pvar(vec!["Monad", "pure"]), var("x")),
   );
   similar!(
     res,

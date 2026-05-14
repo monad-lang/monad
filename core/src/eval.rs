@@ -226,7 +226,15 @@ fn eval_inner(
         let loc = current_loc.take();
         eval_app(*fun, *arg, scope, options, loc)?
       }
-      Var { name } => resolve_name(&name, scope)?.clone(),
+      Var { name } => {
+        let mut term = resolve_name(&name, scope)?.clone();
+        // Strip forall wrappers — the type checker has already instantiated
+        // forall parameters for class methods, but the stored term retains them
+        while let Term::Forall { body, .. } = term {
+          term = *body;
+        }
+        term
+      }
       Ntv { native } => {
         let loc = current_loc.take();
         native_execute(native, scope).map_err(|e| wrap_error(Error::Native(e), loc))?
