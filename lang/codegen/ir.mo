@@ -17,6 +17,10 @@ type PhiPair {
     mk (val : LLVMValue) (label : String),
 }
 
+type NativeOp {
+    op_add, op_sub, op_mul, op_sdiv, op_eq,
+}
+
 type LLVMValue {
     int_ (n : I64),
     int32_ (n : I32),
@@ -39,6 +43,7 @@ type LLVMValue {
     bitcast (val : LLVMValue) (to_ty : LLVMType),
     alloc_closure (entry : String) (arity : I64) (env : List LLVMValue),
     alloc_constructor (tag : I64) (fields : List LLVMValue),
+    native_op (op : NativeOp) (args : List LLVMValue),
 }
 
 type LLVMInstruction {
@@ -81,6 +86,7 @@ open LLVMValue
 open LLVMInstruction
 open ParamPair
 open PhiPair
+open NativeOp
 
 def show_bool (b : Bool) : String := match b {
     true => "true",
@@ -156,6 +162,9 @@ def show_llvm_value (val : LLVMValue) : String := match val {
         String.concat "alloc_constructor("
             (String.concat (I64.to_string tag)
             (String.concat ", " (String.concat (I64.to_string (list_valu_len fields)) ")"))),
+    native_op op args =>
+        let inner := String.concat "args=" (I64.to_string (list_valu_len args)) in
+        String.concat "native_op(" (String.concat inner ")"),
 }
 
 def list_valu_len (xs : List LLVMValue) : I64 := match xs {
@@ -190,6 +199,7 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     bitcast x to_ty => to_ty,
     alloc_closure x y z => ptr i8_,
     alloc_constructor x y => ptr i8_,
+    native_op x y => i64_,
 }
 
 def show_llvm_value_typed (val : LLVMValue) : String :=
@@ -284,6 +294,7 @@ def show_ret_instr (val : LLVMValue) : String := match val {
     bitcast x y => "  ret " ++ show_llvm_value_typed val,
     alloc_closure x y z => "  ret " ++ show_llvm_value_typed val,
     alloc_constructor x y => "  ret " ++ show_llvm_value_typed val,
+    native_op x y => "  ret " ++ show_llvm_value_typed val,
 }
 
 def emit_block (block : LLVMBasicBlock) : String := match block {

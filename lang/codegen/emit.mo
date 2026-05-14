@@ -62,6 +62,123 @@ def show_identifier (id : Identifier) : String := match id {
     Identifier.id s => s,
 }
 
+def show_name_ref (name : NameRef) : String := match name {
+    NameRef.nid id => show_identifier id,
+    NameRef.nmp mp => module_path_to_str mp,
+    NameRef.nop op => show_operator op,
+}
+
+def show_operator (op : Operator) : String := match op {
+    Operator.operator s => s,
+}
+
+def cons_val (v : LLVMValue) (vs : List LLVMValue) : List LLVMValue := List.cons v vs
+
+def lookup_native (name : String) : Option NativeOp :=
+    if String.beq name "I64_add" then Option.some NativeOp.op_add
+    else if String.beq name "I64_sub" then Option.some NativeOp.op_sub
+    else if String.beq name "I64_mul" then Option.some NativeOp.op_mul
+    else if String.beq name "I64_div" then Option.some NativeOp.op_sdiv
+    else if String.beq name "I64_eq" then Option.some NativeOp.op_eq
+    else Option.none
+
+def compile_native_val (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) : LLVMValue :=
+    match op {
+        NativeOp.op_add => LLVMValue.add lhs rhs,
+        NativeOp.op_sub => LLVMValue.sub lhs rhs,
+        NativeOp.op_mul => LLVMValue.mul lhs rhs,
+        NativeOp.op_sdiv => LLVMValue.sdiv lhs rhs,
+        NativeOp.op_eq => LLVMValue.icmp_eq lhs rhs,
+    }
+
+def extract_lit_val (term_ : Term) : Option I64 := match term_ {
+    Term.lit val => extract_lit_val_inner val,
+    Term.forall a b c => Option.none,
+    Term.pi a b => Option.none,
+    Term.var a => Option.none,
+    Term.lam a b => Option.none,
+    Term.app a b => Option.none,
+    Term.ntv a => Option.none,
+    Term.con a => Option.none,
+    Term.type_ a => Option.none,
+    Term.hole => Option.none,
+}
+
+def extract_lit_val_inner (lit_ : Literal) : Option I64 := match lit_ {
+    Literal.num n suffix => Option.some n,
+    Literal.str s => Option.none,
+    Literal.if_ a b c => Option.none,
+    Literal.match_ a b => Option.none,
+}
+
+def try_compile_native (op : NativeOp) (arg2 : Term) (arg : Term) : Option LLVMValue :=
+    match extract_lit_val arg2 {
+        Option.some n1 =>
+            match extract_lit_val arg {
+                Option.some n2 =>
+                    Option.some (compile_native_val op (LLVMValue.int_ n1) (LLVMValue.int_ n2)),
+                Option.none => Option.none,
+            },
+        Option.none => Option.none,
+    }
+
+def try_compile_body (term_ : Term) : Option LLVMValue := match term_ {
+    Term.app fun arg =>
+        match fun {
+            Term.app fun2 arg2 =>
+                match fun2 {
+                    Term.var name_ref =>
+                        let var_name := show_name_ref name_ref in
+                        match lookup_native var_name {
+                            Option.some op => try_compile_native op arg2 arg,
+                            Option.none => Option.none,
+                        },
+                    Term.lit val => Option.none,
+                    Term.app fun3 arg3 => Option.none,
+                    Term.forall a b c => Option.none,
+                    Term.pi a b => Option.none,
+                    Term.lam a b => Option.none,
+                    Term.ntv a => Option.none,
+                    Term.con a => Option.none,
+                    Term.type_ a => Option.none,
+                    Term.hole => Option.none,
+                },
+            Term.lit val => Option.none,
+            Term.forall a b c => Option.none,
+            Term.pi a b => Option.none,
+            Term.var a => Option.none,
+            Term.lam a b => Option.none,
+            Term.ntv a => Option.none,
+            Term.con a => Option.none,
+            Term.type_ a => Option.none,
+            Term.hole => Option.none,
+        },
+    Term.lit val =>
+        match val {
+            Literal.num n suffix => Option.some (LLVMValue.int_ n),
+            Literal.str s => Option.none,
+            Literal.if_ a b c => Option.none,
+            Literal.match_ a b => Option.none,
+        },
+    Term.forall a b c => Option.none,
+    Term.pi a b => Option.none,
+    Term.var a => Option.none,
+    Term.lam a b => Option.none,
+    Term.ntv a => Option.none,
+    Term.con a => Option.none,
+    Term.type_ a => Option.none,
+    Term.hole => Option.none,
+}
+
+def empty_instrs : List LLVMInstruction := List.empty
+
+def compile_body_instrs (body : Term) : List LLVMInstruction :=
+    match try_compile_body body {
+        Option.some val =>
+            cons_instr (LLVMInstruction.assign "t0" val) (cons_instr (LLVMInstruction.ret (LLVMValue.var_ "t0")) empty_instrs),
+        Option.none => empty_instrs,
+    }
+
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
     Literal.num n suffix => CompileResult.ok c (LLVMValue.int_ n),
     Literal.str s => CompileResult.ok c (LLVMValue.global_ "str"),
@@ -156,7 +273,9 @@ def compile_def_ir (def_ : Def) : LLVMFunction := match def_ {
         let fn_name := module_path_to_str name in
         let params := collect_def_params term_ in
         let llvm_params := build_llvm_params params in
-        let entry_block := LLVMBasicBlock.mk "entry" List.empty in
+        let body := strip_lams term_ in
+        let instrs := compile_body_instrs body in
+        let entry_block := LLVMBasicBlock.mk "entry" instrs in
         LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true,
 }
 
@@ -296,5 +415,30 @@ def test_empty_decls_module : Bool :=
         LLVMModule.mk triple globals funcs decls =>
             String.beq triple "x86_64-unknown-linux-gnu",
     }
+
+@[test]
+def test_native_add_inlined : Bool :=
+    match try_compile_body (Term.app (Term.app (Term.var (NameRef.nid (Identifier.id "I64_add"))) (Term.lit (Literal.num 1 NumSuffix.i64))) (Term.lit (Literal.num 2 NumSuffix.i64))) {
+        Option.some val => true,
+        Option.none => false,
+    }
+
+@[test]
+def test_literal_body_compiles : Bool :=
+    match try_compile_body (Term.lit (Literal.num 42 NumSuffix.i64)) {
+        Option.some val => true,
+        Option.none => false,
+    }
+
+def empty_ids : List Identifier := List.empty
+
+def empty_cons : List TypeConstraint := List.empty
+
+def empty_attrs : List String := List.empty
+
+def check_contains (text : String) (needle : String) : Bool :=
+    if String.beq text "" then false
+    else if String.beq (String.slice text 0 (String.length needle)) needle then true
+    else check_contains (String.slice text 1 (String.length text)) needle
 
 def main : I64 := 42
