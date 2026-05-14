@@ -16,6 +16,9 @@ instance Monad IO {
 @[native print_str]
 def IO.println (s: String) : IO Unit
 
+@[native "write_file"]
+def IO.write_file (path : String) (content : String) : IO Unit
+
 // TODO support constraints
 // def IO.println [ToString A] (a: A) : IO Unit :=
 //   IO.println_raw (ToString.to_string a)

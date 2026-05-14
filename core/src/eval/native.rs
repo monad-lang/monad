@@ -116,6 +116,14 @@ pub fn println(terms: Vec<Term>) -> Result<Term, NativeError> {
   Ok(io_term(unit()))
 }
 
+pub fn write_file(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let path = extract_string_at(&terms, 0)?;
+  let content = extract_string_at(&terms, 1)?;
+  std::fs::write(&path, &content)
+    .map_err(|e| NativeError::Custom(format!("write_file failed: {e}")))?;
+  Ok(io_term(unit()))
+}
+
 pub fn exec_cmd(terms: Vec<Term>) -> Result<Term, NativeError> {
   let cmd = extract_string_at(&terms, 0)?;
   let args_term = terms.get(1).ok_or(NativeError::MissingArgs {
@@ -622,6 +630,7 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("eq_rec"), s(eq_rec)),
     (id("nat_to_string"), s(nat_to_string)),
     (id("exec_cmd"), s(exec_cmd)),
+    (id("write_file"), s(write_file)),
   ];
   v.into_iter().collect()
 }
