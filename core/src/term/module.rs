@@ -1530,6 +1530,31 @@ pub fn load_module_from_text(
   Ok(())
 }
 
+/// Returns the path to the `init/` stdlib directory when loading from filesystem.
+#[cfg(not(feature = "embed-stdlib"))]
+fn stdlib_dir() -> std::path::PathBuf {
+  if let Ok(dir) = std::env::var("MONAD_STDLIB") {
+    return std::path::PathBuf::from(dir);
+  }
+  // CARGO_MANIFEST_DIR is core/ — parent is the workspace root, then init/
+  std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .parent()
+    .expect("CARGO_MANIFEST_DIR has no parent")
+    .join("init")
+}
+
+/// Load a module from a file on disk (non-embed path).
+#[cfg(not(feature = "embed-stdlib"))]
+fn load_module_file(
+  file_path: std::path::PathBuf,
+  module_path: &ModulePath,
+  loaded: &mut LoadedModules,
+) -> Result<(), LoadingError> {
+  let text = std::fs::read_to_string(&file_path)
+    .map_err(|e| LoadingError::Generic(format!("failed to read {}: {}", file_path.display(), e)))?;
+  load_module_from_text(&text, module_path.clone(), loaded)
+}
+
 pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingError> {
   let prelude_path = ModulePath::top("'prelude");
   let io_path = ModulePath::top("io");
@@ -1538,19 +1563,38 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
   let string_path = ModulePath::top("string");
   let number_path = ModulePath::top("number");
 
-  let prelude_text = include_str!("../../../init/prelude.mo");
-  let io_text = include_str!("../../../init/io.mo");
-  let math_text = include_str!("../../../init/math.mo");
-  let init_text = include_str!("../../../init/init.mo");
-  let string_text = include_str!("../../../init/string.mo");
-  let number_text = include_str!("../../../init/number.mo");
+  #[cfg(feature = "embed-stdlib")]
+  {
+    let prelude_text = include_str!("../../../init/prelude.mo");
+    let io_text = include_str!("../../../init/io.mo");
+    let number_text = include_str!("../../../init/number.mo");
+    let math_text = include_str!("../../../init/math.mo");
+    let string_text = include_str!("../../../init/string.mo");
+    let init_text = include_str!("../../../init/init.mo");
 
-  load_module_from_text(prelude_text, prelude_path, &mut loaded)?;
-  load_module_from_text(io_text, io_path, &mut loaded)?;
-  load_module_from_text(number_text, number_path, &mut loaded)?;
-  load_module_from_text(math_text, math_path, &mut loaded)?;
-  load_module_from_text(string_text, string_path, &mut loaded)?;
-  load_module_from_text(init_text, init_path, &mut loaded)?;
+    load_module_from_text(prelude_text, prelude_path, &mut loaded)?;
+    load_module_from_text(io_text, io_path, &mut loaded)?;
+    load_module_from_text(number_text, number_path, &mut loaded)?;
+    load_module_from_text(math_text, math_path, &mut loaded)?;
+    load_module_from_text(string_text, string_path, &mut loaded)?;
+    load_module_from_text(init_text, init_path, &mut loaded)?;
+  }
+
+  #[cfg(not(feature = "embed-stdlib"))]
+  {
+    let dir = stdlib_dir();
+    // Load in dependency order:
+    //   prelude, io, number: no deps
+    //   math: depends on number
+    //   string: depends on math
+    //   init: depends on io, number, math, string
+    load_module_file(dir.join("prelude.mo"), &prelude_path, &mut loaded)?;
+    load_module_file(dir.join("io.mo"), &io_path, &mut loaded)?;
+    load_module_file(dir.join("number.mo"), &number_path, &mut loaded)?;
+    load_module_file(dir.join("math.mo"), &math_path, &mut loaded)?;
+    load_module_file(dir.join("string.mo"), &string_path, &mut loaded)?;
+    load_module_file(dir.join("init.mo"), &init_path, &mut loaded)?;
+  }
 
   Ok(loaded)
 }

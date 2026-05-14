@@ -43,6 +43,7 @@ class Sub A {
 class Div A {
 	def div : A -> A -> A
 }
+infix (+) := HAdd.add
 
 infix (/) := Div.div
 
@@ -253,11 +254,6 @@ class Append A {
 	def append (a b : A) : A
 }
 
-// TODO
-// instance [A] Append (List A) {
-// 	def append (a b : List A) : List A = List.append a b
-// }
-
 infix (++) := Append.append
 
 def List.first (self : List A) : Option A :=
@@ -284,7 +280,13 @@ def List.tail (l : List A) : List A :=
 		cons a tail => tail
 	}
 
-/*
+def List.map (f : A -> B) (self: List A) : List B :=
+		match self {
+			empty => List.empty,
+			cons a tail => List.cons (f a) (List.map f tail)
+		}
+
+
 instance Functor List {
 	def map (f : A -> B) (self: List A) : List B :=
 		match self {
@@ -292,23 +294,6 @@ instance Functor List {
 			cons a tail => List.cons (f a) (Functor.map f tail)
 		}
 }
-/*
-instance Applicative List {
-
-	def pure (a : A) : List A := List.cons a List.empty
-
-	def apply (fs : List (A -> B)) (self: List A) : List B :=
-		match self {
-			empty => List.empty,
-			cons a tail => List.append (Functor.map (\f => f a) fs) (Applicative.apply fs tail)
-		}
-}*/
-
-/*
-type Vec (len : Nat) A {
-	nil : Vec Nat.zero A,
-	vcons (a : A) (Vec m A) : Vec (Nat.succ m) A
-}*/
 
 /// A length-indexed vector: Vec len A is a list of exactly len elements of type A
 type Vec (len : Nat) A {
@@ -341,3 +326,4 @@ class IndexedMonad (M : Type -> Type -> Type -> Type) {
     /// Lift a pure value into the indexed monad at any index
     def lift (a : A) : M I I A := pure a
 }
+// DEBUG_PRELUDE_MARKER_12345
