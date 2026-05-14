@@ -628,7 +628,6 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("u8_gt"), s(u8_gt)),
     (id("eval_term"), sa(eval_term)),
     (id("eq_rec"), s(eq_rec)),
-    (id("nat_to_string"), s(nat_to_string)),
     (id("exec_cmd"), s(exec_cmd)),
     (id("write_file"), s(write_file)),
   ];

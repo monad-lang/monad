@@ -664,11 +664,20 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       let cases = cases
         .into_iter()
         .map(|c| {
-          case(
-            c.name.clone(),
-            c.args.clone(),
-            substitute(*c.value, nref, new_term),
-          )
+          // Skip substitution in case body if any pattern arg shadows nref
+          if c
+            .args
+            .iter()
+            .any(|a| Some(a.clone()) == nref.as_id().cloned())
+          {
+            c
+          } else {
+            case(
+              c.name.clone(),
+              c.args.clone(),
+              substitute(*c.value, nref, new_term),
+            )
+          }
         })
         .collect();
       match_term(value, cases)
