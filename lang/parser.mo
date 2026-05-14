@@ -305,14 +305,29 @@ def type_expression (input : String) : ParseResult Term :=
 
 def type_expr_ws (r : ParseResult String) : ParseResult Term :=
 	match r {
-		success rem _ => type_expr_atom (type_atom rem),
+		success rem _ => type_expr_first (type_atom rem) rem,
 		fail e => fail e
 	}
 
-def type_expr_atom (r : ParseResult Term) : ParseResult Term :=
+def type_expr_first (r : ParseResult Term) (rem : String) : ParseResult Term :=
 	match r {
-		success rem out => type_expr_check_arrow rem out,
+		success after lhs => type_expr_apps after lhs,
 		fail e => fail e
+	}
+
+def type_expr_apps (input : String) (lhs : Term) : ParseResult Term :=
+	type_expr_app_ws (take_while is_space input) lhs
+
+def type_expr_app_ws (r : ParseResult String) (lhs : Term) : ParseResult Term :=
+	match r {
+		success rem _ => type_expr_app_next (type_atom rem) rem lhs,
+		fail e => fail e
+	}
+
+def type_expr_app_next (r : ParseResult Term) (input : String) (lhs : Term) : ParseResult Term :=
+	match r {
+		success rem rhs => type_expr_apps rem (Term.app lhs rhs),
+		fail _ => type_expr_check_arrow input lhs
 	}
 
 def type_expr_check_arrow (input : String) (lhs : Term) : ParseResult Term :=
@@ -1111,6 +1126,395 @@ def infix_path (r : ParseResult ModulePath) (op : String) : ParseResult Decl :=
 		fail e => fail e
 	}
 
+// struct Name { field1 : Type, field2 : Type := default }
+
+def struct_parser (input : String) : ParseResult Decl :=
+	struct_kw (tag "struct" input)
+
+def struct_kw (r : ParseResult String) : ParseResult Decl :=
+	match r {
+		success rem _ => struct_name (identifier (skip_spaces rem)),
+		fail e => fail e
+	}
+
+def struct_name (r : ParseResult String) : ParseResult Decl :=
+	match r {
+		success rem name => struct_brace (tag "{" (skip_spaces rem)) (Identifier.id name),
+		fail e => fail e
+	}
+
+def struct_brace (r : ParseResult String) (name : Identifier) : ParseResult Decl :=
+	match r {
+		success rem _ => struct_fields_top rem name,
+		fail e => fail e
+	}
+
+def struct_fields_top (input : String) (name : Identifier) : ParseResult Decl :=
+	struct_field_first (struct_one_field (skip_spaces input)) input name
+
+def struct_field_first (r : ParseResult StructField) (orig : String) (name : Identifier) : ParseResult Decl :=
+	match r {
+		success rem fld => struct_fields_rest rem (List.cons fld List.empty) name,
+		fail _ => struct_empty_close (tag "}" (skip_spaces orig)) name
+	}
+
+def struct_empty_close (r : ParseResult String) (name : Identifier) : ParseResult Decl :=
+	match r {
+		success rem _ =>
+			let empty_fields : List StructField := List.empty in
+			success rem (Decl.struct_d (Struct.mk name empty_fields)),
+		fail e => fail (ParseError.custom "expected }")
+	}
+
+def struct_fields_rest (input : String) (fields : List StructField) (name : Identifier) : ParseResult Decl :=
+	struct_fields_rest_comma (tag "," (skip_spaces input)) input fields name
+
+def struct_fields_rest_comma (r : ParseResult String) (orig : String) (fields : List StructField) (name : Identifier) : ParseResult Decl :=
+	match r {
+		success rem _ => struct_fields_rest_more (struct_one_field (skip_spaces rem)) fields name,
+		fail _ => struct_close (tag "}" (skip_spaces orig)) name fields
+	}
+
+def struct_fields_rest_more (r : ParseResult StructField) (fields : List StructField) (name : Identifier) : ParseResult Decl :=
+	match r {
+		success rem fld => struct_fields_rest rem (List.cons fld fields) name,
+		fail _ => struct_close (tag "}" (skip_spaces "")) name fields
+	}
+
+def struct_close (r : ParseResult String) (name : Identifier) (fields : List StructField) : ParseResult Decl :=
+	match r {
+		success rem _ =>
+			let rev : List StructField := list_reverse fields in
+			success rem (Decl.struct_d (Struct.mk name rev)),
+		fail e => fail e
+	}
+
+def struct_one_field (input : String) : ParseResult StructField :=
+	struct_field_name (identifier input)
+
+def struct_field_name (r : ParseResult String) : ParseResult StructField :=
+	match r {
+		success rem name => struct_field_colon (tag ":" (skip_spaces rem)) (Identifier.id name),
+		fail e => fail e
+	}
+
+def struct_field_colon (r : ParseResult String) (name : Identifier) : ParseResult StructField :=
+	match r {
+		success rem _ => struct_field_type (type_expression (skip_spaces rem)) name,
+		fail e => fail e
+	}
+
+def struct_field_type (r : ParseResult Term) (name : Identifier) : ParseResult StructField :=
+	match r {
+		success rem typ => struct_field_default (tag ":=" (skip_spaces rem)) rem name typ,
+		fail e => fail e
+	}
+
+def struct_field_default (r : ParseResult String) (orig : String) (name : Identifier) (typ : Term) : ParseResult StructField :=
+	match r {
+		success rem _ => struct_field_default_val (expression (skip_spaces rem)) name typ,
+		fail _ =>
+			let none : Option Term := Option.none in
+			success orig (StructField.mk name typ none)
+	}
+
+def struct_field_default_val (r : ParseResult Term) (name : Identifier) (typ : Term) : ParseResult StructField :=
+	match r {
+		success rem defval =>
+			let some_val : Option Term := Option.some defval in
+			success rem (StructField.mk name typ some_val),
+		fail e => fail e
+	}
+
+// class [constraints] Name params { def method sig, def method sig := default }
+
+def class_parser (input : String) : ParseResult Decl :=
+	class_kw (tag "class" input)
+
+def class_kw (r : ParseResult String) : ParseResult Decl :=
+	match r {
+		success rem _ => class_constraints_or_name rem,
+		fail e => fail e
+	}
+
+def class_constraints_or_name (input : String) : ParseResult Decl :=
+	class_try_constraints (tag "[" (skip_spaces input)) input
+
+def class_try_constraints (r : ParseResult String) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem _ => class_name_after_bracket rem,
+		fail _ => class_name (identifier (skip_spaces orig))
+	}
+
+def class_name_after_bracket (input : String) : ParseResult Decl :=
+	class_find_bracket_close (take_while is_not_bracket input) input
+
+def is_not_bracket (c : String) : Bool :=
+	if String.beq "]" c then false
+	else true
+
+def class_find_bracket_close (r : ParseResult String) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem _ => class_name_after_close (tag "]" rem) orig,
+		fail _ => fail (ParseError.custom "expected ]")
+	}
+
+def class_name_after_close (r : ParseResult String) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem _ => class_name (identifier (skip_spaces rem)),
+		fail _ => class_name (identifier (skip_spaces orig))
+	}
+
+def class_name (r : ParseResult String) : ParseResult Decl :=
+	match r {
+		success rem name =>
+			let empty_params : List Identifier := List.empty in
+			class_params rem (Identifier.id name) empty_params,
+		fail e => fail e
+	}
+
+def class_params (input : String) (name : Identifier) (params : List Identifier) : ParseResult Decl :=
+	class_params_try (identifier (skip_spaces input)) input name params
+
+def class_params_try (r : ParseResult String) (orig : String) (name : Identifier) (params : List Identifier) : ParseResult Decl :=
+	match r {
+		success rem next => class_params rem name (List.cons (Identifier.id next) params),
+		fail _ => class_brace (tag "{" (skip_spaces orig)) name
+	}
+
+def class_brace (r : ParseResult String) (name : Identifier) : ParseResult Decl :=
+	match r {
+		success rem _ =>
+			let empty_methods : List ClassDef := List.empty in
+			class_methods rem name empty_methods,
+		fail e => fail e
+	}
+
+def class_methods (input : String) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	class_try_close_or_method (tag "def" (skip_spaces input)) input name methods
+
+def class_try_close_or_method (r : ParseResult String) (orig : String) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem _ => class_methods_single rem name methods,
+		fail _ => class_close (tag "}" (skip_spaces orig)) name methods
+	}
+
+def class_methods_single (input : String) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	class_method_name (identifier (skip_spaces input)) name methods
+
+def class_method_name (r : ParseResult String) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem mname => class_method_colon_or_sig rem (Identifier.id mname) name methods,
+		fail e => fail e
+	}
+
+def class_method_colon_or_sig (input : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	class_method_params_try (tag "(" (skip_spaces input)) input mname name methods
+
+def class_method_params_try (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_param_loop rem mname name methods,
+		fail _ => class_method_ret_type (tag ":" (skip_spaces orig)) mname name methods
+	}
+
+def class_method_param_loop (input : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	class_method_one_param (identifier (skip_spaces input)) input mname name methods
+
+def class_method_one_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem pname => class_method_param_colon (tag ":" (skip_spaces rem)) mname name methods orig,
+		fail e => fail e
+	}
+
+def class_method_param_colon (r : ParseResult String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_param_type (type_expression rem) mname name methods orig,
+		fail e => fail e
+	}
+
+def class_method_param_type (r : ParseResult Term) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_close_or_next rem mname name methods orig,
+		fail e => fail e
+	}
+
+def class_method_close_or_next (input : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (orig : String) : ParseResult Decl :=
+	class_method_try_close_param (tag ")" (skip_spaces input)) input mname name methods
+
+def class_method_try_close_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_ret_or_more rem mname name methods,
+		fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods
+	}
+
+def class_method_ret_or_more (input : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	class_method_try_ret_type (tag ":" (skip_spaces input)) input mname name methods
+
+def class_method_try_ret_type (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_ret_type_val (type_expression rem) mname name methods,
+		fail _ => class_method_next_param (tag "(" (skip_spaces orig)) orig mname name methods
+	}
+
+def class_method_ret_type_val (r : ParseResult Term) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem typ => class_method_default_or_done rem mname typ name methods,
+		fail e => fail e
+	}
+
+def class_method_next_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_param_loop rem mname name methods,
+		fail _ => fail (ParseError.custom "expected ) or another parameter")
+	}
+
+def class_method_ret_type (r : ParseResult String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_sig_type (type_expression rem) mname name methods,
+		fail _ => fail (ParseError.custom "expected : return type")
+	}
+
+def class_method_sig_type (r : ParseResult Term) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem typ => class_method_default_or_done rem mname typ name methods,
+		fail e => fail e
+	}
+
+def class_method_default_or_done (input : String) (mname : Identifier) (typ : Term) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	class_method_try_default (tag ":=" (skip_spaces input)) input mname typ name methods
+
+def class_method_try_default (r : ParseResult String) (orig : String) (mname : Identifier) (typ : Term) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_default_val (expression (skip_spaces rem)) orig mname typ name methods,
+		fail _ =>
+			let none_val : Option Term := Option.none in
+			class_methods orig name (List.cons (ClassDef.mk mname typ none_val) methods)
+	}
+
+def class_method_default_val (r : ParseResult Term) (orig : String) (mname : Identifier) (typ : Term) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem defval =>
+			let some_val : Option Term := Option.some defval in
+			class_methods rem name (List.cons (ClassDef.mk mname typ some_val) methods),
+		fail e => fail e
+	}
+
+def class_close (r : ParseResult String) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+	match r {
+		success rem _ =>
+			let rev_methods : List ClassDef := list_reverse methods in
+			let empty_params : List Param := List.empty in
+			let empty_constraints : List TypeConstraint := List.empty in
+			success rem (Decl.class_d (Class.mk name empty_params empty_constraints rev_methods)),
+		fail e => fail e
+	}
+
+// instance [constraints] [name :] Class args { methods }
+
+def instance_parser (input : String) : ParseResult Decl :=
+	instance_kw (tag "instance" input)
+
+def instance_kw (r : ParseResult String) : ParseResult Decl :=
+	match r {
+		success rem _ => instance_try_constraints (tag "[" (skip_spaces rem)) rem,
+		fail e => fail e
+	}
+
+def instance_try_constraints (r : ParseResult String) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem _ => instance_name (module_path_parser (skip_spaces rem)),
+		fail _ => instance_name (module_path_parser (skip_spaces orig))
+	}
+
+def instance_name (r : ParseResult ModulePath) : ParseResult Decl :=
+	match r {
+		success rem path =>
+			let empty_args : List Term := List.empty in
+			instance_args_or_brace rem path empty_args,
+		fail e => fail e
+	}
+
+def instance_args_or_brace (input : String) (cls : ModulePath) (args : List Term) : ParseResult Decl :=
+	instance_try_arg (atom_term (skip_spaces input)) input cls args
+
+def instance_try_arg (r : ParseResult Term) (orig : String) (cls : ModulePath) (args : List Term) : ParseResult Decl :=
+	match r {
+		success rem arg => instance_args_or_brace rem cls (List.cons arg args),
+		fail _ => instance_brace (tag "{" (skip_spaces orig)) cls args
+	}
+
+def instance_brace (r : ParseResult String) (cls : ModulePath) (args : List Term) : ParseResult Decl :=
+	match r {
+		success rem _ =>
+			let empty_methods : List Def := List.empty in
+			instance_methods rem cls args empty_methods,
+		fail e => fail e
+	}
+
+def instance_methods (input : String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	instance_try_close_or_def (tag "def" (skip_spaces input)) input cls args methods
+
+def instance_try_close_or_def (r : ParseResult String) (orig : String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	match r {
+		success rem _ => instance_method_single rem cls args methods,
+		fail _ => instance_close (tag "}" (skip_spaces orig)) cls args methods
+	}
+
+def instance_method_single (input : String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	instance_method_name (identifier (skip_spaces input)) cls args methods
+
+def instance_method_name (r : ParseResult String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	match r {
+		success rem name => instance_method_params_or_body rem (Identifier.id name) cls args methods,
+		fail e => fail e
+	}
+
+def instance_method_params_or_body (input : String) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	instance_method_try_body (atom_term (skip_spaces input)) input name cls args methods
+
+def instance_method_try_body (r : ParseResult Term) (orig : String) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	match r {
+		success rem arg =>
+			let start_args : List Term := List.cons arg List.empty in
+			instance_method_body_loop rem start_args name cls args methods,
+		fail _ => instance_method_finish (tag ":=" (skip_spaces orig)) name cls args methods
+	}
+
+def instance_method_body_loop (input : String) (body_args : List Term) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	instance_method_body_next (atom_term (skip_spaces input)) input body_args name cls args methods
+
+def instance_method_body_next (r : ParseResult Term) (orig : String) (body_args : List Term) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	match r {
+		success rem arg => instance_method_body_loop rem (List.cons arg body_args) name cls args methods,
+		fail _ => instance_method_finish (tag ":=" (skip_spaces orig)) name cls args methods
+	}
+
+def instance_method_finish (r : ParseResult String) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	match r {
+		success rem _ => instance_method_body (expression (skip_spaces rem)) name cls args methods,
+		fail _ => fail (ParseError.custom "expected := in instance method")
+	}
+
+def instance_method_body (r : ParseResult Term) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	match r {
+		success rem body =>
+			let empty_constraints : List TypeConstraint := List.empty in
+			let empty_attrs : List String := List.empty in
+			let d : Def := Def.mk (ModulePath.mp (List.cons name List.empty)) (Term.hole) body empty_constraints empty_attrs in
+			instance_methods rem cls args (List.cons d methods),
+		fail e => fail e
+	}
+
+def instance_close (r : ParseResult String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+	match r {
+		success rem _ =>
+			let rev_methods : List Def := list_reverse methods in
+			let rev_args : List Term := list_reverse args in
+			let empty_constraints : List TypeConstraint := List.empty in
+			success rem (Decl.instance_d (Instance.mk (Identifier.id "_") cls empty_constraints rev_args)),
+		fail e => fail e
+	}
+
 // type Name { constructor1 (args), constructor2 }
 
 def type_parser (input : String) : ParseResult Decl :=
@@ -1454,10 +1858,28 @@ def decl_try_infix (r : ParseResult Decl) (input : String) : ParseResult Decl :=
 def decl_try_def (r : ParseResult Decl) (input : String) : ParseResult Decl :=
 	match r {
 		success rem out => success rem out,
+		fail _ => decl_try_struct (struct_parser input) input
+	}
+
+def decl_try_struct (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
 		fail _ => decl_try_type (type_parser input) input
 	}
 
 def decl_try_type (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => decl_try_class (class_parser input) input
+	}
+
+def decl_try_class (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => decl_try_instance (instance_parser input) input
+	}
+
+def decl_try_instance (r : ParseResult Decl) (input : String) : ParseResult Decl :=
 	match r {
 		success rem out => success rem out,
 		fail _ => fail (ParseError.custom "unknown declaration")
@@ -1990,6 +2412,54 @@ def test_type_simple : Bool :=
 @[test]
 def test_type_empty : Bool :=
 	match type_parser "type Void { }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+// --- Struct parser tests ---
+
+@[test]
+def test_struct_simple : Bool :=
+	match struct_parser "struct Point { x : I64, y : I64 }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_struct_default : Bool :=
+	match struct_parser "struct Point { x : I64 := 0 }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+// --- Class parser tests ---
+
+@[test]
+def test_class_simple : Bool :=
+	match class_parser "class Show A { def show (a : A) : String }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_class_constraints : Bool :=
+	match class_parser "class [Functor M] Monad M { def bind (a : M A) (f : A -> M B) : M B }" {
+		success rem out => true,
+		fail _ => false
+	}
+
+@[test]
+def test_class_multi_param : Bool :=
+	match class_parser "class Foo { def bar (a : I64) (b : I64) : I64 }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+// --- Instance parser tests ---
+
+@[test]
+def test_instance_simple : Bool :=
+	match instance_parser "instance Show I64 { def show x := \"int\" }" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}

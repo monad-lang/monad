@@ -98,9 +98,18 @@ type Class {
     mk (name: Identifier) (params: List Param) (constraints: List TypeConstraint) (methods: List ClassDef)
 }
 
+type StructField {
+    mk (name: Identifier) (typ: Term) (default: Option Term)
+}
+
+type Struct {
+    mk (name: Identifier) (fields: List StructField)
+}
+
 type Decl {
     def_d (Def),
     inductive_d (Inductive),
+    struct_d (Struct),
     class_d (Class),
     instance_d (Instance),
     infix_d (op: Operator) (path: ModulePath),
