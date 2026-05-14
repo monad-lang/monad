@@ -570,6 +570,7 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
             name: new_name.clone(),
             typ: param.typ.clone(),
             mult: param.mult.clone(),
+            default: param.default.clone(),
           };
           let new_body = rename_variable(*body, new_name, old_name.clone());
           let term = substitute(new_body, nref, new_term);

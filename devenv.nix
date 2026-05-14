@@ -63,7 +63,31 @@
     monad-tests = {
       enable = true;
       entry = ''
-        cargo run -- test init/tests.mo
+        cargo run -- test init/
+      '';
+      pass_filenames = false;
+      files = "\\.(rs|mo)$";
+    };
+    monad-std-tests = {
+      enable = true;
+      entry = ''
+        cargo run -- test std/
+      '';
+      pass_filenames = false;
+      files = "\\.(rs|mo)$";
+    };
+    monad-lang-tests = {
+      enable = true;
+      entry = ''
+        cargo run -- test lang/
+      '';
+      pass_filenames = false;
+      files = "\\.(rs|mo)$";
+    };
+    monad-examples-tests = {
+      enable = false; # TODO enable when examples stabilizes
+      entry = ''
+        cargo run -- test examples/
       '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";

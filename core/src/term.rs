@@ -549,6 +549,8 @@ impl Instance {
           .args
           .get(index)
           .expect("instance args did not match class");
+        // Structural comparison: Var/App terms are compared directly.
+        // Type variables (free vars without a known mapping) match structurally.
         // Compare by converting both to ModulePath to handle Id vs P variants
         let arg_path = match arg {
           Term::Var { name } => name.to_path(),
@@ -758,6 +760,7 @@ pub struct Param {
   pub name: Identifier,
   pub typ: Box<Term>,
   pub mult: Multiplicity, // NEW: Many (default), Linear (!), or Affine (?)
+  pub default: Option<Box<Term>>, // Default value for class parameters (:= syntax)
 }
 
 impl Typed for Param {
@@ -769,7 +772,15 @@ impl Typed for Param {
 impl Display for Param {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     if self.typ.is_known() {
-      write!(f, "({}{} : {})", self.mult, self.name, self.typ)
+      if let Some(ref default) = self.default {
+        write!(
+          f,
+          "({}{} : {} := {})",
+          self.mult, self.name, self.typ, default
+        )
+      } else {
+        write!(f, "({}{} : {})", self.mult, self.name, self.typ)
+      }
     } else {
       write!(f, "{}{}", self.mult, self.name)
     }
@@ -785,6 +796,7 @@ pub fn param(name: Identifier, typ: Term) -> Param {
     name,
     typ: Box::new(typ),
     mult: Multiplicity::default(),
+    default: None,
   }
 }
 
@@ -793,6 +805,16 @@ pub fn param_with_mult(name: Identifier, typ: Term, mult: Multiplicity) -> Param
     name,
     typ: Box::new(typ),
     mult,
+    default: None,
+  }
+}
+
+pub fn param_with_default(name: Identifier, typ: Term, default: Option<Term>) -> Param {
+  Param {
+    name,
+    typ: Box::new(typ),
+    mult: Multiplicity::default(),
+    default: default.map(Box::new),
   }
 }
 

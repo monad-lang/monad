@@ -856,7 +856,30 @@ pub fn derive_instance_key(class_def: &ClassDefRef, typ: &Term) -> Result<Instan
       .collect::<Vec<Result<Param, Identifier>>>(),
   );
   if !errs.is_empty() {
-    Err(MissingTypeArgs(errs))?;
+    // Try to resolve undetermined params using class defaults
+    let mut resolved_args = args.clone();
+    let mut still_missing = Vec::new();
+    for name in errs {
+      if let Some(class_param) = class_def.class.params.iter().find(|p| p.name == name) {
+        if let Some(ref default) = class_param.default {
+          resolved_args.push(param(name, (**default).clone()));
+        } else {
+          still_missing.push(name);
+        }
+      } else {
+        still_missing.push(name);
+      }
+    }
+    if !still_missing.is_empty() {
+      Err(MissingTypeArgs(still_missing))?;
+    }
+    // Use the resolved args (with defaults filled in)
+    let key = InstanceKey::new(
+      class_def.class.name().clone(),
+      class_def.class.constraints.clone(),
+      resolved_args,
+    );
+    return Ok(key);
   }
 
   let key = InstanceKey::new(

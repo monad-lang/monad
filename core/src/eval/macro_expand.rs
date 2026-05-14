@@ -652,6 +652,7 @@ fn alpha_rename_body(term: Term) -> Term {
               name: new_name,
               typ: Box::new(alpha_rename_body(*param.typ)),
               mult: param.mult,
+              default: param.default.clone(),
             }),
             alpha_rename_body(body),
           )

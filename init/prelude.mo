@@ -7,7 +7,7 @@ class Functor (F: Type -> Type) {
 	def map (f: A -> B) : (F A) -> F B
 }
 
-class FromListLiteral (L: Type -> Type) {
+class FromListLiteral (L : Type -> Type := List) {
 	def cons (a : A) (L A) : L A
 	def empty : L A 
 }
@@ -288,11 +288,11 @@ def List.map (f : A -> B) (self: List A) : List B :=
 
 
 instance Functor List {
-	def map (f : A -> B) (self: List A) : List B :=
-		match self {
-			empty => List.empty,
-			cons a tail => List.cons (f a) (Functor.map f tail)
-		}
+  def map (f : A -> B) (self: List A) : List B :=
+    match self {
+      empty => List.empty,
+      cons a tail => List.cons (f a) (Functor.map f tail)
+    }
 }
 
 /// A length-indexed vector: Vec len A is a list of exactly len elements of type A

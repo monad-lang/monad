@@ -18,8 +18,8 @@ use crate::{
     float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
     ivar, lam, lams, lets, match_term,
     module::ParsedModule,
-    mpvar, num_suffix, opr, param, param_with_mult, pi_name, pi_typs, pvar, stru,
-    stru_field_with_mult, type_constraint, var_id,
+    mpvar, num_suffix, opr, param, param_with_default, param_with_mult, pi_name, pi_typs, pvar,
+    stru, stru_field_with_mult, type_constraint, var_id,
   },
 };
 use locate::{LocatedSpan, info};
@@ -371,9 +371,19 @@ fn lam_param<X: Clone>(input: Span<X>) -> Res<Param, X> {
       map(
         pair(
           multiplicity_prefix,
-          separated_pair(identifier, ws0, opt_type_annotation),
+          pair(
+            terminated(identifier, ws0),
+            pair(
+              opt_type_annotation,
+              opt(preceded((ws0, tag(":="), ws0), term_inner)),
+            ),
+          ),
         ),
-        |(mult, (name, typ))| param_with_mult(name, typ, mult),
+        |(mult, (name, (typ, default)))| {
+          let mut p = param_with_default(name, typ, default);
+          p.mult = mult;
+          p
+        },
       ),
       (
         ws0,
