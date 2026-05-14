@@ -447,6 +447,90 @@ def test_arithmetic_full_chain : Bool :=
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "add i64"
 
+@[test]
+def test_sub_inlined : Bool :=
+    match try_compile_body (Term.app (Term.app (Term.var (NameRef.nid (Identifier.id "I64_sub"))) (Term.lit (Literal.num 5 NumSuffix.i64))) (Term.lit (Literal.num 3 NumSuffix.i64))) {
+        Option.some val => true,
+        Option.none => false,
+    }
+
+@[test]
+def test_mul_inlined : Bool :=
+    match try_compile_body (Term.app (Term.app (Term.var (NameRef.nid (Identifier.id "I64_mul"))) (Term.lit (Literal.num 3 NumSuffix.i64))) (Term.lit (Literal.num 4 NumSuffix.i64))) {
+        Option.some val => true,
+        Option.none => false,
+    }
+
+@[test]
+def test_div_inlined : Bool :=
+    match try_compile_body (Term.app (Term.app (Term.var (NameRef.nid (Identifier.id "I64_div"))) (Term.lit (Literal.num 8 NumSuffix.i64))) (Term.lit (Literal.num 2 NumSuffix.i64))) {
+        Option.some val => true,
+        Option.none => false,
+    }
+
+@[test]
+def test_eq_inlined : Bool :=
+    match try_compile_body (Term.app (Term.app (Term.var (NameRef.nid (Identifier.id "I64_eq"))) (Term.lit (Literal.num 1 NumSuffix.i64))) (Term.lit (Literal.num 1 NumSuffix.i64))) {
+        Option.some val => true,
+        Option.none => false,
+    }
+
+@[test]
+def test_sub_full_chain : Bool :=
+    let id := Identifier.id "test" in
+    let nid := NameRef.nid (Identifier.id "I64_sub") in
+    let one := Term.lit (Literal.num 5 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 3 NumSuffix.i64) in
+    let var_ := Term.var nid in
+    let app1 := Term.app var_ one in
+    let body := Term.app app1 two in
+    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (Term.type_ 1) body List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "sub i64"
+
+@[test]
+def test_mul_full_chain : Bool :=
+    let id := Identifier.id "test" in
+    let nid := NameRef.nid (Identifier.id "I64_mul") in
+    let one := Term.lit (Literal.num 3 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 4 NumSuffix.i64) in
+    let var_ := Term.var nid in
+    let app1 := Term.app var_ one in
+    let body := Term.app app1 two in
+    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (Term.type_ 1) body List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "mul i64"
+
+@[test]
+def test_div_full_chain : Bool :=
+    let id := Identifier.id "test" in
+    let nid := NameRef.nid (Identifier.id "I64_div") in
+    let one := Term.lit (Literal.num 8 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 2 NumSuffix.i64) in
+    let var_ := Term.var nid in
+    let app1 := Term.app var_ one in
+    let body := Term.app app1 two in
+    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (Term.type_ 1) body List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "sdiv i64"
+
+@[test]
+def test_eq_full_chain : Bool :=
+    let id := Identifier.id "test" in
+    let nid := NameRef.nid (Identifier.id "I64_eq") in
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let var_ := Term.var nid in
+    let app1 := Term.app var_ one in
+    let body := Term.app app1 two in
+    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (Term.type_ 1) body List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "icmp eq"
+
 def empty_ids : List Identifier := List.empty
 
 def empty_cons : List TypeConstraint := List.empty
