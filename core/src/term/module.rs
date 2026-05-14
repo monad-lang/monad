@@ -1562,6 +1562,7 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
   let math_path = ModulePath::top("math");
   let string_path = ModulePath::top("string");
   let number_path = ModulePath::top("number");
+  let process_path = ModulePath::top("process");
 
   #[cfg(feature = "embed-stdlib")]
   {
@@ -1571,6 +1572,7 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
     let math_text = include_str!("../../../init/math.mo");
     let string_text = include_str!("../../../init/string.mo");
     let init_text = include_str!("../../../init/init.mo");
+    let process_text = include_str!("../../../init/process.mo");
 
     load_module_from_text(prelude_text, prelude_path, &mut loaded)?;
     load_module_from_text(io_text, io_path, &mut loaded)?;
@@ -1578,6 +1580,7 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
     load_module_from_text(math_text, math_path, &mut loaded)?;
     load_module_from_text(string_text, string_path, &mut loaded)?;
     load_module_from_text(init_text, init_path, &mut loaded)?;
+    load_module_from_text(process_text, process_path, &mut loaded)?;
   }
 
   #[cfg(not(feature = "embed-stdlib"))]
@@ -1594,6 +1597,7 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
     load_module_file(dir.join("math.mo"), &math_path, &mut loaded)?;
     load_module_file(dir.join("string.mo"), &string_path, &mut loaded)?;
     load_module_file(dir.join("init.mo"), &init_path, &mut loaded)?;
+    load_module_file(dir.join("process.mo"), &process_path, &mut loaded)?;
   }
 
   Ok(loaded)

@@ -116,6 +116,56 @@ pub fn println(terms: Vec<Term>) -> Result<Term, NativeError> {
   Ok(io_term(unit()))
 }
 
+pub fn exec_cmd(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let cmd = extract_string_at(&terms, 0)?;
+  let args_term = terms.get(1).ok_or(NativeError::MissingArgs {
+    expected: 2,
+    actual: terms.len(),
+  })?;
+  let args = extract_string_list(args_term)?;
+  let status = std::process::Command::new(&cmd)
+    .args(&args)
+    .status()
+    .map_err(|e| NativeError::Custom(format!("exec_cmd failed: {e}")))?;
+  let exit_code = status.code().unwrap_or(-1) as i64;
+  Ok(io_term(num_suffix(exit_code, NumSuffix::I64)))
+}
+
+fn extract_string_list(term: &Term) -> Result<Vec<String>, NativeError> {
+  match term {
+    Term::Con(Constructor { name, .. }) if name == &id("empty") => Ok(vec![]),
+    Term::Con(Constructor { name, args, .. }) if name == &id("cons") => {
+      let mut result = vec![];
+      if let Some(Some(head)) = args.first() {
+        let s = extract_string_from_term(head)?;
+        result.push(s);
+      } else {
+        return Err(NativeError::Custom(
+          "List.cons missing head argument".into(),
+        ));
+      }
+      if let Some(Some(tail)) = args.get(1) {
+        result.extend(extract_string_list(tail)?);
+      }
+      Ok(result)
+    }
+    other => Err(NativeError::Custom(format!(
+      "expected List String, got {other}"
+    ))),
+  }
+}
+
+fn extract_string_from_term(term: &Term) -> Result<String, NativeError> {
+  match term {
+    Term::Lit {
+      value: Literal::Str { value: s },
+    } => Ok(s.clone()),
+    other => Err(NativeError::ExpectedString {
+      actual: other.clone(),
+    }),
+  }
+}
+
 fn bool_to_term(b: bool) -> Term {
   if b { b_true() } else { b_false() }
 }
@@ -570,6 +620,8 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("u8_gt"), s(u8_gt)),
     (id("eval_term"), sa(eval_term)),
     (id("eq_rec"), s(eq_rec)),
+    (id("nat_to_string"), s(nat_to_string)),
+    (id("exec_cmd"), s(exec_cmd)),
   ];
   v.into_iter().collect()
 }
