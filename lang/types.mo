@@ -94,6 +94,20 @@ type ClassDef {
     mk (name: Identifier) (typ: Term) (default: Option Term)
 }
 
+type Class {
+    mk (name: Identifier) (params: List Param) (constraints: List TypeConstraint) (methods: List ClassDef)
+}
+
+type Decl {
+    def_d (Def),
+    inductive_d (Inductive),
+    class_d (Class),
+    instance_d (Instance),
+    infix_d (op: Operator) (path: ModulePath),
+    use_d (path: ModulePath),
+    open_d (path: ModulePath),
+}
+
 type Instance {
     mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term)
 }
