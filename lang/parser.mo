@@ -413,8 +413,53 @@ def number_term_body (r : ParseResult I64) : ParseResult Term :=
 
 // --- Variable parser ---
 
+// --- Path variable parser (e.g. A.B.C) ---
+
+def path_variable (input : String) : ParseResult Term :=
+	path_var_first (identifier input)
+
+def path_var_first (r : ParseResult String) : ParseResult Term :=
+	match r {
+		success rem first => path_var_need_dot rem (List.cons (Identifier.id first) List.empty),
+		fail e => fail e
+	}
+
+def path_var_need_dot (input : String) (ids : List Identifier) : ParseResult Term :=
+	path_var_need_dot_try (tag "." input) ids input
+
+def path_var_need_dot_try (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult Term :=
+	match r {
+		success rem _ => path_var_field (identifier rem) ids,
+		fail _ => fail (ParseError.custom "not a dotted path")
+	}
+
+def path_var_loop (input : String) (ids : List Identifier) : ParseResult Term :=
+	path_var_loop_dot (tag "." input) ids input
+
+def path_var_loop_dot (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult Term :=
+	match r {
+		success rem _ => path_var_field (identifier rem) ids,
+		fail _ =>
+			let rev : List Identifier := list_reverse ids in
+			success orig (Term.var (NameRef.nmp (ModulePath.mp rev)))
+	}
+
+def path_var_field (r : ParseResult String) (ids : List Identifier) : ParseResult Term :=
+	match r {
+		success rem next => path_var_loop rem (List.cons (Identifier.id next) ids),
+		fail e => fail e
+	}
+
+// --- Variable parser (dotted path or simple identifier) ---
+
 def variable (input : String) : ParseResult Term :=
-	variable_got (identifier input)
+	variable_try_path (path_variable input) input
+
+def variable_try_path (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => variable_got (identifier input)
+	}
 
 def variable_got (r : ParseResult String) : ParseResult Term :=
 	match r {
@@ -598,7 +643,7 @@ def if_else_branch (r : ParseResult Term) (cond : Term) (then_b : Term) : ParseR
 // --- Lambda expression parser ---
 
 def lambda_parser (input : String) : ParseResult Term :=
-	lambda_kw (alt (tag "fn") (tag "ꟛ") input)
+	lambda_kw (alt (alt (tag "fn") (tag "ꟛ")) (tag "\\") input)
 
 def lambda_kw (r : ParseResult String) : ParseResult Term :=
 	match r {
@@ -1181,6 +1226,45 @@ def test_expression_op_chain : Bool :=
 @[test]
 def test_expression_app_over_op : Bool :=
 	match expression "f x ++ g y" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+// --- Dotted path tests ---
+
+@[test]
+def test_variable_dotted_path : Bool :=
+	match variable "A.B.C" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_variable_simple_not_path : Bool :=
+	match variable "abc" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_expression_path : Bool :=
+	match expression "List.cons" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_expression_path_app : Bool :=
+	match expression "A.fun x y" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+// --- Backslash lambda tests ---
+
+@[test]
+def test_lambda_backslash : Bool :=
+	match expression "\\ x => x" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}

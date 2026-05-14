@@ -98,6 +98,17 @@ type Instance {
     mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term)
 }
 
+// --- Utilities ---
+
+def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
+    match xs {
+        List.cons x rest => list_rev_loop rest (List.cons x acc),
+        List.empty => acc
+    }
+
+def list_reverse {A : Type} (xs : List A) : List A :=
+    list_rev_loop xs List.empty
+
 // --- Similar class for structural comparison ---
 
 class Similar A {
