@@ -710,7 +710,126 @@ def let_body (r : ParseResult Term) (name : Identifier) (value : Term) : ParseRe
 		fail e => fail e
 	}
 
-// --- Updated atom_term chain (with keyword parsers) ---
+// --- Do-notation parser ---
+
+def do_stmt_return (input : String) : ParseResult DoStmt :=
+	do_stmt_ret_kw (tag "return" input) input
+
+def do_stmt_ret_kw (r : ParseResult String) (orig : String) : ParseResult DoStmt :=
+	match r {
+		success rem _ => do_stmt_ret_expr (expression (skip_spaces rem)),
+		fail _ => do_stmt_try_let (tag "let" (skip_spaces orig)) orig
+	}
+
+def do_stmt_try_let (r : ParseResult String) (orig : String) : ParseResult DoStmt :=
+	match r {
+		success rem _ => do_stmt_let_name (identifier (skip_spaces rem)),
+		fail _ => do_stmt_expr (expression (skip_spaces orig))
+	}
+
+def do_stmt_let_name (r : ParseResult String) : ParseResult DoStmt :=
+	match r {
+		success rem name => do_stmt_let_kind rem (Identifier.id name),
+		fail e => fail e
+	}
+
+def do_stmt_let_kind (input : String) (name : Identifier) : ParseResult DoStmt :=
+	do_stmt_let_kind_try (tag ":=" (skip_spaces input)) name input
+
+def do_stmt_let_kind_try (r : ParseResult String) (name : Identifier) (orig : String) : ParseResult DoStmt :=
+	match r {
+		success rem _ => do_stmt_let_value (expression (skip_spaces rem)) name,
+		fail _ => do_stmt_bind_arrow (tag "<-" (skip_spaces orig)) name orig
+	}
+
+def do_stmt_let_value (r : ParseResult Term) (name : Identifier) : ParseResult DoStmt :=
+	match r {
+		success rem value => success rem (DoStmt.let_s name value),
+		fail e => fail e
+	}
+
+def do_stmt_bind_arrow (r : ParseResult String) (name : Identifier) (orig : String) : ParseResult DoStmt :=
+	match r {
+		success rem _ => do_stmt_bind_value (expression (skip_spaces rem)) name,
+		fail _ => fail (ParseError.custom "expected := or <- after let in do block")
+	}
+
+def do_stmt_bind_value (r : ParseResult Term) (name : Identifier) : ParseResult DoStmt :=
+	match r {
+		success rem value => success rem (DoStmt.bind_s name value),
+		fail e => fail e
+	}
+
+def do_stmt_ret_expr (r : ParseResult Term) : ParseResult DoStmt :=
+	match r {
+		success rem value => success rem (DoStmt.ret_s value),
+		fail e => fail e
+	}
+
+def do_stmt_expr (r : ParseResult Term) : ParseResult DoStmt :=
+	match r {
+		success rem value => success rem (DoStmt.expr_s value),
+		fail e => fail e
+	}
+
+def do_stmts (input : String) : ParseResult (List DoStmt) :=
+	do_stmts_check_end (tag "}" (skip_spaces input)) input
+
+def do_stmts_check_end (r : ParseResult String) (orig : String) : ParseResult (List DoStmt) :=
+	match r {
+		success rem _ =>
+			let empty : List DoStmt := List.empty in
+			success rem empty,
+		fail _ => do_stmts_first (do_stmt_return (skip_spaces orig)) (skip_spaces orig)
+	}
+
+def do_stmts_first (r : ParseResult DoStmt) (orig : String) : ParseResult (List DoStmt) :=
+	match r {
+		success rem stmt => do_stmts_next (do_stmts (do_stmts_tail rem)) stmt,
+		fail e => fail e
+	}
+
+def do_stmts_tail (input : String) : String :=
+	do_stmts_tail_sp (take_while is_space input) input
+
+def do_stmts_tail_sp (r : ParseResult String) (orig : String) : String :=
+	match r {
+		success rem _ => do_stmts_tail_semi (tag ";" rem) rem orig,
+		fail _ => orig
+	}
+
+def do_stmts_tail_semi (r : ParseResult String) (after_sp : String) (orig : String) : String :=
+	match r {
+		success rem _ => skip_spaces rem,
+		fail _ => after_sp
+	}
+
+def do_stmts_next (r : ParseResult (List DoStmt)) (first : DoStmt) : ParseResult (List DoStmt) :=
+	match r {
+		success rem rest => success rem (List.cons first rest),
+		fail e => fail e
+	}
+
+def do_parser (input : String) : ParseResult Term :=
+	do_kw (tag "do" input)
+
+def do_kw (r : ParseResult String) : ParseResult Term :=
+	match r {
+		success rem _ => do_brace (tag "{" (skip_spaces rem)),
+		fail e => fail e
+	}
+
+def do_brace (r : ParseResult String) : ParseResult Term :=
+	match r {
+		success rem _ => do_build (do_stmts rem),
+		fail e => fail e
+	}
+
+def do_build (r : ParseResult (List DoStmt)) : ParseResult Term :=
+	match r {
+		success rem stmts => success rem (desugar_do stmts),
+		fail e => fail e
+	}
 
 def atom_try_lit (r : ParseResult Term) (input : String) : ParseResult Term :=
 	match r {
@@ -731,6 +850,12 @@ def atom_try_if (r : ParseResult Term) (input : String) : ParseResult Term :=
 	}
 
 def atom_try_let (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => atom_try_do (do_parser input) input
+	}
+
+def atom_try_do (r : ParseResult Term) (input : String) : ParseResult Term :=
 	match r {
 		success rem out => success rem out,
 		fail _ => atom_try_lambda (lambda_parser input) input
@@ -1265,6 +1390,50 @@ def test_expression_path_app : Bool :=
 @[test]
 def test_lambda_backslash : Bool :=
 	match expression "\\ x => x" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+// --- Do-notation tests ---
+
+@[test]
+def test_do_empty : Bool :=
+	match do_parser "do { }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_do_return : Bool :=
+	match do_parser "do { return 42 }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_do_bind : Bool :=
+	match do_parser "do { let x <- m; return x }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_do_let : Bool :=
+	match do_parser "do { let x := 1; return x }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_do_expr : Bool :=
+	match do_parser "do { println 42; return 0 }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_do_chain : Bool :=
+	match do_parser "do { let a <- f x; let b <- g a; return b }" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}

@@ -98,7 +98,35 @@ type Instance {
     mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term)
 }
 
-// --- Utilities ---
+// --- Do-notation desugaring ---
+
+type DoStmt {
+    bind_s (name: Identifier) (expr: Term),
+    let_s (name: Identifier) (expr: Term),
+    ret_s (expr: Term),
+    expr_s (expr: Term),
+}
+
+def monad_bind_term : Term :=
+    Term.var (NameRef.nmp (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))))
+
+def monad_pure_term : Term :=
+    Term.var (NameRef.nmp (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "pure") List.empty))))
+
+def desugar_do (stmts : List DoStmt) : Term :=
+    desugar_do_inner (list_reverse stmts) (Term.app monad_pure_term (Term.hole))
+
+def desugar_do_inner (stmts : List DoStmt) (rest : Term) : Term :=
+    match stmts {
+        List.cons s ss =>
+            match s {
+                bind_s name expr => Term.app (Term.app monad_bind_term expr) (Term.lam (Param.mk name (Term.hole)) (desugar_do_inner ss rest)),
+                let_s name expr => Term.app (Term.lam (Param.mk name (Term.hole)) (desugar_do_inner ss rest)) expr,
+                ret_s expr => Term.app monad_pure_term expr,
+                expr_s expr => Term.app (Term.app monad_bind_term expr) (Term.lam (Param.mk (Identifier.id "_") (Term.hole)) (desugar_do_inner ss rest))
+            },
+        List.empty => rest
+    }
 
 def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
     match xs {
