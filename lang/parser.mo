@@ -1689,7 +1689,29 @@ def type_to_decl (name : Identifier) (cons : List InductConstructor) : Decl :=
 	Decl.inductive_d (Inductive.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.type_ 1) cons empty_attrs)
 
 def def_parser (input : String) : ParseResult Decl :=
-	def_kw (tag "def" input)
+	def_try_attrs (tag "@[" (skip_spaces input)) input
+
+def def_try_attrs (r : ParseResult String) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem _ => def_attr_skip (take_while is_not_attr_end rem) rem,
+		fail _ => def_kw (tag "def" (skip_spaces orig))
+	}
+
+def is_not_attr_end (c : String) : Bool :=
+	if String.beq "]" c then false
+	else true
+
+def def_attr_skip (r : ParseResult String) (rest : String) : ParseResult Decl :=
+	match r {
+		success rem _ => def_attr_close (tag "]" rem),
+		fail _ => fail (ParseError.custom "expected ]")
+	}
+
+def def_attr_close (r : ParseResult String) : ParseResult Decl :=
+	match r {
+		success rem _ => def_kw (tag "def" (skip_spaces rem)),
+		fail e => fail e
+	}
 
 def def_kw (r : ParseResult String) : ParseResult Decl :=
 	match r {
@@ -1796,7 +1818,13 @@ def def_body (input : String) (name : Identifier) (params : List Param) (typ : T
 def def_body_assign (r : ParseResult String) (name : Identifier) (params : List Param) (typ : Term) (orig : String) : ParseResult Decl :=
 	match r {
 		success rem _ => def_body_expr (expression (skip_spaces rem)) name params typ,
-		fail _ => def_body_block (tag "{" (skip_spaces orig)) name params typ
+		fail _ => def_body_block_or_none (tag "{" (skip_spaces orig)) name params typ orig
+	}
+
+def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params : List Param) (typ : Term) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem _ => def_body_do (do_stmts rem) name params typ,
+		fail _ => success orig (def_to_decl (lam_params params (Term.hole)) name typ)
 	}
 
 def def_body_expr (r : ParseResult Term) (name : Identifier) (params : List Param) (typ : Term) : ParseResult Decl :=
@@ -2460,6 +2488,38 @@ def test_class_multi_param : Bool :=
 @[test]
 def test_instance_simple : Bool :=
 	match instance_parser "instance Show I64 { def show x := \"int\" }" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+// --- Attribute tests ---
+
+@[test]
+def test_def_native_attr : Bool :=
+	match def_parser "@[native \"add\"] def add (a : I64) (b : I64) : I64 := a" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_def_native_no_body : Bool :=
+	match def_parser "@[native \"add\"] def add (a : I64) (b : I64) : I64" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_def_attr_simple : Bool :=
+	match def_parser "@[test] def f (x : I64) : I64 := x" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+// --- Implicit param tests ---
+
+@[test]
+def test_def_implicit_params : Bool :=
+	match def_parser "def identity {A : Type} (x : A) : A := x" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
