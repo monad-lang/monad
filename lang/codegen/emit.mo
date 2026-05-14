@@ -1,6 +1,9 @@
 use lang.types
 use lang.codegen.ir
 
+open LLVMType
+open LLVMValue
+
 type LocalBinding {
     mk (lname : Identifier) (lval : LLVMValue),
 }
@@ -429,6 +432,20 @@ def test_literal_body_compiles : Bool :=
         Option.some val => true,
         Option.none => false,
     }
+
+@[test]
+def test_arithmetic_full_chain : Bool :=
+    let id := Identifier.id "test" in
+    let nid := NameRef.nid (Identifier.id "I64_add") in
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 2 NumSuffix.i64) in
+    let var_ := Term.var nid in
+    let app1 := Term.app var_ one in
+    let body := Term.app app1 two in
+    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (Term.type_ 1) body List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "add i64"
 
 def empty_ids : List Identifier := List.empty
 
