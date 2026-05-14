@@ -720,7 +720,7 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
         body,
       );
       let lambda = lam(param(name, Term::Hole), lambda_body);
-      app(pvar(vec!["Monad", "bind"]), app(value, lambda))
+      app(app(pvar(vec!["Monad", "bind"]), value), lambda)
     }
     None => Term::Hole,
   };
@@ -733,7 +733,7 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
       DoStatement::Expr { value } => {
         let underscore = param(id("_"), Term::Hole);
         let lambda = lam(underscore, body);
-        body = app(pvar(vec!["Monad", "bind"]), app(value, lambda));
+        body = app(app(pvar(vec!["Monad", "bind"]), value), lambda);
       }
       DoStatement::Let { name, value } => {
         body = lets(
@@ -747,7 +747,7 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
       }
       DoStatement::Bind { name, value } => {
         let lambda = lam(param(name, Term::Hole), body);
-        body = app(pvar(vec!["Monad", "bind"]), app(value, lambda));
+        body = app(app(pvar(vec!["Monad", "bind"]), value), lambda);
       }
     }
   }
