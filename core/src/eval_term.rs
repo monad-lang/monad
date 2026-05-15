@@ -891,8 +891,28 @@ fn exec_prim(idx: u64, args: &[EvalTerm], env: &Env) -> Result<EvalTerm, EvalErr
     "i8_eq" | "i16_eq" | "i32_eq" | "i64_eq" | "u8_eq" | "u16_eq" | "u32_eq" | "u64_eq" => {
       kernel_int_cmp(args, |a, b| a == b)
     }
+    "u8_lt" => kernel_int_cmp(args, |a, b| a < b),
+    "u8_gt" => kernel_int_cmp(args, |a, b| a > b),
+    "f32_add" | "f64_add" => kernel_float_binop(args, |a, b| a + b),
+    "f32_sub" | "f64_sub" => kernel_float_binop(args, |a, b| a - b),
+    "f32_mul" | "f64_mul" => kernel_float_binop(args, |a, b| a * b),
+    "f32_div" | "f64_div" => kernel_float_binop(args, |a, b| a / b),
+    "f32_eq" | "f64_eq" => kernel_float_cmp(args, |a, b| a == b),
     "string_eq" => kernel_string_eq(args),
     "string_concat" => kernel_string_concat(args),
+    "string_length" => kernel_string_length(args),
+    "string_starts_with" => kernel_string_starts_with(args),
+    "string_slice" => kernel_string_slice(args),
+    "string_drop" => kernel_string_drop(args),
+    "i8_to_string" => kernel_int_to_string(args, |v| (v as i8).to_string()),
+    "i16_to_string" => kernel_int_to_string(args, |v| (v as i16).to_string()),
+    "i32_to_string" => kernel_int_to_string(args, |v| (v as i32).to_string()),
+    "i64_to_string" => kernel_int_to_string(args, |v| v.to_string()),
+    "u8_to_string" => kernel_int_to_string(args, |v| (v as u8).to_string()),
+    "u16_to_string" => kernel_int_to_string(args, |v| (v as u16).to_string()),
+    "u32_to_string" => kernel_int_to_string(args, |v| (v as u32).to_string()),
+    "u64_to_string" => kernel_int_to_string(args, |v| (v as u64).to_string()),
+    "f32_to_string" | "f64_to_string" => kernel_float_to_string(args),
     _ => Ok(EvalTerm::Prim {
       idx: idx as u64,
       args: args.to_vec(),
@@ -983,7 +1003,123 @@ fn resolve_const(idx: u64, env: &Env) -> Result<EvalTerm, EvalError> {
     .ok_or(EvalError::UnknownConstant(idx))
 }
 
-// ---------------------------------------------------------------------------
+fn extract_float(arg: &EvalTerm) -> Result<f64, EvalError> {
+  match arg {
+    EvalTerm::Lit {
+      l: Literal::Float { value },
+    } => Ok(value.0),
+    _ => Err(EvalError::PrimCallFailed(format!(
+      "expected float literal, got {arg}"
+    ))),
+  }
+}
+
+fn kernel_float_binop(args: &[EvalTerm], op: fn(f64, f64) -> f64) -> Result<EvalTerm, EvalError> {
+  if args.len() < 2 {
+    return Err(EvalError::PrimCallFailed("float binop needs 2 args".into()));
+  }
+  let a = extract_float(&args[0])?;
+  let b = extract_float(&args[1])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Float {
+      value: FloatValue(op(a, b)),
+    },
+  })
+}
+
+fn kernel_float_cmp(args: &[EvalTerm], op: fn(f64, f64) -> bool) -> Result<EvalTerm, EvalError> {
+  if args.len() < 2 {
+    return Err(EvalError::PrimCallFailed("float cmp needs 2 args".into()));
+  }
+  let a = extract_float(&args[0])?;
+  let b = extract_float(&args[1])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Bool {
+      v: if op(a, b) { 1 } else { 0 },
+    },
+  })
+}
+
+fn kernel_string_length(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
+  if args.len() < 1 {
+    return Err(EvalError::PrimCallFailed(
+      "string_length needs 1 arg".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Int { v: s.len() as i64 },
+  })
+}
+
+fn kernel_int_to_string(args: &[EvalTerm], fmt: fn(i64) -> String) -> Result<EvalTerm, EvalError> {
+  let v = extract_int(&args[0])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Str { value: fmt(v) },
+  })
+}
+
+fn kernel_float_to_string(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
+  let v = extract_float(&args[0])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Str {
+      value: v.to_string(),
+    },
+  })
+}
+
+fn kernel_string_starts_with(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
+  if args.len() < 2 {
+    return Err(EvalError::PrimCallFailed(
+      "string_starts_with needs 2 args".into(),
+    ));
+  }
+  let prefix = extract_string(&args[0])?;
+  let s = extract_string(&args[1])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Bool {
+      v: if s.starts_with(&prefix) { 1 } else { 0 },
+    },
+  })
+}
+
+fn kernel_string_slice(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
+  if args.len() < 3 {
+    return Err(EvalError::PrimCallFailed(
+      "string_slice needs 3 args".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  let start = extract_int(&args[1])?.max(0) as usize;
+  let len = extract_int(&args[2])?.max(0) as usize;
+  let end = (start + len).min(s.len());
+  let result = if start <= s.len() {
+    s[start..end].to_string()
+  } else {
+    String::new()
+  };
+  Ok(EvalTerm::Lit {
+    l: Literal::Str { value: result },
+  })
+}
+
+fn kernel_string_drop(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
+  if args.len() < 2 {
+    return Err(EvalError::PrimCallFailed("string_drop needs 2 args".into()));
+  }
+  let n = extract_int(&args[0])?.max(0) as usize;
+  let s = extract_string(&args[1])?;
+  let result = if n >= s.len() {
+    String::new()
+  } else {
+    s[n..].to_string()
+  };
+  Ok(EvalTerm::Lit {
+    l: Literal::Str { value: result },
+  })
+}
+
+// --------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

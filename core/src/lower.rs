@@ -1051,4 +1051,140 @@ mod integration_tests {
       eval_term::lit(ELit::Int { v: 0 })
     );
   }
+
+  #[test]
+  fn test_integration_string_length() {
+    let scope = test_scope();
+
+    let input = r#"String.length "hello""#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+
+    let result = eval_lowered(term, &scope);
+    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+  }
+
+  #[test]
+  fn test_integration_float_add() {
+    let scope = test_scope();
+
+    let input = "F64.add 3.14 2.86";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+
+    let result = eval_lowered(term, &scope);
+    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+  }
+
+  #[test]
+  fn test_integration_float_mul() {
+    let scope = test_scope();
+
+    let input = "F64.mul 2.0 3.0";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+
+    let result = eval_lowered(term, &scope);
+    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+  }
+
+  #[test]
+  fn test_integration_to_string_u8() {
+    let scope = test_scope();
+    let input = "U8.to_string 255u8";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Str {
+        value: "255".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_to_string_i64() {
+    let scope = test_scope();
+    let input = "I64.to_string (-42)";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Str {
+        value: "-42".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_to_string_f64() {
+    let scope = test_scope();
+    let input = "F64.to_string 3.14";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope);
+    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+  }
+
+  #[test]
+  fn test_integration_starts_with_true() {
+    let scope = test_scope();
+    let input = r#"String.starts_with "hel" "hello""#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Bool { v: 1 })
+    );
+  }
+
+  #[test]
+  fn test_integration_starts_with_false() {
+    let scope = test_scope();
+    let input = r#"String.starts_with "world" "hello""#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Bool { v: 0 })
+    );
+  }
+
+  #[test]
+  fn test_integration_string_slice() {
+    let scope = test_scope();
+    let input = r#"String.slice "hello" 1 3"#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Str {
+        value: "ell".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_string_drop() {
+    let scope = test_scope();
+    let input = r#"String.drop 2 "hello""#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Str {
+        value: "llo".to_string()
+      })
+    );
+  }
 }
