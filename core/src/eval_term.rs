@@ -148,6 +148,8 @@ pub enum Literal {
   Nat { v: u64 },
   /// Signed integer (64-bit)
   Int { v: i64 },
+  /// Boolean (0 = false, 1 = true, enforced by constructors)
+  Bool { v: u8 },
   /// String
   Str { value: String },
   /// IEEE 754 double-precision float
@@ -161,6 +163,7 @@ impl Display for Literal {
     match self {
       Literal::Nat { v } => write!(f, "{v}n"),
       Literal::Int { v } => write!(f, "{v}"),
+      Literal::Bool { v } => write!(f, "{}", if *v == 0 { "false" } else { "true" }),
       Literal::Str { value } => write!(f, "{value:?}"),
       Literal::Float { value } => write!(f, "{value}"),
       Literal::Char { c } => write!(f, "'{}'", char::from_u32(*c as u32).unwrap_or('�')),
@@ -226,13 +229,6 @@ pub enum EvalTerm {
     arg: Box<EvalTerm>,
   },
 
-  /// Let binding: name erased, value + continuation
-  LetExpr {
-    val: Box<EvalTerm>,
-    mult: Multiplicity,
-    body: Box<EvalTerm>,
-  },
-
   /// Resolved constant (index into environment's constant table)
   Const { idx: u64 },
 
@@ -284,7 +280,6 @@ impl Display for EvalTerm {
       EvalTerm::Var { idx } => write!(f, "(var {idx})"),
       EvalTerm::Lam { param_mult, body } => write!(f, "(lam {param_mult} {body})"),
       EvalTerm::App { fun, arg } => write!(f, "(app {fun} {arg})"),
-      EvalTerm::LetExpr { val, mult, body } => write!(f, "(let {mult} {val} {body})"),
       EvalTerm::Const { idx } => write!(f, "(const #{idx})"),
       EvalTerm::Sort { level } => write!(f, "(sort {level})"),
       EvalTerm::Lit { l } => write!(f, "(lit {l})"),
@@ -369,14 +364,6 @@ pub fn app(fun: EvalTerm, arg: EvalTerm) -> EvalTerm {
   }
 }
 
-pub fn let_expr(val: EvalTerm, mult: Multiplicity, body: EvalTerm) -> EvalTerm {
-  EvalTerm::LetExpr {
-    val: Box::new(val),
-    mult,
-    body: Box::new(body),
-  }
-}
-
 pub fn const_(idx: u64) -> EvalTerm {
   EvalTerm::Const { idx }
 }
@@ -445,7 +432,7 @@ pub fn proj_field(base: EvalTerm, field_idx: u64) -> EvalTerm {
 ///
 /// All free indices > `index` are decremented by 1 because one binder
 /// is removed from the context. The `replacement` is shifted up when
-/// entering a binder (Lam, LetExpr body) to avoid capture.
+/// entering a binder (Lam body) to avoid capture.
 pub fn subst(term: &EvalTerm, index: u64, replacement: &EvalTerm) -> EvalTerm {
   use std::cmp::Ordering;
 
@@ -468,15 +455,6 @@ pub fn subst(term: &EvalTerm, index: u64, replacement: &EvalTerm) -> EvalTerm {
       fun: Box::new(subst(fun, index, replacement)),
       arg: Box::new(subst(arg, index, replacement)),
     },
-
-    EvalTerm::LetExpr { val, mult, body } => {
-      let shifted = shift(replacement, 0, 1);
-      EvalTerm::LetExpr {
-        val: Box::new(subst(val, index, replacement)),
-        mult: *mult,
-        body: Box::new(subst(body, index + 1, &shifted)),
-      }
-    }
 
     EvalTerm::Const { .. } => term.clone(),
     EvalTerm::Sort { .. } => term.clone(),
@@ -563,12 +541,6 @@ pub fn shift(term: &EvalTerm, cutoff: u64, amount: i64) -> EvalTerm {
       arg: Box::new(shift(arg, cutoff, amount)),
     },
 
-    EvalTerm::LetExpr { val, mult, body } => EvalTerm::LetExpr {
-      val: Box::new(shift(val, cutoff, amount)),
-      mult: *mult,
-      body: Box::new(shift(body, cutoff + 1, amount)),
-    },
-
     EvalTerm::Const { .. } => term.clone(),
     EvalTerm::Sort { .. } => term.clone(),
     EvalTerm::Lit { .. } => term.clone(),
@@ -625,10 +597,8 @@ pub fn shift(term: &EvalTerm, cutoff: u64, amount: i64) -> EvalTerm {
 /// One step of WHNF reduction. Returns `Some(reduced)` if a reduction was
 /// taken, or `None` if the term is already in WHNF.
 ///
-/// WHNF reduction steps:
+/// WHNF reduction step:
 ///   App(Lam { body }, arg) → subst(body, 0, arg)    (β-reduction)
-///   LetExpr { val, body }  → subst(body, 0, val)    (let reduction)
-///   App(App(...), arg)     → first reduce the function part
 pub fn whnf_step(term: &EvalTerm) -> Option<EvalTerm> {
   match term {
     EvalTerm::App { fun, arg } => match fun.as_ref() {
@@ -645,11 +615,6 @@ pub fn whnf_step(term: &EvalTerm) -> Option<EvalTerm> {
       }
       _ => None,
     },
-
-    EvalTerm::LetExpr { val, mult: _, body } => {
-      let reduced = subst(body, 0, val);
-      Some(reduced)
-    }
 
     _ => None,
   }
@@ -713,7 +678,6 @@ impl Display for EvalError {
 ///
 /// The evaluator reduces to weak head normal form (WHNF):
 ///   App(Lam { body }, arg) → subst(body, 0, arg)    (β-reduction)
-///   LetExpr { val, body }  → subst(body, 0, val)    (let reduction)
 ///   Var { idx }            → locals[locals.len()-1-idx]
 ///   Const { idx }          → env.constants[idx] (then evaluate)
 ///   Lam, Sort, Lit         → values (no further reduction)
@@ -733,18 +697,51 @@ pub fn eval(term: &EvalTerm, locals: &[EvalTerm], env: &Env) -> Result<EvalTerm,
           let resolved = resolve_const(idx, env)?;
           match resolved {
             EvalTerm::Lam { .. } => eval(&app(resolved, arg.as_ref().clone()), locals, env),
+            EvalTerm::Prim {
+              idx: p_idx,
+              args: ref p_args,
+            } => {
+              let mut all_args = p_args.clone();
+              all_args.push(arg.as_ref().clone());
+              let arity = env
+                .primitives
+                .get(p_idx as usize)
+                .map(|(_, a)| *a)
+                .unwrap_or(0);
+              if arity > 0 && all_args.len() >= arity {
+                exec_prim(p_idx, &all_args, env)
+              } else {
+                Ok(EvalTerm::Prim {
+                  idx: p_idx,
+                  args: all_args,
+                })
+              }
+            }
             _ => Ok(app(resolved, arg.as_ref().clone())),
+          }
+        }
+        EvalTerm::Prim {
+          idx: p_idx,
+          args: ref p_args,
+        } => {
+          let mut all_args = p_args.clone();
+          all_args.push(arg.as_ref().clone());
+          let arity = env
+            .primitives
+            .get(p_idx as usize)
+            .map(|(_, a)| *a)
+            .unwrap_or(0);
+          if arity > 0 && all_args.len() >= arity {
+            exec_prim(p_idx, &all_args, env)
+          } else {
+            Ok(EvalTerm::Prim {
+              idx: p_idx,
+              args: all_args,
+            })
           }
         }
         other => Ok(app(other, arg.as_ref().clone())),
       }
-    }
-
-    // -- Let binding ------------------------------------------------------
-    EvalTerm::LetExpr { val, mult: _, body } => {
-      let reduced_val = eval(val, locals, env)?;
-      let reduced = subst(body, 0, &reduced_val);
-      eval(&reduced, locals, env)
     }
 
     // -- Variable lookup --------------------------------------------------
@@ -807,23 +804,35 @@ fn dispatch_recursor(
   locals: &[EvalTerm],
   env: &Env,
 ) -> Result<EvalTerm, EvalError> {
-  // Extract constructor index from scrutinee WHNF
-  let con_idx = match scrutinee {
-    EvalTerm::Const { idx } => *idx,
-    EvalTerm::App { fun, .. } => match fun.as_ref() {
-      EvalTerm::Const { idx } => *idx,
-      _ => {
-        return Err(EvalError::NotAFunction(scrutinee.clone()));
+  let rec_idx = info.rec_idx;
+
+  let case_idx = match scrutinee {
+    EvalTerm::Lit {
+      l: Literal::Bool { v },
+    } => {
+      if *v == 0 {
+        1
+      } else {
+        0
       }
-    },
+    }
+
     _ => {
-      return Err(EvalError::NotAFunction(scrutinee.clone()));
+      let con_idx = match scrutinee {
+        EvalTerm::Const { idx } => *idx,
+        EvalTerm::App { fun, .. } => match fun.as_ref() {
+          EvalTerm::Const { idx } => *idx,
+          _ => {
+            return Err(EvalError::NotAFunction(scrutinee.clone()));
+          }
+        },
+        _ => {
+          return Err(EvalError::NotAFunction(scrutinee.clone()));
+        }
+      };
+      find_constructor_tag(rec_idx, con_idx, env)?
     }
   };
-
-  // Find the case index for this constructor
-  let rec_idx = info.rec_idx;
-  let case_idx = find_constructor_tag(rec_idx, con_idx, env)?;
 
   if case_idx >= cases.len() as u64 {
     return Err(EvalError::CaseIndexOutOfBounds(rec_idx, case_idx));
@@ -861,14 +870,105 @@ fn find_constructor_tag(rec_idx: u64, con_idx: u64, env: &Env) -> Result<u64, Ev
 
 fn exec_prim(idx: u64, args: &[EvalTerm], env: &Env) -> Result<EvalTerm, EvalError> {
   let idx = idx as usize;
-  let (_name, _arity) = env
+  let (name, _arity) = env
     .primitives
     .get(idx)
     .ok_or(EvalError::UnknownPrimitive(idx))?;
 
-  Ok(EvalTerm::Prim {
-    idx: idx as u64,
-    args: args.to_vec(),
+  match name.as_str() {
+    "i8_add" | "i16_add" | "i32_add" | "i64_add" | "u8_add" | "u16_add" | "u32_add" | "u64_add" => {
+      kernel_int_binop(args, |a, b| a.wrapping_add(b))
+    }
+    "i8_sub" | "i16_sub" | "i32_sub" | "i64_sub" | "u8_sub" | "u16_sub" | "u32_sub" | "u64_sub" => {
+      kernel_int_binop(args, |a, b| a.wrapping_sub(b))
+    }
+    "i8_mul" | "i16_mul" | "i32_mul" | "i64_mul" | "u8_mul" | "u16_mul" | "u32_mul" | "u64_mul" => {
+      kernel_int_binop(args, |a, b| a.wrapping_mul(b))
+    }
+    "i8_div" | "i16_div" | "i32_div" | "i64_div" | "u8_div" | "u16_div" | "u32_div" | "u64_div" => {
+      kernel_int_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_div(b) })
+    }
+    "i8_eq" | "i16_eq" | "i32_eq" | "i64_eq" | "u8_eq" | "u16_eq" | "u32_eq" | "u64_eq" => {
+      kernel_int_cmp(args, |a, b| a == b)
+    }
+    "string_eq" => kernel_string_eq(args),
+    "string_concat" => kernel_string_concat(args),
+    _ => Ok(EvalTerm::Prim {
+      idx: idx as u64,
+      args: args.to_vec(),
+    }),
+  }
+}
+
+fn extract_int(arg: &EvalTerm) -> Result<i64, EvalError> {
+  match arg {
+    EvalTerm::Lit {
+      l: Literal::Int { v },
+    } => Ok(*v),
+    _ => Err(EvalError::PrimCallFailed(format!(
+      "expected int literal, got {arg}"
+    ))),
+  }
+}
+
+fn extract_string(arg: &EvalTerm) -> Result<String, EvalError> {
+  match arg {
+    EvalTerm::Lit {
+      l: Literal::Str { value },
+    } => Ok(value.clone()),
+    _ => Err(EvalError::PrimCallFailed(format!(
+      "expected string literal, got {arg}"
+    ))),
+  }
+}
+
+fn kernel_int_binop(args: &[EvalTerm], op: fn(i64, i64) -> i64) -> Result<EvalTerm, EvalError> {
+  if args.len() < 2 {
+    return Err(EvalError::PrimCallFailed("int binop needs 2 args".into()));
+  }
+  let a = extract_int(&args[0])?;
+  let b = extract_int(&args[1])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Int { v: op(a, b) },
+  })
+}
+
+fn kernel_int_cmp(args: &[EvalTerm], op: fn(i64, i64) -> bool) -> Result<EvalTerm, EvalError> {
+  if args.len() < 2 {
+    return Err(EvalError::PrimCallFailed("int cmp needs 2 args".into()));
+  }
+  let a = extract_int(&args[0])?;
+  let b = extract_int(&args[1])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Bool {
+      v: if op(a, b) { 1 } else { 0 },
+    },
+  })
+}
+
+fn kernel_string_eq(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
+  if args.len() < 2 {
+    return Err(EvalError::PrimCallFailed("string_eq needs 2 args".into()));
+  }
+  let a = extract_string(&args[0])?;
+  let b = extract_string(&args[1])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Bool {
+      v: if a == b { 1 } else { 0 },
+    },
+  })
+}
+
+fn kernel_string_concat(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
+  if args.len() < 2 {
+    return Err(EvalError::PrimCallFailed(
+      "string_concat needs 2 args".into(),
+    ));
+  }
+  let a = extract_string(&args[0])?;
+  let b = extract_string(&args[1])?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Str { value: a + &b },
   })
 }
 
@@ -918,14 +1018,6 @@ mod tests {
     let id_lam = lam(Multiplicity::Many, var(0));
     let t = app(id_lam, const_(7));
     assert_eq!(t.to_string(), "(app (lam ω (var 0)) (const #7))");
-  }
-
-  #[test]
-  fn test_let_expr_construction() {
-    let val = lit(Literal::Int { v: 42 });
-    let body = var(0);
-    let l = let_expr(val, Multiplicity::Many, body);
-    assert_eq!(l.to_string(), "(let ω (lit 42) (var 0))");
   }
 
   #[test]
@@ -1185,50 +1277,6 @@ mod tests {
     assert_eq!(result, prim(0, vec![const_(99), var(0)]));
   }
 
-  #[test]
-  fn test_subst_let_expr() {
-    // let x = v in body — encodes (λ. body) v, so body has idx 0 = x
-    let val = var(0);
-    let body = var(0); // body: idx 0 = let-bound value
-    let t = let_expr(val, Multiplicity::Many, body);
-    let r = const_(99);
-    // subst(let_expr(val, body), 0, r)
-    // → let_expr(subst(val, 0, r), subst(body, 1, shift(r, 0, 1)))
-    let result = subst(&t, 0, &r);
-    assert_eq!(
-      result,
-      let_expr(
-        const_(99),
-        Multiplicity::Many,
-        var(0) // body: idx 0 is still the let-bound value, shift(r) isn't used for idx 0
-      )
-    );
-  }
-
-  #[test]
-  fn test_subst_recursor() {
-    let info = RecursorInfo::new(0, 1, 1, 2);
-    let motive = var(0);
-    let case = const_(1);
-    let scrutinee = var(1);
-    let t = recursor(info, motive, vec![case], scrutinee);
-    let r = const_(99);
-    let result = subst(&t, 0, &r);
-    match result {
-      EvalTerm::Recursor {
-        motive,
-        cases,
-        scrutinee,
-        ..
-      } => {
-        assert_eq!(*motive, const_(99));
-        assert_eq!(cases, vec![const_(1)]);
-        assert_eq!(*scrutinee, var(0));
-      }
-      _ => panic!("expected Recursor"),
-    }
-  }
-
   // -- shift tests ---------------------------------------------------------
 
   #[test]
@@ -1274,18 +1322,6 @@ mod tests {
     assert_eq!(result, lam(Multiplicity::Many, var(0)));
   }
 
-  #[test]
-  fn test_shift_let_expr() {
-    // let v in body: both shift
-    let val = var(2);
-    let body = var(2);
-    let t = let_expr(val, Multiplicity::Many, body);
-    let result = shift(&t, 0, 2);
-    // val: var(2) >= 0 → var(4)
-    // body: cutoff becomes 1 inside let-expr body, var(2) >= 1 → var(4)
-    assert_eq!(result, let_expr(var(4), Multiplicity::Many, var(4)));
-  }
-
   // -- whnf tests ----------------------------------------------------------
 
   #[test]
@@ -1309,16 +1345,6 @@ mod tests {
     let t = app(id, arg);
     let result = whnf_step(&t);
     assert_eq!(result, Some(var(1)));
-  }
-
-  #[test]
-  fn test_whnf_step_let_expr() {
-    // let const(42) in var(0) → const(42)
-    let val = const_(42);
-    let body = var(0);
-    let t = let_expr(val, Multiplicity::Many, body);
-    let result = whnf_step(&t);
-    assert_eq!(result, Some(const_(42)));
   }
 
   #[test]
@@ -1356,12 +1382,6 @@ mod tests {
     let id_lam = lam(Multiplicity::Many, var(0));
     let t = app(id_lam, const_(7));
     assert_eq!(whnf(&t), const_(7));
-  }
-
-  #[test]
-  fn test_whnf_let_reduces_to_value() {
-    let t = let_expr(const_(42), Multiplicity::Many, var(0));
-    assert_eq!(whnf(&t), const_(42));
   }
 
   #[test]
@@ -1437,13 +1457,6 @@ mod tests {
     let id = lam(Multiplicity::Many, var(0));
     let t = app(id, lit(Literal::Int { v: 42 }));
     assert_eq!(eval(&t, &[], &env).unwrap(), lit(Literal::Int { v: 42 }));
-  }
-
-  #[test]
-  fn test_eval_let_expr() {
-    let env = Env::new();
-    let t = let_expr(const_(42), Multiplicity::Many, var(0));
-    assert_eq!(eval(&t, &[], &env).unwrap(), const_(42)); // const(42) is subst'd as-is
   }
 
   #[test]

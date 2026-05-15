@@ -47,6 +47,8 @@ pub struct LowerContext<'a> {
   const_indices: Map<ModulePath, u64>,
   /// Maps native names → prim indices.
   prim_indices: Map<Identifier, u64>,
+  /// Maps prim indices → arity (number of arguments before the native fires).
+  prim_arities: Map<u64, usize>,
   /// Maps inductive type paths → recursor indices.
   recursor_indices: Map<ModulePath, u64>,
   /// Recursor metadata: (name, RecursorInfo) for each index.
@@ -60,6 +62,7 @@ impl<'a> LowerContext<'a> {
       bound_vars: Vec::new(),
       const_indices: Map::new(),
       prim_indices: Map::new(),
+      prim_arities: Map::new(),
       recursor_indices: Map::new(),
       recursor_infos: Vec::new(),
     }
@@ -172,9 +175,7 @@ impl<'a> LowerContext<'a> {
         if let Some((idx, _)) = self.find_bound(ident) {
           Ok(eval_term::var(idx))
         } else {
-          Err(LowerError::UnresolvedName(format!(
-            "free variable: {ident}"
-          )))
+          self.lower_free_id(ident, name)
         }
       }
 
@@ -203,6 +204,16 @@ impl<'a> LowerContext<'a> {
         "macros must be expanded before lowering".into(),
       )),
     }
+  }
+
+  fn lower_free_id(&mut self, ident: &Identifier, name: &NameRef) -> Result<EvalTerm, LowerError> {
+    let resolved = self
+      .scope
+      .resolve_name(name)
+      .map_err(|_| LowerError::UnresolvedName(format!("free variable: {ident}")))?;
+    let path = constructor_fqn(resolved).unwrap_or_else(|| ModulePath::single(ident.clone()));
+    let const_idx = self.get_or_create_const(&path);
+    Ok(eval_term::const_(const_idx))
   }
 
   fn find_bound_at_index(&self, idx: usize) -> Option<Multiplicity> {
@@ -291,9 +302,34 @@ impl<'a> LowerContext<'a> {
 
     let motive = synthesize_motive();
 
-    let lowered_cases: Vec<EvalTerm> = cases
+    let inductive = self
+      .scope
+      .global()
+      .find_inductive(&inductive_path)
+      .ok_or_else(|| LowerError::UnresolvedName(format!("inductive: {inductive_path}")))?;
+
+    let mut indexed_cases: Vec<(usize, &MatchCase)> = cases
       .iter()
-      .map(|c| self.lower_match_case(c))
+      .map(|c| {
+        let cons_idx = inductive
+          .constructors()
+          .iter()
+          .position(|ctor| ctor.name().last() == &c.name)
+          .ok_or_else(|| {
+            LowerError::UnresolvedName(format!(
+              "constructor {} not found in {}",
+              c.name,
+              inductive_path.to_string()
+            ))
+          })?;
+        Ok((cons_idx, c))
+      })
+      .collect::<Result<Vec<_>, _>>()?;
+    indexed_cases.sort_by_key(|(idx, _)| *idx);
+
+    let lowered_cases: Vec<EvalTerm> = indexed_cases
+      .iter()
+      .map(|(_, c)| self.lower_match_case(c))
       .collect::<Result<Vec<_>, _>>()?;
 
     Ok(eval_term::recursor(
@@ -371,6 +407,7 @@ impl<'a> LowerContext<'a> {
       .map(|arg| self.lower(arg))
       .collect::<Result<Vec<_>, _>>()?;
 
+    self.prim_arities.insert(prim_idx, native.num_args);
     Ok(eval_term::prim(prim_idx, lowered_args))
   }
 
@@ -404,7 +441,6 @@ impl<'a> LowerContext<'a> {
     use std::collections::BTreeSet;
 
     let n_consts = self.const_indices.len();
-    let n_prims = self.prim_indices.len();
 
     // --- constants --------------------------------------------------------
     // Each const body must be lowered (may in turn reference other consts).
@@ -471,12 +507,14 @@ impl<'a> LowerContext<'a> {
       }
     }
 
-    // --- primitives -------------------------------------------------------
+    // --- primitives (after const loop, which may create new prims) ---------
+    let n_prims = self.prim_indices.len();
     let mut primitives = vec![("".to_string(), 0usize); n_prims];
     for (name, idx) in &self.prim_indices {
-      let idx = *idx as usize;
-      if idx < primitives.len() {
-        primitives[idx] = (name.to_string(), 0);
+      let idx_u = *idx as usize;
+      if idx_u < primitives.len() {
+        let arity = self.prim_arities.get(idx).copied().unwrap_or(0);
+        primitives[idx_u] = (name.to_string(), arity);
       }
     }
 
@@ -513,6 +551,16 @@ impl<'a> LowerContext<'a> {
 /// Synthetic motive for simple (non-dependent) matches: `λ_. Sort 1`.
 fn synthesize_motive() -> EvalTerm {
   eval_term::lam(Multiplicity::Many, eval_term::sort(1))
+}
+
+/// Extract the fully qualified constructor name from a resolved term.
+/// Unwraps leading lambdas (for parameterized constructors like `some`).
+fn constructor_fqn(term: &Term) -> Option<ModulePath> {
+  match term {
+    Term::Con(con) => Some(con.typ_name().append(vec![con.name().clone()])),
+    Term::Lam { body, .. } => constructor_fqn(body),
+    _ => None,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -863,16 +911,17 @@ mod integration_tests {
   }
 
   #[test]
-  fn test_integration_arithmetic_parse() {
+  fn test_integration_arithmetic() {
     let scope = test_scope();
 
     let input = "1 + 2";
     let ReplInput::Term(term) = repl_parser(input).unwrap() else {
       panic!("expected term")
     };
-
-    let result = eval_lowered(term, &scope);
-    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Int { v: 3 })
+    );
   }
 
   #[test]
@@ -886,5 +935,120 @@ mod integration_tests {
 
     let result = eval_lowered(term, &scope);
     assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+  }
+
+  #[test]
+  fn test_integration_string_concat() {
+    let scope = test_scope();
+
+    let input = r#""hello" ++ " world""#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Str {
+        value: "hello world".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_if_true() {
+    let scope = test_scope();
+
+    let input = "if true then 42 else 0";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Int { v: 42 })
+    );
+  }
+
+  #[test]
+  fn test_integration_if_false() {
+    let scope = test_scope();
+
+    let input = "if false then 42 else 0";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Int { v: 0 })
+    );
+  }
+
+  #[test]
+  fn test_integration_if_nested() {
+    let scope = test_scope();
+
+    let input = "if (if true then false else true) then 1 else 2";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Int { v: 2 })
+    );
+  }
+
+  #[test]
+  fn test_integration_bool_not() {
+    let scope = test_scope();
+
+    let input = "Bool.not true";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+
+    let result = eval_lowered(term, &scope);
+    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+    // Bool.not true → false (constructor const — opaque value)
+    assert!(
+      matches!(&result, Ok(eval_term::EvalTerm::Const { .. })),
+      "expected constructor const, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn test_integration_bool_eq() {
+    let scope = test_scope();
+
+    let input = "5 == 5";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Bool { v: 1 })
+    );
+  }
+
+  #[test]
+  fn test_integration_if_arithmetic_cmp() {
+    let scope = test_scope();
+
+    let input = "if (5 == 5) then 100 else 0";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Int { v: 100 })
+    );
+
+    let scope = test_scope();
+    let input = "if (5 == 3) then 100 else 0";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Int { v: 0 })
+    );
   }
 }
