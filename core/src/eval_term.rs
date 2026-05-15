@@ -700,46 +700,14 @@ pub fn eval(term: &EvalTerm, locals: &[EvalTerm], env: &Env) -> Result<EvalTerm,
             EvalTerm::Prim {
               idx: p_idx,
               args: ref p_args,
-            } => {
-              let mut all_args = p_args.clone();
-              all_args.push(arg.as_ref().clone());
-              let arity = env
-                .primitives
-                .get(p_idx as usize)
-                .map(|(_, a)| *a)
-                .unwrap_or(0);
-              if arity > 0 && all_args.len() >= arity {
-                exec_prim(p_idx, &all_args, env)
-              } else {
-                Ok(EvalTerm::Prim {
-                  idx: p_idx,
-                  args: all_args,
-                })
-              }
-            }
+            } => eval_prim_app(p_idx, p_args, arg, env, locals),
             _ => Ok(app(resolved, arg.as_ref().clone())),
           }
         }
         EvalTerm::Prim {
           idx: p_idx,
           args: ref p_args,
-        } => {
-          let mut all_args = p_args.clone();
-          all_args.push(arg.as_ref().clone());
-          let arity = env
-            .primitives
-            .get(p_idx as usize)
-            .map(|(_, a)| *a)
-            .unwrap_or(0);
-          if arity > 0 && all_args.len() >= arity {
-            exec_prim(p_idx, &all_args, env)
-          } else {
-            Ok(EvalTerm::Prim {
-              idx: p_idx,
-              args: all_args,
-            })
-          }
-        }
+        } => eval_prim_app(p_idx, p_args, arg, env, locals),
         other => Ok(app(other, arg.as_ref().clone())),
       }
     }
@@ -994,6 +962,34 @@ fn kernel_string_concat(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
 
 /// Resolve a constant index to its definition in the environment.
 /// Returns the definition term (which may be a Lam, Lit, etc.).
+fn eval_prim_app(
+  p_idx: u64,
+  existing_args: &[EvalTerm],
+  extra_arg: &EvalTerm,
+  env: &Env,
+  locals: &[EvalTerm],
+) -> Result<EvalTerm, EvalError> {
+  let mut all_args: Vec<EvalTerm> = existing_args.to_vec();
+  all_args.push(extra_arg.clone());
+  let arity = env
+    .primitives
+    .get(p_idx as usize)
+    .map(|(_, a)| *a)
+    .unwrap_or(0);
+  let evaluated: Vec<EvalTerm> = all_args
+    .iter()
+    .map(|a| eval(a, locals, env))
+    .collect::<Result<Vec<_>, _>>()?;
+  if arity > 0 && evaluated.len() >= arity {
+    exec_prim(p_idx, &evaluated, env)
+  } else {
+    Ok(EvalTerm::Prim {
+      idx: p_idx,
+      args: evaluated,
+    })
+  }
+}
+
 fn resolve_const(idx: u64, env: &Env) -> Result<EvalTerm, EvalError> {
   let idx = idx as usize;
   env

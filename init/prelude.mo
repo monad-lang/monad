@@ -209,8 +209,7 @@ def Nat.eq (a b : Nat) : Bool :=
 		}
 	}
 
-@[native "nat_to_string"]
-def Nat.to_string (n : Nat) : String
+
 
 instance BEq Nat {
 	def beq (a b : Nat) : Bool := Nat.eq a b

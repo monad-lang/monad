@@ -451,3 +451,11 @@ instance BEq F64 {
 instance ToString F64 {
 	def to_string (a : F64) : String := F64.to_string a
 }
+
+def nat_to_i64 (n : Nat) : I64 :=
+	match n {
+		zero => 0,
+		succ m => I64.add 1 (nat_to_i64 m)
+	}
+
+def Nat.to_string (n : Nat) : String := I64.to_string (nat_to_i64 n)

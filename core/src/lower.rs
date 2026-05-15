@@ -440,6 +440,17 @@ impl<'a> LowerContext<'a> {
   pub fn finish(&mut self, scope: &Scope) -> Result<eval_term::Env, LowerError> {
     use std::collections::BTreeSet;
 
+    // --- ensure all constructor const indices are registered so that
+    //     dispatch_recursor can find constructor tags for any inductive ---
+    {
+      let global = scope.global();
+      for inductive in global.inductives() {
+        for ctor in inductive.constructors() {
+          self.get_or_create_const(ctor.name());
+        }
+      }
+    }
+
     let n_consts = self.const_indices.len();
 
     // --- constants --------------------------------------------------------
@@ -519,21 +530,43 @@ impl<'a> LowerContext<'a> {
     }
 
     // --- recursors --------------------------------------------------------
-    let recursors: Vec<(String, RecursorInfo)> = self.recursor_infos.clone();
+    let mut recursors: Vec<(String, RecursorInfo)> = self.recursor_infos.clone();
+
+    // Register all inductives from scope as recursors so that
+    // dispatch_recursor can find constructor tags even when the
+    // inductive was never explicitly matched on in the lowered code.
+    {
+      let global = scope.global();
+      for inductive in global.inductives() {
+        let name = inductive.name().to_string();
+        if !recursors.iter().any(|(n, _)| n == &name) {
+          let info = RecursorInfo::new(
+            recursors.len() as u64,
+            inductive.params().len() as u64,
+            1,
+            inductive.constructors().len() as u64,
+          );
+          recursors.push((name, info));
+        }
+      }
+    }
 
     // --- constructor_tags -------------------------------------------------
     let mut constructor_tags: Map<u64, Vec<(u64, u64)>> = Map::new();
     {
       let global = scope.global();
-      for inductive in global.inductives() {
-        if let Some(&rec_idx) = self.recursor_indices.get(inductive.name()) {
-          for (case_idx, ctor) in inductive.constructors.iter().enumerate() {
-            if let Some(&const_idx) = self.const_indices.get(ctor.name()) {
-              constructor_tags
-                .entry(const_idx)
-                .or_default()
-                .push((rec_idx, case_idx as u64));
+      for (rec_idx, (name, _)) in recursors.iter().enumerate() {
+        for inductive in global.inductives() {
+          if inductive.name().to_string() == *name {
+            for (case_idx, ctor) in inductive.constructors().iter().enumerate() {
+              if let Some(&const_idx) = self.const_indices.get(ctor.name()) {
+                constructor_tags
+                  .entry(const_idx)
+                  .or_default()
+                  .push((rec_idx as u64, case_idx as u64));
+              }
             }
+            break;
           }
         }
       }
@@ -1184,6 +1217,36 @@ mod integration_tests {
       eval_lowered(term, &scope).unwrap(),
       eval_term::lit(ELit::Str {
         value: "llo".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_nat_to_string_zero() {
+    let scope = test_scope();
+    let input = "Nat.to_string Nat.zero";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Str {
+        value: "0".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_nat_to_string_succ() {
+    let scope = test_scope();
+    let input = "Nat.to_string (Nat.succ (Nat.succ Nat.zero))";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Str {
+        value: "2".to_string()
       })
     );
   }
