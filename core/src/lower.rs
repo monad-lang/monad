@@ -169,8 +169,8 @@ impl<'a> LowerContext<'a> {
   fn lower_var(&mut self, name: &NameRef) -> Result<EvalTerm, LowerError> {
     match name {
       NameRef::Id(ident) => {
-        if let Some((idx, mult)) = self.find_bound(ident) {
-          Ok(eval_term::var(idx, mult))
+        if let Some((idx, _)) = self.find_bound(ident) {
+          Ok(eval_term::var(idx))
         } else {
           Err(LowerError::UnresolvedName(format!(
             "free variable: {ident}"
@@ -195,8 +195,8 @@ impl<'a> LowerContext<'a> {
       }
 
       NameRef::Index(i) => {
-        let mult = self.find_bound_at_index(*i).unwrap_or(Multiplicity::Many);
-        Ok(eval_term::var(*i as u64, mult))
+        let _mult = self.find_bound_at_index(*i).unwrap_or(Multiplicity::Many);
+        Ok(eval_term::var(*i as u64))
       }
 
       NameRef::Macro(_) => Err(LowerError::Unsupported(
@@ -233,8 +233,7 @@ impl<'a> LowerContext<'a> {
   fn lower_app(&mut self, fun: &Term, arg: &Term) -> Result<EvalTerm, LowerError> {
     let lowered_fun = self.lower(fun)?;
     let lowered_arg = self.lower(arg)?;
-    let mult = Multiplicity::Many;
-    Ok(eval_term::app(lowered_fun, lowered_arg, mult))
+    Ok(eval_term::app(lowered_fun, lowered_arg))
   }
 
   // -- Literal lowering ---------------------------------------------------
@@ -302,7 +301,6 @@ impl<'a> LowerContext<'a> {
       motive,
       lowered_cases,
       lowered_scrutinee,
-      Multiplicity::Many,
     ))
   }
 
@@ -391,10 +389,124 @@ impl<'a> LowerContext<'a> {
 
     let mut result: EvalTerm = eval_term::const_(const_idx);
     for arg in lowered_args {
-      result = eval_term::app(result, arg, Multiplicity::Many);
+      result = eval_term::app(result, arg);
     }
 
     Ok(result)
+  }
+
+  /// Build an evaluation environment from the lowering context and scope.
+  ///
+  /// Resolves all const bodies from the scope's def_refs, lowering each
+  /// recursively. Primitives are collected by name. Recursor metadata is
+  /// copied directly. Constructor tags are built from the scope's inductives.
+  pub fn finish(&mut self, scope: &Scope) -> Result<eval_term::Env, LowerError> {
+    use std::collections::BTreeSet;
+
+    let n_consts = self.const_indices.len();
+    let n_prims = self.prim_indices.len();
+
+    // --- constants --------------------------------------------------------
+    // Each const body must be lowered (may in turn reference other consts).
+    // We iterate to a fixpoint, processing consts whose bodies haven't been
+    // lowered yet.
+    let mut constants: Vec<EvalTerm> = vec![eval_term::sort(0); n_consts];
+    let mut lowered_mask: Vec<bool> = vec![false; n_consts];
+
+    // Map from module paths that are known to be constructors (NOT defs).
+    let constructor_paths: BTreeSet<ModulePath> = {
+      let mut s = BTreeSet::new();
+      let global = scope.global();
+      for inductive in global.inductives() {
+        for ctor in &inductive.constructors {
+          s.insert(ctor.name().clone());
+        }
+      }
+      s
+    };
+
+    loop {
+      // Snapshot current const_indices
+      let snapshot: Vec<(ModulePath, u64)> = self
+        .const_indices
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+      let mut work_done = false;
+
+      for (path, idx) in &snapshot {
+        let idx = *idx as usize;
+        if idx >= constants.len() {
+          constants.resize(idx + 1, eval_term::sort(0));
+          lowered_mask.resize(idx + 1, false);
+        }
+        if lowered_mask[idx] {
+          continue;
+        }
+
+        // Skip constructors — they have no def body
+        if constructor_paths.contains(path) {
+          lowered_mask[idx] = true;
+          constants[idx] = eval_term::const_(idx as u64);
+          work_done = true;
+          continue;
+        }
+
+        // Try to find a def body via scope
+        let global = scope.global();
+        if let Some(def_ref) = global.find_ref(path) {
+          let body = def_ref.term();
+          let lowered = self.lower(body)?;
+          constants[idx] = lowered;
+          lowered_mask[idx] = true;
+          work_done = true;
+        } else {
+          // Not a def, not a constructor — leave as placeholder
+          lowered_mask[idx] = true;
+          work_done = true;
+        }
+      }
+      if !work_done {
+        break;
+      }
+    }
+
+    // --- primitives -------------------------------------------------------
+    let mut primitives = vec![("".to_string(), 0usize); n_prims];
+    for (name, idx) in &self.prim_indices {
+      let idx = *idx as usize;
+      if idx < primitives.len() {
+        primitives[idx] = (name.to_string(), 0);
+      }
+    }
+
+    // --- recursors --------------------------------------------------------
+    let recursors: Vec<(String, RecursorInfo)> = self.recursor_infos.clone();
+
+    // --- constructor_tags -------------------------------------------------
+    let mut constructor_tags: Map<u64, Vec<(u64, u64)>> = Map::new();
+    {
+      let global = scope.global();
+      for inductive in global.inductives() {
+        if let Some(&rec_idx) = self.recursor_indices.get(inductive.name()) {
+          for (case_idx, ctor) in inductive.constructors.iter().enumerate() {
+            if let Some(&const_idx) = self.const_indices.get(ctor.name()) {
+              constructor_tags
+                .entry(const_idx)
+                .or_default()
+                .push((rec_idx, case_idx as u64));
+            }
+          }
+        }
+      }
+    }
+
+    Ok(eval_term::Env {
+      constants,
+      primitives,
+      recursors,
+      constructor_tags,
+    })
   }
 }
 
@@ -410,7 +522,7 @@ fn synthesize_motive() -> EvalTerm {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::eval_term::{self, Literal as ELit, Multiplicity as EMult};
+  use crate::eval_term::{self, Literal as ELit};
   use crate::term::{
     Literal as TLit, ModulePath, NameRef, NumSuffix, Term,
     module::{LoadedModules, ParsedModule, module},
@@ -455,18 +567,12 @@ mod tests {
     let t = Term::Var {
       name: NameRef::Index(0),
     };
-    assert_eq!(
-      lower_term(&t, &scope).unwrap(),
-      eval_term::var(0, EMult::Many)
-    );
+    assert_eq!(lower_term(&t, &scope).unwrap(), eval_term::var(0));
 
     let t = Term::Var {
       name: NameRef::Index(3),
     };
-    assert_eq!(
-      lower_term(&t, &scope).unwrap(),
-      eval_term::var(3, EMult::Many)
-    );
+    assert_eq!(lower_term(&t, &scope).unwrap(), eval_term::var(3));
   }
 
   #[test]
@@ -651,5 +757,134 @@ mod tests {
       },
     };
     assert!(lower_term(&t, &scope).is_err());
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests (parse → type-check → lower → eval)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod integration_tests {
+  use super::*;
+  use crate::eval::r#type::type_check;
+  use crate::eval_term::{self, Literal as ELit, eval_entry};
+  use crate::parser::{ReplInput, repl_parser};
+  use crate::term::{
+    Hole, ModulePath, app, lam,
+    module::{LoadedModules, ParsedModule, Scope, default_modules, module},
+    num, param, var,
+  };
+
+  fn eval_lowered(term: Term, scope: &Scope) -> Result<eval_term::EvalTerm, String> {
+    let typed = type_check(term, Hole, scope).map_err(|e| format!("type check failed: {e}"))?;
+    let mut ctx = LowerContext::new(scope);
+    let lowered = ctx
+      .lower(&typed.term)
+      .map_err(|e| format!("lower failed: {e}"))?;
+    let env = ctx
+      .finish(scope)
+      .map_err(|e| format!("env build failed: {e}"))?;
+    eval_entry(&lowered, &env).map_err(|e| format!("eval failed: {e}"))
+  }
+
+  fn test_scope() -> Scope<'static> {
+    let loaded: &'static mut LoadedModules = Box::leak(Box::new(default_modules().unwrap()));
+    let path: &'static ModulePath =
+      Box::leak(Box::new(ModulePath::new(vec![crate::term::id("'test")])));
+    loaded.add_module(module(
+      path.clone(),
+      ParsedModule {
+        decls: vec![],
+        module_doc: None,
+      },
+    ));
+    let global: &'static _ = Box::leak(Box::new(loaded.global(path).unwrap()));
+    Scope::new(global)
+  }
+
+  #[test]
+  fn test_integration_lit() {
+    let scope = test_scope();
+
+    let result = eval_lowered(num(42), &scope).unwrap();
+    assert_eq!(result, eval_term::lit(ELit::Int { v: 42 }));
+  }
+
+  #[test]
+  fn test_integration_lam_id() {
+    let scope = test_scope();
+
+    let term = app(lam(param(crate::term::id("x"), Hole), var("x")), num(42));
+
+    let result = eval_lowered(term, &scope).unwrap();
+    assert_eq!(result, eval_term::lit(ELit::Int { v: 42 }));
+  }
+
+  #[test]
+  fn test_integration_nested_app() {
+    let scope = test_scope();
+
+    let const_fun_app = app(
+      lam(param(crate::term::id("f"), Hole), app(var("f"), num(99))),
+      lam(param(crate::term::id("x"), Hole), var("x")),
+    );
+
+    let result = eval_lowered(const_fun_app, &scope).unwrap();
+    assert_eq!(result, eval_term::lit(ELit::Int { v: 99 }));
+  }
+
+  #[test]
+  fn test_integration_lam_chain() {
+    let scope = test_scope();
+
+    let k = lam(
+      param(crate::term::id("x"), Hole),
+      lam(param(crate::term::id("y"), Hole), var("x")),
+    );
+    let term = app(app(k, num(10)), num(20));
+
+    let result = eval_lowered(term, &scope).unwrap();
+    assert_eq!(result, eval_term::lit(ELit::Int { v: 10 }));
+  }
+
+  #[test]
+  fn test_integration_string_lit() {
+    let scope = test_scope();
+
+    let term = crate::term::str("hello");
+    let result = eval_lowered(term, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lit(ELit::Str {
+        value: "hello".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_arithmetic_parse() {
+    let scope = test_scope();
+
+    let input = "1 + 2";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+
+    let result = eval_lowered(term, &scope);
+    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+  }
+
+  #[test]
+  fn test_integration_list_empty_parse() {
+    let scope = test_scope();
+
+    let input = "List.empty";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+
+    let result = eval_lowered(term, &scope);
+    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
   }
 }
