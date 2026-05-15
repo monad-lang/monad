@@ -1250,4 +1250,36 @@ mod integration_tests {
       })
     );
   }
+
+  #[test]
+  fn test_integration_bool_and() {
+    let scope = test_scope();
+    let input = "Bool.and true false";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope);
+    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+    // Bool.and true false → false (opaque constructor const)
+    assert!(
+      matches!(&result, Ok(eval_term::EvalTerm::Const { .. })),
+      "expected constructor const, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn test_integration_bool_or() {
+    let scope = test_scope();
+    let input = "Bool.or false true";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope);
+    assert!(result.is_ok(), "pipeline error: {:?}", result.err());
+    // Bool.or false true → true (opaque constructor const)
+    assert!(
+      matches!(&result, Ok(eval_term::EvalTerm::Const { .. })),
+      "expected constructor const, got {result:?}"
+    );
+  }
 }
