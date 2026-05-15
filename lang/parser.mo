@@ -17,7 +17,7 @@ open ParseResult
 
 // --- Helper ---
 
-def is_empty (s : String) : Bool := I64.beq (String.length s) 0
+def is_empty (s : String) : Bool := (String.length s) == 0
 
 // --- Combinators ---
 
@@ -27,7 +27,7 @@ def tag (s : String) (input : String) : ParseResult String :=
 	else fail (ParseError.tag s)
 
 def is_prefix (pre : String) (s : String) : Bool :=
-	String.beq pre (String.slice s 0 (String.length pre))
+	pre == (String.slice s 0 (String.length pre))
 
 def alt (a : String -> ParseResult A) (b : String -> ParseResult A) (input : String) : ParseResult A :=
 	alt_body (a input) b input
@@ -47,14 +47,14 @@ def alt_second (r : ParseResult A) (e1 : ParseError) : ParseResult A :=
 // --- Char predicates ---
 
 def is_digit (c : String) : Bool :=
-	if String.beq "0" c then true
-	else if String.beq "1" c then true
-	else if String.beq "2" c then true
-	else if String.beq "3" c then true
-	else if String.beq "4" c then true
-	else if String.beq "5" c then true
-	else if String.beq "6" c then true
-	else if String.beq "7" c then true
+	if "0" == c then true
+	else if "1" == c then true
+	else if "2" == c then true
+	else if "3" == c then true
+	else if "4" == c then true
+	else if "5" == c then true
+	else if "6" == c then true
+	else if "7" == c then true
 	else if String.beq "8" c then true
 	else String.beq "9" c
 
@@ -1606,16 +1606,6 @@ def type_cons_paren_or_nil (r : ParseResult String) (orig : String) (name : Iden
 			success orig (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.hole))
 	}
 
-def type_cons_paren (r : ParseResult String) (name : Identifier) : ParseResult InductConstructor :=
-	match r {
-		success rem _ => type_cons_params (type_param_list rem) name,
-		fail _ => type_cons_no_paren name
-	}
-
-def type_cons_no_paren (name : Identifier) : ParseResult InductConstructor :=
-	let empty_params : List Param := List.empty in
-	fail (ParseError.custom "expected params")
-
 def type_cons_params (r : ParseResult (List Param)) (name : Identifier) : ParseResult InductConstructor :=
 	match r {
 		success rem params => type_cons_close_paren (tag ")" (skip_spaces rem)) name params,
@@ -1678,10 +1668,6 @@ def type_param_rest_more (r : ParseResult Param) (params : List Param) : ParseRe
 			let rev : List Param := list_reverse params in
 			success "" rev
 	}
-
-def type_cons_done (name : Identifier) : ParseResult InductConstructor :=
-	let empty_params : List Param := List.empty in
-	success "" (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.hole))
 
 def type_to_decl (name : Identifier) (cons : List InductConstructor) : Decl :=
 	let empty_params : List Param := List.empty in

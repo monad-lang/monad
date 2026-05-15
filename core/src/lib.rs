@@ -297,8 +297,10 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
       Ok(m) => m,
       Err(e) => return Err(format!("{e}")),
     };
-    // Ensure std/test is loaded
-    let test_path = ModulePath::new(vec![id("std"), id("test")]);
+    // Skip files that are already part of the default modules
+    let is_default = loaded.get_module(&path).is_some();
+    // Ensure std/test is loaded (for Test.assert)
+    let test_path: ModulePath = ModulePath::new(vec![id("std"), id("test")]);
     if loaded.get_module(&test_path).is_none() {
       loaded = match load_module_files(&test_path, loaded) {
         Ok(l) => l,
@@ -308,8 +310,7 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
         }
       };
     }
-    // Skip files that are already part of the default modules
-    if loaded.get_module(&path).is_some() {
+    if is_default {
       continue;
     }
     // Try loading the test file; skip if it fails to compile
