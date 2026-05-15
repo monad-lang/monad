@@ -25,6 +25,7 @@ use crate::term::{app, id};
 pub mod diag;
 pub mod eval;
 pub mod eval_term;
+pub mod lower;
 pub mod parser;
 pub mod term;
 
