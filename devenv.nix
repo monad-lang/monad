@@ -85,7 +85,7 @@
       files = "\\.(rs|mo)$";
     };
     monad-examples-tests = {
-      enable = false; # TODO enable when examples stabilizes
+      enable = true;
       entry = ''
         cargo run -- test examples/
       '';

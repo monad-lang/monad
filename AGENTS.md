@@ -519,6 +519,8 @@ After each commit, confirm the test suite still passes.
 
 When a feature or bug fix is implemented, update the relevant plan in `plans/` to reflect the completed work. Mark completed tasks, add notes on the approach taken, and capture any design decisions or tradeoffs discovered during implementation.
 
+When implementing a non-trivial new language feature or stdlib addition, add a corresponding example to `examples/` demonstrating its use. The example must pass `cargo run -- test examples/` — do not add broken examples. If an existing example already covers the feature, add a test case to the existing example file instead of creating a new one.
+
 ## Common Patterns
 
 ### Creating New Types
