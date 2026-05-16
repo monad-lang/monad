@@ -172,8 +172,15 @@ impl<'a> LowerContext<'a> {
   fn lower_var(&mut self, name: &NameRef) -> Result<EvalTerm, LowerError> {
     match name {
       NameRef::Id(ident) => {
-        if let Some((idx, _)) = self.find_bound(ident) {
-          Ok(eval_term::var(idx))
+        if let Some((idx, mult)) = self.find_bound(ident) {
+          if mult == Multiplicity::Zero {
+            // Erasure: zero-multiplicity variables are replaced with a
+            // zero-sized placeholder (Sort 0 = Prop). The evaluator
+            // treats Sort as a value, so no runtime computation occurs.
+            Ok(eval_term::sort(0))
+          } else {
+            Ok(eval_term::var(idx))
+          }
         } else {
           self.lower_free_id(ident, name)
         }
@@ -900,6 +907,88 @@ mod tests {
           eval_term::lam(
             Multiplicity::Many,
             eval_term::region(Region::Stack, eval_term::var(0))
+          )
+        )
+      )
+    );
+  }
+
+  #[test]
+  fn test_erasure_zero_multiplicity() {
+    let loaded = empty_loaded();
+    let path = ModulePath::new(vec![crate::term::id("'test")]);
+    let scopes = loaded.scopes();
+    let global = scopes.global(&path).unwrap();
+    let scope = Scope::new(&global);
+
+    // λx^0. x → the reference to x (multiplicity Zero) is erased to sort(0)
+    let zero_param = crate::term::Param {
+      name: crate::term::id("x"),
+      typ: Box::new(crate::term::Hole),
+      mult: crate::term::Multiplicity::Zero,
+      default: None,
+    };
+    let t = Term::Lam {
+      param: Par::P(zero_param),
+      body: Box::new(crate::term::var("x")),
+    };
+    let result = lower_term(&t, &scope).unwrap();
+    // Lam body is region-wrapped; the variable ref is erased to sort(0)
+    assert_eq!(
+      result,
+      eval_term::lam(
+        Multiplicity::Zero,
+        eval_term::region(Region::Stack, eval_term::sort(0))
+      )
+    );
+  }
+
+  #[test]
+  fn test_erasure_zero_multiplicity_nested() {
+    let loaded = empty_loaded();
+    let path = ModulePath::new(vec![crate::term::id("'test")]);
+    let scopes = loaded.scopes();
+    let global = scopes.global(&path).unwrap();
+    let scope = Scope::new(&global);
+
+    // λx^many. λy^0. (x y)
+    // x (many) → var(1), y (zero) → sort(0) → app(var 1, sort 0)
+    let zero_param = crate::term::Param {
+      name: crate::term::id("y"),
+      typ: Box::new(crate::term::Hole),
+      mult: crate::term::Multiplicity::Zero,
+      default: None,
+    };
+    let inner_body = Term::App {
+      fun: Box::new(crate::term::var("x")),
+      arg: Box::new(crate::term::var("y")),
+    };
+    let inner = Term::Lam {
+      param: Par::P(zero_param),
+      body: Box::new(inner_body),
+    };
+    let many_param = crate::term::param(crate::term::id("x"), crate::term::Hole);
+    let outer = Term::Lam {
+      param: Par::P(many_param),
+      body: Box::new(inner),
+    };
+    let result = lower_term(&outer, &scope).unwrap();
+    // Outer lam: (lam many (region (lam 0 (region (app (var 1) (sort 0))))))
+    assert_eq!(
+      result,
+      eval_term::lam(
+        Multiplicity::Many,
+        eval_term::region(
+          Region::Stack,
+          eval_term::lam(
+            Multiplicity::Zero,
+            eval_term::region(
+              Region::Stack,
+              eval_term::app(
+                eval_term::var(1),  // x (many, pushed after y but we look from top)
+                eval_term::sort(0)  // y (zero, erased)
+              )
+            )
           )
         )
       )
