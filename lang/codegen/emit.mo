@@ -13,7 +13,7 @@ type CodegenCtx {
 }
 
 type CompileResult {
-    ok (cr_ctx : CodegenCtx) (cr_val : LLVMValue),
+    ok (cr_ctx : CodegenCtx) (cr_instrs : List LLVMInstruction) (cr_val : LLVMValue),
 }
 
 type CtxStrPair {
@@ -211,10 +211,10 @@ def is_llvm_constant (val : LLVMValue) : Bool := match val {
 }
 
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
-    Literal.num n suffix => CompileResult.ok c (LLVMValue.int_ n),
-    Literal.str s => CompileResult.ok c (LLVMValue.global_ "str"),
-    Literal.if_ cond then_ else_ => CompileResult.ok c LLVMValue.void_val,
-    Literal.match_ scrutinee cases => CompileResult.ok c LLVMValue.void_val,
+    Literal.num n suffix => CompileResult.ok c empty_instrs (LLVMValue.int_ n),
+    Literal.str s => CompileResult.ok c empty_instrs (LLVMValue.global_ "str"),
+    Literal.if_ cond then_ else_ => CompileResult.ok c empty_instrs LLVMValue.void_val,
+    Literal.match_ scrutinee cases => CompileResult.ok c empty_instrs LLVMValue.void_val,
 }
 
 def compile_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match term_ {
@@ -223,23 +223,173 @@ def compile_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match ter
         match name {
             NameRef.nid id =>
                 match ctx_lookup_local c id {
-                    Option.some val => CompileResult.ok c val,
-                    Option.none => CompileResult.ok c (LLVMValue.var_ (show_identifier id)),
+                    Option.some val => CompileResult.ok c empty_instrs val,
+                    Option.none => CompileResult.ok c empty_instrs (LLVMValue.var_ (show_identifier id)),
                 },
-            NameRef.nmp mp => CompileResult.ok c (LLVMValue.var_ "modpath"),
-            NameRef.nop op => CompileResult.ok c (LLVMValue.var_ "operator"),
+            NameRef.nmp mp => CompileResult.ok c empty_instrs (LLVMValue.var_ (module_path_to_str mp)),
+            NameRef.nop op => CompileResult.ok c empty_instrs (LLVMValue.var_ (show_operator op)),
         },
-    Term.lam param_ body =>
-        let bname := param_name param_ in
-        CompileResult.ok c (LLVMValue.parm_ 0),
-    Term.app fun arg =>
-        CompileResult.ok c (LLVMValue.var_ "app"),
-    Term.ntv native => CompileResult.ok c LLVMValue.void_val,
-    Term.con constr => CompileResult.ok c LLVMValue.void_val,
-    Term.forall name typ body => CompileResult.ok c LLVMValue.void_val,
-    Term.pi arg ret => CompileResult.ok c LLVMValue.void_val,
-    Term.type_ universe => CompileResult.ok c LLVMValue.void_val,
-    Term.hole => CompileResult.ok c LLVMValue.void_val,
+    Term.lam param_ body => CompileResult.ok c empty_instrs (LLVMValue.parm_ 0),
+    Term.app fun arg => compile_app_ir c fun arg,
+    Term.ntv native => CompileResult.ok c empty_instrs LLVMValue.void_val,
+    Term.con constr => CompileResult.ok c empty_instrs LLVMValue.void_val,
+    Term.forall name typ body => CompileResult.ok c empty_instrs LLVMValue.void_val,
+    Term.pi arg ret => CompileResult.ok c empty_instrs LLVMValue.void_val,
+    Term.type_ universe => CompileResult.ok c empty_instrs LLVMValue.void_val,
+    Term.hole => CompileResult.ok c empty_instrs LLVMValue.void_val,
+}
+
+def compile_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
+    match try_compile_inline_native c fun arg {
+        Option.some result => result,
+        Option.none => compile_general_call c fun arg,
+    }
+
+def try_compile_inline_native (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
+    match fun {
+        Term.app fun2 arg2 =>
+            match fun2 {
+                Term.var name_ref =>
+                    let var_name := show_name_ref name_ref in
+                    match lookup_native var_name {
+                        Option.some op =>
+                            Option.some (compile_native_app c op arg2 arg),
+                        Option.none => Option.none,
+                    },
+                Term.lit val => Option.none,
+                Term.app fun3 arg3 => Option.none,
+                Term.forall a b c => Option.none,
+                Term.pi a b => Option.none,
+                Term.lam a b => Option.none,
+                Term.ntv a => Option.none,
+                Term.con a => Option.none,
+                Term.type_ a => Option.none,
+                Term.hole => Option.none,
+            },
+        Term.lit val => Option.none,
+        Term.var a => Option.none,
+        Term.lam a b => Option.none,
+        Term.ntv a => Option.none,
+        Term.con a => Option.none,
+        Term.forall a b c => Option.none,
+        Term.pi a b => Option.none,
+        Term.type_ a => Option.none,
+        Term.hole => Option.none,
+    }
+
+def compile_native_app (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : Term) : CompileResult :=
+    match compile_term_ir c arg2 {
+        CompileResult.ok ctx2 instrs2 val2 =>
+            match compile_term_ir ctx2 arg {
+                CompileResult.ok ctx1 instrs1 val1 =>
+                    let combined := append_instrs instrs2 instrs1 in
+                    match extract_lit_from_val val2 {
+                        Option.some n1 =>
+                            match extract_lit_from_val val1 {
+                                Option.some n2 =>
+                                    CompileResult.ok ctx1 combined (compile_native_val op (LLVMValue.int_ n1) (LLVMValue.int_ n2)),
+                                Option.none =>
+                                    emit_arith_instr ctx1 op val2 val1 combined,
+                            },
+                        Option.none =>
+                            emit_arith_instr ctx1 op val2 val1 combined,
+                    },
+            },
+    }
+
+def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) (instrs : List LLVMInstruction) : CompileResult :=
+    match fresh_temp c {
+        CtxStrPair.mk new_ctx temp =>
+            let arith_val := compile_native_val op lhs rhs in
+            let arith_instr := LLVMInstruction.assign temp arith_val in
+            CompileResult.ok new_ctx (cons_instr arith_instr instrs) (LLVMValue.var_ temp),
+    }
+
+def extract_lit_from_val (val : LLVMValue) : Option I64 := match val {
+    LLVMValue.int_ n => Option.some n,
+    LLVMValue.int32_ n => Option.none,
+    LLVMValue.bool_ b => Option.none,
+    LLVMValue.void_val => Option.none,
+    LLVMValue.var_ name => Option.none,
+    LLVMValue.parm_ idx => Option.none,
+    LLVMValue.global_ name => Option.none,
+    LLVMValue.call fn_name ret_ty args tail => Option.none,
+    LLVMValue.add lhs rhs => Option.none,
+    LLVMValue.sub lhs rhs => Option.none,
+    LLVMValue.mul lhs rhs => Option.none,
+    LLVMValue.sdiv lhs rhs => Option.none,
+    LLVMValue.icmp_eq lhs rhs => Option.none,
+    LLVMValue.zext val from_ty to_ty => Option.none,
+    LLVMValue.trunc val from_ty to_ty => Option.none,
+    LLVMValue.phi pairs => Option.none,
+    LLVMValue.gep base indices => Option.none,
+    LLVMValue.load ptr => Option.none,
+    LLVMValue.bitcast val ty => Option.none,
+    LLVMValue.alloc_closure entry arity env_size => Option.none,
+    LLVMValue.alloc_constructor tag field_count => Option.none,
+    LLVMValue.native_op op args => Option.none,
+}
+
+def compile_general_call (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
+    match compile_term_ir c fun {
+        CompileResult.ok ctx_f instrs_f val_f =>
+            match compile_term_ir ctx_f arg {
+                CompileResult.ok ctx_a instrs_a val_a =>
+                    let combined := append_instrs instrs_f instrs_a in
+                    match val_f {
+                        LLVMValue.var_ name =>
+                            compile_direct_call ctx_a name val_a combined,
+                        LLVMValue.parm_ idx =>
+                            compile_indirect_call ctx_a val_a combined,
+                        LLVMValue.int_ n => compile_call_stub ctx_a combined,
+                        LLVMValue.int32_ n => compile_call_stub ctx_a combined,
+                        LLVMValue.bool_ b => compile_call_stub ctx_a combined,
+                        LLVMValue.void_val => compile_call_stub ctx_a combined,
+                        LLVMValue.global_ name => compile_call_stub ctx_a combined,
+                        LLVMValue.call fn_name ret_ty args tail => compile_call_stub ctx_a combined,
+                        LLVMValue.add lhs rhs => compile_call_stub ctx_a combined,
+                        LLVMValue.sub lhs rhs => compile_call_stub ctx_a combined,
+                        LLVMValue.mul lhs rhs => compile_call_stub ctx_a combined,
+                        LLVMValue.sdiv lhs rhs => compile_call_stub ctx_a combined,
+                        LLVMValue.icmp_eq lhs rhs => compile_call_stub ctx_a combined,
+                        LLVMValue.zext val from_ty to_ty => compile_call_stub ctx_a combined,
+                        LLVMValue.trunc val from_ty to_ty => compile_call_stub ctx_a combined,
+                        LLVMValue.phi pairs => compile_call_stub ctx_a combined,
+                        LLVMValue.gep base indices => compile_call_stub ctx_a combined,
+                        LLVMValue.load ptr => compile_call_stub ctx_a combined,
+                        LLVMValue.bitcast val ty => compile_call_stub ctx_a combined,
+                        LLVMValue.alloc_closure entry arity env_size => compile_call_stub ctx_a combined,
+                        LLVMValue.alloc_constructor tag field_count => compile_call_stub ctx_a combined,
+                        LLVMValue.native_op op args => compile_call_stub ctx_a combined,
+                    },
+            },
+    }
+
+def compile_direct_call (ctx_a : CodegenCtx) (name : String) (val_a : LLVMValue) (combined : List LLVMInstruction) : CompileResult :=
+    match fresh_temp ctx_a {
+        CtxStrPair.mk ctx_t temp =>
+            let call_instr := LLVMInstruction.assign temp
+                (LLVMValue.call name LLVMType.i64_ (cons_val val_a empty_vals) false) in
+            CompileResult.ok ctx_t (cons_instr call_instr combined) (LLVMValue.var_ temp),
+    }
+
+def compile_indirect_call (ctx_a : CodegenCtx) (val_a : LLVMValue) (combined : List LLVMInstruction) : CompileResult :=
+    match fresh_temp ctx_a {
+        CtxStrPair.mk ctx_t temp =>
+            let call_instr := LLVMInstruction.assign temp
+                (LLVMValue.call "apply_fun" LLVMType.i64_ (cons_val val_a empty_vals) false) in
+            CompileResult.ok ctx_t (cons_instr call_instr combined) (LLVMValue.var_ temp),
+    }
+
+def compile_call_stub (ctx_a : CodegenCtx) (combined : List LLVMInstruction) : CompileResult :=
+    match fresh_temp ctx_a {
+        CtxStrPair.mk ctx_t temp =>
+            CompileResult.ok ctx_t combined (LLVMValue.var_ temp),
+    }
+
+def append_instrs (a : List LLVMInstruction) (b : List LLVMInstruction) : List LLVMInstruction := match a {
+    List.empty => b,
+    List.cons hd tl => cons_instr hd (append_instrs tl b),
 }
 
 def param_name (p : Param) : Identifier := match p {
@@ -305,9 +455,23 @@ def compile_def_ir (def_ : Def) : LLVMFunction := match def_ {
         let params := collect_def_params term_ in
         let llvm_params := build_llvm_params params in
         let body := strip_lams term_ in
-        let instrs := compile_body_instrs body in
-        let entry_block := LLVMBasicBlock.mk "entry" instrs in
-        LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true,
+        let c0 := bind_params_in_ctx empty_ctx params in
+        match compile_term_ir c0 body {
+            CompileResult.ok ctx_r instrs_r val_r =>
+                let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
+                let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true,
+        },
+}
+
+def bind_params_in_ctx (c : CodegenCtx) (params : List Param) : CodegenCtx :=
+    bind_params_with_idx c params 0
+
+def bind_params_with_idx (c : CodegenCtx) (params : List Param) (idx : I64) : CodegenCtx := match params {
+    List.empty => c,
+    List.cons p rest =>
+        let c1 := ctx_bind_local c (param_name p) (LLVMValue.parm_ idx) in
+        bind_params_with_idx c1 rest (idx + 1),
 }
 
 def empty_vals : List LLVMValue := List.empty
@@ -566,5 +730,74 @@ def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true
     else check_contains (String.slice text 1 (String.length text)) needle
+
+@[test]
+def test_param_binding : Bool :=
+    let x_id := Identifier.id "x" in
+    let nid := NameRef.nid (Identifier.id "I64_add") in
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let x_var := Term.var (NameRef.nid x_id) in
+    let var_ := Term.var nid in
+    let app1 := Term.app var_ x_var in
+    let body := Term.app app1 one in
+    let param := Param.mk x_id (Term.type_ 1) in
+    let term_ := Term.lam param body in
+    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "add1") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "add i64"
+
+@[test]
+def test_multi_param : Bool :=
+    let a_id := Identifier.id "a" in
+    let b_id := Identifier.id "b" in
+    let nid := NameRef.nid (Identifier.id "I64_mul") in
+    let a_var := Term.var (NameRef.nid a_id) in
+    let b_var := Term.var (NameRef.nid b_id) in
+    let var_ := Term.var nid in
+    let app1 := Term.app var_ a_var in
+    let body := Term.app app1 b_var in
+    let param_a := Param.mk a_id (Term.type_ 1) in
+    let param_b := Param.mk b_id (Term.type_ 1) in
+    let term_ := Term.lam param_a (Term.lam param_b body) in
+    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "mul2") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    String.beq (String.slice text 0 5) "; Mod"
+
+@[test]
+def test_nested_native : Bool :=
+    let x_id := Identifier.id "x" in
+    let add_nid := NameRef.nid (Identifier.id "I64_add") in
+    let mul_nid := NameRef.nid (Identifier.id "I64_mul") in
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 2 NumSuffix.i64) in
+    let x_var := Term.var (NameRef.nid x_id) in
+    let mul_var := Term.var mul_nid in
+    let mul_app1 := Term.app mul_var x_var in
+    let mul_body := Term.app mul_app1 two in
+    let add_var := Term.var add_nid in
+    let add_app1 := Term.app add_var mul_body in
+    let body := Term.app add_app1 one in
+    let param := Param.mk x_id (Term.type_ 1) in
+    let term_ := Term.lam param body in
+    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "nested") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "mul i64"
+
+@[test]
+def test_general_call_emitted : Bool :=
+    let x_id := Identifier.id "x" in
+    let f_nid := NameRef.nid (Identifier.id "some_fun") in
+    let x_var := Term.var (NameRef.nid x_id) in
+    let f_var := Term.var f_nid in
+    let body := Term.app f_var x_var in
+    let param := Param.mk x_id (Term.type_ 1) in
+    let term_ := Term.lam param body in
+    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "caller") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "call i64"
 
 def main : I64 := 42
