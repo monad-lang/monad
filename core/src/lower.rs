@@ -9,7 +9,7 @@ use crate::Map;
 ///   5. Erasure of type-level constructs (Forall, Pi)
 ///
 /// See: plans/implementations/two-term-kernel.md
-use crate::eval_term::{self, EvalTerm, Literal as ELiteral, Multiplicity, RecursorInfo};
+use crate::eval_term::{self, EvalTerm, Literal as ELiteral, Multiplicity, RecursorInfo, Region};
 use crate::term::module::Scope;
 use crate::term::{
   Constructor, Identifier, Literal, MatchCase, ModulePath, NameRef, Named, Native, Par, Term,
@@ -236,7 +236,10 @@ impl<'a> LowerContext<'a> {
     let lowered = self.lower(body)?;
     self.pop();
 
-    Ok(eval_term::lam(mult, lowered))
+    // Wrap the lambda body in a Stack region — all values allocated
+    // inside the lambda live on the stack by default.
+    let body_with_region = eval_term::region(Region::Stack, lowered);
+    Ok(eval_term::lam(mult, body_with_region))
   }
 
   // -- App lowering -------------------------------------------------------
@@ -844,6 +847,63 @@ mod tests {
       },
     };
     assert!(lower_term(&t, &scope).is_err());
+  }
+
+  #[test]
+  fn test_region_inference_lam_body() {
+    let loaded = empty_loaded();
+    let path = ModulePath::new(vec![crate::term::id("'test")]);
+    let scopes = loaded.scopes();
+    let global = scopes.global(&path).unwrap();
+    let scope = Scope::new(&global);
+
+    // λx. x  →  lam many (region r_stack (var 0))
+    let t = crate::term::lam(
+      crate::term::param(crate::term::id("x"), crate::term::Hole),
+      crate::term::var("x"),
+    );
+    let result = lower_term(&t, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lam(
+        Multiplicity::Many,
+        eval_term::region(Region::Stack, eval_term::var(0))
+      )
+    );
+  }
+
+  #[test]
+  fn test_region_inference_nested_lam() {
+    let loaded = empty_loaded();
+    let path = ModulePath::new(vec![crate::term::id("'test")]);
+    let scopes = loaded.scopes();
+    let global = scopes.global(&path).unwrap();
+    let scope = Scope::new(&global);
+
+    // λx. λy. y
+    // → lam many (region r_stack (lam many (region r_stack (var 0))))
+    let inner = crate::term::lam(
+      crate::term::param(crate::term::id("y"), crate::term::Hole),
+      crate::term::var("y"),
+    );
+    let outer = crate::term::lam(
+      crate::term::param(crate::term::id("x"), crate::term::Hole),
+      inner,
+    );
+    let result = lower_term(&outer, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lam(
+        Multiplicity::Many,
+        eval_term::region(
+          Region::Stack,
+          eval_term::lam(
+            Multiplicity::Many,
+            eval_term::region(Region::Stack, eval_term::var(0))
+          )
+        )
+      )
+    );
   }
 }
 
