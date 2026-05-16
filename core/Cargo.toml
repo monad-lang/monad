@@ -15,6 +15,7 @@ rustyline = { version = "17.0.2", optional = true }
 [features]
 default = []
 embed-stdlib = []
+kernel = []
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 repl = ["dep:rustyline"]
 cli = ["dep:clap"]

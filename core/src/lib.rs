@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use crate::eval::r#type::render_type_error_with_source;
 use crate::eval::r#type::type_check;
 use crate::eval::{EvalOptions, eval};
+#[cfg(feature = "kernel")]
 use crate::eval_term::EvalTerm;
+#[cfg(feature = "kernel")]
 use crate::lower::LowerContext;
 #[cfg(feature = "repl")]
 use crate::parser::{ReplInput, repl_parser};
@@ -163,6 +165,7 @@ pub fn load_module(
   Ok(loaded)
 }
 
+#[cfg(feature = "kernel")]
 /// Evaluate a type-checked Term through the EvalTerm kernel pipeline.
 /// Returns the resulting EvalTerm (no conversion back to Term yet).
 pub fn eval_kernel(term: Term, scope: &crate::term::module::Scope) -> Result<EvalTerm, String> {
@@ -201,12 +204,25 @@ pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<()
     .map_err(|e| render_type_error_with_source(&source, &e, options.use_colors, Some(&input)))?
     .to_tuple();
   println!("Eval type {typ}");
-  let term = eval(term, &global.scope(), &options)
-    .map_err(|e| format!("{e}"))
-    .inspect_err(|e| eprintln!("{e}"))?;
+  #[cfg(feature = "kernel")]
+  {
+    let kernel_result = eval_kernel(term.clone(), &global.scope())
+      .map_err(|e| format!("kernel: {e}"))
+      .inspect_err(|e| eprintln!("{e}"))?;
+    println!("Kernel result {kernel_result}");
+    if options.debug {
+      eprintln!("Note: kernel evaluator used (feature \"kernel\" enabled)");
+    }
+  }
+  #[cfg(not(feature = "kernel"))]
+  {
+    let term = eval(term, &global.scope(), &options)
+      .map_err(|e| format!("{e}"))
+      .inspect_err(|e| eprintln!("{e}"))?;
 
-  if options.debug {
-    println!("Eval result {term}");
+    if options.debug {
+      println!("Eval result {term}");
+    }
   }
   Ok(())
 }

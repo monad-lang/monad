@@ -1422,6 +1422,7 @@ mod integration_tests {
   }
 
   #[test]
+  #[cfg(feature = "kernel")]
   fn bench_kernel_vs_eval() {
     let scope = test_scope();
     use std::time::Instant;
