@@ -13,7 +13,7 @@ type CodegenCtx {
 }
 
 type CompileResult {
-    ok (cr_ctx : CodegenCtx) (cr_instrs : List LLVMInstruction) (cr_val : LLVMValue),
+    ok (cr_ctx : CodegenCtx) (cr_instrs : List LLVMInstruction) (cr_val : LLVMValue) (cr_blocks : List LLVMBasicBlock),
 }
 
 type CtxStrPair {
@@ -211,11 +211,64 @@ def is_llvm_constant (val : LLVMValue) : Bool := match val {
 }
 
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
-    Literal.num n suffix => CompileResult.ok c empty_instrs (LLVMValue.int_ n),
-    Literal.str s => CompileResult.ok c empty_instrs (LLVMValue.global_ "str"),
-    Literal.if_ cond then_ else_ => CompileResult.ok c empty_instrs LLVMValue.void_val,
-    Literal.match_ scrutinee cases => CompileResult.ok c empty_instrs LLVMValue.void_val,
+    Literal.num n suffix => CompileResult.ok c empty_instrs (LLVMValue.int_ n) empty_blocks,
+    Literal.str s => CompileResult.ok c empty_instrs (LLVMValue.global_ "str") empty_blocks,
+    Literal.if_ cond then_ else_ => compile_if_ir c cond then_ else_,
+    Literal.match_ scrutinee cases => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
 }
+
+type IfLabels {
+    mk (ctx_after : CodegenCtx) (then_label : String) (else_label : String) (merge_label : String),
+}
+
+def compile_if_ir (c : CodegenCtx) (cond : Term) (then_ : Term) (else_ : Term) : CompileResult :=
+    match compile_term_ir c cond {
+        CompileResult.ok ctx_cond cond_instrs cond_val blocks_cond =>
+            match build_if_labels ctx_cond {
+                IfLabels.mk ctx_branches then_label else_label merge_label =>
+                    let branch_instr := LLVMInstruction.branch cond_val then_label else_label in
+                    let entry_instrs := cons_instr branch_instr cond_instrs in
+                    build_if_blocks ctx_branches then_label else_label merge_label then_ else_ entry_instrs blocks_cond,
+            },
+    }
+
+def build_if_labels (c : CodegenCtx) : IfLabels :=
+    match fresh_label c "then" {
+        CtxStrPair.mk ctx1 tl =>
+            match fresh_label ctx1 "else" {
+                CtxStrPair.mk ctx2 el =>
+                    match fresh_label ctx2 "merge" {
+                        CtxStrPair.mk ctx3 ml =>
+                            IfLabels.mk ctx3 tl el ml,
+                    },
+            },
+    }
+
+def build_branch_block (label : String) (merge_label : String) (instrs : List LLVMInstruction) : LLVMBasicBlock :=
+    LLVMBasicBlock.mk label (cons_instr (LLVMInstruction.jump merge_label) instrs)
+
+def build_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : String) (merge_label : String) (then_ : Term) (else_ : Term) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) : CompileResult :=
+    match compile_term_ir ctx then_ {
+        CompileResult.ok ctx_then then_instrs then_val blocks_then =>
+            let then_block := build_branch_block then_label merge_label then_instrs in
+            match compile_term_ir ctx_then else_ {
+                CompileResult.ok ctx_else else_instrs else_val blocks_else =>
+                    let else_block := build_branch_block else_label merge_label else_instrs in
+                    build_merge_result ctx_else merge_label then_val then_label else_val else_label entry_instrs entry_blocks blocks_then blocks_else then_block else_block,
+            },
+    }
+
+def build_merge_result (ctx_else : CodegenCtx) (merge_label : String) (then_val : LLVMValue) (then_label : String) (else_val : LLVMValue) (else_label : String) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) (blocks_then : List LLVMBasicBlock) (blocks_else : List LLVMBasicBlock) (then_block : LLVMBasicBlock) (else_block : LLVMBasicBlock) : CompileResult :=
+    match fresh_temp ctx_else {
+        CtxStrPair.mk ctx_phi phi_temp =>
+            let phi_val := LLVMValue.phi (cons_phi (PhiPair.mk then_val then_label) (cons_phi (PhiPair.mk else_val else_label) empty_phis)) in
+            let phi_instr := LLVMInstruction.assign phi_temp phi_val in
+            let ret_instr := LLVMInstruction.ret (LLVMValue.var_ phi_temp) in
+            let merge_instrs := cons_instr phi_instr (cons_instr ret_instr empty_instrs) in
+            let merge_block := LLVMBasicBlock.mk merge_label merge_instrs in
+            let all_blocks := cons_block then_block (cons_block else_block (cons_block merge_block (append_blocks (append_blocks entry_blocks blocks_then) blocks_else))) in
+            CompileResult.ok ctx_phi entry_instrs (LLVMValue.var_ phi_temp) all_blocks,
+    }
 
 def compile_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match term_ {
     Term.lit val => compile_lit_ir c val,
@@ -223,20 +276,20 @@ def compile_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match ter
         match name {
             NameRef.nid id =>
                 match ctx_lookup_local c id {
-                    Option.some val => CompileResult.ok c empty_instrs val,
-                    Option.none => CompileResult.ok c empty_instrs (LLVMValue.var_ (show_identifier id)),
+                    Option.some val => CompileResult.ok c empty_instrs val empty_blocks,
+                    Option.none => CompileResult.ok c empty_instrs (LLVMValue.var_ (show_identifier id)) empty_blocks,
                 },
-            NameRef.nmp mp => CompileResult.ok c empty_instrs (LLVMValue.var_ (module_path_to_str mp)),
-            NameRef.nop op => CompileResult.ok c empty_instrs (LLVMValue.var_ (show_operator op)),
+            NameRef.nmp mp => CompileResult.ok c empty_instrs (LLVMValue.var_ (module_path_to_str mp)) empty_blocks,
+            NameRef.nop op => CompileResult.ok c empty_instrs (LLVMValue.var_ (show_operator op)) empty_blocks,
         },
-    Term.lam param_ body => CompileResult.ok c empty_instrs (LLVMValue.parm_ 0),
+    Term.lam param_ body => CompileResult.ok c empty_instrs (LLVMValue.parm_ 0) empty_blocks,
     Term.app fun arg => compile_app_ir c fun arg,
-    Term.ntv native => CompileResult.ok c empty_instrs LLVMValue.void_val,
-    Term.con constr => CompileResult.ok c empty_instrs LLVMValue.void_val,
-    Term.forall name typ body => CompileResult.ok c empty_instrs LLVMValue.void_val,
-    Term.pi arg ret => CompileResult.ok c empty_instrs LLVMValue.void_val,
-    Term.type_ universe => CompileResult.ok c empty_instrs LLVMValue.void_val,
-    Term.hole => CompileResult.ok c empty_instrs LLVMValue.void_val,
+    Term.ntv native => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
+    Term.con constr => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
+    Term.forall name typ body => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
+    Term.pi arg ret => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
+    Term.type_ universe => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
+    Term.hole => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
 }
 
 def compile_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
@@ -279,15 +332,15 @@ def try_compile_inline_native (c : CodegenCtx) (fun : Term) (arg : Term) : Optio
 
 def compile_native_app (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : Term) : CompileResult :=
     match compile_term_ir c arg2 {
-        CompileResult.ok ctx2 instrs2 val2 =>
+        CompileResult.ok ctx2 instrs2 val2 _ =>
             match compile_term_ir ctx2 arg {
-                CompileResult.ok ctx1 instrs1 val1 =>
+                CompileResult.ok ctx1 instrs1 val1 _ =>
                     let combined := append_instrs instrs2 instrs1 in
                     match extract_lit_from_val val2 {
                         Option.some n1 =>
                             match extract_lit_from_val val1 {
                                 Option.some n2 =>
-                                    CompileResult.ok ctx1 combined (compile_native_val op (LLVMValue.int_ n1) (LLVMValue.int_ n2)),
+                                    CompileResult.ok ctx1 combined (compile_native_val op (LLVMValue.int_ n1) (LLVMValue.int_ n2)) empty_blocks,
                                 Option.none =>
                                     emit_arith_instr ctx1 op val2 val1 combined,
                             },
@@ -302,7 +355,7 @@ def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : L
         CtxStrPair.mk new_ctx temp =>
             let arith_val := compile_native_val op lhs rhs in
             let arith_instr := LLVMInstruction.assign temp arith_val in
-            CompileResult.ok new_ctx (cons_instr arith_instr instrs) (LLVMValue.var_ temp),
+            CompileResult.ok new_ctx (cons_instr arith_instr instrs) (LLVMValue.var_ temp) empty_blocks,
     }
 
 def extract_lit_from_val (val : LLVMValue) : Option I64 := match val {
@@ -332,9 +385,9 @@ def extract_lit_from_val (val : LLVMValue) : Option I64 := match val {
 
 def compile_general_call (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
     match compile_term_ir c fun {
-        CompileResult.ok ctx_f instrs_f val_f =>
+        CompileResult.ok ctx_f instrs_f val_f _ =>
             match compile_term_ir ctx_f arg {
-                CompileResult.ok ctx_a instrs_a val_a =>
+                CompileResult.ok ctx_a instrs_a val_a _ =>
                     let combined := append_instrs instrs_f instrs_a in
                     match val_f {
                         LLVMValue.var_ name =>
@@ -370,7 +423,7 @@ def compile_direct_call (ctx_a : CodegenCtx) (name : String) (val_a : LLVMValue)
         CtxStrPair.mk ctx_t temp =>
             let call_instr := LLVMInstruction.assign temp
                 (LLVMValue.call name LLVMType.i64_ (cons_val val_a empty_vals) false) in
-            CompileResult.ok ctx_t (cons_instr call_instr combined) (LLVMValue.var_ temp),
+            CompileResult.ok ctx_t (cons_instr call_instr combined) (LLVMValue.var_ temp) empty_blocks,
     }
 
 def compile_indirect_call (ctx_a : CodegenCtx) (val_a : LLVMValue) (combined : List LLVMInstruction) : CompileResult :=
@@ -378,18 +431,23 @@ def compile_indirect_call (ctx_a : CodegenCtx) (val_a : LLVMValue) (combined : L
         CtxStrPair.mk ctx_t temp =>
             let call_instr := LLVMInstruction.assign temp
                 (LLVMValue.call "apply_fun" LLVMType.i64_ (cons_val val_a empty_vals) false) in
-            CompileResult.ok ctx_t (cons_instr call_instr combined) (LLVMValue.var_ temp),
+            CompileResult.ok ctx_t (cons_instr call_instr combined) (LLVMValue.var_ temp) empty_blocks,
     }
 
 def compile_call_stub (ctx_a : CodegenCtx) (combined : List LLVMInstruction) : CompileResult :=
     match fresh_temp ctx_a {
         CtxStrPair.mk ctx_t temp =>
-            CompileResult.ok ctx_t combined (LLVMValue.var_ temp),
+            CompileResult.ok ctx_t combined (LLVMValue.var_ temp) empty_blocks,
     }
 
 def append_instrs (a : List LLVMInstruction) (b : List LLVMInstruction) : List LLVMInstruction := match a {
     List.empty => b,
     List.cons hd tl => cons_instr hd (append_instrs tl b),
+}
+
+def append_blocks (a : List LLVMBasicBlock) (b : List LLVMBasicBlock) : List LLVMBasicBlock := match a {
+    List.empty => b,
+    List.cons hd tl => cons_block hd (append_blocks tl b),
 }
 
 def param_name (p : Param) : Identifier := match p {
@@ -457,10 +515,11 @@ def compile_def_ir (def_ : Def) : LLVMFunction := match def_ {
         let body := strip_lams term_ in
         let c0 := bind_params_in_ctx empty_ctx params in
         match compile_term_ir c0 body {
-            CompileResult.ok ctx_r instrs_r val_r =>
+            CompileResult.ok ctx_r instrs_r val_r blocks_r =>
                 let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
                 let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true,
+                let all_blocks := append_blocks (cons_block entry_block empty_blocks) blocks_r in
+                LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true,
         },
 }
 
@@ -475,6 +534,10 @@ def bind_params_with_idx (c : CodegenCtx) (params : List Param) (idx : I64) : Co
 }
 
 def empty_vals : List LLVMValue := List.empty
+
+def empty_phis : List PhiPair := List.empty
+
+def cons_phi (p : PhiPair) (ps : List PhiPair) : List PhiPair := List.cons p ps
 
 def cons_instr (i : LLVMInstruction) (is : List LLVMInstruction) : List LLVMInstruction :=
     List.cons i is
@@ -799,5 +862,20 @@ def test_general_call_emitted : Bool :=
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "call i64"
+
+@[test]
+def test_if_then_else_compiled : Bool :=
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 2 NumSuffix.i64) in
+    let eq_var := Term.var (NameRef.nid (Identifier.id "I64_eq")) in
+    let eq_one := Term.app eq_var one in
+    let cond := Term.app eq_one two in
+    let if_term := Term.lit (Literal.if_ cond one two) in
+    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "iftest") List.empty)) (Term.type_ 1) if_term List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    if check_contains text "br i1"
+    then check_contains text "phi i64"
+    else false
 
 def main : I64 := 42
