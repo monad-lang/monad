@@ -178,9 +178,37 @@ def empty_instrs : List LLVMInstruction := List.empty
 def compile_body_instrs (body : Term) : List LLVMInstruction :=
     match try_compile_body body {
         Option.some val =>
-            cons_instr (LLVMInstruction.assign "t0" val) (cons_instr (LLVMInstruction.ret (LLVMValue.var_ "t0")) empty_instrs),
+            if is_llvm_constant val
+            then cons_instr (LLVMInstruction.ret val) empty_instrs
+            else cons_instr (LLVMInstruction.assign "t0" val) (cons_instr (LLVMInstruction.ret (LLVMValue.var_ "t0")) empty_instrs),
         Option.none => empty_instrs,
     }
+
+/// Check if an LLVMValue is a constant that can be used directly
+/// in an instruction (no need for assignment).
+def is_llvm_constant (val : LLVMValue) : Bool := match val {
+    LLVMValue.int_ n => true,
+    LLVMValue.int32_ n => true,
+    LLVMValue.bool_ b => true,
+    LLVMValue.void_val => true,
+    LLVMValue.global_ name => true,
+    LLVMValue.var_ name => true,
+    LLVMValue.parm_ idx => true,
+    LLVMValue.call fn_name ret_ty args tail => false,
+    LLVMValue.add lhs rhs => false,
+    LLVMValue.sub lhs rhs => false,
+    LLVMValue.mul lhs rhs => false,
+    LLVMValue.sdiv lhs rhs => false,
+    LLVMValue.icmp_eq lhs rhs => false,
+    LLVMValue.zext val from_ty to_ty => false,
+    LLVMValue.trunc val from_ty to_ty => false,
+    LLVMValue.phi pairs => false,
+    LLVMValue.gep base indices => false,
+    LLVMValue.load ptr => false,
+    LLVMValue.bitcast val ty => false,
+    LLVMValue.alloc_closure entry arity env_size => false,
+    LLVMValue.alloc_constructor tag field_count => false,
+}
 
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
     Literal.num n suffix => CompileResult.ok c (LLVMValue.int_ n),
@@ -346,10 +374,7 @@ def compile_def_list (defs : List Def) : List LLVMFunction := match defs {
 }
 
 def ren_main_and_wrap (funcs : List LLVMFunction) : List LLVMFunction :=
-    if has_main funcs
-    then let renamed := rename_main funcs in
-        cons_func compile_main_wrapper_ir renamed
-    else funcs
+    rename_main funcs
 
 def has_main (funcs : List LLVMFunction) : Bool := match funcs {
     List.empty => false,
