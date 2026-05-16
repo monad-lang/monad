@@ -334,6 +334,8 @@ pub struct Env {
   /// Maps const_idx → Vec<(recursor_idx, case_idx)> for recursor dispatch.
   /// Each const can be a constructor in multiple inductive types.
   pub constructor_tags: Map<u64, Vec<(u64, u64)>>,
+  /// Maps well-known constructor names (e.g. "Option.some") to their const index.
+  pub well_known: Map<String, u64>,
 }
 
 impl Env {
@@ -894,6 +896,9 @@ fn exec_prim(idx: u64, args: &[EvalTerm], env: &Env) -> Result<EvalTerm, EvalErr
     "u64_to_string" => kernel_int_to_string(args, |v| (v as u64).to_string()),
     "f32_to_string" | "f64_to_string" => kernel_float_to_string(args),
     "print_str" => kernel_print_str(args),
+    "string_get" => kernel_string_get(args, env),
+    "string_to_list" => kernel_string_to_list(args, env),
+    "string_from_list" => kernel_string_from_list(args, env),
     _ => Ok(EvalTerm::Prim {
       idx: idx as u64,
       args: args.to_vec(),
@@ -1137,6 +1142,116 @@ fn kernel_print_str(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
   Ok(EvalTerm::Lit {
     l: Literal::Str { value: s },
   })
+}
+
+fn kernel_string_get(args: &[EvalTerm], env: &Env) -> Result<EvalTerm, EvalError> {
+  if args.len() < 2 {
+    return Err(EvalError::PrimCallFailed("string_get needs 2 args".into()));
+  }
+  let s = extract_string(&args[0])?;
+  let idx = extract_int(&args[1])?;
+  if idx < 0 || idx >= s.len() as i64 {
+    let none_idx = env
+      .well_known
+      .get("Option.none")
+      .copied()
+      .unwrap_or(u64::MAX);
+    return Ok(EvalTerm::Const { idx: none_idx });
+  }
+  let some_idx = env
+    .well_known
+    .get("Option.some")
+    .copied()
+    .unwrap_or(u64::MAX);
+  let byte = s.as_bytes()[idx as usize] as i64;
+  Ok(EvalTerm::App {
+    fun: Box::new(EvalTerm::Const { idx: some_idx }),
+    arg: Box::new(EvalTerm::Lit {
+      l: Literal::Int { v: byte },
+    }),
+  })
+}
+
+fn kernel_string_to_list(args: &[EvalTerm], env: &Env) -> Result<EvalTerm, EvalError> {
+  if args.is_empty() {
+    return Err(EvalError::PrimCallFailed(
+      "string_to_list needs 1 arg".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  let cons_idx = env.well_known.get("List.cons").copied().unwrap_or(u64::MAX);
+  let empty_idx = env
+    .well_known
+    .get("List.empty")
+    .copied()
+    .unwrap_or(u64::MAX);
+  let result = EvalTerm::Const { idx: empty_idx };
+  let result = s
+    .as_bytes()
+    .iter()
+    .rev()
+    .fold(result, |acc, &byte| EvalTerm::App {
+      fun: Box::new(EvalTerm::App {
+        fun: Box::new(EvalTerm::Const { idx: cons_idx }),
+        arg: Box::new(EvalTerm::Lit {
+          l: Literal::Int { v: byte as i64 },
+        }),
+      }),
+      arg: Box::new(acc),
+    });
+  Ok(result)
+}
+
+fn kernel_string_from_list(args: &[EvalTerm], env: &Env) -> Result<EvalTerm, EvalError> {
+  if args.is_empty() {
+    return Err(EvalError::PrimCallFailed(
+      "string_from_list needs 1 arg".into(),
+    ));
+  }
+  let empty_idx = env
+    .well_known
+    .get("List.empty")
+    .copied()
+    .unwrap_or(u64::MAX);
+  let cons_idx = env.well_known.get("List.cons").copied().unwrap_or(u64::MAX);
+  let bytes = walk_list(&args[0], empty_idx, cons_idx)?;
+  let s = String::from_utf8(bytes)
+    .map_err(|e| EvalError::PrimCallFailed(format!("invalid UTF-8 in string_from_list: {e}")))?;
+  Ok(EvalTerm::Lit {
+    l: Literal::Str { value: s },
+  })
+}
+
+fn walk_list(term: &EvalTerm, empty_idx: u64, cons_idx: u64) -> Result<Vec<u8>, EvalError> {
+  match term {
+    EvalTerm::Const { idx } if *idx == empty_idx => Ok(Vec::new()),
+    EvalTerm::App { fun, arg: rest } => {
+      if let EvalTerm::App {
+        fun: inner,
+        arg: head,
+      } = fun.as_ref()
+      {
+        if let EvalTerm::Const { idx } = inner.as_ref() {
+          if *idx == cons_idx {
+            if let EvalTerm::Lit {
+              l: Literal::Int { v },
+            } = head.as_ref()
+            {
+              let mut bytes = walk_list(rest, empty_idx, cons_idx)?;
+              bytes.insert(0, *v as u8);
+              return Ok(bytes);
+            }
+          }
+        }
+      }
+      Err(EvalError::PrimCallFailed(
+        "string_from_list: expected List<U8>".into(),
+      ))
+    }
+    _ => Err(EvalError::PrimCallFailed(
+      "string_from_list: expected List<U8>".into(),
+    )),
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -1729,5 +1844,122 @@ mod tests {
     let t = app(prim(0, vec![]), hello.clone());
     let result = eval(&t, &[], &env).unwrap();
     assert_eq!(result, hello);
+  }
+
+  fn env_with_well_known(
+    names: &[(&str, u64)],
+    prims: Vec<(String, usize)>,
+    consts: Vec<EvalTerm>,
+  ) -> Env {
+    let mut env = Env::new();
+    env.primitives = prims;
+    env.constants = consts;
+    for (name, idx) in names {
+      env.well_known.insert(name.to_string(), *idx);
+    }
+    env
+  }
+
+  #[test]
+  fn test_eval_string_get_some() {
+    let mut env = env_with_well_known(
+      &[("Option.some", 10), ("Option.none", 11)],
+      vec![("string_get".into(), 2)],
+      vec![sort(0); 12],
+    );
+    // Constructors must point to themselves so they aren't resolved to sort(0)
+    env.constants[10] = const_(10);
+    env.constants[11] = const_(11);
+    let hello = lit(Literal::Str {
+      value: "hello".to_string(),
+    });
+    let t = app(app(prim(0, vec![]), hello), lit(Literal::Int { v: 1 }));
+    let result = eval(&t, &[], &env).unwrap();
+    // Should be Option.some(101) = App(Const(10), Lit(101))
+    assert_eq!(result, app(const_(10), lit(Literal::Int { v: 101 })));
+  }
+
+  #[test]
+  fn test_eval_string_get_none() {
+    let mut env = env_with_well_known(
+      &[("Option.some", 10), ("Option.none", 11)],
+      vec![("string_get".into(), 2)],
+      vec![sort(0); 12],
+    );
+    env.constants[10] = const_(10);
+    env.constants[11] = const_(11);
+    let hello = lit(Literal::Str {
+      value: "hello".to_string(),
+    });
+    let t = app(app(prim(0, vec![]), hello), lit(Literal::Int { v: 10 }));
+    let result = eval(&t, &[], &env).unwrap();
+    assert_eq!(result, const_(11)); // Option.none
+  }
+
+  #[test]
+  fn test_eval_string_to_list() {
+    let mut env = env_with_well_known(
+      &[("List.cons", 20), ("List.empty", 21)],
+      vec![("string_to_list".into(), 1)],
+      vec![sort(0); 22],
+    );
+    env.constants[20] = const_(20);
+    env.constants[21] = const_(21);
+    let t = prim(
+      0,
+      vec![lit(Literal::Str {
+        value: "ab".to_string(),
+      })],
+    );
+    let result = eval(&t, &[], &env).unwrap();
+    // Should be cons(97, cons(98, empty))
+    let expected = app(
+      app(const_(20), lit(Literal::Int { v: 97 })),
+      app(app(const_(20), lit(Literal::Int { v: 98 })), const_(21)),
+    );
+    assert_eq!(result, expected);
+  }
+
+  #[test]
+  fn test_eval_string_from_list() {
+    let mut env = env_with_well_known(
+      &[("List.cons", 20), ("List.empty", 21)],
+      vec![("string_from_list".into(), 1)],
+      vec![sort(0); 22],
+    );
+    env.constants[20] = const_(20);
+    env.constants[21] = const_(21);
+    // Build List.cons(97, List.cons(98, List.empty)) — "ab"
+    let list = app(
+      app(const_(20), lit(Literal::Int { v: 97 })),
+      app(app(const_(20), lit(Literal::Int { v: 98 })), const_(21)),
+    );
+    let t = prim(0, vec![list]);
+    let result = eval(&t, &[], &env).unwrap();
+    assert_eq!(
+      result,
+      lit(Literal::Str {
+        value: "ab".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_eval_string_from_list_empty() {
+    let mut env = env_with_well_known(
+      &[("List.cons", 20), ("List.empty", 21)],
+      vec![("string_from_list".into(), 1)],
+      vec![sort(0); 22],
+    );
+    env.constants[20] = const_(20);
+    env.constants[21] = const_(21);
+    let t = prim(0, vec![const_(21)]); // List.empty
+    let result = eval(&t, &[], &env).unwrap();
+    assert_eq!(
+      result,
+      lit(Literal::Str {
+        value: String::new()
+      })
+    );
   }
 }

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::eval::r#type::render_type_error_with_source;
 use crate::eval::r#type::type_check;
 use crate::eval::{EvalOptions, eval};
+use crate::eval_term::EvalTerm;
+use crate::lower::LowerContext;
 #[cfg(feature = "repl")]
 use crate::parser::{ReplInput, repl_parser};
 #[cfg(feature = "repl")]
@@ -159,6 +161,15 @@ pub fn load_module(
   let text = fs::read_to_string(file).map_err(|e| format!("{e}"))?;
   load_module_from_text(&text, path.clone(), &mut loaded).map_err(|e| format!("{e}"))?;
   Ok(loaded)
+}
+
+/// Evaluate a type-checked Term through the EvalTerm kernel pipeline.
+/// Returns the resulting EvalTerm (no conversion back to Term yet).
+pub fn eval_kernel(term: Term, scope: &crate::term::module::Scope) -> Result<EvalTerm, String> {
+  let mut ctx = LowerContext::new(scope);
+  let lowered = ctx.lower(&term).map_err(|e| format!("lower: {e}"))?;
+  let env = ctx.finish(scope).map_err(|e| format!("env: {e}"))?;
+  crate::eval_term::eval_entry(&lowered, &env).map_err(|e| format!("eval: {e}"))
 }
 
 pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<(), String> {

@@ -149,7 +149,7 @@ pub fn lower_term(term: &Term, scope: &Scope) -> Result<EvalTerm, LowerError> {
 // ---------------------------------------------------------------------------
 
 impl<'a> LowerContext<'a> {
-  fn lower(&mut self, term: &Term) -> Result<EvalTerm, LowerError> {
+  pub fn lower(&mut self, term: &Term) -> Result<EvalTerm, LowerError> {
     match term {
       Term::Var { name } => self.lower_var(name),
       Term::Lam { param, body } => self.lower_lam(param, body),
@@ -572,11 +572,23 @@ impl<'a> LowerContext<'a> {
       }
     }
 
+    // --- well_known const indices ------------------------------------------
+    let mut well_known: Map<String, u64> = Map::new();
+    for (path, &idx) in &self.const_indices {
+      let path_str = path.to_string();
+      for name in &["Option.some", "Option.none", "List.empty", "List.cons"] {
+        if path_str.ends_with(name) {
+          well_known.insert(name.to_string(), idx);
+        }
+      }
+    }
+
     Ok(eval_term::Env {
       constants,
       primitives,
       recursors,
       constructor_tags,
+      well_known,
     })
   }
 }
@@ -849,7 +861,7 @@ mod tests {
 mod integration_tests {
   use super::*;
   use crate::eval::r#type::type_check;
-  use crate::eval_term::{self, Literal as ELit, eval_entry};
+  use crate::eval_term::{self, EvalTerm, Literal as ELit, eval_entry};
   use crate::parser::{ReplInput, repl_parser};
   use crate::term::{
     Hole, ModulePath, app, lam,
@@ -1349,6 +1361,138 @@ mod integration_tests {
       eval_term::lit(ELit::Str {
         value: "ell".to_string()
       })
+    );
+  }
+
+  #[test]
+  fn test_integration_string_get_some() {
+    let scope = test_scope();
+    let input = r#"String.get "hello" 1"#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope).unwrap();
+    // result should be Option.some 101 ('e' = U8(101))
+    if let EvalTerm::App { fun, arg } = &result {
+      assert!(matches!(fun.as_ref(), EvalTerm::Const { .. })); // some
+      assert_eq!(arg.as_ref(), &eval_term::lit(ELit::Int { v: 101 }));
+    } else {
+      panic!("expected App, got {result:?}");
+    }
+  }
+
+  #[test]
+  fn test_integration_string_get_none() {
+    let scope = test_scope();
+    // index 10 is out of bounds for "hello"
+    let input = r#"String.get "hello" 10"#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope).unwrap();
+    // result should be Option.none
+    assert!(matches!(result, EvalTerm::Const { .. }));
+  }
+
+  #[test]
+  fn test_integration_string_to_list_roundtrip() {
+    let scope = test_scope();
+    // String.to_list + String.from_list roundtrip
+    let input = r#"String.from_list (String.to_list "hello")"#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lit(ELit::Str {
+        value: "hello".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_string_from_list_empty() {
+    let scope = test_scope();
+    let input = r#"String.from_list (List.empty : List U8)"#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lit(ELit::Str {
+        value: String::new()
+      })
+    );
+  }
+
+  #[test]
+  fn bench_kernel_vs_eval() {
+    let scope = test_scope();
+    use std::time::Instant;
+
+    // Expressions to benchmark
+    let exprs: &[&str] = &[
+      "if (1 + 2 == 3 && 4 + 5 == 9 && 10 + 20 == 30) then \"pass\" else \"fail\"",
+      "String.concat \"a\" (String.concat \"b\" (String.concat \"c\" \"d\"))",
+      "if Bool.and (Bool.or false true) (1 + 1 == 2) then 42 else 0",
+      "String.length (String.concat \"hello\" (String.concat \" \" \"world\"))",
+    ];
+
+    let iterations = 1000;
+
+    for expr_str in exprs {
+      let ReplInput::Term(term) = repl_parser(expr_str).unwrap() else {
+        continue;
+      };
+
+      // Warm up type-checking
+      let (_typed, _) = crate::eval::r#type::type_check(term.clone(), crate::term::Hole, &scope)
+        .unwrap()
+        .to_tuple();
+
+      // Time existing eval
+      let typed = crate::eval::r#type::type_check(term.clone(), crate::term::Hole, &scope).unwrap();
+      let start = Instant::now();
+      for _ in 0..iterations {
+        let typed = typed.clone();
+        let _ =
+          crate::eval::eval(typed.term, &scope, &crate::eval::EvalOptions::default()).unwrap();
+      }
+      let existing = start.elapsed();
+
+      // Time kernel eval
+      let typed = crate::eval::r#type::type_check(term.clone(), crate::term::Hole, &scope).unwrap();
+      let start = Instant::now();
+      for _ in 0..iterations {
+        let _ = crate::eval_kernel(typed.term.clone(), &scope).unwrap();
+      }
+      let kernel = start.elapsed();
+
+      println!(
+        "expr: {expr_str:.50}...  existing: {existing:?}  kernel: {kernel:?}  ratio: {:.2}x",
+        existing.as_nanos() as f64 / kernel.as_nanos().max(1) as f64
+      );
+    }
+
+    // Run once more and verify kernel gives correct result
+    let input = "if (1 + 2 == 3) then 99 else 0";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      return;
+    };
+    let typed = crate::eval::r#type::type_check(term, crate::term::Hole, &scope).unwrap();
+    let _existing_result = crate::eval::eval(
+      typed.term.clone(),
+      &scope,
+      &crate::eval::EvalOptions::default(),
+    )
+    .unwrap();
+    let kernel_result = crate::eval_kernel(typed.term, &scope).unwrap();
+    assert_eq!(
+      kernel_result,
+      eval_term::lit(ELit::Int { v: 99 }),
+      "kernel and existing eval disagree"
     );
   }
 }
