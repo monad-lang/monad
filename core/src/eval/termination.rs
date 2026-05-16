@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use crate::empty_set;
 use crate::term::{Def, Identifier, Literal, ModulePath, Par, SourceRange, Term, Term::*};
 
 /// Tracks which variables are known subterms of which formal parameters.
@@ -43,6 +44,9 @@ impl Display for TerminationError {
   }
 }
 
+/// A set of mutually recursive function names being checked together.
+type RecursiveNames = crate::Set<ModulePath>;
+
 /// A found recursive call site with collected arguments.
 #[derive(Debug, Clone)]
 struct RecursiveCall {
@@ -81,17 +85,17 @@ fn extract_params(body: &Term) -> Vec<Identifier> {
   params
 }
 
-/// Check if a term is a reference to a specific definition name.
-fn is_ref_to(term: &Term, def_name: &ModulePath) -> bool {
+/// Check if a term is a reference to any name in the given set.
+fn is_ref_to_any(term: &Term, names: &RecursiveNames) -> bool {
   match term {
-    Var { name } => name.to_path().as_ref() == Some(def_name),
+    Var { name } => name.to_path().map_or(false, |p| names.contains(&p)),
     _ => false,
   }
 }
 
-/// If `term` is a chain of `App` nodes ending in a reference to `def_name`,
-/// collect and return the arguments. Returns None otherwise.
-fn as_recursive_call(term: &Term, def_name: &ModulePath) -> Option<RecursiveCall> {
+/// If `term` is a chain of `App` nodes ending in a reference to one of the
+/// recursive names, collect and return the arguments. Returns None otherwise.
+fn as_recursive_call_any(term: &Term, names: &RecursiveNames) -> Option<RecursiveCall> {
   let mut args: Vec<Term> = Vec::new();
   let mut current = term;
   let mut loc = SourceRange::default();
@@ -116,7 +120,7 @@ fn as_recursive_call(term: &Term, def_name: &ModulePath) -> Option<RecursiveCall
 
   args.reverse();
 
-  if is_ref_to(current, def_name) {
+  if is_ref_to_any(current, names) {
     Some(RecursiveCall { args, loc })
   } else {
     None
@@ -229,19 +233,21 @@ fn check_call_args(
   ))
 }
 
-/// Recursively walk a term body, checking all recursive calls for termination.
+/// Recursively walk a term body, checking all calls to any member of
+/// `recursive_names` for structural termination.
 fn check_body_termination(
   body: &Term,
   def_name: &ModulePath,
+  recursive_names: &RecursiveNames,
   params: &[Identifier],
   env: &SubtermEnv,
 ) -> Result<(), TerminationError> {
   match body {
-    Lam { body, .. } => check_body_termination(body, def_name, params, env),
+    Lam { body, .. } => check_body_termination(body, def_name, recursive_names, params, env),
 
     App { fun, arg } => {
-      // Check if the current App chain is a recursive call
-      if let Some(call) = as_recursive_call(body, def_name) {
+      // Check if the current App chain is a call to any recursive name
+      if let Some(call) = as_recursive_call_any(body, recursive_names) {
         check_call_args(&call, env, params).map_err(|msg| TerminationError::NotStructural {
           def_name: def_name.clone(),
           call: format!("{}", body),
@@ -253,8 +259,8 @@ fn check_body_termination(
         })?;
       }
       // Recurse into sub-expressions
-      check_body_termination(fun, def_name, params, env)?;
-      check_body_termination(arg, def_name, params, env)
+      check_body_termination(fun, def_name, recursive_names, params, env)?;
+      check_body_termination(arg, def_name, recursive_names, params, env)
     }
 
     Lit {
@@ -263,7 +269,7 @@ fn check_body_termination(
       for case in cases {
         let mut case_env = env.clone();
         extend_env_from_match(&mut case_env, value, &case.args, params);
-        check_body_termination(&case.value, def_name, params, &case_env)?;
+        check_body_termination(&case.value, def_name, recursive_names, params, &case_env)?;
       }
       Ok(())
     }
@@ -271,14 +277,14 @@ fn check_body_termination(
     Lit {
       value: Literal::If { value, then, els },
     } => {
-      check_body_termination(value, def_name, params, env)?;
-      check_body_termination(then, def_name, params, env)?;
-      check_body_termination(els, def_name, params, env)
+      check_body_termination(value, def_name, recursive_names, params, env)?;
+      check_body_termination(then, def_name, recursive_names, params, env)?;
+      check_body_termination(els, def_name, recursive_names, params, env)
     }
 
-    Ann { term, .. } => check_body_termination(term, def_name, params, env),
+    Ann { term, .. } => check_body_termination(term, def_name, recursive_names, params, env),
 
-    Ctx { term, .. } => check_body_termination(term, def_name, params, env),
+    Ctx { term, .. } => check_body_termination(term, def_name, recursive_names, params, env),
 
     // Leaf / non-recursive nodes: no further checking needed
     Var { .. } | Lit { .. } | Sort { .. } | Hole | Ntv { .. } | Con(..) | Quote { .. } => Ok(()),
@@ -288,9 +294,173 @@ fn check_body_termination(
   }
 }
 
-/// Check that a recursive definition terminates by structural recursion.
+/// Build a call graph from definitions: for each def, find which other
+/// defs (by ModulePath) it references in its body.
+pub fn build_call_graph(defs: &[&Def]) -> crate::Map<ModulePath, crate::Set<ModulePath>> {
+  let def_names: crate::Set<&ModulePath> = defs.iter().map(|d| d.name()).collect();
+  let mut graph = crate::Map::new();
+
+  for def in defs {
+    let callees = find_callees(&def.term, &def_names);
+    graph.insert(def.name().clone(), callees);
+  }
+
+  graph
+}
+
+/// Walk a term to find all Var references that match known def names.
+fn find_callees(term: &Term, known_names: &crate::Set<&ModulePath>) -> crate::Set<ModulePath> {
+  let mut callees = empty_set();
+
+  fn walk(term: &Term, known: &crate::Set<&ModulePath>, callees: &mut crate::Set<ModulePath>) {
+    match term {
+      Var { name } => {
+        if let Some(path) = name.to_path() {
+          if known.contains(&path) {
+            callees.insert(path);
+          }
+        }
+      }
+      App { fun, arg } => {
+        walk(fun, known, callees);
+        walk(arg, known, callees);
+      }
+      Lam { body, .. } => walk(body, known, callees),
+      Ann { term, .. } => walk(term, known, callees),
+      Ctx { term, .. } => walk(term, known, callees),
+      Lit {
+        value: Literal::Match { value, cases },
+      } => {
+        walk(value, known, callees);
+        for case in cases {
+          walk(&case.value, known, callees);
+        }
+      }
+      Lit {
+        value: Literal::If { value, then, els },
+      } => {
+        walk(value, known, callees);
+        walk(then, known, callees);
+        walk(els, known, callees);
+      }
+      Pi { arg, ret, .. } => {
+        walk(arg, known, callees);
+        walk(ret, known, callees);
+      }
+      Forall { typ, body, .. } => {
+        walk(typ, known, callees);
+        walk(body, known, callees);
+      }
+      _ => {}
+    }
+  }
+
+  walk(term, known_names, &mut callees);
+  callees
+}
+
+/// Find strongly connected components in the call graph.
+/// Returns groups of mutually recursive definitions (SCCs with size > 1).
+pub fn find_mutual_groups(
+  graph: &crate::Map<ModulePath, crate::Set<ModulePath>>,
+) -> Vec<Vec<ModulePath>> {
+  // Use Tarjan's algorithm for SCC detection
+  let mut index_counter = 0u64;
+  let mut indices: crate::Map<ModulePath, u64> = crate::Map::new();
+  let mut lowlink: crate::Map<ModulePath, u64> = crate::Map::new();
+  let mut on_stack: crate::Set<ModulePath> = empty_set();
+  let mut stack: Vec<ModulePath> = Vec::new();
+  let mut sccs: Vec<Vec<ModulePath>> = Vec::new();
+
+  // Collect all nodes (some may have no outgoing edges)
+  let mut all_nodes: crate::Set<ModulePath> = empty_set();
+  for node in graph.keys() {
+    all_nodes.insert(node.clone());
+  }
+  for callees in graph.values() {
+    for callee in callees {
+      all_nodes.insert(callee.clone());
+    }
+  }
+
+  fn strongconnect(
+    v: &ModulePath,
+    graph: &crate::Map<ModulePath, crate::Set<ModulePath>>,
+    index_counter: &mut u64,
+    indices: &mut crate::Map<ModulePath, u64>,
+    lowlink: &mut crate::Map<ModulePath, u64>,
+    on_stack: &mut crate::Set<ModulePath>,
+    stack: &mut Vec<ModulePath>,
+    sccs: &mut Vec<Vec<ModulePath>>,
+  ) {
+    indices.insert(v.clone(), *index_counter);
+    lowlink.insert(v.clone(), *index_counter);
+    *index_counter += 1;
+    stack.push(v.clone());
+    on_stack.insert(v.clone());
+
+    if let Some(neighbors) = graph.get(v) {
+      for w in neighbors {
+        if !indices.contains_key(w) {
+          strongconnect(
+            w,
+            graph,
+            index_counter,
+            indices,
+            lowlink,
+            on_stack,
+            stack,
+            sccs,
+          );
+          let w_low = lowlink[w];
+          let v_low = lowlink.get_mut(v).unwrap();
+          *v_low = (*v_low).min(w_low);
+        } else if on_stack.contains(w) {
+          let w_idx = indices[w];
+          let v_low = lowlink.get_mut(v).unwrap();
+          *v_low = (*v_low).min(w_idx);
+        }
+      }
+    }
+
+    if lowlink[v] == indices[v] {
+      let mut scc = Vec::new();
+      loop {
+        let w = stack.pop().unwrap();
+        on_stack.remove(&w);
+        scc.push(w.clone());
+        if &w == v {
+          break;
+        }
+      }
+      if scc.len() > 1 {
+        sccs.push(scc);
+      }
+    }
+  }
+
+  for node in &all_nodes {
+    if !indices.contains_key(node) {
+      strongconnect(
+        node,
+        graph,
+        &mut index_counter,
+        &mut indices,
+        &mut lowlink,
+        &mut on_stack,
+        &mut stack,
+        &mut sccs,
+      );
+    }
+  }
+
+  sccs
+}
+
+/// Check a single definition for termination, treating only self-calls
+/// as recursive calls.
 ///
-/// Returns Ok if all recursive calls use structural subterms on at least one
+/// Returns Ok if all self-calls use structural subterms on at least one
 /// parameter, or Err describing the first non-structural call found.
 pub fn check_termination(def: &Def) -> Result<(), TerminationError> {
   // Skip if the definition has @[terminating] or @[partial] attribute
@@ -308,8 +478,81 @@ pub fn check_termination(def: &Def) -> Result<(), TerminationError> {
     return Ok(());
   }
 
+  let mut names = RecursiveNames::default();
+  names.insert(def.name().clone());
   let env = SubtermEnv::default();
-  check_body_termination(body, def.name(), &params, &env)
+  check_body_termination(body, def.name(), &names, &params, &env)
+}
+
+/// Check a mutually recursive group of definitions for termination.
+///
+/// Each definition's body is checked against calls to any member of the group.
+/// A call to any group member must use a structural subterm of the caller's
+/// parameters.
+pub fn check_termination_group(defs: &[&Def]) -> Result<(), TerminationError> {
+  let mut recursive_names = RecursiveNames::default();
+  for def in defs {
+    recursive_names.insert(def.name().clone());
+  }
+
+  for def in defs {
+    // Skip individual defs with escape attributes
+    if def
+      .attributes
+      .iter()
+      .any(|a| a.name.as_str() == "terminating" || a.name.as_str() == "partial")
+    {
+      continue;
+    }
+
+    let params = extract_params(&def.term);
+    if params.is_empty() {
+      return Err(TerminationError::NoRecursiveParams {
+        def_name: def.name().clone(),
+      });
+    }
+
+    let env = SubtermEnv::default();
+    check_body_termination(&def.term, def.name(), &recursive_names, &params, &env)?;
+  }
+
+  Ok(())
+}
+
+/// Run termination checking on a collection of definitions.
+///
+/// Builds the call graph, finds mutual recursion groups (SCCs), and checks
+/// each group together. Single-recursive definitions are checked individually.
+pub fn check_termination_all(defs: &[&Def]) -> Result<(), TerminationError> {
+  let graph = build_call_graph(defs);
+  let groups = find_mutual_groups(&graph);
+
+  // Collect defs that are in mutual groups
+  let mut in_group: crate::Set<ModulePath> = empty_set();
+  for group in &groups {
+    for name in group {
+      in_group.insert(name.clone());
+    }
+  }
+
+  // Check each mutual group
+  for group in &groups {
+    let group_defs: Vec<&Def> = defs
+      .iter()
+      .filter(|d| group.contains(d.name()))
+      .copied()
+      .collect();
+    check_termination_group(&group_defs)?;
+  }
+
+  // Check remaining non-mutual defs individually
+  for def in defs {
+    if !in_group.contains(def.name()) {
+      check_termination(def)?;
+    }
+  }
+
+  Ok(())
 }
 
 // ──────── Tests ────────
@@ -327,6 +570,8 @@ mod tests {
   fn mpath(segments: &[&str]) -> ModulePath {
     ModulePath::new(segments.iter().map(|s| id(s)).collect())
   }
+
+  // ── Unit tests for helper functions ──
 
   #[test]
   fn test_extract_params_single() {
@@ -358,39 +603,7 @@ mod tests {
     assert_eq!(params, vec![id("x")]);
   }
 
-  #[test]
-  fn test_is_ref_to_true() {
-    let name = mpath(&["List", "append"]);
-    let term = crate::term::mpvar(name.clone());
-    assert!(is_ref_to(&term, &name));
-  }
-
-  #[test]
-  fn test_is_ref_to_false() {
-    let name = mpath(&["List", "append"]);
-    let term = var("other");
-    assert!(!is_ref_to(&term, &name));
-  }
-
-  #[test]
-  fn test_as_recursive_call_basic() {
-    let name = mpath(&["List", "append"]);
-    let ref_term = crate::term::mpvar(name.clone());
-    let call = crate::term::app(crate::term::app(ref_term, var("tail")), var("b"));
-    let result = as_recursive_call(&call, &name);
-    assert!(result.is_some());
-    let rc = result.unwrap();
-    assert_eq!(rc.args.len(), 2);
-  }
-
-  #[test]
-  fn test_as_recursive_call_not_recursive() {
-    let name = mpath(&["List", "append"]);
-    let ref_term = crate::term::mpvar(mpath(&["List", "map"]));
-    let call = crate::term::app(crate::term::app(ref_term, var("tail")), var("b"));
-    let result = as_recursive_call(&call, &name);
-    assert!(result.is_none());
-  }
+  // ── Single-def termination tests ──
 
   #[test]
   fn test_structural_list_append_passes() {
@@ -521,7 +734,6 @@ mod tests {
 
   #[test]
   fn test_infinite_loop_rejected() {
-    // def infinite (x : I64) : I64 := infinite x
     let name = test_def("infinite");
     let body = lam(
       param(id("x"), Term::Hole),
@@ -582,7 +794,6 @@ mod tests {
 
   #[test]
   fn test_list_last_passes() {
-    // match self { empty => none, cons a tail => ... List.last tail }
     let name = mpath(&["List", "last"]);
     let ref_name = crate::term::mpvar(name.clone());
 
@@ -639,7 +850,6 @@ mod tests {
 
   #[test]
   fn test_non_recursive_def_passes() {
-    // def add (a b : I64) : I64 := a + b   (no self-call)
     let name = test_def("add");
     let body = lam(
       param(id("a"), Term::Hole),
@@ -664,6 +874,394 @@ mod tests {
     assert!(
       result.is_ok(),
       "Non-recursive def should pass: {}",
+      result.unwrap_err()
+    );
+  }
+
+  // ── Call graph tests ──
+
+  #[test]
+  fn test_build_call_graph_basic() {
+    // f calls g, g calls nothing
+    let f_name = test_def("f");
+    let g_name = test_def("g");
+
+    let f_def = Def {
+      name: f_name.clone(),
+      typ: Term::Hole,
+      term: lam(
+        param(id("x"), Term::Hole),
+        crate::term::app(var("g"), var("x")),
+      ),
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let g_def = Def {
+      name: g_name.clone(),
+      typ: Term::Hole,
+      term: lam(param(id("x"), Term::Hole), var("x")),
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let defs = [&f_def, &g_def];
+    let graph = build_call_graph(&defs);
+    assert!(graph.get(&f_name).unwrap().contains(&g_name));
+    assert!(graph.get(&g_name).unwrap().is_empty());
+  }
+
+  #[test]
+  fn test_build_call_graph_mutual() {
+    // f calls g, g calls f
+    let f_name = test_def("f");
+    let g_name = test_def("g");
+
+    let f_def = Def {
+      name: f_name.clone(),
+      typ: Term::Hole,
+      term: lam(
+        param(id("x"), Term::Hole),
+        crate::term::app(var("g"), var("x")),
+      ),
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let g_def = Def {
+      name: g_name.clone(),
+      typ: Term::Hole,
+      term: lam(
+        param(id("x"), Term::Hole),
+        crate::term::app(var("f"), var("x")),
+      ),
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let defs = [&f_def, &g_def];
+    let graph = build_call_graph(&defs);
+    assert!(graph.get(&f_name).unwrap().contains(&g_name));
+    assert!(graph.get(&g_name).unwrap().contains(&f_name));
+  }
+
+  #[test]
+  fn test_find_mutual_groups_pair() {
+    // f → g, g → f  => one SCC {f, g}
+    let f = test_def("f");
+    let g = test_def("g");
+    let mut graph = crate::Map::new();
+    graph.insert(f.clone(), crate::set_of(std::iter::once(g.clone())));
+    graph.insert(g.clone(), crate::set_of(std::iter::once(f.clone())));
+
+    let groups = find_mutual_groups(&graph);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].len(), 2);
+    // Both f and g should be in the group
+    let group_set: crate::Set<&ModulePath> = groups[0].iter().collect();
+    assert!(group_set.contains(&f));
+    assert!(group_set.contains(&g));
+  }
+
+  #[test]
+  fn test_find_mutual_groups_no_cycle() {
+    // f → g, g → h  (simple chain, no mutual recursion)
+    let f = test_def("f");
+    let g = test_def("g");
+    let h = test_def("h");
+    let mut graph = crate::Map::new();
+    graph.insert(f.clone(), crate::set_of(std::iter::once(g.clone())));
+    graph.insert(g.clone(), crate::set_of(std::iter::once(h.clone())));
+    graph.insert(h.clone(), empty_set());
+
+    let groups = find_mutual_groups(&graph);
+    assert!(groups.is_empty(), "no mutual groups in a DAG");
+  }
+
+  #[test]
+  fn test_find_mutual_groups_self_loop_not_mutual() {
+    // f → f (self-loop, not mutual with others)
+    let f = test_def("f");
+    let mut graph = crate::Map::new();
+    graph.insert(f.clone(), crate::set_of(std::iter::once(f.clone())));
+
+    let groups = find_mutual_groups(&graph);
+    // Self-loop is an SCC of size 1, should not be returned as mutual group
+    assert!(groups.is_empty());
+  }
+
+  // ── Mutual recursion termination tests ──
+
+  #[test]
+  fn test_mutual_structural_passes() {
+    // Mutual recursion on List, both decreasing:
+    //
+    // def is_even (n : Nat) : Bool :=
+    //   match n { zero => true, succ m => is_odd m }
+    //
+    // def is_odd (n : Nat) : Bool :=
+    //   match n { zero => false, succ m => is_even m }
+    let even_name = test_def("is_even");
+    let odd_name = test_def("is_odd");
+
+    let even_term = crate::term::mpvar(even_name.clone());
+    let odd_term = crate::term::mpvar(odd_name.clone());
+
+    let even_body = lam(
+      param(id("n"), Term::Hole),
+      crate::term::match_term(
+        var("n"),
+        vec![
+          case(id("zero"), vec![], crate::term::b_true()),
+          case(
+            id("succ"),
+            vec![id("m")],
+            crate::term::app(odd_term, var("m")),
+          ),
+        ],
+      ),
+    );
+
+    let odd_body = lam(
+      param(id("n"), Term::Hole),
+      crate::term::match_term(
+        var("n"),
+        vec![
+          case(id("zero"), vec![], crate::term::b_false()),
+          case(
+            id("succ"),
+            vec![id("m")],
+            crate::term::app(even_term, var("m")),
+          ),
+        ],
+      ),
+    );
+
+    let even_def = Def {
+      name: even_name,
+      typ: Term::Hole,
+      term: even_body,
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let odd_def = Def {
+      name: odd_name,
+      typ: Term::Hole,
+      term: odd_body,
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let result = check_termination_group(&[&even_def, &odd_def]);
+    assert!(
+      result.is_ok(),
+      "is_even/is_odd mutual recursion should pass: {}",
+      result.unwrap_err()
+    );
+  }
+
+  #[test]
+  fn test_mutual_nonstructural_fails() {
+    // Non-structural mutual recursion:
+    // def f (x : I64) : I64 := g (x - 1)
+    // def g (x : I64) : I64 := f (x - 1)
+    let f_name = test_def("f");
+    let g_name = test_def("g");
+
+    let f_term = crate::term::mpvar(f_name.clone());
+    let g_term = crate::term::mpvar(g_name.clone());
+
+    let f_body = lam(
+      param(id("x"), Term::Hole),
+      crate::term::app(
+        g_term,
+        crate::term::app(
+          crate::term::app(crate::term::mpvar(mpath(&["I64", "sub"])), var("x")),
+          num(1),
+        ),
+      ),
+    );
+
+    let g_body = lam(
+      param(id("x"), Term::Hole),
+      crate::term::app(
+        f_term,
+        crate::term::app(
+          crate::term::app(crate::term::mpvar(mpath(&["I64", "sub"])), var("x")),
+          num(1),
+        ),
+      ),
+    );
+
+    let f_def = Def {
+      name: f_name,
+      typ: Term::Hole,
+      term: f_body,
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let g_def = Def {
+      name: g_name,
+      typ: Term::Hole,
+      term: g_body,
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let result = check_termination_group(&[&f_def, &g_def]);
+    assert!(
+      result.is_err(),
+      "non-structural mutual recursion should fail"
+    );
+  }
+
+  #[test]
+  fn test_mutual_three_way_structural_passes() {
+    // Three-way mutual recursion on Nat (all structural):
+    // def a (n : Nat) : Nat := match n { zero => zero, succ m => b m }
+    // def b (n : Nat) : Nat := match n { zero => zero, succ m => c m }
+    // def c (n : Nat) : Nat := match n { zero => zero, succ m => a m }
+    let a_name = test_def("a");
+    let b_name = test_def("b");
+    let c_name = test_def("c");
+
+    let a_term = crate::term::mpvar(a_name.clone());
+    let b_term = crate::term::mpvar(b_name.clone());
+    let c_term = crate::term::mpvar(c_name.clone());
+
+    let make_body = |callee: Term| -> Term {
+      lam(
+        param(id("n"), Term::Hole),
+        crate::term::match_term(
+          var("n"),
+          vec![
+            case(id("zero"), vec![], crate::term::num(0)),
+            case(
+              id("succ"),
+              vec![id("m")],
+              crate::term::app(callee, var("m")),
+            ),
+          ],
+        ),
+      )
+    };
+
+    let a_def = Def {
+      name: a_name,
+      typ: Term::Hole,
+      term: make_body(b_term),
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+    let b_def = Def {
+      name: b_name,
+      typ: Term::Hole,
+      term: make_body(c_term),
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+    let c_def = Def {
+      name: c_name,
+      typ: Term::Hole,
+      term: make_body(a_term),
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let result = check_termination_group(&[&a_def, &b_def, &c_def]);
+    assert!(
+      result.is_ok(),
+      "Three-way structural mutual recursion should pass: {}",
+      result.unwrap_err()
+    );
+  }
+
+  #[test]
+  fn test_check_termination_all_mixed() {
+    // Mix of single-recursive (structural), mutual (structural), and non-recursive.
+    // Verifies that check_termination_all dispatches correctly.
+    let f_name = test_def("f");
+    let g_name = test_def("g");
+    let h_name = test_def("h");
+
+    // f: structural self-recursion on List
+    let f_term = crate::term::mpvar(f_name.clone());
+    let f_body = lam(
+      param(id("xs"), Term::Hole),
+      crate::term::match_term(
+        var("xs"),
+        vec![
+          case(id("empty"), vec![], crate::term::num(0)),
+          case(
+            id("cons"),
+            vec![id("x"), id("tail")],
+            crate::term::app(f_term, var("tail")),
+          ),
+        ],
+      ),
+    );
+
+    // g ⇄ h: mutual structural on List
+    let g_term = crate::term::mpvar(g_name.clone());
+    let h_term = crate::term::mpvar(h_name.clone());
+    let g_body = lam(
+      param(id("xs"), Term::Hole),
+      crate::term::match_term(
+        var("xs"),
+        vec![
+          case(id("empty"), vec![], crate::term::num(0)),
+          case(
+            id("cons"),
+            vec![id("x"), id("tail")],
+            crate::term::app(h_term, var("tail")),
+          ),
+        ],
+      ),
+    );
+    let h_body = lam(
+      param(id("xs"), Term::Hole),
+      crate::term::match_term(
+        var("xs"),
+        vec![
+          case(id("empty"), vec![], crate::term::num(0)),
+          case(
+            id("cons"),
+            vec![id("x"), id("tail")],
+            crate::term::app(g_term, var("tail")),
+          ),
+        ],
+      ),
+    );
+
+    let f_def = Def {
+      name: f_name,
+      typ: Term::Hole,
+      term: f_body,
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+    let g_def = Def {
+      name: g_name,
+      typ: Term::Hole,
+      term: g_body,
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+    let h_def = Def {
+      name: h_name,
+      typ: Term::Hole,
+      term: h_body,
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let defs = [&f_def, &g_def, &h_def];
+    let result = check_termination_all(&defs);
+    assert!(
+      result.is_ok(),
+      "Mixed single/mutual structural recursion should pass: {}",
       result.unwrap_err()
     );
   }
