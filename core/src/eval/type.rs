@@ -2177,7 +2177,31 @@ fn type_check_with_env(
         let mut branch_t = expected_type.clone();
         let mut new_cases = Vec::new();
         for mcase in cases {
-          if let Some(ind_cons) = ind.find_cons(&mcase.name) {
+          if mcase.name.as_str() == "_" {
+            if !mcase.args.is_empty() {
+              return Err(Generic(
+                "wildcard pattern cannot bind variables".to_string(),
+                SourceRange::default(),
+              ));
+            }
+            let t = type_check_with_env(
+              *mcase.value.clone(),
+              branch_t.clone(),
+              &scope,
+              usage,
+              track_usage,
+            )?;
+            if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
+              branch_t = typ;
+            } else {
+              return Err(MismatchingBranches(
+                branch_t,
+                t.typ().clone(),
+                SourceRange::default(),
+              ));
+            }
+            new_cases.push(case(id("_"), vec![], t.term().clone()));
+          } else if let Some(ind_cons) = ind.find_cons(&mcase.name) {
             let mut scope = scope.clone();
             if ind_cons.params.len() != mcase.args.len() {
               return Err(ConstructorMismatch {

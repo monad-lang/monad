@@ -292,7 +292,10 @@ impl<'a> LowerContext<'a> {
   fn lower_match(&mut self, scrutinee: &Term, cases: &[MatchCase]) -> Result<EvalTerm, LowerError> {
     let lowered_scrutinee = self.lower(scrutinee)?;
 
-    let inductive_path = self.infer_inductive_path(cases)?;
+    let explicit_cases: Vec<&MatchCase> = cases.iter().filter(|c| c.name.as_str() != "_").collect();
+    let wildcard = cases.iter().find(|c| c.name.as_str() == "_");
+
+    let inductive_path = self.infer_inductive_path(&explicit_cases)?;
 
     let info = self.build_recursor_info(&inductive_path, cases)?;
     let rec_idx = self.get_or_create_recursor(&inductive_path, info.clone());
@@ -308,24 +311,15 @@ impl<'a> LowerContext<'a> {
       .find_inductive(&inductive_path)
       .ok_or_else(|| LowerError::UnresolvedName(format!("inductive: {inductive_path}")))?;
 
-    let mut indexed_cases: Vec<(usize, &MatchCase)> = cases
-      .iter()
-      .map(|c| {
-        let cons_idx = inductive
-          .constructors()
-          .iter()
-          .position(|ctor| ctor.name().last() == &c.name)
-          .ok_or_else(|| {
-            LowerError::UnresolvedName(format!(
-              "constructor {} not found in {}",
-              c.name,
-              inductive_path.to_string()
-            ))
-          })?;
-        Ok((cons_idx, c))
-      })
-      .collect::<Result<Vec<_>, _>>()?;
-    indexed_cases.sort_by_key(|(idx, _)| *idx);
+    let mut indexed_cases: Vec<(usize, &MatchCase)> = Vec::new();
+    for (idx, ctor) in inductive.constructors().iter().enumerate() {
+      let ctor_name = ctor.name().last();
+      if let Some(explicit_case) = explicit_cases.iter().find(|c| &c.name == ctor_name) {
+        indexed_cases.push((idx, explicit_case));
+      } else if let Some(wc) = wildcard {
+        indexed_cases.push((idx, wc));
+      }
+    }
 
     let lowered_cases: Vec<EvalTerm> = indexed_cases
       .iter()
@@ -340,7 +334,7 @@ impl<'a> LowerContext<'a> {
     ))
   }
 
-  fn infer_inductive_path(&self, cases: &[MatchCase]) -> Result<ModulePath, LowerError> {
+  fn infer_inductive_path(&self, cases: &[&MatchCase]) -> Result<ModulePath, LowerError> {
     for case in cases {
       let name = &case.name;
       let inductives = self.scope.global().inductives();

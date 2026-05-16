@@ -407,3 +407,37 @@ def test_tuple_nested_expr : Bool :=
     match t {
         Pair.pair a b => (a == 2) && b
     }
+
+@[test]
+def test_match_wildcard : Bool :=
+    match Option.some 42 {
+        some x => x == 42,
+        _ => false
+    }
+
+@[test]
+def test_match_wildcard_fallback : Bool :=
+    match Option.none {
+        some x => false,
+        _ => true
+    }
+
+@[test]
+def test_match_wildcard_only : Bool :=
+    match Option.some 1 {
+        _ => true
+    }
+
+@[test]
+def test_match_wildcard_exact_first : Bool :=
+    match Option.some 5 {
+        some x => x == 5,
+        _ => false
+    }
+
+@[test]
+def test_match_wildcard_discard_arg : Bool :=
+    match Option.some 99 {
+        some _ => true,
+        _ => false
+    }

@@ -9,8 +9,8 @@ use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
   Decl, Hole, Identifier, ModulePath, Multiplicity, SourceContext, Term, Typed, app, app2, b_false,
-  b_true, constructor, forall, id, io_term, lams, mp, mpt, mpvar, num, par, param, param_with_mult,
-  pi, some, sort1, str, strings_to_list_term, to_list_term, typ, unit, var,
+  b_true, case, constructor, forall, id, io_term, lams, match_term, mp, mpt, mpvar, none, num, par,
+  param, param_with_mult, pi, some, sort1, str, strings_to_list_term, to_list_term, typ, unit, var,
 };
 use crate::term::{stru, stru_field, stru_field_with_mult};
 use crate::{set_of, similar};
@@ -2395,6 +2395,71 @@ fn test_struct_constructor_via_mk() {
     "#,
   );
   assert!(r.is_ok(), "Struct via helper should type check");
+}
+
+// ===== Match Wildcard Tests =====
+
+#[test]
+fn test_match_wildcard_only() {
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+  let term = match_term(some(num(42)), vec![case(id("_"), vec![], num(1))]);
+  let result = eval_test(term, &scope).unwrap();
+  assert_eq!(result, num(1), "_ => body on some(42) should return body");
+}
+
+#[test]
+fn test_match_wildcard_fallback() {
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+  let term = match_term(
+    none(),
+    vec![
+      case(id("some"), vec![id("x")], var("x")),
+      case(id("_"), vec![], num(42)),
+    ],
+  );
+  let result = eval_test(term, &scope).unwrap();
+  assert_eq!(
+    result,
+    num(42),
+    "wildcard should match when no constructor case fits"
+  );
+}
+
+#[test]
+fn test_match_wildcard_exact_first() {
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+  let term = match_term(
+    some(num(1)),
+    vec![
+      case(id("some"), vec![id("x")], var("x")),
+      case(id("_"), vec![], num(99)),
+    ],
+  );
+  let result = eval_test(term, &scope).unwrap();
+  assert_eq!(
+    result,
+    num(1),
+    "exact constructor match should take priority over wildcard"
+  );
+}
+
+#[test]
+fn test_match_nowildcard_preserved() {
+  let loaded = default_modules().unwrap();
+  let global = loaded.global(&loaded.builtins().prelude_path).unwrap();
+  let scope = Scope::new(&global);
+  let term = match_term(some(num(1)), vec![case(id("none"), vec![], num(0))]);
+  let result = eval_test(term, &scope);
+  assert!(
+    result.is_err(),
+    "no wildcard + no matching constructor should error (NoMatchingBranch)"
+  );
 }
 
 // ===== Pi Multiplicity and Subsumption Tests =====

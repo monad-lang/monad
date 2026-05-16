@@ -271,6 +271,8 @@ fn eval_inner(
               }
             }
             term
+          } else if let Some(wildcard) = cases.iter().find(|case| case.name.as_str() == "_") {
+            *wildcard.value.clone()
           } else {
             return Err(wrap_error(
               Error::Eval(EvalError::NoMatchingBranch {
