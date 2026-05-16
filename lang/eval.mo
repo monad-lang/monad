@@ -303,10 +303,10 @@ def keval (term: EvalTerm) (env: KEvalEnv) : KernelResult :=
     EvalTerm.econst idx => kr_ok term,
     EvalTerm.eprim idx args => kr_ok term,
     EvalTerm.erecursor info cases scrutinee => kr_ok term,
-    EvalTerm.eregion region mult body => kr_ok term,
-    EvalTerm.eborrow region kind body => kr_ok term,
-    EvalTerm.eproj field arg => kr_ok term,
-    EvalTerm.eproj_field field base => kr_ok term
+    EvalTerm.eregion region mult body => keval body env,
+    EvalTerm.eborrow region kind body => keval body env,
+    EvalTerm.eproj field arg => keval arg env,
+    EvalTerm.eproj_field field base => keval base env
   }
 
 // ─── EvalTerm evaluator tests ──────────────────────────────────────────

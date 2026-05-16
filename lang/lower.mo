@@ -37,7 +37,10 @@ def lower (ctx: List Identifier) (t: Term) : EvalTerm :=
     Term.lam param body =>
       match param {
         Param.mk pname ptype =>
-          EvalTerm.elam Multiplicity.many (lower (List.cons pname ctx) body)
+          let lowered_body : EvalTerm := lower (List.cons pname ctx) body in
+          // Match Rust lower: wrap body in Region::Stack (Monad Param has no
+          // multiplicity field, so we default to Many/Stack).
+          EvalTerm.elam Multiplicity.many (EvalTerm.eregion Region.r_stack Multiplicity.many lowered_body)
       },
     Term.app fun arg =>
       EvalTerm.eapp (lower ctx fun) (lower ctx arg),
@@ -234,10 +237,10 @@ def e2e_eval (term: EvalTerm) (env: KEvalEnv) : KernelResult :=
     EvalTerm.econst idx => kr_ok term,
     EvalTerm.eprim idx args => kr_ok term,
     EvalTerm.erecursor info cases scrutinee => kr_ok term,
-    EvalTerm.eregion region mult body => kr_ok term,
-    EvalTerm.eborrow region kind body => kr_ok term,
-    EvalTerm.eproj field arg => kr_ok term,
-    EvalTerm.eproj_field field base => kr_ok term,
+    EvalTerm.eregion region mult body => e2e_eval body env,
+    EvalTerm.eborrow region kind body => e2e_eval body env,
+    EvalTerm.eproj field arg => e2e_eval arg env,
+    EvalTerm.eproj_field field base => e2e_eval base env,
     EvalTerm.elit lit =>
       match lit {
         EvalLiteral.l_int n => kr_ok term,
