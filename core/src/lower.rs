@@ -1423,6 +1423,104 @@ mod integration_tests {
 
   #[test]
   #[cfg(feature = "kernel")]
+  fn parity_kernel_eval_correctness() {
+    let scope = test_scope();
+
+    // Comprehensive correctness check for the kernel evaluator.
+    // Each expression is type-checked, lowered, and evaluated via eval_entry.
+    // Result is compared against the expected EvalTerm value.
+
+    let lit_int = |v: i64| eval_term::lit(ELit::Int { v });
+    let lit_str = |v: &str| {
+      eval_term::lit(ELit::Str {
+        value: v.to_string(),
+      })
+    };
+    let lit_bool = |v: bool| {
+      eval_term::lit(ELit::Bool {
+        v: if v { 1 } else { 0 },
+      })
+    };
+    // Note: standalone `true`/`false` evaluate to Const (constructors), not Lit Bool.
+    // Bool literal results come from comparison operations.
+
+    let test_cases: &[(&str, EvalTerm)] = &[
+      // Literals
+      ("42", lit_int(42)),
+      ("\"hello\"", lit_str("hello")),
+      // Lambda calculus
+      ("(\\x => x) 42", lit_int(42)),
+      ("(\\x => x) \"hi\"", lit_str("hi")),
+      ("(\\x => \\y => x) 10 20", lit_int(10)),
+      ("(\\x => \\y => y) 10 20", lit_int(20)),
+      ("(\\f => f 42) (\\x => x)", lit_int(42)),
+      ("(\\f => f 10 20) (\\x => \\y => x)", lit_int(10)),
+      ("(\\f => f 10 20) (\\x => \\y => y)", lit_int(20)),
+      // Arithmetic — only + works (HAdd has Add bridge instance)
+      ("1 + 2", lit_int(3)),
+      // Comparisons
+      ("5 == 5", lit_bool(true)),
+      ("5 == 3", lit_bool(false)),
+      // If / Then / Else
+      ("if true then 42 else 0", lit_int(42)),
+      ("if false then 42 else 0", lit_int(0)),
+      ("if (5 == 5) then 100 else 0", lit_int(100)),
+      ("if (5 == 3) then 100 else 0", lit_int(0)),
+      ("if true then if false then 1 else 2 else 3", lit_int(2)),
+      (
+        "if (if true then false else true) then 1 else 2",
+        lit_int(2),
+      ),
+      // String operations
+      (r#""hello" ++ " world""#, lit_str("hello world")),
+      (r#""abc" ++ "def""#, lit_str("abcdef")),
+      (
+        r#"String.concat "a" (String.concat "b" "c")"#,
+        lit_str("abc"),
+      ),
+      (r#"String.length "hello""#, lit_int(5)),
+      (r#"String.length """#, lit_int(0)),
+      (r#"String.starts_with "hel" "hello""#, lit_bool(true)),
+      (r#"String.starts_with "wor" "hello""#, lit_bool(false)),
+      // Bool operations (constructors in EvalTerm, verified via if/then/else)
+      // "Bool.not true" → Const(Bool.false) — constructor, not Lit Bool.
+      // I64.to_string
+      ("I64.to_string 42", lit_str("42")),
+      ("I64.to_string 0", lit_str("0")),
+      ("I64.to_string 255", lit_str("255")),
+      // Chained / nested with only + and ==
+      ("(1 + 2) + 3", lit_int(6)),
+      (
+        r#"if (String.length "ab" == 2) then (10 + 20) else 0"#,
+        lit_int(30),
+      ),
+      (
+        r#"if Bool.and (Bool.or false true) (1 + 1 == 2) then 42 else 0"#,
+        lit_int(42),
+      ),
+    ];
+
+    for (input, expected) in test_cases {
+      let ReplInput::Term(term) =
+        repl_parser(input).unwrap_or_else(|e| panic!("parse error for `{input}`: {e}"))
+      else {
+        panic!("expected term from `{input}`")
+      };
+
+      let typed = crate::eval::r#type::type_check(term.clone(), crate::term::Hole, &scope)
+        .unwrap_or_else(|e| panic!("type check failed for `{input}`: {e}"));
+      let kernel_result = crate::eval_kernel(typed.term, &scope)
+        .unwrap_or_else(|e| panic!("kernel eval failed for `{input}`: {e}"));
+
+      assert_eq!(
+        kernel_result, *expected,
+        "kernel eval gave wrong result for `{input}`:\n  expected: {expected:?}\n  got:      {kernel_result:?}"
+      );
+    }
+  }
+
+  #[test]
+  #[cfg(feature = "kernel")]
   fn bench_kernel_vs_eval() {
     let scope = test_scope();
     use std::time::Instant;

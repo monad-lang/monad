@@ -169,3 +169,220 @@ def test_lower_hole : Bool :=
   let t : Term := Term.hole in
   let _ : EvalTerm := lower empty_ctx t in
   true
+
+// ─── Lower + eval end-to-end pipeline tests ───────────────────────────
+// Full pipeline: Term → lower → e2e_eval → result.
+// keval logic inlined here to avoid import conflicts with lang/eval.mo
+// (both define identifier_string).
+
+type KEvalEnv {
+  kenv_empty,
+  kenv_push (val: EvalTerm) (rest: KEvalEnv),
+}
+
+open KEvalEnv
+
+type KernelResult {
+  kr_ok (v: EvalTerm),
+  kr_err (msg: String),
+}
+
+open KernelResult
+
+def kenv_lookup (env: KEvalEnv) (idx: I64) : Option EvalTerm :=
+  match env {
+    kenv_empty => Option.none,
+    kenv_push val rest =>
+      if I64.beq idx 0
+      then Option.some val
+      else kenv_lookup rest (idx - 1)
+  }
+
+def e2e_eval (term: EvalTerm) (env: KEvalEnv) : KernelResult :=
+  match term {
+    EvalTerm.evar idx =>
+      match kenv_lookup env idx {
+        Option.some val => e2e_eval val env,
+        Option.none => kr_err "unbound variable"
+      },
+    EvalTerm.eapp fun arg =>
+      match e2e_eval fun env {
+        kr_ok fun_val =>
+          match e2e_eval arg env {
+            kr_ok arg_val =>
+              match fun_val {
+                EvalTerm.elam mult body =>
+                  e2e_eval body (kenv_push arg_val env),
+                EvalTerm.esort level => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.evar idx => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.eapp f a => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.econst idx => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.elit lit => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.eprim idx args => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.erecursor info cases s => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.eregion r m b => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.eborrow r k b => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.eproj f a => kr_ok (EvalTerm.eapp fun_val arg_val),
+                EvalTerm.eproj_field f b => kr_ok (EvalTerm.eapp fun_val arg_val)
+              },
+            kr_err msg => kr_err msg
+          },
+        kr_err msg => kr_err msg
+      },
+    EvalTerm.elam mult body => kr_ok term,
+    EvalTerm.esort level => kr_ok term,
+    EvalTerm.econst idx => kr_ok term,
+    EvalTerm.eprim idx args => kr_ok term,
+    EvalTerm.erecursor info cases scrutinee => kr_ok term,
+    EvalTerm.eregion region mult body => kr_ok term,
+    EvalTerm.eborrow region kind body => kr_ok term,
+    EvalTerm.eproj field arg => kr_ok term,
+    EvalTerm.eproj_field field base => kr_ok term,
+    EvalTerm.elit lit =>
+      match lit {
+        EvalLiteral.l_int n => kr_ok term,
+        EvalLiteral.l_str s => kr_ok term,
+        EvalLiteral.l_float s => kr_ok term,
+        EvalLiteral.l_bool b => kr_ok term,
+        EvalLiteral.l_sort n => kr_ok term
+      }
+  }
+
+@[test]
+def test_e2e_literal : Bool :=
+  let n : EvalTerm := EvalTerm.elit (EvalLiteral.l_int 7) in
+  match e2e_eval n kenv_empty {
+    kr_ok v =>
+      match v {
+        EvalTerm.elit lit =>
+          match lit {
+            EvalLiteral.l_int x => I64.beq x 7,
+            EvalLiteral.l_str s => false,
+            EvalLiteral.l_float s => false,
+            EvalLiteral.l_bool b => false,
+            EvalLiteral.l_sort n => false
+          },
+        EvalTerm.evar idx => false,
+        EvalTerm.elam mult body => false,
+        EvalTerm.eapp fun arg => false,
+        EvalTerm.econst idx => false,
+        EvalTerm.esort level => false,
+        EvalTerm.eprim idx args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+      },
+    kr_err msg => false
+  }
+
+@[test]
+def test_e2e_identity : Bool :=
+  // (λx. x) 99 → 99 via e2e_eval directly
+  let body : EvalTerm := EvalTerm.elam Multiplicity.many (EvalTerm.evar 0) in
+  let arg : EvalTerm := EvalTerm.elit (EvalLiteral.l_int 99) in
+  let app : EvalTerm := EvalTerm.eapp body arg in
+  match e2e_eval app kenv_empty {
+    kr_ok v =>
+      match v {
+        EvalTerm.elit lit =>
+          match lit {
+            EvalLiteral.l_int n => I64.beq n 99,
+            EvalLiteral.l_str s => false,
+            EvalLiteral.l_float s => false,
+            EvalLiteral.l_bool b => false,
+            EvalLiteral.l_sort n => false
+          },
+        EvalTerm.evar idx => false,
+        EvalTerm.elam mult body => false,
+        EvalTerm.eapp fun arg => false,
+        EvalTerm.econst idx => false,
+        EvalTerm.esort level => false,
+        EvalTerm.eprim idx args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+      },
+    kr_err msg => false
+  }
+
+@[test]
+def test_e2e_lower_plus_eval : Bool :=
+  // Full pipeline: Term → lower → e2e_eval
+  // Term: (λx. x) "hello" → "hello"
+  let x_name : NameRef := NameRef.nid (Identifier.id "x") in
+  let x_var : Term := Term.var x_name in
+  let x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 1) in
+  let lam_body : Term := Term.lam x_param x_var in
+  let arg_term : Term := Term.lit (Literal.str "hello") in
+  let app_term : Term := Term.app lam_body arg_term in
+  let empty_ctx : List Identifier := List.empty in
+  let lowered : EvalTerm := lower empty_ctx app_term in
+  match e2e_eval lowered kenv_empty {
+    kr_ok v =>
+      match v {
+        EvalTerm.elit lit =>
+          match lit {
+            EvalLiteral.l_str s => String.beq s "hello",
+            EvalLiteral.l_int n => false,
+            EvalLiteral.l_float s => false,
+            EvalLiteral.l_bool b => false,
+            EvalLiteral.l_sort n => false
+          },
+        EvalTerm.evar idx => false,
+        EvalTerm.elam mult body => false,
+        EvalTerm.eapp fun arg => false,
+        EvalTerm.econst idx => false,
+        EvalTerm.esort level => false,
+        EvalTerm.eprim idx args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+      },
+    kr_err msg => false
+  }
+
+@[test]
+def test_e2e_nested : Bool :=
+  // Full pipeline: (λx. λy. y) 10 "world" → "world"
+  let y_name : NameRef := NameRef.nid (Identifier.id "y") in
+  let y_var : Term := Term.var y_name in
+  let y_param : Param := Param.mk (Identifier.id "y") (Term.type_ 1) in
+  let inner_lam : Term := Term.lam y_param y_var in
+  let x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 1) in
+  let outer_lam : Term := Term.lam x_param inner_lam in
+  let arg1 : Term := Term.lit (Literal.num 10 NumSuffix.i64) in
+  let arg2 : Term := Term.lit (Literal.str "world") in
+  let app_term : Term := Term.app (Term.app outer_lam arg1) arg2 in
+  let empty_ctx : List Identifier := List.empty in
+  let lowered : EvalTerm := lower empty_ctx app_term in
+  match e2e_eval lowered kenv_empty {
+    kr_ok v =>
+      match v {
+        EvalTerm.elit lit =>
+          match lit {
+            EvalLiteral.l_str s => String.beq s "world",
+            EvalLiteral.l_int n => false,
+            EvalLiteral.l_float s => false,
+            EvalLiteral.l_bool b => false,
+            EvalLiteral.l_sort n => false
+          },
+        EvalTerm.evar idx => false,
+        EvalTerm.elam mult body => false,
+        EvalTerm.eapp fun arg => false,
+        EvalTerm.econst idx => false,
+        EvalTerm.esort level => false,
+        EvalTerm.eprim idx args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+      },
+    kr_err msg => false
+  }
