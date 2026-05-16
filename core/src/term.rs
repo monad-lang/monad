@@ -538,6 +538,8 @@ impl Instance {
     if key.args.len() != self.args.len() {
       return false;
     }
+    // Track substitutions for instance type parameters
+    let mut subst: Map<Identifier, Term> = Map::new();
     let matches_key = key.args.iter().all(|key_arg| {
       if let Some((index, _c_param)) = class
         .params
@@ -549,18 +551,33 @@ impl Instance {
           .args
           .get(index)
           .expect("instance args did not match class");
-        // Structural comparison: Var/App terms are compared directly.
-        // Type variables (free vars without a known mapping) match structurally.
-        // Compare by converting both to ModulePath to handle Id vs P variants
-        let arg_path = match arg {
-          Term::Var { name } => name.to_path(),
-          _ => None,
-        };
-        let key_path = match &*key_arg.typ {
-          Term::Var { name } => name.to_path(),
-          _ => None,
-        };
-        arg_path == key_path
+        // If the instance arg is a type variable from the instance's own
+        // type parameters, use substitution-based matching.
+        if let Term::Var {
+          name: NameRef::Id(id),
+        } = arg
+          && self.params.iter().any(|p| p.name == *id)
+        {
+          if let Some(bound) = subst.get(id) {
+            *bound == *key_arg.typ.as_ref()
+          } else {
+            subst.insert(id.clone(), key_arg.typ.as_ref().clone());
+            true
+          }
+        } else {
+          // Structural comparison: Var/App terms are compared directly.
+          // Type variables (free vars without a known mapping) match structurally.
+          // Compare by converting both to ModulePath to handle Id vs P variants
+          let arg_path = match arg {
+            Term::Var { name } => name.to_path(),
+            _ => None,
+          };
+          let key_path = match &*key_arg.typ {
+            Term::Var { name } => name.to_path(),
+            _ => None,
+          };
+          arg_path == key_path
+        }
       } else {
         true // irrelevant
       }

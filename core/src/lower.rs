@@ -1282,4 +1282,73 @@ mod integration_tests {
       "expected constructor const, got {result:?}"
     );
   }
+
+  #[test]
+  fn test_integration_combined_arith_cmp_if_string() {
+    let scope = test_scope();
+
+    // Tests: arithmetic (1+2), comparison (==), if/then/else, string concat
+    let input = r#"String.concat "result: " (if (1 + 2 == 3) then "pass" else "fail")"#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lit(ELit::Str {
+        value: "result: pass".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_combined_arith_to_string_concat() {
+    let scope = test_scope();
+
+    // Tests: arithmetic (2+3), to_string, string concat
+    let input = r#"String.concat "val=" (I64.to_string (2 + 3))"#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lit(ELit::Str {
+        value: "val=5".to_string()
+      })
+    );
+  }
+
+  #[test]
+  fn test_integration_nested_arith_and_cmp() {
+    let scope = test_scope();
+
+    // Tests: chained arithmetic, chained comparisons, if/then/else
+    let input = "if (1 + 2 == 3 && 4 + 5 == 9) then 100 else 0";
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    assert_eq!(
+      eval_lowered(term, &scope).unwrap(),
+      eval_term::lit(ELit::Int { v: 100 })
+    );
+  }
+
+  #[test]
+  fn test_integration_combined_bool_and_string() {
+    let scope = test_scope();
+
+    // Tests: Bool.and, if/then/else, string_slice, string concat
+    let input = r#"if (Bool.and (String.starts_with "hel" "hello") (String.length "abc" == 3)) then String.slice "hello" 1 3 else "no""#;
+    let ReplInput::Term(term) = repl_parser(input).unwrap() else {
+      panic!("expected term")
+    };
+    let result = eval_lowered(term, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lit(ELit::Str {
+        value: "ell".to_string()
+      })
+    );
+  }
 }

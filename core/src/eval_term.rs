@@ -741,11 +741,23 @@ pub fn eval(term: &EvalTerm, locals: &[EvalTerm], env: &Env) -> Result<EvalTerm,
 
     // -- Primitive call ---------------------------------------------------
     EvalTerm::Prim { idx, args } => {
+      let arity = env
+        .primitives
+        .get(*idx as usize)
+        .map(|(_, a)| *a)
+        .unwrap_or(0);
       let evaluated_args: Vec<EvalTerm> = args
         .iter()
         .map(|a| eval(a, locals, env))
         .collect::<Result<Vec<_>, _>>()?;
-      exec_prim(*idx, &evaluated_args, env)
+      if arity > 0 && evaluated_args.len() >= arity {
+        exec_prim(*idx, &evaluated_args, env)
+      } else {
+        Ok(EvalTerm::Prim {
+          idx: *idx,
+          args: evaluated_args,
+        })
+      }
     }
 
     // -- Region / Borrow / Proj — evaluate body ----------------------------
@@ -881,6 +893,7 @@ fn exec_prim(idx: u64, args: &[EvalTerm], env: &Env) -> Result<EvalTerm, EvalErr
     "u32_to_string" => kernel_int_to_string(args, |v| (v as u32).to_string()),
     "u64_to_string" => kernel_int_to_string(args, |v| (v as u64).to_string()),
     "f32_to_string" | "f64_to_string" => kernel_float_to_string(args),
+    "print_str" => kernel_print_str(args),
     _ => Ok(EvalTerm::Prim {
       idx: idx as u64,
       args: args.to_vec(),
@@ -1112,6 +1125,17 @@ fn kernel_string_drop(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
   };
   Ok(EvalTerm::Lit {
     l: Literal::Str { value: result },
+  })
+}
+
+fn kernel_print_str(args: &[EvalTerm]) -> Result<EvalTerm, EvalError> {
+  if args.is_empty() {
+    return Err(EvalError::PrimCallFailed("print_str needs 1 arg".into()));
+  }
+  let s = extract_string(&args[0])?;
+  println!("{s}");
+  Ok(EvalTerm::Lit {
+    l: Literal::Str { value: s },
   })
 }
 
@@ -1665,5 +1689,45 @@ mod tests {
     let id = lam(Multiplicity::Many, var(0));
     let t = app(call_f, id);
     assert_eq!(eval(&t, &[], &env).unwrap(), const_(5));
+  }
+
+  fn env_with_prims(prims: Vec<(String, usize)>) -> Env {
+    let mut env = Env::new();
+    env.primitives = prims;
+    env
+  }
+
+  #[test]
+  fn test_eval_print_str() {
+    let env = env_with_prims(vec![("print_str".into(), 1)]);
+    // We need to prime the const for the string result — but
+    // print_str returns a literal, not a const, so this works without
+    // consts. The primitive accumulates args and fires print_str.
+    let hello = lit(Literal::Str {
+      value: "hello".to_string(),
+    });
+    let t = prim(0, vec![hello.clone()]);
+    let result = eval(&t, &[], &env).unwrap();
+    assert_eq!(result, hello);
+  }
+
+  #[test]
+  fn test_eval_prim_insufficient_args_is_value() {
+    let env = env_with_prims(vec![("print_str".into(), 1)]);
+    let t = prim(0, vec![]);
+    let result = eval(&t, &[], &env).unwrap();
+    assert!(matches!(result, EvalTerm::Prim { .. }));
+  }
+
+  #[test]
+  fn test_eval_print_str_app() {
+    let env = env_with_prims(vec![("print_str".into(), 1)]);
+    // Simulate: App(Prim(print_str), "world") — print_str accumulates arg
+    let hello = lit(Literal::Str {
+      value: "world".to_string(),
+    });
+    let t = app(prim(0, vec![]), hello.clone());
+    let result = eval(&t, &[], &env).unwrap();
+    assert_eq!(result, hello);
   }
 }
