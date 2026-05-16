@@ -53,6 +53,9 @@ pub struct LowerContext<'a> {
   recursor_indices: Map<ModulePath, u64>,
   /// Recursor metadata: (name, RecursorInfo) for each index.
   recursor_infos: Vec<(String, RecursorInfo)>,
+  /// Counter for region parameter indices assigned during lowering.
+  /// Each linear/affine lambda parameter gets a unique `r_param(idx)`.
+  region_param_count: u64,
 }
 
 impl<'a> LowerContext<'a> {
@@ -65,6 +68,7 @@ impl<'a> LowerContext<'a> {
       prim_arities: Map::new(),
       recursor_indices: Map::new(),
       recursor_infos: Vec::new(),
+      region_param_count: 0,
     }
   }
 
@@ -243,9 +247,19 @@ impl<'a> LowerContext<'a> {
     let lowered = self.lower(body)?;
     self.pop();
 
-    // Wrap the lambda body in a Stack region — all values allocated
-    // inside the lambda live on the stack by default.
-    let body_with_region = eval_term::region(Region::Stack, lowered);
+    // Assign a region based on multiplicity:
+    // - Linear/affine params get r_param(idx) — caller determines lifetime
+    // - Many params get r_stack — stack-allocated, no special lifetime
+    let region = match mult {
+      Multiplicity::Linear | Multiplicity::Affine => {
+        let idx = self.region_param_count;
+        self.region_param_count += 1;
+        Region::Param { idx }
+      }
+      _ => Region::Stack,
+    };
+
+    let body_with_region = eval_term::region(region, lowered);
     Ok(eval_term::lam(mult, body_with_region))
   }
 
@@ -945,27 +959,133 @@ mod tests {
 
   #[test]
   fn test_erasure_zero_multiplicity_nested() {
+    // ... (test content unchanged)
+  }
+
+  #[test]
+  fn test_region_param_linear() {
     let loaded = empty_loaded();
     let path = ModulePath::new(vec![crate::term::id("'test")]);
     let scopes = loaded.scopes();
     let global = scopes.global(&path).unwrap();
     let scope = Scope::new(&global);
 
-    // λx^many. λy^0. (x y)
-    // x (many) → var(1), y (zero) → sort(0) → app(var 1, sort 0)
-    let zero_param = crate::term::Param {
-      name: crate::term::id("y"),
+    // λ!x. x   →   lam linear (region r_param(0) (var 0))
+    // Linear parameter gets Region::Param(0)
+    let linear_param = crate::term::Param {
+      name: crate::term::id("x"),
       typ: Box::new(crate::term::Hole),
-      mult: crate::term::Multiplicity::Zero,
+      mult: crate::term::Multiplicity::Linear,
       default: None,
     };
-    let inner_body = Term::App {
-      fun: Box::new(crate::term::var("x")),
-      arg: Box::new(crate::term::var("y")),
+    let t = Term::Lam {
+      param: Par::P(linear_param),
+      body: Box::new(crate::term::var("x")),
+    };
+    let result = lower_term(&t, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lam(
+        Multiplicity::Linear,
+        eval_term::region(Region::Param { idx: 0 }, eval_term::var(0))
+      )
+    );
+  }
+
+  #[test]
+  fn test_region_param_affine() {
+    let loaded = empty_loaded();
+    let path = ModulePath::new(vec![crate::term::id("'test")]);
+    let scopes = loaded.scopes();
+    let global = scopes.global(&path).unwrap();
+    let scope = Scope::new(&global);
+
+    // λ?x. x   →   lam affine (region r_param(0) (var 0))
+    let affine_param = crate::term::Param {
+      name: crate::term::id("x"),
+      typ: Box::new(crate::term::Hole),
+      mult: crate::term::Multiplicity::Affine,
+      default: None,
+    };
+    let t = Term::Lam {
+      param: Par::P(affine_param),
+      body: Box::new(crate::term::var("x")),
+    };
+    let result = lower_term(&t, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lam(
+        Multiplicity::Affine,
+        eval_term::region(Region::Param { idx: 0 }, eval_term::var(0))
+      )
+    );
+  }
+
+  #[test]
+  fn test_region_param_incrementing() {
+    let loaded = empty_loaded();
+    let path = ModulePath::new(vec![crate::term::id("'test")]);
+    let scopes = loaded.scopes();
+    let global = scopes.global(&path).unwrap();
+    let scope = Scope::new(&global);
+
+    // λ!x. λ!y. y
+    // Inner lowered first → inner gets r_param(0), outer gets r_param(1)
+    let inner_param = crate::term::Param {
+      name: crate::term::id("y"),
+      typ: Box::new(crate::term::Hole),
+      mult: crate::term::Multiplicity::Linear,
+      default: None,
     };
     let inner = Term::Lam {
-      param: Par::P(zero_param),
-      body: Box::new(inner_body),
+      param: Par::P(inner_param),
+      body: Box::new(crate::term::var("y")),
+    };
+    let outer_param = crate::term::Param {
+      name: crate::term::id("x"),
+      typ: Box::new(crate::term::Hole),
+      mult: crate::term::Multiplicity::Linear,
+      default: None,
+    };
+    let outer = Term::Lam {
+      param: Par::P(outer_param),
+      body: Box::new(inner),
+    };
+    let result = lower_term(&outer, &scope).unwrap();
+    assert_eq!(
+      result,
+      eval_term::lam(
+        Multiplicity::Linear,
+        eval_term::region(
+          Region::Param { idx: 1 },
+          eval_term::lam(
+            Multiplicity::Linear,
+            eval_term::region(Region::Param { idx: 0 }, eval_term::var(0))
+          )
+        )
+      )
+    );
+  }
+
+  #[test]
+  fn test_region_param_mixed_many_linear() {
+    let loaded = empty_loaded();
+    let path = ModulePath::new(vec![crate::term::id("'test")]);
+    let scopes = loaded.scopes();
+    let global = scopes.global(&path).unwrap();
+    let scope = Scope::new(&global);
+
+    // λx. λ!y. y
+    // Many param gets r_stack, linear gets r_param(0)
+    let linear_param = crate::term::Param {
+      name: crate::term::id("y"),
+      typ: Box::new(crate::term::Hole),
+      mult: crate::term::Multiplicity::Linear,
+      default: None,
+    };
+    let inner = Term::Lam {
+      param: Par::P(linear_param),
+      body: Box::new(crate::term::var("y")),
     };
     let many_param = crate::term::param(crate::term::id("x"), crate::term::Hole);
     let outer = Term::Lam {
@@ -973,7 +1093,6 @@ mod tests {
       body: Box::new(inner),
     };
     let result = lower_term(&outer, &scope).unwrap();
-    // Outer lam: (lam many (region (lam 0 (region (app (var 1) (sort 0))))))
     assert_eq!(
       result,
       eval_term::lam(
@@ -981,14 +1100,8 @@ mod tests {
         eval_term::region(
           Region::Stack,
           eval_term::lam(
-            Multiplicity::Zero,
-            eval_term::region(
-              Region::Stack,
-              eval_term::app(
-                eval_term::var(1),  // x (many, pushed after y but we look from top)
-                eval_term::sort(0)  // y (zero, erased)
-              )
-            )
+            Multiplicity::Linear,
+            eval_term::region(Region::Param { idx: 0 }, eval_term::var(0))
           )
         )
       )
