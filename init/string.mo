@@ -93,6 +93,7 @@ def String.ends_with (s : String) (suffix : String) : Bool :=
 
 // ── Repetition ──
 
+@[terminating]
 def String.repeat (s : String) (n : I64) : String :=
 	if I64.beq n 0
 	then ""

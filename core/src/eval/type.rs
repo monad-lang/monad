@@ -3,6 +3,7 @@ use std::fmt::Display;
 use crate::{
   Map, Set, empty_set,
   eval::macro_expand,
+  eval::termination::{TerminationError, check_termination_all},
   set_of,
   term::{
     Ann, ClassDefRef, Decl, DeclGenDef, Def, Identifier, Inductive, InductiveVariant, Instance,
@@ -99,6 +100,7 @@ pub enum TypeError {
     loc: SourceRange,
   },
   MacroExpansion(crate::eval::macro_expand::MacroError),
+  Termination(TerminationError),
 }
 
 impl From<ScopeError> for TypeError {
@@ -269,6 +271,9 @@ impl Display for TypeError {
       }
       TypeError::MacroExpansion(err) => {
         write!(f, "macro expansion failed: {err}")
+      }
+      TypeError::Termination(err) => {
+        write!(f, "{err}")
       }
     }
   }
@@ -584,6 +589,15 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
     TypeError::MacroExpansion(err) => Diagnostic {
       severity: Severity::Error,
       message: format!("macro expansion failed: {err}"),
+      location: None,
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+      context_name: None,
+    },
+    TypeError::Termination(err) => Diagnostic {
+      severity: Severity::Error,
+      message: err.to_string(),
       location: None,
       path: None,
       sub_diagnostics: vec![],
@@ -2693,7 +2707,30 @@ pub fn type_check_decls(
         })
     })
     .collect();
-  join_many_results(res)
+  let (checked_decls, type_errors) = join_many_results(res);
+
+  // Only run termination checking if there are no type errors
+  if !type_errors.is_empty() {
+    return (checked_decls, type_errors);
+  }
+
+  // Collect all Def declarations for termination checking
+  let defs: Vec<&Def> = checked_decls
+    .iter()
+    .filter_map(|ctx| match ctx.value() {
+      Decl::Def(d) => Some(d),
+      _ => None,
+    })
+    .collect();
+
+  if defs.is_empty() {
+    return (checked_decls, vec![]);
+  }
+
+  match check_termination_all(&defs) {
+    Ok(()) => (checked_decls, vec![]),
+    Err(e) => (checked_decls, vec![TypeError::Termination(e)]),
+  }
 }
 
 pub fn pi_to_vec(mut typ: Term) -> (Vec<Term>, Term) {

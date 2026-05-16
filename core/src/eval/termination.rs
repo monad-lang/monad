@@ -135,6 +135,12 @@ fn extend_env_from_match(
   case_args: &[Identifier],
   params: &[Identifier],
 ) {
+  // Unwrap Ctx wrappers added by the type checker
+  let mut scrutinee = scrutinee;
+  while let Ctx { term, .. } = scrutinee {
+    scrutinee = term;
+  }
+
   let scrutinee_id = match scrutinee {
     Var { name } => name.as_id().cloned(),
     _ => None,
@@ -189,6 +195,7 @@ fn is_subterm(env: &SubtermEnv, param: &Identifier, arg: &Term) -> bool {
         false
       }
     }
+    Ctx { term, .. } => is_subterm(env, param, term),
     _ => false,
   }
 }
@@ -246,19 +253,23 @@ fn check_body_termination(
     Lam { body, .. } => check_body_termination(body, def_name, recursive_names, params, env),
 
     App { fun, arg } => {
-      // Check if the current App chain is a call to any recursive name
+      // Check if the current App chain is a call to any recursive name.
+      // If so, verify structural termination and stop — don't recurse into
+      // sub-expressions (which would detect partial applications as false positives).
       if let Some(call) = as_recursive_call_any(body, recursive_names) {
-        check_call_args(&call, env, params).map_err(|msg| TerminationError::NotStructural {
-          def_name: def_name.clone(),
-          call: format!("{}", body),
-          suggestion: format!(
-            "{} — add @[terminating] if this function is well-founded",
-            msg
-          ),
-          loc: call.loc,
-        })?;
+        return check_call_args(&call, env, params).map_err(|msg| {
+          TerminationError::NotStructural {
+            def_name: def_name.clone(),
+            call: format!("{}", body),
+            suggestion: format!(
+              "{} — add @[terminating] if this function is well-founded",
+              msg
+            ),
+            loc: call.loc,
+          }
+        });
       }
-      // Recurse into sub-expressions
+      // Not a recursive call — recurse into sub-expressions
       check_body_termination(fun, def_name, recursive_names, params, env)?;
       check_body_termination(arg, def_name, recursive_names, params, env)
     }
@@ -1296,6 +1307,94 @@ mod tests {
     assert!(
       result.is_ok(),
       "Mixed single/mutual structural recursion should pass: {}",
+      result.unwrap_err()
+    );
+  }
+
+  #[test]
+  fn test_nat_add_structural_passes() {
+    // Mimics: def Nat.add (a b : Nat) : Nat := match a { zero => b, succ n => Nat.succ (Nat.add n b) }
+    let name = mpath(&["Nat", "add"]);
+    let ref_name = crate::term::mpvar(name.clone());
+
+    let zero_case = crate::term::case(id("zero"), vec![], var("b"));
+    let succ_case = crate::term::case(
+      id("succ"),
+      vec![id("n")],
+      crate::term::app(
+        crate::term::app(crate::term::mpvar(mpath(&["Nat", "succ"])), var("n")),
+        crate::term::app(crate::term::app(ref_name, var("n")), var("b")),
+      ),
+    );
+
+    let body = lam(
+      param(id("a"), Term::Hole),
+      lam(
+        param(id("b"), Term::Hole),
+        crate::term::match_term(var("a"), vec![zero_case, succ_case]),
+      ),
+    );
+
+    let def = Def {
+      name,
+      typ: Term::Hole,
+      term: body,
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let result = check_termination(&def);
+    assert!(
+      result.is_ok(),
+      "Nat.add should pass: {}",
+      result.unwrap_err()
+    );
+  }
+
+  #[test]
+  fn test_list_map_structural_passes() {
+    // Mimics: def List.map (f : A -> B) (self: List A) : List B :=
+    //   match self { empty => List.empty, cons a tail => List.cons (f a) (List.map f tail) }
+    let name = mpath(&["List", "map"]);
+    let ref_name = crate::term::mpvar(name.clone());
+
+    let empty_case = crate::term::case(
+      id("empty"),
+      vec![],
+      crate::term::mpvar(mpath(&["List", "empty"])),
+    );
+    let cons_case = crate::term::case(
+      id("cons"),
+      vec![id("a"), id("tail")],
+      crate::term::app(
+        crate::term::app(
+          crate::term::mpvar(mpath(&["List", "cons"])),
+          crate::term::app(var("f"), var("a")),
+        ),
+        crate::term::app(crate::term::app(ref_name, var("f")), var("tail")),
+      ),
+    );
+
+    let body = lam(
+      param(id("f"), Term::Hole),
+      lam(
+        param(id("self"), Term::Hole),
+        crate::term::match_term(var("self"), vec![empty_case, cons_case]),
+      ),
+    );
+
+    let def = Def {
+      name,
+      typ: Term::Hole,
+      term: body,
+      type_constraints: vec![],
+      attributes: vec![],
+    };
+
+    let result = check_termination(&def);
+    assert!(
+      result.is_ok(),
+      "List.map should pass: {}",
       result.unwrap_err()
     );
   }

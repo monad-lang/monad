@@ -9,7 +9,7 @@
   },
   {
     "name": "factorial",
-    "code": "use init\n\nuse math\n\ndef factorial (n : I64) : I64 :=\n  if n == 0\n  then 1\n  else n * factorial (n - 1)\n\ndef main (args : List String) : I64 := factorial 5"
+    "code": "use init\n\nuse math\n\n@[terminating]\ndef factorial (n : I64) : I64 :=\n  if n == 0\n  then 1\n  else n * factorial (n - 1)\n\ndef main (args : List String) : I64 := factorial 5"
   },
   {
     "name": "list is_empty",
