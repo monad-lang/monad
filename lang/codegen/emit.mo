@@ -217,6 +217,48 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
     Literal.match_ scrutinee cases => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
 }
 
+type NtvArgs {
+    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (vals : List LLVMValue),
+}
+
+def compile_ntv_args (c : CodegenCtx) (args : List (Option Term)) (acc_instrs : List LLVMInstruction) (acc_vals : List LLVMValue) : NtvArgs :=
+    match args {
+        List.cons opt_ rest =>
+            match opt_ {
+                Option.some term_ =>
+                    match compile_term_ir c term_ {
+                        CompileResult.ok ctx_t instrs val _ =>
+                            compile_ntv_args ctx_t rest
+                                (append_instrs acc_instrs instrs)
+                                (cons_val val acc_vals),
+                    },
+                Option.none =>
+                    compile_ntv_args c rest acc_instrs acc_vals,
+            },
+        List.empty =>
+            NtvArgs.mk c acc_instrs (rev_vals acc_vals empty_vals),
+    }
+
+def rev_vals (xs : List LLVMValue) (acc : List LLVMValue) : List LLVMValue := match xs {
+    List.cons x rest => rev_vals rest (cons_val x acc),
+    List.empty => acc,
+}
+
+def compile_ntv_ir (c : CodegenCtx) (native : Native) : CompileResult :=
+    match native {
+        Native.mk name num_args args =>
+            let fn_name := String.concat "monad_" (show_identifier name) in
+            match compile_ntv_args c args empty_instrs empty_vals {
+                NtvArgs.mk ctx_args all_instrs all_vals =>
+                    match fresh_temp ctx_args {
+                        CtxStrPair.mk ctx_t temp =>
+                            let call_val := LLVMValue.call fn_name LLVMType.i64_ all_vals false in
+                            let assign_instr := LLVMInstruction.assign temp call_val in
+                            CompileResult.ok ctx_t (cons_instr assign_instr all_instrs) (LLVMValue.var_ temp) empty_blocks,
+                    },
+            },
+    }
+
 type IfLabels {
     mk (ctx_after : CodegenCtx) (then_label : String) (else_label : String) (merge_label : String),
 }
@@ -284,7 +326,7 @@ def compile_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match ter
         },
     Term.lam param_ body => CompileResult.ok c empty_instrs (LLVMValue.parm_ 0) empty_blocks,
     Term.app fun arg => compile_app_ir c fun arg,
-    Term.ntv native => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
+    Term.ntv native => compile_ntv_ir c native,
     Term.con constr => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
     Term.forall name typ body => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
     Term.pi arg ret => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks,
@@ -877,5 +919,19 @@ def test_if_then_else_compiled : Bool :=
     if check_contains text "br i1"
     then check_contains text "phi i64"
     else false
+
+@[test]
+def test_native_call_compiled : Bool :=
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 2 NumSuffix.i64) in
+    let some_one := Option.some one in
+    let some_two := Option.some two in
+    let args := List.cons some_one (List.cons some_two List.empty) in
+    let native := Native.mk (Identifier.id "alloc") 2 args in
+    let term_ := Term.ntv native in
+    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "callnative") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
+    let mod_ := compile_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "call i64 @monad_alloc"
 
 def main : I64 := 42
