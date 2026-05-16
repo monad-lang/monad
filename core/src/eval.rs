@@ -46,6 +46,7 @@ pub enum EvalError {
   StructLiteralNotDesugared,
   StructUpdateNotDesugared,
   NativeArgumentOverflow,
+  RecursionDepthExceeded { max: u64 },
 }
 
 impl Display for EvalError {
@@ -80,6 +81,9 @@ impl Display for EvalError {
       }
       EvalError::NativeArgumentOverflow => {
         write!(f, "native function applied to too many arguments")
+      }
+      EvalError::RecursionDepthExceeded { max } => {
+        write!(f, "recursion depth limit ({max}) exceeded")
       }
     }
   }
@@ -196,6 +200,7 @@ impl From<&Error> for crate::diag::Diagnostic {
 pub struct EvalOptions {
   pub debug: bool,
   pub use_colors: bool,
+  pub max_recursion_depth: Option<u64>,
 }
 
 fn resolve_name<'a>(name: &'a NameRef, scope: &'a Scope<'a>) -> Result<&'a Term, Error> {
@@ -214,7 +219,17 @@ fn eval_inner(
   options: &EvalOptions,
   mut current_loc: Option<SourceRange>,
 ) -> Result<Term, Error> {
+  let mut steps: u64 = 0;
   loop {
+    if let Some(max) = options.max_recursion_depth {
+      if steps > max {
+        return Err(wrap_error(
+          Error::Eval(EvalError::RecursionDepthExceeded { max }),
+          current_loc,
+        ));
+      }
+    }
+    steps += 1;
     main_term = apply_dot_macro(main_term);
     main_term = match main_term {
       Ctx { loc, term } => {

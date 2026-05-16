@@ -18,6 +18,8 @@ enum Commands {
     color: bool,
     #[arg(long = "no-color", default_value_t = false)]
     no_color: bool,
+    #[arg(long)]
+    max_depth: Option<u64>,
   },
 
   Run {
@@ -31,6 +33,8 @@ enum Commands {
     color: bool,
     #[arg(long = "no-color", default_value_t = false)]
     no_color: bool,
+    #[arg(long)]
+    max_depth: Option<u64>,
   },
 
   Test {
@@ -42,6 +46,8 @@ enum Commands {
     color: bool,
     #[arg(long = "no-color", default_value_t = false)]
     no_color: bool,
+    #[arg(long)]
+    max_depth: Option<u64>,
   },
 
   #[cfg(feature = "llvm")]
@@ -81,9 +87,15 @@ fn main() -> Result<(), String> {
       debug,
       color,
       no_color,
+      max_depth,
     } => {
       let use_colors = color && !no_color;
-      repl(EvalOptions { debug, use_colors }).map_err(|e| e.to_string())
+      repl(EvalOptions {
+        debug,
+        use_colors,
+        max_recursion_depth: max_depth,
+      })
+      .map_err(|e| e.to_string())
     }
     #[cfg(not(feature = "repl"))]
     Commands::Repl { .. } => {
@@ -95,9 +107,18 @@ fn main() -> Result<(), String> {
       args,
       color,
       no_color,
+      max_depth,
     } => {
       let use_colors = color && !no_color;
-      let result = run(input, args, EvalOptions { debug, use_colors });
+      let result = run(
+        input,
+        args,
+        EvalOptions {
+          debug,
+          use_colors,
+          max_recursion_depth: max_depth,
+        },
+      );
       match result {
         Ok(_) => (),
         Err(ref e) => {
@@ -111,9 +132,17 @@ fn main() -> Result<(), String> {
       debug,
       color,
       no_color,
+      max_depth,
     } => {
       let use_colors = color && !no_color;
-      let result = run_tests(input, EvalOptions { debug, use_colors });
+      let result = run_tests(
+        input,
+        EvalOptions {
+          debug,
+          use_colors,
+          max_recursion_depth: max_depth,
+        },
+      );
       match result {
         Ok(_) => (),
         Err(ref e) => {

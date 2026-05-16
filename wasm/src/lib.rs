@@ -48,6 +48,7 @@ pub fn run_file(path: String, args: JsValue) -> WasmResult {
   let options = EvalOptions {
     debug: false,
     use_colors: false,
+    max_recursion_depth: None,
   };
 
   let path: ModulePath = ModulePath::top(&path);
@@ -161,6 +162,7 @@ impl WasmRepl {
     let options = EvalOptions {
       debug: false,
       use_colors: false,
+      max_recursion_depth: None,
     };
 
     let parsed = match repl_parser(&source) {
@@ -330,6 +332,7 @@ mod test {
       &EvalOptions {
         debug: false,
         use_colors: false,
+        max_recursion_depth: None,
       },
     )
     .map_err(|e| format!("eval error: {e}"))

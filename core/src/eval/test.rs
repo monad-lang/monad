@@ -483,6 +483,7 @@ fn eval_test(main_term: Term, scope: &Scope) -> Result<Term, String> {
     &EvalOptions {
       debug: true,
       use_colors: false,
+      max_recursion_depth: None,
     },
   )
   .map_err(|e| format!("eval error: {e}"))
@@ -2504,5 +2505,134 @@ fn test_linear_param_consumed_by_app() {
   assert!(
     r.is_ok(),
     "Linear param consumed by function call should pass"
+  );
+}
+
+// ===== Recursion Depth Limiter Tests =====
+
+fn eval_with_depth(term: Term, scope: &Scope, max_depth: Option<u64>) -> Result<Term, String> {
+  let tt = type_check(term, Hole, &scope).map_err(|e| format!("type check failed: {e}"))?;
+  eval(
+    tt.term,
+    scope,
+    &EvalOptions {
+      debug: false,
+      use_colors: false,
+      max_recursion_depth: max_depth,
+    },
+  )
+  .map_err(|e| format!("eval error: {e}"))
+}
+
+#[test]
+fn test_recursion_depth_simple_overflow() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("_test");
+  let parsed = parse_file(
+    r#"
+    @[terminating]
+    def loop_forever (x : I64) : I64 := loop_forever (x + 1)
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
+    .unwrap_or_else(|e| panic!("type_check_module_decls: {e}"));
+  let global = loaded.scope_of_decls(&path, &decls);
+  let scope = global.scope();
+
+  let term = parse_term("loop_forever 0");
+  let result = eval_with_depth(term, &scope, Some(50));
+  assert!(result.is_err(), "Infinite loop should hit depth limit");
+  let err = result.unwrap_err();
+  assert!(
+    err.contains("recursion depth limit"),
+    "Error should mention recursion depth limit, got: {err}"
+  );
+}
+
+#[test]
+fn test_recursion_depth_within_limit() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("_test");
+  let parsed = parse_file(
+    r#"
+    use math
+    @[terminating]
+    def factorial (n : I64) : I64 :=
+      if n == 0 then 1
+      else n * factorial (n - 1)
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
+    .unwrap_or_else(|e| panic!("type_check_module_decls: {e}"));
+  let global = loaded.scope_of_decls(&path, &decls);
+  let scope = global.scope();
+
+  let term = parse_term("factorial 3");
+  let result = eval_with_depth(term, &scope, Some(200));
+  assert!(
+    result.is_ok(),
+    "Factorial 3 should complete within 200 steps"
+  );
+  similar!(result.unwrap(), num(6));
+}
+
+#[test]
+fn test_recursion_depth_no_limit_works() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("_test");
+  let parsed = parse_file(
+    r#"
+    use math
+    @[terminating]
+    def factorial (n : I64) : I64 :=
+      if n == 0 then 1
+      else n * factorial (n - 1)
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
+    .unwrap_or_else(|e| panic!("type_check_module_decls: {e}"));
+  let global = loaded.scope_of_decls(&path, &decls);
+  let scope = global.scope();
+
+  let term = parse_term("factorial 3");
+  let result = eval_with_depth(term, &scope, None);
+  assert!(result.is_ok(), "Factorial should complete with no limit");
+  similar!(result.unwrap(), num(6));
+}
+
+#[test]
+fn test_recursion_depth_limit_exceeded() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("_test");
+  let parsed = parse_file(
+    r#"
+    @[terminating]
+    def loop_forever (x : I64) : I64 := loop_forever (x + 1)
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &mut loaded)
+    .unwrap_or_else(|e| panic!("type_check_module_decls: {e}"));
+  let global = loaded.scope_of_decls(&path, &decls);
+  let scope = global.scope();
+
+  let term = parse_term("loop_forever 0");
+  let result = eval_with_depth(term, &scope, Some(5));
+  assert!(result.is_err(), "Loop should exceed 5-step depth limit");
+  let err = result.unwrap_err();
+  assert!(
+    err.contains("recursion depth limit"),
+    "Error should mention recursion depth limit, got: {err}"
+  );
+  assert!(
+    err.contains("exceeded"),
+    "Error should mention exceeded, got: {err}"
   );
 }
