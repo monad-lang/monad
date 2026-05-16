@@ -3,6 +3,7 @@ use lang.eval_term
 
 /// Find the de Bruijn index of an identifier in the binding context.
 /// Returns Option.none if not found (treat as global/const).
+@[partial]
 def find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64 :=
   match ctx {
     List.cons x rest =>
@@ -12,6 +13,7 @@ def find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64
     List.empty => Option.none
   }
 
+@[partial]
 def identifier_string (id: Identifier) : String :=
   match id {
     id s => s
@@ -22,6 +24,7 @@ def identifier_string (id: Identifier) : String :=
 /// ctx: binding context (innermost first) — list of bound variable identifiers.
 /// Each lambda adds its param name to the front of ctx.
 /// De Bruijn index 0 = most recently bound variable (head of ctx).
+@[partial]
 def lower (ctx: List Identifier) (t: Term) : EvalTerm :=
   match t {
     Term.var name =>
@@ -72,8 +75,10 @@ def lower (ctx: List Identifier) (t: Term) : EvalTerm :=
 
 // ─── Test helpers ──────────────────────────────────────────────────────
 
+@[partial]
 def empty_ctx : List Identifier := List.empty
 
+@[partial]
 def single_ctx (id: Identifier) : List Identifier :=
   List.cons id List.empty
 
@@ -192,6 +197,7 @@ type KernelResult {
 
 open KernelResult
 
+@[partial]
 def kenv_lookup (env: KEvalEnv) (idx: I64) : Option EvalTerm :=
   match env {
     kenv_empty => Option.none,
@@ -201,6 +207,7 @@ def kenv_lookup (env: KEvalEnv) (idx: I64) : Option EvalTerm :=
       else kenv_lookup rest (idx - 1)
   }
 
+@[partial]
 def e2e_eval (term: EvalTerm) (env: KEvalEnv) : KernelResult :=
   match term {
     EvalTerm.evar idx =>

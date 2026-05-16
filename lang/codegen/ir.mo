@@ -88,11 +88,13 @@ open ParamPair
 open PhiPair
 open NativeOp
 
+@[partial]
 def show_bool (b : Bool) : String := match b {
     true => "true",
     false => "false",
 }
 
+@[partial]
 def show_llvm_type (ty : LLVMType) : String := match ty {
     void => "void",
     i1_ => "i1",
@@ -104,15 +106,18 @@ def show_llvm_type (ty : LLVMType) : String := match ty {
     struct_ name => String.concat "%" name,
 }
 
+@[partial]
 def show_llvm_type_fn (params : List LLVMType) (ret : LLVMType) : String :=
     let params_str := join_types params in
     String.concat (show_llvm_type ret) (String.concat " (" (String.concat params_str ")"))
 
+@[partial]
 def join_types (types : List LLVMType) : String := match types {
     List.empty => "",
     List.cons t rest => join_types_rest t rest,
 }
 
+@[partial]
 def join_types_rest (t : LLVMType) (rest : List LLVMType) : String :=
     let shown := show_llvm_type t in
     match rest {
@@ -120,11 +125,13 @@ def join_types_rest (t : LLVMType) (rest : List LLVMType) : String :=
         List.cons x y => String.concat shown (String.concat ", " (join_types rest)),
     }
 
+@[partial]
 def show_args_typed (args : List LLVMValue) : String := match args {
     List.empty => "",
     List.cons a rest => show_args_typed_rest a rest,
 }
 
+@[partial]
 def show_args_typed_rest (a : LLVMValue) (rest : List LLVMValue) : String :=
     let shown := show_llvm_value_typed a in
     match rest {
@@ -132,6 +139,7 @@ def show_args_typed_rest (a : LLVMValue) (rest : List LLVMValue) : String :=
         List.cons x y => String.concat shown (String.concat ", " (show_args_typed rest)),
     }
 
+@[partial]
 def show_llvm_value (val : LLVMValue) : String := match val {
     int_ n => I64.to_string n,
     int32_ n => I32.to_string n,
@@ -167,16 +175,19 @@ def show_llvm_value (val : LLVMValue) : String := match val {
         String.concat "native_op(" (String.concat inner ")"),
 }
 
+@[partial]
 def list_valu_len (xs : List LLVMValue) : I64 := match xs {
     List.empty => 0,
     List.cons x rest => 1 + list_valu_len rest,
 }
 
+@[partial]
 def list_i64_len (xs : List I64) : I64 := match xs {
     List.empty => 0,
     List.cons x rest => 1 + list_i64_len rest,
 }
 
+@[partial]
 def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     int_ x => i64_,
     int32_ x => i32_,
@@ -202,10 +213,12 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     native_op x y => i64_,
 }
 
+@[partial]
 def show_llvm_value_typed (val : LLVMValue) : String :=
     String.concat (show_llvm_type (llvm_value_type val))
         (String.concat " " (show_llvm_value val))
 
+@[partial]
 def show_call (fn_name : String) (ret_ty : LLVMType) (args : List LLVMValue) (tail : Bool) : String :=
     let prefix := if tail then "tail call " else "call " in
     let sig := String.concat prefix
@@ -213,24 +226,29 @@ def show_call (fn_name : String) (ret_ty : LLVMType) (args : List LLVMValue) (ta
     let args_str := show_args_typed args in
     String.concat sig (String.concat "(" (String.concat args_str ")"))
 
+@[partial]
 def show_arith (op : String) (lhs : LLVMValue) (rhs : LLVMValue) : String :=
     String.concat (String.concat op " i64 ") (String.concat (show_llvm_value lhs)
         (String.concat ", " (show_llvm_value rhs)))
 
+@[partial]
 def show_ext (op : String) (v : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType) : String :=
     String.concat (String.concat op " ") (String.concat (show_llvm_type from_ty)
         (String.concat " " (String.concat (show_llvm_value v)
         (String.concat " to " (show_llvm_type to_ty)))))
 
+@[partial]
 def show_phi (pairs : List PhiPair) : String :=
     let inner := join_phi_pairs pairs in
     String.concat "phi i64 [" (String.concat inner "]")
 
+@[partial]
 def join_phi_pairs (pairs : List PhiPair) : String := match pairs {
     List.empty => "",
     List.cons p rest => join_phi_rest p rest,
 }
 
+@[partial]
 def join_phi_rest (p : PhiPair) (rest : List PhiPair) : String :=
     let shown := show_one_phi p in
     match rest {
@@ -238,17 +256,20 @@ def join_phi_rest (p : PhiPair) (rest : List PhiPair) : String :=
         List.cons x y => String.concat shown (String.concat ", " (join_phi_pairs rest)),
     }
 
+@[partial]
 def show_one_phi (p : PhiPair) : String := match p {
     PhiPair.mk val label =>
         String.concat "[" (String.concat (show_llvm_value val)
             (String.concat ", %" (String.concat label "]"))),
 }
 
+@[partial]
 def show_gep (base : LLVMValue) (indices : List I64) : String :=
     let pre := String.concat "getelementptr " (String.concat (show_llvm_value_typed base)
         (String.concat ", " (I64.to_string (list_i64_len indices)))) in
     join_gep_indices pre indices
 
+@[partial]
 def join_gep_indices (pre : String) (indices : List I64) : String := match indices {
     List.empty => pre,
     List.cons i rest =>
@@ -257,6 +278,7 @@ def join_gep_indices (pre : String) (indices : List I64) : String := match indic
             rest,
 }
 
+@[partial]
 def show_instruction (instr : LLVMInstruction) : String := match instr {
     assign target value =>
         String.concat "  %" (String.concat target (String.concat " = "
@@ -272,6 +294,7 @@ def show_instruction (instr : LLVMInstruction) : String := match instr {
         String.concat "  ; " text,
 }
 
+@[partial]
 def show_ret_instr (val : LLVMValue) : String := match val {
     void_val => "  ret void",
     int_ x => "  ret " ++ show_llvm_value_typed val,
@@ -297,17 +320,20 @@ def show_ret_instr (val : LLVMValue) : String := match val {
     native_op x y => "  ret " ++ show_llvm_value_typed val,
 }
 
+@[partial]
 def emit_block (block : LLVMBasicBlock) : String := match block {
     LLVMBasicBlock.mk label instructions =>
         String.concat "\n" (String.concat label (String.concat ":" (emit_instrs instructions))),
 }
 
+@[partial]
 def emit_instrs (instructions : List LLVMInstruction) : String := match instructions {
     List.empty => "",
     List.cons i rest =>
         String.concat "\n" (String.concat (show_instruction i) (emit_instrs rest)),
 }
 
+@[partial]
 def emit_function (func : LLVMFunction) : String := match func {
     LLVMFunction.mk name params ret_ty blocks ghc_cc =>
         let cc := if ghc_cc then " cc 9" else "" in
@@ -320,11 +346,13 @@ def emit_function (func : LLVMFunction) : String := match func {
         String.concat prefix (String.concat sig2 (String.concat body "\n}")),
 }
 
+@[partial]
 def join_params (params : List ParamPair) : String := match params {
     List.empty => "",
     List.cons p rest => join_params_rest p rest,
 }
 
+@[partial]
 def join_params_rest (p : ParamPair) (rest : List ParamPair) : String :=
     let shown := show_one_param p in
     match rest {
@@ -332,21 +360,25 @@ def join_params_rest (p : ParamPair) (rest : List ParamPair) : String :=
         List.cons x y => String.concat shown (String.concat ", " (join_params rest)),
     }
 
+@[partial]
 def show_one_param (p : ParamPair) : String := match p {
     ParamPair.mk param_name param_ty =>
         String.concat (show_llvm_type param_ty) (String.concat " %" param_name),
 }
 
+@[partial]
 def emit_blocks (blocks : List LLVMBasicBlock) : String := match blocks {
     List.empty => "",
     List.cons b rest => String.concat (emit_block b) (emit_blocks rest),
 }
 
+@[partial]
 def emit_globals (gs : List LLVMGlobal) : String := match gs {
     List.empty => "",
     List.cons g rest => String.concat (show_llvm_global g) (String.concat "\n" (emit_globals rest)),
 }
 
+@[partial]
 def show_llvm_global (g : LLVMGlobal) : String := match g {
     LLVMGlobal.mk name value byte_len constant =>
         if constant
@@ -356,33 +388,39 @@ def show_llvm_global (g : LLVMGlobal) : String := match g {
         else String.concat "@" (String.concat name (String.concat " = global " value)),
 }
 
+@[partial]
 def emit_decls (ds : List LLVMDeclaration) : String := match ds {
     List.empty => "",
     List.cons d rest => String.concat (show_llvm_decl d) (String.concat "\n" (emit_decls rest)),
 }
 
+@[partial]
 def show_llvm_decl (d : LLVMDeclaration) : String := match d {
     LLVMDeclaration.mk name params ret_ty =>
         String.concat "declare " (String.concat ret_ty (String.concat " @"
             (String.concat name (String.concat "(" (String.concat (join_strs params) ")"))))),
 }
 
+@[partial]
 def join_strs (xs : List String) : String := match xs {
     List.empty => "",
     List.cons x rest => join_strs_rest x rest,
 }
 
+@[partial]
 def join_strs_rest (x : String) (rest : List String) : String :=
     match rest {
         List.empty => x,
         List.cons y z => String.concat x (String.concat ", " (join_strs rest)),
     }
 
+@[partial]
 def emit_functions (fs : List LLVMFunction) : String := match fs {
     List.empty => "",
     List.cons f rest => String.concat (emit_function f) (String.concat "\n" (emit_functions rest)),
 }
 
+@[partial]
 def emit_module (module_ : LLVMModule) : String := match module_ {
     LLVMModule.mk target_triple globals functions declarations =>
         let h1 := String.concat "; ModuleID = 'monad'\ntarget triple = \"" (String.concat target_triple "\"\n\n") in

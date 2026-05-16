@@ -8,20 +8,24 @@ open LLVMType
 open LLVMValue
 
 /// Generate LLVM IR text from a list of Defs.
+@[partial]
 def compile_defs_to_ir (defs : List Def) : String :=
     let module_ := compile_decls_ir defs in
     lang.codegen.ir.emit_module module_
 
 
 /// Build a List String from four strings.
+@[partial]
 def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
     List.cons a (List.cons b (List.cons c (List.cons d List.empty)))
 
 /// An empty List String, explicitly typed to avoid forall leakage.
+@[partial]
 def empty_str_list : List String := List.empty
 
 /// Full pipeline: compile Defs to IR, write to file, run llc,
 /// compile runtime, link, run the binary, return exit code.
+@[partial]
 def compile_and_run (defs : List Def) (output_dir : String) (output_name : String) : IO I64 {
     let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
     let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
@@ -52,6 +56,7 @@ def test_link_compile_defs_to_ir : Bool :=
     let text := compile_defs_to_ir (List.cons def_ List.empty) in
     check_contains text "add i64"
 
+@[partial]
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true

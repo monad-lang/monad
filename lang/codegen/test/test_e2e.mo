@@ -69,14 +69,19 @@ def test_e2e_calling_convention : Bool :=
     let text := emit_module mod_ in
     check_contains text "cc 9"
 
+@[partial]
 def empty_defs : List Def := List.empty
 
+@[partial]
 def empty_ids : List Identifier := List.empty
 
+@[partial]
 def empty_cons : List TypeConstraint := List.empty
 
+@[partial]
 def empty_attrs : List String := List.empty
 
+@[partial]
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true

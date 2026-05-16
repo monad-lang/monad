@@ -4,7 +4,9 @@ open EvalTerm
 type EvalResult{ok_val(Term),err_val(EvalError)}
 open EvalResult
 type Scope{empty_scope,bind(name:NameRef)(value:Term)(rest:Scope)}
+@[partial]
 def identifier_string(i:Identifier):String:=match i{id s=>s}
+@[partial]
 def name_eq(a:NameRef)(b:NameRef):Bool:=
  match a{
   nid id_a=>match b{
@@ -13,11 +15,13 @@ def name_eq(a:NameRef)(b:NameRef):Bool:=
   },
   nmp mp_a=>false,nop op_a=>false
  }
+@[partial]
 def scope_lookup(name:NameRef)(scope:Scope):Option Term:=
  match scope{
   empty_scope=>Option.none,
   bind n val rest=>if name_eq n name then Option.some val else scope_lookup name rest
  }
+@[partial]
 def substitute_lam(param:Param)(body:Term)(name:NameRef)(new_term:Term):Term:=
  match param{
   mk pname ptype=>
@@ -25,6 +29,7 @@ def substitute_lam(param:Param)(body:Term)(name:NameRef)(new_term:Term):Term:=
    then Term.lam param body
     else Term.lam param (substitute body name new_term)
  }
+@[partial]
 def substitute(term:Term)(name:NameRef)(new_term:Term):Term:=
  match term{
   var n=>if name_eq n name then new_term else term,
@@ -38,6 +43,7 @@ def substitute(term:Term)(name:NameRef)(new_term:Term):Term:=
   type_ universe_val=>term,
   hole=>term
  }
+@[partial]
 def eval_apply(fun:Term)(arg:Term)(scope:Scope):EvalResult:=
  match fun{
    lam param body=>match param{mk pname ptype=>ok_val (substitute body (NameRef.nid pname) arg)},
@@ -57,11 +63,13 @@ def eval_apply(fun:Term)(arg:Term)(scope:Scope):EvalResult:=
    type_ universe_val=>err_val (EvalError.not_a_function fun),
    hole=>err_val (EvalError.not_a_function fun)
  }
+@[partial]
 def eval_step_var(name:NameRef)(scope:Scope):EvalResult:=
  match scope_lookup name scope{
   Option.some val=>eval_step val scope,
    Option.none=>err_val (EvalError.undefined_var name)
  }
+@[partial]
 def eval_step(term:Term)(scope:Scope):EvalResult:=
  match term{
   var name=>eval_step_var name scope,
@@ -81,12 +89,16 @@ def eval_step(term:Term)(scope:Scope):EvalResult:=
   hole=>ok_val term,
   lit val=>eval_lit val scope
   }
+@[partial]
 def var_term(s:String):Term:=Term.var (NameRef.nid (Identifier.id s))
+@[partial]
 def num_term(n:I64):Term:=Term.lit (Literal.num n NumSuffix.i64)
+@[partial]
 def con_name_match(c:Con)(s:String):Bool:=
   match c{
     mk cname ctyp cnum_args ccon_args=>String.beq (identifier_string cname) s
   }
+@[partial]
 def find_case(name:Identifier)(cases:List MatchCase):Option MatchCase:=
   match cases{
     List.cons c rest=>
@@ -97,6 +109,7 @@ def find_case(name:Identifier)(cases:List MatchCase):Option MatchCase:=
       },
     List.empty=>Option.none
   }
+@[partial]
 def substitute_args(args:List (Option Term))(params:List Identifier)(body:Term):EvalResult:=
   match args{
     List.cons a rest_args=>
@@ -106,16 +119,19 @@ def substitute_args(args:List (Option Term))(params:List Identifier)(body:Term):
       },
     List.empty=>ok_val body
   }
+@[partial]
 def substitute_args_opt(a:Option Term)(rest_args:List (Option Term))(p:Identifier)(rest_params:List Identifier)(body:Term):EvalResult:=
   match a{
     Option.some arg_val=>substitute_args rest_args rest_params (substitute body (NameRef.nid p) arg_val),
     Option.none=>err_val (EvalError.custom "incomplete constructor args")
   }
+@[partial]
 def eval_match(scrutinee:Term)(cases:List MatchCase)(scope:Scope):EvalResult:=
   match eval_step scrutinee scope{
     ok_val result=>eval_match_result result cases,
     err_val e=>err_val e
   }
+@[partial]
 def eval_match_result(result:Term)(cases:List MatchCase):EvalResult:=
   match result{
     con c=>eval_match_con c result cases,
@@ -129,6 +145,7 @@ def eval_match_result(result:Term)(cases:List MatchCase):EvalResult:=
     type_ u=>err_val (EvalError.match_failure result),
     hole=>err_val (EvalError.match_failure result)
   }
+@[partial]
 def eval_match_con(c:Con)(result:Term)(cases:List MatchCase):EvalResult:=
   match c{
     mk cname ctyp cnum_args ccon_args=>
@@ -139,11 +156,13 @@ def eval_match_con(c:Con)(result:Term)(cases:List MatchCase):EvalResult:=
         Option.none=>err_val (EvalError.match_failure result)
       }
   }
+@[partial]
 def eval_if(cond:Term)(then_b:Term)(else_b:Term)(scope:Scope):EvalResult:=
   match eval_step cond scope{
     ok_val result=>eval_if_result result then_b else_b,
     err_val e=>err_val e
   }
+@[partial]
 def eval_if_result(result:Term)(then_b:Term)(else_b:Term):EvalResult:=
   match result{
     con c=>eval_if_con c then_b else_b,
@@ -157,12 +176,14 @@ def eval_if_result(result:Term)(then_b:Term)(else_b:Term):EvalResult:=
     type_ u=>err_val (EvalError.custom "if condition must be Bool"),
     hole=>err_val (EvalError.custom "if condition must be Bool")
   }
+@[partial]
 def eval_if_con(c:Con)(then_b:Term)(else_b:Term):EvalResult:=
   if con_name_match c "true"
   then ok_val then_b
   else if con_name_match c "false"
   then ok_val else_b
   else err_val (EvalError.custom "if condition must be Bool")
+@[partial]
 def eval_lit(val:Literal)(scope:Scope):EvalResult:=
   match val{
     match_ scrutinee cases=>eval_match scrutinee cases scope,
@@ -241,6 +262,7 @@ type KEvalEnv {
 open KEvalEnv
 
 /// Look up a de Bruijn index in the evaluation environment.
+@[partial]
 def kenv_lookup (env: KEvalEnv) (idx: I64) : Option EvalTerm :=
   match env {
     kenv_empty => Option.none,
@@ -259,6 +281,7 @@ open KernelResult
 
 /// Evaluate an EvalTerm under an environment.
 /// Variables resolved via kenv_lookup. Lambdas extend the env on application.
+@[partial]
 def keval (term: EvalTerm) (env: KEvalEnv) : KernelResult :=
   match term {
     EvalTerm.evar idx =>
