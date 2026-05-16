@@ -285,3 +285,47 @@ fn test_attr_native_string() {
     _ => panic!("expected Def"),
   }
 }
+
+#[test]
+fn test_attr_terminating() {
+  let s = r#"@[terminating]
+    def factorial (n : I64) : I64 :=
+        if n == 0
+        then 1
+        else n * factorial (n - 1)
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("terminating"),
+    args: vec![],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_partial() {
+  let s = r#"@[partial]
+    def arbitrary (n : I64) : I64 :=
+        if n == 0
+        then 1
+        else arbitrary (n - 1)
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("partial"),
+    args: vec![],
+  }];
+
+  match res.value() {
+    Decl::Def(def) => assert_eq!(def.attributes, expected_attrs),
+    _ => panic!("expected Def"),
+  }
+}

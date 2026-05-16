@@ -464,11 +464,7 @@ pub fn find_mutual_groups(
 /// parameter, or Err describing the first non-structural call found.
 pub fn check_termination(def: &Def) -> Result<(), TerminationError> {
   // Skip if the definition has @[terminating] or @[partial] attribute
-  if def
-    .attributes
-    .iter()
-    .any(|a| a.name.as_str() == "terminating" || a.name.as_str() == "partial")
-  {
+  if def.has_terminating_attr() || def.has_partial_attr() {
     return Ok(());
   }
 
@@ -497,11 +493,7 @@ pub fn check_termination_group(defs: &[&Def]) -> Result<(), TerminationError> {
 
   for def in defs {
     // Skip individual defs with escape attributes
-    if def
-      .attributes
-      .iter()
-      .any(|a| a.name.as_str() == "terminating" || a.name.as_str() == "partial")
-    {
+    if def.has_terminating_attr() || def.has_partial_attr() {
       continue;
     }
 
@@ -728,6 +720,48 @@ mod tests {
     assert!(
       result.is_ok(),
       "@[terminating] should skip check: {}",
+      result.unwrap_err()
+    );
+  }
+
+  #[test]
+  fn test_partial_attr_skips_check() {
+    let name = test_def("arbitrary");
+    let ref_term = var("arbitrary");
+
+    let body = lam(
+      param(id("n"), Term::Hole),
+      crate::term::if_term(
+        crate::term::app(
+          crate::term::app(crate::term::mpvar(mpath(&["I64", "beq"])), var("n")),
+          num(0),
+        ),
+        num(1),
+        crate::term::app(
+          ref_term,
+          crate::term::app(
+            crate::term::app(crate::term::mpvar(mpath(&["I64", "sub"])), var("n")),
+            num(1),
+          ),
+        ),
+      ),
+    );
+
+    let def = Def {
+      name,
+      typ: Term::Hole,
+      term: body,
+      type_constraints: vec![],
+      attributes: vec![crate::term::Attribute {
+        name: id("partial"),
+        args: vec![],
+      }],
+    };
+
+    let result = check_termination(&def);
+    assert!(
+      result.is_ok(),
+      "@[partial] should skip check: {}",
       result.unwrap_err()
     );
   }

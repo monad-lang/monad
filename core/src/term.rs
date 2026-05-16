@@ -1783,6 +1783,15 @@ impl Def {
   pub fn has_test_attr(&self) -> bool {
     self.attributes.iter().any(|a| a.name.as_str() == "test")
   }
+  pub fn has_terminating_attr(&self) -> bool {
+    self
+      .attributes
+      .iter()
+      .any(|a| a.name.as_str() == "terminating")
+  }
+  pub fn has_partial_attr(&self) -> bool {
+    self.attributes.iter().any(|a| a.name.as_str() == "partial")
+  }
   pub fn name(&self) -> &ModulePath {
     &self.name
   }
