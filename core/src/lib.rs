@@ -326,8 +326,15 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
       Ok(m) => m,
       Err(e) => return Err(format!("{e}")),
     };
-    // Skip files that are already part of the default modules
-    let is_default = loaded.get_module(&path).is_some();
+    // Skip files that are already part of the default modules.
+    // Also skip if the last segment of the path matches a default module
+    // (e.g., init/id.mo is the same as the "id" default module).
+    let is_default = loaded.get_module(&path).is_some() || {
+      let last = path.last();
+      loaded
+        .get_module(&ModulePath::single(last.clone()))
+        .is_some()
+    };
     // Ensure std/test is loaded (for Test.assert)
     let test_path: ModulePath = ModulePath::new(vec![id("std"), id("test")]);
     if loaded.get_module(&test_path).is_none() {

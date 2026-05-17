@@ -622,7 +622,7 @@ fn match_case_parser<X: Clone>(input: Span<X>) -> Res<MatchCase, X> {
 
 fn match_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, _) = tag("match")(input)?;
-  let (input, _) = ws1(input)?;
+  let (input, _) = ws0(input)?;
   let (input, value) = term(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("{")(input)?;

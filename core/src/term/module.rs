@@ -1557,6 +1557,7 @@ fn load_module_file(
 
 pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingError> {
   let prelude_path = ModulePath::top("'prelude");
+  let id_path = ModulePath::top("id");
   let io_path = ModulePath::top("io");
   let init_path = ModulePath::top("init");
   let math_path = ModulePath::top("math");
@@ -1567,6 +1568,7 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
   #[cfg(feature = "embed-stdlib")]
   {
     let prelude_text = include_str!("../../../init/prelude.mo");
+    let id_text = include_str!("../../../init/id.mo");
     let io_text = include_str!("../../../init/io.mo");
     let number_text = include_str!("../../../init/number.mo");
     let math_text = include_str!("../../../init/math.mo");
@@ -1575,6 +1577,7 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
     let process_text = include_str!("../../../init/process.mo");
 
     load_module_from_text(prelude_text, prelude_path, &mut loaded)?;
+    load_module_from_text(id_text, id_path, &mut loaded)?;
     load_module_from_text(io_text, io_path, &mut loaded)?;
     load_module_from_text(number_text, number_path, &mut loaded)?;
     load_module_from_text(math_text, math_path, &mut loaded)?;
@@ -1587,11 +1590,12 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
   {
     let dir = stdlib_dir();
     // Load in dependency order:
-    //   prelude, io, number: no deps
+    //   prelude, id, io, number: no deps
     //   math: depends on number
     //   string: depends on math
     //   init: depends on io, number, math, string
     load_module_file(dir.join("prelude.mo"), &prelude_path, &mut loaded)?;
+    load_module_file(dir.join("id.mo"), &id_path, &mut loaded)?;
     load_module_file(dir.join("io.mo"), &io_path, &mut loaded)?;
     load_module_file(dir.join("number.mo"), &number_path, &mut loaded)?;
     load_module_file(dir.join("math.mo"), &math_path, &mut loaded)?;

@@ -1240,7 +1240,17 @@ pub fn match_determine_type_vars_with_scope<'a>(
 fn apply_free_type_vars(typ: Term, free_vars: &FreeVars) -> Term {
   let typ = substitute_forall(typ, free_vars);
 
-  add_forall_to_type(typ, free_vars.keep_vars())
+  // Filter keep_vars: skip ~-suffixed vars (temporary renamed forall vars
+  // created by pi_of_forall_types_with_mult for matching only — they must
+  // not leak into stored types seen by the evaluator).
+  let keep = free_vars.keep_vars();
+  let filtered: Map<Identifier, &Term> = keep
+    .iter()
+    .filter(|(id, _)| !id.as_str().contains('~'))
+    .map(|(k, v)| ((*k).clone(), *v))
+    .collect();
+  let filtered_refs: Map<&Identifier, &Term> = filtered.iter().map(|(k, v)| (k, *v)).collect();
+  add_forall_to_type(typ, &filtered_refs)
 }
 
 /// Try to resolve a `NameRef` through def_refs to expand type aliases.
@@ -1793,8 +1803,21 @@ pub fn substitute_forall(typ_: Term, free_vars: &FreeVars) -> Term {
     Forall { name, typ, body } => {
       if let Some(FreeVar::Detected { typ: _, term }) = free_vars.get_free_var(&name) {
         let res = substitute(*body, &Id(name), term);
-
         substitute_forall(res, free_vars)
+      } else if name.as_str().contains('~') {
+        // Strip ~-renamed foralls that were not detected — these are
+        // temporary renames from pi_of_forall_types_with_mult that must
+        // not leak into stored types or result types seen by the evaluator.
+        // Also clean up Var references to this variable in the body.
+        let original = Identifier::new(name.as_str().trim_end_matches('~').to_string());
+        let body = substitute(
+          *body,
+          &Id(name.clone()),
+          &Var {
+            name: NameRef::Id(original),
+          },
+        );
+        substitute_forall(body, free_vars)
       } else {
         let res = substitute_forall(*body, free_vars);
         forall(param(name, *typ), res)

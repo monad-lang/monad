@@ -441,3 +441,13 @@ def test_match_wildcard_discard_arg : Bool :=
         some _ => true,
         _ => false
     }
+
+// -- Id monad tests --
+
+@[test]
+def test_id_unwrap : Bool :=
+    match Id.run (Id.id true) { true => true, false => false }
+
+@[test]
+def test_id_unwrap_false : Bool :=
+    match Id.run (Id.id false) { true => false, false => true }

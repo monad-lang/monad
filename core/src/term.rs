@@ -523,6 +523,9 @@ pub struct Instance {
 }
 
 impl Instance {
+  pub fn name(&self) -> &ModulePath {
+    &self.name
+  }
   pub fn as_constructor(&self) -> &Constructor {
     &self.cons
   }
