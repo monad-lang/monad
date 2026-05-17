@@ -673,6 +673,15 @@ Always commit with pre-commit hooks enabled. **Never** use `git commit --no-veri
 2. Fix the underlying problem (code warnings, test failures, formatting)
 3. Stage the fix and retry the commit
 
+**IMPORTANT**: When `rustfmt` hook fails, the commit DID NOT succeed (the files
+were modified by the hook but NOT committed). Always run `cargo fmt` manually
+BEFORE committing. If the hook modifies files, the commit was rejected — run
+`cargo fmt && git add <modified files> && git commit ...` to retry.
+
+**DO NOT** assume the commit succeeded when you see "files were modified by
+this hook" — that means the hook rejected the commit. Always check
+`git log -1` after committing to verify.
+
 ### Pre-commit Checklist
 
 Before committing, ensure:
