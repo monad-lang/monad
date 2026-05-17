@@ -10,7 +10,7 @@ use crate::{
     InstanceKey, Literal, ModulePath, Multiplicity, NameRef, Named, NumSuffix, SourceContext,
     SourceRange,
     Term::{Forall, Hole, Pi, Quote, Sort},
-    TypeConstraint, Typed, TypedTerm, VarRef, app, bvar, ctx, forall, lam_par,
+    TypeConstraint, Typed, TypedTerm, VarRef, app, ctx, forall, lam_par,
     module::{LoadedModules, names_of_decls},
     mpvar, num_suffix, param, pi_typs, pi_with_mult, sort_u, sort1, typed_term, var,
   },
@@ -719,6 +719,56 @@ fn did_you_mean(name: &str, candidates: &[String]) -> Option<String> {
     })
     .min_by_key(|(d, _)| *d)
     .map(|(_, c)| c)
+}
+
+/// Extract the universe level from a type, resolving through Var aliases.
+/// Uses a visiting set to prevent infinite recursion on alias chains.
+fn ensure_sort(typ: &Term, scope: &Scope) -> Result<(Term, u64), TypeError> {
+  match typ {
+    Term::Sort { level } => Ok((typ.clone(), *level)),
+    Term::Var { name } if name.is_name() => {
+      let mut visited = std::collections::HashSet::new();
+      let mut current = typ.clone();
+      loop {
+        match &current {
+          Term::Sort { level } => return Ok((current.clone(), *level)),
+          Term::Ctx { term, .. } => {
+            current = (**term).clone();
+          }
+          Term::Var { name } if name.is_name() => {
+            let def_path = name.to_path().unwrap();
+            if !visited.insert(def_path.clone()) {
+              return Err(TypeError::ExpectedType(typ.clone(), SourceRange::default()));
+            }
+            let def = scope
+              .global()
+              .find_ref(&def_path)
+              .ok_or(TypeError::ExpectedType(typ.clone(), SourceRange::default()))?;
+            current = def.typ().clone();
+          }
+          _ => return Err(TypeError::ExpectedType(typ.clone(), SourceRange::default())),
+        }
+      }
+    }
+    Term::Ctx { term, .. } => ensure_sort(term, scope),
+    _ => Err(TypeError::ExpectedType(typ.clone(), SourceRange::default())),
+  }
+}
+
+/// Check that actual is a subtype of expected under cumulativity.
+/// Sort u is a subtype of Sort v iff u <= v.
+pub fn check_cumulativity(actual: &Term, expected: &Term, scope: &Scope) -> Result<(), TypeError> {
+  match (actual, expected) {
+    (Term::Sort { level: u }, Term::Sort { level: v }) if u <= v => Ok(()),
+    (Term::Sort { .. }, Term::Sort { .. }) => Err(TypeError::ExpectedType(
+      actual.clone(),
+      SourceRange::default(),
+    )),
+    _ => {
+      let _ = match_resolve_type(actual, expected, scope)?;
+      Ok(())
+    }
+  }
 }
 
 fn t_context(err: TypeError, name: Option<ModulePath>, loc: SourceRange) -> TypeError {
@@ -2477,7 +2527,12 @@ fn type_check_with_env(
       Hole => Ok(typed_term(term, sort_u(level + 1))),
       Sort {
         level: expected_level,
-      } if *expected_level > level => Ok(typed_term(term, sort_u(level + 1))),
+      } if *expected_level > level =>
+      // Cumulativity: Sort u can inhabit Sort v whenever v > u
+      // Return the expected type to propagate level information
+      {
+        Ok(typed_term(term, expected_type.clone()))
+      }
       _ => Err(TypeError::ExpectedType(term, SourceRange::default())),
     },
     Ntv { native: _ } => Ok(typed_term(term.clone(), expected_type.clone())),
@@ -2581,19 +2636,42 @@ fn type_check_with_env(
     }
     Forall {
       name: _,
-      typ: _,
-      body: _,
-    } => Ok(typed_term(term, expected_type)),
+      ref typ,
+      ref body,
+    } => {
+      let typ_result = type_check_with_env(*typ.clone(), Hole, &scope, usage, track_usage)?;
+      let body_result = type_check_with_env(*body.clone(), Hole, &scope, usage, track_usage)?;
+
+      // Try .term first (handles Sort literals), fall back to .typ (handles Pi/App/Var types)
+      let (_, typ_sort) =
+        ensure_sort(&typ_result.term, &scope).or_else(|_| ensure_sort(typ_result.typ(), &scope))?;
+      let (_, body_sort) = ensure_sort(&body_result.term, &scope)
+        .or_else(|_| ensure_sort(body_result.typ(), &scope))?;
+
+      let max_level = std::cmp::max(typ_sort, body_sort);
+      Ok(typed_term(term, sort_u(max_level)))
+    }
     Pi {
       ref arg,
       ref ret,
       arg_name: _,
       ..
     } => {
-      if expected_type.is_type() {
-        let _arg = type_check_with_env(*arg.clone(), sort1(), &scope, usage, track_usage)?;
-        let _ret = type_check_with_env(*ret.clone(), sort1(), &scope, usage, track_usage)?;
-        Ok(typed_term(term.clone(), sort1()))
+      if expected_type.is_type()
+        || matches!(expected_type, Term::Sort { .. })
+        || matches!(expected_type, Hole)
+      {
+        let arg_result = type_check_with_env(*arg.clone(), Hole, &scope, usage, track_usage)?;
+        let ret_result = type_check_with_env(*ret.clone(), Hole, &scope, usage, track_usage)?;
+
+        // Try .term first (handles Sort literals), fall back to .typ (handles Pi/App/Var types)
+        let (_, arg_sort) = ensure_sort(&arg_result.term, &scope)
+          .or_else(|_| ensure_sort(arg_result.typ(), &scope))?;
+        let (_, ret_sort) = ensure_sort(&ret_result.term, &scope)
+          .or_else(|_| ensure_sort(ret_result.typ(), &scope))?;
+
+        let max_level = std::cmp::max(arg_sort, ret_sort);
+        Ok(typed_term(term.clone(), sort_u(max_level)))
       } else {
         Err(TypeError::ExpectedType(
           expected_type.clone(),
@@ -2613,31 +2691,6 @@ fn type_check_with_env(
       let _ = type_check_with_env((*term).clone(), Hole, &scope, usage, track_usage)?;
       Ok(typed_term(*term, Hole))
     }
-  }
-}
-
-/// Replace local var identifiers with index
-pub fn substitute_local_var_with_index(term: Term, name: &Identifier) -> Term {
-  substitute_var_with_index_inner(term, name, 1)
-}
-
-fn substitute_var_with_index_inner(term: Term, name: &Identifier, index: usize) -> Term {
-  match &term {
-    Var {
-      name: NameRef::Id(id),
-    } if id == name => bvar(index),
-    Lam { param, body } => match param {
-      Par::P(param) if &param.name == name => term,
-      _ => {
-        let body = substitute_var_with_index_inner(*body.clone(), name, index + 1);
-        Lam {
-          param: param.clone(),
-          body: Box::new(body),
-        }
-      }
-    },
-    // TODO
-    _ => term,
   }
 }
 
