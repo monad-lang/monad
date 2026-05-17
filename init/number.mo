@@ -147,6 +147,12 @@ def I64.mul (a b : I64) : I64
 @[native i64_div]
 def I64.div (a b : I64) : I64
 
+@[native i64_lt]
+def I64.lt (a b : I64) : Bool
+
+@[native i64_gt]
+def I64.gt (a b : I64) : Bool
+
 @[native i64_eq]
 def I64.beq (a b : I64) : Bool
 
@@ -171,6 +177,11 @@ instance Div I64 {
 
 instance BEq I64 {
 	def beq (a b : I64) : Bool := I64.beq a b
+}
+
+instance BOrd I64 {
+	def lt (a b : I64) : Bool := I64.lt a b
+	def gt (a b : I64) : Bool := I64.gt a b
 }
 
 instance ToString I64 {

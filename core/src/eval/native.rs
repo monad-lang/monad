@@ -503,6 +503,16 @@ pub fn u8_gt(terms: Vec<Term>) -> Result<Term, NativeError> {
   Ok(bool_to_term((a as u8) > (b as u8)))
 }
 
+pub fn i64_lt(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let (a, b) = extract_num_pair(&terms)?;
+  Ok(bool_to_term(a < b))
+}
+
+pub fn i64_gt(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let (a, b) = extract_num_pair(&terms)?;
+  Ok(bool_to_term(a > b))
+}
+
 /// Simple native function: takes args, returns result.
 pub type SimpleNativeFun = fn(Vec<Term>) -> Result<Term, NativeError>;
 /// Scope-aware native function: takes args and the current scope.
@@ -624,6 +634,8 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("string_from_list"), s(string_from_list)),
     (id("bench_now"), s(bench_now)),
     (id("bench_report"), s(bench_report)),
+    (id("i64_lt"), s(i64_lt)),
+    (id("i64_gt"), s(i64_gt)),
     (id("u8_lt"), s(u8_lt)),
     (id("u8_gt"), s(u8_gt)),
     (id("eval_term"), sa(eval_term)),
