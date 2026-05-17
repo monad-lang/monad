@@ -371,11 +371,14 @@ impl InductConstructor {
   pub fn typ(&self) -> &Term {
     &self.typ
   }
-  pub fn params(&self) -> &Vec<Param> {
-    &self.params
-  }
   pub fn term(&self) -> &Term {
     &self.term
+  }
+  pub fn set_term(&mut self, term: Term) {
+    self.term = term;
+  }
+  pub fn params(&self) -> &Vec<Param> {
+    &self.params
   }
   pub fn inductive_name(&self) -> &ModulePath {
     &self.inductive_name

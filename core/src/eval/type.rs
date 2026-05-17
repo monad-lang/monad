@@ -2842,9 +2842,10 @@ pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -
     .iter()
     .chain(known_names.iter().copied())
     .collect();
+  let ind_params = ind.params().clone();
   for cons in ind.constructors.iter_mut() {
     let typ = cons.typ().clone();
-    cons.typ = if is_class {
+    if is_class {
       let (mut class_defs, ret) = pi_to_vec(typ);
       for (typ, param) in class_defs.iter_mut().zip(cons.params.iter_mut()) {
         let free_vars = free_vars(typ, &known_names);
@@ -2856,16 +2857,45 @@ pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -
         *typ = add_forall_to_type(typ.clone(), &vars);
         *param.typ = typ.clone();
       }
-      pi_typs(class_defs, ret)
+      cons.typ = pi_typs(class_defs, ret);
     } else {
-      let free_vars = free_vars(&typ, &known_names);
-      let default_type = sort1();
-      let vars = free_vars
-        .iter()
-        .map(|i| (i, &default_type))
-        .chain(params.iter())
-        .collect();
-      add_forall_to_type(typ, &vars)
+      let all_free = free_vars(&typ, &empty_set());
+      let extra_free = free_vars(&typ, &known_names);
+      let mut new_typ = typ;
+      let mut new_term = cons.term().clone();
+      // Determine which inductive params need Forall wrappers on the term:
+      // - Sort-typed params (type-level): always Forall-wrapped, stripped by Var resolution
+      // - Non-Sort params: only Forall-wrapped when the constructor has no explicit
+      //   params (like `refl` with 0 field params), so eval_app absorbs arguments.
+      //   For constructors WITH explicit params (like `cons`), the Lams handle args.
+      let has_explicit_params = !cons.params().is_empty();
+      for p in ind_params.iter().rev() {
+        if all_free.contains(&p.name) {
+          let p_typ = params
+            .get(&p.name)
+            .cloned()
+            .unwrap_or_else(|| (*p.typ).clone());
+          let lam_param = Param {
+            name: p.name.clone(),
+            typ: Box::new(p_typ.clone()),
+            mult: p.mult.clone(),
+            default: p.default.clone(),
+          };
+          new_typ = forall(lam_param.clone(), new_typ);
+          if matches!(*p.typ, Term::Sort { .. }) || !has_explicit_params {
+            new_term = forall(lam_param, new_term);
+          }
+        }
+      }
+      let def_type = sort1();
+      for fv in extra_free.iter() {
+        if !params.contains_key(fv) && all_free.contains(fv) {
+          new_typ = forall(param((*fv).clone(), def_type.clone()), new_typ);
+          new_term = forall(param((*fv).clone(), def_type.clone()), new_term);
+        }
+      }
+      cons.typ = new_typ;
+      cons.set_term(new_term);
     }
   }
   ind

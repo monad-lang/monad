@@ -451,3 +451,13 @@ def test_id_unwrap : Bool :=
 @[test]
 def test_id_unwrap_false : Bool :=
     match Id.run (Id.id false) { true => false, false => true }
+
+@[test]
+def test_eq_refl_apply : Bool :=
+    let refx := Eq.refl 1 in
+    true
+
+@[test]
+def test_eq_refl_apply_str : Bool :=
+    let refx := Eq.refl "hello" in
+    true

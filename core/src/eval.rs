@@ -244,10 +244,16 @@ fn eval_inner(
       }
       Var { name } => {
         let mut term = resolve_name(&name, scope)?.clone();
-        // Strip forall wrappers — the type checker has already instantiated
-        // forall parameters for class methods, but the stored term retains them
-        while let Term::Forall { body, .. } = term {
-          term = *body;
+        // Strip type-level forall wrappers — the type checker has already
+        // instantiated forall parameters for class/inductive methods.
+        // Only strip foralls whose parameter type is a Sort (type-level),
+        // leaving value-level foralls to be handled by eval_app.
+        while let Term::Forall { body, typ, .. } = &term {
+          if matches!(**typ, Term::Sort { .. }) {
+            term = *body.clone();
+          } else {
+            break;
+          }
         }
         term
       }
@@ -547,6 +553,7 @@ fn eval_app(
   match fun {
     Var { name } => unwrap_decl_lambda(arg, &name, scope, loc.clone()),
     Lam { param, body } => Ok(substitute_lam(param, *body, &arg)),
+    Forall { body, .. } => Ok(*body),
     Ntv { native } => {
       let index = native.args.iter().filter(|a| a.is_some()).count() + 1;
       if let Some(result) = native_apply_arg(native, index, arg) {
