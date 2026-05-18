@@ -899,9 +899,8 @@ impl UsageEnv {
 pub fn derive_instance_key(class_def: &ClassDefRef, typ: &Term) -> Result<InstanceKey, TypeError> {
   use FreeVar::*;
   use InstanceError::*;
-  let free_vars: FreeVars = class_def
-    .class
-    .params
+  let class_params = &class_def.class.params;
+  let free_vars: FreeVars = class_params
     .iter()
     .map(|p| (&p.name, Unknown { typ: &p.typ }))
     .collect();

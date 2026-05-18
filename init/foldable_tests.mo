@@ -1,6 +1,8 @@
 use std.test
 use init.foldable
 
+def multiply (x : I64) (y : I64) : I64 := x * y
+
 @[test]
 def test_semigroup_string : Bool :=
   let s : String := Semigroup.combine "hello" "world" in
@@ -33,7 +35,7 @@ def test_foldr_sum : Bool :=
 
 @[test]
 def test_foldr_product : Bool :=
-  let res : I64 := Foldable.foldr (fn x acc => x * acc) 1 [2, 3, 4] in
+  let res : I64 := Foldable.foldr multiply 1 [2, 3, 4] in
   res == 24
 
 @[test]

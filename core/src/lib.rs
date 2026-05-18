@@ -234,6 +234,10 @@ pub fn vec_fmt<T: Display>(v: &[T]) -> String {
     .join(", ")
 }
 
+const GREEN: &str = "\x1b[32m";
+const RED: &str = "\x1b[31m";
+const RESET: &str = "\x1b[0m";
+
 enum TestResult {
   Pass,
   Fail,
@@ -415,15 +419,15 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
       match detect_test_result(&result) {
         TestResult::Pass => {
           passed += 1;
-          println!("PASS {name}");
+          println!("{GREEN}PASS{RESET} {name}");
         }
         TestResult::Fail => {
           failed += 1;
-          println!("FAIL {name}");
+          println!("{RED}FAIL{RESET} {name}");
         }
         TestResult::FailWithMessage(msg) => {
           failed += 1;
-          println!("FAIL {name}: {msg}");
+          println!("{RED}FAIL{RESET} {name}: {msg}");
           failures.push((name.clone(), msg));
         }
       }
@@ -435,12 +439,10 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
 
     if failed > 0 {
       for (name, msg) in &failures {
-        eprintln!("FAIL {name}: {msg}");
+        eprintln!("{RED}FAIL{RESET} {name}: {msg}");
       }
       overall_errors.push(format!(
-        "{}/{} tests passed in {}: FAILED",
-        passed,
-        total,
+        "{passed}/{total} tests passed in {}: {RED}FAILED{RESET}",
         file.display()
       ));
     } else if passed > 0 {
@@ -453,15 +455,15 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
     return Err("No tests found".to_string());
   }
 
-  println!("{total_passed}/{total_tests} total tests passed");
-
   if total_failed > 0 {
+    println!("{RED}{total_passed}/{total_tests} total tests passed{RESET}");
     Err(format!(
       "{} test(s) failed\n{}",
       total_failed,
       overall_errors.join("\n")
     ))
   } else {
+    println!("{GREEN}{total_passed}/{total_tests} total tests passed{RESET}");
     Ok(())
   }
 }
