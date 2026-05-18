@@ -909,7 +909,7 @@ fn quote_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
 }
 
 fn base_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((application, non_app_term)).parse(input)
+  alt((sort_parser, application, non_app_term)).parse(input)
 }
 
 fn parse_expr<X: Clone>(input: Span<X>, min_prec: u8) -> Res<Term, X> {

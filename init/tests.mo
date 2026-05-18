@@ -466,3 +466,20 @@ def test_eq_refl_apply_str : Bool :=
 def test_eq_refl_type : Bool :=
     let refx : Eq I64 1 1 := Eq.refl 1 in
     true
+
+// -- Sort universe tests —
+
+@[test]
+def test_sort_formation : Bool :=
+    let _type : Sort 2 := Sort 1 in
+    true
+
+@[test]
+def test_sort_cumulativity : Bool :=
+    let t : Sort 1 := Sort 0 in
+    true
+
+@[test]
+def test_pi_universe : Bool :=
+    let _f : (Sort 1 -> Sort 2) := fn x => x in
+    true
