@@ -782,13 +782,18 @@ def cons_phi (p : PhiPair) (ps : List PhiPair) : List PhiPair := List.cons p ps
 def cons_instr (i : LLVMInstruction) (is : List LLVMInstruction) : List LLVMInstruction :=
     List.cons i is
 
+/// LLVM wrapper from C main→main_monad. Unused in the current pipeline
+/// (the C runtime's main() calls main_monad directly). Kept as reference
+/// for future pipeline integration.
 @[partial]
 def compile_main_wrapper_ir : LLVMFunction :=
     let argc_pair := ParamPair.mk "argc" LLVMType.i32_ in
     let argv_pair := ParamPair.mk "argv" LLVMType.i64_ in
     let wrapper_params := cons_pair argc_pair (cons_pair argv_pair (empty_pairs)) in
+    let argv_val := LLVMValue.parm_ 1 in
+    let args_singleton := List.cons argv_val List.empty in
     let call_instr := LLVMInstruction.assign "t0"
-        (LLVMValue.call "main_monad" LLVMType.i64_ empty_vals false) in
+        (LLVMValue.call "main_monad" LLVMType.i64_ args_singleton false) in
     let trunc_instr := LLVMInstruction.assign "t1"
         (LLVMValue.trunc (LLVMValue.var_ "t0") LLVMType.i64_ LLVMType.i32_) in
     let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "t1") in
@@ -877,17 +882,30 @@ def has_main (funcs : List LLVMFunction) : Bool := match funcs {
         },
 }
 
+/// When the user's main has no params, add an `args` param so the C runtime
+/// can pass the command-line argument list. If main already has params (e.g.,
+/// `def main (args : List String) : I64`), keep them as-is.
 @[partial]
 def rename_main (funcs : List LLVMFunction) : List LLVMFunction := match funcs {
     List.empty => empty_funcs,
     List.cons f rest =>
         match f {
             LLVMFunction.mk name params ret_ty blocks ghc_cc =>
-                let renamed := if String.beq name "main"
-                    then LLVMFunction.mk "main_monad" params ret_ty blocks ghc_cc
-                    else f in
-                cons_func renamed (rename_main rest),
+                if String.beq name "main"
+                then
+                    let main_params := ensure_main_params params in
+                    cons_func (LLVMFunction.mk "main_monad" main_params ret_ty blocks ghc_cc) (rename_main rest)
+                else
+                    cons_func f (rename_main rest),
         },
+}
+
+/// If main has no params, add a synthetic `args` param (List String from C runtime).
+/// If main already has params (user wrote `def main (args : List String)`), keep them.
+@[partial]
+def ensure_main_params (params : List ParamPair) : List ParamPair := match params {
+    List.empty => cons_pair (ParamPair.mk "args" LLVMType.i64_) empty_pairs,
+    List.cons x y => params,
 }
 
 

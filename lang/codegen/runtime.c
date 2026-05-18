@@ -95,10 +95,26 @@ void monad_print_str(char* s) {
     if (s) printf("%s\n", s);
 }
 
-int64_t main_monad(void);
+/* Build a List String (linked list of StringObj) from command line args.
+   List.empty is constructor tag 0 (0 fields).
+   List.cons is constructor tag 1 (2 fields: head, tail).
+   Strings are built via alloc_string.
+   Builds the list in reverse (cons prepends), so argv[0] is first. */
+void* monad_build_args(int argc, char** argv) {
+    void* list = alloc_constructor(0, 0);   /* List.empty */
+    for (int i = argc - 1; i >= 0; i--) {
+        void* str = alloc_string(argv[i], (int64_t)strlen(argv[i]));
+        Constructor* cons = (Constructor*)alloc_constructor(1, 2);
+        cons->fields[0] = str;   /* head */
+        cons->fields[1] = list;  /* tail */
+        list = cons;
+    }
+    return list;
+}
+
+int64_t main_monad(void* args);
 
 int main(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
-    return (int)main_monad();
+    void* args = monad_build_args(argc, argv);
+    return (int)main_monad(args);
 }
