@@ -557,13 +557,25 @@ impl Instance {
           .args
           .get(index)
           .expect("instance args did not match class");
-        // If the instance arg is a type variable from the instance's own
-        // type parameters, use substitution-based matching.
-        if let Term::Var {
+        // If the instance arg is a type variable, use substitution-based matching.
+        // Check if the arg name matches a class param OR an instance param.
+        // This handles both explicit {A : Type} params and implicit type variables
+        // from bridge instances like `instance [C A] Class A`.
+        let is_subst_var = if let Term::Var {
           name: NameRef::Id(id),
         } = arg
-          && self.params.iter().any(|p| p.name == *id)
         {
+          class.params.iter().any(|p| p.name == *id) || self.params.iter().any(|p| p.name == *id)
+        } else {
+          false
+        };
+        if is_subst_var {
+          let id = match arg {
+            Term::Var {
+              name: NameRef::Id(id),
+            } => id,
+            _ => unreachable!(),
+          };
           if let Some(bound) = subst.get(id) {
             *bound == *key_arg.typ.as_ref()
           } else {
