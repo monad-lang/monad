@@ -349,6 +349,7 @@ pub fn stru(
     term,
     attributes,
     defaults,
+    method_constraints: Map::new(),
   }
 }
 
@@ -446,6 +447,7 @@ pub fn inductive(
     term,
     attributes,
     defaults: Map::new(),
+    method_constraints: Map::new(),
   }
 }
 
@@ -486,6 +488,11 @@ pub fn class(
 ) -> Inductive {
   let typ = params_to_inductive_type(&params, sort1());
   let con_typs = defs.iter().map(|d| d.typ.clone()).collect();
+  let method_constraints: Map<Identifier, Vec<TypeConstraint>> = defs
+    .iter()
+    .filter(|d| !d.constraints.is_empty())
+    .map(|d| (d.name.clone(), d.constraints.clone()))
+    .collect();
   let con_params = defs
     .into_iter()
     .map(|d| {
@@ -512,6 +519,7 @@ pub fn class(
     term,
     attributes,
     defaults: Map::new(),
+    method_constraints,
   }
 }
 
@@ -687,6 +695,7 @@ pub struct Inductive {
   pub(crate) constructors: Vec<InductConstructor>,
   pub attributes: Vec<Attribute>,
   pub defaults: Map<Identifier, Term>,
+  pub method_constraints: Map<Identifier, Vec<TypeConstraint>>,
 }
 
 pub trait AsVarRef {
@@ -701,6 +710,9 @@ impl Typed for Inductive {
 impl Inductive {
   pub fn find_cons(&self, id: &Identifier) -> Option<&InductConstructor> {
     self.constructors.iter().find(|c| c.name.last() == id)
+  }
+  pub fn method_constraints_for(&self, method: &Identifier) -> Option<&Vec<TypeConstraint>> {
+    self.method_constraints.get(method)
   }
   pub fn params(&self) -> &Vec<Param> {
     &self.params
@@ -2237,6 +2249,9 @@ impl<'a> Named for ClassDefRef<'a> {
 impl<'a> ClassDefRef<'a> {
   pub fn typ(&self) -> &Term {
     self.typ
+  }
+  pub fn method_constraints(&self) -> Option<&Vec<TypeConstraint>> {
+    self.class.method_constraints_for(self.name)
   }
 
   pub fn with_path(&self, path: ModulePath) -> ClassDefRef<'_> {

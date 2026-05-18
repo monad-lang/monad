@@ -27,6 +27,10 @@ class Foldable (T : Type -> Type) {
   def foldl (f : B -> A -> B) (z : B) (t : T A) : B
 }
 
+class [Foldable T] Traversable (T : Type -> Type) {
+  def traverse [Applicative F] {A B : Type} (f : A -> F B) (t : T A) : F (T B)
+}
+
 instance Foldable List {
   def foldr (f : A -> B -> B) (z : B) (t : List A) : B :=
     match t {
