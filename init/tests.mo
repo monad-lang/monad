@@ -461,3 +461,8 @@ def test_eq_refl_apply : Bool :=
 def test_eq_refl_apply_str : Bool :=
     let refx := Eq.refl "hello" in
     true
+
+@[test]
+def test_eq_refl_type : Bool :=
+    let refx : Eq I64 1 1 := Eq.refl 1 in
+    true

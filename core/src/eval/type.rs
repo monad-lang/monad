@@ -1555,7 +1555,17 @@ fn match_resolve_type_inner<'a>(
         match_resolve_type_inner(body, r_body, free_vars, scope, visiting)
       } else {
         free_vars.insert_free_var(name, Unknown { typ });
-        match_resolve_type_inner(body, right, free_vars, scope, visiting)
+        let result = match_resolve_type_inner(body, right, free_vars, scope, visiting);
+        // When left has Forall wrappers (implicit params) and the body is a
+        // constructor return type (App) rather than a Pi, the body may need
+        // to match the Pi's return type rather than the whole Pi structure.
+        // The Forall-absorbed implicit arguments consume the Pi's arg.
+        if !result {
+          if let Term::Pi { ret, .. } = right {
+            return match_resolve_type_inner(body, ret, free_vars, scope, visiting);
+          }
+        }
+        result
       }
     }
     (_, Forall { name, typ, body }) => {
@@ -2106,6 +2116,13 @@ fn type_check_with_env(
         let ret_type = *ret.clone();
         let ret_type = add_forall_to_type(ret_type, &fun_forall_vars);
         Ok(typed_term(term, ret_type))
+      } else if fun_vars.is_empty() {
+        // Constructor with only Forall-wrapped implicit params (like refl).
+        // The Foralls were substituted by match_resolve_type and the
+        // explicit argument was absorbed by one of the Foralls.
+        // The resulting type is the constructor's return type.
+        let term = app(fun, arg);
+        Ok(typed_term(term, fun_typ_pi))
       } else {
         Err(ExpectedPi(fun_typ_pi.clone(), SourceRange::default()))
       }

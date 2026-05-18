@@ -114,6 +114,11 @@ type Eq (A : Sort 1) (a : A) (b : A) : Prop {
     refl : Eq A a a
 }
 
+/// Native J eliminator for propositional equality
+@[native "eq_rec"]
+def Eq.rec (A : Sort 1) (a : A) (P : (b : A) -> Eq A a b -> Sort 1)
+    (h : P a (Eq.refl a)) (b : A) (e : Eq A a b) : P b e
+
 /// Equals
 class BEq A {
 	def beq : A -> A -> Bool
