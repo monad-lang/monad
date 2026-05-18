@@ -588,7 +588,7 @@ def cons_global (g : LLVMGlobal) (gs : List LLVMGlobal) : List LLVMGlobal :=
 
 @[partial]
 def param_name (p : Param) : Identifier := match p {
-    Param.mk name typ_ => name,
+    Param.mk name typ_ mult defval => name,
 }
 
 @[partial]
@@ -932,7 +932,7 @@ def test_compile_decls_ir_runtime : Bool :=
 @[test]
 def test_compile_decls_ir_has_def : Bool :=
     let id := Identifier.id "x" in
-    let param := Param.mk id (Term.type_ 1) in
+    let param := param_many id (Term.type_ 1) in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "test") List.empty)) (Term.type_ 1) (Term.lam param (Term.var (NameRef.nid id))) List.empty List.empty in
     match (compile_decls_ir (List.cons def_ empty_defs)) {
         LLVMModule.mk triple globals funcs decls =>
@@ -1091,7 +1091,7 @@ def test_param_binding : Bool :=
     let var_ := Term.var nid in
     let app1 := Term.app var_ x_var in
     let body := Term.app app1 one in
-    let param := Param.mk x_id (Term.type_ 1) in
+    let param := param_many x_id (Term.type_ 1) in
     let term_ := Term.lam param body in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "add1") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
@@ -1108,8 +1108,8 @@ def test_multi_param : Bool :=
     let var_ := Term.var nid in
     let app1 := Term.app var_ a_var in
     let body := Term.app app1 b_var in
-    let param_a := Param.mk a_id (Term.type_ 1) in
-    let param_b := Param.mk b_id (Term.type_ 1) in
+    let param_a := param_many a_id (Term.type_ 1) in
+    let param_b := param_many b_id (Term.type_ 1) in
     let term_ := Term.lam param_a (Term.lam param_b body) in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "mul2") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
@@ -1130,7 +1130,7 @@ def test_nested_native : Bool :=
     let add_var := Term.var add_nid in
     let add_app1 := Term.app add_var mul_body in
     let body := Term.app add_app1 one in
-    let param := Param.mk x_id (Term.type_ 1) in
+    let param := param_many x_id (Term.type_ 1) in
     let term_ := Term.lam param body in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "nested") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
@@ -1144,7 +1144,7 @@ def test_general_call_emitted : Bool :=
     let x_var := Term.var (NameRef.nid x_id) in
     let f_var := Term.var f_nid in
     let body := Term.app f_var x_var in
-    let param := Param.mk x_id (Term.type_ 1) in
+    let param := param_many x_id (Term.type_ 1) in
     let term_ := Term.lam param body in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "caller") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
@@ -1155,7 +1155,7 @@ def test_general_call_emitted : Bool :=
 def test_lambda_compiled : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := Term.var (NameRef.nid x_id) in
-    let param := Param.mk x_id (Term.type_ 1) in
+    let param := param_many x_id (Term.type_ 1) in
     let term_ := Term.lam param x_var in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "lamtest") List.empty)) (Term.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in

@@ -16,9 +16,26 @@ type NameRef {
     nop (Operator),
 }
 
-type Param {
-    mk (name: Identifier) (type_: Term)
+type Multiplicity {
+    zero,
+    many,
+    linear,
+    affine,
 }
+
+type Param {
+    mk (name: Identifier) (type_: Term) (mult: Multiplicity) (default: Option Term)
+}
+
+/// Create a Param with multiplicity=Many and no default value.
+def param_many (name: Identifier) (type_: Term) : Param :=
+    let none : Option Term := Option.none in
+    Param.mk name type_ Multiplicity.many none
+
+/// Create a Param with explicit multiplicity and no default value.
+def mk_param (name: Identifier) (type_: Term) (mult: Multiplicity) : Param :=
+    let none : Option Term := Option.none in
+    Param.mk name type_ mult none
 
 type MatchCase {
     mc (name: Identifier) (args: List Identifier) (value: Term)
@@ -143,10 +160,10 @@ def desugar_do_inner (stmts : List DoStmt) (rest : Term) : Term :=
     match stmts {
         List.cons s ss =>
             match s {
-                bind_s name expr => Term.app (Term.app monad_bind_term expr) (Term.lam (Param.mk name (Term.hole)) (desugar_do_inner ss rest)),
-                let_s name expr => Term.app (Term.lam (Param.mk name (Term.hole)) (desugar_do_inner ss rest)) expr,
+                bind_s name expr => Term.app (Term.app monad_bind_term expr) (Term.lam (param_many name (Term.hole)) (desugar_do_inner ss rest)),
+                let_s name expr => Term.app (Term.lam (param_many name (Term.hole)) (desugar_do_inner ss rest)) expr,
                 ret_s expr => Term.app monad_pure_term expr,
-                expr_s expr => Term.app (Term.app monad_bind_term expr) (Term.lam (Param.mk (Identifier.id "_") (Term.hole)) (desugar_do_inner ss rest))
+                expr_s expr => Term.app (Term.app monad_bind_term expr) (Term.lam (param_many (Identifier.id "_") (Term.hole)) (desugar_do_inner ss rest))
             },
         List.empty => rest
     }
@@ -361,11 +378,23 @@ instance Similar MatchCase {
         }
 }
 
+instance Similar Multiplicity {
+    def similar (a : Multiplicity) (b : Multiplicity) : Bool :=
+        match a {
+            zero => match b { zero => true, many => false, linear => false, affine => false },
+            many => match b { zero => false, many => true, linear => false, affine => false },
+            linear => match b { zero => false, many => false, linear => true, affine => false },
+            affine => match b { zero => false, many => false, linear => false, affine => true }
+        }
+}
+
 instance Similar Param {
     def similar (a : Param) (b : Param) : Bool :=
         match a {
-            mk name1 typ1 => match b {
-                mk name2 typ2 => Similar.similar name1 name2 && Similar.similar typ1 typ2
+            mk name1 typ1 mult1 def1 => match b {
+                mk name2 typ2 mult2 def2 =>
+                    Similar.similar name1 name2 && Similar.similar typ1 typ2
+                    && Similar.similar mult1 mult2 && opt_term_similar def1 def2
             }
         }
 }

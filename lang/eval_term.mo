@@ -1,10 +1,4 @@
-/// Multiplicity for linear type system.
-type Multiplicity {
-  zero,
-  many,
-  linear,
-  affine,
-}
+use lang.types
 
 /// Memory region classification.
 type Region {

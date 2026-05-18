@@ -768,28 +768,46 @@ def lambda_parser (input : String) : ParseResult Term :=
 @[partial]
 def lambda_kw (r : ParseResult String) : ParseResult Term :=
 	match r {
-		success rem _ => lambda_param (identifier (skip_spaces rem)),
+		success rem _ => lambda_mult (skip_spaces rem),
 		fail e => fail e
 	}
 
 @[partial]
-def lambda_param (r : ParseResult String) : ParseResult Term :=
+def lambda_mult (input : String) : ParseResult Term :=
+	lambda_mult_prefix (tag "!" input) Multiplicity.linear input
+
+@[partial]
+def lambda_mult_prefix (r : ParseResult String) (mult : Multiplicity) (orig : String) : ParseResult Term :=
 	match r {
-		success rem name => lambda_arrow (tag "=>" (skip_spaces rem)) (Identifier.id name),
+		success rem _ => lambda_name (identifier rem) mult,
+		fail _ => lambda_mult_affine (tag "?" orig) mult orig
+	}
+
+@[partial]
+def lambda_mult_affine (r : ParseResult String) (mult : Multiplicity) (orig : String) : ParseResult Term :=
+	match r {
+		success rem _ => lambda_name (identifier rem) Multiplicity.affine,
+		fail _ => lambda_name (identifier orig) Multiplicity.many
+	}
+
+@[partial]
+def lambda_name (r : ParseResult String) (mult : Multiplicity) : ParseResult Term :=
+	match r {
+		success rem name => lambda_arrow_mult (tag "=>" (skip_spaces rem)) (Identifier.id name) mult,
 		fail e => fail e
 	}
 
 @[partial]
-def lambda_arrow (r : ParseResult String) (name : Identifier) : ParseResult Term :=
+def lambda_arrow_mult (r : ParseResult String) (name : Identifier) (mult : Multiplicity) : ParseResult Term :=
 	match r {
-		success rem _ => lambda_body (expression (skip_spaces rem)) name,
+		success rem _ => lambda_body_mult (expression (skip_spaces rem)) name mult,
 		fail e => fail e
 	}
 
 @[partial]
-def lambda_body (r : ParseResult Term) (name : Identifier) : ParseResult Term :=
+def lambda_body_mult (r : ParseResult Term) (name : Identifier) (mult : Multiplicity) : ParseResult Term :=
 	match r {
-		success rem body => success rem (Term.lam (Param.mk name (Term.type_ 1)) body),
+		success rem body => success rem (Term.lam (mk_param name (Term.type_ 1) mult) body),
 		fail e => fail e
 	}
 
@@ -837,7 +855,7 @@ def let_in_kw (r : ParseResult String) (name : Identifier) (value : Term) : Pars
 @[partial]
 def let_body (r : ParseResult Term) (name : Identifier) (value : Term) : ParseResult Term :=
 	match r {
-		success rem body => success rem (Term.app (Term.lam (Param.mk name (Term.type_ 1)) body) value),
+		success rem body => success rem (Term.app (Term.lam (param_many name (Term.type_ 1)) body) value),
 		fail e => fail e
 	}
 
@@ -1913,7 +1931,7 @@ def type_one_param_type (r : ParseResult String) (name : Identifier) : ParseResu
 @[partial]
 def type_one_param_val (r : ParseResult Term) (name : Identifier) : ParseResult Param :=
 	match r {
-		success rem typ => success rem (Param.mk name typ),
+		success rem typ => success rem (param_many name typ),
 		fail e => fail e
 	}
 
@@ -2074,7 +2092,7 @@ def def_explicit_type (r : ParseResult Term) (close_rem : String) (name : String
 @[partial]
 def def_explicit_close (r : ParseResult String) (close_rem : String) (name : String) (typ : Term) (params : List Param) : ParseResult (List Param) :=
 	match r {
-		success rem _ => def_params_loop (skip_spaces rem) (List.cons (Param.mk (Identifier.id name) typ) params),
+		success rem _ => def_params_loop (skip_spaces rem) (List.cons (param_many (Identifier.id name) typ) params),
 		fail e => fail e
 	}
 

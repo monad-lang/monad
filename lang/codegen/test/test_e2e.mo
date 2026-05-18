@@ -30,7 +30,7 @@ def test_e2e_simple_literal : Bool :=
 @[test]
 def test_e2e_function_with_param : Bool :=
     let id := Identifier.id "add5" in
-    let param := Param.mk (Identifier.id "x") (Term.type_ 1) in
+    let param := param_many (Identifier.id "x") (Term.type_ 1) in
     let body := Term.lit (Literal.num 99 NumSuffix.i64) in
     let def_ := Def.mk
         (ModulePath.mp (List.cons id empty_ids))

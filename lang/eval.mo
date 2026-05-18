@@ -23,8 +23,8 @@ def scope_lookup(name:NameRef)(scope:Scope):Option Term:=
  }
 @[partial]
 def substitute_lam(param:Param)(body:Term)(name:NameRef)(new_term:Term):Term:=
- match param{
-  mk pname ptype=>
+  match param{
+  mk pname ptype pmult pdefault=>
     if name_eq (NameRef.nid pname) name
    then Term.lam param body
     else Term.lam param (substitute body name new_term)
@@ -46,7 +46,7 @@ def substitute(term:Term)(name:NameRef)(new_term:Term):Term:=
 @[partial]
 def eval_apply(fun:Term)(arg:Term)(scope:Scope):EvalResult:=
  match fun{
-   lam param body=>match param{mk pname ptype=>ok_val (substitute body (NameRef.nid pname) arg)},
+   lam param body=>match param{mk pname ptype pmult pdefault=>ok_val (substitute body (NameRef.nid pname) arg)},
   var name=>match scope_lookup name scope{
    Option.some val=>eval_apply val arg scope,
     Option.none=>err_val (EvalError.undefined_var name)
@@ -193,7 +193,7 @@ def eval_lit(val:Literal)(scope:Scope):EvalResult:=
   }
 @[test]
 def test_eval_identity:Bool:=
-  let id_lam:Term:=Term.lam (Param.mk (Identifier.id "x") (Term.type_ 1)) (var_term "x") in
+  let id_lam:Term:=Term.lam (param_many (Identifier.id "x") (Term.type_ 1)) (var_term "x") in
   let app_term:Term:=Term.app id_lam (num_term 42) in
   match eval_step app_term Scope.empty_scope{
     ok_val result=>match result{
@@ -209,8 +209,8 @@ def test_eval_identity:Bool:=
   }
 @[test]
 def test_eval_shadowing:Bool:=
-  let inner_lam:Term:=Term.lam (Param.mk (Identifier.id "x") (Term.type_ 1)) (var_term "x") in
-  let outer_lam:Term:=Term.lam (Param.mk (Identifier.id "x") (Term.type_ 1)) inner_lam in
+  let inner_lam:Term:=Term.lam (param_many (Identifier.id "x") (Term.type_ 1)) (var_term "x") in
+  let outer_lam:Term:=Term.lam (param_many (Identifier.id "x") (Term.type_ 1)) inner_lam in
   let app_term:Term:=Term.app (Term.app outer_lam (num_term 1)) (num_term 2) in
   match eval_step app_term Scope.empty_scope{
     ok_val result=>match result{
