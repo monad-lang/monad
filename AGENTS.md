@@ -2,6 +2,13 @@
 
 This document explains how to modify the Monad language codebase and write correct Monad code.
 
+**IMPORTANT**: All development changes (code, tests, modules) should happen in the
+**current worktree directory** (i.e., the working directory where `cargo` commands
+are run). Do not switch to other worktrees (e.g., `../monad/`, `../monad-main/`)
+unless explicitly instructed. The current worktree contains the branch and
+codebase under active development — changes to other worktrees may target
+a different branch and cause confusion.
+
 ## Project Structure
 
 ```
