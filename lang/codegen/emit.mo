@@ -674,6 +674,44 @@ def compile_def_ir (def_ : Def) : DefResult := match def_ {
         },
 }
 
+/// Compile an inductive type constructor to an LLVM wrapper function.
+/// Generates: define cc 9 i64 @monad_ctor_<name>(i64 %p0, i64 %p1, ...) {
+///   entry:
+///     %ctemp = alloc_constructor(%p0, %p1, ...)
+///     ret i64 %ctemp
+/// }
+/// Matches Rust reference: llvm-codegen/src/codegen/constructors.rs:38-82
+@[partial]
+def compile_constructor_decl (con_name : String) (field_count : I64) : LLVMFunction :=
+    let params := build_constructor_params field_count in
+    let fields := build_param_fields field_count in
+    let alloc_val := LLVMValue.alloc_constructor 0 fields in
+    let assign_instr := LLVMInstruction.assign "ctemp" alloc_val in
+    let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "ctemp") in
+    let entry_block := LLVMBasicBlock.mk "entry" (cons_instr assign_instr (cons_instr ret_instr empty_instrs)) in
+    let func_name := String.concat "monad_ctor_" con_name in
+    LLVMFunction.mk func_name params LLVMType.i64_ (cons_block entry_block empty_blocks) true
+
+@[partial]
+def build_constructor_params (count : I64) : List ParamPair :=
+    build_params_from count 0
+
+@[partial]
+def build_params_from (count : I64) (idx : I64) : List ParamPair :=
+    if idx == count then empty_pairs
+    else
+        let name := String.concat "p" (I64.to_string idx) in
+        cons_pair (ParamPair.mk name LLVMType.i64_) (build_params_from count (idx + 1))
+
+@[partial]
+def build_param_fields (count : I64) : List LLVMValue :=
+    build_fields_from count 0
+
+@[partial]
+def build_fields_from (count : I64) (idx : I64) : List LLVMValue :=
+    if idx == count then empty_vals
+    else List.cons (LLVMValue.parm_ idx) (build_fields_from count (idx + 1))
+
 @[partial]
 def bind_params_in_ctx (c : CodegenCtx) (params : List Param) : CodegenCtx :=
     bind_params_with_idx c params 0
@@ -1110,5 +1148,14 @@ def test_native_call_compiled : Bool :=
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "call i64 @monad_alloc"
+
+@[test]
+def test_compile_constructor_decl : Bool :=
+    let decl_func := compile_constructor_decl "Some" 2 in
+    let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list (cons_func decl_func empty_funcs) empty_decls in
+    let text := lang.codegen.ir.emit_module mod_ in
+    if check_contains text "monad_ctor_Some"
+    then check_contains text "alloc_constructor"
+    else false
 
 def main : I64 := 42
