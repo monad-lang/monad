@@ -43,6 +43,7 @@ class Functor (F: Type -> Type) {
         pi(pi(typ("A"), typ("B")), pi(app2("F", "A"), app2("F", "B"))),
         None,
         vec![],
+        vec![],
         None
       )],
       vec![]

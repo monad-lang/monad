@@ -1299,23 +1299,32 @@ fn class_def_parser<X: Clone>(input: Span<X>) -> Res<ClassDef, X> {
   let (input, _) = multispace0(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("def")(input)?;
-  let (input, _) = ws1(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, constraints) = opt(all_type_cons_parser).parse(input)?;
+  let (input, _) = ws0(input)?;
   let (input, name) = name(input)?;
   let (input, _) = ws0(input)?;
   let (input, params) = cons_params(input)?;
   let (input, return_typ) = def_type_annotation(input)?;
   let (input, _) = ws0(input)?;
   let (input, default) = opt(preceded((assignment_operator, ws0), term)).parse(input)?;
+  let constraints = constraints.unwrap_or_else(Vec::new);
 
   if params.is_empty() {
-    Ok((input, class_def(name, return_typ, default, attrs, doc)))
+    Ok((
+      input,
+      class_def(name, return_typ, default, constraints, attrs, doc),
+    ))
   } else {
     let full_typ = pi_typs(
       params.iter().map(|p| *p.typ.clone()).collect::<Vec<_>>(),
       return_typ,
     );
     let default_term = default.map(|d| lams(params, d));
-    Ok((input, class_def(name, full_typ, default_term, attrs, doc)))
+    Ok((
+      input,
+      class_def(name, full_typ, default_term, constraints, attrs, doc),
+    ))
   }
 }
 

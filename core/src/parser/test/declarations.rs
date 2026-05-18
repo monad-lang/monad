@@ -20,6 +20,7 @@ fn test_class() {
         pi(pi(typ("A"), typ("B")), pi(app2("F", "A"), app2("F", "B"))),
         None,
         vec![],
+        vec![],
         None
       )],
       vec![]
@@ -40,7 +41,14 @@ fn test_class() {
       vec![type_constraint(mpt("Functor"), vec![id("F")])],
       vec![par("F")],
       vec![
-        class_def(id("pure"), pi(typ("A"), app2("F", "A")), None, vec![], None),
+        class_def(
+          id("pure"),
+          pi(typ("A"), app2("F", "A")),
+          None,
+          vec![],
+          vec![],
+          None
+        ),
         class_def(
           id("apply"),
           pi(
@@ -48,6 +56,7 @@ fn test_class() {
             pi(app2("F", "A"), app2("F", "B"))
           ),
           None,
+          vec![],
           vec![],
           None
         )
@@ -70,7 +79,14 @@ fn test_class() {
       vec![type_constraint(mpt("Applicative"), vec![id("M")])],
       vec![dpar("M", pi(typ("Type"), typ("Type")))],
       vec![
-        class_def(id("pure"), pi(typ("A"), app2("M", "A")), None, vec![], None),
+        class_def(
+          id("pure"),
+          pi(typ("A"), app2("M", "A")),
+          None,
+          vec![],
+          vec![],
+          None
+        ),
         class_def(
           id("bind"),
           pi(
@@ -78,6 +94,7 @@ fn test_class() {
             pi(pi(typ("A"), app2("M", "B")), app2("M", "B"))
           ),
           None,
+          vec![],
           vec![],
           None
         )
@@ -442,6 +459,7 @@ fn module_test() {
           id("map"),
           pi(pi(typ("A"), typ("B")), pi(app2("F", "A"), app2("F", "B"))),
           None,
+          vec![],
           vec![],
           None
         )]

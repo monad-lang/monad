@@ -454,6 +454,7 @@ pub struct ClassDef {
   pub(crate) name: Identifier,
   pub(crate) typ: Term,
   pub default: Option<Term>,
+  pub constraints: Vec<TypeConstraint>,
   pub doc: Option<Documentation>,
   pub attributes: Vec<Attribute>,
 }
@@ -462,6 +463,7 @@ pub fn class_def(
   name: Identifier,
   typ: Term,
   default: Option<Term>,
+  constraints: Vec<TypeConstraint>,
   attributes: Vec<Attribute>,
   doc: Option<Documentation>,
 ) -> ClassDef {
@@ -469,6 +471,7 @@ pub fn class_def(
     name,
     typ,
     default,
+    constraints,
     doc,
     attributes,
   }

@@ -107,6 +107,7 @@ impl Similar for ClassDef {
     self.name == other.name
       && self.typ.similar(&other.typ)
       && self.default.similar(&other.default)
+      && self.constraints.similar(&other.constraints)
       && self.doc == other.doc
       && self.attributes == other.attributes
   }
