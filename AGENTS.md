@@ -634,6 +634,66 @@ class BEq A {
 
 **Fix**: Rename the field (e.g., `class` → `cls`). See the warning under [Type Definitions](#type-definitions) for the full list of reserved keywords.
 
+### Lambda Expressions Not Supported as Direct Function Arguments
+
+**Problem**: Using `fn` (or `\ `) lambda expressions as direct arguments in function application (e.g., `map_parse (fn s : String => s) ...`) produces a cascading parse error: "unexpected token" at the lambda keyword. This is a Rust parser limitation — lambda expressions are not accepted in application argument position.
+
+**Workaround**: Define a named helper function and pass it instead:
+
+```monad
+// BROKEN — lambda as direct argument:
+map_parse (fn s : String => s) (tag "x") "xy"
+
+// WORKING — named helper:
+@[partial]
+def id_str (s : String) : String := s
+...
+map_parse id_str (tag "x") "xy"
+```
+
+### `struct` Definitions with Tab Indentation Fail to Parse
+
+**Problem**: `parser.mo` uses tab indentation throughout. The Rust parser's `struct_inner_parser` does not handle tab-indented field declarations, causing cascading parse errors (e.g., `unexpected token` at `pos : Location`). `types.mo` uses 4-space indentation and parses structs correctly.
+
+**Symptom**: The parse error appears far from the actual `struct` definition (e.g., at `///` docstring on line 1 or `custom String` on line 8), making diagnosis difficult. The `struct` tab issue cascades backward through the entire module.
+
+**Workarounds** (pick one):
+
+1. Use `type` syntax instead of `struct` in tab-indented files:
+   ```monad
+   // In parser.mo (tabs): use `type` syntax
+   type LocatedSpan {
+       mk (fragment : String) (location : Location)
+   }
+   ```
+2. Place `struct` definitions in space-indented files (e.g., `types.mo`).
+
+### Struct Field Access via Dot Syntax Is Not Valid Monad
+
+**Problem**: Writing `loc.offset` or `span.fragment` to access struct fields appears natural but does NOT work. Dot syntax in Monad is method-call syntax (`x.fun` desugars to `Type.fun x`), NOT field access. Using dot syntax on a struct produces "unexpected token" or "not a function" errors.
+
+**Root cause**: Monad has no dedicated field access syntax for structs. Dot syntax is exclusively for method calls and module paths.
+
+**Correct pattern**: Access struct fields via pattern matching on the `mk` constructor:
+```monad
+// Struct definition:
+struct Location { offset : I64, line : I64, column : I64 }
+
+// BROKEN — dot syntax:
+let off : I64 := loc.offset in   // interpreted as method call!
+
+// CORRECT — pattern matching:
+match loc {
+    mk off line col => ...
+}
+```
+
+### Debug `println!` in Type Checker Masks Real Errors
+
+**Problem**: `core/src/eval/type.rs` contains debug `println!()` statements in `match_resolve_type_inner` (line ~1596: `"{left} != {right} arg=... ret=... vars=..."`) and `check_free_vars` (line ~1479: `"{detected} != {current_type}"`). These produce noisy output during normal type checking and can mask the actual error when diagnosing parse/type failures.
+
+**Fix**: Remove these `println!` calls before production use. They are leftover debugging aids and are not guarded by any log level.
+
 ## Parser Combinator Library (init/parser.mo)
 
 ### Status: In Progress
@@ -670,6 +730,7 @@ Tests: `test_struct_eq_in_match`, `test_eq_in_plain_match` in `init/tests.mo`.
 3. **~~`FromListLiteral` class methods~~** (FIXED): List literals `[x]` desugar correctly. Verified: `[1, 2, 3]` evaluates as `(List I64)`.
 4. **~~`==` operator~~** (FIXED): `5 == 5` now resolves through `BEq.beq` instance dispatch. Verified: works correctly.
 5. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Inner opens are not applied to module exports. Functions using `open`-ed constructors must be defined inside the same module. Workaround: bind results to a typed parameter before matching (see `many0`/`many1` implementation pattern in `init/parser.mo`).
+6. **Forall inference on polymorphic combinators works with named functions**: The type checker correctly instantiates `{A B : Type}` forall parameters on functions like `map_parse` and `bind_parse` when called with concrete named functions (e.g., `map_parse id_str (tag "x") "xy"`). Using lambdas fails due to the parser limitation above (lambda expressions not supported as direct arguments). When a combinator call fails with "Variable mismatch, expected ... found {B : Type} -> {A : Type} -> ...", first check for parser issues (lambda arguments) before suspecting type checker bugs.
 
 ## Committing Changes
 
