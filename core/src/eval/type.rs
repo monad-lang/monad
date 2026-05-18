@@ -1640,19 +1640,12 @@ fn match_resolve_type_inner<'a>(
       let arg = match_resolve_type_inner(a_arg, b_arg, free_vars, scope, visiting);
       let ret = match_resolve_type_inner(a_ret, b_ret, free_vars, scope, visiting);
       let b = arg && ret;
-      if !b {
-        println!("{left} != {right} arg={arg} ret={ret} vars={free_vars}");
-      }
       b
     }
     (App { fun: f1, arg: a1 }, App { fun: f2, arg: a2 }) => {
       let f_res = match_resolve_type_inner(f1, f2, free_vars, scope, visiting);
       let a_res = match_resolve_type_inner(a1, a2, free_vars, scope, visiting);
-      let b = f_res && a_res;
-      if !b {
-        println!("app {left} != {right}");
-      }
-      b
+      f_res && a_res
     }
     (Hole, _) => true,
     (_, Hole) => true,

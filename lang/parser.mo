@@ -415,6 +415,190 @@ def many1_body (r : ParseResult A) (p : String -> ParseResult A) (input : String
 			many0_next (many0 p rem) out rem,
 		fail e => fail e
 	}
+// --- Extended combinators (Phase 1.1) ---
+
+@[partial]
+def map_parse (f : A -> B) (p : String -> ParseResult A) (input : String) : ParseResult B :=
+	map_parse_body (p input) f
+
+@[partial]
+def map_parse_body (r : ParseResult A) (f : A -> B) : ParseResult B :=
+	match r {
+		success rem out => map_parse_ok rem out f,
+		fail e => map_parse_fail e
+	}
+
+@[partial]
+def map_parse_ok (rem : String) (out : A) (f : A -> B) : ParseResult B :=
+	success rem (f out)
+
+@[partial]
+def map_parse_fail (e : ParseError) : ParseResult B :=
+	fail e
+
+@[partial]
+def bind_parse (p : String -> ParseResult A) (f : A -> String -> ParseResult B) (input : String) : ParseResult B :=
+	bind_parse_body (p input) f
+
+@[partial]
+def bind_parse_body (r : ParseResult A) (f : A -> String -> ParseResult B) : ParseResult B :=
+	match r {
+		success rem out => f out rem,
+		fail e => bind_parse_fail e
+	}
+
+@[partial]
+def bind_parse_fail (e : ParseError) : ParseResult B :=
+	fail e
+
+@[partial]
+def alt_fold (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
+	match parsers {
+		List.cons p ps => alt_fold_try (p input) ps input,
+		List.empty => fail (ParseError.custom "alt_fold: empty list")
+	}
+
+@[partial]
+def alt_fold_try (r : ParseResult A) (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
+	match r {
+		success rem out => alt_fold_ok rem out,
+		fail e => alt_fold parsers input
+	}
+
+@[partial]
+def alt_fold_ok (rem : String) (out : A) : ParseResult A :=
+	success rem out
+
+@[partial]
+def preceded_by (before : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult B :=
+	preceded_by_body (before input) p
+
+@[partial]
+def preceded_by_body (r : ParseResult A) (p : String -> ParseResult B) : ParseResult B :=
+	match r {
+		success rem _ => p rem,
+		fail e => preceded_by_err e
+	}
+
+@[partial]
+def preceded_by_err (e : ParseError) : ParseResult B :=
+	fail e
+
+@[partial]
+def terminated_by (p : String -> ParseResult A) (after : String -> ParseResult B) (input : String) : ParseResult A :=
+	terminated_by_body (p input) after
+
+@[partial]
+def terminated_by_body (r : ParseResult A) (after : String -> ParseResult B) : ParseResult A :=
+	match r {
+		success rem out => terminated_by_after (after rem) out,
+		fail e => terminated_by_err e
+	}
+
+@[partial]
+def terminated_by_after (r : ParseResult B) (out : A) : ParseResult A :=
+	match r {
+		success rem _ => terminated_by_ok rem out,
+		fail e => terminated_by_err e
+	}
+
+@[partial]
+def terminated_by_ok (rem : String) (out : A) : ParseResult A :=
+	success rem out
+
+@[partial]
+def terminated_by_err (e : ParseError) : ParseResult A :=
+	fail e
+
+@[partial]
+def delimited_by (before : String -> ParseResult A) (p : String -> ParseResult B) (after : String -> ParseResult C) (input : String) : ParseResult B :=
+	delimited_by_before (before input) p after
+
+@[partial]
+def delimited_by_before (r : ParseResult A) (p : String -> ParseResult B) (after : String -> ParseResult C) : ParseResult B :=
+	match r {
+		success rem _ => delimited_by_body (p rem) after,
+		fail e => delimited_by_err e
+	}
+
+@[partial]
+def delimited_by_body (r : ParseResult B) (after : String -> ParseResult C) : ParseResult B :=
+	match r {
+		success rem out => delimited_by_after (after rem) out,
+		fail e => delimited_by_err e
+	}
+
+@[partial]
+def delimited_by_after (r : ParseResult C) (out : B) : ParseResult B :=
+	match r {
+		success rem _ => delimited_by_ok rem out,
+		fail e => delimited_by_err e
+	}
+
+@[partial]
+def delimited_by_ok (rem : String) (out : B) : ParseResult B :=
+	success rem out
+
+@[partial]
+def delimited_by_err (e : ParseError) : ParseResult B :=
+	fail e
+
+@[partial]
+def separated_by (sep : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult (List B) :=
+	separated_by_body (p input) p sep input List.empty
+
+@[partial]
+def separated_by_body (r : ParseResult B) (p : String -> ParseResult B) (sep : String -> ParseResult A) (input : String) (acc : List B) : ParseResult (List B) :=
+	match r {
+		success rem out => separated_by_loop (sep rem) rem out p sep acc,
+		fail e => separated_by_ok input acc
+	}
+
+@[partial]
+def separated_by_loop (r : ParseResult A) (rem : String) (out : B) (p : String -> ParseResult B) (sep : String -> ParseResult A) (acc : List B) : ParseResult (List B) :=
+	match r {
+		success rem2 _ => separated_by_body (p rem2) p sep rem2 (List.cons out acc),
+		fail e => separated_by_ok rem (List.cons out acc)
+	}
+
+@[partial]
+def separated_by_ok (input : String) (acc : List B) : ParseResult (List B) :=
+	success input (list_reverse acc)
+
+@[partial]
+def opt (p : String -> ParseResult A) (input : String) : ParseResult (Option A) :=
+	opt_body (p input) input
+
+@[partial]
+def opt_body (r : ParseResult A) (input : String) : ParseResult (Option A) :=
+	match r {
+		success rem out => opt_some rem out,
+		fail e => opt_none input
+	}
+
+@[partial]
+def opt_some (rem : String) (out : A) : ParseResult (Option A) :=
+	success rem (Option.some out)
+
+@[partial]
+def opt_none (input : String) : ParseResult (Option A) :=
+	success input Option.none
+
+@[partial]
+def ws0 (input : String) : ParseResult String :=
+	take_while is_space input
+
+@[partial]
+def ws1 (input : String) : ParseResult String :=
+	ws1_body (take_while is_space input) input
+
+@[partial]
+def ws1_body (r : ParseResult String) (input : String) : ParseResult String :=
+	match r {
+		success rem out => if is_empty out then fail (ParseError.custom "expected whitespace") else success rem out,
+		fail e => fail e
+	}
+
 
 // --- Number parsing helpers ---
 
@@ -2845,6 +3029,207 @@ def test_def_implicit_params : Bool :=
 	match def_parser "def identity {A : Type} (x : A) : A := x" {
 		success rem out => String.beq rem "",
 		fail _ => false
+	}
+
+
+// --- Combinator tests (Phase 1.1) ---
+
+// Helper functions for tests
+@[partial]
+def id_str (s : String) : String := s
+
+@[partial]
+def str_len (s : String) : I64 := String.length s
+
+@[partial]
+def always_tag_y (a : String) (input : String) : ParseResult String := tag "y" input
+
+@[test]
+def test_map_parse_simple : Bool :=
+	match map_parse id_str identifier "abc def" {
+		success rem out => String.beq rem " def",
+		fail _ => false
+	}
+
+@[test]
+def test_map_parse_tag : Bool :=
+	match map_parse id_str (tag "x") "xy" {
+		success rem out => String.beq out "x",
+		fail _ => false
+	}
+
+@[test]
+def test_map_parse_fail : Bool :=
+	match map_parse id_str (tag "x") "y" {
+		success rem out => false,
+		fail e => true
+	}
+
+@[test]
+def test_map_parse_mapped : Bool :=
+	match map_parse str_len identifier "abc def" {
+		success rem out => String.beq rem " def",
+		fail _ => false
+	}
+
+@[test]
+def test_bind_parse : Bool :=
+	match bind_parse (tag "x") always_tag_y "xyz" {
+		success rem out => String.beq rem "z",
+		fail _ => false
+	}
+
+@[test]
+def test_bind_parse_fail_first : Bool :=
+	match bind_parse (tag "x") always_tag_y "abc" {
+		success rem out => false,
+		fail e => true
+	}
+
+@[test]
+def test_bind_parse_fail_second : Bool :=
+	match bind_parse (tag "x") always_tag_y "xab" {
+		success rem out => false,
+		fail e => true
+	}
+
+@[test]
+def test_alt_fold_first : Bool :=
+	match alt_fold (List.cons (tag "a") (List.cons (tag "b") (List.cons (tag "c") List.empty))) "abc" {
+		success rem out => String.beq rem "bc",
+		fail _ => false
+	}
+
+@[test]
+def test_alt_fold_second : Bool :=
+	match alt_fold (List.cons (tag "x") (List.cons (tag "y") (List.cons (tag "z") List.empty))) "y" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_alt_fold_none : Bool :=
+	match alt_fold (List.cons (tag "x") (List.cons (tag "y") List.empty)) "abc" {
+		success rem out => false,
+		fail e => true
+	}
+
+@[test]
+def test_preceded_by : Bool :=
+	match preceded_by (tag "(") (tag "x") "(x" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_preceded_by_fail : Bool :=
+	match preceded_by (tag "(") (tag "x") "x" {
+		success rem out => false,
+		fail e => true
+	}
+
+@[test]
+def test_terminated_by : Bool :=
+	match terminated_by (tag "x") (tag ")") "x)" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_terminated_by_fail : Bool :=
+	match terminated_by (tag "x") (tag ")") "x(" {
+		success rem out => false,
+		fail e => true
+	}
+
+@[test]
+def test_delimited_by : Bool :=
+	match delimited_by (tag "(") (tag "x") (tag ")") "(x)" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_delimited_by_fail_open : Bool :=
+	match delimited_by (tag "(") (tag "x") (tag ")") "x)" {
+		success rem out => false,
+		fail e => true
+	}
+
+@[test]
+def test_delimited_by_fail_close : Bool :=
+	match delimited_by (tag "(") (tag "x") (tag ")") "(x(" {
+		success rem out => false,
+		fail e => true
+	}
+
+@[test]
+def test_separated_by_single : Bool :=
+	match separated_by (tag ",") (tag "a") "a" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_separated_by_multi : Bool :=
+	match separated_by (tag ",") (tag "a") "a,a,a" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_separated_by_empty : Bool :=
+	match separated_by (tag ",") (tag "a") "b" {
+		success rem out => String.beq rem "b",
+		fail e => false
+	}
+
+@[test]
+def test_opt_some : Bool :=
+	match opt (tag "x") "xy" {
+		success rem out => match out {
+			Option.some val => String.beq val "x",
+			Option.none => false
+		},
+		fail _ => false
+	}
+
+@[test]
+def test_opt_none : Bool :=
+	match opt (tag "x") "yz" {
+		success rem out => match out {
+			Option.some val => false,
+			Option.none => String.beq rem "yz"
+		},
+		fail _ => false
+	}
+
+@[test]
+def test_ws0 : Bool :=
+	match ws0 "  abc" {
+		success rem out => String.beq rem "abc",
+		fail _ => false
+	}
+
+@[test]
+def test_ws0_empty : Bool :=
+	match ws0 "abc" {
+		success rem out => String.beq rem "abc",
+		fail _ => false
+	}
+
+@[test]
+def test_ws1 : Bool :=
+	match ws1 "  abc" {
+		success rem out => String.beq rem "abc",
+		fail _ => false
+	}
+
+@[test]
+def test_ws1_fail : Bool :=
+	match ws1 "abc" {
+		success rem out => false,
+		fail e => true
 	}
 
 def main : I64 := 42
