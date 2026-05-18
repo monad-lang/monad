@@ -25,6 +25,7 @@ instance Monoid String {
 class Foldable (T : Type -> Type) {
   def foldr (f : A -> B -> B) (z : B) (t : T A) : B
   def foldl (f : B -> A -> B) (z : B) (t : T A) : B
+  // foldMap [Monoid M] {A M : Type} (f : A -> M) (t : T A) : M  -- requires constraint propagation
 }
 
 class [Foldable T] Traversable (T : Type -> Type) {

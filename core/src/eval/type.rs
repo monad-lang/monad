@@ -19,6 +19,7 @@ use crate::{
 
 use super::*;
 
+use crate::eval::constraint::check_method_constraints;
 use crate::term::module::Scope;
 
 fn is_known_type_name(name: &ModulePath, scope: &Scope) -> bool {
@@ -1744,12 +1745,15 @@ pub fn type_check_free_var(
 ) -> Result<TypedTerm, TypeError> {
   use TypeError::*;
   let defined = scope.find_var_ref_of(nref, &expected_type)?;
+  let mut method_constraints: Option<&Vec<TypeConstraint>> = None;
   match defined {
     VarRef::UpdateRef {
       new_path,
       term: _,
       typ: _,
+      method_constraints: mc,
     } => {
+      method_constraints = mc;
       term = Var {
         name: new_path.clone().into(),
       };
@@ -1769,6 +1773,42 @@ pub fn type_check_free_var(
     let typ = defined_type.clone();
     Ok(typed_term(term, typ))
   } else if let Ok(typ) = match_resolve_type(&defined_type, &expected_type, scope) {
+    // Check per-method constraints when expected type is known
+    if let Some(constraints) = method_constraints
+      && !constraints.is_empty()
+    {
+      let free_vars = FreeVars::from_locals(scope);
+      if let Ok(free_vars) =
+        match_determine_type_vars_with_scope(&defined_type, &expected_type, free_vars, scope)
+      {
+        use FreeVar::*;
+        let keep_vars = free_vars.keep_vars();
+        let var_map: Map<Identifier, &Term> = free_vars
+          .free_vars()
+          .iter()
+          .filter_map(|(name, fv)| match fv {
+            Detected { term, .. } => Some(((*name).clone(), *term)),
+            _ => None,
+          })
+          .collect();
+        // Skip check if any mapped type is still an unresolved type variable
+        // (happens during instance body type-checking where types are generic)
+        let all_concrete = var_map.values().all(|t| {
+          if let Term::Var { name } = t
+            && let Some(id) = name.as_id()
+          {
+            !keep_vars.contains_key(id)
+          } else {
+            true
+          }
+        });
+        if all_concrete && !var_map.is_empty() {
+          if let Err(msg) = check_method_constraints(scope.global(), constraints, &var_map) {
+            return Err(TypeError::Generic(msg, SourceRange::default()));
+          }
+        }
+      }
+    }
     Ok(typed_term(term, typ))
   } else if let Some(expanded) = try_expand_def_alias(&defined_type, scope) {
     let typ = match_resolve_type(&expanded, &expected_type, scope)?;

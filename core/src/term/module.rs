@@ -548,7 +548,7 @@ pub struct GlobalScope<'a> {
   loaded: &'a LoadedModules,
   current_path: &'a ModulePath,
   def_refs: Map<ModulePath, DefRef<'a>>,
-  class_defs: Map<ModulePath, ClassDefRef<'a>>,
+  pub(crate) class_defs: Map<ModulePath, ClassDefRef<'a>>,
   instances: Map<&'a ModulePath, Vec<&'a Instance>>,
   inductives: Map<&'a ModulePath, &'a Inductive>,
   classes: Map<&'a ModulePath, &'a Inductive>,
@@ -998,21 +998,27 @@ impl<'a> GlobalScope<'a> {
   }
   /// Try to resolve a class method reference for the given name and type.
   /// Returns the instance definition reference, or an error.
-  fn resolve_class_method(
-    &self,
+  fn resolve_class_method<'s>(
+    &'s self,
     _name: &ModulePath,
     typ: &Term,
-    def: &ClassDefRef,
-  ) -> Result<VarRef<'_>, ScopeError> {
+    def: &'s ClassDefRef<'s>,
+  ) -> Result<VarRef<'s>, ScopeError> {
     let key = derive_instance_key(def, typ)?;
     let instance = self
       .find_instance(&key)
       .ok_or_else(|| ScopeError::InstanceNotFound(key.clone()))?;
     let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
-    let ins_def = self
+    let ins_def: &'s DefRef<'s> = self
       .find_ref(&ins_def_name)
       .ok_or(ScopeError::PathNotFound(ins_def_name))?;
-    Ok(ins_def.to_update_ref())
+    let method_constraints = def.method_constraints();
+    Ok(VarRef::UpdateRef {
+      new_path: &ins_def.name,
+      typ: ins_def.typ,
+      term: ins_def.term,
+      method_constraints,
+    })
   }
 
   pub fn find_any_ref(&'_ self, name: &ModulePath, typ: &Term) -> Result<VarRef<'_>, ScopeError> {

@@ -84,7 +84,7 @@ impl<'a> ConstraintSolver<'a> {
   }
 
   /// Check if a single constraint is satisfiable.
-  fn check_constraint(
+  pub(crate) fn check_constraint(
     &mut self,
     constraint: &TypeConstraint,
     key_args: &Map<Identifier, &Term>,
@@ -190,4 +190,51 @@ pub fn check_instance_constraints(
 ) -> bool {
   let mut visiting = Set::default();
   check_instance_constraints_with_visiting(global, instance, key, class, &mut visiting)
+}
+
+/// Check if per-method constraints are satisfiable using a variable map
+/// from Forall instantiation (maps type variable names to concrete types).
+/// Returns Err with the first failing constraint description, or Ok(()).
+/// Skips constraints where any mapped type is still an unresolved type variable.
+/// In Monad's type representation, concrete types use `NameRef::P` (module path)
+/// while type variables use `NameRef::Id` (bare identifier).
+pub fn check_method_constraints(
+  global: &GlobalScope,
+  constraints: &Vec<TypeConstraint>,
+  var_map: &Map<Identifier, &Term>,
+) -> Result<(), String> {
+  let mut solver = ConstraintSolver::new(global);
+  let mut visiting = Set::default();
+  for constraint in constraints {
+    // Skip constraint if any of its variables are still unresolved type vars.
+    // Unresolved type vars appear as Var{Id(_)} — they resolve to
+    // Var{P(_)} or App{...} when concrete types are determined.
+    let all_concrete = constraint.vars().iter().all(|v| {
+      if let Some(t) = var_map.get(v) {
+        match t {
+          Term::Var { name } => !name.is_id(),
+          _ => true, // App, Pi, etc. are concrete type expressions
+        }
+      } else {
+        false
+      }
+    });
+    if !all_concrete {
+      continue;
+    }
+    if !solver.check_constraint(constraint, var_map, &mut visiting) {
+      let concrete_types: Vec<String> = constraint
+        .vars()
+        .iter()
+        .filter_map(|v| var_map.get(v).map(|t| format!("{}", *t)))
+        .collect();
+      let types_str = concrete_types.join(" ");
+      return Err(format!(
+        "constraint `{}` not satisfied for type(s): {}",
+        constraint.class(),
+        types_str
+      ));
+    }
+  }
+  Ok(())
 }

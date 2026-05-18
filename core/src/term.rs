@@ -1228,6 +1228,7 @@ pub enum VarRef<'a> {
     new_path: &'a ModulePath,
     term: &'a Term,
     typ: &'a Term,
+    method_constraints: Option<&'a Vec<TypeConstraint>>,
   },
 }
 impl<'a> Typed for VarRef<'a> {
@@ -1235,11 +1236,7 @@ impl<'a> Typed for VarRef<'a> {
     match self {
       VarRef::Local { typ } => typ,
       VarRef::Free { term: _, typ } => typ,
-      VarRef::UpdateRef {
-        new_path: _,
-        typ,
-        term: _,
-      } => typ,
+      VarRef::UpdateRef { typ, .. } => typ,
     }
   }
 }
@@ -2297,14 +2294,6 @@ impl<'a> DefRef<'a> {
     VarRef::Free {
       term: self.term,
       typ: self.typ,
-    }
-  }
-
-  fn to_update_ref(&self) -> VarRef<'_> {
-    VarRef::UpdateRef {
-      new_path: &self.name,
-      typ: self.typ,
-      term: self.term,
     }
   }
 }
