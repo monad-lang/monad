@@ -712,6 +712,51 @@ def build_fields_from (count : I64) (idx : I64) : List LLVMValue :=
     if idx == count then empty_vals
     else List.cons (LLVMValue.parm_ idx) (build_fields_from count (idx + 1))
 
+/// Compile a list of Inductive declarations, generating constructor wrapper
+/// functions for each constructor. Matches Rust reference: compiler.rs Inductive arm.
+@[partial]
+def compile_inductive_decls (ind_decls : List Inductive) : List LLVMFunction :=
+    compile_inductive_list ind_decls
+
+@[partial]
+def compile_inductive_list (ind_decls : List Inductive) : List LLVMFunction := match ind_decls {
+    List.empty => empty_funcs,
+    List.cons ind rest =>
+        let ctor_funcs := compile_inductive_constructors (inductive_constructors ind) in
+        append_funcs ctor_funcs (compile_inductive_list rest)
+}
+
+@[partial]
+def inductive_constructors (ind : Inductive) : List InductConstructor := match ind {
+    Inductive.mk name params typ constructors attrs => constructors,
+}
+
+@[partial]
+def compile_inductive_constructors (constructors : List InductConstructor) : List LLVMFunction := match constructors {
+    List.empty => empty_funcs,
+    List.cons c rest =>
+        let name := module_path_to_str (constructor_name c) in
+        let field_count := count_params (constructor_params c) 0 in
+        let func := compile_constructor_decl name field_count in
+        cons_func func (compile_inductive_constructors rest)
+}
+
+@[partial]
+def constructor_name (c : InductConstructor) : ModulePath := match c {
+    InductConstructor.mk name params typ => name,
+}
+
+@[partial]
+def constructor_params (c : InductConstructor) : List Param := match c {
+    InductConstructor.mk name params typ => params,
+}
+
+@[partial]
+def count_params (params : List Param) (n : I64) : I64 := match params {
+    List.empty => n,
+    List.cons p rest => count_params rest (n + 1),
+}
+
 @[partial]
 def bind_params_in_ctx (c : CodegenCtx) (params : List Param) : CodegenCtx :=
     bind_params_with_idx c params 0
@@ -1157,5 +1202,24 @@ def test_compile_constructor_decl : Bool :=
     if check_contains text "monad_ctor_Some"
     then check_contains text "alloc_constructor"
     else false
+
+@[test]
+def test_compile_inductive_decls : Bool :=
+    let some_name := ModulePath.mp (List.cons (Identifier.id "Some") List.empty) in
+    let some_ctor := InductConstructor.mk some_name empty_params_list (Term.type_ 1) in
+    let none_name := ModulePath.mp (List.cons (Identifier.id "None") List.empty) in
+    let none_ctor := InductConstructor.mk none_name empty_params_list (Term.type_ 1) in
+    let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
+    let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
+    let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs in
+    let funcs := compile_inductive_decls (List.cons ind List.empty) in
+    let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls in
+    let text := lang.codegen.ir.emit_module mod_ in
+    if check_contains text "monad_ctor_Some"
+    then check_contains text "monad_ctor_None"
+    else false
+
+@[partial]
+def empty_params_list : List Param := List.empty
 
 def main : I64 := 42
