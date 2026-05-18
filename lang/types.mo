@@ -23,6 +23,23 @@ type Multiplicity {
     affine,
 }
 
+struct Location {
+    offset : I64,
+    line : I64,
+    column : I64,
+}
+
+struct SourceRange {
+    start : Location,
+    end : Location,
+    path : Option String,
+}
+
+struct LocatedSpan {
+    fragment : String,
+    location : Location,
+}
+
 type Param {
     mk (name: Identifier) (type_: Term) (mult: Multiplicity) (default: Option Term)
 }
@@ -70,6 +87,7 @@ type Term {
     ntv (native: Native),
     con (c: Con),
     type_ (universe: I64),
+    ctx (loc : SourceRange) (term : Term),
     hole,
 }
 
@@ -399,6 +417,38 @@ instance Similar Param {
         }
 }
 
+instance Similar Location {
+    def similar (a : Location) (b : Location) : Bool :=
+        match a {
+            mk off1 line1 col1 => match b {
+                mk off2 line2 col2 =>
+                    I64.beq off1 off2 && I64.beq line1 line2 && I64.beq col1 col2
+            }
+        }
+}
+
+def opt_str_similar (a : Option String) (b : Option String) : Bool :=
+    match a {
+        Option.some x => match b {
+            Option.some y => String.beq x y,
+            Option.none => false
+        },
+        Option.none => match b {
+            Option.none => true,
+            Option.some _ => false
+        }
+    }
+
+instance Similar SourceRange {
+    def similar (a : SourceRange) (b : SourceRange) : Bool :=
+        match a {
+            mk start1 end1 path1 => match b {
+                mk start2 end2 path2 =>
+                    Similar.similar start1 start2 && Similar.similar end1 end2 && opt_str_similar path1 path2
+            }
+        }
+}
+
 instance Similar Literal {
     def similar (a : Literal) (b : Literal) : Bool :=
         match a {
@@ -427,52 +477,57 @@ instance Similar Term {
             forall n1 t1 bd1 => match b {
                 forall n2 t2 bd2 => Similar.similar n1 n2 && Similar.similar t1 t2 && Similar.similar bd1 bd2,
                 pi _ _ => false, var _ => false, lam _ _ => false, app _ _ => false,
-                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, ctx _ _ => false, hole => false
             },
             pi a1 r1 => match b {
                 pi a2 r2 => Similar.similar a1 a2 && Similar.similar r1 r2,
                 forall _ _ _ => false, var _ => false, lam _ _ => false, app _ _ => false,
-                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, ctx _ _ => false, hole => false
             },
             var n1 => match b {
                 var n2 => Similar.similar n1 n2,
                 forall _ _ _ => false, pi _ _ => false, lam _ _ => false, app _ _ => false,
-                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, ctx _ _ => false, hole => false
             },
             lam p1 bd1 => match b {
                 lam p2 bd2 => Similar.similar p1 p2 && Similar.similar bd1 bd2,
                 forall _ _ _ => false, pi _ _ => false, var _ => false, app _ _ => false,
-                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, ctx _ _ => false, hole => false
             },
             app f1 a1 => match b {
                 app f2 a2 => Similar.similar f1 f2 && Similar.similar a1 a2,
                 forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
-                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+                lit _ => false, ntv _ => false, con _ => false, type_ _ => false, ctx _ _ => false, hole => false
             },
             lit v1 => match b {
                 lit v2 => Similar.similar v1 v2,
                 forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
-                app _ _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
+                app _ _ => false, ntv _ => false, con _ => false, type_ _ => false, ctx _ _ => false, hole => false
             },
             ntv n1 => match b {
                 ntv n2 => Similar.similar n1 n2,
                 forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
-                app _ _ => false, lit _ => false, con _ => false, type_ _ => false, hole => false
+                app _ _ => false, lit _ => false, con _ => false, type_ _ => false, ctx _ _ => false, hole => false
             },
             con c1 => match b {
                 con c2 => Similar.similar c1 c2,
                 forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
-                app _ _ => false, lit _ => false, ntv _ => false, type_ _ => false, hole => false
+                app _ _ => false, lit _ => false, ntv _ => false, type_ _ => false, ctx _ _ => false, hole => false
             },
             type_ u1 => match b {
                 type_ u2 => I64.beq u1 u2,
                 forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
-                app _ _ => false, lit _ => false, ntv _ => false, con _ => false, hole => false
+                app _ _ => false, lit _ => false, ntv _ => false, con _ => false, ctx _ _ => false, hole => false
+            },
+            ctx loc1 term1 => match b {
+                ctx loc2 term2 => Similar.similar loc1 loc2 && Similar.similar term1 term2,
+                forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
+                app _ _ => false, lit _ => false, ntv _ => false, con _ => false, type_ _ => false, hole => false
             },
             hole => match b {
                 hole => true,
                 forall _ _ _ => false, pi _ _ => false, var _ => false, lam _ _ => false,
-                app _ _ => false, lit _ => false, ntv _ => false, con _ => false, type_ _ => false
+                app _ _ => false, lit _ => false, ntv _ => false, con _ => false, type_ _ => false, ctx _ _ => false
             }
         }
 }

@@ -20,6 +20,57 @@ open ParseResult
 @[partial]
 def is_empty (s : String) : Bool := (String.length s) == 0
 
+
+// --- Position tracking (Phase 1.2) ---
+
+@[partial]
+def new_span (s : String) : LocatedSpan :=
+	LocatedSpan.mk s (Location.mk 0 1 1)
+
+@[partial]
+def span_location (span : LocatedSpan) : Location :=
+	match span {
+		mk frag loc => loc
+	}
+
+@[partial]
+def span_fragment (span : LocatedSpan) : String :=
+	match span {
+		mk frag loc => frag
+	}
+
+@[partial]
+def count_newlines (s : String) (acc : I64) : I64 :=
+	if is_empty s
+	then acc
+	else count_newlines_tail (String.slice s 0 1) (String.drop 1 s) acc
+
+@[partial]
+def count_newlines_tail (c : String) (s : String) (acc : I64) : I64 :=
+	if String.beq "\n" c
+	then count_newlines s (I64.add acc 1)
+	else count_newlines s acc
+
+@[partial]
+def advance_location (loc : Location) (consumed : String) (n : I64) : Location :=
+	match loc {
+		mk off line col =>
+			let newlines : I64 := count_newlines consumed 0 in
+			if I64.beq newlines 0
+			then Location.mk (I64.add off n) line (I64.add col n)
+			else Location.mk (I64.add off n) (I64.add line newlines) 1
+	}
+
+@[partial]
+def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
+	match span {
+		mk frag loc =>
+			let consumed : String := String.slice frag 0 n in
+			let rest : String := String.drop n frag in
+			let new_loc : Location := advance_location loc consumed n in
+			LocatedSpan.mk rest new_loc
+	}
+
 // --- Combinators ---
 
 @[partial]
@@ -3231,5 +3282,56 @@ def test_ws1_fail : Bool :=
 		success rem out => false,
 		fail e => true
 	}
+
+
+// --- Position tracking tests (Phase 1.2) ---
+
+@[test]
+def test_new_span : Bool :=
+	let span : LocatedSpan := new_span "hello" in
+	let frag : String := span_fragment span in
+	I64.beq (String.length frag) 5
+
+@[test]
+def test_new_span_location : Bool :=
+	let span : LocatedSpan := new_span "x" in
+	let loc : Location := span_location span in
+	match loc {
+		mk off line col => I64.beq off 0 && I64.beq line 1 && I64.beq col 1
+	}
+
+@[test]
+def test_consume_no_newline : Bool :=
+	let span : LocatedSpan := new_span "hello world" in
+	let next : LocatedSpan := consume_span span 5 in
+	let loc : Location := span_location next in
+	match loc {
+		mk off line col => I64.beq off 5 && I64.beq line 1 && I64.beq col 6
+	}
+
+@[test]
+def test_consume_single_newline : Bool :=
+	let span : LocatedSpan := new_span "a\nb" in
+	let next : LocatedSpan := consume_span span 2 in
+	let loc : Location := span_location next in
+	match loc {
+		mk off line col => I64.beq off 2 && I64.beq line 2 && I64.beq col 1
+	}
+
+@[test]
+def test_consume_multi_newline : Bool :=
+	let span : LocatedSpan := new_span "a\n\nb" in
+	let next : LocatedSpan := consume_span span 3 in
+	let loc : Location := span_location next in
+	match loc {
+		mk off line col => I64.beq off 3 && I64.beq line 3 && I64.beq col 1
+	}
+
+@[test]
+def test_span_fragment_after_consume : Bool :=
+	let span : LocatedSpan := new_span "hello world" in
+	let next : LocatedSpan := consume_span span 6 in
+	let rest : String := span_fragment next in
+	String.beq rest "world"
 
 def main : I64 := 42

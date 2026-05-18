@@ -1521,9 +1521,6 @@ fn check_free_vars<'a>(
     match free_var {
       Detected { term: detected, .. } => {
         let b = compare_types(detected, current_type, free_vars);
-        if !b {
-          println!("{detected} != {current_type}");
-        }
         b
       }
       Unknown { typ } => {
