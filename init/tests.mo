@@ -483,3 +483,39 @@ def test_sort_cumulativity : Bool :=
 def test_pi_universe : Bool :=
     let _f : (Sort 1 -> Sort 2) := fn x => x in
     true
+
+// -- Prop/Type/Pred in value position —
+
+@[test]
+def test_type_as_value_arg : Bool :=
+    let _x : Sort 1 := get_sort Type in
+    true
+
+@[test]
+def test_prop_as_value_arg : Bool :=
+    let _x : Sort 1 := get_sort Prop in
+    true
+
+@[test]
+def test_pred_as_value_arg : Bool :=
+    let _x : Sort 1 := get_sort Pred in
+    true
+
+@[test]
+def test_id_type_with_prop : Bool :=
+    let _x : Sort 0 := get_identity Prop in
+    true
+
+@[test]
+def test_id_type_with_pred : Bool :=
+    let _x : Sort 0 := get_identity Pred in
+    true
+
+@[test]
+def test_prop_nested_inference : Bool :=
+    let _x : Sort 1 := get_identity (get_sort Prop) in
+    true
+
+def get_sort {A : Sort 1} (x : Sort 1) : Sort 1 := x
+
+def get_identity {A : Sort 1} (x : A) : A := x
