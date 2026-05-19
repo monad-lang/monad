@@ -1,15 +1,15 @@
 use lang.types
 use lang.eval_term
-open Term2
+open Term
 open DebugName
 
-// ─── Term2 environment-based evaluator ─────────────────────────────────
-// Evaluates Term2 using an environment (stack of values for de Bruijn
+// ─── Term environment-based evaluator ─────────────────────────────────
+// Evaluates Term using an environment (stack of values for de Bruijn
 // indices). Call-by-value semantics. de Bruijn index 0 = head of env.
 
 type T2EvalEnv {
     t2e_empty,
-    t2e_push (val: Term2) (rest: T2EvalEnv),
+    t2e_push (val: Term) (rest: T2EvalEnv),
 }
 
 open T2EvalEnv
@@ -17,7 +17,7 @@ open T2EvalEnv
 // Look up a de Bruijn index in the evaluation environment.
 // Index 0 = most recently pushed value (head of env).
 @[partial]
-def t2e_lookup (env: T2EvalEnv) (idx: I64) : Option Term2 :=
+def t2e_lookup (env: T2EvalEnv) (idx: I64) : Option Term :=
     match env {
         t2e_empty => Option.none,
         t2e_push val rest =>
@@ -27,17 +27,17 @@ def t2e_lookup (env: T2EvalEnv) (idx: I64) : Option Term2 :=
     }
 
 type T2EvalResult {
-    t2e_ok (v: Term2),
+    t2e_ok (v: Term),
     t2e_err (msg: String),
 }
 
 open T2EvalResult
 
-/// Evaluate a Term2 under an environment.
+/// Evaluate a Term under an environment.
 /// Call-by-value: lambdas are values, apps evaluate fun and arg first,
 /// then if fun is a lam, push arg onto env and evaluate the body.
 @[partial]
-def t2e_eval (term: Term2) (env: T2EvalEnv) : T2EvalResult :=
+def t2e_eval (term: Term) (env: T2EvalEnv) : T2EvalResult :=
     match term {
         var idx dbg =>
             match t2e_lookup env idx {
@@ -55,15 +55,15 @@ def t2e_eval (term: Term2) (env: T2EvalEnv) : T2EvalResult :=
                             match fun_val {
                                 lam dbg typ body =>
                                     t2e_eval body (t2e_push arg_val env),
-                                var idx dbg => t2e_ok (Term2.app fun_val arg_val),
-                                app f a => t2e_ok (Term2.app fun_val arg_val),
-                                lit v => t2e_ok (Term2.app fun_val arg_val),
-                                ntv n => t2e_ok (Term2.app fun_val arg_val),
-                                con c => t2e_ok (Term2.app fun_val arg_val),
-                                type_ u => t2e_ok (Term2.app fun_val arg_val),
-                                hole => t2e_ok (Term2.app fun_val arg_val),
-                                forall dbg k b => t2e_ok (Term2.app fun_val arg_val),
-                                pi a r => t2e_ok (Term2.app fun_val arg_val)
+                                var idx dbg => t2e_ok (Term.app fun_val arg_val),
+                                app f a => t2e_ok (Term.app fun_val arg_val),
+                                lit v => t2e_ok (Term.app fun_val arg_val),
+                                ntv n => t2e_ok (Term.app fun_val arg_val),
+                                con c => t2e_ok (Term.app fun_val arg_val),
+                                type_ u => t2e_ok (Term.app fun_val arg_val),
+                                hole => t2e_ok (Term.app fun_val arg_val),
+                                forall dbg k b => t2e_ok (Term.app fun_val arg_val),
+                                pi a r => t2e_ok (Term.app fun_val arg_val)
                             },
                         t2e_err msg => t2e_err msg
                     },
@@ -76,11 +76,11 @@ def t2e_eval (term: Term2) (env: T2EvalEnv) : T2EvalResult :=
         hole => t2e_ok term
     }
 
-// ─── Term2 evaluator tests ────────────────────────────────────────────
+// ─── Term evaluator tests ────────────────────────────────────────────
 
 @[test]
 def test_t2e_lit : Bool :=
-    let t : Term2 := Term2.lit (Literal.str "hello") in
+    let t : Term := Term.lit (Literal.str "hello") in
     match t2e_eval t t2e_empty {
         t2e_ok v =>
             match v {
@@ -107,10 +107,10 @@ def test_t2e_lit : Bool :=
 @[test]
 def test_t2e_identity : Bool :=
     // (λx. x) 42 → 42
-    let body : Term2 := Term2.var 0 DebugName.unnamed in
-    let lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) body in
-    let arg : Term2 := Term2.lit (Literal.num 42 NumSuffix.i64) in
-    let app : Term2 := Term2.app lam arg in
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) body in
+    let arg : Term := Term.lit (Literal.num 42 NumSuffix.i64) in
+    let app : Term := Term.app lam arg in
     match t2e_eval app t2e_empty {
         t2e_ok v =>
             match v {
@@ -137,8 +137,8 @@ def test_t2e_identity : Bool :=
 @[test]
 def test_t2e_lam_value : Bool :=
     // λx. x is a value already
-    let body : Term2 := Term2.var 0 DebugName.unnamed in
-    let lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) body in
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) body in
     match t2e_eval lam t2e_empty {
         t2e_ok v =>
             match v {
@@ -159,12 +159,12 @@ def test_t2e_lam_value : Bool :=
 @[test]
 def test_t2e_nested_app : Bool :=
     // (λx. λy. y) 10 "world" → "world"
-    let inner_body : Term2 := Term2.var 0 DebugName.unnamed in
-    let inner_lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) inner_body in
-    let outer_lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) inner_lam in
-    let arg1 : Term2 := Term2.lit (Literal.num 10 NumSuffix.i64) in
-    let arg2 : Term2 := Term2.lit (Literal.str "world") in
-    let app : Term2 := Term2.app (Term2.app outer_lam arg1) arg2 in
+    let inner_body : Term := Term.var 0 DebugName.unnamed in
+    let inner_lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) inner_body in
+    let outer_lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) inner_lam in
+    let arg1 : Term := Term.lit (Literal.num 10 NumSuffix.i64) in
+    let arg2 : Term := Term.lit (Literal.str "world") in
+    let app : Term := Term.app (Term.app outer_lam arg1) arg2 in
     match t2e_eval app t2e_empty {
         t2e_ok v =>
             match v {
@@ -191,12 +191,12 @@ def test_t2e_nested_app : Bool :=
 @[test]
 def test_t2e_shadowing : Bool :=
     // (λx. λx. x) 1 2 → 2  (inner x shadows outer)
-    let inner_body : Term2 := Term2.var 0 DebugName.unnamed in
-    let inner_lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) inner_body in
-    let outer_lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) inner_lam in
-    let one : Term2 := Term2.lit (Literal.num 1 NumSuffix.i64) in
-    let two : Term2 := Term2.lit (Literal.num 2 NumSuffix.i64) in
-    let app : Term2 := Term2.app (Term2.app outer_lam one) two in
+    let inner_body : Term := Term.var 0 DebugName.unnamed in
+    let inner_lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) inner_body in
+    let outer_lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) inner_lam in
+    let one : Term := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let two : Term := Term.lit (Literal.num 2 NumSuffix.i64) in
+    let app : Term := Term.app (Term.app outer_lam one) two in
     match t2e_eval app t2e_empty {
         t2e_ok v =>
             match v {
@@ -223,9 +223,9 @@ def test_t2e_shadowing : Bool :=
 @[test]
 def test_t2e_env_lookup : Bool :=
     // Resolve var 0 from explicit env
-    let val_term : Term2 := Term2.lit (Literal.num 99 NumSuffix.i64) in
+    let val_term : Term := Term.lit (Literal.num 99 NumSuffix.i64) in
     let env : T2EvalEnv := t2e_push val_term t2e_empty in
-    let var_term : Term2 := Term2.var 0 DebugName.unnamed in
+    let var_term : Term := Term.var 0 DebugName.unnamed in
     match t2e_eval var_term env {
         t2e_ok v =>
             match v {
@@ -252,10 +252,10 @@ def test_t2e_env_lookup : Bool :=
 @[test]
 def test_t2e_ntv_value : Bool :=
     // native terms are values
-    let none_opt : Option Term := Option.none in
-    let args : List (Option Term) := List.cons none_opt List.empty in
+    let none_opt : Option TermV0 := Option.none in
+    let args : List (Option TermV0) := List.cons none_opt List.empty in
     let nval : Native := Native.mk (Identifier.id "add") 0 args in
-    let n : Term2 := Term2.ntv nval in
+    let n : Term := Term.ntv nval in
     match t2e_eval n t2e_empty {
         t2e_ok v =>
             match v {
@@ -276,11 +276,11 @@ def test_t2e_ntv_value : Bool :=
 @[test]
 def test_t2e_con_value : Bool :=
     // constructors are values
-    let none_opt : Option Term := Option.none in
-    let args : List (Option Term) := List.cons none_opt List.empty in
+    let none_opt : Option TermV0 := Option.none in
+    let args : List (Option TermV0) := List.cons none_opt List.empty in
     let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "T") List.empty) in
     let cval : Con := Con.mk (Identifier.id "C") mod_path 0 args in
-    let c : Term2 := Term2.con cval in
+    let c : Term := Term.con cval in
     match t2e_eval c t2e_empty {
         t2e_ok v =>
             match v {
@@ -301,20 +301,20 @@ def test_t2e_con_value : Bool :=
 @[test]
 def test_t2e_unbound_var : Bool :=
     // unresolvable variable should be an error
-    let v : Term2 := Term2.var 0 DebugName.unnamed in
+    let v : Term := Term.var 0 DebugName.unnamed in
     match t2e_eval v t2e_empty {
         t2e_ok v => false,
         t2e_err msg => true
     }
 
-// ─── Term2 to EvalTerm lowerer ───────────────────────────────────────
+// ─── Term to EvalTerm lowerer ───────────────────────────────────────
 // Direct mapping (no find_index needed — de Bruijn indices preserved).
 
-/// Lower a Term2 to EvalTerm.
-/// De Bruijn indices pass through unchanged: Term2.var i → EvalTerm.evar i.
+/// Lower a Term to EvalTerm.
+/// De Bruijn indices pass through unchanged: Term.var i → EvalTerm.evar i.
 /// forall and pi are erased (type-level only at eval time).
 @[partial]
-def lower_t2 (t: Term2) : EvalTerm :=
+def lower_t2 (t: Term) : EvalTerm :=
     match t {
         var idx dbg =>
             EvalTerm.evar idx,
@@ -355,7 +355,7 @@ def lower_t2 (t: Term2) : EvalTerm :=
 @[test]
 def test_lower_t2_var : Bool :=
     // De Bruijn index preserved directly
-    let t : Term2 := Term2.var 3 DebugName.unnamed in
+    let t : Term := Term.var 3 DebugName.unnamed in
     let lowered : EvalTerm := lower_t2 t in
     match lowered {
         EvalTerm.evar idx => I64.beq idx 3,
@@ -375,8 +375,8 @@ def test_lower_t2_var : Bool :=
 @[test]
 def test_lower_t2_lam : Bool :=
     // Lambda lowers to EvalTerm.elam(body lowered with region)
-    let body : Term2 := Term2.var 0 DebugName.unnamed in
-    let lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) body in
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) body in
     let lowered : EvalTerm := lower_t2 lam in
     match lowered {
         EvalTerm.elam m b => true,
@@ -396,9 +396,9 @@ def test_lower_t2_lam : Bool :=
 @[test]
 def test_lower_t2_app : Bool :=
     // Application lowers to EvalTerm.eapp
-    let f : Term2 := Term2.var 0 DebugName.unnamed in
-    let a : Term2 := Term2.var 1 DebugName.unnamed in
-    let app : Term2 := Term2.app f a in
+    let f : Term := Term.var 0 DebugName.unnamed in
+    let a : Term := Term.var 1 DebugName.unnamed in
+    let app : Term := Term.app f a in
     let lowered : EvalTerm := lower_t2 app in
     match lowered {
         EvalTerm.eapp fun arg => true,
@@ -418,7 +418,7 @@ def test_lower_t2_app : Bool :=
 @[test]
 def test_lower_t2_lit_num : Bool :=
     // Number literal lowers to l_int
-    let t : Term2 := Term2.lit (Literal.num 42 NumSuffix.i64) in
+    let t : Term := Term.lit (Literal.num 42 NumSuffix.i64) in
     let lowered : EvalTerm := lower_t2 t in
     match lowered {
         EvalTerm.elit lit =>
@@ -445,7 +445,7 @@ def test_lower_t2_lit_num : Bool :=
 @[test]
 def test_lower_t2_lit_str : Bool :=
     // String literal lowers to l_str
-    let t : Term2 := Term2.lit (Literal.str "hello") in
+    let t : Term := Term.lit (Literal.str "hello") in
     let lowered : EvalTerm := lower_t2 t in
     match lowered {
         EvalTerm.elit lit =>
@@ -472,8 +472,8 @@ def test_lower_t2_lit_str : Bool :=
 @[test]
 def test_lower_t2_forall_erase : Bool :=
     // forall erases to body
-    let body : Term2 := Term2.var 0 DebugName.unnamed in
-    let f : Term2 := Term2.forall DebugName.unnamed (Term2.type_ 1) body in
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let f : Term := Term.forall DebugName.unnamed (Term.type_ 1) body in
     let lowered : EvalTerm := lower_t2 f in
     match lowered {
         EvalTerm.evar idx => true,
@@ -493,7 +493,7 @@ def test_lower_t2_forall_erase : Bool :=
 @[test]
 def test_lower_t2_pi_erase : Bool :=
     // pi erases to EvalTerm.esort
-    let t : Term2 := Term2.pi (Term2.type_ 1) (Term2.type_ 1) in
+    let t : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
     let lowered : EvalTerm := lower_t2 t in
     match lowered {
         EvalTerm.esort level => true,
@@ -513,7 +513,7 @@ def test_lower_t2_pi_erase : Bool :=
 @[test]
 def test_lower_t2_type : Bool :=
     // type_ level passes through as EvalTerm.esort
-    let t : Term2 := Term2.type_ 2 in
+    let t : Term := Term.type_ 2 in
     let lowered : EvalTerm := lower_t2 t in
     match lowered {
         EvalTerm.esort level => I64.beq level 2,
@@ -530,7 +530,7 @@ def test_lower_t2_type : Bool :=
         EvalTerm.eproj_field f b => false
     }
 
-// ─── End-to-end: Term2 → lower_t2 → keval ────────────────────────────
+// ─── End-to-end: Term → lower_t2 → keval ────────────────────────────
 
 // Inline keval to avoid cross-module import.
 type KEvalEnv {
@@ -610,11 +610,11 @@ def kev_eval (term: EvalTerm) (env: KEvalEnv) : KEvalResult :=
 
 @[test]
 def test_e2e_lower_t2_identity : Bool :=
-    // (λx. x) "hello" → Term2 → lower_t2 → kev_eval → "hello"
-    let body : Term2 := Term2.var 0 DebugName.unnamed in
-    let lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) body in
-    let arg : Term2 := Term2.lit (Literal.str "hello") in
-    let app : Term2 := Term2.app lam arg in
+    // (λx. x) "hello" → Term → lower_t2 → kev_eval → "hello"
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) body in
+    let arg : Term := Term.lit (Literal.str "hello") in
+    let app : Term := Term.app lam arg in
     let lowered : EvalTerm := lower_t2 app in
     match kev_eval lowered kev_empty {
         kev_ok v =>
@@ -645,12 +645,12 @@ def test_e2e_lower_t2_identity : Bool :=
 @[test]
 def test_e2e_lower_t2_nested : Bool :=
     // (λx. λy. y) 10 "world" → "world"
-    let inner_body : Term2 := Term2.var 0 DebugName.unnamed in
-    let inner_lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) inner_body in
-    let outer_lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) inner_lam in
-    let arg1 : Term2 := Term2.lit (Literal.num 10 NumSuffix.i64) in
-    let arg2 : Term2 := Term2.lit (Literal.str "world") in
-    let app : Term2 := Term2.app (Term2.app outer_lam arg1) arg2 in
+    let inner_body : Term := Term.var 0 DebugName.unnamed in
+    let inner_lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) inner_body in
+    let outer_lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) inner_lam in
+    let arg1 : Term := Term.lit (Literal.num 10 NumSuffix.i64) in
+    let arg2 : Term := Term.lit (Literal.str "world") in
+    let app : Term := Term.app (Term.app outer_lam arg1) arg2 in
     let lowered : EvalTerm := lower_t2 app in
     match kev_eval lowered kev_empty {
         kev_ok v =>

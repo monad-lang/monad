@@ -289,116 +289,116 @@ def many0_next (r : ParseResult (List A)) (out : A) (rem : String) : ParseResult
 // --- Type helpers ---
 
 @[partial]
-def var_term (s : String) : Term :=
-	Term.var (NameRef.nid (Identifier.id s))
+def var_term (s : String) : TermV0 :=
+	TermV0.var (NameRef.nid (Identifier.id s))
 
 // --- Type expression parser ---
 
 @[partial]
-def type_variable (input : String) : ParseResult Term :=
+def type_variable (input : String) : ParseResult TermV0 :=
 	type_var_got (identifier input)
 
 @[partial]
-def type_var_got (r : ParseResult String) : ParseResult Term :=
+def type_var_got (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem (var_term out),
 		fail e => fail e
 	}
 
 @[partial]
-def type_parens (input : String) : ParseResult Term :=
+def type_parens (input : String) : ParseResult TermV0 :=
 	type_parens_open (tag "(" input)
 
 @[partial]
-def type_parens_open (r : ParseResult String) : ParseResult Term :=
+def type_parens_open (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => type_parens_expr (type_expression rem),
 		fail e => fail e
 	}
 
 @[partial]
-def type_parens_expr (r : ParseResult Term) : ParseResult Term :=
+def type_parens_expr (r : ParseResult TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem out => type_parens_close (tag ")" rem) out,
 		fail e => fail e
 	}
 
 @[partial]
-def type_parens_close (r : ParseResult String) (out : Term) : ParseResult Term :=
+def type_parens_close (r : ParseResult String) (out : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem _ => success rem out,
 		fail e => fail e
 	}
 
 @[partial]
-def type_atom (input : String) : ParseResult Term :=
+def type_atom (input : String) : ParseResult TermV0 :=
 	type_atom_try_var (type_variable input) input
 
 @[partial]
-def type_atom_try_var (r : ParseResult Term) (input : String) : ParseResult Term :=
+def type_atom_try_var (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => type_parens input
 	}
 
 @[partial]
-def type_expression (input : String) : ParseResult Term :=
+def type_expression (input : String) : ParseResult TermV0 :=
 	type_expr_ws (take_while is_space input)
 
 @[partial]
-def type_expr_ws (r : ParseResult String) : ParseResult Term :=
+def type_expr_ws (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => type_expr_first (type_atom rem) rem,
 		fail e => fail e
 	}
 
 @[partial]
-def type_expr_first (r : ParseResult Term) (rem : String) : ParseResult Term :=
+def type_expr_first (r : ParseResult TermV0) (rem : String) : ParseResult TermV0 :=
 	match r {
 		success after lhs => type_expr_apps after lhs,
 		fail e => fail e
 	}
 
 @[partial]
-def type_expr_apps (input : String) (lhs : Term) : ParseResult Term :=
+def type_expr_apps (input : String) (lhs : TermV0) : ParseResult TermV0 :=
 	type_expr_app_ws (take_while is_space input) lhs
 
 @[partial]
-def type_expr_app_ws (r : ParseResult String) (lhs : Term) : ParseResult Term :=
+def type_expr_app_ws (r : ParseResult String) (lhs : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem _ => type_expr_app_next (type_atom rem) rem lhs,
 		fail e => fail e
 	}
 
 @[partial]
-def type_expr_app_next (r : ParseResult Term) (input : String) (lhs : Term) : ParseResult Term :=
+def type_expr_app_next (r : ParseResult TermV0) (input : String) (lhs : TermV0) : ParseResult TermV0 :=
 	match r {
-		success rem rhs => type_expr_apps rem (Term.app lhs rhs),
+		success rem rhs => type_expr_apps rem (TermV0.app lhs rhs),
 		fail _ => type_expr_check_arrow input lhs
 	}
 
 @[partial]
-def type_expr_check_arrow (input : String) (lhs : Term) : ParseResult Term :=
+def type_expr_check_arrow (input : String) (lhs : TermV0) : ParseResult TermV0 :=
 	type_expr_arrow_ws (take_while is_space input) input lhs
 
 @[partial]
-def type_expr_arrow_ws (r : ParseResult String) (input : String) (lhs : Term) : ParseResult Term :=
+def type_expr_arrow_ws (r : ParseResult String) (input : String) (lhs : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem _ => type_expr_try_arrow rem lhs (tag "->" rem),
 		fail e => fail e
 	}
 
 @[partial]
-def type_expr_try_arrow (input : String) (lhs : Term) (r : ParseResult String) : ParseResult Term :=
+def type_expr_try_arrow (input : String) (lhs : TermV0) (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => type_expr_rhs lhs (type_expression rem),
 		fail _ => success input lhs
 	}
 
 @[partial]
-def type_expr_rhs (lhs : Term) (r : ParseResult Term) : ParseResult Term :=
+def type_expr_rhs (lhs : TermV0) (r : ParseResult TermV0) : ParseResult TermV0 :=
 	match r {
-		success rem out => success rem (Term.pi lhs out),
+		success rem out => success rem (TermV0.pi lhs out),
 		fail e => fail e
 	}
 
@@ -453,40 +453,40 @@ def is_not_quote (c : String) : Bool :=
 	else true
 
 @[partial]
-def string_parse (input : String) : ParseResult Term :=
+def string_parse (input : String) : ParseResult TermV0 :=
 	string_parse_open (tag "\"" input)
 
 @[partial]
-def string_parse_open (r : ParseResult String) : ParseResult Term :=
+def string_parse_open (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => string_parse_content (take_while is_not_quote rem),
 		fail e => fail e
 	}
 
 @[partial]
-def string_parse_content (r : ParseResult String) : ParseResult Term :=
+def string_parse_content (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem out => string_parse_close (tag "\"" rem) out,
 		fail e => fail e
 	}
 
 @[partial]
-def string_parse_close (r : ParseResult String) (content : String) : ParseResult Term :=
+def string_parse_close (r : ParseResult String) (content : String) : ParseResult TermV0 :=
 	match r {
-		success rem _ => success rem (Term.lit (Literal.str content)),
+		success rem _ => success rem (TermV0.lit (Literal.str content)),
 		fail e => fail e
 	}
 
 // --- Number term wrapper ---
 
 @[partial]
-def number_term (input : String) : ParseResult Term :=
+def number_term (input : String) : ParseResult TermV0 :=
 	number_term_body (number input)
 
 @[partial]
-def number_term_body (r : ParseResult I64) : ParseResult Term :=
+def number_term_body (r : ParseResult I64) : ParseResult TermV0 :=
 	match r {
-		success rem out => success rem (Term.lit (Literal.num out NumSuffix.i64)),
+		success rem out => success rem (TermV0.lit (Literal.num out NumSuffix.i64)),
 		fail e => fail e
 	}
 
@@ -495,42 +495,42 @@ def number_term_body (r : ParseResult I64) : ParseResult Term :=
 // --- Path variable parser (e.g. A.B.C) ---
 
 @[partial]
-def path_variable (input : String) : ParseResult Term :=
+def path_variable (input : String) : ParseResult TermV0 :=
 	path_var_first (identifier input)
 
 @[partial]
-def path_var_first (r : ParseResult String) : ParseResult Term :=
+def path_var_first (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem first => path_var_need_dot rem (List.cons (Identifier.id first) List.empty),
 		fail e => fail e
 	}
 
 @[partial]
-def path_var_need_dot (input : String) (ids : List Identifier) : ParseResult Term :=
+def path_var_need_dot (input : String) (ids : List Identifier) : ParseResult TermV0 :=
 	path_var_need_dot_try (tag "." input) ids input
 
 @[partial]
-def path_var_need_dot_try (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult Term :=
+def path_var_need_dot_try (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => path_var_field (identifier rem) ids,
 		fail _ => fail (ParseError.custom "not a dotted path")
 	}
 
 @[partial]
-def path_var_loop (input : String) (ids : List Identifier) : ParseResult Term :=
+def path_var_loop (input : String) (ids : List Identifier) : ParseResult TermV0 :=
 	path_var_loop_dot (tag "." input) ids input
 
 @[partial]
-def path_var_loop_dot (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult Term :=
+def path_var_loop_dot (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => path_var_field (identifier rem) ids,
 		fail _ =>
 			let rev : List Identifier := list_reverse ids in
-			success orig (Term.var (NameRef.nmp (ModulePath.mp rev)))
+			success orig (TermV0.var (NameRef.nmp (ModulePath.mp rev)))
 	}
 
 @[partial]
-def path_var_field (r : ParseResult String) (ids : List Identifier) : ParseResult Term :=
+def path_var_field (r : ParseResult String) (ids : List Identifier) : ParseResult TermV0 :=
 	match r {
 		success rem next => path_var_loop rem (List.cons (Identifier.id next) ids),
 		fail e => fail e
@@ -539,31 +539,31 @@ def path_var_field (r : ParseResult String) (ids : List Identifier) : ParseResul
 // --- Variable parser (dotted path or simple identifier) ---
 
 @[partial]
-def variable (input : String) : ParseResult Term :=
+def variable (input : String) : ParseResult TermV0 :=
 	variable_try_path (path_variable input) input
 
 @[partial]
-def variable_try_path (r : ParseResult Term) (input : String) : ParseResult Term :=
+def variable_try_path (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => variable_got (identifier input)
 	}
 
 @[partial]
-def variable_got (r : ParseResult String) : ParseResult Term :=
+def variable_got (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
-		success rem out => success rem (Term.var (NameRef.nid (Identifier.id out))),
+		success rem out => success rem (TermV0.var (NameRef.nid (Identifier.id out))),
 		fail e => fail e
 	}
 
 // --- Literal term (string or number) ---
 
 @[partial]
-def literal_term (input : String) : ParseResult Term :=
+def literal_term (input : String) : ParseResult TermV0 :=
 	literal_try_str (string_parse input) input
 
 @[partial]
-def literal_try_str (r : ParseResult Term) (input : String) : ParseResult Term :=
+def literal_try_str (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => number_term input
@@ -572,32 +572,32 @@ def literal_try_str (r : ParseResult Term) (input : String) : ParseResult Term :
 // --- Atom term (variable, literal, parenthesized expression) ---
 
 @[partial]
-def atom_term (input : String) : ParseResult Term :=
+def atom_term (input : String) : ParseResult TermV0 :=
 	atom_try_var (variable input) input
 
 @[partial]
-def atom_try_var (r : ParseResult Term) (input : String) : ParseResult Term :=
+def atom_try_var (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => atom_try_lit (literal_term input) input
 	}
 
 @[partial]
-def atom_try_paren (r : ParseResult String) (input : String) : ParseResult Term :=
+def atom_try_paren (r : ParseResult String) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => atom_inner_expr (expression rem),
 		fail e => fail e
 	}
 
 @[partial]
-def atom_inner_expr (r : ParseResult Term) : ParseResult Term :=
+def atom_inner_expr (r : ParseResult TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem out => atom_close_paren (tag ")" rem) out,
 		fail e => fail e
 	}
 
 @[partial]
-def atom_close_paren (r : ParseResult String) (out : Term) : ParseResult Term :=
+def atom_close_paren (r : ParseResult String) (out : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem _ => success rem out,
 		fail e => fail e
@@ -644,7 +644,7 @@ def match_case_arrow (r : ParseResult String) (name : Identifier) : ParseResult 
 	}
 
 @[partial]
-def match_case_body (r : ParseResult Term) (name : Identifier) : ParseResult MatchCase :=
+def match_case_body (r : ParseResult TermV0) (name : Identifier) : ParseResult MatchCase :=
 	match r {
 		success rem body =>
 			let empty_args : List Identifier := List.empty in
@@ -673,189 +673,189 @@ def match_case_tail_cm (r : ParseResult String) (after_sp : String) : String :=
 // --- Match expression parser ---
 
 @[partial]
-def match_parser (input : String) : ParseResult Term :=
+def match_parser (input : String) : ParseResult TermV0 :=
 	match_kw (tag "match" input)
 
 @[partial]
-def match_kw (r : ParseResult String) : ParseResult Term :=
+def match_kw (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => match_scrutinee (expression (skip_spaces rem)),
 		fail e => fail e
 	}
 
 @[partial]
-def match_scrutinee (r : ParseResult Term) : ParseResult Term :=
+def match_scrutinee (r : ParseResult TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem scrutinee => match_brace_open (tag "{" (skip_spaces rem)) scrutinee,
 		fail e => fail e
 	}
 
 @[partial]
-def match_brace_open (r : ParseResult String) (scrutinee : Term) : ParseResult Term :=
+def match_brace_open (r : ParseResult String) (scrutinee : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem _ => match_cases_parse (many1 match_case rem) scrutinee,
 		fail e => fail e
 	}
 
 @[partial]
-def match_cases_parse (r : ParseResult (List MatchCase)) (scrutinee : Term) : ParseResult Term :=
+def match_cases_parse (r : ParseResult (List MatchCase)) (scrutinee : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem cases => match_close (tag "}" (skip_spaces rem)) scrutinee cases,
 		fail e => fail e
 	}
 
 @[partial]
-def match_close (r : ParseResult String) (scrutinee : Term) (cases : List MatchCase) : ParseResult Term :=
+def match_close (r : ParseResult String) (scrutinee : TermV0) (cases : List MatchCase) : ParseResult TermV0 :=
 	match r {
-		success rem _ => success rem (Term.lit (Literal.match_ scrutinee cases)),
+		success rem _ => success rem (TermV0.lit (Literal.match_ scrutinee cases)),
 		fail e => fail e
 	}
 
 // --- If expression parser ---
 
 @[partial]
-def if_parser (input : String) : ParseResult Term :=
+def if_parser (input : String) : ParseResult TermV0 :=
 	if_kw (tag "if" input)
 
 @[partial]
-def if_kw (r : ParseResult String) : ParseResult Term :=
+def if_kw (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => if_cond (expression (skip_spaces rem)),
 		fail e => fail e
 	}
 
 @[partial]
-def if_cond (r : ParseResult Term) : ParseResult Term :=
+def if_cond (r : ParseResult TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem cond => if_then_kw (tag "then" (skip_spaces rem)) cond,
 		fail e => fail e
 	}
 
 @[partial]
-def if_then_kw (r : ParseResult String) (cond : Term) : ParseResult Term :=
+def if_then_kw (r : ParseResult String) (cond : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem _ => if_then_branch (expression (skip_spaces rem)) cond,
 		fail e => fail e
 	}
 
 @[partial]
-def if_then_branch (r : ParseResult Term) (cond : Term) : ParseResult Term :=
+def if_then_branch (r : ParseResult TermV0) (cond : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem then_b => if_else_kw (tag "else" (skip_spaces rem)) cond then_b,
 		fail e => fail e
 	}
 
 @[partial]
-def if_else_kw (r : ParseResult String) (cond : Term) (then_b : Term) : ParseResult Term :=
+def if_else_kw (r : ParseResult String) (cond : TermV0) (then_b : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem _ => if_else_branch (expression (skip_spaces rem)) cond then_b,
 		fail e => fail e
 	}
 
 @[partial]
-def if_else_branch (r : ParseResult Term) (cond : Term) (then_b : Term) : ParseResult Term :=
+def if_else_branch (r : ParseResult TermV0) (cond : TermV0) (then_b : TermV0) : ParseResult TermV0 :=
 	match r {
-		success rem else_b => success rem (Term.lit (Literal.if_ cond then_b else_b)),
+		success rem else_b => success rem (TermV0.lit (Literal.if_ cond then_b else_b)),
 		fail e => fail e
 	}
 
 // --- Lambda expression parser ---
 
 @[partial]
-def lambda_parser (input : String) : ParseResult Term :=
+def lambda_parser (input : String) : ParseResult TermV0 :=
 	lambda_kw (alt (alt (tag "fn") (tag "ꟛ")) (tag "\\") input)
 
 @[partial]
-def lambda_kw (r : ParseResult String) : ParseResult Term :=
+def lambda_kw (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => lambda_mult (skip_spaces rem),
 		fail e => fail e
 	}
 
 @[partial]
-def lambda_mult (input : String) : ParseResult Term :=
+def lambda_mult (input : String) : ParseResult TermV0 :=
 	lambda_mult_prefix (tag "!" input) Multiplicity.linear input
 
 @[partial]
-def lambda_mult_prefix (r : ParseResult String) (mult : Multiplicity) (orig : String) : ParseResult Term :=
+def lambda_mult_prefix (r : ParseResult String) (mult : Multiplicity) (orig : String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => lambda_name (identifier rem) mult,
 		fail _ => lambda_mult_affine (tag "?" orig) mult orig
 	}
 
 @[partial]
-def lambda_mult_affine (r : ParseResult String) (mult : Multiplicity) (orig : String) : ParseResult Term :=
+def lambda_mult_affine (r : ParseResult String) (mult : Multiplicity) (orig : String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => lambda_name (identifier rem) Multiplicity.affine,
 		fail _ => lambda_name (identifier orig) Multiplicity.many
 	}
 
 @[partial]
-def lambda_name (r : ParseResult String) (mult : Multiplicity) : ParseResult Term :=
+def lambda_name (r : ParseResult String) (mult : Multiplicity) : ParseResult TermV0 :=
 	match r {
 		success rem name => lambda_arrow_mult (tag "=>" (skip_spaces rem)) (Identifier.id name) mult,
 		fail e => fail e
 	}
 
 @[partial]
-def lambda_arrow_mult (r : ParseResult String) (name : Identifier) (mult : Multiplicity) : ParseResult Term :=
+def lambda_arrow_mult (r : ParseResult String) (name : Identifier) (mult : Multiplicity) : ParseResult TermV0 :=
 	match r {
 		success rem _ => lambda_body_mult (expression (skip_spaces rem)) name mult,
 		fail e => fail e
 	}
 
 @[partial]
-def lambda_body_mult (r : ParseResult Term) (name : Identifier) (mult : Multiplicity) : ParseResult Term :=
+def lambda_body_mult (r : ParseResult TermV0) (name : Identifier) (mult : Multiplicity) : ParseResult TermV0 :=
 	match r {
-		success rem body => success rem (Term.lam (mk_param name (Term.type_ 1) mult) body),
+		success rem body => success rem (TermV0.lam (mk_param name (TermV0.type_ 1) mult) body),
 		fail e => fail e
 	}
 
 // --- Let expression parser ---
 
 @[partial]
-def let_parser (input : String) : ParseResult Term :=
+def let_parser (input : String) : ParseResult TermV0 :=
 	let_kw (tag "let" input)
 
 @[partial]
-def let_kw (r : ParseResult String) : ParseResult Term :=
+def let_kw (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => let_name (identifier (skip_spaces rem)),
 		fail e => fail e
 	}
 
 @[partial]
-def let_name (r : ParseResult String) : ParseResult Term :=
+def let_name (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem name => let_assign (tag ":=" (skip_spaces rem)) (Identifier.id name),
 		fail e => fail e
 	}
 
 @[partial]
-def let_assign (r : ParseResult String) (name : Identifier) : ParseResult Term :=
+def let_assign (r : ParseResult String) (name : Identifier) : ParseResult TermV0 :=
 	match r {
 		success rem _ => let_value (expression (skip_spaces rem)) name,
 		fail e => fail e
 	}
 
 @[partial]
-def let_value (r : ParseResult Term) (name : Identifier) : ParseResult Term :=
+def let_value (r : ParseResult TermV0) (name : Identifier) : ParseResult TermV0 :=
 	match r {
 		success rem value => let_in_kw (tag "in" (skip_spaces rem)) name value,
 		fail e => fail e
 	}
 
 @[partial]
-def let_in_kw (r : ParseResult String) (name : Identifier) (value : Term) : ParseResult Term :=
+def let_in_kw (r : ParseResult String) (name : Identifier) (value : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem _ => let_body (expression (skip_spaces rem)) name value,
 		fail e => fail e
 	}
 
 @[partial]
-def let_body (r : ParseResult Term) (name : Identifier) (value : Term) : ParseResult Term :=
+def let_body (r : ParseResult TermV0) (name : Identifier) (value : TermV0) : ParseResult TermV0 :=
 	match r {
-		success rem body => success rem (Term.app (Term.lam (param_many name (Term.type_ 1)) body) value),
+		success rem body => success rem (TermV0.app (TermV0.lam (param_many name (TermV0.type_ 1)) body) value),
 		fail e => fail e
 	}
 
@@ -898,7 +898,7 @@ def do_stmt_let_kind_try (r : ParseResult String) (name : Identifier) (orig : St
 	}
 
 @[partial]
-def do_stmt_let_value (r : ParseResult Term) (name : Identifier) : ParseResult DoStmt :=
+def do_stmt_let_value (r : ParseResult TermV0) (name : Identifier) : ParseResult DoStmt :=
 	match r {
 		success rem value => success rem (DoStmt.let_s name value),
 		fail e => fail e
@@ -912,21 +912,21 @@ def do_stmt_bind_arrow (r : ParseResult String) (name : Identifier) (orig : Stri
 	}
 
 @[partial]
-def do_stmt_bind_value (r : ParseResult Term) (name : Identifier) : ParseResult DoStmt :=
+def do_stmt_bind_value (r : ParseResult TermV0) (name : Identifier) : ParseResult DoStmt :=
 	match r {
 		success rem value => success rem (DoStmt.bind_s name value),
 		fail e => fail e
 	}
 
 @[partial]
-def do_stmt_ret_expr (r : ParseResult Term) : ParseResult DoStmt :=
+def do_stmt_ret_expr (r : ParseResult TermV0) : ParseResult DoStmt :=
 	match r {
 		success rem value => success rem (DoStmt.ret_s value),
 		fail e => fail e
 	}
 
 @[partial]
-def do_stmt_expr (r : ParseResult Term) : ParseResult DoStmt :=
+def do_stmt_expr (r : ParseResult TermV0) : ParseResult DoStmt :=
 	match r {
 		success rem value => success rem (DoStmt.expr_s value),
 		fail e => fail e
@@ -978,67 +978,67 @@ def do_stmts_next (r : ParseResult (List DoStmt)) (first : DoStmt) : ParseResult
 	}
 
 @[partial]
-def do_parser (input : String) : ParseResult Term :=
+def do_parser (input : String) : ParseResult TermV0 :=
 	do_kw (tag "do" input)
 
 @[partial]
-def do_kw (r : ParseResult String) : ParseResult Term :=
+def do_kw (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => do_brace (tag "{" (skip_spaces rem)),
 		fail e => fail e
 	}
 
 @[partial]
-def do_brace (r : ParseResult String) : ParseResult Term :=
+def do_brace (r : ParseResult String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => do_build (do_stmts rem),
 		fail e => fail e
 	}
 
 @[partial]
-def do_build (r : ParseResult (List DoStmt)) : ParseResult Term :=
+def do_build (r : ParseResult (List DoStmt)) : ParseResult TermV0 :=
 	match r {
 		success rem stmts => success rem (desugar_do stmts),
 		fail e => fail e
 	}
 
 @[partial]
-def atom_try_lit (r : ParseResult Term) (input : String) : ParseResult Term :=
+def atom_try_lit (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => atom_try_match (match_parser input) input
 	}
 
 @[partial]
-def atom_try_match (r : ParseResult Term) (input : String) : ParseResult Term :=
+def atom_try_match (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => atom_try_if (if_parser input) input
 	}
 
 @[partial]
-def atom_try_if (r : ParseResult Term) (input : String) : ParseResult Term :=
+def atom_try_if (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => atom_try_let (let_parser input) input
 	}
 
 @[partial]
-def atom_try_let (r : ParseResult Term) (input : String) : ParseResult Term :=
+def atom_try_let (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => atom_try_do (do_parser input) input
 	}
 
 @[partial]
-def atom_try_do (r : ParseResult Term) (input : String) : ParseResult Term :=
+def atom_try_do (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => atom_try_lambda (lambda_parser input) input
 	}
 
 @[partial]
-def atom_try_lambda (r : ParseResult Term) (input : String) : ParseResult Term :=
+def atom_try_lambda (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
 	match r {
 		success rem out => success rem out,
 		fail _ => atom_try_paren (tag "(" input) input
@@ -1114,66 +1114,66 @@ def op_is_right_assoc (op : String) : Bool :=
 // --- Expression (atom + juxtaposition application + operators) ---
 
 @[partial]
-def expression (input : String) : ParseResult Term :=
+def expression (input : String) : ParseResult TermV0 :=
 	expr_first (atom_term input)
 
 @[partial]
-def expr_first (r : ParseResult Term) : ParseResult Term :=
+def expr_first (r : ParseResult TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem lhs => expr_rest rem lhs,
 		fail e => fail e
 	}
 
 @[partial]
-def expr_rest (input : String) (lhs : Term) : ParseResult Term :=
+def expr_rest (input : String) (lhs : TermV0) : ParseResult TermV0 :=
 	expr_rest_ws (take_while is_space input) lhs
 
 @[partial]
-def expr_rest_ws (r : ParseResult String) (lhs : Term) : ParseResult Term :=
+def expr_rest_ws (r : ParseResult String) (lhs : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem _ => expr_rest_next (atom_term rem) rem lhs,
 		fail e => fail e
 	}
 
 @[partial]
-def expr_rest_next (r : ParseResult Term) (input : String) (lhs : Term) : ParseResult Term :=
+def expr_rest_next (r : ParseResult TermV0) (input : String) (lhs : TermV0) : ParseResult TermV0 :=
 	match r {
-		success rem rhs => expr_rest rem (Term.app lhs rhs),
+		success rem rhs => expr_rest rem (TermV0.app lhs rhs),
 		fail _ => expr_op input lhs
 	}
 
 @[partial]
-def expr_op (input : String) (lhs : Term) : ParseResult Term :=
+def expr_op (input : String) (lhs : TermV0) : ParseResult TermV0 :=
 	expr_op_try (operator_parse input) input lhs
 
 @[partial]
-def expr_op_try (r : ParseResult String) (input : String) (lhs : Term) : ParseResult Term :=
+def expr_op_try (r : ParseResult String) (input : String) (lhs : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem op => expr_op_prec input lhs op rem,
 		fail _ => success input lhs
 	}
 
 @[partial]
-def expr_op_prec (input : String) (lhs : Term) (op : String) (rem : String) : ParseResult Term :=
+def expr_op_prec (input : String) (lhs : TermV0) (op : String) (rem : String) : ParseResult TermV0 :=
 	expr_op_prec_val (op_precedence op) input lhs op rem
 
 @[partial]
-def expr_op_prec_val (prec : I64) (input : String) (lhs : Term) (op : String) (rem : String) : ParseResult Term :=
+def expr_op_prec_val (prec : I64) (input : String) (lhs : TermV0) (op : String) (rem : String) : ParseResult TermV0 :=
 	if I64.beq prec 0
 	then success input lhs
 	else expr_op_rhs_ws (take_while is_space rem) lhs op
 
 @[partial]
-def expr_op_rhs_ws (r : ParseResult String) (lhs : Term) (op : String) : ParseResult Term :=
+def expr_op_rhs_ws (r : ParseResult String) (lhs : TermV0) (op : String) : ParseResult TermV0 :=
 	match r {
 		success rem _ => expr_op_rhs_expr (expression rem) lhs op,
 		fail e => fail e
 	}
 
 @[partial]
-def expr_op_rhs_expr (r : ParseResult Term) (lhs : Term) (op : String) : ParseResult Term :=
+def expr_op_rhs_expr (r : ParseResult TermV0) (lhs : TermV0) (op : String) : ParseResult TermV0 :=
 	match r {
-		success rem rhs => success rem (Term.app (Term.app (Term.var (NameRef.nop (Operator.operator op))) lhs) rhs),
+		success rem rhs => success rem (TermV0.app (TermV0.app (TermV0.var (NameRef.nop (Operator.operator op))) lhs) rhs),
 		fail e => fail e
 	}
 
@@ -1420,26 +1420,26 @@ def struct_field_colon (r : ParseResult String) (name : Identifier) : ParseResul
 	}
 
 @[partial]
-def struct_field_type (r : ParseResult Term) (name : Identifier) : ParseResult StructField :=
+def struct_field_type (r : ParseResult TermV0) (name : Identifier) : ParseResult StructField :=
 	match r {
 		success rem typ => struct_field_default (tag ":=" (skip_spaces rem)) rem name typ,
 		fail e => fail e
 	}
 
 @[partial]
-def struct_field_default (r : ParseResult String) (orig : String) (name : Identifier) (typ : Term) : ParseResult StructField :=
+def struct_field_default (r : ParseResult String) (orig : String) (name : Identifier) (typ : TermV0) : ParseResult StructField :=
 	match r {
 		success rem _ => struct_field_default_val (expression (skip_spaces rem)) name typ,
 		fail _ =>
-			let none : Option Term := Option.none in
+			let none : Option TermV0 := Option.none in
 			success orig (StructField.mk name typ none)
 	}
 
 @[partial]
-def struct_field_default_val (r : ParseResult Term) (name : Identifier) (typ : Term) : ParseResult StructField :=
+def struct_field_default_val (r : ParseResult TermV0) (name : Identifier) (typ : TermV0) : ParseResult StructField :=
 	match r {
 		success rem defval =>
-			let some_val : Option Term := Option.some defval in
+			let some_val : Option TermV0 := Option.some defval in
 			success rem (StructField.mk name typ some_val),
 		fail e => fail e
 	}
@@ -1572,7 +1572,7 @@ def class_method_param_colon (r : ParseResult String) (mname : Identifier) (name
 	}
 
 @[partial]
-def class_method_param_type (r : ParseResult Term) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (orig : String) : ParseResult Decl :=
+def class_method_param_type (r : ParseResult TermV0) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (orig : String) : ParseResult Decl :=
 	match r {
 		success rem _ => class_method_close_or_next rem mname name methods orig,
 		fail e => fail e
@@ -1601,7 +1601,7 @@ def class_method_try_ret_type (r : ParseResult String) (orig : String) (mname : 
 	}
 
 @[partial]
-def class_method_ret_type_val (r : ParseResult Term) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+def class_method_ret_type_val (r : ParseResult TermV0) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
 	match r {
 		success rem typ => class_method_default_or_done rem mname typ name methods,
 		fail e => fail e
@@ -1622,30 +1622,30 @@ def class_method_ret_type (r : ParseResult String) (mname : Identifier) (name : 
 	}
 
 @[partial]
-def class_method_sig_type (r : ParseResult Term) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+def class_method_sig_type (r : ParseResult TermV0) (mname : Identifier) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
 	match r {
 		success rem typ => class_method_default_or_done rem mname typ name methods,
 		fail e => fail e
 	}
 
 @[partial]
-def class_method_default_or_done (input : String) (mname : Identifier) (typ : Term) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+def class_method_default_or_done (input : String) (mname : Identifier) (typ : TermV0) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
 	class_method_try_default (tag ":=" (skip_spaces input)) input mname typ name methods
 
 @[partial]
-def class_method_try_default (r : ParseResult String) (orig : String) (mname : Identifier) (typ : Term) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+def class_method_try_default (r : ParseResult String) (orig : String) (mname : Identifier) (typ : TermV0) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
 	match r {
 		success rem _ => class_method_default_val (expression (skip_spaces rem)) orig mname typ name methods,
 		fail _ =>
-			let none_val : Option Term := Option.none in
+			let none_val : Option TermV0 := Option.none in
 			class_methods orig name (List.cons (ClassDef.mk mname typ none_val) methods)
 	}
 
 @[partial]
-def class_method_default_val (r : ParseResult Term) (orig : String) (mname : Identifier) (typ : Term) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
+def class_method_default_val (r : ParseResult TermV0) (orig : String) (mname : Identifier) (typ : TermV0) (name : Identifier) (methods : List ClassDef) : ParseResult Decl :=
 	match r {
 		success rem defval =>
-			let some_val : Option Term := Option.some defval in
+			let some_val : Option TermV0 := Option.some defval in
 			class_methods rem name (List.cons (ClassDef.mk mname typ some_val) methods),
 		fail e => fail e
 	}
@@ -1685,24 +1685,24 @@ def instance_try_constraints (r : ParseResult String) (orig : String) : ParseRes
 def instance_name (r : ParseResult ModulePath) : ParseResult Decl :=
 	match r {
 		success rem path =>
-			let empty_args : List Term := List.empty in
+			let empty_args : List TermV0 := List.empty in
 			instance_args_or_brace rem path empty_args,
 		fail e => fail e
 	}
 
 @[partial]
-def instance_args_or_brace (input : String) (cls : ModulePath) (args : List Term) : ParseResult Decl :=
+def instance_args_or_brace (input : String) (cls : ModulePath) (args : List TermV0) : ParseResult Decl :=
 	instance_try_arg (atom_term (skip_spaces input)) input cls args
 
 @[partial]
-def instance_try_arg (r : ParseResult Term) (orig : String) (cls : ModulePath) (args : List Term) : ParseResult Decl :=
+def instance_try_arg (r : ParseResult TermV0) (orig : String) (cls : ModulePath) (args : List TermV0) : ParseResult Decl :=
 	match r {
 		success rem arg => instance_args_or_brace rem cls (List.cons arg args),
 		fail _ => instance_brace (tag "{" (skip_spaces orig)) cls args
 	}
 
 @[partial]
-def instance_brace (r : ParseResult String) (cls : ModulePath) (args : List Term) : ParseResult Decl :=
+def instance_brace (r : ParseResult String) (cls : ModulePath) (args : List TermV0) : ParseResult Decl :=
 	match r {
 		success rem _ =>
 			let empty_methods : List Def := List.empty in
@@ -1711,75 +1711,75 @@ def instance_brace (r : ParseResult String) (cls : ModulePath) (args : List Term
 	}
 
 @[partial]
-def instance_methods (input : String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_methods (input : String) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	instance_try_close_or_def (tag "def" (skip_spaces input)) input cls args methods
 
 @[partial]
-def instance_try_close_or_def (r : ParseResult String) (orig : String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_try_close_or_def (r : ParseResult String) (orig : String) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	match r {
 		success rem _ => instance_method_single rem cls args methods,
 		fail _ => instance_close (tag "}" (skip_spaces orig)) cls args methods
 	}
 
 @[partial]
-def instance_method_single (input : String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_method_single (input : String) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	instance_method_name (identifier (skip_spaces input)) cls args methods
 
 @[partial]
-def instance_method_name (r : ParseResult String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_method_name (r : ParseResult String) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	match r {
 		success rem name => instance_method_params_or_body rem (Identifier.id name) cls args methods,
 		fail e => fail e
 	}
 
 @[partial]
-def instance_method_params_or_body (input : String) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_method_params_or_body (input : String) (name : Identifier) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	instance_method_try_body (atom_term (skip_spaces input)) input name cls args methods
 
 @[partial]
-def instance_method_try_body (r : ParseResult Term) (orig : String) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_method_try_body (r : ParseResult TermV0) (orig : String) (name : Identifier) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	match r {
 		success rem arg =>
-			let start_args : List Term := List.cons arg List.empty in
+			let start_args : List TermV0 := List.cons arg List.empty in
 			instance_method_body_loop rem start_args name cls args methods,
 		fail _ => instance_method_finish (tag ":=" (skip_spaces orig)) name cls args methods
 	}
 
 @[partial]
-def instance_method_body_loop (input : String) (body_args : List Term) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_method_body_loop (input : String) (body_args : List TermV0) (name : Identifier) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	instance_method_body_next (atom_term (skip_spaces input)) input body_args name cls args methods
 
 @[partial]
-def instance_method_body_next (r : ParseResult Term) (orig : String) (body_args : List Term) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_method_body_next (r : ParseResult TermV0) (orig : String) (body_args : List TermV0) (name : Identifier) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	match r {
 		success rem arg => instance_method_body_loop rem (List.cons arg body_args) name cls args methods,
 		fail _ => instance_method_finish (tag ":=" (skip_spaces orig)) name cls args methods
 	}
 
 @[partial]
-def instance_method_finish (r : ParseResult String) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_method_finish (r : ParseResult String) (name : Identifier) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	match r {
 		success rem _ => instance_method_body (expression (skip_spaces rem)) name cls args methods,
 		fail _ => fail (ParseError.custom "expected := in instance method")
 	}
 
 @[partial]
-def instance_method_body (r : ParseResult Term) (name : Identifier) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_method_body (r : ParseResult TermV0) (name : Identifier) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	match r {
 		success rem body =>
 			let empty_constraints : List TypeConstraint := List.empty in
 			let empty_attrs : List String := List.empty in
-			let d : Def := Def.mk (ModulePath.mp (List.cons name List.empty)) (Term.hole) body empty_constraints empty_attrs in
+			let d : Def := Def.mk (ModulePath.mp (List.cons name List.empty)) (TermV0.hole) body empty_constraints empty_attrs in
 			instance_methods rem cls args (List.cons d methods),
 		fail e => fail e
 	}
 
 @[partial]
-def instance_close (r : ParseResult String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
+def instance_close (r : ParseResult String) (cls : ModulePath) (args : List TermV0) (methods : List Def) : ParseResult Decl :=
 	match r {
 		success rem _ =>
 			let rev_methods : List Def := list_reverse methods in
-			let rev_args : List Term := list_reverse args in
+			let rev_args : List TermV0 := list_reverse args in
 			let empty_constraints : List TypeConstraint := List.empty in
 			success rem (Decl.instance_d (Instance.mk (Identifier.id "_") cls empty_constraints rev_args)),
 		fail e => fail e
@@ -1889,7 +1889,7 @@ def type_cons_paren_or_nil (r : ParseResult String) (orig : String) (name : Iden
 		success rem _ => type_cons_params (type_param_list rem) name,
 		fail _ =>
 			let empty_params : List Param := List.empty in
-			success orig (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.hole))
+			success orig (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) empty_params (TermV0.hole))
 	}
 
 @[partial]
@@ -1902,7 +1902,7 @@ def type_cons_params (r : ParseResult (List Param)) (name : Identifier) : ParseR
 @[partial]
 def type_cons_close_paren (r : ParseResult String) (name : Identifier) (params : List Param) : ParseResult InductConstructor :=
 	match r {
-		success rem _ => success rem (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) params (Term.hole)),
+		success rem _ => success rem (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) params (TermV0.hole)),
 		fail e => fail e
 	}
 
@@ -1929,7 +1929,7 @@ def type_one_param_type (r : ParseResult String) (name : Identifier) : ParseResu
 	}
 
 @[partial]
-def type_one_param_val (r : ParseResult Term) (name : Identifier) : ParseResult Param :=
+def type_one_param_val (r : ParseResult TermV0) (name : Identifier) : ParseResult Param :=
 	match r {
 		success rem typ => success rem (param_many name typ),
 		fail e => fail e
@@ -1970,7 +1970,7 @@ def type_param_rest_more (r : ParseResult Param) (params : List Param) : ParseRe
 def type_to_decl (name : Identifier) (cons : List InductConstructor) : Decl :=
 	let empty_params : List Param := List.empty in
 	let empty_attrs : List String := List.empty in
-	Decl.inductive_d (Inductive.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.type_ 1) cons empty_attrs)
+	Decl.inductive_d (Inductive.mk (ModulePath.mp (List.cons name List.empty)) empty_params (TermV0.type_ 1) cons empty_attrs)
 
 @[partial]
 def def_parser (input : String) : ParseResult Decl :=
@@ -2044,14 +2044,14 @@ def def_implicit_colon (r : ParseResult String) (brace_rem : String) (rem : Stri
 	}
 
 @[partial]
-def def_implicit_type (r : ParseResult Term) (brace_rem : String) (rem : String) (name : String) (params : List Param) : ParseResult (List Param) :=
+def def_implicit_type (r : ParseResult TermV0) (brace_rem : String) (rem : String) (name : String) (params : List Param) : ParseResult (List Param) :=
 	match r {
 		success rem2 typ => def_implicit_close (tag "}" rem2) brace_rem name typ params,
 		fail e => fail e
 	}
 
 @[partial]
-def def_implicit_close (r : ParseResult String) (brace_rem : String) (name : String) (typ : Term) (params : List Param) : ParseResult (List Param) :=
+def def_implicit_close (r : ParseResult String) (brace_rem : String) (name : String) (typ : TermV0) (params : List Param) : ParseResult (List Param) :=
 	match r {
 		success rem2 _ =>
 			let empty : List Param := List.empty in
@@ -2083,14 +2083,14 @@ def def_explicit_colon (r : ParseResult String) (close_rem : String) (name : Str
 	}
 
 @[partial]
-def def_explicit_type (r : ParseResult Term) (close_rem : String) (name : String) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_type (r : ParseResult TermV0) (close_rem : String) (name : String) (params : List Param) : ParseResult (List Param) :=
 	match r {
 		success rem typ => def_explicit_close (tag ")" rem) close_rem name typ params,
 		fail e => fail e
 	}
 
 @[partial]
-def def_explicit_close (r : ParseResult String) (close_rem : String) (name : String) (typ : Term) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_close (r : ParseResult String) (close_rem : String) (name : String) (typ : TermV0) (params : List Param) : ParseResult (List Param) :=
 	match r {
 		success rem _ => def_params_loop (skip_spaces rem) (List.cons (param_many (Identifier.id name) typ) params),
 		fail e => fail e
@@ -2111,65 +2111,65 @@ def def_ret_type (r : ParseResult String) (orig : String) (name : Identifier) (p
 	}
 
 @[partial]
-def def_ret_expr (r : ParseResult Term) (name : Identifier) (params : List Param) : ParseResult Decl :=
+def def_ret_expr (r : ParseResult TermV0) (name : Identifier) (params : List Param) : ParseResult Decl :=
 	match r {
 		success rem typ => def_body rem name params typ,
 		fail e => fail e
 	}
 
 @[partial]
-def def_body (input : String) (name : Identifier) (params : List Param) (typ : Term) : ParseResult Decl :=
+def def_body (input : String) (name : Identifier) (params : List Param) (typ : TermV0) : ParseResult Decl :=
 	def_body_assign (tag ":=" (skip_spaces input)) name params typ input
 
 @[partial]
-def def_body_assign (r : ParseResult String) (name : Identifier) (params : List Param) (typ : Term) (orig : String) : ParseResult Decl :=
+def def_body_assign (r : ParseResult String) (name : Identifier) (params : List Param) (typ : TermV0) (orig : String) : ParseResult Decl :=
 	match r {
 		success rem _ => def_body_expr (expression (skip_spaces rem)) name params typ,
 		fail _ => def_body_block_or_none (tag "{" (skip_spaces orig)) name params typ orig
 	}
 
 @[partial]
-def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params : List Param) (typ : Term) (orig : String) : ParseResult Decl :=
+def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params : List Param) (typ : TermV0) (orig : String) : ParseResult Decl :=
 	match r {
 		success rem _ => def_body_do (do_stmts rem) name params typ,
-		fail _ => success orig (def_to_decl (lam_params params (Term.hole)) name typ)
+		fail _ => success orig (def_to_decl (lam_params params (TermV0.hole)) name typ)
 	}
 
 @[partial]
-def def_body_expr (r : ParseResult Term) (name : Identifier) (params : List Param) (typ : Term) : ParseResult Decl :=
+def def_body_expr (r : ParseResult TermV0) (name : Identifier) (params : List Param) (typ : TermV0) : ParseResult Decl :=
 	match r {
 		success rem body => success rem (def_to_decl (lam_params params body) name typ),
 		fail e => fail e
 	}
 
 @[partial]
-def def_body_block (r : ParseResult String) (name : Identifier) (params : List Param) (typ : Term) : ParseResult Decl :=
+def def_body_block (r : ParseResult String) (name : Identifier) (params : List Param) (typ : TermV0) : ParseResult Decl :=
 	match r {
 		success rem _ => def_body_do (do_stmts rem) name params typ,
 		fail e => fail e
 	}
 
 @[partial]
-def def_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params : List Param) (typ : Term) : ParseResult Decl :=
+def def_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params : List Param) (typ : TermV0) : ParseResult Decl :=
 	match r {
 		success rem stmts => success rem (def_to_decl (lam_params params (desugar_do stmts)) name typ),
 		fail e => fail e
 	}
 
 @[partial]
-def lam_params (params : List Param) (body : Term) : Term :=
+def lam_params (params : List Param) (body : TermV0) : TermV0 :=
 	let rev : List Param := list_reverse params in
 	lam_params_loop rev body
 
 @[partial]
-def lam_params_loop (params : List Param) (body : Term) : Term :=
+def lam_params_loop (params : List Param) (body : TermV0) : TermV0 :=
 	match params {
-		List.cons p rest => lam_params_loop rest (Term.lam p body),
+		List.cons p rest => lam_params_loop rest (TermV0.lam p body),
 		List.empty => body
 	}
 
 @[partial]
-def def_to_decl (body : Term) (name : Identifier) (typ : Term) : Decl :=
+def def_to_decl (body : TermV0) (name : Identifier) (typ : TermV0) : Decl :=
 	let empty_constraints : List TypeConstraint := List.empty in
 	let empty_attrs : List String := List.empty in
 	Decl.def_d (Def.mk (ModulePath.mp (List.cons name List.empty)) typ body empty_constraints empty_attrs)
@@ -2847,8 +2847,8 @@ def test_def_implicit_params : Bool :=
 		fail _ => false
 	}
 
-// ─── Term2 (de Bruijn) parser functions (Phase 1) ────────────────────────
-// Staged coexistence: these produce Term2 alongside existing Term parsers.
+// ─── Term (de Bruijn) parser functions (Phase 1) ────────────────────────
+// Staged coexistence: these produce Term alongside existing TermV0 parsers.
 // ctx: binding context (List Identifier), head = most recent = index 0.
 
 // Sentinel for unresolved de Bruijn indices.
@@ -2876,257 +2876,257 @@ def t2_debug_name_of_id (id: Identifier) : DebugName :=
     DebugName.named id
 
 @[partial]
-def t2_var_term (ctx: List Identifier) (s: String) : Term2 :=
+def t2_var_term (ctx: List Identifier) (s: String) : Term :=
     let sid : Identifier := Identifier.id s in
     match t2_find_index sid ctx 0 {
-        Option.some idx => Term2.var idx (DebugName.named sid),
-        Option.none => Term2.var t2_sentinel (DebugName.named sid)
+        Option.some idx => Term.var idx (DebugName.named sid),
+        Option.none => Term.var t2_sentinel (DebugName.named sid)
     }
 
 @[partial]
-def t2_variable (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_variable (ctx: List Identifier) (input: String) : ParseResult Term :=
     t2_variable_try_path (path_variable input) ctx input
 
 @[partial]
-def t2_variable_try_path (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_variable_try_path (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
         success rem out =>
             // Dotted path → sentinel index (resolved later by module resolver)
-            success rem (Term2.var t2_sentinel DebugName.unnamed),
+            success rem (Term.var t2_sentinel DebugName.unnamed),
         fail _ => t2_variable_got (identifier input) ctx
     }
 
 @[partial]
-def t2_variable_got (r: ParseResult String) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_variable_got (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem out => success rem (t2_var_term ctx out),
         fail e => fail e
     }
 
-// ─── Term2 atom ──────────────────────────────────────────────────────────
+// ─── Term atom ──────────────────────────────────────────────────────────
 
 @[partial]
-def t2_atom_term (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_atom_term (ctx: List Identifier) (input: String) : ParseResult Term :=
     t2_atom_try_var (t2_variable ctx input) ctx input
 
 @[partial]
-def t2_atom_try_var (r: ParseResult Term2) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_atom_try_var (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
         success rem out => success rem out,
         fail _ => t2_atom_try_lit (literal_term input) ctx input
     }
 
 @[partial]
-def t2_atom_try_lit (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_atom_try_lit (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
         success rem out => t2_atom_lift_lit out rem,
         fail _ => t2_atom_try_match (match_parser input) ctx input
     }
 
 @[partial]
-def t2_atom_lift_lit (t: Term) (rem: String) : ParseResult Term2 :=
+def t2_atom_lift_lit (t: TermV0) (rem: String) : ParseResult Term :=
     match t {
-        Term.lit val => success rem (Term2.lit val),
-        Term.var name => match name {
-            NameRef.nid id => success rem (Term2.var t2_sentinel (DebugName.named id)),
-            NameRef.nmp mp => success rem (Term2.var t2_sentinel DebugName.unnamed),
-            NameRef.nop op => success rem (Term2.var t2_sentinel DebugName.unnamed)
+        TermV0.lit val => success rem (Term.lit val),
+        TermV0.var name => match name {
+            NameRef.nid id => success rem (Term.var t2_sentinel (DebugName.named id)),
+            NameRef.nmp mp => success rem (Term.var t2_sentinel DebugName.unnamed),
+            NameRef.nop op => success rem (Term.var t2_sentinel DebugName.unnamed)
         },
-        Term.app f a => success rem (Term2.var t2_sentinel DebugName.unnamed),
-        Term.lam p b => success rem (Term2.var t2_sentinel DebugName.unnamed),
-        Term.pi a r => success rem (Term2.var t2_sentinel DebugName.unnamed),
-        Term.forall n t b => success rem (Term2.var t2_sentinel DebugName.unnamed),
-        Term.con c => success rem (Term2.var t2_sentinel DebugName.unnamed),
-        Term.ntv n => success rem (Term2.var t2_sentinel DebugName.unnamed),
-        Term.type_ u => success rem (Term2.type_ u),
-        Term.hole => success rem Term2.hole
+        TermV0.app f a => success rem (Term.var t2_sentinel DebugName.unnamed),
+        TermV0.lam p b => success rem (Term.var t2_sentinel DebugName.unnamed),
+        TermV0.pi a r => success rem (Term.var t2_sentinel DebugName.unnamed),
+        TermV0.forall n t b => success rem (Term.var t2_sentinel DebugName.unnamed),
+        TermV0.con c => success rem (Term.var t2_sentinel DebugName.unnamed),
+        TermV0.ntv n => success rem (Term.var t2_sentinel DebugName.unnamed),
+        TermV0.type_ u => success rem (Term.type_ u),
+        TermV0.hole => success rem Term.hole
     }
 
 @[partial]
-def t2_atom_try_match (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_atom_try_match (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
         success rem out => t2_atom_lift_lit out rem,
         fail _ => t2_atom_try_if (if_parser input) ctx input
     }
 
 @[partial]
-def t2_atom_try_if (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_atom_try_if (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
         success rem out => t2_atom_lift_lit out rem,
         fail _ => t2_atom_try_lambda (t2_lambda_parser ctx input) ctx input
     }
 
 @[partial]
-def t2_atom_try_lambda (r: ParseResult Term2) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_atom_try_lambda (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
         success rem out => success rem out,
         fail _ => t2_atom_try_paren (tag "(" input) ctx input
     }
 
 @[partial]
-def t2_atom_try_paren (r: ParseResult String) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_atom_try_paren (r: ParseResult String) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
         success rem _ => t2_atom_inner_expr (t2_expression ctx rem) ctx,
         fail e => fail e
     }
 
 @[partial]
-def t2_atom_inner_expr (r: ParseResult Term2) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_atom_inner_expr (r: ParseResult Term) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem out => t2_atom_close_paren (tag ")" rem) out,
         fail e => fail e
     }
 
 @[partial]
-def t2_atom_close_paren (r: ParseResult String) (out: Term2) : ParseResult Term2 :=
+def t2_atom_close_paren (r: ParseResult String) (out: Term) : ParseResult Term :=
     match r {
         success rem _ => success rem out,
         fail e => fail e
     }
 
-// ─── Term2 lambda ────────────────────────────────────────────────────────
+// ─── Term lambda ────────────────────────────────────────────────────────
 
 @[partial]
-def t2_lambda_parser (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_lambda_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
     t2_lambda_kw (alt (alt (tag "fn") (tag "ꟛ")) (tag "\\") input) ctx
 
 @[partial]
-def t2_lambda_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_lambda_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem _ => t2_lambda_name_outer (skip_spaces rem) ctx,
         fail e => fail e
     }
 
 @[partial]
-def t2_lambda_name_outer (input: String) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_lambda_name_outer (input: String) (ctx: List Identifier) : ParseResult Term :=
     t2_lambda_name_outer_got (identifier input) input ctx
 
 @[partial]
-def t2_lambda_name_outer_got (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_lambda_name_outer_got (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem name => t2_lambda_arrow (tag "=>" (skip_spaces rem)) rem orig (Identifier.id name) ctx,
         fail e => fail e
     }
 
 @[partial]
-def t2_lambda_arrow (r: ParseResult String) (rem: String) (orig: String) (name: Identifier) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_lambda_arrow (r: ParseResult String) (rem: String) (orig: String) (name: Identifier) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem2 _ => t2_lambda_body (t2_expression (List.cons name ctx) (skip_spaces rem2)) name,
         fail e => fail e
     }
 
 @[partial]
-def t2_lambda_body (r: ParseResult Term2) (name: Identifier) : ParseResult Term2 :=
+def t2_lambda_body (r: ParseResult Term) (name: Identifier) : ParseResult Term :=
     match r {
-        success rem body => success rem (Term2.lam (DebugName.named name) (Term2.type_ 1) body),
+        success rem body => success rem (Term.lam (DebugName.named name) (Term.type_ 1) body),
         fail e => fail e
     }
 
-// ─── Term2 expression (application + operators) ─────────────────────────
+// ─── Term expression (application + operators) ─────────────────────────
 
 @[partial]
-def t2_expression (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+def t2_expression (ctx: List Identifier) (input: String) : ParseResult Term :=
     t2_expr_first (t2_atom_term ctx (skip_spaces input)) ctx
 
 @[partial]
-def t2_expr_first (r: ParseResult Term2) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_first (r: ParseResult Term) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem lhs => t2_expr_rest rem lhs ctx,
         fail e => fail e
     }
 
 @[partial]
-def t2_expr_rest (input: String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_rest (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
     t2_expr_rest_ws (take_while is_space input) lhs ctx
 
 @[partial]
-def t2_expr_rest_ws (r: ParseResult String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_rest_ws (r: ParseResult String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem _ => t2_expr_rest_next (t2_atom_term ctx rem) rem lhs ctx,
         fail e => fail e
     }
 
 @[partial]
-def t2_expr_rest_next (r: ParseResult Term2) (input: String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_rest_next (r: ParseResult Term) (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
     match r {
-        success rem rhs => t2_expr_rest rem (Term2.app lhs rhs) ctx,
+        success rem rhs => t2_expr_rest rem (Term.app lhs rhs) ctx,
         fail _ => t2_expr_op input lhs ctx
     }
 
 @[partial]
-def t2_expr_op (input: String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_op (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
     t2_expr_op_try (operator_parse input) input lhs ctx
 
 @[partial]
-def t2_expr_op_try (r: ParseResult String) (input: String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_op_try (r: ParseResult String) (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem op => t2_expr_op_prec input lhs op rem ctx,
         fail _ => success input lhs
     }
 
 @[partial]
-def t2_expr_op_prec (input: String) (lhs: Term2) (op: String) (rem: String) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_op_prec (input: String) (lhs: Term) (op: String) (rem: String) (ctx: List Identifier) : ParseResult Term :=
     t2_expr_op_prec_val (op_precedence op) input lhs op rem ctx
 
 @[partial]
-def t2_expr_op_prec_val (prec: I64) (input: String) (lhs: Term2) (op: String) (rem: String) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_op_prec_val (prec: I64) (input: String) (lhs: Term) (op: String) (rem: String) (ctx: List Identifier) : ParseResult Term :=
     if I64.beq prec 0
     then success input lhs
     else t2_expr_op_rhs_ws (take_while is_space rem) lhs op ctx
 
 @[partial]
-def t2_expr_op_rhs_ws (r: ParseResult String) (lhs: Term2) (op: String) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_op_rhs_ws (r: ParseResult String) (lhs: Term) (op: String) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem _ => t2_expr_op_rhs_expr (t2_expression ctx rem) lhs op ctx,
         fail e => fail e
     }
 
 @[partial]
-def t2_expr_op_rhs_expr (r: ParseResult Term2) (lhs: Term2) (op: String) (ctx: List Identifier) : ParseResult Term2 :=
+def t2_expr_op_rhs_expr (r: ParseResult Term) (lhs: Term) (op: String) (ctx: List Identifier) : ParseResult Term :=
     match r {
         success rem rhs =>
             // Operator desugars to: op lhs rhs → app (app (var SENTINEL op) lhs) rhs
-            let op_var : Term2 := Term2.var t2_sentinel DebugName.unnamed in
-            success rem (Term2.app (Term2.app op_var lhs) rhs),
+            let op_var : Term := Term.var t2_sentinel DebugName.unnamed in
+            success rem (Term.app (Term.app op_var lhs) rhs),
         fail e => fail e
     }
 
-// ─── Term2 parser tests (Phase 1) ───────────────────────────────────────
+// ─── Term parser tests (Phase 1) ───────────────────────────────────────
 
 @[test]
-def test_t2_var_bound : Bool :=
+def test_t_var_bound : Bool :=
 	let ctx : List Identifier := List.cons (Identifier.id "x") List.empty in
 	match t2_expression ctx "x" {
 		success rem out =>
 			match out {
-				Term2.var idx dbg =>
+				Term.var idx dbg =>
 					I64.beq idx 0 && String.beq rem "",
-				Term2.lam _ _ _ => false, Term2.forall _ _ _ => false,
-				Term2.pi _ _ => false, Term2.app _ _ => false,
-				Term2.lit _ => false, Term2.ntv _ => false,
-				Term2.con _ => false, Term2.type_ _ => false, Term2.hole => false
+				Term.lam _ _ _ => false, Term.forall _ _ _ => false,
+				Term.pi _ _ => false, Term.app _ _ => false,
+				Term.lit _ => false, Term.ntv _ => false,
+				Term.con _ => false, Term.type_ _ => false, Term.hole => false
 			},
 		fail _ => false
 	}
 
 @[test]
-def test_t2_var_unbound : Bool :=
+def test_t_var_unbound : Bool :=
 	let empty_ctx : List Identifier := List.empty in
 	match t2_expression empty_ctx "y" {
 		success rem out =>
 			match out {
-				Term2.var idx dbg =>
+				Term.var idx dbg =>
 					I64.beq idx t2_sentinel && String.beq rem "",
-				Term2.lam _ _ _ => false, Term2.forall _ _ _ => false,
-				Term2.pi _ _ => false, Term2.app _ _ => false,
-				Term2.lit _ => false, Term2.ntv _ => false,
-				Term2.con _ => false, Term2.type_ _ => false, Term2.hole => false
+				Term.lam _ _ _ => false, Term.forall _ _ _ => false,
+				Term.pi _ _ => false, Term.app _ _ => false,
+				Term.lit _ => false, Term.ntv _ => false,
+				Term.con _ => false, Term.type_ _ => false, Term.hole => false
 			},
 		fail _ => false
 	}
 
 @[test]
-def test_t2_var_shadow : Bool :=
+def test_t_var_shadow : Bool :=
 	// In ctx [x, y, x] (outer x first), the inner x should be index 0
 	let x : Identifier := Identifier.id "x" in
 	let y : Identifier := Identifier.id "y" in
@@ -3134,42 +3134,42 @@ def test_t2_var_shadow : Bool :=
 	match t2_expression ctx "x" {
 		success rem out =>
 			match out {
-				Term2.var idx dbg =>
+				Term.var idx dbg =>
 					I64.beq idx 1 && String.beq rem "",
-				Term2.lam _ _ _ => false, Term2.forall _ _ _ => false,
-				Term2.pi _ _ => false, Term2.app _ _ => false,
-				Term2.lit _ => false, Term2.ntv _ => false,
-				Term2.con _ => false, Term2.type_ _ => false, Term2.hole => false
+				Term.lam _ _ _ => false, Term.forall _ _ _ => false,
+				Term.pi _ _ => false, Term.app _ _ => false,
+				Term.lit _ => false, Term.ntv _ => false,
+				Term.con _ => false, Term.type_ _ => false, Term.hole => false
 			},
 		fail _ => false
 	}
 
 @[test]
-def test_t2_lambda_identity : Bool :=
+def test_t_lambda_identity : Bool :=
 	// fn x => x  →  lam (named "x") (type_ 1) (var 0 (named "x"))
 	let empty_ctx : List Identifier := List.empty in
 	match t2_expression empty_ctx "fn x => x" {
 		success rem out =>
 			match out {
-				Term2.lam dbg typ body =>
+				Term.lam dbg typ body =>
 					match typ {
-						Term2.type_ u => I64.beq u 1 && String.beq rem "",
-						Term2.var _ _ => false, Term2.lam _ _ _ => false,
-						Term2.forall _ _ _ => false, Term2.pi _ _ => false,
-						Term2.app _ _ => false, Term2.lit _ => false,
-						Term2.ntv _ => false, Term2.con _ => false,
-						Term2.hole => false
+						Term.type_ u => I64.beq u 1 && String.beq rem "",
+						Term.var _ _ => false, Term.lam _ _ _ => false,
+						Term.forall _ _ _ => false, Term.pi _ _ => false,
+						Term.app _ _ => false, Term.lit _ => false,
+						Term.ntv _ => false, Term.con _ => false,
+						Term.hole => false
 					},
-				Term2.var _ _ => false, Term2.forall _ _ _ => false,
-				Term2.pi _ _ => false, Term2.app _ _ => false,
-				Term2.lit _ => false, Term2.ntv _ => false,
-				Term2.con _ => false, Term2.type_ _ => false, Term2.hole => false
+				Term.var _ _ => false, Term.forall _ _ _ => false,
+				Term.pi _ _ => false, Term.app _ _ => false,
+				Term.lit _ => false, Term.ntv _ => false,
+				Term.con _ => false, Term.type_ _ => false, Term.hole => false
 			},
 		fail _ => false
 	}
 
 @[test]
-def test_t2_lambda_nested : Bool :=
+def test_t_lambda_nested : Bool :=
 	// fn x => fn y => y  →  lam/named/x (lam/named/y (var 0))
 	let empty_ctx : List Identifier := List.empty in
 	match t2_expression empty_ctx "fn x => fn y => y" {
@@ -3178,7 +3178,7 @@ def test_t2_lambda_nested : Bool :=
 	}
 
 @[test]
-def test_t2_app_simple : Bool :=
+def test_t_app_simple : Bool :=
 	// f x  →  app (var SENTINEL f) (var SENTINEL x)
 	let empty_ctx : List Identifier := List.empty in
 	match t2_expression empty_ctx "f x" {
@@ -3187,7 +3187,7 @@ def test_t2_app_simple : Bool :=
 	}
 
 @[test]
-def test_t2_app_chain : Bool :=
+def test_t_app_chain : Bool :=
 	// f x y  →  app (app (var SENTINEL f) (var SENTINEL x)) (var SENTINEL y)
 	let empty_ctx : List Identifier := List.empty in
 	match t2_expression empty_ctx "f x y" {
@@ -3196,7 +3196,7 @@ def test_t2_app_chain : Bool :=
 	}
 
 @[test]
-def test_t2_operator : Bool :=
+def test_t_operator : Bool :=
 	// a ++ b  →  app (app (var SENTINEL _) (var SENTINEL a)) (var SENTINEL b)
 	let empty_ctx : List Identifier := List.empty in
 	match t2_expression empty_ctx "a ++ b" {
@@ -3205,7 +3205,7 @@ def test_t2_operator : Bool :=
 	}
 
 @[test]
-def test_t2_parens : Bool :=
+def test_t_parens : Bool :=
 	// (x)  →  var (SENTINEL, x)
 	let empty_ctx : List Identifier := List.empty in
 	match t2_expression empty_ctx "(x)" {
@@ -3214,7 +3214,7 @@ def test_t2_parens : Bool :=
 	}
 
 @[test]
-def test_t2_literal_num : Bool :=
+def test_t_literal_num : Bool :=
 	// 42  →  lit (num 42 i64)
 	let empty_ctx : List Identifier := List.empty in
 	match t2_expression empty_ctx "42" {

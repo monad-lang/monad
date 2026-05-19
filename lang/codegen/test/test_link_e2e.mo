@@ -7,7 +7,7 @@ use lang.codegen.emit
 
 open LLVMType
 open LLVMValue
-open Term
+open TermV0
 open Literal
 open Identifier
 open NameRef
@@ -23,10 +23,10 @@ def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
 /// Build a minimal program: def main : I64 := 42
 def build_main42 : List Def :=
     let id := Identifier.id "main" in
-    let body := Term.lit (Literal.num 42 NumSuffix.i64) in
+    let body := TermV0.lit (Literal.num 42 NumSuffix.i64) in
     let def_ := Def.mk
         (ModulePath.mp (List.cons id List.empty))
-        (Term.type_ 1)
+        (TermV0.type_ 1)
         body
         List.empty
         List.empty in

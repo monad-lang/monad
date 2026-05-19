@@ -41,21 +41,21 @@ struct LocatedSpan {
 }
 
 type Param {
-    mk (name: Identifier) (type_: Term) (mult: Multiplicity) (default: Option Term)
+    mk (name: Identifier) (type_: TermV0) (mult: Multiplicity) (default: Option TermV0)
 }
 
 /// Create a Param with multiplicity=Many and no default value.
-def param_many (name: Identifier) (type_: Term) : Param :=
-    let none : Option Term := Option.none in
+def param_many (name: Identifier) (type_: TermV0) : Param :=
+    let none : Option TermV0 := Option.none in
     Param.mk name type_ Multiplicity.many none
 
 /// Create a Param with explicit multiplicity and no default value.
-def mk_param (name: Identifier) (type_: Term) (mult: Multiplicity) : Param :=
-    let none : Option Term := Option.none in
+def mk_param (name: Identifier) (type_: TermV0) (mult: Multiplicity) : Param :=
+    let none : Option TermV0 := Option.none in
     Param.mk name type_ mult none
 
 type MatchCase {
-    mc (name: Identifier) (args: List Identifier) (value: Term)
+    mc (name: Identifier) (args: List Identifier) (value: TermV0)
 }
 
 type NumSuffix {
@@ -65,24 +65,24 @@ type NumSuffix {
 type Literal {
     str (value: String),
     num (value: I64) (suffix: NumSuffix),
-    if_ (one: Term) (two: Term) (three: Term),
-    match_ (value: Term) (cases: List MatchCase),
+    if_ (one: TermV0) (two: TermV0) (three: TermV0),
+    match_ (value: TermV0) (cases: List MatchCase),
 }
 
 type Con {
-    mk (name: Identifier) (typ_name: ModulePath) (num_args: I64) (args: List (Option Term))
+    mk (name: Identifier) (typ_name: ModulePath) (num_args: I64) (args: List (Option TermV0))
 }
 
 type Native {
-    mk (native_name: Identifier) (num_args: I64) (args: List (Option Term))
+    mk (native_name: Identifier) (num_args: I64) (args: List (Option TermV0))
 }
 
-type Term {
-    forall (name: Identifier) (typ: Term) (body: Term),
-    pi (arg: Term) (ret: Term),
+type TermV0 {
+    forall (name: Identifier) (typ: TermV0) (body: TermV0),
+    pi (arg: TermV0) (ret: TermV0),
     var (name: NameRef),
-    lam (param: Param) (body: Term),
-    app (fun: Term) (arg: Term),
+    lam (param: Param) (body: TermV0),
+    app (fun: TermV0) (arg: TermV0),
     lit (value: Literal),
     ntv (native: Native),
     con (c: Con),
@@ -100,18 +100,18 @@ type DebugName {
     unnamed,
 }
 
-// De Bruijn Term IR — staged alongside existing named Term.
-// Phase 0: coexistence. Phase 4: replaces Term entirely.
+// De Bruijn TermV0 IR — staged alongside existing named TermV0.
+// Phase 0: coexistence. Phase 4: replaces TermV0 entirely.
 //
 // De Bruijn convention: index 0 = most recently bound variable.
 // Free variables use sentinel index (I64.max) and are resolved
 // by the type checker or module resolver.
-type Term2 {
+type Term {
     var (idx: I64) (dbg: DebugName),
-    lam (dbg: DebugName) (typ: Term2) (body: Term2),
-    forall (dbg: DebugName) (kind: Term2) (body: Term2),
-    pi (arg: Term2) (ret: Term2),
-    app (fun: Term2) (arg: Term2),
+    lam (dbg: DebugName) (typ: Term) (body: Term),
+    forall (dbg: DebugName) (kind: Term) (body: Term),
+    pi (arg: Term) (ret: Term),
+    app (fun: Term) (arg: Term),
     lit (value: Literal),
     ntv (native: Native),
     con (c: Con),
@@ -120,20 +120,20 @@ type Term2 {
 }
 
 type TypeError {
-    mismatch (expected: Term) (actual: Term),
+    mismatch (expected: TermV0) (actual: TermV0),
     unknown_var (name: NameRef),
     unknown_type (name: NameRef),
     unknown_constructor (name: NameRef),
-    not_a_function (term: Term),
-    not_a_type (term: Term),
-    infinite_type (term: Term),
+    not_a_function (term: TermV0),
+    not_a_type (term: TermV0),
+    infinite_type (term: TermV0),
     custom (msg: String),
 }
 
 type EvalError {
     undefined_var (name: NameRef),
-    not_a_function (term: Term),
-    match_failure (term: Term),
+    not_a_function (term: TermV0),
+    match_failure (term: TermV0),
     custom (msg: String),
 }
 
@@ -142,19 +142,19 @@ type TypeConstraint {
 }
 
 type Def {
-    mk (name: ModulePath) (typ: Term) (term: Term) (constraints: List TypeConstraint) (attrs: List String)
+    mk (name: ModulePath) (typ: TermV0) (term: TermV0) (constraints: List TypeConstraint) (attrs: List String)
 }
 
 type InductConstructor {
-    mk (name: ModulePath) (params: List Param) (typ: Term)
+    mk (name: ModulePath) (params: List Param) (typ: TermV0)
 }
 
 type Inductive {
-    mk (name: ModulePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List String)
+    mk (name: ModulePath) (params: List Param) (typ: TermV0) (constructors: List InductConstructor) (attrs: List String)
 }
 
 type ClassDef {
-    mk (name: Identifier) (typ: Term) (default: Option Term)
+    mk (name: Identifier) (typ: TermV0) (default: Option TermV0)
 }
 
 type Class {
@@ -162,7 +162,7 @@ type Class {
 }
 
 type StructField {
-    mk (name: Identifier) (typ: Term) (default: Option Term)
+    mk (name: Identifier) (typ: TermV0) (default: Option TermV0)
 }
 
 type Struct {
@@ -181,35 +181,35 @@ type Decl {
 }
 
 type Instance {
-    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term)
+    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List TermV0)
 }
 
 // --- Do-notation desugaring ---
 
 type DoStmt {
-    bind_s (name: Identifier) (expr: Term),
-    let_s (name: Identifier) (expr: Term),
-    ret_s (expr: Term),
-    expr_s (expr: Term),
+    bind_s (name: Identifier) (expr: TermV0),
+    let_s (name: Identifier) (expr: TermV0),
+    ret_s (expr: TermV0),
+    expr_s (expr: TermV0),
 }
 
-def monad_bind_term : Term :=
-    Term.var (NameRef.nmp (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))))
+def monad_bind_term : TermV0 :=
+    TermV0.var (NameRef.nmp (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))))
 
-def monad_pure_term : Term :=
-    Term.var (NameRef.nmp (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "pure") List.empty))))
+def monad_pure_term : TermV0 :=
+    TermV0.var (NameRef.nmp (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "pure") List.empty))))
 
-def desugar_do (stmts : List DoStmt) : Term :=
-    desugar_do_inner (list_reverse stmts) (Term.app monad_pure_term (Term.hole))
+def desugar_do (stmts : List DoStmt) : TermV0 :=
+    desugar_do_inner (list_reverse stmts) (TermV0.app monad_pure_term (TermV0.hole))
 
-def desugar_do_inner (stmts : List DoStmt) (rest : Term) : Term :=
+def desugar_do_inner (stmts : List DoStmt) (rest : TermV0) : TermV0 :=
     match stmts {
         List.cons s ss =>
             match s {
-                bind_s name expr => Term.app (Term.app monad_bind_term expr) (Term.lam (param_many name (Term.hole)) (desugar_do_inner ss rest)),
-                let_s name expr => Term.app (Term.lam (param_many name (Term.hole)) (desugar_do_inner ss rest)) expr,
-                ret_s expr => Term.app monad_pure_term expr,
-                expr_s expr => Term.app (Term.app monad_bind_term expr) (Term.lam (param_many (Identifier.id "_") (Term.hole)) (desugar_do_inner ss rest))
+                bind_s name expr => TermV0.app (TermV0.app monad_bind_term expr) (TermV0.lam (param_many name (TermV0.hole)) (desugar_do_inner ss rest)),
+                let_s name expr => TermV0.app (TermV0.lam (param_many name (TermV0.hole)) (desugar_do_inner ss rest)) expr,
+                ret_s expr => TermV0.app monad_pure_term expr,
+                expr_s expr => TermV0.app (TermV0.app monad_bind_term expr) (TermV0.lam (param_many (Identifier.id "_") (TermV0.hole)) (desugar_do_inner ss rest))
             },
         List.empty => rest
     }
@@ -284,7 +284,7 @@ def param_list_similar (a : List Param) (b : List Param) : Bool :=
         }
     }
 
-def opt_term_similar (a : Option Term) (b : Option Term) : Bool :=
+def opt_term_similar (a : Option TermV0) (b : Option TermV0) : Bool :=
     match a {
         Option.some x => match b {
             Option.some y => Similar.similar x y,
@@ -296,7 +296,7 @@ def opt_term_similar (a : Option Term) (b : Option Term) : Bool :=
         }
     }
 
-def opt_term_list_similar (a : List (Option Term)) (b : List (Option Term)) : Bool :=
+def opt_term_list_similar (a : List (Option TermV0)) (b : List (Option TermV0)) : Bool :=
     match a {
         List.cons x xs => match b {
             List.cons y ys => opt_term_similar x y && opt_term_list_similar xs ys,
@@ -499,8 +499,8 @@ instance Similar Literal {
         }
 }
 
-instance Similar Term {
-    def similar (a : Term) (b : Term) : Bool :=
+instance Similar TermV0 {
+    def similar (a : TermV0) (b : TermV0) : Bool :=
         match a {
             forall n1 t1 bd1 => match b {
                 forall n2 t2 bd2 => Similar.similar n1 n2 && Similar.similar t1 t2 && Similar.similar bd1 bd2,
@@ -576,8 +576,8 @@ instance Similar DebugName {
         }
 }
 
-instance Similar Term2 {
-    def similar (a : Term2) (b : Term2) : Bool :=
+instance Similar Term {
+    def similar (a : Term) (b : Term) : Bool :=
         match a {
             var i1 d1 => match b {
                 var i2 d2 => I64.beq i1 i2 && Similar.similar d1 d2,
@@ -642,73 +642,73 @@ instance Similar Term2 {
         }
 }
 
-// ─── Term2 construction tests (Phase 0) ─────────────────────────────
+// ─── Term construction tests (Phase 0) ─────────────────────────────
 
 @[test]
-def test_term2_var : Bool :=
-    let v : Term2 := Term2.var 0 (DebugName.named (Identifier.id "x")) in
+def test_term_var : Bool :=
+    let v : Term := Term.var 0 (DebugName.named (Identifier.id "x")) in
     true
 
 @[test]
-def test_term2_lam : Bool :=
-    let body : Term2 := Term2.var 0 (DebugName.unnamed) in
-    let l : Term2 := Term2.lam DebugName.unnamed body body in
+def test_term_lam : Bool :=
+    let body : Term := Term.var 0 (DebugName.unnamed) in
+    let l : Term := Term.lam DebugName.unnamed body body in
     true
 
 @[test]
-def test_term2_forall : Bool :=
-    let body : Term2 := Term2.var 0 (DebugName.unnamed) in
-    let f : Term2 := Term2.forall DebugName.unnamed body body in
+def test_term_forall : Bool :=
+    let body : Term := Term.var 0 (DebugName.unnamed) in
+    let f : Term := Term.forall DebugName.unnamed body body in
     true
 
 @[test]
-def test_term2_pi : Bool :=
-    let arg : Term2 := Term2.type_ 1 in
-    let ret : Term2 := Term2.type_ 1 in
-    let p : Term2 := Term2.pi arg ret in
+def test_term_pi : Bool :=
+    let arg : Term := Term.type_ 1 in
+    let ret : Term := Term.type_ 1 in
+    let p : Term := Term.pi arg ret in
     true
 
 @[test]
-def test_term2_app : Bool :=
-    let f : Term2 := Term2.var 0 (DebugName.unnamed) in
-    let a : Term2 := Term2.var 1 (DebugName.unnamed) in
-    let app : Term2 := Term2.app f a in
+def test_term_app : Bool :=
+    let f : Term := Term.var 0 (DebugName.unnamed) in
+    let a : Term := Term.var 1 (DebugName.unnamed) in
+    let app : Term := Term.app f a in
     true
 
 @[test]
-def test_term2_lit : Bool :=
-    let l : Term2 := Term2.lit (Literal.str "hello") in
+def test_term_lit : Bool :=
+    let l : Term := Term.lit (Literal.str "hello") in
     true
 
 @[test]
-def test_term2_ntv : Bool :=
+def test_term_ntv : Bool :=
     // Work around Native.mk forall-inference bug with List.empty
     // by using a non-empty list of args
-    let none_opt : Option Term := Option.none in
-    let args : List (Option Term) := List.cons none_opt List.empty in
+    let none_opt : Option TermV0 := Option.none in
+    let args : List (Option TermV0) := List.cons none_opt List.empty in
     let ntv_val : Native := Native.mk (Identifier.id "foo") 0 args in
-    let n : Term2 := Term2.ntv ntv_val in
+    let n : Term := Term.ntv ntv_val in
     true
 
 @[test]
-def test_term2_con : Bool :=
+def test_term_con : Bool :=
     // Work around Con.mk/ModulePath.mp forall-inference bugs with List.empty
     // by using non-empty lists
-    let none_opt : Option Term := Option.none in
-    let args : List (Option Term) := List.cons none_opt List.empty in
+    let none_opt : Option TermV0 := Option.none in
+    let args : List (Option TermV0) := List.cons none_opt List.empty in
     let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
     let con_val : Con := Con.mk (Identifier.id "Bar") mod_path 0 args in
-    let c : Term2 := Term2.con con_val in
+    let c : Term := Term.con con_val in
     true
 
 @[test]
-def test_term2_type : Bool :=
-    let t : Term2 := Term2.type_ 0 in
+def test_term_type : Bool :=
+    let t : Term := Term.type_ 0 in
     true
 
 @[test]
-def test_term2_hole : Bool :=
-    let h : Term2 := Term2.hole in
+def test_term_hole : Bool :=
+    let h : Term := Term.hole in
     true
 
 def main : I64 := 42

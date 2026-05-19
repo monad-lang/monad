@@ -19,15 +19,15 @@ def identifier_string (id: Identifier) : String :=
     id s => s
   }
 
-/// Lower a type-checked Term to EvalTerm.
+/// Lower a type-checked TermV0 to EvalTerm.
 ///
 /// ctx: binding context (innermost first) — list of bound variable identifiers.
 /// Each lambda adds its param name to the front of ctx.
 /// De Bruijn index 0 = most recently bound variable (head of ctx).
 @[partial]
-def lower (ctx: List Identifier) (t: Term) : EvalTerm :=
+def lower (ctx: List Identifier) (t: TermV0) : EvalTerm :=
   match t {
-    Term.var name =>
+    TermV0.var name =>
       match name {
         NameRef.nid id =>
           match find_index id ctx 0 {
@@ -37,7 +37,7 @@ def lower (ctx: List Identifier) (t: Term) : EvalTerm :=
         NameRef.nmp p => EvalTerm.econst 0,
         NameRef.nop o => EvalTerm.eprim 0 (List.empty : List EvalTerm)
       },
-    Term.lam param body =>
+    TermV0.lam param body =>
       match param {
         Param.mk pname ptype mult _default =>
           let lowered_body : EvalTerm := lower (List.cons pname ctx) body in
@@ -50,9 +50,9 @@ def lower (ctx: List Identifier) (t: Term) : EvalTerm :=
           } in
           EvalTerm.elam mult (EvalTerm.eregion region mult lowered_body)
       },
-    Term.app fun arg =>
+    TermV0.app fun arg =>
       EvalTerm.eapp (lower ctx fun) (lower ctx arg),
-    Term.lit lit_value =>
+    TermV0.lit lit_value =>
       match lit_value {
         Literal.str s => EvalTerm.elit (EvalLiteral.l_str s),
         Literal.num n suffix => EvalTerm.elit (EvalLiteral.l_int n),
@@ -60,21 +60,21 @@ def lower (ctx: List Identifier) (t: Term) : EvalTerm :=
         Literal.match_ scrutinee cases =>
           EvalTerm.erecursor (RecursorInfo.mk 0 0 0) (List.empty : List EvalTerm) (lower ctx scrutinee)
       },
-    Term.forall fname ftyp fbody =>
+    TermV0.forall fname ftyp fbody =>
       lower ctx fbody,
-    Term.pi arg ret =>
+    TermV0.pi arg ret =>
       EvalTerm.esort 1,
-    Term.type_ level =>
+    TermV0.type_ level =>
       EvalTerm.esort level,
-    Term.ntv native_val =>
+    TermV0.ntv native_val =>
       match native_val {
         Native.mk native_name num_args args => EvalTerm.eprim 0 (List.empty : List EvalTerm)
       },
-    Term.con con_val =>
+    TermV0.con con_val =>
       match con_val {
         Con.mk cname ctyp_name cnum_args cargs => EvalTerm.econst 0
       },
-    Term.hole =>
+    TermV0.hole =>
       EvalTerm.elit (EvalLiteral.l_int 0)
   }
 
@@ -91,27 +91,27 @@ def single_ctx (id: Identifier) : List Identifier :=
 
 @[test]
 def test_lower_var_str : Bool :=
-  let t : Term := Term.lit (Literal.str "hello") in
+  let t : TermV0 := TermV0.lit (Literal.str "hello") in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
 @[test]
 def test_lower_var_num : Bool :=
-  let t : Term := Term.lit (Literal.num 42 NumSuffix.i64) in
+  let t : TermV0 := TermV0.lit (Literal.num 42 NumSuffix.i64) in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
 @[test]
 def test_lower_var_bound : Bool :=
   let id_x : Identifier := Identifier.id "x" in
-  let t : Term := Term.var (NameRef.nid id_x) in
+  let t : TermV0 := TermV0.var (NameRef.nid id_x) in
   let _ : EvalTerm := lower (single_ctx id_x) t in
   true
 
 @[test]
 def test_lower_var_free : Bool :=
   let id_x : Identifier := Identifier.id "x" in
-  let t : Term := Term.var (NameRef.nid id_x) in
+  let t : TermV0 := TermV0.var (NameRef.nid id_x) in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
@@ -120,9 +120,9 @@ def test_lower_var_free : Bool :=
 @[test]
 def test_lower_lam_identity : Bool :=
   let id_x : Identifier := Identifier.id "x" in
-  let t : Term := Term.lam
-    (param_many id_x Term.hole)
-    (Term.var (NameRef.nid id_x)) in
+  let t : TermV0 := TermV0.lam
+    (param_many id_x TermV0.hole)
+    (TermV0.var (NameRef.nid id_x)) in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
@@ -130,11 +130,11 @@ def test_lower_lam_identity : Bool :=
 def test_lower_lam_nested : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let id_y : Identifier := Identifier.id "y" in
-  let t : Term := Term.lam
-    (param_many id_x Term.hole)
-    (Term.lam
-      (param_many id_y Term.hole)
-      (Term.var (NameRef.nid id_x))) in
+  let t : TermV0 := TermV0.lam
+    (param_many id_x TermV0.hole)
+    (TermV0.lam
+      (param_many id_y TermV0.hole)
+      (TermV0.var (NameRef.nid id_x))) in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
@@ -143,10 +143,10 @@ def test_lower_lam_nested : Bool :=
 @[test]
 def test_lower_app_simple : Bool :=
   let id_x : Identifier := Identifier.id "x" in
-  let f : Term := Term.lam
-    (param_many id_x Term.hole)
-    (Term.var (NameRef.nid id_x)) in
-  let t : Term := Term.app f (Term.lit (Literal.num 1 NumSuffix.i64)) in
+  let f : TermV0 := TermV0.lam
+    (param_many id_x TermV0.hole)
+    (TermV0.var (NameRef.nid id_x)) in
+  let t : TermV0 := TermV0.app f (TermV0.lit (Literal.num 1 NumSuffix.i64)) in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
@@ -155,13 +155,13 @@ def test_lower_app_simple : Bool :=
 @[test]
 def test_lower_forall_erased : Bool :=
   let id_a : Identifier := Identifier.id "a" in
-  let t : Term := Term.forall id_a Term.hole (Term.lit (Literal.num 42 NumSuffix.i64)) in
+  let t : TermV0 := TermV0.forall id_a TermV0.hole (TermV0.lit (Literal.num 42 NumSuffix.i64)) in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
 @[test]
 def test_lower_pi_erased : Bool :=
-  let t : Term := Term.pi Term.hole Term.hole in
+  let t : TermV0 := TermV0.pi TermV0.hole TermV0.hole in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
@@ -169,7 +169,7 @@ def test_lower_pi_erased : Bool :=
 
 @[test]
 def test_lower_sort : Bool :=
-  let t : Term := Term.type_ 1 in
+  let t : TermV0 := TermV0.type_ 1 in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
@@ -179,12 +179,12 @@ def test_lower_sort : Bool :=
 
 @[test]
 def test_lower_hole : Bool :=
-  let t : Term := Term.hole in
+  let t : TermV0 := TermV0.hole in
   let _ : EvalTerm := lower empty_ctx t in
   true
 
 // ─── Lower + eval end-to-end pipeline tests ───────────────────────────
-// Full pipeline: Term → lower → e2e_eval → result.
+// Full pipeline: TermV0 → lower → e2e_eval → result.
 // keval logic inlined here to avoid import conflicts with lang/eval.mo
 // (both define identifier_string).
 
@@ -326,14 +326,14 @@ def test_e2e_identity : Bool :=
 
 @[test]
 def test_e2e_lower_plus_eval : Bool :=
-  // Full pipeline: Term → lower → e2e_eval
-  // Term: (λx. x) "hello" → "hello"
+  // Full pipeline: TermV0 → lower → e2e_eval
+  // TermV0: (λx. x) "hello" → "hello"
   let x_name : NameRef := NameRef.nid (Identifier.id "x") in
-  let x_var : Term := Term.var x_name in
-  let x_param : Param := param_many (Identifier.id "x") (Term.type_ 1) in
-  let lam_body : Term := Term.lam x_param x_var in
-  let arg_term : Term := Term.lit (Literal.str "hello") in
-  let app_term : Term := Term.app lam_body arg_term in
+  let x_var : TermV0 := TermV0.var x_name in
+  let x_param : Param := param_many (Identifier.id "x") (TermV0.type_ 1) in
+  let lam_body : TermV0 := TermV0.lam x_param x_var in
+  let arg_term : TermV0 := TermV0.lit (Literal.str "hello") in
+  let app_term : TermV0 := TermV0.app lam_body arg_term in
   let empty_ctx : List Identifier := List.empty in
   let lowered : EvalTerm := lower empty_ctx app_term in
   match e2e_eval lowered kenv_empty {
@@ -366,14 +366,14 @@ def test_e2e_lower_plus_eval : Bool :=
 def test_e2e_nested : Bool :=
   // Full pipeline: (λx. λy. y) 10 "world" → "world"
   let y_name : NameRef := NameRef.nid (Identifier.id "y") in
-  let y_var : Term := Term.var y_name in
-  let y_param : Param := param_many (Identifier.id "y") (Term.type_ 1) in
-  let inner_lam : Term := Term.lam y_param y_var in
-  let x_param : Param := param_many (Identifier.id "x") (Term.type_ 1) in
-  let outer_lam : Term := Term.lam x_param inner_lam in
-  let arg1 : Term := Term.lit (Literal.num 10 NumSuffix.i64) in
-  let arg2 : Term := Term.lit (Literal.str "world") in
-  let app_term : Term := Term.app (Term.app outer_lam arg1) arg2 in
+  let y_var : TermV0 := TermV0.var y_name in
+  let y_param : Param := param_many (Identifier.id "y") (TermV0.type_ 1) in
+  let inner_lam : TermV0 := TermV0.lam y_param y_var in
+  let x_param : Param := param_many (Identifier.id "x") (TermV0.type_ 1) in
+  let outer_lam : TermV0 := TermV0.lam x_param inner_lam in
+  let arg1 : TermV0 := TermV0.lit (Literal.num 10 NumSuffix.i64) in
+  let arg2 : TermV0 := TermV0.lit (Literal.str "world") in
+  let app_term : TermV0 := TermV0.app (TermV0.app outer_lam arg1) arg2 in
   let empty_ctx : List Identifier := List.empty in
   let lowered : EvalTerm := lower empty_ctx app_term in
   match e2e_eval lowered kenv_empty {
