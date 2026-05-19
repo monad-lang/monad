@@ -1,4 +1,5 @@
 use lang.types
+use lang.eval_term
 open Term2
 open DebugName
 
@@ -304,6 +305,377 @@ def test_t2e_unbound_var : Bool :=
     match t2e_eval v t2e_empty {
         t2e_ok v => false,
         t2e_err msg => true
+    }
+
+// ─── Term2 to EvalTerm lowerer ───────────────────────────────────────
+// Direct mapping (no find_index needed — de Bruijn indices preserved).
+
+/// Lower a Term2 to EvalTerm.
+/// De Bruijn indices pass through unchanged: Term2.var i → EvalTerm.evar i.
+/// forall and pi are erased (type-level only at eval time).
+@[partial]
+def lower_t2 (t: Term2) : EvalTerm :=
+    match t {
+        var idx dbg =>
+            EvalTerm.evar idx,
+        lam dbg typ body =>
+            let lowered_body : EvalTerm := lower_t2 body in
+            EvalTerm.elam Multiplicity.many (EvalTerm.eregion Region.r_stack Multiplicity.many lowered_body),
+        forall dbg kind body =>
+            lower_t2 body,
+        pi arg ret =>
+            EvalTerm.esort 1,
+        app fun arg =>
+            EvalTerm.eapp (lower_t2 fun) (lower_t2 arg),
+        lit value =>
+            match value {
+                str s => EvalTerm.elit (EvalLiteral.l_str s),
+                num n suffix => EvalTerm.elit (EvalLiteral.l_int n),
+                if_ cond then_ else_ => EvalTerm.elit (EvalLiteral.l_bool true),
+                match_ scrutinee cases =>
+                    let scrutinee_term : EvalTerm := EvalTerm.econst 0 in
+                    EvalTerm.erecursor (RecursorInfo.mk 0 0 0) (List.empty : List EvalTerm) scrutinee_term
+            },
+        ntv native_val =>
+            match native_val {
+                mk native_name nargs args => EvalTerm.eprim 0 (List.empty : List EvalTerm)
+            },
+        con con_val =>
+            match con_val {
+                mk name typ nargs args => EvalTerm.econst 0
+            },
+        type_ level =>
+            EvalTerm.esort level,
+        hole =>
+            EvalTerm.elit (EvalLiteral.l_int 0)
+    }
+
+// ─── Lowerer tests ───────────────────────────────────────────────────
+
+@[test]
+def test_lower_t2_var : Bool :=
+    // De Bruijn index preserved directly
+    let t : Term2 := Term2.var 3 DebugName.unnamed in
+    let lowered : EvalTerm := lower_t2 t in
+    match lowered {
+        EvalTerm.evar idx => I64.beq idx 3,
+        EvalTerm.elam m b => false,
+        EvalTerm.eapp f a => false,
+        EvalTerm.econst i => false,
+        EvalTerm.esort l => false,
+        EvalTerm.elit l => false,
+        EvalTerm.eprim i args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+    }
+
+@[test]
+def test_lower_t2_lam : Bool :=
+    // Lambda lowers to EvalTerm.elam(body lowered with region)
+    let body : Term2 := Term2.var 0 DebugName.unnamed in
+    let lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) body in
+    let lowered : EvalTerm := lower_t2 lam in
+    match lowered {
+        EvalTerm.elam m b => true,
+        EvalTerm.evar i => false,
+        EvalTerm.eapp f a => false,
+        EvalTerm.econst i => false,
+        EvalTerm.esort l => false,
+        EvalTerm.elit l => false,
+        EvalTerm.eprim i args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+    }
+
+@[test]
+def test_lower_t2_app : Bool :=
+    // Application lowers to EvalTerm.eapp
+    let f : Term2 := Term2.var 0 DebugName.unnamed in
+    let a : Term2 := Term2.var 1 DebugName.unnamed in
+    let app : Term2 := Term2.app f a in
+    let lowered : EvalTerm := lower_t2 app in
+    match lowered {
+        EvalTerm.eapp fun arg => true,
+        EvalTerm.evar i => false,
+        EvalTerm.elam m b => false,
+        EvalTerm.econst i => false,
+        EvalTerm.esort l => false,
+        EvalTerm.elit l => false,
+        EvalTerm.eprim i args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+    }
+
+@[test]
+def test_lower_t2_lit_num : Bool :=
+    // Number literal lowers to l_int
+    let t : Term2 := Term2.lit (Literal.num 42 NumSuffix.i64) in
+    let lowered : EvalTerm := lower_t2 t in
+    match lowered {
+        EvalTerm.elit lit =>
+            match lit {
+                EvalLiteral.l_int n => I64.beq n 42,
+                EvalLiteral.l_str s => false,
+                EvalLiteral.l_float s => false,
+                EvalLiteral.l_bool b => false,
+                EvalLiteral.l_sort s => false
+            },
+        EvalTerm.evar i => false,
+        EvalTerm.elam m b => false,
+        EvalTerm.eapp f a => false,
+        EvalTerm.econst i => false,
+        EvalTerm.esort l => false,
+        EvalTerm.eprim i args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+    }
+
+@[test]
+def test_lower_t2_lit_str : Bool :=
+    // String literal lowers to l_str
+    let t : Term2 := Term2.lit (Literal.str "hello") in
+    let lowered : EvalTerm := lower_t2 t in
+    match lowered {
+        EvalTerm.elit lit =>
+            match lit {
+                EvalLiteral.l_str s => String.beq s "hello",
+                EvalLiteral.l_int n => false,
+                EvalLiteral.l_float s => false,
+                EvalLiteral.l_bool b => false,
+                EvalLiteral.l_sort s => false
+            },
+        EvalTerm.evar i => false,
+        EvalTerm.elam m b => false,
+        EvalTerm.eapp f a => false,
+        EvalTerm.econst i => false,
+        EvalTerm.esort l => false,
+        EvalTerm.eprim i args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+    }
+
+@[test]
+def test_lower_t2_forall_erase : Bool :=
+    // forall erases to body
+    let body : Term2 := Term2.var 0 DebugName.unnamed in
+    let f : Term2 := Term2.forall DebugName.unnamed (Term2.type_ 1) body in
+    let lowered : EvalTerm := lower_t2 f in
+    match lowered {
+        EvalTerm.evar idx => true,
+        EvalTerm.elam m b => false,
+        EvalTerm.eapp ap1 ap2 => false,
+        EvalTerm.econst i => false,
+        EvalTerm.esort l => false,
+        EvalTerm.elit l => false,
+        EvalTerm.eprim i args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+    }
+
+@[test]
+def test_lower_t2_pi_erase : Bool :=
+    // pi erases to EvalTerm.esort
+    let t : Term2 := Term2.pi (Term2.type_ 1) (Term2.type_ 1) in
+    let lowered : EvalTerm := lower_t2 t in
+    match lowered {
+        EvalTerm.esort level => true,
+        EvalTerm.evar i => false,
+        EvalTerm.elam m b => false,
+        EvalTerm.eapp f a => false,
+        EvalTerm.econst i => false,
+        EvalTerm.elit l => false,
+        EvalTerm.eprim i args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+    }
+
+@[test]
+def test_lower_t2_type : Bool :=
+    // type_ level passes through as EvalTerm.esort
+    let t : Term2 := Term2.type_ 2 in
+    let lowered : EvalTerm := lower_t2 t in
+    match lowered {
+        EvalTerm.esort level => I64.beq level 2,
+        EvalTerm.evar i => false,
+        EvalTerm.elam m b => false,
+        EvalTerm.eapp f a => false,
+        EvalTerm.econst i => false,
+        EvalTerm.elit l => false,
+        EvalTerm.eprim i args => false,
+        EvalTerm.erecursor info cases s => false,
+        EvalTerm.eregion r m b => false,
+        EvalTerm.eborrow r k b => false,
+        EvalTerm.eproj f a => false,
+        EvalTerm.eproj_field f b => false
+    }
+
+// ─── End-to-end: Term2 → lower_t2 → keval ────────────────────────────
+
+// Inline keval to avoid cross-module import.
+type KEvalEnv {
+    kev_empty,
+    kev_push (val: EvalTerm) (rest: KEvalEnv),
+}
+
+open KEvalEnv
+
+type KEvalResult {
+    kev_ok (v: EvalTerm),
+    kev_err (msg: String),
+}
+
+open KEvalResult
+
+@[partial]
+def kev_lookup (env: KEvalEnv) (idx: I64) : Option EvalTerm :=
+    match env {
+        kev_empty => Option.none,
+        kev_push val rest =>
+            if I64.beq idx 0
+            then Option.some val
+            else kev_lookup rest (idx - 1)
+    }
+
+@[partial]
+def kev_eval (term: EvalTerm) (env: KEvalEnv) : KEvalResult :=
+    match term {
+        EvalTerm.evar idx =>
+            match kev_lookup env idx {
+                Option.some val => kev_eval val env,
+                Option.none => kev_err "unbound variable"
+            },
+        EvalTerm.eapp fun arg =>
+            match kev_eval fun env {
+                kev_ok fun_val =>
+                    match kev_eval arg env {
+                        kev_ok arg_val =>
+                            match fun_val {
+                                EvalTerm.elam mult body =>
+                                    kev_eval body (kev_push arg_val env),
+                                EvalTerm.evar idx => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.eapp f a => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.econst idx => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.esort level => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.elit lit => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.eprim idx args => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.erecursor info cases s => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.eregion r m b => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.eborrow r k b => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.eproj f a => kev_ok (EvalTerm.eapp fun_val arg_val),
+                                EvalTerm.eproj_field f b => kev_ok (EvalTerm.eapp fun_val arg_val)
+                            },
+                        kev_err msg => kev_err msg
+                    },
+                kev_err msg => kev_err msg
+            },
+        EvalTerm.elam mult body => kev_ok term,
+        EvalTerm.econst idx => kev_ok term,
+        EvalTerm.esort level => kev_ok term,
+        EvalTerm.elit lit =>
+            match lit {
+                EvalLiteral.l_int n => kev_ok term,
+                EvalLiteral.l_str s => kev_ok term,
+                EvalLiteral.l_float s => kev_ok term,
+                EvalLiteral.l_bool b => kev_ok term,
+                EvalLiteral.l_sort n => kev_ok term
+            },
+        EvalTerm.eprim idx args => kev_ok term,
+        EvalTerm.erecursor info cases scrutinee => kev_ok term,
+        EvalTerm.eregion region mult body => kev_eval body env,
+        EvalTerm.eborrow region kind body => kev_eval body env,
+        EvalTerm.eproj field arg => kev_eval arg env,
+        EvalTerm.eproj_field field base => kev_eval base env
+    }
+
+@[test]
+def test_e2e_lower_t2_identity : Bool :=
+    // (λx. x) "hello" → Term2 → lower_t2 → kev_eval → "hello"
+    let body : Term2 := Term2.var 0 DebugName.unnamed in
+    let lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) body in
+    let arg : Term2 := Term2.lit (Literal.str "hello") in
+    let app : Term2 := Term2.app lam arg in
+    let lowered : EvalTerm := lower_t2 app in
+    match kev_eval lowered kev_empty {
+        kev_ok v =>
+            match v {
+                EvalTerm.elit lit =>
+                    match lit {
+                        EvalLiteral.l_str s => String.beq s "hello",
+                        EvalLiteral.l_int n => false,
+                        EvalLiteral.l_float s => false,
+                        EvalLiteral.l_bool b => false,
+                        EvalLiteral.l_sort n => false
+                    },
+                EvalTerm.evar i => false,
+                EvalTerm.elam m b => false,
+                EvalTerm.eapp f a => false,
+                EvalTerm.econst i => false,
+                EvalTerm.esort l => false,
+                EvalTerm.eprim i args => false,
+                EvalTerm.erecursor info cases s => false,
+                EvalTerm.eregion r m b => false,
+                EvalTerm.eborrow r k b => false,
+                EvalTerm.eproj f a => false,
+                EvalTerm.eproj_field f b => false
+            },
+        kev_err msg => false
+    }
+
+@[test]
+def test_e2e_lower_t2_nested : Bool :=
+    // (λx. λy. y) 10 "world" → "world"
+    let inner_body : Term2 := Term2.var 0 DebugName.unnamed in
+    let inner_lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) inner_body in
+    let outer_lam : Term2 := Term2.lam DebugName.unnamed (Term2.type_ 1) inner_lam in
+    let arg1 : Term2 := Term2.lit (Literal.num 10 NumSuffix.i64) in
+    let arg2 : Term2 := Term2.lit (Literal.str "world") in
+    let app : Term2 := Term2.app (Term2.app outer_lam arg1) arg2 in
+    let lowered : EvalTerm := lower_t2 app in
+    match kev_eval lowered kev_empty {
+        kev_ok v =>
+            match v {
+                EvalTerm.elit lit =>
+                    match lit {
+                        EvalLiteral.l_str s => String.beq s "world",
+                        EvalLiteral.l_int n => false,
+                        EvalLiteral.l_float s => false,
+                        EvalLiteral.l_bool b => false,
+                        EvalLiteral.l_sort n => false
+                    },
+                EvalTerm.evar i => false,
+                EvalTerm.elam m b => false,
+                EvalTerm.eapp f a => false,
+                EvalTerm.econst i => false,
+                EvalTerm.esort l => false,
+                EvalTerm.eprim i args => false,
+                EvalTerm.erecursor info cases s => false,
+                EvalTerm.eregion r m b => false,
+                EvalTerm.eborrow r k b => false,
+                EvalTerm.eproj f a => false,
+                EvalTerm.eproj_field f b => false
+            },
+        kev_err msg => false
     }
 
 def main : I64 := 42
