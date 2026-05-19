@@ -91,6 +91,34 @@ type Term {
     hole,
 }
 
+// Optional debug name carried by de Bruijn variables and binders.
+// Names are never used for identity or equality — de Bruijn indices
+// determine identity. DebugName exists solely for error messages
+// and pretty-printing during debugging.
+type DebugName {
+    named (id: Identifier),
+    unnamed,
+}
+
+// De Bruijn Term IR — staged alongside existing named Term.
+// Phase 0: coexistence. Phase 4: replaces Term entirely.
+//
+// De Bruijn convention: index 0 = most recently bound variable.
+// Free variables use sentinel index (I64.max) and are resolved
+// by the type checker or module resolver.
+type Term2 {
+    var (idx: I64) (dbg: DebugName),
+    lam (dbg: DebugName) (typ: Term2) (body: Term2),
+    forall (dbg: DebugName) (kind: Term2) (body: Term2),
+    pi (arg: Term2) (ret: Term2),
+    app (fun: Term2) (arg: Term2),
+    lit (value: Literal),
+    ntv (native: Native),
+    con (c: Con),
+    type_ (universe: I64),
+    hole,
+}
+
 type TypeError {
     mismatch (expected: Term) (actual: Term),
     unknown_var (name: NameRef),
@@ -531,5 +559,156 @@ instance Similar Term {
             }
         }
 }
+
+// --- Similar instances for de Bruijn types (Phase 0) ---
+
+instance Similar DebugName {
+    def similar (a : DebugName) (b : DebugName) : Bool :=
+        match a {
+            named id1 => match b {
+                named id2 => Similar.similar id1 id2,
+                unnamed => false
+            },
+            unnamed => match b {
+                unnamed => true,
+                named _ => false
+            }
+        }
+}
+
+instance Similar Term2 {
+    def similar (a : Term2) (b : Term2) : Bool :=
+        match a {
+            var i1 d1 => match b {
+                var i2 d2 => I64.beq i1 i2 && Similar.similar d1 d2,
+                lam _ _ _ => false, forall _ _ _ => false, pi _ _ => false,
+                app _ _ => false, lit _ => false, ntv _ => false,
+                con _ => false, type_ _ => false, hole => false
+            },
+            lam d1 t1 bd1 => match b {
+                lam d2 t2 bd2 => Similar.similar d1 d2 && Similar.similar t1 t2 && Similar.similar bd1 bd2,
+                var _ _ => false, forall _ _ _ => false, pi _ _ => false,
+                app _ _ => false, lit _ => false, ntv _ => false,
+                con _ => false, type_ _ => false, hole => false
+            },
+            forall d1 k1 bd1 => match b {
+                forall d2 k2 bd2 => Similar.similar d1 d2 && Similar.similar k1 k2 && Similar.similar bd1 bd2,
+                var _ _ => false, lam _ _ _ => false, pi _ _ => false,
+                app _ _ => false, lit _ => false, ntv _ => false,
+                con _ => false, type_ _ => false, hole => false
+            },
+            pi a1 r1 => match b {
+                pi a2 r2 => Similar.similar a1 a2 && Similar.similar r1 r2,
+                var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
+                app _ _ => false, lit _ => false, ntv _ => false,
+                con _ => false, type_ _ => false, hole => false
+            },
+            app f1 a1 => match b {
+                app f2 a2 => Similar.similar f1 f2 && Similar.similar a1 a2,
+                var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
+                pi _ _ => false, lit _ => false, ntv _ => false,
+                con _ => false, type_ _ => false, hole => false
+            },
+            lit v1 => match b {
+                lit v2 => Similar.similar v1 v2,
+                var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
+                pi _ _ => false, app _ _ => false, ntv _ => false,
+                con _ => false, type_ _ => false, hole => false
+            },
+            ntv n1 => match b {
+                ntv n2 => Similar.similar n1 n2,
+                var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
+                pi _ _ => false, app _ _ => false, lit _ => false,
+                con _ => false, type_ _ => false, hole => false
+            },
+            con c1 => match b {
+                con c2 => Similar.similar c1 c2,
+                var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
+                pi _ _ => false, app _ _ => false, lit _ => false,
+                ntv _ => false, type_ _ => false, hole => false
+            },
+            type_ u1 => match b {
+                type_ u2 => I64.beq u1 u2,
+                var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
+                pi _ _ => false, app _ _ => false, lit _ => false,
+                ntv _ => false, con _ => false, hole => false
+            },
+            hole => match b {
+                hole => true,
+                var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
+                pi _ _ => false, app _ _ => false, lit _ => false,
+                ntv _ => false, con _ => false, type_ _ => false
+            }
+        }
+}
+
+// ─── Term2 construction tests (Phase 0) ─────────────────────────────
+
+@[test]
+def test_term2_var : Bool :=
+    let v : Term2 := Term2.var 0 (DebugName.named (Identifier.id "x")) in
+    true
+
+@[test]
+def test_term2_lam : Bool :=
+    let body : Term2 := Term2.var 0 (DebugName.unnamed) in
+    let l : Term2 := Term2.lam DebugName.unnamed body body in
+    true
+
+@[test]
+def test_term2_forall : Bool :=
+    let body : Term2 := Term2.var 0 (DebugName.unnamed) in
+    let f : Term2 := Term2.forall DebugName.unnamed body body in
+    true
+
+@[test]
+def test_term2_pi : Bool :=
+    let arg : Term2 := Term2.type_ 1 in
+    let ret : Term2 := Term2.type_ 1 in
+    let p : Term2 := Term2.pi arg ret in
+    true
+
+@[test]
+def test_term2_app : Bool :=
+    let f : Term2 := Term2.var 0 (DebugName.unnamed) in
+    let a : Term2 := Term2.var 1 (DebugName.unnamed) in
+    let app : Term2 := Term2.app f a in
+    true
+
+@[test]
+def test_term2_lit : Bool :=
+    let l : Term2 := Term2.lit (Literal.str "hello") in
+    true
+
+@[test]
+def test_term2_ntv : Bool :=
+    // Work around Native.mk forall-inference bug with List.empty
+    // by using a non-empty list of args
+    let none_opt : Option Term := Option.none in
+    let args : List (Option Term) := List.cons none_opt List.empty in
+    let ntv_val : Native := Native.mk (Identifier.id "foo") 0 args in
+    let n : Term2 := Term2.ntv ntv_val in
+    true
+
+@[test]
+def test_term2_con : Bool :=
+    // Work around Con.mk/ModulePath.mp forall-inference bugs with List.empty
+    // by using non-empty lists
+    let none_opt : Option Term := Option.none in
+    let args : List (Option Term) := List.cons none_opt List.empty in
+    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let con_val : Con := Con.mk (Identifier.id "Bar") mod_path 0 args in
+    let c : Term2 := Term2.con con_val in
+    true
+
+@[test]
+def test_term2_type : Bool :=
+    let t : Term2 := Term2.type_ 0 in
+    true
+
+@[test]
+def test_term2_hole : Bool :=
+    let h : Term2 := Term2.hole in
+    true
 
 def main : I64 := 42
