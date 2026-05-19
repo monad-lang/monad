@@ -1064,6 +1064,26 @@ impl<'a> GlobalScope<'a> {
     }
   }
 
+  /// Resolve a class method name to the first available instance's implementation term.
+  /// Used by the evaluator when the type checker cannot resolve a class method to a
+  /// concrete instance (e.g., constrained instances with abstract type variables).
+  pub fn resolve_class_method_instance(&self, name: &ModulePath) -> Option<&Term> {
+    let class_def = self.find_class_def(name)?;
+    let class_name = class_def.class.name();
+    let instances = self.instances.get(class_name)?;
+    for instance in instances.iter() {
+      if instance.impls_map.contains_key(class_def.name) {
+        let method_name = instance
+          .name
+          .clone()
+          .extend(ModulePath::single(class_def.name.clone()));
+        let def = self.find_ref(&method_name)?;
+        return Some(def.term);
+      }
+    }
+    None
+  }
+
   pub fn find_any_name_ref_with_constraints(
     &'_ self,
     nref: &NameRef,
@@ -1381,8 +1401,12 @@ impl<'a> Scope<'a> {
     if let Some(name) = nref.clone().to_path() {
       if let Some(def) = global.find_ref(&name) {
         Ok(def.term)
-      } else if let Some(class_def) = global.find_class_def(&name) {
-        Ok(class_def.typ())
+      } else if let Some(_class_def) = global.find_class_def(&name) {
+        if let Some(term) = global.resolve_class_method_instance(&name) {
+          Ok(term)
+        } else {
+          Ok(_class_def.typ())
+        }
       } else {
         Err(ScopeError::PathNotFound(name))
       }
@@ -1390,8 +1414,12 @@ impl<'a> Scope<'a> {
       let infix = global.find_infix(op)?;
       if let Some(def) = global.find_ref(&infix.name) {
         Ok(def.term)
-      } else if let Some(class_def) = global.find_class_def(&infix.name) {
-        Ok(class_def.typ())
+      } else if let Some(_class_def) = global.find_class_def(&infix.name) {
+        if let Some(term) = global.resolve_class_method_instance(&infix.name) {
+          Ok(term)
+        } else {
+          Ok(_class_def.typ())
+        }
       } else {
         Err(ScopeError::PathNotFound(infix.name.clone()))
       }
