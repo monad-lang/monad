@@ -15,153 +15,10 @@ type ParseResult O {
 
 open ParseResult
 
-type OpEntry {
-	mk (op_str: String) (prec: I64) (right_assoc: Bool)
-}
-
-def op_chars : List String :=
-	["+", "&", "=", "|", "<", ">", "*", "/", "-", "!", "."]
-
-def op_table : List OpEntry :=
-	[OpEntry.mk "|>" 5 false,
-	 OpEntry.mk "<|" 5 true,
-	 OpEntry.mk ">>=" 10 true,
-	 OpEntry.mk "." 12 true,
-	 OpEntry.mk "<*>" 15 false,
-	 OpEntry.mk "<|>" 20 false,
-	 OpEntry.mk "||" 25 true,
-	 OpEntry.mk "&&" 30 true,
-	 OpEntry.mk "==" 40 false,
-	 OpEntry.mk "!=" 40 false,
-	 OpEntry.mk "++" 50 true,
-	 OpEntry.mk ">>" 60 false,
-	 OpEntry.mk "<<" 60 false,
-	 OpEntry.mk "+" 65 false,
-	 OpEntry.mk "-" 65 false,
-	 OpEntry.mk "*" 70 false,
-	 OpEntry.mk "/" 70 false]
-
-@[partial]
-def op_char_member (c : String) (chars : List String) : Bool :=
-	match chars {
-		List.cons ch rest => if String.beq ch c then true else op_char_member c rest,
-		List.empty => false
-	}
-
-@[partial]
-def op_entry_name (entry : OpEntry) : String :=
-	match entry {
-		OpEntry.mk o _ _ => o
-	}
-
-@[partial]
-def op_entry_prec (entry : OpEntry) : I64 :=
-	match entry {
-		OpEntry.mk _ p _ => p
-	}
-
-@[partial]
-def op_entry_rassoc (entry : OpEntry) : Bool :=
-	match entry {
-		OpEntry.mk _ _ r => r
-	}
-
-@[partial]
-def op_lookup_prec (op_str : String) (table : List OpEntry) : I64 :=
-	match table {
-		List.cons entry rest =>
-			if String.beq (op_entry_name entry) op_str then op_entry_prec entry
-			else op_lookup_prec op_str rest,
-		List.empty => 0
-	}
-
-@[partial]
-def op_lookup_rassoc (op_str : String) (table : List OpEntry) : Bool :=
-	match table {
-		List.cons entry rest =>
-			if String.beq (op_entry_name entry) op_str then op_entry_rassoc entry
-			else op_lookup_rassoc op_str rest,
-		List.empty => false
-	}
-
-def kw_list : List String :=
-	["def", "let", "in", "use", "open", "class", "struct", "instance",
-	 "type", "fn", "match", "if", "then", "else", "infix",
-	 "do", "return", "for", "quote", "with"]
-
-@[partial]
-def kw_member (s : String) (kws : List String) : Bool :=
-	match kws {
-		List.cons kw rest => if String.beq kw s then true else kw_member s rest,
-		List.empty => false
-	}
-
-def decl_parsers : List (String -> ParseResult Decl) :=
-	[use_parser, open_parser, infix_parser, def_parser,
-	 struct_parser, type_parser, class_parser, instance_parser]
-
-@[partial]
-def decl_fail_to_unknown (r : ParseResult Decl) : ParseResult Decl :=
-	match r {
-		success rem out => success rem out,
-		fail _ => fail (ParseError.custom "unknown declaration")
-	}
-
 // --- Helper ---
 
 @[partial]
 def is_empty (s : String) : Bool := (String.length s) == 0
-
-
-// --- Position tracking (Phase 1.2) ---
-
-@[partial]
-def new_span (s : String) : LocatedSpan :=
-	LocatedSpan.mk s (Location.mk 0 1 1)
-
-@[partial]
-def span_location (span : LocatedSpan) : Location :=
-	match span {
-		mk frag loc => loc
-	}
-
-@[partial]
-def span_fragment (span : LocatedSpan) : String :=
-	match span {
-		mk frag loc => frag
-	}
-
-@[partial]
-def count_newlines (s : String) (acc : I64) : I64 :=
-	if is_empty s
-	then acc
-	else count_newlines_tail (String.slice s 0 1) (String.drop 1 s) acc
-
-@[partial]
-def count_newlines_tail (c : String) (s : String) (acc : I64) : I64 :=
-	if String.beq "\n" c
-	then count_newlines s (I64.add acc 1)
-	else count_newlines s acc
-
-@[partial]
-def advance_location (loc : Location) (consumed : String) (n : I64) : Location :=
-	match loc {
-		mk off line col =>
-			let newlines : I64 := count_newlines consumed 0 in
-			if I64.beq newlines 0
-			then Location.mk (I64.add off n) line (I64.add col n)
-			else Location.mk (I64.add off n) (I64.add line newlines) 1
-	}
-
-@[partial]
-def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
-	match span {
-		mk frag loc =>
-			let consumed : String := String.slice frag 0 n in
-			let rest : String := String.drop n frag in
-			let new_loc : Location := advance_location loc consumed n in
-			LocatedSpan.mk rest new_loc
-	}
 
 // --- Combinators ---
 
@@ -302,7 +159,27 @@ def is_space (c : String) : Bool :=
 
 @[partial]
 def is_keyword (s : String) : Bool :=
-	kw_member s kw_list
+	if String.beq "def" s then true
+	else if String.beq "let" s then true
+	else if String.beq "in" s then true
+	else if String.beq "use" s then true
+	else if String.beq "open" s then true
+	else if String.beq "class" s then true
+	else if String.beq "struct" s then true
+	else if String.beq "instance" s then true
+	else if String.beq "type" s then true
+	else if String.beq "fn" s then true
+	else if String.beq "match" s then true
+	else if String.beq "if" s then true
+	else if String.beq "then" s then true
+	else if String.beq "else" s then true
+	else if String.beq "infix" s then true
+	else if String.beq "do" s then true
+	else if String.beq "return" s then true
+	else if String.beq "for" s then true
+	else if String.beq "quote" s then true
+	else if String.beq "with" s then true
+	else false
 
 // --- Identifier parser ---
 
@@ -538,190 +415,6 @@ def many1_body (r : ParseResult A) (p : String -> ParseResult A) (input : String
 			many0_next (many0 p rem) out rem,
 		fail e => fail e
 	}
-// --- Extended combinators (Phase 1.1) ---
-
-@[partial]
-def map_parse (f : A -> B) (p : String -> ParseResult A) (input : String) : ParseResult B :=
-	map_parse_body (p input) f
-
-@[partial]
-def map_parse_body (r : ParseResult A) (f : A -> B) : ParseResult B :=
-	match r {
-		success rem out => map_parse_ok rem out f,
-		fail e => map_parse_fail e
-	}
-
-@[partial]
-def map_parse_ok (rem : String) (out : A) (f : A -> B) : ParseResult B :=
-	success rem (f out)
-
-@[partial]
-def map_parse_fail (e : ParseError) : ParseResult B :=
-	fail e
-
-@[partial]
-def bind_parse (p : String -> ParseResult A) (f : A -> String -> ParseResult B) (input : String) : ParseResult B :=
-	bind_parse_body (p input) f
-
-@[partial]
-def bind_parse_body (r : ParseResult A) (f : A -> String -> ParseResult B) : ParseResult B :=
-	match r {
-		success rem out => f out rem,
-		fail e => bind_parse_fail e
-	}
-
-@[partial]
-def bind_parse_fail (e : ParseError) : ParseResult B :=
-	fail e
-
-@[partial]
-def alt_fold (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
-	match parsers {
-		List.cons p ps => alt_fold_try (p input) ps input,
-		List.empty => fail (ParseError.custom "alt_fold: empty list")
-	}
-
-@[partial]
-def alt_fold_try (r : ParseResult A) (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
-	match r {
-		success rem out => alt_fold_ok rem out,
-		fail e => alt_fold parsers input
-	}
-
-@[partial]
-def alt_fold_ok (rem : String) (out : A) : ParseResult A :=
-	success rem out
-
-@[partial]
-def preceded_by (before : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult B :=
-	preceded_by_body (before input) p
-
-@[partial]
-def preceded_by_body (r : ParseResult A) (p : String -> ParseResult B) : ParseResult B :=
-	match r {
-		success rem _ => p rem,
-		fail e => preceded_by_err e
-	}
-
-@[partial]
-def preceded_by_err (e : ParseError) : ParseResult B :=
-	fail e
-
-@[partial]
-def terminated_by (p : String -> ParseResult A) (after : String -> ParseResult B) (input : String) : ParseResult A :=
-	terminated_by_body (p input) after
-
-@[partial]
-def terminated_by_body (r : ParseResult A) (after : String -> ParseResult B) : ParseResult A :=
-	match r {
-		success rem out => terminated_by_after (after rem) out,
-		fail e => terminated_by_err e
-	}
-
-@[partial]
-def terminated_by_after (r : ParseResult B) (out : A) : ParseResult A :=
-	match r {
-		success rem _ => terminated_by_ok rem out,
-		fail e => terminated_by_err e
-	}
-
-@[partial]
-def terminated_by_ok (rem : String) (out : A) : ParseResult A :=
-	success rem out
-
-@[partial]
-def terminated_by_err (e : ParseError) : ParseResult A :=
-	fail e
-
-@[partial]
-def delimited_by (before : String -> ParseResult A) (p : String -> ParseResult B) (after : String -> ParseResult C) (input : String) : ParseResult B :=
-	delimited_by_before (before input) p after
-
-@[partial]
-def delimited_by_before (r : ParseResult A) (p : String -> ParseResult B) (after : String -> ParseResult C) : ParseResult B :=
-	match r {
-		success rem _ => delimited_by_body (p rem) after,
-		fail e => delimited_by_err e
-	}
-
-@[partial]
-def delimited_by_body (r : ParseResult B) (after : String -> ParseResult C) : ParseResult B :=
-	match r {
-		success rem out => delimited_by_after (after rem) out,
-		fail e => delimited_by_err e
-	}
-
-@[partial]
-def delimited_by_after (r : ParseResult C) (out : B) : ParseResult B :=
-	match r {
-		success rem _ => delimited_by_ok rem out,
-		fail e => delimited_by_err e
-	}
-
-@[partial]
-def delimited_by_ok (rem : String) (out : B) : ParseResult B :=
-	success rem out
-
-@[partial]
-def delimited_by_err (e : ParseError) : ParseResult B :=
-	fail e
-
-@[partial]
-def separated_by (sep : String -> ParseResult A) (p : String -> ParseResult B) (input : String) : ParseResult (List B) :=
-	separated_by_body (p input) p sep input List.empty
-
-@[partial]
-def separated_by_body (r : ParseResult B) (p : String -> ParseResult B) (sep : String -> ParseResult A) (input : String) (acc : List B) : ParseResult (List B) :=
-	match r {
-		success rem out => separated_by_loop (sep rem) rem out p sep acc,
-		fail e => separated_by_ok input acc
-	}
-
-@[partial]
-def separated_by_loop (r : ParseResult A) (rem : String) (out : B) (p : String -> ParseResult B) (sep : String -> ParseResult A) (acc : List B) : ParseResult (List B) :=
-	match r {
-		success rem2 _ => separated_by_body (p rem2) p sep rem2 (List.cons out acc),
-		fail e => separated_by_ok rem (List.cons out acc)
-	}
-
-@[partial]
-def separated_by_ok (input : String) (acc : List B) : ParseResult (List B) :=
-	success input (list_reverse acc)
-
-@[partial]
-def opt (p : String -> ParseResult A) (input : String) : ParseResult (Option A) :=
-	opt_body (p input) input
-
-@[partial]
-def opt_body (r : ParseResult A) (input : String) : ParseResult (Option A) :=
-	match r {
-		success rem out => opt_some rem out,
-		fail e => opt_none input
-	}
-
-@[partial]
-def opt_some (rem : String) (out : A) : ParseResult (Option A) :=
-	success rem (Option.some out)
-
-@[partial]
-def opt_none (input : String) : ParseResult (Option A) :=
-	success input Option.none
-
-@[partial]
-def ws0 (input : String) : ParseResult String :=
-	take_while is_space input
-
-@[partial]
-def ws1 (input : String) : ParseResult String :=
-	ws1_body (take_while is_space input) input
-
-@[partial]
-def ws1_body (r : ParseResult String) (input : String) : ParseResult String :=
-	match r {
-		success rem out => if is_empty out then fail (ParseError.custom "expected whitespace") else success rem out,
-		fail e => fail e
-	}
-
 
 // --- Number parsing helpers ---
 
@@ -879,16 +572,15 @@ def literal_try_str (r : ParseResult Term) (input : String) : ParseResult Term :
 // --- Atom term (variable, literal, parenthesized expression) ---
 
 @[partial]
-def atom_paren_parser (input : String) : ParseResult Term :=
-	atom_try_paren (tag "(" input) input
-
-def atom_parsers (input : String) : List (String -> ParseResult Term) :=
-	[variable, literal_term, match_parser, if_parser,
-	 let_parser, do_parser, lambda_parser, atom_paren_parser]
+def atom_term (input : String) : ParseResult Term :=
+	atom_try_var (variable input) input
 
 @[partial]
-def atom_term (input : String) : ParseResult Term :=
-	alt_fold (atom_parsers input) input
+def atom_try_var (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => atom_try_lit (literal_term input) input
+	}
 
 @[partial]
 def atom_try_paren (r : ParseResult String) (input : String) : ParseResult Term :=
@@ -1310,11 +1002,63 @@ def do_build (r : ParseResult (List DoStmt)) : ParseResult Term :=
 		fail e => fail e
 	}
 
+@[partial]
+def atom_try_lit (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => atom_try_match (match_parser input) input
+	}
+
+@[partial]
+def atom_try_match (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => atom_try_if (if_parser input) input
+	}
+
+@[partial]
+def atom_try_if (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => atom_try_let (let_parser input) input
+	}
+
+@[partial]
+def atom_try_let (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => atom_try_do (do_parser input) input
+	}
+
+@[partial]
+def atom_try_do (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => atom_try_lambda (lambda_parser input) input
+	}
+
+@[partial]
+def atom_try_lambda (r : ParseResult Term) (input : String) : ParseResult Term :=
+	match r {
+		success rem out => success rem out,
+		fail _ => atom_try_paren (tag "(" input) input
+	}
+
 // --- Operator parsing ---
 
 @[partial]
 def is_op_char (c : String) : Bool :=
-	op_char_member c op_chars
+	if String.beq "+" c then true
+	else if String.beq "&" c then true
+	else if String.beq "=" c then true
+	else if String.beq "|" c then true
+	else if String.beq "<" c then true
+	else if String.beq ">" c then true
+	else if String.beq "*" c then true
+	else if String.beq "/" c then true
+	else if String.beq "-" c then true
+	else if String.beq "!" c then true
+	else String.beq "." c
 
 @[partial]
 def operator_parse (input : String) : ParseResult String :=
@@ -1338,11 +1082,34 @@ def operator_check (s : String) (rem : String) : ParseResult String :=
 
 @[partial]
 def op_precedence (op : String) : I64 :=
-	op_lookup_prec op op_table
+	if String.beq "|>" op then 5
+	else if String.beq "<|" op then 5
+	else if String.beq ">>=" op then 10
+	else if String.beq "." op then 12
+	else if String.beq "<*>" op then 15
+	else if String.beq "<|>" op then 20
+	else if String.beq "||" op then 25
+	else if String.beq "&&" op then 30
+	else if String.beq "==" op then 40
+	else if String.beq "!=" op then 40
+	else if String.beq "++" op then 50
+	else if String.beq ">>" op then 60
+	else if String.beq "<<" op then 60
+	else if String.beq "+" op then 65
+	else if String.beq "-" op then 65
+	else if String.beq "*" op then 70
+	else if String.beq "/" op then 70
+	else 0
 
 @[partial]
 def op_is_right_assoc (op : String) : Bool :=
-	op_lookup_rassoc op op_table
+	if String.beq "<|" op then true
+	else if String.beq ">>=" op then true
+	else if String.beq "." op then true
+	else if String.beq "||" op then true
+	else if String.beq "&&" op then true
+	else if String.beq "++" op then true
+	else false
 
 // --- Expression (atom + juxtaposition application + operators) ---
 
@@ -2411,7 +2178,63 @@ def def_to_decl (body : Term) (name : Identifier) (typ : Term) : Decl :=
 
 @[partial]
 def decl_parser (input : String) : ParseResult Decl :=
-	decl_fail_to_unknown (alt_fold decl_parsers input)
+	decl_try_use (use_parser input) input
+
+@[partial]
+def decl_try_use (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => decl_try_open (open_parser input) input
+	}
+
+@[partial]
+def decl_try_open (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => decl_try_infix (infix_parser input) input
+	}
+
+@[partial]
+def decl_try_infix (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => decl_try_def (def_parser input) input
+	}
+
+@[partial]
+def decl_try_def (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => decl_try_struct (struct_parser input) input
+	}
+
+@[partial]
+def decl_try_struct (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => decl_try_type (type_parser input) input
+	}
+
+@[partial]
+def decl_try_type (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => decl_try_class (class_parser input) input
+	}
+
+@[partial]
+def decl_try_class (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => decl_try_instance (instance_parser input) input
+	}
+
+@[partial]
+def decl_try_instance (r : ParseResult Decl) (input : String) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => fail (ParseError.custom "unknown declaration")
+	}
 
 // --- Tests ---
 
@@ -3024,256 +2847,379 @@ def test_def_implicit_params : Bool :=
 		fail _ => false
 	}
 
+// ─── Term2 (de Bruijn) parser functions (Phase 1) ────────────────────────
+// Staged coexistence: these produce Term2 alongside existing Term parsers.
+// ctx: binding context (List Identifier), head = most recent = index 0.
 
-// --- Combinator tests (Phase 1.1) ---
-
-// Helper functions for tests
+// Sentinel for unresolved de Bruijn indices.
 @[partial]
-def id_str (s : String) : String := s
-
-@[partial]
-def str_len (s : String) : I64 := String.length s
+def t2_sentinel : I64 := -1
 
 @[partial]
-def always_tag_y (a : String) (input : String) : ParseResult String := tag "y" input
+def t2_ident_str (id: Identifier) : String :=
+    match id {
+        id s => s
+    }
+
+@[partial]
+def t2_find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64 :=
+    match ctx {
+        List.cons x rest =>
+            if String.beq (t2_ident_str id) (t2_ident_str x)
+            then Option.some depth
+            else t2_find_index id rest (depth + 1),
+        List.empty => Option.none
+    }
+
+@[partial]
+def t2_debug_name_of_id (id: Identifier) : DebugName :=
+    DebugName.named id
+
+@[partial]
+def t2_var_term (ctx: List Identifier) (s: String) : Term2 :=
+    let sid : Identifier := Identifier.id s in
+    match t2_find_index sid ctx 0 {
+        Option.some idx => Term2.var idx (DebugName.named sid),
+        Option.none => Term2.var t2_sentinel (DebugName.named sid)
+    }
+
+@[partial]
+def t2_variable (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    t2_variable_try_path (path_variable input) ctx input
+
+@[partial]
+def t2_variable_try_path (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    match r {
+        success rem out =>
+            // Dotted path → sentinel index (resolved later by module resolver)
+            success rem (Term2.var t2_sentinel DebugName.unnamed),
+        fail _ => t2_variable_got (identifier input) ctx
+    }
+
+@[partial]
+def t2_variable_got (r: ParseResult String) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem out => success rem (t2_var_term ctx out),
+        fail e => fail e
+    }
+
+// ─── Term2 atom ──────────────────────────────────────────────────────────
+
+@[partial]
+def t2_atom_term (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    t2_atom_try_var (t2_variable ctx input) ctx input
+
+@[partial]
+def t2_atom_try_var (r: ParseResult Term2) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    match r {
+        success rem out => success rem out,
+        fail _ => t2_atom_try_lit (literal_term input) ctx input
+    }
+
+@[partial]
+def t2_atom_try_lit (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    match r {
+        success rem out => t2_atom_lift_lit out rem,
+        fail _ => t2_atom_try_match (match_parser input) ctx input
+    }
+
+@[partial]
+def t2_atom_lift_lit (t: Term) (rem: String) : ParseResult Term2 :=
+    match t {
+        Term.lit val => success rem (Term2.lit val),
+        Term.var name => match name {
+            NameRef.nid id => success rem (Term2.var t2_sentinel (DebugName.named id)),
+            NameRef.nmp mp => success rem (Term2.var t2_sentinel DebugName.unnamed),
+            NameRef.nop op => success rem (Term2.var t2_sentinel DebugName.unnamed)
+        },
+        Term.app f a => success rem (Term2.var t2_sentinel DebugName.unnamed),
+        Term.lam p b => success rem (Term2.var t2_sentinel DebugName.unnamed),
+        Term.pi a r => success rem (Term2.var t2_sentinel DebugName.unnamed),
+        Term.forall n t b => success rem (Term2.var t2_sentinel DebugName.unnamed),
+        Term.con c => success rem (Term2.var t2_sentinel DebugName.unnamed),
+        Term.ntv n => success rem (Term2.var t2_sentinel DebugName.unnamed),
+        Term.type_ u => success rem (Term2.type_ u),
+        Term.hole => success rem Term2.hole
+    }
+
+@[partial]
+def t2_atom_try_match (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    match r {
+        success rem out => t2_atom_lift_lit out rem,
+        fail _ => t2_atom_try_if (if_parser input) ctx input
+    }
+
+@[partial]
+def t2_atom_try_if (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    match r {
+        success rem out => t2_atom_lift_lit out rem,
+        fail _ => t2_atom_try_lambda (t2_lambda_parser ctx input) ctx input
+    }
+
+@[partial]
+def t2_atom_try_lambda (r: ParseResult Term2) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    match r {
+        success rem out => success rem out,
+        fail _ => t2_atom_try_paren (tag "(" input) ctx input
+    }
+
+@[partial]
+def t2_atom_try_paren (r: ParseResult String) (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    match r {
+        success rem _ => t2_atom_inner_expr (t2_expression ctx rem) ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_atom_inner_expr (r: ParseResult Term2) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem out => t2_atom_close_paren (tag ")" rem) out,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_atom_close_paren (r: ParseResult String) (out: Term2) : ParseResult Term2 :=
+    match r {
+        success rem _ => success rem out,
+        fail e => fail e
+    }
+
+// ─── Term2 lambda ────────────────────────────────────────────────────────
+
+@[partial]
+def t2_lambda_parser (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    t2_lambda_kw (alt (alt (tag "fn") (tag "ꟛ")) (tag "\\") input) ctx
+
+@[partial]
+def t2_lambda_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem _ => t2_lambda_name_outer (skip_spaces rem) ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_lambda_name_outer (input: String) (ctx: List Identifier) : ParseResult Term2 :=
+    t2_lambda_name_outer_got (identifier input) input ctx
+
+@[partial]
+def t2_lambda_name_outer_got (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem name => t2_lambda_arrow (tag "=>" (skip_spaces rem)) rem orig (Identifier.id name) ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_lambda_arrow (r: ParseResult String) (rem: String) (orig: String) (name: Identifier) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem2 _ => t2_lambda_body (t2_expression (List.cons name ctx) (skip_spaces rem2)) name,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_lambda_body (r: ParseResult Term2) (name: Identifier) : ParseResult Term2 :=
+    match r {
+        success rem body => success rem (Term2.lam (DebugName.named name) (Term2.type_ 1) body),
+        fail e => fail e
+    }
+
+// ─── Term2 expression (application + operators) ─────────────────────────
+
+@[partial]
+def t2_expression (ctx: List Identifier) (input: String) : ParseResult Term2 :=
+    t2_expr_first (t2_atom_term ctx (skip_spaces input)) ctx
+
+@[partial]
+def t2_expr_first (r: ParseResult Term2) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem lhs => t2_expr_rest rem lhs ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_expr_rest (input: String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+    t2_expr_rest_ws (take_while is_space input) lhs ctx
+
+@[partial]
+def t2_expr_rest_ws (r: ParseResult String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem _ => t2_expr_rest_next (t2_atom_term ctx rem) rem lhs ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_expr_rest_next (r: ParseResult Term2) (input: String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem rhs => t2_expr_rest rem (Term2.app lhs rhs) ctx,
+        fail _ => t2_expr_op input lhs ctx
+    }
+
+@[partial]
+def t2_expr_op (input: String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+    t2_expr_op_try (operator_parse input) input lhs ctx
+
+@[partial]
+def t2_expr_op_try (r: ParseResult String) (input: String) (lhs: Term2) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem op => t2_expr_op_prec input lhs op rem ctx,
+        fail _ => success input lhs
+    }
+
+@[partial]
+def t2_expr_op_prec (input: String) (lhs: Term2) (op: String) (rem: String) (ctx: List Identifier) : ParseResult Term2 :=
+    t2_expr_op_prec_val (op_precedence op) input lhs op rem ctx
+
+@[partial]
+def t2_expr_op_prec_val (prec: I64) (input: String) (lhs: Term2) (op: String) (rem: String) (ctx: List Identifier) : ParseResult Term2 :=
+    if I64.beq prec 0
+    then success input lhs
+    else t2_expr_op_rhs_ws (take_while is_space rem) lhs op ctx
+
+@[partial]
+def t2_expr_op_rhs_ws (r: ParseResult String) (lhs: Term2) (op: String) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem _ => t2_expr_op_rhs_expr (t2_expression ctx rem) lhs op ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_expr_op_rhs_expr (r: ParseResult Term2) (lhs: Term2) (op: String) (ctx: List Identifier) : ParseResult Term2 :=
+    match r {
+        success rem rhs =>
+            // Operator desugars to: op lhs rhs → app (app (var SENTINEL op) lhs) rhs
+            let op_var : Term2 := Term2.var t2_sentinel DebugName.unnamed in
+            success rem (Term2.app (Term2.app op_var lhs) rhs),
+        fail e => fail e
+    }
+
+// ─── Term2 parser tests (Phase 1) ───────────────────────────────────────
 
 @[test]
-def test_map_parse_simple : Bool :=
-	match map_parse id_str identifier "abc def" {
-		success rem out => String.beq rem " def",
+def test_t2_var_bound : Bool :=
+	let ctx : List Identifier := List.cons (Identifier.id "x") List.empty in
+	match t2_expression ctx "x" {
+		success rem out =>
+			match out {
+				Term2.var idx dbg =>
+					I64.beq idx 0 && String.beq rem "",
+				Term2.lam _ _ _ => false, Term2.forall _ _ _ => false,
+				Term2.pi _ _ => false, Term2.app _ _ => false,
+				Term2.lit _ => false, Term2.ntv _ => false,
+				Term2.con _ => false, Term2.type_ _ => false, Term2.hole => false
+			},
 		fail _ => false
 	}
 
 @[test]
-def test_map_parse_tag : Bool :=
-	match map_parse id_str (tag "x") "xy" {
-		success rem out => String.beq out "x",
+def test_t2_var_unbound : Bool :=
+	let empty_ctx : List Identifier := List.empty in
+	match t2_expression empty_ctx "y" {
+		success rem out =>
+			match out {
+				Term2.var idx dbg =>
+					I64.beq idx t2_sentinel && String.beq rem "",
+				Term2.lam _ _ _ => false, Term2.forall _ _ _ => false,
+				Term2.pi _ _ => false, Term2.app _ _ => false,
+				Term2.lit _ => false, Term2.ntv _ => false,
+				Term2.con _ => false, Term2.type_ _ => false, Term2.hole => false
+			},
 		fail _ => false
 	}
 
 @[test]
-def test_map_parse_fail : Bool :=
-	match map_parse id_str (tag "x") "y" {
-		success rem out => false,
-		fail e => true
-	}
-
-@[test]
-def test_map_parse_mapped : Bool :=
-	match map_parse str_len identifier "abc def" {
-		success rem out => String.beq rem " def",
+def test_t2_var_shadow : Bool :=
+	// In ctx [x, y, x] (outer x first), the inner x should be index 0
+	let x : Identifier := Identifier.id "x" in
+	let y : Identifier := Identifier.id "y" in
+	let ctx : List Identifier := List.cons y (List.cons x (List.cons x List.empty)) in
+	match t2_expression ctx "x" {
+		success rem out =>
+			match out {
+				Term2.var idx dbg =>
+					I64.beq idx 1 && String.beq rem "",
+				Term2.lam _ _ _ => false, Term2.forall _ _ _ => false,
+				Term2.pi _ _ => false, Term2.app _ _ => false,
+				Term2.lit _ => false, Term2.ntv _ => false,
+				Term2.con _ => false, Term2.type_ _ => false, Term2.hole => false
+			},
 		fail _ => false
 	}
 
 @[test]
-def test_bind_parse : Bool :=
-	match bind_parse (tag "x") always_tag_y "xyz" {
-		success rem out => String.beq rem "z",
+def test_t2_lambda_identity : Bool :=
+	// fn x => x  →  lam (named "x") (type_ 1) (var 0 (named "x"))
+	let empty_ctx : List Identifier := List.empty in
+	match t2_expression empty_ctx "fn x => x" {
+		success rem out =>
+			match out {
+				Term2.lam dbg typ body =>
+					match typ {
+						Term2.type_ u => I64.beq u 1 && String.beq rem "",
+						Term2.var _ _ => false, Term2.lam _ _ _ => false,
+						Term2.forall _ _ _ => false, Term2.pi _ _ => false,
+						Term2.app _ _ => false, Term2.lit _ => false,
+						Term2.ntv _ => false, Term2.con _ => false,
+						Term2.hole => false
+					},
+				Term2.var _ _ => false, Term2.forall _ _ _ => false,
+				Term2.pi _ _ => false, Term2.app _ _ => false,
+				Term2.lit _ => false, Term2.ntv _ => false,
+				Term2.con _ => false, Term2.type_ _ => false, Term2.hole => false
+			},
 		fail _ => false
 	}
 
 @[test]
-def test_bind_parse_fail_first : Bool :=
-	match bind_parse (tag "x") always_tag_y "abc" {
-		success rem out => false,
-		fail e => true
-	}
-
-@[test]
-def test_bind_parse_fail_second : Bool :=
-	match bind_parse (tag "x") always_tag_y "xab" {
-		success rem out => false,
-		fail e => true
-	}
-
-@[test]
-def test_alt_fold_first : Bool :=
-	match alt_fold (List.cons (tag "a") (List.cons (tag "b") (List.cons (tag "c") List.empty))) "abc" {
-		success rem out => String.beq rem "bc",
-		fail _ => false
-	}
-
-@[test]
-def test_alt_fold_second : Bool :=
-	match alt_fold (List.cons (tag "x") (List.cons (tag "y") (List.cons (tag "z") List.empty))) "y" {
+def test_t2_lambda_nested : Bool :=
+	// fn x => fn y => y  →  lam/named/x (lam/named/y (var 0))
+	let empty_ctx : List Identifier := List.empty in
+	match t2_expression empty_ctx "fn x => fn y => y" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
 
 @[test]
-def test_alt_fold_none : Bool :=
-	match alt_fold (List.cons (tag "x") (List.cons (tag "y") List.empty)) "abc" {
-		success rem out => false,
-		fail e => true
-	}
-
-@[test]
-def test_preceded_by : Bool :=
-	match preceded_by (tag "(") (tag "x") "(x" {
+def test_t2_app_simple : Bool :=
+	// f x  →  app (var SENTINEL f) (var SENTINEL x)
+	let empty_ctx : List Identifier := List.empty in
+	match t2_expression empty_ctx "f x" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
 
 @[test]
-def test_preceded_by_fail : Bool :=
-	match preceded_by (tag "(") (tag "x") "x" {
-		success rem out => false,
-		fail e => true
-	}
-
-@[test]
-def test_terminated_by : Bool :=
-	match terminated_by (tag "x") (tag ")") "x)" {
+def test_t2_app_chain : Bool :=
+	// f x y  →  app (app (var SENTINEL f) (var SENTINEL x)) (var SENTINEL y)
+	let empty_ctx : List Identifier := List.empty in
+	match t2_expression empty_ctx "f x y" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
 
 @[test]
-def test_terminated_by_fail : Bool :=
-	match terminated_by (tag "x") (tag ")") "x(" {
-		success rem out => false,
-		fail e => true
-	}
-
-@[test]
-def test_delimited_by : Bool :=
-	match delimited_by (tag "(") (tag "x") (tag ")") "(x)" {
+def test_t2_operator : Bool :=
+	// a ++ b  →  app (app (var SENTINEL _) (var SENTINEL a)) (var SENTINEL b)
+	let empty_ctx : List Identifier := List.empty in
+	match t2_expression empty_ctx "a ++ b" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
 
 @[test]
-def test_delimited_by_fail_open : Bool :=
-	match delimited_by (tag "(") (tag "x") (tag ")") "x)" {
-		success rem out => false,
-		fail e => true
-	}
-
-@[test]
-def test_delimited_by_fail_close : Bool :=
-	match delimited_by (tag "(") (tag "x") (tag ")") "(x(" {
-		success rem out => false,
-		fail e => true
-	}
-
-@[test]
-def test_separated_by_single : Bool :=
-	match separated_by (tag ",") (tag "a") "a" {
+def test_t2_parens : Bool :=
+	// (x)  →  var (SENTINEL, x)
+	let empty_ctx : List Identifier := List.empty in
+	match t2_expression empty_ctx "(x)" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
 
 @[test]
-def test_separated_by_multi : Bool :=
-	match separated_by (tag ",") (tag "a") "a,a,a" {
+def test_t2_literal_num : Bool :=
+	// 42  →  lit (num 42 i64)
+	let empty_ctx : List Identifier := List.empty in
+	match t2_expression empty_ctx "42" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
-
-@[test]
-def test_separated_by_empty : Bool :=
-	match separated_by (tag ",") (tag "a") "b" {
-		success rem out => String.beq rem "b",
-		fail e => false
-	}
-
-@[test]
-def test_opt_some : Bool :=
-	match opt (tag "x") "xy" {
-		success rem out => match out {
-			Option.some val => String.beq val "x",
-			Option.none => false
-		},
-		fail _ => false
-	}
-
-@[test]
-def test_opt_none : Bool :=
-	match opt (tag "x") "yz" {
-		success rem out => match out {
-			Option.some val => false,
-			Option.none => String.beq rem "yz"
-		},
-		fail _ => false
-	}
-
-@[test]
-def test_ws0 : Bool :=
-	match ws0 "  abc" {
-		success rem out => String.beq rem "abc",
-		fail _ => false
-	}
-
-@[test]
-def test_ws0_empty : Bool :=
-	match ws0 "abc" {
-		success rem out => String.beq rem "abc",
-		fail _ => false
-	}
-
-@[test]
-def test_ws1 : Bool :=
-	match ws1 "  abc" {
-		success rem out => String.beq rem "abc",
-		fail _ => false
-	}
-
-@[test]
-def test_ws1_fail : Bool :=
-	match ws1 "abc" {
-		success rem out => false,
-		fail e => true
-	}
-
-
-// --- Position tracking tests (Phase 1.2) ---
-
-@[test]
-def test_new_span : Bool :=
-	let span : LocatedSpan := new_span "hello" in
-	let frag : String := span_fragment span in
-	I64.beq (String.length frag) 5
-
-@[test]
-def test_new_span_location : Bool :=
-	let span : LocatedSpan := new_span "x" in
-	let loc : Location := span_location span in
-	match loc {
-		mk off line col => I64.beq off 0 && I64.beq line 1 && I64.beq col 1
-	}
-
-@[test]
-def test_consume_no_newline : Bool :=
-	let span : LocatedSpan := new_span "hello world" in
-	let next : LocatedSpan := consume_span span 5 in
-	let loc : Location := span_location next in
-	match loc {
-		mk off line col => I64.beq off 5 && I64.beq line 1 && I64.beq col 6
-	}
-
-@[test]
-def test_consume_single_newline : Bool :=
-	let span : LocatedSpan := new_span "a\nb" in
-	let next : LocatedSpan := consume_span span 2 in
-	let loc : Location := span_location next in
-	match loc {
-		mk off line col => I64.beq off 2 && I64.beq line 2 && I64.beq col 1
-	}
-
-@[test]
-def test_consume_multi_newline : Bool :=
-	let span : LocatedSpan := new_span "a\n\nb" in
-	let next : LocatedSpan := consume_span span 3 in
-	let loc : Location := span_location next in
-	match loc {
-		mk off line col => I64.beq off 3 && I64.beq line 3 && I64.beq col 1
-	}
-
-@[test]
-def test_span_fragment_after_consume : Bool :=
-	let span : LocatedSpan := new_span "hello world" in
-	let next : LocatedSpan := consume_span span 6 in
-	let rest : String := span_fragment next in
-	String.beq rest "world"
 
 def main : I64 := 42
