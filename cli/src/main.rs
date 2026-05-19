@@ -48,6 +48,10 @@ enum Commands {
     no_color: bool,
     #[arg(long)]
     max_depth: Option<u64>,
+    #[arg(short = 'j', long)]
+    jobs: Option<usize>,
+    #[arg(long, default_value_t = false)]
+    sequential: bool,
   },
 
   #[cfg(feature = "llvm")]
@@ -133,8 +137,19 @@ fn main() -> Result<(), String> {
       color,
       no_color,
       max_depth,
+      jobs,
+      sequential,
     } => {
       let use_colors = color && !no_color;
+      let num_threads = if sequential {
+        1
+      } else {
+        jobs.unwrap_or_else(|| {
+          std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+        })
+      };
       let result = run_tests(
         input,
         EvalOptions {
@@ -142,6 +157,7 @@ fn main() -> Result<(), String> {
           use_colors,
           max_recursion_depth: max_depth,
         },
+        num_threads,
       );
       match result {
         Ok(_) => (),

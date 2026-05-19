@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::fs;
 use std::hash::{BuildHasherDefault, DefaultHasher, Hash};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::eval::r#type::render_type_error_with_source;
 use crate::eval::r#type::type_check;
@@ -311,148 +312,180 @@ fn collect_mo_files(dir: &Path) -> Vec<PathBuf> {
   files
 }
 
-pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
-  let files: Vec<PathBuf> = if input.is_dir() {
-    let mut files = collect_mo_files(&input);
-    files.sort();
-    files
-  } else {
-    vec![input]
+#[derive(Debug)]
+struct FileOutput {
+  path: PathBuf,
+  passed: usize,
+  failed: usize,
+  output_lines: Vec<String>,
+  error_message: Option<String>,
+  failures: Vec<(String, String)>,
+}
+
+/// Process a single test file. Returns updated `LoadedModules` and the file result.
+fn test_one_file(
+  file: &Path,
+  path: &ModulePath,
+  mut loaded: LoadedModules,
+  options: &EvalOptions,
+) -> (LoadedModules, FileOutput) {
+  let file_path = file.to_path_buf();
+
+  let backup = loaded.clone();
+  loaded = match load_module(&file_path, path, loaded) {
+    Ok(l) => l,
+    Err(e) => {
+      return (
+        backup,
+        FileOutput {
+          path: file_path.clone(),
+          passed: 0,
+          failed: 1,
+          output_lines: vec![format!("{RED}FAIL{RESET} {}", file_path.display())],
+          error_message: Some(format!("failed to compile {}: {e}", file_path.display())),
+          failures: Vec::new(),
+        },
+      );
+    }
   };
 
-  let mut total_passed = 0;
-  let mut total_failed = 0;
-  let mut overall_errors: Vec<String> = Vec::new();
+  let module = match loaded.get_module(path) {
+    Some(m) => m,
+    None => {
+      return (
+        loaded,
+        FileOutput {
+          path: file_path.clone(),
+          passed: 0,
+          failed: 0,
+          output_lines: Vec::new(),
+          error_message: None,
+          failures: Vec::new(),
+        },
+      );
+    }
+  };
 
-  for file in &files {
-    let path: ModulePath = file.clone().into();
-    let mut loaded = match default_modules() {
-      Ok(m) => m,
-      Err(e) => return Err(format!("{e}")),
-    };
-    // Skip files that are already part of the default modules.
-    // Also skip if the last segment of the path matches a default module
-    // (e.g., init/id.mo is the same as the "id" default module).
-    let is_default = loaded.get_module(&path).is_some() || {
-      let last = path.last();
-      loaded
-        .get_module(&ModulePath::single(last.clone()))
-        .is_some()
-    };
-    // Ensure std/test is loaded (for Test.assert)
-    let test_path: ModulePath = ModulePath::new(vec![id("std"), id("test")]);
-    if loaded.get_module(&test_path).is_none() {
-      loaded = match load_module_files(&test_path, loaded) {
-        Ok(l) => l,
-        Err(e) => {
-          eprintln!("Skipping std/test: {e}");
-          return Err(format!("Failed to load std/test: {e}"));
-        }
-      };
-    }
-    if is_default {
-      continue;
-    }
-    // Try loading the test file; treat parse/compile errors as failures
-    let loaded = match load_module(file, &path, loaded) {
-      Ok(l) => l,
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(path).expect("Module not loaded");
+
+  let mut output_lines: Vec<String> = Vec::new();
+  if options.debug {
+    output_lines.push(format!("{global}"));
+  }
+
+  let test_defs: Vec<_> = module
+    .defs()
+    .into_iter()
+    .filter(|ctx| ctx.value().has_test_attr())
+    .collect();
+
+  if test_defs.is_empty() {
+    return (
+      loaded,
+      FileOutput {
+        path: file_path.clone(),
+        passed: 0,
+        failed: 0,
+        output_lines: Vec::new(),
+        error_message: None,
+        failures: Vec::new(),
+      },
+    );
+  }
+
+  let mut passed = 0;
+  let mut failed = 0;
+  let mut failures: Vec<(String, String)> = Vec::new();
+
+  for ctx in &test_defs {
+    let def = ctx.value();
+    let name = def.name.to_string();
+    let term = def.term.clone();
+
+    let (term, typ) = match type_check(term, Hole, &global.scope()) {
+      Ok(tt) => tt.to_tuple(),
       Err(e) => {
-        total_failed += 1;
-        println!("{RED}FAIL{RESET} {}", file.display());
-        eprintln!("  {e}");
-        overall_errors.push(format!("failed to compile {}: {e}", file.display()));
+        failed += 1;
+        failures.push((name.clone(), format!("type error: {e}")));
         continue;
       }
     };
-    let module = match loaded.get_module(&path) {
-      Some(m) => m,
-      None => continue,
-    };
-    let loaded_scopes = loaded.scopes();
-    let global = loaded_scopes.global(&path).expect("Module not loaded");
+
     if options.debug {
-      println!("{global}");
+      output_lines.push(format!("test {name} : {typ}"));
     }
 
-    let test_defs: Vec<_> = module
-      .defs()
-      .into_iter()
-      .filter(|ctx| ctx.value().has_test_attr())
-      .collect();
+    let result = match eval(term, &global.scope(), options) {
+      Ok(t) => t,
+      Err(e) => {
+        failed += 1;
+        failures.push((name.clone(), format!("eval error: {e}")));
+        continue;
+      }
+    };
 
-    if test_defs.is_empty() {
-      continue;
+    if options.debug {
+      output_lines.push(format!("  eval: {result}"));
     }
 
-    let mut passed = 0;
-    let mut failed = 0;
-    let mut failures: Vec<(String, String)> = Vec::new();
-
-    for ctx in &test_defs {
-      let def = ctx.value();
-      let name = def.name.to_string();
-      let term = def.term.clone();
-
-      let (term, typ) = match type_check(term, Hole, &global.scope()) {
-        Ok(tt) => tt.to_tuple(),
-        Err(e) => {
-          failed += 1;
-          failures.push((name.clone(), format!("type error: {e}")));
-          continue;
-        }
-      };
-
-      if options.debug {
-        println!("test {name} : {typ}");
+    match detect_test_result(&result) {
+      TestResult::Pass => {
+        passed += 1;
+        output_lines.push(format!("{GREEN}PASS{RESET} {name}"));
       }
-
-      let result = match eval(term, &global.scope(), &options) {
-        Ok(t) => t,
-        Err(e) => {
-          failed += 1;
-          failures.push((name.clone(), format!("eval error: {e}")));
-          continue;
-        }
-      };
-
-      if options.debug {
-        println!("  eval: {result}");
+      TestResult::Fail => {
+        failed += 1;
+        output_lines.push(format!("{RED}FAIL{RESET} {name}"));
       }
-
-      match detect_test_result(&result) {
-        TestResult::Pass => {
-          passed += 1;
-          println!("{GREEN}PASS{RESET} {name}");
-        }
-        TestResult::Fail => {
-          failed += 1;
-          println!("{RED}FAIL{RESET} {name}");
-        }
-        TestResult::FailWithMessage(msg) => {
-          failed += 1;
-          println!("{RED}FAIL{RESET} {name}: {msg}");
-          failures.push((name.clone(), msg));
-        }
+      TestResult::FailWithMessage(msg) => {
+        failed += 1;
+        output_lines.push(format!("{RED}FAIL{RESET} {name}: {msg}"));
+        failures.push((name.clone(), msg));
       }
-    }
-
-    let total = passed + failed;
-    total_passed += passed;
-    total_failed += failed;
-
-    if failed > 0 {
-      for (name, msg) in &failures {
-        eprintln!("{RED}FAIL{RESET} {name}: {msg}");
-      }
-      overall_errors.push(format!(
-        "{passed}/{total} tests passed in {}: {RED}FAILED{RESET}",
-        file.display()
-      ));
-    } else if passed > 0 {
-      println!("{passed}/{total} tests passed in {}", file.display());
     }
   }
 
+  let total = passed + failed;
+  if failed > 0 {
+    output_lines.push(format!(
+      "{passed}/{total} tests passed in {}: {RED}FAILED{RESET}",
+      file_path.display()
+    ));
+  } else if passed > 0 {
+    output_lines.push(format!(
+      "{passed}/{total} tests passed in {}",
+      file_path.display()
+    ));
+  }
+
+  (
+    loaded,
+    FileOutput {
+      path: file_path,
+      passed,
+      failed,
+      output_lines,
+      error_message: None,
+      failures,
+    },
+  )
+}
+
+fn print_file_output(result: &FileOutput) {
+  for line in &result.output_lines {
+    println!("{line}");
+  }
+  for (name, msg) in &result.failures {
+    eprintln!("{RED}FAIL{RESET} {name}: {msg}");
+  }
+}
+
+fn print_final_summary(
+  total_passed: usize,
+  total_failed: usize,
+  overall_errors: &[String],
+) -> Result<(), String> {
   let total_tests = total_passed + total_failed;
   if total_tests == 0 {
     return Err("No tests found".to_string());
@@ -469,4 +502,132 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
     println!("{GREEN}{total_passed}/{total_tests} total tests passed{RESET}");
     Ok(())
   }
+}
+
+fn run_tests_sequential(
+  files: &[PathBuf],
+  master_loaded: &LoadedModules,
+  options: &EvalOptions,
+) -> Result<(), String> {
+  let mut total_passed = 0;
+  let mut total_failed = 0;
+  let mut overall_errors: Vec<String> = Vec::new();
+  let mut loaded = master_loaded.clone();
+
+  for file in files {
+    let path: ModulePath = file.clone().into();
+    let (new_loaded, result) = test_one_file(file, &path, loaded, options);
+    loaded = new_loaded;
+
+    print_file_output(&result);
+
+    total_passed += result.passed;
+    total_failed += result.failed;
+
+    if let Some(ref err) = result.error_message {
+      eprintln!("  {err}");
+      overall_errors.push(err.clone());
+    }
+  }
+
+  print_final_summary(total_passed, total_failed, &overall_errors)
+}
+
+fn run_tests_parallel(
+  files: &[PathBuf],
+  master_loaded: &LoadedModules,
+  options: &EvalOptions,
+  num_threads: usize,
+) -> Result<(), String> {
+  let n_threads = std::cmp::min(num_threads, files.len());
+  let chunk_size = files.len().div_ceil(n_threads);
+
+  let results: Arc<Mutex<Vec<FileOutput>>> = Arc::new(Mutex::new(Vec::new()));
+
+  let mut handles = Vec::with_capacity(n_threads);
+  for chunk in files.chunks(chunk_size) {
+    let mut loaded = master_loaded.clone();
+    let opts = options.clone();
+    let results = Arc::clone(&results);
+    let chunk_files: Vec<PathBuf> = chunk.to_vec();
+
+    let handle = std::thread::Builder::new()
+      .stack_size(8 * 1024 * 1024)
+      .spawn(move || {
+        for file in &chunk_files {
+          let path: ModulePath = file.clone().into();
+          let (new_loaded, output) = test_one_file(file, &path, loaded, &opts);
+          loaded = new_loaded;
+          results.lock().unwrap().push(output);
+        }
+      })
+      .expect("failed to spawn test thread");
+    handles.push(handle);
+  }
+
+  for handle in handles {
+    handle.join().expect("test thread panicked");
+  }
+
+  let mut results = Arc::try_unwrap(results).unwrap().into_inner().unwrap();
+  results.sort_by(|a, b| a.path.cmp(&b.path));
+
+  let mut total_passed = 0;
+  let mut total_failed = 0;
+  let mut overall_errors: Vec<String> = Vec::new();
+
+  for result in &results {
+    print_file_output(result);
+
+    total_passed += result.passed;
+    total_failed += result.failed;
+
+    if let Some(ref err) = result.error_message {
+      eprintln!("  {err}");
+      overall_errors.push(err.clone());
+    }
+  }
+
+  print_final_summary(total_passed, total_failed, &overall_errors)
+}
+
+pub fn run_tests(input: PathBuf, options: EvalOptions, num_threads: usize) -> Result<(), String> {
+  let files: Vec<PathBuf> = if input.is_dir() {
+    let mut files = collect_mo_files(&input);
+    files.sort();
+    files
+  } else {
+    vec![input]
+  };
+
+  let mut master_loaded = default_modules().map_err(|e| format!("{e}"))?;
+
+  // Ensure std/test is loaded (for Test.assert)
+  let test_path: ModulePath = ModulePath::new(vec![id("std"), id("test")]);
+  if master_loaded.get_module(&test_path).is_none() {
+    master_loaded = load_module_files(&test_path, master_loaded)
+      .map_err(|e| format!("Failed to load std/test: {e}"))?;
+  }
+
+  // Filter out files that are already part of the default modules
+  let files: Vec<PathBuf> = files
+    .into_iter()
+    .filter(|file| {
+      let path: ModulePath = file.clone().into();
+      let is_default = master_loaded.get_module(&path).is_some() || {
+        let last = path.last();
+        master_loaded
+          .get_module(&ModulePath::single(last.clone()))
+          .is_some()
+      };
+      !is_default
+    })
+    .collect();
+
+  // Single file or single-threaded: run sequentially
+  if num_threads <= 1 || files.len() <= 1 {
+    return run_tests_sequential(&files, &master_loaded, &options);
+  }
+
+  run_tests_parallel(&files, &master_loaded, &options, num_threads)
 }
