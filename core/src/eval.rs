@@ -15,15 +15,15 @@ use crate::eval::r#type::TypeError;
 use crate::term::Term::Forall;
 use crate::term::module::{Scope, ScopeError};
 use crate::term::{
-  Constructor, Identifier, ModulePath, Native, Par, SourceRange, ann, case, forall, if_term, lam,
-  lam_index, match_term, mpt, param, pi_name,
+  Constructor, Identifier, ModulePath, Named, Native, NumSuffix, Par, SourceRange, ann, case,
+  forall, if_term, lam, lam_index, match_term, mpt, param, pi_name,
 };
 use crate::term::{
-  Literal,
+  InstanceKey, Literal,
   NameRef::{self, Id, Index},
   Param,
   Term::{self, Ann, App, Con, Ctx, Lam, Lit, Ntv, Pi, Quote, Sort, Var},
-  apps, id,
+  apps, id, var,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -522,6 +522,50 @@ pub fn apply_dot_macro_recursive(term: Term) -> Term {
   apply_dot_macro(term)
 }
 
+/// Infer the runtime type of a term for class method dispatch.
+fn infer_arg_type(term: &Term) -> Option<Term> {
+  match term {
+    Lit { value } => match value {
+      Literal::Num { suffix, .. } => Some(var(num_suffix_to_type_name(suffix))),
+      Literal::Float { suffix, .. } => Some(var(num_suffix_to_type_name(suffix))),
+      Literal::Str { .. } => Some(var("String")),
+      _ => None,
+    },
+    Con(Constructor { typ_name, args, .. }) => {
+      let base = var(&typ_name.to_string());
+      if args.is_empty() {
+        Some(base)
+      } else {
+        let type_args: Option<Vec<Term>> = args
+          .iter()
+          .filter_map(|a| a.as_ref())
+          .map(infer_arg_type)
+          .collect();
+        match type_args {
+          Some(ts) if !ts.is_empty() => Some(apps(base, ts)),
+          _ => Some(base),
+        }
+      }
+    }
+    _ => None,
+  }
+}
+
+fn num_suffix_to_type_name(suffix: &NumSuffix) -> &'static str {
+  match suffix {
+    NumSuffix::I8 => "I8",
+    NumSuffix::I16 => "I16",
+    NumSuffix::I32 => "I32",
+    NumSuffix::I64 => "I64",
+    NumSuffix::U8 => "U8",
+    NumSuffix::U16 => "U16",
+    NumSuffix::U32 => "U32",
+    NumSuffix::U64 => "U64",
+    NumSuffix::F32 => "F32",
+    NumSuffix::F64 => "F64",
+  }
+}
+
 fn unwrap_decl_lambda(
   arg: Term,
   name: &NameRef,
@@ -545,18 +589,55 @@ fn eval_app(
   options: &EvalOptions,
   loc: Option<SourceRange>,
 ) -> Result<Term, Error> {
-  let fun = eval_inner(fun, scope, options, loc.clone())?;
-  let arg = eval_inner(arg, scope, options, loc.clone())?;
+  // Class method dispatch: evaluate arg first to determine runtime type,
+  // so we can find the correct instance instead of picking the first.
+  let (fun_evaluated, arg_evaluated) = if let Term::Var { name } = &fun
+    && let Some(path) = name.clone().to_path()
+    && let Some(class_def) = scope.global().find_class_def(&path)
+  {
+    let arg_eval = eval_inner(arg, scope, options, loc.clone())?;
+    if let Some(arg_type) = infer_arg_type(&arg_eval) {
+      let param_name = class_def
+        .class
+        .params()
+        .first()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| Identifier::new("_".to_string()));
+      let key = InstanceKey::new(
+        class_def.class.name().clone(),
+        vec![],
+        vec![param(param_name, arg_type)],
+      );
+      if let Some(instance) = scope.global().find_instance(&key) {
+        let method_name = instance
+          .name()
+          .clone()
+          .extend(ModulePath::single(class_def.name.clone()));
+        if let Ok(method_term) = scope.resolve_name(&NameRef::P(method_name)) {
+          if let Lam { param, body } = method_term {
+            return Ok(substitute_lam(param.clone(), *body.clone(), &arg_eval));
+          }
+        }
+      }
+    }
+    // Dispatch failed; fall through to normal resolution
+    let fun_eval = eval_inner(fun, scope, options, loc.clone())?;
+    (fun_eval, arg_eval)
+  } else {
+    let fun_eval = eval_inner(fun, scope, options, loc.clone())?;
+    let arg_eval = eval_inner(arg, scope, options, loc.clone())?;
+    (fun_eval, arg_eval)
+  };
   if options.debug {
-    println!("eval_app: fun={} arg={}", fun, arg);
+    println!("eval_app: fun={} arg={}", fun_evaluated, arg_evaluated);
   }
-  match fun {
-    Var { name } => unwrap_decl_lambda(arg, &name, scope, loc.clone()),
-    Lam { param, body } => Ok(substitute_lam(param, *body, &arg)),
+  match fun_evaluated {
+    Var { name } => unwrap_decl_lambda(arg_evaluated, &name, scope, loc.clone()),
+    Lam { param, body } => Ok(substitute_lam(param, *body, &arg_evaluated)),
     Forall { body, .. } => Ok(*body),
     Ntv { native } => {
       let index = native.args.iter().filter(|a| a.is_some()).count() + 1;
-      if let Some(result) = native_apply_arg(native, index, arg) {
+      if let Some(result) = native_apply_arg(native, index, arg_evaluated) {
         let result_eval = eval_inner(result, scope, options, loc.clone())?;
         Ok(result_eval)
       } else {
@@ -571,11 +652,13 @@ fn eval_app(
       arg: arg_internal,
     } => {
       let f = eval_app(*fun2, *arg_internal, scope, options, loc.clone())?;
-      let f2 = eval_app(f, arg, scope, options, loc.clone())?;
+      let f2 = eval_app(f, arg_evaluated, scope, options, loc.clone())?;
       Ok(f2)
     }
     _ => Err(wrap_error(
-      Error::Eval(EvalError::NotAFunction { term: fun.clone() }),
+      Error::Eval(EvalError::NotAFunction {
+        term: fun_evaluated.clone(),
+      }),
       loc.clone(),
     )),
   }
