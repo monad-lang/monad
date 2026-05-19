@@ -1230,6 +1230,16 @@ pub enum VarRef<'a> {
     typ: &'a Term,
     method_constraints: Option<&'a Vec<TypeConstraint>>,
   },
+  /// A class method reference that needs runtime resolution.
+  /// The type checker has verified via constraints that an instance
+  /// exists, but the concrete type is abstract (a type variable).
+  /// The evaluator must resolve this at runtime using the env.
+  ClassMethod {
+    class_name: ModulePath,
+    method_name: Identifier,
+    type_var: Identifier,
+    typ: Term,
+  },
 }
 impl<'a> Typed for VarRef<'a> {
   fn typ(&self) -> &Term {
@@ -1237,6 +1247,7 @@ impl<'a> Typed for VarRef<'a> {
       VarRef::Local { typ } => typ,
       VarRef::Free { term: _, typ } => typ,
       VarRef::UpdateRef { typ, .. } => typ,
+      VarRef::ClassMethod { typ, .. } => typ,
     }
   }
 }
@@ -1248,6 +1259,7 @@ impl<'a> VarRef<'a> {
       VarRef::Free { term, .. } => Some(term),
       VarRef::UpdateRef { term, .. } => Some(term),
       VarRef::Local { .. } => None,
+      VarRef::ClassMethod { .. } => None,
     }
   }
 }
@@ -2294,6 +2306,14 @@ impl<'a> DefRef<'a> {
     VarRef::Free {
       term: self.term,
       typ: self.typ,
+    }
+  }
+  pub fn to_update_ref(&self) -> VarRef<'_> {
+    VarRef::UpdateRef {
+      new_path: &self.name,
+      typ: self.typ,
+      term: self.term,
+      method_constraints: None,
     }
   }
 }

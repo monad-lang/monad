@@ -7,7 +7,9 @@ use crate::eval::native::{NativeFun, load_native_funs};
 use crate::eval::r#type::{
   TypeError, UsageEnv, derive_instance_key, render_type_error_with_source, type_check_module_decls,
 };
-use crate::term::{Inductive, Instance, InstanceKey, ModulePath, SourceContext, Term};
+use crate::term::{
+  Inductive, Instance, InstanceKey, ModulePath, SourceContext, Term, TypeConstraint,
+};
 use crate::{
   parser::parse_file_with_path,
   term::{
@@ -1062,6 +1064,118 @@ impl<'a> GlobalScope<'a> {
     }
   }
 
+  pub fn find_any_name_ref_with_constraints(
+    &'_ self,
+    nref: &NameRef,
+    typ: &Term,
+    constraints: &[TypeConstraint],
+  ) -> Result<VarRef<'_>, ScopeError> {
+    if let Some(i) = nref.clone().to_path() {
+      let var = self.find_any_ref_with_constraints(&i, typ, constraints)?;
+      Ok(var)
+    } else if let NameRef::Op(op) = nref {
+      let infix = self.find_infix(op)?;
+      let var = self.find_any_ref_with_constraints(&infix.name, typ, constraints)?;
+      Ok(var)
+    } else if let NameRef::Macro(name) = nref {
+      let path = ModulePath::single(name.clone());
+      let var = self.find_any_ref_with_constraints(&path, typ, constraints)?;
+      Ok(var)
+    } else {
+      Err(nref_error(nref.clone()))
+    }
+  }
+
+  pub fn find_any_ref_with_constraints(
+    &'_ self,
+    name: &ModulePath,
+    typ: &Term,
+    constraints: &[TypeConstraint],
+  ) -> Result<VarRef<'_>, ScopeError> {
+    if let Some(candidates) = self.conflicts.get(name) {
+      return Err(ScopeError::AmbiguousName {
+        name: name.clone(),
+        candidates: candidates.clone(),
+      });
+    }
+    if let Some(def) = self.find_ref(name) {
+      Ok(def.to_var_ref())
+    } else if let Some(def) = self.find_class_def(name) {
+      let result = self.resolve_class_method_with_constraints(name, typ, def, constraints);
+      if result.is_err() && is_indexed_monad_method(name) {
+        if let Some(monad_name) = to_monad_name(name) {
+          if let Some(monad_def) = self.find_class_def(&monad_name) {
+            return self.resolve_class_method_with_constraints(
+              &monad_name,
+              typ,
+              monad_def,
+              constraints,
+            );
+          }
+        }
+      }
+      result
+    } else {
+      Err(ScopeError::PathNotFound(name.clone()))
+    }
+  }
+
+  fn resolve_class_method_with_constraints(
+    &'_ self,
+    _name: &ModulePath,
+    typ: &Term,
+    def: &ClassDefRef,
+    constraints: &[TypeConstraint],
+  ) -> Result<VarRef<'_>, ScopeError> {
+    let key = derive_instance_key(def, typ)?;
+    for constraint in constraints {
+      if *constraint.class() == *def.class.name() {
+        if let Some(ty) = constraint.vars().first() {
+          // Build an InstanceKey using the class param's name so
+          // Instance::matches correctly finds the matching class param.
+          let class_param_name = def.class.params.first().map(|p| p.name.clone());
+          let param_name = class_param_name.unwrap_or_else(|| ty.clone());
+          let constrained_key = InstanceKey::new(
+            constraint.class().clone(),
+            vec![],
+            vec![crate::term::param(
+              param_name,
+              Term::Var {
+                name: NameRef::Id(ty.clone()),
+              },
+            )],
+          );
+          if let Some(instance) = self.find_instance(&constrained_key) {
+            let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
+            let ins_def = self
+              .find_ref(&ins_def_name)
+              .ok_or(ScopeError::PathNotFound(ins_def_name))?;
+            return Ok(ins_def.to_update_ref());
+          }
+          // No concrete instance found for the type variable, but the
+          // constraint guarantees one exists. Produce a ClassMethod ref
+          // for runtime resolution.
+          let method_name = def.name.clone();
+          let class_name = def.class.name().clone();
+          return Ok(VarRef::ClassMethod {
+            class_name,
+            method_name,
+            type_var: ty.clone(),
+            typ: typ.clone(),
+          });
+        }
+      }
+    }
+    if let Some(instance) = self.find_instance(&key) {
+      let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
+      let ins_def = self
+        .find_ref(&ins_def_name)
+        .ok_or(ScopeError::PathNotFound(ins_def_name))?;
+      return Ok(ins_def.to_update_ref());
+    }
+    Err(ScopeError::InstanceNotFound(key.clone()))
+  }
+
   fn load_decl(
     &mut self,
     ctx: &'a SourceContext<Decl>,
@@ -1197,11 +1311,13 @@ pub enum Scope<'a> {
   Top {
     global: &'a GlobalScope<'a>,
     usage_env: UsageEnv,
+    constraints: Vec<TypeConstraint>,
   },
   Sub {
     local: LocalVar<'a>,
     parent: Box<Scope<'a>>,
     usage_env: UsageEnv,
+    constraints: Vec<TypeConstraint>,
   },
 }
 
@@ -1210,6 +1326,7 @@ impl<'a> Scope<'a> {
     Scope::Top {
       global,
       usage_env: UsageEnv::new(),
+      constraints: Vec::new(),
     }
   }
 
@@ -1228,6 +1345,36 @@ impl<'a> Scope<'a> {
       Scope::Sub { usage_env, .. } => usage_env,
     }
   }
+  pub fn constraints(&self) -> &[TypeConstraint] {
+    match self {
+      Scope::Top { constraints, .. } => constraints,
+      Scope::Sub { constraints, .. } => constraints,
+    }
+  }
+
+  pub fn with_constraints(&self, cs: Vec<TypeConstraint>) -> Scope<'a> {
+    match self {
+      Scope::Top {
+        global, usage_env, ..
+      } => Scope::Top {
+        global,
+        usage_env: usage_env.clone(),
+        constraints: cs,
+      },
+      Scope::Sub {
+        local,
+        parent,
+        usage_env,
+        ..
+      } => Scope::Sub {
+        local: local.clone(),
+        parent: parent.clone(),
+        usage_env: usage_env.clone(),
+        constraints: cs,
+      },
+    }
+  }
+
   /// Extract term of NameRef
   pub fn resolve_name(&self, nref: &NameRef) -> Result<&Term, ScopeError> {
     let global = self.global();
@@ -1338,6 +1485,7 @@ impl<'a> Scope<'a> {
   pub fn with_param(&self, param: &'a Par) -> Scope<'a> {
     let mult = param.multiplicity();
     let mut usage_env = self.usage_env().clone();
+    let constraints = self.constraints().to_vec();
     match param {
       Par::P(param) => {
         usage_env.register(param.name.clone(), mult.clone());
@@ -1345,6 +1493,7 @@ impl<'a> Scope<'a> {
           local: local_var(&param.name, param.typ.as_ref()),
           parent: Box::new(self.clone()),
           usage_env,
+          constraints,
         }
       }
       Par::I { typ, .. } => {
@@ -1353,6 +1502,7 @@ impl<'a> Scope<'a> {
           local: local_index_var(typ.as_ref()),
           parent: Box::new(self.clone()),
           usage_env,
+          constraints,
         }
       }
     }
@@ -1362,6 +1512,7 @@ impl<'a> Scope<'a> {
       local: local_var(name, typ),
       parent: Box::new(self.clone()),
       usage_env: self.usage_env().clone(),
+      constraints: self.constraints().to_vec(),
     }
   }
   pub fn with_forall(&self, name: &'a Identifier, typ: &'a Term) -> Scope<'a> {
@@ -1369,6 +1520,7 @@ impl<'a> Scope<'a> {
       local: local_forall(name, typ),
       parent: Box::new(self.clone()),
       usage_env: self.usage_env().clone(),
+      constraints: self.constraints().to_vec(),
     }
   }
   pub fn with_local_index_var(&self, typ: &'a Term) -> Scope<'a> {
@@ -1376,6 +1528,7 @@ impl<'a> Scope<'a> {
       local: local_index_var(typ),
       parent: Box::new(self.clone()),
       usage_env: self.usage_env().clone(),
+      constraints: self.constraints().to_vec(),
     }
   }
   pub fn with_type_owned(&self, name: &'a Identifier, typ: Term) -> Scope<'a> {
@@ -1383,6 +1536,7 @@ impl<'a> Scope<'a> {
       local: local_var_owned(name, typ),
       parent: Box::new(self.clone()),
       usage_env: self.usage_env().clone(),
+      constraints: self.constraints().to_vec(),
     }
   }
 

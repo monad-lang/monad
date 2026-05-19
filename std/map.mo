@@ -128,19 +128,102 @@ def BTreeMap.to_list_asc (m: BTreeMap K V) (acc: List (Pair K V)) : List (Pair K
       BTreeMap.to_list_asc left acc2
   }
 
+/// Recursive insert helper. Takes comparison functions explicitly to avoid
+/// needing type class constraints on recursive self-calls.
+/// NOTE: this function is ready for use but requires compiler support for
+/// evaluating class method references (BOrd.lt/BOrd.gt) passed as arguments
+/// from constrained instance bodies.
+@[terminating]
+def BTreeMap.insert_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (val: V) (m: BTreeMap K V) : BTreeMap K V :=
+  BTreeMap.with_node m
+    (fn k v left right h =>
+      let insert_left : BTreeMap K V := BTreeMap.insert_loop lt gt key val left in
+      let insert_right : BTreeMap K V := BTreeMap.insert_loop lt gt key val right in
+      if lt key k
+      then BTreeMap.balance k v insert_left right
+      else if gt key k
+      then BTreeMap.balance k v left insert_right
+      else BTreeMap.node key val left right h)
+    (BTreeMap.node key val BTreeMap.empty BTreeMap.empty 1)
+
+/// Recursive lookup helper.
+@[terminating]
+def BTreeMap.lookup_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (m: BTreeMap K V) : Option V :=
+  match m {
+    BTreeMap.empty => Option.none,
+    BTreeMap.node k v left right _ =>
+      if lt key k
+      then BTreeMap.lookup_loop lt gt key left
+      else if gt key k
+      then BTreeMap.lookup_loop lt gt key right
+      else Option.some v
+  }
+
+/// Recursive delete helper.
+@[terminating]
+def BTreeMap.delete_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (m: BTreeMap K V) : BTreeMap K V :=
+  BTreeMap.with_node m
+    (fn k v left right h =>
+      let delete_left : BTreeMap K V := BTreeMap.delete_loop lt gt key left in
+      let delete_right : BTreeMap K V := BTreeMap.delete_loop lt gt key right in
+      if lt key k
+      then BTreeMap.balance k v delete_left right
+      else if gt key k
+      then BTreeMap.balance k v left delete_right
+      else
+        BTreeMap.with_node left
+          (fn lk lv ll lr lh =>
+            BTreeMap.with_node right
+              (fn rk rv rl rr rh => BTreeMap.balance rk rv left rl)
+              left)
+          right)
+    BTreeMap.empty
+
 /// Instance: BTreeMap implements the Map type class.
-/// NOTE: insert/lookup/delete require BOrd constraint propagation
-/// for type variables in instance method bodies (compiler fix needed).
-/// Full implementations exist in the BTreeMap module.
 instance [BOrd K] Map BTreeMap {
   def empty : BTreeMap K V := BTreeMap.empty
 
+  @[terminating]
   def insert (key: K) (val: V) (m: BTreeMap K V) : BTreeMap K V :=
-    BTreeMap.empty
+    BTreeMap.with_node m
+      (fn k v left right h =>
+        let insert_left : BTreeMap K V := Map.insert key val left in
+        let insert_right : BTreeMap K V := Map.insert key val right in
+        if BOrd.lt key k
+        then BTreeMap.balance k v insert_left right
+        else if BOrd.gt key k
+        then BTreeMap.balance k v left insert_right
+        else BTreeMap.node key val left right h)
+      (BTreeMap.node key val BTreeMap.empty BTreeMap.empty 1)
 
+  @[terminating]
   def lookup (key: K) (m: BTreeMap K V) : Option V :=
-    Option.none
+    match m {
+      BTreeMap.empty => Option.none,
+      BTreeMap.node k v left right _ =>
+        if BOrd.lt key k
+        then Map.lookup key left
+        else if BOrd.gt key k
+        then Map.lookup key right
+        else Option.some v
+    }
 
+  @[terminating]
   def delete (key: K) (m: BTreeMap K V) : BTreeMap K V :=
-    BTreeMap.empty
+    BTreeMap.with_node m
+      (fn k v left right h =>
+        let delete_left : BTreeMap K V := Map.delete key left in
+        let delete_right : BTreeMap K V := Map.delete key right in
+        if BOrd.lt key k
+        then BTreeMap.balance k v delete_left right
+        else if BOrd.gt key k
+        then BTreeMap.balance k v left delete_right
+        else
+          BTreeMap.with_node left
+            (fn lk lv ll lr lh =>
+              BTreeMap.with_node right
+                (fn rk rv rl rr rh => BTreeMap.balance rk rv left rl)
+                left)
+            right)
+      BTreeMap.empty
 }

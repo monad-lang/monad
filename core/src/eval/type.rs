@@ -1017,6 +1017,10 @@ pub fn type_check_instance<'a>(
 
   // Add type variables to scope BEFORE type checking args
   let mut scope = scope.clone();
+  // Add instance constraints FIRST so they propagate through with_forall calls
+  if !instance.constraints.is_empty() {
+    scope = scope.with_constraints(instance.constraints.clone());
+  }
   for (var, typ) in &type_vars {
     scope = scope.with_forall(var, typ);
   }
@@ -1744,7 +1748,13 @@ pub fn type_check_free_var(
   scope: &Scope,
 ) -> Result<TypedTerm, TypeError> {
   use TypeError::*;
-  let defined = scope.find_var_ref_of(nref, &expected_type)?;
+  let defined = match scope.find_var_ref_of(nref, &expected_type) {
+    Ok(var_ref) => var_ref,
+    Err(_) if !scope.constraints().is_empty() => scope
+      .global()
+      .find_any_name_ref_with_constraints(nref, &expected_type, scope.constraints())?,
+    Err(e) => return Err(e.into()),
+  };
   let mut method_constraints: Option<&Vec<TypeConstraint>> = None;
   match defined {
     VarRef::UpdateRef {
@@ -1757,6 +1767,10 @@ pub fn type_check_free_var(
       term = Var {
         name: new_path.clone().into(),
       };
+    }
+    VarRef::ClassMethod { .. } => {
+      // Constraint guarantees an instance exists, but the
+      // concrete type is abstract. Keep the original term.
     }
     _ => {
       if let NameRef::Op(op) = nref {
