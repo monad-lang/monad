@@ -2,11 +2,11 @@
 //
 // Provides:
 //   - Show class and instances (String, I64, Bool)
-//   - Show (List A) instance (stub — element show blocked by BLOCKER #8)
+//   - Show (List A) instance — element-wise, uses runtime type dispatch
 //   - Append (List A) instance
-//   - BEq (List A) instance (structural — element eq blocked by BLOCKER #8)
+//   - BEq (List A) instance — full element-wise equality
 //   - List.length, List.filter, List.sum
-//   - list_show helper (call with explicit show function, bypasses blocker)
+//   - list_show helper (explicit show function, for concrete call sites)
 
 class Show A {
     def show : A -> String
@@ -25,14 +25,7 @@ instance Show Bool {
         if b then "true" else "false"
 }
 
-// BLOCKER #8: Inside instance [Show A] Show (List A), calling Show.show on
-// type variable A fails with "instance not found instance key for Show
-// with args (A => A)". The constraint solver does not propagate instance-level
-// constraints into method body resolution for type variables.
-//
-// Workaround: use the standalone list_show helper (below), passing
-// Show.show explicitly from a concrete call site (not inside the instance).
-
+// list_show helper for explicit show functions (concrete call-site bypass)
 def list_show (show_elem : A -> String) (xs : List A) : String :=
     match xs {
         empty => "[]",
@@ -49,26 +42,13 @@ def show_body (show_elem : A -> String) (xs : List A) : String :=
             ", " ++ show_elem a ++ rest
     }
 
+// Element-wise Show (List A) - dispatches via runtime type inference
 instance [Show A] Show (List A) {
     def show (xs: List A) : String :=
-        "[" ++ show_len xs ++ " element(s)]"
+        list_show (fn a => Show.show a) xs
 }
 
-// Show the number of elements (stand-in until BLOCKER #8 is fixed)
-def show_len {A : Type} (xs : List A) : String :=
-    I64.to_string (List.length xs)
-
-instance {A : Type} Append (List A) {
-    def append (a b : List A) : List A := List.append a b
-}
-
-// BLOCKER #8: Same issue as Show — BEq.beq on type variable A inside the
-// instance body cannot be resolved. The tail comparison (BEq.beq on List A)
-// works, but element comparison does not.
-//
-// Current workaround: compare list structure (length + tail recursion) only.
-// Full element-wise equality requires the constraint propagation fix.
-
+// Element-wise BEq (List A) - dispatches via runtime type inference
 instance [BEq A] BEq (List A) {
     def beq (xs ys : List A) : Bool :=
         match xs {
@@ -76,11 +56,15 @@ instance [BEq A] BEq (List A) {
                 empty => true,
                 cons _ _ => false
             },
-            cons _ x_tail => match ys {
+            cons x x_tail => match ys {
                 empty => false,
-                cons _ y_tail => BEq.beq x_tail y_tail
+                cons y y_tail =>
+                    (x == y) && (BEq.beq x_tail y_tail)
             }
         }
+}
+instance {A : Type} Append (List A) {
+    def append (a b : List A) : List A := List.append a b
 }
 
 def List.length {A : Type} (xs : List A) : I64 :=

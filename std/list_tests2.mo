@@ -29,23 +29,35 @@ def test_map_pipe_empty : Bool :=
     let doubled : List I64 := xs |> List.map double in
     list_show I64.to_string doubled == "[]"
 
-// BEq tests (structural only until BLOCKER #8)
+// BEq tests - element-wise equality
 
 @[test]
 def test_list_beq_empty : Bool :=
     BEq.beq ([] : List I64) ([] : List I64)
 
 @[test]
-def test_list_beq_same_length : Bool :=
-    BEq.beq [1, 2, 3] [4, 5, 6]
+def test_list_beq_same : Bool :=
+    BEq.beq [1, 2, 3] [1, 2, 3]
+
+@[test]
+def test_list_beq_diff_elements : Bool :=
+    Bool.not (BEq.beq [1, 2, 3] [4, 5, 6])
 
 @[test]
 def test_list_beq_diff_length : Bool :=
     Bool.not (BEq.beq [1, 2] [1, 2, 3])
 
 @[test]
-def test_list_beq_singleton : Bool :=
-    BEq.beq [42] [99]
+def test_list_beq_singleton_same : Bool :=
+    BEq.beq [42] [42]
+
+@[test]
+def test_list_beq_singleton_diff : Bool :=
+    Bool.not (BEq.beq [42] [99])
+
+@[test]
+def test_list_beq_prefix_match : Bool :=
+    Bool.not (BEq.beq [1, 2, 3] [1, 2, 4])
 
 // Append tests
 

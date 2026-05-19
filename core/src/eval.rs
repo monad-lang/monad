@@ -591,42 +591,53 @@ fn eval_app(
 ) -> Result<Term, Error> {
   // Class method dispatch: evaluate arg first to determine runtime type,
   // so we can find the correct instance instead of picking the first.
-  let (fun_evaluated, arg_evaluated) = if let Term::Var { name } = &fun
-    && let Some(path) = name.clone().to_path()
-    && let Some(class_def) = scope.global().find_class_def(&path)
-  {
-    let arg_eval = eval_inner(arg, scope, options, loc.clone())?;
-    if let Some(arg_type) = infer_arg_type(&arg_eval) {
-      let param_name = class_def
-        .class
-        .params()
-        .first()
-        .map(|p| p.name.clone())
-        .unwrap_or_else(|| Identifier::new("_".to_string()));
-      let key = InstanceKey::new(
-        class_def.class.name().clone(),
-        vec![],
-        vec![param(param_name, arg_type)],
-      );
-      if let Some(instance) = scope.global().find_instance(&key) {
-        let method_name = instance
-          .name()
-          .clone()
-          .extend(ModulePath::single(class_def.name.clone()));
-        if let Ok(method_term) = scope.resolve_name(&NameRef::P(method_name)) {
-          if let Lam { param, body } = method_term {
-            return Ok(substitute_lam(param.clone(), *body.clone(), &arg_eval));
+  // Handles both path-based names (e.g. Show.show) and operators (e.g. ==).
+  let (fun_evaluated, arg_evaluated) = {
+    let class_def = match &fun {
+      Term::Var { name } => {
+        // For operators, resolve to the underlying method path first
+        let target = match name {
+          NameRef::Op(op) => scope.global().find_infix(op).ok().map(|i| i.name().clone()),
+          _ => name.clone().to_path(),
+        };
+        target.and_then(|path| scope.global().find_class_def(&path))
+      }
+      _ => None,
+    };
+    if let Some(class_def) = class_def {
+      let arg_eval = eval_inner(arg, scope, options, loc.clone())?;
+      if let Some(arg_type) = infer_arg_type(&arg_eval) {
+        let param_name = class_def
+          .class
+          .params()
+          .first()
+          .map(|p| p.name.clone())
+          .unwrap_or_else(|| Identifier::new("_".to_string()));
+        let key = InstanceKey::new(
+          class_def.class.name().clone(),
+          vec![],
+          vec![param(param_name, arg_type)],
+        );
+        if let Some(instance) = scope.global().find_instance(&key) {
+          let method_name = instance
+            .name()
+            .clone()
+            .extend(ModulePath::single(class_def.name.clone()));
+          if let Ok(method_term) = scope.resolve_name(&NameRef::P(method_name)) {
+            if let Lam { param, body } = method_term {
+              return Ok(substitute_lam(param.clone(), *body.clone(), &arg_eval));
+            }
           }
         }
       }
+      // Dispatch failed; fall through to normal resolution
+      let fun_eval = eval_inner(fun, scope, options, loc.clone())?;
+      (fun_eval, arg_eval)
+    } else {
+      let fun_eval = eval_inner(fun, scope, options, loc.clone())?;
+      let arg_eval = eval_inner(arg, scope, options, loc.clone())?;
+      (fun_eval, arg_eval)
     }
-    // Dispatch failed; fall through to normal resolution
-    let fun_eval = eval_inner(fun, scope, options, loc.clone())?;
-    (fun_eval, arg_eval)
-  } else {
-    let fun_eval = eval_inner(fun, scope, options, loc.clone())?;
-    let arg_eval = eval_inner(arg, scope, options, loc.clone())?;
-    (fun_eval, arg_eval)
   };
   if options.debug {
     println!("eval_app: fun={} arg={}", fun_evaluated, arg_evaluated);

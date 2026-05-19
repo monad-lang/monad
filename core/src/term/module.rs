@@ -1166,12 +1166,12 @@ impl<'a> GlobalScope<'a> {
     def: &ClassDefRef,
     constraints: &[TypeConstraint],
   ) -> Result<VarRef<'_>, ScopeError> {
-    let key = derive_instance_key(def, typ)?;
+    let maybe_key = derive_instance_key(def, typ);
+    // Check constraints for a matching class — produce a ClassMethod ref
+    // for runtime resolution even if derive_instance_key failed.
     for constraint in constraints {
       if *constraint.class() == *def.class.name() {
         if let Some(ty) = constraint.vars().first() {
-          // Build an InstanceKey using the class param's name so
-          // Instance::matches correctly finds the matching class param.
           let class_param_name = def.class.params.first().map(|p| p.name.clone());
           let param_name = class_param_name.unwrap_or_else(|| ty.clone());
           let constrained_key = InstanceKey::new(
@@ -1205,14 +1205,19 @@ impl<'a> GlobalScope<'a> {
         }
       }
     }
-    if let Some(instance) = self.find_instance(&key) {
-      let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
-      let ins_def = self
-        .find_ref(&ins_def_name)
-        .ok_or(ScopeError::PathNotFound(ins_def_name))?;
-      return Ok(ins_def.to_update_ref());
+    // No matching constraint found, try the concrete key (if it was derived)
+    if let Ok(key) = maybe_key {
+      if let Some(instance) = self.find_instance(&key) {
+        let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
+        let ins_def = self
+          .find_ref(&ins_def_name)
+          .ok_or(ScopeError::PathNotFound(ins_def_name))?;
+        return Ok(ins_def.to_update_ref());
+      }
+      Err(ScopeError::InstanceNotFound(key.clone()))
+    } else {
+      Err(maybe_key.unwrap_err().into())
     }
-    Err(ScopeError::InstanceNotFound(key.clone()))
   }
 
   fn load_decl(

@@ -28,8 +28,16 @@ def test_show_bool_false : Bool :=
     Show.show false == "false"
 
 @[test]
-def test_show_list_stub : Bool :=
-    Show.show ([1, 2, 3] : List I64) == "[3 element(s)]"
+def test_show_list_i64 : Bool :=
+    Show.show ([1, 2, 3] : List I64) == "[1, 2, 3]"
+
+@[test]
+def test_show_list_empty : Bool :=
+    Show.show ([] : List I64) == "[]"
+
+@[test]
+def test_show_list_single : Bool :=
+    Show.show [42] == "[42]"
 
 // list_show helper (bypasses BLOCKER #8)
 
