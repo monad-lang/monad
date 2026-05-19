@@ -1577,6 +1577,7 @@ pub fn compare_types(left: &Term, right: &Term, free_vars: &FreeVars) -> bool {
         n1 == n2
       }
     }
+    (Sort { .. }, Sort { .. }) => true,
     _ => left == right,
   }
 }
@@ -1678,12 +1679,20 @@ fn match_resolve_type_inner<'a>(
       }
     }
     (Sort { level: _ }, Var { name: Id(name) }) => {
-      let s = name.as_str();
-      s == "Type" || s == "Prop" || s == "Sort"
+      if check_free_vars(name, left, free_vars) {
+        true
+      } else {
+        let s = name.as_str();
+        s == "Type" || s == "Prop" || s == "Sort"
+      }
     }
     (Var { name: Id(name) }, Sort { level: _ }) => {
-      let s = name.as_str();
-      s == "Type" || s == "Prop" || s == "Sort"
+      if check_free_vars(name, right, free_vars) {
+        true
+      } else {
+        let s = name.as_str();
+        s == "Type" || s == "Prop" || s == "Sort"
+      }
     }
     (Var { name: Id(name) }, _) => {
       if check_free_vars(name, right, free_vars) {
