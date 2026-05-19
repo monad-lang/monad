@@ -281,6 +281,16 @@ impl Builtins {
       loc: &self.loc,
     }
   }
+
+  fn get_pred(&self) -> DefRef<'_> {
+    DefRef {
+      module: &self.path,
+      name: mpt("Pred"),
+      term: &self.sort_0,
+      typ: &self.sort_0,
+      loc: &self.loc,
+    }
+  }
 }
 
 /// Owned scope data for a module, built from the module and its dependencies
@@ -424,6 +434,14 @@ impl GlobalScopeData {
     );
     def_refs.insert(
       mpt("Prop"),
+      (
+        builtins.get_sort_0().typ.clone(),
+        builtins.get_sort_0().term.clone(),
+        builtins.get_sort_0().module.clone(),
+      ),
+    );
+    def_refs.insert(
+      mpt("Pred"),
       (
         builtins.get_sort_0().typ.clone(),
         builtins.get_sort_0().term.clone(),
@@ -769,6 +787,7 @@ impl<'a> GlobalScope<'a> {
 
     def_refs.insert(mpt("Type"), builtins.get_sort_1());
     def_refs.insert(mpt("Prop"), builtins.get_sort_0());
+    def_refs.insert(mpt("Pred"), builtins.get_pred());
 
     let class_defs = modules
       .iter()

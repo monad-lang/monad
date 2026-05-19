@@ -772,6 +772,48 @@ pub fn check_cumulativity(actual: &Term, expected: &Term, scope: &Scope) -> Resu
   }
 }
 
+fn check_strict_pos(type_name: &ModulePath, typ: &Term, polarity: bool) -> Result<(), TypeError> {
+  match typ {
+    Term::Var { name } => {
+      if name.to_path().as_ref() == Some(type_name) {
+        if polarity {
+          Ok(())
+        } else {
+          Err(TypeError::Generic(
+            format!("non-strictly positive occurrence of {}", type_name),
+            SourceRange::default(),
+          ))
+        }
+      } else {
+        Ok(())
+      }
+    }
+    Term::App { fun, arg } => {
+      check_strict_pos(type_name, fun, polarity)?;
+      check_strict_pos(type_name, arg, polarity)
+    }
+    Term::Pi { arg, ret, .. } => {
+      check_strict_pos(type_name, arg, !polarity)?;
+      check_strict_pos(type_name, ret, polarity)
+    }
+    Term::Forall { typ, body, .. } => {
+      check_strict_pos(type_name, typ, !polarity)?;
+      check_strict_pos(type_name, body, polarity)
+    }
+    _ => Ok(()),
+  }
+}
+
+fn check_strict_positivity(ind: &Inductive) -> Result<(), TypeError> {
+  let name = ind.name();
+  for cons in ind.constructors() {
+    for param in cons.params() {
+      check_strict_pos(name, param.typ(), true)?;
+    }
+  }
+  Ok(())
+}
+
 fn t_context(err: TypeError, name: Option<ModulePath>, loc: SourceRange) -> TypeError {
   TypeError::Context {
     loc,
@@ -2779,6 +2821,10 @@ pub fn type_check_decl(decl: Decl, scope: &Scope) -> Result<Decl, TypeError> {
     Decl::Ins(instance) => {
       let class = scope.find_inductive(&instance.class_name)?;
       type_check_instance(instance, class, scope).map(Decl::Ins)
+    }
+    Decl::Type(ref ind) => {
+      check_strict_positivity(ind)?;
+      Ok(decl)
     }
     Decl::DefMacro(_) => Ok(decl),
     Decl::DeclGen(_) => Ok(decl),

@@ -2636,3 +2636,76 @@ fn test_recursion_depth_limit_exceeded() {
     "Error should mention exceeded, got: {err}"
   );
 }
+
+#[test]
+fn test_strict_positivity_rejects_negative_occurrence() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("_test");
+  let parsed = parse_file(
+    r#"
+     type Bad : Type {
+       mk (f : Bad -> Bool) : Bad
+     }
+     "#
+    .into(),
+  )
+  .unwrap();
+  let result = type_check_module_decls(&path, parsed.decls, &mut loaded);
+  assert!(
+    result.is_err(),
+    "Should reject Bad type with negative occurrence"
+  );
+  let err = format!("{}", result.unwrap_err());
+  assert!(
+    err.contains("non-strictly positive"),
+    "Error should mention non-strictly positive, got: {err}"
+  );
+}
+
+#[test]
+fn test_strict_positivity_accepts_positive_occurrence() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("_test");
+  let parsed = parse_file(
+    r#"
+     type MyList A : Type {
+       cons (head: A) (tail: MyList A),
+       nil
+     }
+     "#
+    .into(),
+  )
+  .unwrap();
+  let result = type_check_module_decls(&path, parsed.decls, &mut loaded);
+  assert!(
+    result.is_ok(),
+    "Should accept MyList type with positive occurrence: {result:?}"
+  );
+}
+
+#[test]
+fn test_strict_positivity_rejects_double_negative() {
+  // (Bad -> Bad) -> Bad is still bad: the innermost Bad in the
+  // function arg of the first arrow is in a negative position.
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("_test");
+  let parsed = parse_file(
+    r#"
+     type Bad : Type {
+       mk (f : (Bad -> Bad) -> Bad) : Bad
+     }
+     "#
+    .into(),
+  )
+  .unwrap();
+  let result = type_check_module_decls(&path, parsed.decls, &mut loaded);
+  assert!(
+    result.is_err(),
+    "Should reject Bad type with nested negative occurrence"
+  );
+  let err = format!("{}", result.unwrap_err());
+  assert!(
+    err.contains("non-strictly positive"),
+    "Error should mention non-strictly positive, got: {err}"
+  );
+}
