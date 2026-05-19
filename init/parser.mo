@@ -39,6 +39,7 @@ def alt_step2 (r : ParseResult A) (e1 : ParseError) : ParseResult A :=
 
 infix (<|>) := alt
 
+@[terminating]
 def many0 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
 	many0_step (p input) p input
 
@@ -147,6 +148,7 @@ def test_many1_fail : Bool :=
 		fail _ => true
 	}
 
+@[terminating]
 def char_in_string (c : String) (s : String) : Bool :=
 	if String.is_empty s then false
 	else if String.beq (String.slice s 0 1) c then true
@@ -191,11 +193,13 @@ def space (input : String) : ParseResult String :=
 def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
 	take_while_step pred "" input
 
+@[terminating]
 def take_while_step (pred : String -> Bool) (acc : String) (input : String) : ParseResult String :=
 	if String.is_empty input
 	then success input acc
 	else take_while_step_body pred acc input (String.slice input 0 1) (String.drop 1 input)
 
+@[terminating]
 def take_while_step_body (pred : String -> Bool) (acc : String) (input : String) (ch : String) (rest : String) : ParseResult String :=
 	if pred ch
 	then take_while_step pred (String.concat acc ch) rest

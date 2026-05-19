@@ -353,11 +353,14 @@ pub fn run_tests(input: PathBuf, options: EvalOptions) -> Result<(), String> {
     if is_default {
       continue;
     }
-    // Try loading the test file; skip if it fails to compile
+    // Try loading the test file; treat parse/compile errors as failures
     let loaded = match load_module(file, &path, loaded) {
       Ok(l) => l,
       Err(e) => {
-        eprintln!("Skipping {}: {e}", file.display());
+        total_failed += 1;
+        println!("{RED}FAIL{RESET} {}", file.display());
+        eprintln!("  {e}");
+        overall_errors.push(format!("failed to compile {}: {e}", file.display()));
         continue;
       }
     };
