@@ -30,6 +30,19 @@ def String.to_list (s : String) : List U8
 @[native string_from_list]
 def String.from_list (bytes : List U8) : String
 
+/// djb2 hash: hash = hash * 33 + byte
+@[terminating]
+def String.hash_bytes (bytes: List U8) (acc: U64) : U64 :=
+  match bytes {
+    List.empty => acc,
+    List.cons b rest =>
+      let byte : U64 := U8.to_u64 b in
+      String.hash_bytes rest (U64.add (U64.mul acc 33u64) byte)
+  }
+
+def String.hash (s : String) : U64 :=
+  String.hash_bytes (String.to_list s) 5381u64
+
 instance BEq String {
 	def beq (a b : String) : Bool := String.beq a b
 }
@@ -43,7 +56,11 @@ instance Add String {
 }
 
 instance Append String {
-	def append (a b : String) : String := String.concat a b
+  def append (a b : String) : String := String.concat a b
+}
+
+instance Hashable String {
+  def hash (s : String) : U64 := String.hash s
 }
 
 def String.is_empty (s : String) : Bool :=

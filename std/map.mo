@@ -227,3 +227,162 @@ instance [BOrd K] Map BTreeMap {
             right)
       BTreeMap.empty
 }
+
+/// ─── HashMap ────────────────────────────────────────────────
+
+/// Compute bucket index (0–15) from a hash value.
+def HashMap.bucket_of (hash: U64) : U64 := U64.mod hash 16u64
+
+/// Fixed 16 buckets for the hash map.
+type Buckets16 K V {
+  buckets (
+    b0 b1 b2 b3 b4 b5 b6 b7 
+    b8 b9 b10 b11 b12 b13 b14 b15 
+    : List (Pair K V))
+}
+
+/// Hash map type: 16-bucket chaining hash table.
+type HashMap K V {
+  map (Buckets16 K V)
+}
+
+/// 16 empty buckets.
+def HashMap.empty_buckets {K V : Type} : Buckets16 K V :=
+  Buckets16.buckets 
+    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
+    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
+    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
+    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
+    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
+    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
+    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
+    (List.empty : List (Pair K V)) (List.empty : List (Pair K V))
+
+/// Look up the bucket at a given U64 index.
+@[terminating]
+def HashMap.get_bucket {K V : Type} (b: Buckets16 K V) (idx: U64) : List (Pair K V) :=
+  match b {
+    Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+      if U64.beq 0u64 idx then b0 else
+      if U64.beq 1u64 idx then b1 else
+      if U64.beq 2u64 idx then b2 else
+      if U64.beq 3u64 idx then b3 else
+      if U64.beq 4u64 idx then b4 else
+      if U64.beq 5u64 idx then b5 else
+      if U64.beq 6u64 idx then b6 else
+      if U64.beq 7u64 idx then b7 else
+      if U64.beq 8u64 idx then b8 else
+      if U64.beq 9u64 idx then b9 else
+      if U64.beq 10u64 idx then b10 else
+      if U64.beq 11u64 idx then b11 else
+      if U64.beq 12u64 idx then b12 else
+      if U64.beq 13u64 idx then b13 else
+      if U64.beq 14u64 idx then b14 else
+      b15
+  }
+
+/// Return buckets with bucket at idx replaced by new_val.
+@[terminating]
+def HashMap.set_bucket {K V : Type} (b: Buckets16 K V) (idx: U64) (new_val: List (Pair K V)) : Buckets16 K V :=
+  match b {
+    Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+      if U64.beq 0u64 idx then Buckets16.buckets new_val b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 1u64 idx then Buckets16.buckets b0 new_val b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 2u64 idx then Buckets16.buckets b0 b1 new_val b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 3u64 idx then Buckets16.buckets b0 b1 b2 new_val b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 4u64 idx then Buckets16.buckets b0 b1 b2 b3 new_val b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 5u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 new_val b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 6u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 new_val b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 7u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 new_val b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 8u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 new_val b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 9u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 new_val b10 b11 b12 b13 b14 b15 else
+      if U64.beq 10u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 new_val b11 b12 b13 b14 b15 else
+      if U64.beq 11u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 new_val b12 b13 b14 b15 else
+      if U64.beq 12u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 new_val b13 b14 b15 else
+      if U64.beq 13u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 new_val b14 b15 else
+      if U64.beq 14u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 new_val b15 else
+      Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 new_val
+  }
+
+/// Instance: HashMap implements the Map type class using hashing + ordering-based equality.
+/// NOTE: uses BOrd K instead of BEq K due to evaluator instance resolution limitation.
+/// The evaluator's resolve_class_method_instance picks the first registered instance
+/// (BOrd I64 is correctly first for I64 keys, but BEq Bool is first for BEq, producing
+/// wrong instance when abstract K is concrete I64 at runtime).
+instance [Hashable K, BOrd K] Map HashMap {
+  def empty : HashMap K V := HashMap.map HashMap.empty_buckets
+
+  @[terminating]
+  def insert (key: K) (val: V) (m: HashMap K V) : HashMap K V :=
+    match m {
+      HashMap.map buckets =>
+        let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
+        let bucket : List (Pair K V) := HashMap.get_bucket buckets idx in
+        let new_bucket : List (Pair K V) :=
+          HashMap.bucket_insert BOrd.lt BOrd.gt key val bucket in
+        HashMap.map (HashMap.set_bucket buckets idx new_bucket)
+    }
+
+  @[terminating]
+  def lookup (key: K) (m: HashMap K V) : Option V :=
+    match m {
+      HashMap.map buckets =>
+        let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
+        let bucket : List (Pair K V) := HashMap.get_bucket buckets idx in
+        HashMap.bucket_lookup BOrd.lt BOrd.gt key bucket
+    }
+
+  @[terminating]
+  def delete (key: K) (m: HashMap K V) : HashMap K V :=
+    match m {
+      HashMap.map buckets =>
+        let idx : U64 := HashMap.bucket_of (Hashable.hash key) in
+        let bucket : List (Pair K V) := HashMap.get_bucket buckets idx in
+        let new_bucket : List (Pair K V) :=
+          HashMap.bucket_delete BOrd.lt BOrd.gt key bucket in
+        HashMap.map (HashMap.set_bucket buckets idx new_bucket)
+    }
+}
+
+/// Insert (key, val) into a single bucket, replacing existing key if present.
+/// Equality check: not (lt a b) && not (gt a b)  (equivalent to a == b for total orders).
+@[terminating]
+def HashMap.bucket_insert {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (val: V) (bucket: List (Pair K V)) : List (Pair K V) :=
+  match bucket {
+    List.empty => List.cons (Pair.pair key val) List.empty,
+    List.cons pair rest =>
+      match pair {
+        Pair.pair k v =>
+          if Bool.not (lt key k) && Bool.not (gt key k)
+          then List.cons (Pair.pair key val) rest
+          else List.cons pair (HashMap.bucket_insert lt gt key val rest)
+      }
+  }
+
+/// Look up a key in a single bucket.
+@[terminating]
+def HashMap.bucket_lookup {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (bucket: List (Pair K V)) : Option V :=
+  match bucket {
+    List.empty => Option.none,
+    List.cons pair rest =>
+      match pair {
+        Pair.pair k v =>
+          if Bool.not (lt key k) && Bool.not (gt key k)
+          then Option.some v
+          else HashMap.bucket_lookup lt gt key rest
+      }
+  }
+
+/// Delete a key from a single bucket.
+@[terminating]
+def HashMap.bucket_delete {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (bucket: List (Pair K V)) : List (Pair K V) :=
+  match bucket {
+    List.empty => List.empty,
+    List.cons pair rest =>
+      match pair {
+        Pair.pair k v =>
+          if Bool.not (lt key k) && Bool.not (gt key k)
+          then rest
+          else List.cons pair (HashMap.bucket_delete lt gt key rest)
+      }
+  }

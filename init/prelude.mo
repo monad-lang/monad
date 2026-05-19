@@ -134,8 +134,13 @@ infix (==) := BEq.beq
 
 /// Ordered comparison
 class BOrd A {
-	def lt (a b : A) : Bool
-	def gt (a b : A) : Bool
+  def lt (a b : A) : Bool
+  def gt (a b : A) : Bool
+}
+
+/// Hashable: produce a hash value for an element.
+class Hashable A {
+  def hash (a : A) : U64
 }
 
 type DefaultValue (A: Type) (default : A) {

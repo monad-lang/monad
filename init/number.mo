@@ -153,6 +153,9 @@ def I64.lt (a b : I64) : Bool
 @[native i64_gt]
 def I64.gt (a b : I64) : Bool
 
+@[native i64_to_u64]
+def I64.to_u64 (a : I64) : U64
+
 @[native i64_eq]
 def I64.beq (a b : I64) : Bool
 
@@ -185,7 +188,11 @@ instance BOrd I64 {
 }
 
 instance ToString I64 {
-	def to_string (a : I64) : String := I64.to_string a
+  def to_string (a : I64) : String := I64.to_string a
+}
+
+instance Hashable I64 {
+  def hash (a : I64) : U64 := I64.to_u64 a
 }
 
 // U8
@@ -204,6 +211,9 @@ def U8.div (a b : U8) : U8
 
 @[native u8_eq]
 def U8.beq (a b : U8) : Bool
+
+@[native u8_to_u64]
+def U8.to_u64 (a : U8) : U64
 
 @[native u8_lt]
 def U8.lt (a b : U8) : Bool
@@ -345,6 +355,12 @@ def U64.mul (a b : U64) : U64
 @[native u64_div]
 def U64.div (a b : U64) : U64
 
+@[native u64_mod]
+def U64.mod (a b : U64) : U64
+
+@[native u64_xor]
+def U64.xor (a b : U64) : U64
+
 @[native u64_eq]
 def U64.beq (a b : U64) : Bool
 
@@ -364,7 +380,11 @@ instance HMul U64 U64 U64 {
 }
 
 instance Div U64 {
-	def div (a b : U64) : U64 := U64.div a b
+  def div (a b : U64) : U64 := U64.div a b
+}
+
+instance Hashable U64 {
+  def hash (a : U64) : U64 := a
 }
 
 instance BEq U64 {

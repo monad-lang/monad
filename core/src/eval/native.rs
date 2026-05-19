@@ -469,6 +469,30 @@ fn extract_u8_from_term(term: &Term) -> Result<u8, NativeError> {
   }
 }
 
+pub fn u64_xor(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let (a, b) = extract_num_pair(&terms)?;
+  Ok(num_suffix(((a as u64) ^ (b as u64)) as i64, NumSuffix::U64))
+}
+
+pub fn i64_to_u64(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let n = extract_num_at(&terms, 0)?;
+  Ok(num_suffix(n, NumSuffix::U64))
+}
+
+pub fn u8_to_u64(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let n = extract_num_at(&terms, 0)?;
+  Ok(num_suffix((n as u8) as i64, NumSuffix::U64))
+}
+
+pub fn u64_mod(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let (a, b) = extract_num_pair(&terms)?;
+  let b_u64 = b as u64;
+  if b_u64 == 0 {
+    return Err(Custom("modulo by zero".into()));
+  }
+  Ok(num_suffix(((a as u64) % b_u64) as i64, NumSuffix::U64))
+}
+
 pub fn string_from_list(terms: Vec<Term>) -> Result<Term, NativeError> {
   let list = &terms[0];
   let bytes = collect_bytes_from_list(list)?;
@@ -609,8 +633,12 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("u64_sub"), s(u64_sub)),
     (id("u64_mul"), s(u64_mul)),
     (id("u64_div"), s(u64_div)),
+    (id("u64_mod"), s(u64_mod)),
     (id("u64_eq"), s(u64_eq)),
     (id("u64_to_string"), s(u64_to_string)),
+    (id("u64_xor"), s(u64_xor)),
+    (id("i64_to_u64"), s(i64_to_u64)),
+    (id("u8_to_u64"), s(u8_to_u64)),
     (id("f32_add"), s(f32_add)),
     (id("f32_sub"), s(f32_sub)),
     (id("f32_mul"), s(f32_mul)),
