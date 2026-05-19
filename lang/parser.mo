@@ -15,6 +15,98 @@ type ParseResult O {
 
 open ParseResult
 
+type OpEntry {
+	mk (op_str: String) (prec: I64) (right_assoc: Bool)
+}
+
+def op_chars : List String :=
+	["+", "&", "=", "|", "<", ">", "*", "/", "-", "!", "."]
+
+def op_table : List OpEntry :=
+	[OpEntry.mk "|>" 5 false,
+	 OpEntry.mk "<|" 5 true,
+	 OpEntry.mk ">>=" 10 true,
+	 OpEntry.mk "." 12 true,
+	 OpEntry.mk "<*>" 15 false,
+	 OpEntry.mk "<|>" 20 false,
+	 OpEntry.mk "||" 25 true,
+	 OpEntry.mk "&&" 30 true,
+	 OpEntry.mk "==" 40 false,
+	 OpEntry.mk "!=" 40 false,
+	 OpEntry.mk "++" 50 true,
+	 OpEntry.mk ">>" 60 false,
+	 OpEntry.mk "<<" 60 false,
+	 OpEntry.mk "+" 65 false,
+	 OpEntry.mk "-" 65 false,
+	 OpEntry.mk "*" 70 false,
+	 OpEntry.mk "/" 70 false]
+
+@[partial]
+def op_char_member (c : String) (chars : List String) : Bool :=
+	match chars {
+		List.cons ch rest => if String.beq ch c then true else op_char_member c rest,
+		List.empty => false
+	}
+
+@[partial]
+def op_entry_name (entry : OpEntry) : String :=
+	match entry {
+		OpEntry.mk o _ _ => o
+	}
+
+@[partial]
+def op_entry_prec (entry : OpEntry) : I64 :=
+	match entry {
+		OpEntry.mk _ p _ => p
+	}
+
+@[partial]
+def op_entry_rassoc (entry : OpEntry) : Bool :=
+	match entry {
+		OpEntry.mk _ _ r => r
+	}
+
+@[partial]
+def op_lookup_prec (op_str : String) (table : List OpEntry) : I64 :=
+	match table {
+		List.cons entry rest =>
+			if String.beq (op_entry_name entry) op_str then op_entry_prec entry
+			else op_lookup_prec op_str rest,
+		List.empty => 0
+	}
+
+@[partial]
+def op_lookup_rassoc (op_str : String) (table : List OpEntry) : Bool :=
+	match table {
+		List.cons entry rest =>
+			if String.beq (op_entry_name entry) op_str then op_entry_rassoc entry
+			else op_lookup_rassoc op_str rest,
+		List.empty => false
+	}
+
+def kw_list : List String :=
+	["def", "let", "in", "use", "open", "class", "struct", "instance",
+	 "type", "fn", "match", "if", "then", "else", "infix",
+	 "do", "return", "for", "quote", "with"]
+
+@[partial]
+def kw_member (s : String) (kws : List String) : Bool :=
+	match kws {
+		List.cons kw rest => if String.beq kw s then true else kw_member s rest,
+		List.empty => false
+	}
+
+def decl_parsers : List (String -> ParseResult Decl) :=
+	[use_parser, open_parser, infix_parser, def_parser,
+	 struct_parser, type_parser, class_parser, instance_parser]
+
+@[partial]
+def decl_fail_to_unknown (r : ParseResult Decl) : ParseResult Decl :=
+	match r {
+		success rem out => success rem out,
+		fail _ => fail (ParseError.custom "unknown declaration")
+	}
+
 // --- Helper ---
 
 @[partial]
@@ -210,27 +302,7 @@ def is_space (c : String) : Bool :=
 
 @[partial]
 def is_keyword (s : String) : Bool :=
-	if String.beq "def" s then true
-	else if String.beq "let" s then true
-	else if String.beq "in" s then true
-	else if String.beq "use" s then true
-	else if String.beq "open" s then true
-	else if String.beq "class" s then true
-	else if String.beq "struct" s then true
-	else if String.beq "instance" s then true
-	else if String.beq "type" s then true
-	else if String.beq "fn" s then true
-	else if String.beq "match" s then true
-	else if String.beq "if" s then true
-	else if String.beq "then" s then true
-	else if String.beq "else" s then true
-	else if String.beq "infix" s then true
-	else if String.beq "do" s then true
-	else if String.beq "return" s then true
-	else if String.beq "for" s then true
-	else if String.beq "quote" s then true
-	else if String.beq "with" s then true
-	else false
+	kw_member s kw_list
 
 // --- Identifier parser ---
 
@@ -807,15 +879,16 @@ def literal_try_str (r : ParseResult Term) (input : String) : ParseResult Term :
 // --- Atom term (variable, literal, parenthesized expression) ---
 
 @[partial]
-def atom_term (input : String) : ParseResult Term :=
-	atom_try_var (variable input) input
+def atom_paren_parser (input : String) : ParseResult Term :=
+	atom_try_paren (tag "(" input) input
+
+def atom_parsers (input : String) : List (String -> ParseResult Term) :=
+	[variable, literal_term, match_parser, if_parser,
+	 let_parser, do_parser, lambda_parser, atom_paren_parser]
 
 @[partial]
-def atom_try_var (r : ParseResult Term) (input : String) : ParseResult Term :=
-	match r {
-		success rem out => success rem out,
-		fail _ => atom_try_lit (literal_term input) input
-	}
+def atom_term (input : String) : ParseResult Term :=
+	alt_fold (atom_parsers input) input
 
 @[partial]
 def atom_try_paren (r : ParseResult String) (input : String) : ParseResult Term :=
@@ -1237,63 +1310,11 @@ def do_build (r : ParseResult (List DoStmt)) : ParseResult Term :=
 		fail e => fail e
 	}
 
-@[partial]
-def atom_try_lit (r : ParseResult Term) (input : String) : ParseResult Term :=
-	match r {
-		success rem out => success rem out,
-		fail _ => atom_try_match (match_parser input) input
-	}
-
-@[partial]
-def atom_try_match (r : ParseResult Term) (input : String) : ParseResult Term :=
-	match r {
-		success rem out => success rem out,
-		fail _ => atom_try_if (if_parser input) input
-	}
-
-@[partial]
-def atom_try_if (r : ParseResult Term) (input : String) : ParseResult Term :=
-	match r {
-		success rem out => success rem out,
-		fail _ => atom_try_let (let_parser input) input
-	}
-
-@[partial]
-def atom_try_let (r : ParseResult Term) (input : String) : ParseResult Term :=
-	match r {
-		success rem out => success rem out,
-		fail _ => atom_try_do (do_parser input) input
-	}
-
-@[partial]
-def atom_try_do (r : ParseResult Term) (input : String) : ParseResult Term :=
-	match r {
-		success rem out => success rem out,
-		fail _ => atom_try_lambda (lambda_parser input) input
-	}
-
-@[partial]
-def atom_try_lambda (r : ParseResult Term) (input : String) : ParseResult Term :=
-	match r {
-		success rem out => success rem out,
-		fail _ => atom_try_paren (tag "(" input) input
-	}
-
 // --- Operator parsing ---
 
 @[partial]
 def is_op_char (c : String) : Bool :=
-	if String.beq "+" c then true
-	else if String.beq "&" c then true
-	else if String.beq "=" c then true
-	else if String.beq "|" c then true
-	else if String.beq "<" c then true
-	else if String.beq ">" c then true
-	else if String.beq "*" c then true
-	else if String.beq "/" c then true
-	else if String.beq "-" c then true
-	else if String.beq "!" c then true
-	else String.beq "." c
+	op_char_member c op_chars
 
 @[partial]
 def operator_parse (input : String) : ParseResult String :=
@@ -1317,34 +1338,11 @@ def operator_check (s : String) (rem : String) : ParseResult String :=
 
 @[partial]
 def op_precedence (op : String) : I64 :=
-	if String.beq "|>" op then 5
-	else if String.beq "<|" op then 5
-	else if String.beq ">>=" op then 10
-	else if String.beq "." op then 12
-	else if String.beq "<*>" op then 15
-	else if String.beq "<|>" op then 20
-	else if String.beq "||" op then 25
-	else if String.beq "&&" op then 30
-	else if String.beq "==" op then 40
-	else if String.beq "!=" op then 40
-	else if String.beq "++" op then 50
-	else if String.beq ">>" op then 60
-	else if String.beq "<<" op then 60
-	else if String.beq "+" op then 65
-	else if String.beq "-" op then 65
-	else if String.beq "*" op then 70
-	else if String.beq "/" op then 70
-	else 0
+	op_lookup_prec op op_table
 
 @[partial]
 def op_is_right_assoc (op : String) : Bool :=
-	if String.beq "<|" op then true
-	else if String.beq ">>=" op then true
-	else if String.beq "." op then true
-	else if String.beq "||" op then true
-	else if String.beq "&&" op then true
-	else if String.beq "++" op then true
-	else false
+	op_lookup_rassoc op op_table
 
 // --- Expression (atom + juxtaposition application + operators) ---
 
@@ -2413,63 +2411,7 @@ def def_to_decl (body : Term) (name : Identifier) (typ : Term) : Decl :=
 
 @[partial]
 def decl_parser (input : String) : ParseResult Decl :=
-	decl_try_use (use_parser input) input
-
-@[partial]
-def decl_try_use (r : ParseResult Decl) (input : String) : ParseResult Decl :=
-	match r {
-		success rem out => success rem out,
-		fail _ => decl_try_open (open_parser input) input
-	}
-
-@[partial]
-def decl_try_open (r : ParseResult Decl) (input : String) : ParseResult Decl :=
-	match r {
-		success rem out => success rem out,
-		fail _ => decl_try_infix (infix_parser input) input
-	}
-
-@[partial]
-def decl_try_infix (r : ParseResult Decl) (input : String) : ParseResult Decl :=
-	match r {
-		success rem out => success rem out,
-		fail _ => decl_try_def (def_parser input) input
-	}
-
-@[partial]
-def decl_try_def (r : ParseResult Decl) (input : String) : ParseResult Decl :=
-	match r {
-		success rem out => success rem out,
-		fail _ => decl_try_struct (struct_parser input) input
-	}
-
-@[partial]
-def decl_try_struct (r : ParseResult Decl) (input : String) : ParseResult Decl :=
-	match r {
-		success rem out => success rem out,
-		fail _ => decl_try_type (type_parser input) input
-	}
-
-@[partial]
-def decl_try_type (r : ParseResult Decl) (input : String) : ParseResult Decl :=
-	match r {
-		success rem out => success rem out,
-		fail _ => decl_try_class (class_parser input) input
-	}
-
-@[partial]
-def decl_try_class (r : ParseResult Decl) (input : String) : ParseResult Decl :=
-	match r {
-		success rem out => success rem out,
-		fail _ => decl_try_instance (instance_parser input) input
-	}
-
-@[partial]
-def decl_try_instance (r : ParseResult Decl) (input : String) : ParseResult Decl :=
-	match r {
-		success rem out => success rem out,
-		fail _ => fail (ParseError.custom "unknown declaration")
-	}
+	decl_fail_to_unknown (alt_fold decl_parsers input)
 
 // --- Tests ---
 
