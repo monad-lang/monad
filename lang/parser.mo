@@ -3389,7 +3389,7 @@ def t2_atom_try_lambda (r: ParseResult Term) (ctx: List Identifier) (input: Stri
 @[partial]
 def t2_atom_try_paren (r: ParseResult String) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
-        success rem _ => t2_atom_inner_expr (t2_expression ctx rem) ctx,
+        success rem _ => t2_atom_inner_expr (t2_type_expression ctx rem) ctx,
         fail e => fail e
     }
 
@@ -3511,6 +3511,117 @@ def t2_expr_op_rhs_expr (r: ParseResult Term) (lhs: Term) (op: String) (ctx: Lis
             // Operator desugars to: op lhs rhs → app (app (var SENTINEL op) lhs) rhs
             let op_var : Term := Term.var t2_sentinel DebugName.unnamed in
             success rem (Term.app (Term.app op_var lhs) rhs),
+        fail e => fail e
+    }
+
+// ─── Term type expression (like expression but with -> for pi) ─────────
+
+@[partial]
+def t2_type_expression (ctx: List Identifier) (input: String) : ParseResult Term :=
+    t2_type_expr_ws (take_while is_space input) input ctx
+
+@[partial]
+def t2_type_expr_ws (r: ParseResult String) (input: String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_type_try_dep (tag "(" (skip_spaces rem)) input ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_type_try_dep (r: ParseResult String) (input: String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_type_dep_id (identifier (skip_spaces rem)) input ctx,
+        fail _ => t2_type_plain input ctx
+    }
+
+@[partial]
+def t2_type_dep_id (r: ParseResult String) (input: String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem name => t2_type_dep_colon (tag ":" (skip_spaces rem)) input name ctx,
+        fail _ => t2_type_plain input ctx
+    }
+
+@[partial]
+def t2_type_dep_colon (r: ParseResult String) (input: String) (name: String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_type_dep_typ (t2_type_expression ctx (skip_spaces rem)) input name ctx,
+        fail _ => t2_type_plain input ctx
+    }
+
+@[partial]
+def t2_type_dep_typ (r: ParseResult Term) (input: String) (name: String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem typ => t2_type_dep_close (tag ")" (skip_spaces rem)) input name typ ctx,
+        fail _ => t2_type_plain input ctx
+    }
+
+@[partial]
+def t2_type_dep_close (r: ParseResult String) (input: String) (name: String) (typ: Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_type_dep_arrow rem name typ ctx,
+        fail _ => t2_type_plain input ctx
+    }
+
+@[partial]
+def t2_type_dep_arrow (rem: String) (name: String) (typ: Term) (ctx: List Identifier) : ParseResult Term :=
+    t2_type_dep_arrow_ws (take_while is_space rem) rem name typ ctx
+
+@[partial]
+def t2_type_dep_arrow_ws (r: ParseResult String) (rem: String) (name: String) (typ: Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem2 _ => t2_type_dep_arrow_tag (tag "->" rem2) rem name typ ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_type_dep_arrow_tag (r: ParseResult String) (rem: String) (name: String) (typ: Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem2 _ => t2_type_dep_body (t2_type_expression (List.cons (Identifier.id name) ctx) (skip_spaces rem2)) typ,
+        fail _ => success rem typ
+    }
+
+@[partial]
+def t2_type_dep_body (r: ParseResult Term) (typ: Term) : ParseResult Term :=
+    match r {
+        success rem body => success rem (Term.pi typ body),
+        fail e => fail e
+    }
+
+// Plain type expression (no dependent binding on LHS).
+// Parses t2_expression, then checks for non-dependent -> arrow.
+@[partial]
+def t2_type_plain (input: String) (ctx: List Identifier) : ParseResult Term :=
+    t2_type_plain_expr (t2_expression ctx input) ctx
+
+@[partial]
+def t2_type_plain_expr (r: ParseResult Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem lhs => t2_type_check_arrow rem lhs ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_type_check_arrow (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
+    t2_type_arrow_ws (take_while is_space input) input lhs ctx
+
+@[partial]
+def t2_type_arrow_ws (r: ParseResult String) (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_type_arrow_tag (tag "->" rem) input lhs ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_type_arrow_tag (r: ParseResult String) (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_type_arrow_rhs lhs (t2_type_expression ctx (skip_spaces rem)),
+        fail _ => success input lhs
+    }
+
+@[partial]
+def t2_type_arrow_rhs (lhs: Term) (r: ParseResult Term) : ParseResult Term :=
+    match r {
+        success rem rhs => success rem (Term.pi lhs rhs),
         fail e => fail e
     }
 
@@ -3644,3 +3755,112 @@ def test_t_literal_num : Bool :=
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
+
+// ─── Term type expression tests (Phase 5) ──────────────────────────────
+
+@[test]
+def test_t_type_atom : Bool :=
+    // A  →  var (sentinel, named "A")
+    let empty_ctx : List Identifier := List.empty in
+    match t2_type_expression empty_ctx "A" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t_type_arrow_simple : Bool :=
+    // A -> B  →  pi (var sentinel A) (var sentinel B)
+    let empty_ctx : List Identifier := List.empty in
+    match t2_type_expression empty_ctx "A -> B" {
+        success rem out =>
+            match out {
+                pi _ _ => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t_type_arrow_chain : Bool :=
+    // A -> B -> C  →  pi A (pi B C)  (right-associative)
+    let empty_ctx : List Identifier := List.empty in
+    match t2_type_expression empty_ctx "A -> B -> C" {
+        success rem out =>
+            match out {
+                pi arg ret =>
+                    match ret {
+                        pi _ _ => String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t_type_arrow_parens : Bool :=
+    // (A -> B) -> C  →  pi (pi A B) C
+    let empty_ctx : List Identifier := List.empty in
+    match t2_type_expression empty_ctx "(A -> B) -> C" {
+        success rem out =>
+            match out {
+                pi arg ret =>
+                    match arg {
+                        pi _ _ => String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t_type_dep_pi : Bool :=
+    // (n : Nat) -> Vec n Int
+    //  →  pi Nat (app (app (sentinel Vec) (var 0 named "n")) (sentinel Int))
+    let n_id : Identifier := Identifier.id "n" in
+    let ctx : List Identifier := List.empty in
+    match t2_type_expression ctx "(n : Nat) -> Vec n Int" {
+        success rem out =>
+            match out {
+                pi arg ret =>
+                    match ret {
+                        app f a =>
+                            String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t_type_dep_pi_shadow : Bool :=
+    // Shadowed dependent pi: (x : Type) -> (x : Type) -> x
+    // Inner x → index 0, outer x → index 1
+    let empty_ctx : List Identifier := List.empty in
+    match t2_type_expression empty_ctx "(x : Type) -> (x : Type) -> x" {
+        success rem out =>
+            match out {
+                pi arg1 ret1 =>
+                    match ret1 {
+                        pi arg2 ret2 =>
+                            match ret2 {
+                                var idx _ => String.beq rem "",
+                                _ => false
+                            },
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t_type_no_arrow_parens : Bool :=
+    // (A, B) (no ->) — falls through to plain expression as parens
+    let empty_ctx : List Identifier := List.empty in
+    match t2_type_expression empty_ctx "(A)" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }

@@ -669,6 +669,14 @@ def test_term_pi : Bool :=
     true
 
 @[test]
+def test_term_dep_pi : Bool :=
+    // Dependent pi: pi Nat (var 0 "n") — ret references arg at index 0
+    let arg : Term := Term.type_ 0 in
+    let ret : Term := Term.var 0 (DebugName.named (Identifier.id "n")) in
+    let p : Term := Term.pi arg ret in
+    true
+
+@[test]
 def test_term_app : Bool :=
     let f : Term := Term.var 0 (DebugName.unnamed) in
     let a : Term := Term.var 1 (DebugName.unnamed) in
