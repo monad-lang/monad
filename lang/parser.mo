@@ -1281,9 +1281,146 @@ def do_stmts_tail_semi (r : ParseResult String) (after_sp : String) (orig : Stri
 @[partial]
 def do_stmts_next (r : ParseResult (List DoStmt)) (first : DoStmt) : ParseResult (List DoStmt) :=
 	match r {
-		success rem rest => success rem (List.cons first rest),
-		fail e => fail e
-	}
+        success rem rest => success rem (List.cons first rest),
+        fail e => fail e
+    }
+
+// ─── Term do-notation (de Bruijn, Phase 6a) ────────────────────────────
+
+@[partial]
+def t2_do_stmt_return (ctx: List Identifier) (input: String) : ParseResult DoStmt2 :=
+    t2_do_stmt_ret_kw (tag "return" input) input ctx
+
+@[partial]
+def t2_do_stmt_ret_kw (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult DoStmt2 :=
+    match r {
+        success rem _ => t2_do_stmt_ret_expr (t2_expression ctx (skip_spaces rem)),
+        fail _ => t2_do_stmt_try_let (tag "let" (skip_spaces orig)) orig ctx
+    }
+
+@[partial]
+def t2_do_stmt_ret_expr (r: ParseResult Term) : ParseResult DoStmt2 :=
+    match r {
+        success rem value => success rem (DoStmt2.ret_s value),
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_stmt_try_let (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult DoStmt2 :=
+    match r {
+        success rem _ => t2_do_stmt_let_name (identifier (skip_spaces rem)) ctx,
+        fail _ => t2_do_stmt_expr (t2_expression ctx (skip_spaces orig))
+    }
+
+@[partial]
+def t2_do_stmt_let_name (r: ParseResult String) (ctx: List Identifier) : ParseResult DoStmt2 :=
+    match r {
+        success rem name => t2_do_stmt_let_kind rem (Identifier.id name) ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_stmt_let_kind (input: String) (name: Identifier) (ctx: List Identifier) : ParseResult DoStmt2 :=
+    t2_do_stmt_let_kind_try (tag ":=" (skip_spaces input)) name input ctx
+
+@[partial]
+def t2_do_stmt_let_kind_try (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt2 :=
+    match r {
+        success rem _ => t2_do_stmt_let_value (t2_expression ctx (skip_spaces rem)) name,
+        fail _ => t2_do_stmt_bind_arrow (tag "<-" (skip_spaces orig)) name orig ctx
+    }
+
+@[partial]
+def t2_do_stmt_let_value (r: ParseResult Term) (name: Identifier) : ParseResult DoStmt2 :=
+    match r {
+        success rem value => success rem (DoStmt2.let_s name value),
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_stmt_bind_arrow (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt2 :=
+    match r {
+        success rem _ => t2_do_stmt_bind_value (t2_expression ctx (skip_spaces rem)) name,
+        fail _ => fail (ParseError.custom "expected := or <- after let in do block")
+    }
+
+@[partial]
+def t2_do_stmt_bind_value (r: ParseResult Term) (name: Identifier) : ParseResult DoStmt2 :=
+    match r {
+        success rem value => success rem (DoStmt2.bind_s name value),
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_stmt_expr (r: ParseResult Term) : ParseResult DoStmt2 :=
+    match r {
+        success rem value => success rem (DoStmt2.expr_s value),
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_stmts_extend_ctx (stmt: DoStmt2) (ctx: List Identifier) : List Identifier :=
+    match stmt {
+        bind_s name _ => List.cons name ctx,
+        let_s name _ => List.cons name ctx,
+        _ => ctx
+    }
+
+@[partial]
+def t2_do_stmts (ctx: List Identifier) (input: String) : ParseResult (List DoStmt2) :=
+    t2_do_stmts_check_end (tag "}" (skip_spaces input)) input ctx
+
+@[partial]
+def t2_do_stmts_check_end (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult (List DoStmt2) :=
+    match r {
+        success rem _ =>
+            let empty : List DoStmt2 := List.empty in
+            success rem empty,
+        fail _ => t2_do_stmts_first (t2_do_stmt_return ctx (skip_spaces orig)) (skip_spaces orig) ctx
+    }
+
+@[partial]
+def t2_do_stmts_first (r: ParseResult DoStmt2) (orig: String) (ctx: List Identifier) : ParseResult (List DoStmt2) :=
+    match r {
+        success rem stmt => t2_do_stmts_next2 (t2_do_stmts (t2_do_stmts_extend_ctx stmt ctx) (do_stmts_tail rem)) stmt,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_stmts_next2 (r: ParseResult (List DoStmt2)) (first: DoStmt2) : ParseResult (List DoStmt2) :=
+    match r {
+        success rem rest => success rem (List.cons first rest),
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
+    t2_do_parser_kw (tag "do" input) ctx
+
+@[partial]
+def t2_do_parser_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_do_parser_open (tag "{" (skip_spaces rem)) ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_parser_open (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_do_parser_stmts (t2_do_stmts ctx rem) ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_parser_stmts (r: ParseResult (List DoStmt2)) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem stmts => t2_do_parser_desugar rem stmts,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_do_parser_desugar (rem: String) (stmts: List DoStmt2) : ParseResult Term :=
+    success rem (t2_desugar_do stmts)
 
 @[partial]
 def do_parser (input : String) : ParseResult TermV0 :=
@@ -2867,6 +3004,71 @@ def test_do_chain : Bool :=
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
+
+// ─── Term do-notation tests (Phase 6a) ─────────────────────────────────
+
+@[test]
+def test_t2_do_empty : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_do_parser empty_ctx "do { }" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_do_return : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_do_parser empty_ctx "do { return 42 }" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_do_bind : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_do_parser empty_ctx "do { let x <- m; return x }" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_do_let : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_do_parser empty_ctx "do { let x := 1; return x }" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_do_expr : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_do_parser empty_ctx "do { println 42; return 0 }" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_do_chain : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_do_parser empty_ctx "do { let a <- f x; let b <- g a; return b }" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_do_desugar_structure : Bool :=
+    // Verify desugaring produces the right Term structure
+    // do { return x }  →  app (var sentinel Monad.pure) x
+    // But x is unbound, so it's var(sentinel, named "x")
+    let empty_ctx : List Identifier := List.empty in
+    match t2_do_parser empty_ctx "do { return x }" {
+        success rem out =>
+            match out {
+                app f a => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
 
 // --- Declaration parser tests ---
 

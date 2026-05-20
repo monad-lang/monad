@@ -214,6 +214,41 @@ def desugar_do_inner (stmts : List DoStmt) (rest : TermV0) : TermV0 :=
         List.empty => rest
     }
 
+// --- Do-notation desugaring (de Bruijn Term) ---
+
+type DoStmt2 {
+    bind_s (name: Identifier) (expr: Term),
+    let_s (name: Identifier) (expr: Term),
+    ret_s (expr: Term),
+    expr_s (expr: Term),
+}
+
+def t2_monad_bind_term : Term :=
+    Term.var (-1) (DebugName.unnamed)
+
+def t2_monad_pure_term : Term :=
+    Term.var (-1) (DebugName.unnamed)
+
+def t2_desugar_do (stmts : List DoStmt2) : Term :=
+    t2_desugar_do_inner (list_reverse stmts) (Term.app t2_monad_pure_term Term.hole)
+
+def t2_desugar_do_inner (stmts : List DoStmt2) (rest : Term) : Term :=
+    match stmts {
+        List.cons s ss =>
+            match s {
+                bind_s name expr =>
+                    Term.app (Term.app t2_monad_bind_term expr)
+                        (Term.lam (DebugName.named name) Term.hole (t2_desugar_do_inner ss rest)),
+                let_s name expr =>
+                    Term.app (Term.lam (DebugName.named name) Term.hole (t2_desugar_do_inner ss rest)) expr,
+                ret_s expr => Term.app t2_monad_pure_term expr,
+                expr_s expr =>
+                    Term.app (Term.app t2_monad_bind_term expr)
+                        (Term.lam (DebugName.unnamed) Term.hole (t2_desugar_do_inner ss rest))
+            },
+        List.empty => rest
+    }
+
 def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
     match xs {
         List.cons x rest => list_rev_loop rest (List.cons x acc),
