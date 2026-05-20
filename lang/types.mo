@@ -710,5 +710,3 @@ def test_term_type : Bool :=
 def test_term_hole : Bool :=
     let h : Term := Term.hole in
     true
-
-def main : I64 := 42

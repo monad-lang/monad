@@ -1239,5 +1239,3 @@ def test_compile_inductive_decls : Bool :=
 
 @[partial]
 def empty_params_list : List Param := List.empty
-
-def main : I64 := 42

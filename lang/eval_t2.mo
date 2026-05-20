@@ -677,5 +677,3 @@ def test_e2e_lower_t2_nested : Bool :=
             },
         kev_err msg => false
     }
-
-def main : I64 := 42
