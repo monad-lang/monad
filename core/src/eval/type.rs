@@ -1080,7 +1080,7 @@ pub fn type_check_instance<'a>(
   for param in class_defs {
     if let Some(impl_def) = instance.impls_map.get_mut(&param.name) {
       let class_def_type = param.typ();
-      let typ = match_resolve_type(class_def_type, &impl_def.typ, &scope)?;
+      let typ = match_resolve_type(&class_def_type, &impl_def.typ, &scope)?;
       let (term, _) =
         type_check_with_env(impl_def.term.clone(), typ.clone(), &scope, &mut usage, true)?
           .to_tuple();
