@@ -3,17 +3,15 @@ use lang.eval_term
 
 /// Find the de Bruijn index of an identifier in the binding context.
 /// Returns Option.none if not found (treat as global/const).
-@[partial]
 def find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64 :=
   match ctx {
     List.cons x rest =>
-      if String.beq (identifier_string id) (identifier_string x)
+      if (identifier_string id) == (identifier_string x)
       then Option.some depth
       else find_index id rest (depth + 1),
     List.empty => Option.none
   }
 
-@[partial]
 def identifier_string (id: Identifier) : String :=
   match id {
     id s => s
@@ -24,8 +22,7 @@ def identifier_string (id: Identifier) : String :=
 /// ctx: binding context (innermost first) — list of bound variable identifiers.
 /// Each lambda adds its param name to the front of ctx.
 /// De Bruijn index 0 = most recently bound variable (head of ctx).
-@[partial]
-def lower (ctx: List Identifier) (t: TermV0) : EvalTerm :=
+def lower_v0 (ctx: List Identifier) (t: TermV0) : EvalTerm :=
   match t {
     TermV0.var name =>
       match name {
@@ -40,7 +37,7 @@ def lower (ctx: List Identifier) (t: TermV0) : EvalTerm :=
     TermV0.lam param body =>
       match param {
         Param.mk pname ptype mult _default =>
-          let lowered_body : EvalTerm := lower (List.cons pname ctx) body in
+          let lowered_body : EvalTerm := lower_v0 (List.cons pname ctx) body in
           // Assign region based on multiplicity: linear/affine→r_param, many/zero→r_stack
           let region : Region := match mult {
             Multiplicity.linear => Region.r_param 0,
@@ -51,17 +48,17 @@ def lower (ctx: List Identifier) (t: TermV0) : EvalTerm :=
           EvalTerm.elam mult (EvalTerm.eregion region mult lowered_body)
       },
     TermV0.app fun arg =>
-      EvalTerm.eapp (lower ctx fun) (lower ctx arg),
+      EvalTerm.eapp (lower_v0 ctx fun) (lower_v0 ctx arg),
     TermV0.lit lit_value =>
       match lit_value {
         Literal.str s => EvalTerm.elit (EvalLiteral.l_str s),
         Literal.num n suffix => EvalTerm.elit (EvalLiteral.l_int n),
         Literal.if_ cond then_ else_ => EvalTerm.elit (EvalLiteral.l_bool true),
         Literal.match_ scrutinee cases =>
-          EvalTerm.erecursor (RecursorInfo.mk 0 0 0) (List.empty : List EvalTerm) (lower ctx scrutinee)
+          EvalTerm.erecursor (RecursorInfo.mk 0 0 0) (List.empty : List EvalTerm) (lower_v0 ctx scrutinee)
       },
     TermV0.forall fname ftyp fbody =>
-      lower ctx fbody,
+      lower_v0 ctx fbody,
     TermV0.pi arg ret =>
       EvalTerm.esort 1,
     TermV0.type_ level =>
@@ -80,10 +77,8 @@ def lower (ctx: List Identifier) (t: TermV0) : EvalTerm :=
 
 // ─── Test helpers ──────────────────────────────────────────────────────
 
-@[partial]
 def empty_ctx : List Identifier := List.empty
 
-@[partial]
 def single_ctx (id: Identifier) : List Identifier :=
   List.cons id List.empty
 
@@ -92,28 +87,44 @@ def single_ctx (id: Identifier) : List Identifier :=
 @[test]
 def test_lower_var_str : Bool :=
   let t : TermV0 := TermV0.lit (Literal.str "hello") in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
+  match lower_v0 empty_ctx t {
+    EvalTerm.elit lit =>
+      match lit {
+        EvalLiteral.l_str s => s == "hello",
+        _ => false
+      },
+    _ => false
+  }
 
 @[test]
 def test_lower_var_num : Bool :=
   let t : TermV0 := TermV0.lit (Literal.num 42 NumSuffix.i64) in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
+  match lower_v0 empty_ctx t {
+    EvalTerm.elit lit =>
+      match lit {
+        EvalLiteral.l_int n => n == 42,
+        _ => false
+      },
+    _ => false
+  }
 
 @[test]
 def test_lower_var_bound : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let t : TermV0 := TermV0.var (NameRef.nid id_x) in
-  let _ : EvalTerm := lower (single_ctx id_x) t in
-  true
+  match lower_v0 (single_ctx id_x) t {
+    EvalTerm.evar idx => idx == 0,
+    _ => false
+  }
 
 @[test]
 def test_lower_var_free : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let t : TermV0 := TermV0.var (NameRef.nid id_x) in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
+  match lower_v0 empty_ctx t {
+    EvalTerm.econst idx => idx == 0,
+    _ => false
+  }
 
 // ─── Lambda lowering tests ─────────────────────────────────────────────
 
@@ -123,8 +134,18 @@ def test_lower_lam_identity : Bool :=
   let t : TermV0 := TermV0.lam
     (param_many id_x TermV0.hole)
     (TermV0.var (NameRef.nid id_x)) in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
+  match lower_v0 empty_ctx t {
+    EvalTerm.elam m1 body1 =>
+      match body1 {
+        EvalTerm.eregion r1 m2 body2 =>
+          match body2 {
+            EvalTerm.evar idx => idx == 0,
+            _ => false
+          },
+        _ => false
+      },
+    _ => false
+  }
 
 @[test]
 def test_lower_lam_nested : Bool :=
@@ -135,8 +156,26 @@ def test_lower_lam_nested : Bool :=
     (TermV0.lam
       (param_many id_y TermV0.hole)
       (TermV0.var (NameRef.nid id_x))) in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
+  match lower_v0 empty_ctx t {
+    EvalTerm.elam m1 body1 =>
+      match body1 {
+        EvalTerm.eregion r1 m2 body2 =>
+          match body2 {
+            EvalTerm.elam m3 body3 =>
+              match body3 {
+                EvalTerm.eregion r2 m4 body4 =>
+                  match body4 {
+                    EvalTerm.evar idx => idx == 1,
+                    _ => false
+                  },
+                _ => false
+              },
+            _ => false
+          },
+        _ => false
+      },
+    _ => false
+  }
 
 // ─── Application lowering tests ────────────────────────────────────────
 
@@ -147,8 +186,18 @@ def test_lower_app_simple : Bool :=
     (param_many id_x TermV0.hole)
     (TermV0.var (NameRef.nid id_x)) in
   let t : TermV0 := TermV0.app f (TermV0.lit (Literal.num 1 NumSuffix.i64)) in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
+  match lower_v0 empty_ctx t {
+    EvalTerm.eapp fun arg =>
+      match arg {
+        EvalTerm.elit lit =>
+          match lit {
+            EvalLiteral.l_int n => n == 1,
+            _ => false
+          },
+        _ => false
+      },
+    _ => false
+  }
 
 // ─── Forall/Pi erasure tests ───────────────────────────────────────────
 
@@ -156,32 +205,46 @@ def test_lower_app_simple : Bool :=
 def test_lower_forall_erased : Bool :=
   let id_a : Identifier := Identifier.id "a" in
   let t : TermV0 := TermV0.forall id_a TermV0.hole (TermV0.lit (Literal.num 42 NumSuffix.i64)) in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
+  match lower_v0 empty_ctx t {
+    EvalTerm.elit lit =>
+      match lit {
+        EvalLiteral.l_int n => n == 42,
+        _ => false
+      },
+    _ => false
+  }
 
 @[test]
 def test_lower_pi_erased : Bool :=
   let t : TermV0 := TermV0.pi TermV0.hole TermV0.hole in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
+  match lower_v0 empty_ctx t {
+    EvalTerm.esort level => level == 1,
+    _ => false
+  }
 
 // ─── Sort lowering tests ───────────────────────────────────────────────
 
 @[test]
 def test_lower_sort : Bool :=
   let t : TermV0 := TermV0.type_ 1 in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
-
-// ─── Native lowering tests ─────────────────────────────────────────────
+  match lower_v0 empty_ctx t {
+    EvalTerm.esort level => level == 1,
+    _ => false
+  }
 
 // ─── Hole lowering tests ───────────────────────────────────────────────
 
 @[test]
 def test_lower_hole : Bool :=
   let t : TermV0 := TermV0.hole in
-  let _ : EvalTerm := lower empty_ctx t in
-  true
+  match lower_v0 empty_ctx t {
+    EvalTerm.elit lit =>
+      match lit {
+        EvalLiteral.l_int n => n == 0,
+        _ => false
+      },
+    _ => false
+  }
 
 // ─── Lower + eval end-to-end pipeline tests ───────────────────────────
 // Full pipeline: TermV0 → lower → e2e_eval → result.
@@ -202,12 +265,11 @@ type KernelResult {
 
 open KernelResult
 
-@[partial]
 def kenv_lookup (env: KEvalEnv) (idx: I64) : Option EvalTerm :=
   match env {
     kenv_empty => Option.none,
     kenv_push val rest =>
-      if I64.beq idx 0
+      if idx == 0
       then Option.some val
       else kenv_lookup rest (idx - 1)
   }
@@ -271,7 +333,7 @@ def test_e2e_literal : Bool :=
       match v {
         EvalTerm.elit lit =>
           match lit {
-            EvalLiteral.l_int x => I64.beq x 7,
+            EvalLiteral.l_int x => x == 7,
             EvalLiteral.l_str s => false,
             EvalLiteral.l_float s => false,
             EvalLiteral.l_bool b => false,
@@ -303,7 +365,7 @@ def test_e2e_identity : Bool :=
       match v {
         EvalTerm.elit lit =>
           match lit {
-            EvalLiteral.l_int n => I64.beq n 99,
+            EvalLiteral.l_int n => n == 99,
             EvalLiteral.l_str s => false,
             EvalLiteral.l_float s => false,
             EvalLiteral.l_bool b => false,
@@ -335,13 +397,13 @@ def test_e2e_lower_plus_eval : Bool :=
   let arg_term : TermV0 := TermV0.lit (Literal.str "hello") in
   let app_term : TermV0 := TermV0.app lam_body arg_term in
   let empty_ctx : List Identifier := List.empty in
-  let lowered : EvalTerm := lower empty_ctx app_term in
+  let lowered : EvalTerm := lower_v0 empty_ctx app_term in
   match e2e_eval lowered kenv_empty {
     kr_ok v =>
       match v {
         EvalTerm.elit lit =>
           match lit {
-            EvalLiteral.l_str s => String.beq s "hello",
+            EvalLiteral.l_str s => s == "hello",
             EvalLiteral.l_int n => false,
             EvalLiteral.l_float s => false,
             EvalLiteral.l_bool b => false,
@@ -375,13 +437,13 @@ def test_e2e_nested : Bool :=
   let arg2 : TermV0 := TermV0.lit (Literal.str "world") in
   let app_term : TermV0 := TermV0.app (TermV0.app outer_lam arg1) arg2 in
   let empty_ctx : List Identifier := List.empty in
-  let lowered : EvalTerm := lower empty_ctx app_term in
+  let lowered : EvalTerm := lower_v0 empty_ctx app_term in
   match e2e_eval lowered kenv_empty {
     kr_ok v =>
       match v {
         EvalTerm.elit lit =>
           match lit {
-            EvalLiteral.l_str s => String.beq s "world",
+            EvalLiteral.l_str s => s == "world",
             EvalLiteral.l_int n => false,
             EvalLiteral.l_float s => false,
             EvalLiteral.l_bool b => false,
