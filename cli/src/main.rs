@@ -38,8 +38,8 @@ enum Commands {
   },
 
   Test {
-    #[arg(value_name = "FILE")]
-    input: PathBuf,
+    #[arg(value_name = "PATHS", num_args = 1..)]
+    inputs: Vec<PathBuf>,
     #[arg(short, long, default_value_t = false)]
     debug: bool,
     #[arg(long, default_value_t = false, overrides_with = "no_color")]
@@ -48,6 +48,8 @@ enum Commands {
     no_color: bool,
     #[arg(long)]
     max_depth: Option<u64>,
+    #[arg(long)]
+    timeout: Option<f64>,
     #[arg(short = 'j', long)]
     jobs: Option<usize>,
     #[arg(long, default_value_t = false)]
@@ -132,11 +134,12 @@ fn main() -> Result<(), String> {
       result
     }
     Commands::Test {
-      input,
+      inputs,
       debug,
       color,
       no_color,
       max_depth,
+      timeout,
       jobs,
       sequential,
     } => {
@@ -151,13 +154,14 @@ fn main() -> Result<(), String> {
         })
       };
       let result = run_tests(
-        input,
+        inputs,
         EvalOptions {
           debug,
           use_colors,
           max_recursion_depth: max_depth,
         },
         num_threads,
+        timeout.map(|s| std::time::Duration::from_secs_f64(s)),
       );
       match result {
         Ok(_) => (),

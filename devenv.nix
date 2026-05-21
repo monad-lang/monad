@@ -36,17 +36,8 @@
   # https://devenv.sh/basics/
   enterShell = "";
 
-  # https://devenv.sh/tasks/
-  # tasks = {
-  #   "myproj:setup".exec = "mytool build";
-  #   "devenv:enterShell".after = [ "myproj:setup" ];
-  # };
-
   # https://devenv.sh/tests/
-  enterTest = ''
-    echo "Running tests"
-    cargo test
-  '';
+  enterTest = "";
 
   # https://devenv.sh/git-hooks/
   git-hooks.hooks = {
@@ -63,31 +54,7 @@
     monad-tests = {
       enable = true;
       entry = ''
-        cargo run -- test init/
-      '';
-      pass_filenames = false;
-      files = "\\.(rs|mo)$";
-    };
-    monad-std-tests = {
-      enable = true;
-      entry = ''
-        cargo run -- test std/
-      '';
-      pass_filenames = false;
-      files = "\\.(rs|mo)$";
-    };
-    monad-lang-tests = {
-      enable = true;
-      entry = ''
-        cargo run -- test lang/
-      '';
-      pass_filenames = false;
-      files = "\\.(rs|mo)$";
-    };
-    monad-examples-tests = {
-      enable = true;
-      entry = ''
-        cargo run -- test examples/
+        cargo run -- test init std lang examples
       '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";

@@ -152,10 +152,22 @@ pub fn local_var_owned<'a>(name: &'a Identifier, typ: Term) -> LocalVar<'a> {
 
 /// Owner struct of loaded modules
 #[derive(Debug, Clone)]
+pub struct LoadedModulesConfig {
+  pub test_mode: bool,
+}
+
+impl Default for LoadedModulesConfig {
+  fn default() -> Self {
+    Self { test_mode: false }
+  }
+}
+
+#[derive(Debug, Clone)]
 pub struct LoadedModules {
   modules: Map<ModulePath, Module>,
   builtins: Builtins,
   native: Map<Identifier, NativeFun>,
+  pub config: LoadedModulesConfig,
 }
 
 impl Display for LoadedModules {
@@ -180,7 +192,14 @@ impl LoadedModules {
       modules,
       builtins,
       native,
+      config: Default::default(),
     }
+  }
+  pub fn test_mode(&self) -> bool {
+    self.config.test_mode
+  }
+  pub fn set_test_mode(&mut self, test_mode: bool) {
+    self.config.test_mode = test_mode;
   }
   pub fn get_module_mut(&mut self, path: &ModulePath) -> Option<&mut Module> {
     self.modules.get_mut(path)
@@ -206,6 +225,7 @@ impl LoadedModules {
       native,
       modules: Map::new(),
       builtins: Builtins::new(),
+      config: Default::default(),
     }
   }
 
@@ -226,7 +246,7 @@ impl LoadedModules {
   }
 
   pub fn scopes(&self) -> LoadedScopes<'_> {
-    LoadedScopes::new(self)
+    LoadedScopes::new(self, self.config.test_mode)
   }
 }
 #[derive(Debug, Clone)]
@@ -307,11 +327,16 @@ pub struct GlobalScopeData {
 }
 
 impl GlobalScopeData {
-  pub fn from_module(module: &Module, loaded: &LoadedModules) -> Self {
+  pub fn from_module(module: &Module, loaded: &LoadedModules, test_mode: bool) -> Self {
     let builtins = &loaded.builtins;
 
     // Collect opens from current module and prelude
-    let mut opens: Vec<&Open> = module.get_opens().iter().map(|ctx| ctx.value()).collect();
+    let mut opens: Vec<&Open> = module
+      .get_opens()
+      .iter()
+      .map(|ctx| ctx.value())
+      .filter(|o| test_mode || !o.has_cfg_test_attr())
+      .collect();
     let prelude = loaded.get_module(&builtins.prelude_path);
     if let Some(prelude) = prelude {
       opens = opens
@@ -326,6 +351,9 @@ impl GlobalScopeData {
 
     // Include explicitly used modules
     for use_decl in module.get_uses() {
+      if !test_mode && use_decl.has_cfg_test_attr() {
+        continue;
+      }
       if let Some(mo) = loaded.get_module(&use_decl.module_path) {
         visible_modules.insert(mo.path(), mo);
       }
@@ -373,7 +401,7 @@ impl GlobalScopeData {
       let is_used = use_decl.is_some();
       let filter = use_decl.map(|u| &u.filter);
 
-      for d in modu.get_def_refs(&opens) {
+      for d in modu.get_def_refs(&opens, test_mode) {
         let bare_name = d.name.clone();
 
         let included = match filter {
@@ -542,12 +570,12 @@ pub struct LoadedScopes<'a> {
 }
 
 impl<'a> LoadedScopes<'a> {
-  pub fn new(loaded: &'a LoadedModules) -> Self {
+  pub fn new(loaded: &'a LoadedModules, test_mode: bool) -> Self {
     let mut scopes = Map::new();
     let module_paths: Vec<ModulePath> = loaded.modules.keys().cloned().collect();
     for path in module_paths {
       if let Some(module) = loaded.get_module(&path) {
-        let data = GlobalScopeData::from_module(module, loaded);
+        let data = GlobalScopeData::from_module(module, loaded, test_mode);
         scopes.insert(path, data);
       }
     }
@@ -583,17 +611,18 @@ impl<'a> GlobalScope<'a> {
     decls: &'a Vec<SourceContext<Decl>>,
     loaded: &'a LoadedModules,
   ) -> GlobalScope<'a> {
+    let test_mode = loaded.config.test_mode;
     let uses: Vec<&Use> = decls
       .iter()
       .filter_map(|ctx| match ctx.value() {
-        Decl::Use(u) => Some(u),
+        Decl::Use(u) if test_mode || !u.has_cfg_test_attr() => Some(u),
         _ => None,
       })
       .collect();
     let mut opens: Vec<&Open> = decls
       .iter()
       .filter_map(|ctx| match ctx.value() {
-        Decl::Open(u) => Some(u),
+        Decl::Open(u) if test_mode || !u.has_cfg_test_attr() => Some(u),
         _ => None,
       })
       .collect();
@@ -642,6 +671,7 @@ impl<'a> GlobalScope<'a> {
       loaded,
       empty_all_scopes,
       &used_set,
+      loaded.test_mode(),
     );
     for ctx in decls {
       global.load_decl(ctx, &opens, path);
@@ -665,10 +695,12 @@ impl<'a> GlobalScope<'a> {
     let current_module = loaded.modules.iter().find(|(k, _)| k == &path)?.1;
 
     // Collect opens from current module and prelude only
+    let test_mode = loaded.config.test_mode;
     let mut opens: Vec<&Open> = current_module
       .get_opens()
       .iter()
       .map(|ctx| ctx.value())
+      .filter(|o| test_mode || !o.has_cfg_test_attr())
       .collect();
     let prelude = loaded.get_module(&builtins.prelude_path);
     if let Some(prelude) = prelude {
@@ -683,6 +715,7 @@ impl<'a> GlobalScope<'a> {
       .get_uses()
       .iter()
       .map(|ctx| ctx.value())
+      .filter(|u| test_mode || !u.has_cfg_test_attr())
       .collect();
     let used_set: Set<ModulePath> = uses.iter().map(|u| u.module_path.clone()).collect();
 
@@ -733,6 +766,7 @@ impl<'a> GlobalScope<'a> {
       loaded,
       empty_all_scopes,
       &used_set,
+      loaded.test_mode(),
     ))
   }
   fn from_modules(
@@ -742,6 +776,7 @@ impl<'a> GlobalScope<'a> {
     loaded: &'a LoadedModules,
     all_scopes: Map<&'a ModulePath, &'a GlobalScopeData>,
     used_modules: &Set<ModulePath>,
+    test_mode: bool,
   ) -> Self {
     let builtins = &loaded.builtins;
 
@@ -752,7 +787,7 @@ impl<'a> GlobalScope<'a> {
     for (mp_mod, module) in &modules {
       let is_used = **mp_mod != *current_path && used_modules.contains(mp_mod);
 
-      for d in module.get_def_refs(&opens) {
+      for d in module.get_def_refs(&opens, test_mode) {
         if is_used {
           let prefixed_name = module.path().clone().extend(d.name.clone());
           let prefixed_def = DefRef {
@@ -1637,8 +1672,9 @@ fn load_decl_uses_modules(
   loaded: LoadedModules,
   in_progress: &mut Set<ModulePath>,
 ) -> Result<LoadedModules, LoadingError> {
+  let test_mode = loaded.config.test_mode;
   let mut uses = decls.iter().filter_map(|ctx| match ctx.value() {
-    Decl::Use(u) => Some(u),
+    Decl::Use(u) if test_mode || !u.has_cfg_test_attr() => Some(u),
     _ => None,
   });
   let loaded = uses.try_fold(
@@ -1687,6 +1723,7 @@ fn load_module_files_impl(
   }
   let decls = load_decls(path)?;
   let mut loaded = load_decl_uses_modules(&decls, loaded, in_progress)?;
+  let decls = filter_cfg_test_decls(decls, loaded.config.test_mode);
   let decls = type_check_module_decls(path, decls, &loaded)?;
   let mo = module(
     path.clone(),
@@ -1717,6 +1754,23 @@ pub fn load_decls_from_text_with_path(
   Ok(parsed.decls)
 }
 
+fn filter_cfg_test_decls(
+  decls: Vec<SourceContext<Decl>>,
+  test_mode: bool,
+) -> Vec<SourceContext<Decl>> {
+  if test_mode {
+    return decls;
+  }
+  decls
+    .into_iter()
+    .filter(|ctx| match ctx.value() {
+      Decl::Use(u) => !u.has_cfg_test_attr(),
+      Decl::Open(o) => !o.has_cfg_test_attr(),
+      _ => true,
+    })
+    .collect()
+}
+
 pub fn load_module_from_text(
   text: &str,
   path: ModulePath,
@@ -1727,6 +1781,7 @@ pub fn load_module_from_text(
     .map_err(|e| format!("parse error for {}: {e}", path))?;
   let mut in_progress = crate::empty_set();
   *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
+  let init_decls = filter_cfg_test_decls(init_decls, loaded.config.test_mode);
   let init_decls = type_check_module_decls(&path, init_decls, loaded).map_err(|e| {
     let file_path = path.to_file_path();
     let rendered = render_type_error_with_source(text, &e, false, Some(&file_path));
@@ -1977,7 +2032,7 @@ impl Module {
     }
   }
 
-  fn get_def_refs<'a>(&'a self, opens: &Vec<&'a Open>) -> Vec<DefRef<'a>> {
+  fn get_def_refs<'a>(&'a self, opens: &Vec<&'a Open>, test_mode: bool) -> Vec<DefRef<'a>> {
     let instance_defs: Vec<DefRef> = self
       .instances
       .iter()
@@ -2051,6 +2106,7 @@ impl Module {
     self
       .defs
       .iter()
+      .filter(|(_, def)| test_mode || !def.value().has_test_attr())
       .flat_map(|(name, def)| {
         let names = name.open(opens);
         names

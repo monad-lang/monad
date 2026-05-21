@@ -3,11 +3,13 @@ use std::fmt::Display;
 use std::fs;
 use std::hash::{BuildHasherDefault, DefaultHasher, Hash};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::eval::r#type::render_type_error_with_source;
 use crate::eval::r#type::type_check;
-use crate::eval::{EvalOptions, eval};
+use crate::eval::{EvalOptions, eval, eval_test};
 #[cfg(feature = "kernel")]
 use crate::eval_term::EvalTerm;
 #[cfg(feature = "kernel")]
@@ -237,6 +239,7 @@ pub fn vec_fmt<T: Display>(v: &[T]) -> String {
 
 const GREEN: &str = "\x1b[32m";
 const RED: &str = "\x1b[31m";
+const YELLOW: &str = "\x1b[33m";
 const RESET: &str = "\x1b[0m";
 
 enum TestResult {
@@ -314,7 +317,6 @@ fn collect_mo_files(dir: &Path) -> Vec<PathBuf> {
 
 #[derive(Debug)]
 struct FileOutput {
-  path: PathBuf,
   passed: usize,
   failed: usize,
   output_lines: Vec<String>,
@@ -328,8 +330,19 @@ fn test_one_file(
   path: &ModulePath,
   mut loaded: LoadedModules,
   options: &EvalOptions,
+  test_timeout: Option<std::time::Duration>,
+  file_index: usize,
+  total_files: usize,
 ) -> (LoadedModules, FileOutput) {
   let file_path = file.to_path_buf();
+
+  let header = format!(
+    "{YELLOW}[{}/{}] Testing {}...{RESET}",
+    file_index + 1,
+    total_files,
+    file_path.display()
+  );
+  println!("{header}");
 
   let backup = loaded.clone();
   loaded = match load_module(&file_path, path, loaded) {
@@ -338,7 +351,6 @@ fn test_one_file(
       return (
         backup,
         FileOutput {
-          path: file_path.clone(),
           passed: 0,
           failed: 1,
           output_lines: vec![format!("{RED}FAIL{RESET} {}", file_path.display())],
@@ -355,7 +367,6 @@ fn test_one_file(
       return (
         loaded,
         FileOutput {
-          path: file_path.clone(),
           passed: 0,
           failed: 0,
           output_lines: Vec::new(),
@@ -384,7 +395,6 @@ fn test_one_file(
     return (
       loaded,
       FileOutput {
-        path: file_path.clone(),
         passed: 0,
         failed: 0,
         output_lines: Vec::new(),
@@ -416,7 +426,12 @@ fn test_one_file(
       output_lines.push(format!("test {name} : {typ}"));
     }
 
-    let result = match eval(term, &global.scope(), options) {
+    let start = Instant::now();
+    let eval_result = run_test_eval(term.clone(), &global.scope(), &options, test_timeout);
+    let duration = start.elapsed();
+    let duration_str = format_duration(duration);
+
+    let result = match eval_result {
       Ok(t) => t,
       Err(e) => {
         failed += 1;
@@ -432,15 +447,15 @@ fn test_one_file(
     match detect_test_result(&result) {
       TestResult::Pass => {
         passed += 1;
-        output_lines.push(format!("{GREEN}PASS{RESET} {name}"));
+        output_lines.push(format!("{GREEN}PASS{RESET} {name} ({duration_str})"));
       }
       TestResult::Fail => {
         failed += 1;
-        output_lines.push(format!("{RED}FAIL{RESET} {name}"));
+        output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str})"));
       }
       TestResult::FailWithMessage(msg) => {
         failed += 1;
-        output_lines.push(format!("{RED}FAIL{RESET} {name}: {msg}"));
+        output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str}): {msg}"));
         failures.push((name.clone(), msg));
       }
     }
@@ -462,7 +477,6 @@ fn test_one_file(
   (
     loaded,
     FileOutput {
-      path: file_path,
       passed,
       failed,
       output_lines,
@@ -508,15 +522,17 @@ fn run_tests_sequential(
   files: &[PathBuf],
   master_loaded: &LoadedModules,
   options: &EvalOptions,
+  test_timeout: Option<std::time::Duration>,
 ) -> Result<(), String> {
   let mut total_passed = 0;
   let mut total_failed = 0;
   let mut overall_errors: Vec<String> = Vec::new();
   let mut loaded = master_loaded.clone();
+  let total = files.len();
 
-  for file in files {
+  for (i, file) in files.iter().enumerate() {
     let path: ModulePath = file.clone().into();
-    let (new_loaded, result) = test_one_file(file, &path, loaded, options);
+    let (new_loaded, result) = test_one_file(file, &path, loaded, options, test_timeout, i, total);
     loaded = new_loaded;
 
     print_file_output(&result);
@@ -538,27 +554,50 @@ fn run_tests_parallel(
   master_loaded: &LoadedModules,
   options: &EvalOptions,
   num_threads: usize,
+  test_timeout: Option<std::time::Duration>,
 ) -> Result<(), String> {
   let n_threads = std::cmp::min(num_threads, files.len());
   let chunk_size = files.len().div_ceil(n_threads);
 
-  let results: Arc<Mutex<Vec<FileOutput>>> = Arc::new(Mutex::new(Vec::new()));
+  let total_passed = Arc::new(AtomicUsize::new(0));
+  let total_failed = Arc::new(AtomicUsize::new(0));
+  let overall_errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
   let mut handles = Vec::with_capacity(n_threads);
-  for chunk in files.chunks(chunk_size) {
+  for (chunk_idx, chunk) in files.chunks(chunk_size).enumerate() {
     let mut loaded = master_loaded.clone();
     let opts = options.clone();
-    let results = Arc::clone(&results);
     let chunk_files: Vec<PathBuf> = chunk.to_vec();
+    let passed = Arc::clone(&total_passed);
+    let failed = Arc::clone(&total_failed);
+    let errors = Arc::clone(&overall_errors);
+    let total = files.len();
+    let base_idx = chunk_idx * chunk_size;
 
     let handle = std::thread::Builder::new()
       .stack_size(8 * 1024 * 1024)
       .spawn(move || {
-        for file in &chunk_files {
+        for (i, file) in chunk_files.iter().enumerate() {
           let path: ModulePath = file.clone().into();
-          let (new_loaded, output) = test_one_file(file, &path, loaded, &opts);
+          let (new_loaded, output) = test_one_file(
+            file,
+            &path,
+            loaded,
+            &opts,
+            test_timeout,
+            base_idx + i,
+            total,
+          );
           loaded = new_loaded;
-          results.lock().unwrap().push(output);
+
+          print_file_output(&output);
+
+          passed.fetch_add(output.passed, Ordering::Relaxed);
+          failed.fetch_add(output.failed, Ordering::Relaxed);
+          if let Some(ref err) = output.error_message {
+            eprintln!("  {err}");
+            errors.lock().unwrap().push(err.clone());
+          }
         }
       })
       .expect("failed to spawn test thread");
@@ -569,38 +608,60 @@ fn run_tests_parallel(
     handle.join().expect("test thread panicked");
   }
 
-  let mut results = Arc::try_unwrap(results).unwrap().into_inner().unwrap();
-  results.sort_by(|a, b| a.path.cmp(&b.path));
-
-  let mut total_passed = 0;
-  let mut total_failed = 0;
-  let mut overall_errors: Vec<String> = Vec::new();
-
-  for result in &results {
-    print_file_output(result);
-
-    total_passed += result.passed;
-    total_failed += result.failed;
-
-    if let Some(ref err) = result.error_message {
-      eprintln!("  {err}");
-      overall_errors.push(err.clone());
-    }
-  }
+  let total_passed = total_passed.load(Ordering::Relaxed);
+  let total_failed = total_failed.load(Ordering::Relaxed);
+  let overall_errors = Arc::try_unwrap(overall_errors)
+    .unwrap()
+    .into_inner()
+    .unwrap();
 
   print_final_summary(total_passed, total_failed, &overall_errors)
 }
 
-pub fn run_tests(input: PathBuf, options: EvalOptions, num_threads: usize) -> Result<(), String> {
-  let files: Vec<PathBuf> = if input.is_dir() {
-    let mut files = collect_mo_files(&input);
-    files.sort();
-    files
+fn format_duration(d: std::time::Duration) -> String {
+  let nanos = d.as_nanos();
+  if nanos < 1_000 {
+    format!("{nanos}ns")
+  } else if nanos < 1_000_000 {
+    format!("{:.0}µs", d.as_micros())
+  } else if nanos < 1_000_000_000 {
+    format!("{:.2}ms", d.as_secs_f64() * 1000.0)
   } else {
-    vec![input]
-  };
+    format!("{:.2}s", d.as_secs_f64())
+  }
+}
+
+fn run_test_eval(
+  term: Term,
+  scope: &crate::term::module::Scope,
+  options: &EvalOptions,
+  test_timeout: Option<std::time::Duration>,
+) -> Result<Term, String> {
+  match test_timeout {
+    Some(timeout) => eval_test(term, scope, options, timeout).map_err(|e| format!("{e}")),
+    None => eval(term, scope, options).map_err(|e| format!("{e}")),
+  }
+}
+
+pub fn run_tests(
+  inputs: Vec<PathBuf>,
+  options: EvalOptions,
+  num_threads: usize,
+  test_timeout: Option<std::time::Duration>,
+) -> Result<(), String> {
+  let mut files: Vec<PathBuf> = Vec::new();
+  for input in &inputs {
+    if input.is_dir() {
+      files.extend(collect_mo_files(input));
+    } else {
+      files.push(input.clone());
+    }
+  }
+  files.sort();
+  files.dedup();
 
   let mut master_loaded = default_modules().map_err(|e| format!("{e}"))?;
+  master_loaded.set_test_mode(true);
 
   // Ensure std/test is loaded (for Test.assert)
   let test_path: ModulePath = ModulePath::new(vec![id("std"), id("test")]);
@@ -626,8 +687,8 @@ pub fn run_tests(input: PathBuf, options: EvalOptions, num_threads: usize) -> Re
 
   // Single file or single-threaded: run sequentially
   if num_threads <= 1 || files.len() <= 1 {
-    return run_tests_sequential(&files, &master_loaded, &options);
+    return run_tests_sequential(&files, &master_loaded, &options, test_timeout);
   }
 
-  run_tests_parallel(&files, &master_loaded, &options, num_threads)
+  run_tests_parallel(&files, &master_loaded, &options, num_threads, test_timeout)
 }

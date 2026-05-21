@@ -2107,11 +2107,21 @@ pub struct Use {
   pub(crate) module_path: ModulePath,
   pub(crate) filter: UseFilter,
   pub(crate) public: bool,
+  pub attributes: Vec<Attribute>,
 }
 
 impl Use {
   pub fn module_path(&self) -> &ModulePath {
     &self.module_path
+  }
+  pub fn has_cfg_test_attr(&self) -> bool {
+    self.attributes.iter().any(|a| {
+      a.name.as_str() == "cfg"
+        && a
+          .args
+          .iter()
+          .any(|arg| matches!(arg, AttrArg::Ident(id) if id.as_str() == "test"))
+    })
   }
 }
 
@@ -2126,11 +2136,21 @@ pub struct Open {
   pub source_location: SourceRange,
   pub(crate) module_path: ModulePath,
   pub(crate) filter: OpenFilter,
+  pub attributes: Vec<Attribute>,
 }
 
 impl Open {
   pub fn module_path(&self) -> &ModulePath {
     &self.module_path
+  }
+  pub fn has_cfg_test_attr(&self) -> bool {
+    self.attributes.iter().any(|a| {
+      a.name.as_str() == "cfg"
+        && a
+          .args
+          .iter()
+          .any(|arg| matches!(arg, AttrArg::Ident(id) if id.as_str() == "test"))
+    })
   }
 }
 

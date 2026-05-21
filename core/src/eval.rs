@@ -9,6 +9,7 @@ pub mod test;
 pub mod r#type;
 
 use std::fmt::Display;
+use std::time::Instant;
 
 use crate::eval::native::{NativeError, native_execute};
 use crate::eval::r#type::TypeError;
@@ -47,6 +48,7 @@ pub enum EvalError {
   StructUpdateNotDesugared,
   NativeArgumentOverflow,
   RecursionDepthExceeded { max: u64 },
+  TimeOut,
 }
 
 impl Display for EvalError {
@@ -84,6 +86,9 @@ impl Display for EvalError {
       }
       EvalError::RecursionDepthExceeded { max } => {
         write!(f, "recursion depth limit ({max}) exceeded")
+      }
+      EvalError::TimeOut => {
+        write!(f, "test timed out")
       }
     }
   }
@@ -210,7 +215,17 @@ fn resolve_name<'a>(name: &'a NameRef, scope: &'a Scope<'a>) -> Result<&'a Term,
 
 /// Run a beta reduction
 pub fn eval(main_term: Term, scope: &Scope, options: &EvalOptions) -> Result<Term, Error> {
-  eval_inner(main_term, scope, options, None)
+  eval_inner(main_term, scope, options, None, None)
+}
+
+pub fn eval_test(
+  term: Term,
+  scope: &Scope,
+  options: &EvalOptions,
+  timeout: std::time::Duration,
+) -> Result<Term, Error> {
+  let deadline = Instant::now() + timeout;
+  eval_inner(term, scope, options, None, Some(deadline))
 }
 
 fn eval_inner(
@@ -218,6 +233,7 @@ fn eval_inner(
   scope: &Scope,
   options: &EvalOptions,
   mut current_loc: Option<SourceRange>,
+  deadline: Option<Instant>,
 ) -> Result<Term, Error> {
   let mut steps: u64 = 0;
   loop {
@@ -227,6 +243,11 @@ fn eval_inner(
           Error::Eval(EvalError::RecursionDepthExceeded { max }),
           current_loc,
         ));
+      }
+    }
+    if let Some(deadline) = deadline {
+      if Instant::now() > deadline {
+        return Err(wrap_error(Error::Eval(EvalError::TimeOut), current_loc));
       }
     }
     steps += 1;
@@ -240,7 +261,7 @@ fn eval_inner(
       }
       App { fun, arg } => {
         let loc = current_loc.take();
-        eval_app(*fun, *arg, scope, options, loc)?
+        eval_app(*fun, *arg, scope, options, loc, deadline)?
       }
       Var { name } => {
         let mut term = resolve_name(&name, scope)?.clone();
@@ -265,7 +286,7 @@ fn eval_inner(
         value: Literal::Match { value, cases },
       } => {
         let loc = current_loc.take();
-        let value = eval_inner(*value, scope, options, loc.clone())?;
+        let value = eval_inner(*value, scope, options, loc.clone(), deadline)?;
         if let Con(Constructor {
           name,
           typ_name: _,
@@ -316,7 +337,7 @@ fn eval_inner(
         value: Literal::If { value, then, els },
       } => {
         let loc = current_loc.take();
-        let value = eval_inner(*value, scope, options, loc.clone())?;
+        let value = eval_inner(*value, scope, options, loc.clone(), deadline)?;
         let b = recognize_bool(&value, loc)?;
         if b { *then } else { *els }
       }
@@ -588,6 +609,7 @@ fn eval_app(
   scope: &Scope,
   options: &EvalOptions,
   loc: Option<SourceRange>,
+  deadline: Option<Instant>,
 ) -> Result<Term, Error> {
   // Class method dispatch: evaluate arg first to determine runtime type,
   // so we can find the correct instance instead of picking the first.
@@ -605,7 +627,7 @@ fn eval_app(
       _ => None,
     };
     if let Some(class_def) = class_def {
-      let arg_eval = eval_inner(arg, scope, options, loc.clone())?;
+      let arg_eval = eval_inner(arg, scope, options, loc.clone(), deadline)?;
       if let Some(arg_type) = infer_arg_type(&arg_eval) {
         let param_name = class_def
           .class
@@ -631,11 +653,11 @@ fn eval_app(
         }
       }
       // Dispatch failed; fall through to normal resolution
-      let fun_eval = eval_inner(fun, scope, options, loc.clone())?;
+      let fun_eval = eval_inner(fun, scope, options, loc.clone(), deadline)?;
       (fun_eval, arg_eval)
     } else {
-      let fun_eval = eval_inner(fun, scope, options, loc.clone())?;
-      let arg_eval = eval_inner(arg, scope, options, loc.clone())?;
+      let fun_eval = eval_inner(fun, scope, options, loc.clone(), deadline)?;
+      let arg_eval = eval_inner(arg, scope, options, loc.clone(), deadline)?;
       (fun_eval, arg_eval)
     }
   };
@@ -649,7 +671,7 @@ fn eval_app(
     Ntv { native } => {
       let index = native.args.iter().filter(|a| a.is_some()).count() + 1;
       if let Some(result) = native_apply_arg(native, index, arg_evaluated) {
-        let result_eval = eval_inner(result, scope, options, loc.clone())?;
+        let result_eval = eval_inner(result, scope, options, loc.clone(), deadline)?;
         Ok(result_eval)
       } else {
         Err(wrap_error(
@@ -662,8 +684,8 @@ fn eval_app(
       fun: fun2,
       arg: arg_internal,
     } => {
-      let f = eval_app(*fun2, *arg_internal, scope, options, loc.clone())?;
-      let f2 = eval_app(f, arg_evaluated, scope, options, loc.clone())?;
+      let f = eval_app(*fun2, *arg_internal, scope, options, loc.clone(), deadline)?;
+      let f2 = eval_app(f, arg_evaluated, scope, options, loc.clone(), deadline)?;
       Ok(f2)
     }
     _ => Err(wrap_error(

@@ -3074,6 +3074,18 @@ pub fn type_check_module_decls(
   decls: Vec<SourceContext<Decl>>,
   loaded: &LoadedModules,
 ) -> Result<Vec<SourceContext<Decl>>, TypeError> {
+  let decls: Vec<SourceContext<Decl>> = if loaded.config.test_mode {
+    decls
+  } else {
+    decls
+      .into_iter()
+      .filter(|ctx| match ctx.value() {
+        Decl::Use(u) if u.has_cfg_test_attr() => false,
+        Decl::Open(o) if o.has_cfg_test_attr() => false,
+        _ => true,
+      })
+      .collect()
+  };
   let decls = elaborate_decls(decls, loaded);
   let decls = macro_expand::expand_macros(decls, loaded).map_err(TypeError::MacroExpansion)?;
   let global = loaded.scope_of_decls(path, &decls);

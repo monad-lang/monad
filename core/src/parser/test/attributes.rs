@@ -329,3 +329,41 @@ fn test_attr_partial() {
     _ => panic!("expected Def"),
   }
 }
+
+#[test]
+fn test_attr_cfg_test_on_use() {
+  let s = r#"@[cfg test]
+    use std.test
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("cfg"),
+    args: vec![AttrArg::Ident(id("test"))],
+  }];
+
+  match res.value() {
+    Decl::Use(u) => assert_eq!(u.attributes, expected_attrs),
+    _ => panic!("expected Use, got {:?}", res.value()),
+  }
+}
+
+#[test]
+fn test_attr_cfg_test_on_open() {
+  let s = r#"@[cfg test]
+    open IO
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  let expected_attrs = vec![Attribute {
+    name: id("cfg"),
+    args: vec![AttrArg::Ident(id("test"))],
+  }];
+
+  match res.value() {
+    Decl::Open(o) => assert_eq!(o.attributes, expected_attrs),
+    _ => panic!("expected Open, got {:?}", res.value()),
+  }
+}

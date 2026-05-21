@@ -347,11 +347,14 @@ impl Similar for Use {
     self.module_path == other.module_path
       && self.filter == other.filter
       && self.public == other.public
+      && self.attributes == other.attributes
   }
 }
 impl Similar for Open {
   fn similar(&self, other: &Self) -> bool {
-    self.module_path == other.module_path && self.filter == other.filter
+    self.module_path == other.module_path
+      && self.filter == other.filter
+      && self.attributes == other.attributes
   }
 }
 impl Similar for Decl {
@@ -387,6 +390,7 @@ pub fn decl_use(name_path: Vec<&str>) -> Decl {
     module_path: ModulePath::new(ids),
     filter: UseFilter::All,
     public: false,
+    attributes: vec![],
   })
 }
 
@@ -396,6 +400,7 @@ pub fn decl_open(name_path: Vec<&str>) -> Decl {
     source_location: Default::default(),
     module_path: ModulePath::new(ids),
     filter: OpenFilter::All,
+    attributes: vec![],
   })
 }
 

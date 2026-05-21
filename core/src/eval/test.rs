@@ -5,12 +5,16 @@ use crate::eval::r#type::{
 };
 use crate::parser::parse_file;
 use crate::parser::{ReplInput, repl_parser, term, test::parse_type};
-use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
+use crate::term::module::{
+  LoadedModules, ParsedModule, Scope, default_modules, load_module_files, load_module_from_text,
+  module,
+};
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
-  Decl, Hole, Identifier, ModulePath, Multiplicity, SourceContext, Term, Typed, app, app2, b_false,
-  b_true, case, constructor, forall, id, io_term, lams, match_term, mp, mpt, mpvar, none, num, par,
-  param, param_with_mult, pi, some, sort1, str, strings_to_list_term, to_list_term, typ, unit, var,
+  Decl, Hole, Identifier, ModulePath, Multiplicity, NameRef, SourceContext, Term, Typed, app, app2,
+  b_false, b_true, case, constructor, forall, id, io_term, lams, match_term, mp, mpt, mpvar, none,
+  num, par, param, param_with_mult, pi, some, sort1, str, strings_to_list_term, to_list_term, typ,
+  unit, var,
 };
 use crate::term::{stru, stru_field, stru_field_with_mult};
 use crate::{set_of, similar};
@@ -2708,4 +2712,91 @@ fn test_strict_positivity_rejects_double_negative() {
     err.contains("non-strictly positive"),
     "Error should mention non-strictly positive, got: {err}"
   );
+}
+
+#[test]
+fn test_cfg_test_use_skipped_in_non_test_mode() {
+  let mut loaded = default_modules().unwrap();
+  let helper_path = ModulePath::new(vec![id("init"), id("test_helper")]);
+  load_module_from_text(
+    "def test_helper_val : I64 := 42",
+    helper_path.clone(),
+    &mut loaded,
+  )
+  .unwrap();
+
+  let path = ModulePath::top("_test_cfg_use");
+  let parsed = parse_file(
+    r#"
+    @[cfg test]
+    use init.test_helper
+
+    use init
+
+    def main : I64 := 10
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let global = loaded.global(&path).unwrap();
+  let scope = Scope::new(&global);
+  let result = scope.resolve_name(&NameRef::P(mpt("test_helper_val")));
+  assert!(
+    result.is_err(),
+    "test_helper_val should NOT be visible in non-test mode"
+  );
+}
+
+#[test]
+fn test_cfg_test_use_visible_in_test_mode() {
+  let mut loaded = default_modules().unwrap();
+  loaded.set_test_mode(true);
+  let helper_path = ModulePath::new(vec![id("init"), id("test_helper")]);
+  load_module_from_text(
+    "def test_helper_val : I64 := 42",
+    helper_path.clone(),
+    &mut loaded,
+  )
+  .unwrap();
+
+  let path = ModulePath::top("_test_cfg_use");
+  let parsed = parse_file(
+    r#"
+    @[cfg test]
+    use init.test_helper
+    use init
+
+    def test_main : I64 := test_helper_val
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&path).expect("scope should exist");
+  let scope = Scope::new(&global);
+
+  let (_, e) = term::<()>("test_main".into()).finish().unwrap();
+  similar!(eval_test(e, &scope).unwrap(), num(42));
 }
