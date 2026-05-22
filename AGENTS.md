@@ -911,3 +911,38 @@ When a Monad program produces the wrong result:
    signature and the Rust handler must agree on argument count and types
 4. Verify that substitution produces the expected term — many eval bugs
    are actually substitution bugs
+
+### Rebase Resolution Workflow
+
+When rebasing a feature branch onto upstream changes that touch the same
+Monad source files, the safest resolution strategy is:
+
+1. **Accept the upstream file as-is**: `git checkout --theirs <file>` to
+   start from a clean upstream state. This avoids tedious per-hunk conflict
+   resolution when large AST renames (e.g., `Term` → `TermV0`) sweep
+   through the file.
+2. **Reapply your edits on top**: Port each logical change set (function
+   compactions, table conversions, etc.) onto the fresh upstream base.
+3. **Audit for leftover artifacts**: Check for:
+   - Double `@[partial]` annotations (both upstream and your stashed code
+     may have had one → both land after checkout/reapply)
+   - `@[partial]` on pure (non-parsing) helper functions (not needed)
+   - Old helper functions that upstream renamed parameters on but you
+     removed entirely (check with `rg -n 'helper_name' <file>`)
+4. **Verify**: Run `cargo run -- test <file>` and verify all tests pass.
+   If the number of tests changes, confirm the delta is expected (e.g.,
+   upstream added tests to match new AST variants).
+5. **Verify no unmerged files remain**: `git diff --name-only --diff-filter=U`
+
+**Common artifacts after checkout/reapply**:
+- Double `@[partial]`: the upstream `@[partial]` + your stashed `@[partial]`
+  both survive. Remove duplicates.
+- `@[partial]` on pure helpers: `num_to_term`, `op_check` don't need it.
+- Old helper definitions that were supposed to be deleted but survived
+  because upstream changed their parameter names (making the conflict
+  resolution merge them back as "separate" definitions).
+
+**`fn` lambda limitation during reapplication**: When reapplying compactions
+that use `bind_parse`/`map_parse`, inline `fn` lambda arguments fail type
+inference. Use nested pattern matches or named helper functions instead
+(see Known Issues above).
