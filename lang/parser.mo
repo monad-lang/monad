@@ -4154,7 +4154,7 @@ def t2_atom_try_var (r: ParseResult Term) (ctx: List Identifier) (input: String)
 def t2_atom_try_lit (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
         success rem out => t2_atom_lift_lit out rem,
-        fail _ => t2_atom_try_match (match_parser input) ctx input
+        fail _ => t2_atom_try_match ctx input
     }
 
 @[partial]
@@ -4181,17 +4181,161 @@ def t2_atom_lift_lit (t: TermV0) (rem: String) : ParseResult Term :=
         TermV0.hole => success rem Term.hole
     }
 
+// ─── Canonical match case parser (Phase 9) ─────────────────────────────
+
 @[partial]
-def t2_atom_try_match (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
+def t2_match_case_parser (ctx: List Identifier) (input: String) : ParseResult MatchCase :=
+    t2_match_case_name (identifier (skip_spaces input)) ctx
+
+@[partial]
+def t2_match_case_name (r: ParseResult String) (ctx: List Identifier) : ParseResult MatchCase :=
     match r {
-        success rem out => t2_atom_lift_lit out rem,
-        fail _ => t2_atom_try_if (if_parser input) ctx input
+        success rem name =>
+            t2_match_case_args (many0 identifier (skip_spaces rem)) (Identifier.id name) ctx,
+        fail e => fail e
     }
 
 @[partial]
-def t2_atom_try_if (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
+def t2_match_case_args (r: ParseResult (List String)) (name: Identifier) (ctx: List Identifier) : ParseResult MatchCase :=
     match r {
-        success rem out => t2_atom_lift_lit out rem,
+        success rem _ => t2_match_case_arrow (tag "=>" (skip_spaces rem)) name ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_match_case_arrow (r: ParseResult String) (name: Identifier) (ctx: List Identifier) : ParseResult MatchCase :=
+    match r {
+        success rem _ => t2_match_case_body (t2_expression ctx (skip_spaces rem)) name,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_match_case_body (r: ParseResult Term) (name: Identifier) : ParseResult MatchCase :=
+    match r {
+        success rem body =>
+            let empty_args : List Identifier := List.empty in
+            success (t2_match_case_tail rem) (MatchCase.mc name empty_args body),
+        fail e => fail e
+    }
+
+@[partial]
+def t2_match_case_tail (input: String) : String :=
+    t2_match_case_tail_sp (take_while is_space input) input
+
+@[partial]
+def t2_match_case_tail_sp (r: ParseResult String) (orig: String) : String :=
+    match r {
+        success after_sp _ => t2_match_case_tail_cm (tag "," after_sp) after_sp,
+        fail _ => orig
+    }
+
+@[partial]
+def t2_match_case_tail_cm (r: ParseResult String) (after_sp: String) : String :=
+    match r {
+        success rem _ => skip_spaces rem,
+        fail _ => after_sp
+    }
+
+// ─── Canonical match expression parser (Phase 9) ───────────────────────
+
+@[partial]
+def t2_match_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
+    t2_match_kw (tag "match" input) ctx
+
+@[partial]
+def t2_match_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_match_scrutinee (t2_expression ctx (skip_spaces rem)) ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_match_scrutinee (r: ParseResult Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem scrutinee => t2_match_brace_open (tag "{" (skip_spaces rem)) scrutinee ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_match_brace_open (r: ParseResult String) (scrutinee: Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_match_cases_parse (many1 (t2_match_case_parser ctx) rem) scrutinee,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_match_cases_parse (r: ParseResult (List MatchCase)) (scrutinee: Term) : ParseResult Term :=
+    match r {
+        success rem cases => t2_match_close (tag "}" (skip_spaces rem)) scrutinee cases,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_match_close (r: ParseResult String) (scrutinee: Term) (cases: List MatchCase) : ParseResult Term :=
+    match r {
+        success rem _ => success rem (Term.lit (Literal.match_ scrutinee cases)),
+        fail e => fail e
+    }
+
+// ─── Canonical if expression parser (Phase 9) ─────────────────────────
+
+@[partial]
+def t2_if_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
+    t2_if_kw (tag "if" input) ctx
+
+@[partial]
+def t2_if_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_if_cond (t2_expression ctx (skip_spaces rem)) ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_if_cond (r: ParseResult Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem cond => t2_if_then_kw (tag "then" (skip_spaces rem)) cond ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_if_then_kw (r: ParseResult String) (cond: Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_if_then_branch (t2_expression ctx (skip_spaces rem)) cond ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_if_then_branch (r: ParseResult Term) (cond: Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem then_b => t2_if_else_kw (tag "else" (skip_spaces rem)) cond then_b ctx,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_if_else_kw (r: ParseResult String) (cond: Term) (then_b: Term) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => t2_if_else_branch (t2_expression ctx (skip_spaces rem)) cond then_b,
+        fail e => fail e
+    }
+
+@[partial]
+def t2_if_else_branch (r: ParseResult Term) (cond: Term) (then_b: Term) : ParseResult Term :=
+    match r {
+        success rem else_b => success rem (Term.lit (Literal.if_ cond then_b else_b)),
+        fail e => fail e
+    }
+
+@[partial]
+def t2_atom_try_match (ctx: List Identifier) (input: String) : ParseResult Term :=
+    match t2_match_parser ctx input {
+        success rem out => success rem out,
+        fail _ => t2_atom_try_if ctx input
+    }
+
+@[partial]
+def t2_atom_try_if (ctx: List Identifier) (input: String) : ParseResult Term :=
+    match t2_if_parser ctx input {
+        success rem out => success rem out,
         fail _ => t2_atom_try_lambda (t2_lambda_parser ctx input) ctx input
     }
 
@@ -4679,4 +4823,238 @@ def test_t_type_no_arrow_parens : Bool :=
     match t2_type_expression empty_ctx "(A)" {
         success rem _ => String.beq rem "",
         fail _ => false
+    }
+
+// ─── Canonical if/match parser tests (Phase 9) ────────────────────────
+
+@[test]
+def test_t2_match_case_simple : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_match_case_parser empty_ctx "none => 0" {
+        success rem out =>
+            match out {
+                mc name args body =>
+                    String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_match_simple : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_match_parser empty_ctx "match x { some a => a, none => 0 }" {
+        success rem out =>
+            match out {
+                lit val =>
+                    match val {
+                        match_ scrutinee cases => String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_match_multi : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_match_parser empty_ctx "match x { zero => 0, one => 1 }" {
+        success rem out =>
+            match out {
+                lit val =>
+                    match val {
+                        match_ scrutinee cases => String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_if_simple : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_if_parser empty_ctx "if true then 1 else 2" {
+        success rem out =>
+            match out {
+                lit val =>
+                    match val {
+                        if_ cond then_b else_b => String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_if_nested : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match t2_if_parser empty_ctx "if a then if b then 1 else 2 else 3" {
+        success rem out =>
+            match out {
+                lit val =>
+                    match val {
+                        if_ cond then_b else_b => String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_if_bound_var : Bool :=
+    let x : Identifier := Identifier.id "x" in
+    let ctx : List Identifier := List.cons x List.empty in
+    match t2_if_parser ctx "if x then 1 else x" {
+        success rem out =>
+            match out {
+                lit val =>
+                    match val {
+                        if_ cond then_b else_b =>
+                            String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_match_bound_var : Bool :=
+    let x : Identifier := Identifier.id "x" in
+    let ctx : List Identifier := List.cons x List.empty in
+    match t2_match_parser ctx "match x { none => 0 }" {
+        success rem out =>
+            match out {
+                lit val =>
+                    match val {
+                        match_ scrutinee cases =>
+                            String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+// ─── Canonical decl parser smoke tests (Phase 8) ─────────────────────
+
+@[test]
+def test_t2_use_parser : Bool :=
+    match t2_use_parser "use prelude" {
+        success rem out =>
+            match out {
+                use_d path => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_open_parser : Bool :=
+    match t2_open_parser "open IO" {
+        success rem out =>
+            match out {
+                open_d path => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_infix_parser : Bool :=
+    match t2_infix_parser "infix (++) := List.append" {
+        success rem out =>
+            match out {
+                infix_d op path => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_struct_parser : Bool :=
+    match t2_struct_parser "struct Point { x : I64, y : I64 }" {
+        success rem out =>
+            match out {
+                struct_d s => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_type_parser : Bool :=
+    match t2_type_parser "type Maybe A { some (a: A), none }" {
+        success rem out =>
+            match out {
+                inductive_d ind => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_def_parser : Bool :=
+    match t2_def_parser "@[test] def f (x : I64) : I64 := x" {
+        success rem out =>
+            match out {
+                def_d d => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_def_do_block : Bool :=
+    match t2_def_parser "def main : Unit { return 0 }" {
+        success rem out =>
+            match out {
+                def_d d => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_class_parser : Bool :=
+    match t2_class_parser "class Show A { def show (a : A) : String }" {
+        success rem out =>
+            match out {
+                class_d c => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_instance_parser : Bool :=
+    match t2_instance_parser "instance Functor Maybe { def map f m := match m { some a => a, none => none } }" {
+        success rem out =>
+            match out {
+                instance_d i => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decl_parser_def : Bool :=
+    match t2_decl_parser "def add (a: I64) (b: I64) : I64 := a + b" {
+        success rem out =>
+            match out {
+                def_d d => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decl_parser_fail : Bool :=
+    match t2_decl_parser "foobar" {
+        success rem out => false,
+        fail _ => true
     }
