@@ -82,8 +82,53 @@ def List.filter {A : Type} (pred : A -> Bool) (xs : List A) : List A :=
             else List.filter pred tail
     }
 
+// TODO Fix instance resolution over constraint
+// def List.contains [BEq A] {A : Type} (a : A) (xs : List A) : Bool :=
+//     List.any (fn x => a == x) xs
+
+def List.any {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
+    match xs {
+        empty => false,
+        cons a tail =>
+            if pred a
+            then true
+            else List.any pred tail
+    }
+
+def List.all {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
+    match xs {
+        empty => true,
+        cons a tail =>
+            if pred a
+            then List.all pred tail
+            else false
+    }
+
 def List.sum (xs : List I64) : I64 :=
     match xs {
         empty => 0,
         cons a tail => a + List.sum tail
     }
+
+@[test]
+def test_length : Bool :=
+    [1, 2, 3, 4]
+        |> List.length
+        |> BEq.beq 4
+
+@[test]
+def test_sum : Bool :=
+    [1, 2, 3, 4]
+        |> List.sum
+        |> BEq.beq 10
+    
+@[test]
+def test_contains : Bool :=
+    ["a", "b", "c"]
+        // |> List.contains "c" // TODO fix instance resolution
+        |> List.any (fn a => a == "c")
+
+@[test]
+def test_not_contains : Bool :=
+    ["a", "b", "c"]
+        |> List.all (fn a => not (a == "d"))

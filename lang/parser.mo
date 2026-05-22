@@ -5,6 +5,7 @@
 
 
 use lang.types
+use std.list
 
 
 
@@ -364,31 +365,9 @@ def alt_second (r : ParseResult A) (e1 : ParseError) : ParseResult A :=
 
 // --- Char predicates ---
 
-
-
-@[partial]
-
 def is_digit (c : String) : Bool :=
-
-	if "0" == c then true
-
-	else if "1" == c then true
-
-	else if "2" == c then true
-
-	else if "3" == c then true
-
-	else if "4" == c then true
-
-	else if "5" == c then true
-
-	else if "6" == c then true
-
-	else if "7" == c then true
-
-	else if String.beq "8" c then true
-
-	else String.beq "9" c
+	 ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+        |> List.any (fn a => a == c)
 
 
 

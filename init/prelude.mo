@@ -130,7 +130,11 @@ instance BEq Bool {
 		else (Bool.not b)
 }
 
+// TODO Constraint resolving
+// def not_beq [BEq A] (a b : A) : Bool := BEq.beq a b
+
 infix (==) := BEq.beq
+// infix (!=) := not_beq
 
 /// Ordered comparison
 class BOrd A {
