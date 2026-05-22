@@ -186,65 +186,66 @@ type Instance {
 
 // --- Do-notation desugaring ---
 
-type DoStmt {
+// --- Do-notation desugaring ---
+// Canonical DoStmt uses de Bruijn Term. DoStmtV0 is the legacy V0 variant.
+
+type DoStmtV0 {
     bind_s (name: Identifier) (expr: TermV0),
     let_s (name: Identifier) (expr: TermV0),
     ret_s (expr: TermV0),
     expr_s (expr: TermV0),
 }
 
-def monad_bind_term : TermV0 :=
+def monad_bind_term_v0 : TermV0 :=
     TermV0.var (NameRef.nmp (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))))
 
-def monad_pure_term : TermV0 :=
+def monad_pure_term_v0 : TermV0 :=
     TermV0.var (NameRef.nmp (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "pure") List.empty))))
 
-def desugar_do (stmts : List DoStmt) : TermV0 :=
-    desugar_do_inner (list_reverse stmts) (TermV0.app monad_pure_term (TermV0.hole))
+def desugar_do_v0 (stmts : List DoStmtV0) : TermV0 :=
+    desugar_do_v0_inner (list_reverse stmts) (TermV0.app monad_pure_term_v0 (TermV0.hole))
 
-def desugar_do_inner (stmts : List DoStmt) (rest : TermV0) : TermV0 :=
+def desugar_do_v0_inner (stmts : List DoStmtV0) (rest : TermV0) : TermV0 :=
     match stmts {
         List.cons s ss =>
             match s {
-                bind_s name expr => TermV0.app (TermV0.app monad_bind_term expr) (TermV0.lam (param_many name (TermV0.hole)) (desugar_do_inner ss rest)),
-                let_s name expr => TermV0.app (TermV0.lam (param_many name (TermV0.hole)) (desugar_do_inner ss rest)) expr,
-                ret_s expr => TermV0.app monad_pure_term expr,
-                expr_s expr => TermV0.app (TermV0.app monad_bind_term expr) (TermV0.lam (param_many (Identifier.id "_") (TermV0.hole)) (desugar_do_inner ss rest))
+                bind_s name expr => TermV0.app (TermV0.app monad_bind_term_v0 expr) (TermV0.lam (param_many name (TermV0.hole)) (desugar_do_v0_inner ss rest)),
+                let_s name expr => TermV0.app (TermV0.lam (param_many name (TermV0.hole)) (desugar_do_v0_inner ss rest)) expr,
+                ret_s expr => TermV0.app monad_pure_term_v0 expr,
+                expr_s expr => TermV0.app (TermV0.app monad_bind_term_v0 expr) (TermV0.lam (param_many (Identifier.id "_") (TermV0.hole)) (desugar_do_v0_inner ss rest))
             },
         List.empty => rest
     }
 
-// --- Do-notation desugaring (de Bruijn Term) ---
-
-type DoStmt2 {
+type DoStmt {
     bind_s (name: Identifier) (expr: Term),
     let_s (name: Identifier) (expr: Term),
     ret_s (expr: Term),
     expr_s (expr: Term),
 }
 
-def t2_monad_bind_term : Term :=
+def monad_bind_term : Term :=
     Term.var (-1) (DebugName.unnamed)
 
-def t2_monad_pure_term : Term :=
+def monad_pure_term : Term :=
     Term.var (-1) (DebugName.unnamed)
 
-def t2_desugar_do (stmts : List DoStmt2) : Term :=
-    t2_desugar_do_inner (list_reverse stmts) (Term.app t2_monad_pure_term Term.hole)
+def desugar_do (stmts : List DoStmt) : Term :=
+    desugar_do_inner (list_reverse stmts) (Term.app monad_pure_term Term.hole)
 
-def t2_desugar_do_inner (stmts : List DoStmt2) (rest : Term) : Term :=
+def desugar_do_inner (stmts : List DoStmt) (rest : Term) : Term :=
     match stmts {
         List.cons s ss =>
             match s {
                 bind_s name expr =>
-                    Term.app (Term.app t2_monad_bind_term expr)
-                        (Term.lam (DebugName.named name) Term.hole (t2_desugar_do_inner ss rest)),
+                    Term.app (Term.app monad_bind_term expr)
+                        (Term.lam (DebugName.named name) Term.hole (desugar_do_inner ss rest)),
                 let_s name expr =>
-                    Term.app (Term.lam (DebugName.named name) Term.hole (t2_desugar_do_inner ss rest)) expr,
-                ret_s expr => Term.app t2_monad_pure_term expr,
+                    Term.app (Term.lam (DebugName.named name) Term.hole (desugar_do_inner ss rest)) expr,
+                ret_s expr => Term.app monad_pure_term expr,
                 expr_s expr =>
-                    Term.app (Term.app t2_monad_bind_term expr)
-                        (Term.lam (DebugName.unnamed) Term.hole (t2_desugar_do_inner ss rest))
+                    Term.app (Term.app monad_bind_term expr)
+                        (Term.lam (DebugName.unnamed) Term.hole (desugar_do_inner ss rest))
             },
         List.empty => rest
     }
