@@ -70,11 +70,11 @@ type Literal {
 }
 
 type Con {
-    mk (name: Identifier) (typ_name: ModulePath) (num_args: I64) (args: List (Option TermV0))
+    mk (name: Identifier) (typ_name: ModulePath) (num_args: I64) (args: List (Option Term))
 }
 
 type Native {
-    mk (native_name: Identifier) (num_args: I64) (args: List (Option TermV0))
+    mk (native_name: Identifier) (num_args: I64) (args: List (Option Term))
 }
 
 type TermV0 {
@@ -343,6 +343,30 @@ def opt_term_list_similar (a : List (Option TermV0)) (b : List (Option TermV0)) 
         }
     }
 
+def opt_db_term_similar (a : Option Term) (b : Option Term) : Bool :=
+    match a {
+        Option.some x => match b {
+            Option.some y => Similar.similar x y,
+            Option.none => false
+        },
+        Option.none => match b {
+            Option.none => true,
+            Option.some _ => false
+        }
+    }
+
+def opt_db_term_list_similar (a : List (Option Term)) (b : List (Option Term)) : Bool :=
+    match a {
+        List.cons x xs => match b {
+            List.cons y ys => opt_db_term_similar x y && opt_db_term_list_similar xs ys,
+            List.empty => false
+        },
+        List.empty => match b {
+            List.empty => true,
+            List.cons _ _ => false
+        }
+    }
+
 instance Similar ModulePath {
     def similar (a : ModulePath) (b : ModulePath) : Bool :=
         match a {
@@ -434,7 +458,7 @@ instance Similar Con {
         match a {
             mk name1 typ1 nargs1 args1 => match b {
                 mk name2 typ2 nargs2 args2 =>
-                    Similar.similar name1 name2 && Similar.similar typ1 typ2 && I64.beq nargs1 nargs2 && opt_term_list_similar args1 args2
+                    Similar.similar name1 name2 && Similar.similar typ1 typ2 && I64.beq nargs1 nargs2 && opt_db_term_list_similar args1 args2
             }
         }
 }
@@ -444,7 +468,7 @@ instance Similar Native {
         match a {
             mk name1 nargs1 args1 => match b {
                 mk name2 nargs2 args2 =>
-                    Similar.similar name1 name2 && I64.beq nargs1 nargs2 && opt_term_list_similar args1 args2
+                    Similar.similar name1 name2 && I64.beq nargs1 nargs2 && opt_db_term_list_similar args1 args2
             }
         }
 }
@@ -727,8 +751,8 @@ def test_term_lit : Bool :=
 def test_term_ntv : Bool :=
     // Work around Native.mk forall-inference bug with List.empty
     // by using a non-empty list of args
-    let none_opt : Option TermV0 := Option.none in
-    let args : List (Option TermV0) := List.cons none_opt List.empty in
+    let none_opt : Option Term := Option.none in
+    let args : List (Option Term) := List.cons none_opt List.empty in
     let ntv_val : Native := Native.mk (Identifier.id "foo") 0 args in
     let n : Term := Term.ntv ntv_val in
     true
@@ -737,8 +761,8 @@ def test_term_ntv : Bool :=
 def test_term_con : Bool :=
     // Work around Con.mk/ModulePath.mp forall-inference bugs with List.empty
     // by using non-empty lists
-    let none_opt : Option TermV0 := Option.none in
-    let args : List (Option TermV0) := List.cons none_opt List.empty in
+    let none_opt : Option Term := Option.none in
+    let args : List (Option Term) := List.cons none_opt List.empty in
     let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
     let con_val : Con := Con.mk (Identifier.id "Bar") mod_path 0 args in
     let c : Term := Term.con con_val in

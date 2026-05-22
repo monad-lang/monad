@@ -249,12 +249,12 @@ type NtvArgs {
 }
 
 @[partial]
-def compile_ntv_args (c : CodegenCtx) (args : List (Option TermV0)) (acc_instrs : List LLVMInstruction) (acc_vals : List LLVMValue) : NtvArgs :=
+def compile_ntv_args (c : CodegenCtx) (args : List (Option Term)) (acc_instrs : List LLVMInstruction) (acc_vals : List LLVMValue) : NtvArgs :=
     match args {
         List.cons opt_ rest =>
             match opt_ {
                 Option.some term_ =>
-                    match compile_term_ir c term_ {
+                    match compile_db_term_ir c term_ {
                         CompileResult.ok ctx_t instrs val _ _ _ =>
                             compile_ntv_args ctx_t rest
                                 (append_instrs acc_instrs instrs)
@@ -310,6 +310,27 @@ def compile_lam_ir (c : CodegenCtx) (param_ : Param) (body : TermV0) : CompileRe
         CtxStrPair.mk ctx1 lam_name =>
             let c1 := ctx_bind_local ctx1 (param_name param_) (LLVMValue.parm_ 0) in
             match compile_term_ir c1 body {
+                CompileResult.ok ctx2 instrs_r val_r blocks_r funcs_r globals_r =>
+                    let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
+                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                    let lam_pair := ParamPair.mk "p0" LLVMType.i64_ in
+                    let lam_params := cons_pair lam_pair empty_pairs in
+                    let lam_func := LLVMFunction.mk lam_name lam_params LLVMType.i64_ (cons_block entry_block blocks_r) false in
+                    CompileResult.ok ctx2 empty_instrs (LLVMValue.var_ lam_name) empty_blocks (cons_func lam_func funcs_r) globals_r,
+            },
+    }
+
+@[partial]
+def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Term) : CompileResult :=
+    match fresh_label c "lambda" {
+        CtxStrPair.mk ctx1 lam_name =>
+            let name : Identifier := match dbg {
+                named id => id,
+                unnamed => Identifier.id "x",
+            } in
+            let param_ : Param := param_many name (TermV0.type_ 1) in
+            let c1 := ctx_bind_local ctx1 (param_name param_) (LLVMValue.parm_ 0) in
+            match compile_db_term_ir c1 body {
                 CompileResult.ok ctx2 instrs_r val_r blocks_r funcs_r globals_r =>
                     let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
@@ -404,10 +425,51 @@ def compile_term_ir (c : CodegenCtx) (term_ : TermV0) : CompileResult := match t
 }
 
 @[partial]
+def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match term_ {
+    Term.lit val => compile_lit_ir c val,
+    Term.var idx dbg =>
+        match dbg {
+            DebugName.named id =>
+                match ctx_lookup_local c id {
+                    Option.some val => CompileResult.ok c empty_instrs val empty_blocks empty_funcs empty_globals_list,
+                    Option.none => CompileResult.ok c empty_instrs (LLVMValue.var_ (show_identifier id)) empty_blocks empty_funcs empty_globals_list,
+                },
+            DebugName.unnamed =>
+                CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+        },
+    Term.lam dbg typ body => compile_db_lam_ir c dbg typ body,
+    Term.app fun arg => compile_db_app_ir c fun arg,
+    Term.ntv native => compile_ntv_ir c native,
+    Term.con constr => compile_con_ir c constr,
+    Term.forall dbg kind body => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+    Term.pi arg ret => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+    Term.type_ universe => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+    Term.hole => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+}
+
+@[partial]
 def compile_app_ir (c : CodegenCtx) (fun : TermV0) (arg : TermV0) : CompileResult :=
     match try_compile_inline_native c fun arg {
         Option.some result => result,
         Option.none => compile_general_call c fun arg,
+    }
+
+@[partial]
+def compile_db_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
+    match compile_db_term_ir c fun {
+        CompileResult.ok ctx_f instrs_f val_f _ _ _ =>
+            match compile_db_term_ir ctx_f arg {
+                CompileResult.ok ctx_a instrs_a val_a _ _ _ =>
+                    let combined := append_instrs instrs_f instrs_a in
+                    match val_f {
+                        LLVMValue.var_ name =>
+                            compile_direct_call ctx_a name val_a combined,
+                        LLVMValue.parm_ idx =>
+                            compile_indirect_call ctx_a val_a combined,
+                        _ =>
+                            compile_call_stub ctx_a combined,
+                    },
+            },
     }
 
 @[partial]
@@ -1172,7 +1234,7 @@ def test_string_literal_compiled : Bool :=
 
 @[test]
 def test_constructor_compiled : Bool :=
-    let one := TermV0.lit (Literal.num 1 NumSuffix.i64) in
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
     let args := List.cons (Option.some one) (List.cons (Option.some one) List.empty) in
     let con := Con.mk (Identifier.id "Some") (ModulePath.mp (List.cons (Identifier.id "Option") List.empty)) 2 args in
     let term_ := TermV0.con con in
@@ -1200,8 +1262,8 @@ def test_if_then_else_compiled : Bool :=
 
 @[test]
 def test_native_call_compiled : Bool :=
-    let one := TermV0.lit (Literal.num 1 NumSuffix.i64) in
-    let two := TermV0.lit (Literal.num 2 NumSuffix.i64) in
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 2 NumSuffix.i64) in
     let some_one := Option.some one in
     let some_two := Option.some two in
     let args := List.cons some_one (List.cons some_two List.empty) in
