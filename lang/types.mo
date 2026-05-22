@@ -59,6 +59,16 @@ def mk_param_v0 (name: Identifier) (type_: TermV0) (mult: Multiplicity) : ParamV
     let none : Option TermV0 := Option.none in
     ParamV0.mk name type_ mult none
 
+/// Create a canonical Param with multiplicity=Many and no default value.
+def param_many (name: Identifier) (type_: Term) : Param :=
+    let none : Option Term := Option.none in
+    Param.mk name type_ Multiplicity.many none
+
+/// Create a canonical Param with explicit multiplicity and no default value.
+def mk_param (name: Identifier) (type_: Term) (mult: Multiplicity) : Param :=
+    let none : Option Term := Option.none in
+    Param.mk name type_ mult none
+
 // Canonical MatchCase uses de Bruijn Term. MatchCaseV0 is the legacy V0 variant.
 type MatchCase {
     mc (name: Identifier) (args: List Identifier) (body: Term)
@@ -411,6 +421,18 @@ def param_list_similar_v0 (a : List ParamV0) (b : List ParamV0) : Bool :=
     match a {
         List.cons x xs => match b {
             List.cons y ys => Similar.similar x y && param_list_similar_v0 xs ys,
+            List.empty => false
+        },
+        List.empty => match b {
+            List.cons y ys => false,
+            List.empty => true
+        }
+    }
+
+def param_list_similar (a : List Param) (b : List Param) : Bool :=
+    match a {
+        List.cons x xs => match b {
+            List.cons y ys => Similar.similar x y && param_list_similar xs ys,
             List.empty => false
         },
         List.empty => match b {

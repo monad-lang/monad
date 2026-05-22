@@ -2277,6 +2277,30 @@ def def_to_decl (body : TermV0) (name : Identifier) (typ : TermV0) : DeclV0 :=
 	let empty_attrs : List String := List.empty in
 	DeclV0.def_d (DefV0.mk (ModulePath.mp (List.cons name List.empty)) typ body empty_constraints empty_attrs)
 
+// --- Canonical AST helpers (de Bruijn Term) ---
+
+@[partial]
+def t2_lam_params (params : List Param) (body : Term) : Term :=
+	let rev : List Param := list_reverse params in
+	t2_lam_params_loop rev body
+
+@[partial]
+def t2_lam_params_loop (params : List Param) (body : Term) : Term :=
+	match params {
+		List.cons p rest =>
+			match p {
+				Param.mk name type_ mult default =>
+					t2_lam_params_loop rest (Term.lam (DebugName.named name) type_ body)
+			},
+		List.empty => body
+	}
+
+@[partial]
+def t2_def_to_decl (body : Term) (name : Identifier) (typ : Term) : Decl :=
+	let empty_constraints : List TypeConstraint := List.empty in
+	let empty_attrs : List String := List.empty in
+	Decl.def_d (Def.mk (ModulePath.mp (List.cons name List.empty)) typ body empty_constraints empty_attrs)
+
 // Top-level declaration dispatcher
 
 @[partial]
