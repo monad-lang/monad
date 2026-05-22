@@ -6,15 +6,19 @@ use std::time::Duration;
 
 use super::fiber::{Fiber, FiberState};
 
-enum Task {
+pub enum Task {
   Run(Box<dyn FnOnce() + Send + 'static>),
   Shutdown,
 }
 
+pub struct QueuePair {
+  pub global: Arc<Mutex<VecDeque<Task>>>,
+  pub idle: Arc<(Mutex<usize>, Condvar)>,
+}
+
 pub struct Scheduler {
-  global: Arc<Mutex<VecDeque<Task>>>,
+  queues: Arc<QueuePair>,
   all_locals: Arc<Vec<Arc<Mutex<VecDeque<Task>>>>>,
-  idle: Arc<(Mutex<usize>, Condvar)>,
   shutdown: Arc<AtomicBool>,
   handles: Vec<JoinHandle<()>>,
 }
@@ -89,8 +93,10 @@ impl Scheduler {
   pub fn with_workers(num_workers: usize) -> Self {
     assert!(num_workers > 0, "must have at least 1 worker");
 
-    let global = Arc::new(Mutex::new(VecDeque::new()));
-    let idle = Arc::new((Mutex::new(0usize), Condvar::new()));
+    let queues = Arc::new(QueuePair {
+      global: Arc::new(Mutex::new(VecDeque::new())),
+      idle: Arc::new((Mutex::new(0usize), Condvar::new())),
+    });
     let shutdown = Arc::new(AtomicBool::new(false));
 
     let locals: Vec<Arc<Mutex<VecDeque<Task>>>> = (0..num_workers)
@@ -101,9 +107,9 @@ impl Scheduler {
     let mut handles = Vec::with_capacity(num_workers);
     for id in 0..num_workers {
       let local = Arc::clone(&locals[id]);
-      let global = Arc::clone(&global);
+      let global = Arc::clone(&queues.global);
       let all_locals = Arc::clone(&all_locals);
-      let idle = Arc::clone(&idle);
+      let idle = Arc::clone(&queues.idle);
       let shutdown = Arc::clone(&shutdown);
 
       let handle = thread::Builder::new()
@@ -117,12 +123,15 @@ impl Scheduler {
     }
 
     Scheduler {
-      global,
+      queues,
       all_locals,
-      idle,
       shutdown,
       handles,
     }
+  }
+
+  pub fn queues(&self) -> Arc<QueuePair> {
+    Arc::clone(&self.queues)
   }
 
   pub fn spawn<F, T>(&self, f: F) -> Fiber<T>
@@ -143,9 +152,14 @@ impl Scheduler {
       fiber_clone.set_state(FiberState::Completed);
     });
 
-    self.global.lock().unwrap().push_back(Task::Run(task));
+    self
+      .queues
+      .global
+      .lock()
+      .unwrap()
+      .push_back(Task::Run(task));
 
-    let (lock, cvar) = &*self.idle;
+    let (lock, cvar) = &*self.queues.idle;
     let idle_count = lock.lock().unwrap();
     if *idle_count > 0 {
       cvar.notify_one();
@@ -170,7 +184,7 @@ impl Scheduler {
       local.lock().unwrap().push_back(Task::Shutdown);
     }
 
-    let (_, cvar) = &*self.idle;
+    let (_, cvar) = &*self.queues.idle;
     cvar.notify_all();
 
     for handle in self.handles.drain(..) {
@@ -187,7 +201,7 @@ impl Drop for Scheduler {
       local.lock().unwrap().push_back(Task::Shutdown);
     }
 
-    let (_, cvar) = &*self.idle;
+    let (_, cvar) = &*self.queues.idle;
     cvar.notify_all();
 
     for handle in self.handles.drain(..) {

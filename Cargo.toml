@@ -13,3 +13,4 @@ repository = "https://tangled.org/monad-lang/monad"
 [workspace.dependencies]
 nom = "8.0.0"
 paste = "1.0"
+libc = "0.2"

@@ -257,6 +257,7 @@ version = "0.1.2"
 dependencies = [
  "clap",
  "console_error_panic_hook",
+ "libc",
  "nom",
  "paste",
  "pretty_assertions",
