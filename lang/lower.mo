@@ -38,7 +38,7 @@ def lower_v0 (ctx: List Identifier) (t: TermV0) : EvalTerm :=
       },
     TermV0.lam param body =>
       match param {
-        Param.mk pname ptype mult _default =>
+        ParamV0.mk pname ptype mult _default =>
           let lowered_body : EvalTerm := lower_v0 (List.cons pname ctx) body in
           // Assign region based on multiplicity: linear/affine→r_param, many/zero→r_stack
           let region : Region := match mult {
@@ -130,7 +130,7 @@ def test_lower_var_free : Bool :=
 def test_lower_lam_identity : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let t : TermV0 := TermV0.lam
-    (param_many id_x TermV0.hole)
+    (param_many_v0 id_x TermV0.hole)
     (TermV0.var (NameRef.nid id_x)) in
   match lower_v0 empty_ctx t {
     EvalTerm.elam m1 body1 =>
@@ -150,9 +150,9 @@ def test_lower_lam_nested : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let id_y : Identifier := Identifier.id "y" in
   let t : TermV0 := TermV0.lam
-    (param_many id_x TermV0.hole)
+    (param_many_v0 id_x TermV0.hole)
     (TermV0.lam
-      (param_many id_y TermV0.hole)
+      (param_many_v0 id_y TermV0.hole)
       (TermV0.var (NameRef.nid id_x))) in
   match lower_v0 empty_ctx t {
     EvalTerm.elam m1 body1 =>
@@ -181,7 +181,7 @@ def test_lower_lam_nested : Bool :=
 def test_lower_app_simple : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let f : TermV0 := TermV0.lam
-    (param_many id_x TermV0.hole)
+    (param_many_v0 id_x TermV0.hole)
     (TermV0.var (NameRef.nid id_x)) in
   let t : TermV0 := TermV0.app f (TermV0.lit (LiteralV0.num 1 NumSuffix.i64)) in
   match lower_v0 empty_ctx t {
@@ -390,7 +390,7 @@ def test_e2e_lower_plus_eval : Bool :=
   // TermV0: (λx. x) "hello" → "hello"
   let x_name : NameRef := NameRef.nid (Identifier.id "x") in
   let x_var : TermV0 := TermV0.var x_name in
-  let x_param : Param := param_many (Identifier.id "x") (TermV0.type_ 1) in
+  let x_param : ParamV0 := param_many_v0 (Identifier.id "x") (TermV0.type_ 1) in
   let lam_body : TermV0 := TermV0.lam x_param x_var in
   let arg_term : TermV0 := TermV0.lit (LiteralV0.str "hello") in
   let app_term : TermV0 := TermV0.app lam_body arg_term in
@@ -427,9 +427,9 @@ def test_e2e_nested : Bool :=
   // Full pipeline: (λx. λy. y) 10 "world" → "world"
   let y_name : NameRef := NameRef.nid (Identifier.id "y") in
   let y_var : TermV0 := TermV0.var y_name in
-  let y_param : Param := param_many (Identifier.id "y") (TermV0.type_ 1) in
+  let y_param : ParamV0 := param_many_v0 (Identifier.id "y") (TermV0.type_ 1) in
   let inner_lam : TermV0 := TermV0.lam y_param y_var in
-  let x_param : Param := param_many (Identifier.id "x") (TermV0.type_ 1) in
+  let x_param : ParamV0 := param_many_v0 (Identifier.id "x") (TermV0.type_ 1) in
   let outer_lam : TermV0 := TermV0.lam x_param inner_lam in
   let arg1 : TermV0 := TermV0.lit (LiteralV0.num 10 NumSuffix.i64) in
   let arg2 : TermV0 := TermV0.lit (LiteralV0.str "world") in

@@ -1115,7 +1115,7 @@ def lambda_arrow_mult (r : ParseResult String) (name : Identifier) (mult : Multi
 @[partial]
 def lambda_body_mult (r : ParseResult TermV0) (name : Identifier) (mult : Multiplicity) : ParseResult TermV0 :=
 	match r {
-		success rem body => success rem (TermV0.lam (mk_param name (TermV0.type_ 1) mult) body),
+		success rem body => success rem (TermV0.lam (mk_param_v0 name (TermV0.type_ 1) mult) body),
 		fail e => fail e
 	}
 
@@ -1163,7 +1163,7 @@ def let_in_kw (r : ParseResult String) (name : Identifier) (value : TermV0) : Pa
 @[partial]
 def let_body (r : ParseResult TermV0) (name : Identifier) (value : TermV0) : ParseResult TermV0 :=
 	match r {
-		success rem body => success rem (TermV0.app (TermV0.lam (param_many name (TermV0.type_ 1)) body) value),
+		success rem body => success rem (TermV0.app (TermV0.lam (param_many_v0 name (TermV0.type_ 1)) body) value),
 		fail e => fail e
 	}
 
@@ -2025,7 +2025,7 @@ def class_close (r : ParseResult String) (name : Identifier) (methods : List Cla
 	match r {
 		success rem _ =>
 			let rev_methods : List ClassDef := list_reverse methods in
-			let empty_params : List Param := List.empty in
+			let empty_params : List ParamV0 := List.empty in
 			let empty_constraints : List TypeConstraint := List.empty in
 			success rem (Decl.class_d (Class.mk name empty_params empty_constraints rev_methods)),
 		fail e => fail e
@@ -2258,87 +2258,87 @@ def type_cons_paren_or_nil (r : ParseResult String) (orig : String) (name : Iden
 	match r {
 		success rem _ => type_cons_params (type_param_list rem) name,
 		fail _ =>
-			let empty_params : List Param := List.empty in
+			let empty_params : List ParamV0 := List.empty in
 			success orig (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) empty_params (TermV0.hole))
 	}
 
 @[partial]
-def type_cons_params (r : ParseResult (List Param)) (name : Identifier) : ParseResult InductConstructor :=
+def type_cons_params (r : ParseResult (List ParamV0)) (name : Identifier) : ParseResult InductConstructor :=
 	match r {
 		success rem params => type_cons_close_paren (tag ")" (skip_spaces rem)) name params,
 		fail e => fail e
 	}
 
 @[partial]
-def type_cons_close_paren (r : ParseResult String) (name : Identifier) (params : List Param) : ParseResult InductConstructor :=
+def type_cons_close_paren (r : ParseResult String) (name : Identifier) (params : List ParamV0) : ParseResult InductConstructor :=
 	match r {
 		success rem _ => success rem (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) params (TermV0.hole)),
 		fail e => fail e
 	}
 
 @[partial]
-def type_param_list (input : String) : ParseResult (List Param) :=
+def type_param_list (input : String) : ParseResult (List ParamV0) :=
 	type_param_first (type_one_param (skip_spaces input))
 
 @[partial]
-def type_one_param (input : String) : ParseResult Param :=
+def type_one_param (input : String) : ParseResult ParamV0 :=
 	type_one_param_name (identifier input)
 
 @[partial]
-def type_one_param_name (r : ParseResult String) : ParseResult Param :=
+def type_one_param_name (r : ParseResult String) : ParseResult ParamV0 :=
 	match r {
 		success rem name => type_one_param_type (tag ":" (skip_spaces rem)) (Identifier.id name),
 		fail e => fail e
 	}
 
 @[partial]
-def type_one_param_type (r : ParseResult String) (name : Identifier) : ParseResult Param :=
+def type_one_param_type (r : ParseResult String) (name : Identifier) : ParseResult ParamV0 :=
 	match r {
 		success rem _ => type_one_param_val (type_expression (skip_spaces rem)) name,
 		fail e => fail e
 	}
 
 @[partial]
-def type_one_param_val (r : ParseResult TermV0) (name : Identifier) : ParseResult Param :=
+def type_one_param_val (r : ParseResult TermV0) (name : Identifier) : ParseResult ParamV0 :=
 	match r {
-		success rem typ => success rem (param_many name typ),
+		success rem typ => success rem (param_many_v0 name typ),
 		fail e => fail e
 	}
 
 @[partial]
-def type_param_first (r : ParseResult Param) : ParseResult (List Param) :=
+def type_param_first (r : ParseResult ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem param => type_param_rest rem (List.cons param List.empty),
 		fail _ =>
-			let empty : List Param := List.empty in
+			let empty : List ParamV0 := List.empty in
 			success "" empty
 	}
 
 @[partial]
-def type_param_rest (input : String) (params : List Param) : ParseResult (List Param) :=
+def type_param_rest (input : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	type_param_rest_comma (tag "," (skip_spaces input)) input params
 
 @[partial]
-def type_param_rest_comma (r : ParseResult String) (orig : String) (params : List Param) : ParseResult (List Param) :=
+def type_param_rest_comma (r : ParseResult String) (orig : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem _ => type_param_rest_more (type_one_param (skip_spaces rem)) params,
 		fail _ =>
-			let rev : List Param := list_reverse params in
+			let rev : List ParamV0 := list_reverse params in
 			success orig rev
 	}
 
 @[partial]
-def type_param_rest_more (r : ParseResult Param) (params : List Param) : ParseResult (List Param) :=
+def type_param_rest_more (r : ParseResult ParamV0) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem param => type_param_rest rem (List.cons param params),
 		fail _ =>
-			let rev : List Param := list_reverse params in
+			let rev : List ParamV0 := list_reverse params in
 			success "" rev
 	}
 
 @[partial]
 def type_to_decl (name : Identifier) (cons : List InductConstructor) : Decl :=
-	let empty_params : List Param := List.empty in
+	let empty_params : List ParamV0 := List.empty in
 	let empty_attrs : List String := List.empty in
 	Decl.inductive_d (Inductive.mk (ModulePath.mp (List.cons name List.empty)) empty_params (TermV0.type_ 1) cons empty_attrs)
 
@@ -2383,156 +2383,156 @@ def def_kw (r : ParseResult String) : ParseResult Decl :=
 def def_name (r : ParseResult String) : ParseResult Decl :=
 	match r {
 		success rem name =>
-			let empty : List Param := List.empty in
+			let empty : List ParamV0 := List.empty in
 			def_params (def_params_loop (skip_spaces rem) empty) (Identifier.id name),
 		fail e => fail e
 	}
 
 @[partial]
-def def_params_loop (input : String) (params : List Param) : ParseResult (List Param) :=
+def def_params_loop (input : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	def_params_try_implicit (tag "{" input) input params
 
 @[partial]
-def def_params_try_implicit (r : ParseResult String) (orig : String) (params : List Param) : ParseResult (List Param) :=
+def def_params_try_implicit (r : ParseResult String) (orig : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem _ => def_implicit_param (identifier (skip_spaces rem)) rem params,
 		fail _ => def_params_try_explicit (tag "(" orig) orig params
 	}
 
 @[partial]
-def def_implicit_param (r : ParseResult String) (rem : String) (params : List Param) : ParseResult (List Param) :=
+def def_implicit_param (r : ParseResult String) (rem : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem2 name => def_implicit_colon (tag ":" (skip_spaces rem2)) rem rem2 name params,
 		fail e => fail e
 	}
 
 @[partial]
-def def_implicit_colon (r : ParseResult String) (brace_rem : String) (rem : String) (name : String) (params : List Param) : ParseResult (List Param) :=
+def def_implicit_colon (r : ParseResult String) (brace_rem : String) (rem : String) (name : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem2 _ => def_implicit_type (type_expression rem2) brace_rem rem name params,
 		fail e => fail e
 	}
 
 @[partial]
-def def_implicit_type (r : ParseResult TermV0) (brace_rem : String) (rem : String) (name : String) (params : List Param) : ParseResult (List Param) :=
+def def_implicit_type (r : ParseResult TermV0) (brace_rem : String) (rem : String) (name : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem2 typ => def_implicit_close (tag "}" rem2) brace_rem name typ params,
 		fail e => fail e
 	}
 
 @[partial]
-def def_implicit_close (r : ParseResult String) (brace_rem : String) (name : String) (typ : TermV0) (params : List Param) : ParseResult (List Param) :=
+def def_implicit_close (r : ParseResult String) (brace_rem : String) (name : String) (typ : TermV0) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem2 _ =>
-			let empty : List Param := List.empty in
+			let empty : List ParamV0 := List.empty in
 			def_params_loop (skip_spaces rem2) empty,
 		fail e => fail e
 	}
 
 @[partial]
-def def_params_try_explicit (r : ParseResult String) (orig : String) (params : List Param) : ParseResult (List Param) :=
+def def_params_try_explicit (r : ParseResult String) (orig : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem _ => def_explicit_param (identifier (skip_spaces rem)) rem params,
 		fail _ =>
-			let rev : List Param := list_reverse params in
+			let rev : List ParamV0 := list_reverse params in
 			success orig rev
 	}
 
 @[partial]
-def def_explicit_param (r : ParseResult String) (close_rem : String) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_param (r : ParseResult String) (close_rem : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem name => def_explicit_colon (tag ":" (skip_spaces rem)) close_rem name params,
 		fail e => fail e
 	}
 
 @[partial]
-def def_explicit_colon (r : ParseResult String) (close_rem : String) (name : String) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_colon (r : ParseResult String) (close_rem : String) (name : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem _ => def_explicit_type (type_expression rem) close_rem name params,
 		fail e => fail e
 	}
 
 @[partial]
-def def_explicit_type (r : ParseResult TermV0) (close_rem : String) (name : String) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_type (r : ParseResult TermV0) (close_rem : String) (name : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
 		success rem typ => def_explicit_close (tag ")" rem) close_rem name typ params,
 		fail e => fail e
 	}
 
 @[partial]
-def def_explicit_close (r : ParseResult String) (close_rem : String) (name : String) (typ : TermV0) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_close (r : ParseResult String) (close_rem : String) (name : String) (typ : TermV0) (params : List ParamV0) : ParseResult (List ParamV0) :=
 	match r {
-		success rem _ => def_params_loop (skip_spaces rem) (List.cons (param_many (Identifier.id name) typ) params),
+		success rem _ => def_params_loop (skip_spaces rem) (List.cons (param_many_v0 (Identifier.id name) typ) params),
 		fail e => fail e
 	}
 
 @[partial]
-def def_params (r : ParseResult (List Param)) (name : Identifier) : ParseResult Decl :=
+def def_params (r : ParseResult (List ParamV0)) (name : Identifier) : ParseResult Decl :=
 	match r {
 		success rem params => def_ret_type (tag ":" (skip_spaces rem)) rem name params,
 		fail e => fail e
 	}
 
 @[partial]
-def def_ret_type (r : ParseResult String) (orig : String) (name : Identifier) (params : List Param) : ParseResult Decl :=
+def def_ret_type (r : ParseResult String) (orig : String) (name : Identifier) (params : List ParamV0) : ParseResult Decl :=
 	match r {
 		success rem _ => def_ret_expr (type_expression rem) name params,
 		fail _ => fail (ParseError.custom "expected : return type")
 	}
 
 @[partial]
-def def_ret_expr (r : ParseResult TermV0) (name : Identifier) (params : List Param) : ParseResult Decl :=
+def def_ret_expr (r : ParseResult TermV0) (name : Identifier) (params : List ParamV0) : ParseResult Decl :=
 	match r {
 		success rem typ => def_body rem name params typ,
 		fail e => fail e
 	}
 
 @[partial]
-def def_body (input : String) (name : Identifier) (params : List Param) (typ : TermV0) : ParseResult Decl :=
+def def_body (input : String) (name : Identifier) (params : List ParamV0) (typ : TermV0) : ParseResult Decl :=
 	def_body_assign (tag ":=" (skip_spaces input)) name params typ input
 
 @[partial]
-def def_body_assign (r : ParseResult String) (name : Identifier) (params : List Param) (typ : TermV0) (orig : String) : ParseResult Decl :=
+def def_body_assign (r : ParseResult String) (name : Identifier) (params : List ParamV0) (typ : TermV0) (orig : String) : ParseResult Decl :=
 	match r {
 		success rem _ => def_body_expr (expression (skip_spaces rem)) name params typ,
 		fail _ => def_body_block_or_none (tag "{" (skip_spaces orig)) name params typ orig
 	}
 
 @[partial]
-def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params : List Param) (typ : TermV0) (orig : String) : ParseResult Decl :=
+def def_body_block_or_none (r : ParseResult String) (name : Identifier) (params : List ParamV0) (typ : TermV0) (orig : String) : ParseResult Decl :=
 	match r {
 		success rem _ => def_body_do (do_stmts rem) name params typ,
 		fail _ => success orig (def_to_decl (lam_params params (TermV0.hole)) name typ)
 	}
 
 @[partial]
-def def_body_expr (r : ParseResult TermV0) (name : Identifier) (params : List Param) (typ : TermV0) : ParseResult Decl :=
+def def_body_expr (r : ParseResult TermV0) (name : Identifier) (params : List ParamV0) (typ : TermV0) : ParseResult Decl :=
 	match r {
 		success rem body => success rem (def_to_decl (lam_params params body) name typ),
 		fail e => fail e
 	}
 
 @[partial]
-def def_body_block (r : ParseResult String) (name : Identifier) (params : List Param) (typ : TermV0) : ParseResult Decl :=
+def def_body_block (r : ParseResult String) (name : Identifier) (params : List ParamV0) (typ : TermV0) : ParseResult Decl :=
 	match r {
 		success rem _ => def_body_do (do_stmts rem) name params typ,
 		fail e => fail e
 	}
 
 @[partial]
-def def_body_do (r : ParseResult (List DoStmtV0)) (name : Identifier) (params : List Param) (typ : TermV0) : ParseResult Decl :=
+def def_body_do (r : ParseResult (List DoStmtV0)) (name : Identifier) (params : List ParamV0) (typ : TermV0) : ParseResult Decl :=
 	match r {
 		success rem stmts => success rem (def_to_decl (lam_params params (desugar_do_v0 stmts)) name typ),
 		fail e => fail e
 	}
 
 @[partial]
-def lam_params (params : List Param) (body : TermV0) : TermV0 :=
-	let rev : List Param := list_reverse params in
+def lam_params (params : List ParamV0) (body : TermV0) : TermV0 :=
+	let rev : List ParamV0 := list_reverse params in
 	lam_params_loop rev body
 
 @[partial]
-def lam_params_loop (params : List Param) (body : TermV0) : TermV0 :=
+def lam_params_loop (params : List ParamV0) (body : TermV0) : TermV0 :=
 	match params {
 		List.cons p rest => lam_params_loop rest (TermV0.lam p body),
 		List.empty => body

@@ -40,19 +40,24 @@ struct LocatedSpan {
     location : Location,
 }
 
-type Param {
+type ParamV0 {
     mk (name: Identifier) (type_: TermV0) (mult: Multiplicity) (default: Option TermV0)
 }
 
-/// Create a Param with multiplicity=Many and no default value.
-def param_many (name: Identifier) (type_: TermV0) : Param :=
-    let none : Option TermV0 := Option.none in
-    Param.mk name type_ Multiplicity.many none
+// Canonical Param uses de Bruijn Term. ParamV0 is the legacy V0 variant.
+type Param {
+    mk (name: Identifier) (type_: Term) (mult: Multiplicity) (default: Option Term)
+}
 
-/// Create a Param with explicit multiplicity and no default value.
-def mk_param (name: Identifier) (type_: TermV0) (mult: Multiplicity) : Param :=
+/// Create a ParamV0 with multiplicity=Many and no default value.
+def param_many_v0 (name: Identifier) (type_: TermV0) : ParamV0 :=
     let none : Option TermV0 := Option.none in
-    Param.mk name type_ mult none
+    ParamV0.mk name type_ Multiplicity.many none
+
+/// Create a ParamV0 with explicit multiplicity and no default value.
+def mk_param_v0 (name: Identifier) (type_: TermV0) (mult: Multiplicity) : ParamV0 :=
+    let none : Option TermV0 := Option.none in
+    ParamV0.mk name type_ mult none
 
 // Canonical MatchCase uses de Bruijn Term. MatchCaseV0 is the legacy V0 variant.
 type MatchCase {
@@ -94,7 +99,7 @@ type TermV0 {
     forall (name: Identifier) (typ: TermV0) (body: TermV0),
     pi (arg: TermV0) (ret: TermV0),
     var (name: NameRef),
-    lam (param: Param) (body: TermV0),
+    lam (param: ParamV0) (body: TermV0),
     app (fun: TermV0) (arg: TermV0),
     lit (value: LiteralV0),
     ntv (native: Native),
@@ -159,11 +164,11 @@ type Def {
 }
 
 type InductConstructor {
-    mk (name: ModulePath) (params: List Param) (typ: TermV0)
+    mk (name: ModulePath) (params: List ParamV0) (typ: TermV0)
 }
 
 type Inductive {
-    mk (name: ModulePath) (params: List Param) (typ: TermV0) (constructors: List InductConstructor) (attrs: List String)
+    mk (name: ModulePath) (params: List ParamV0) (typ: TermV0) (constructors: List InductConstructor) (attrs: List String)
 }
 
 type ClassDef {
@@ -171,7 +176,7 @@ type ClassDef {
 }
 
 type Class {
-    mk (name: Identifier) (params: List Param) (constraints: List TypeConstraint) (methods: List ClassDef)
+    mk (name: Identifier) (params: List ParamV0) (constraints: List TypeConstraint) (methods: List ClassDef)
 }
 
 type StructField {
@@ -222,10 +227,10 @@ def desugar_do_v0_inner (stmts : List DoStmtV0) (rest : TermV0) : TermV0 :=
     match stmts {
         List.cons s ss =>
             match s {
-                bind_s name expr => TermV0.app (TermV0.app monad_bind_term_v0 expr) (TermV0.lam (param_many name (TermV0.hole)) (desugar_do_v0_inner ss rest)),
-                let_s name expr => TermV0.app (TermV0.lam (param_many name (TermV0.hole)) (desugar_do_v0_inner ss rest)) expr,
+                bind_s name expr => TermV0.app (TermV0.app monad_bind_term_v0 expr) (TermV0.lam (param_many_v0 name (TermV0.hole)) (desugar_do_v0_inner ss rest)),
+                let_s name expr => TermV0.app (TermV0.lam (param_many_v0 name (TermV0.hole)) (desugar_do_v0_inner ss rest)) expr,
                 ret_s expr => TermV0.app monad_pure_term_v0 expr,
-                expr_s expr => TermV0.app (TermV0.app monad_bind_term_v0 expr) (TermV0.lam (param_many (Identifier.id "_") (TermV0.hole)) (desugar_do_v0_inner ss rest))
+                expr_s expr => TermV0.app (TermV0.app monad_bind_term_v0 expr) (TermV0.lam (param_many_v0 (Identifier.id "_") (TermV0.hole)) (desugar_do_v0_inner ss rest))
             },
         List.empty => rest
     }
@@ -330,15 +335,15 @@ def mc_list_similar (a : List MatchCase) (b : List MatchCase) : Bool :=
         }
     }
 
-def param_list_similar (a : List Param) (b : List Param) : Bool :=
+def param_list_similar_v0 (a : List ParamV0) (b : List ParamV0) : Bool :=
     match a {
         List.cons x xs => match b {
-            List.cons y ys => Similar.similar x y && param_list_similar xs ys,
+            List.cons y ys => Similar.similar x y && param_list_similar_v0 xs ys,
             List.empty => false
         },
         List.empty => match b {
-            List.empty => true,
-            List.cons _ _ => false
+            List.cons y ys => false,
+            List.empty => true
         }
     }
 
@@ -526,13 +531,24 @@ instance Similar Multiplicity {
         }
 }
 
+instance Similar ParamV0 {
+    def similar (a : ParamV0) (b : ParamV0) : Bool :=
+        match a {
+            mk name1 typ1 mult1 def1 => match b {
+                mk name2 typ2 mult2 def2 =>
+                    Similar.similar name1 name2 && Similar.similar typ1 typ2
+                    && Similar.similar mult1 mult2 && opt_term_similar def1 def2
+            }
+        }
+}
+
 instance Similar Param {
     def similar (a : Param) (b : Param) : Bool :=
         match a {
             mk name1 typ1 mult1 def1 => match b {
                 mk name2 typ2 mult2 def2 =>
                     Similar.similar name1 name2 && Similar.similar typ1 typ2
-                    && Similar.similar mult1 mult2 && opt_term_similar def1 def2
+                    && Similar.similar mult1 mult2 && opt_db_term_similar def1 def2
             }
         }
 }

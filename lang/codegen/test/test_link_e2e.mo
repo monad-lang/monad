@@ -12,7 +12,7 @@ open Literal
 open Identifier
 open NameRef
 open NumSuffix
-open Param
+open ParamV0
 open Def
 open ModulePath
 

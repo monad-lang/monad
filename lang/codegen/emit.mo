@@ -318,7 +318,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
     }
 
 @[partial]
-def compile_lam_ir (c : CodegenCtx) (param_ : Param) (body : TermV0) : CompileResult :=
+def compile_lam_ir (c : CodegenCtx) (param_ : ParamV0) (body : TermV0) : CompileResult :=
     match fresh_label c "lambda" {
         CtxStrPair.mk ctx1 lam_name =>
             let c1 := ctx_bind_local ctx1 (param_name param_) (LLVMValue.parm_ 0) in
@@ -341,7 +341,7 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
                 named id => id,
                 unnamed => Identifier.id "x",
             } in
-            let param_ : Param := param_many name (TermV0.type_ 1) in
+            let param_ : ParamV0 := param_many_v0 name (TermV0.type_ 1) in
             let c1 := ctx_bind_local ctx1 (param_name param_) (LLVMValue.parm_ 0) in
             match compile_db_term_ir c1 body {
                 CompileResult.ok ctx2 instrs_r val_r blocks_r funcs_r globals_r =>
@@ -662,8 +662,8 @@ def cons_global (g : LLVMGlobal) (gs : List LLVMGlobal) : List LLVMGlobal :=
     List.cons g gs
 
 @[partial]
-def param_name (p : Param) : Identifier := match p {
-    Param.mk name typ_ mult defval => name,
+def param_name (p : ParamV0) : Identifier := match p {
+    ParamV0.mk name typ_ mult defval => name,
 }
 
 @[partial]
@@ -674,7 +674,7 @@ def cons_block (b : LLVMBasicBlock) (bs : List LLVMBasicBlock) : List LLVMBasicB
     List.cons b bs
 
 @[partial]
-def collect_def_params (term_ : TermV0) : List Param := match term_ {
+def collect_def_params (term_ : TermV0) : List ParamV0 := match term_ {
     TermV0.lam param body => List.cons param (collect_def_params body),
     TermV0.forall name typ body => collect_def_params body,
     TermV0.var name => List.empty,
@@ -724,7 +724,7 @@ type DefResult {
 }
 
 @[partial]
-def build_llvm_params (params : List Param) : List ParamPair := match params {
+def build_llvm_params (params : List ParamV0) : List ParamPair := match params {
     List.empty => List.empty,
     List.cons p rest =>
         let pp := ParamPair.mk (show_identifier (param_name p)) LLVMType.i64_ in
@@ -822,22 +822,22 @@ def constructor_name (c : InductConstructor) : ModulePath := match c {
 }
 
 @[partial]
-def constructor_params (c : InductConstructor) : List Param := match c {
+def constructor_params (c : InductConstructor) : List ParamV0 := match c {
     InductConstructor.mk name params typ => params,
 }
 
 @[partial]
-def count_params (params : List Param) (n : I64) : I64 := match params {
+def count_params (params : List ParamV0) (n : I64) : I64 := match params {
     List.empty => n,
     List.cons p rest => count_params rest (n + 1),
 }
 
 @[partial]
-def bind_params_in_ctx (c : CodegenCtx) (params : List Param) : CodegenCtx :=
+def bind_params_in_ctx (c : CodegenCtx) (params : List ParamV0) : CodegenCtx :=
     bind_params_with_idx c params 0
 
 @[partial]
-def bind_params_with_idx (c : CodegenCtx) (params : List Param) (idx : I64) : CodegenCtx := match params {
+def bind_params_with_idx (c : CodegenCtx) (params : List ParamV0) (idx : I64) : CodegenCtx := match params {
     List.empty => c,
     List.cons p rest =>
         let c1 := ctx_bind_local c (param_name p) (LLVMValue.parm_ idx) in
@@ -1007,7 +1007,7 @@ def test_compile_decls_ir_runtime : Bool :=
 @[test]
 def test_compile_decls_ir_has_def : Bool :=
     let id := Identifier.id "x" in
-    let param := param_many id (TermV0.type_ 1) in
+    let param := param_many_v0 id (TermV0.type_ 1) in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "test") List.empty)) (TermV0.type_ 1) (TermV0.lam param (TermV0.var (NameRef.nid id))) List.empty List.empty in
     match (compile_decls_ir (List.cons def_ empty_defs)) {
         LLVMModule.mk triple globals funcs decls =>
@@ -1166,7 +1166,7 @@ def test_param_binding : Bool :=
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ x_var in
     let body := TermV0.app app1 one in
-    let param := param_many x_id (TermV0.type_ 1) in
+    let param := param_many_v0 x_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param body in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "add1") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
@@ -1183,8 +1183,8 @@ def test_multi_param : Bool :=
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ a_var in
     let body := TermV0.app app1 b_var in
-    let param_a := param_many a_id (TermV0.type_ 1) in
-    let param_b := param_many b_id (TermV0.type_ 1) in
+    let param_a := param_many_v0 a_id (TermV0.type_ 1) in
+    let param_b := param_many_v0 b_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param_a (TermV0.lam param_b body) in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "mul2") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
@@ -1205,7 +1205,7 @@ def test_nested_native : Bool :=
     let add_var := TermV0.var add_nid in
     let add_app1 := TermV0.app add_var mul_body in
     let body := TermV0.app add_app1 one in
-    let param := param_many x_id (TermV0.type_ 1) in
+    let param := param_many_v0 x_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param body in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "nested") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
@@ -1219,7 +1219,7 @@ def test_general_call_emitted : Bool :=
     let x_var := TermV0.var (NameRef.nid x_id) in
     let f_var := TermV0.var f_nid in
     let body := TermV0.app f_var x_var in
-    let param := param_many x_id (TermV0.type_ 1) in
+    let param := param_many_v0 x_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param body in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "caller") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
@@ -1230,7 +1230,7 @@ def test_general_call_emitted : Bool :=
 def test_lambda_compiled : Bool :=
     let x_id := Identifier.id "x" in
     let x_var := TermV0.var (NameRef.nid x_id) in
-    let param := param_many x_id (TermV0.type_ 1) in
+    let param := param_many_v0 x_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param x_var in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "lamtest") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
@@ -1313,4 +1313,4 @@ def test_compile_inductive_decls : Bool :=
     else false
 
 @[partial]
-def empty_params_list : List Param := List.empty
+def empty_params_list : List ParamV0 := List.empty

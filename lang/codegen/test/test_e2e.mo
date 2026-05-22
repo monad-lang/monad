@@ -10,7 +10,7 @@ open LLVMInstruction
 open Identifier
 open NameRef
 open NumSuffix
-open Param
+open ParamV0
 open Def
 open ModulePath
 
@@ -30,7 +30,7 @@ def test_e2e_simple_literal : Bool :=
 @[test]
 def test_e2e_function_with_param : Bool :=
     let id := Identifier.id "add5" in
-    let param := param_many (Identifier.id "x") (TermV0.type_ 1) in
+    let param := param_many_v0 (Identifier.id "x") (TermV0.type_ 1) in
     let body := TermV0.lit (LiteralV0.num 99 NumSuffix.i64) in
     let def_ := Def.mk
         (ModulePath.mp (List.cons id empty_ids))
