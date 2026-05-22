@@ -1,5 +1,7 @@
 use lang.types
 use lang.eval_term
+open Term
+open DebugName
 
 /// Find the de Bruijn index of an identifier in the binding context.
 /// Returns Option.none if not found (treat as global/const).
@@ -63,10 +65,6 @@ def lower_v0 (ctx: List Identifier) (t: TermV0) : EvalTerm :=
       EvalTerm.esort 1,
     TermV0.type_ level =>
       EvalTerm.esort level,
-    TermV0.ntv native_val =>
-      match native_val {
-        Native.mk native_name num_args args => EvalTerm.eprim 0 (List.empty : List EvalTerm)
-      },
     TermV0.con con_val =>
       match con_val {
         Con.mk cname ctyp_name cnum_args cargs => EvalTerm.econst 0
@@ -463,3 +461,172 @@ def test_e2e_nested : Bool :=
       },
     kr_err msg => false
   }
+
+// ─── De Bruijn Term lowerer ─────────────────────────────────────────
+// Direct mapping: Term → EvalTerm with de Bruijn indices passthrough.
+
+/// Lower a de Bruijn Term to EvalTerm.
+/// De Bruijn indices pass through unchanged: var idx → evar idx.
+/// forall and pi are erased (type-level only at eval time).
+def lower (t: Term) : EvalTerm :=
+    match t {
+        var idx dbg =>
+            EvalTerm.evar idx,
+        lam dbg typ body =>
+            let lowered_body : EvalTerm := lower body in
+            EvalTerm.elam Multiplicity.many (EvalTerm.eregion Region.r_stack Multiplicity.many lowered_body),
+        forall dbg kind body =>
+            lower body,
+        pi arg ret =>
+            EvalTerm.esort 1,
+        app fun arg =>
+            EvalTerm.eapp (lower fun) (lower arg),
+        lit value =>
+            match value {
+                str s => EvalTerm.elit (EvalLiteral.l_str s),
+                num n suffix => EvalTerm.elit (EvalLiteral.l_int n),
+                if_ cond then_ else_ => EvalTerm.elit (EvalLiteral.l_bool true),
+                match_ scrutinee cases =>
+                    let scrutinee_term : EvalTerm := EvalTerm.econst 0 in
+                    EvalTerm.erecursor (RecursorInfo.mk 0 0 0) (List.empty : List EvalTerm) scrutinee_term
+            },
+        ntv native_val =>
+            match native_val {
+                mk native_name nargs args => EvalTerm.eprim 0 (List.empty : List EvalTerm)
+            },
+        con con_val =>
+            match con_val {
+                mk name typ nargs args => EvalTerm.econst 0
+            },
+        type_ level =>
+            EvalTerm.esort level,
+        hole =>
+            EvalTerm.elit (EvalLiteral.l_int 0)
+    }
+
+// ─── De Bruijn lowerer tests ───────────────────────────────────────
+
+@[test]
+def test_lower_debruijn_var : Bool :=
+    let t : Term := Term.var 3 DebugName.unnamed in
+    match lower t {
+        EvalTerm.evar idx => idx == 3,
+        _ => false
+    }
+
+@[test]
+def test_lower_debruijn_lam : Bool :=
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let lam_term : Term := Term.lam DebugName.unnamed (Term.type_ 1) body in
+    match lower lam_term {
+        EvalTerm.elam m body1 =>
+            match body1 {
+                EvalTerm.eregion r m2 body2 =>
+                    match body2 {
+                        EvalTerm.evar idx => idx == 0,
+                        _ => false
+                    },
+                _ => false
+            },
+        _ => false
+    }
+
+@[test]
+def test_lower_debruijn_app : Bool :=
+    let f : Term := Term.var 0 DebugName.unnamed in
+    let a : Term := Term.var 1 DebugName.unnamed in
+    let app_term : Term := Term.app f a in
+    match lower app_term {
+        EvalTerm.eapp fun arg =>
+            match fun {
+                EvalTerm.evar idx => idx == 0,
+                _ => false
+            },
+        _ => false
+    }
+
+@[test]
+def test_lower_debruijn_lit_num : Bool :=
+    let t : Term := Term.lit (Literal.num 42 NumSuffix.i64) in
+    match lower t {
+        EvalTerm.elit lit_val =>
+            match lit_val {
+                EvalLiteral.l_int n => n == 42,
+                _ => false
+            },
+        _ => false
+    }
+
+@[test]
+def test_lower_debruijn_lit_str : Bool :=
+    let t : Term := Term.lit (Literal.str "hello") in
+    match lower t {
+        EvalTerm.elit lit_val =>
+            match lit_val {
+                EvalLiteral.l_str s => s == "hello",
+                _ => false
+            },
+        _ => false
+    }
+
+@[test]
+def test_lower_debruijn_forall_erase : Bool :=
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let forall_term : Term := Term.forall DebugName.unnamed (Term.type_ 1) body in
+    match lower forall_term {
+        EvalTerm.evar idx => idx == 0,
+        _ => false
+    }
+
+@[test]
+def test_lower_debruijn_pi_erase : Bool :=
+    let t : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
+    match lower t {
+        EvalTerm.esort level => level == 1,
+        _ => false
+    }
+
+// ─── De Bruijn end-to-end pipeline tests ───────────────────────────
+// Full pipeline: Term → lower → e2e_eval → result.
+
+@[test]
+def test_e2e_debruijn_identity : Bool :=
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let lam_term : Term := Term.lam DebugName.unnamed (Term.type_ 1) body in
+    let arg : Term := Term.lit (Literal.str "hello") in
+    let app_term : Term := Term.app lam_term arg in
+    let lowered : EvalTerm := lower app_term in
+    match e2e_eval lowered kenv_empty {
+        kr_ok v =>
+            match v {
+                EvalTerm.elit lit_val =>
+                    match lit_val {
+                        EvalLiteral.l_str s => s == "hello",
+                        _ => false
+                    },
+                _ => false
+            },
+        kr_err msg => false
+    }
+
+@[test]
+def test_e2e_debruijn_nested : Bool :=
+    let inner_body : Term := Term.var 0 DebugName.unnamed in
+    let inner_lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) inner_body in
+    let outer_lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) inner_lam in
+    let arg1 : Term := Term.lit (Literal.num 10 NumSuffix.i64) in
+    let arg2 : Term := Term.lit (Literal.str "world") in
+    let app_term : Term := Term.app (Term.app outer_lam arg1) arg2 in
+    let lowered : EvalTerm := lower app_term in
+    match e2e_eval lowered kenv_empty {
+        kr_ok v =>
+            match v {
+                EvalTerm.elit lit_val =>
+                    match lit_val {
+                        EvalLiteral.l_str s => s == "world",
+                        _ => false
+                    },
+                _ => false
+            },
+        kr_err msg => false
+    }
