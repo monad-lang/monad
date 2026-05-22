@@ -34,6 +34,7 @@ pub mod eval;
 pub mod eval_term;
 pub mod lower;
 pub mod parser;
+pub mod runtime;
 pub mod term;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "repl"))]
