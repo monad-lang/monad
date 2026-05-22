@@ -423,28 +423,7 @@ def type_variable (input : String) : ParseResult TermV0 :=
 
 @[partial]
 def type_parens (input : String) : ParseResult TermV0 :=
-	type_parens_open (tag "(" input)
-
-@[partial]
-def type_parens_open (r : ParseResult String) : ParseResult TermV0 :=
-	match r {
-		success rem _ => type_parens_expr (type_expression rem),
-		fail e => fail e
-	}
-
-@[partial]
-def type_parens_expr (r : ParseResult TermV0) : ParseResult TermV0 :=
-	match r {
-		success rem out => type_parens_close (tag ")" rem) out,
-		fail e => fail e
-	}
-
-@[partial]
-def type_parens_close (r : ParseResult String) (out : TermV0) : ParseResult TermV0 :=
-	match r {
-		success rem _ => success rem out,
-		fail e => fail e
-	}
+	delimited_by (tag "(") type_expression (tag ")") input
 
 @[partial]
 def type_atom (input : String) : ParseResult TermV0 :=
@@ -522,13 +501,11 @@ def type_expr_rhs (lhs : TermV0) (r : ParseResult TermV0) : ParseResult TermV0 :
 
 @[partial]
 def many1 (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
-	many1_body (p input) p input
-
-@[partial]
-def many1_body (r : ParseResult A) (p : String -> ParseResult A) (input : String) : ParseResult (List A) :=
-	match r {
+	match many0 p input {
 		success rem out =>
-			many0_next (many0 p rem) out rem,
+			if List.is_empty out
+			then fail (ParseError.custom "expected at least one")
+			else success rem out,
 		fail e => fail e
 	}
 // --- Extended combinators (Phase 1.1) ---
@@ -791,44 +768,16 @@ def number_term (input : String) : ParseResult TermV0 :=
 // --- Path variable parser (e.g. A.B.C) ---
 
 @[partial]
+def at_least_two (ids : List String) : Bool :=
+	Bool.not (List.is_empty (List.tail ids))
+
+@[partial]
 def path_variable (input : String) : ParseResult TermV0 :=
-	path_var_first (identifier input)
-
-@[partial]
-def path_var_first (r : ParseResult String) : ParseResult TermV0 :=
-	match r {
-		success rem first => path_var_need_dot rem (List.cons (Identifier.id first) List.empty),
-		fail e => fail e
-	}
-
-@[partial]
-def path_var_need_dot (input : String) (ids : List Identifier) : ParseResult TermV0 :=
-	path_var_need_dot_try (tag "." input) ids input
-
-@[partial]
-def path_var_need_dot_try (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult TermV0 :=
-	match r {
-		success rem _ => path_var_field (identifier rem) ids,
-		fail _ => fail (ParseError.custom "not a dotted path")
-	}
-
-@[partial]
-def path_var_loop (input : String) (ids : List Identifier) : ParseResult TermV0 :=
-	path_var_loop_dot (tag "." input) ids input
-
-@[partial]
-def path_var_loop_dot (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult TermV0 :=
-	match r {
-		success rem _ => path_var_field (identifier rem) ids,
-		fail _ =>
-			let rev : List Identifier := list_reverse ids in
-			success orig (TermV0.var (NameRef.nmp (ModulePath.mp rev)))
-	}
-
-@[partial]
-def path_var_field (r : ParseResult String) (ids : List Identifier) : ParseResult TermV0 :=
-	match r {
-		success rem next => path_var_loop rem (List.cons (Identifier.id next) ids),
+	match separated_by (tag ".") identifier input {
+		success rem ids =>
+			if at_least_two ids
+			then success rem (TermV0.var (NameRef.nmp (ModulePath.mp (List.map Identifier.id ids))))
+			else fail (ParseError.custom "not a dotted path"),
 		fail e => fail e
 	}
 
@@ -848,7 +797,7 @@ def literal_term (input : String) : ParseResult TermV0 :=
 
 @[partial]
 def atom_paren_parser (input : String) : ParseResult TermV0 :=
-	atom_try_paren (tag "(" input) input
+	delimited_by (tag "(") expression (tag ")") input
 
 def atom_parsers (input : String) : List (String -> ParseResult TermV0) :=
 	[variable, literal_term, match_parser, if_parser,
@@ -857,27 +806,6 @@ def atom_parsers (input : String) : List (String -> ParseResult TermV0) :=
 @[partial]
 def atom_term (input : String) : ParseResult TermV0 :=
 	alt_fold (atom_parsers input) input
-
-@[partial]
-def atom_try_paren (r : ParseResult String) (input : String) : ParseResult TermV0 :=
-	match r {
-		success rem _ => atom_inner_expr (expression rem),
-		fail e => fail e
-	}
-
-@[partial]
-def atom_inner_expr (r : ParseResult TermV0) : ParseResult TermV0 :=
-	match r {
-		success rem out => atom_close_paren (tag ")" rem) out,
-		fail e => fail e
-	}
-
-@[partial]
-def atom_close_paren (r : ParseResult String) (out : TermV0) : ParseResult TermV0 :=
-	match r {
-		success rem _ => success rem out,
-		fail e => fail e
-	}
 
 // --- Whitespace skip (non-ParseResult version) ---
 
@@ -1512,48 +1440,12 @@ def expr_op_rhs_expr (r : ParseResult TermV0) (lhs : TermV0) (op : String) : Par
 // Module path parser (e.g. init.prelude)
 
 @[partial]
+def ids_to_module_path (ids : List String) : ModulePath :=
+	ModulePath.mp (List.map Identifier.id ids)
+
+@[partial]
 def module_path_parser (input : String) : ParseResult ModulePath :=
-	mp_first (identifier input)
-
-@[partial]
-def mp_first (r : ParseResult String) : ParseResult ModulePath :=
-	match r {
-		success rem first => mp_need_dot rem (List.cons (Identifier.id first) List.empty),
-		fail e => fail e
-	}
-
-@[partial]
-def mp_need_dot (input : String) (ids : List Identifier) : ParseResult ModulePath :=
-	mp_need_dot_try (tag "." input) ids input
-
-@[partial]
-def mp_need_dot_try (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult ModulePath :=
-	match r {
-		success rem _ => mp_field (identifier rem) ids,
-		fail _ =>
-			let rev : List Identifier := list_reverse ids in
-			success orig (ModulePath.mp rev)
-	}
-
-@[partial]
-def mp_loop (input : String) (ids : List Identifier) : ParseResult ModulePath :=
-	mp_loop_dot (tag "." input) ids input
-
-@[partial]
-def mp_loop_dot (r : ParseResult String) (ids : List Identifier) (orig : String) : ParseResult ModulePath :=
-	match r {
-		success rem _ => mp_field (identifier rem) ids,
-		fail _ =>
-			let rev : List Identifier := list_reverse ids in
-			success orig (ModulePath.mp rev)
-	}
-
-@[partial]
-def mp_field (r : ParseResult String) (ids : List Identifier) : ParseResult ModulePath :=
-	match r {
-		success rem next => mp_loop rem (List.cons (Identifier.id next) ids),
-		fail e => fail e
-	}
+	map_parse ids_to_module_path (separated_by (tag ".") identifier) input
 
 // use module.path
 
@@ -1664,54 +1556,18 @@ def struct_name (r : ParseResult String) : ParseResult DeclV0 :=
 @[partial]
 def struct_brace (r : ParseResult String) (name : Identifier) : ParseResult DeclV0 :=
 	match r {
-		success rem _ => struct_fields_top rem name,
+		success rem _ => struct_fields rem name,
 		fail e => fail e
 	}
 
 @[partial]
-def struct_fields_top (input : String) (name : Identifier) : ParseResult DeclV0 :=
-	struct_field_first (struct_one_field (skip_spaces input)) input name
-
-@[partial]
-def struct_field_first (r : ParseResult StructFieldV0) (orig : String) (name : Identifier) : ParseResult DeclV0 :=
-	match r {
-		success rem fld => struct_fields_rest rem (List.cons fld List.empty) name,
-		fail _ => struct_empty_close (tag "}" (skip_spaces orig)) name
-	}
-
-@[partial]
-def struct_empty_close (r : ParseResult String) (name : Identifier) : ParseResult DeclV0 :=
-	match r {
-		success rem _ =>
-			let empty_fields : List StructFieldV0 := List.empty in
-			success rem (DeclV0.struct_d (StructV0.mk name empty_fields)),
-		fail e => fail (ParseError.custom "expected }")
-	}
-
-@[partial]
-def struct_fields_rest (input : String) (fields : List StructFieldV0) (name : Identifier) : ParseResult DeclV0 :=
-	struct_fields_rest_comma (tag "," (skip_spaces input)) input fields name
-
-@[partial]
-def struct_fields_rest_comma (r : ParseResult String) (orig : String) (fields : List StructFieldV0) (name : Identifier) : ParseResult DeclV0 :=
-	match r {
-		success rem _ => struct_fields_rest_more (struct_one_field (skip_spaces rem)) fields name,
-		fail _ => struct_close (tag "}" (skip_spaces orig)) name fields
-	}
-
-@[partial]
-def struct_fields_rest_more (r : ParseResult StructFieldV0) (fields : List StructFieldV0) (name : Identifier) : ParseResult DeclV0 :=
-	match r {
-		success rem fld => struct_fields_rest rem (List.cons fld fields) name,
-		fail _ => struct_close (tag "}" (skip_spaces "")) name fields
-	}
-
-@[partial]
-def struct_close (r : ParseResult String) (name : Identifier) (fields : List StructFieldV0) : ParseResult DeclV0 :=
-	match r {
-		success rem _ =>
-			let rev : List StructFieldV0 := list_reverse fields in
-			success rem (DeclV0.struct_d (StructV0.mk name rev)),
+def struct_fields (input : String) (name : Identifier) : ParseResult DeclV0 :=
+	match separated_by (tag ",") (preceded_by ws0 struct_one_field) input {
+		success rem fields =>
+			match tag "}" (skip_spaces rem) {
+				success rem2 _ => success rem2 (DeclV0.struct_d (StructV0.mk name fields)),
+				fail e => fail (ParseError.custom "expected }")
+			},
 		fail e => fail e
 	}
 
@@ -2135,54 +1991,18 @@ def type_params_skip_try (r : ParseResult String) (orig : String) (name : Identi
 @[partial]
 def type_brace (r : ParseResult String) (name : Identifier) : ParseResult DeclV0 :=
 	match r {
-		success rem _ => type_constructors_with_name rem name,
+		success rem _ => type_constructors rem name,
 		fail e => fail e
 	}
 
 @[partial]
-def type_constructors_with_name (input : String) (name : Identifier) : ParseResult DeclV0 :=
-	type_cons_first_named (type_one_constructor (skip_spaces input)) input name
-
-@[partial]
-def type_cons_first_named (r : ParseResult InductConstructorV0) (orig : String) (name : Identifier) : ParseResult DeclV0 :=
-	match r {
-		success rem con => type_cons_rest_named rem (List.cons con List.empty) name,
-		fail _ => type_empty_close_named (tag "}" (skip_spaces orig)) name
-	}
-
-@[partial]
-def type_empty_close_named (r : ParseResult String) (name : Identifier) : ParseResult DeclV0 :=
-	match r {
-		success rem _ =>
-			let empty : List InductConstructorV0 := List.empty in
-			success rem (type_to_decl name empty),
-		fail e => fail (ParseError.custom "expected }")
-	}
-
-@[partial]
-def type_cons_rest_named (input : String) (cons : List InductConstructorV0) (name : Identifier) : ParseResult DeclV0 :=
-	type_cons_rest_comma_named (tag "," (skip_spaces input)) input cons name
-
-@[partial]
-def type_cons_rest_comma_named (r : ParseResult String) (orig : String) (cons : List InductConstructorV0) (name : Identifier) : ParseResult DeclV0 :=
-	match r {
-		success rem _ => type_cons_rest_more_named (type_one_constructor (skip_spaces rem)) cons name,
-		fail _ => type_close_brace (tag "}" (skip_spaces orig)) name cons
-	}
-
-@[partial]
-def type_cons_rest_more_named (r : ParseResult InductConstructorV0) (cons : List InductConstructorV0) (name : Identifier) : ParseResult DeclV0 :=
-	match r {
-		success rem con => type_cons_rest_named rem (List.cons con cons) name,
-		fail _ => type_close_brace (tag "}" (skip_spaces "")) name cons
-	}
-
-@[partial]
-def type_close_brace (r : ParseResult String) (name : Identifier) (cons : List InductConstructorV0) : ParseResult DeclV0 :=
-	match r {
-		success rem _ =>
-			let rev : List InductConstructorV0 := list_reverse cons in
-			success rem (type_to_decl name rev),
+def type_constructors (input : String) (name : Identifier) : ParseResult DeclV0 :=
+	match separated_by (tag ",") (preceded_by ws0 type_one_constructor) input {
+		success rem cons =>
+			match tag "}" (skip_spaces rem) {
+				success rem2 _ => success rem2 (type_to_decl name cons),
+				fail e => fail (ParseError.custom "expected }")
+			},
 		fail e => fail e
 	}
 
