@@ -419,14 +419,7 @@ def var_term (s : String) : TermV0 :=
 
 @[partial]
 def type_variable (input : String) : ParseResult TermV0 :=
-	type_var_got (identifier input)
-
-@[partial]
-def type_var_got (r : ParseResult String) : ParseResult TermV0 :=
-	match r {
-		success rem out => success rem (var_term out),
-		fail e => fail e
-	}
+	map_parse var_term identifier input
 
 @[partial]
 def type_parens (input : String) : ParseResult TermV0 :=
@@ -786,16 +779,12 @@ def string_parse_close (r : ParseResult String) (content : String) : ParseResult
 
 // --- Number term wrapper ---
 
-@[partial]
-def number_term (input : String) : ParseResult TermV0 :=
-	number_term_body (number input)
+def num_to_term (n : I64) : TermV0 :=
+	TermV0.lit (LiteralV0.num n NumSuffix.i64)
 
 @[partial]
-def number_term_body (r : ParseResult I64) : ParseResult TermV0 :=
-	match r {
-		success rem out => success rem (TermV0.lit (LiteralV0.num out NumSuffix.i64)),
-		fail e => fail e
-	}
+def number_term (input : String) : ParseResult TermV0 :=
+	map_parse num_to_term number input
 
 // --- Variable parser ---
 
@@ -847,34 +836,13 @@ def path_var_field (r : ParseResult String) (ids : List Identifier) : ParseResul
 
 @[partial]
 def variable (input : String) : ParseResult TermV0 :=
-	variable_try_path (path_variable input) input
-
-@[partial]
-def variable_try_path (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
-	match r {
-		success rem out => success rem out,
-		fail _ => variable_got (identifier input)
-	}
-
-@[partial]
-def variable_got (r : ParseResult String) : ParseResult TermV0 :=
-	match r {
-		success rem out => success rem (TermV0.var (NameRef.nid (Identifier.id out))),
-		fail e => fail e
-	}
+	alt_fold [path_variable, map_parse var_term identifier] input
 
 // --- Literal term (string or number) ---
 
 @[partial]
 def literal_term (input : String) : ParseResult TermV0 :=
-	literal_try_str (string_parse input) input
-
-@[partial]
-def literal_try_str (r : ParseResult TermV0) (input : String) : ParseResult TermV0 :=
-	match r {
-		success rem out => success rem out,
-		fail _ => number_term input
-	}
+	alt_fold [string_parse, number_term] input
 
 // --- Atom term (variable, literal, parenthesized expression) ---
 
@@ -1454,24 +1422,16 @@ def is_op_char (c : String) : Bool :=
 	op_char_member c op_chars
 
 @[partial]
+def op_check (s : String) (rem : String) : ParseResult String :=
+	if is_empty s
+	then fail (ParseError.custom "expected operator")
+	else if I64.beq 0 (op_precedence s)
+		then fail (ParseError.custom "unknown operator")
+		else success rem s
+
+@[partial]
 def operator_parse (input : String) : ParseResult String :=
-	operator_parse_body (take_while is_op_char input)
-
-@[partial]
-def operator_parse_body (r : ParseResult String) : ParseResult String :=
-	match r {
-		success rem out =>
-			if is_empty out
-			then fail (ParseError.custom "expected operator")
-			else operator_check out rem,
-		fail e => fail e
-	}
-
-@[partial]
-def operator_check (s : String) (rem : String) : ParseResult String :=
-	if I64.beq 0 (op_precedence s)
-	then fail (ParseError.custom "unknown operator")
-	else success rem s
+	bind_parse (take_while is_op_char) op_check input
 
 @[partial]
 def op_precedence (op : String) : I64 :=
@@ -1599,19 +1559,11 @@ def mp_field (r : ParseResult String) (ids : List Identifier) : ParseResult Modu
 
 @[partial]
 def use_parser (input : String) : ParseResult DeclV0 :=
-	use_kw (tag "use" input)
-
-@[partial]
-def use_kw (r : ParseResult String) : ParseResult DeclV0 :=
-	match r {
-		success rem _ => use_path (module_path_parser (skip_spaces rem)),
-		fail e => fail e
-	}
-
-@[partial]
-def use_path (r : ParseResult ModulePath) : ParseResult DeclV0 :=
-	match r {
-		success rem path => success rem (DeclV0.use_d path),
+	match tag "use" input {
+		success rem _ => match module_path_parser (skip_spaces rem) {
+			success rem2 path => success rem2 (DeclV0.use_d path),
+			fail e => fail e
+		},
 		fail e => fail e
 	}
 
@@ -1619,19 +1571,11 @@ def use_path (r : ParseResult ModulePath) : ParseResult DeclV0 :=
 
 @[partial]
 def open_parser (input : String) : ParseResult DeclV0 :=
-	open_kw (tag "open" input)
-
-@[partial]
-def open_kw (r : ParseResult String) : ParseResult DeclV0 :=
-	match r {
-		success rem _ => open_path (module_path_parser (skip_spaces rem)),
-		fail e => fail e
-	}
-
-@[partial]
-def open_path (r : ParseResult ModulePath) : ParseResult DeclV0 :=
-	match r {
-		success rem path => success rem (DeclV0.open_d path),
+	match tag "open" input {
+		success rem _ => match module_path_parser (skip_spaces rem) {
+			success rem2 path => success rem2 (DeclV0.open_d path),
+			fail e => fail e
+		},
 		fail e => fail e
 	}
 
