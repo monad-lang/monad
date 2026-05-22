@@ -55,6 +55,13 @@ impl<T: Send> Fiber<T> {
     *self.inner.state.lock().unwrap() == FiberState::Cancelled
   }
 
+  pub fn is_done(&self) -> bool {
+    matches!(
+      *self.inner.state.lock().unwrap(),
+      FiberState::Completed | FiberState::Failed | FiberState::Cancelled
+    )
+  }
+
   pub fn wait(self) -> T {
     let mut state = self.inner.state.lock().unwrap();
     loop {

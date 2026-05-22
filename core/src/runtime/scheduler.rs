@@ -16,6 +16,12 @@ pub struct QueuePair {
   pub idle: Arc<(Mutex<usize>, Condvar)>,
 }
 
+impl std::fmt::Debug for QueuePair {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("QueuePair").finish()
+  }
+}
+
 pub struct Scheduler {
   queues: Arc<QueuePair>,
   all_locals: Arc<Vec<Arc<Mutex<VecDeque<Task>>>>>,

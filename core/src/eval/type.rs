@@ -2543,6 +2543,7 @@ fn type_check_with_env(
         // Term values are evaluated at expansion time; not type-checked here
         Ok(typed_term(Lit { value }, Hole))
       }
+      Literal::Foreign(_) => Ok(typed_term(Lit { value }, expected_type.clone())),
     },
     Var { ref name } => {
       // Try desugaring method calls (x.fun -> A.fun x)

@@ -1091,6 +1091,8 @@ pub enum Literal {
   },
   /// Runtime term value (produced by eval of Quote)
   Term(Box<Term>),
+  /// Opaque handle to a runtime object (Fiber, Channel, Mutex, etc.)
+  Foreign(u64),
 }
 
 pub fn match_term(value: Term, cases: Vec<MatchCase>) -> Term {
@@ -1150,6 +1152,7 @@ impl Display for Literal {
         write!(f, "{{ {base} with {fields_str} }}")
       }
       Literal::Term(t) => write!(f, "term({t})"),
+      Literal::Foreign(id) => write!(f, "<foreign:{id}>"),
     }
   }
 }
@@ -1433,6 +1436,7 @@ impl Term {
         Literal::StructLit { .. } => "struct_lit",
         Literal::StructUpdate { .. } => "struct_update",
         Literal::Term(_) => "term",
+        Literal::Foreign(_) => "foreign",
       },
       Ntv { native: _ } => "ntv",
       Con(_) => "con",

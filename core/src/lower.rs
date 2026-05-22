@@ -309,6 +309,9 @@ impl<'a> LowerContext<'a> {
         "struct updates must be desugared before lowering".into(),
       )),
       Literal::Term(inner) => self.lower(inner),
+      Literal::Foreign(_id) => Err(LowerError::Unsupported(
+        "foreign handles must be produced by native functions, not in source".into(),
+      )),
     }
   }
 
