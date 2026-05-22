@@ -2042,7 +2042,7 @@ def type_cons_close_paren (r : ParseResult String) (name : Identifier) (params :
 
 @[partial]
 def type_param_list (input : String) : ParseResult (List ParamV0) :=
-	type_param_first (type_one_param (skip_spaces input))
+	separated_by (tag ",") (preceded_by ws0 type_one_param) input
 
 @[partial]
 def type_one_param (input : String) : ParseResult ParamV0 :=
@@ -2067,37 +2067,6 @@ def type_one_param_val (r : ParseResult TermV0) (name : Identifier) : ParseResul
 	match r {
 		success rem typ => success rem (param_many_v0 name typ),
 		fail e => fail e
-	}
-
-@[partial]
-def type_param_first (r : ParseResult ParamV0) : ParseResult (List ParamV0) :=
-	match r {
-		success rem param => type_param_rest rem (List.cons param List.empty),
-		fail _ =>
-			let empty : List ParamV0 := List.empty in
-			success "" empty
-	}
-
-@[partial]
-def type_param_rest (input : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
-	type_param_rest_comma (tag "," (skip_spaces input)) input params
-
-@[partial]
-def type_param_rest_comma (r : ParseResult String) (orig : String) (params : List ParamV0) : ParseResult (List ParamV0) :=
-	match r {
-		success rem _ => type_param_rest_more (type_one_param (skip_spaces rem)) params,
-		fail _ =>
-			let rev : List ParamV0 := list_reverse params in
-			success orig rev
-	}
-
-@[partial]
-def type_param_rest_more (r : ParseResult ParamV0) (params : List ParamV0) : ParseResult (List ParamV0) :=
-	match r {
-		success rem param => type_param_rest rem (List.cons param params),
-		fail _ =>
-			let rev : List ParamV0 := list_reverse params in
-			success "" rev
 	}
 
 @[partial]
