@@ -53,10 +53,10 @@ def lower_v0 (ctx: List Identifier) (t: TermV0) : EvalTerm :=
       EvalTerm.eapp (lower_v0 ctx fun) (lower_v0 ctx arg),
     TermV0.lit lit_value =>
       match lit_value {
-        Literal.str s => EvalTerm.elit (EvalLiteral.l_str s),
-        Literal.num n suffix => EvalTerm.elit (EvalLiteral.l_int n),
-        Literal.if_ cond then_ else_ => EvalTerm.elit (EvalLiteral.l_bool true),
-        Literal.match_ scrutinee cases =>
+        LiteralV0.str s => EvalTerm.elit (EvalLiteral.l_str s),
+        LiteralV0.num n suffix => EvalTerm.elit (EvalLiteral.l_int n),
+        LiteralV0.if_ cond then_ else_ => EvalTerm.elit (EvalLiteral.l_bool true),
+        LiteralV0.match_ scrutinee cases =>
           EvalTerm.erecursor (RecursorInfo.mk 0 0 0) (List.empty : List EvalTerm) (lower_v0 ctx scrutinee)
       },
     TermV0.forall fname ftyp fbody =>
@@ -84,7 +84,7 @@ def single_ctx (id: Identifier) : List Identifier :=
 
 @[test]
 def test_lower_var_str : Bool :=
-  let t : TermV0 := TermV0.lit (Literal.str "hello") in
+  let t : TermV0 := TermV0.lit (LiteralV0.str "hello") in
   match lower_v0 empty_ctx t {
     EvalTerm.elit lit =>
       match lit {
@@ -96,7 +96,7 @@ def test_lower_var_str : Bool :=
 
 @[test]
 def test_lower_var_num : Bool :=
-  let t : TermV0 := TermV0.lit (Literal.num 42 NumSuffix.i64) in
+  let t : TermV0 := TermV0.lit (LiteralV0.num 42 NumSuffix.i64) in
   match lower_v0 empty_ctx t {
     EvalTerm.elit lit =>
       match lit {
@@ -183,7 +183,7 @@ def test_lower_app_simple : Bool :=
   let f : TermV0 := TermV0.lam
     (param_many id_x TermV0.hole)
     (TermV0.var (NameRef.nid id_x)) in
-  let t : TermV0 := TermV0.app f (TermV0.lit (Literal.num 1 NumSuffix.i64)) in
+  let t : TermV0 := TermV0.app f (TermV0.lit (LiteralV0.num 1 NumSuffix.i64)) in
   match lower_v0 empty_ctx t {
     EvalTerm.eapp fun arg =>
       match arg {
@@ -202,7 +202,7 @@ def test_lower_app_simple : Bool :=
 @[test]
 def test_lower_forall_erased : Bool :=
   let id_a : Identifier := Identifier.id "a" in
-  let t : TermV0 := TermV0.forall id_a TermV0.hole (TermV0.lit (Literal.num 42 NumSuffix.i64)) in
+  let t : TermV0 := TermV0.forall id_a TermV0.hole (TermV0.lit (LiteralV0.num 42 NumSuffix.i64)) in
   match lower_v0 empty_ctx t {
     EvalTerm.elit lit =>
       match lit {
@@ -392,7 +392,7 @@ def test_e2e_lower_plus_eval : Bool :=
   let x_var : TermV0 := TermV0.var x_name in
   let x_param : Param := param_many (Identifier.id "x") (TermV0.type_ 1) in
   let lam_body : TermV0 := TermV0.lam x_param x_var in
-  let arg_term : TermV0 := TermV0.lit (Literal.str "hello") in
+  let arg_term : TermV0 := TermV0.lit (LiteralV0.str "hello") in
   let app_term : TermV0 := TermV0.app lam_body arg_term in
   let empty_ctx : List Identifier := List.empty in
   let lowered : EvalTerm := lower_v0 empty_ctx app_term in
@@ -431,8 +431,8 @@ def test_e2e_nested : Bool :=
   let inner_lam : TermV0 := TermV0.lam y_param y_var in
   let x_param : Param := param_many (Identifier.id "x") (TermV0.type_ 1) in
   let outer_lam : TermV0 := TermV0.lam x_param inner_lam in
-  let arg1 : TermV0 := TermV0.lit (Literal.num 10 NumSuffix.i64) in
-  let arg2 : TermV0 := TermV0.lit (Literal.str "world") in
+  let arg1 : TermV0 := TermV0.lit (LiteralV0.num 10 NumSuffix.i64) in
+  let arg2 : TermV0 := TermV0.lit (LiteralV0.str "world") in
   let app_term : TermV0 := TermV0.app (TermV0.app outer_lam arg1) arg2 in
   let empty_ctx : List Identifier := List.empty in
   let lowered : EvalTerm := lower_v0 empty_ctx app_term in

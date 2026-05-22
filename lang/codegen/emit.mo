@@ -110,7 +110,7 @@ def compile_native_val (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) : LLV
 
 @[partial]
 def extract_lit_val (term_ : TermV0) : Option I64 := match term_ {
-    TermV0.lit val => extract_lit_val_inner val,
+    TermV0.lit val => extract_lit_val_inner_v0 val,
     TermV0.forall a b c => Option.none,
     TermV0.pi a b => Option.none,
     TermV0.var a => Option.none,
@@ -123,11 +123,11 @@ def extract_lit_val (term_ : TermV0) : Option I64 := match term_ {
 }
 
 @[partial]
-def extract_lit_val_inner (lit_ : Literal) : Option I64 := match lit_ {
-    Literal.num n suffix => Option.some n,
-    Literal.str s => Option.none,
-    Literal.if_ a b c => Option.none,
-    Literal.match_ a b => Option.none,
+def extract_lit_val_inner_v0 (lit_ : LiteralV0) : Option I64 := match lit_ {
+    LiteralV0.num n suffix => Option.some n,
+    LiteralV0.str s => Option.none,
+    LiteralV0.if_ a b c => Option.none,
+    LiteralV0.match_ a b => Option.none,
 }
 
 @[partial]
@@ -176,10 +176,10 @@ def try_compile_body (term_ : TermV0) : Option LLVMValue := match term_ {
         },
     TermV0.lit val =>
         match val {
-            Literal.num n suffix => Option.some (LLVMValue.int_ n),
-            Literal.str s => Option.none,
-            Literal.if_ a b c => Option.none,
-            Literal.match_ a b => Option.none,
+            LiteralV0.num n suffix => Option.some (LLVMValue.int_ n),
+            LiteralV0.str s => Option.none,
+            LiteralV0.if_ a b c => Option.none,
+            LiteralV0.match_ a b => Option.none,
         },
     TermV0.forall a b c => Option.none,
     TermV0.pi a b => Option.none,
@@ -232,6 +232,19 @@ def is_llvm_constant (val : LLVMValue) : Bool := match val {
 }
 
 @[partial]
+def compile_lit_v0_ir (c : CodegenCtx) (lit_ : LiteralV0) : CompileResult := match lit_ {
+    LiteralV0.num n suffix => CompileResult.ok c empty_instrs (LLVMValue.int_ n) empty_blocks empty_funcs empty_globals_list,
+    LiteralV0.str s =>
+        match fresh_label c "str" {
+            CtxStrPair.mk ctx1 name =>
+                let global := LLVMGlobal.mk name s (String.length s) true in
+                CompileResult.ok ctx1 empty_instrs (LLVMValue.global_ name) empty_blocks empty_funcs (cons_global global empty_globals_list),
+        },
+    LiteralV0.if_ cond then_ else_ => compile_if_ir c cond then_ else_,
+    LiteralV0.match_ scrutinee cases => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+}
+
+@[partial]
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
     Literal.num n suffix => CompileResult.ok c empty_instrs (LLVMValue.int_ n) empty_blocks empty_funcs empty_globals_list,
     Literal.str s =>
@@ -240,7 +253,7 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
                 let global := LLVMGlobal.mk name s (String.length s) true in
                 CompileResult.ok ctx1 empty_instrs (LLVMValue.global_ name) empty_blocks empty_funcs (cons_global global empty_globals_list),
         },
-    Literal.if_ cond then_ else_ => compile_if_ir c cond then_ else_,
+    Literal.if_ cond then_ else_ => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
     Literal.match_ scrutinee cases => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
 }
 
@@ -403,7 +416,7 @@ def build_merge_result (ctx_else : CodegenCtx) (merge_label : String) (then_val 
 
 @[partial]
 def compile_term_ir (c : CodegenCtx) (term_ : TermV0) : CompileResult := match term_ {
-    TermV0.lit val => compile_lit_ir c val,
+    TermV0.lit val => compile_lit_v0_ir c val,
     TermV0.var name =>
         match name {
             NameRef.nid id =>
@@ -1019,14 +1032,14 @@ def test_empty_decls_module : Bool :=
 
 @[test]
 def test_native_add_inlined : Bool :=
-    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_add"))) (TermV0.lit (Literal.num 1 NumSuffix.i64))) (TermV0.lit (Literal.num 2 NumSuffix.i64))) {
+    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_add"))) (TermV0.lit (LiteralV0.num 1 NumSuffix.i64))) (TermV0.lit (LiteralV0.num 2 NumSuffix.i64))) {
         Option.some val => true,
         Option.none => false,
     }
 
 @[test]
 def test_literal_body_compiles : Bool :=
-    match try_compile_body (TermV0.lit (Literal.num 42 NumSuffix.i64)) {
+    match try_compile_body (TermV0.lit (LiteralV0.num 42 NumSuffix.i64)) {
         Option.some val => true,
         Option.none => false,
     }
@@ -1035,8 +1048,8 @@ def test_literal_body_compiles : Bool :=
 def test_arithmetic_full_chain : Bool :=
     let id := Identifier.id "test" in
     let nid := NameRef.nid (Identifier.id "I64_add") in
-    let one := TermV0.lit (Literal.num 1 NumSuffix.i64) in
-    let two := TermV0.lit (Literal.num 2 NumSuffix.i64) in
+    let one := TermV0.lit (LiteralV0.num 1 NumSuffix.i64) in
+    let two := TermV0.lit (LiteralV0.num 2 NumSuffix.i64) in
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
@@ -1047,28 +1060,28 @@ def test_arithmetic_full_chain : Bool :=
 
 @[test]
 def test_sub_inlined : Bool :=
-    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_sub"))) (TermV0.lit (Literal.num 5 NumSuffix.i64))) (TermV0.lit (Literal.num 3 NumSuffix.i64))) {
+    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_sub"))) (TermV0.lit (LiteralV0.num 5 NumSuffix.i64))) (TermV0.lit (LiteralV0.num 3 NumSuffix.i64))) {
         Option.some val => true,
         Option.none => false,
     }
 
 @[test]
 def test_mul_inlined : Bool :=
-    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_mul"))) (TermV0.lit (Literal.num 3 NumSuffix.i64))) (TermV0.lit (Literal.num 4 NumSuffix.i64))) {
+    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_mul"))) (TermV0.lit (LiteralV0.num 3 NumSuffix.i64))) (TermV0.lit (LiteralV0.num 4 NumSuffix.i64))) {
         Option.some val => true,
         Option.none => false,
     }
 
 @[test]
 def test_div_inlined : Bool :=
-    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_div"))) (TermV0.lit (Literal.num 8 NumSuffix.i64))) (TermV0.lit (Literal.num 2 NumSuffix.i64))) {
+    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_div"))) (TermV0.lit (LiteralV0.num 8 NumSuffix.i64))) (TermV0.lit (LiteralV0.num 2 NumSuffix.i64))) {
         Option.some val => true,
         Option.none => false,
     }
 
 @[test]
 def test_eq_inlined : Bool :=
-    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_eq"))) (TermV0.lit (Literal.num 1 NumSuffix.i64))) (TermV0.lit (Literal.num 1 NumSuffix.i64))) {
+    match try_compile_body (TermV0.app (TermV0.app (TermV0.var (NameRef.nid (Identifier.id "I64_eq"))) (TermV0.lit (LiteralV0.num 1 NumSuffix.i64))) (TermV0.lit (LiteralV0.num 1 NumSuffix.i64))) {
         Option.some val => true,
         Option.none => false,
     }
@@ -1077,8 +1090,8 @@ def test_eq_inlined : Bool :=
 def test_sub_full_chain : Bool :=
     let id := Identifier.id "test" in
     let nid := NameRef.nid (Identifier.id "I64_sub") in
-    let one := TermV0.lit (Literal.num 5 NumSuffix.i64) in
-    let two := TermV0.lit (Literal.num 3 NumSuffix.i64) in
+    let one := TermV0.lit (LiteralV0.num 5 NumSuffix.i64) in
+    let two := TermV0.lit (LiteralV0.num 3 NumSuffix.i64) in
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
@@ -1091,8 +1104,8 @@ def test_sub_full_chain : Bool :=
 def test_mul_full_chain : Bool :=
     let id := Identifier.id "test" in
     let nid := NameRef.nid (Identifier.id "I64_mul") in
-    let one := TermV0.lit (Literal.num 3 NumSuffix.i64) in
-    let two := TermV0.lit (Literal.num 4 NumSuffix.i64) in
+    let one := TermV0.lit (LiteralV0.num 3 NumSuffix.i64) in
+    let two := TermV0.lit (LiteralV0.num 4 NumSuffix.i64) in
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
@@ -1105,8 +1118,8 @@ def test_mul_full_chain : Bool :=
 def test_div_full_chain : Bool :=
     let id := Identifier.id "test" in
     let nid := NameRef.nid (Identifier.id "I64_div") in
-    let one := TermV0.lit (Literal.num 8 NumSuffix.i64) in
-    let two := TermV0.lit (Literal.num 2 NumSuffix.i64) in
+    let one := TermV0.lit (LiteralV0.num 8 NumSuffix.i64) in
+    let two := TermV0.lit (LiteralV0.num 2 NumSuffix.i64) in
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
@@ -1119,8 +1132,8 @@ def test_div_full_chain : Bool :=
 def test_eq_full_chain : Bool :=
     let id := Identifier.id "test" in
     let nid := NameRef.nid (Identifier.id "I64_eq") in
-    let one := TermV0.lit (Literal.num 1 NumSuffix.i64) in
-    let two := TermV0.lit (Literal.num 1 NumSuffix.i64) in
+    let one := TermV0.lit (LiteralV0.num 1 NumSuffix.i64) in
+    let two := TermV0.lit (LiteralV0.num 1 NumSuffix.i64) in
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
@@ -1148,7 +1161,7 @@ def check_contains (text : String) (needle : String) : Bool :=
 def test_param_binding : Bool :=
     let x_id := Identifier.id "x" in
     let nid := NameRef.nid (Identifier.id "I64_add") in
-    let one := TermV0.lit (Literal.num 1 NumSuffix.i64) in
+    let one := TermV0.lit (LiteralV0.num 1 NumSuffix.i64) in
     let x_var := TermV0.var (NameRef.nid x_id) in
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ x_var in
@@ -1183,8 +1196,8 @@ def test_nested_native : Bool :=
     let x_id := Identifier.id "x" in
     let add_nid := NameRef.nid (Identifier.id "I64_add") in
     let mul_nid := NameRef.nid (Identifier.id "I64_mul") in
-    let one := TermV0.lit (Literal.num 1 NumSuffix.i64) in
-    let two := TermV0.lit (Literal.num 2 NumSuffix.i64) in
+    let one := TermV0.lit (LiteralV0.num 1 NumSuffix.i64) in
+    let two := TermV0.lit (LiteralV0.num 2 NumSuffix.i64) in
     let x_var := TermV0.var (NameRef.nid x_id) in
     let mul_var := TermV0.var mul_nid in
     let mul_app1 := TermV0.app mul_var x_var in
@@ -1226,7 +1239,7 @@ def test_lambda_compiled : Bool :=
 
 @[test]
 def test_string_literal_compiled : Bool :=
-    let str_term := TermV0.lit (Literal.str "hello") in
+    let str_term := TermV0.lit (LiteralV0.str "hello") in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "strtest") List.empty)) (TermV0.type_ 1) str_term List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
@@ -1247,12 +1260,12 @@ def test_constructor_compiled : Bool :=
 
 @[test]
 def test_if_then_else_compiled : Bool :=
-    let one := TermV0.lit (Literal.num 1 NumSuffix.i64) in
-    let two := TermV0.lit (Literal.num 2 NumSuffix.i64) in
+    let one := TermV0.lit (LiteralV0.num 1 NumSuffix.i64) in
+    let two := TermV0.lit (LiteralV0.num 2 NumSuffix.i64) in
     let eq_var := TermV0.var (NameRef.nid (Identifier.id "I64_eq")) in
     let eq_one := TermV0.app eq_var one in
     let cond := TermV0.app eq_one two in
-    let if_term := TermV0.lit (Literal.if_ cond one two) in
+    let if_term := TermV0.lit (LiteralV0.if_ cond one two) in
     let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "iftest") List.empty)) (TermV0.type_ 1) if_term List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in

@@ -780,7 +780,7 @@ def string_parse_content (r : ParseResult String) : ParseResult TermV0 :=
 @[partial]
 def string_parse_close (r : ParseResult String) (content : String) : ParseResult TermV0 :=
 	match r {
-		success rem _ => success rem (TermV0.lit (Literal.str content)),
+		success rem _ => success rem (TermV0.lit (LiteralV0.str content)),
 		fail e => fail e
 	}
 
@@ -793,7 +793,7 @@ def number_term (input : String) : ParseResult TermV0 :=
 @[partial]
 def number_term_body (r : ParseResult I64) : ParseResult TermV0 :=
 	match r {
-		success rem out => success rem (TermV0.lit (Literal.num out NumSuffix.i64)),
+		success rem out => success rem (TermV0.lit (LiteralV0.num out NumSuffix.i64)),
 		fail e => fail e
 	}
 
@@ -927,36 +927,36 @@ def skip_spaces_match (r : ParseResult String) (orig : String) : String :=
 // --- Match case parser ---
 
 @[partial]
-def match_case (input : String) : ParseResult MatchCase :=
+def match_case (input : String) : ParseResult MatchCaseV0 :=
 	match_case_name (identifier (skip_spaces input))
 
 @[partial]
-def match_case_name (r : ParseResult String) : ParseResult MatchCase :=
+def match_case_name (r : ParseResult String) : ParseResult MatchCaseV0 :=
 	match r {
 		success rem name => match_case_args (many0 identifier (skip_spaces rem)) (Identifier.id name),
 		fail e => fail e
 	}
 
 @[partial]
-def match_case_args (r : ParseResult (List String)) (name : Identifier) : ParseResult MatchCase :=
+def match_case_args (r : ParseResult (List String)) (name : Identifier) : ParseResult MatchCaseV0 :=
 	match r {
 		success rem _ => match_case_arrow (tag "=>" (skip_spaces rem)) name,
 		fail e => fail e
 	}
 
 @[partial]
-def match_case_arrow (r : ParseResult String) (name : Identifier) : ParseResult MatchCase :=
+def match_case_arrow (r : ParseResult String) (name : Identifier) : ParseResult MatchCaseV0 :=
 	match r {
 		success rem _ => match_case_body (expression (skip_spaces rem)) name,
 		fail e => fail e
 	}
 
 @[partial]
-def match_case_body (r : ParseResult TermV0) (name : Identifier) : ParseResult MatchCase :=
+def match_case_body (r : ParseResult TermV0) (name : Identifier) : ParseResult MatchCaseV0 :=
 	match r {
 		success rem body =>
 			let empty_args : List Identifier := List.empty in
-			success (match_case_tail rem) (MatchCase.mc name empty_args body),
+			success (match_case_tail rem) (MatchCaseV0.mc_v0 name empty_args body),
 		fail e => fail e
 	}
 
@@ -1006,16 +1006,16 @@ def match_brace_open (r : ParseResult String) (scrutinee : TermV0) : ParseResult
 	}
 
 @[partial]
-def match_cases_parse (r : ParseResult (List MatchCase)) (scrutinee : TermV0) : ParseResult TermV0 :=
+def match_cases_parse (r : ParseResult (List MatchCaseV0)) (scrutinee : TermV0) : ParseResult TermV0 :=
 	match r {
 		success rem cases => match_close (tag "}" (skip_spaces rem)) scrutinee cases,
 		fail e => fail e
 	}
 
 @[partial]
-def match_close (r : ParseResult String) (scrutinee : TermV0) (cases : List MatchCase) : ParseResult TermV0 :=
+def match_close (r : ParseResult String) (scrutinee : TermV0) (cases : List MatchCaseV0) : ParseResult TermV0 :=
 	match r {
-		success rem _ => success rem (TermV0.lit (Literal.match_ scrutinee cases)),
+		success rem _ => success rem (TermV0.lit (LiteralV0.match_ scrutinee cases)),
 		fail e => fail e
 	}
 
@@ -1063,7 +1063,7 @@ def if_else_kw (r : ParseResult String) (cond : TermV0) (then_b : TermV0) : Pars
 @[partial]
 def if_else_branch (r : ParseResult TermV0) (cond : TermV0) (then_b : TermV0) : ParseResult TermV0 :=
 	match r {
-		success rem else_b => success rem (TermV0.lit (Literal.if_ cond then_b else_b)),
+		success rem else_b => success rem (TermV0.lit (LiteralV0.if_ cond then_b else_b)),
 		fail e => fail e
 	}
 
@@ -3551,7 +3551,12 @@ def t2_atom_try_lit (r: ParseResult TermV0) (ctx: List Identifier) (input: Strin
 @[partial]
 def t2_atom_lift_lit (t: TermV0) (rem: String) : ParseResult Term :=
     match t {
-        TermV0.lit val => success rem (Term.lit val),
+        TermV0.lit val => match val {
+            LiteralV0.str s => success rem (Term.lit (Literal.str s)),
+            LiteralV0.num n suffix => success rem (Term.lit (Literal.num n suffix)),
+            LiteralV0.if_ a b c => success rem (Term.var t2_sentinel DebugName.unnamed),
+            LiteralV0.match_ a b => success rem (Term.var t2_sentinel DebugName.unnamed)
+        },
         TermV0.var name => match name {
             NameRef.nid id => success rem (Term.var t2_sentinel (DebugName.named id)),
             NameRef.nmp mp => success rem (Term.var t2_sentinel DebugName.unnamed),

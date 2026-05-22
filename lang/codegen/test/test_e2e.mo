@@ -20,7 +20,7 @@ def test_e2e_simple_literal : Bool :=
     let def_ := Def.mk
         (ModulePath.mp (List.cons id empty_ids))
         (TermV0.type_ 1)
-        (TermV0.lit (Literal.num 42 NumSuffix.i64))
+        (TermV0.lit (LiteralV0.num 42 NumSuffix.i64))
         empty_cons
         empty_attrs in
     let mod_ := lang.codegen.emit.compile_decls_ir (List.cons def_ empty_defs) in
@@ -31,7 +31,7 @@ def test_e2e_simple_literal : Bool :=
 def test_e2e_function_with_param : Bool :=
     let id := Identifier.id "add5" in
     let param := param_many (Identifier.id "x") (TermV0.type_ 1) in
-    let body := TermV0.lit (Literal.num 99 NumSuffix.i64) in
+    let body := TermV0.lit (LiteralV0.num 99 NumSuffix.i64) in
     let def_ := Def.mk
         (ModulePath.mp (List.cons id empty_ids))
         (TermV0.type_ 1)
@@ -62,7 +62,7 @@ def test_e2e_calling_convention : Bool :=
     let def_ := Def.mk
         (ModulePath.mp (List.cons id empty_ids))
         (TermV0.type_ 1)
-        (TermV0.lit (Literal.num 1 NumSuffix.i64))
+        (TermV0.lit (LiteralV0.num 1 NumSuffix.i64))
         empty_cons
         empty_attrs in
     let mod_ := lang.codegen.emit.compile_decls_ir (List.cons def_ empty_defs) in

@@ -47,8 +47,8 @@ def compile_and_run (defs : List Def) (output_dir : String) (output_name : Strin
 def test_link_compile_defs_to_ir : Bool :=
     let id_val := lang.types.Identifier.id "test" in
     let nid := lang.types.NameRef.nid (lang.types.Identifier.id "I64_add") in
-    let one := lang.types.TermV0.lit (lang.types.Literal.num 1 lang.types.NumSuffix.i64) in
-    let two := lang.types.TermV0.lit (lang.types.Literal.num 2 lang.types.NumSuffix.i64) in
+    let one := lang.types.TermV0.lit (lang.types.LiteralV0.num 1 lang.types.NumSuffix.i64) in
+    let two := lang.types.TermV0.lit (lang.types.LiteralV0.num 2 lang.types.NumSuffix.i64) in
     let var_ := lang.types.TermV0.var nid in
     let app1 := lang.types.TermV0.app var_ one in
     let body := lang.types.TermV0.app app1 two in

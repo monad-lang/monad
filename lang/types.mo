@@ -54,19 +54,32 @@ def mk_param (name: Identifier) (type_: TermV0) (mult: Multiplicity) : Param :=
     let none : Option TermV0 := Option.none in
     Param.mk name type_ mult none
 
+// Canonical MatchCase uses de Bruijn Term. MatchCaseV0 is the legacy V0 variant.
 type MatchCase {
-    mc (name: Identifier) (args: List Identifier) (value: TermV0)
+    mc (name: Identifier) (args: List Identifier) (body: Term)
+}
+
+type MatchCaseV0 {
+    mc_v0 (name: Identifier) (args: List Identifier) (value: TermV0)
 }
 
 type NumSuffix {
     i8, i16, i32, i64, u8, u16, u32, u64, f32, f64,
 }
 
+// Canonical Literal uses de Bruijn Term. LiteralV0 is the legacy V0 variant.
 type Literal {
     str (value: String),
     num (value: I64) (suffix: NumSuffix),
+    if_ (one: Term) (two: Term) (three: Term),
+    match_ (value: Term) (cases: List MatchCase),
+}
+
+type LiteralV0 {
+    str (value: String),
+    num (value: I64) (suffix: NumSuffix),
     if_ (one: TermV0) (two: TermV0) (three: TermV0),
-    match_ (value: TermV0) (cases: List MatchCase),
+    match_ (value: TermV0) (cases: List MatchCaseV0),
 }
 
 type Con {
@@ -83,7 +96,7 @@ type TermV0 {
     var (name: NameRef),
     lam (param: Param) (body: TermV0),
     app (fun: TermV0) (arg: TermV0),
-    lit (value: Literal),
+    lit (value: LiteralV0),
     ntv (native: Native),
     con (c: Con),
     type_ (universe: I64),
@@ -296,6 +309,15 @@ def id_list_similar (a : List Identifier) (b : List Identifier) : Bool :=
         }
     }
 
+def mc_list_similar_v0 (a : List MatchCaseV0) (b : List MatchCaseV0) : Bool :=
+    match a {
+        List.empty => match b { List.empty => true, List.cons _ _ => false },
+        List.cons h1 t1 => match b {
+            List.empty => false,
+            List.cons h2 t2 => Similar.similar h1 h2 && mc_list_similar_v0 t1 t2
+        }
+    }
+
 def mc_list_similar (a : List MatchCase) (b : List MatchCase) : Bool :=
     match a {
         List.cons x xs => match b {
@@ -474,12 +496,22 @@ instance Similar Native {
         }
 }
 
+instance Similar MatchCaseV0 {
+    def similar (a : MatchCaseV0) (b : MatchCaseV0) : Bool :=
+        match a {
+            mc_v0 name1 args1 val1 => match b {
+                mc_v0 name2 args2 val2 =>
+                    Similar.similar name1 name2 && id_list_similar args1 args2 && Similar.similar val1 val2
+            }
+        }
+}
+
 instance Similar MatchCase {
     def similar (a : MatchCase) (b : MatchCase) : Bool :=
         match a {
-            mc name1 args1 val1 => match b {
-                mc name2 args2 val2 =>
-                    Similar.similar name1 name2 && id_list_similar args1 args2 && Similar.similar val1 val2
+            mc name1 args1 body1 => match b {
+                mc name2 args2 body2 =>
+                    Similar.similar name1 name2 && id_list_similar args1 args2 && Similar.similar body1 body2
             }
         }
 }
@@ -533,6 +565,28 @@ instance Similar SourceRange {
             mk start1 end1 path1 => match b {
                 mk start2 end2 path2 =>
                     Similar.similar start1 start2 && Similar.similar end1 end2 && opt_str_similar path1 path2
+            }
+        }
+}
+
+instance Similar LiteralV0 {
+    def similar (a : LiteralV0) (b : LiteralV0) : Bool :=
+        match a {
+            str s1 => match b {
+                str s2 => String.beq s1 s2,
+                num _ _ => false, if_ _ _ _ => false, match_ _ _ => false
+            },
+            num v1 s1 => match b {
+                num v2 s2 => I64.beq v1 v2 && Similar.similar s1 s2,
+                str _ => false, if_ _ _ _ => false, match_ _ _ => false
+            },
+            if_ o1 t1 th1 => match b {
+                if_ o2 t2 th2 => Similar.similar o1 o2 && Similar.similar t1 t2 && Similar.similar th1 th2,
+                str _ => false, num _ _ => false, match_ _ _ => false
+            },
+            match_ v1 cs1 => match b {
+                match_ v2 cs2 => Similar.similar v1 v2 && mc_list_similar_v0 cs1 cs2,
+                str _ => false, num _ _ => false, if_ _ _ _ => false
             }
         }
 }
