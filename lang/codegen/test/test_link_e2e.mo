@@ -13,7 +13,7 @@ open Identifier
 open NameRef
 open NumSuffix
 open ParamV0
-open Def
+open DefV0
 open ModulePath
 
 /// Build a List String from four strings.
@@ -21,10 +21,10 @@ def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
     List.cons a (List.cons b (List.cons c (List.cons d List.empty)))
 
 /// Build a minimal program: def main : I64 := 42
-def build_main42 : List Def :=
+def build_main42 : List DefV0 :=
     let id := Identifier.id "main" in
     let body := TermV0.lit (LiteralV0.num 42 NumSuffix.i64) in
-    let def_ := Def.mk
+    let def_ := DefV0.mk
         (ModulePath.mp (List.cons id List.empty))
         (TermV0.type_ 1)
         body

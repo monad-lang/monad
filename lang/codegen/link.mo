@@ -9,7 +9,7 @@ open LLVMValue
 
 /// Generate LLVM IR text from a list of Defs.
 @[partial]
-def compile_defs_to_ir (defs : List Def) : String :=
+def compile_defs_to_ir (defs : List DefV0) : String :=
     let module_ := compile_decls_ir defs in
     lang.codegen.ir.emit_module module_
 
@@ -26,7 +26,7 @@ def empty_str_list : List String := List.empty
 /// Full pipeline: compile Defs to IR, write to file, run llc,
 /// compile runtime, link, run the binary, return exit code.
 @[partial]
-def compile_and_run (defs : List Def) (output_dir : String) (output_name : String) : IO I64 {
+def compile_and_run (defs : List DefV0) (output_dir : String) (output_name : String) : IO I64 {
     let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
     let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
     let runtime_obj := String.concat output_dir "/monad_runtime.o";
@@ -52,7 +52,7 @@ def test_link_compile_defs_to_ir : Bool :=
     let var_ := lang.types.TermV0.var nid in
     let app1 := lang.types.TermV0.app var_ one in
     let body := lang.types.TermV0.app app1 two in
-    let def_ := lang.types.Def.mk (lang.types.ModulePath.mp (List.cons id_val List.empty)) (lang.types.TermV0.type_ 1) body List.empty List.empty in
+    let def_ := lang.types.DefV0.mk (lang.types.ModulePath.mp (List.cons id_val List.empty)) (lang.types.TermV0.type_ 1) body List.empty List.empty in
     let text := compile_defs_to_ir (List.cons def_ List.empty) in
     check_contains text "add i64"
 

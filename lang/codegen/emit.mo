@@ -732,8 +732,8 @@ def build_llvm_params (params : List ParamV0) : List ParamPair := match params {
 }
 
 @[partial]
-def compile_def_ir (def_ : Def) : DefResult := match def_ {
-    Def.mk name typ term_ constraints attrs =>
+def compile_def_ir (def_ : DefV0) : DefResult := match def_ {
+    DefV0.mk name typ term_ constraints attrs =>
         let fn_name := module_path_to_str name in
         let params := collect_def_params term_ in
         let llvm_params := build_llvm_params params in
@@ -787,14 +787,14 @@ def build_fields_from (count : I64) (idx : I64) : List LLVMValue :=
     if idx == count then empty_vals
     else List.cons (LLVMValue.parm_ idx) (build_fields_from count (idx + 1))
 
-/// Compile a list of Inductive declarations, generating constructor wrapper
-/// functions for each constructor. Matches Rust reference: compiler.rs Inductive arm.
+/// Compile a list of InductiveV0 declarations, generating constructor wrapper
+/// functions for each constructor. Matches Rust reference: compiler.rs InductiveV0 arm.
 @[partial]
-def compile_inductive_decls (ind_decls : List Inductive) : List LLVMFunction :=
+def compile_inductive_decls (ind_decls : List InductiveV0) : List LLVMFunction :=
     compile_inductive_list ind_decls
 
 @[partial]
-def compile_inductive_list (ind_decls : List Inductive) : List LLVMFunction := match ind_decls {
+def compile_inductive_list (ind_decls : List InductiveV0) : List LLVMFunction := match ind_decls {
     List.empty => empty_funcs,
     List.cons ind rest =>
         let ctor_funcs := compile_inductive_constructors (inductive_constructors ind) in
@@ -802,12 +802,12 @@ def compile_inductive_list (ind_decls : List Inductive) : List LLVMFunction := m
 }
 
 @[partial]
-def inductive_constructors (ind : Inductive) : List InductConstructor := match ind {
-    Inductive.mk name params typ constructors attrs => constructors,
+def inductive_constructors (ind : InductiveV0) : List InductConstructorV0 := match ind {
+    InductiveV0.mk name params typ constructors attrs => constructors,
 }
 
 @[partial]
-def compile_inductive_constructors (constructors : List InductConstructor) : List LLVMFunction := match constructors {
+def compile_inductive_constructors (constructors : List InductConstructorV0) : List LLVMFunction := match constructors {
     List.empty => empty_funcs,
     List.cons c rest =>
         let name := module_path_to_str (constructor_name c) in
@@ -817,13 +817,13 @@ def compile_inductive_constructors (constructors : List InductConstructor) : Lis
 }
 
 @[partial]
-def constructor_name (c : InductConstructor) : ModulePath := match c {
-    InductConstructor.mk name params typ => name,
+def constructor_name (c : InductConstructorV0) : ModulePath := match c {
+    InductConstructorV0.mk name params typ => name,
 }
 
 @[partial]
-def constructor_params (c : InductConstructor) : List ParamV0 := match c {
-    InductConstructor.mk name params typ => params,
+def constructor_params (c : InductConstructorV0) : List ParamV0 := match c {
+    InductConstructorV0.mk name params typ => params,
 }
 
 @[partial]
@@ -922,7 +922,7 @@ def cons_func (f : LLVMFunction) (fs : List LLVMFunction) : List LLVMFunction :=
 def empty_globals_list : List LLVMGlobal := List.empty
 
 @[partial]
-def compile_decls_ir (defs : List Def) : LLVMModule :=
+def compile_decls_ir (defs : List DefV0) : LLVMModule :=
     match compile_def_list defs {
         DefResult.dr compiled_funcs compiled_globals =>
             let funcs := ren_main_and_wrap compiled_funcs in
@@ -930,7 +930,7 @@ def compile_decls_ir (defs : List Def) : LLVMModule :=
     }
 
 @[partial]
-def compile_def_list (defs : List Def) : DefResult := match defs {
+def compile_def_list (defs : List DefV0) : DefResult := match defs {
     List.empty => DefResult.dr empty_funcs empty_globals_list,
     List.cons d rest =>
         match compile_def_ir d {
@@ -992,7 +992,7 @@ def test_runtime_decls_not_empty : Bool :=
     }
 
 @[partial]
-def empty_defs : List Def := List.empty
+def empty_defs : List DefV0 := List.empty
 
 @[test]
 def test_compile_decls_ir_runtime : Bool :=
@@ -1008,7 +1008,7 @@ def test_compile_decls_ir_runtime : Bool :=
 def test_compile_decls_ir_has_def : Bool :=
     let id := Identifier.id "x" in
     let param := param_many_v0 id (TermV0.type_ 1) in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "test") List.empty)) (TermV0.type_ 1) (TermV0.lam param (TermV0.var (NameRef.nid id))) List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "test") List.empty)) (TermV0.type_ 1) (TermV0.lam param (TermV0.var (NameRef.nid id))) List.empty List.empty in
     match (compile_decls_ir (List.cons def_ empty_defs)) {
         LLVMModule.mk triple globals funcs decls =>
             match funcs {
@@ -1053,7 +1053,7 @@ def test_arithmetic_full_chain : Bool :=
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
-    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "add i64"
@@ -1095,7 +1095,7 @@ def test_sub_full_chain : Bool :=
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
-    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "sub i64"
@@ -1109,7 +1109,7 @@ def test_mul_full_chain : Bool :=
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
-    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "mul i64"
@@ -1123,7 +1123,7 @@ def test_div_full_chain : Bool :=
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
-    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "sdiv i64"
@@ -1137,7 +1137,7 @@ def test_eq_full_chain : Bool :=
     let var_ := TermV0.var nid in
     let app1 := TermV0.app var_ one in
     let body := TermV0.app app1 two in
-    let def_ := Def.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "icmp eq"
@@ -1168,7 +1168,7 @@ def test_param_binding : Bool :=
     let body := TermV0.app app1 one in
     let param := param_many_v0 x_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param body in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "add1") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "add1") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "add i64"
@@ -1186,7 +1186,7 @@ def test_multi_param : Bool :=
     let param_a := param_many_v0 a_id (TermV0.type_ 1) in
     let param_b := param_many_v0 b_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param_a (TermV0.lam param_b body) in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "mul2") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "mul2") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     String.beq (String.slice text 0 5) "; Mod"
@@ -1207,7 +1207,7 @@ def test_nested_native : Bool :=
     let body := TermV0.app add_app1 one in
     let param := param_many_v0 x_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param body in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "nested") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "nested") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "mul i64"
@@ -1221,7 +1221,7 @@ def test_general_call_emitted : Bool :=
     let body := TermV0.app f_var x_var in
     let param := param_many_v0 x_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param body in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "caller") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "caller") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "call i64"
@@ -1232,7 +1232,7 @@ def test_lambda_compiled : Bool :=
     let x_var := TermV0.var (NameRef.nid x_id) in
     let param := param_many_v0 x_id (TermV0.type_ 1) in
     let term_ := TermV0.lam param x_var in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "lamtest") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "lamtest") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "ret i64 %p0"
@@ -1240,7 +1240,7 @@ def test_lambda_compiled : Bool :=
 @[test]
 def test_string_literal_compiled : Bool :=
     let str_term := TermV0.lit (LiteralV0.str "hello") in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "strtest") List.empty)) (TermV0.type_ 1) str_term List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "strtest") List.empty)) (TermV0.type_ 1) str_term List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "hello"
@@ -1251,7 +1251,7 @@ def test_constructor_compiled : Bool :=
     let args := List.cons (Option.some one) (List.cons (Option.some one) List.empty) in
     let con := Con.mk (Identifier.id "Some") (ModulePath.mp (List.cons (Identifier.id "Option") List.empty)) 2 args in
     let term_ := TermV0.con con in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "constest") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "constest") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     if check_contains text "alloc_constructor"
@@ -1266,7 +1266,7 @@ def test_if_then_else_compiled : Bool :=
     let eq_one := TermV0.app eq_var one in
     let cond := TermV0.app eq_one two in
     let if_term := TermV0.lit (LiteralV0.if_ cond one two) in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "iftest") List.empty)) (TermV0.type_ 1) if_term List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "iftest") List.empty)) (TermV0.type_ 1) if_term List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     if check_contains text "br i1"
@@ -1282,7 +1282,7 @@ def test_native_call_compiled : Bool :=
     let args := List.cons some_one (List.cons some_two List.empty) in
     let native := Native.mk (Identifier.id "alloc") 2 args in
     let term_ := TermV0.ntv native in
-    let def_ := Def.mk (ModulePath.mp (List.cons (Identifier.id "callnative") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons (Identifier.id "callnative") List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "call i64 @monad_alloc"
@@ -1299,12 +1299,12 @@ def test_compile_constructor_decl : Bool :=
 @[test]
 def test_compile_inductive_decls : Bool :=
     let some_name := ModulePath.mp (List.cons (Identifier.id "Some") List.empty) in
-    let some_ctor := InductConstructor.mk some_name empty_params_list (TermV0.type_ 1) in
+    let some_ctor := InductConstructorV0.mk some_name empty_params_list (TermV0.type_ 1) in
     let none_name := ModulePath.mp (List.cons (Identifier.id "None") List.empty) in
-    let none_ctor := InductConstructor.mk none_name empty_params_list (TermV0.type_ 1) in
+    let none_ctor := InductConstructorV0.mk none_name empty_params_list (TermV0.type_ 1) in
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
     let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
-    let ind := Inductive.mk ind_name empty_params_list (TermV0.type_ 1) ctors empty_attrs in
+    let ind := InductiveV0.mk ind_name empty_params_list (TermV0.type_ 1) ctors empty_attrs in
     let funcs := compile_inductive_decls (List.cons ind List.empty) in
     let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls in
     let text := lang.codegen.ir.emit_module mod_ in

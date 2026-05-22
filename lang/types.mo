@@ -137,7 +137,19 @@ type Term {
     hole,
 }
 
+// Canonical TypeError uses de Bruijn Term. TypeErrorV0 is the legacy V0 variant.
 type TypeError {
+    mismatch (expected: Term) (actual: Term),
+    unknown_var (name: NameRef),
+    unknown_type (name: NameRef),
+    unknown_constructor (name: NameRef),
+    not_a_function (term: Term),
+    not_a_type (term: Term),
+    infinite_type (term: Term),
+    custom (msg: String),
+}
+
+type TypeErrorV0 {
     mismatch (expected: TermV0) (actual: TermV0),
     unknown_var (name: NameRef),
     unknown_type (name: NameRef),
@@ -148,7 +160,15 @@ type TypeError {
     custom (msg: String),
 }
 
+// Canonical EvalError uses de Bruijn Term. EvalErrorV0 is the legacy V0 variant.
 type EvalError {
+    undefined_var (name: NameRef),
+    not_a_function (term: Term),
+    match_failure (term: Term),
+    custom (msg: String),
+}
+
+type EvalErrorV0 {
     undefined_var (name: NameRef),
     not_a_function (term: TermV0),
     match_failure (term: TermV0),
@@ -159,34 +179,70 @@ type TypeConstraint {
     mk (cls: ModulePath) (vars: List Identifier)
 }
 
+// Canonical Def uses de Bruijn Term. DefV0 is the legacy V0 variant.
 type Def {
+    mk (name: ModulePath) (typ: Term) (term: Term) (constraints: List TypeConstraint) (attrs: List String)
+}
+
+type DefV0 {
     mk (name: ModulePath) (typ: TermV0) (term: TermV0) (constraints: List TypeConstraint) (attrs: List String)
 }
 
+// Canonical InductConstructor uses de Bruijn Term. InductConstructorV0 is the legacy V0 variant.
 type InductConstructor {
+    mk (name: ModulePath) (params: List Param) (typ: Term)
+}
+
+type InductConstructorV0 {
     mk (name: ModulePath) (params: List ParamV0) (typ: TermV0)
 }
 
+// Canonical Inductive uses de Bruijn Term. InductiveV0 is the legacy V0 variant.
 type Inductive {
-    mk (name: ModulePath) (params: List ParamV0) (typ: TermV0) (constructors: List InductConstructor) (attrs: List String)
+    mk (name: ModulePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List String)
 }
 
+type InductiveV0 {
+    mk (name: ModulePath) (params: List ParamV0) (typ: TermV0) (constructors: List InductConstructorV0) (attrs: List String)
+}
+
+// Canonical ClassDef uses de Bruijn Term. ClassDefV0 is the legacy V0 variant.
 type ClassDef {
+    mk (name: Identifier) (typ: Term) (default: Option Term)
+}
+
+type ClassDefV0 {
     mk (name: Identifier) (typ: TermV0) (default: Option TermV0)
 }
 
+// Canonical Class uses de Bruijn Term. ClassV0 is the legacy V0 variant.
 type Class {
-    mk (name: Identifier) (params: List ParamV0) (constraints: List TypeConstraint) (methods: List ClassDef)
+    mk (name: Identifier) (params: List Param) (constraints: List TypeConstraint) (methods: List ClassDef)
 }
 
+type ClassV0 {
+    mk (name: Identifier) (params: List ParamV0) (constraints: List TypeConstraint) (methods: List ClassDefV0)
+}
+
+// Canonical StructField uses de Bruijn Term. StructFieldV0 is the legacy V0 variant.
 type StructField {
+    mk (name: Identifier) (typ: Term) (default: Option Term)
+}
+
+type StructFieldV0 {
     mk (name: Identifier) (typ: TermV0) (default: Option TermV0)
 }
 
+// Canonical Struct uses de Bruijn Term. StructV0 is the legacy V0 variant.
 type Struct {
     mk (name: Identifier) (fields: List StructField)
 }
 
+type StructV0 {
+    mk (name: Identifier) (fields: List StructFieldV0)
+}
+
+// Canonical Decl uses de Bruijn Term. DeclV0 is the legacy V0 variant.
 type Decl {
     def_d (Def),
     inductive_d (Inductive),
@@ -198,7 +254,23 @@ type Decl {
     open_d (path: ModulePath),
 }
 
+type DeclV0 {
+    def_d (DefV0),
+    inductive_d (InductiveV0),
+    struct_d (StructV0),
+    class_d (ClassV0),
+    instance_d (InstanceV0),
+    infix_d (op: Operator) (path: ModulePath),
+    use_d (path: ModulePath),
+    open_d (path: ModulePath),
+}
+
+// Canonical Instance uses de Bruijn Term. InstanceV0 is the legacy V0 variant.
 type Instance {
+    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term)
+}
+
+type InstanceV0 {
     mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List TermV0)
 }
 
