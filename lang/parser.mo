@@ -4137,6 +4137,34 @@ def t2_variable_got (r: ParseResult String) (ctx: List Identifier) : ParseResult
         fail e => fail e
     }
 
+// ─── Canonical literal parser (Phase 10) ───────────────────────────────
+
+@[partial]
+def t2_string_parse (input: String) : ParseResult Term :=
+    match tag "\"" input {
+        success rem _ =>
+            match take_while is_not_quote rem {
+                success rem2 content =>
+                    match tag "\"" rem2 {
+                        success rem3 _ => success rem3 (Term.lit (Literal.str content)),
+                        fail e => fail e
+                    },
+                fail e => fail e
+            },
+        fail e => fail e
+    }
+
+def t2_num_to_term (n: I64) : Term :=
+    Term.lit (Literal.num n NumSuffix.i64)
+
+@[partial]
+def t2_number_term (input: String) : ParseResult Term :=
+    map_parse t2_num_to_term number input
+
+@[partial]
+def t2_literal_parser (input: String) : ParseResult Term :=
+    alt_fold [t2_string_parse, t2_number_term] input
+
 // ─── Term atom ──────────────────────────────────────────────────────────
 
 @[partial]
@@ -4147,38 +4175,14 @@ def t2_atom_term (ctx: List Identifier) (input: String) : ParseResult Term :=
 def t2_atom_try_var (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
         success rem out => success rem out,
-        fail _ => t2_atom_try_lit (literal_term input) ctx input
+        fail _ => t2_atom_try_lit ctx input
     }
 
 @[partial]
-def t2_atom_try_lit (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
-    match r {
-        success rem out => t2_atom_lift_lit out rem,
+def t2_atom_try_lit (ctx: List Identifier) (input: String) : ParseResult Term :=
+    match t2_literal_parser input {
+        success rem out => success rem out,
         fail _ => t2_atom_try_match ctx input
-    }
-
-@[partial]
-def t2_atom_lift_lit (t: TermV0) (rem: String) : ParseResult Term :=
-    match t {
-        TermV0.lit val => match val {
-            LiteralV0.str s => success rem (Term.lit (Literal.str s)),
-            LiteralV0.num n suffix => success rem (Term.lit (Literal.num n suffix)),
-            LiteralV0.if_ a b c => success rem (Term.var t2_sentinel DebugName.unnamed),
-            LiteralV0.match_ a b => success rem (Term.var t2_sentinel DebugName.unnamed)
-        },
-        TermV0.var name => match name {
-            NameRef.nid id => success rem (Term.var t2_sentinel (DebugName.named id)),
-            NameRef.nmp mp => success rem (Term.var t2_sentinel DebugName.unnamed),
-            NameRef.nop op => success rem (Term.var t2_sentinel DebugName.unnamed)
-        },
-        TermV0.app f a => success rem (Term.var t2_sentinel DebugName.unnamed),
-        TermV0.lam p b => success rem (Term.var t2_sentinel DebugName.unnamed),
-        TermV0.pi a r => success rem (Term.var t2_sentinel DebugName.unnamed),
-        TermV0.forall n t b => success rem (Term.var t2_sentinel DebugName.unnamed),
-        TermV0.con c => success rem (Term.var t2_sentinel DebugName.unnamed),
-        TermV0.ntv n => success rem (Term.var t2_sentinel DebugName.unnamed),
-        TermV0.type_ u => success rem (Term.type_ u),
-        TermV0.hole => success rem Term.hole
     }
 
 // ─── Canonical match case parser (Phase 9) ─────────────────────────────
