@@ -5,7 +5,7 @@ use crate::{
   eval::EvalOptions,
   term::{
     Constructor, F64Wrap, Identifier, Literal, Native, NumSuffix, Term, app, apps, b_false, b_true,
-    id, io_term, module::Scope, num_suffix, pvar, to_list_term, unit,
+    id, io_term, module::Scope, num_suffix, pvar, str, to_list_term, unit,
   },
 };
 
@@ -142,6 +142,13 @@ pub fn write_file(terms: Vec<Term>) -> Result<Term, NativeError> {
   std::fs::write(&path, &content)
     .map_err(|e| NativeError::Custom(format!("write_file failed: {e}")))?;
   Ok(io_term(unit()))
+}
+
+pub fn read_file(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let path = extract_string_at(&terms, 0)?;
+  std::fs::read_to_string(&path)
+    .map(|content| io_term(str(&content)))
+    .map_err(|e| NativeError::Custom(format!("read_file failed: {e}")))
 }
 
 pub fn exec_cmd(terms: Vec<Term>) -> Result<Term, NativeError> {
@@ -730,6 +737,7 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("eq_rec"), s(eq_rec)),
     (id("exec_cmd"), s(exec_cmd)),
     (id("write_file"), s(write_file)),
+    (id("read_file"), s(read_file)),
   ];
   v.into_iter().collect()
 }
