@@ -240,7 +240,7 @@ def show_ext (op : String) (v : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMTyp
 @[partial]
 def show_phi (pairs : List PhiPair) : String :=
     let inner := join_phi_pairs pairs in
-    String.concat "phi i64 [" (String.concat inner "]")
+    String.concat "phi i64 " inner
 
 @[partial]
 def join_phi_pairs (pairs : List PhiPair) : String := match pairs {
@@ -285,8 +285,8 @@ def show_instruction (instr : LLVMInstruction) : String := match instr {
             (show_llvm_value value))),
     branch cond then_label else_label =>
         String.concat "  br " (String.concat (show_llvm_value_typed cond)
-            (String.concat " %" (String.concat then_label
-            (String.concat ", %" else_label)))),
+            (String.concat ", label %" (String.concat then_label
+            (String.concat ", label %" else_label)))),
     jump label =>
         String.concat "  br label %" label,
     ret val => show_ret_instr val,

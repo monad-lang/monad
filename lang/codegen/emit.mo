@@ -109,6 +109,16 @@ def compile_native_val (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) : LLV
     }
 
 @[partial]
+def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : LLVMValue :=
+    match op {
+        NativeOp.op_add => LLVMValue.int_ (n1 + n2),
+        NativeOp.op_sub => LLVMValue.int_ (n1 - n2),
+        NativeOp.op_mul => LLVMValue.int_ (n1 * n2),
+        NativeOp.op_sdiv => LLVMValue.int_ (n1 / n2),
+        NativeOp.op_eq => LLVMValue.bool_ (n1 == n2),
+    }
+
+@[partial]
 def extract_lit_val (term_ : TermV0) : Option I64 := match term_ {
     TermV0.lit val => extract_lit_val_inner_v0 val,
     TermV0.forall a b c => Option.none,
@@ -529,7 +539,7 @@ def compile_native_app (c : CodegenCtx) (op : NativeOp) (arg2 : TermV0) (arg : T
                         Option.some n1 =>
                             match extract_lit_from_val val1 {
                                 Option.some n2 =>
-                                    CompileResult.ok ctx1 combined (compile_native_val op (LLVMValue.int_ n1) (LLVMValue.int_ n2)) empty_blocks empty_funcs empty_globals_list,
+                                    CompileResult.ok ctx1 combined (fold_native_const op n1 n2) empty_blocks empty_funcs empty_globals_list,
                                 Option.none =>
                                     emit_arith_instr ctx1 op val2 val1 combined,
                             },
@@ -1047,13 +1057,16 @@ def test_literal_body_compiles : Bool :=
 @[test]
 def test_arithmetic_full_chain : Bool :=
     let id := Identifier.id "test" in
+    let x_id := Identifier.id "x" in
     let nid := NameRef.nid (Identifier.id "I64_add") in
-    let one := TermV0.lit (LiteralV0.num 1 NumSuffix.i64) in
     let two := TermV0.lit (LiteralV0.num 2 NumSuffix.i64) in
+    let x_var := TermV0.var (NameRef.nid x_id) in
     let var_ := TermV0.var nid in
-    let app1 := TermV0.app var_ one in
+    let app1 := TermV0.app var_ x_var in
     let body := TermV0.app app1 two in
-    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
+    let param := param_many_v0 x_id (TermV0.type_ 1) in
+    let term_ := TermV0.lam param body in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "add i64"
@@ -1089,13 +1102,16 @@ def test_eq_inlined : Bool :=
 @[test]
 def test_sub_full_chain : Bool :=
     let id := Identifier.id "test" in
+    let x_id := Identifier.id "x" in
     let nid := NameRef.nid (Identifier.id "I64_sub") in
-    let one := TermV0.lit (LiteralV0.num 5 NumSuffix.i64) in
-    let two := TermV0.lit (LiteralV0.num 3 NumSuffix.i64) in
+    let three := TermV0.lit (LiteralV0.num 3 NumSuffix.i64) in
+    let x_var := TermV0.var (NameRef.nid x_id) in
     let var_ := TermV0.var nid in
-    let app1 := TermV0.app var_ one in
-    let body := TermV0.app app1 two in
-    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
+    let app1 := TermV0.app var_ x_var in
+    let body := TermV0.app app1 three in
+    let param := param_many_v0 x_id (TermV0.type_ 1) in
+    let term_ := TermV0.lam param body in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "sub i64"
@@ -1103,13 +1119,16 @@ def test_sub_full_chain : Bool :=
 @[test]
 def test_mul_full_chain : Bool :=
     let id := Identifier.id "test" in
+    let x_id := Identifier.id "x" in
     let nid := NameRef.nid (Identifier.id "I64_mul") in
-    let one := TermV0.lit (LiteralV0.num 3 NumSuffix.i64) in
-    let two := TermV0.lit (LiteralV0.num 4 NumSuffix.i64) in
+    let four := TermV0.lit (LiteralV0.num 4 NumSuffix.i64) in
+    let x_var := TermV0.var (NameRef.nid x_id) in
     let var_ := TermV0.var nid in
-    let app1 := TermV0.app var_ one in
-    let body := TermV0.app app1 two in
-    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
+    let app1 := TermV0.app var_ x_var in
+    let body := TermV0.app app1 four in
+    let param := param_many_v0 x_id (TermV0.type_ 1) in
+    let term_ := TermV0.lam param body in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "mul i64"
@@ -1117,13 +1136,16 @@ def test_mul_full_chain : Bool :=
 @[test]
 def test_div_full_chain : Bool :=
     let id := Identifier.id "test" in
+    let x_id := Identifier.id "x" in
     let nid := NameRef.nid (Identifier.id "I64_div") in
-    let one := TermV0.lit (LiteralV0.num 8 NumSuffix.i64) in
     let two := TermV0.lit (LiteralV0.num 2 NumSuffix.i64) in
+    let x_var := TermV0.var (NameRef.nid x_id) in
     let var_ := TermV0.var nid in
-    let app1 := TermV0.app var_ one in
+    let app1 := TermV0.app var_ x_var in
     let body := TermV0.app app1 two in
-    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
+    let param := param_many_v0 x_id (TermV0.type_ 1) in
+    let term_ := TermV0.lam param body in
+    let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) term_ List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "sdiv i64"
@@ -1140,7 +1162,7 @@ def test_eq_full_chain : Bool :=
     let def_ := DefV0.mk (ModulePath.mp (List.cons id List.empty)) (TermV0.type_ 1) body List.empty List.empty in
     let mod_ := compile_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
-    check_contains text "icmp eq"
+    check_contains text "true"
 
 @[partial]
 def empty_ids : List Identifier := List.empty

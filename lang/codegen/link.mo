@@ -46,13 +46,16 @@ def compile_and_run (defs : List DefV0) (output_dir : String) (output_name : Str
 @[test]
 def test_link_compile_defs_to_ir : Bool :=
     let id_val := lang.types.Identifier.id "test" in
+    let x_id := lang.types.Identifier.id "x" in
     let nid := lang.types.NameRef.nid (lang.types.Identifier.id "I64_add") in
-    let one := lang.types.TermV0.lit (lang.types.LiteralV0.num 1 lang.types.NumSuffix.i64) in
     let two := lang.types.TermV0.lit (lang.types.LiteralV0.num 2 lang.types.NumSuffix.i64) in
+    let x_var := lang.types.TermV0.var (lang.types.NameRef.nid x_id) in
     let var_ := lang.types.TermV0.var nid in
-    let app1 := lang.types.TermV0.app var_ one in
+    let app1 := lang.types.TermV0.app var_ x_var in
     let body := lang.types.TermV0.app app1 two in
-    let def_ := lang.types.DefV0.mk (lang.types.ModulePath.mp (List.cons id_val List.empty)) (lang.types.TermV0.type_ 1) body List.empty List.empty in
+    let param := lang.types.param_many_v0 x_id (lang.types.TermV0.type_ 1) in
+    let term_ := lang.types.TermV0.lam param body in
+    let def_ := lang.types.DefV0.mk (lang.types.ModulePath.mp (List.cons id_val List.empty)) (lang.types.TermV0.type_ 1) term_ List.empty List.empty in
     let text := compile_defs_to_ir (List.cons def_ List.empty) in
     check_contains text "add i64"
 
