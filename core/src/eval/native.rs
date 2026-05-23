@@ -146,9 +146,9 @@ pub fn write_file(terms: Vec<Term>) -> Result<Term, NativeError> {
 
 pub fn read_file(terms: Vec<Term>) -> Result<Term, NativeError> {
   let path = extract_string_at(&terms, 0)?;
-  std::fs::read_to_string(&path)
-    .map(|content| io_term(str(&content)))
-    .map_err(|e| NativeError::Custom(format!("read_file failed: {e}")))
+  let content = std::fs::read_to_string(&path)
+    .map_err(|e| NativeError::Custom(format!("read_file failed: {e}")))?;
+  Ok(io_term(str(&content)))
 }
 
 pub fn exec_cmd(terms: Vec<Term>) -> Result<Term, NativeError> {
