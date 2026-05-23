@@ -2197,13 +2197,21 @@ fn type_check_with_env(
         let mut arg_type = *arg_type.clone();
         arg_type = add_forall_to_type(arg_type, &fun_forall_vars);
         // Second check: verify arg against expected type (DON'T count usage again)
-        let (arg, _) = if arg_type.is_known()
-          || matches!(
-            arg,
+        // Unwrap Ctx wrappers before checking for struct literals
+        // (type_check_with_env from step (a) may wrap the literal in a Ctx)
+        let is_struct_lit = {
+          let mut t = &arg;
+          while let Term::Ctx { term, .. } = t {
+            t = term;
+          }
+          matches!(
+            t,
             Term::Lit {
               value: Literal::StructLit { .. }
             }
-          ) {
+          )
+        };
+        let (arg, _) = if arg_type.is_known() || is_struct_lit {
           type_check_with_env(arg, arg_type, &scope, usage, false)?.to_tuple()
         } else {
           (arg, arg_type)
