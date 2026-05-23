@@ -2159,24 +2159,24 @@ fn type_check_with_env(
       }
       let arg = *arg;
       // First check: infer arg type (counts usage only when tracking is active)
-      let (arg, arg_type) = match type_check_with_env(arg.clone(), Hole, &scope, usage, track_usage)
-      {
-        Ok(tt) => tt.to_tuple(),
-        Err(err) => {
-          // Propagate linear type errors; suppress other (type inference) errors
-          if matches!(
-            err,
-            TypeError::LinearUsedMultipleTimes(..)
-              | TypeError::LinearUnused(..)
-              | TypeError::AffineUsedMultipleTimes(..)
-              | TypeError::ErasedUsedAtRuntime(..)
-          ) {
-            return Err(err);
+      let (arg, inferred_type) =
+        match type_check_with_env(arg.clone(), Hole, &scope, usage, track_usage) {
+          Ok(tt) => tt.to_tuple(),
+          Err(err) => {
+            // Propagate linear type errors; suppress other (type inference) errors
+            if matches!(
+              err,
+              TypeError::LinearUsedMultipleTimes(..)
+                | TypeError::LinearUnused(..)
+                | TypeError::AffineUsedMultipleTimes(..)
+                | TypeError::ErasedUsedAtRuntime(..)
+            ) {
+              return Err(err);
+            }
+            (arg, Hole)
           }
-          (arg, Hole)
-        }
-      };
-      let fun_type = pi_of_forall_types(arg_type.clone(), expected_type.clone());
+        };
+      let fun_type = pi_of_forall_types(inferred_type.clone(), expected_type.clone());
       // Check function against expected type with the inferred arg type
       let (fun, fun_type) =
         type_check_with_env(*fun, fun_type, &scope, usage, track_usage)?.to_tuple();
@@ -2211,8 +2211,14 @@ fn type_check_with_env(
             }
           )
         };
-        let (arg, _) = if arg_type.is_known() || is_struct_lit {
-          type_check_with_env(arg, arg_type, &scope, usage, false)?.to_tuple()
+        // Optimization: skip second full term walk when step (a) already
+        // inferred the same type the Pi expects.
+        let (arg, _) = if is_struct_lit || arg_type.is_known() {
+          if arg_type.is_known() && inferred_type == arg_type {
+            (arg, arg_type)
+          } else {
+            type_check_with_env(arg, arg_type, &scope, usage, false)?.to_tuple()
+          }
         } else {
           (arg, arg_type)
         };
