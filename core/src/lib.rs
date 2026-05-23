@@ -62,6 +62,7 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
     println!("No previous history.");
   }
   let mut loaded_modules = default_modules().map_err(|e| format!("{e}"))?;
+  loaded_modules.config.benchmark = options.benchmark;
   let module_path = ModulePath::top("'repl");
   let module = module(
     module_path.clone(),
@@ -182,6 +183,7 @@ pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<()
   let path: ModulePath = input.clone().into();
   let source = fs::read_to_string(&input).map_err(|e| format!("{e}"))?;
   let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
+  loaded.config.benchmark = options.benchmark;
   load_module_from_text(&source, path.clone(), &mut loaded).map_err(|e| format!("{e}"))?;
   let module = loaded
     .get_module(&path)
@@ -662,6 +664,7 @@ pub fn run_tests(
 
   let mut master_loaded = default_modules().map_err(|e| format!("{e}"))?;
   master_loaded.set_test_mode(true);
+  master_loaded.config.benchmark = options.benchmark;
 
   // Ensure std/test is loaded (for Test.assert)
   let test_path: ModulePath = ModulePath::new(vec![id("std"), id("test")]);
@@ -687,8 +690,8 @@ pub fn run_tests(
 
   // Single file or single-threaded: run sequentially
   if num_threads <= 1 || files.len() <= 1 {
-    return run_tests_sequential(&files, &master_loaded, &options, test_timeout);
+    run_tests_sequential(&files, &master_loaded, &options, test_timeout)
+  } else {
+    run_tests_parallel(&files, &master_loaded, &options, num_threads, test_timeout)
   }
-
-  run_tests_parallel(&files, &master_loaded, &options, num_threads, test_timeout)
 }

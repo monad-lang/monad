@@ -485,6 +485,7 @@ fn eval_test(main_term: Term, scope: &Scope) -> Result<Term, String> {
     scope,
     &EvalOptions {
       debug: true,
+      benchmark: false,
       use_colors: false,
       max_recursion_depth: None,
     },
@@ -2520,6 +2521,7 @@ fn eval_with_depth(term: Term, scope: &Scope, max_depth: Option<u64>) -> Result<
     scope,
     &EvalOptions {
       debug: false,
+      benchmark: false,
       use_colors: false,
       max_recursion_depth: max_depth,
     },

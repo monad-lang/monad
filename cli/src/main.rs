@@ -14,6 +14,8 @@ enum Commands {
   Repl {
     #[arg(short, long, default_value_t = false)]
     debug: bool,
+    #[arg(long, default_value_t = false)]
+    benchmark: bool,
     #[arg(long, default_value_t = false, overrides_with = "no_color")]
     color: bool,
     #[arg(long = "no-color", default_value_t = false)]
@@ -27,6 +29,8 @@ enum Commands {
     input: PathBuf,
     #[arg(short, long, default_value_t = false)]
     debug: bool,
+    #[arg(long, default_value_t = false)]
+    benchmark: bool,
     #[arg(value_name = "ARGS", trailing_var_arg = true)]
     args: Vec<String>,
     #[arg(long, default_value_t = false, overrides_with = "no_color")]
@@ -42,6 +46,8 @@ enum Commands {
     inputs: Vec<PathBuf>,
     #[arg(short, long, default_value_t = false)]
     debug: bool,
+    #[arg(long, default_value_t = false)]
+    benchmark: bool,
     #[arg(long, default_value_t = false, overrides_with = "no_color")]
     color: bool,
     #[arg(long = "no-color", default_value_t = false)]
@@ -91,6 +97,7 @@ fn main() -> Result<(), String> {
     #[cfg(feature = "repl")]
     Commands::Repl {
       debug,
+      benchmark,
       color,
       no_color,
       max_depth,
@@ -98,6 +105,7 @@ fn main() -> Result<(), String> {
       let use_colors = color && !no_color;
       repl(EvalOptions {
         debug,
+        benchmark,
         use_colors,
         max_recursion_depth: max_depth,
       })
@@ -110,6 +118,7 @@ fn main() -> Result<(), String> {
     Commands::Run {
       input,
       debug,
+      benchmark,
       args,
       color,
       no_color,
@@ -121,6 +130,7 @@ fn main() -> Result<(), String> {
         args,
         EvalOptions {
           debug,
+          benchmark,
           use_colors,
           max_recursion_depth: max_depth,
         },
@@ -136,6 +146,7 @@ fn main() -> Result<(), String> {
     Commands::Test {
       inputs,
       debug,
+      benchmark,
       color,
       no_color,
       max_depth,
@@ -157,6 +168,7 @@ fn main() -> Result<(), String> {
         inputs,
         EvalOptions {
           debug,
+          benchmark,
           use_colors,
           max_recursion_depth: max_depth,
         },

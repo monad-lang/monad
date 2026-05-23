@@ -19,6 +19,7 @@ use crate::{
 };
 use std::collections::HashSet;
 use std::fs::read_to_string;
+use std::time::Instant;
 use std::{fmt::Display, hash::Hash};
 
 fn default_source_range() -> &'static SourceRange {
@@ -154,11 +155,15 @@ pub fn local_var_owned<'a>(name: &'a Identifier, typ: Term) -> LocalVar<'a> {
 #[derive(Debug, Clone)]
 pub struct LoadedModulesConfig {
   pub test_mode: bool,
+  pub benchmark: bool,
 }
 
 impl Default for LoadedModulesConfig {
   fn default() -> Self {
-    Self { test_mode: false }
+    Self {
+      test_mode: false,
+      benchmark: false,
+    }
   }
 }
 
@@ -1721,10 +1726,22 @@ fn load_module_files_impl(
   if let Some(_) = loaded.get_module(path) {
     return Ok(loaded);
   }
+  let parse_start = Instant::now();
   let decls = load_decls(path)?;
+  let parse_dur = parse_start.elapsed();
   let mut loaded = load_decl_uses_modules(&decls, loaded, in_progress)?;
   let decls = filter_cfg_test_decls(decls, loaded.config.test_mode);
+  let tc_start = Instant::now();
   let decls = type_check_module_decls(path, decls, &loaded)?;
+  let tc_dur = tc_start.elapsed();
+  if loaded.config.benchmark {
+    eprintln!(
+      "  [{}] parse={} typeck={}",
+      path,
+      format_duration(parse_dur),
+      format_duration(tc_dur),
+    );
+  }
   let mo = module(
     path.clone(),
     ParsedModule {
@@ -1777,16 +1794,28 @@ pub fn load_module_from_text(
   loaded: &mut LoadedModules,
 ) -> Result<(), LoadingError> {
   let file_path = path.to_file_path();
+  let parse_start = Instant::now();
   let init_decls = load_decls_from_text_with_path(text, Some(&file_path))
     .map_err(|e| format!("parse error for {}: {e}", path))?;
+  let parse_dur = parse_start.elapsed();
   let mut in_progress = crate::empty_set();
   *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
   let init_decls = filter_cfg_test_decls(init_decls, loaded.config.test_mode);
+  let tc_start = Instant::now();
   let init_decls = type_check_module_decls(&path, init_decls, loaded).map_err(|e| {
     let file_path = path.to_file_path();
     let rendered = render_type_error_with_source(text, &e, false, Some(&file_path));
     LoadingError::Generic(rendered)
   })?;
+  let tc_dur = tc_start.elapsed();
+  if loaded.config.benchmark {
+    eprintln!(
+      "  [{}] parse={} typeck={}",
+      path,
+      format_duration(parse_dur),
+      format_duration(tc_dur),
+    );
+  }
   loaded.add_module(module(
     path,
     ParsedModule {
@@ -1872,6 +1901,19 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
   }
 
   Ok(loaded)
+}
+
+pub(crate) fn format_duration(d: std::time::Duration) -> String {
+  let nanos = d.as_nanos();
+  if nanos < 1_000 {
+    format!("{nanos}ns")
+  } else if nanos < 1_000_000 {
+    format!("{:.0}µs", d.as_micros())
+  } else if nanos < 1_000_000_000 {
+    format!("{:.2}ms", d.as_secs_f64() * 1000.0)
+  } else {
+    format!("{:.2}s", d.as_secs_f64())
+  }
 }
 
 pub fn default_modules() -> Result<LoadedModules, LoadingError> {

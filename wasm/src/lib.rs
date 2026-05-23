@@ -47,6 +47,7 @@ pub fn run_file(path: String, args: JsValue) -> WasmResult {
   let args: Vec<String> = serde_wasm_bindgen::from_value(args).unwrap_or_default();
   let options = EvalOptions {
     debug: false,
+    benchmark: false,
     use_colors: false,
     max_recursion_depth: None,
   };
@@ -161,6 +162,7 @@ impl WasmRepl {
   pub fn eval(&mut self, source: String) -> WasmResult {
     let options = EvalOptions {
       debug: false,
+      benchmark: false,
       use_colors: false,
       max_recursion_depth: None,
     };
@@ -331,6 +333,7 @@ mod test {
       &global.scope(),
       &EvalOptions {
         debug: false,
+        benchmark: false,
         use_colors: false,
         max_recursion_depth: None,
       },

@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::time::Instant;
 
 use crate::{
   Map, Set, empty_set,
@@ -3071,6 +3072,7 @@ pub fn type_check_module_decls(
   decls: Vec<SourceContext<Decl>>,
   loaded: &LoadedModules,
 ) -> Result<Vec<SourceContext<Decl>>, TypeError> {
+  let benchmark = loaded.config.benchmark;
   let decls: Vec<SourceContext<Decl>> = if loaded.config.test_mode {
     decls
   } else {
@@ -3083,11 +3085,29 @@ pub fn type_check_module_decls(
       })
       .collect()
   };
+  let elab_start = Instant::now();
   let decls = elaborate_decls(decls, loaded);
+  let elab_dur = elab_start.elapsed();
+  let macro_start = Instant::now();
   let decls = macro_expand::expand_macros(decls, loaded).map_err(TypeError::MacroExpansion)?;
+  let macro_dur = macro_start.elapsed();
+  let scope_start = Instant::now();
   let global = loaded.scope_of_decls(path, &decls);
+  let scope_dur = scope_start.elapsed();
 
+  let tc_start = Instant::now();
   let (oks, errs) = type_check_decls(decls.clone(), &global.scope());
+  let tc_dur = tc_start.elapsed();
+  if benchmark {
+    eprintln!(
+      "  [{}] elab={} macro={} scope={} tc={}",
+      path,
+      crate::term::module::format_duration(elab_dur),
+      crate::term::module::format_duration(macro_dur),
+      crate::term::module::format_duration(scope_dur),
+      crate::term::module::format_duration(tc_dur),
+    );
+  }
   if !errs.is_empty() {
     Err(TypeError::Many(errs))
   } else {

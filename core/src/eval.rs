@@ -204,6 +204,7 @@ impl From<&Error> for crate::diag::Diagnostic {
 #[derive(Clone, PartialEq, Default)]
 pub struct EvalOptions {
   pub debug: bool,
+  pub benchmark: bool,
   pub use_colors: bool,
   pub max_recursion_depth: Option<u64>,
 }

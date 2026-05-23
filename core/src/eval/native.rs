@@ -560,6 +560,7 @@ pub fn string_from_chars(terms: Vec<Term>) -> Result<Term, NativeError> {
 }
 
 pub fn bench_report(terms: Vec<Term>) -> Result<Term, NativeError> {
+  // TODO should written in Monad
   let label = extract_string_at(&terms, 0)?;
   let elapsed = extract_num_at(&terms, 1)?;
   println!("  BENCH {label}: {elapsed}ms");
