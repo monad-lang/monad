@@ -942,3 +942,101 @@ def test_term_type : Bool :=
 def test_term_hole : Bool :=
     let h : Term := Term.hole in
     true
+
+// --- Phase 2: Scope types ---
+
+// Infix operator binding. Maps an operator symbol to a definition path.
+struct Infix {
+    operator : Operator,
+    name : ModulePath,
+}
+
+// Instance lookup key.
+struct InstanceKey {
+    cls : ModulePath,
+    constraints : List TypeConstraint,
+    args : List Param,
+}
+
+// A resolved definition entry in scope.
+struct ScopeDef {
+    name : ModulePath,
+    module : ModulePath,
+    sig : Term,
+    body : Term,
+}
+
+// A class method entry in scope.
+struct ScopeClassDef {
+    full_name : ModulePath,
+    name : Identifier,
+    sig : Term,
+}
+
+// Instance entries grouped by class name.
+struct ScopeInstance {
+    class_name : ModulePath,
+    instances : List Instance,
+}
+
+// Conflicting name resolution entry.
+struct ScopeConflict {
+    name : ModulePath,
+    candidates : List ModulePath,
+}
+
+// Local variable in the scope chain.
+struct LocalVar {
+    name : Identifier,
+    typ : Term,
+    multiplicity : Multiplicity,
+}
+
+// All resolved entries for a single scope level.
+struct ScopeData {
+    def_refs : List ScopeDef,
+    class_defs : List ScopeClassDef,
+    instances : List ScopeInstance,
+    inductives : List Inductive,
+    classes : List Inductive,
+    infixes : List Infix,
+    conflicts : List ScopeConflict,
+}
+
+// A scope node in the linked list.
+struct Scope {
+    module_id : ModulePath,
+    scope : ScopeData,
+    parent : Option Scope,
+}
+
+// Compiled or loaded module entry.
+struct Module {
+    path : ModulePath,
+    inductives : List Inductive,
+    defs : List ScopeDef,
+    infixs : List Infix,
+    instances : List ScopeInstance,
+}
+
+// Global map of loaded module paths to modules.
+struct LoadedModules {
+    modules : List Module,
+}
+
+// Scope for local bindings (let expressions, case arms, lambda vars).
+struct LocalScope {
+    vars : List LocalVar,
+    parent : Option LocalScope,
+}
+
+// Error type for scope resolution failures.
+type ScopeError {
+    name_not_found (name : NameRef),
+    ambiguous_name (name : NameRef) (candidates : List ModulePath),
+    inductive_not_found (name : ModulePath),
+    instance_not_found (key : InstanceKey),
+    class_not_found (name : ModulePath),
+    linear_used_twice (name : Identifier),
+    affine_used_multiple (name : Identifier),
+}
