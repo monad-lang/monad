@@ -2222,295 +2222,293 @@ fn type_check_with_env(
         Err(ExpectedPi(fun_typ_pi.clone(), SourceRange::default()))
       }
     }
-    Lit {
-      value: Literal::StructLit { ref fields },
-    } => {
-      let struct_type = {
-        if let Var { name } = &expected_type
-          && let Some(name) = name.to_path()
-        {
-          Some(name.clone())
-        } else {
-          None
-        }
-      };
-      if struct_type.is_none() && expected_type.is_known() {
-        return Err(TypeError::ExpectedStructName {
-          found: expected_type.clone(),
-          loc: SourceRange::default(),
-        });
-      }
-      if let Some(ref struct_name) = struct_type {
-        let ind = scope.find_inductive(struct_name)?;
-        let mk_cons = ind
-          .constructors
-          .first()
-          .ok_or_else(|| TypeError::StructNoConstructors {
-            loc: SourceRange::default(),
-          })?;
-        if fields.len() > mk_cons.params.len() {
-          return Err(TypeError::StructTooManyFields {
-            max: mk_cons.params.len(),
-            found: fields.len(),
+    Lit { value } => match value {
+      Literal::StructLit { ref fields } => {
+        let struct_type = {
+          if let Var { name } = &expected_type
+            && let Some(name) = name.to_path()
+          {
+            Some(name.clone())
+          } else {
+            None
+          }
+        };
+        if struct_type.is_none() && expected_type.is_known() {
+          return Err(TypeError::ExpectedStructName {
+            found: expected_type.clone(),
             loc: SourceRange::default(),
           });
         }
-        for Param { name, typ, .. } in mk_cons.params.iter() {
-          if let Some(term) = fields.get(name) {
-            type_check_with_env(term.clone(), *typ.clone(), &scope, usage, track_usage)?;
-          } else if !ind.defaults.contains_key(name) {
-            return Err(MissingField(name.clone(), SourceRange::default()));
+        if let Some(ref struct_name) = struct_type {
+          let ind = scope.find_inductive(struct_name)?;
+          let mk_cons =
+            ind
+              .constructors
+              .first()
+              .ok_or_else(|| TypeError::StructNoConstructors {
+                loc: SourceRange::default(),
+              })?;
+          if fields.len() > mk_cons.params.len() {
+            return Err(TypeError::StructTooManyFields {
+              max: mk_cons.params.len(),
+              found: fields.len(),
+              loc: SourceRange::default(),
+            });
           }
-        }
-        let args: Vec<Option<Term>> = mk_cons
-          .params
-          .iter()
-          .map(|p| {
-            Ok(Some(
-              fields
-                .get(&p.name)
-                .cloned()
-                .or_else(|| ind.defaults.get(&p.name).cloned())
-                .ok_or_else(|| MissingField(p.name.clone(), SourceRange::default()))?,
-            ))
-          })
-          .collect::<Result<Vec<_>, TypeError>>()?;
-        let con = Term::Con(Constructor {
-          name: id("mk"),
-          typ_name: struct_name.clone(),
-          args,
-          num_args: mk_cons.params.len(),
-        });
-        Ok(typed_term(con, expected_type.clone()))
-      } else {
-        Ok(typed_term(term, expected_type))
-      }
-    }
-    Lit {
-      value: Literal::StructUpdate { base, fields },
-    } => {
-      // Desugar { id with field := val, ... } to:
-      //   match id { mk orig_fields => mk new_fields }
-      let base_term = Term::Var {
-        name: NameRef::Id(base),
-      };
-      let (base, base_type) =
-        type_check_with_env(base_term, Hole, &scope, usage, track_usage)?.to_tuple();
-      if let Some((ind_name, _ind_args)) = extract_first_name(&base_type) {
-        let ind = scope.find_inductive(&ind_name)?;
-        let mk_cons = ind
-          .constructors
-          .first()
-          .ok_or_else(|| TypeError::StructNoConstructors {
-            loc: SourceRange::default(),
-          })?;
-        // Generate fresh pattern variables
-        let fresh_names: Map<Identifier, Identifier> = mk_cons
-          .params
-          .iter()
-          .map(|p| {
-            let fresh = p.name.rename();
-            (p.name.clone(), fresh)
-          })
-          .collect();
-        let pat_args: Vec<Identifier> = mk_cons
-          .params
-          .iter()
-          .map(|p| fresh_names.get(&p.name).unwrap().clone())
-          .collect();
-        // Build body with fresh variable references (will be bound by match pattern)
-        let mut body_args: Vec<Option<Term>> = Vec::new();
-        for param in mk_cons.params.iter() {
-          let fresh = fresh_names.get(&param.name).unwrap();
-          let val: Term = if let Some(override_term) = fields.get(&param.name) {
-            override_term.clone()
-          } else {
-            Term::Var {
-              name: NameRef::Id(fresh.clone()),
+          for Param { name, typ, .. } in mk_cons.params.iter() {
+            if let Some(term) = fields.get(name) {
+              type_check_with_env(term.clone(), *typ.clone(), &scope, usage, track_usage)?;
+            } else if !ind.defaults.contains_key(name) {
+              return Err(MissingField(name.clone(), SourceRange::default()));
             }
-          };
-          body_args.push(Some(val));
+          }
+          let args: Vec<Option<Term>> = mk_cons
+            .params
+            .iter()
+            .map(|p| {
+              Ok(Some(
+                fields
+                  .get(&p.name)
+                  .cloned()
+                  .or_else(|| ind.defaults.get(&p.name).cloned())
+                  .ok_or_else(|| MissingField(p.name.clone(), SourceRange::default()))?,
+              ))
+            })
+            .collect::<Result<Vec<_>, TypeError>>()?;
+          let con = Term::Con(Constructor {
+            name: id("mk"),
+            typ_name: struct_name.clone(),
+            args,
+            num_args: mk_cons.params.len(),
+          });
+          Ok(typed_term(con, expected_type.clone()))
+        } else {
+          Ok(typed_term(Lit { value }, expected_type))
         }
-        let body = Term::Con(Constructor {
-          name: id("mk"),
-          typ_name: ind_name.clone(),
-          args: body_args,
-          num_args: mk_cons.params.len(),
-        });
-        let match_case = case(id("mk"), pat_args, body);
-        let match_expr = match_term(base, vec![match_case]);
-        return type_check_with_env(
-          match_expr,
-          expected_type.clone(),
-          &scope,
-          usage,
-          track_usage,
-        );
       }
-      Err(TypeError::StructUpdateExpectedInductive {
-        found: base_type,
-        loc: SourceRange::default(),
-      })
-    }
-    Lit {
-      value: Literal::Match {
+      Literal::StructUpdate { base, fields } => {
+        // Desugar { id with field := val, ... } to:
+        //   match id { mk orig_fields => mk new_fields }
+        let base_term = Term::Var {
+          name: NameRef::Id(base),
+        };
+        let (base, base_type) =
+          type_check_with_env(base_term, Hole, &scope, usage, track_usage)?.to_tuple();
+        if let Some((ind_name, _ind_args)) = extract_first_name(&base_type) {
+          let ind = scope.find_inductive(&ind_name)?;
+          let mk_cons =
+            ind
+              .constructors
+              .first()
+              .ok_or_else(|| TypeError::StructNoConstructors {
+                loc: SourceRange::default(),
+              })?;
+          // Generate fresh pattern variables
+          let fresh_names: Map<Identifier, Identifier> = mk_cons
+            .params
+            .iter()
+            .map(|p| {
+              let fresh = p.name.rename();
+              (p.name.clone(), fresh)
+            })
+            .collect();
+          let pat_args: Vec<Identifier> = mk_cons
+            .params
+            .iter()
+            .map(|p| fresh_names.get(&p.name).unwrap().clone())
+            .collect();
+          // Build body with fresh variable references (will be bound by match pattern)
+          let mut body_args: Vec<Option<Term>> = Vec::new();
+          for param in mk_cons.params.iter() {
+            let fresh = fresh_names.get(&param.name).unwrap();
+            let val: Term = if let Some(override_term) = fields.get(&param.name) {
+              override_term.clone()
+            } else {
+              Term::Var {
+                name: NameRef::Id(fresh.clone()),
+              }
+            };
+            body_args.push(Some(val));
+          }
+          let body = Term::Con(Constructor {
+            name: id("mk"),
+            typ_name: ind_name.clone(),
+            args: body_args,
+            num_args: mk_cons.params.len(),
+          });
+          let match_case = case(id("mk"), pat_args, body);
+          let match_expr = match_term(base, vec![match_case]);
+          return type_check_with_env(
+            match_expr,
+            expected_type.clone(),
+            &scope,
+            usage,
+            track_usage,
+          );
+        }
+        Err(TypeError::StructUpdateExpectedInductive {
+          found: base_type,
+          loc: SourceRange::default(),
+        })
+      }
+      Literal::Match {
         ref value,
         ref cases,
-      },
-    } => {
-      let con = type_check_with_env(*value.clone(), Hole, &scope, usage, track_usage)?;
-      let (_, con_type) = unwrap_forall(con.typ().clone());
+      } => {
+        let con = type_check_with_env(*value.clone(), Hole, &scope, usage, track_usage)?;
+        let (_, con_type) = unwrap_forall(con.typ().clone());
 
-      if let Some((ind_name, ind_args)) = extract_first_name(&con_type) {
-        let ind = scope.find_inductive(&ind_name)?;
-        let ind_params = &ind.params;
-        if ind_params.len() != ind_args.len() {
-          return Err(InductiveMismatch {
-            name: ind_name,
-            params: ind_params.clone(),
-            args: ind_args,
-            loc: SourceRange::default(),
-          });
-        }
-        let mut branch_t = expected_type.clone();
-        let mut new_cases = Vec::new();
-        for mcase in cases {
-          if mcase.name.as_str() == "_" {
-            if !mcase.args.is_empty() {
-              return Err(Generic(
-                "wildcard pattern cannot bind variables".to_string(),
-                SourceRange::default(),
-              ));
-            }
-            let t = type_check_with_env(
-              *mcase.value.clone(),
-              branch_t.clone(),
-              &scope,
-              usage,
-              track_usage,
-            )?;
-            if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
-              branch_t = typ;
-            } else {
-              return Err(MismatchingBranches(
-                branch_t,
-                t.typ().clone(),
-                SourceRange::default(),
-              ));
-            }
-            new_cases.push(case(id("_"), vec![], t.term().clone()));
-          } else if let Some(ind_cons) = ind.find_cons(&mcase.name) {
-            let mut scope = scope.clone();
-            if ind_cons.params.len() != mcase.args.len() {
-              return Err(ConstructorMismatch {
-                params: ind_cons.params.clone(),
-                args: mcase.args.clone(),
-                loc: SourceRange::default(),
-              });
-            }
-            for (name, param) in mcase.args.iter().zip(ind_cons.params.iter()) {
-              if name.as_str() == "_" {
-                continue;
-              }
-              let typ = substitute_params(*param.typ.clone(), ind_params, &ind_args);
-              scope = add_params_to_scope(ind_params, &ind_args, scope);
-              scope = scope.with_type_owned(name, typ);
-              // Register pattern variable with its constructor param's multiplicity
-              usage.register(name.clone(), param.mult.clone());
-            }
-            let t = type_check_with_env(
-              *mcase.value.clone(),
-              branch_t.clone(),
-              &scope,
-              usage,
-              track_usage,
-            )?;
-            // Remove pattern variables from usage tracking after each branch
-            for (name, _) in mcase.args.iter().zip(ind_cons.params.iter()) {
-              if name.as_str() != "_" {
-                usage.remove(name);
-              }
-            }
-            if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
-              branch_t = typ;
-            } else {
-              return Err(MismatchingBranches(
-                branch_t,
-                t.typ().clone(),
-                SourceRange::default(),
-              ));
-            }
-            new_cases.push(case(
-              mcase.name.clone(),
-              mcase.args.clone(),
-              t.term().clone(),
-            ));
-          } else {
-            let ctor_names: Vec<Identifier> = ind
-              .constructors
-              .iter()
-              .map(|c| c.name().last().clone())
-              .collect();
-            return Err(ConstructorUnknown(
-              mcase.name.clone(),
-              ctor_names,
-              SourceRange::default(),
-            ));
+        if let Some((ind_name, ind_args)) = extract_first_name(&con_type) {
+          let ind = scope.find_inductive(&ind_name)?;
+          let ind_params = &ind.params;
+          if ind_params.len() != ind_args.len() {
+            return Err(InductiveMismatch {
+              name: ind_name,
+              params: ind_params.clone(),
+              args: ind_args,
+              loc: SourceRange::default(),
+            });
           }
+          let mut branch_t = expected_type.clone();
+          let mut new_cases = Vec::new();
+          for mcase in cases {
+            if mcase.name.as_str() == "_" {
+              if !mcase.args.is_empty() {
+                return Err(Generic(
+                  "wildcard pattern cannot bind variables".to_string(),
+                  SourceRange::default(),
+                ));
+              }
+              let t = type_check_with_env(
+                *mcase.value.clone(),
+                branch_t.clone(),
+                &scope,
+                usage,
+                track_usage,
+              )?;
+              if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
+                branch_t = typ;
+              } else {
+                return Err(MismatchingBranches(
+                  branch_t,
+                  t.typ().clone(),
+                  SourceRange::default(),
+                ));
+              }
+              new_cases.push(case(id("_"), vec![], t.term().clone()));
+            } else if let Some(ind_cons) = ind.find_cons(&mcase.name) {
+              let mut scope = scope.clone();
+              if ind_cons.params.len() != mcase.args.len() {
+                return Err(ConstructorMismatch {
+                  params: ind_cons.params.clone(),
+                  args: mcase.args.clone(),
+                  loc: SourceRange::default(),
+                });
+              }
+              for (name, param) in mcase.args.iter().zip(ind_cons.params.iter()) {
+                if name.as_str() == "_" {
+                  continue;
+                }
+                let typ = substitute_params(*param.typ.clone(), ind_params, &ind_args);
+                scope = add_params_to_scope(ind_params, &ind_args, scope);
+                scope = scope.with_type_owned(name, typ);
+                // Register pattern variable with its constructor param's multiplicity
+                usage.register(name.clone(), param.mult.clone());
+              }
+              let t = type_check_with_env(
+                *mcase.value.clone(),
+                branch_t.clone(),
+                &scope,
+                usage,
+                track_usage,
+              )?;
+              // Remove pattern variables from usage tracking after each branch
+              for (name, _) in mcase.args.iter().zip(ind_cons.params.iter()) {
+                if name.as_str() != "_" {
+                  usage.remove(name);
+                }
+              }
+              if let Ok(typ) = match_resolve_type(&branch_t, t.typ(), &scope) {
+                branch_t = typ;
+              } else {
+                return Err(MismatchingBranches(
+                  branch_t,
+                  t.typ().clone(),
+                  SourceRange::default(),
+                ));
+              }
+              new_cases.push(case(
+                mcase.name.clone(),
+                mcase.args.clone(),
+                t.term().clone(),
+              ));
+            } else {
+              let ctor_names: Vec<Identifier> = ind
+                .constructors
+                .iter()
+                .map(|c| c.name().last().clone())
+                .collect();
+              return Err(ConstructorUnknown(
+                mcase.name.clone(),
+                ctor_names,
+                SourceRange::default(),
+              ));
+            }
+          }
+          Ok(typed_term(
+            match_term(con.term().clone(), new_cases),
+            branch_t.clone(),
+          ))
+        } else {
+          Err(ExpectedInductive(con.typ().clone(), SourceRange::default()))
         }
-        Ok(typed_term(
-          match_term(con.term().clone(), new_cases),
-          branch_t.clone(),
-        ))
-      } else {
-        Err(ExpectedInductive(con.typ().clone(), SourceRange::default()))
       }
-    }
-    Lit {
-      value: Literal::If { value, then, els },
-    } => {
-      let b = type_check_with_env(*value, var("Bool"), &scope, usage, track_usage)?;
-      let t1 = type_check_with_env(*then, expected_type.clone(), &scope, usage, track_usage)?;
-      let t2 = type_check_with_env(*els, expected_type.clone(), &scope, usage, track_usage)?;
-      if let Ok(typ) = match_resolve_type(t1.typ(), t2.typ(), &scope) {
-        let new_term = Lit {
-          value: Literal::If {
-            value: Box::new(b.term().clone()),
-            then: Box::new(t1.term().clone()),
-            els: Box::new(t2.term().clone()),
-          },
-        };
-        Ok(typed_term(new_term, typ))
-      } else {
-        Err(TypeError::MismatchingBranches(
-          t1.typ().clone(),
-          t2.typ().clone(),
-          SourceRange::default(),
-        ))
+      Literal::If { value, then, els } => {
+        let b = type_check_with_env(*value, var("Bool"), &scope, usage, track_usage)?;
+        let t1 = type_check_with_env(*then, expected_type.clone(), &scope, usage, track_usage)?;
+        let t2 = type_check_with_env(*els, expected_type.clone(), &scope, usage, track_usage)?;
+        if let Ok(typ) = match_resolve_type(t1.typ(), t2.typ(), &scope) {
+          let new_term = Lit {
+            value: Literal::If {
+              value: Box::new(b.term().clone()),
+              then: Box::new(t1.term().clone()),
+              els: Box::new(t2.term().clone()),
+            },
+          };
+          Ok(typed_term(new_term, typ))
+        } else {
+          Err(TypeError::MismatchingBranches(
+            t1.typ().clone(),
+            t2.typ().clone(),
+            SourceRange::default(),
+          ))
+        }
       }
-    }
-    Lit { ref value } => match value {
       Literal::Str { value: _ } => {
         let typ = match_resolve_type(&var("String"), &expected_type, &scope)?;
-        Ok(typed_term(term, typ))
+        Ok(typed_term(Lit { value }, typ))
       }
-      Literal::Num { value, suffix } => {
+      Literal::Char { value: _ } => {
+        let typ = match_resolve_type(&var("Char"), &expected_type, &scope)?;
+        Ok(typed_term(Lit { value }, typ))
+      }
+      Literal::Num { value: val, suffix } => {
         if suffix.is_int() {
-          let target = resolve_num_literal_type(&expected_type, *suffix, &scope)?;
-          let converted = convert_int_literal(*value, target)?;
+          let target = resolve_num_literal_type(&expected_type, suffix, &scope)?;
+          let converted = convert_int_literal(val, target)?;
           Ok(typed_term(converted, var(target.type_name())))
         } else {
           let typ = match_resolve_type(&var("F64"), &expected_type, &scope)?;
-          Ok(typed_term(term, typ))
+          Ok(typed_term(Lit { value }, typ))
         }
       }
-      Literal::Float { value, suffix } => {
+      Literal::Float { value: val, suffix } => {
         if suffix.is_float() {
-          let target = resolve_float_literal_type(&expected_type, *suffix, &scope)?;
+          let target = resolve_float_literal_type(&expected_type, suffix, &scope)?;
           Ok(typed_term(
             Term::Lit {
               value: Literal::Float {
-                value: *value,
+                value: val,
                 suffix: target,
               },
             },
@@ -2518,14 +2516,13 @@ fn type_check_with_env(
           ))
         } else {
           let typ = match_resolve_type(&var("F64"), &expected_type, &scope)?;
-          Ok(typed_term(term, typ))
+          Ok(typed_term(Lit { value }, typ))
         }
       }
-      Literal::Term(_t) => {
+      Literal::Term(_) => {
         // Term values are evaluated at expansion time; not type-checked here
-        Ok(typed_term(term, Hole))
+        Ok(typed_term(Lit { value }, Hole))
       }
-      _ => panic!("Lit branch not covered {value}"),
     },
     Var { ref name } => {
       // Try desugaring method calls (x.fun -> A.fun x)

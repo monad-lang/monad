@@ -14,6 +14,7 @@ pub enum NativeError {
   MissingArgs { expected: usize, actual: usize },
   ExpectedString { actual: Term },
   ExpectedNum { actual: Term },
+  ExpectedChar { actual: Term },
   NotFound(Identifier),
   Custom(String),
 }
@@ -33,6 +34,7 @@ impl Display for NativeError {
       NotFound(identifier) => write!(f, "native {identifier} not found"),
       Custom(c) => write!(f, "{c}"),
       ExpectedString { actual } => write!(f, "expected String found {actual}"),
+      ExpectedChar { actual } => write!(f, "expected Char found {actual}"),
       ExpectedNum { actual } => write!(f, "expected number found {actual}"),
     }
   }
@@ -56,6 +58,24 @@ fn extract_string_at(terms: &[Term], index: usize) -> Result<String, NativeError
   if terms.len() > index {
     if let Term::Lit {
       value: Literal::Str { value: s },
+    } = &terms[index]
+    {
+      Ok(s.clone())
+    } else {
+      Err(Custom(format!("wrong type of args first={}", terms[index])))
+    }
+  } else {
+    Err(MissingArgs {
+      expected: index + 1,
+      actual: terms.len(),
+    })
+  }
+}
+
+pub fn extract_char_at(terms: &[Term], index: usize) -> Result<char, NativeError> {
+  if terms.len() > index {
+    if let Term::Lit {
+      value: Literal::Char { value: s },
     } = &terms[index]
     {
       Ok(s.clone())
@@ -404,6 +424,17 @@ pub fn string_starts_with(terms: Vec<Term>) -> Result<Term, NativeError> {
   Ok(bool_to_term(s.starts_with(&prefix)))
 }
 
+pub fn string_to_chars(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let s = extract_string_at(&terms, 0)?;
+
+  let chars: Vec<Term> = s
+    .chars()
+    .map(|c| Term::Lit {
+      value: Literal::Char { value: c },
+    })
+    .collect();
+  Ok(to_list_term(chars))
+}
 pub fn string_get(terms: Vec<Term>) -> Result<Term, NativeError> {
   let s = extract_string_at(&terms, 0)?;
   let i = extract_num_at(&terms, 1)?;
@@ -436,22 +467,28 @@ pub fn string_to_list(terms: Vec<Term>) -> Result<Term, NativeError> {
 }
 
 fn collect_bytes_from_list(term: &Term) -> Result<Vec<u8>, NativeError> {
+  collect_from_list(term, extract_u8_from_term)
+}
+fn collect_from_list<A>(
+  term: &Term,
+  f: fn(&Term) -> Result<A, NativeError>,
+) -> Result<Vec<A>, NativeError> {
   match term {
     Term::Con(Constructor { name, .. }) if name == &id("empty") => Ok(vec![]),
     Term::Con(Constructor { name, args, .. }) if name == &id("cons") => {
       let mut bytes = vec![];
       if let Some(Some(head)) = args.first() {
-        let b = extract_u8_from_term(head)?;
+        let b = f(head)?;
         bytes.push(b);
       } else {
         return Err(Custom("List.cons missing head argument".into()));
       }
       if let Some(Some(tail)) = args.get(1) {
-        bytes.extend(collect_bytes_from_list(tail)?);
+        bytes.extend(collect_from_list(tail, f)?);
       }
       Ok(bytes)
     }
-    other => Err(Custom(format!("expected List U8, got {other}"))),
+    other => Err(Custom(format!("expected List, got {other}"))),
   }
 }
 
@@ -463,6 +500,17 @@ fn extract_u8_from_term(term: &Term) -> Result<u8, NativeError> {
         suffix: NumSuffix::U8,
       },
     } => Ok(*value as u8),
+    other => Err(ExpectedNum {
+      actual: other.clone(),
+    }),
+  }
+}
+
+fn extract_char_from_term(term: &Term) -> Result<char, NativeError> {
+  match term {
+    Term::Lit {
+      value: Literal::Char { value },
+    } => Ok(value.clone()),
     other => Err(ExpectedNum {
       actual: other.clone(),
     }),
@@ -497,6 +545,15 @@ pub fn string_from_list(terms: Vec<Term>) -> Result<Term, NativeError> {
   let list = &terms[0];
   let bytes = collect_bytes_from_list(list)?;
   let s = String::from_utf8(bytes).map_err(|e| Custom(format!("invalid UTF-8: {e}")))?;
+  Ok(Term::Lit {
+    value: Literal::Str { value: s },
+  })
+}
+
+pub fn string_from_chars(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let list = &terms[0];
+  let chars = collect_from_list(list, extract_char_from_term)?;
+  let s = chars.into_iter().collect();
   Ok(Term::Lit {
     value: Literal::Str { value: s },
   })
@@ -659,7 +716,9 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("string_starts_with"), s(string_starts_with)),
     (id("string_get"), s(string_get)),
     (id("string_to_list"), s(string_to_list)),
+    (id("string_to_chars"), s(string_to_chars)),
     (id("string_from_list"), s(string_from_list)),
+    (id("string_from_chars"), s(string_from_chars)),
     (id("bench_now"), s(bench_now)),
     (id("bench_report"), s(bench_report)),
     (id("i64_lt"), s(i64_lt)),

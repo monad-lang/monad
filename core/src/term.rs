@@ -1061,6 +1061,9 @@ pub enum Literal {
   Str {
     value: String,
   },
+  Char {
+    value: char,
+  },
   Num {
     value: i64,
     suffix: NumSuffix,
@@ -1112,6 +1115,7 @@ impl Display for Literal {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Literal::Str { value } => write!(f, "{value:?}"),
+      Literal::Char { value } => write!(f, "{value:?}"),
       Literal::Num { value, suffix } => write!(f, "{value}{}", suffix.type_name().to_lowercase()),
       Literal::Float { value, suffix } => {
         if suffix == &NumSuffix::F64 {
@@ -1413,6 +1417,7 @@ impl Term {
       App { fun: _, arg: _ } => "app",
       Lit { value } => match value {
         Literal::Str { .. } => "str",
+        Literal::Char { .. } => "char",
         Literal::Num { .. } => "num",
         Literal::Float { .. } => "float",
         Literal::Match { .. } => "match",

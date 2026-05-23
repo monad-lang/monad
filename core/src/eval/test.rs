@@ -6,8 +6,7 @@ use crate::eval::r#type::{
 use crate::parser::parse_file;
 use crate::parser::{ReplInput, repl_parser, term, test::parse_type};
 use crate::term::module::{
-  LoadedModules, ParsedModule, Scope, default_modules, load_module_files, load_module_from_text,
-  module,
+  LoadedModules, ParsedModule, Scope, default_modules, load_module_from_text, module,
 };
 use crate::term::test::{Similar, decl_def};
 use crate::term::{

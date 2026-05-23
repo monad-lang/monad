@@ -7,7 +7,10 @@ pub mod test;
 use std::fmt::Display;
 
 use crate::{
-  parser::error::{ParseError, ReplParserError},
+  parser::{
+    error::{ParseError, ReplParserError},
+    string::parse_char_literal,
+  },
   term::{
     AttrArg, Attribute, ClassDef, Decl, DeclGenDef, Def, Documentation, Identifier,
     InductConstructor, Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath,
@@ -35,7 +38,7 @@ use nom::{
   multi::{fold_many0, many0, many1},
   sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
-use string::parse_string;
+use string::parse_string_literal;
 
 pub use error::{OwnedError, ParseFileError, ParseTermError, display_source_context};
 pub type Span<'a, X = ()> = LocatedSpan<&'a str, X>;
@@ -282,7 +285,7 @@ fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let extra = input.extra().clone();
   let input = input.map_extra(|_| ());
   let (input, value) = set_res_extra(
-    parse_string(input.into_fragment())
+    parse_string_literal(input.into_fragment())
       .map_err(|e| e.map(|f: nom::error::Error<&str>| f.into()))
       .map(|(i, v)| (Span::new(i), v)),
     extra,
@@ -291,6 +294,23 @@ fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
     input,
     Term::Lit {
       value: Literal::Str { value },
+    },
+  ))
+}
+
+fn char_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let extra = input.extra().clone();
+  let input = input.map_extra(|_| ());
+  let (input, value) = set_res_extra(
+    parse_char_literal(input.into_fragment())
+      .map_err(|e| e.map(|f: nom::error::Error<&str>| f.into()))
+      .map(|(i, v)| (Span::new(i), v)),
+    extra,
+  )?;
+  Ok((
+    input,
+    Term::Lit {
+      value: Literal::Char { value },
     },
   ))
 }
@@ -958,6 +978,7 @@ fn literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   alt((
     list_literal,
     string_literal,
+    char_literal,
     float_literal,
     num_literal,
     struct_or_update_parser,

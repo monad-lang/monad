@@ -155,7 +155,7 @@ pub enum Literal {
   /// IEEE 754 double-precision float
   Float { value: FloatValue },
   /// Unicode character
-  Char { c: u64 },
+  Char { c: char },
 }
 
 impl Display for Literal {
@@ -1309,7 +1309,13 @@ mod tests {
       .to_string(),
       "(lit 3.14)"
     );
-    assert_eq!(lit(Literal::Char { c: 65 }).to_string(), "(lit 'A')");
+    assert_eq!(
+      lit(Literal::Char {
+        c: char::from_u32(65).unwrap()
+      })
+      .to_string(),
+      "(lit 'A')"
+    );
   }
 
   #[test]

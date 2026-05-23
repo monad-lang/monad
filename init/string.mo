@@ -30,6 +30,12 @@ def String.to_list (s : String) : List U8
 @[native string_from_list]
 def String.from_list (bytes : List U8) : String
 
+@[native string_to_chars]
+def String.to_chars (s : String) : List Char
+
+@[native string_from_chars]
+def String.from_chars (bytes : List Chars) : String
+
 /// djb2 hash: hash = hash * 33 + byte
 @[terminating]
 def String.hash_bytes (bytes: List U8) (acc: U64) : U64 :=

@@ -66,8 +66,14 @@ infix (>>=) := Monad.bind
 
 type Void {}
 
+/// UTF8 string
 type String {
-	of_bytes U8
+	of_bytes (List U8)
+}
+
+/// UTF8 code point
+type Char {
+	of_bytes (List U8)
 }
 
 class ToString A {

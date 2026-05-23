@@ -1,5 +1,6 @@
 use nom::branch::alt;
 use nom::bytes::streaming::{is_not, take_while_m_n};
+use nom::character::anychar;
 use nom::character::streaming::{char, multispace1};
 use nom::combinator::{complete, map, map_opt, map_res, value, verify};
 use nom::error::{FromExternalError, ParseError};
@@ -67,6 +68,7 @@ where
       value('\\', char('\\')),
       value('/', char('/')),
       value('"', char('"')),
+      value('\'', char('\'')),
     )),
   )
   .parse(input)
@@ -121,7 +123,35 @@ where
 
 /// Parse a string. Use a loop of parse_fragment and push all of the fragments
 /// into an output string.
-pub fn parse_string<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
+pub fn parse_char_literal<'a, E>(input: &'a str) -> IResult<&'a str, char, E>
+where
+  E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
+{
+  complete(delimited(
+    char('\''),
+    alt((parse_escaped_char, anychar)),
+    char('\''),
+  ))
+  .parse_complete(input)
+}
+
+#[test]
+fn test_parse_char() {
+  assert!(parse_char_literal::<()>("''").is_err());
+  assert!(parse_char_literal::<()>("'\'").is_err());
+  assert!(parse_char_literal::<()>("\'").is_err());
+  assert!(parse_char_literal::<()>("'").is_err());
+  assert_eq!(parse_char_literal::<()>("'a'").unwrap().1, 'a');
+  assert!(parse_char_literal::<()>("'aa'").is_err());
+  assert_eq!(parse_char_literal::<()>("'\"'").unwrap().1, '"');
+  assert_eq!(parse_char_literal::<()>("'\\''").unwrap().1, '\'');
+  assert_eq!(parse_char_literal::<()>("'\\t''").unwrap().1, '\t');
+  assert_eq!(parse_char_literal::<()>("'\\n''").unwrap().1, '\n');
+}
+
+/// Parse a string. Use a loop of parse_fragment and push all of the fragments
+/// into an output string.
+pub fn parse_string_literal<'a, E>(input: &'a str) -> IResult<&'a str, String, E>
 where
   E: ParseError<&'a str> + FromExternalError<&'a str, std::num::ParseIntError>,
 {

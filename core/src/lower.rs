@@ -275,6 +275,7 @@ impl<'a> LowerContext<'a> {
 
   fn lower_lit(&mut self, value: &Literal) -> Result<EvalTerm, LowerError> {
     match value {
+      Literal::Char { value } => Ok(eval_term::lit(ELiteral::Char { c: value.clone() })),
       Literal::Str { value } => Ok(eval_term::lit(ELiteral::Str {
         value: value.clone(),
       })),
