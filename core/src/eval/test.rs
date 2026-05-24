@@ -2077,6 +2077,26 @@ fn test_mo_linear_used_twice_fails() {
 }
 
 #[test]
+fn test_mo_linear_let_consume_and_use() {
+  // Linear var consumed in let binding, bound var used — should pass
+  let r = type_check_mo(r#"def f (!x : I64) : I64 := let y := x in y"#);
+  assert!(
+    r.is_ok(),
+    "Linear let consume-and-use should pass: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_mo_linear_let_consume_then_reuse_linear() {
+  // Linear var consumed in let binding, then used again directly — should fail
+  let r = type_check_mo(r#"def f (!x : I64) : I64 := let y := x in x"#);
+  assert!(r.is_err(), "Linear reused after let consume should fail");
+  let msg = r.unwrap_err().to_string();
+  assert!(msg.contains("used more than once"), "got: {msg}");
+}
+
+#[test]
 fn test_constructor_in_instance_body() {
   // Id.id in instance body should type-check (alpha-rename clash)
   let r = type_check_mo(

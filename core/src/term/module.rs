@@ -1620,10 +1620,12 @@ impl<'a> Scope<'a> {
     }
   }
   pub fn with_local_var(&self, name: &'a Identifier, typ: &'a Term) -> Scope<'a> {
+    let mut usage_env = self.usage_env().clone();
+    usage_env.register(name.clone(), Multiplicity::Many);
     Scope::Sub {
       local: local_var(name, typ),
       parent: Box::new(self.clone()),
-      usage_env: self.usage_env().clone(),
+      usage_env,
       constraints: self.constraints().to_vec(),
     }
   }
