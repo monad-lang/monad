@@ -1,0 +1,2 @@
+[env]
+RUST_MIN_STACK = { value = "16777216", force = true }
