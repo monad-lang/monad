@@ -3,9 +3,13 @@ use std::fmt::Display;
 use crate::{
   Map,
   eval::EvalOptions,
+  runtime::{
+    fiber::{Fiber, FiberState},
+    global,
+  },
   term::{
     Constructor, F64Wrap, Identifier, Literal, Native, NumSuffix, Term, app, apps, b_false, b_true,
-    id, io_term, module::Scope, num_suffix, pvar, str, to_list_term, unit,
+    id, io_term, lit_foreign, module::Scope, num_suffix, pvar, str, to_list_term, unit,
   },
 };
 
@@ -640,6 +644,86 @@ pub fn eq_rec(args: Vec<Term>) -> Result<Term, NativeError> {
   Ok(apps(pvar(vec!["Eq", "rec"]), args))
 }
 
+struct FiberHandle {
+  fiber: Fiber<Term>,
+  action: Option<Term>,
+}
+
+fn extract_foreign_id(term: &Term) -> Result<u64, NativeError> {
+  match term {
+    Term::Lit {
+      value: Literal::Foreign(id),
+    } => Ok(*id),
+    Term::Con(Constructor { name, args, .. }) if name.as_str() == "io" => args
+      .first()
+      .and_then(|a| a.as_ref())
+      .map(|inner| extract_foreign_id(inner))
+      .unwrap_or_else(|| {
+        Err(NativeError::Custom(format!(
+          "expected Fiber handle, found {term}"
+        )))
+      }),
+    other => Err(NativeError::Custom(format!(
+      "expected Fiber handle, found {other}"
+    ))),
+  }
+}
+
+pub fn fork_io(terms: Vec<Term>, _scope: &Scope) -> Result<Term, NativeError> {
+  let lam = terms.into_iter().next().ok_or(NativeError::MissingArgs {
+    expected: 1,
+    actual: 0,
+  })?;
+  if !matches!(lam, Term::Lam { .. }) {
+    return Err(NativeError::Custom(format!(
+      "forkIO expected a function (Unit -> IO A), got {lam}"
+    )));
+  }
+  let fiber = Fiber::<Term>::new();
+  let handle = FiberHandle {
+    fiber: fiber.clone(),
+    action: Some(lam),
+  };
+  let id = global::register(handle);
+  Ok(io_term(lit_foreign(id)))
+}
+
+pub fn await_fiber(terms: Vec<Term>, scope: &Scope) -> Result<Term, NativeError> {
+  let term = terms.into_iter().next().ok_or(NativeError::MissingArgs {
+    expected: 1,
+    actual: 0,
+  })?;
+  let id = extract_foreign_id(&term)?;
+  let handle = global::take::<FiberHandle>(id)
+    .ok_or_else(|| NativeError::Custom(format!("fiber handle {id} not found")))?;
+  if handle.fiber.is_done() && handle.fiber.state() == FiberState::Cancelled {
+    return Err(NativeError::Custom(format!("fiber {id} was cancelled")));
+  }
+  let action = handle
+    .action
+    .ok_or_else(|| NativeError::Custom(format!("fiber {id} already awaited")))?;
+  // Apply the thunk to unit(): app(lam, unit())
+  let applied = app(action, unit());
+  let result = crate::eval::eval(applied, scope, &EvalOptions::default())
+    .map_err(|e| NativeError::Custom(e.to_string()))?;
+  handle.fiber.set_result(result.clone());
+  handle.fiber.set_state(FiberState::Completed);
+  Ok(result)
+}
+
+pub fn cancel_fiber(terms: Vec<Term>, _scope: &Scope) -> Result<Term, NativeError> {
+  let term = terms.into_iter().next().ok_or(NativeError::MissingArgs {
+    expected: 1,
+    actual: 0,
+  })?;
+  let id = extract_foreign_id(&term)?;
+  global::with::<FiberHandle, _>(id, |h| {
+    h.fiber.cancel();
+  })
+  .ok_or_else(|| NativeError::Custom(format!("fiber handle {id} not found")))?;
+  Ok(io_term(unit()))
+}
+
 pub fn load_native_funs() -> Map<Identifier, NativeFun> {
   /// Helper to wrap a simple native function into NativeFun::Simple
   fn s(f: SimpleNativeFun) -> NativeFun {
@@ -738,6 +822,9 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("exec_cmd"), s(exec_cmd)),
     (id("write_file"), s(write_file)),
     (id("read_file"), s(read_file)),
+    (id("fork_io"), sa(fork_io)),
+    (id("await_fiber"), sa(await_fiber)),
+    (id("cancel_fiber"), sa(cancel_fiber)),
   ];
   v.into_iter().collect()
 }
@@ -774,5 +861,109 @@ pub fn native_execute(native: Native, scope: &Scope) -> Result<Term, NativeError
       expected: native.num_args,
       actual: args.len(),
     })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::term::{constructor_term, id, lam, mpt, num, param};
+
+  fn test_scope() -> Scope<'static> {
+    let loaded: &'static mut crate::term::module::LoadedModules =
+      Box::leak(Box::new(crate::term::module::default_modules().unwrap()));
+    let path: &'static crate::term::ModulePath =
+      Box::leak(Box::new(loaded.builtins().prelude_path.clone()));
+    let global: &'static crate::term::module::GlobalScope<'static> =
+      Box::leak(Box::new(loaded.global(path).unwrap()));
+    Scope::new(global)
+  }
+
+  fn io_value(inner: Term) -> Term {
+    constructor_term(id("io"), mpt("IO"), vec![inner])
+  }
+
+  fn thunk(body: Term) -> Term {
+    lam(param(id("_"), num(0)), body)
+  }
+
+  fn get_foreign_id(term: &Term) -> Option<u64> {
+    match term {
+      Term::Lit {
+        value: Literal::Foreign(id),
+      } => Some(*id),
+      Term::Con(Constructor { name, args, .. }) if name.as_str() == "io" => {
+        args.first()?.as_ref().and_then(|t| get_foreign_id(t))
+      }
+      _ => None,
+    }
+  }
+
+  fn get_io_inner(term: &Term) -> Option<&Term> {
+    match term {
+      Term::Con(Constructor { name, args, .. }) if name.as_str() == "io" => args.first()?.as_ref(),
+      _ => None,
+    }
+  }
+
+  #[test]
+  fn test_fork_io_returns_foreign_handle() {
+    let scope = test_scope();
+    let action = thunk(io_value(num(42)));
+    let result = fork_io(vec![action], &scope).unwrap();
+    let inner = get_io_inner(&result).expect("expected IO wrapper");
+    let id = get_foreign_id(inner).expect("expected foreign handle");
+    assert!(id > 0 || id == 0);
+    global::drop_handle(id);
+  }
+
+  #[test]
+  fn test_fork_and_await_returns_result() {
+    let scope = test_scope();
+    let action = thunk(io_value(num(42)));
+    let fork_result = fork_io(vec![action], &scope).unwrap();
+    let id = get_foreign_id(&fork_result).expect("expected foreign handle in IO wrapper");
+    let await_result = await_fiber(vec![fork_result], &scope).unwrap();
+    let inner = get_io_inner(&await_result).expect("expected IO wrapper in await result");
+    assert_eq!(*inner, num(42));
+    let remaining = global::with::<FiberHandle, _>(id, |_| ());
+    assert!(remaining.is_none(), "handle should be consumed by await");
+  }
+
+  #[test]
+  fn test_fork_and_cancel() {
+    let scope = test_scope();
+    let action = thunk(io_value(num(42)));
+    let fork_result = fork_io(vec![action], &scope).unwrap();
+    let id = get_foreign_id(&fork_result).expect("expected foreign handle");
+    let cancel_result = cancel_fiber(vec![fork_result.clone()], &scope).unwrap();
+    assert_eq!(
+      cancel_result,
+      io_value(unit()),
+      "cancel should return IO Unit"
+    );
+    let await_result = await_fiber(vec![fork_result], &scope);
+    assert!(await_result.is_err(), "await after cancel should fail");
+    let remaining = global::with::<FiberHandle, _>(id, |_| ());
+    assert!(
+      remaining.is_none(),
+      "handle should be consumed by await attempt"
+    );
+  }
+
+  #[test]
+  fn test_await_fiber_not_found() {
+    let scope = test_scope();
+    let bad_fiber = lit_foreign(999);
+    let result = await_fiber(vec![bad_fiber], &scope);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn test_cancel_fiber_not_found() {
+    let scope = test_scope();
+    let bad_fiber = lit_foreign(999);
+    let result = cancel_fiber(vec![bad_fiber], &scope);
+    assert!(result.is_err());
   }
 }

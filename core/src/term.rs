@@ -1608,6 +1608,12 @@ pub fn io_term(term: Term) -> Term {
   constructor_term(id("io"), mpt("IO"), vec![term])
 }
 
+pub fn lit_foreign(id: u64) -> Term {
+  Term::Lit {
+    value: Literal::Foreign(id),
+  }
+}
+
 pub fn some(term: Term) -> Term {
   constructor_term(id("some"), mpt("Option"), vec![term])
 }
