@@ -39,6 +39,8 @@ enum Commands {
     no_color: bool,
     #[arg(long)]
     max_depth: Option<u64>,
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
   },
 
   Test {
@@ -60,6 +62,8 @@ enum Commands {
     jobs: Option<usize>,
     #[arg(long, default_value_t = false)]
     sequential: bool,
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
   },
 
   #[cfg(feature = "llvm")]
@@ -76,6 +80,8 @@ enum Commands {
     keep_intermediates: bool,
     #[arg(short, long, default_value_t = false)]
     debug: bool,
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
   },
 }
 
@@ -123,6 +129,7 @@ fn main() -> Result<(), String> {
       color,
       no_color,
       max_depth,
+      mote_path,
     } => {
       let use_colors = color && !no_color;
       let result = run(
@@ -134,6 +141,7 @@ fn main() -> Result<(), String> {
           use_colors,
           max_recursion_depth: max_depth,
         },
+        mote_path,
       );
       match result {
         Ok(_) => (),
@@ -153,6 +161,7 @@ fn main() -> Result<(), String> {
       timeout,
       jobs,
       sequential,
+      mote_path,
     } => {
       let use_colors = color && !no_color;
       let num_threads = if sequential {
@@ -174,6 +183,7 @@ fn main() -> Result<(), String> {
         },
         num_threads,
         timeout.map(|s| std::time::Duration::from_secs_f64(s)),
+        mote_path,
       );
       match result {
         Ok(_) => (),
@@ -191,6 +201,7 @@ fn main() -> Result<(), String> {
       output_kind,
       keep_intermediates,
       debug,
+      mote_path: _mote_path,
     } => {
       let output_kind = match output_kind.as_str() {
         "exe" => OutputKind::Executable,

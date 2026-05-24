@@ -173,6 +173,7 @@ pub struct LoadedModules {
   builtins: Builtins,
   native: Map<Identifier, NativeFun>,
   pub config: LoadedModulesConfig,
+  search_paths: SearchPaths,
 }
 
 impl Display for LoadedModules {
@@ -198,6 +199,7 @@ impl LoadedModules {
       builtins,
       native,
       config: Default::default(),
+      search_paths: SearchPaths::empty(),
     }
   }
   pub fn test_mode(&self) -> bool {
@@ -205,6 +207,12 @@ impl LoadedModules {
   }
   pub fn set_test_mode(&mut self, test_mode: bool) {
     self.config.test_mode = test_mode;
+  }
+  pub fn search_paths(&self) -> &SearchPaths {
+    &self.search_paths
+  }
+  pub fn set_search_paths(&mut self, paths: SearchPaths) {
+    self.search_paths = paths;
   }
   pub fn get_module_mut(&mut self, path: &ModulePath) -> Option<&mut Module> {
     self.modules.get_mut(path)
@@ -231,6 +239,7 @@ impl LoadedModules {
       modules: Map::new(),
       builtins: Builtins::new(),
       config: Default::default(),
+      search_paths: SearchPaths::empty(),
     }
   }
 
@@ -1738,7 +1747,8 @@ fn load_module_files_impl(
     return Ok(loaded);
   }
   let parse_start = Instant::now();
-  let decls = load_decls(path)?;
+  let search_paths = loaded.search_paths().clone();
+  let decls = load_decls(path, &search_paths)?;
   let parse_dur = parse_start.elapsed();
   let mut loaded = load_decl_uses_modules(&decls, loaded, in_progress)?;
   let decls = filter_cfg_test_decls(decls, loaded.config.test_mode);
@@ -1764,8 +1774,17 @@ fn load_module_files_impl(
   Ok(loaded)
 }
 
-pub fn load_decls(path: &ModulePath) -> Result<Vec<SourceContext<Decl>>, String> {
-  let file_path = path.to_file_path();
+pub fn load_decls(
+  path: &ModulePath,
+  search_paths: &SearchPaths,
+) -> Result<Vec<SourceContext<Decl>>, String> {
+  let file_path = path
+    .resolve_file_path(search_paths)
+    .or_else(|| {
+      let p = path.to_file_path();
+      if p.exists() { Some(p) } else { None }
+    })
+    .ok_or_else(|| format!("module not found: {path}"))?;
   let text = read_to_string(&file_path).map_err(|e| e.to_string())?;
   load_decls_from_text_with_path(&text, Some(&file_path))
 }

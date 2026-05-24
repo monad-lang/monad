@@ -2051,6 +2051,16 @@ impl ModulePath {
     p
   }
 
+  pub fn resolve_file_path(&self, search_paths: &SearchPaths) -> Option<PathBuf> {
+    for dir in &search_paths.0 {
+      let candidate = dir.join(self.to_file_path());
+      if candidate.exists() {
+        return Some(candidate);
+      }
+    }
+    None
+  }
+
   pub fn open(&self, opens: &Vec<&Open>) -> Vec<ModulePath> {
     opens
       .iter()
@@ -2103,6 +2113,33 @@ impl ModulePath {
     } else {
       None
     }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchPaths(pub(crate) Vec<PathBuf>);
+
+impl SearchPaths {
+  pub fn new(paths: Vec<PathBuf>) -> Self {
+    SearchPaths(paths)
+  }
+
+  pub fn empty() -> Self {
+    SearchPaths(Vec::new())
+  }
+
+  pub fn push(&mut self, path: PathBuf) {
+    self.0.push(path);
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.0.is_empty()
+  }
+}
+
+impl Default for SearchPaths {
+  fn default() -> Self {
+    SearchPaths::empty()
   }
 }
 

@@ -26,7 +26,7 @@ use crate::term::module::module;
 use crate::term::module::{
   LoadedModules, default_modules, load_module_files, load_module_from_text,
 };
-use crate::term::{Constructor, ModulePath, mpt, strings_to_list_term};
+use crate::term::{Constructor, ModulePath, SearchPaths, mpt, strings_to_list_term};
 use crate::term::{app, id};
 
 pub mod diag;
@@ -64,6 +64,7 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
   }
   let mut loaded_modules = default_modules().map_err(|e| format!("{e}"))?;
   loaded_modules.config.benchmark = options.benchmark;
+  loaded_modules.set_search_paths(build_default_search_paths(&PathBuf::from("."), &[]));
   let module_path = ModulePath::top("'repl");
   let module = module(
     module_path.clone(),
@@ -180,11 +181,18 @@ pub fn eval_kernel(term: Term, scope: &crate::term::module::Scope) -> Result<Eva
   crate::eval_term::eval_entry(&lowered, &env).map_err(|e| format!("eval: {e}"))
 }
 
-pub fn run(input: PathBuf, args: Vec<String>, options: EvalOptions) -> Result<(), String> {
+pub fn run(
+  input: PathBuf,
+  args: Vec<String>,
+  options: EvalOptions,
+  extra_mote_paths: Vec<PathBuf>,
+) -> Result<(), String> {
   let path: ModulePath = input.clone().into();
   let source = fs::read_to_string(&input).map_err(|e| format!("{e}"))?;
   let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
   loaded.config.benchmark = options.benchmark;
+  let search_paths = build_default_search_paths(&input, &extra_mote_paths);
+  loaded.set_search_paths(search_paths);
   load_module_from_text(&source, path.clone(), &mut loaded).map_err(|e| format!("{e}"))?;
   let module = loaded
     .get_module(&path)
@@ -238,6 +246,43 @@ pub fn vec_fmt<T: Display>(v: &[T]) -> String {
     .map(|t| format!("{t}"))
     .collect::<Vec<String>>()
     .join(", ")
+}
+
+fn build_default_search_paths(input: &PathBuf, extra_paths: &[PathBuf]) -> SearchPaths {
+  let mut paths = SearchPaths::empty();
+
+  if let Some(parent) = input.parent() {
+    paths.push(parent.to_path_buf());
+  }
+
+  paths.push(PathBuf::from("."));
+
+  if let Ok(cwd) = std::env::current_dir() {
+    let motes_dir = cwd.join("motes");
+    if motes_dir.is_dir() {
+      paths.push(motes_dir.clone());
+      if let Ok(entries) = std::fs::read_dir(&motes_dir) {
+        for entry in entries.flatten() {
+          let src_dir = entry.path().join("src");
+          if src_dir.is_dir() {
+            paths.push(src_dir);
+          }
+        }
+      }
+    }
+  }
+
+  if let Ok(monad_path) = std::env::var("MONAD_PATH") {
+    for dir in std::env::split_paths(&monad_path) {
+      paths.push(dir);
+    }
+  }
+
+  for p in extra_paths {
+    paths.push(p.clone());
+  }
+
+  paths
 }
 
 const GREEN: &str = "\x1b[32m";
@@ -651,6 +696,7 @@ pub fn run_tests(
   options: EvalOptions,
   num_threads: usize,
   test_timeout: Option<std::time::Duration>,
+  extra_mote_paths: Vec<PathBuf>,
 ) -> Result<(), String> {
   let mut files: Vec<PathBuf> = Vec::new();
   for input in &inputs {
@@ -666,6 +712,13 @@ pub fn run_tests(
   let mut master_loaded = default_modules().map_err(|e| format!("{e}"))?;
   master_loaded.set_test_mode(true);
   master_loaded.config.benchmark = options.benchmark;
+
+  let search_paths = if let Some(first_input) = inputs.first() {
+    build_default_search_paths(first_input, &extra_mote_paths)
+  } else {
+    build_default_search_paths(&PathBuf::from("."), &extra_mote_paths)
+  };
+  master_loaded.set_search_paths(search_paths);
 
   // Ensure std/test is loaded (for Test.assert)
   let test_path: ModulePath = ModulePath::new(vec![id("std"), id("test")]);

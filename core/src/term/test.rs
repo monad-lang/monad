@@ -568,3 +568,83 @@ fn test_merge_detect_rejects_duplicate() {
   assert!(result.is_err());
   assert!(result.unwrap_err().contains("duplicate"));
 }
+
+#[test]
+fn test_search_paths_empty() {
+  let sp = SearchPaths::empty();
+  assert!(sp.is_empty());
+}
+
+#[test]
+fn test_search_paths_new_and_push() {
+  let mut sp = SearchPaths::new(vec![PathBuf::from("/a")]);
+  assert!(!sp.is_empty());
+  sp.push(PathBuf::from("/b"));
+  assert_eq!(sp.0.len(), 2);
+}
+
+#[test]
+fn test_search_paths_default_is_empty() {
+  let sp = SearchPaths::default();
+  assert!(sp.is_empty());
+}
+
+fn random_tmp_dir(label: &str) -> PathBuf {
+  let prefix = format!("monad-test-{}-{:x}", label, std::process::id());
+  PathBuf::from("/tmp").join(prefix)
+}
+
+#[test]
+fn test_resolve_file_path_finds_in_first_dir() {
+  let dir1 = random_tmp_dir("s1a");
+  let dir2 = random_tmp_dir("s1b");
+
+  let sp = SearchPaths::new(vec![dir1.clone(), dir2]);
+
+  std::fs::create_dir_all(&dir1).unwrap();
+  std::fs::write(dir1.join("test_mod.mo"), "").unwrap();
+
+  let mp = mpt("test_mod");
+  let found = mp.resolve_file_path(&sp);
+  assert!(found.is_some());
+
+  std::fs::remove_dir_all(&dir1).unwrap();
+}
+
+#[test]
+fn test_resolve_file_path_finds_in_second_dir_when_first_missing() {
+  let dir1 = random_tmp_dir("s2a");
+  let dir2 = random_tmp_dir("s2b");
+
+  let sp = SearchPaths::new(vec![dir1, dir2.clone()]);
+
+  std::fs::create_dir_all(&dir2).unwrap();
+  std::fs::write(dir2.join("test_mod.mo"), "").unwrap();
+
+  let mp = mpt("test_mod");
+  let found = mp.resolve_file_path(&sp);
+  assert!(found.is_some());
+  assert!(found.unwrap().starts_with(dir2.to_str().unwrap()));
+
+  std::fs::remove_dir_all(&dir2).unwrap();
+}
+
+#[test]
+fn test_resolve_file_path_none_when_not_in_any_dir() {
+  let dir1 = random_tmp_dir("nonexistent-1");
+  let dir2 = random_tmp_dir("nonexistent-2");
+
+  let sp = SearchPaths::new(vec![dir1, dir2]);
+
+  let mp = mpt("no_such_module");
+  let found = mp.resolve_file_path(&sp);
+  assert!(found.is_none());
+}
+
+#[test]
+fn test_resolve_file_path_empty_search_paths_returns_none() {
+  let sp = SearchPaths::empty();
+  let mp = mpt("anything");
+  let found = mp.resolve_file_path(&sp);
+  assert!(found.is_none());
+}
