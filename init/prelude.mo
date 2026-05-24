@@ -148,6 +148,16 @@ class BOrd A {
   def gt (a b : A) : Bool
 }
 
+instance BOrd Bool {
+  def lt (a b : Bool) : Bool :=
+    if a then false
+    else b
+
+  def gt (a b : Bool) : Bool :=
+    if a then Bool.not b
+    else false
+}
+
 /// Hashable: produce a hash value for an element.
 class Hashable A {
   def hash (a : A) : U64

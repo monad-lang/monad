@@ -3,7 +3,6 @@
 // Provides:
 //   - Ordering type (lt, eq, gt)
 //   - Ord A — total ordering (uses BEq from prelude)
-//   - Hashable A — hash to U64
 //   - Semigroup A — associative combine
 //   - Monoid A — Semigroup with empty
 //   - Default A — default value
@@ -26,11 +25,6 @@ open Ordering
 /// Total ordering with three-way comparison.
 class [BEq A] Ord A {
     def compare : A -> A -> Ordering
-}
-
-/// Types that can be hashed to U64.
-class Hashable A {
-    def hash : A -> U64
 }
 
 /// Associative binary operation.
@@ -162,6 +156,18 @@ instance Ord Bool {
         else if a then gt
         else lt
 }
+
+instance Ord U8 {
+    def compare (a b : U8) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
+def ordering_show (o : Ordering) : String :=
+    if BEq.beq o lt then "lt"
+    else if BEq.beq o eq then "eq"
+    else "gt"
 
 // ---------- Tests ----------
 
@@ -365,3 +371,39 @@ def test_ord_bool_true_true : Bool :=
         eq => true,
         gt => false
     }
+
+@[test]
+def test_ord_u8_lt : Bool :=
+    match Ord.compare 1u8 5u8 {
+        lt => true,
+        eq => false,
+        gt => false
+    }
+
+@[test]
+def test_ord_u8_eq : Bool :=
+    match Ord.compare 42u8 42u8 {
+        lt => false,
+        eq => true,
+        gt => false
+    }
+
+@[test]
+def test_ord_u8_gt : Bool :=
+    match Ord.compare 10u8 3u8 {
+        lt => false,
+        eq => false,
+        gt => true
+    }
+
+@[test]
+def test_ordering_show_lt : Bool :=
+    ordering_show lt == "lt"
+
+@[test]
+def test_ordering_show_eq : Bool :=
+    ordering_show eq == "eq"
+
+@[test]
+def test_ordering_show_gt : Bool :=
+    ordering_show gt == "gt"

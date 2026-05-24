@@ -519,3 +519,37 @@ def test_prop_nested_inference : Bool :=
 def get_sort {A : Sort 1} (x : Sort 1) : Sort 1 := x
 
 def get_identity {A : Sort 1} (x : A) : A := x
+
+// BOrd Bool tests
+
+@[test]
+def test_bord_bool_lt_false_true : Bool :=
+    BOrd.lt false true
+
+@[test]
+def test_bord_bool_lt_true_false : Bool :=
+    Bool.not (BOrd.lt true false)
+
+@[test]
+def test_bord_bool_lt_false_false : Bool :=
+    Bool.not (BOrd.lt false false)
+
+@[test]
+def test_bord_bool_lt_true_true : Bool :=
+    Bool.not (BOrd.lt true true)
+
+@[test]
+def test_bord_bool_gt_true_false : Bool :=
+    BOrd.gt true false
+
+@[test]
+def test_bord_bool_gt_false_true : Bool :=
+    Bool.not (BOrd.gt false true)
+
+@[test]
+def test_bord_bool_gt_true_true : Bool :=
+    Bool.not (BOrd.gt true true)
+
+@[test]
+def test_bord_bool_gt_false_false : Bool :=
+    Bool.not (BOrd.gt false false)
