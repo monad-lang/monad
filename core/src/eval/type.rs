@@ -1286,11 +1286,6 @@ pub fn match_resolve_type<'a>(
   if !left.is_known() {
     return Ok(right.clone());
   }
-  if let Var { name } = right
-    && name.is_id()
-  {
-    return Ok(left.clone());
-  }
   let free_vars = FreeVars::from_locals(scope);
   let free_vars = match_determine_type_vars_with_scope(left, right, free_vars, scope)?;
   let typ = apply_free_type_vars(left.clone(), &free_vars);

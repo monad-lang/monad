@@ -110,18 +110,58 @@ instance Semigroup String {
     def combine (a b : String) : String := a ++ b
 }
 
-// Monoid String and Default Bool deferred: compiler bug with
-// class methods returning bare type params (e.g. `def empty : A`).
-// See known limitation below.
+instance Monoid String {
+    def empty : String := ""
+}
 
-// ---------- Known Limitations ----------
-// Class methods returning bare type parameters (e.g. Monoid.empty : A,
-// Default.default : A, Bounded.min_bound : A) fail type checking in
-// instance bodies. The class method type gets forall-wrapped as
-// {A : Type} -> A, and match_resolve_type's early return for ID types
-// returns the forall unwrapped, failing downstream type unification.
-// Workaround: instances for Monoid, Default, Bounded must be deferred
-// until this is fixed in the type checker.
+instance Default Bool {
+    def default : Bool := false
+}
+
+instance Default I64 {
+    def default : I64 := 0
+}
+
+instance Enum Ordering {
+    def succ (o : Ordering) : Ordering :=
+        if BEq.beq o lt then eq
+        else if BEq.beq o eq then gt
+        else lt
+
+    def pred (o : Ordering) : Ordering :=
+        if BEq.beq o lt then gt
+        else if BEq.beq o eq then lt
+        else eq
+
+    def to_nat (o : Ordering) : Nat :=
+        if BEq.beq o lt then Nat.zero
+        else if BEq.beq o eq then Nat.succ Nat.zero
+        else Nat.succ (Nat.succ Nat.zero)
+
+    def from_nat (n : Nat) : Ordering :=
+        if Nat.eq n Nat.zero then lt
+        else if Nat.eq n (Nat.succ Nat.zero) then eq
+        else gt
+}
+
+instance Bounded Ordering {
+    def min_bound : Ordering := lt
+    def max_bound : Ordering := gt
+}
+
+instance Ord I64 {
+    def compare (a b : I64) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
+instance Ord Bool {
+    def compare (a b : Bool) : Ordering :=
+        if a == b then eq
+        else if a then gt
+        else lt
+}
 
 // ---------- Tests ----------
 
@@ -222,3 +262,106 @@ def test_semigroup_string_assoc : Bool :=
     let left : String := Semigroup.combine (Semigroup.combine a b) c in
     let right : String := Semigroup.combine a (Semigroup.combine b c) in
     left == right
+
+@[test]
+def test_monoid_empty_string : Bool :=
+    let empty_str : String := Monoid.empty in
+    empty_str == ""
+
+@[test]
+def test_default_bool : Bool :=
+    Default.default == false
+
+@[test]
+def test_default_i64 : Bool :=
+    Default.default == 0i64
+
+@[test]
+def test_default_i64_ne_not_false : Bool :=
+    Bool.not (Default.default == 1i64)
+
+@[test]
+def test_enum_succ : Bool :=
+    let s1 := Enum.succ lt in
+    let s2 := Enum.succ eq in
+    let s3 := Enum.succ gt in
+    BEq.beq s1 eq && BEq.beq s2 gt && BEq.beq s3 lt
+
+@[test]
+def test_enum_pred : Bool :=
+    let p1 := Enum.pred gt in
+    let p2 := Enum.pred lt in
+    let p3 := Enum.pred eq in
+    BEq.beq p1 eq && BEq.beq p2 gt && BEq.beq p3 lt
+
+@[test]
+def test_enum_to_nat : Bool :=
+    let n0 := Enum.to_nat lt in
+    let n1 := Enum.to_nat eq in
+    let n2 := Enum.to_nat gt in
+    let zero := Nat.zero in
+    let one := Nat.succ Nat.zero in
+    let two := Nat.succ (Nat.succ Nat.zero) in
+    Nat.eq n0 zero && Nat.eq n1 one && Nat.eq n2 two
+
+@[test]
+def test_enum_from_nat : Bool :=
+    let f0 := Enum.from_nat Nat.zero in
+    let f1 := Enum.from_nat (Nat.succ Nat.zero) in
+    BEq.beq f0 lt && BEq.beq f1 eq
+
+@[test]
+def test_bounded_min : Bool :=
+    BEq.beq Bounded.min_bound lt
+
+@[test]
+def test_bounded_max : Bool :=
+    BEq.beq Bounded.max_bound gt
+
+@[test]
+def test_ord_i64_lt : Bool :=
+    match Ord.compare 1i64 5i64 {
+        lt => true,
+        eq => false,
+        gt => false
+    }
+
+@[test]
+def test_ord_i64_eq : Bool :=
+    match Ord.compare 42i64 42i64 {
+        lt => false,
+        eq => true,
+        gt => false
+    }
+
+@[test]
+def test_ord_i64_gt : Bool :=
+    match Ord.compare 10i64 3i64 {
+        lt => false,
+        eq => false,
+        gt => true
+    }
+
+@[test]
+def test_ord_bool_false_true : Bool :=
+    match Ord.compare false true {
+        lt => true,
+        eq => false,
+        gt => false
+    }
+
+@[test]
+def test_ord_bool_true_false : Bool :=
+    match Ord.compare true false {
+        lt => false,
+        eq => false,
+        gt => true
+    }
+
+@[test]
+def test_ord_bool_true_true : Bool :=
+    match Ord.compare true true {
+        lt => false,
+        eq => true,
+        gt => false
+    }
