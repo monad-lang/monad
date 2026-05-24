@@ -56,6 +56,19 @@ enum RawDependency {
 }
 
 impl Manifest {
+  pub fn discover(start_dir: &Path) -> Option<(PathBuf, Self)> {
+    let mut current = start_dir.to_path_buf();
+    loop {
+      let candidate = current.join("mote.toml");
+      if candidate.is_file() {
+        return Manifest::parse(&candidate).ok().map(|m| (candidate, m));
+      }
+      if !current.pop() {
+        return None;
+      }
+    }
+  }
+
   pub fn parse(path: &Path) -> Result<Self, String> {
     let content = std::fs::read_to_string(path)
       .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
@@ -171,6 +184,63 @@ version = "1.2.3"
     assert_eq!(manifest.mote.name, "test-mote");
     assert_eq!(manifest.mote.version, "1.2.3");
     assert!(manifest.dependencies.is_empty());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn test_discover_finds_in_current_dir() {
+    let dir =
+      PathBuf::from("/tmp").join(format!("monad-test-discover-cur-{:x}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mote_toml = dir.join("mote.toml");
+    std::fs::write(
+      &mote_toml,
+      r#"[mote]
+name = "found-in-root"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+
+    let (path, manifest) = Manifest::discover(&dir).expect("Should find mote.toml");
+    assert_eq!(manifest.mote.name, "found-in-root");
+    assert_eq!(path, mote_toml.canonicalize().unwrap());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn test_discover_walks_up() {
+    let dir =
+      PathBuf::from("/tmp").join(format!("monad-test-discover-up-{:x}", std::process::id()));
+    let sub = dir.join("a").join("b").join("c");
+    std::fs::create_dir_all(&sub).unwrap();
+    let mote_toml = dir.join("mote.toml");
+    std::fs::write(
+      &mote_toml,
+      r#"[mote]
+name = "walked-up"
+version = "0.2.0"
+"#,
+    )
+    .unwrap();
+
+    let (path, manifest) = Manifest::discover(&sub).expect("Should walk up to find mote.toml");
+    assert_eq!(manifest.mote.name, "walked-up");
+    assert_eq!(path, mote_toml.canonicalize().unwrap());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn test_discover_none_when_no_mote_toml() {
+    let dir =
+      PathBuf::from("/tmp").join(format!("monad-test-discover-none-{:x}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let result = Manifest::discover(&dir);
+    assert!(result.is_none());
 
     std::fs::remove_dir_all(&dir).unwrap();
   }

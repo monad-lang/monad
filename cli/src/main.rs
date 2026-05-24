@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use monad_core::{eval::EvalOptions, run, run_tests};
+use monad_core::{eval::EvalOptions, run, run_tests, term::mote::Manifest};
 
 #[cfg(feature = "repl")]
 use monad_core::repl;
@@ -41,6 +41,8 @@ enum Commands {
     max_depth: Option<u64>,
     #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
     mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
   },
 
   Test {
@@ -64,6 +66,8 @@ enum Commands {
     sequential: bool,
     #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
     mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
   },
 
   #[cfg(feature = "llvm")]
@@ -82,6 +86,8 @@ enum Commands {
     debug: bool,
     #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
     mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
   },
 }
 
@@ -94,6 +100,31 @@ enum Commands {
 struct Cli {
   #[command(subcommand)]
   command: Commands,
+}
+
+fn augment_mote_paths(mote_path: &mut Vec<PathBuf>, manifest_path: Option<&PathBuf>) {
+  let (manifest, project_root) = if let Some(mp) = manifest_path {
+    let root = mp.parent().map(|p| p.to_path_buf());
+    (Manifest::parse(mp).ok(), root)
+  } else {
+    std::env::current_dir()
+      .ok()
+      .and_then(|cwd| Manifest::discover(&cwd))
+      .map(|(path, m)| {
+        let root = path.parent().map(|p| p.to_path_buf());
+        (Some(m), root)
+      })
+      .unwrap_or((None, None))
+  };
+
+  if manifest.is_some() {
+    if let Some(root) = project_root {
+      let src_dir = root.join("src");
+      if src_dir.is_dir() && !mote_path.contains(&src_dir) {
+        mote_path.push(src_dir);
+      }
+    }
+  }
 }
 
 fn main() -> Result<(), String> {
@@ -129,9 +160,11 @@ fn main() -> Result<(), String> {
       color,
       no_color,
       max_depth,
-      mote_path,
+      mut mote_path,
+      manifest_path,
     } => {
       let use_colors = color && !no_color;
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
       let result = run(
         input,
         args,
@@ -161,9 +194,11 @@ fn main() -> Result<(), String> {
       timeout,
       jobs,
       sequential,
-      mote_path,
+      mut mote_path,
+      manifest_path,
     } => {
       let use_colors = color && !no_color;
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
       let num_threads = if sequential {
         1
       } else {
@@ -201,8 +236,10 @@ fn main() -> Result<(), String> {
       output_kind,
       keep_intermediates,
       debug,
-      mote_path: _mote_path,
+      mut mote_path,
+      manifest_path,
     } => {
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
       let output_kind = match output_kind.as_str() {
         "exe" => OutputKind::Executable,
         "shared" | "so" => OutputKind::SharedObject,
