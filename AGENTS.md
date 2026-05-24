@@ -565,6 +565,19 @@ def function_name (args: Types) : ReturnType
 ### `std/test.mo`
 - `Test.assert` for assertion-based testing
 
+### Module Dependency Boundaries
+
+**`init/` must never depend on `std/`.** The `init/` directory contains core language definitions (prelude, io, types) that are foundational. The `std/` directory contains higher-level modules that depend on `init/`.
+
+- `std/` modules may `use` `init/` modules (e.g., `use io`)
+- `init/` modules must **NOT** `use` `std/` modules
+- **Tests for `std/` modules go in `std/`**, not in `init/` — `init/tests.mo` must not import from `std/`
+
+When adding a new `std/` module with tests, place the test file within `std/`:
+```bash
+cargo run -- test std/   # runs all std/ tests including new ones
+```
+
 ## Style Conventions
 
 - Use 2 spaces for indentation
@@ -879,8 +892,10 @@ scope builder (`module.rs`) is usually the culprit.
 
 1. **Add a parser test** (`core/src/parser/test/`) if the bug involves syntax
 2. **Add an eval test** (`core/src/eval/test.rs`) if the bug involves evaluation
-3. **Add a Monad test** (`@[test]` in `init/tests.mo`) if the bug involves
-   language semantics end-to-end
+3. **Add a Monad test** — use `@[test]` in:
+   - `init/tests.mo` for bugs involving core language semantics (prelude types, operators, etc.)
+   - `std/<module>_test.mo` for bugs in `std/` modules (concurrency, collections, etc.)
+   - Never add `std/`-dependent tests to `init/tests.mo` — `init/` must not depend on `std/`
 4. **Test the failing case first** — confirm it fails before your fix, then
    confirm it passes after
 
