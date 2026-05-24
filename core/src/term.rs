@@ -1,4 +1,5 @@
 pub mod module;
+pub mod mote;
 #[cfg(test)]
 pub mod test;
 
