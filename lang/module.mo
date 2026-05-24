@@ -28,3 +28,10 @@ def parse_module (path : ModulePath) (text : String) : ScopeData :=
         success _ decls => build_scope_from_decls path decls,
         fail _ => build_scope_from_decls path empty_decls
     }
+
+@[test]
+def test_parse_all_decls_empty : Bool :=
+    match parse_all_decls "" {
+        success _ _ => true,
+        fail _ => false
+    }

@@ -1814,6 +1814,11 @@ pub fn type_check_free_var(
       // Constraint guarantees an instance exists, but the
       // concrete type is abstract. Keep the original term.
     }
+    VarRef::Free { ref path, .. } => {
+      term = Var {
+        name: path.clone().into(),
+      };
+    }
     _ => {
       if let NameRef::Op(op) = nref {
         if let Ok(infix) = scope.global().find_infix(op) {

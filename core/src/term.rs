@@ -1226,7 +1226,11 @@ pub enum VarRef<'a> {
   /// A local variable
   Local { typ: &'a Term },
   /// A free var ref
-  Free { term: &'a Term, typ: &'a Term },
+  Free {
+    path: ModulePath,
+    term: &'a Term,
+    typ: &'a Term,
+  },
   /// Indicates that the existing ref needs to be updated
   UpdateRef {
     new_path: &'a ModulePath,
@@ -1249,7 +1253,11 @@ impl<'a> Typed for VarRef<'a> {
   fn typ(&self) -> &Term {
     match self {
       VarRef::Local { typ } => typ,
-      VarRef::Free { term: _, typ } => typ,
+      VarRef::Free {
+        path: _,
+        term: _,
+        typ,
+      } => typ,
       VarRef::UpdateRef { typ, .. } => typ,
       VarRef::ClassMethod { typ, .. } => typ,
     }
@@ -1268,8 +1276,8 @@ impl<'a> VarRef<'a> {
   }
 }
 
-pub fn free_var_ref<'a>(term: &'a Term, typ: &'a Term) -> VarRef<'a> {
-  VarRef::Free { term, typ }
+pub fn free_var_ref<'a>(path: ModulePath, term: &'a Term, typ: &'a Term) -> VarRef<'a> {
+  VarRef::Free { path, term, typ }
 }
 pub fn typed_term(term: Term, typ: Term) -> TypedTerm {
   TypedTerm { term, typ }
@@ -1851,7 +1859,7 @@ impl Def {
 }
 impl AsVarRef for Def {
   fn as_var_ref<'a>(&'a self) -> VarRef<'a> {
-    free_var_ref(&self.term, &self.typ)
+    free_var_ref(self.name.clone(), &self.term, &self.typ)
   }
 }
 
@@ -2302,6 +2310,7 @@ pub struct DefRef<'a> {
   module: &'a ModulePath,
   loc: &'a SourceRange,
   name: ModulePath,
+  full_path: ModulePath,
   typ: &'a Term,
   term: &'a Term,
 }
@@ -2320,6 +2329,7 @@ impl<'a> DefRef<'a> {
   pub fn with_name(&self, name: ModulePath) -> DefRef<'_> {
     DefRef {
       name,
+      full_path: self.full_path.clone(),
       typ: self.typ,
       term: self.term,
       loc: self.loc,
@@ -2329,6 +2339,7 @@ impl<'a> DefRef<'a> {
 
   pub fn to_var_ref(&self) -> VarRef<'_> {
     VarRef::Free {
+      path: self.full_path.clone(),
       term: self.term,
       typ: self.typ,
     }
@@ -2352,6 +2363,7 @@ impl<'a, T: AsVarRef> From<&'a T> for VarRef<'a> {
 impl<'a> AsVarRef for DefRef<'a> {
   fn as_var_ref(&self) -> VarRef<'a> {
     VarRef::Free {
+      path: self.full_path.clone(),
       term: self.term,
       typ: self.typ,
     }

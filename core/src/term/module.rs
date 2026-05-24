@@ -291,6 +291,7 @@ impl Builtins {
     DefRef {
       module: &self.path,
       name: mpt("Prop"),
+      full_path: mpt("Prop"),
       term: &self.sort_0,
       typ: &self.sort_0,
       loc: &self.loc,
@@ -301,6 +302,7 @@ impl Builtins {
     DefRef {
       module: &self.path,
       name: mpt("Type"),
+      full_path: mpt("Type"),
       term: &self.sort_1,
       typ: &self.sort_1,
       loc: &self.loc,
@@ -311,6 +313,7 @@ impl Builtins {
     DefRef {
       module: &self.path,
       name: mpt("Pred"),
+      full_path: mpt("Pred"),
       term: &self.sort_0,
       typ: &self.sort_0,
       loc: &self.loc,
@@ -797,6 +800,7 @@ impl<'a> GlobalScope<'a> {
           let prefixed_name = module.path().clone().extend(d.name.clone());
           let prefixed_def = DefRef {
             name: prefixed_name,
+            full_path: d.full_path.clone(),
             typ: d.typ,
             term: d.term,
             module: d.module,
@@ -892,6 +896,7 @@ impl<'a> GlobalScope<'a> {
           name.clone(),
           DefRef {
             name: name.clone(),
+            full_path: name.clone(),
             typ,
             term,
             module,
@@ -1274,6 +1279,7 @@ impl<'a> GlobalScope<'a> {
           .iter()
           .map(|name| DefRef {
             name: name.clone(),
+            full_path: def.name.clone(),
             typ: &def.typ,
             term: &def.term,
             module,
@@ -1281,6 +1287,7 @@ impl<'a> GlobalScope<'a> {
           })
           .chain([DefRef {
             name: name.clone(),
+            full_path: name.clone(),
             typ: &def.typ,
             term: &def.term,
             module,
@@ -1303,6 +1310,7 @@ impl<'a> GlobalScope<'a> {
               .iter()
               .map(|name| DefRef {
                 name: name.clone(),
+                full_path: cons.name.clone(),
                 typ: &cons.typ,
                 term: &cons.term,
                 module,
@@ -1310,6 +1318,7 @@ impl<'a> GlobalScope<'a> {
               })
               .chain([DefRef {
                 name: name.clone(),
+                full_path: name.clone(),
                 typ: &cons.typ,
                 term: &cons.term,
                 module,
@@ -1345,6 +1354,7 @@ impl<'a> GlobalScope<'a> {
           })
           .chain([DefRef {
             name: ind.name.clone(),
+            full_path: ind.name.clone(),
             typ: &ind.typ,
             term: &ind.term,
             module,
@@ -1371,7 +1381,8 @@ impl<'a> GlobalScope<'a> {
               .extend(ModulePath::single(name.clone()));
 
             DefRef {
-              name: full_name,
+              name: full_name.clone(),
+              full_path: full_name,
               typ: &imp.typ,
               term: &imp.term,
               module,
@@ -2088,7 +2099,8 @@ impl Module {
           DefRef {
             module: &self.path,
             loc: &instance.loc,
-            name,
+            name: name.clone(),
+            full_path: name,
             typ: &imp.typ,
             term: &imp.term,
           }
@@ -2103,6 +2115,7 @@ impl Module {
         if ind.variant == InductiveVariant::Class {
           vec![DefRef {
             name: ind.name.clone(),
+            full_path: ind.name.clone(),
             typ: &ind.typ,
             term: &ind.term,
             module: &self.path,
@@ -2120,6 +2133,7 @@ impl Module {
                 .iter()
                 .map(|name| DefRef {
                   name: name.clone(),
+                  full_path: cons.name.clone(),
                   typ: &cons.typ,
                   term: &cons.term,
                   module: &self.path,
@@ -2127,6 +2141,7 @@ impl Module {
                 })
                 .chain([DefRef {
                   name: name.clone(),
+                  full_path: name.clone(),
                   typ: &cons.typ,
                   term: &cons.term,
                   module: &self.path,
@@ -2136,6 +2151,7 @@ impl Module {
             })
             .chain([DefRef {
               name: ind.name.clone(),
+              full_path: ind.name.clone(),
               typ: &ind.typ,
               term: &ind.term,
               module: &self.path,
@@ -2150,11 +2166,13 @@ impl Module {
       .iter()
       .filter(|(_, def)| test_mode || !def.value().has_test_attr())
       .flat_map(|(name, def)| {
+        let full_name = name.clone();
         let names = name.open(opens);
         names
           .iter()
           .map(|name| DefRef {
             name: name.clone(),
+            full_path: full_name.clone(),
             typ: &def.typ,
             term: &def.term,
             module: &self.path,
@@ -2162,6 +2180,7 @@ impl Module {
           })
           .chain([DefRef {
             name: name.clone(),
+            full_path: full_name.clone(),
             typ: &def.typ,
             term: &def.term,
             module: &self.path,
