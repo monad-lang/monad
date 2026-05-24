@@ -164,6 +164,62 @@ instance Ord U8 {
         else gt
 }
 
+instance Ord I8 {
+    def compare (a b : I8) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
+instance Ord I16 {
+    def compare (a b : I16) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
+instance Ord I32 {
+    def compare (a b : I32) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
+instance Ord U16 {
+    def compare (a b : U16) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
+instance Ord U32 {
+    def compare (a b : U32) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
+instance Ord U64 {
+    def compare (a b : U64) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
+instance Ord F32 {
+    def compare (a b : F32) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
+instance Ord F64 {
+    def compare (a b : F64) : Ordering :=
+        if a == b then eq
+        else if BOrd.lt a b then lt
+        else gt
+}
+
 def ordering_show (o : Ordering) : String :=
     if BEq.beq o lt then "lt"
     else if BEq.beq o eq then "eq"
@@ -407,3 +463,31 @@ def test_ordering_show_eq : Bool :=
 @[test]
 def test_ordering_show_gt : Bool :=
     ordering_show gt == "gt"
+
+@[test]
+def test_ord_i8_lt : Bool :=
+    BEq.beq (Ord.compare 0i8 5i8) lt
+
+@[test]
+def test_ord_i8_eq : Bool :=
+    BEq.beq (Ord.compare 5i8 5i8) eq
+
+@[test]
+def test_ord_i8_gt : Bool :=
+    BEq.beq (Ord.compare 5i8 0i8) gt
+
+@[test]
+def test_ord_u16_lt : Bool :=
+    BEq.beq (Ord.compare 0u16 5u16) lt
+
+@[test]
+def test_ord_u16_gt : Bool :=
+    BEq.beq (Ord.compare 5u16 0u16) gt
+
+@[test]
+def test_ord_f64_lt : Bool :=
+    BEq.beq (Ord.compare 0.0f64 5.0f64) lt
+
+@[test]
+def test_ord_f64_gt : Bool :=
+    BEq.beq (Ord.compare 5.0f64 0.0f64) gt

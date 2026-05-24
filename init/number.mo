@@ -18,6 +18,12 @@ def I8.div (a b : I8) : I8
 @[native i8_eq]
 def I8.beq (a b : I8) : Bool
 
+@[native i8_lt]
+def I8.lt (a b : I8) : Bool
+
+@[native i8_gt]
+def I8.gt (a b : I8) : Bool
+
 @[native i8_to_string]
 def I8.to_string (a : I8) : String
 
@@ -41,6 +47,11 @@ instance BEq I8 {
 	def beq (a b : I8) : Bool := I8.beq a b
 }
 
+instance BOrd I8 {
+	def lt (a b : I8) : Bool := I8.lt a b
+	def gt (a b : I8) : Bool := I8.gt a b
+}
+
 instance ToString I8 {
 	def to_string (a : I8) : String := I8.to_string a
 }
@@ -61,6 +72,12 @@ def I16.div (a b : I16) : I16
 
 @[native i16_eq]
 def I16.beq (a b : I16) : Bool
+
+@[native i16_lt]
+def I16.lt (a b : I16) : Bool
+
+@[native i16_gt]
+def I16.gt (a b : I16) : Bool
 
 @[native i16_to_string]
 def I16.to_string (a : I16) : String
@@ -85,6 +102,11 @@ instance BEq I16 {
 	def beq (a b : I16) : Bool := I16.beq a b
 }
 
+instance BOrd I16 {
+	def lt (a b : I16) : Bool := I16.lt a b
+	def gt (a b : I16) : Bool := I16.gt a b
+}
+
 instance ToString I16 {
 	def to_string (a : I16) : String := I16.to_string a
 }
@@ -105,6 +127,12 @@ def I32.div (a b : I32) : I32
 
 @[native i32_eq]
 def I32.beq (a b : I32) : Bool
+
+@[native i32_lt]
+def I32.lt (a b : I32) : Bool
+
+@[native i32_gt]
+def I32.gt (a b : I32) : Bool
 
 @[native i32_to_string]
 def I32.to_string (a : I32) : String
@@ -127,6 +155,11 @@ instance Div I32 {
 
 instance BEq I32 {
 	def beq (a b : I32) : Bool := I32.beq a b
+}
+
+instance BOrd I32 {
+	def lt (a b : I32) : Bool := I32.lt a b
+	def gt (a b : I32) : Bool := I32.gt a b
 }
 
 instance ToString I32 {
@@ -270,6 +303,12 @@ def U16.div (a b : U16) : U16
 @[native u16_eq]
 def U16.beq (a b : U16) : Bool
 
+@[native u16_lt]
+def U16.lt (a b : U16) : Bool
+
+@[native u16_gt]
+def U16.gt (a b : U16) : Bool
+
 @[native u16_to_string]
 def U16.to_string (a : U16) : String
 
@@ -293,6 +332,11 @@ instance BEq U16 {
 	def beq (a b : U16) : Bool := U16.beq a b
 }
 
+instance BOrd U16 {
+	def lt (a b : U16) : Bool := U16.lt a b
+	def gt (a b : U16) : Bool := U16.gt a b
+}
+
 instance ToString U16 {
 	def to_string (a : U16) : String := U16.to_string a
 }
@@ -313,6 +357,12 @@ def U32.div (a b : U32) : U32
 
 @[native u32_eq]
 def U32.beq (a b : U32) : Bool
+
+@[native u32_lt]
+def U32.lt (a b : U32) : Bool
+
+@[native u32_gt]
+def U32.gt (a b : U32) : Bool
 
 @[native u32_to_string]
 def U32.to_string (a : U32) : String
@@ -335,6 +385,11 @@ instance Div U32 {
 
 instance BEq U32 {
 	def beq (a b : U32) : Bool := U32.beq a b
+}
+
+instance BOrd U32 {
+	def lt (a b : U32) : Bool := U32.lt a b
+	def gt (a b : U32) : Bool := U32.gt a b
 }
 
 instance ToString U32 {
@@ -364,6 +419,12 @@ def U64.xor (a b : U64) : U64
 @[native u64_eq]
 def U64.beq (a b : U64) : Bool
 
+@[native u64_lt]
+def U64.lt (a b : U64) : Bool
+
+@[native u64_gt]
+def U64.gt (a b : U64) : Bool
+
 @[native u64_to_string]
 def U64.to_string (a : U64) : String
 
@@ -391,6 +452,11 @@ instance BEq U64 {
 	def beq (a b : U64) : Bool := U64.beq a b
 }
 
+instance BOrd U64 {
+	def lt (a b : U64) : Bool := U64.lt a b
+	def gt (a b : U64) : Bool := U64.gt a b
+}
+
 instance ToString U64 {
 	def to_string (a : U64) : String := U64.to_string a
 }
@@ -411,6 +477,12 @@ def F32.div (a b : F32) : F32
 
 @[native f32_eq]
 def F32.beq (a b : F32) : Bool
+
+@[native f32_lt]
+def F32.lt (a b : F32) : Bool
+
+@[native f32_gt]
+def F32.gt (a b : F32) : Bool
 
 @[native f32_to_string]
 def F32.to_string (a : F32) : String
@@ -435,6 +507,11 @@ instance BEq F32 {
 	def beq (a b : F32) : Bool := F32.beq a b
 }
 
+instance BOrd F32 {
+	def lt (a b : F32) : Bool := F32.lt a b
+	def gt (a b : F32) : Bool := F32.gt a b
+}
+
 instance ToString F32 {
 	def to_string (a : F32) : String := F32.to_string a
 }
@@ -455,6 +532,12 @@ def F64.div (a b : F64) : F64
 
 @[native f64_eq]
 def F64.beq (a b : F64) : Bool
+
+@[native f64_lt]
+def F64.lt (a b : F64) : Bool
+
+@[native f64_gt]
+def F64.gt (a b : F64) : Bool
 
 @[native f64_to_string]
 def F64.to_string (a : F64) : String
@@ -477,6 +560,11 @@ instance Div F64 {
 
 instance BEq F64 {
 	def beq (a b : F64) : Bool := F64.beq a b
+}
+
+instance BOrd F64 {
+	def lt (a b : F64) : Bool := F64.lt a b
+	def gt (a b : F64) : Bool := F64.gt a b
 }
 
 instance ToString F64 {

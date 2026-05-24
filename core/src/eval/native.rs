@@ -288,6 +288,14 @@ macro_rules! int_ops {
         let (a, b) = extract_num_pair(&terms)?;
         Ok(bool_to_term((a as $ty) == (b as $ty)))
       }
+      pub fn [<$suffix:lower _lt>](terms: Vec<Term>) -> Result<Term, NativeError> {
+        let (a, b) = extract_num_pair(&terms)?;
+        Ok(bool_to_term((a as $ty) < (b as $ty)))
+      }
+      pub fn [<$suffix:lower _gt>](terms: Vec<Term>) -> Result<Term, NativeError> {
+        let (a, b) = extract_num_pair(&terms)?;
+        Ok(bool_to_term((a as $ty) > (b as $ty)))
+      }
       pub fn [<$suffix:lower _to_string>](terms: Vec<Term>) -> Result<Term, NativeError> {
         let n = extract_num_at(&terms, 0)?;
         Ok(Term::Lit {
@@ -342,6 +350,14 @@ macro_rules! float_ops {
       pub fn [<$suffix:lower _eq>](terms: Vec<Term>) -> Result<Term, NativeError> {
         let (a, b) = extract_float_pair(&terms)?;
         Ok(bool_to_term(a == b))
+      }
+      pub fn [<$suffix:lower _lt>](terms: Vec<Term>) -> Result<Term, NativeError> {
+        let (a, b) = extract_float_pair(&terms)?;
+        Ok(bool_to_term(a < b))
+      }
+      pub fn [<$suffix:lower _gt>](terms: Vec<Term>) -> Result<Term, NativeError> {
+        let (a, b) = extract_float_pair(&terms)?;
+        Ok(bool_to_term(a > b))
       }
       pub fn [<$suffix:lower _to_string>](terms: Vec<Term>) -> Result<Term, NativeError> {
         let n = extract_float_at(&terms, 0)?;
@@ -586,26 +602,6 @@ pub fn bench_now(_terms: Vec<Term>) -> Result<Term, NativeError> {
   Ok(num_suffix(now, NumSuffix::I64))
 }
 
-pub fn u8_lt(terms: Vec<Term>) -> Result<Term, NativeError> {
-  let (a, b) = extract_num_pair(&terms)?;
-  Ok(bool_to_term((a as u8) < (b as u8)))
-}
-
-pub fn u8_gt(terms: Vec<Term>) -> Result<Term, NativeError> {
-  let (a, b) = extract_num_pair(&terms)?;
-  Ok(bool_to_term((a as u8) > (b as u8)))
-}
-
-pub fn i64_lt(terms: Vec<Term>) -> Result<Term, NativeError> {
-  let (a, b) = extract_num_pair(&terms)?;
-  Ok(bool_to_term(a < b))
-}
-
-pub fn i64_gt(terms: Vec<Term>) -> Result<Term, NativeError> {
-  let (a, b) = extract_num_pair(&terms)?;
-  Ok(bool_to_term(a > b))
-}
-
 /// Simple native function: takes args, returns result.
 pub type SimpleNativeFun = fn(Vec<Term>) -> Result<Term, NativeError>;
 /// Scope-aware native function: takes args and the current scope.
@@ -741,42 +737,56 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("i8_mul"), s(i8_mul)),
     (id("i8_div"), s(i8_div)),
     (id("i8_eq"), s(i8_eq)),
+    (id("i8_lt"), s(i8_lt)),
+    (id("i8_gt"), s(i8_gt)),
     (id("i8_to_string"), s(i8_to_string)),
     (id("i16_add"), s(i16_add)),
     (id("i16_sub"), s(i16_sub)),
     (id("i16_mul"), s(i16_mul)),
     (id("i16_div"), s(i16_div)),
     (id("i16_eq"), s(i16_eq)),
+    (id("i16_lt"), s(i16_lt)),
+    (id("i16_gt"), s(i16_gt)),
     (id("i16_to_string"), s(i16_to_string)),
     (id("i32_add"), s(i32_add)),
     (id("i32_sub"), s(i32_sub)),
     (id("i32_mul"), s(i32_mul)),
     (id("i32_div"), s(i32_div)),
     (id("i32_eq"), s(i32_eq)),
+    (id("i32_lt"), s(i32_lt)),
+    (id("i32_gt"), s(i32_gt)),
     (id("i32_to_string"), s(i32_to_string)),
     (id("i64_add"), s(i64_add)),
     (id("i64_sub"), s(i64_sub)),
     (id("i64_mul"), s(i64_mul)),
     (id("i64_div"), s(i64_div)),
     (id("i64_eq"), s(i64_eq)),
+    (id("i64_lt"), s(i64_lt)),
+    (id("i64_gt"), s(i64_gt)),
     (id("i64_to_string"), s(i64_to_string)),
     (id("u8_add"), s(u8_add)),
     (id("u8_sub"), s(u8_sub)),
     (id("u8_mul"), s(u8_mul)),
     (id("u8_div"), s(u8_div)),
     (id("u8_eq"), s(u8_eq)),
+    (id("u8_lt"), s(u8_lt)),
+    (id("u8_gt"), s(u8_gt)),
     (id("u8_to_string"), s(u8_to_string)),
     (id("u16_add"), s(u16_add)),
     (id("u16_sub"), s(u16_sub)),
     (id("u16_mul"), s(u16_mul)),
     (id("u16_div"), s(u16_div)),
     (id("u16_eq"), s(u16_eq)),
+    (id("u16_lt"), s(u16_lt)),
+    (id("u16_gt"), s(u16_gt)),
     (id("u16_to_string"), s(u16_to_string)),
     (id("u32_add"), s(u32_add)),
     (id("u32_sub"), s(u32_sub)),
     (id("u32_mul"), s(u32_mul)),
     (id("u32_div"), s(u32_div)),
     (id("u32_eq"), s(u32_eq)),
+    (id("u32_lt"), s(u32_lt)),
+    (id("u32_gt"), s(u32_gt)),
     (id("u32_to_string"), s(u32_to_string)),
     (id("u64_add"), s(u64_add)),
     (id("u64_sub"), s(u64_sub)),
@@ -784,6 +794,8 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("u64_div"), s(u64_div)),
     (id("u64_mod"), s(u64_mod)),
     (id("u64_eq"), s(u64_eq)),
+    (id("u64_lt"), s(u64_lt)),
+    (id("u64_gt"), s(u64_gt)),
     (id("u64_to_string"), s(u64_to_string)),
     (id("u64_xor"), s(u64_xor)),
     (id("i64_to_u64"), s(i64_to_u64)),
@@ -793,12 +805,16 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("f32_mul"), s(f32_mul)),
     (id("f32_div"), s(f32_div)),
     (id("f32_eq"), s(f32_eq)),
+    (id("f32_lt"), s(f32_lt)),
+    (id("f32_gt"), s(f32_gt)),
     (id("f32_to_string"), s(f32_to_string)),
     (id("f64_add"), s(f64_add)),
     (id("f64_sub"), s(f64_sub)),
     (id("f64_mul"), s(f64_mul)),
     (id("f64_div"), s(f64_div)),
     (id("f64_eq"), s(f64_eq)),
+    (id("f64_lt"), s(f64_lt)),
+    (id("f64_gt"), s(f64_gt)),
     (id("f64_to_string"), s(f64_to_string)),
     (id("string_eq"), s(string_eq)),
     (id("string_concat"), s(string_concat)),
@@ -813,10 +829,6 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("string_from_chars"), s(string_from_chars)),
     (id("bench_now"), s(bench_now)),
     (id("bench_report"), s(bench_report)),
-    (id("i64_lt"), s(i64_lt)),
-    (id("i64_gt"), s(i64_gt)),
-    (id("u8_lt"), s(u8_lt)),
-    (id("u8_gt"), s(u8_gt)),
     (id("eval_term"), sa(eval_term)),
     (id("eq_rec"), s(eq_rec)),
     (id("exec_cmd"), s(exec_cmd)),
