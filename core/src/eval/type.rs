@@ -85,6 +85,12 @@ pub enum TypeError {
   LinearUnused(Identifier, SourceRange),
   AffineUsedMultipleTimes(Identifier, SourceRange),
   ErasedUsedAtRuntime(Identifier, SourceRange),
+  QttSubsumption {
+    name: Identifier,
+    provided: Multiplicity,
+    expected: Multiplicity,
+    loc: SourceRange,
+  },
   StructNoConstructors {
     loc: SourceRange,
   },
@@ -249,6 +255,31 @@ impl Display for TypeError {
           f,
           "Erased variable '{}' used at runtime (erased vars are compile-time only)",
           id
+        )?;
+        fmt_loc(loc, f)
+      }
+      TypeError::QttSubsumption {
+        name,
+        provided,
+        expected,
+        loc,
+      } => {
+        write!(
+          f,
+          "Cannot pass {} variable '{}' where {} parameter is expected (subsumption failed)",
+          match provided {
+            Multiplicity::Linear => "linear",
+            Multiplicity::Affine => "affine",
+            Multiplicity::Zero => "erased",
+            Multiplicity::Many => "unrestricted",
+          },
+          name,
+          match expected {
+            Multiplicity::Linear => "linear",
+            Multiplicity::Affine => "affine",
+            Multiplicity::Zero => "erased",
+            Multiplicity::Many => "unrestricted",
+          },
         )?;
         fmt_loc(loc, f)
       }
@@ -536,6 +567,34 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       severity: Severity::Error,
       message: format!(
         "Erased variable '{id}' used at runtime (erased vars are compile-time only)"
+      ),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![],
+      context_name: None,
+    },
+    TypeError::QttSubsumption {
+      name,
+      provided,
+      expected,
+      loc,
+    } => Diagnostic {
+      severity: Severity::Error,
+      message: format!(
+        "Cannot pass {} variable '{name}' where {} parameter is expected",
+        match provided {
+          Multiplicity::Linear => "linear",
+          Multiplicity::Affine => "affine",
+          Multiplicity::Zero => "erased",
+          Multiplicity::Many => "unrestricted",
+        },
+        match expected {
+          Multiplicity::Linear => "linear",
+          Multiplicity::Affine => "affine",
+          Multiplicity::Zero => "erased",
+          Multiplicity::Many => "unrestricted",
+        },
       ),
       location: loc_opt(loc),
       path: None,
@@ -923,6 +982,10 @@ impl UsageEnv {
       }
     }
     Ok(())
+  }
+
+  pub fn lookup_mult(&self, name: &Identifier) -> Option<&Multiplicity> {
+    self.usages.get(name).map(|(mult, _)| mult)
   }
 
   /// Verify a single variable was used according to its multiplicity.
@@ -2170,6 +2233,7 @@ fn type_check_with_env(
                 | TypeError::LinearUnused(..)
                 | TypeError::AffineUsedMultipleTimes(..)
                 | TypeError::ErasedUsedAtRuntime(..)
+                | TypeError::QttSubsumption { .. }
             ) {
               return Err(err);
             }
@@ -2190,9 +2254,24 @@ fn type_check_with_env(
         arg: arg_type,
         ret,
         arg_name: _,
-        ..
+        mult,
       } = fun_typ_pi
       {
+        // Subsumption check: arg multiplicity must be >= parameter multiplicity
+        if let Term::Var { ref name } = arg {
+          if let NameRef::Id(id) = name {
+            if let Some(provided_mult) = usage.lookup_mult(id) {
+              if !provided_mult.subsumes(&mult) {
+                return Err(TypeError::QttSubsumption {
+                  name: id.clone(),
+                  provided: provided_mult.clone(),
+                  expected: mult.clone(),
+                  loc: SourceRange::default(),
+                });
+              }
+            }
+          }
+        }
         let fun_forall_vars: Map<&Identifier, &Term> = fun_vars.iter().collect();
         let mut arg_type = *arg_type.clone();
         arg_type = add_forall_to_type(arg_type, &fun_forall_vars);

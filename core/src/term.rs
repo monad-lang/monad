@@ -747,6 +747,16 @@ pub enum Multiplicity {
   Affine, // ≤1 - can use 0 or 1 time
 }
 
+impl Multiplicity {
+  pub fn subsumes(&self, required: &Multiplicity) -> bool {
+    use Multiplicity::*;
+    match (self, required) {
+      (Zero, Many | Linear | Affine) => false,
+      _ => true,
+    }
+  }
+}
+
 impl Default for Multiplicity {
   fn default() -> Self {
     Multiplicity::Many

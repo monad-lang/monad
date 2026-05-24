@@ -21,8 +21,8 @@ use crate::{
     float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
     ivar, lam, lams, lets, match_term,
     module::ParsedModule,
-    mpvar, num_suffix, opr, param, param_with_default, param_with_mult, pi_name, pi_typs, pvar,
-    stru, stru_field_with_mult, type_constraint, var_id,
+    mpvar, num_suffix, opr, param, param_with_default, param_with_mult, pi_name, pi_typs,
+    pi_with_mult, pvar, stru, stru_field_with_mult, type_constraint, var_id,
   },
 };
 use locate::{LocatedSpan, info};
@@ -1169,10 +1169,10 @@ fn def_parser(input: Span) -> Res<Def> {
     }
     Ok((input, def(name, type_cons, typ, term, attrs)))
   } else {
-    let mut full_typ = pi_typs(
-      params.iter().map(|p| *p.typ.clone()).collect::<Vec<_>>(),
-      return_typ,
-    );
+    let mut full_typ = return_typ;
+    for param in params.iter().rev() {
+      full_typ = pi_with_mult((*param.typ).clone(), full_typ, param.mult.clone());
+    }
     if !implicit_params.is_empty() {
       full_typ = foralls(implicit_params, full_typ);
     }

@@ -2096,6 +2096,98 @@ fn test_mo_linear_let_consume_then_reuse_linear() {
   assert!(msg.contains("used more than once"), "got: {msg}");
 }
 
+// ===== Pi.mult subsumption tests (Gap 5) =====
+
+#[test]
+fn test_mo_pi_mult_linear_passed_to_many_should_pass() {
+  let r = type_check_mo(
+    r#"
+    def many_ (x : I64) : I64 := x
+    def test_ (!y : I64) : I64 := many_ y
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Linear passed to Many parameter should pass (context scaling): {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_mo_pi_mult_many_passed_to_linear_should_pass() {
+  let r = type_check_mo(
+    r#"
+    def linear_ (!x : I64) : I64 := x
+    def test_ (y : I64) : I64 := linear_ y
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Many passed to Linear parameter should pass: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_mo_pi_mult_affine_passed_to_many_should_pass() {
+  let r = type_check_mo(
+    r#"
+    def many_ (x : I64) : I64 := x
+    def test_ (?y : I64) : I64 := many_ y
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Affine passed to Many parameter should pass (context scaling): {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_mo_pi_mult_linear_passed_to_linear_should_pass() {
+  let r = type_check_mo(
+    r#"
+    def linear_ (!x : I64) : I64 := x
+    def test_ (!y : I64) : I64 := linear_ y
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Linear passed to Linear parameter should pass: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_mo_pi_mult_many_passed_to_many_should_pass() {
+  let r = type_check_mo(
+    r#"
+    def many_ (x : I64) : I64 := x
+    def test_ (y : I64) : I64 := many_ y
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Many passed to Many parameter should pass: {:?}",
+    r.err()
+  );
+}
+
+#[test]
+fn test_mo_pi_mult_linear_passed_to_affine_should_pass() {
+  let r = type_check_mo(
+    r#"
+    def affine_ (?x : I64) : I64 := x
+    def test_ (!y : I64) : I64 := affine_ y
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "Linear passed to Affine parameter should pass (Linear >= Affine): {:?}",
+    r.err()
+  );
+}
+
 #[test]
 fn test_constructor_in_instance_body() {
   // Id.id in instance body should type-check (alpha-rename clash)
