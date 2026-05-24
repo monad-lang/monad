@@ -645,6 +645,10 @@ struct FiberHandle {
   action: Option<Term>,
 }
 
+struct ScopeHandle {
+  fiber_ids: std::sync::Mutex<Vec<u64>>,
+}
+
 fn extract_foreign_id(term: &Term) -> Result<u64, NativeError> {
   match term {
     Term::Lit {
@@ -717,6 +721,67 @@ pub fn cancel_fiber(terms: Vec<Term>, _scope: &Scope) -> Result<Term, NativeErro
     h.fiber.cancel();
   })
   .ok_or_else(|| NativeError::Custom(format!("fiber handle {id} not found")))?;
+  Ok(io_term(unit()))
+}
+
+pub fn sleep_io(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let ms = extract_num_at(&terms, 0)?;
+  std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+  Ok(io_term(unit()))
+}
+
+pub fn scope_new(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let _ = terms;
+  let handle = ScopeHandle {
+    fiber_ids: std::sync::Mutex::new(Vec::new()),
+  };
+  let id = global::register(handle);
+  Ok(io_term(lit_foreign(id)))
+}
+
+pub fn scope_fork(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let mut terms = terms.into_iter();
+  let scope_term = terms.next().ok_or(NativeError::MissingArgs {
+    expected: 2,
+    actual: 0,
+  })?;
+  let lam = terms.next().ok_or(NativeError::MissingArgs {
+    expected: 2,
+    actual: 1,
+  })?;
+  let scope_id = extract_foreign_id(&scope_term)?;
+  if !matches!(lam, Term::Lam { .. }) {
+    return Err(NativeError::Custom(format!(
+      "scope_fork expected a function (Unit -> IO A), got {lam}"
+    )));
+  }
+  let fiber = Fiber::<Term>::new();
+  let handle = FiberHandle {
+    fiber: fiber.clone(),
+    action: Some(lam),
+  };
+  let fiber_id = global::register(handle);
+  global::with::<ScopeHandle, _>(scope_id, |scope| {
+    scope.fiber_ids.lock().unwrap().push(fiber_id);
+  })
+  .ok_or_else(|| NativeError::Custom(format!("scope {scope_id} not found")))?;
+  Ok(io_term(lit_foreign(fiber_id)))
+}
+
+pub fn scope_drop(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let scope_term = terms.into_iter().next().ok_or(NativeError::MissingArgs {
+    expected: 1,
+    actual: 0,
+  })?;
+  let scope_id = extract_foreign_id(&scope_term)?;
+  let handle = global::take::<ScopeHandle>(scope_id)
+    .ok_or_else(|| NativeError::Custom(format!("scope {scope_id} not found")))?;
+  let fiber_ids = handle.fiber_ids.into_inner().unwrap();
+  for fid in &fiber_ids {
+    global::with::<FiberHandle, _>(*fid, |h| {
+      h.fiber.cancel();
+    });
+  }
   Ok(io_term(unit()))
 }
 
@@ -837,6 +902,10 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("fork_io"), sa(fork_io)),
     (id("await_fiber"), sa(await_fiber)),
     (id("cancel_fiber"), sa(cancel_fiber)),
+    (id("sleep_io"), s(sleep_io)),
+    (id("scope_new"), s(scope_new)),
+    (id("scope_fork"), s(scope_fork)),
+    (id("scope_drop"), s(scope_drop)),
   ];
   v.into_iter().collect()
 }
@@ -977,5 +1046,63 @@ mod tests {
     let bad_fiber = lit_foreign(999);
     let result = cancel_fiber(vec![bad_fiber], &scope);
     assert!(result.is_err());
+  }
+
+  #[test]
+  fn test_sleep_io_returns_unit() {
+    let result = sleep_io(vec![num(1)]).unwrap();
+    assert_eq!(result, io_value(unit()));
+  }
+
+  #[test]
+  fn test_scope_new_returns_foreign_handle() {
+    let result = scope_new(vec![]).unwrap();
+    let inner = get_io_inner(&result).expect("expected IO wrapper");
+    let id = get_foreign_id(inner).expect("expected foreign handle");
+    global::drop_handle(id);
+  }
+
+  #[test]
+  fn test_scope_fork_registers_fiber() {
+    let scope = test_scope();
+    let scope_result = scope_new(vec![]).unwrap();
+    let scope_id = get_foreign_id(&scope_result).expect("expected scope foreign handle");
+
+    let action = thunk(io_value(num(99)));
+    let fork_result = scope_fork(vec![scope_result, action]).unwrap();
+    let fiber_id = get_foreign_id(&fork_result).expect("expected fiber foreign handle");
+
+    // Verify fiber is registered in scope
+    let found = global::with::<ScopeHandle, _>(scope_id, |sh| {
+      sh.fiber_ids.lock().unwrap().contains(&fiber_id)
+    });
+    assert_eq!(found, Some(true));
+
+    // Cleanup
+    let _ = await_fiber(vec![lit_foreign(fiber_id)], &scope);
+    global::drop_handle(scope_id);
+  }
+
+  #[test]
+  fn test_scope_drop_cancels_fibers() {
+    let scope = test_scope();
+    let scope_result = scope_new(vec![]).unwrap();
+    let scope_id = get_foreign_id(&scope_result).expect("expected scope foreign handle");
+
+    let action = thunk(io_value(num(7)));
+    let fork_result = scope_fork(vec![scope_result, action]).unwrap();
+    let fiber_id = get_foreign_id(&fork_result).expect("expected fiber foreign handle");
+
+    // Drop the scope
+    let drop_result = scope_drop(vec![lit_foreign(scope_id)]).unwrap();
+    assert_eq!(drop_result, io_value(unit()));
+
+    // Scope should be gone
+    let scope_gone = global::with::<ScopeHandle, _>(scope_id, |_| ());
+    assert!(scope_gone.is_none());
+
+    // Fiber should be cancelled (await should fail)
+    let await_result = await_fiber(vec![lit_foreign(fiber_id)], &scope);
+    assert!(await_result.is_err(), "await after scope_drop should fail");
   }
 }
