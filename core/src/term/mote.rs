@@ -209,7 +209,9 @@ impl Lockfile {
     };
 
     for mote in &lock.motes {
-      validate_checksum(&mote.checksum, "checksum")?;
+      if !mote.checksum.is_empty() {
+        validate_checksum(&mote.checksum, "checksum")?;
+      }
       for module in &mote.modules {
         validate_hash_hex(&module.source_hash, "source_hash")?;
         if let Some(ref h) = module.input_hash {
@@ -228,6 +230,22 @@ impl Lockfile {
     let content = self.to_string();
     std::fs::write(path, content.as_bytes())
       .map_err(|e| format!("Failed to write {}: {e}", path.display()))
+  }
+
+  pub fn from_resolved(deps: &ResolvedDeps) -> Self {
+    let mut motes: Vec<LockedMote> = deps
+      .motes
+      .iter()
+      .map(|m| LockedMote {
+        name: m.name.clone(),
+        version: m.version.clone(),
+        checksum: String::new(),
+        source: None,
+        modules: vec![],
+      })
+      .collect();
+    motes.sort_by(|a, b| a.name.cmp(&b.name).then(a.version.cmp(&b.version)));
+    Lockfile { version: 1, motes }
   }
 
   pub fn serialize(&self) -> String {
@@ -261,6 +279,124 @@ impl Lockfile {
 impl fmt::Display for Lockfile {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write!(f, "{}", self.serialize())
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedDeps {
+  pub motes: Vec<ResolvedMote>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMote {
+  pub name: String,
+  pub version: String,
+  pub source_path: Option<PathBuf>,
+  pub dependencies: BTreeMap<String, Dependency>,
+}
+
+pub struct Resolver;
+
+impl Resolver {
+  pub fn resolve(
+    manifest: &Manifest,
+    manifest_dir: &Path,
+    lockfile: Option<&Lockfile>,
+  ) -> Result<ResolvedDeps, String> {
+    let locked: BTreeMap<&str, &str> = lockfile
+      .map(|lf| {
+        lf.motes
+          .iter()
+          .map(|m| (m.name.as_str(), m.version.as_str()))
+          .collect()
+      })
+      .unwrap_or_default();
+    let mut resolved: BTreeMap<String, ResolvedMote> = BTreeMap::new();
+
+    let mut queue: Vec<(String, Dependency, PathBuf)> = manifest
+      .dependencies
+      .iter()
+      .map(|(n, d)| (n.clone(), d.clone(), manifest_dir.to_path_buf()))
+      .collect();
+
+    while let Some((dep_name, dependency, dep_manifest_dir)) = queue.pop() {
+      match dependency {
+        Dependency::Path(path) => {
+          let dep_dir = dep_manifest_dir.join(&path).canonicalize().map_err(|e| {
+            format!(
+              "dependency {dep_name}: path {} does not exist: {e}",
+              path.display()
+            )
+          })?;
+          let (_manifest_path, dep_manifest) = Manifest::discover(&dep_dir).ok_or_else(|| {
+            format!(
+              "dependency {dep_name}: no mote.toml found at {}",
+              dep_dir.display()
+            )
+          })?;
+
+          let deps = dep_manifest.dependencies.clone();
+
+          if let Some(&locked_version) = locked.get(dep_name.as_str()) {
+            if dep_manifest.mote.version != locked_version {
+              return Err(format!(
+                "lockfile conflict for mote '{}': locked at version {} but resolved {} at {}",
+                dep_name,
+                locked_version,
+                dep_manifest.mote.version,
+                dep_dir.display()
+              ));
+            }
+          }
+
+          if let Some(existing) = resolved.get(&dep_name) {
+            if dep_manifest.mote.version != existing.version {
+              return Err(format!(
+                "version conflict for mote '{}': version {} at {} conflicts with version {} at {}",
+                dep_name,
+                existing.version,
+                existing
+                  .source_path
+                  .as_ref()
+                  .map(|p| p.display().to_string())
+                  .unwrap_or_else(|| "unknown".into()),
+                dep_manifest.mote.version,
+                dep_dir.display(),
+              ));
+            }
+            continue;
+          }
+
+          resolved.insert(
+            dep_name.clone(),
+            ResolvedMote {
+              name: dep_manifest.mote.name.clone(),
+              version: dep_manifest.mote.version.clone(),
+              source_path: Some(dep_dir.clone()),
+              dependencies: deps.clone(),
+            },
+          );
+
+          for (trans_name, trans_dep) in &deps {
+            queue.push((trans_name.clone(), trans_dep.clone(), dep_dir.clone()));
+          }
+        }
+        Dependency::Registry(version_req) => {
+          return Err(format!(
+            "dependency {dep_name} {version_req}: registry deps not yet supported"
+          ));
+        }
+        Dependency::Git { url, .. } => {
+          return Err(format!(
+            "dependency {dep_name} from {url}: git deps not yet supported"
+          ));
+        }
+      }
+    }
+
+    Ok(ResolvedDeps {
+      motes: resolved.into_values().collect(),
+    })
   }
 }
 
@@ -712,5 +848,290 @@ artifact_hash = "notsha256:def"
 "#;
     let err = Lockfile::parse_str(toml_str).unwrap_err();
     assert!(err.contains("invalid artifact_hash"), "got: {err}");
+  }
+
+  // --- Resolver tests ---
+
+  #[test]
+  fn test_resolve_empty_manifest() {
+    let dir =
+      PathBuf::from("/tmp").join(format!("monad-test-resolve-empty-{:x}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mote_toml = dir.join("mote.toml");
+    std::fs::write(
+      &mote_toml,
+      r#"
+[mote]
+name = "my-app"
+version = "0.1.0"
+"#,
+    )
+    .unwrap();
+
+    let manifest = Manifest::parse(&mote_toml).unwrap();
+    let resolved = Resolver::resolve(&manifest, &dir, None).unwrap();
+    assert!(resolved.motes.is_empty());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  fn setup_mote(
+    dir: &Path,
+    name: &str,
+    version: &str,
+    deps: &[(&str, &str)],
+  ) -> (Manifest, PathBuf) {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let mote_toml = dir.join("mote.toml");
+    let mut toml_content = format!(
+      r#"
+[mote]
+name = "{}"
+version = "{}"
+"#,
+      name, version
+    );
+    if !deps.is_empty() {
+      toml_content.push_str("\n[dependencies]\n");
+      for (dep_name, _dep_version) in deps {
+        toml_content.push_str(&format!("{dep_name} = {{ path = \"../{dep_name}\" }}\n"));
+      }
+    }
+    std::fs::write(&mote_toml, &toml_content).unwrap();
+    let manifest = Manifest::parse(&mote_toml).unwrap();
+    (manifest, dir.to_path_buf())
+  }
+
+  #[test]
+  fn test_resolve_single_path_dep() {
+    let root =
+      PathBuf::from("/tmp").join(format!("monad-test-resolve-path-{:x}", std::process::id()));
+    let root_dir = root.clone();
+    let lib_dir = root.join("motes").join("mylib");
+
+    let manifest = {
+      let mote_toml = root_dir.join("mote.toml");
+      std::fs::create_dir_all(&root_dir).unwrap();
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+mylib = { path = "motes/mylib" }
+"#,
+      )
+      .unwrap();
+      Manifest::parse(&mote_toml).unwrap()
+    };
+
+    setup_mote(&lib_dir, "mylib", "0.1.0", &[]);
+
+    let resolved = Resolver::resolve(&manifest, &root_dir, None).unwrap();
+    assert_eq!(resolved.motes.len(), 1);
+    assert_eq!(resolved.motes[0].name, "mylib");
+    assert_eq!(resolved.motes[0].version, "0.1.0");
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_resolve_transitive_path_deps() {
+    let root =
+      PathBuf::from("/tmp").join(format!("monad-test-resolve-trans-{:x}", std::process::id()));
+    let lib_a_dir = root.join("motes").join("lib-a");
+    let lib_b_dir = root.join("motes").join("lib-b");
+
+    let manifest = {
+      let mote_toml = root.join("mote.toml");
+      std::fs::create_dir_all(&root).unwrap();
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+lib-a = { path = "motes/lib-a" }
+"#,
+      )
+      .unwrap();
+      Manifest::parse(&mote_toml).unwrap()
+    };
+
+    setup_mote(&lib_a_dir, "lib-a", "0.1.0", &[("lib-b", ">=0.5.0")]);
+    setup_mote(&lib_b_dir, "lib-b", "0.5.0", &[]);
+
+    let resolved = Resolver::resolve(&manifest, &root, None).unwrap();
+    assert_eq!(resolved.motes.len(), 2);
+
+    let names: Vec<&str> = resolved.motes.iter().map(|m| m.name.as_str()).collect();
+    assert!(names.contains(&"lib-a"));
+    assert!(names.contains(&"lib-b"));
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_resolve_diamond_conflict() {
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-resolve-diamond-{:x}",
+      std::process::id()
+    ));
+
+    let manifest = {
+      let mote_toml = root.join("mote.toml");
+      std::fs::create_dir_all(&root).unwrap();
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+lib-a = { path = "motes/lib-a" }
+lib-c = { path = "motes/lib-c" }
+"#,
+      )
+      .unwrap();
+      Manifest::parse(&mote_toml).unwrap()
+    };
+
+    let lib_a_dir = root.join("motes").join("lib-a");
+    let lib_b_dir = root.join("motes").join("lib-b");
+    let lib_b_alt_dir = root.join("motes").join("lib-b-alt");
+    let lib_c_dir = root.join("motes").join("lib-c");
+
+    setup_mote(&lib_a_dir, "lib-a", "0.1.0", &[("lib-b", ">=1.0.0")]);
+    setup_mote(&lib_b_dir, "lib-b", "1.0.0", &[]);
+    setup_mote(&lib_b_alt_dir, "lib-b", "2.0.0", &[]);
+
+    {
+      let mote_toml = lib_c_dir.join("mote.toml");
+      std::fs::create_dir_all(&lib_c_dir).unwrap();
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "lib-c"
+version = "2.0.0"
+
+[dependencies]
+lib-b = { path = "../lib-b-alt" }
+"#,
+      )
+      .unwrap();
+    }
+
+    let err = Resolver::resolve(&manifest, &root, None).unwrap_err();
+    assert!(
+      err.contains("version conflict for mote 'lib-b'"),
+      "got: {err}"
+    );
+    assert!(err.contains("1.0.0"), "got: {err}");
+    assert!(err.contains("2.0.0"), "got: {err}");
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_resolve_lockfile_version_mismatch_detected() {
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-resolve-lock-mismatch-{:x}",
+      std::process::id()
+    ));
+    let lib_dir = root.join("motes").join("mylib");
+
+    setup_mote(&lib_dir, "mylib", "0.2.0", &[]);
+
+    let manifest = {
+      let mote_toml = root.join("mote.toml");
+      std::fs::create_dir_all(&root).unwrap();
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+mylib = { path = "motes/mylib" }
+"#,
+      )
+      .unwrap();
+      Manifest::parse(&mote_toml).unwrap()
+    };
+
+    let lockfile = Lockfile {
+      version: 1,
+      motes: vec![LockedMote {
+        name: "mylib".into(),
+        version: "0.1.0".into(),
+        checksum: "sha256:4467c075665950b2ae160a145ebffddf7e7876189ef4add43d491b48386ab921".into(),
+        source: None,
+        modules: vec![],
+      }],
+    };
+
+    let err = Resolver::resolve(&manifest, &root, Some(&lockfile)).unwrap_err();
+    assert!(
+      err.contains("lockfile conflict for mote 'mylib'"),
+      "got: {err}"
+    );
+    assert!(err.contains("0.1.0"), "got: {err}");
+    assert!(err.contains("0.2.0"), "got: {err}");
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_lockfile_from_resolved() {
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-lock-from-resolved-{:x}",
+      std::process::id()
+    ));
+    let lib_dir = root.join("motes").join("mylib");
+
+    setup_mote(&lib_dir, "mylib", "0.1.0", &[]);
+
+    let manifest = {
+      let mote_toml = root.join("mote.toml");
+      std::fs::create_dir_all(&root).unwrap();
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+mylib = { path = "motes/mylib" }
+"#,
+      )
+      .unwrap();
+      Manifest::parse(&mote_toml).unwrap()
+    };
+
+    let resolved = Resolver::resolve(&manifest, &root, None).unwrap();
+    let lockfile = Lockfile::from_resolved(&resolved);
+
+    assert_eq!(lockfile.version, 1);
+    assert_eq!(lockfile.motes.len(), 1);
+    assert_eq!(lockfile.motes[0].name, "mylib");
+    assert_eq!(lockfile.motes[0].version, "0.1.0");
+    assert!(lockfile.motes[0].checksum.is_empty());
+    assert!(lockfile.motes[0].source.is_none());
+    assert!(lockfile.motes[0].modules.is_empty());
+
+    // Round-trip: serialize and parse
+    let serialized = lockfile.to_string();
+    let parsed = Lockfile::parse_str(&serialized).unwrap();
+    assert_eq!(lockfile.motes, parsed.motes);
+
+    std::fs::remove_dir_all(&root).unwrap();
   }
 }
