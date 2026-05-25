@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use monad_core::{eval::EvalOptions, run, run_tests, term::mote::Manifest};
+use monad_core::{
+  eval::EvalOptions,
+  run, run_tests,
+  term::mote::{Manifest, Resolver},
+};
 
 #[cfg(feature = "repl")]
 use monad_core::repl;
@@ -94,11 +98,25 @@ fn augment_mote_paths(mote_path: &mut Vec<PathBuf>, manifest_path: Option<&PathB
       .unwrap_or((None, None))
   };
 
-  if manifest.is_some() {
-    if let Some(root) = project_root {
-      let src_dir = root.join("src");
-      if src_dir.is_dir() && !mote_path.contains(&src_dir) {
-        mote_path.push(src_dir);
+  if let (Some(manifest), Some(root)) = (manifest, project_root) {
+    let src_dir = root.join("src");
+    if src_dir.is_dir() && !mote_path.contains(&src_dir) {
+      mote_path.push(src_dir);
+    }
+
+    match Resolver::resolve(&manifest, &root, None) {
+      Ok(resolved) => {
+        for mote in &resolved.motes {
+          if let Some(source_path) = &mote.source_path {
+            let dep_src_dir = source_path.join("src");
+            if dep_src_dir.is_dir() && !mote_path.contains(&dep_src_dir) {
+              mote_path.push(dep_src_dir);
+            }
+          }
+        }
+      }
+      Err(e) => {
+        eprintln!("warning: failed to resolve dependencies: {e}");
       }
     }
   }

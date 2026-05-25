@@ -10,10 +10,10 @@ use crate::term::module::{
 };
 use crate::term::test::{Similar, decl_def};
 use crate::term::{
-  Decl, Hole, Identifier, ModulePath, Multiplicity, NameRef, SourceContext, Term, Typed, app, app2,
-  b_false, b_true, case, constructor, forall, id, io_term, lams, match_term, mp, mpt, mpvar, none,
-  num, par, param, param_with_mult, pi, some, sort1, str, strings_to_list_term, to_list_term, typ,
-  unit, var,
+  Decl, Hole, Identifier, ModulePath, Multiplicity, NameRef, SearchPaths, SourceContext, Term,
+  Typed, app, app2, b_false, b_true, case, constructor, forall, id, io_term, lams, match_term, mp,
+  mpt, mpvar, none, num, par, param, param_with_mult, pi, some, sort1, str, strings_to_list_term,
+  to_list_term, typ, unit, var,
 };
 use crate::term::{stru, stru_field, stru_field_with_mult};
 use crate::{set_of, similar};
@@ -2992,4 +2992,50 @@ fn test_cfg_test_use_visible_in_test_mode() {
 
   let (_, e) = term::<()>("test_main".into()).finish().unwrap();
   similar!(eval_test(e, &scope).unwrap(), num(42));
+}
+
+#[test]
+fn test_mote_dependency_resolves_via_search_paths() {
+  use std::path::PathBuf;
+
+  let dep_dir = PathBuf::from("/tmp").join(format!(
+    "monad-test-mote-dep-resolve-{:x}",
+    std::process::id()
+  ));
+  let dep_src = dep_dir.join("src");
+  std::fs::create_dir_all(&dep_src).unwrap();
+
+  std::fs::write(
+    dep_src.join("mylib.mo"),
+    r#"
+    def greet : I64 := 42
+    "#,
+  )
+  .unwrap();
+
+  let mut loaded = default_modules().unwrap();
+  let mut paths = SearchPaths::empty();
+  paths.push(dep_src.clone());
+  loaded.set_search_paths(paths);
+
+  let path = ModulePath::top("_test_mote_dep");
+  load_module_from_text(
+    r#"
+    use mylib
+
+    def main : I64 := mylib.greet
+    "#,
+    path.clone(),
+    &mut loaded,
+  )
+  .inspect_err(|e| eprintln!("{e}"))
+  .unwrap();
+
+  let global = loaded.global(&path).expect("scope should exist");
+  let scope = Scope::new(&global);
+
+  let (_, e) = term::<()>("main".into()).finish().unwrap();
+  similar!(eval_test(e, &scope).unwrap(), num(42));
+
+  std::fs::remove_dir_all(&dep_dir).unwrap();
 }
