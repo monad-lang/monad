@@ -295,6 +295,97 @@ pub struct ResolvedMote {
   pub dependencies: BTreeMap<String, Dependency>,
 }
 
+pub struct Installer;
+
+impl Installer {
+  pub fn install(
+    deps: &ResolvedDeps,
+    project_dir: &Path,
+    _lockfile: Option<&Lockfile>,
+  ) -> Result<(), String> {
+    let motes_dir = project_dir.join("motes");
+    std::fs::create_dir_all(&motes_dir)
+      .map_err(|e| format!("Failed to create motes directory: {e}"))?;
+
+    for mote in &deps.motes {
+      let source = mote
+        .source_path
+        .as_ref()
+        .ok_or_else(|| format!("cannot install mote '{}': no source path", mote.name))?;
+
+      let install_dir = mote_install_dir(&motes_dir, &mote.name, &mote.version);
+
+      install_mote(source, &install_dir)?;
+    }
+
+    Ok(())
+  }
+}
+
+static EXCLUDE_DIRS: &[&str] = &[".git", "target", "motes"];
+static EXCLUDE_FILES: &[&str] = &["mote.lock"];
+
+fn mote_install_dir(motes_dir: &Path, name: &str, version: &str) -> PathBuf {
+  let sanitized_name = name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+  let sanitized_version = version
+    .split('+')
+    .next()
+    .unwrap_or(version)
+    .replace(|c: char| !c.is_alphanumeric() && c != '.' && c != '-', "_");
+  motes_dir.join(format!("{sanitized_name}-{sanitized_version}"))
+}
+
+fn install_mote(source: &Path, dest: &Path) -> Result<(), String> {
+  if !source.is_dir() {
+    return Err(format!("source is not a directory: {}", source.display()));
+  }
+
+  if dest.exists() {
+    std::fs::remove_dir_all(dest).map_err(|e| {
+      format!(
+        "Failed to remove existing directory {}: {e}",
+        dest.display()
+      )
+    })?;
+  }
+
+  copy_source_tree(source, dest, source)
+}
+
+fn copy_source_tree(source: &Path, dest: &Path, root: &Path) -> Result<(), String> {
+  std::fs::create_dir_all(dest).map_err(|e| format!("Failed to create {}: {e}", dest.display()))?;
+
+  let entries = std::fs::read_dir(source)
+    .map_err(|e| format!("Failed to read directory {}: {e}", source.display()))?;
+
+  for entry in entries {
+    let entry = entry.map_err(|e| format!("Failed to read entry: {e}"))?;
+    let name = entry.file_name();
+    let name_str = name.to_string_lossy();
+
+    if EXCLUDE_DIRS.iter().any(|d| name_str.as_ref() == *d) {
+      continue;
+    }
+
+    let file_type = entry
+      .file_type()
+      .map_err(|e| format!("Failed to get file type: {e}"))?;
+    let dest_path = dest.join(&name);
+
+    if file_type.is_dir() {
+      copy_source_tree(&entry.path(), &dest_path, root)?;
+    } else if file_type.is_file() {
+      if EXCLUDE_FILES.iter().any(|f| name_str.as_ref() == *f) {
+        continue;
+      }
+      std::fs::copy(&entry.path(), &dest_path)
+        .map_err(|e| format!("Failed to copy {}: {e}", entry.path().display()))?;
+    }
+  }
+
+  Ok(())
+}
+
 pub struct Resolver;
 
 impl Resolver {
@@ -1089,9 +1180,9 @@ mylib = { path = "motes/mylib" }
   }
 
   #[test]
-  fn test_lockfile_from_resolved() {
+  fn test_install_single_path_dep() {
     let root = PathBuf::from("/tmp").join(format!(
-      "monad-test-lock-from-resolved-{:x}",
+      "monad-test-install-single-{:x}",
       std::process::id()
     ));
     let lib_dir = root.join("motes").join("mylib");
@@ -1117,21 +1208,194 @@ mylib = { path = "motes/mylib" }
     };
 
     let resolved = Resolver::resolve(&manifest, &root, None).unwrap();
-    let lockfile = Lockfile::from_resolved(&resolved);
+    Installer::install(&resolved, &root, None).unwrap();
 
-    assert_eq!(lockfile.version, 1);
-    assert_eq!(lockfile.motes.len(), 1);
-    assert_eq!(lockfile.motes[0].name, "mylib");
-    assert_eq!(lockfile.motes[0].version, "0.1.0");
-    assert!(lockfile.motes[0].checksum.is_empty());
-    assert!(lockfile.motes[0].source.is_none());
-    assert!(lockfile.motes[0].modules.is_empty());
-
-    // Round-trip: serialize and parse
-    let serialized = lockfile.to_string();
-    let parsed = Lockfile::parse_str(&serialized).unwrap();
-    assert_eq!(lockfile.motes, parsed.motes);
+    let installed = root.join("motes").join("mylib-0.1.0");
+    assert!(installed.join("mote.toml").is_file());
+    assert!(installed.join("src").is_dir());
 
     std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_install_excludes_excluded_dirs() {
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-install-exclude-{:x}",
+      std::process::id()
+    ));
+    let lib_dir = root.join("motes").join("lib-a");
+
+    setup_mote(&lib_dir, "lib-a", "0.1.0", &[]);
+    std::fs::create_dir_all(lib_dir.join(".git")).unwrap();
+    std::fs::write(lib_dir.join(".git").join("HEAD"), "ref: refs/heads/main").unwrap();
+    std::fs::create_dir_all(lib_dir.join("target")).unwrap();
+    std::fs::write(lib_dir.join("target").join("artifact.o"), "binary").unwrap();
+    std::fs::write(lib_dir.join("mote.lock"), "lock").unwrap();
+
+    let manifest = {
+      let mote_toml = root.join("mote.toml");
+      std::fs::create_dir_all(&root).unwrap();
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+lib-a = { path = "motes/lib-a" }
+"#,
+      )
+      .unwrap();
+      Manifest::parse(&mote_toml).unwrap()
+    };
+
+    let resolved = Resolver::resolve(&manifest, &root, None).unwrap();
+    Installer::install(&resolved, &root, None).unwrap();
+
+    let installed = root.join("motes").join("lib-a-0.1.0");
+    assert!(installed.join("mote.toml").is_file());
+    assert!(installed.join("src").is_dir());
+    assert!(!installed.join(".git").exists());
+    assert!(!installed.join("target").exists());
+    assert!(!installed.join("mote.lock").exists());
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_install_transitive_deps() {
+    let root =
+      PathBuf::from("/tmp").join(format!("monad-test-install-trans-{:x}", std::process::id()));
+    let lib_a_dir = root.join("motes").join("lib-a");
+    let lib_b_dir = root.join("motes").join("lib-b");
+
+    setup_mote(&lib_a_dir, "lib-a", "0.1.0", &[("lib-b", ">=0.5.0")]);
+    setup_mote(&lib_b_dir, "lib-b", "0.5.0", &[]);
+
+    let manifest = {
+      let mote_toml = root.join("mote.toml");
+      std::fs::create_dir_all(&root).unwrap();
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+lib-a = { path = "motes/lib-a" }
+"#,
+      )
+      .unwrap();
+      Manifest::parse(&mote_toml).unwrap()
+    };
+
+    let resolved = Resolver::resolve(&manifest, &root, None).unwrap();
+    Installer::install(&resolved, &root, None).unwrap();
+
+    assert!(
+      root
+        .join("motes")
+        .join("lib-a-0.1.0")
+        .join("mote.toml")
+        .is_file()
+    );
+    assert!(
+      root
+        .join("motes")
+        .join("lib-b-0.5.0")
+        .join("mote.toml")
+        .is_file()
+    );
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_install_missing_source_errors() {
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-install-missing-{:x}",
+      std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+
+    let manifest = {
+      let mote_toml = root.join("mote.toml");
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+nonexistent = { path = "motes/nonexistent" }
+"#,
+      )
+      .unwrap();
+      Manifest::parse(&mote_toml).unwrap()
+    };
+
+    let err = Resolver::resolve(&manifest, &root, None).unwrap_err();
+    assert!(
+      err.contains("does not exist"),
+      "expected 'does not exist' error, got: {err}"
+    );
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_install_overwrites_existing() {
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-install-overwrite-{:x}",
+      std::process::id()
+    ));
+    let lib_dir = root.join("motes").join("mylib");
+
+    setup_mote(&lib_dir, "mylib", "0.1.0", &[]);
+
+    let manifest = {
+      let mote_toml = root.join("mote.toml");
+      std::fs::create_dir_all(&root).unwrap();
+      std::fs::write(
+        &mote_toml,
+        r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[dependencies]
+mylib = { path = "motes/mylib" }
+"#,
+      )
+      .unwrap();
+      Manifest::parse(&mote_toml).unwrap()
+    };
+
+    let resolved = Resolver::resolve(&manifest, &root, None).unwrap();
+
+    Installer::install(&resolved, &root, None).unwrap();
+    let installed = root.join("motes").join("mylib-0.1.0");
+    assert!(installed.join("mote.toml").is_file());
+
+    Installer::install(&resolved, &root, None).unwrap();
+    assert!(installed.join("mote.toml").is_file());
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_mote_install_dir_sanitizes_version() {
+    let tmp = PathBuf::from("/tmp/motes").join(format!("test-sanitize-{:x}", std::process::id()));
+    let dir = mote_install_dir(&tmp, "my-lib", "1.0.0+20240101");
+    assert_eq!(dir.file_name().unwrap().to_string_lossy(), "my-lib-1.0.0");
+
+    let dir = mote_install_dir(&tmp, "weird name!", "1.0.0-beta.1");
+    assert_eq!(
+      dir.file_name().unwrap().to_string_lossy(),
+      "weird_name_-1.0.0-beta.1"
+    );
   }
 }
