@@ -153,6 +153,26 @@ impl Manifest {
   }
 }
 
+fn validate_checksum(s: &str, field_name: &str) -> Result<(), String> {
+  let hex = s
+    .strip_prefix("sha256:")
+    .ok_or_else(|| format!("invalid {field_name} '{s}': expected 'sha256:<64-char-hex>'"))?;
+  validate_hash_hex(hex, field_name)
+}
+
+fn validate_hash_hex(s: &str, field_name: &str) -> Result<(), String> {
+  if s.len() != 64
+    || !s
+      .chars()
+      .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+  {
+    return Err(format!(
+      "invalid {field_name} '{s}': expected 64 lowercase hex characters"
+    ));
+  }
+  Ok(())
+}
+
 impl Lockfile {
   pub fn parse(path: &Path) -> Result<Self, String> {
     let content = std::fs::read_to_string(path)
@@ -164,7 +184,7 @@ impl Lockfile {
     let raw: RawLockfile =
       toml::from_str(content).map_err(|e| format!("Failed to parse mote.lock: {e}"))?;
 
-    Ok(Self {
+    let lock = Self {
       version: raw.version,
       motes: raw
         .mote
@@ -186,7 +206,22 @@ impl Lockfile {
             .collect(),
         })
         .collect(),
-    })
+    };
+
+    for mote in &lock.motes {
+      validate_checksum(&mote.checksum, "checksum")?;
+      for module in &mote.modules {
+        validate_hash_hex(&module.source_hash, "source_hash")?;
+        if let Some(ref h) = module.input_hash {
+          validate_hash_hex(h, "input_hash")?;
+        }
+        if let Some(ref h) = module.artifact_hash {
+          validate_checksum(h, "artifact_hash")?;
+        }
+      }
+    }
+
+    Ok(lock)
   }
 
   pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -389,14 +424,17 @@ version = 1
 [[mote]]
 name = "json"
 version = "0.2.0"
-checksum = "sha256:abc123"
+checksum = "sha256:4467c075665950b2ae160a145ebffddf7e7876189ef4add43d491b48386ab921"
 "#;
     let lock = Lockfile::parse_str(toml_str).unwrap();
     assert_eq!(lock.version, 1);
     assert_eq!(lock.motes.len(), 1);
     assert_eq!(lock.motes[0].name, "json");
     assert_eq!(lock.motes[0].version, "0.2.0");
-    assert_eq!(lock.motes[0].checksum, "sha256:abc123");
+    assert_eq!(
+      lock.motes[0].checksum,
+      "sha256:4467c075665950b2ae160a145ebffddf7e7876189ef4add43d491b48386ab921"
+    );
     assert!(lock.motes[0].source.is_none());
     assert!(lock.motes[0].modules.is_empty());
   }
@@ -409,7 +447,7 @@ version = 1
 [[mote]]
 name = "http"
 version = "0.1.0"
-checksum = "sha256:xyz789"
+checksum = "sha256:4a0702486331f0fd9bf8f86e2460be96e32cdc3ef9051f0cd6fbd0355e6ce259"
 source = "git+https://github.com/user/http?tag=v0.1.0"
 "#;
     let lock = Lockfile::parse_str(toml_str).unwrap();
@@ -428,17 +466,17 @@ version = 1
 [[mote]]
 name = "json"
 version = "0.2.0"
-checksum = "sha256:abc123"
+checksum = "sha256:4467c075665950b2ae160a145ebffddf7e7876189ef4add43d491b48386ab921"
 
 [[mote.modules]]
 path = "parser"
-source_hash = "2f3a"
-input_hash = "b3e4"
-artifact_hash = "sha256:def"
+source_hash = "594f793e8b6d5d761b72f2512d07fd25933ff7483d72b31224d264b4cb77777a"
+input_hash = "b6f9ba0467502d6697078623b75f7e2cacf59563d76b0e5b946b27e1f0185cff"
+artifact_hash = "sha256:c477bab45dd91f6ccbafed332dcff7503b4bc7e6b87f5a6786c46eb627eb6b7f"
 
 [[mote.modules]]
 path = "types"
-source_hash = "4b5c"
+source_hash = "81fef029a4ab54b8d12f2e2079e8f358d72084225e29062e0232442012d6e901"
 "#;
     let lock = Lockfile::parse_str(toml_str).unwrap();
     assert_eq!(lock.motes.len(), 1);
@@ -446,12 +484,24 @@ source_hash = "4b5c"
     assert_eq!(modules.len(), 2);
 
     assert_eq!(modules[0].path, "parser");
-    assert_eq!(modules[0].source_hash, "2f3a");
-    assert_eq!(modules[0].input_hash.as_deref(), Some("b3e4"));
-    assert_eq!(modules[0].artifact_hash.as_deref(), Some("sha256:def"));
+    assert_eq!(
+      modules[0].source_hash,
+      "594f793e8b6d5d761b72f2512d07fd25933ff7483d72b31224d264b4cb77777a"
+    );
+    assert_eq!(
+      modules[0].input_hash.as_deref(),
+      Some("b6f9ba0467502d6697078623b75f7e2cacf59563d76b0e5b946b27e1f0185cff")
+    );
+    assert_eq!(
+      modules[0].artifact_hash.as_deref(),
+      Some("sha256:c477bab45dd91f6ccbafed332dcff7503b4bc7e6b87f5a6786c46eb627eb6b7f")
+    );
 
     assert_eq!(modules[1].path, "types");
-    assert_eq!(modules[1].source_hash, "4b5c");
+    assert_eq!(
+      modules[1].source_hash,
+      "81fef029a4ab54b8d12f2e2079e8f358d72084225e29062e0232442012d6e901"
+    );
     assert!(modules[1].input_hash.is_none());
     assert!(modules[1].artifact_hash.is_none());
   }
@@ -464,18 +514,25 @@ source_hash = "4b5c"
         LockedMote {
           name: "json".into(),
           version: "0.2.0".into(),
-          checksum: "sha256:abc".into(),
+          checksum: "sha256:4467c075665950b2ae160a145ebffddf7e7876189ef4add43d491b48386ab921"
+            .into(),
           source: None,
           modules: vec![
             LockedModule {
               path: "parser".into(),
-              source_hash: "2f3a".into(),
-              input_hash: Some("b3e4".into()),
-              artifact_hash: Some("sha256:def".into()),
+              source_hash: "594f793e8b6d5d761b72f2512d07fd25933ff7483d72b31224d264b4cb77777a"
+                .into(),
+              input_hash: Some(
+                "b6f9ba0467502d6697078623b75f7e2cacf59563d76b0e5b946b27e1f0185cff".into(),
+              ),
+              artifact_hash: Some(
+                "sha256:c477bab45dd91f6ccbafed332dcff7503b4bc7e6b87f5a6786c46eb627eb6b7f".into(),
+              ),
             },
             LockedModule {
               path: "types".into(),
-              source_hash: "4b5c".into(),
+              source_hash: "81fef029a4ab54b8d12f2e2079e8f358d72084225e29062e0232442012d6e901"
+                .into(),
               input_hash: None,
               artifact_hash: None,
             },
@@ -484,7 +541,8 @@ source_hash = "4b5c"
         LockedMote {
           name: "http".into(),
           version: "0.1.0".into(),
-          checksum: "sha256:xyz".into(),
+          checksum: "sha256:4a0702486331f0fd9bf8f86e2460be96e32cdc3ef9051f0cd6fbd0355e6ce259"
+            .into(),
           source: Some("git+https://github.com/user/http?tag=v0.1.0".into()),
           modules: vec![],
         },
@@ -518,11 +576,11 @@ source_hash = "4b5c"
       motes: vec![LockedMote {
         name: "test".into(),
         version: "1.0.0".into(),
-        checksum: "sha256:deadbeef".into(),
+        checksum: "sha256:0bb304d010d2914dafb3c0eb4b419d3de4adfb6833f4bb370f119e4e338e4fd1".into(),
         source: None,
         modules: vec![LockedModule {
           path: "main".into(),
-          source_hash: "abcd".into(),
+          source_hash: "9e6a36df1bd43a118568af8d84b8332b7f0608e6e27d04097aa54beaad36c668".into(),
           input_hash: None,
           artifact_hash: None,
         }],
@@ -543,7 +601,7 @@ source_hash = "4b5c"
       motes: vec![LockedMote {
         name: "hello".into(),
         version: "0.1.0".into(),
-        checksum: "sha256:abc".into(),
+        checksum: "sha256:5125b47c16687d8b180201118fea1e727a32345ee254a39f40ed9694dbac1591".into(),
         source: None,
         modules: vec![],
       }],
@@ -551,7 +609,9 @@ source_hash = "4b5c"
     let s = format!("{lock}");
     assert!(s.contains("version = 1"));
     assert!(s.contains("name = \"hello\""));
-    assert!(s.contains("checksum = \"sha256:abc\""));
+    assert!(s.contains(
+      "checksum = \"sha256:5125b47c16687d8b180201118fea1e727a32345ee254a39f40ed9694dbac1591\""
+    ));
   }
 
   #[test]
@@ -564,5 +624,93 @@ source_hash = "4b5c"
     let parsed = Lockfile::parse_str(&s).unwrap();
     assert_eq!(parsed.version, 1);
     assert!(parsed.motes.is_empty());
+  }
+
+  #[test]
+  fn test_reject_invalid_checksum_no_prefix() {
+    let toml_str = r#"
+version = 1
+
+[[mote]]
+name = "bad"
+version = "0.1.0"
+checksum = "notsha256:594f793e8b6d5d761b72f2512d07fd25933ff7483d72b31224d264b4cb77777a"
+"#;
+    let err = Lockfile::parse_str(toml_str).unwrap_err();
+    assert!(err.contains("invalid checksum"), "got: {err}");
+  }
+
+  #[test]
+  fn test_reject_invalid_checksum_wrong_length() {
+    let toml_str = r#"
+version = 1
+
+[[mote]]
+name = "bad"
+version = "0.1.0"
+checksum = "sha256:abc123"
+"#;
+    let err = Lockfile::parse_str(toml_str).unwrap_err();
+    assert!(
+      err.contains("expected 64 lowercase hex characters"),
+      "got: {err}"
+    );
+  }
+
+  #[test]
+  fn test_reject_invalid_checksum_uppercase() {
+    let toml_str = r#"
+version = 1
+
+[[mote]]
+name = "bad"
+version = "0.1.0"
+checksum = "sha256:4467C075665950B2AE160A145EBFFDDF7E7876189EF4ADD43D491B48386AB921"
+"#;
+    let err = Lockfile::parse_str(toml_str).unwrap_err();
+    assert!(
+      err.contains("expected 64 lowercase hex characters"),
+      "got: {err}"
+    );
+  }
+
+  #[test]
+  fn test_reject_invalid_source_hash() {
+    let toml_str = r#"
+version = 1
+
+[[mote]]
+name = "json"
+version = "0.2.0"
+checksum = "sha256:4467c075665950b2ae160a145ebffddf7e7876189ef4add43d491b48386ab921"
+
+[[mote.modules]]
+path = "parser"
+source_hash = "2f3a"
+"#;
+    let err = Lockfile::parse_str(toml_str).unwrap_err();
+    assert!(
+      err.contains("expected 64 lowercase hex characters"),
+      "got: {err}"
+    );
+  }
+
+  #[test]
+  fn test_reject_invalid_artifact_hash() {
+    let toml_str = r#"
+version = 1
+
+[[mote]]
+name = "json"
+version = "0.2.0"
+checksum = "sha256:4467c075665950b2ae160a145ebffddf7e7876189ef4add43d491b48386ab921"
+
+[[mote.modules]]
+path = "parser"
+source_hash = "594f793e8b6d5d761b72f2512d07fd25933ff7483d72b31224d264b4cb77777a"
+artifact_hash = "notsha256:def"
+"#;
+    let err = Lockfile::parse_str(toml_str).unwrap_err();
+    assert!(err.contains("invalid artifact_hash"), "got: {err}");
   }
 }
