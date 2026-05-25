@@ -496,11 +496,7 @@ pub fn class(
     .collect();
   let con_params = defs
     .into_iter()
-    .map(|d| {
-      param(
-        d.name, d.typ, // TODO default value
-      )
-    })
+    .map(|d| param_with_default(d.name, d.typ, d.default))
     .collect();
   let constructor = induct_constructor(
     name.clone(),

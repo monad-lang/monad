@@ -1141,6 +1141,7 @@ pub fn type_check_instance<'a>(
     .first()
     .expect("Class needs to have at least one constructor");
   let class_defs = cons.params.iter();
+  let mut default_impls: Vec<(Identifier, crate::term::Def)> = Vec::new();
   for param in class_defs {
     if let Some(impl_def) = instance.impls_map.get_mut(&param.name) {
       let class_def_type = param.typ();
@@ -1151,9 +1152,33 @@ pub fn type_check_instance<'a>(
       impl_def.term = term;
       // Wrap type with forall bindings for type variables
       impl_def.typ = wrap_with_foralls(typ, &type_vars);
+    } else if let Some(default_term) = &param.default {
+      // Use the class method's default implementation when the instance
+      // does not provide an explicit one.
+      let class_def_type = param.typ();
+      let typ = match_resolve_type(&class_def_type, &class_def_type, &scope)?;
+      let (term, _) = type_check_with_env(
+        default_term.as_ref().clone(),
+        typ.clone(),
+        &scope,
+        &mut usage,
+        true,
+      )?
+      .to_tuple();
+      let def = crate::term::Def {
+        name: crate::term::ModulePath::single(param.name.clone()),
+        typ: wrap_with_foralls(typ, &type_vars),
+        term,
+        type_constraints: vec![],
+        attributes: vec![],
+      };
+      default_impls.push((param.name.clone(), def));
     } else {
       Err(MissingImplementation(param.name.clone()))?;
     }
+  }
+  for (name, def) in default_impls {
+    instance.impls_map.insert(name, def);
   }
   Ok(instance)
 }
@@ -1250,6 +1275,10 @@ impl<'a> From<&'a (Term, Option<Term>)> for FreeVar<'a> {
 pub struct FreeVars<'a> {
   vars: Map<&'a Identifier, FreeVar<'a>>,
   keep_vars: Map<&'a Identifier, &'a Term>,
+  /// Right-side forall variables that share a name with a left-side forall
+  /// variable (name collision). These must not be unified — they represent
+  /// the right forall's binder, which is kept (non-unifiable) in keep_vars.
+  clash_vars: Set<&'a Identifier>,
 }
 
 impl<'a> Display for FreeVars<'a> {
@@ -1276,6 +1305,7 @@ impl<'a> FromIterator<(&'a Identifier, FreeVar<'a>)> for FreeVars<'a> {
     FreeVars {
       vars: map,
       keep_vars: Map::new(),
+      clash_vars: Set::default(),
     }
   }
 }
@@ -1291,6 +1321,7 @@ impl<'a> FreeVars<'a> {
     Self {
       vars: Map::new(),
       keep_vars: Map::new(),
+      clash_vars: Set::default(),
     }
   }
   pub fn from_locals(scope: &'a Scope<'a>) -> FreeVars<'a> {
@@ -1302,6 +1333,7 @@ impl<'a> FreeVars<'a> {
     FreeVars {
       vars: Map::new(),
       keep_vars,
+      clash_vars: Set::default(),
     }
   }
   pub fn get_free_var(&self, name: &Identifier) -> Option<&FreeVar<'a>> {
@@ -1321,6 +1353,10 @@ impl<'a> FreeVars<'a> {
 
   pub fn keep_vars(&self) -> &Map<&Identifier, &Term> {
     &self.keep_vars
+  }
+
+  fn add_clash_var(&mut self, name: &'a Identifier) {
+    self.clash_vars.insert(name);
   }
 
   pub fn free_vars(&self) -> &Map<&Identifier, FreeVar<'_>> {
@@ -1655,6 +1691,11 @@ fn match_resolve_type_inner<'a>(
       } = right
       {
         free_vars.insert_free_var(name, Unknown { typ });
+        if name == r_name {
+          // Name collision: right forall binds the same name as left.
+          // Mark the right name as a clash var so (_, Var) doesn't unify it.
+          free_vars.add_clash_var(r_name);
+        }
         free_vars.add_var_to_keep(r_name, r_typ);
         match_resolve_type_inner(body, r_body, free_vars, scope, visiting)
       } else {
@@ -1673,6 +1714,7 @@ fn match_resolve_type_inner<'a>(
       }
     }
     (_, Forall { name, typ, body }) => {
+      free_vars.insert_free_var(name, Unknown { typ });
       free_vars.add_var_to_keep(name, typ);
       match_resolve_type_inner(left, body, free_vars, scope, visiting)
     }
@@ -1749,6 +1791,20 @@ fn match_resolve_type_inner<'a>(
       } else {
         match resolve_def_alias(&NameRef::Id(name.clone()), scope, visiting) {
           Some(body) => compare_types(&body, right, free_vars),
+          None => false,
+        }
+      }
+    }
+    (_, Var { name: Id(name) }) => {
+      // A right-side Var that collides with a left forall binding
+      // (same name used by both foralls) is non-unifiable — skip it.
+      if free_vars.clash_vars.contains(name) {
+        false
+      } else if check_free_vars(name, left, free_vars) {
+        true
+      } else {
+        match resolve_def_alias(&NameRef::Id(name.clone()), scope, visiting) {
+          Some(body) => compare_types(left, &body, free_vars),
           None => false,
         }
       }

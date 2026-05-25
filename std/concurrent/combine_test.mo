@@ -114,8 +114,10 @@ def test_cancel_all_smoke : IO Bool {
 
 // scoped: creates scope, runs action, auto-cancels on exit
 
+def fork_io_42_scoped (s : Scope) : IO (Fiber I64) := scope_fork s io_42_action
+
 def scoped_fork_await_42 (s : Scope) : IO I64 := do {
-  let f <- scope_fork s io_42_action;
+  let f <- fork_io_42_scoped s;
   await_fiber f
 }
 

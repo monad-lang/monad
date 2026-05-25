@@ -146,7 +146,18 @@ infix (==) := BEq.beq
 class BOrd A {
   def lt (a b : A) : Bool
   def gt (a b : A) : Bool
+	// TODO fix default implementations
+  // def lte (a b : A) : Bool := not (BOrd.gt a b)
+  // def gte (a b : A) : Bool := not (BOrd.lt a b)
 }
+
+infix (<) := BOrd.lt
+
+// TODO
+// infix (<=) := BOrd.lte
+// infix (>=) := BOrd.gte
+
+infix (>) := BOrd.gt
 
 instance BOrd Bool {
   def lt (a b : Bool) : Bool :=

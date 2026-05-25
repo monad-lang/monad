@@ -50,7 +50,7 @@ impl<'a> From<ParseError<Span<'a>>> for OwnedError {
     ParseError {
       input: value.input.into(),
       expected: value.expected,
-      errors: value.errors,
+      kind: value.kind,
     }
   }
 }
@@ -835,12 +835,14 @@ fn let_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
 }
 
 fn infix_symbol<X: Clone>(input: Span<X>) -> Res<Operator, X> {
-  let (input, op) = alt((
+  let (input, op) = alt([
     tag(">>="),
     tag("<*>"),
     tag("<|>"),
     tag("=="),
     tag("!="),
+    tag(">="),
+    tag("<="),
     tag(">>"),
     tag("<<"),
     tag("|>"),
@@ -848,13 +850,15 @@ fn infix_symbol<X: Clone>(input: Span<X>) -> Res<Operator, X> {
     tag("++"),
     tag("&&"),
     tag("||"),
+    tag(">"),
+    tag("<"),
     tag("="),
     tag("*"),
     tag("/"),
     tag("+"),
     tag("-"),
     tag("."),
-  ))
+  ])
   .parse(input)?;
 
   Ok((input, Operator::new(op.into_fragment().into())))
@@ -876,7 +880,7 @@ fn operator_precedence(op: &Operator) -> Option<(u8, Associativity)> {
     "<|>" => Some((20, Associativity::Left)),
     "||" => Some((25, Associativity::Right)),
     "&&" => Some((30, Associativity::Right)),
-    "==" | "!=" | "=" => Some((40, Associativity::Left)),
+    "==" | "!=" | "=" | "<" | ">" | "<=" | ">=" => Some((40, Associativity::Left)),
     "++" => Some((50, Associativity::Right)),
     ">>" | "<<" => Some((60, Associativity::Left)),
     "+" | "-" => Some((65, Associativity::Left)),

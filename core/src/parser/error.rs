@@ -25,7 +25,7 @@ impl ParseErrorKind {
 pub struct ParseError<I> {
   pub input: I,
   pub expected: Option<String>,
-  pub errors: Vec<ParseErrorKind>,
+  pub kind: ParseErrorKind,
 }
 
 impl<I> ParseError<I> {
@@ -33,14 +33,14 @@ impl<I> ParseError<I> {
     ParseError {
       input,
       expected: None,
-      errors: vec![error],
+      kind: error,
     }
   }
   pub fn map_input<R>(self, f: impl FnOnce(I) -> R) -> ParseError<R> {
     ParseError {
       input: f(self.input),
       expected: self.expected,
-      errors: self.errors,
+      kind: self.kind,
     }
   }
 }
@@ -54,26 +54,21 @@ where
     ParseError::new(input, ParseErrorKind::Nom(kind))
   }
 
-  fn append(input: I, kind: ErrorKind, mut other: Self) -> Self {
+  fn append(input: I, kind: ErrorKind, other: Self) -> Self {
     match input.input_len().cmp(&other.input.input_len()) {
       Ordering::Less => ParseError::new(input, ParseErrorKind::Nom(kind)),
       Ordering::Equal => {
-        other.errors.push(ParseErrorKind::Nom(kind));
+        // other.kind.push(ParseErrorKind::Nom(kind));
         other
       }
       Ordering::Greater => other,
     }
   }
 
-  fn or(self, mut other: Self) -> Self {
+  fn or(self, other: Self) -> Self {
     match self.input.input_len().cmp(&other.input.input_len()) {
       Ordering::Less => self,
-      Ordering::Equal => {
-        for x in self.errors {
-          other.errors.push(x);
-        }
-        other
-      }
+      Ordering::Equal => other,
       Ordering::Greater => other,
     }
   }
@@ -89,13 +84,13 @@ where
       Ordering::Less => ParseError {
         input,
         expected: Some(ctx.into()),
-        errors: vec![],
+        kind: other.kind,
       },
       Ordering::Equal => match other.expected {
         None => ParseError {
           input,
           expected: Some(ctx.into()),
-          errors: other.errors,
+          kind: other.kind,
         },
         _ => other,
       },
@@ -147,16 +142,14 @@ pub fn parse_error_to_diagnostic(
       message: format!("expected: {ctx}"),
     });
   }
-  for err in &error.errors {
-    let msg = match err {
-      ParseErrorKind::Native(msg) => msg.clone(),
-      ParseErrorKind::Nom(kind) => describe_nom_error(kind).to_string(),
-    };
-    sub_diagnostics.push(SubDiagnostic {
-      severity: Severity::Note,
-      message: msg,
-    });
-  }
+  let msg = match &error.kind {
+    ParseErrorKind::Native(msg) => msg.clone(),
+    ParseErrorKind::Nom(kind) => describe_nom_error(kind).to_string(),
+  };
+  sub_diagnostics.push(SubDiagnostic {
+    severity: Severity::Note,
+    message: msg,
+  });
 
   let location = if line_num > 0 {
     Some(SourceRange::new(
