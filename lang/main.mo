@@ -7,118 +7,138 @@ use lang.codegen.emit
 
 open LLVMType
 open LLVMValue
-open TermV0
+open Term
 open Literal
 open Identifier
-open NameRef
+open DebugName
 open NumSuffix
-open ParamV0
-open DefV0
+open Param
+open Def
 open ModulePath
 
 @[partial]
 def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
-    List.cons a (List.cons b (List.cons c (List.cons d List.empty)))
+    [a, b, c, d]
 
 @[partial]
-def empty_str_list : List String := List.empty
+def empty_str_list : List String := []
 
 @[partial]
-def make_native_app (op_name : String) (a : I64) (b : I64) : TermV0 :=
-    let nid := NameRef.nid (Identifier.id op_name) in
-    let var_ := TermV0.var nid in
-    let app1 := TermV0.app var_ (TermV0.lit (LiteralV0.num a NumSuffix.i64)) in
-    TermV0.app app1 (TermV0.lit (LiteralV0.num b NumSuffix.i64))
+def mk_var (name : String) : Term :=
+    Term.var 0 (DebugName.named (Identifier.id name))
 
 @[partial]
-def build_const42 : List DefV0 :=
-    let id := Identifier.id "main" in
-    let body := TermV0.lit (LiteralV0.num 42 NumSuffix.i64) in
-    let def_ := DefV0.mk
-        (ModulePath.mp (List.cons id List.empty))
-        (TermV0.type_ 1)
-        body
-        List.empty
-        List.empty in
-    List.cons def_ List.empty
+def mk_native_app (op_name : String) (a : I64) (b : I64) : Term :=
+    let nid := mk_var op_name in
+    Term.app (Term.app nid (Term.lit (Literal.num a NumSuffix.i64)))
+        (Term.lit (Literal.num b NumSuffix.i64))
 
 @[partial]
-def build_add : List DefV0 :=
-    let id := Identifier.id "main" in
-    let body := make_native_app "I64_add" 1 2 in
-    let def_ := DefV0.mk
-        (ModulePath.mp (List.cons id List.empty))
-        (TermV0.type_ 1)
-        body
-        List.empty
-        List.empty in
-    List.cons def_ List.empty
+def mk_native_app_t (op_name : String) (a : Term) (b : Term) : Term :=
+    let nid := mk_var op_name in
+    Term.app (Term.app nid a) b
 
 @[partial]
-def build_arithmetic : List DefV0 :=
-    let id := Identifier.id "main" in
-    let one := TermV0.lit (LiteralV0.num 1 NumSuffix.i64) in
-    let mul_2_3 := make_native_app "I64_mul" 2 3 in
-    let nid := NameRef.nid (Identifier.id "I64_add") in
-    let var_ := TermV0.var nid in
-    let app1 := TermV0.app var_ one in
-    let body := TermV0.app app1 mul_2_3 in
-    let def_ := DefV0.mk
-        (ModulePath.mp (List.cons id List.empty))
-        (TermV0.type_ 1)
-        body
-        List.empty
-        List.empty in
-    List.cons def_ List.empty
+def mk_call (fn_name : String) (arg : Term) : Term :=
+    Term.app (mk_var fn_name) arg
 
 @[partial]
-def build_iftrue : List DefV0 :=
-    let id := Identifier.id "main" in
-    let cond := make_native_app "I64_eq" 1 1 in
-    let body := TermV0.lit
-        (LiteralV0.if_ cond
-            (TermV0.lit (LiteralV0.num 42 NumSuffix.i64))
-            (TermV0.lit (LiteralV0.num 0 NumSuffix.i64))) in
-    let def_ := DefV0.mk
-        (ModulePath.mp (List.cons id List.empty))
-        (TermV0.type_ 1)
-        body
-        List.empty
-        List.empty in
-    List.cons def_ List.empty
+def mk_i64 (n : I64) : Term :=
+    Term.lit (Literal.num n NumSuffix.i64)
 
 @[partial]
-def build_iffalse : List DefV0 :=
-    let id := Identifier.id "main" in
-    let cond := make_native_app "I64_eq" 1 2 in
-    let body := TermV0.lit
-        (LiteralV0.if_ cond
-            (TermV0.lit (LiteralV0.num 99 NumSuffix.i64))
-            (TermV0.lit (LiteralV0.num 100 NumSuffix.i64))) in
-    let def_ := DefV0.mk
-        (ModulePath.mp (List.cons id List.empty))
-        (TermV0.type_ 1)
-        body
-        List.empty
-        List.empty in
-    List.cons def_ List.empty
+def mk_lam (name : String) (body : Term) : Term :=
+    Term.lam (DebugName.named (Identifier.id name)) (Term.type_ 1) body
+
+@[partial]
+def mk_def (name : String) (body : Term) : Def :=
+    Def.mk (ModulePath.mp [Identifier.id name]) (Term.type_ 1) body
+        ([] : List TypeConstraint) ([] : List String)
+
+@[partial]
+def mk_if (cond : Term) (then_ : Term) (else_ : Term) : Term :=
+    Term.lit (Literal.if_ cond then_ else_)
+
+// === Examples ===
+
+@[partial]
+def build_const42 : List Def :=
+    [mk_def "main" (mk_i64 42)]
+
+@[partial]
+def build_add : List Def :=
+    [mk_def "main" (mk_native_app "I64_add" 1 2)]
+
+@[partial]
+def build_arithmetic : List Def :=
+    let one := mk_i64 1 in
+    let mul_2_3 := mk_native_app "I64_mul" 2 3 in
+    let body := Term.app (Term.app (mk_var "I64_add") one) mul_2_3 in
+    [mk_def "main" body]
+
+@[partial]
+def build_nested_if : List Def :=
+    let inner_cond := mk_native_app "I64_eq" 1 2 in
+    let inner_if := mk_if inner_cond (mk_i64 1) (mk_i64 2) in
+    let outer_cond := mk_native_app "I64_eq" 1 1 in
+    let body := mk_if outer_cond inner_if (mk_i64 3) in
+    [mk_def "main" body]
+
+@[partial]
+def build_iftrue : List Def :=
+    let cond := mk_native_app "I64_eq" 1 1 in
+    [mk_def "main" (mk_if cond (mk_i64 42) (mk_i64 0))]
+
+@[partial]
+def build_iffalse : List Def :=
+    let cond := mk_native_app "I64_eq" 1 2 in
+    [mk_def "main" (mk_if cond (mk_i64 99) (mk_i64 100))]
+
+@[partial]
+def build_multicall : List Def :=
+    let square_body := mk_native_app_t "I64_mul" (mk_var "x") (mk_var "x") in
+    let square_def := mk_def "square" (mk_lam "x" square_body) in
+    let main_def := mk_def "main" (mk_call "square" (mk_i64 5)) in
+    [square_def, main_def]
+
+@[partial]
+def build_lambda : List Def :=
+    let lam_body := mk_native_app_t "I64_add" (mk_var "x") (mk_i64 1) in
+    let lam := mk_lam "x" lam_body in
+    let call := Term.app lam (mk_i64 5) in
+    [mk_def "main" call]
+
+@[partial]
+def build_factorial : List Def :=
+    let n_var := mk_var "n" in
+    let zero_ := mk_i64 0 in
+    let one_ := mk_i64 1 in
+    let n_minus_1 := mk_native_app_t "I64_sub" n_var one_ in
+    let fact_rec := mk_call "factorial" n_minus_1 in
+    let mul_rec := mk_native_app_t "I64_mul" n_var fact_rec in
+    let eq_zero := mk_native_app_t "I64_eq" n_var zero_ in
+    let if_body := mk_if eq_zero one_ mul_rec in
+    let fact_def := mk_def "factorial" (mk_lam "n" if_body) in
+    let main_def := mk_def "main" (mk_call "factorial" (mk_i64 5)) in
+    [fact_def, main_def]
+
+// === Names ===
 
 @[partial]
 def example_names : List String :=
-    List.cons "const42"
-        (List.cons "add"
-        (List.cons "arithmetic"
-        (List.cons "iftrue"
-        (List.cons "iffalse"
-        List.empty))))
+    ["const42", "add", "arithmetic", "iftrue", "iffalse",
+     "multicall", "lambda", "factorial"]
 
 @[partial]
-def get_example_defs (name : String) : Option (List DefV0) :=
+def get_example_defs (name : String) : Option (List Def) :=
     if String.beq name "const42" then Option.some build_const42
     else if String.beq name "add" then Option.some build_add
     else if String.beq name "arithmetic" then Option.some build_arithmetic
     else if String.beq name "iftrue" then Option.some build_iftrue
     else if String.beq name "iffalse" then Option.some build_iffalse
+    else if String.beq name "multicall" then Option.some build_multicall
+    else if String.beq name "lambda" then Option.some build_lambda
+    else if String.beq name "factorial" then Option.some build_factorial
     else Option.none
 
 @[partial]
@@ -128,16 +148,21 @@ def get_expected (name : String) : I64 :=
     else if String.beq name "arithmetic" then 7
     else if String.beq name "iftrue" then 42
     else if String.beq name "iffalse" then 100
+    else if String.beq name "multicall" then 25
+    else if String.beq name "lambda" then 6
+    else if String.beq name "factorial" then 120
     else 0
 
+// === Compile & run ===
+
 @[partial]
-def compile_and_run (defs : List DefV0) (output_dir : String) (output_name : String) (expect : I64) : IO I64 {
+def compile_and_run (defs : List Def) (output_dir : String) (output_name : String) (expect : I64) : IO I64 {
     let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
     let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
     let runtime_obj := String.concat output_dir "/monad_runtime.o";
     let output_path := String.concat output_dir (String.concat "/" output_name);
 
-    let mod_ := lang.codegen.emit.compile_decls_ir defs;
+    let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
     let ir_text := lang.codegen.ir.emit_module mod_;
     IO.write_file ir_path ir_text;
 

@@ -284,7 +284,7 @@ def show_instruction (instr : LLVMInstruction) : String := match instr {
         String.concat "  %" (String.concat target (String.concat " = "
             (show_llvm_value value))),
     branch cond then_label else_label =>
-        String.concat "  br " (String.concat (show_llvm_value_typed cond)
+        String.concat "  br i1 " (String.concat (show_llvm_value cond)
             (String.concat ", label %" (String.concat then_label
             (String.concat ", label %" else_label)))),
     jump label =>

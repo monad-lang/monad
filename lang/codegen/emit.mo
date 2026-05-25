@@ -263,7 +263,7 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
                 let global := LLVMGlobal.mk name s (String.length s) true in
                 CompileResult.ok ctx1 empty_instrs (LLVMValue.global_ name) empty_blocks empty_funcs (cons_global global empty_globals_list),
         },
-    Literal.if_ cond then_ else_ => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+    Literal.if_ cond then_ else_ => compile_db_if_ir c cond then_ else_,
     Literal.match_ scrutinee cases => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
 }
 
@@ -375,7 +375,7 @@ def compile_if_ir (c : CodegenCtx) (cond : TermV0) (then_ : TermV0) (else_ : Ter
             match build_if_labels ctx_cond {
                 IfLabels.mk ctx_branches then_label else_label merge_label =>
                     let branch_instr := LLVMInstruction.branch cond_val then_label else_label in
-                    let entry_instrs := cons_instr branch_instr cond_instrs in
+                    let entry_instrs := append_instrs cond_instrs (cons_instr branch_instr empty_instrs) in
                     build_if_blocks ctx_branches then_label else_label merge_label then_ else_ entry_instrs blocks_cond funcs_cond globals_cond,
             },
     }
@@ -395,7 +395,51 @@ def build_if_labels (c : CodegenCtx) : IfLabels :=
 
 @[partial]
 def build_branch_block (label : String) (merge_label : String) (instrs : List LLVMInstruction) : LLVMBasicBlock :=
-    LLVMBasicBlock.mk label (cons_instr (LLVMInstruction.jump merge_label) instrs)
+    if ends_with_terminator instrs
+    then LLVMBasicBlock.mk label instrs
+    else LLVMBasicBlock.mk label (append_instrs instrs (cons_instr (LLVMInstruction.jump merge_label) empty_instrs))
+
+@[partial]
+def ends_with_terminator (instrs : List LLVMInstruction) : Bool := match instrs {
+    List.empty => false,
+    List.cons hd tl => match tl {
+        List.empty => is_terminator_instr hd,
+        List.cons x y => ends_with_terminator tl,
+    },
+}
+
+@[partial]
+def is_terminator_instr (instr : LLVMInstruction) : Bool := match instr {
+    LLVMInstruction.branch a b c => true,
+    LLVMInstruction.jump a => true,
+    LLVMInstruction.ret a => true,
+    LLVMInstruction.assign a b => false,
+    LLVMInstruction.comment a => false,
+}
+
+@[partial]
+def compile_db_if_ir (c : CodegenCtx) (cond : Term) (then_ : Term) (else_ : Term) : CompileResult :=
+    match compile_db_term_ir c cond {
+        CompileResult.ok ctx_cond cond_instrs cond_val blocks_cond funcs_cond globals_cond =>
+            match build_if_labels ctx_cond {
+                IfLabels.mk ctx_branches then_label else_label merge_label =>
+                    let branch_instr := LLVMInstruction.branch cond_val then_label else_label in
+                    let entry_instrs := append_instrs cond_instrs (cons_instr branch_instr empty_instrs) in
+                    build_db_if_blocks ctx_branches then_label else_label merge_label then_ else_ entry_instrs blocks_cond funcs_cond globals_cond,
+            },
+    }
+
+@[partial]
+def build_db_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : String) (merge_label : String) (then_ : Term) (else_ : Term) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) (entry_funcs : List LLVMFunction) (entry_globals : List LLVMGlobal) : CompileResult :=
+    match compile_db_term_ir ctx then_ {
+        CompileResult.ok ctx_then then_instrs then_val blocks_then funcs_then globals_then =>
+            let then_block := build_branch_block then_label merge_label then_instrs in
+            match compile_db_term_ir ctx_then else_ {
+                CompileResult.ok ctx_else else_instrs else_val blocks_else funcs_else globals_else =>
+                    let else_block := build_branch_block else_label merge_label else_instrs in
+                    build_merge_result ctx_else merge_label then_val then_label else_val else_label entry_instrs entry_blocks entry_funcs entry_globals blocks_then blocks_else funcs_then funcs_else globals_then globals_else then_block else_block,
+            },
+    }
 
 @[partial]
 def build_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : String) (merge_label : String) (then_ : TermV0) (else_ : TermV0) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) (entry_funcs : List LLVMFunction) (entry_globals : List LLVMGlobal) : CompileResult :=
@@ -479,20 +523,89 @@ def compile_app_ir (c : CodegenCtx) (fun : TermV0) (arg : TermV0) : CompileResul
 
 @[partial]
 def compile_db_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
-    match compile_db_term_ir c fun {
-        CompileResult.ok ctx_f instrs_f val_f _ _ _ =>
-            match compile_db_term_ir ctx_f arg {
-                CompileResult.ok ctx_a instrs_a val_a _ _ _ =>
-                    let combined := append_instrs instrs_f instrs_a in
-                    match val_f {
-                        LLVMValue.var_ name =>
-                            compile_direct_call ctx_a name val_a combined,
-                        LLVMValue.parm_ idx =>
-                            compile_indirect_call ctx_a val_a combined,
-                        _ =>
-                            compile_call_stub ctx_a combined,
+    match try_compile_inline_native_db c fun arg {
+        Option.some result => result,
+        Option.none => compile_general_db_call c fun arg,
+    }
+
+@[partial]
+def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
+    match fun {
+        Term.app fun2 arg2 =>
+            match fun2 {
+                Term.var idx dbg =>
+                    match dbg {
+                        DebugName.named id =>
+                            match lookup_native (show_identifier id) {
+                                Option.some op =>
+                                    Option.some (compile_native_app_db c op arg2 arg),
+                                Option.none => Option.none,
+                            },
+                        DebugName.unnamed => Option.none,
+                    },
+                _ => Option.none,
+            },
+        _ => Option.none,
+    }
+
+@[partial]
+def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : Term) : CompileResult :=
+    match compile_db_term_ir c arg2 {
+        CompileResult.ok ctx2 instrs2 val2 _ _ _ =>
+            match compile_db_term_ir ctx2 arg {
+                CompileResult.ok ctx1 instrs1 val1 _ _ _ =>
+                    let combined := append_instrs instrs2 instrs1 in
+                    match extract_lit_from_val val2 {
+                        Option.some n1 =>
+                            match extract_lit_from_val val1 {
+                                Option.some n2 =>
+                                    CompileResult.ok ctx1 combined (fold_native_const op n1 n2) empty_blocks empty_funcs empty_globals_list,
+                                Option.none =>
+                                    emit_arith_instr ctx1 op val2 val1 combined,
+                            },
+                        Option.none =>
+                            emit_arith_instr ctx1 op val2 val1 combined,
                     },
             },
+    }
+
+@[partial]
+def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
+    match compile_db_term_ir c fun {
+        CompileResult.ok ctx_f instrs_f val_f blocks_f funcs_f globals_f =>
+            match compile_db_term_ir ctx_f arg {
+                CompileResult.ok ctx_a instrs_a val_a blocks_a funcs_a globals_a =>
+                    let combined := append_instrs instrs_f instrs_a in
+                    let all_blocks := append_blocks blocks_f blocks_a in
+                    let all_funcs := append_funcs funcs_f funcs_a in
+                    let all_globals := append_globals globals_f globals_a in
+                    match val_f {
+                        LLVMValue.var_ name =>
+                            combine_direct_call ctx_a name val_a combined all_blocks all_funcs all_globals,
+                        LLVMValue.parm_ idx =>
+                            combine_indirect_call ctx_a val_a combined all_blocks all_funcs all_globals,
+                        _ =>
+                            CompileResult.ok ctx_a combined LLVMValue.void_val all_blocks all_funcs all_globals,
+                    },
+            },
+    }
+
+@[partial]
+def combine_direct_call (ctx_a : CodegenCtx) (name : String) (val_a : LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) : CompileResult :=
+    match fresh_temp ctx_a {
+        CtxStrPair.mk ctx_t temp =>
+            let call_instr := LLVMInstruction.assign temp
+                (LLVMValue.call name LLVMType.i64_ (cons_val val_a empty_vals) false) in
+            CompileResult.ok ctx_t (append_instrs combined (cons_instr call_instr empty_instrs)) (LLVMValue.var_ temp) blocks funcs globals,
+    }
+
+@[partial]
+def combine_indirect_call (ctx_a : CodegenCtx) (val_a : LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) : CompileResult :=
+    match fresh_temp ctx_a {
+        CtxStrPair.mk ctx_t temp =>
+            let call_instr := LLVMInstruction.assign temp
+                (LLVMValue.call "apply_fun" LLVMType.i64_ (cons_val val_a empty_vals) false) in
+            CompileResult.ok ctx_t (append_instrs combined (cons_instr call_instr empty_instrs)) (LLVMValue.var_ temp) blocks funcs globals,
     }
 
 @[partial]
@@ -555,7 +668,7 @@ def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : L
         CtxStrPair.mk new_ctx temp =>
             let arith_val := compile_native_val op lhs rhs in
             let arith_instr := LLVMInstruction.assign temp arith_val in
-            CompileResult.ok new_ctx (cons_instr arith_instr instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+            CompileResult.ok new_ctx (append_instrs instrs (cons_instr arith_instr empty_instrs)) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
     }
 
 @[partial]
@@ -734,11 +847,15 @@ type DefResult {
 }
 
 @[partial]
-def build_llvm_params (params : List ParamV0) : List ParamPair := match params {
+def build_llvm_params (params : List ParamV0) : List ParamPair :=
+    build_llvm_params_from params 0
+
+@[partial]
+def build_llvm_params_from (params : List ParamV0) (idx : I64) : List ParamPair := match params {
     List.empty => List.empty,
     List.cons p rest =>
-        let pp := ParamPair.mk (show_identifier (param_name p)) LLVMType.i64_ in
-        List.cons pp (build_llvm_params rest),
+        let pp := ParamPair.mk (String.concat "p" (I64.to_string idx)) LLVMType.i64_ in
+        List.cons pp (build_llvm_params_from rest (idx + 1)),
 }
 
 @[partial]
@@ -1336,3 +1453,70 @@ def test_compile_inductive_decls : Bool :=
 
 @[partial]
 def empty_params_list : List ParamV0 := List.empty
+
+// === De Bruijn (canonical) def compilation ===
+
+/// Collect lambda params from a de Bruijn Term body.
+/// Strips `Term.lam` prefixes and returns ParamV0 for each.
+@[partial]
+def collect_db_params (term_ : Term) : List ParamV0 := match term_ {
+    Term.lam dbg typ body =>
+        let name : Identifier := match dbg {
+            DebugName.named id => id,
+            DebugName.unnamed => Identifier.id "x",
+        } in
+        let param_ := param_many_v0 name (TermV0.type_ 1) in
+        List.cons param_ (collect_db_params body),
+    Term.forall dbg kind body => collect_db_params body,
+    _ => List.empty,
+}
+
+/// Strip lambda/forall prefixes from a de Bruijn Term body.
+@[partial]
+def strip_db_lams (term_ : Term) : Term := match term_ {
+    Term.lam dbg typ body => strip_db_lams body,
+    Term.forall dbg kind body => strip_db_lams body,
+    _ => term_,
+}
+
+/// Compile a canonical Def (de Bruijn Term) to LLVM IR.
+@[partial]
+def compile_db_def_ir (def_ : Def) : DefResult := match def_ {
+    Def.mk name typ term_ constraints attrs =>
+        let fn_name := module_path_to_str name in
+        let params := collect_db_params term_ in
+        let llvm_params := build_llvm_params params in
+        let body := strip_db_lams term_ in
+        let c0 := bind_params_in_ctx empty_ctx params in
+        match compile_db_term_ir c0 body {
+            CompileResult.ok ctx_r instrs_r val_r blocks_r funcs_r globals_r =>
+                let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
+                let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                let all_blocks := append_blocks (cons_block entry_block empty_blocks) blocks_r in
+                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
+                DefResult.dr (cons_func main_func funcs_r) globals_r,
+        },
+}
+
+/// Compile a list of canonical Defs to LLVM functions.
+@[partial]
+def compile_db_def_list (defs : List Def) : DefResult := match defs {
+    List.empty => DefResult.dr empty_funcs empty_globals_list,
+    List.cons d rest =>
+        match compile_db_def_ir d {
+            DefResult.dr funcs_d globals_d =>
+                match compile_db_def_list rest {
+                    DefResult.dr funcs_rest globals_rest =>
+                        DefResult.dr (append_funcs funcs_d funcs_rest) (append_globals globals_d globals_rest),
+                },
+        },
+}
+
+/// Compile a list of canonical Defs to a complete LLVM module.
+@[partial]
+def compile_db_decls_ir (defs : List Def) : LLVMModule :=
+    match compile_db_def_list defs {
+        DefResult.dr compiled_funcs compiled_globals =>
+            let funcs := ren_main_and_wrap compiled_funcs in
+            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
+    }
