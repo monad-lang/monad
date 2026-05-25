@@ -416,3 +416,168 @@ def add_builtin_prop (sd : ScopeData) : ScopeData :=
     } in
     let sd1 : ScopeData := scope_data_add_inductive sd prop_ind in
     scope_data_add_def sd1 prop_sd
+
+// --- build_scope_from_modules: build ScopeData from loaded modules ---
+
+def build_scope_from_modules (path : ModulePath) (loaded : LoadedModules) : ScopeData :=
+    match loaded {
+        mk modules =>
+            let empty : ScopeData := scope_data_empty in
+            build_scope_from_modules_go modules empty
+    }
+
+def build_scope_from_modules_go (modules : List Module) (acc : ScopeData) : ScopeData :=
+    match modules {
+        List.empty => acc,
+        List.cons m rest =>
+            let with_mod : ScopeData := build_scope_from_one_module m acc in
+            build_scope_from_modules_go rest with_mod
+    }
+
+def build_scope_from_one_module (m : Module) (acc : ScopeData) : ScopeData :=
+    match m {
+        mk _path _inductives defs infxs _instances =>
+            let with_defs : ScopeData := add_module_defs acc defs in
+            let with_inds : ScopeData := add_module_inductives with_defs _inductives in
+            let with_inst : ScopeData := add_module_instances with_inds _instances in
+            add_module_infixes with_inst infxs
+    }
+
+def add_module_defs (acc : ScopeData) (defs : List ScopeDef) : ScopeData :=
+    match defs {
+        List.empty => acc,
+        List.cons d rest =>
+            let new_acc : ScopeData := scope_data_add_def acc d in
+            add_module_defs new_acc rest
+    }
+
+def add_module_inductives (acc : ScopeData) (inds : List Inductive) : ScopeData :=
+    match inds {
+        List.empty => acc,
+        List.cons ind rest =>
+            let new_acc : ScopeData := scope_data_add_inductive acc ind in
+            add_module_inductives new_acc rest
+    }
+
+def add_module_instances (acc : ScopeData) (insts : List ScopeInstance) : ScopeData :=
+    match insts {
+        List.empty => acc,
+        List.cons si rest =>
+            let new_acc : ScopeData := add_module_instance_group acc si in
+            add_module_instances new_acc rest
+    }
+
+def add_module_instance_group (acc : ScopeData) (si : ScopeInstance) : ScopeData :=
+    match acc {
+        mk dr cd insts ind cls infs conf =>
+            let merged : List ScopeInstance := scope_add_instance_group insts si in
+            {
+                def_refs := dr,
+                class_defs := cd,
+                instances := merged,
+                inductives := ind,
+                classes := cls,
+                infixes := infs,
+                conflicts := conf,
+            }
+    }
+
+def scope_add_instance_group (insts : List ScopeInstance) (si : ScopeInstance) : List ScopeInstance :=
+    match si {
+        mk cn ins_list =>
+            scope_add_instances_to_group insts cn ins_list
+    }
+
+def scope_add_instances_to_group (insts : List ScopeInstance) (cls_name : ModulePath) (ins_list : List Instance) : List ScopeInstance :=
+    match insts {
+        List.empty =>
+            let si : ScopeInstance := {
+                class_name := cls_name,
+                instances := ins_list,
+            } in
+            let empty_rest : List ScopeInstance := List.empty in
+            List.cons si empty_rest,
+        List.cons existing rest =>
+            match existing {
+                mk cn existing_list =>
+                    if modpath_eq cn cls_name
+                    then
+                        let merged_list : List Instance := list_append existing_list ins_list in
+                        let new_si : ScopeInstance := {
+                            class_name := cn,
+                            instances := merged_list,
+                        } in
+                        List.cons new_si rest
+                    else List.cons existing (scope_add_instances_to_group rest cls_name ins_list)
+            }
+    }
+
+def add_module_infixes (acc : ScopeData) (infxs : List Infix) : ScopeData :=
+    match infxs {
+        List.empty => acc,
+        List.cons inf rest =>
+            match acc {
+                mk dr cd ins ind cls infs conf => {
+                    def_refs := dr,
+                    class_defs := cd,
+                    instances := ins,
+                    inductives := ind,
+                    classes := cls,
+                    infixes := List.cons inf infs,
+                    conflicts := conf,
+                }
+            }
+    }
+
+// --- scope_resolve_instance: find concrete instance by class name ---
+
+def scope_resolve_instance (class_name : ModulePath) (instance_key : InstanceKey) (s : Scope) : Result ScopeError Instance :=
+    let g : ScopeData := scope_globals s in
+    let candidates : List Instance := scope_instance_candidates g class_name in
+    first_matching_instance candidates instance_key
+
+def scope_instance_candidates (sd : ScopeData) (cls_name : ModulePath) : List Instance :=
+    match sd {
+        mk _ _ insts _ _ _ _ => find_instances_by_class insts cls_name
+    }
+
+def find_instances_by_class (insts : List ScopeInstance) (cls_name : ModulePath) : List Instance :=
+    match insts {
+        List.empty => List.empty,
+        List.cons si rest =>
+            match si {
+                mk cn ins_list =>
+                    if modpath_eq cn cls_name
+                    then list_append ins_list (find_instances_by_class rest cls_name)
+                    else find_instances_by_class rest cls_name
+            }
+    }
+
+def first_matching_instance (candidates : List Instance) (key : InstanceKey) : Result ScopeError Instance :=
+    match candidates {
+        List.empty => err (ScopeError.instance_not_found key),
+        List.cons ins rest =>
+            if instance_key_matches ins key
+            then ok ins
+            else first_matching_instance rest key
+    }
+
+def instance_key_matches (ins : Instance) (key : InstanceKey) : Bool :=
+    match ins {
+        mk _ cls_name constraints _ =>
+            match key {
+                mk key_cls _ _ =>
+                    Similar.similar cls_name key_cls
+            }
+    }
+
+// --- list_append helper (prelude List.append is curried) ---
+
+def list_append (xs : List A) (ys : List A) : List A :=
+    match xs {
+        List.empty => ys,
+        List.cons x rest => List.cons x (list_append rest ys)
+    }
+
+// Exports
+infix (++) := list_append
