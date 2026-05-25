@@ -26,7 +26,6 @@ a different branch and cause confusion.
 ├── cli/              # CLI entry point
 │   └── src/main.rs
 ├── wasm/             # WebAssembly bindings
-├── llvm-codegen/     # LLVM native compilation backend
 ├── init/             # Standard library
 │   ├── prelude.mo     # Basic types (Bool, List, Option, etc.)
 │   ├── io.mo         # IO operations

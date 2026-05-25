@@ -86,10 +86,10 @@ codegen (`lang/codegen/`). The C runtime converts `argc`/`argv` to a
 cargo test
 
 # Monad standard library tests
-cargo run -- test init/tests.mo
+cargo run -- test init std
 
 # Self-hosted codegen tests
-cargo run -- test lang/codegen/
+cargo run -- test lang
 ```
 
 ### Compile and run via the self-hosted codegen (experimental)
@@ -99,7 +99,7 @@ The self-hosted codegen compiles Monad `Def` AST nodes to LLVM IR, invokes
 
 ```bash
 # Run the self-hosted codegen test suite (all unit tests)
-cargo run -- test lang/codegen/
+cargo run -- run lang/main.mo test-all
 
 # The full pipeline (requires llc + clang):
 # Test file: lang/codegen/test/test_link_e2e.mo
@@ -112,7 +112,6 @@ cargo run -- test lang/codegen/
 | Component | Location | Description |
 |-----------|----------|-------------|
 | **Rust compiler** | `core/`, `cli/` | Parser, type checker, evaluator, constraint solver |
-| **Rust LLVM codegen** | `llvm-codegen/` | Full LLVM IR codegen from typed AST |
 | **Self-hosted codegen** | `lang/codegen/` | Monad-in-Monad LLVM IR emitter + linker |
 | **C runtime** | `lang/codegen/runtime.c` | Heap allocation, ref counting, constructor/string objects |
 | **Standard library** | `init/`, `std/` | Prelude types, type classes, native-backed operations |

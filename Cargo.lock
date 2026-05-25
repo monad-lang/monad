@@ -269,7 +269,6 @@ version = "0.1.2"
 dependencies = [
  "clap",
  "monad-core",
- "monad-llvm-codegen",
  "rustyline",
 ]
 
@@ -286,15 +285,6 @@ dependencies = [
  "rustyline",
  "serde",
  "toml",
-]
-
-[[package]]
-name = "monad-llvm-codegen"
-version = "0.1.2"
-dependencies = [
- "clap",
- "monad-core",
- "pretty_assertions",
 ]
 
 [[package]]

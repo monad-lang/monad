@@ -6,16 +6,14 @@ license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "monad"
+name = "monad-rs"
 path = "src/main.rs"
 
 [dependencies]
 monad-core = { path = "../core" }
-monad-llvm-codegen = { path = "../llvm-codegen", optional = true }
 clap = { version = "4", features = ["derive"] }
 rustyline = { version = "17.0.2", optional = true }
 
 [features]
-default = ["repl", "llvm"]
+default = ["repl"]
 repl = ["dep:rustyline", "monad-core/repl"]
-llvm = ["dep:monad-llvm-codegen"]

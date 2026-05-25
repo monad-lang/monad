@@ -1,4 +1,3 @@
-use std.test
 use init
 use io
 open IO
@@ -82,6 +81,30 @@ def test_list_empty : Bool :=
 @[test]
 def test_list_not_empty : Bool :=
     not (List.is_empty [1, 2, 3])
+
+@[test]
+def test_get_0 : Bool :=
+    some 1 == (List.get 0 [1, 2, 3])
+
+@[test]
+def test_get_1 : Bool :=
+    some 2 == (List.get 1 [1, 2, 3])
+
+@[test]
+def test_get_2 : Bool :=
+    some 3 == (List.get 2 [1, 2, 3])
+
+@[test]
+def test_get_max : Bool :=
+    none == (List.get 4 [1, 2, 3])
+
+@[test]
+def test_get_neg1 : Bool :=
+    none == (List.get (-1) [1, 2, 3])
+
+@[test]
+def test_get_empty : Bool :=
+    none == (List.get 0 List.empty)
 
 def first_of_empty : Option I64 :=
     List.first List.empty

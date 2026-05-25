@@ -595,18 +595,7 @@ impl Instance {
             true
           }
         } else {
-          // Structural comparison: Var/App terms are compared directly.
-          // Type variables (free vars without a known mapping) match structurally.
-          // Compare by converting both to ModulePath to handle Id vs P variants
-          let arg_path = match arg {
-            Term::Var { name } => name.to_path(),
-            _ => None,
-          };
-          let key_path = match &*key_arg.typ {
-            Term::Var { name } => name.to_path(),
-            _ => None,
-          };
-          arg_path == key_path
+          compare_instance_term(arg, &key_arg.typ, &class.params, &self.params, &mut subst)
         }
       } else {
         true // irrelevant
@@ -622,6 +611,48 @@ impl Instance {
     }
 
     check_instance_constraints_with_visiting(global, self, key, class, visiting)
+  }
+}
+
+/// Recursively compare an instance arg term with a key arg term.
+/// Handles App chains and type variable substitution.
+fn compare_instance_term(
+  instance_term: &Term,
+  key_term: &Term,
+  class_params: &[Param],
+  instance_params: &[Param],
+  subst: &mut Map<Identifier, Term>,
+) -> bool {
+  match (instance_term, key_term) {
+    (Term::Ctx { term: t1, .. }, _) => {
+      compare_instance_term(t1, key_term, class_params, instance_params, subst)
+    }
+    (_, Term::Ctx { term: t2, .. }) => {
+      compare_instance_term(instance_term, t2, class_params, instance_params, subst)
+    }
+    (Term::App { fun: f1, arg: a1 }, Term::App { fun: f2, arg: a2 }) => {
+      compare_instance_term(f1, f2, class_params, instance_params, subst)
+        && compare_instance_term(a1, a2, class_params, instance_params, subst)
+    }
+    (
+      Term::Var {
+        name: NameRef::Id(id),
+      },
+      _,
+    ) if class_params.iter().any(|p| p.name == *id)
+      || instance_params.iter().any(|p| p.name == *id) =>
+    {
+      let id = id.clone();
+      if let Some(bound) = subst.get(&id) {
+        let bound = bound.clone();
+        compare_instance_term(&bound, key_term, class_params, instance_params, subst)
+      } else {
+        subst.insert(id, key_term.clone());
+        true
+      }
+    }
+    (Term::Var { name: n1 }, Term::Var { name: n2 }) => n1.to_path() == n2.to_path(),
+    _ => instance_term == key_term,
   }
 }
 

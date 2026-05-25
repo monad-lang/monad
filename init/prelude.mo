@@ -355,4 +355,3 @@ class IndexedMonad (M : Type -> Type -> Type -> Type) {
     /// Lift a pure value into the indexed monad at any index
     def lift (a : A) : M I I A := pure a
 }
-// DEBUG_PRELUDE_MARKER_12345

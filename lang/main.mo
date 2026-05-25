@@ -214,22 +214,19 @@ def print_one (name : String) : IO I64 {
 @[partial]
 def print_list_cont (rest : List String) (_ : I64) : IO I64 := print_list rest
 
-@[partial]
 def print_list (names : List String) : IO I64 :=
     match names {
         List.cons name rest =>
-            Monad.bind (print_one name) (print_list_cont rest),
+            (print_one name) >>= (print_list_cont rest),
         List.empty => Monad.pure 0
     }
 
-@[partial]
 def first_arg (args : List String) : String :=
     match args {
         List.cons cmd rest => cmd,
         List.empty => ""
     }
 
-@[partial]
 def second_arg (args : List String) : String :=
     let tail :=
         match args {
@@ -238,18 +235,19 @@ def second_arg (args : List String) : String :=
         } in
     first_arg tail
 
+/// Current main entrypoint of self hosted compiler
 def main (args : List String) : IO I64 {
     let cmd := first_arg args;
     let out_dir := "/tmp";
-    if String.beq cmd "compile" then do {
+    if cmd == "compile" then do {
         let name := second_arg args;
         run_one name out_dir
     }
-    else if String.beq cmd "test-all" then do {
+    else if cmd == "test-all" then do {
         println "Running all examples...";
         run_all example_names out_dir
     }
-    else if String.beq cmd "list" then do {
+    else if cmd == "list" then do {
         println "Available examples:";
         print_list example_names
     }

@@ -795,15 +795,15 @@ fn ann_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
 
 fn if_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, _) = tag("if")(input)?;
-  let (input, _) = ws1(input)?;
+  let (input, _) = ws0(input)?;
   let (input, value) = term(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("then")(input)?;
-  let (input, _) = ws1(input)?;
+  let (input, _) = ws0(input)?;
   let (input, then) = term(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("else")(input)?;
-  let (input, _) = ws1(input)?;
+  let (input, _) = ws0(input)?;
   let (input, els) = term(input)?;
 
   Ok((input, if_term(value, then, els)))
