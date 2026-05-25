@@ -3039,3 +3039,44 @@ fn test_mote_dependency_resolves_via_search_paths() {
 
   std::fs::remove_dir_all(&dep_dir).unwrap();
 }
+
+#[test]
+fn test_mote_resolution_priority_dep_before_motes() {
+  use std::path::PathBuf;
+
+  let id = std::process::id();
+  let root = PathBuf::from("/tmp").join(format!("monad-test-mote-priority-{id:x}"));
+
+  let dep_src = root.join("project/src");
+  let motes_src = root.join("motes").join("mylib-1.0.0").join("src");
+  std::fs::create_dir_all(&dep_src).unwrap();
+  std::fs::create_dir_all(&motes_src).unwrap();
+
+  std::fs::write(dep_src.join("mylib.mo"), "def greet : I64 := 42\n").unwrap();
+  std::fs::write(motes_src.join("mylib.mo"), "def greet : I64 := 99\n").unwrap();
+
+  let mut loaded = default_modules().unwrap();
+
+  // Priority: dep src BEFORE motes/ src
+  let mut paths = SearchPaths::empty();
+  paths.push(dep_src.clone());
+  paths.push(motes_src.clone());
+  loaded.set_search_paths(paths);
+
+  let path = ModulePath::top("_test_mote_priority_dep");
+  load_module_from_text(
+    "use mylib\n\ndef main : I64 := mylib.greet\n",
+    path.clone(),
+    &mut loaded,
+  )
+  .expect("should load");
+
+  let global = loaded.global(&path).expect("scope should exist");
+  let scope = Scope::new(&global);
+
+  let (_, e) = term::<()>("main".into()).finish().unwrap();
+  // Dep version (42) should win over motes/ version (99)
+  similar!(eval_test(e, &scope).unwrap(), num(42));
+
+  std::fs::remove_dir_all(&root).unwrap();
+}

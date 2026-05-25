@@ -257,6 +257,10 @@ fn build_default_search_paths(input: &PathBuf, extra_paths: &[PathBuf]) -> Searc
 
   paths.push(PathBuf::from("."));
 
+  for p in extra_paths {
+    paths.push(p.clone());
+  }
+
   if let Ok(cwd) = std::env::current_dir() {
     let motes_dir = cwd.join("motes");
     if motes_dir.is_dir() {
@@ -276,10 +280,6 @@ fn build_default_search_paths(input: &PathBuf, extra_paths: &[PathBuf]) -> Searc
     for dir in std::env::split_paths(&monad_path) {
       paths.push(dir);
     }
-  }
-
-  for p in extra_paths {
-    paths.push(p.clone());
   }
 
   paths
