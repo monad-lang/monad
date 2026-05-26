@@ -210,8 +210,22 @@ pub struct EvalOptions {
 }
 
 fn resolve_name<'a>(name: &'a NameRef, scope: &'a Scope<'a>) -> Result<&'a Term, Error> {
-  let term = scope.resolve_name(name)?;
-  Ok(term)
+  match scope.resolve_name(name) {
+    Ok(term) => Ok(term),
+    Err(_) => {
+      // Fallback: search transitive dependencies.
+      // When evaluating a def from another module, its body may reference
+      // defs that are only visible in the def's own module scope.
+      if let Some(def_name) = name.clone().to_path() {
+        if let Some(term) = scope.global().find_term_transitive(&def_name) {
+          return Ok(term);
+        }
+      }
+      Err(Error::Scope(ScopeError::Generic(format!(
+        "scope: {name} not found"
+      ))))
+    }
+  }
 }
 
 /// Run a beta reduction

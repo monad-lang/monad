@@ -4,6 +4,8 @@ use process
 use lang.types
 use lang.codegen.ir
 use lang.codegen.emit
+use lang.module
+use lang.parser
 
 open LLVMType
 open LLVMValue
@@ -222,9 +224,10 @@ def run_all (names : List String) (out_dir : String) : IO I64 :=
 
 @[partial]
 def print_help : IO I64 {
-    println "Usage: monad-self compile <name>     Compile and run named example";
-    println "       monad-self test-all           Compile and run all examples";
-    println "       monad-self list               List available examples";
+    println "Usage: monad-self compile <name>         Compile and run named example";
+    println "       monad-self compile-file <path> [name]  Parse and compile a .mo source file";
+    println "       monad-self test-all               Compile and run all examples";
+    println "       monad-self list                   List available examples";
     return 0
 }
 
@@ -260,6 +263,48 @@ def second_arg (args : List String) : String :=
         } in
     first_arg tail
 
+def third_arg (args : List String) : String :=
+    let tail :=
+        match args {
+            List.cons cmd rest => rest,
+            List.empty => List.empty
+        } in
+    second_arg tail
+
+/// Parse a source file and compile + run it via LLVM.
+@[partial]
+def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name : String) : IO I64 {
+    let mod_ := lang.codegen.emit.compile_db_module decls;
+    let ir_text := lang.codegen.ir.emit_module mod_;
+    let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
+    let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
+    let runtime_obj := String.concat output_dir "/monad_runtime.o";
+    let output_path := String.concat output_dir (String.concat "/" output_name);
+
+    IO.write_file ir_path ir_text;
+
+    let _ <- exec_cmd "llc" (args4 "-filetype=obj" ir_path "-o" obj_path);
+    let _ <- exec_cmd "clang" (args4 "-c" "lang/codegen/runtime.c" "-o" runtime_obj);
+    let _ <- exec_cmd "clang" (args4 obj_path runtime_obj "-o" output_path);
+
+    let exit_code <- exec_cmd output_path empty_str_list;
+    println (String.concat (String.concat output_name " => exit ") (I64.to_string exit_code));
+    return 0
+}
+
+/// Parse a source file and compile + run it via LLVM.
+@[partial]
+def compile_file (file_path : String) (output_dir : String) (output_name : String) : IO I64 {
+    let source <- IO.read_file file_path;
+    match lang.module.try_parse_decls source {
+        Option.some decls => compile_parsed_decls decls output_dir output_name,
+        Option.none => do {
+            println (String.concat "Parse error: " file_path);
+            return 1
+        }
+    }
+}
+
 /// Current main entrypoint of self hosted compiler
 def main (args : List String) : IO I64 {
     let cmd := first_arg args;
@@ -267,6 +312,13 @@ def main (args : List String) : IO I64 {
     if cmd == "compile" then do {
         let name := second_arg args;
         run_one name out_dir
+    }
+    else if cmd == "compile-file" then do {
+        let file_path := second_arg args;
+        let out_name := if third_arg args == ""
+            then "source"
+            else third_arg args;
+        compile_file file_path out_dir out_name
     }
     else if cmd == "test-all" then do {
         println "Running all examples...";

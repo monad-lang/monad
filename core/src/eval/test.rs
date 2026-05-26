@@ -883,6 +883,86 @@ fn test_cross_module_def_resolution() {
 }
 
 #[test]
+fn test_transitive_module_dep_resolution() {
+  // Test that a function from a transitive dependency (A -> B -> C)
+  // can be resolved when evaluating B's function body from A's scope.
+  // Module C: leaf dependency, defines c_fun
+  // Module B: uses C, defines b_fun that calls c_fun
+  // Module A: uses B, calls b_fun (which internally calls c_fun)
+  let loaded = default_modules().unwrap();
+
+  // Module C: defines a simple function
+  let c_path = ModulePath::top("c");
+  let parsed_c = parse_file(
+    r#"
+    use init
+    def c_fun : I64 := 10
+    "#,
+  )
+  .unwrap();
+  let c_decls = type_check_module_decls(&c_path, parsed_c.decls, &loaded)
+    .inspect_err(|e| eprintln!("c: {e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    c_path.clone(),
+    ParsedModule {
+      decls: c_decls,
+      module_doc: None,
+    },
+  ));
+
+  // Module B: uses C and defines b_fun that depends on c_fun
+  let b_path = ModulePath::top("b");
+  let parsed_b = parse_file(
+    r#"
+    use c
+    use init
+    def b_fun : I64 := c_fun + 1
+    "#,
+  )
+  .unwrap();
+  let b_decls = type_check_module_decls(&b_path, parsed_b.decls, &loaded)
+    .inspect_err(|e| eprintln!("b: {e}"))
+    .unwrap();
+  loaded.add_module(module(
+    b_path.clone(),
+    ParsedModule {
+      decls: b_decls,
+      module_doc: None,
+    },
+  ));
+
+  // Module A: uses B and calls b_fun
+  let a_path = ModulePath::top("a");
+  let parsed_a = parse_file(
+    r#"
+    use b
+    use init
+    def use_b_fun : I64 := b_fun
+    "#,
+  )
+  .unwrap();
+  let a_decls = type_check_module_decls(&a_path, parsed_a.decls, &loaded)
+    .inspect_err(|e| eprintln!("a: {e}"))
+    .unwrap();
+  loaded.add_module(module(
+    a_path.clone(),
+    ParsedModule {
+      decls: a_decls,
+      module_doc: None,
+    },
+  ));
+
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&a_path).expect("scope should exist");
+  let scope = Scope::new(&global);
+
+  let (_, e) = term::<()>("use_b_fun".into()).finish().unwrap();
+  similar!(eval_test(e, &scope).unwrap(), num(11));
+}
+
+#[test]
 fn test_module_scope_isolation() {
   // Test that defs with same name in different modules are isolated
   let loaded = default_modules().unwrap();

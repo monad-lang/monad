@@ -16,8 +16,16 @@ open scope
 /// can be parsed.
 @[partial]
 def parse_all_decls (input : String) : ParseResult (List Decl) :=
-    let decl_parser : (String -> ParseResult Decl) := fn s => t2_decl_parser (skip_spaces s) in
-    many0 decl_parser input
+    let decl_parser : (String -> ParseResult Decl) := fn s => lang.parser.t2_decl_parser (lang.parser.skip_spaces s) in
+    lang.parser.many0 decl_parser input
+
+/// Parse source text, returning the parsed declarations or none on parse error.
+@[partial]
+def try_parse_decls (input : String) : Option (List Decl) :=
+    match parse_all_decls input {
+        success _ decls => Option.some decls,
+        fail _ => Option.none,
+    }
 
 /// Parse source text and build scope data for a module.
 /// Does not resolve `use` dependencies — only parses and builds

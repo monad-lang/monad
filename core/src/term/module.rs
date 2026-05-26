@@ -1071,6 +1071,19 @@ impl<'a> GlobalScope<'a> {
   pub fn find_ref(&'_ self, name: &ModulePath) -> Option<&DefRef<'_>> {
     self.def_refs.get(name)
   }
+  /// Search for a term in ANY module scope (transitive dependencies).
+  /// Returns the term from the def if found in any loaded module.
+  pub fn find_term_transitive(&self, name: &ModulePath) -> Option<&Term> {
+    if let Some(def) = self.def_refs.get(name) {
+      return Some(def.term);
+    }
+    for (_mod_path, mod_data) in self.all_scopes.iter() {
+      if let Some((_typ, term, _module)) = mod_data.def_refs.get(name) {
+        return Some(term);
+      }
+    }
+    None
+  }
   /// Try to resolve a class method reference for the given name and type.
   /// Returns the instance definition reference, or an error.
   fn resolve_class_method<'s>(
@@ -1414,12 +1427,14 @@ impl<'a> GlobalScope<'a> {
 pub enum Scope<'a> {
   Top {
     global: &'a GlobalScope<'a>,
+    module_path: &'a ModulePath,
     usage_env: UsageEnv,
     constraints: Vec<TypeConstraint>,
   },
   Sub {
     local: LocalVar<'a>,
     parent: Box<Scope<'a>>,
+    module_path: &'a ModulePath,
     usage_env: UsageEnv,
     constraints: Vec<TypeConstraint>,
   },
@@ -1429,6 +1444,7 @@ impl<'a> Scope<'a> {
   pub fn new(global: &'a GlobalScope<'a>) -> Scope<'a> {
     Scope::Top {
       global,
+      module_path: global.current_path(),
       usage_env: UsageEnv::new(),
       constraints: Vec::new(),
     }
@@ -1459,20 +1475,26 @@ impl<'a> Scope<'a> {
   pub fn with_constraints(&self, cs: Vec<TypeConstraint>) -> Scope<'a> {
     match self {
       Scope::Top {
-        global, usage_env, ..
+        global,
+        module_path,
+        usage_env,
+        ..
       } => Scope::Top {
         global,
+        module_path,
         usage_env: usage_env.clone(),
         constraints: cs,
       },
       Scope::Sub {
         local,
         parent,
+        module_path,
         usage_env,
         ..
       } => Scope::Sub {
         local: local.clone(),
         parent: parent.clone(),
+        module_path,
         usage_env: usage_env.clone(),
         constraints: cs,
       },
@@ -1598,12 +1620,14 @@ impl<'a> Scope<'a> {
     let mult = param.multiplicity();
     let mut usage_env = self.usage_env().clone();
     let constraints = self.constraints().to_vec();
+    let module_path = self.module_path();
     match param {
       Par::P(param) => {
         usage_env.register(param.name.clone(), mult.clone());
         Scope::Sub {
           local: local_var(&param.name, param.typ.as_ref()),
           parent: Box::new(self.clone()),
+          module_path,
           usage_env,
           constraints,
         }
@@ -1613,6 +1637,7 @@ impl<'a> Scope<'a> {
         Scope::Sub {
           local: local_index_var(typ.as_ref()),
           parent: Box::new(self.clone()),
+          module_path,
           usage_env,
           constraints,
         }
@@ -1625,6 +1650,7 @@ impl<'a> Scope<'a> {
     Scope::Sub {
       local: local_var(name, typ),
       parent: Box::new(self.clone()),
+      module_path: self.module_path(),
       usage_env,
       constraints: self.constraints().to_vec(),
     }
@@ -1633,6 +1659,7 @@ impl<'a> Scope<'a> {
     Scope::Sub {
       local: local_forall(name, typ),
       parent: Box::new(self.clone()),
+      module_path: self.module_path(),
       usage_env: self.usage_env().clone(),
       constraints: self.constraints().to_vec(),
     }
@@ -1641,6 +1668,7 @@ impl<'a> Scope<'a> {
     Scope::Sub {
       local: local_index_var(typ),
       parent: Box::new(self.clone()),
+      module_path: self.module_path(),
       usage_env: self.usage_env().clone(),
       constraints: self.constraints().to_vec(),
     }
@@ -1649,6 +1677,7 @@ impl<'a> Scope<'a> {
     Scope::Sub {
       local: local_var_owned(name, typ),
       parent: Box::new(self.clone()),
+      module_path: self.module_path(),
       usage_env: self.usage_env().clone(),
       constraints: self.constraints().to_vec(),
     }
@@ -1657,9 +1686,13 @@ impl<'a> Scope<'a> {
   pub fn global(&self) -> &GlobalScope<'a> {
     match self {
       Scope::Top { global, .. } => global,
-      Scope::Sub {
-        local: _, parent, ..
-      } => parent.global(),
+      Scope::Sub { parent, .. } => parent.global(),
+    }
+  }
+  pub fn module_path(&self) -> &'a ModulePath {
+    match self {
+      Scope::Top { module_path, .. } => module_path,
+      Scope::Sub { module_path, .. } => module_path,
     }
   }
 }

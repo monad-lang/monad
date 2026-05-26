@@ -1520,3 +1520,82 @@ def compile_db_decls_ir (defs : List Def) : LLVMModule :=
             let funcs := ren_main_and_wrap compiled_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
     }
+
+// === De Bruijn (canonical) inductive compilation ===
+
+/// Count the number of fields in a Param list.
+@[partial]
+def count_db_params (params : List Param) (n : I64) : I64 := match params {
+    List.empty => n,
+    List.cons p rest => count_db_params rest (n + 1),
+}
+
+/// Compile a list of canonical InductConstructors to LLVM constructor wrapper functions.
+@[partial]
+def compile_db_inductive_constructors (constructors : List InductConstructor) : List LLVMFunction := match constructors {
+    List.empty => empty_funcs,
+    List.cons c rest =>
+        match c {
+            InductConstructor.mk name params typ =>
+                let name_str := module_path_to_str name in
+                let field_count := count_db_params params 0 in
+                let func := compile_constructor_decl name_str field_count in
+                cons_func func (compile_db_inductive_constructors rest)
+        }
+}
+
+/// Compile a single canonical Inductive to LLVM constructor wrapper functions.
+@[partial]
+def compile_db_inductive (ind : Inductive) : List LLVMFunction := match ind {
+    Inductive.mk name params typ constructors attrs =>
+        compile_db_inductive_constructors constructors
+}
+
+/// Compile a list of canonical Inductives to LLVM constructor wrapper functions.
+@[partial]
+def compile_db_inductive_decls (ind_decls : List Inductive) : List LLVMFunction := match ind_decls {
+    List.empty => empty_funcs,
+    List.cons ind rest =>
+        let funcs := compile_db_inductive ind in
+        append_funcs funcs (compile_db_inductive_decls rest)
+}
+
+// === Decl-based module compilation ===
+
+/// Extract def_d entries from a list of Decl.
+@[partial]
+def extract_defs (decls : List Decl) : List Def := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        let rest_defs := extract_defs rest in
+        match d {
+            Decl.def_d def_ => List.cons def_ rest_defs,
+            _ => rest_defs,
+        }
+}
+
+/// Extract inductive_d entries from a list of Decl.
+@[partial]
+def extract_inductives (decls : List Decl) : List Inductive := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        let rest_inds := extract_inductives rest in
+        match d {
+            Decl.inductive_d ind => List.cons ind rest_inds,
+            _ => rest_inds,
+        }
+}
+
+/// Compile a list of Decl to a complete LLVM module.
+/// Extracts def_d and inductive_d entries, compiles constructors and defs.
+@[partial]
+def compile_db_module (decls : List Decl) : LLVMModule :=
+    let defs := extract_defs decls in
+    let inds := extract_inductives decls in
+    let ctor_funcs := compile_db_inductive_decls inds in
+    match compile_db_def_list defs {
+        DefResult.dr compiled_funcs compiled_globals =>
+            let all_funcs := append_funcs ctor_funcs compiled_funcs in
+            let funcs := ren_main_and_wrap all_funcs in
+            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
+    }
