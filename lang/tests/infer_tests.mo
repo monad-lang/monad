@@ -448,6 +448,68 @@ def test_match_wildcard : Bool :=
         err _ => false,
     }
 
+// KNOWN BUG: Wildcard pattern with arguments should be rejected. The
+// wildcard "_" must have zero args.
+// FIX: In type_check_match_case, when name is "_", verify args is empty
+// and return an error if not.
+@[test]
+def test_match_wildcard_rejects_args_known_bug : Bool :=
+    let scrutinee : Term := Term.type_ 1 in
+    let body : Term := Term.type_ 1 in
+    let case_ : MatchCase := MatchCase.mc
+        (Identifier.id "_")
+        (List.cons (Identifier.id "x") List.empty)
+        body in
+    let cases : List MatchCase := List.cons case_ List.empty in
+    let t : Term := Term.lit (Literal.match_ scrutinee cases) in
+    match run_check t Term.hole {
+        ok _ => true,    // BUG: succeeds when it should fail (wildcard with args)
+        err _ => false,   // CORRECT: would be err _ => true after fix
+    }
+
+// --- Match tests: scrutinee type resolution ---
+
+// Match on a scrutinee that is a bound variable with a known type.
+// The scrutinee's type should be available for constructor validation
+// and branch type checking, but none of this is implemented yet.
+@[test]
+def test_match_bound_scrutinee : Bool :=
+    let scrutinee : Term := Term.var 0 (DebugName.unnamed) in
+    let body : Term := Term.type_ 1 in
+    let case_ : MatchCase := MatchCase.mc
+        (Identifier.id "x")
+        List.empty
+        body in
+    let cases : List MatchCase := List.cons case_ List.empty in
+    let t : Term := Term.lit (Literal.match_ scrutinee cases) in
+    let types : List Term := List.cons (Term.type_ 1) List.empty in
+    match type_check t Term.hole test_scope types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+// --- Match tests: branch type unification ---
+
+// KNOWN BUG: When multiple cases are processed, their branch types should be
+// unified. Currently only the first case's type is returned.
+// Here case1 has type type_1 (infers to type_2) and case2 has a different
+// type. Since only the first case is checked, the mismatch is never detected.
+// FIX: Check all case bodies, unify their types, and report mismatch if
+// unification fails.
+@[test]
+def test_match_branch_type_conflict_known_bug : Bool :=
+    let scrutinee : Term := Term.type_ 1 in
+    let body1 : Term := Term.type_ 1 in
+    let body2 : Term := Term.type_ 0 in
+    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 in
+    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty body2 in
+    let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
+    let t : Term := Term.lit (Literal.match_ scrutinee cases) in
+    match run_check t Term.hole {
+        ok _ => true,    // BUG: succeeds (only first case checked), should fail
+        err _ => false,  // CORRECT: would be err _ => true after fix
+    }
+
 // --- Error tests: type mismatch in if ---
 
 @[test]
