@@ -614,7 +614,7 @@ pub struct GlobalScope<'a> {
   current_path: &'a ModulePath,
   def_refs: Map<ModulePath, DefRef<'a>>,
   pub(crate) class_defs: Map<ModulePath, ClassDefRef<'a>>,
-  instances: Map<&'a ModulePath, Vec<&'a Instance>>,
+  pub(crate) instances: Map<&'a ModulePath, Vec<&'a Instance>>,
   inductives: Map<&'a ModulePath, &'a Inductive>,
   classes: Map<&'a ModulePath, &'a Inductive>,
   infixes: Map<&'a Operator, &'a Infix>,

@@ -500,4 +500,278 @@ def show_decl (d : Decl) : String := match d {
         String.concat "open " path_str,
 }
 
+/// Tests
+
+@[test]
+def test_show_var_named : Bool :=
+    let id := Identifier.id "x" in
+    let dbg := DebugName.named id in
+    let t := Term.var 0 dbg in
+    show_term t == "x"
+
+@[test]
+def test_show_var_unnamed : Bool :=
+    let dbg := DebugName.unnamed in
+    let t := Term.var 1 dbg in
+    show_term t == "_"
+
+@[test]
+def test_show_lam_unnamed : Bool :=
+    let dbg := DebugName.unnamed in
+    let body := Term.var 0 DebugName.unnamed in
+    let t := Term.lam dbg Term.hole body in
+    show_term t == "(fn _ : _ => _)"
+
+@[test]
+def test_show_lam_named : Bool :=
+    let id := Identifier.id "x" in
+    let dbg := DebugName.named id in
+    let body := Term.var 0 dbg in
+    let t := Term.lam dbg (Term.type_ 1) body in
+    show_term t == "(fn x : Type => x)"
+
+@[test]
+def test_show_forall_named : Bool :=
+    let id := Identifier.id "A" in
+    let dbg := DebugName.named id in
+    let body := Term.type_ 1 in
+    let t := Term.forall dbg (Term.type_ 1) body in
+    show_term t == "{A : Type} -> Type"
+
+@[test]
+def test_show_forall_unnamed : Bool :=
+    let dbg := DebugName.unnamed in
+    let body := Term.type_ 1 in
+    let t := Term.forall dbg (Term.type_ 1) body in
+    show_term t == "{_ : Type} -> Type"
+
+@[test]
+def test_show_pi : Bool :=
+    let arg := Term.type_ 1 in
+    let ret := Term.type_ 1 in
+    let t := Term.pi arg ret in
+    show_term t == "(Type -> Type)"
+
+@[test]
+def test_show_app : Bool :=
+    let fun_id := Identifier.id "f" in
+    let arg_id := Identifier.id "x" in
+    let fun_ := Term.var 0 (DebugName.named fun_id) in
+    let arg := Term.var 1 (DebugName.named arg_id) in
+    let t := Term.app fun_ arg in
+    show_term t == "(f x)"
+
+@[test]
+def test_show_lit_str : Bool :=
+    let t := Term.lit (Literal.str "hello") in
+    show_term t == "\"hello\""
+
+@[test]
+def test_show_lit_num : Bool :=
+    let t := Term.lit (Literal.num 42 NumSuffix.i64) in
+    show_term t == "42i64"
+
+@[test]
+def test_show_ntv : Bool :=
+    let ntv := Native.mk (Identifier.id "add") (0i64) List.empty in
+    let t := Term.ntv ntv in
+    show_term t == "native"
+
+@[test]
+def test_show_con_named_args : Bool :=
+    let args := List.cons (Option.some (Term.var 0 DebugName.unnamed))
+                         List.empty in
+    let con := Con.mk (Identifier.id "some")
+                      (ModulePath.mp (List.cons (Identifier.id "Option") List.empty))
+                      (1i64)
+                      args in
+    let t := Term.con con in
+    show_term t == "(Option.some _)"
+
+@[test]
+def test_show_con_no_args : Bool :=
+    let con := Con.mk (Identifier.id "true_")
+                      (ModulePath.mp (List.cons (Identifier.id "Bool") List.empty))
+                      (0i64)
+                      List.empty in
+    let t := Term.con con in
+    show_term t == "Bool.true_"
+
+@[test]
+def test_show_type_prop : Bool :=
+    show_term (Term.type_ 0) == "Prop"
+
+@[test]
+def test_show_type_type : Bool :=
+    show_term (Term.type_ 1) == "Type"
+
+@[test]
+def test_show_type_type1 : Bool :=
+    show_term (Term.type_ 2) == "Type 1"
+
+@[test]
+def test_show_type_type2 : Bool :=
+    show_term (Term.type_ 3) == "Type 2"
+
+@[test]
+def test_show_hole : Bool :=
+    show_term Term.hole == "_"
+
+@[test]
+def test_show_literal_if : Bool :=
+    let cond := Term.var 0 (DebugName.named (Identifier.id "x")) in
+    let then_ := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let else_ := Term.lit (Literal.num 0 NumSuffix.i64) in
+    let t := Term.lit (Literal.if_ cond then_ else_) in
+    show_term t == "if x then 1i64 else 0i64"
+
+@[test]
+def test_show_literal_match : Bool :=
+    let scrutinee := Term.var 0 (DebugName.named (Identifier.id "x")) in
+    let case_name := Identifier.id "some" in
+    let case_arg := Identifier.id "v" in
+    let case_args := List.cons case_arg List.empty in
+    let case_body := Term.var 0 (DebugName.named (Identifier.id "v")) in
+    let mc := MatchCase.mc case_name case_args case_body in
+    let cases := List.cons mc List.empty in
+    let t := Term.lit (Literal.match_ scrutinee cases) in
+    show_term t == "match x {\n some v => v\n}"
+
+@[test]
+def test_show_identifier : Bool :=
+    show_identifier (Identifier.id "foo") == "foo"
+
+@[test]
+def test_show_operator : Bool :=
+    show_operator (Operator.operator ">>=") == ">>="
+
+@[test]
+def test_show_module_path_single : Bool :=
+    show_module_path (ModulePath.mp (List.cons (Identifier.id "List") List.empty)) == "List"
+
+@[test]
+def test_show_module_path_multi : Bool :=
+    let ids := List.cons (Identifier.id "List") (List.cons (Identifier.id "append") List.empty) in
+    show_module_path (ModulePath.mp ids) == "List.append"
+
+@[test]
+def test_show_num_suffix_i8 : Bool :=
+    show_num_suffix NumSuffix.i8 == "i8"
+
+@[test]
+def test_show_num_suffix_i64 : Bool :=
+    show_num_suffix NumSuffix.i64 == "i64"
+
+@[test]
+def test_show_num_suffix_f64 : Bool :=
+    show_num_suffix NumSuffix.f64 == "f64"
+
+@[test]
+def test_show_multiplicity_zero : Bool :=
+    show_multiplicity Multiplicity.zero == "0"
+
+@[test]
+def test_show_multiplicity_many : Bool :=
+    show_multiplicity Multiplicity.many == ""
+
+@[test]
+def test_show_multiplicity_linear : Bool :=
+    show_multiplicity Multiplicity.linear == "!"
+
+@[test]
+def test_show_multiplicity_affine : Bool :=
+    show_multiplicity Multiplicity.affine == "?"
+
+@[test]
+def test_show_param_simple : Bool :=
+    let id := Identifier.id "x" in
+    let typ := Term.type_ 1 in
+    let p := Param.mk id typ Multiplicity.many Option.none in
+    show_param p == "x : Type"
+
+@[test]
+def test_show_param_with_default : Bool :=
+    let id := Identifier.id "x" in
+    let typ := Term.type_ 1 in
+    let dflt := Term.type_ 1 in
+    let p := Param.mk id typ Multiplicity.many (Option.some dflt) in
+    show_param p == "x : Type := Type"
+
+@[test]
+def test_show_param_linear : Bool :=
+    let id := Identifier.id "x" in
+    let typ := Term.type_ 1 in
+    let p := Param.mk id typ Multiplicity.linear Option.none in
+    show_param p == "!x : Type"
+
+@[test]
+def test_show_universe_prop : Bool :=
+    show_universe 0 == "Prop"
+
+@[test]
+def test_show_universe_type : Bool :=
+    show_universe 1 == "Type"
+
+@[test]
+def test_show_universe_type1 : Bool :=
+    show_universe 2 == "Type 1"
+
+@[test]
+def test_show_debug_name_named : Bool :=
+    show_debug_name (DebugName.named (Identifier.id "x")) == "x"
+
+@[test]
+def test_show_debug_name_unnamed : Bool :=
+    show_debug_name DebugName.unnamed == "_"
+
+@[test]
+def test_show_decl_use : Bool :=
+    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "prelude") List.empty)) in
+    show_decl d == "use prelude"
+
+@[test]
+def test_show_decl_open : Bool :=
+    let d := Decl.open_d (ModulePath.mp (List.cons (Identifier.id "IO") List.empty)) in
+    show_decl d == "open IO"
+
+@[test]
+def test_show_decl_infix : Bool :=
+    let d := Decl.infix_d (Operator.operator ">>=") (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))) in
+    show_decl d == "infix: >>= := Monad.bind"
+
+@[test]
+def test_show_decl_def : Bool :=
+    let name := ModulePath.mp (List.cons (Identifier.id "id") List.empty) in
+    let path := Identifier.id "x" in
+    let var_t := Term.var 0 (DebugName.named path) in
+    let lam := Term.lam (DebugName.named path) (Term.type_ 1) var_t in
+    let d := Def.mk name (Term.type_ 1) lam List.empty List.empty in
+    let decl := Decl.def_d d in
+    show_decl decl == "def id : Type := (fn x : Type => x)"
+
+@[test]
+def test_show_decl_class : Bool :=
+    let name := Identifier.id "Show" in
+    let show_name := Identifier.id "show" in
+    let cd := ClassDef.mk show_name (Term.type_ 1) Option.none in
+    let methods := List.cons cd List.empty in
+    let cls := Class.mk name List.empty List.empty methods in
+    let decl := Decl.class_d cls in
+    show_decl decl == "class Show {\n  def show : Type\n}"
+
+@[test]
+def test_show_decl_struct : Bool :=
+    let name := Identifier.id "Point" in
+    let field := StructField.mk (Identifier.id "x") (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
+    let decl := Decl.struct_d (Struct.mk name (List.cons field List.empty)) in
+    show_decl decl == "struct Point {\n  x : 0i64\n}"
+
+@[test]
+def test_show_decl_inductive : Bool :=
+    let name := ModulePath.mp (List.cons (Identifier.id "Bool") List.empty) in
+    let ct1 := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "true") List.empty)) List.empty (Term.type_ 1) in
+    let ct2 := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "false") List.empty)) List.empty (Term.type_ 1) in
+    let decl := Decl.inductive_d (Inductive.mk name List.empty (Term.type_ 1) (List.cons ct1 (List.cons ct2 List.empty)) List.empty) in
+    show_decl decl == "type Bool {\n  true,\n  false\n}"
+
 
