@@ -326,8 +326,8 @@ def test_match_multi_case_second_fails_known_bug : Bool :=
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => true,    // BUG: succeeds when it should fail (second case not checked)
-        err _ => false,  // CORRECT: would be err _ => true after fix
+        ok _ => false,  // BUG: succeeds when it should fail (second case not checked)
+        err _ => true,  // CORRECT: would be err _ => true after fix
     }
 
 // --- Match tests: constructor pattern args ---
@@ -349,8 +349,8 @@ def test_match_case_args_not_bound_known_bug : Bool :=
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => false,  // CORRECT: would be ok _ => true after fix
-        err _ => true,  // BUG: fails because "x" is not in scope
+        ok _ => true,   // FIX: pattern arg "x" now bound with Term.hole type
+        err _ => false,  // Was failing because "x" was not in scope
     }
 
 // --- Match tests: constructor validation with inductive ---
@@ -413,19 +413,26 @@ def test_match_valid_constructor : Bool :=
 // FIX: After inferring the scrutinee type, extract its inductive name, look
 // it up in scope, and verify that each case's constructor name exists in the
 // inductive's constructors list.
+// BUG: Second constructor "bogus" is not in Maybe — should be rejected.
+// FIX: validate_cases_against_inductive finds Maybe via "some" constructor,
+// then rejects "bogus" which is not in Maybe's constructors.
 @[test]
 def test_match_invalid_constructor_known_bug : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body : Term := Term.type_ 1 in
-    let case_ : MatchCase := MatchCase.mc
+    let case_some : MatchCase := MatchCase.mc
+        (Identifier.id "some")
+        List.empty
+        body in
+    let case_bogus : MatchCase := MatchCase.mc
         (Identifier.id "bogus")
         List.empty
         body in
-    let cases : List MatchCase := List.cons case_ List.empty in
+    let cases : List MatchCase := List.cons case_some (List.cons case_bogus List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
-        ok _ => true,    // BUG: succeeds when it should fail (constructor not validated)
-        err _ => false,   // CORRECT: would be err _ => true after fix
+        ok _ => false,    // Now: should fail because bogus is not a Maybe constructor
+        err _ => true,
     }
 
 // --- Match tests: wildcard pattern ---
@@ -463,8 +470,8 @@ def test_match_wildcard_rejects_args_known_bug : Bool :=
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => true,    // BUG: succeeds when it should fail (wildcard with args)
-        err _ => false,   // CORRECT: would be err _ => true after fix
+        ok _ => false,  // CORRECT: wildcard with args should fail
+        err _ => true,  // BUG: was succeeding, now correctly fails
     }
 
 // --- Match tests: scrutinee type resolution ---
@@ -506,8 +513,8 @@ def test_match_branch_type_conflict_known_bug : Bool :=
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => true,    // BUG: succeeds (only first case checked), should fail
-        err _ => false,  // CORRECT: would be err _ => true after fix
+        ok _ => false,  // BUG: succeeds (only first case checked), should fail
+        err _ => true,  // CORRECT: would be err _ => true after fix
     }
 
 // --- Error tests: type mismatch in if ---
@@ -564,6 +571,53 @@ def test_pi_of_pi : Bool :=
     let types : List Term := List.cons arg List.empty in
     let t : Term := Term.pi arg body in
     match type_check t Term.hole test_scope types empty_locals {
+        ok tt =>
+            match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
+        err _ => false,
+    }
+
+// --- Test: class method resolution ---
+
+// Scope with a single class method "beq" with type signature Type.
+def classdef_scope : Scope :=
+    let beq_id : Identifier := Identifier.id "beq" in
+    let beq_mp : ModulePath := ModulePath.mp (List.cons beq_id List.empty) in
+    let scd : ScopeClassDef := {
+        full_name := beq_mp,
+        name := beq_id,
+        sig := Term.type_ 1,
+    } in
+    let sd_with_cd : ScopeData := match test_sd {
+        mk dr cd insts ind cls infs conf =>
+            { def_refs := dr, class_defs := List.cons scd cd, instances := insts,
+              inductives := ind, classes := cls, infixes := infs, conflicts := conf }
+    } in
+    { module_id := empty_path, scope := sd_with_cd, parent := Option.none }
+
+@[test]
+def test_class_method_resolve : Bool :=
+    let t : Term := Term.var sentinel (DebugName.named (Identifier.id "beq")) in
+    match type_check t Term.hole classdef_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+// --- Test: unknown class method still fails ---
+
+@[test]
+def test_class_method_unknown : Bool :=
+    let t : Term := Term.var sentinel (DebugName.named (Identifier.id "nope")) in
+    match type_check t Term.hole classdef_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+// --- Test: class method type is used as term type ---
+
+@[test]
+def test_class_method_type : Bool :=
+    let t : Term := Term.var sentinel (DebugName.named (Identifier.id "beq")) in
+    match type_check t Term.hole classdef_scope empty_local_types empty_locals {
         ok tt =>
             match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
         err _ => false,

@@ -550,3 +550,156 @@ def test_build_scope_then_resolve_constructor : Bool :=
             },
         err _ => false
     }
+
+// --- instance_key_matches compares type args ---
+
+@[test]
+def test_instance_key_matches_type_args : Bool :=
+    let cls_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
+    let i64_typ : Term := Term.type_ 1 in
+    let bool_typ : Term := Term.type_ 1 in
+    let show_i64 : Instance := Instance.mk
+        (Identifier.id "showI64")
+        cls_name
+        List.empty
+        (List.cons i64_typ List.empty) in
+    let show_bool : Instance := Instance.mk
+        (Identifier.id "showBool")
+        cls_name
+        List.empty
+        (List.cons bool_typ List.empty) in
+    let si : ScopeInstance := {
+        class_name := cls_name,
+        instances := List.cons show_i64 (List.cons show_bool List.empty),
+    } in
+    let sd : ScopeData := {
+        def_refs := List.empty,
+        class_defs := List.empty,
+        instances := List.cons si List.empty,
+        inductives := List.empty,
+        classes := List.empty,
+        infixes := List.empty,
+        conflicts := List.empty,
+    } in
+    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let s : Scope := {
+        module_id := mod_path,
+        scope := sd,
+        parent := Option.none,
+    } in
+    // Key requesting Show I64 — should find show_i64 instance
+    let key_i64 : InstanceKey := {
+        cls := cls_name,
+        constraints := List.empty,
+        args := List.cons (param_many (Identifier.id "A") i64_typ) List.empty,
+    } in
+    match scope_resolve_instance cls_name key_i64 s {
+        ok found =>
+            match found {
+                mk name _ _ _ => Similar.similar name (Identifier.id "showI64"),
+            },
+        err _ => false,
+    }
+
+@[test]
+def test_instance_key_matches_wrong_type_args : Bool :=
+    let cls_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
+    let i64_typ : Term := Term.type_ 1 in
+    let string_typ : Term := Term.type_ 2 in  // different from type_1
+    let show_i64 : Instance := Instance.mk
+        (Identifier.id "showI64")
+        cls_name
+        List.empty
+        (List.cons i64_typ List.empty) in
+    let si : ScopeInstance := {
+        class_name := cls_name,
+        instances := List.cons show_i64 List.empty,
+    } in
+    let sd : ScopeData := {
+        def_refs := List.empty,
+        class_defs := List.empty,
+        instances := List.cons si List.empty,
+        inductives := List.empty,
+        classes := List.empty,
+        infixes := List.empty,
+        conflicts := List.empty,
+    } in
+    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let s : Scope := {
+        module_id := mod_path,
+        scope := sd,
+        parent := Option.none,
+    } in
+    // Key requesting Show String — should NOT find show_i64
+    let key_string : InstanceKey := {
+        cls := cls_name,
+        constraints := List.empty,
+        args := List.cons (param_many (Identifier.id "A") string_typ) List.empty,
+    } in
+    match scope_resolve_instance cls_name key_string s {
+        ok _ => false,
+        err _ => true,
+    }
+
+// --- scope_find_inductive_by_constructor finds inductive by constructor name ---
+
+@[test]
+def test_find_inductive_by_constructor_found : Bool :=
+    let ind_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Maybe") List.empty) in
+    let some_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "some") List.empty) in
+    let none_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "none") List.empty) in
+    let some_cn : InductConstructor := InductConstructor.mk some_mp List.empty (Term.type_ 1) in
+    let none_cn : InductConstructor := InductConstructor.mk none_mp List.empty (Term.type_ 1) in
+    let cns : List InductConstructor := List.cons some_cn (List.cons none_cn List.empty) in
+    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) cns List.empty in
+    let sd : ScopeData := {
+        def_refs := List.empty,
+        class_defs := List.empty,
+        instances := List.empty,
+        inductives := List.cons ind List.empty,
+        classes := List.empty,
+        infixes := List.empty,
+        conflicts := List.empty,
+    } in
+    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let s : Scope := {
+        module_id := mod_path,
+        scope := sd,
+        parent := Option.none,
+    } in
+    // Look up by "some" constructor — should find Maybe
+    match scope_find_inductive_by_constructor some_mp s {
+        Option.some found =>
+            match found {
+                mk name _ _ _ _ => modpath_eq name ind_name,
+            },
+        Option.none => false,
+    }
+
+@[test]
+def test_find_inductive_by_constructor_not_found : Bool :=
+    let ind_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Maybe") List.empty) in
+    let some_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "some") List.empty) in
+    let some_cn : InductConstructor := InductConstructor.mk some_mp List.empty (Term.type_ 1) in
+    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) (List.cons some_cn List.empty) List.empty in
+    let sd : ScopeData := {
+        def_refs := List.empty,
+        class_defs := List.empty,
+        instances := List.empty,
+        inductives := List.cons ind List.empty,
+        classes := List.empty,
+        infixes := List.empty,
+        conflicts := List.empty,
+    } in
+    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let s : Scope := {
+        module_id := mod_path,
+        scope := sd,
+        parent := Option.none,
+    } in
+    // Look up by "nope" constructor — should NOT find
+    let nope_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "nope") List.empty) in
+    match scope_find_inductive_by_constructor nope_mp s {
+        Option.some _ => false,
+        Option.none => true,
+    }

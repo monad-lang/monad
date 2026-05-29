@@ -157,7 +157,26 @@ def add_methods_go (acc : ScopeData) (methods : List ClassDef) (cls_mp : ModuleP
 def scope_globals (s : Scope) : ScopeData :=
     match s { mk _ d _ => d }
 
-// --- scope_find_inductive ---
+// --- ScopeData: find a class def (method) by ModulePath ---
+
+def scope_data_find_class_def (sd : ScopeData) (name : ModulePath) : Option ScopeClassDef :=
+    match sd {
+        mk _ cds _ _ _ _ _ => find_class_def_in_list cds name
+    }
+
+def find_class_def_in_list (cds : List ScopeClassDef) (name : ModulePath) : Option ScopeClassDef :=
+    match cds {
+        List.empty => Option.none,
+        List.cons cd rest =>
+            match cd {
+                mk full_name _ _ =>
+                    if modpath_eq full_name name
+                    then Option.some cd
+                    else find_class_def_in_list rest name
+            }
+    }
+
+// ---- scope_find_inductive ---
 
 def scope_find_inductive (name : ModulePath) (s : Scope) : Result ScopeError Inductive :=
     let g : ScopeData := scope_globals s in
@@ -165,6 +184,93 @@ def scope_find_inductive (name : ModulePath) (s : Scope) : Result ScopeError Ind
     match result {
         Option.some ind => ok ind,
         Option.none => err (ScopeError.inductive_not_found name)
+    }
+
+// --- scope_find_class_def ---
+
+def scope_find_class_def (name : ModulePath) (s : Scope) : Result ScopeError ScopeClassDef :=
+    let g : ScopeData := scope_globals s in
+    let result : Option ScopeClassDef := scope_data_find_class_def g name in
+    match result {
+        Option.some cd => ok cd,
+        Option.none => err (ScopeError.class_not_found name)
+    }
+
+// --- scope_find_inductive_by_constructor ---
+
+def scope_find_inductive_by_constructor (con_name : ModulePath) (s : Scope) : Option Inductive :=
+    let g : ScopeData := scope_globals s in
+    scope_data_find_inductive_by_constructor g con_name
+
+def scope_data_find_inductive_by_constructor (sd : ScopeData) (con_name : ModulePath) : Option Inductive :=
+    match sd {
+        mk _ _ _ inds _ _ _ => find_inductive_by_constructor_in_list inds con_name
+    }
+
+def find_inductive_by_constructor_in_list (inds : List Inductive) (con_name : ModulePath) : Option Inductive :=
+    match inds {
+        List.empty => Option.none,
+        List.cons ind rest =>
+            if inductive_has_constructor ind con_name
+            then Option.some ind
+            else find_inductive_by_constructor_in_list rest con_name
+    }
+
+def inductive_has_constructor (ind : Inductive) (con_name : ModulePath) : Bool :=
+    match ind {
+        mk _ _ _ constructors _ =>
+            match constructors {
+                List.empty => false,
+                List.cons cn rest =>
+                    match cn {
+                        mk cn_mp _ _ =>
+                            if modpath_eq cn_mp con_name
+                            then true
+                            else inductive_has_constructor_rest rest con_name
+                    }
+            }
+    }
+
+@[terminating]
+def inductive_has_constructor_rest (cns : List InductConstructor) (con_name : ModulePath) : Bool :=
+    match cns {
+        List.empty => false,
+        List.cons cn rest =>
+            match cn {
+                mk cn_mp _ _ =>
+                    if modpath_eq cn_mp con_name
+                    then true
+                    else inductive_has_constructor_rest rest con_name
+            }
+    }
+
+// --- scope_find_class_def_by_name: search by simple method name (last segment) ---
+
+def scope_find_class_def_by_name (method_name : Identifier) (s : Scope) : Result ScopeError ScopeClassDef :=
+    let g : ScopeData := scope_globals s in
+    let result : Option ScopeClassDef := scope_data_find_class_def_by_name g method_name in
+    match result {
+        Option.some cd => ok cd,
+        Option.none =>
+            let mp : ModulePath := ModulePath.mp (List.cons method_name List.empty) in
+            err (ScopeError.class_not_found mp)
+    }
+
+def scope_data_find_class_def_by_name (sd : ScopeData) (name : Identifier) : Option ScopeClassDef :=
+    match sd {
+        mk _ cds _ _ _ _ _ => find_class_def_by_name_in_list cds name
+    }
+
+def find_class_def_by_name_in_list (cds : List ScopeClassDef) (name : Identifier) : Option ScopeClassDef :=
+    match cds {
+        List.empty => Option.none,
+        List.cons cd rest =>
+            match cd {
+                mk _ cd_name _ =>
+                    if Similar.similar cd_name name
+                    then Option.some cd
+                    else find_class_def_by_name_in_list rest name
+            }
     }
 
 // --- scope_push_local ---
@@ -564,11 +670,35 @@ def first_matching_instance (candidates : List Instance) (key : InstanceKey) : R
 
 def instance_key_matches (ins : Instance) (key : InstanceKey) : Bool :=
     match ins {
-        mk _ cls_name constraints _ =>
+        mk _ cls_name constraints ins_args =>
             match key {
-                mk key_cls _ _ =>
-                    Similar.similar cls_name key_cls
+                mk key_cls _ key_args =>
+                    if Similar.similar cls_name key_cls
+                    then term_args_match ins_args key_args
+                    else false
             }
+    }
+
+/// Compare instance type args (List Term) against key type args (List Param).
+/// Extracts type_ field from each Param and uses term_similar_pairwise.
+def term_args_match (ins_args : List Term) (key_args : List Param) : Bool :=
+    match ins_args {
+        List.empty =>
+            match key_args {
+                List.empty => true,
+                _ => false,
+            },
+        List.cons t rest_ins =>
+            match key_args {
+                List.empty => false,
+                List.cons p rest_key =>
+                    match p {
+                        mk _ p_typ _ _ =>
+                            if Similar.similar t p_typ
+                            then term_args_match rest_ins rest_key
+                            else false,
+                    },
+            },
     }
 
 // --- list_append helper (prelude List.append is curried) ---

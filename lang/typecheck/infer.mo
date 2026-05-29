@@ -1,6 +1,7 @@
 use lang.types
 open types
 use lang.scope
+use lang.typecheck.unify
 
 /// A type-checked term paired with its type.
 struct TypedTerm {
@@ -12,6 +13,13 @@ struct TypedTerm {
 struct CheckedCase {
     case_ : MatchCase,
     body_typ_ : Term,
+}
+
+/// Accumulator for processing match cases: the unified body
+/// type and the checked cases in reverse order.
+struct CaseAcc {
+    body_typ : Term,
+    cases : List MatchCase,
 }
 
 /// Free variable sentinel from parser (matches elaborate.mo).
@@ -95,41 +103,167 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
         ok sc_tt =>
             let sc_term : Term := tt_term sc_tt in
             let sc_typ : Term := tt_typ sc_tt in
-            type_check_cases cases sc_term sc_typ expected_type scope local_types locals,
+            match validate_match_constructors cases scope {
+                err e => err e,
+                ok _ => type_check_cases cases sc_term sc_typ expected_type scope local_types locals,
+            },
         err e => err e,
     }
 
-/// Type check match cases.
+/// Validate that all non-wildcard case constructors belong to the same inductive.
+/// Returns ok if valid or if no inductive found (skip validation).
+def validate_match_constructors (cases : List MatchCase) (scope : Scope) : Result TypeError Bool :=
+    match find_inductive_for_cases cases scope {
+        Option.none => ok true,
+        Option.some ind =>
+            validate_cases_against_inductive cases ind,
+    }
+
+/// Find the inductive that the first non-wildcard case constructor belongs to.
+def find_inductive_for_cases (cases : List MatchCase) (scope : Scope) : Option Inductive :=
+    match cases {
+        List.empty => Option.none,
+        List.cons hd rest =>
+            match hd {
+                MatchCase.mc name _ _ =>
+                    let wildcard_id : Identifier := Identifier.id "_" in
+                    if Similar.similar name wildcard_id
+                    then find_inductive_for_cases rest scope
+                    else
+                        let con_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
+                        scope_find_inductive_by_constructor con_mp scope,
+            },
+    }
+
+/// Check that every non-wildcard case constructor exists in the inductive.
+def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) : Result TypeError Bool :=
+    match cases {
+        List.empty => ok true,
+        List.cons hd rest =>
+            match hd {
+                MatchCase.mc name _ _ =>
+                    let wildcard_id : Identifier := Identifier.id "_" in
+                    if Similar.similar name wildcard_id
+                    then validate_cases_against_inductive rest ind
+                    else
+                        let con_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
+                        if inductive_has_constructor ind con_mp
+                        then validate_cases_against_inductive rest ind
+                        else err (TypeError.custom "constructor not found in inductive"),
+            },
+    }
+
+/// Type check match cases — process all cases and unify their body types.
 def type_check_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match type_check_cases_accum cases scrutinee_term scrutinee_typ scope local_types locals (Term.hole) List.empty {
+        ok acc =>
+            match acc {
+                mk body_typ checked_cases =>
+                    match unify body_typ expected_type {
+                        ok unified_typ =>
+                            let lit_val : Literal := Literal.match_ scrutinee_term checked_cases in
+                            ok (mk_typed (Term.lit lit_val) unified_typ),
+                        err e => err e,
+                    },
+            },
+        err e => err e,
+    }
+
+/// Recursively type-check each case, accumulating checked cases and a
+/// progressively unified body type. `acc_cases` is built in reverse order
+/// and reversed at the end.
+@[terminating]
+def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) (acc_typ : Term) (acc_cases : List MatchCase) : Result TypeError CaseAcc :=
     match cases {
         List.cons hd rest =>
             match type_check_match_case hd scrutinee_term scrutinee_typ scope local_types locals {
                 ok checked =>
                     match checked {
-                        mk checked_case case_body_typ =>
-                            let lit_val : Literal := Literal.match_ scrutinee_term (List.cons checked_case List.empty) in
-                            ok (mk_typed (Term.lit lit_val) case_body_typ),
+                        mk checked_case body_typ =>
+                            let new_cases : List MatchCase := List.cons checked_case acc_cases in
+                            match acc_typ {
+                                Term.hole =>
+                                    type_check_cases_accum rest scrutinee_term scrutinee_typ scope local_types locals body_typ new_cases,
+                                _ =>
+                                    match unify acc_typ body_typ {
+                                        ok unified_typ =>
+                                            type_check_cases_accum rest scrutinee_term scrutinee_typ scope local_types locals unified_typ new_cases,
+                                        err e => err e,
+                                    },
+                            },
                     },
                 err e => err e,
             },
         List.empty =>
-            let lit_val : Literal := Literal.match_ scrutinee_term List.empty in
-            ok (mk_typed (Term.lit lit_val) expected_type),
+            let reversed : List MatchCase := list_reverse acc_cases in
+            ok ({ body_typ := acc_typ, cases := reversed }),
+    }
+
+/// List reverse helper.
+@[terminating]
+def list_reverse {A : Type} (xs : List A) : List A :=
+    list_rev_loop xs List.empty
+
+@[terminating]
+def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
+    match xs {
+        List.cons x rest => list_rev_loop rest (List.cons x acc),
+        List.empty => acc,
     }
 
 /// Type check a single match case arm.
 def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match case_ {
         MatchCase.mc name args body =>
-            match type_check body Term.hole scope local_types locals {
-                ok body_tt =>
-                    let body_term : Term := tt_term body_tt in
-                    let body_typ : Term := tt_typ body_tt in
-                    let new_case : MatchCase := MatchCase.mc name args body_term in
-                    let result : CheckedCase := { case_ := new_case, body_typ_ := body_typ } in
-                    ok result,
-                err e => err e,
-            },
+            let wildcard_id : Identifier := Identifier.id "_" in
+            if Similar.similar name wildcard_id then
+                match args {
+                    List.empty =>
+                        type_check_case_body_checked name args body scope local_types locals,
+                    _ =>
+                        err (TypeError.custom "wildcard pattern cannot bind arguments"),
+                }
+            else
+                match args {
+                    List.empty =>
+                        type_check_case_body_checked name args body scope local_types locals,
+                    _ =>
+                        let extended_types : List Term := prepend_holes args local_types in
+                        let extended_locals : LocalScope := prepend_local_vars args locals in
+                        type_check_case_body_checked name args body scope extended_types extended_locals,
+                },
+    }
+
+/// Prepend a Term.hole for each identifier onto the front of local_types.
+def prepend_holes (args : List Identifier) (local_types : List Term) : List Term :=
+    match args {
+        List.cons x rest => prepend_holes rest (List.cons Term.hole local_types),
+        List.empty => local_types,
+    }
+
+/// Prepend LocalVar bindings (with Term.hole type, Multiplicity.many) for each identifier onto locals.
+def prepend_local_vars (args : List Identifier) (locals : LocalScope) : LocalScope :=
+    let new_vars : List LocalVar := rec_prepend_local_vars args in
+    { vars := new_vars, parent := Option.some locals }
+
+/// Recursively build a list of LocalVar entries from identifiers.
+def rec_prepend_local_vars (args : List Identifier) : List LocalVar :=
+    match args {
+        List.cons x rest =>
+            let lv : LocalVar := { name := x, typ := Term.hole, multiplicity := Multiplicity.many } in
+            List.cons lv (rec_prepend_local_vars rest),
+        List.empty => List.empty,
+    }
+
+/// Type-check the body of a match case arm, returning the checked result.
+def type_check_case_body_checked (name : Identifier) (args : List Identifier) (body : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
+    match type_check body Term.hole scope local_types locals {
+        ok body_tt =>
+            let body_term : Term := tt_term body_tt in
+            let body_typ : Term := tt_typ body_tt in
+            let new_case : MatchCase := MatchCase.mc name args body_term in
+            ok ({ case_ := new_case, body_typ_ := body_typ }),
+        err e => err e,
     }
 
 /// Type check a variable reference.
@@ -151,7 +285,15 @@ def type_check_free_var (dbg : DebugName) (scope : Scope) (locals : LocalScope) 
                         ok (mk_typed (Term.var sentinel dbg) sig),
                 },
                 err _ =>
-                    err (TypeError.unknown_var nref),
+                    let clsd_result : Result ScopeError ScopeClassDef := scope_find_class_def_by_name id scope in
+                    match clsd_result {
+                        ok cd => match cd {
+                            mk _ _ sig =>
+                                ok (mk_typed (Term.var sentinel dbg) sig),
+                        },
+                        err _ =>
+                            err (TypeError.unknown_var nref),
+                    },
             },
         DebugName.unnamed =>
             ok (mk_typed (Term.var sentinel dbg) (Term.type_ 1)),

@@ -1040,3 +1040,10 @@ type ScopeError {
     linear_used_twice (name : Identifier),
     affine_used_multiple (name : Identifier),
 }
+
+/// Returns true if the Result is ok, false if err.
+def result_is_ok (r : Result E A) : Bool :=
+    match r {
+        ok _ => true,
+        err _ => false,
+    }
