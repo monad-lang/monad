@@ -2814,6 +2814,57 @@ def t2_def_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params :
 
 
 
+
+// ---------- TypeConstraint parser ----------
+
+@[partial]
+def t2_type_constraint_one (input : String) : ParseResult TypeConstraint :=
+	t2_type_constraint_one_name (module_path_parser input) input
+
+@[partial]
+def t2_type_constraint_one_name (r : ParseResult ModulePath) (orig : String) : ParseResult TypeConstraint :=
+	match r {
+		success rem cls =>
+			let empty_vars : List Identifier := List.empty in
+			t2_type_constraint_vars (take_while is_ident_char (skip_spaces rem)) cls empty_vars rem,
+		fail _ => fail (ParseError.custom "expected class name in constraint")
+	}
+
+@[partial]
+def t2_type_constraint_vars (r : ParseResult String) (cls : ModulePath) (acc : List Identifier) (orig : String) : ParseResult TypeConstraint :=
+	match r {
+		success rest ident =>
+			if is_empty ident
+			then success rest (TypeConstraint.mk cls (list_reverse acc))
+			else t2_type_constraint_vars (take_while is_ident_char (skip_spaces rest)) cls (List.cons (Identifier.id ident) acc) orig,
+		fail _ => success orig (TypeConstraint.mk cls (list_reverse acc))
+	}
+
+@[partial]
+def t2_type_constraint_list (input : String) : ParseResult (List TypeConstraint) :=
+	t2_type_constraint_list_loop (skip_spaces input) List.empty
+
+@[partial]
+def t2_type_constraint_list_loop (input : String) (acc : List TypeConstraint) : ParseResult (List TypeConstraint) :=
+	t2_type_constraint_list_try (t2_type_constraint_one input) input acc
+
+@[partial]
+def t2_type_constraint_list_try (r : ParseResult TypeConstraint) (orig : String) (acc : List TypeConstraint) : ParseResult (List TypeConstraint) :=
+	match r {
+		success rem constraint =>
+			t2_type_constraint_list_comma (tag "," (skip_spaces rem)) rem constraint acc,
+		fail _ => success orig (list_reverse acc)
+	}
+
+@[partial]
+def t2_type_constraint_list_comma (r : ParseResult String) (rem : String) (constraint : TypeConstraint) (acc : List TypeConstraint) : ParseResult (List TypeConstraint) :=
+	match r {
+		success after_comma _ =>
+			t2_type_constraint_list_loop (skip_spaces after_comma) (List.cons constraint acc),
+		fail _ => success rem (list_reverse (List.cons constraint acc))
+	}
+
+
 // t2_class [constraints] Name params { def method sig, def method sig := default }
 
 @[partial]
@@ -3282,9 +3333,100 @@ def t2_instance_try_constraints (r : ParseResult String) (orig : String) : Parse
 
 	match r {
 
-		success rem _ => t2_instance_name (module_path_parser (skip_spaces rem)),
+		success rem _ => t2_instance_parse_bracket rem,
 
 		fail _ => t2_instance_name (module_path_parser (skip_spaces orig))
+
+	}
+
+
+
+
+@[partial]
+
+def t2_instance_parse_bracket (input : String) : ParseResult Decl :=
+
+	t2_instance_constraints_with_bracket (take_while is_not_bracket input) input
+
+
+
+@[partial]
+
+def t2_instance_constraints_with_bracket (r : ParseResult String) (orig : String) : ParseResult Decl :=
+
+	match r {
+
+		success rem content =>
+
+			t2_instance_constraints_then_name (t2_type_constraint_list content) rem,
+
+		fail _ => fail (ParseError.custom "expected ]")
+
+	}
+
+
+
+@[partial]
+
+def t2_instance_constraints_then_name (cr : ParseResult (List TypeConstraint)) (input : String) : ParseResult Decl :=
+
+	match cr {
+
+		success _ constraints =>
+
+			t2_instance_constraints_close_bracket (tag "]" input) constraints,
+
+		fail _ =>
+
+			let empty_cs : List TypeConstraint := List.empty in
+
+			t2_instance_constraints_close_bracket (tag "]" input) empty_cs
+
+	}
+
+
+
+@[partial]
+
+def t2_instance_constraints_close_bracket (r : ParseResult String) (constraints : List TypeConstraint) : ParseResult Decl :=
+
+	match r {
+
+		success rem _ =>
+
+			t2_instance_set_constraints (t2_instance_name (module_path_parser (skip_spaces rem))) constraints,
+
+		fail _ => fail (ParseError.custom "expected ] after instance constraint")
+
+	}
+
+
+
+@[partial]
+
+def t2_instance_set_constraints (dr : ParseResult Decl) (constraints : List TypeConstraint) : ParseResult Decl :=
+
+	match dr {
+
+		success rem decl =>
+
+			match decl {
+
+				instance_d inst =>
+
+					match inst {
+
+						Instance.mk name cls _ args =>
+
+							success rem (Decl.instance_d (Instance.mk name cls constraints args))
+
+					},
+
+				_ => success rem decl
+
+			},
+
+		fail e => fail e
 
 	}
 
@@ -5409,6 +5551,66 @@ def test_t2_type_implicit_no_parens : Bool :=
 		success rem decl => String.beq rem "",
 		fail _ => false
 	}
+
+// --- TypeConstraint parsing tests ---
+
+@[test]
+def test_type_constraint_one_simple : Bool :=
+	match t2_type_constraint_one "Functor F" {
+		success rem _ => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_constraint_one_two_vars : Bool :=
+	match t2_type_constraint_one "HAdd A A A" {
+		success rem _ => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_constraint_one_no_vars : Bool :=
+	match t2_type_constraint_one "Show" {
+		success rem _ => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_constraint_list_single : Bool :=
+	match t2_type_constraint_list "Functor F" {
+		success rem _ => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_constraint_list_multi : Bool :=
+	match t2_type_constraint_list "Functor F, Applicative M" {
+		success rem _ => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_type_constraint_list_empty : Bool :=
+	match t2_type_constraint_list "" {
+		success rem _ => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_class_with_constraints : Bool :=
+	match t2_class_parser "class [Functor F] Applicative F { def pure (a : A) : F A }" {
+		success rem _ => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_instance_with_constraints : Bool :=
+	match t2_instance_parser "instance [Show A] Show A { def m := a }" {
+		success rem _ => String.beq rem "",
+		fail _ => false
+	}
+
+
 
 // ─── Term parser tests (Phase 1) ───────────────────────────────────────
 
