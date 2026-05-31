@@ -244,6 +244,34 @@ def inductive_has_constructor_rest (cns : List InductConstructor) (con_name : Mo
             }
     }
 
+// --- Find a constructor by name in an inductive, return the constructor ---
+
+def find_constructor_in_inductive (ind : Inductive) (con_name : ModulePath) : Option InductConstructor :=
+    match ind {
+        mk _ _ _ constructors _ => find_constructor_in_list constructors con_name
+    }
+
+@[terminating]
+def find_constructor_in_list (cns : List InductConstructor) (con_name : ModulePath) : Option InductConstructor :=
+    match cns {
+        List.empty => Option.none,
+        List.cons cn rest =>
+            match cn {
+                mk cn_mp params typ =>
+                    if modpath_eq cn_mp con_name
+                    then Option.some cn
+                    else find_constructor_in_list rest con_name
+            }
+    }
+
+// --- scope_find_constructor: find a constructor by name in the scope ---
+
+def scope_find_constructor (con_name : ModulePath) (s : Scope) : Option InductConstructor :=
+    match scope_find_inductive_by_constructor con_name s {
+        Option.some ind => find_constructor_in_inductive ind con_name,
+        Option.none => Option.none,
+    }
+
 // --- scope_find_class_def_by_name: search by simple method name (last segment) ---
 
 def scope_find_class_def_by_name (method_name : Identifier) (s : Scope) : Result ScopeError ScopeClassDef :=

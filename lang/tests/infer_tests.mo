@@ -313,11 +313,10 @@ def test_match_multi_case_bodies_ok : Bool :=
     }
 
 // KNOWN BUG: type_check_cases only processes the head case and drops the rest.
-// The second case body has a type error but is never checked.
-// FIX: When the case list has more than one element, check all cases and
-// return the type from the first case's body.
+// The second case body has a type error, which should be caught.
+// All cases are now checked and their types unified.
 @[test]
-def test_match_multi_case_second_fails_known_bug : Bool :=
+def test_match_multi_case_second_fails : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body1 : Term := Term.type_ 1 in
     let bad_var : Term := Term.var sentinel (DebugName.named (Identifier.id "no_such")) in
@@ -326,19 +325,17 @@ def test_match_multi_case_second_fails_known_bug : Bool :=
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => false,  // BUG: succeeds when it should fail (second case not checked)
-        err _ => true,  // CORRECT: would be err _ => true after fix
+        ok _ => false,  // Should fail because second case references unknown var
+        err _ => true,
     }
 
 // --- Match tests: constructor pattern args ---
 
-// KNOWN BUG: Constructor pattern args are not added to the local scope or
-// local_types, so the case body cannot reference them. The body references
-// "x" which should be bound by the pattern.
-// FIX: After matching a constructor, add its params to local_types and locals
-// before type-checking the case body (substituting the inductive's type params).
+// Constructor pattern args are added to the local scope and local_types,
+// so the case body can reference them. Pattern arg "x" is now bound with
+// Term.hole type before type-checking the case body.
 @[test]
-def test_match_case_args_not_bound_known_bug : Bool :=
+def test_match_case_args_bound : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let arg_id : Identifier := Identifier.id "x" in
     let body : Term := Term.var sentinel (DebugName.named arg_id) in
@@ -349,8 +346,8 @@ def test_match_case_args_not_bound_known_bug : Bool :=
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => true,   // FIX: pattern arg "x" now bound with Term.hole type
-        err _ => false,  // Was failing because "x" was not in scope
+        ok _ => true,   // Pattern arg "x" is now bound
+        err _ => false,
     }
 
 // --- Match tests: constructor validation with inductive ---
@@ -390,8 +387,7 @@ def test_match_inductive_in_scope : Bool :=
     }
 
 // Match on a scrutinee with a valid constructor name. Constructor validation
-// (looking up the constructor in the inductive) is not yet implemented, so
-// this passes by default without verifying the constructor exists.
+// looks up the constructor in the inductive and verifies it exists.
 @[test]
 def test_match_valid_constructor : Bool :=
     let scrutinee : Term := Term.type_ 1 in
@@ -413,11 +409,11 @@ def test_match_valid_constructor : Bool :=
 // FIX: After inferring the scrutinee type, extract its inductive name, look
 // it up in scope, and verify that each case's constructor name exists in the
 // inductive's constructors list.
-// BUG: Second constructor "bogus" is not in Maybe — should be rejected.
-// FIX: validate_cases_against_inductive finds Maybe via "some" constructor,
+// Second constructor "bogus" is not in Maybe — should be rejected.
+// validate_cases_against_inductive finds Maybe via "some" constructor,
 // then rejects "bogus" which is not in Maybe's constructors.
 @[test]
-def test_match_invalid_constructor_known_bug : Bool :=
+def test_match_invalid_constructor : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body : Term := Term.type_ 1 in
     let case_some : MatchCase := MatchCase.mc
@@ -431,15 +427,14 @@ def test_match_invalid_constructor_known_bug : Bool :=
     let cases : List MatchCase := List.cons case_some (List.cons case_bogus List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
-        ok _ => false,    // Now: should fail because bogus is not a Maybe constructor
+        ok _ => false,    // Should fail because bogus is not a Maybe constructor
         err _ => true,
     }
 
 // --- Match tests: wildcard pattern ---
 
-// Wildcard case (name "_") with no args.
-// BUG: Wildcard handling (args verification, branch type accumulation)
-// is not yet implemented.
+// Wildcard case (name "_") with no args. Wildcard handling now works
+// correctly: args verification and branch type accumulation are implemented.
 @[test]
 def test_match_wildcard : Bool :=
     let scrutinee : Term := Term.type_ 1 in
@@ -455,12 +450,11 @@ def test_match_wildcard : Bool :=
         err _ => false,
     }
 
-// KNOWN BUG: Wildcard pattern with arguments should be rejected. The
-// wildcard "_" must have zero args.
-// FIX: In type_check_match_case, when name is "_", verify args is empty
-// and return an error if not.
+// Wildcard pattern with arguments should be rejected. The wildcard "_"
+// must have zero args. type_check_match_case verifies this and returns
+// an error if args is non-empty.
 @[test]
-def test_match_wildcard_rejects_args_known_bug : Bool :=
+def test_match_wildcard_rejects_args : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body : Term := Term.type_ 1 in
     let case_ : MatchCase := MatchCase.mc
@@ -470,15 +464,15 @@ def test_match_wildcard_rejects_args_known_bug : Bool :=
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => false,  // CORRECT: wildcard with args should fail
-        err _ => true,  // BUG: was succeeding, now correctly fails
+        ok _ => false,  // Wildcard with args should fail
+        err _ => true,  // Correctly fails
     }
 
 // --- Match tests: scrutinee type resolution ---
 
 // Match on a scrutinee that is a bound variable with a known type.
-// The scrutinee's type should be available for constructor validation
-// and branch type checking, but none of this is implemented yet.
+// The scrutinee's type is now available for constructor validation and
+// branch type checking.
 @[test]
 def test_match_bound_scrutinee : Bool :=
     let scrutinee : Term := Term.var 0 (DebugName.unnamed) in
@@ -497,14 +491,12 @@ def test_match_bound_scrutinee : Bool :=
 
 // --- Match tests: branch type unification ---
 
-// KNOWN BUG: When multiple cases are processed, their branch types should be
-// unified. Currently only the first case's type is returned.
+// When multiple cases are processed, their branch types should be unified.
 // Here case1 has type type_1 (infers to type_2) and case2 has a different
-// type. Since only the first case is checked, the mismatch is never detected.
-// FIX: Check all case bodies, unify their types, and report mismatch if
-// unification fails.
+// type. All case bodies are checked and their types are unified, so the
+// mismatch is detected.
 @[test]
-def test_match_branch_type_conflict_known_bug : Bool :=
+def test_match_branch_type_conflict : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body1 : Term := Term.type_ 1 in
     let body2 : Term := Term.type_ 0 in
@@ -513,8 +505,8 @@ def test_match_branch_type_conflict_known_bug : Bool :=
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
-        ok _ => false,  // BUG: succeeds (only first case checked), should fail
-        err _ => true,  // CORRECT: would be err _ => true after fix
+        ok _ => false,  // Should fail due to type conflict
+        err _ => true,  // Correctly detects the conflict
     }
 
 // --- Error tests: type mismatch in if ---
