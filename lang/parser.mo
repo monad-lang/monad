@@ -3471,6 +3471,40 @@ def t2_decl_fail_to_unknown (r : ParseResult Decl) : ParseResult Decl :=
 
 
 
+// ─── Multiple declaration parser (file-level) ──────────────────────────
+
+
+
+@[partial]
+
+def t2_decls_parser (input : String) : ParseResult (List Decl) :=
+
+	t2_decls_skip (skip_spaces input) List.empty
+
+
+
+@[partial]
+
+def t2_decls_skip (input : String) (acc : List Decl) : ParseResult (List Decl) :=
+
+	t2_decls_try (t2_decl_parser input) input acc
+
+
+
+@[partial]
+
+def t2_decls_try (r : ParseResult Decl) (orig : String) (acc : List Decl) : ParseResult (List Decl) :=
+
+	match r {
+
+		success rem decl => t2_decls_skip (skip_spaces rem) (List.cons decl acc),
+
+		fail _ => success orig (list_reverse acc)
+
+	}
+
+
+
 // Top-level declaration dispatcher
 
 
@@ -5919,4 +5953,146 @@ def test_t2_decl_parser_fail : Bool :=
 
         fail _ => true
 
+    }
+
+
+
+
+
+
+// ─── AST debug helpers ───────────────────────────────────────────────────
+
+
+
+@[partial]
+def debug_decl_kind (d : Decl) : String :=
+    match d {
+        use_d _ => "use_d",
+        open_d _ => "open_d",
+        def_d _ => "def_d",
+        infix_d _ _ => "infix_d",
+
+        struct_d _ => "struct_d",
+        class_d _ => "class_d",
+        instance_d _ => "instance_d"
+    }
+
+@[partial]
+def debug_decl_count (decls : List Decl) : I64 :=
+    match decls {
+        List.empty => 0,
+        List.cons d rest => 1 + debug_decl_count rest
+    }
+
+// ─── Multi-declaration parser tests ──────────────────────────────────────────────────────
+
+
+
+@[test]
+def test_t2_decls_empty : Bool :=
+    match t2_decls_parser "" {
+        success rem decls =>
+            String.beq rem "" && match decls {
+                List.empty => true,
+                List.cons _ _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_whitespace_only : Bool :=
+    match t2_decls_parser "  " {
+        success rem decls =>
+            String.beq rem "" && match decls {
+                List.empty => true,
+                List.cons _ _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_one_use : Bool :=
+    match t2_decls_parser "use prelude" {
+        success rem decls => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_two_parsed : Bool :=
+    match t2_decls_parser "use prelude open IO" {
+        success rem decls => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_def : Bool :=
+    match t2_decls_parser "def x : I64 := 42" {
+        success rem decls => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_decl_plus_noise : Bool :=
+    match t2_decls_parser "use prelude  garbage" {
+        success rem decls => true,
+        fail _ => false
+    }
+
+
+@[test]
+def test_t2_decls_count_two : Bool :=
+    match t2_decls_parser "use prelude open IO" {
+        success rem decls =>
+            String.beq rem "" && I64.beq (debug_decl_count decls) 2,
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_count_one : Bool :=
+    match t2_decls_parser "def x : I64 := 1" {
+        success rem decls =>
+            String.beq rem "" && I64.beq (debug_decl_count decls) 1,
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_kind_use : Bool :=
+    match t2_decls_parser "use prelude" {
+        success rem decls =>
+            match decls {
+                List.cons d rest =>
+                    match rest { List.empty => String.beq rem "", List.cons _ _ => false },
+                List.empty => false
+            },
+        fail _ => false
+    }
+
+
+@[test]
+def test_t2_decls_type_decl : Bool :=
+    match t2_decls_parser "type Maybe A { some (a : A), none }" {
+        success rem decls => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_class : Bool :=
+    match t2_decls_parser "class Show A { def show (a : A) : String }" {
+        success rem decls => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_struct : Bool :=
+    match t2_decls_parser "struct Point { x : I64, y : I64 }" {
+        success rem decls => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_mixed : Bool :=
+    match t2_decls_parser "use prelude  open IO  def main : I64 := 42" {
+        success rem decls =>
+            String.beq rem "" && I64.beq (debug_decl_count decls) 3,
+        fail _ => false
     }
