@@ -3785,7 +3785,7 @@ def t2_decls_try (r : ParseResult Decl) (orig : String) (acc : List Decl) : Pars
 
 	match r {
 
-		success rem decl => t2_decls_skip (skip_spaces rem) (List.cons decl acc),
+		success rem decl => t2_decls_skip (skip_docstrings (skip_spaces rem)) (List.cons decl acc),
 
 		fail _ => success orig (list_reverse acc)
 
@@ -6522,3 +6522,39 @@ def test_t2_decls_mixed : Bool :=
             String.beq rem "" && I64.beq (debug_decl_count decls) 3,
         fail _ => false
     }
+
+
+// ─── Phase 1.5 integration tests ───────────────────────────────────────────
+
+@[test]
+def test_t2_decls_fromlist_one_line : Bool :=
+    match t2_class_parser "class FromListLiteral (L : Type -> Type := List) { def cons (a : A) : L A -> L A }" {
+        success rem _ => true,
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_prelude_features : Bool :=
+    match t2_decls_parser "\ntype Any {\n  any {A : Type} (value: A)\n}\n\nclass Functor (F: Type -> Type) {\n  def map (f: A -> B) : (F A) -> F B\n}\n\nclass FromListLiteral (L : Type -> Type := List) {\n  def cons (a : A) : L A -> L A\n  def empty : L A\n}\n\n/// HAdd\nclass [HAdd A A] Add A {\n  def add (a: A) (b: A) : A\n}\n\ninstance [Show A] Show (List A) {\n  def show xs := \"list\"\n}\n" {
+        success rem decls =>
+            I64.beq (debug_decl_count decls) 5,
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_fromlist_one_line_nl : Bool :=
+    match t2_class_parser "class FromListLiteral (L : Type -> Type := List) {\n  def cons (a : A) : L A -> L A\n}\n" {
+        success rem _ => true,
+        fail _ => false
+    }
+
+@[test]
+def test_t2_decls_fromlist_empty_sig_nl : Bool :=
+    match t2_class_parser "class FromListLiteral (L : Type -> Type := List) {\n  def empty : L A\n}\n" {
+        success rem _ => true,
+        fail _ => false
+    }
+
+@[test]
+def test_is_space_newline : Bool :=
+  is_space "\n"
