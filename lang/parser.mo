@@ -1652,6 +1652,14 @@ def is_not_close_curly (c : String) : Bool :=
 	else true
 
 
+
+@[partial]
+def is_not_close_paren (c : String) : Bool :=
+	if String.beq c ")" then false
+	else true
+
+
+
 @[partial]
 
 def is_op_char (c : String) : Bool :=
@@ -2973,6 +2981,7 @@ def t2_class_params (input : String) (name : Identifier) (params : List Identifi
 
 
 
+
 @[partial]
 
 def t2_class_params_try (r : ParseResult String) (orig : String) (name : Identifier) (params : List Identifier) : ParseResult Decl :=
@@ -2980,6 +2989,74 @@ def t2_class_params_try (r : ParseResult String) (orig : String) (name : Identif
 	match r {
 
 		success rem next => t2_class_params rem name (List.cons (Identifier.id next) params),
+
+		fail _ => t2_class_try_paren (tag "(" (skip_spaces orig)) orig name
+
+	}
+
+
+
+
+@[partial]
+
+def t2_class_try_paren (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult Decl :=
+
+	match r {
+
+		success rem _ =>
+
+			t2_class_paren_close (take_while is_not_close_paren rem) rem orig name,
+
+		fail _ => t2_class_brace (tag "{" (skip_spaces orig)) name
+
+	}
+
+
+
+
+@[partial]
+
+def t2_class_paren_close (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) : ParseResult Decl :=
+
+	match r {
+
+		success after _ =>
+
+			t2_class_paren_end (tag ")" (skip_spaces after)) after orig name,
+
+		fail _ => t2_class_brace (tag "{" (skip_spaces orig)) name
+
+	}
+
+
+
+
+@[partial]
+
+def t2_class_paren_end (r : ParseResult String) (orig : String) (orig2 : String) (name : Identifier) : ParseResult Decl :=
+
+	match r {
+
+		success rem _ =>
+
+			t2_class_try_more_parens_or_brace (tag "(" (skip_spaces rem)) rem name,
+
+		fail _ => t2_class_brace (tag "{" (skip_spaces orig)) name
+
+	}
+
+
+
+
+@[partial]
+
+def t2_class_try_more_parens_or_brace (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult Decl :=
+
+	match r {
+
+		success rem _ =>
+
+			t2_class_paren_close (take_while is_not_close_paren rem) rem orig name,
 
 		fail _ => t2_class_brace (tag "{" (skip_spaces orig)) name
 
@@ -5605,10 +5682,24 @@ def test_class_with_constraints : Bool :=
 
 @[test]
 def test_instance_with_constraints : Bool :=
-	match t2_instance_parser "instance [Show A] Show A { def m := a }" {
-		success rem _ => String.beq rem "",
-		fail _ => false
-	}
+  match t2_instance_parser "instance [Show A] Show A { def m := a }" {
+    success rem _ => String.beq rem "",
+    fail _ => false
+  }
+
+@[test]
+def test_class_with_paren_params : Bool :=
+  match t2_class_parser "class Functor (F : Type -> Type) { def map (f : A -> B) : F A -> F B }" {
+    success rem _ => String.beq rem "",
+    fail _ => false
+  }
+
+@[test]
+def test_class_with_default_param : Bool :=
+  match t2_class_parser "class FromListLiteral (L : Type -> Type := List) { def cons (a : A) : L A -> L A }" {
+    success rem _ => String.beq rem "",
+    fail _ => false
+  }
 
 
 
