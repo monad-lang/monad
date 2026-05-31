@@ -4618,29 +4618,9 @@ def t2_variable_got (r: ParseResult String) (ctx: List Identifier) : ParseResult
 @[partial]
 
 def t2_string_parse (input: String) : ParseResult Term :=
-
-    match tag "\"" input {
-
-        success rem _ =>
-
-            match take_while is_not_quote rem {
-
-                success rem2 content =>
-
-                    match tag "\"" rem2 {
-
-                        success rem3 _ => success rem3 (Term.lit (Literal.str content)),
-
-                        fail e => fail e
-
-                    },
-
-                fail e => fail e
-
-            },
-
+    match delimited_by (tag "\"") (take_while is_not_quote) (tag "\"") input {
+        success rem content => success rem (Term.lit (Literal.str content)),
         fail e => fail e
-
     }
 
 
