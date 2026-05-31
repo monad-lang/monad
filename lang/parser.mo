@@ -1634,6 +1634,25 @@ def t2_do_parser_desugar (rem: String) (stmts: List DoStmt) : ParseResult Term :
 
 
 @[partial]
+def is_newline (c : String) : Bool :=
+	String.beq c "\n"
+
+@[partial]
+def is_not_newline (c : String) : Bool :=
+	if String.beq c "\n" then false
+	else true
+
+@[partial]
+def is_close_curly (c : String) : Bool :=
+	String.beq c "}"
+
+@[partial]
+def is_not_close_curly (c : String) : Bool :=
+	if String.beq c "}" then false
+	else true
+
+
+@[partial]
 
 def is_op_char (c : String) : Bool :=
 
@@ -2265,11 +2284,61 @@ def t2_type_cons_paren_or_nil (r : ParseResult String) (orig : String) (name : I
 
 		success rem _ => t2_type_cons_params (t2_type_param_list ctx rem) name,
 
+		fail _ => t2_type_cons_implicit (tag "{" (skip_spaces orig)) orig name ctx
+
+	}
+
+
+
+@[partial]
+
+def t2_type_cons_implicit (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) : ParseResult InductConstructor :=
+
+	match r {
+
+		success rem _ => t2_type_cons_implicit_skip (take_while is_not_close_curly rem) rem orig name ctx,
+
 		fail _ =>
 
 			let empty_params : List Param := List.empty in
 
 			success orig (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.hole))
+
+	}
+
+
+
+@[partial]
+
+def t2_type_cons_implicit_skip (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (ctx : List Identifier) : ParseResult InductConstructor :=
+
+	match r {
+
+		success after_bracket _ => t2_type_cons_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket orig name ctx,
+
+		fail _ =>
+
+			let empty_params : List Param := List.empty in
+
+			success orig (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.hole))
+
+	}
+
+
+
+@[partial]
+
+def t2_type_cons_implicit_close (r : ParseResult String) (after_bracket : String) (orig : String) (name : Identifier) (ctx : List Identifier) : ParseResult InductConstructor :=
+
+	match r {
+
+		success rem _ => t2_type_cons_paren_or_nil (tag "(" (skip_spaces rem)) rem name ctx,
+
+		fail _ =>
+
+			let empty_params : List Param := List.empty in
+
+			success after_bracket (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.hole))
 
 	}
 
@@ -3479,7 +3548,7 @@ def t2_decl_fail_to_unknown (r : ParseResult Decl) : ParseResult Decl :=
 
 def t2_decls_parser (input : String) : ParseResult (List Decl) :=
 
-	t2_decls_skip (skip_spaces input) List.empty
+	t2_decls_skip (skip_docstrings (skip_spaces input)) List.empty
 
 
 
@@ -4429,6 +4498,30 @@ def t2_literal_parser (input: String) : ParseResult Term :=
 
 
 
+// Skip /// docstring lines (consumed as whitespace).
+@[partial]
+def skip_docstrings (input : String) : String :=
+	skip_docstrings_try (tag "///" input) input
+
+@[partial]
+def skip_docstrings_try (r : ParseResult String) (orig : String) : String :=
+	match r {
+		success rem _ => skip_docstrings_eol (take_while is_not_newline rem) rem,
+		fail _ => orig
+	}
+
+@[partial]
+def skip_docstrings_eol (r : ParseResult String) (orig : String) : String :=
+	let after_eol : String := skip_spaces_match r orig in
+	skip_docstrings_try_newline (tag "\n" after_eol) after_eol
+
+@[partial]
+def skip_docstrings_try_newline (r : ParseResult String) (orig : String) : String :=
+	match r {
+		success rem _ => skip_docstrings (skip_spaces rem),
+		fail _ => orig
+	}
+
 // ─── Term atom ──────────────────────────────────────────────────────────
 
 
@@ -5276,6 +5369,46 @@ def t2_type_arrow_rhs (lhs: Term) (r: ParseResult Term) : ParseResult Term :=
     }
 
 
+
+// ─── Phase 1.5: docstring and implicit params tests ───────────────────────────────
+
+@[test]
+def test_skip_docstrings_none : Bool :=
+	let rem : String := skip_docstrings "use prelude" in
+	String.beq rem "use prelude"
+
+@[test]
+def test_skip_docstrings_one : Bool :=
+	let rem : String := skip_docstrings "/// doc\nuse prelude" in
+	String.beq rem "use prelude"
+
+@[test]
+def test_skip_docstrings_multi : Bool :=
+	let rem : String := skip_docstrings "/// line1\n/// line2\n\ndef x := 1" in
+	String.beq rem "def x := 1"
+
+@[test]
+def test_t2_decls_with_docstring : Bool :=
+	match t2_decls_parser "/// A test declaration\ndef x : I64 := 42" {
+		success rem decls =>
+			let rem_stripped : String := skip_spaces rem in
+			String.beq rem_stripped "" && I64.beq (debug_decl_count decls) 1,
+		fail _ => false
+	}
+
+@[test]
+def test_t2_type_implicit_params : Bool :=
+	match t2_type_parser "type Any { any {A : Type} (value : A) }" {
+		success rem decl => String.beq rem "",
+		fail _ => false
+	}
+
+@[test]
+def test_t2_type_implicit_no_parens : Bool :=
+	match t2_type_parser "type All { mk {A : Type} (val : A) }" {
+		success rem decl => String.beq rem "",
+		fail _ => false
+	}
 
 // ─── Term parser tests (Phase 1) ───────────────────────────────────────
 
