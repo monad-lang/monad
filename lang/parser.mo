@@ -1289,39 +1289,9 @@ def skip_spaces_match (r : ParseResult String) (orig : String) : String :=
 
 
 
-@[partial]
-
-def match_case_tail (input : String) : String :=
-
-	match_case_tail_sp (take_while is_space input) input
 
 
 
-@[partial]
-
-def match_case_tail_sp (r : ParseResult String) (orig : String) : String :=
-
-	match r {
-
-		success after_sp _ => match_case_tail_cm (tag "," after_sp) after_sp,
-
-		fail _ => orig
-
-	}
-
-
-
-@[partial]
-
-def match_case_tail_cm (r : ParseResult String) (after_sp : String) : String :=
-
-	match r {
-
-		success rem _ => skip_spaces rem,
-
-		fail _ => after_sp
-
-	}
 
 
 
@@ -2850,27 +2820,7 @@ def t2_type_constraint_vars (r : ParseResult String) (cls : ModulePath) (acc : L
 
 @[partial]
 def t2_type_constraint_list (input : String) : ParseResult (List TypeConstraint) :=
-	t2_type_constraint_list_loop (skip_spaces input) List.empty
-
-@[partial]
-def t2_type_constraint_list_loop (input : String) (acc : List TypeConstraint) : ParseResult (List TypeConstraint) :=
-	t2_type_constraint_list_try (t2_type_constraint_one input) input acc
-
-@[partial]
-def t2_type_constraint_list_try (r : ParseResult TypeConstraint) (orig : String) (acc : List TypeConstraint) : ParseResult (List TypeConstraint) :=
-	match r {
-		success rem constraint =>
-			t2_type_constraint_list_comma (tag "," (skip_spaces rem)) rem constraint acc,
-		fail _ => success orig (list_reverse acc)
-	}
-
-@[partial]
-def t2_type_constraint_list_comma (r : ParseResult String) (rem : String) (constraint : TypeConstraint) (acc : List TypeConstraint) : ParseResult (List TypeConstraint) :=
-	match r {
-		success after_comma _ =>
-			t2_type_constraint_list_loop (skip_spaces after_comma) (List.cons constraint acc),
-		fail _ => success rem (list_reverse (List.cons constraint acc))
-	}
+    separated_by (tag ",") (preceded_by ws0 t2_type_constraint_one) input
 
 
 // t2_class [constraints] Name params { def method sig, def method sig := default }
@@ -4838,37 +4788,14 @@ def t2_match_case_body (r: ParseResult Term) (name: Identifier) : ParseResult Ma
 
 
 @[partial]
-
 def t2_match_case_tail (input: String) : String :=
-
-    t2_match_case_tail_sp (take_while is_space input) input
-
-
-
-@[partial]
-
-def t2_match_case_tail_sp (r: ParseResult String) (orig: String) : String :=
-
-    match r {
-
-        success after_sp _ => t2_match_case_tail_cm (tag "," after_sp) after_sp,
-
-        fail _ => orig
-
-    }
-
-
-
-@[partial]
-
-def t2_match_case_tail_cm (r: ParseResult String) (after_sp: String) : String :=
-
-    match r {
-
-        success rem _ => skip_spaces rem,
-
-        fail _ => after_sp
-
+    match take_while is_space input {
+        success after_sp _ =>
+            match tag "," after_sp {
+                success rem _ => skip_spaces rem,
+                fail _ => after_sp
+            },
+        fail _ => input
     }
 
 
