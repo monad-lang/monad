@@ -1243,11 +1243,17 @@ def at_least_two (ids : List String) : Bool :=
 
 
 
+def dotted_identifier (input : String) : ParseResult (List String) :=
+
+	separated_by (tag ".") identifier input
+
+
+
 @[partial]
 
 def path_variable (input : String) : ParseResult TermV0 :=
 
-	match separated_by (tag ".") identifier input {
+	match dotted_identifier input {
 
 		success rem ids =>
 
@@ -1692,7 +1698,7 @@ def ids_to_module_path (ids : List String) : ModulePath :=
 
 def module_path_parser (input : String) : ParseResult ModulePath :=
 
-	map_parse ids_to_module_path (separated_by (tag ".") identifier) input
+	map_parse ids_to_module_path dotted_identifier input
 
 
 
