@@ -61,6 +61,54 @@ def tt_term (tt : TypedTerm) : Term :=
 def tt_typ (tt : TypedTerm) : Term :=
     match tt { mk _ typ => typ }
 
+// --- Instance resolution helpers ---
+
+/// Derive an instance key from a class class_def and an expected type.
+/// The expected type should be the type at which the class method is being used.
+def derive_instance_key (class_def : Inductive) (class_method : ScopeClassDef) (expected_type : Term) : Result TypeError InstanceKey :=
+    // For now, this is a stub. The full implementation would:
+    // 1. Match expected_type against the class parameters
+    // 2. Extract the type arguments
+    // 3. Build an InstanceKey with those args
+    // For simplicity, we'll just return a basic key with empty args
+    // This needs to be implemented properly for full instance resolution
+    match class_method {
+        mk class_name _full_name _name _sig =>
+            let empty_args : List Param := List.empty in
+            let empty_constraints : List TypeConstraint := List.empty in
+            ok ({ cls := class_name, constraints := empty_constraints, args := empty_args })
+    }
+
+/// Resolve a class method reference to a concrete instance method.
+/// Looks up the instance in the scope and returns the concrete method definition.
+def resolve_class_method (class_method : ScopeClassDef) (expected_type : Term) (scope : Scope) : Result TypeError ScopeDef :=
+    // Extract class_name via pattern matching (struct field access via dot syntax not supported)
+    match class_method {
+        mk class_name full_name method_name sig =>
+            // Derive the instance key from the expected type
+            let class_find : Result ScopeError Inductive := scope_find_inductive class_name scope in
+            match class_find {
+                ok class_def =>
+                    let key_result : Result TypeError InstanceKey := derive_instance_key class_def class_method expected_type in
+                    match key_result {
+                        ok key =>
+                            let inst_result : Result ScopeError Instance := scope_resolve_instance class_name key scope in
+                            match inst_result {
+                                ok inst =>
+                                    // For now, instance methods are not stored in the self-hosted version
+                                    // Fall back to the class method signature
+                                    // TODO: When Instance has impls_map, look up the concrete method
+                                    // Return the class method signature as a fallback
+                                    let empty_mp : ModulePath := ModulePath.mp List.empty in
+                                    ok ({ name := full_name, module := empty_mp, sig := sig, body := Term.hole }),
+                                err _ => err (TypeError.custom "Instance not found"),
+                            },
+                        err e => err e,
+                    },
+                err _ => err (TypeError.custom "Class not found"),
+            }
+    }
+
 /// Type check a literal value.
 def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match value {
@@ -269,12 +317,12 @@ def type_check_case_body_checked (name : Identifier) (args : List Identifier) (b
 /// Type check a variable reference.
 def type_check_var (idx : I64) (dbg : DebugName) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     if I64.beq idx sentinel then
-        type_check_free_var dbg scope locals
+        type_check_free_var dbg expected_type scope locals
     else
         type_check_bound_var idx dbg local_types
 
 /// Look up a free variable by debug name in the scope.
-def type_check_free_var (dbg : DebugName) (scope : Scope) (locals : LocalScope) : Result TypeError TypedTerm :=
+def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope) (locals : LocalScope) : Result TypeError TypedTerm :=
     match dbg {
         DebugName.named id =>
             let nref : NameRef := NameRef.nid id in
@@ -287,10 +335,21 @@ def type_check_free_var (dbg : DebugName) (scope : Scope) (locals : LocalScope) 
                 err _ =>
                     let clsd_result : Result ScopeError ScopeClassDef := scope_find_class_def_by_name id scope in
                     match clsd_result {
-                        ok cd => match cd {
-                            mk _class_name _full_name _ sig =>
-                                ok (mk_typed (Term.var sentinel dbg) sig),
-                        },
+                        ok cd =>
+                            // Try to resolve class method to concrete instance
+                            match resolve_class_method cd expected_type scope {
+                                ok instance_def =>
+                                    match instance_def {
+                                        mk _ _ inst_sig _ =>
+                                            ok (mk_typed (Term.var sentinel dbg) inst_sig),
+                                    },
+                                err _ =>
+                                    // Fall back to class method signature (not resolved)
+                                    match cd {
+                                        mk _class_name _full_name _ sig =>
+                                            ok (mk_typed (Term.var sentinel dbg) sig),
+                                    },
+                            },
                         err _ =>
                             err (TypeError.unknown_var nref),
                     },
