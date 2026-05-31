@@ -36,10 +36,10 @@ instance Similar ScopeDef {
 instance Similar ScopeClassDef {
     def similar (a : ScopeClassDef) (b : ScopeClassDef) : Bool :=
         match a {
-            mk fn1 id1 sig1 => match b {
-                mk fn2 id2 sig2 =>
-                    Similar.similar fn1 fn2 && Similar.similar id1 id2
-                    && Similar.similar sig1 sig2
+            mk cls1 fn1 id1 sig1 => match b {
+                mk cls2 fn2 id2 sig2 =>
+                    Similar.similar cls1 cls2 && Similar.similar fn1 fn2
+                    && Similar.similar id1 id2 && Similar.similar sig1 sig2
             }
         }
 }
@@ -135,13 +135,15 @@ def test_scope_def_construct : Bool :=
 def test_scope_class_def_construct : Bool :=
     let expected_full_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Eq") List.empty) in
     let expected_id : Identifier := Identifier.id "beq" in
+    let expected_class : ModulePath := ModulePath.mp (List.cons (Identifier.id "BEq") List.empty) in
     let d : ScopeClassDef := {
+        class_name := expected_class,
         full_name := expected_full_name,
         name := expected_id,
         sig := Term.hole,
     } in
     match d {
-        mk fnm id sig => Similar.similar fnm expected_full_name && Similar.similar id expected_id
+        mk _cls_name fnm id sig => Similar.similar fnm expected_full_name && Similar.similar id expected_id
     }
 
 @[test]

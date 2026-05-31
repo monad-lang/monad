@@ -44,7 +44,7 @@ def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types
         Term.forall dbg kind body => type_check_forall dbg kind body scope local_types locals,
         Term.pi arg ret => type_check_pi arg ret scope local_types locals,
         Term.con c => type_check_con c expected_type scope local_types locals,
-        Term.ntv ntv => type_check_ntv ntv expected_type,
+        Term.ntv ntv => type_check_ntv ntv expected_type scope local_types locals,
         Term.type_ level => type_check_sort_full level expected_type,
         Term.hole => ok ({ term := expected_type, typ := expected_type }),
     }
@@ -288,7 +288,7 @@ def type_check_free_var (dbg : DebugName) (scope : Scope) (locals : LocalScope) 
                     let clsd_result : Result ScopeError ScopeClassDef := scope_find_class_def_by_name id scope in
                     match clsd_result {
                         ok cd => match cd {
-                            mk _ _ sig =>
+                            mk _class_name _full_name _ sig =>
                                 ok (mk_typed (Term.var sentinel dbg) sig),
                         },
                         err _ =>
@@ -453,5 +453,5 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
     ok (mk_typed (Term.con c) expected_type)
 
 /// Type check a native term.
-def type_check_ntv (n : Native) (expected_type : Term) : Result TypeError TypedTerm :=
+def type_check_ntv (n : Native) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     ok (mk_typed (Term.ntv n) expected_type)

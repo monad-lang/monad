@@ -573,8 +573,10 @@ def test_pi_of_pi : Bool :=
 // Scope with a single class method "beq" with type signature Type.
 def classdef_scope : Scope :=
     let beq_id : Identifier := Identifier.id "beq" in
+    let beq_class : ModulePath := ModulePath.mp (List.cons (Identifier.id "BEq") List.empty) in
     let beq_mp : ModulePath := ModulePath.mp (List.cons beq_id List.empty) in
     let scd : ScopeClassDef := {
+        class_name := beq_class,
         full_name := beq_mp,
         name := beq_id,
         sig := Term.type_ 1,

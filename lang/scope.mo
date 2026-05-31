@@ -142,6 +142,7 @@ def add_methods_go (acc : ScopeData) (methods : List ClassDef) (cls_mp : ModuleP
                             let method_ids : List Identifier := List.append cls_ids method_id_list in
                             let full_name : ModulePath := ModulePath.mp method_ids in
                             let scd : ScopeClassDef := {
+                                class_name := cls_mp,
                                 full_name := full_name,
                                 name := method_name,
                                 sig := Term.hole,
@@ -169,7 +170,7 @@ def find_class_def_in_list (cds : List ScopeClassDef) (name : ModulePath) : Opti
         List.empty => Option.none,
         List.cons cd rest =>
             match cd {
-                mk full_name _ _ =>
+                mk _class_name full_name _ _ =>
                     if modpath_eq full_name name
                     then Option.some cd
                     else find_class_def_in_list rest name
@@ -294,7 +295,7 @@ def find_class_def_by_name_in_list (cds : List ScopeClassDef) (name : Identifier
         List.empty => Option.none,
         List.cons cd rest =>
             match cd {
-                mk _ cd_name _ =>
+                mk _class_name _full_name cd_name _ =>
                     if Similar.similar cd_name name
                     then Option.some cd
                     else find_class_def_by_name_in_list rest name

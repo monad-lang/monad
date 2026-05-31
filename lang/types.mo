@@ -968,6 +968,7 @@ struct ScopeDef {
 
 // A class method entry in scope.
 struct ScopeClassDef {
+    class_name : ModulePath,
     full_name : ModulePath,
     name : Identifier,
     sig : Term,
