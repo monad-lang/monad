@@ -4748,36 +4748,18 @@ def skip_docstrings_try_newline (r : ParseResult String) (orig : String) : Strin
 @[partial]
 
 def t2_atom_term (ctx: List Identifier) (input: String) : ParseResult Term :=
-
-    t2_atom_try_var (t2_variable ctx input) ctx input
-
-
-
-@[partial]
-
-def t2_atom_try_var (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term :=
-
-    match r {
-
+    match alt_fold (t2_atom_parsers ctx) input {
         success rem out => success rem out,
-
-        fail _ => t2_atom_try_lit ctx input
-
+        fail _ =>
+            match t2_lambda_parser ctx input {
+                success rem out => success rem out,
+                fail _ => t2_paren_expr ctx input
+            }
     }
 
-
-
 @[partial]
-
-def t2_atom_try_lit (ctx: List Identifier) (input: String) : ParseResult Term :=
-
-    match t2_literal_parser input {
-
-        success rem out => success rem out,
-
-        fail _ => t2_atom_try_match ctx input
-
-    }
+def t2_atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
+    [t2_variable ctx, t2_literal_parser, t2_match_parser ctx, t2_if_parser ctx]
 
 
 
@@ -5071,84 +5053,24 @@ def t2_if_else_branch (r: ParseResult Term) (cond: Term) (then_b: Term) : ParseR
 
 @[partial]
 
-def t2_atom_try_match (ctx: List Identifier) (input: String) : ParseResult Term :=
-
-    match t2_match_parser ctx input {
-
-        success rem out => success rem out,
-
-        fail _ => t2_atom_try_if ctx input
-
-    }
-
-
-
-@[partial]
-
-def t2_atom_try_if (ctx: List Identifier) (input: String) : ParseResult Term :=
-
-    match t2_if_parser ctx input {
-
-        success rem out => success rem out,
-
-        fail _ => t2_atom_try_lambda (t2_lambda_parser ctx input) ctx input
-
-    }
-
-
-
-@[partial]
-
-def t2_atom_try_lambda (r: ParseResult Term) (ctx: List Identifier) (input: String) : ParseResult Term :=
-
-    match r {
-
-        success rem out => success rem out,
-
-        fail _ => t2_atom_try_paren (tag "(" input) ctx input
-
-    }
-
-
-
-@[partial]
-
-def t2_atom_try_paren (r: ParseResult String) (ctx: List Identifier) (input: String) : ParseResult Term :=
-
-    match r {
-
-        success rem _ => t2_atom_inner_expr (t2_type_expression ctx rem) ctx,
-
+def t2_paren_expr (ctx: List Identifier) (input: String) : ParseResult Term :=
+    match tag "(" input {
+        success rem _ => t2_paren_inner (t2_type_expression ctx rem),
         fail e => fail e
-
     }
 
-
-
 @[partial]
-
-def t2_atom_inner_expr (r: ParseResult Term) (ctx: List Identifier) : ParseResult Term :=
-
+def t2_paren_inner (r: ParseResult Term) : ParseResult Term :=
     match r {
-
-        success rem out => t2_atom_close_paren (tag ")" rem) out,
-
+        success rem out => t2_paren_close (tag ")" rem) out,
         fail e => fail e
-
     }
 
-
-
 @[partial]
-
-def t2_atom_close_paren (r: ParseResult String) (out: Term) : ParseResult Term :=
-
+def t2_paren_close (r: ParseResult String) (out: Term) : ParseResult Term :=
     match r {
-
         success rem _ => success rem out,
-
         fail e => fail e
-
     }
 
 
