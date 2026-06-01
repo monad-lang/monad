@@ -3,11 +3,14 @@
 
 use lang.types
 use lang.parser
+use lang.parser.core
 use lang.scope
 use std.list
 
 open types
 open parser
+open parser.core
+open ParseResult
 open scope
 
 /// Parse all declarations from source text.

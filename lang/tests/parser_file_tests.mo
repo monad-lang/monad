@@ -6,6 +6,7 @@ open IO
 open Monad
 use lang.types
 use lang.parser
+use lang.parser.core
 use std.list
 
 open ParseResult

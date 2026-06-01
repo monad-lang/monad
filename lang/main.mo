@@ -6,6 +6,7 @@ use lang.codegen.ir
 use lang.codegen.emit
 use lang.module
 use lang.parser
+use lang.parser.core
 
 open LLVMType
 open LLVMValue
@@ -13,6 +14,7 @@ open Term
 open Literal
 open Identifier
 open DebugName
+open ParseResult
 open NumSuffix
 open Param
 open Def
