@@ -401,7 +401,7 @@ pub fn string_concat(terms: Vec<Term>) -> Result<Term, NativeError> {
 
 pub fn string_length(terms: Vec<Term>) -> Result<Term, NativeError> {
   let s = extract_string_at(&terms, 0)?;
-  Ok(num_suffix(s.len() as i64, NumSuffix::I64))
+  Ok(num_suffix(s.chars().count() as i64, NumSuffix::I64))
 }
 
 pub fn string_slice(terms: Vec<Term>) -> Result<Term, NativeError> {
@@ -412,10 +412,13 @@ pub fn string_slice(terms: Vec<Term>) -> Result<Term, NativeError> {
   let len = len.max(0) as usize;
   let end = (start + len).min(s.len());
   if start <= s.len() {
+    // Use char indices for UTF-8 safety
+    let chars: Vec<char> = s.chars().collect();
+    let start_char = start.min(chars.len());
+    let end_char = end.min(chars.len());
+    let slice_chars: String = chars[start_char..end_char].iter().collect();
     Ok(Term::Lit {
-      value: Literal::Str {
-        value: s[start..end].to_string(),
-      },
+      value: Literal::Str { value: slice_chars },
     })
   } else {
     Ok(Term::Lit {
@@ -437,10 +440,12 @@ pub fn string_drop(terms: Vec<Term>) -> Result<Term, NativeError> {
       },
     })
   } else {
+    // Use char indices for UTF-8 safety
+    let chars: Vec<char> = s.chars().collect();
+    let n_char = n.min(chars.len());
+    let dropped: String = chars[n_char..].iter().collect();
     Ok(Term::Lit {
-      value: Literal::Str {
-        value: s[n..].to_string(),
-      },
+      value: Literal::Str { value: dropped },
     })
   }
 }
