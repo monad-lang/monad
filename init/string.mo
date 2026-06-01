@@ -24,6 +24,9 @@ def String.starts_with (prefix : String) (s : String) : Bool
 @[native string_get]
 def String.get (s : String) (i : I64) : Option U8
 
+@[native string_get_char]
+def String.get_char (s : String) (i : I64) : Option Char
+
 @[native string_to_list]
 def String.to_list (s : String) : List U8
 

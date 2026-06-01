@@ -475,17 +475,39 @@ pub fn string_get(terms: Vec<Term>) -> Result<Term, NativeError> {
     let some_term = Term::Var {
       name: crate::term::NameRef::Id(id("some")),
     };
+    Ok(app(some_term, num_suffix(byte as i64, NumSuffix::U8)))
+  } else {
     let none_term = Term::Var {
       name: crate::term::NameRef::Id(id("none")),
     };
+    Ok(none_term)
+  }
+}
+
+pub fn string_get_char(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let s = extract_string_at(&terms, 0)?;
+  let i = extract_num_at(&terms, 1)?;
+  let chars: Vec<char> = s.chars().collect();
+  let i = i as usize;
+  if i < chars.len() {
+    let c = chars[i];
+    // Return Option.some (Char c) as a Literal::Char
+    // Char literals in Monad are represented as Literal::Char
+    let some_term = Term::Var {
+      name: crate::term::NameRef::Id(id("some")),
+    };
     Ok(app(
-      app(some_term, num_suffix(byte as i64, NumSuffix::U8)),
-      none_term,
+      some_term,
+      Term::Lit {
+        value: Literal::Char { value: c },
+      },
     ))
   } else {
-    Ok(Term::Var {
+    // Return Option.none
+    let none_term = Term::Var {
       name: crate::term::NameRef::Id(id("none")),
-    })
+    };
+    Ok(none_term)
   }
 }
 
@@ -893,6 +915,7 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("string_drop"), s(string_drop)),
     (id("string_starts_with"), s(string_starts_with)),
     (id("string_get"), s(string_get)),
+    (id("string_get_char"), s(string_get_char)),
     (id("string_to_list"), s(string_to_list)),
     (id("string_to_chars"), s(string_to_chars)),
     (id("string_from_list"), s(string_from_list)),
