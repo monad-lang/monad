@@ -252,6 +252,27 @@ def separated_by_ok (input : String) (acc : List B) : ParseResult (List B) :=
 	success input (list_reverse acc)
 
 
+// --- take_while combinator ---
+
+@[partial]
+def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
+	take_while_loop pred "" input
+
+
+@[partial]
+def take_while_loop (pred : String -> Bool) (acc : String) (input : String) : ParseResult String :=
+	if is_empty input
+	then success input acc
+	else take_while_check pred acc input (String.slice input 0 1) (String.drop 1 input)
+
+
+@[partial]
+def take_while_check (pred : String -> Bool) (acc : String) (input : String) (ch : String) (rest : String) : ParseResult String :=
+	if pred ch
+	then take_while_loop pred (String.concat acc ch) rest
+	else success input acc
+
+
 // --- Optional parser ---
 
 @[partial]

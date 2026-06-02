@@ -6,6 +6,7 @@ use lang.types
 use lang.parser
 use lang.parser.core
 use lang.parser.combinators
+use lang.parser.whitespace
 use lang.scope
 use lang.typecheck.infer
 use std.list
@@ -40,7 +41,7 @@ def lang_module_path (name : String) : String := String.concat (String.concat "l
 /// can be parsed.
 @[partial]
 def parse_all_decls (input : String) : ParseResult (List Decl) :=
-    let decl_parser : (String -> ParseResult Decl) := fn s => lang.parser.t2_decl_parser (lang.parser.skip_spaces s) in
+    let decl_parser : (String -> ParseResult Decl) := fn s => t2_decl_parser (skip_spaces s) in
     lang.parser.combinators.many0 decl_parser input
 
 /// Parse source text, returning the parsed declarations or none on parse error.
