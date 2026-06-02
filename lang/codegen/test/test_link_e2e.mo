@@ -7,13 +7,13 @@ use lang.codegen.emit
 
 open LLVMType
 open LLVMValue
-open TermV0
+open Term
 open Literal
 open Identifier
-open NameRef
+open DebugName
 open NumSuffix
-open ParamV0
-open DefV0
+open Param
+open Def
 open ModulePath
 
 /// Build a List String from four strings.
@@ -21,12 +21,12 @@ def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
     List.cons a (List.cons b (List.cons c (List.cons d List.empty)))
 
 /// Build a minimal program: def main : I64 := 42
-def build_main42 : List DefV0 :=
+def build_main42 : List Def :=
     let id := Identifier.id "main" in
-    let body := TermV0.lit (LiteralV0.num 42 NumSuffix.i64) in
-    let def_ := DefV0.mk
+    let body := Term.lit (Literal.num 42 NumSuffix.i64) in
+    let def_ := Def.mk
         (ModulePath.mp (List.cons id List.empty))
-        (TermV0.type_ 1)
+        (Term.type_ 1)
         body
         List.empty
         List.empty in
@@ -44,7 +44,7 @@ def main : IO I64 {
 
     let defs := build_main42;
 
-    let mod_ := lang.codegen.emit.compile_decls_ir defs;
+    let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
     let ir_text := lang.codegen.ir.emit_module mod_;
 
     IO.write_file ir_path ir_text;

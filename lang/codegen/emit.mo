@@ -790,6 +790,11 @@ def param_name (p : ParamV0) : Identifier := match p {
 }
 
 @[partial]
+def param_name_db (p : Param) : Identifier := match p {
+    Param.mk name typ_ mult default => name,
+}
+
+@[partial]
 def empty_blocks : List LLVMBasicBlock := List.empty
 
 @[partial]
@@ -856,6 +861,18 @@ def build_llvm_params_from (params : List ParamV0) (idx : I64) : List ParamPair 
     List.cons p rest =>
         let pp := ParamPair.mk (String.concat "p" (I64.to_string idx)) LLVMType.i64_ in
         List.cons pp (build_llvm_params_from rest (idx + 1)),
+}
+
+@[partial]
+def build_llvm_params_db (params : List Param) : List ParamPair :=
+    build_llvm_params_from_db params 0
+
+@[partial]
+def build_llvm_params_from_db (params : List Param) (idx : I64) : List ParamPair := match params {
+    List.empty => List.empty,
+    List.cons p rest =>
+        let pp := ParamPair.mk (String.concat "p" (I64.to_string idx)) LLVMType.i64_ in
+        List.cons pp (build_llvm_params_from_db rest (idx + 1)),
 }
 
 @[partial]
@@ -969,6 +986,18 @@ def bind_params_with_idx (c : CodegenCtx) (params : List ParamV0) (idx : I64) : 
     List.cons p rest =>
         let c1 := ctx_bind_local c (param_name p) (LLVMValue.parm_ idx) in
         bind_params_with_idx c1 rest (idx + 1),
+}
+
+@[partial]
+def bind_params_in_ctx_db (c : CodegenCtx) (params : List Param) : CodegenCtx :=
+    bind_params_with_idx_db c params 0
+
+@[partial]
+def bind_params_with_idx_db (c : CodegenCtx) (params : List Param) (idx : I64) : CodegenCtx := match params {
+    List.empty => c,
+    List.cons p rest =>
+        let c1 := ctx_bind_local c (param_name_db p) (LLVMValue.parm_ idx) in
+        bind_params_with_idx_db c1 rest (idx + 1),
 }
 
 @[partial]
@@ -1436,15 +1465,15 @@ def test_compile_constructor_decl : Bool :=
     else false
 
 @[test]
-def test_compile_inductive_decls : Bool :=
+def test_compile_db_inductive_decls : Bool :=
     let some_name := ModulePath.mp (List.cons (Identifier.id "Some") List.empty) in
-    let some_ctor := InductConstructorV0.mk some_name empty_params_list (TermV0.type_ 1) in
+    let some_ctor := InductConstructor.mk some_name empty_params_list (Term.type_ 1) in
     let none_name := ModulePath.mp (List.cons (Identifier.id "None") List.empty) in
-    let none_ctor := InductConstructorV0.mk none_name empty_params_list (TermV0.type_ 1) in
+    let none_ctor := InductConstructor.mk none_name empty_params_list (Term.type_ 1) in
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
     let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
-    let ind := InductiveV0.mk ind_name empty_params_list (TermV0.type_ 1) ctors empty_attrs in
-    let funcs := compile_inductive_decls (List.cons ind List.empty) in
+    let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs in
+    let funcs := compile_db_inductive_decls (List.cons ind List.empty) in
     let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls in
     let text := lang.codegen.ir.emit_module mod_ in
     if check_contains text "monad_ctor_Some"
@@ -1452,20 +1481,20 @@ def test_compile_inductive_decls : Bool :=
     else false
 
 @[partial]
-def empty_params_list : List ParamV0 := List.empty
+def empty_params_list : List Param := List.empty
 
 // === De Bruijn (canonical) def compilation ===
 
 /// Collect lambda params from a de Bruijn Term body.
-/// Strips `Term.lam` prefixes and returns ParamV0 for each.
+/// Strips `Term.lam` prefixes and returns Param for each.
 @[partial]
-def collect_db_params (term_ : Term) : List ParamV0 := match term_ {
+def collect_db_params (term_ : Term) : List Param := match term_ {
     Term.lam dbg typ body =>
         let name : Identifier := match dbg {
             DebugName.named id => id,
             DebugName.unnamed => Identifier.id "x",
         } in
-        let param_ := param_many_v0 name (TermV0.type_ 1) in
+        let param_ := param_many name typ in
         List.cons param_ (collect_db_params body),
     Term.forall dbg kind body => collect_db_params body,
     _ => List.empty,
@@ -1485,9 +1514,9 @@ def compile_db_def_ir (def_ : Def) : DefResult := match def_ {
     Def.mk name typ term_ constraints attrs =>
         let fn_name := module_path_to_str name in
         let params := collect_db_params term_ in
-        let llvm_params := build_llvm_params params in
+        let llvm_params := build_llvm_params_db params in
         let body := strip_db_lams term_ in
-        let c0 := bind_params_in_ctx empty_ctx params in
+        let c0 := bind_params_in_ctx_db empty_ctx params in
         match compile_db_term_ir c0 body {
             CompileResult.ok ctx_r instrs_r val_r blocks_r funcs_r globals_r =>
                 let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in

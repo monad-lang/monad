@@ -8,6 +8,8 @@ use lang.module
 use lang.parser
 use lang.parser.core
 use lang.parser.combinators
+use lang.typecheck.infer
+use lang.scope
 
 open LLVMType
 open LLVMValue
@@ -20,6 +22,7 @@ open NumSuffix
 open Param
 open Def
 open ModulePath
+open TypeError
 
 @[partial]
 def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
@@ -54,6 +57,64 @@ def mk_i64 (n : I64) : Term :=
 @[partial]
 def mk_lam (name : String) (body : Term) : Term :=
     Term.lam (DebugName.named (Identifier.id name)) (Term.type_ 1) body
+
+/// Empty local scope for type checking
+@[partial]
+def empty_locals : LocalScope := {
+    vars := List.empty,
+    parent := Option.none,
+}
+
+/// Empty list of local types for type checking
+@[partial]
+def empty_local_types : List Term := List.empty
+
+/// Create a scope with builtins for type checking
+@[partial]
+def make_scope_with_builtins : Scope :=
+    let empty_path := ModulePath.mp List.empty in
+    let sd := lang.scope.scope_data_empty in
+    let sd_with_builtins := lang.scope.add_builtins sd in
+    {
+        module_id := empty_path,
+        scope := sd_with_builtins,
+        parent := Option.none,
+    }
+
+/// Type-check a list of Defs. Returns true if all type-check successfully.
+@[partial]
+def typecheck_defs (defs : List Def) : Bool :=
+    match defs {
+        List.empty => true,
+        List.cons def_ rest =>
+            match typecheck_def def_ {
+                true => typecheck_defs rest,
+                false => false,
+            },
+    }
+
+/// Type-check a single Def by checking its term.
+@[partial]
+def typecheck_def (def_ : Def) : Bool :=
+    match def_ {
+        Def.mk name typ term_ constraints attrs =>
+            let scope := make_scope_with_builtins in
+            match type_check term_ typ scope empty_local_types empty_locals {
+                ok tt => true,
+                err e => false,
+            },
+    }
+
+/// Type-check a list of Defs and print results
+@[partial]
+def typecheck_and_print (defs : List Def) : IO I64 :=
+    if typecheck_defs defs then do {
+        println "Type check: PASS";
+        return 0
+    } else do {
+        println "Type check: FAIL";
+        return 1
+    }
 
 @[partial]
 def mk_def (name : String) (body : Term) : Def :=
@@ -230,6 +291,8 @@ def print_help : IO I64 {
     println "Usage: monad-self compile <name>         Compile and run named example";
     println "       monad-self compile-file <path> [name]  Parse and compile a .mo source file";
     println "       monad-self test-all               Compile and run all examples";
+    println "       monad-self typecheck <name>       Type-check a named example";
+    println "       monad-self typecheck-all          Type-check all examples";
     println "       monad-self list                   List available examples";
     return 0
 }
@@ -308,6 +371,30 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
     }
 }
 
+/// Type-check a named example and print results
+@[partial]
+def typecheck_one (name : String) : IO I64 :=
+    match get_example_defs name {
+        Option.some defs => typecheck_and_print defs,
+        Option.none => missing_name name
+    }
+
+/// Type-check all examples
+@[partial]
+def typecheck_all_cont (rest : List String) (r : I64) : IO I64 :=
+    if I64.beq r 0
+    then typecheck_all rest
+    else abort_failure
+
+/// Type-check all examples
+@[partial]
+def typecheck_all (names : List String) : IO I64 :=
+    match names {
+        List.cons name rest =>
+            Monad.bind (typecheck_one name) (typecheck_all_cont rest),
+        List.empty => all_done
+    }
+
 /// Current main entrypoint of self hosted compiler
 def main (args : List String) : IO I64 {
     let cmd := first_arg args;
@@ -326,6 +413,14 @@ def main (args : List String) : IO I64 {
     else if cmd == "test-all" then do {
         println "Running all examples...";
         run_all example_names out_dir
+    }
+    else if cmd == "typecheck" then do {
+        let name := second_arg args;
+        typecheck_one name
+    }
+    else if cmd == "typecheck-all" then do {
+        println "Type-checking all examples...";
+        typecheck_all example_names
     }
     else if cmd == "list" then do {
         println "Available examples:";

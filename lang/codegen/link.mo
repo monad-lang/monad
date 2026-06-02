@@ -6,13 +6,14 @@ use lang.codegen.emit
 
 open LLVMType
 open LLVMValue
-
-/// Generate LLVM IR text from a list of Defs.
-@[partial]
-def compile_defs_to_ir (defs : List DefV0) : String :=
-    let module_ := compile_decls_ir defs in
-    lang.codegen.ir.emit_module module_
-
+open Term
+open Literal
+open Identifier
+open NameRef
+open NumSuffix
+open Param
+open Def
+open ModulePath
 
 /// Build a List String from four strings.
 @[partial]
@@ -23,10 +24,16 @@ def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
 @[partial]
 def empty_str_list : List String := List.empty
 
+/// Generate LLVM IR text from a list of Defs.
+@[partial]
+def compile_defs_to_ir (defs : List Def) : String :=
+    let module_ := compile_db_decls_ir defs in
+    lang.codegen.ir.emit_module module_
+
 /// Full pipeline: compile Defs to IR, write to file, run llc,
 /// compile runtime, link, run the binary, return exit code.
 @[partial]
-def compile_and_run (defs : List DefV0) (output_dir : String) (output_name : String) : IO I64 {
+def compile_and_run (defs : List Def) (output_dir : String) (output_name : String) : IO I64 {
     let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
     let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
     let runtime_obj := String.concat output_dir "/monad_runtime.o";
@@ -45,17 +52,14 @@ def compile_and_run (defs : List DefV0) (output_dir : String) (output_name : Str
 
 @[test]
 def test_link_compile_defs_to_ir : Bool :=
-    let id_val := lang.types.Identifier.id "test" in
-    let x_id := lang.types.Identifier.id "x" in
-    let nid := lang.types.NameRef.nid (lang.types.Identifier.id "I64_add") in
-    let two := lang.types.TermV0.lit (lang.types.LiteralV0.num 2 lang.types.NumSuffix.i64) in
-    let x_var := lang.types.TermV0.var (lang.types.NameRef.nid x_id) in
-    let var_ := lang.types.TermV0.var nid in
-    let app1 := lang.types.TermV0.app var_ x_var in
-    let body := lang.types.TermV0.app app1 two in
-    let param := lang.types.param_many_v0 x_id (lang.types.TermV0.type_ 1) in
-    let term_ := lang.types.TermV0.lam param body in
-    let def_ := lang.types.DefV0.mk (lang.types.ModulePath.mp (List.cons id_val List.empty)) (lang.types.TermV0.type_ 1) term_ List.empty List.empty in
+    let id_val := Identifier.id "test" in
+    let x_id := Identifier.id "x" in
+    let two := Term.lit (Literal.num 2 NumSuffix.i64) in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
+    let body := Term.app (Term.app add_var x_var) two in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk (ModulePath.mp (List.cons id_val List.empty)) (Term.type_ 1) term_ List.empty List.empty in
     let text := compile_defs_to_ir (List.cons def_ List.empty) in
     check_contains text "add i64"
 
