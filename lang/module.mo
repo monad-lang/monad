@@ -104,11 +104,7 @@ def module_path_to_file (mp : ModulePath) : String :=
 
 /// Check if a file exists using native IO
 @[partial]
-def file_exists (path : String) : Bool := 
-    match IO.read_file path {
-        io _ => true,
-        _ => false
-    }
+def file_exists (path : String) : Bool := IO.file_exists path
 
 /// Resolve a module path to a file path, trying different directories
 @[partial]
@@ -148,10 +144,10 @@ def resolve_module_file (mp : ModulePath) : String :=
 @[partial]
 def try_read_module_file (mp : ModulePath) : Option String := 
     let file_path : String := resolve_module_file mp in
-    match IO.read_file file_path {
-        io content => Option.some content,
-        _ => Option.none
-    }
+    if IO.file_exists file_path then
+        Option.some (IO.read_file_sync file_path)
+    else
+        Option.none
 
 /// Load a module by its ModulePath, returning parsed declarations or none
 @[partial]
@@ -306,23 +302,23 @@ def build_scope_with_deps (file_path : String) (mod_name : String) : Option Scop
 /// Build scope and type check a file with its dependencies loaded
 @[partial]
 def typecheck_file_with_deps (file_path : String) (mod_name : String) : Bool := 
-    match build_scope_with_deps file_path mod_name {
-        Option.some scope =>
-            match IO.read_file file_path {
-                io content =>
-                    match parse_all_decls content {
-                        success _ decls =>
-                            let empty_locs : LocalScope := {
-                                vars := List.empty,
-                                parent := Option.none,
-                            } in
-                            typecheck_module_with_scope scope decls empty_locs,
-                        fail _ => false
-                    },
-                _ => false
-            },
-        Option.none => false
-    }
+    if IO.file_exists file_path then
+        let content : String := IO.read_file_sync file_path in
+        match build_scope_with_deps file_path mod_name {
+            Option.some scope =>
+                match parse_all_decls content {
+                    success _ decls =>
+                        let empty_locs : LocalScope := {
+                            vars := List.empty,
+                            parent := Option.none,
+                        } in
+                        typecheck_module_with_scope scope decls empty_locs,
+                    fail _ => false
+                },
+            Option.none => false
+        }
+    else
+        false
 
 /// Type check all declarations in a module with a given scope
 @[partial]

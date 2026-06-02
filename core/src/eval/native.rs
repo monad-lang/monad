@@ -155,6 +155,19 @@ pub fn read_file(terms: Vec<Term>) -> Result<Term, NativeError> {
   Ok(io_term(str(&content)))
 }
 
+pub fn file_exists(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let path = extract_string_at(&terms, 0)?;
+  let exists = std::fs::metadata(&path).is_ok();
+  Ok(bool_to_term(exists))
+}
+
+pub fn read_file_sync(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let path = extract_string_at(&terms, 0)?;
+  let content = std::fs::read_to_string(&path)
+    .map_err(|e| NativeError::Custom(format!("read_file_sync failed: {e}")))?;
+  Ok(str(&content))
+}
+
 pub fn exec_cmd(terms: Vec<Term>) -> Result<Term, NativeError> {
   let cmd = extract_string_at(&terms, 0)?;
   let args_term = terms.get(1).ok_or(NativeError::MissingArgs {
@@ -927,6 +940,8 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("exec_cmd"), s(exec_cmd)),
     (id("write_file"), s(write_file)),
     (id("read_file"), s(read_file)),
+    (id("file_exists"), s(file_exists)),
+    (id("read_file_sync"), s(read_file_sync)),
     (id("fork_io"), sa(fork_io)),
     (id("await_fiber"), sa(await_fiber)),
     (id("cancel_fiber"), sa(cancel_fiber)),
