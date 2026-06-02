@@ -2,6 +2,7 @@ use io
 use lang.types
 use lang.module
 use lang.parser
+use lang.parser.core
 use lang.scope
 use lang.typecheck.infer
 
@@ -9,6 +10,7 @@ open IO
 open types
 open module
 open parser
+open parser.core
 open scope
 open infer
 
