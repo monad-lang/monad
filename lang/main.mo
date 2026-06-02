@@ -7,6 +7,7 @@ use lang.codegen.emit
 use lang.module
 use lang.parser
 use lang.parser.core
+use lang.parser.combinators
 
 open LLVMType
 open LLVMValue
