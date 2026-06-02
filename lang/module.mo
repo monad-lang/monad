@@ -87,7 +87,7 @@ def identifier_to_string (id : Identifier) : String :=
     }
 
 /// Convert a ModulePath to a file path string (without .mo extension)
-@[partial]
+@[terminating]
 def module_path_to_file (mp : ModulePath) : String := 
     match mp {
         ModulePath.mp ids => 
@@ -143,9 +143,9 @@ def resolve_module_file (mp : ModulePath) : String :=
 /// Try to read a module file from disk
 @[partial]
 def try_read_module_file (mp : ModulePath) : Option String := 
-    let file_path : String := resolve_module_file mp in
-    if IO.file_exists file_path then
-        Option.some (IO.read_file_sync file_path)
+    let resolved := resolve_module_file mp in
+    if IO.file_exists resolved then
+        Option.some (IO.read_file_sync resolved)
     else
         Option.none
 
