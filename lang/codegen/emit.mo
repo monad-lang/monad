@@ -173,8 +173,25 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
                 CompileResult.ok ctx1 empty_instrs (LLVMValue.global_ name) empty_blocks empty_funcs (cons_global global empty_globals_list),
         },
     Literal.if_ cond then_ else_ => compile_db_if_ir c cond then_ else_,
-    Literal.match_ scrutinee cases => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+    Literal.match_ scrutinee cases => compile_match_ir c scrutinee cases,
 }
+
+/// Compile a match expression to LLVM IR.
+/// For now, this is a simplified implementation that just compiles the first case body.
+/// A full implementation would check constructor tags and branch accordingly.
+@[partial]
+def compile_match_ir (c : CodegenCtx) (scrutinee : Term) (cases : List MatchCase) : CompileResult :=
+    match cases {
+        List.empty =>
+            // No cases - return void
+            CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+        List.cons first_case rest_cases =>
+            // For now, just compile and return the first case body
+            match first_case {
+                MatchCase.mc name args body =>
+                    compile_db_term_ir c body,
+            },
+    }
 
 type NtvArgs {
     mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (vals : List LLVMValue),

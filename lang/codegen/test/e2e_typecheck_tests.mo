@@ -1650,6 +1650,287 @@ def test_compile_result_option_nat : Bool :=
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "result_option_nat"
 
+/// Test compilation of match on Nat.zero
+@[test]
+def test_compile_match_nat_zero : Bool :=
+    let id := Identifier.id "match_nat_zero" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    // Match on Nat with case for zero
+    let zero_case := MatchCase.mc (Identifier.id "zero") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) in
+    let cases := List.cons zero_case List.empty in
+    let body := Term.lit (Literal.match_ x_var cases) in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "match_nat_zero"
+
+/// Test compilation of match on Nat with zero and succ cases
+@[test]
+def test_compile_match_nat_zero_succ : Bool :=
+    let id := Identifier.id "match_nat_both" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    // Match on Nat with cases for zero and succ
+    let zero_case := MatchCase.mc (Identifier.id "zero") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) in
+    let succ_name := Identifier.id "n" in
+    let succ_case := MatchCase.mc (Identifier.id "succ") (List.cons succ_name List.empty) (Term.lit (Literal.num 1 NumSuffix.i64)) in
+    let cases := List.cons zero_case (List.cons succ_case List.empty) in
+    let body := Term.lit (Literal.match_ x_var cases) in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "match_nat_both"
+
+/// Test compilation of recursive Nat addition
+@[test]
+def test_compile_nat_add : Bool :=
+    let id := Identifier.id "nat_add" in
+    let a_id := Identifier.id "a" in
+    let b_id := Identifier.id "b" in
+    let a_var := Term.var 0 (DebugName.named a_id) in
+    let b_var := Term.var 1 (DebugName.named b_id) in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let succ_con := Con.mk (Identifier.id "succ") nat_typ 1 List.empty in
+    let add_var := Term.var 2 (DebugName.named id) in
+    // nat_add a b = match a {
+    //   zero => b
+    //   succ a' => succ (nat_add a' b)
+    // }
+    let a_zero_case := MatchCase.mc (Identifier.id "zero") List.empty b_var in
+    let a_prime := Identifier.id "a'" in
+    let a_prime_var := Term.var 0 (DebugName.named a_prime) in
+    let recursive_call := Term.app (Term.app add_var a_prime_var) b_var in
+    let succ_result := Term.con (Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some recursive_call) List.empty)) in
+    let a_succ_case := MatchCase.mc (Identifier.id "succ") (List.cons a_prime List.empty) succ_result in
+    let cases := List.cons a_zero_case (List.cons a_succ_case List.empty) in
+    let body := Term.lit (Literal.match_ a_var cases) in
+    let term_ := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) body) in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "nat_add"
+
+/// Test compilation of recursive Nat multiplication
+@[test]
+def test_compile_nat_mul : Bool :=
+    let id := Identifier.id "nat_mul" in
+    let a_id := Identifier.id "a" in
+    let b_id := Identifier.id "b" in
+    let a_var := Term.var 0 (DebugName.named a_id) in
+    let b_var := Term.var 1 (DebugName.named b_id) in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let mul_var := Term.var 2 (DebugName.named id) in
+    // nat_mul a b = match a {
+    //   zero => zero
+    //   succ a' => nat_add b (nat_mul a' b)
+    // }
+    let a_zero_case := MatchCase.mc (Identifier.id "zero") List.empty zero_val in
+    let a_prime := Identifier.id "a'" in
+    let a_prime_var := Term.var 0 (DebugName.named a_prime) in
+    let recursive_mul := Term.app (Term.app mul_var a_prime_var) b_var in
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "nat_add")) in
+    let add_result := Term.app (Term.app add_var b_var) recursive_mul in
+    let a_succ_case := MatchCase.mc (Identifier.id "succ") (List.cons a_prime List.empty) add_result in
+    let cases := List.cons a_zero_case (List.cons a_succ_case List.empty) in
+    let body := Term.lit (Literal.match_ a_var cases) in
+    let term_ := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) body) in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "nat_mul"
+
+/// Test compilation of Nat predecessor function using match
+@[test]
+def test_compile_nat_pred : Bool :=
+    let id := Identifier.id "nat_pred" in
+    let n_id := Identifier.id "n" in
+    let n_var := Term.var 0 (DebugName.named n_id) in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    // nat_pred n = match n {
+    //   zero => zero
+    //   succ n' => n'
+    // }
+    let zero_case := MatchCase.mc (Identifier.id "zero") List.empty zero_val in
+    let n_prime := Identifier.id "n'" in
+    let n_prime_var := Term.var 0 (DebugName.named n_prime) in
+    let succ_case := MatchCase.mc (Identifier.id "succ") (List.cons n_prime List.empty) n_prime_var in
+    let cases := List.cons zero_case (List.cons succ_case List.empty) in
+    let body := Term.lit (Literal.match_ n_var cases) in
+    let term_ := Term.lam (DebugName.named n_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "nat_pred"
+
+/// Test compilation of String.beq (boolean equality)
+@[test]
+def test_compile_string_beq : Bool :=
+    let id := Identifier.id "string_beq_test" in
+    let s1 := Term.lit (Literal.str "hello") in
+    let s2 := Term.lit (Literal.str "world") in
+    let beq_var := Term.var 0 (DebugName.named (Identifier.id "String_beq")) in
+    let body := Term.app (Term.app beq_var s1) s2 in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "string_beq_test"
+
+/// Test compilation of String.concat
+@[test]
+def test_compile_string_concat : Bool :=
+    let id := Identifier.id "string_concat_test" in
+    let s1 := Term.lit (Literal.str "hello") in
+    let s2 := Term.lit (Literal.str "world") in
+    let concat_var := Term.var 0 (DebugName.named (Identifier.id "String_concat")) in
+    let body := Term.app (Term.app concat_var s1) s2 in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "string_concat_test"
+
+/// Test compilation of List.is_empty using match
+@[test]
+def test_compile_list_is_empty : Bool :=
+    let id := Identifier.id "list_is_empty" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let list_name := Identifier.id "List" in
+    let list_typ := ModulePath.mp (List.cons list_name List.empty) in
+    // Match on List with cases for empty and cons
+    let empty_case := MatchCase.mc (Identifier.id "empty") List.empty (Term.lit (Literal.num 1 NumSuffix.i64)) in
+    let head_name := Identifier.id "head" in
+    let tail_name := Identifier.id "tail" in
+    let cons_case := MatchCase.mc (Identifier.id "cons") (List.cons head_name (List.cons tail_name List.empty)) (Term.lit (Literal.num 0 NumSuffix.i64)) in
+    let cases := List.cons empty_case (List.cons cons_case List.empty) in
+    let body := Term.lit (Literal.match_ x_var cases) in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "list_is_empty"
+
+/// Test compilation of Option.is_some using match
+@[test]
+def test_compile_option_is_some : Bool :=
+    let id := Identifier.id "option_is_some" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let option_name := Identifier.id "Option" in
+    let option_typ := ModulePath.mp (List.cons option_name List.empty) in
+    // Match on Option with cases for some and none
+    let some_name := Identifier.id "val" in
+    let some_case := MatchCase.mc (Identifier.id "some") (List.cons some_name List.empty) (Term.lit (Literal.num 1 NumSuffix.i64)) in
+    let none_case := MatchCase.mc (Identifier.id "none") List.empty (Term.lit (Literal.num 0 NumSuffix.i64)) in
+    let cases := List.cons some_case (List.cons none_case List.empty) in
+    let body := Term.lit (Literal.match_ x_var cases) in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "option_is_some"
+
+/// Test compilation of Monad.pure (IO)
+@[test]
+def test_compile_io_pure : Bool :=
+    let id := Identifier.id "io_pure_test" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let pure_var := Term.var 0 (DebugName.named (Identifier.id "IO_pure")) in
+    let body := Term.app pure_var x_var in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "io_pure_test"
+
+/// Test compilation of Monad.bind (IO)
+@[test]
+def test_compile_io_bind : Bool :=
+    let id := Identifier.id "io_bind_test" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let bind_var := Term.var 0 (DebugName.named (Identifier.id "IO_bind")) in
+    let io_var := Term.var 1 (DebugName.named (Identifier.id "io_val")) in
+    let body := Term.app (Term.app bind_var io_var) x_var in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "io_bind_test"
+
 @[partial]
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
