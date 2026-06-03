@@ -940,6 +940,485 @@ def test_compile_triple : Bool :=
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "triple"
 
+/// Test compilation of nested list constructors (List of Lists)
+@[test]
+def test_compile_nested_list : Bool :=
+    let id := Identifier.id "nested_list" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let list_name := Identifier.id "List" in
+    let list_typ := ModulePath.mp (List.cons list_name List.empty) in
+    let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
+    let empty_val := Term.con empty_con in
+    let inner_cons := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some x_var) (List.cons (Option.some empty_val) List.empty)) in
+    let inner_list := Term.con inner_cons in
+    let outer_cons := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some inner_list) (List.cons (Option.some empty_val) List.empty)) in
+    let body := Term.con outer_cons in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "nested_list"
+
+/// Test compilation of chained native function applications
+@[test]
+def test_compile_chained_natives : Bool :=
+    let id := Identifier.id "chained_ops" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
+    let mul_var := Term.var 0 (DebugName.named (Identifier.id "I64_mul")) in
+    let sub_var := Term.var 0 (DebugName.named (Identifier.id "I64_sub")) in
+    // ((x + 5) * 10) - 20
+    let five := Term.lit (Literal.num 5 NumSuffix.i64) in
+    let ten := Term.lit (Literal.num 10 NumSuffix.i64) in
+    let twenty := Term.lit (Literal.num 20 NumSuffix.i64) in
+    let add_step := Term.app (Term.app add_var x_var) five in
+    let mul_step := Term.app (Term.app mul_var add_step) ten in
+    let body := Term.app (Term.app sub_var mul_step) twenty in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "add i64" && check_contains text "mul i64" && check_contains text "sub i64"
+
+/// Test compilation of mixed boolean and arithmetic operations
+@[test]
+def test_compile_mixed_bool_arith : Bool :=
+    let id := Identifier.id "mixed_ops" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let eq_var := Term.var 0 (DebugName.named (Identifier.id "I64_eq")) in
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
+    let ten := Term.lit (Literal.num 10 NumSuffix.i64) in
+    let five := Term.lit (Literal.num 5 NumSuffix.i64) in
+    let zero := Term.lit (Literal.num 0 NumSuffix.i64) in
+    // if x == 0 then 10 else (x + 5)
+    let cond := Term.app (Term.app eq_var x_var) zero in
+    let add_result := Term.app (Term.app add_var x_var) five in
+    let then_val := ten in
+    let else_val := add_result in
+    let body := Term.lit (Literal.if_ cond then_val else_val) in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "br i1" && check_contains text "add i64"
+
+/// Test compilation of Result with both ok and err cases
+@[test]
+def test_compile_result_both : Bool :=
+    let id := Identifier.id "result_both" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let result_name := Identifier.id "Result" in
+    let result_typ := ModulePath.mp (List.cons result_name List.empty) in
+    let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some x_var) List.empty) in
+    let ok_val := Term.con ok_con in
+    let bool_name := Identifier.id "Bool" in
+    let bool_typ := ModulePath.mp (List.cons bool_name List.empty) in
+    let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
+    let true_val := Term.con true_con in
+    let err_con := Con.mk (Identifier.id "err") result_typ 1 (List.cons (Option.some true_val) List.empty) in
+    let err_val := Term.con err_con in
+    // Create a pair of result values
+    let pair_name := Identifier.id "Pair" in
+    let pair_typ := ModulePath.mp (List.cons pair_name List.empty) in
+    let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some ok_val) (List.cons (Option.some err_val) List.empty)) in
+    let body := Term.con pair_con in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "result_both"
+
+/// Test compilation of deeply nested if-then-else with arithmetic
+@[test]
+def test_compile_deeply_nested_if : Bool :=
+    let id := Identifier.id "deep_nested_if" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let eq_var := Term.var 0 (DebugName.named (Identifier.id "I64_eq")) in
+    let lt_var := Term.var 0 (DebugName.named (Identifier.id "I64_lt")) in
+    let gt_var := Term.var 0 (DebugName.named (Identifier.id "I64_gt")) in
+    let zero := Term.lit (Literal.num 0 NumSuffix.i64) in
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let ten := Term.lit (Literal.num 10 NumSuffix.i64) in
+    // if x == 0 then 1 else (if x < 0 then 10 else (if x > 0 then 100 else 50))
+    let cond1 := Term.app (Term.app eq_var x_var) zero in
+    let cond2 := Term.app (Term.app lt_var x_var) zero in
+    let cond3 := Term.app (Term.app gt_var x_var) zero in
+    let inner_else := Term.lit (Literal.num 50 NumSuffix.i64) in
+    let inner_if := Term.lit (Literal.if_ cond3 ten inner_else) in
+    let middle_else := inner_if in
+    let middle_if := Term.lit (Literal.if_ cond2 ten middle_else) in
+    let body := Term.lit (Literal.if_ cond1 one middle_if) in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    // Should contain multiple branch instructions
+    check_contains text "br i1"
+
+/// Test compilation of lambda with multiple parameters applied to arguments
+@[test]
+def test_compile_lambda_multi_arg : Bool :=
+    let id := Identifier.id "lam_multi_arg" in
+    let x_id := Identifier.id "x" in
+    let y_id := Identifier.id "y" in
+    let z_id := Identifier.id "z" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let y_var := Term.var 1 (DebugName.named y_id) in
+    let z_var := Term.var 2 (DebugName.named z_id) in
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
+    // Create lambda that takes 3 args and adds them all
+    let add_xy := Term.app (Term.app add_var x_var) y_var in
+    let body := Term.app (Term.app add_var add_xy) z_var in
+    let lam := Term.lam (DebugName.named x_id) (Term.type_ 1) (
+        Term.lam (DebugName.named y_id) (Term.type_ 1) (
+        Term.lam (DebugName.named z_id) (Term.type_ 1) body)) in
+    // Apply the lambda to concrete values
+    let five := Term.lit (Literal.num 5 NumSuffix.i64) in
+    let three := Term.lit (Literal.num 3 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 2 NumSuffix.i64) in
+    let lam_5 := Term.app lam five in
+    let lam_5_3 := Term.app lam_5 three in
+    let result := Term.app lam_5_3 two in
+    let term_ := result in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "lam_multi_arg"
+
+/// Test compilation of forall type
+@[test]
+def test_compile_forall_type : Bool :=
+    let id := Identifier.id "forall_test" in
+    let a_id := Identifier.id "A" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    // forall A. A -> A (identity function)
+    let forall_body := Term.lam (DebugName.named x_id) (Term.type_ 1) x_var in
+    let term_ := Term.forall (DebugName.named a_id) (Term.type_ 1) forall_body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "forall_test"
+
+/// Test compilation of pi type
+@[test]
+def test_compile_pi_type : Bool :=
+    let id := Identifier.id "pi_test" in
+    let a_id := Identifier.id "A" in
+    let b_id := Identifier.id "B" in
+    let a_var := Term.var 0 (DebugName.named a_id) in
+    let b_var := Term.var 0 (DebugName.named b_id) in
+    // Pi A B. (A -> B -> A)
+    let pi_body := Term.forall (DebugName.named b_id) (Term.type_ 1) (
+        Term.lam (DebugName.unnamed) (Term.type_ 1) a_var) in
+    let term_ := Term.pi a_var pi_body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "pi_test"
+
+/// Test compilation of type_ (universe) term
+@[test]
+def test_compile_type_universe : Bool :=
+    let id := Identifier.id "type_universe" in
+    let term_ := Term.type_ 1 in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 2)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "type_universe"
+
+/// Test compilation of hole term
+@[test]
+def test_compile_hole : Bool :=
+    let id := Identifier.id "hole_test" in
+    let term_ := Term.hole in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "hole_test"
+
+/// Test compilation of partial application (currying)
+@[test]
+def test_compile_partial_application : Bool :=
+    let id := Identifier.id "partial_app" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
+    // Create a partially applied function: add 5 (returns a function that takes one arg)
+    let five := Term.lit (Literal.num 5 NumSuffix.i64) in
+    let partial_add := Term.app add_var five in
+    let body := Term.app partial_add x_var in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "partial_app"
+
+/// Test compilation of multiple definitions with dependencies
+@[test]
+def test_compile_defs_with_deps : Bool :=
+    let helper_id := Identifier.id "helper" in
+    let main_id := Identifier.id "main_with_helper" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
+    let ten := Term.lit (Literal.num 10 NumSuffix.i64) in
+    // helper adds 10 to its argument
+    let helper_body := Term.app (Term.app add_var x_var) ten in
+    let helper_term := Term.lam (DebugName.named x_id) (Term.type_ 1) helper_body in
+    let helper_def := Def.mk
+        (ModulePath.mp (List.cons helper_id List.empty))
+        (Term.type_ 1)
+        helper_term
+        List.empty
+        List.empty in
+    // main calls helper with 5
+    let five := Term.lit (Literal.num 5 NumSuffix.i64) in
+    let helper_call := Term.app (Term.var 0 (DebugName.named helper_id)) five in
+    let main_def := Def.mk
+        (ModulePath.mp (List.cons main_id List.empty))
+        (Term.type_ 1)
+        helper_call
+        List.empty
+        List.empty in
+    let defs := List.cons helper_def (List.cons main_def List.empty) in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir defs in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "helper" && check_contains text "main_with_helper"
+
+/// Test compilation of match expression with multiple cases
+@[test]
+def test_compile_match_multiple_cases : Bool :=
+    let id := Identifier.id "match_multi" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let bool_name := Identifier.id "Bool" in
+    let bool_typ := ModulePath.mp (List.cons bool_name List.empty) in
+    let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
+    let false_con := Con.mk (Identifier.id "false") bool_typ 0 List.empty in
+    // Match on bool with different return values
+    let true_case := MatchCase.mc (Identifier.id "true") List.empty (Term.lit (Literal.num 100 NumSuffix.i64)) in
+    let false_case := MatchCase.mc (Identifier.id "false") List.empty (Term.lit (Literal.num 200 NumSuffix.i64)) in
+    let cases := List.cons true_case (List.cons false_case List.empty) in
+    let body := Term.lit (Literal.match_ x_var cases) in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "match_multi"
+
+/// Test compilation of comparison operators (simplified version)
+@[test]
+def test_compile_comparison_ops : Bool :=
+    let id := Identifier.id "comparison_ops" in
+    let x_id := Identifier.id "x" in
+    let y_id := Identifier.id "y" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let y_var := Term.var 1 (DebugName.named y_id) in
+    // Use unique DebugNames for each operator
+    let eq_var := Term.var 0 (DebugName.named (Identifier.id "I64_eq")) in
+    let body := Term.app (Term.app eq_var x_var) y_var in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) (Term.lam (DebugName.named y_id) (Term.type_ 1) body) in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "comparison_ops"
+
+/// Test compilation of arithmetic operators (simplified version)
+@[test]
+def test_compile_arithmetic_ops : Bool :=
+    let id := Identifier.id "arithmetic_ops" in
+    let x_id := Identifier.id "x" in
+    let y_id := Identifier.id "y" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let y_var := Term.var 1 (DebugName.named y_id) in
+    // Use unique DebugNames for each operator
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
+    let body := Term.app (Term.app add_var x_var) y_var in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) (Term.lam (DebugName.named y_id) (Term.type_ 1) body) in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "arithmetic_ops"
+
+/// Test compilation of recursive Fibonacci function
+@[test]
+def test_compile_fibonacci : Bool :=
+    let id := Identifier.id "fibonacci" in
+    let n_id := Identifier.id "n" in
+    let n_var := Term.var 0 (DebugName.named n_id) in
+    let zero := Term.lit (Literal.num 0 NumSuffix.i64) in
+    let one := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let two := Term.lit (Literal.num 2 NumSuffix.i64) in
+    let eq_var := Term.var 0 (DebugName.named (Identifier.id "I64_eq")) in
+    let lt_var := Term.var 0 (DebugName.named (Identifier.id "I64_lt")) in
+    let sub_var := Term.var 0 (DebugName.named (Identifier.id "I64_sub")) in
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
+    let fib_var := Term.var 1 (DebugName.named id) in
+    // if n < 2 then n else fib(n-1) + fib(n-2)
+    let cond := Term.app (Term.app lt_var n_var) two in
+    let n_minus_1 := Term.app (Term.app sub_var n_var) one in
+    let n_minus_2 := Term.app (Term.app sub_var n_var) two in
+    let fib_n1 := Term.app fib_var n_minus_1 in
+    let fib_n2 := Term.app fib_var n_minus_2 in
+    let sum := Term.app (Term.app add_var fib_n1) fib_n2 in
+    let body := Term.lit (Literal.if_ cond n_var sum) in
+    let term_ := Term.lam (DebugName.named n_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "fibonacci"
+
+/// Test compilation of multiple nested lists (List (List (List A)))
+@[test]
+def test_compile_triple_nested_list : Bool :=
+    let id := Identifier.id "triple_nested" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let list_name := Identifier.id "List" in
+    let list_typ := ModulePath.mp (List.cons list_name List.empty) in
+    let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
+    let empty_val := Term.con empty_con in
+    // Innermost list: [x]
+    let inner_cons := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some x_var) (List.cons (Option.some empty_val) List.empty)) in
+    let inner_list := Term.con inner_cons in
+    // Middle list: [[x]]
+    let middle_cons := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some inner_list) (List.cons (Option.some empty_val) List.empty)) in
+    let middle_list := Term.con middle_cons in
+    // Outer list: [[[x]]]
+    let outer_cons := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some middle_list) (List.cons (Option.some empty_val) List.empty)) in
+    let body := Term.con outer_cons in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "triple_nested"
+
+/// Test compilation with all available constructors (Bool, List, Option, Pair, Result)
+@[test]
+def test_compile_all_constructors : Bool :=
+    let id := Identifier.id "all_ctors" in
+    // Create one of each constructor type
+    let bool_name := Identifier.id "Bool" in
+    let bool_typ := ModulePath.mp (List.cons bool_name List.empty) in
+    let true_con := Con.mk (Identifier.id "true") bool_typ 0 List.empty in
+    let true_val := Term.con true_con in
+    
+    let list_name := Identifier.id "List" in
+    let list_typ := ModulePath.mp (List.cons list_name List.empty) in
+    let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
+    let empty_val := Term.con empty_con in
+    
+    let option_name := Identifier.id "Option" in
+    let option_typ := ModulePath.mp (List.cons option_name List.empty) in
+    let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some true_val) List.empty) in
+    let some_val := Term.con some_con in
+    
+    let pair_name := Identifier.id "Pair" in
+    let pair_typ := ModulePath.mp (List.cons pair_name List.empty) in
+    let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some empty_val) (List.cons (Option.some some_val) List.empty)) in
+    let pair_val := Term.con pair_con in
+    
+    let result_name := Identifier.id "Result" in
+    let result_typ := ModulePath.mp (List.cons result_name List.empty) in
+    let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some pair_val) List.empty) in
+    let body := Term.con ok_con in
+    
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        body
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "all_ctors"
+
 @[partial]
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
