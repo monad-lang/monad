@@ -1419,6 +1419,237 @@ def test_compile_all_constructors : Bool :=
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "all_ctors"
 
+/// Test compilation of Nat.zero constructor
+@[test]
+def test_compile_nat_zero : Bool :=
+    let id := Identifier.id "nat_zero" in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let body := Term.con zero_con in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "nat_zero"
+
+/// Test compilation of Nat.succ constructor
+@[test]
+def test_compile_nat_succ : Bool :=
+    let id := Identifier.id "nat_succ" in
+    let x_id := Identifier.id "x" in
+    let x_var := Term.var 0 (DebugName.named x_id) in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let succ_con := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some x_var) List.empty) in
+    let body := Term.con succ_con in
+    let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "nat_succ"
+
+/// Test compilation of nested Nat constructors (succ(succ(zero)))
+@[test]
+def test_compile_nested_nat : Bool :=
+    let id := Identifier.id "nested_nat" in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let succ_con1 := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some zero_val) List.empty) in
+    let succ_val1 := Term.con succ_con1 in
+    let succ_con2 := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some succ_val1) List.empty) in
+    let body := Term.con succ_con2 in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "nested_nat"
+
+/// Test compilation of complex nested constructors (List of Option of Nat)
+@[test]
+def test_compile_list_option_nat : Bool :=
+    let id := Identifier.id "list_option_nat" in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let succ_con := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some zero_val) List.empty) in
+    let one_val := Term.con succ_con in
+    let option_name := Identifier.id "Option" in
+    let option_typ := ModulePath.mp (List.cons option_name List.empty) in
+    let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some one_val) List.empty) in
+    let some_nat := Term.con some_con in
+    let none_con := Con.mk (Identifier.id "none") option_typ 0 List.empty in
+    let none_nat := Term.con none_con in
+    let list_name := Identifier.id "List" in
+    let list_typ := ModulePath.mp (List.cons list_name List.empty) in
+    let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
+    let empty_val := Term.con empty_con in
+    let cons_con1 := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some some_nat) (List.cons (Option.some empty_val) List.empty)) in
+    let cons_val1 := Term.con cons_con1 in
+    let cons_con2 := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some none_nat) (List.cons (Option.some cons_val1) List.empty)) in
+    let body := Term.con cons_con2 in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "list_option_nat"
+
+/// Test compilation of deeply nested Nat (succ(succ(succ(zero))))
+@[test]
+def test_compile_nat_three : Bool :=
+    let id := Identifier.id "nat_three" in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let succ_con1 := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some zero_val) List.empty) in
+    let one_val := Term.con succ_con1 in
+    let succ_con2 := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some one_val) List.empty) in
+    let two_val := Term.con succ_con2 in
+    let succ_con3 := Con.mk (Identifier.id "succ") nat_typ 1 (List.cons (Option.some two_val) List.empty) in
+    let body := Term.con succ_con3 in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "nat_three"
+
+/// Test compilation of Option containing List of Nat
+@[test]
+def test_compile_option_list_nat : Bool :=
+    let id := Identifier.id "option_list_nat" in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let list_name := Identifier.id "List" in
+    let list_typ := ModulePath.mp (List.cons list_name List.empty) in
+    let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
+    let empty_val := Term.con empty_con in
+    let cons_con := Con.mk (Identifier.id "cons") list_typ 2 (List.cons (Option.some zero_val) (List.cons (Option.some empty_val) List.empty)) in
+    let list_nat := Term.con cons_con in
+    let option_name := Identifier.id "Option" in
+    let option_typ := ModulePath.mp (List.cons option_name List.empty) in
+    let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some list_nat) List.empty) in
+    let body := Term.con some_con in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "option_list_nat"
+
+/// Test compilation of Pair of Nat and List
+@[test]
+def test_compile_pair_nat_list : Bool :=
+    let id := Identifier.id "pair_nat_list" in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let list_name := Identifier.id "List" in
+    let list_typ := ModulePath.mp (List.cons list_name List.empty) in
+    let empty_con := Con.mk (Identifier.id "empty") list_typ 0 List.empty in
+    let empty_val := Term.con empty_con in
+    let pair_name := Identifier.id "Pair" in
+    let pair_typ := ModulePath.mp (List.cons pair_name List.empty) in
+    let pair_con := Con.mk (Identifier.id "pair") pair_typ 2 (List.cons (Option.some zero_val) (List.cons (Option.some empty_val) List.empty)) in
+    let body := Term.con pair_con in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "pair_nat_list"
+
+/// Test compilation of Result with Nat values
+@[test]
+def test_compile_result_nat : Bool :=
+    let id := Identifier.id "result_nat" in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let result_name := Identifier.id "Result" in
+    let result_typ := ModulePath.mp (List.cons result_name List.empty) in
+    let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some zero_val) List.empty) in
+    let body := Term.con ok_con in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "result_nat"
+
+/// Test compilation of nested Result (Result (Option Nat))
+@[test]
+def test_compile_result_option_nat : Bool :=
+    let id := Identifier.id "result_option_nat" in
+    let nat_name := Identifier.id "Nat" in
+    let nat_typ := ModulePath.mp (List.cons nat_name List.empty) in
+    let zero_con := Con.mk (Identifier.id "zero") nat_typ 0 List.empty in
+    let zero_val := Term.con zero_con in
+    let option_name := Identifier.id "Option" in
+    let option_typ := ModulePath.mp (List.cons option_name List.empty) in
+    let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some zero_val) List.empty) in
+    let some_val := Term.con some_con in
+    let result_name := Identifier.id "Result" in
+    let result_typ := ModulePath.mp (List.cons result_name List.empty) in
+    let ok_con := Con.mk (Identifier.id "ok") result_typ 1 (List.cons (Option.some some_val) List.empty) in
+    let body := Term.con ok_con in
+    let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
+    let def_ := Def.mk
+        (ModulePath.mp (List.cons id List.empty))
+        (Term.type_ 1)
+        term_
+        List.empty
+        List.empty in
+    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
+    let text := lang.codegen.ir.emit_module mod_ in
+    check_contains text "result_option_nat"
+
 @[partial]
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
