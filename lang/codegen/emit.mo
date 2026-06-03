@@ -96,6 +96,9 @@ def lookup_native (name : String) : Option NativeOp :=
     else if String.beq name "I64_mul" then Option.some NativeOp.op_mul
     else if String.beq name "I64_div" then Option.some NativeOp.op_sdiv
     else if String.beq name "I64_eq" then Option.some NativeOp.op_eq
+    else if String.beq name "I64_lt" then Option.some NativeOp.op_lt
+    else if String.beq name "I64_gt" then Option.some NativeOp.op_gt
+    else if String.beq name "I64_ne" then Option.some NativeOp.op_ne
     else Option.none
 
 @[partial]
@@ -106,7 +109,13 @@ def compile_native_val (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) : LLV
         NativeOp.op_mul => LLVMValue.mul lhs rhs,
         NativeOp.op_sdiv => LLVMValue.sdiv lhs rhs,
         NativeOp.op_eq => LLVMValue.icmp_eq lhs rhs,
+        NativeOp.op_ne => LLVMValue.icmp_ne lhs rhs,
+        NativeOp.op_lt => LLVMValue.icmp_slt lhs rhs,
+        NativeOp.op_gt => LLVMValue.icmp_sgt lhs rhs,
     }
+
+@[partial]
+def i64_ne (a : I64) (b : I64) : Bool := not (a == b)
 
 @[partial]
 def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : LLVMValue :=
@@ -116,6 +125,9 @@ def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : LLVMValue :=
         NativeOp.op_mul => LLVMValue.int_ (n1 * n2),
         NativeOp.op_sdiv => LLVMValue.int_ (n1 / n2),
         NativeOp.op_eq => LLVMValue.bool_ (n1 == n2),
+        NativeOp.op_ne => LLVMValue.bool_ (i64_ne n1 n2),
+        NativeOp.op_lt => LLVMValue.bool_ (n1 < n2),
+        NativeOp.op_gt => LLVMValue.bool_ (n1 > n2),
     }
 
 @[partial]
@@ -138,6 +150,9 @@ def is_llvm_constant (val : LLVMValue) : Bool := match val {
     LLVMValue.mul lhs rhs => false,
     LLVMValue.sdiv lhs rhs => false,
     LLVMValue.icmp_eq lhs rhs => false,
+    LLVMValue.icmp_ne lhs rhs => false,
+    LLVMValue.icmp_slt lhs rhs => false,
+    LLVMValue.icmp_sgt lhs rhs => false,
     LLVMValue.zext val from_ty to_ty => false,
     LLVMValue.trunc val from_ty to_ty => false,
     LLVMValue.phi pairs => false,
@@ -455,6 +470,9 @@ def extract_lit_from_val (val : LLVMValue) : Option I64 := match val {
     LLVMValue.mul lhs rhs => Option.none,
     LLVMValue.sdiv lhs rhs => Option.none,
     LLVMValue.icmp_eq lhs rhs => Option.none,
+    LLVMValue.icmp_ne lhs rhs => Option.none,
+    LLVMValue.icmp_slt lhs rhs => Option.none,
+    LLVMValue.icmp_sgt lhs rhs => Option.none,
     LLVMValue.zext val from_ty to_ty => Option.none,
     LLVMValue.trunc val from_ty to_ty => Option.none,
     LLVMValue.phi pairs => Option.none,

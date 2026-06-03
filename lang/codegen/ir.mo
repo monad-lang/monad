@@ -18,7 +18,7 @@ type PhiPair {
 }
 
 type NativeOp {
-    op_add, op_sub, op_mul, op_sdiv, op_eq,
+    op_add, op_sub, op_mul, op_sdiv, op_eq, op_lt, op_gt, op_ne,
 }
 
 type LLVMValue {
@@ -35,6 +35,9 @@ type LLVMValue {
     mul (lhs : LLVMValue) (rhs : LLVMValue),
     sdiv (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_eq (lhs : LLVMValue) (rhs : LLVMValue),
+    icmp_ne (lhs : LLVMValue) (rhs : LLVMValue),
+    icmp_slt (lhs : LLVMValue) (rhs : LLVMValue),
+    icmp_sgt (lhs : LLVMValue) (rhs : LLVMValue),
     zext (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     trunc (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     phi (pairs : List PhiPair),
@@ -154,6 +157,9 @@ def show_llvm_value (val : LLVMValue) : String := match val {
     mul lhs rhs => show_arith "mul" lhs rhs,
     sdiv lhs rhs => show_arith "sdiv" lhs rhs,
     icmp_eq lhs rhs => show_arith "icmp eq" lhs rhs,
+    icmp_ne lhs rhs => show_arith "icmp ne" lhs rhs,
+    icmp_slt lhs rhs => show_arith "icmp slt" lhs rhs,
+    icmp_sgt lhs rhs => show_arith "icmp sgt" lhs rhs,
     zext v from_ty to_ty => show_ext "zext" v from_ty to_ty,
     trunc v from_ty to_ty => show_ext "trunc" v from_ty to_ty,
     phi pairs => show_phi pairs,
@@ -202,6 +208,9 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     mul x y => i64_,
     sdiv x y => i64_,
     icmp_eq x y => i1_,
+    icmp_ne x y => i1_,
+    icmp_slt x y => i1_,
+    icmp_sgt x y => i1_,
     zext x y to_ty => to_ty,
     trunc x y to_ty => to_ty,
     phi x => i64_,
