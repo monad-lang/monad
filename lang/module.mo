@@ -349,6 +349,54 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : Option
 def load_module_with_dependencies_default (mp : ModulePath) : Option Scope := 
     load_module_with_dependencies "" mp
 
+/// Load all declarations for a module and its transitive dependencies.
+/// Returns Option (List Decl) where the list contains all declarations from
+/// the module and all its dependencies, suitable for compilation.
+@[partial]
+def load_module_decls_with_dependencies (base_dir : String) (mp : ModulePath) : Option (List Decl) := 
+    // First load the main module's declarations
+    match load_module_decls base_dir mp {
+        Option.some main_decls =>
+            // Get the actual file path for this module to determine its directory
+            let resolved_path : Option String := resolve_module_file base_dir mp in
+            let module_base_dir : String := 
+                match resolved_path {
+                    Option.some fp => extract_directory fp,
+                    Option.none => base_dir
+                } in
+            // Extract all transitive dependencies
+            let all_deps : List ModulePath := extract_all_dependencies module_base_dir main_decls in
+            // Load all dependency declarations
+            let dep_decls : List Decl := load_dependency_decls module_base_dir all_deps List.empty in
+            // Combine: dependencies first, then main module
+            let all_decls : List Decl := list_append dep_decls main_decls in
+            Option.some all_decls,
+        Option.none => Option.none
+    }
+
+/// Load declarations for a list of module paths
+@[partial]
+def load_dependency_decls (base_dir : String) (deps : List ModulePath) (acc : List Decl) : List Decl := 
+    match deps {
+        List.empty => acc,
+        List.cons mp rest =>
+            // Try to resolve and load each dependency
+            match load_module_decls base_dir mp {
+                Option.some decls => load_dependency_decls base_dir rest (list_append decls acc),
+                Option.none => 
+                    // If not found with base_dir, try with empty base_dir (global search)
+                    match load_module_decls_default mp {
+                        Option.some decls => load_dependency_decls base_dir rest (list_append decls acc),
+                        Option.none => load_dependency_decls base_dir rest acc
+                    }
+            }
+    }
+
+/// Load all declarations for a module and its dependencies with default base directory
+@[partial]
+def load_module_decls_with_dependencies_default (mp : ModulePath) : Option (List Decl) := 
+    load_module_decls_with_dependencies "" mp
+
 /// Load scope data for a list of module paths, with base directory for resolution
 /// Each module is loaded once, and we try to resolve it from the base_dir
 @[partial]

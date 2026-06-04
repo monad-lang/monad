@@ -99,6 +99,10 @@ def lookup_native (name : String) : Option NativeOp :=
     else if String.beq name "I64_lt" then Option.some NativeOp.op_lt
     else if String.beq name "I64_gt" then Option.some NativeOp.op_gt
     else if String.beq name "I64_ne" then Option.some NativeOp.op_ne
+    else if String.beq name "monad_print_str" then Option.some NativeOp.op_print_str
+    else if String.beq name "monad_read_file" then Option.some NativeOp.op_read_file
+    else if String.beq name "monad_write_file" then Option.some NativeOp.op_write_file
+    else if String.beq name "monad_file_exists" then Option.some NativeOp.op_file_exists
     else Option.none
 
 @[partial]
@@ -797,10 +801,13 @@ def runtime_declarations : List LLVMDeclaration :=
     let d2 := mk_decl "monad_retain" (cons_str "i8*" empty_strs) "void" in
     let d3 := mk_decl "monad_release" (cons_str "i8*" empty_strs) "void" in
     let d4 := mk_decl "monad_print_str" (cons_str "i8*" empty_strs) "void" in
-    let d5 := mk_decl "alloc_closure" (cons_str "i8*" (cons_str "i64" (cons_str "i64" empty_strs))) "%Closure*" in
-    let d6 := mk_decl "alloc_constructor" (cons_str "i64" (cons_str "i64" empty_strs)) "%Constructor*" in
-    let d7 := mk_decl "alloc_string" (cons_str "i8*" (cons_str "i64" empty_strs)) "%StringObj*" in
-    cons_decl d1 (cons_decl d2 (cons_decl d3 (cons_decl d4 (cons_decl d5 (cons_decl d6 (cons_decl d7 empty_decls))))))
+    let d5 := mk_decl "monad_read_file" (cons_str "i8*" empty_strs) "i8*" in
+    let d6 := mk_decl "monad_write_file" (cons_str "i8*" (cons_str "i8*" (cons_str "i64" empty_strs))) "void" in
+    let d7 := mk_decl "monad_file_exists" (cons_str "i8*" empty_strs) "i8*" in
+    let d8 := mk_decl "alloc_closure" (cons_str "i8*" (cons_str "i64" (cons_str "i64" empty_strs))) "%Closure*" in
+    let d9 := mk_decl "alloc_constructor" (cons_str "i64" (cons_str "i64" empty_strs)) "%Constructor*" in
+    let d10 := mk_decl "alloc_string" (cons_str "i8*" (cons_str "i64" empty_strs)) "%StringObj*" in
+    cons_decl d1 (cons_decl d2 (cons_decl d3 (cons_decl d4 (cons_decl d5 (cons_decl d6 (cons_decl d7 (cons_decl d8 (cons_decl d9 (cons_decl d10 empty_decls)))))))))
 
 @[partial]
 def empty_funcs : List LLVMFunction := List.empty

@@ -95,6 +95,38 @@ void monad_print_str(char* s) {
     if (s) printf("%s\n", s);
 }
 
+char* monad_read_file(char* path) {
+    if (!path) return NULL;
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size < 0) { fclose(f); return NULL; }
+    char* buf = (char*)malloc(size + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1, size, f);
+    fclose(f);
+    if (got != (size_t)size) { free(buf); return NULL; }
+    buf[size] = '\0';
+    return buf;
+}
+
+void monad_write_file(char* path, char* data, int64_t len) {
+    if (!path || !data || len < 0) return;
+    FILE* f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(data, 1, (size_t)len, f);
+    fclose(f);
+}
+
+char* monad_file_exists(char* path) {
+    if (!path) return NULL;
+    FILE* f = fopen(path, "rb");
+    if (f) { fclose(f); return (char*)"1"; }
+    return NULL;
+}
+
 /* Build a List String (linked list of StringObj) from command line args.
    List.empty is constructor tag 0 (0 fields).
    List.cons is constructor tag 1 (2 fields: head, tail).

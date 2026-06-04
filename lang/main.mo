@@ -358,15 +358,45 @@ def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name 
     return 0
 }
 
+/// Load a file and all its transitive dependencies, returning a single list of declarations.
+/// This function uses the module loading infrastructure to resolve all `use` dependencies.
+@[partial]
+def load_file_decls_with_dependencies (file_path : String) : Option (List Decl) :=
+    // Extract the directory from the file path to use as base_dir for resolving relative imports
+    let base_dir : String := lang.module.extract_directory file_path in
+    // Extract module name from file path (remove .mo extension and directory)
+    let last_slash : I64 := lang.module.string_find_last_slash file_path in
+    let file_name_only :=
+        if I64.lt last_slash 0 then
+            file_path
+        else
+            String.slice file_path (last_slash + 1) (String.length file_path) in
+    let module_name : String :=
+        // Remove .mo extension
+        if String.ends_with file_name_only ".mo" then
+            String.slice file_name_only 0 (String.length file_name_only - 3)
+        else
+            file_name_only in
+    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty) in
+    // Load the file and all its dependencies
+    lang.module.load_module_decls_with_dependencies base_dir mp
+
 /// Parse a source file and compile + run it via LLVM.
 @[partial]
 def compile_file (file_path : String) (output_dir : String) (output_name : String) : IO I64 {
-    let source <- IO.read_file file_path;
-    match lang.module.try_parse_decls source {
+    // First try to load with dependencies
+    match load_file_decls_with_dependencies file_path {
         Option.some decls => compile_parsed_decls decls output_dir output_name,
         Option.none => do {
-            println (String.concat "Parse error: " file_path);
-            return 1
+            // Fallback to simple parsing without dependencies (for error reporting)
+            let source <- IO.read_file file_path;
+            match lang.module.try_parse_decls source {
+                Option.some decls => compile_parsed_decls decls output_dir output_name,
+                Option.none => do {
+                    println (String.concat "Parse error: " file_path);
+                    return 1
+                }
+            }
         }
     }
 }

@@ -1043,7 +1043,7 @@ type ScopeError {
 }
 
 /// Returns true if the Result is ok, false if err.
-def result_is_ok (r : Result E A) : Bool :=
+def result_is_ok {E A : Type} (r : Result E A) : Bool :=
     match r {
         ok _ => true,
         err _ => false,

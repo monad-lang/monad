@@ -1,5 +1,4 @@
 use lang.types
-open types
 
 // --- Helper: empty ScopeData ---
 
@@ -732,11 +731,11 @@ def term_args_match (ins_args : List Term) (key_args : List Param) : Bool :=
 
 // --- list_append helper (prelude List.append is curried) ---
 
-def list_append (xs : List A) (ys : List A) : List A :=
+def list_append {A : Type} (xs : List A) (ys : List A) : List A :=
     match xs {
         List.empty => ys,
         List.cons x rest => List.cons x (list_append rest ys)
     }
 
 // Exports
-infix (++) := list_append
+// infix (++) := list_append
