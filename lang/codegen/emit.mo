@@ -169,7 +169,9 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
     Literal.str s =>
         match fresh_label c "str" {
             CtxStrPair.mk ctx1 name =>
-                let global := LLVMGlobal.mk name s (String.length s) true in
+                // Add 1 to byte length for the null terminator \00 appended in the LLVM IR
+                let byte_len := String.length s + 1 in
+                let global := LLVMGlobal.mk name s byte_len true in
                 CompileResult.ok ctx1 empty_instrs (LLVMValue.global_ name) empty_blocks empty_funcs (cons_global global empty_globals_list),
         },
     Literal.if_ cond then_ else_ => compile_db_if_ir c cond then_ else_,
