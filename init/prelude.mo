@@ -137,10 +137,10 @@ instance BEq Bool {
 }
 
 // TODO Constraint resolving
-// def not_beq [BEq A] (a b : A) : Bool := BEq.beq a b
+// def BEq.not_beq [BEq A] (a b : A) : Bool := not (a == b)
 
 infix (==) := BEq.beq
-// infix (!=) := not_beq
+// infix (!=) := BEq.not_beq
 
 /// Ordered comparison
 class BOrd A {

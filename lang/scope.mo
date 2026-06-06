@@ -155,7 +155,10 @@ def add_methods_go (acc : ScopeData) (methods : List ClassDef) (cls_mp : ModuleP
 // --- scope_globals: extract ScopeData from Scope ---
 
 def scope_globals (s : Scope) : ScopeData :=
-    match s { mk _ d _ => d }
+    match s {
+        mk _ d _ => d,
+        _ => scope_data_empty
+    }
 
 // --- ScopeData: find a class def (method) by ModulePath ---
 

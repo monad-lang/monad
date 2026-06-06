@@ -1,5 +1,6 @@
 // IO module
 
+// TODO make into indexed monad
 type IO A {
  io A
 }
@@ -23,10 +24,8 @@ def IO.write_file (path : String) (content : String) : IO Unit
 def IO.read_file (path : String) : IO String
 
 @[native "file_exists"]
-def IO.file_exists (path : String) : Bool
+def IO.file_exists (path : String) : IO Bool
 
-@[native "read_file_sync"]
-def IO.read_file_sync (path : String) : String
 
 // TODO support constraints
 // def IO.println [ToString A] (a: A) : IO Unit :=

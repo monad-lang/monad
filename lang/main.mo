@@ -288,12 +288,12 @@ def run_all (names : List String) (out_dir : String) : IO I64 :=
 
 @[partial]
 def print_help : IO I64 {
-    println "Usage: monad-self compile <name>         Compile and run named example";
-    println "       monad-self compile-file <path> [name]  Parse and compile a .mo source file";
-    println "       monad-self test-all               Compile and run all examples";
-    println "       monad-self typecheck <name>       Type-check a named example";
-    println "       monad-self typecheck-all          Type-check all examples";
-    println "       monad-self list                   List available examples";
+    println "Usage: monad compile-test <name>    Compile and run named example";
+    println "       monad compile <path> [name]  Parse and compile a .mo source file";
+    println "       monad test-all               Compile and run all examples";
+    println "       monad typecheck <name>       Type-check a named example";
+    println "       monad typecheck-all          Type-check all examples";
+    println "       monad list                   List available examples";
     return 0
 }
 
@@ -429,11 +429,11 @@ def typecheck_all (names : List String) : IO I64 :=
 def main (args : List String) : IO I64 {
     let cmd := first_arg args;
     let out_dir := "/tmp";
-    if cmd == "compile" then do {
+    if cmd == "compile-test" then do {
         let name := second_arg args;
         run_one name out_dir
     }
-    else if cmd == "compile-file" then do {
+    else if cmd == "compile" then do {
         let file_path := second_arg args;
         let out_name := if third_arg args == ""
             then "source"

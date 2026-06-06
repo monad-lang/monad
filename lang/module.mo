@@ -106,7 +106,9 @@ def module_path_to_file (mp : ModulePath) : String :=
 
 /// Check if a file exists using native IO
 @[partial]
-def file_exists (path : String) : Bool := IO.file_exists path
+def file_exists_b (path : String) : Bool := match IO.file_exists path {
+    io b => b // TODO avoid unwrapping
+}
 
 /// Convert a ModulePath to a string representation
 @[partial]
@@ -179,32 +181,32 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : Option String :=
     
     // 1. Try relative to base directory
     let relative_path : String := path_join base_dir with_extension in
-    if file_exists relative_path then
+    if file_exists_b relative_path then
         Option.some relative_path
     else
         // 2. Try direct path (for fully qualified paths like "init/io")
         let direct_path : String := with_extension in
-        if file_exists direct_path then
+        if file_exists_b direct_path then
             Option.some direct_path
         else
             // 3. Try init/ directory
             let init_path : String := String.concat "init/" with_extension in
-            if file_exists init_path then
+            if file_exists_b init_path then
                 Option.some init_path
             else
                 // 4. Try std/ directory
                 let std_path : String := String.concat "std/" with_extension in
-                if file_exists std_path then
+                if file_exists_b std_path then
                     Option.some std_path
                 else
                     // 5. Try lang/ directory
                     let lang_path : String := String.concat "lang/" with_extension in
-                    if file_exists lang_path then
+                    if file_exists_b lang_path then
                         Option.some lang_path
                     else
                         // 6. Try examples/ directory
                         let examples_path : String := String.concat "examples/" with_extension in
-                        if file_exists examples_path then
+                        if file_exists_b examples_path then
                             Option.some examples_path
                         else
                             Option.none
@@ -213,7 +215,7 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : Option String :=
 @[partial]
 def try_read_module_file (base_dir : String) (mp : ModulePath) : Option String := 
     match resolve_module_file base_dir mp {
-        Option.some resolved => Option.some (IO.read_file_sync resolved),
+        Option.some resolved => match IO.read_file resolved { io s => Option.some s },
         Option.none => Option.none
     }
 
@@ -314,7 +316,8 @@ def list_contains (xs : List ModulePath) (x : ModulePath) : Bool :=
             if modpath_eq hd x then
                 true
             else
-                list_contains rest x
+                list_contains rest x,
+        _ => false
     }
 
 /// Load all dependencies for a module and merge their scopes
@@ -481,8 +484,8 @@ def build_scope_with_deps (file_path : String) (mod_name : String) : Option Scop
 /// Build scope and type check a file with its dependencies loaded
 @[partial]
 def typecheck_file_with_deps (file_path : String) (mod_name : String) : Bool := 
-    if IO.file_exists file_path then
-        let content : String := IO.read_file_sync file_path in
+    if file_exists_b file_path then
+        let content : String := match IO.read_file file_path { io c => c } in
         let base_dir : String := extract_directory file_path in
         let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty) in
         match load_module_with_dependencies base_dir mp {
