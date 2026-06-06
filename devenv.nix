@@ -33,6 +33,14 @@
     npx serve . 
   '';
 
+  scripts.bootstrap.exec = ''
+    cargo run --quiet -- run lang/main.mo $@
+  '';
+
+  scripts.monad-rs.exec = ''
+    cargo run --quiet -- $@
+  '';
+
   # https://devenv.sh/basics/
   enterShell = "";
 

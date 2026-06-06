@@ -49,14 +49,20 @@ cargo build --package monad-core
 # Run a Monad file
 cargo run -- run examples/hello.mo
 
+# In devenv shell also monad-rs as an alias for cargo run:
+monad-rs run examples/hello.mo
+
 # Run with debug output
 cargo run -- run examples/hello.mo -- --debug
 
 # Run @[test] annotated definitions
 cargo run -- test init/tests.mo
 
-# Compile to native binary (requires llvm feature)
-cargo run -- compile examples/hello.mo
+# Run the bootstrapped cli in lang/main.mo
+bootstrap
+
+# Compile to native binary in devenv shell
+bootstrap compile examples/hello.mo
 
 # Use the REPL (interactive, requires repl feature)
 cargo run -- repl
