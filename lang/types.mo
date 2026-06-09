@@ -388,12 +388,15 @@ def id_list_similar (a : List Identifier) (b : List Identifier) : Bool :=
     match a {
         List.cons x xs => match b {
             List.cons y ys => Similar.similar x y && id_list_similar xs ys,
-            List.empty => false
+            List.empty => false,
+            _ => false
         },
         List.empty => match b {
             List.empty => true,
-            List.cons _ _ => false
-        }
+            List.cons _ _ => false,
+            _ => false
+        },
+        _ => false
     }
 
 def mc_list_similar_v0 (a : List MatchCaseV0) (b : List MatchCaseV0) : Bool :=
@@ -492,29 +495,31 @@ def opt_db_term_list_similar (a : List (Option Term)) (b : List (Option Term)) :
 instance Similar ModulePath {
     def similar (a : ModulePath) (b : ModulePath) : Bool :=
         match a {
-            mp ids1 => match b {
-                mp ids2 => id_list_similar ids1 ids2
-            }
+            ModulePath.mp ids1 => match b {
+                ModulePath.mp ids2 => id_list_similar ids1 ids2,
+                _ => false
+            },
+            _ => false
         }
 }
 
 instance Similar NameRef {
     def similar (a : NameRef) (b : NameRef) : Bool :=
         match a {
-            nid id1 => match b {
-                nid id2 => Similar.similar id1 id2,
-                nmp _ => false,
-                nop _ => false
+            NameRef.nid id1 => match b {
+                NameRef.nid id2 => Similar.similar id1 id2,
+                NameRef.nmp _ => false,
+                NameRef.nop _ => false
             },
-            nmp mp1 => match b {
-                nmp mp2 => Similar.similar mp1 mp2,
-                nid _ => false,
-                nop _ => false
+            NameRef.nmp mp1 => match b {
+                NameRef.nmp mp2 => Similar.similar mp1 mp2,
+                NameRef.nid _ => false,
+                NameRef.nop _ => false
             },
-            nop op1 => match b {
-                nop op2 => Similar.similar op1 op2,
-                nid _ => false,
-                nmp _ => false
+            NameRef.nop op1 => match b {
+                NameRef.nop op2 => Similar.similar op1 op2,
+                NameRef.nid _ => false,
+                NameRef.nmp _ => false
             }
         }
 }
@@ -1045,6 +1050,6 @@ type ScopeError {
 /// Returns true if the Result is ok, false if err.
 def result_is_ok {E A : Type} (r : Result E A) : Bool :=
     match r {
-        ok _ => true,
-        err _ => false,
+        Result.ok _ => true,
+        Result.err _ => false,
     }

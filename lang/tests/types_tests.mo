@@ -288,9 +288,9 @@ def test_scope_error_construct : Bool :=
     let e : ScopeError := ScopeError.name_not_found (NameRef.nid expected_id) in
     match e {
         name_not_found nr => match nr {
-            nid id => Similar.similar id expected_id,
-            nmp _ => false,
-            nop _ => false
+            NameRef.nid id => Similar.similar id expected_id,
+            NameRef.nmp _ => false,
+            NameRef.nop _ => false
         },
         _ => false
     }

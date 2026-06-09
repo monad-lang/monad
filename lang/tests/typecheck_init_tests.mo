@@ -104,7 +104,7 @@ def typecheck_def (df : Def) (scope : Scope) : Bool :=
 /// Build scope and try to type check a file
 def typecheck_file (file_path : String) (mod_name : String) : Bool := 
     match IO.read_file file_path {
-        io content => 
+        IO.io content => 
             match parse_all_decls content {
                 success _ decls => 
                     let path := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty) in

@@ -31,7 +31,8 @@ def list_show (show_elem : A -> String) (xs : List A) : String :=
         empty => "[]",
         cons a tail =>
             let body := show_body show_elem tail in
-            "[" ++ show_elem a ++ body ++ "]"
+            "[" ++ show_elem a ++ body ++ "]",
+        _ => "[]"
     }
 
 def show_body (show_elem : A -> String) (xs : List A) : String :=
@@ -39,7 +40,8 @@ def show_body (show_elem : A -> String) (xs : List A) : String :=
         empty => "",
         cons a tail =>
             let rest : String := show_body show_elem tail in
-            ", " ++ show_elem a ++ rest
+            ", " ++ show_elem a ++ rest,
+        _ => ""
     }
 
 // Element-wise Show (List A) - dispatches via runtime type inference
@@ -54,13 +56,16 @@ instance [BEq A] BEq (List A) {
         match xs {
             empty => match ys {
                 empty => true,
-                cons _ _ => false
+                cons _ _ => false,
+                _ => false
             },
             cons x x_tail => match ys {
                 empty => false,
                 cons y y_tail =>
-                    (x == y) && (BEq.beq x_tail y_tail)
-            }
+                    (x == y) && (BEq.beq x_tail y_tail),
+                _ => false
+            },
+            _ => false
         }
 }
 instance {A : Type} Append (List A) {
@@ -70,7 +75,8 @@ instance {A : Type} Append (List A) {
 def List.length {A : Type} (xs : List A) : I64 :=
     match xs {
         empty => 0,
-        cons _ tail => 1 + List.length tail
+        cons _ tail => 1 + List.length tail,
+        _ => 0
     }
 
 def List.filter {A : Type} (pred : A -> Bool) (xs : List A) : List A :=
@@ -79,7 +85,8 @@ def List.filter {A : Type} (pred : A -> Bool) (xs : List A) : List A :=
         cons a tail =>
             if pred a
             then List.cons a (List.filter pred tail)
-            else List.filter pred tail
+            else List.filter pred tail,
+        _ => List.empty
     }
 
 // TODO Fix instance resolution over constraint
@@ -92,7 +99,8 @@ def List.any {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
         cons a tail =>
             if pred a
             then true
-            else List.any pred tail
+            else List.any pred tail,
+        _ => false
     }
 
 def List.all {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
@@ -101,13 +109,15 @@ def List.all {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
         cons a tail =>
             if pred a
             then List.all pred tail
-            else false
+            else false,
+        _ => true
     }
 
 def List.sum (xs : List I64) : I64 :=
     match xs {
         empty => 0,
-        cons a tail => a + List.sum tail
+        cons a tail => a + List.sum tail,
+        _ => 0
     }
 
 @[test]

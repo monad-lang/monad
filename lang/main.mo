@@ -100,8 +100,8 @@ def typecheck_def (def_ : Def) : Bool :=
         Def.mk name typ term_ constraints attrs =>
             let scope := make_scope_with_builtins in
             match type_check term_ typ scope empty_local_types empty_locals {
-                ok tt => true,
-                err e => false,
+                Result.ok tt => true,
+                Result.err e => false,
             },
     }
 

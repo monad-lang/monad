@@ -136,7 +136,7 @@ def add_methods_go (acc : ScopeData) (methods : List ClassDef) (cls_mp : ModuleP
             match m {
                 mk method_name _ _ =>
                     match cls_mp {
-                        mp cls_ids =>
+                        ModulePath.mp cls_ids =>
                             let method_id_list : List Identifier := List.cons method_name List.empty in
                             let method_ids : List Identifier := List.append cls_ids method_id_list in
                             let full_name : ModulePath := ModulePath.mp method_ids in
@@ -156,7 +156,7 @@ def add_methods_go (acc : ScopeData) (methods : List ClassDef) (cls_mp : ModuleP
 
 def scope_globals (s : Scope) : ScopeData :=
     match s {
-        mk _ d _ => d,
+        Scope.mk _ d _ => d,
         _ => scope_data_empty
     }
 
@@ -355,7 +355,7 @@ def resolve_name_in_locals (nref : NameRef) (locals : LocalScope) : Option Scope
                 Option.none => Option.none,
                 Option.some lv =>
                     match lv {
-                        mk lvname lvtyp _ =>
+                        LocalVar.mk lvname lvtyp _ =>
                             let empty_id_list : List Identifier := List.empty in
                             let lv_mp : ModulePath := ModulePath.mp (List.cons lvname empty_id_list) in
                             let empty_mp : ModulePath := ModulePath.mp empty_id_list in

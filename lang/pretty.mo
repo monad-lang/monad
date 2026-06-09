@@ -31,6 +31,7 @@ def join_id_rest (hd : Identifier) (rest : List Identifier) : String :=
             let dot := String.concat (show_identifier hd) "." in
             let rest_str := join_id_rest x y in
             String.concat dot rest_str,
+        _ => show_identifier hd
     }
 
 def show_num_suffix (suf : NumSuffix) : String := match suf {

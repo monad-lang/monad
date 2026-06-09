@@ -280,13 +280,15 @@ instance FromListLiteral List {
 def List.is_empty (self : List A) : Bool :=
 	match self {
 		empty => true,
-		cons a tail => false
+		cons a tail => false,
+		_ => true
 	}
 
 def List.append (a b : List A) : List A :=
 	match a {
 		empty => b,
-		cons el_a tail => List.cons el_a (List.append tail b)
+		cons el_a tail => List.cons el_a (List.append tail b),
+		_ => b
 	}
 
 /// Append b to value a
@@ -299,31 +301,36 @@ infix (++) := Append.append
 def List.first (self : List A) : Option A :=
 	match self {
 		empty => none,
-		cons a tail => some a
+		cons a tail => some a,
+		_ => none
 	}
 def List.last (self : List A) : Option A :=
 	match self {
 		empty => none,
 		cons a tail => if List.is_empty tail
 			then some a
-			else List.last tail
+			else List.last tail,
+		_ => none
 	}
 def List.flatten (self : List (List A)) : List A :=
 	match self {
 		empty => List.empty,
-		cons list tail => List.append list (List.flatten tail)
+		cons list tail => List.append list (List.flatten tail),
+		_ => List.empty
 	}
 
 def List.tail (l : List A) : List A :=
 	match l {
 		empty => List.empty,
-		cons a tail => tail
+		cons a tail => tail,
+		_ => List.empty
 	}
 
 def List.map (f : A -> B) (self: List A) : List B :=
 		match self {
 			empty => List.empty,
-			cons a tail => List.cons (f a) (List.map f tail)
+			cons a tail => List.cons (f a) (List.map f tail),
+			_ => List.empty
 		}
 
 
@@ -331,7 +338,8 @@ instance Functor List {
   def map (f : A -> B) (self: List A) : List B :=
     match self {
       empty => List.empty,
-      cons a tail => List.cons (f a) (Functor.map f tail)
+      cons a tail => List.cons (f a) (Functor.map f tail),
+      _ => List.empty
     }
 }
 
