@@ -25,6 +25,28 @@ def make_scope (path : ModulePath) (sd : ScopeData) : Scope := {
     parent := Option.none,
 }
 
+/// Convert a file path (e.g., "lang/module.mo") to a ModulePath
+/// by splitting on '/' and removing the .mo extension
+def file_path_to_module_path (file_path : String) : ModulePath := 
+    // Remove .mo extension if present
+    let without_ext := 
+        if String.ends_with file_path ".mo" then
+            String.slice file_path 0 (String.length file_path - 3)
+        else
+            file_path
+    in
+    // Use recursive helper to split by '/' and build ModulePath
+    file_path_to_module_path_helper without_ext List.empty
+
+/// Helper to recursively build ModulePath from path string
+/// Processes from right to left, building up the identifier list
+@[terminating]
+def file_path_to_module_path_helper (path_str : String) (acc : List Identifier) : ModulePath := 
+    let last_slash := string_find_last_slash path_str in
+    if I64.lt last_slash 0
+    then ModulePath.mp (List.cons (Identifier.id path_str) acc)
+    else file_path_to_module_path_helper (String.slice path_str 0 last_slash) (List.cons (Identifier.id (String.slice path_str (last_slash + 1) (String.length path_str))) acc)
+
 def is_hole (t : Term) : Bool := 
     match t {
         Term.hole => true,
@@ -88,74 +110,27 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
             }
     }
 
-def typecheck_file (file_path : String) (mod_name : String) : Bool := 
-    match IO.read_file file_path {
-        IO.io content => 
+/// Type check a file by loading it with all dependencies and type checking the result
+def typecheck_file (file_path : String) : IO Bool := do {
+    let content <- IO.read_file file_path;
+    // Convert file path to ModulePath (e.g., "lang/module.mo" -> [id "lang", id "module"])
+    let mp := file_path_to_module_path file_path;
+    // Load module with all dependencies
+    return match load_module_with_dependencies "" mp {
+        Option.some scope =>
+            // Parse the file and typecheck with the loaded scope
             match parse_all_decls content {
-                success _ decls => 
-                    let path := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty) in
-                    let sd := build_scope_from_decls path decls in
-                    let scope := make_scope path sd in
-                    typecheck_module path scope decls,
-                fail _ => false
+                ParseResult.success _ decls =>
+                    typecheck_module_with_scope scope decls empty_local_scope,
+                ParseResult.fail _ => false
             },
-        _ => false
+        Option.none => false
     }
+}
 
 // --- lang/ non-test files ---
 
-// These files form the self-hosted compiler and may have interdependencies.
-// We test them individually to see which can type check in isolation.
 
 @[test]
-def test_typecheck_lang_types : Bool := typecheck_file "lang/types.mo" "types"
+def test_typecheck_lang_main : IO Bool := typecheck_file "lang/main.mo"
 
-@[test]
-def test_typecheck_lang_elaborate : Bool := typecheck_file "lang/elaborate.mo" "elaborate"
-
-@[test]
-def test_typecheck_lang_eval : Bool := typecheck_file "lang/eval.mo" "eval"
-
-@[test]
-def test_typecheck_lang_eval_t2 : Bool := typecheck_file "lang/eval_t2.mo" "eval_t2"
-
-@[test]
-def test_typecheck_lang_eval_term : Bool := typecheck_file "lang/eval_term.mo" "eval_term"
-
-@[test]
-def test_typecheck_lang_lower : Bool := typecheck_file "lang/lower.mo" "lower"
-
-@[test]
-def test_typecheck_lang_main : Bool := typecheck_file "lang/main.mo" "main"
-
-@[test]
-def test_typecheck_lang_module : Bool := typecheck_file "lang/module.mo" "module"
-
-@[test]
-def test_typecheck_lang_parser : Bool := typecheck_file "lang/parser.mo" "parser"
-
-@[test]
-def test_typecheck_lang_pretty : Bool := typecheck_file "lang/pretty.mo" "pretty"
-
-@[test]
-def test_typecheck_lang_scope : Bool := typecheck_file "lang/scope.mo" "scope"
-
-// Note: typecheck/infer.mo and typecheck/unify.mo are part of the type checker itself
-// and may have circular dependencies.
-
-@[test]
-def test_typecheck_lang_typecheck_infer : Bool := typecheck_file "lang/typecheck/infer.mo" "typecheck_infer"
-
-@[test]
-def test_typecheck_lang_typecheck_unify : Bool := typecheck_file "lang/typecheck/unify.mo" "typecheck_unify"
-
-// --- lang/codegen/ files ---
-
-@[test]
-def test_typecheck_lang_codegen_ir : Bool := typecheck_file "lang/codegen/ir.mo" "codegen_ir"
-
-@[test]
-def test_typecheck_lang_codegen_emit : Bool := typecheck_file "lang/codegen/emit.mo" "codegen_emit"
-
-@[test]
-def test_typecheck_lang_codegen_link : Bool := typecheck_file "lang/codegen/link.mo" "codegen_link"

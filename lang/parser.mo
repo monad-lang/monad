@@ -206,6 +206,65 @@ def dotted_identifier (input : String) : ParseResult (List String) :=
 
 	separated_by (tag ".") identifier input
 
+/// Join a list of identifiers into a dotted string (e.g., ["Unit", "unit"] -> "Unit.unit")
+@[partial]
+def join_dotted_identifiers (ids : List String) : String := match ids {
+    List.empty => "",
+    List.cons hd rest => join_dotted_rest hd rest,
+}
+
+@[partial]
+def join_dotted_rest (hd : String) (rest : List String) : String := match rest {
+    List.empty => hd,
+    List.cons x y => String.concat (String.concat hd ".") (join_dotted_identifiers rest),
+}
+
+/// Extract the identifier string from a NameRef
+@[partial]
+def name_ref_to_string (nref : NameRef) : Option String := match nref {
+    NameRef.nid id => Option.some (show_identifier id),
+    NameRef.nmp mp => Option.some (module_path_to_string mp),
+    NameRef.nop op => Option.some (show_operator op),
+}
+
+/// Convert a ModulePath to a dotted string
+@[partial]
+def module_path_to_string (mp : ModulePath) : String := match mp {
+    ModulePath.mp ids => join_dotted_identifiers (map_show_identifier ids),
+}
+
+/// Map a list of Identifiers to their string representations
+@[partial]
+def map_show_identifier (ids : List Identifier) : List String := match ids {
+    List.empty => List.empty,
+    List.cons hd rest => List.cons (show_identifier hd) (map_show_identifier rest),
+}
+
+/// Show an Identifier as a string
+@[partial]
+def show_identifier (id : Identifier) : String := match id {
+    Identifier.id s => s,
+}
+
+/// Show an Operator as a string
+@[partial]
+def show_operator (op : Operator) : String := match op {
+    Operator.operator s => s,
+}
+
+/// Find the last occurrence of a substring in a string, return its index or -1
+@[partial]
+def string_find_last (haystack : String) (needle : String) : I64 :=
+    if String.beq needle "" then -1
+    else if I64.gt (String.length needle) (String.length haystack) then -1
+    else string_find_last_loop haystack needle (String.length haystack - String.length needle)
+
+@[partial]
+def string_find_last_loop (haystack : String) (needle : String) (start_idx : I64) : I64 :=
+    if I64.lt start_idx 0 then -1
+    else if String.beq (String.slice haystack start_idx (start_idx + String.length needle)) needle then start_idx
+    else string_find_last_loop haystack needle (start_idx - 1)
+
 
 
 @[partial]
@@ -3532,8 +3591,20 @@ def t2_variable_try_path (r: ParseResult TermV0) (ctx: List Identifier) (input: 
         success rem out =>
 
             // Dotted path → sentinel index (resolved later by module resolver)
-
-            success rem (Term.var t2_sentinel DebugName.unnamed),
+            // Extract the last component of the qualified name for constructor detection
+            match out {
+                TermV0.var nref =>
+                    match name_ref_to_string nref {
+                        Option.some qualified_name =>
+                            // Preserve the full qualified name for proper resolution
+                            // is_constructor_var will extract the base name if needed
+                            success rem (Term.var t2_sentinel (DebugName.named (Identifier.id qualified_name))),
+                        Option.none =>
+                            success rem (Term.var t2_sentinel DebugName.unnamed),
+                    },
+                _ =>
+                    success rem (Term.var t2_sentinel DebugName.unnamed),
+            },
 
         fail _ => t2_variable_got (identifier input) ctx
 

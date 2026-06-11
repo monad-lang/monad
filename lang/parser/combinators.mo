@@ -296,3 +296,6 @@ def opt_some (rem : String) (out : A) : ParseResult (Option A) :=
 @[partial]
 def opt_none (input : String) : ParseResult (Option A) :=
 	success input Option.none
+
+
+// --- End of combinators ---

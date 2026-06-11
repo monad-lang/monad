@@ -69,10 +69,87 @@ def identifier_eq (a : Identifier) (b : Identifier) : Bool := match a {
     },
 }
 
+/// List of known constructor names that should be compiled as alloc_constructor
+/// instead of variable references. These are constructors with 0 or more arguments.
+@[partial]
+def constructor_names : List String :=
+    ["unit", "true", "false", "none", "some", "empty", "cons", "io", "IO.io",
+     "trivial", "refl", "ok", "err", "zero", "succ", "nil", "pair"]
+
+@[partial]
+def extract_base_name (name : String) : String :=
+    let last_dot := string_find_last name "." in
+    if I64.gt last_dot (-1)
+    then String.slice name (last_dot + 1) (String.length name)
+    else name
+
+@[partial]
+def constructor_tag (name : String) : I64 :=
+    // Extract base name for qualified constructors like IO.io
+    let base_name := extract_base_name name in
+    // Simple mapping of constructor names to tags
+    // This should match the tag assignment in the runtime
+    // Check qualified names first
+    if String.beq name "IO.io" then 7
+    else if String.beq name "Unit.unit" then 0
+    else if String.beq name "Bool.true" then 1
+    else if String.beq name "Bool.false" then 2
+    else if String.beq name "Option.none" then 3
+    else if String.beq name "Option.some" then 4
+    else if String.beq name "List.empty" then 5
+    else if String.beq name "List.cons" then 6
+    // Check base names
+    else if String.beq base_name "unit" then 0
+    else if String.beq base_name "true" then 1
+    else if String.beq base_name "false" then 2
+    else if String.beq base_name "none" then 3
+    else if String.beq base_name "some" then 4
+    else if String.beq base_name "empty" then 5
+    else if String.beq base_name "cons" then 6
+    else if String.beq base_name "io" then 7
+    else if String.beq base_name "trivial" then 8
+    else if String.beq base_name "refl" then 9
+    else if String.beq base_name "ok" then 10
+    else if String.beq base_name "err" then 11
+    else if String.beq base_name "zero" then 12
+    else if String.beq base_name "succ" then 13
+    else if String.beq base_name "nil" then 14
+    else if String.beq base_name "pair" then 15
+    else 0
+
+/// Check if a variable name is a known constructor
+/// Handles both simple names ("unit", "true") and qualified names ("Unit.unit", "IO.io")
+@[partial]
+def is_constructor_var (name : String) : Bool :=
+    // Extract the last component after the final dot (for qualified names like "Unit.unit")
+    let base_name := extract_base_name name in
+    check_constructor base_name constructor_names
+
+@[partial]
+def check_constructor (name : String) (names : List String) : Bool := match names {
+    List.empty => false,
+    List.cons hd rest =>
+        if String.beq name hd then true
+        else check_constructor name rest,
+}
+
 @[partial]
 def show_identifier (id : Identifier) : String := match id {
     Identifier.id s => s,
 }
+
+/// Find the last occurrence of a substring in a string, return its index or -1
+@[partial]
+def string_find_last (haystack : String) (needle : String) : I64 :=
+    if String.beq needle "" then -1
+    else if I64.gt (String.length needle) (String.length haystack) then -1
+    else string_find_last_loop haystack needle (String.length haystack - String.length needle)
+
+@[partial]
+def string_find_last_loop (haystack : String) (needle : String) (start_idx : I64) : I64 :=
+    if I64.lt start_idx 0 then -1
+    else if String.beq (String.slice haystack start_idx (start_idx + String.length needle)) needle then start_idx
+    else string_find_last_loop haystack needle (start_idx - 1)
 
 @[partial]
 def show_name_ref (name : NameRef) : String := match name {
@@ -100,9 +177,13 @@ def lookup_native (name : String) : Option NativeOp :=
     else if String.beq name "I64_gt" then Option.some NativeOp.op_gt
     else if String.beq name "I64_ne" then Option.some NativeOp.op_ne
     else if String.beq name "monad_print_str" then Option.some NativeOp.op_print_str
+    else if String.beq name "println" then Option.some NativeOp.op_print_str
     else if String.beq name "monad_read_file" then Option.some NativeOp.op_read_file
+    else if String.beq name "read_file" then Option.some NativeOp.op_read_file
     else if String.beq name "monad_write_file" then Option.some NativeOp.op_write_file
+    else if String.beq name "write_file" then Option.some NativeOp.op_write_file
     else if String.beq name "monad_file_exists" then Option.some NativeOp.op_file_exists
+    else if String.beq name "file_exists" then Option.some NativeOp.op_file_exists
     else Option.none
 
 @[partial]
@@ -232,7 +313,9 @@ def rev_vals (xs : List LLVMValue) (acc : List LLVMValue) : List LLVMValue := ma
 def compile_ntv_ir (c : CodegenCtx) (native : Native) : CompileResult :=
     match native {
         Native.mk name num_args args =>
-            let fn_name := String.concat "monad_" (show_identifier name) in
+            let name_str := show_identifier name in
+            let llvm_name := extract_base_name name_str in
+            let fn_name := String.concat "monad_" llvm_name in
             match compile_ntv_args c args empty_instrs empty_vals {
                 NtvArgs.mk ctx_args all_instrs all_vals =>
                     match fresh_temp ctx_args {
@@ -252,9 +335,13 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
                 NtvArgs.mk ctx_args all_instrs all_vals =>
                     match fresh_temp ctx_args {
                         CtxStrPair.mk ctx_t temp =>
-                            let alloc_val := LLVMValue.alloc_constructor 0 all_vals in
+                            // Call the @alloc_constructor runtime function
+                            // alloc_constructor takes (tag, field_count) and allocates space for fields
+                            // The tag is determined by the constructor name
+                            let tag_val := constructor_tag (show_identifier name) in
+                            let alloc_val := LLVMValue.alloc_constructor tag_val all_vals in
                             let assign_instr := LLVMInstruction.assign temp alloc_val in
-                            CompileResult.ok ctx_t (cons_instr assign_instr all_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                            CompileResult.ok ctx_t (append_instrs all_instrs (cons_instr assign_instr empty_instrs)) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
                     },
             },
     }
@@ -367,7 +454,20 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
             DebugName.named id =>
                 match ctx_lookup_local c id {
                     Option.some val => CompileResult.ok c empty_instrs val empty_blocks empty_funcs empty_globals_list,
-                    Option.none => CompileResult.ok c empty_instrs (LLVMValue.var_ (show_identifier id)) empty_blocks empty_funcs empty_globals_list,
+                    Option.none =>
+                        // Check if this is a constructor reference
+                        let name := show_identifier id in
+                        let llvm_name := extract_base_name name in
+                        if is_constructor_var name then
+                            // Compile as alloc_constructor with 0 fields
+                            match fresh_temp c {
+                                CtxStrPair.mk ctx_t temp =>
+                                    let alloc_val := LLVMValue.call "alloc_constructor" LLVMType.i64_ (List.cons (LLVMValue.int_ 0) (List.cons (LLVMValue.int_ 0) List.empty)) false in
+                                    let assign_instr := LLVMInstruction.assign temp alloc_val in
+                                    CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                            }
+                        else
+                            CompileResult.ok c empty_instrs (LLVMValue.var_ llvm_name) empty_blocks empty_funcs empty_globals_list,
                 },
             DebugName.unnamed =>
                 CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
@@ -384,9 +484,34 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
 
 @[partial]
 def compile_db_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
-    match try_compile_inline_native_db c fun arg {
+    // Check if this is a constructor application
+    match try_compile_constructor_app_db c fun arg {
         Option.some result => result,
-        Option.none => compile_general_db_call c fun arg,
+        Option.none =>
+            match try_compile_inline_native_db c fun arg {
+                Option.some result => result,
+                Option.none => compile_general_db_call c fun arg,
+            },
+    }
+
+@[partial]
+def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
+    match fun {
+        Term.var idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    let name := show_identifier id in
+                    if is_constructor_var name then
+                        // This is a constructor application like IO.io unit or io unit
+                        // Compile it as a constructor with the argument
+                        let base_name := extract_base_name name in
+                        let tag := constructor_tag base_name in
+                        let con := Con.mk (Identifier.id base_name) (ModulePath.mp List.empty) 1 (List.cons (Option.some arg) List.empty) in
+                        Option.some (compile_con_ir c con)
+                    else Option.none,
+                DebugName.unnamed => Option.none,
+            },
+        _ => Option.none,
     }
 
 @[partial]
@@ -397,7 +522,9 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
                 Term.var idx dbg =>
                     match dbg {
                         DebugName.named id =>
-                            match lookup_native (show_identifier id) {
+                            let name := show_identifier id in
+                            let base_name := extract_base_name name in
+                            match lookup_native base_name {
                                 Option.some op =>
                                     Option.some (compile_native_app_db c op arg2 arg),
                                 Option.none => Option.none,
@@ -406,8 +533,50 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
                     },
                 _ => Option.none,
             },
+        Term.var idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    let name := show_identifier id in
+                    let base_name := extract_base_name name in
+                    match lookup_native base_name {
+                        Option.some op =>
+                            Option.some (compile_native_app_unary_db c op arg),
+                        Option.none => Option.none,
+                    },
+                DebugName.unnamed => Option.none,
+            },
         _ => Option.none,
     }
+
+@[partial]
+def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : CompileResult :=
+    match compile_db_term_ir c arg {
+        CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
+            // For unary native operations like print_str, call the runtime function
+            match fresh_temp ctx1 {
+                CtxStrPair.mk ctx_t temp =>
+                    let fn_name := native_op_to_fn_name op in
+                    let call_val := LLVMValue.call fn_name LLVMType.i64_ (cons_val val1 empty_vals) false in
+                    let assign_instr := LLVMInstruction.assign temp call_val in
+                    CompileResult.ok ctx_t (append_instrs instrs1 (cons_instr assign_instr empty_instrs)) (LLVMValue.var_ temp) blocks1 funcs1 globals1,
+            },
+    }
+
+@[partial]
+def native_op_to_fn_name (op : NativeOp) : String := match op {
+    NativeOp.op_add => "I64_add",
+    NativeOp.op_sub => "I64_sub",
+    NativeOp.op_mul => "I64_mul",
+    NativeOp.op_sdiv => "I64_div",
+    NativeOp.op_eq => "I64_eq",
+    NativeOp.op_lt => "I64_lt",
+    NativeOp.op_gt => "I64_gt",
+    NativeOp.op_ne => "I64_ne",
+    NativeOp.op_print_str => "monad_print_str",
+    NativeOp.op_read_file => "monad_read_file",
+    NativeOp.op_write_file => "monad_write_file",
+    NativeOp.op_file_exists => "monad_file_exists",
+}
 
 @[partial]
 def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : Term) : CompileResult :=
@@ -804,9 +973,9 @@ def runtime_declarations : List LLVMDeclaration :=
     let d5 := mk_decl "monad_read_file" (cons_str "i8*" empty_strs) "i8*" in
     let d6 := mk_decl "monad_write_file" (cons_str "i8*" (cons_str "i8*" (cons_str "i64" empty_strs))) "void" in
     let d7 := mk_decl "monad_file_exists" (cons_str "i8*" empty_strs) "i8*" in
-    let d8 := mk_decl "alloc_closure" (cons_str "i8*" (cons_str "i64" (cons_str "i64" empty_strs))) "%Closure*" in
-    let d9 := mk_decl "alloc_constructor" (cons_str "i64" (cons_str "i64" empty_strs)) "%Constructor*" in
-    let d10 := mk_decl "alloc_string" (cons_str "i8*" (cons_str "i64" empty_strs)) "%StringObj*" in
+    let d8 := mk_decl "alloc_closure" (cons_str "i8*" (cons_str "i64" (cons_str "i64" empty_strs))) "i64" in
+    let d9 := mk_decl "alloc_constructor" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d10 := mk_decl "alloc_string" (cons_str "i8*" (cons_str "i64" empty_strs)) "i64" in
     cons_decl d1 (cons_decl d2 (cons_decl d3 (cons_decl d4 (cons_decl d5 (cons_decl d6 (cons_decl d7 (cons_decl d8 (cons_decl d9 (cons_decl d10 empty_decls)))))))))
 
 @[partial]

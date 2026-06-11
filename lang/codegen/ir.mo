@@ -170,13 +170,12 @@ def show_llvm_value (val : LLVMValue) : String := match val {
         String.concat "bitcast " (String.concat (show_llvm_value v)
             (String.concat " to " (show_llvm_type to_ty))),
     alloc_closure entry arity env =>
-        String.concat "alloc_closure(" (String.concat entry
-            (String.concat ", " (String.concat (I64.to_string arity)
-            (String.concat ", " (String.concat (I64.to_string (list_valu_len env)) ")"))))),
+        String.concat "call i64 @alloc_closure(i8* " (String.concat entry
+            (String.concat ", i64 " (String.concat (I64.to_string arity)
+            (String.concat ", i64 " (String.concat (I64.to_string (list_valu_len env)) ")"))))),
     alloc_constructor tag fields =>
-        String.concat "alloc_constructor("
-            (String.concat (I64.to_string tag)
-            (String.concat ", " (String.concat (I64.to_string (list_valu_len fields)) ")"))),
+        String.concat "call i64 @alloc_constructor(i64 " (String.concat (I64.to_string tag)
+            (String.concat ", i64 " (String.concat (I64.to_string (list_valu_len fields)) ")"))),
     native_op op args =>
         let inner := String.concat "args=" (I64.to_string (list_valu_len args)) in
         String.concat "native_op(" (String.concat inner ")"),

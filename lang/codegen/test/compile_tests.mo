@@ -12,6 +12,7 @@ open Param
 open Def
 open ModulePath
 open Monad
+open IO
 
 @[partial]
 def mk_def (name : String) (body : Term) : Def :=
@@ -38,21 +39,32 @@ def test_compile_42 : IO Bool := do {
     let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
     let ir_text := lang.codegen.ir.emit_module mod_;
     IO.write_file ir_path ir_text;
+    println ("wrote ir to: " ++ ir_path);
     
     let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
-    if not (llc_result == 0) then pure false
-    else do {
+    if not (llc_result == 0) then do {
+        println <| "llc failed";
+        return false
+    } else do {
     
-    let rt_result <- exec_cmd "clang" ["-c" "lang/codegen/runtime.c" "-o" runtime_obj];
-    if not (rt_result == 0) then pure false else do {
+        let rt_result <- exec_cmd "clang" ["-c" "lang/codegen/runtime.c" "-o" runtime_obj];
+        if not (rt_result == 0) then do {
+            println <| "compiling runtime failed";
+            return false
+        } else do {
     
-    let link_args := [obj_path, runtime_obj];
-    let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
-    if not (link_result == 0) then pure false else do {    
-    let exec_result <- exec_cmd output_path [];
-    
-    let _ <- exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
-    
-    return (exec_result == 42)
-    }}}
+            let link_args := [obj_path, runtime_obj];
+            let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
+            if not (link_result == 0) then do {
+                println <| "clang linker failed";
+                return false
+            } else do {    
+                let exec_result <- exec_cmd output_path [];
+
+                let _ <- exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
+
+                return (exec_result == 42)
+            }
+        }
+    }
 }

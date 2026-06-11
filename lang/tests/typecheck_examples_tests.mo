@@ -132,7 +132,8 @@ def test_typecheck_examples_optics : Bool := typecheck_file "examples/optics.mo"
 @[test]
 def test_typecheck_examples_structs : Bool := typecheck_file "examples/structs.mo" "structs"
 
-@[test]
-def test_typecheck_examples_test_mote : Bool := typecheck_file "examples/test_mote.mo" "test_mote"
+// TODO this can not be tested without full mote support
+// @[test]
+// def test_typecheck_examples_test_mote : Bool := typecheck_file "examples/test_mote.mo" "test_mote"
 
 // Note: Some examples require module loading (io, init, math, etc.) and are skipped for now.

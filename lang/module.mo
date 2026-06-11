@@ -6,7 +6,6 @@ use lang.types
 use lang.parser
 use lang.parser.core
 use lang.parser.combinators
-use lang.parser.whitespace
 use lang.scope
 use lang.typecheck.infer
 use std.list
@@ -35,14 +34,15 @@ def examples_module_path (name : String) : String := String.concat (String.conca
 @[partial]
 def lang_module_path (name : String) : String := String.concat (String.concat "lang/" name) ".mo"
 
+/// Module path for the prelude
+@[partial]
+def prelude_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "'prelude") List.empty)
+
 /// Parse all declarations from source text.
-/// Repeatedly consumes whitespace and parses one declaration,
-/// accumulating into a List Decl. Stops when no more declarations
-/// can be parsed.
+/// Uses t2_decls_parser which properly handles docstrings.
 @[partial]
 def parse_all_decls (input : String) : ParseResult (List Decl) :=
-    let decl_parser : (String -> ParseResult Decl) := fn s => t2_decl_parser (skip_spaces s) in
-    lang.parser.combinators.many0 decl_parser input
+    lang.parser.t2_decls_parser input
 
 /// Parse source text, returning the parsed declarations or none on parse error.
 @[partial]
@@ -183,12 +183,20 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : Option String :=
     let mp_str : String := module_path_to_file mp in
     let with_extension : String := String.concat mp_str ".mo" in
     
-    // 1. Try relative to base directory
-    let relative_path : String := path_join base_dir with_extension in
-    if file_exists_b relative_path then
-        Option.some relative_path
+    // Special case: 'prelude maps to init/prelude.mo
+    if String.beq mp_str "'prelude" then
+        let prelude_path : String := "init/prelude.mo" in
+        if file_exists_b prelude_path then
+            Option.some prelude_path
+        else
+            Option.none
     else
-        // 2. Try direct path (for fully qualified paths like "init/io")
+        // 1. Try relative to base directory
+        let relative_path : String := path_join base_dir with_extension in
+        if file_exists_b relative_path then
+            Option.some relative_path
+        else
+            // 2. Try direct path (for fully qualified paths like "init/io")
         let direct_path : String := with_extension in
         if file_exists_b direct_path then
             Option.some direct_path
@@ -373,8 +381,10 @@ def load_module_decls_with_dependencies (base_dir : String) (mp : ModulePath) : 
                 } in
             // Extract all transitive dependencies
             let all_deps : List ModulePath := extract_all_dependencies module_base_dir main_decls in
+            // Always include prelude as a default dependency
+            let all_deps_with_prelude : List ModulePath := List.cons prelude_module_path all_deps in
             // Load all dependency declarations
-            let dep_decls : List Decl := load_dependency_decls module_base_dir all_deps List.empty in
+            let dep_decls : List Decl := load_dependency_decls module_base_dir all_deps_with_prelude List.empty in
             // Combine: dependencies first, then main module
             let all_decls : List Decl := list_append dep_decls main_decls in
             Option.some all_decls,
