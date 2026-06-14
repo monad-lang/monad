@@ -10,6 +10,7 @@ use lang.parser.core
 use lang.parser.combinators
 use lang.typecheck.infer
 use lang.scope
+use std.list
 
 open LLVMType
 open LLVMValue
@@ -24,9 +25,6 @@ open Def
 open ModulePath
 open TypeError
 
-@[partial]
-def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
-    [a, b, c, d]
 
 @[partial]
 def empty_str_list : List String := []
@@ -232,9 +230,9 @@ def compile_and_run (defs : List Def) (output_dir : String) (output_name : Strin
     let ir_text := lang.codegen.ir.emit_module mod_;
     IO.write_file ir_path ir_text;
 
-    let _ <- exec_cmd "llc" (args4 "-filetype=obj" ir_path "-o" obj_path);
-    let _ <- exec_cmd "clang" (args4 "-c" "lang/codegen/runtime.c" "-o" runtime_obj);
-    let _ <- exec_cmd "clang" (args4 obj_path runtime_obj "-o" output_path);
+    let _ <- exec_cmd "llc" ([ "-filetype=obj", ir_path, "-o", obj_path]);
+    let _ <- exec_cmd "clang" ([ "-c", "lang/codegen/runtime.c", "-o", runtime_obj]);
+    let _ <- exec_cmd "clang" ([ obj_path, runtime_obj, "-o", output_path]);
 
     let exit_code <- exec_cmd output_path empty_str_list;
     if I64.beq exit_code expect then do {
@@ -339,9 +337,9 @@ def third_arg (args : List String) : String :=
 
 /// Parse a source file and compile + run it via LLVM.
 @[partial]
-def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name : String) : IO I64 {
-    let mod_ := lang.codegen.emit.compile_db_module decls;
-    let ir_text := lang.codegen.ir.emit_module mod_;
+def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name : String) (verbose: Bool) : IO I64 {
+    let mod_ := compile_db_module decls;
+    let ir_text := emit_module mod_;
     let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
     let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
     let runtime_obj := String.concat output_dir "/monad_runtime.o";
@@ -349,13 +347,25 @@ def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name 
 
     IO.write_file ir_path ir_text;
 
-    let _ <- exec_cmd "llc" (args4 "-filetype=obj" ir_path "-o" obj_path);
-    let _ <- exec_cmd "clang" (args4 "-c" "lang/codegen/runtime.c" "-o" runtime_obj);
-    let _ <- exec_cmd "clang" (args4 obj_path runtime_obj "-o" output_path);
+    let result <- exec_cmd "llc" [ "-filetype=obj", ir_path, "-o", obj_path];
+    if not (result == 0) then do {
+        println <| (String.concat "Compiling ir " (String.concat ir_path " with llc failed"));
+        return 1
+    } else do {
+    let result <- exec_cmd "clang" (List.append [ "-c", "lang/codegen/runtime.c", "-o", runtime_obj] (if verbose then ["-v"] else [""]));
+    if not (result == 0) then do {
+        println <| "compiling runtime failed";
+        return 1
+    } else do {
+    let result <- exec_cmd "lld" (List.append [ obj_path, runtime_obj, "-o", output_path] (if verbose then ["-v"] else [""]));
+    if not (result == 0) then do {
+        println <| "linking failed";
+        return 1
+    } else do {
 
-    let exit_code <- exec_cmd output_path empty_str_list;
-    println (String.concat (String.concat output_name " => exit ") (I64.to_string exit_code));
+    println "Compilation finished";
     return 0
+    }}}
 }
 
 /// Load a file and all its transitive dependencies, returning a single list of declarations.
@@ -377,21 +387,32 @@ def load_file_decls_with_dependencies (file_path : String) : Option (List Decl) 
             String.slice file_name_only 0 (String.length file_name_only - 3)
         else
             file_name_only in
-    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty) in
+    let mp : ModulePath := ModulePath.mp [Identifier.id module_name] in
     // Load the file and all its dependencies
     lang.module.load_module_decls_with_dependencies base_dir mp
 
+struct CompileOptions {
+    file_path : String,
+    output_dir : String,
+    output_name : String,
+    verbose : Bool,
+}
+
 /// Parse a source file and compile + run it via LLVM.
 @[partial]
-def compile_file (file_path : String) (output_dir : String) (output_name : String) : IO I64 {
+def compile_file (file_path : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
     // First try to load with dependencies
     match load_file_decls_with_dependencies file_path {
-        Option.some decls => compile_parsed_decls decls output_dir output_name,
+        Option.some decls => do {
+            println (String.concat "parsed decls " (String.concat (List.length decls |> I64.to_string) " succesfully"));
+            compile_parsed_decls decls output_dir output_name verbose
+        },
         Option.none => do {
+            println "Failed to parse dependencies";
             // Fallback to simple parsing without dependencies (for error reporting)
             let source <- IO.read_file file_path;
             match lang.module.try_parse_decls source {
-                Option.some decls => compile_parsed_decls decls output_dir output_name,
+                Option.some decls => compile_parsed_decls decls output_dir output_name verbose,
                 Option.none => do {
                     println (String.concat "Parse error: " file_path);
                     return 1
@@ -429,6 +450,7 @@ def typecheck_all (names : List String) : IO I64 :=
 def main (args : List String) : IO I64 {
     let cmd := first_arg args;
     let out_dir := "/tmp";
+    let verbose := true;
     if cmd == "compile-test" then do {
         let name := second_arg args;
         run_one name out_dir
@@ -438,7 +460,7 @@ def main (args : List String) : IO I64 {
         let out_name := if third_arg args == ""
             then "source"
             else third_arg args;
-        compile_file file_path out_dir out_name
+        compile_file file_path out_dir out_name verbose
     }
     else if cmd == "test-all" then do {
         println "Running all examples...";
