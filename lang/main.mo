@@ -450,7 +450,7 @@ def typecheck_all (names : List String) : IO I64 :=
 def main (args : List String) : IO I64 {
     let cmd := first_arg args;
     let out_dir := "/tmp";
-    let verbose := true;
+    let verbose := false;
     if cmd == "compile-test" then do {
         let name := second_arg args;
         run_one name out_dir

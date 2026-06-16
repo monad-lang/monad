@@ -130,6 +130,22 @@ def module_path_to_string (mp : ModulePath) : String :=
         _ => ""
     }
 
+/// Convert a file path to a ModulePath
+@[partial]
+def file_path_to_module_path (path : String) : ModulePath := 
+    let last_slash : I64 := string_find_last_slash path in
+    let file_name : String := 
+        if I64.lt 0 last_slash then
+            String.slice path 0 (String.length path)
+        else
+            String.slice path (last_slash + 1) (String.length path) in
+    let name_without_ext : String := 
+        if String.ends_with file_name ".mo" then
+            String.slice file_name 0 (String.length file_name - 3)
+        else
+            file_name in
+    ModulePath.mp [Identifier.id name_without_ext]
+
 /// Find the last index of the '/' character in a string, returning -1 if not found
 @[partial]
 def string_find_last_slash (s : String) : I64 := 
