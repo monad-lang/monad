@@ -1,5 +1,6 @@
 use lang.types
 use lang.codegen.ir
+use lang.module
 
 open LLVMType
 open LLVMValue
@@ -1110,3 +1111,16 @@ def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true
     else check_contains (String.slice text 1 (String.length text)) needle
+
+// === Multi-module compilation ===
+
+/// Compile a single module's declarations to LLVM IR
+/// This takes a ModuleInfo (which preserves module boundaries) and compiles
+/// only the declarations from that specific module.
+@[partial]
+def compile_module_to_ir (module_info : ModuleInfo) : LLVMModule :=
+    match module_info {
+        ModuleInfo.mk path file_path decls =>
+            let defs := extract_defs decls in
+            compile_db_decls_ir defs
+    }

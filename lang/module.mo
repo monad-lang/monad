@@ -789,3 +789,131 @@ def test_parse_use_decl_ignored_in_scope : Bool :=
             },
         ParseResult.fail _ => false
     }
+
+// === Multi-module loading with boundary preservation ===
+
+struct ModuleInfo {
+    path : ModulePath,
+    file_path : String,
+    decls : List Decl,
+}
+
+struct LoadedModules {
+    main_module : ModuleInfo,
+    all_modules : List ModuleInfo,
+}
+
+@[partial]
+def get_loaded_main (loaded : LoadedModules) : ModuleInfo :=
+    match loaded {
+        LoadedModules.mk main_module all_modules => main_module
+    }
+
+@[partial]
+def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
+    match loaded {
+        LoadedModules.mk main_module all_modules => all_modules
+    }
+
+@[partial]
+def list_contains_module_info (modules : List ModuleInfo) (mp : ModulePath) : Bool :=
+    match modules {
+        List.empty => false,
+        List.cons hd rest =>
+            match hd {
+                ModuleInfo.mk path file_path decls =>
+                    if modpath_eq path mp then
+                        true
+                    else
+                        list_contains_module_info rest mp
+            }
+    }
+
+@[partial]
+def get_module_info_path (mi : ModuleInfo) : ModulePath :=
+    match mi {
+        ModuleInfo.mk path file_path decls => path
+    }
+
+@[partial]
+def get_module_info_file_path (mi : ModuleInfo) : String :=
+    match mi {
+        ModuleInfo.mk path file_path decls => file_path
+    }
+
+@[partial]
+def get_module_info_decls (mi : ModuleInfo) : List Decl :=
+    match mi {
+        ModuleInfo.mk path file_path decls => decls
+    }
+
+@[partial]
+def load_module_with_info (base_dir : String) (mp : ModulePath) : Option ModuleInfo :=
+    let resolved_path : Option String := resolve_module_file base_dir mp in
+    let actual_base_dir : String :=
+        match resolved_path {
+            Option.some fp => extract_directory fp,
+            Option.none => base_dir
+        } in
+    match load_module_decls actual_base_dir mp {
+        Option.some decls =>
+            let file_path : String :=
+                match resolved_path {
+                    Option.some fp => fp,
+                    Option.none => String.concat (module_path_to_file mp) ".mo"
+                } in
+            Option.some { path := mp, file_path := file_path, decls := decls },
+        Option.none => Option.none
+    }
+
+@[partial]
+def load_file_modules (file_path : String) : Option LoadedModules :=
+    let base_dir : String := extract_directory file_path in
+    let last_slash : I64 := string_find_last_slash file_path in
+    let file_name_only :=
+        if I64.lt last_slash 0 then
+            file_path
+        else
+            String.slice file_path (last_slash + 1) (String.length file_path) in
+    let module_name : String :=
+        if String.ends_with file_name_only ".mo" then
+            String.slice file_name_only 0 (String.length file_name_only - 3)
+        else
+            file_name_only in
+    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty) in
+    match load_module_with_info base_dir mp {
+        Option.some main_module =>
+            match main_module {
+                ModuleInfo.mk mp_path file_path decls =>
+                    let main_base_dir : String := extract_directory file_path in
+                    let all_dep_paths : List ModulePath := extract_all_dependencies main_base_dir decls in
+                    let all_dep_paths_with_prelude : List ModulePath := List.cons prelude_module_path all_dep_paths in
+                    let dep_modules : List ModuleInfo := load_dependencies_with_info main_base_dir all_dep_paths_with_prelude List.empty in
+                    let all_modules : List ModuleInfo := List.cons main_module dep_modules in
+                    Option.some { main_module := ModuleInfo.mk mp_path file_path decls, all_modules := all_modules }
+            },
+        Option.none => Option.none
+    }
+
+@[partial]
+def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (acc : List ModuleInfo) : List ModuleInfo :=
+    match deps {
+        List.empty => acc,
+        List.cons head tail =>
+            if list_contains_module_info acc head then
+                load_dependencies_with_info base_dir tail acc
+            else
+                match load_module_with_info base_dir head {
+                    Option.some mi =>
+                        match mi {
+                            ModuleInfo.mk mp_path file_path decls =>
+                                let dep_base_dir : String := extract_directory file_path in
+                                let dep_deps : List ModulePath := extract_all_dependencies dep_base_dir decls in
+                                let new_acc : List ModuleInfo := List.cons mi acc in
+                                let loaded_deps : List ModuleInfo := load_dependencies_with_info dep_base_dir dep_deps new_acc in
+                                load_dependencies_with_info base_dir tail loaded_deps
+                        },
+                    Option.none =>
+                        load_dependencies_with_info base_dir tail acc
+                }
+    }
