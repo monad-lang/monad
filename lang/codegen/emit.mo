@@ -458,7 +458,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                     Option.none =>
                         // Check if this is a constructor reference
                         let name := show_identifier id in
-                        let llvm_name := extract_base_name name in
+                        let llvm_name := replace_dots_with_underscores name in
                         if is_constructor_var name then
                             // Compile as alloc_constructor with 0 fields
                             match fresh_temp c {
@@ -730,11 +730,11 @@ def join_identifiers (ids : List Identifier) : String := match ids {
 def join_ids_rest (hd : Identifier) (rest : List Identifier) : String :=
     match rest {
         List.empty => show_identifier hd,
-        List.cons x y => String.concat (show_identifier hd) (String.concat "_" (join_identifiers rest)),
+        List.cons x y => String.concat (show_identifier hd) (String.concat "__" (join_identifiers rest)),
     }
 
 type DefResult {
-    dr (funcs : List LLVMFunction) (globals : List LLVMGlobal),
+    dr (ctx : CodegenCtx) (funcs : List LLVMFunction) (globals : List LLVMGlobal),
 }
 
 @[partial]
@@ -751,13 +751,13 @@ def build_llvm_params_from_db (params : List Param) (idx : I64) : List ParamPair
 
 /// Compile a canonical Def (de Bruijn Term) to LLVM IR.
 @[partial]
-def compile_db_def_ir (def_ : Def) : DefResult := match def_ {
+def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
     Def.mk name typ term_ constraints attrs =>
         let fn_name := module_path_to_str name in
         let params := collect_db_params term_ in
         let llvm_params := build_llvm_params_db params in
         let body := strip_db_lams term_ in
-        let c0 := bind_params_in_ctx_db empty_ctx params in
+        let c0 := bind_params_in_ctx_db c params in
         match compile_db_term_ir c0 body {
             CompileResult.ok ctx_r instrs_r val_r blocks_r funcs_r globals_r =>
                 match val_r {
@@ -774,28 +774,28 @@ def compile_db_def_ir (def_ : Def) : DefResult := match def_ {
                                 let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                                 let all_blocks := append_blocks (cons_block entry_block empty_blocks) blocks_r in
                                 let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
-                                DefResult.dr (cons_func main_func funcs_r) globals_r,
+                                DefResult.dr ctx_t (cons_func main_func funcs_r) globals_r,
                         },
                     _ =>
                         let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
                         let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                         let all_blocks := append_blocks (cons_block entry_block empty_blocks) blocks_r in
                         let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
-                        DefResult.dr (cons_func main_func funcs_r) globals_r,
+                        DefResult.dr ctx_r (cons_func main_func funcs_r) globals_r,
                 },
         },
 }
 
 /// Compile a list of canonical Defs to LLVM functions.
 @[partial]
-def compile_db_def_list (defs : List Def) : DefResult := match defs {
-    List.empty => DefResult.dr empty_funcs empty_globals_list,
+def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match defs {
+    List.empty => DefResult.dr c empty_funcs empty_globals_list,
     List.cons d rest =>
-        match compile_db_def_ir d {
-            DefResult.dr funcs_d globals_d =>
-                match compile_db_def_list rest {
-                    DefResult.dr funcs_rest globals_rest =>
-                        DefResult.dr (append_funcs funcs_d funcs_rest) (append_globals globals_d globals_rest),
+        match compile_db_def_ir c d {
+            DefResult.dr ctx_d funcs_d globals_d =>
+                match compile_db_def_list ctx_d rest {
+                    DefResult.dr ctx_rest funcs_rest globals_rest =>
+                        DefResult.dr ctx_rest (append_funcs funcs_d funcs_rest) (append_globals globals_d globals_rest),
                 },
         },
 }
@@ -803,8 +803,8 @@ def compile_db_def_list (defs : List Def) : DefResult := match defs {
 /// Compile a list of canonical Defs to a complete LLVM module.
 @[partial]
 def compile_db_decls_ir (defs : List Def) : LLVMModule :=
-    match compile_db_def_list defs {
-        DefResult.dr compiled_funcs compiled_globals =>
+    match compile_db_def_list empty_ctx defs {
+        DefResult.dr _ compiled_funcs compiled_globals =>
             let funcs := ren_main_and_wrap compiled_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
     }
@@ -816,8 +816,8 @@ def compile_db_module (decls : List Decl) : LLVMModule :=
     let defs := extract_defs decls in
     let inds := extract_inductives decls in
     let ctor_funcs := compile_db_inductive_decls inds in
-    match compile_db_def_list defs {
-        DefResult.dr compiled_funcs compiled_globals =>
+    match compile_db_def_list empty_ctx defs {
+        DefResult.dr _ compiled_funcs compiled_globals =>
             let all_funcs := append_funcs ctor_funcs compiled_funcs in
             let funcs := ren_main_and_wrap all_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
@@ -1044,6 +1044,11 @@ def rename_main (funcs : List LLVMFunction) : List LLVMFunction := match funcs {
                 then
                     let main_params := ensure_main_params params in
                     cons_func (LLVMFunction.mk "main_monad" main_params ret_ty blocks ghc_cc) (rename_main rest)
+                else if ends_with_main name then
+                    // For module-qualified main functions, always rename to just "main_monad"
+                    // The runtime expects this exact name
+                    let main_params := ensure_main_params params in
+                    cons_func (LLVMFunction.mk "main_monad" main_params ret_ty blocks ghc_cc) (rename_main rest)
                 else
                     cons_func f (rename_main rest),
         },
@@ -1142,3 +1147,130 @@ def compile_module_to_ir (module_info : ModuleInfo) : LLVMModule :=
             let defs := extract_defs decls in
             compile_db_decls_ir defs
     }
+
+// === Multi-module compilation ===
+
+/// Replace dots with underscores in a string for use as LLVM identifier
+@[partial]
+def replace_dots_with_underscores (s : String) : String := 
+    replace_dots_loop s ""
+
+@[partial]
+def replace_dots_loop (s : String) (acc : String) : String := 
+    if String.beq s "" then acc
+    else
+        let first_char : U8 := match String.get s 0 {
+            Option.some b => b,
+            Option.none => 0u8
+        } in
+        let rest := String.slice s 1 (String.length s) in
+        let dot_byte : U8 := 46u8 in  // '.' character
+        if U8.beq first_char dot_byte then
+            replace_dots_loop rest (String.concat acc "_")
+        else
+            replace_dots_loop rest (String.concat acc (String.slice s 0 1))
+
+/// Check if a function name is a main function (handles both "main" and module__main)
+@[partial]
+def ends_with_main (name : String) : Bool := 
+    if String.beq name "main" then true
+    else if String.length name > 3 then
+        let suffix := String.slice name (String.length name - 3) (String.length name) in
+        String.beq suffix "__main"
+    else false
+
+/// Compile all loaded modules to a single LLVM module.
+/// All declarations from all modules are compiled together with fully qualified names.
+@[partial]
+def compile_loaded_modules_to_ir (loaded : LoadedModules) : LLVMModule := 
+    let main_mod := get_loaded_main loaded in
+    let all_mods := get_loaded_all loaded in
+    // Collect all declarations with their module paths
+    let all_decls := collect_all_decls_from_modules_with_prefix all_mods List.empty in
+    // Compile all declarations together - function names will be fully qualified
+    compile_db_module all_decls
+
+@[partial]
+def collect_all_decls_from_modules_with_prefix (modules : List ModuleInfo) (acc : List Decl) : List Decl := match modules {
+    List.empty => acc,
+    List.cons mod_ rest => 
+        let mod_decls := get_module_info_decls mod_ in
+        let mod_path := get_module_info_path mod_ in
+        let prefixed_decls := prefix_decl_names mod_decls mod_path in
+        collect_all_decls_from_modules_with_prefix rest (append_decls_list prefixed_decls acc),
+}
+
+@[partial]
+def prefix_decl_names (decls : List Decl) (module_path : ModulePath) : List Decl := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        let prefixed_d := prefix_decl_name d module_path in
+        List.cons prefixed_d (prefix_decl_names rest module_path),
+}
+
+@[partial]
+def prefix_decl_name (d : Decl) (module_path : ModulePath) : Decl := match d {
+    Decl.def_d def_ => Decl.def_d (prefix_def_name def_ module_path),
+    Decl.inductive_d ind => Decl.inductive_d (prefix_inductive_name ind module_path),
+    _ => d,
+}
+
+@[partial]
+def prefix_def_name (def_ : Def) (module_path : ModulePath) : Def := match def_ {
+    Def.mk name typ term constraints attrs =>
+        let prefixed_name := prefix_module_path module_path name in
+        Def.mk prefixed_name typ term constraints attrs,
+}
+
+@[partial]
+def prefix_inductive_name (ind : Inductive) (module_path : ModulePath) : Inductive := match ind {
+    Inductive.mk name params typ constructors attrs =>
+        let prefixed_name := prefix_module_path module_path name in
+        Inductive.mk prefixed_name params typ (prefix_constructor_names constructors module_path) attrs,
+}
+
+@[partial]
+def prefix_constructor_names (cons : List InductConstructor) (module_path : ModulePath) : List InductConstructor := match cons {
+    List.empty => List.empty,
+    List.cons c rest =>
+        let prefixed_c := prefix_constructor_name c module_path in
+        List.cons prefixed_c (prefix_constructor_names rest module_path),
+}
+
+@[partial]
+def prefix_constructor_name (c : InductConstructor) (module_path : ModulePath) : InductConstructor := match c {
+    InductConstructor.mk name params typ =>
+        let prefixed_name := prefix_module_path module_path name in
+        InductConstructor.mk prefixed_name params typ,
+}
+
+@[partial]
+def prefix_module_path (module_path : ModulePath) (name : ModulePath) : ModulePath := 
+    // Concatenate module_path and name to create a fully qualified path
+    match module_path {
+        ModulePath.mp mp_ids =>
+            match name {
+                ModulePath.mp name_ids =>
+                    ModulePath.mp (append_identifiers mp_ids name_ids),
+            },
+    }
+
+@[partial]
+def append_identifiers (a : List Identifier) (b : List Identifier) : List Identifier := match a {
+    List.empty => b,
+    List.cons hd tl => List.cons hd (append_identifiers tl b),
+}
+
+@[partial]
+def collect_all_decls_from_modules (modules : List ModuleInfo) (acc : List Decl) : List Decl := match modules {
+    List.empty => acc,
+    List.cons mod_ rest => 
+        let mod_decls := get_module_info_decls mod_ in
+        collect_all_decls_from_modules rest (append_decls_list mod_decls acc),
+}
+
+@[partial]
+def append_decls_list (a : List Decl) (b : List Decl) : List Decl := match a {
+    List.empty => b,
+    List.cons hd tl => List.cons hd (append_decls_list tl b),
+}
