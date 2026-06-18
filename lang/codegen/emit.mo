@@ -760,11 +760,29 @@ def compile_db_def_ir (def_ : Def) : DefResult := match def_ {
         let c0 := bind_params_in_ctx_db empty_ctx params in
         match compile_db_term_ir c0 body {
             CompileResult.ok ctx_r instrs_r val_r blocks_r funcs_r globals_r =>
-                let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
-                let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                let all_blocks := append_blocks (cons_block entry_block empty_blocks) blocks_r in
-                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
-                DefResult.dr (cons_func main_func funcs_r) globals_r,
+                match val_r {
+                    LLVMValue.void_val =>
+                        match fresh_temp ctx_r {
+                            CtxStrPair.mk ctx_t temp =>
+                                // Create a call to alloc_constructor with tag 0 (Unit) and 0 fields
+                                // This ensures we return a proper i64 value that represents Unit
+                                let zero_val := LLVMValue.int_ 0 in
+                                let unit_val := LLVMValue.alloc_constructor 0 empty_vals in
+                                let assign := LLVMInstruction.assign temp unit_val in
+                                let new_instrs := append_instrs instrs_r (cons_instr assign empty_instrs) in
+                                let entry_instrs := append_instrs new_instrs (cons_instr (LLVMInstruction.ret (LLVMValue.var_ temp)) empty_instrs) in
+                                let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                                let all_blocks := append_blocks (cons_block entry_block empty_blocks) blocks_r in
+                                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
+                                DefResult.dr (cons_func main_func funcs_r) globals_r,
+                        },
+                    _ =>
+                        let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
+                        let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                        let all_blocks := append_blocks (cons_block entry_block empty_blocks) blocks_r in
+                        let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
+                        DefResult.dr (cons_func main_func funcs_r) globals_r,
+                },
         },
 }
 
