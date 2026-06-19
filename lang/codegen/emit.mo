@@ -136,8 +136,26 @@ def check_constructor (name : String) (names : List String) : Bool := match name
 
 @[partial]
 def show_identifier (id : Identifier) : String := match id {
-    Identifier.id s => s,
+    Identifier.id s => remove_quotes_from_identifier s,
 }
+
+@[partial]
+def remove_quotes_from_identifier (s : String) : String := 
+    remove_quotes_loop s ""
+
+@[partial]
+def remove_quotes_loop (s : String) (acc : String) : String := 
+    if String.beq s "" then acc
+    else
+        let first_byte : U8 := match String.get s 0 {
+            Option.some b => b,
+            Option.none => 0u8
+        } in
+        let single_quote : U8 := 39u8 in
+        if U8.beq first_byte single_quote then
+            remove_quotes_loop (String.slice s 1 (String.length s)) acc
+        else
+            remove_quotes_loop (String.slice s 1 (String.length s)) (String.concat acc (String.slice s 0 1))
 
 /// Find the last occurrence of a substring in a string, return its index or -1
 @[partial]
@@ -1185,9 +1203,9 @@ def ends_with_main (name : String) : Bool :=
 def compile_loaded_modules_to_ir (loaded : LoadedModules) : LLVMModule := 
     let main_mod := get_loaded_main loaded in
     let all_mods := get_loaded_all loaded in
-    // Collect all declarations with their module paths
-    let all_decls := collect_all_decls_from_modules_with_prefix all_mods List.empty in
-    // Compile all declarations together - function names will be fully qualified
+    // Collect all declarations without module prefixes (to avoid name resolution issues)
+    let all_decls := collect_all_decls_from_modules all_mods List.empty in
+    // Compile all declarations together
     compile_db_module all_decls
 
 @[partial]

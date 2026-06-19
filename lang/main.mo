@@ -189,11 +189,38 @@ struct CompileOptions {
 /// Parse a source file and compile + run it via LLVM.
 @[partial]
 def compile_file (file_path : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
-    // First try to load with dependencies
-    match load_file_decls_with_dependencies file_path {
-        Option.some decls => do {
-            println (String.concat "parsed decls " (String.concat (List.length decls |> I64.to_string) " succesfully"));
-            compile_parsed_decls decls output_dir output_name verbose
+    // First try to load with module boundaries preserved
+    match load_file_modules file_path {
+        Option.some loaded => do {
+            let mod_ := compile_loaded_modules_to_ir loaded;
+            let ir_text := emit_module mod_;
+            let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
+            let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
+            let runtime_obj := String.concat output_dir "/monad_runtime.o";
+            let output_path := String.concat output_dir (String.concat "/" output_name);
+
+            IO.write_file ir_path ir_text;
+
+            let result <- exec_cmd "llc" [ "-filetype=obj", ir_path, "-o", obj_path];
+            if not (result == 0) then do {
+                println <| (String.concat "Compiling ir " (String.concat ir_path " with llc failed"));
+                return 1
+            } else do {
+                let result <- exec_cmd "clang" (List.append [ "-c", "lang/codegen/runtime.c", "-o", runtime_obj] (if verbose then ["-v"] else [""]));
+                if not (result == 0) then do {
+                    println <| "compiling runtime failed";
+                    return 1
+                } else do {
+                    let result <- exec_cmd "lld" (List.append [ obj_path, runtime_obj, "-o", output_path] (if verbose then ["-v"] else [""]));
+                    if not (result == 0) then do {
+                        println <| "linking failed";
+                        return 1
+                    } else do {
+                        println "Compilation finished";
+                        return 0
+                    }
+                }
+            }
         },
         Option.none => do {
             println "Failed to parse dependencies";
