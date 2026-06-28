@@ -187,7 +187,7 @@ pub fn exec_cmd(terms: Vec<Term>) -> Result<Term, NativeError> {
   let status = std::process::Command::new(&cmd)
     .args(&args)
     .status()
-    .map_err(|e| NativeError::Custom(format!("exec_cmd failed: {e}")))?;
+    .map_err(|e| NativeError::Custom(format!("exec_cmd \"{cmd}\" failed: {e}")))?;
   let exit_code = status.code().unwrap_or(-1) as i64;
   Ok(io_term(num_suffix(exit_code, NumSuffix::I64)))
 }

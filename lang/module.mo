@@ -20,19 +20,19 @@ open infer
 
 /// Module path for the init directory
 @[partial]
-def init_module_path (name : String) : String := String.concat (String.concat "init/" name) ".mo"
+def init_module_path (name : String) : String := "init/" ++ name ++ ".mo"
 
 /// Module path for the std directory
 @[partial]
-def std_module_path (name : String) : String := String.concat (String.concat "std/" name) ".mo"
+def std_module_path (name : String) : String := "std/" ++ name ++ ".mo"
 
 /// Module path for the examples directory
 @[partial]
-def examples_module_path (name : String) : String := String.concat (String.concat "examples/" name) ".mo"
+def examples_module_path (name : String) : String := "examples/" ++ name ++ ".mo"
 
 /// Module path for the lang directory
 @[partial]
-def lang_module_path (name : String) : String := String.concat (String.concat "lang/" name) ".mo"
+def lang_module_path (name : String) : String := "lang/" ++ name ++ ".mo"
 
 /// Module path for the prelude
 @[partial]
@@ -67,11 +67,11 @@ def parse_module (path : ModulePath) (text : String) : ScopeData :=
 
 /// Extract use declarations from a list of declarations
 @[partial]
-def extract_use_decls (decls : List Decl) : List ModulePath := 
+def extract_use_decls (decls : List Decl) : List ModulePath :=
     extract_use_decls_go decls List.empty
 
 @[partial]
-def extract_use_decls_go (decls : List Decl) (acc : List ModulePath) : List ModulePath := 
+def extract_use_decls_go (decls : List Decl) (acc : List ModulePath) : List ModulePath :=
     match decls {
         List.empty => acc,
         List.cons d rest =>
@@ -83,23 +83,23 @@ def extract_use_decls_go (decls : List Decl) (acc : List ModulePath) : List Modu
 
 /// Convert an Identifier to a String
 @[partial]
-def identifier_to_string (id : Identifier) : String := 
+def identifier_to_string (id : Identifier) : String :=
     match id {
         Identifier.id s => s
     }
 
 /// Convert a ModulePath to a file path string (without .mo extension)
 @[terminating]
-def module_path_to_file (mp : ModulePath) : String := 
+def module_path_to_file (mp : ModulePath) : String :=
     match mp {
-        ModulePath.mp ids => 
+        ModulePath.mp ids =>
             match ids {
                 List.empty => "",
                 List.cons hd rest =>
                     let hd_str : String := identifier_to_string hd in
                     let rest_str : String := module_path_to_file (ModulePath.mp rest) in
-                    if String.beq rest_str "" 
-                    then hd_str 
+                    if String.beq rest_str ""
+                    then hd_str
                     else String.concat (String.concat hd_str "/") rest_str,
                 _ => ""
             },
@@ -114,16 +114,16 @@ def file_exists_b (path : String) : Bool := match IO.file_exists path {
 
 /// Convert a ModulePath to a string representation
 @[partial]
-def module_path_to_string (mp : ModulePath) : String := 
+def module_path_to_string (mp : ModulePath) : String :=
     match mp {
-        ModulePath.mp ids => 
+        ModulePath.mp ids =>
             match ids {
                 List.empty => "",
                 List.cons hd rest =>
                     let hd_str : String := identifier_to_string hd in
                     let rest_str : String := module_path_to_string (ModulePath.mp rest) in
-                    if String.beq rest_str "" 
-                    then hd_str 
+                    if String.beq rest_str ""
+                    then hd_str
                     else String.concat (String.concat hd_str ".") rest_str,
                 _ => ""
             },
@@ -132,14 +132,14 @@ def module_path_to_string (mp : ModulePath) : String :=
 
 /// Convert a file path to a ModulePath
 @[partial]
-def file_path_to_module_path (path : String) : ModulePath := 
+def file_path_to_module_path (path : String) : ModulePath :=
     let last_slash : I64 := string_find_last_slash path in
-    let file_name : String := 
+    let file_name : String :=
         if I64.lt 0 last_slash then
             String.slice path 0 (String.length path)
         else
             String.slice path (last_slash + 1) (String.length path) in
-    let name_without_ext : String := 
+    let name_without_ext : String :=
         if String.ends_with file_name ".mo" then
             String.slice file_name 0 (String.length file_name - 3)
         else
@@ -148,7 +148,7 @@ def file_path_to_module_path (path : String) : ModulePath :=
 
 /// Find the last index of the '/' character in a string, returning -1 if not found
 @[partial]
-def string_find_last_slash (s : String) : I64 := 
+def string_find_last_slash (s : String) : I64 :=
     string_find_last_slash_go s (String.length s)
 
 /// '/' character as U8
@@ -156,7 +156,7 @@ def string_find_last_slash (s : String) : I64 :=
 def slash_byte : U8 := 47u8
 
 @[partial]
-def string_find_last_slash_go (s : String) (idx : I64) : I64 := 
+def string_find_last_slash_go (s : String) (idx : I64) : I64 :=
     if I64.lt 0 idx then
         match String.get s (idx - 1) {
             Option.some byte_val =>
@@ -173,7 +173,7 @@ def string_find_last_slash_go (s : String) (idx : I64) : I64 :=
 /// Extract the directory from a file path
 /// e.g., "init/process.mo" -> "init/"
 @[partial]
-def extract_directory (file_path : String) : String := 
+def extract_directory (file_path : String) : String :=
     let last_slash_idx : I64 := string_find_last_slash file_path in
     if I64.lt last_slash_idx 0 then
         ""
@@ -182,7 +182,7 @@ def extract_directory (file_path : String) : String :=
 
 /// Join two path components with a separator
 @[partial]
-def path_join (a : String) (b : String) : String := 
+def path_join (a : String) (b : String) : String :=
     if String.beq a "" then
         b
     else if String.beq b "" then
@@ -195,10 +195,10 @@ def path_join (a : String) (b : String) : String :=
 /// Resolve a module path to a file path, trying different directories
 /// First tries relative to base_dir, then falls back to standard locations
 @[partial]
-def resolve_module_file (base_dir : String) (mp : ModulePath) : Option String := 
+def resolve_module_file (base_dir : String) (mp : ModulePath) : Option String :=
     let mp_str : String := module_path_to_file mp in
     let with_extension : String := String.concat mp_str ".mo" in
-    
+
     // Special case: 'prelude maps to init/prelude.mo
     if String.beq mp_str "'prelude" then
         let prelude_path : String := "init/prelude.mo" in
@@ -241,7 +241,7 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : Option String :=
 
 /// Try to read a module file from disk, relative to a base directory
 @[partial]
-def try_read_module_file (base_dir : String) (mp : ModulePath) : Option String := 
+def try_read_module_file (base_dir : String) (mp : ModulePath) : Option String :=
     match resolve_module_file base_dir mp {
         Option.some resolved => match IO.read_file resolved { io s => Option.some s },
         Option.none => Option.none
@@ -249,15 +249,15 @@ def try_read_module_file (base_dir : String) (mp : ModulePath) : Option String :
 
 /// Try to read a module file from disk (default base directory is empty)
 @[partial]
-def try_read_module_file_default (mp : ModulePath) : Option String := 
+def try_read_module_file_default (mp : ModulePath) : Option String :=
     try_read_module_file "" mp
 
 /// Load a module by its ModulePath, returning parsed declarations or none
 /// base_dir is the directory to resolve relative imports from
 @[partial]
-def load_module_decls (base_dir : String) (mp : ModulePath) : Option (List Decl) := 
+def load_module_decls (base_dir : String) (mp : ModulePath) : Option (List Decl) :=
     match try_read_module_file base_dir mp {
-        Option.some content => 
+        Option.some content =>
             match parse_all_decls content {
                 ParseResult.success _ decls => Option.some decls,
                 ParseResult.fail _ => Option.none
@@ -267,15 +267,15 @@ def load_module_decls (base_dir : String) (mp : ModulePath) : Option (List Decl)
 
 /// Load a module by its ModulePath with default base directory
 @[partial]
-def load_module_decls_default (mp : ModulePath) : Option (List Decl) := 
+def load_module_decls_default (mp : ModulePath) : Option (List Decl) :=
     load_module_decls "" mp
 
 /// Build a Scope from a ModulePath by loading and parsing the file
 /// base_dir is the directory to resolve relative imports from
 @[partial]
-def load_module_scope (base_dir : String) (mp : ModulePath) : Option ScopeData := 
+def load_module_scope (base_dir : String) (mp : ModulePath) : Option ScopeData :=
     match load_module_decls base_dir mp {
-        Option.some decls => 
+        Option.some decls =>
             let sd : ScopeData := build_scope_from_decls mp decls in
             Option.some sd,
         Option.none => Option.none
@@ -283,13 +283,13 @@ def load_module_scope (base_dir : String) (mp : ModulePath) : Option ScopeData :
 
 /// Build a Scope from a ModulePath with default base directory
 @[partial]
-def load_module_scope_default (mp : ModulePath) : Option ScopeData := 
+def load_module_scope_default (mp : ModulePath) : Option ScopeData :=
     load_module_scope "" mp
 
 /// Extract all transitive dependencies from a list of declarations
 /// with a base directory for resolving relative imports
 @[partial]
-def extract_all_dependencies (base_dir : String) (decls : List Decl) : List ModulePath := 
+def extract_all_dependencies (base_dir : String) (decls : List Decl) : List ModulePath :=
     let direct_deps : List ModulePath := extract_use_decls decls in
     let empty_mp_list : List ModulePath := List.empty in
     extract_all_dependencies_go base_dir direct_deps empty_mp_list empty_mp_list
@@ -298,12 +298,12 @@ def extract_all_dependencies (base_dir : String) (decls : List Decl) : List Modu
 /// visiting: modules currently being visited (for cycle detection)
 /// visited: modules already fully processed
 @[partial]
-def extract_all_dependencies_go 
-    (base_dir : String) 
-    (to_visit : List ModulePath) 
-    (visiting : List ModulePath) 
-    (visited : List ModulePath) : 
-    List ModulePath := 
+def extract_all_dependencies_go
+    (base_dir : String)
+    (to_visit : List ModulePath)
+    (visiting : List ModulePath)
+    (visited : List ModulePath) :
+    List ModulePath :=
     match to_visit {
         List.empty => visited,
         List.cons head tail =>
@@ -320,7 +320,7 @@ def extract_all_dependencies_go
                     Option.some dep_decls =>
                         // First, find the actual file path for this module
                         let resolved_path : Option String := resolve_module_file base_dir head in
-                        let new_base_dir : String := 
+                        let new_base_dir : String :=
                             match resolved_path {
                                 Option.some fp => extract_directory fp,
                                 Option.none => base_dir
@@ -337,7 +337,7 @@ def extract_all_dependencies_go
 
 /// Check if a list contains a specific ModulePath
 @[partial]
-def list_contains (xs : List ModulePath) (x : ModulePath) : Bool := 
+def list_contains (xs : List ModulePath) (x : ModulePath) : Bool :=
     match xs {
         List.empty => false,
         List.cons hd rest =>
@@ -351,12 +351,12 @@ def list_contains (xs : List ModulePath) (x : ModulePath) : Bool :=
 /// Load all dependencies for a module and merge their scopes
 /// base_dir is the directory to resolve the initial module from
 @[partial]
-def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : Option Scope := 
+def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : Option Scope :=
     match load_module_decls base_dir mp {
         Option.some decls =>
             // Get the actual file path for this module to determine its directory
             let resolved_path : Option String := resolve_module_file base_dir mp in
-            let module_base_dir : String := 
+            let module_base_dir : String :=
                 match resolved_path {
                     Option.some fp => extract_directory fp,
                     Option.none => base_dir
@@ -377,20 +377,20 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : Option
 
 /// Load all dependencies for a module with default base directory
 @[partial]
-def load_module_with_dependencies_default (mp : ModulePath) : Option Scope := 
+def load_module_with_dependencies_default (mp : ModulePath) : Option Scope :=
     load_module_with_dependencies "" mp
 
 /// Load all declarations for a module and its transitive dependencies.
 /// Returns Option (List Decl) where the list contains all declarations from
 /// the module and all its dependencies, suitable for compilation.
 @[partial]
-def load_module_decls_with_dependencies (base_dir : String) (mp : ModulePath) : Option (List Decl) := 
+def load_module_decls_with_dependencies (base_dir : String) (mp : ModulePath) : Option (List Decl) :=
     // First load the main module's declarations
     match load_module_decls base_dir mp {
         Option.some main_decls =>
             // Get the actual file path for this module to determine its directory
             let resolved_path : Option String := resolve_module_file base_dir mp in
-            let module_base_dir : String := 
+            let module_base_dir : String :=
                 match resolved_path {
                     Option.some fp => extract_directory fp,
                     Option.none => base_dir
@@ -409,14 +409,14 @@ def load_module_decls_with_dependencies (base_dir : String) (mp : ModulePath) : 
 
 /// Load declarations for a list of module paths
 @[partial]
-def load_dependency_decls (base_dir : String) (deps : List ModulePath) (acc : List Decl) : List Decl := 
+def load_dependency_decls (base_dir : String) (deps : List ModulePath) (acc : List Decl) : List Decl :=
     match deps {
         List.empty => acc,
         List.cons head tail =>
             // Try to resolve and load each dependency
             match load_module_decls base_dir head {
                 Option.some decls => load_dependency_decls base_dir tail (list_append decls acc),
-                Option.none => 
+                Option.none =>
                     // If not found with base_dir, try with empty base_dir (global search)
                     match load_module_decls_default head {
                         Option.some decls => load_dependency_decls base_dir tail (list_append decls acc),
@@ -427,20 +427,20 @@ def load_dependency_decls (base_dir : String) (deps : List ModulePath) (acc : Li
 
 /// Load all declarations for a module and its dependencies with default base directory
 @[partial]
-def load_module_decls_with_dependencies_default (mp : ModulePath) : Option (List Decl) := 
+def load_module_decls_with_dependencies_default (mp : ModulePath) : Option (List Decl) :=
     load_module_decls_with_dependencies "" mp
 
 /// Load scope data for a list of module paths, with base directory for resolution
 /// Each module is loaded once, and we try to resolve it from the base_dir
 @[partial]
-def load_dependency_scopes (base_dir : String) (deps : List ModulePath) (acc : List ScopeData) : List ScopeData := 
+def load_dependency_scopes (base_dir : String) (deps : List ModulePath) (acc : List ScopeData) : List ScopeData :=
     match deps {
         List.empty => acc,
         List.cons head tail =>
             // Try to resolve and load each dependency
             match load_module_scope base_dir head {
                 Option.some sd => load_dependency_scopes base_dir tail (List.cons sd acc),
-                Option.none => 
+                Option.none =>
                     // If not found with base_dir, try with empty base_dir (global search)
                     match load_module_scope_default head {
                         Option.some sd => load_dependency_scopes base_dir tail (List.cons sd acc),
@@ -451,7 +451,7 @@ def load_dependency_scopes (base_dir : String) (deps : List ModulePath) (acc : L
 
 /// Merge two ScopeData structures
 @[partial]
-def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData := 
+def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
     match sd1 {
         ScopeData.mk dr1 cd1 ins1 ind1 cls1 inf1 conf1 =>
             match sd2 {
@@ -470,12 +470,12 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
 
 /// Merge lists of ScopeData
 @[partial]
-def merge_scope_data_list (sds : List ScopeData) : ScopeData := 
+def merge_scope_data_list (sds : List ScopeData) : ScopeData :=
     let empty : ScopeData := scope_data_empty in
     merge_scope_data_list_go sds empty
 
 @[partial]
-def merge_scope_data_list_go (sds : List ScopeData) (acc : ScopeData) : ScopeData := 
+def merge_scope_data_list_go (sds : List ScopeData) (acc : ScopeData) : ScopeData :=
     match sds {
         List.empty => acc,
         List.cons sd rest =>
@@ -485,7 +485,7 @@ def merge_scope_data_list_go (sds : List ScopeData) (acc : ScopeData) : ScopeDat
 
 /// Merge two lists of ScopeInstance
 @[partial]
-def merge_instances (ins1 : List ScopeInstance) (ins2 : List ScopeInstance) : List ScopeInstance := 
+def merge_instances (ins1 : List ScopeInstance) (ins2 : List ScopeInstance) : List ScopeInstance :=
     match ins1 {
         List.empty => ins2,
         List.cons si1 rest1 =>
@@ -495,7 +495,7 @@ def merge_instances (ins1 : List ScopeInstance) (ins2 : List ScopeInstance) : Li
 
 /// Helper: append two lists
 @[partial]
-def list_append (xs : List A) (ys : List A) : List A := 
+def list_append (xs : List A) (ys : List A) : List A :=
     match xs {
         List.empty => ys,
         List.cons x rest => List.cons x (list_append rest ys)
@@ -506,14 +506,14 @@ def list_append (xs : List A) (ys : List A) : List A :=
 /// Build a scope with all dependencies loaded for type checking a file
 /// The file_path is used to determine the directory for resolving relative imports
 @[partial]
-def build_scope_with_deps (file_path : String) (mod_name : String) : Option Scope := 
+def build_scope_with_deps (file_path : String) (mod_name : String) : Option Scope :=
     let base_dir : String := extract_directory file_path in
     let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty) in
     load_module_with_dependencies base_dir mp
 
 /// Build scope and type check a file with its dependencies loaded
 @[partial]
-def typecheck_file_with_deps (file_path : String) (mod_name : String) : Bool := 
+def typecheck_file_with_deps (file_path : String) (mod_name : String) : Bool :=
     if file_exists_b file_path then
         let content : String := match IO.read_file file_path { io c => c } in
         let base_dir : String := extract_directory file_path in
@@ -536,7 +536,7 @@ def typecheck_file_with_deps (file_path : String) (mod_name : String) : Bool :=
 
 /// Type check all declarations in a module with a given scope
 @[partial]
-def typecheck_module_with_scope (scope : Scope) (decls : List Decl) (locals : LocalScope) : Bool := 
+def typecheck_module_with_scope (scope : Scope) (decls : List Decl) (locals : LocalScope) : Bool :=
     match decls {
         List.empty => true,
         List.cons d rest =>
@@ -548,7 +548,7 @@ def typecheck_module_with_scope (scope : Scope) (decls : List Decl) (locals : Lo
 
 /// Type check a single declaration with scope
 @[partial]
-def typecheck_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) : Bool := 
+def typecheck_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) : Bool :=
     match d {
         Decl.def_d df => typecheck_def_with_scope df scope locals,
         Decl.inductive_d ind => typecheck_inductive_with_scope ind scope locals,
@@ -557,7 +557,7 @@ def typecheck_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) :
 
 /// Type check a definition with scope
 @[partial]
-def typecheck_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) : Bool := 
+def typecheck_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) : Bool :=
     match df {
         Def.mk _name typ body _constraints _attrs =>
             // Skip native/abstract definitions (body is Term.hole)
@@ -572,7 +572,7 @@ def typecheck_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) : 
 
 /// Check if a term is a hole
 @[partial]
-def is_term_hole (t : Term) : Bool := 
+def is_term_hole (t : Term) : Bool :=
     match t {
         Term.hole => true,
         _ => false
@@ -580,7 +580,7 @@ def is_term_hole (t : Term) : Bool :=
 
 /// Type check an inductive with scope
 @[partial]
-def typecheck_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) : Bool := 
+def typecheck_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) : Bool :=
     match ind {
         Inductive.mk _name _params _typ constructors _attrs =>
             typecheck_constructors_with_scope constructors scope locals
@@ -588,7 +588,7 @@ def typecheck_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : L
 
 /// Type check all constructors with scope
 @[partial]
-def typecheck_constructors_with_scope (cons : List InductConstructor) (scope : Scope) (locals : LocalScope) : Bool := 
+def typecheck_constructors_with_scope (cons : List InductConstructor) (scope : Scope) (locals : LocalScope) : Bool :=
     match cons {
         List.empty => true,
         List.cons c rest =>
@@ -600,7 +600,7 @@ def typecheck_constructors_with_scope (cons : List InductConstructor) (scope : S
 
 /// Type check a single constructor with scope
 @[partial]
-def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals : LocalScope) : Bool := 
+def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals : LocalScope) : Bool :=
     match c {
         InductConstructor.mk _name params typ =>
             match type_check typ Term.hole scope empty_local_types locals {

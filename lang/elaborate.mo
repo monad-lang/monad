@@ -5,30 +5,6 @@ open types
 /// de Bruijn index >= 0 means bound; -1 means free/unknown.
 def sentinel : I64 := -1
 
-/// Compare two identifiers for equality (by string value).
-def id_eq (a : Identifier) (b : Identifier) : Bool :=
-    match a {
-        Identifier.id as => match b {
-            Identifier.id bs => String.beq as bs,
-        },
-    }
-
-/// Check if an identifier is in a list of identifiers.
-def id_member (id : Identifier) (ids : List Identifier) : Bool :=
-    match ids {
-        List.cons hd rest => if id_eq id hd then true else id_member id rest,
-        List.empty => false,
-    }
-
-/// Union two lists of identifiers (deduplicated, left-biased order).
-def union_ids (a : List Identifier) (b : List Identifier) : List Identifier :=
-    match a {
-        List.cons hd rest =>
-            if id_member hd b
-            then union_ids rest b
-            else List.cons hd (union_ids rest b),
-        List.empty => b,
-    }
 
 /// Collect all free type variables from a Term.
 /// A free variable is a var with de Bruijn index == sentinel (-1)

@@ -100,17 +100,7 @@ def test_keval_lit : Bool :=
             EvalLiteral.l_bool b => false,
             EvalLiteral.l_sort n => false
           },
-        EvalTerm.evar idx => false,
-        EvalTerm.elam mult body => false,
-        EvalTerm.eapp fun arg => false,
-        EvalTerm.econst idx => false,
-        EvalTerm.esort level => false,
-        EvalTerm.eprim idx args => false,
-        EvalTerm.erecursor info cases s => false,
-        EvalTerm.eregion r m b => false,
-        EvalTerm.eborrow r k b => false,
-        EvalTerm.eproj f a => false,
-        EvalTerm.eproj_field f b => false
+        _ => false
       },
     kr_err msg => false
   }
@@ -127,22 +117,9 @@ def test_keval_identity : Bool :=
         EvalTerm.elit lit =>
           match lit {
             EvalLiteral.l_int n => I64.beq n 99,
-            EvalLiteral.l_str s => false,
-            EvalLiteral.l_float s => false,
-            EvalLiteral.l_bool b => false,
-            EvalLiteral.l_sort n => false
+            _ => false
           },
-        EvalTerm.evar idx => false,
-        EvalTerm.elam mult body => false,
-        EvalTerm.eapp fun arg => false,
-        EvalTerm.econst idx => false,
-        EvalTerm.esort level => false,
-        EvalTerm.eprim idx args => false,
-        EvalTerm.erecursor info cases s => false,
-        EvalTerm.eregion r m b => false,
-        EvalTerm.eborrow r k b => false,
-        EvalTerm.eproj f a => false,
-        EvalTerm.eproj_field f b => false
+        _ => false
       },
     kr_err msg => false
   }
@@ -154,17 +131,7 @@ def test_keval_lam_value : Bool :=
     kr_ok v =>
       match v {
         EvalTerm.elam mult body => true,
-        EvalTerm.evar idx => false,
-        EvalTerm.eapp fun arg => false,
-        EvalTerm.econst idx => false,
-        EvalTerm.esort level => false,
-        EvalTerm.elit lit => false,
-        EvalTerm.eprim idx args => false,
-        EvalTerm.erecursor info cases s => false,
-        EvalTerm.eregion r m b => false,
-        EvalTerm.eborrow r k b => false,
-        EvalTerm.eproj f a => false,
-        EvalTerm.eproj_field f b => false
+        _ => false
       },
     kr_err msg => false
   }
@@ -176,53 +143,30 @@ def test_keval_const : Bool :=
     kr_ok v =>
       match v {
         EvalTerm.econst idx => I64.beq idx 5,
-        EvalTerm.evar idx => false,
-        EvalTerm.elam mult body => false,
-        EvalTerm.eapp fun arg => false,
-        EvalTerm.esort level => false,
-        EvalTerm.elit lit => false,
-        EvalTerm.eprim idx args => false,
-        EvalTerm.erecursor info cases s => false,
-        EvalTerm.eregion r m b => false,
-        EvalTerm.eborrow r k b => false,
-        EvalTerm.eproj f a => false,
-        EvalTerm.eproj_field f b => false
+        _ => false
       },
     kr_err msg => false
   }
 
 @[test]
 def test_keval_nested_app : Bool :=
-  let body : EvalTerm := EvalTerm.evar 0 in
-  let inner : EvalTerm := EvalTerm.elam Multiplicity.many body in
-  let outer : EvalTerm := EvalTerm.elam Multiplicity.many inner in
-  let arg1 : EvalTerm := EvalTerm.elit (EvalLiteral.l_int 10) in
-  let arg2 : EvalTerm := EvalTerm.elit (EvalLiteral.l_int 20) in
-  let app : EvalTerm := EvalTerm.eapp (EvalTerm.eapp outer arg1) arg2 in
+  let
+    body : EvalTerm := EvalTerm.evar 0;
+    inner : EvalTerm := EvalTerm.elam Multiplicity.many body;
+    outer : EvalTerm := EvalTerm.elam Multiplicity.many inner;
+    arg1 : EvalTerm := EvalTerm.elit (EvalLiteral.l_int 10);
+    arg2 : EvalTerm := EvalTerm.elit (EvalLiteral.l_int 20);
+    app : EvalTerm := EvalTerm.eapp (EvalTerm.eapp outer arg1) arg2
+  in
   match keval app kenv_empty {
     kr_ok v =>
       match v {
         EvalTerm.elit lit =>
           match lit {
             EvalLiteral.l_int n => I64.beq n 20,
-            EvalLiteral.l_str s => false,
-            EvalLiteral.l_float s => false,
-            EvalLiteral.l_bool b => false,
-            EvalLiteral.l_sort n => false
+            _ => false
           },
-        EvalTerm.evar idx => false,
-        EvalTerm.elam mult body => false,
-        EvalTerm.eapp fun arg => false,
-        EvalTerm.econst idx => false,
-        EvalTerm.esort level => false,
-        EvalTerm.eprim idx args => false,
-        EvalTerm.erecursor info cases s => false,
-        EvalTerm.eregion r m b => false,
-        EvalTerm.eborrow r k b => false,
-        EvalTerm.eproj f a => false,
-        EvalTerm.eproj_field f b => false
+        _ => false
       },
     kr_err msg => false
   }
-
-def main:I64:=42
