@@ -190,14 +190,16 @@ struct CompileOptions {
 @[partial]
 def compile_file (file_path : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
     // First try to load with module boundaries preserved
-    match load_file_modules file_path {
-        Option.some loaded => do {
+    let res <- load_file_modules file_path;
+    match (res : Result String LoadedModules) {
+        Result.ok loaded => do {
+            println <| "modules loaded:\n" ++ Show.show loaded;
             let mod_ := compile_loaded_modules_to_ir loaded;
             let ir_text := emit_module mod_;
-            let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
-            let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
-            let runtime_obj := String.concat output_dir "/monad_runtime.o";
-            let output_path := String.concat output_dir (String.concat "/" output_name);
+            let ir_path := output_dir ++ "/" ++ output_name ++ ".ll";
+            let obj_path := output_dir ++ "/" ++ output_name ++ ".o";
+            let runtime_obj := output_dir ++ "/monad_runtime.o";
+            let output_path := output_dir ++ "/" ++ output_name;
 
             IO.write_file ir_path ir_text;
 
@@ -222,8 +224,8 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
                 }
             }
         },
-        Option.none => do {
-            println "Failed to parse dependencies";
+        Result.err e => do {
+            println ("Failed to parse dependencies: " ++ e);
             // Fallback to simple parsing without dependencies (for error reporting)
             let source <- IO.read_file file_path;
             match lang.module.try_parse_decls source {

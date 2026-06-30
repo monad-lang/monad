@@ -1,5 +1,7 @@
 use std.test
 use std.list
+use std.show
+
 
 // Append tests (continued)
 

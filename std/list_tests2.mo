@@ -1,5 +1,6 @@
 use std.test
 use std.list
+use std.show
 
 def double (x : I64) : I64 := x * 2
 

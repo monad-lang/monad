@@ -1,28 +1,18 @@
-// Standard library: List operations and instances not covered in init/
-//
-// Provides:
-//   - Show class and instances (String, I64, Bool)
-//   - Show (List A) instance — element-wise, uses runtime type dispatch
-//   - Append (List A) instance
-//   - BEq (List A) instance — full element-wise equality
-//   - List.length, List.filter, List.sum
-//   - list_show helper (explicit show function, for concrete call sites)
+/// Standard library: List operations and instances not covered in init/
+///
+/// Provides:
+///   - Show class and instances (String, I64, Bool)
+///   - Show (List A) instance — element-wise, uses runtime type dispatch
+///   - Append (List A) instance
+///   - BEq (List A) instance — full element-wise equality
+///   - List.length, List.filter, List.sum
+///   - list_show helper (explicit show function, for concrete call sites)
+
+use std.show
+
 
 class Show A {
     def show : A -> String
-}
-
-instance Show String {
-    def show (s: String) : String := s
-}
-
-instance Show I64 {
-    def show (n: I64) : String := I64.to_string n
-}
-
-instance Show Bool {
-    def show (b: Bool) : String :=
-        if b then "true" else "false"
 }
 
 // list_show helper for explicit show functions (concrete call-site bypass)

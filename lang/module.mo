@@ -9,6 +9,7 @@ use lang.parser.combinators
 use lang.scope
 use lang.typecheck.infer
 use std.list
+use std.show
 
 open IO
 open types
@@ -19,24 +20,21 @@ open scope
 open infer
 
 /// Module path for the init directory
-@[partial]
-def init_module_path (name : String) : String := "init/" ++ name ++ ".mo"
+def init_module_file_path (name : String) : String := "init/" ++ name ++ ".mo"
 
 /// Module path for the std directory
-@[partial]
 def std_module_path (name : String) : String := "std/" ++ name ++ ".mo"
 
 /// Module path for the examples directory
-@[partial]
 def examples_module_path (name : String) : String := "examples/" ++ name ++ ".mo"
 
 /// Module path for the lang directory
-@[partial]
 def lang_module_path (name : String) : String := "lang/" ++ name ++ ".mo"
 
 /// Module path for the prelude
-@[partial]
 def prelude_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "'prelude") List.empty)
+
+def init_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "init") List.empty)
 
 /// Parse all declarations from source text.
 /// Uses t2_decls_parser which properly handles docstrings.
@@ -66,7 +64,6 @@ def parse_module (path : ModulePath) (text : String) : ScopeData :=
 // --- Module dependency loading ---
 
 /// Extract use declarations from a list of declarations
-@[partial]
 def extract_use_decls (decls : List Decl) : List ModulePath :=
     extract_use_decls_go decls List.empty
 
@@ -798,9 +795,27 @@ struct ModuleInfo {
     decls : List Decl,
 }
 
+def show_module_info (m : ModuleInfo) : String :=
+    match m {
+        mk path f _ => "module " ++ Show.show path
+    }
+
+instance Show ModuleInfo {
+    def show (m : ModuleInfo) : String := show_module_info m
+}
+
 struct LoadedModules {
     main_module : ModuleInfo,
     all_modules : List ModuleInfo,
+}
+
+def show_loaded_modules (m : LoadedModules) : String :=
+    match m {
+        mk main all => "main: " ++ Show.show main ++ "\nall: " ++ Show.show all
+    }
+
+instance Show LoadedModules {
+    def show (m : LoadedModules) : String := show_loaded_modules m
 }
 
 @[partial]
@@ -867,7 +882,7 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : Option ModuleI
     }
 
 @[partial]
-def load_file_modules (file_path : String) : Option LoadedModules :=
+def load_file_modules (file_path : String) : IO (Result String LoadedModules) :=
     let base_dir : String := extract_directory file_path in
     let last_slash : I64 := string_find_last_slash file_path in
     let file_name_only :=
@@ -880,25 +895,28 @@ def load_file_modules (file_path : String) : Option LoadedModules :=
             String.slice file_name_only 0 (String.length file_name_only - 3)
         else
             file_name_only in
-    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty) in
-    match load_module_with_info base_dir mp {
+    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id module_name) List.empty) in do {
+    return match load_module_with_info base_dir mp {
         Option.some main_module =>
             match main_module {
                 ModuleInfo.mk mp_path file_path decls =>
                     let main_base_dir : String := extract_directory file_path in
                     let all_dep_paths : List ModulePath := extract_all_dependencies main_base_dir decls in
-                    let all_dep_paths_with_prelude : List ModulePath := List.cons prelude_module_path all_dep_paths in
-                    let dep_modules : List ModuleInfo := load_dependencies_with_info main_base_dir all_dep_paths_with_prelude List.empty in
-                    let all_modules : List ModuleInfo := List.cons main_module dep_modules in
-                    Option.some { main_module := ModuleInfo.mk mp_path file_path decls, all_modules := all_modules }
+                    let all_dep_paths_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ all_dep_paths in
+                    match load_dependencies_with_info main_base_dir all_dep_paths_with_prelude List.empty {
+                      Result.ok dep_modules => 
+                        let all_modules : List ModuleInfo := List.cons main_module dep_modules in
+                        Result.ok { main_module := ModuleInfo.mk mp_path file_path decls, all_modules := all_modules },
+                      Result.err e => err e
+                    }
             },
-        Option.none => Option.none
-    }
+        Option.none => err ("Failed to load" ++ Show.show mp)
+    }}
 
 @[partial]
-def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (acc : List ModuleInfo) : List ModuleInfo :=
+def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (acc : List ModuleInfo) : Result String (List ModuleInfo) :=
     match deps {
-        List.empty => acc,
+        List.empty => Result.ok acc,
         List.cons head tail =>
             if list_contains_module_info acc head then
                 load_dependencies_with_info base_dir tail acc
@@ -910,10 +928,16 @@ def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (ac
                                 let dep_base_dir : String := extract_directory file_path in
                                 let dep_deps : List ModulePath := extract_all_dependencies dep_base_dir decls in
                                 let new_acc : List ModuleInfo := List.cons mi acc in
-                                let loaded_deps : List ModuleInfo := load_dependencies_with_info dep_base_dir dep_deps new_acc in
-                                load_dependencies_with_info base_dir tail loaded_deps
+                                match load_dependencies_with_info dep_base_dir dep_deps new_acc {
+                                    Result.ok loaded_deps =>
+                                        load_dependencies_with_info base_dir tail loaded_deps,
+                                    Result.err e =>
+                                        Result.err e
+                                }
                         },
                     Option.none =>
-                        load_dependencies_with_info base_dir tail acc
+                        let module_path_str := module_path_to_string head in
+                        let err_msg := "Failed to load module: " ++ module_path_str in
+                        Result.err err_msg
                 }
     }

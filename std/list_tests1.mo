@@ -1,3 +1,4 @@
+use std.show
 use std.test
 use std.list
 

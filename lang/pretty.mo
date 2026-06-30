@@ -7,33 +7,6 @@ open Multiplicity
 open DebugName
 open NumSuffix
 
-def show_identifier (id : Identifier) : String := match id {
-    Identifier.id s => s,
-}
-
-def show_operator (op : Operator) : String := match op {
-    Operator.operator s => s,
-}
-
-def show_module_path (mp : ModulePath) : String := match mp {
-    ModulePath.mp ids => join_identifiers ids,
-}
-
-def join_identifiers (ids : List Identifier) : String := match ids {
-    List.empty => "",
-    List.cons hd rest => join_id_rest hd rest,
-}
-
-def join_id_rest (hd : Identifier) (rest : List Identifier) : String :=
-    match rest {
-        List.empty => show_identifier hd,
-        List.cons x y =>
-            let dot := String.concat (show_identifier hd) "." in
-            let rest_str := join_id_rest x y in
-            String.concat dot rest_str,
-        _ => show_identifier hd
-    }
-
 def show_num_suffix (suf : NumSuffix) : String := match suf {
     i8 => "i8",
     i16 => "i16",
