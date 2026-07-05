@@ -1556,7 +1556,7 @@ fn struct_field_parser<X: Clone>(input: Span<X>) -> Res<StructField, X> {
 fn struct_inner_parser<X: Clone>(input: Span<X>) -> Res<Vec<StructField>, X> {
   delimited(
     (char('{'), ws0),
-    many1(terminated(struct_field_parser, (ws0, char(','), ws0))),
+    many1(terminated(struct_field_parser, (ws0, opt(char(',')), ws0))),
     (ws0, context("closing brace for struct fields", char('}'))),
   )
   .parse(input)

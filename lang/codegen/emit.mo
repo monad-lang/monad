@@ -748,7 +748,7 @@ def join_identifiers (ids : List Identifier) : String := match ids {
 def join_ids_rest (hd : Identifier) (rest : List Identifier) : String :=
     match rest {
         List.empty => show_identifier hd,
-        List.cons x y => String.concat (show_identifier hd) (String.concat "__" (join_identifiers rest)),
+        List.cons x y => String.concat (show_identifier hd) (String.concat "_" (join_identifiers rest)),
     }
 
 type DefResult {
@@ -1188,13 +1188,13 @@ def replace_dots_loop (s : String) (acc : String) : String :=
         else
             replace_dots_loop rest (String.concat acc (String.slice s 0 1))
 
-/// Check if a function name is a main function (handles both "main" and module__main)
+/// Check if a function name is a main function (handles both "main" and module_main)
 @[partial]
 def ends_with_main (name : String) : Bool := 
     if String.beq name "main" then true
     else if String.length name > 3 then
         let suffix := String.slice name (String.length name - 3) (String.length name) in
-        String.beq suffix "__main"
+        String.beq suffix "_main"
     else false
 
 /// Compile all loaded modules to a single LLVM module.
@@ -1203,8 +1203,8 @@ def ends_with_main (name : String) : Bool :=
 def compile_loaded_modules_to_ir (loaded : LoadedModules) : LLVMModule := 
     let main_mod := get_loaded_main loaded in
     let all_mods := get_loaded_all loaded in
-    // Collect all declarations without module prefixes (to avoid name resolution issues)
-    let all_decls := collect_all_decls_from_modules all_mods List.empty in
+    // Collect all declarations with module prefixes to avoid name collisions
+    let all_decls := collect_all_decls_from_modules_with_prefix all_mods List.empty in
     // Compile all declarations together
     compile_db_module all_decls
 

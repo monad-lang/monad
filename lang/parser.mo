@@ -266,342 +266,192 @@ def string_find_last_loop (haystack : String) (needle : String) (start_idx : I64
     else string_find_last_loop haystack needle (start_idx - 1)
 
 
-
 @[partial]
-
 def path_variable (input : String) : ParseResult TermV0 :=
-
-	match dotted_identifier input {
-
-		success rem ids =>
-
-			if at_least_two ids
-
-			then success rem (TermV0.var (NameRef.nmp (ModulePath.mp (List.map Identifier.id ids))))
-
-			else fail (ParseError.custom "not a dotted path"),
-
-		fail e => fail e
-
-	}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        match dotted_identifier input {
+                success rem ids =>
+                        if at_least_two ids
+                        then success rem (TermV0.var (NameRef.nmp (ModulePath.mp (List.map Identifier.id ids))))
+                        else fail (ParseError.custom "not a dotted path"),
+                fail e => fail e
+        }
 
 
 @[partial]
-
 def do_stmts_tail (input : String) : String :=
-
 	do_stmts_tail_sp (take_while is_space input) input
 
 
-
 @[partial]
-
 def do_stmts_tail_sp (r : ParseResult String) (orig : String) : String :=
-
 	match r {
-
 		success rem _ => do_stmts_tail_semi (tag ";" rem) rem orig,
-
 		fail _ => orig
-
 	}
 
 
-
 @[partial]
-
 def do_stmts_tail_semi (r : ParseResult String) (after_sp : String) (orig : String) : String :=
-
 	match r {
-
 		success rem _ => skip_spaces rem,
-
 		fail _ => after_sp
-
 	}
 
 
-
 @[partial]
-
 def t2_do_stmt_return (ctx: List Identifier) (input: String) : ParseResult DoStmt :=
-
     t2_do_stmt_ret_kw (tag "return" input) input ctx
 
 
-
 @[partial]
-
 def t2_do_stmt_ret_kw (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
-
     match r {
-
         success rem _ => t2_do_stmt_ret_expr (t2_expression ctx (skip_spaces rem)),
-
         fail _ => t2_do_stmt_try_let (tag "let" (skip_spaces orig)) orig ctx
-
     }
 
 
-
 @[partial]
-
 def t2_do_stmt_ret_expr (r: ParseResult Term) : ParseResult DoStmt :=
-
     match r {
-
         success rem value => success rem (DoStmt.ret_s value),
-
         fail e => fail e
-
     }
 
-
-
 @[partial]
-
 def t2_do_stmt_try_let (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
-
     match r {
-
         success rem _ => t2_do_stmt_let_name (identifier (skip_spaces rem)) ctx,
-
         fail _ => t2_do_stmt_expr (t2_expression ctx (skip_spaces orig))
-
     }
 
 
-
 @[partial]
-
 def t2_do_stmt_let_name (r: ParseResult String) (ctx: List Identifier) : ParseResult DoStmt :=
-
     match r {
-
         success rem name => t2_do_stmt_let_kind rem (Identifier.id name) ctx,
-
         fail e => fail e
-
     }
 
 
-
 @[partial]
-
 def t2_do_stmt_let_kind (input: String) (name: Identifier) (ctx: List Identifier) : ParseResult DoStmt :=
-
     t2_do_stmt_let_kind_try (tag ":=" (skip_spaces input)) name input ctx
 
 
 
 @[partial]
-
 def t2_do_stmt_let_kind_try (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
-
     match r {
-
         success rem _ => t2_do_stmt_let_value (t2_expression ctx (skip_spaces rem)) name,
-
         fail _ => t2_do_stmt_bind_arrow (tag "<-" (skip_spaces orig)) name orig ctx
-
     }
 
-
-
 @[partial]
-
 def t2_do_stmt_let_value (r: ParseResult Term) (name: Identifier) : ParseResult DoStmt :=
-
     match r {
-
         success rem value => success rem (DoStmt.let_s name value),
-
         fail e => fail e
-
     }
 
 
-
 @[partial]
-
 def t2_do_stmt_bind_arrow (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
-
     match r {
-
         success rem _ => t2_do_stmt_bind_value (t2_expression ctx (skip_spaces rem)) name,
-
         fail _ => fail (ParseError.custom "expected := or <- after let in do block")
-
     }
 
 
-
 @[partial]
-
 def t2_do_stmt_bind_value (r: ParseResult Term) (name: Identifier) : ParseResult DoStmt :=
-
     match r {
-
         success rem value => success rem (DoStmt.bind_s name value),
-
         fail e => fail e
-
     }
 
 
 
 @[partial]
-
 def t2_do_stmt_expr (r: ParseResult Term) : ParseResult DoStmt :=
-
     match r {
-
         success rem value => success rem (DoStmt.expr_s value),
-
         fail e => fail e
-
     }
 
 
-
 @[partial]
-
 def t2_do_stmts_extend_ctx (stmt: DoStmt) (ctx: List Identifier) : List Identifier :=
-
     match stmt {
-
         bind_s name _ => List.cons name ctx,
-
         let_s name _ => List.cons name ctx,
-
         _ => ctx
-
     }
 
 
-
 @[partial]
-
 def t2_do_stmts (ctx: List Identifier) (input: String) : ParseResult (List DoStmt) :=
-
     t2_do_stmts_check_end (tag "}" (skip_spaces input)) input ctx
 
 
-
 @[partial]
-
 def t2_do_stmts_check_end (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult (List DoStmt) :=
-
     match r {
-
         success rem _ =>
-
             let empty : List DoStmt := List.empty in
-
             success rem empty,
-
         fail _ => t2_do_stmts_first (t2_do_stmt_return ctx (skip_spaces orig)) (skip_spaces orig) ctx
-
     }
 
 
-
 @[partial]
-
 def t2_do_stmts_first (r: ParseResult DoStmt) (orig: String) (ctx: List Identifier) : ParseResult (List DoStmt) :=
-
     match r {
-
         success rem stmt => t2_do_stmts_next2 (t2_do_stmts (t2_do_stmts_extend_ctx stmt ctx) (do_stmts_tail rem)) stmt,
-
         fail e => fail e
-
     }
 
 
-
 @[partial]
-
 def t2_do_stmts_next2 (r: ParseResult (List DoStmt)) (first: DoStmt) : ParseResult (List DoStmt) :=
-
     match r {
-
         success rem rest => success rem (List.cons first rest),
-
         fail e => fail e
-
     }
 
 
-
 @[partial]
-
 def t2_do_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
-
     t2_do_parser_kw (tag "do" input) ctx
 
 
-
 @[partial]
-
 def t2_do_parser_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
-
     match r {
-
         success rem _ => t2_do_parser_open (tag "{" (skip_spaces rem)) ctx,
-
         fail e => fail e
-
     }
 
 
-
 @[partial]
-
 def t2_do_parser_open (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
-
     match r {
-
         success rem _ => t2_do_parser_stmts (t2_do_stmts ctx rem) ctx,
-
         fail e => fail e
-
     }
 
 
 
 @[partial]
-
 def t2_do_parser_stmts (r: ParseResult (List DoStmt)) (ctx: List Identifier) : ParseResult Term :=
-
     match r {
-
         success rem stmts => t2_do_parser_desugar rem stmts,
-
         fail e => fail e
-
     }
 
 
-
 @[partial]
-
 def t2_do_parser_desugar (rem: String) (stmts: List DoStmt) : ParseResult Term :=
-
     success rem (desugar_do stmts)
 
 
@@ -3549,47 +3399,29 @@ def t2_find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option 
     }
 
 
-
 @[partial]
-
 def t2_debug_name_of_id (id: Identifier) : DebugName :=
-
     DebugName.named id
 
 
-
 @[partial]
-
 def t2_var_term (ctx: List Identifier) (s: String) : Term :=
-
     let sid : Identifier := Identifier.id s in
-
     match t2_find_index sid ctx 0 {
-
         Option.some idx => Term.var idx (DebugName.named sid),
-
         Option.none => Term.var t2_sentinel (DebugName.named sid)
-
     }
 
 
-
 @[partial]
-
 def t2_variable (ctx: List Identifier) (input: String) : ParseResult Term :=
-
     t2_variable_try_path (path_variable input) ctx input
 
 
-
 @[partial]
-
 def t2_variable_try_path (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
-
     match r {
-
         success rem out =>
-
             // Dotted path → sentinel index (resolved later by module resolver)
             // Extract the last component of the qualified name for constructor detection
             match out {
@@ -3605,25 +3437,16 @@ def t2_variable_try_path (r: ParseResult TermV0) (ctx: List Identifier) (input: 
                 _ =>
                     success rem (Term.var t2_sentinel DebugName.unnamed),
             },
-
         fail _ => t2_variable_got (identifier input) ctx
-
     }
-
 
 
 @[partial]
-
 def t2_variable_got (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
-
     match r {
-
         success rem out => success rem (t2_var_term ctx out),
-
         fail e => fail e
-
     }
-
 
 
 // ─── Canonical literal parser (Phase 10) ───────────────────────────────
@@ -3641,25 +3464,19 @@ def t2_string_parse (input: String) : ParseResult Term :=
 
 
 def t2_num_to_term (n: I64) : Term :=
-
     Term.lit (Literal.num n NumSuffix.i64)
 
 
 
 @[partial]
-
 def t2_number_term (input: String) : ParseResult Term :=
-
     map_parse t2_num_to_term number input
 
 
 
 @[partial]
-
 def t2_literal_parser (input: String) : ParseResult Term :=
-
     alt_fold [t2_string_parse, t2_number_term] input
-
 
 
 // Skip /// docstring lines (consumed as whitespace).
@@ -3715,7 +3532,6 @@ def t2_atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :
 @[partial]
 
 def t2_match_case_parser (ctx: List Identifier) (input: String) : ParseResult MatchCase :=
-
     t2_match_case_name (identifier (skip_spaces input)) ctx
 
 
@@ -3723,15 +3539,10 @@ def t2_match_case_parser (ctx: List Identifier) (input: String) : ParseResult Ma
 @[partial]
 
 def t2_match_case_name (r: ParseResult String) (ctx: List Identifier) : ParseResult MatchCase :=
-
     match r {
-
         success rem name =>
-
             t2_match_case_args (many0 identifier (skip_spaces rem)) (Identifier.id name) ctx,
-
         fail e => fail e
-
     }
 
 

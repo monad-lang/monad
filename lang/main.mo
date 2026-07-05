@@ -6,6 +6,7 @@ use lang.codegen.ir
 use lang.codegen.emit
 use lang.module
 use lang.parser
+use lang.pretty
 use lang.parser.core
 use lang.parser.combinators
 use lang.typecheck.infer
@@ -145,7 +146,7 @@ def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name 
         println <| "compiling runtime failed";
         return 1
     } else do {
-    let result <- exec_cmd "lld" (List.append [ obj_path, runtime_obj, "-o", output_path] (if verbose then ["-v"] else [""]));
+    let result <- exec_cmd "clang" (List.append [ obj_path, runtime_obj, "-o", output_path] (if verbose then ["-v"] else [""]));
     if not (result == 0) then do {
         println <| "linking failed";
         return 1
@@ -213,7 +214,7 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
                     println <| "compiling runtime failed";
                     return 1
                 } else do {
-                    let result <- exec_cmd "lld" (List.append [ obj_path, runtime_obj, "-o", output_path] (if verbose then ["-v"] else [""]));
+                    let result <- exec_cmd "clang" (List.append [ obj_path, runtime_obj, "-o", output_path] (if verbose then ["-v"] else [""]));
                     if not (result == 0) then do {
                         println <| "linking failed";
                         return 1
@@ -239,26 +240,67 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
     }
 }
 
-/// Current main entrypoint of self hosted compiler
-def main (args : List String) : IO I64 {
-    let cmd := first_arg args;
-    let out_dir := "/tmp";
-    let verbose := false;
-    if cmd == "compile" then do {
-        let file_path := second_arg args;
+type Command {
+    compile (file: String) (out_name:String),
+    pretty (file: String),
+    help
+}
+
+def Command.from_args (args : List String) : Command :=
+    let cmd := first_arg args in
+    if cmd == "compile" then
+        let file_path := second_arg args in
         let out_name := if third_arg args == ""
             then "source"
-            else third_arg args;
-        compile_file file_path out_dir out_name verbose
-    }
-    else do {
-        print_help
+            else third_arg args in
+        Command.compile file_path out_name
+    else if cmd == "pretty" then
+        // TODO validate not empty
+        let file_path := second_arg args in
+        Command.pretty file_path
+    else
+        Command.help
+
+/// Current main entrypoint of self hosted compiler
+def main (args : List String) : IO I64 {
+    let out_dir := "/tmp";
+    let verbose := false;
+    // TODO fix type annotations in do let expressions
+    let cmd : Command := Command.from_args args in
+    match cmd {
+        compile file_path out_name => do {
+            let file_path := second_arg args;
+            let out_name := if third_arg args == ""
+                then "source"
+                else third_arg args;
+            compile_file file_path out_dir out_name verbose
+        },
+        pretty file_path => do {
+            println <| "loading " ++ file_path;
+            // TODO fix type checking bug on res
+            // let res <- load_file_modules file_path;
+            let res : Result String LoadedModules := err "TODO" in
+            match (res : Result String LoadedModules) {
+                ok loaded => do {
+                    println <| "modules loaded:\n" ++ Show.show loaded;
+                    return 0
+                },
+                err e => do {
+                    println ("Failed to parse dependencies: " ++ e);
+                    return 1
+                }
+            }
+        },
+        help => do {
+            print_help
+        }
     }
 }
 
 @[partial]
 def print_help : IO I64 {
     println "Usage: monad compile <path> [name]  Parse and compile a .mo source file";
+    println "       monad pretty <path>  Parse and pretty print a .mo source file";
     return 0
 }
 def first_arg (args : List String) : String :=

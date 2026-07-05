@@ -32,7 +32,7 @@ def examples_module_path (name : String) : String := "examples/" ++ name ++ ".mo
 def lang_module_path (name : String) : String := "lang/" ++ name ++ ".mo"
 
 /// Module path for the prelude
-def prelude_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "'prelude") List.empty)
+def prelude_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "prelude") List.empty)
 
 def init_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "init") List.empty)
 
@@ -797,7 +797,10 @@ struct ModuleInfo {
 
 def show_module_info (m : ModuleInfo) : String :=
     match m {
-        mk path f _ => "module " ++ Show.show path
+        mk path file decls =>
+            "module: " ++ Show.show path ++
+            "\n\tpath: " ++ file ++
+            "\n\tdecls: " ++ Show.show (List.map Decl.to_name decls : List ModulePath)
     }
 
 instance Show ModuleInfo {
