@@ -250,9 +250,10 @@ fn expand_term(
     Quote { term } => Ok(Quote {
       term: Box::new(resolve_quote(*term, macro_defs, depth)?),
     }),
-    Ctx { loc, term } => Ok(Ctx {
+    Ctx { loc, term, module } => Ok(Ctx {
       loc,
       term: Box::new(expand_term(*term, macro_defs, depth)?),
+      module,
     }),
     Pi {
       arg_name,
@@ -387,9 +388,10 @@ fn resolve_quote(
         term: Box::new(resolve_quote(*term, macro_defs, depth)?),
       })
     }
-    Ctx { loc, term } => Ok(Ctx {
+    Ctx { loc, term, module } => Ok(Ctx {
       loc,
       term: Box::new(resolve_quote(*term, macro_defs, depth)?),
+      module,
     }),
     Pi {
       arg_name,
@@ -593,9 +595,14 @@ fn rename_macro_var(term: Term, old: &Identifier, new: &Identifier) -> Term {
     Quote { term: t } => Quote {
       term: Box::new(rename_macro_var(*t, old, new)),
     },
-    Ctx { loc, term: t } => Ctx {
+    Ctx {
+      loc,
+      term: t,
+      module,
+    } => Ctx {
       loc,
       term: Box::new(rename_macro_var(*t, old, new)),
+      module,
     },
     Ann { term: t, typ } => Ann {
       term: Box::new(rename_macro_var(*t, old, new)),
@@ -712,9 +719,14 @@ fn alpha_rename_body(term: Term) -> Term {
     Quote { term: t } => Quote {
       term: Box::new(alpha_rename_body(*t)),
     },
-    Ctx { loc, term: t } => Ctx {
+    Ctx {
+      loc,
+      term: t,
+      module,
+    } => Ctx {
       loc,
       term: Box::new(alpha_rename_body(*t)),
+      module,
     },
     Ann { term: t, typ } => Ann {
       term: Box::new(alpha_rename_body(*t)),
@@ -816,9 +828,14 @@ fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
     Quote { term: t } => Quote {
       term: Box::new(subst_macro(*t, name, replacement)),
     },
-    Ctx { loc, term: t } => Ctx {
+    Ctx {
+      loc,
+      term: t,
+      module,
+    } => Ctx {
       loc,
       term: Box::new(subst_macro(*t, name, replacement)),
+      module,
     },
     Ann { term: t, typ } => Ann {
       term: Box::new(subst_macro(*t, name, replacement)),

@@ -636,8 +636,11 @@ fn constructor_fqn(term: &Term) -> Option<ModulePath> {
 
 #[cfg(test)]
 mod tests {
+  use std::sync::Arc;
+
   use super::*;
   use crate::eval_term::{self, Literal as ELit};
+  use crate::parser::ModuleContext;
   use crate::term::{
     Literal as TLit, ModulePath, NameRef, NumSuffix, Term,
     module::{LoadedModules, ParsedModule, module},
@@ -773,6 +776,7 @@ mod tests {
   fn test_lower_ctx_unwrapped() {
     let loaded = empty_loaded();
     let path = ModulePath::new(vec![crate::term::id("'test")]);
+    let context = Arc::new(ModuleContext::new(path.clone(), None));
     let scopes = loaded.scopes();
     let global = scopes.global(&path).unwrap();
     let scope = Scope::new(&global);
@@ -781,6 +785,7 @@ mod tests {
     let t = Term::Ctx {
       loc: Default::default(),
       term: Box::new(inner),
+      module: context,
     };
     assert_eq!(lower_term(&t, &scope).unwrap(), eval_term::sort(2));
   }

@@ -1075,7 +1075,7 @@ fn test_module_scope_isolation() {
 fn test_method_call_parse_structure() {
   let term = parse_term("x.get");
   let inner = match &term {
-    Ctx { loc: _, term } => term.as_ref(),
+    Ctx { term, .. } => term.as_ref(),
     t => t,
   };
 
@@ -2913,7 +2913,7 @@ fn test_cfg_test_use_skipped_in_non_test_mode() {
   let helper_path = ModulePath::new(vec![id("init"), id("test_helper")]);
   load_module_from_text(
     "def test_helper_val : I64 := 42",
-    helper_path.clone(),
+    &helper_path.clone(),
     &mut loaded,
   )
   .unwrap();
@@ -2956,12 +2956,7 @@ fn test_cfg_test_use_visible_in_test_mode() {
   let mut loaded = default_modules().unwrap();
   loaded.set_test_mode(true);
   let helper_path = ModulePath::new(vec![id("init"), id("test_helper")]);
-  load_module_from_text(
-    "def test_helper_val : I64 := 42",
-    helper_path.clone(),
-    &mut loaded,
-  )
-  .unwrap();
+  load_module_from_text("def test_helper_val : I64 := 42", &helper_path, &mut loaded).unwrap();
 
   let path = ModulePath::top("_test_cfg_use");
   let parsed = parse_file(
@@ -3025,7 +3020,7 @@ fn test_mote_dependency_resolves_via_search_paths() {
 
     def main : I64 := mylib.greet
     "#,
-    path.clone(),
+    &path,
     &mut loaded,
   )
   .inspect_err(|e| eprintln!("{e}"))
@@ -3066,7 +3061,7 @@ fn test_mote_resolution_priority_dep_before_motes() {
   let path = ModulePath::top("_test_mote_priority_dep");
   load_module_from_text(
     "use mylib\n\ndef main : I64 := mylib.greet\n",
-    path.clone(),
+    &path,
     &mut loaded,
   )
   .expect("should load");

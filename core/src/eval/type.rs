@@ -3,15 +3,17 @@ use std::time::Instant;
 
 use crate::{
   Map, Set, empty_set,
-  eval::macro_expand,
-  eval::termination::{TerminationError, check_termination_all},
+  eval::{
+    macro_expand,
+    termination::{TerminationError, check_termination_all},
+  },
   set_of,
   term::{
     Ann, ClassDefRef, Decl, DeclGenDef, Def, Identifier, Inductive, InductiveVariant, Instance,
     InstanceKey, Literal, ModulePath, Multiplicity, NameRef, Named, NumSuffix, SourceContext,
     SourceRange,
     Term::{Forall, Hole, Pi, Quote, Sort},
-    TypeConstraint, Typed, TypedTerm, VarRef, app, ctx, forall, lam_par,
+    TypeConstraint, Typed, TypedTerm, VarRef, app, ctx_arc, forall, lam_par,
     module::{LoadedModules, names_of_decls},
     mpvar, num_suffix, param, pi_typs, pi_with_mult, sort_u, sort1, typed_term, var,
   },
@@ -1747,8 +1749,8 @@ fn match_resolve_type_inner<'a>(
     }
     (Hole, _) => true,
     (_, Hole) => true,
-    (Ctx { loc: _, term }, _) => match_resolve_type_inner(term, right, free_vars, scope, visiting),
-    (_, Ctx { loc: _, term }) => match_resolve_type_inner(left, term, free_vars, scope, visiting),
+    (Ctx { term, .. }, _) => match_resolve_type_inner(term, right, free_vars, scope, visiting),
+    (_, Ctx { term, .. }) => match_resolve_type_inner(left, term, free_vars, scope, visiting),
     (Var { name: n1 }, Var { name: n2 }) => {
       let name_eq = if n1.is_name() {
         match n1.as_id() {
@@ -2886,12 +2888,17 @@ fn type_check_with_env(
       let cons_type = match_resolve_type(&cons_type, &expected_type, &scope)?;
       Ok(typed_term(term.clone(), cons_type))
     }
-    Ctx { ref loc, term } => {
-      let mut tt = type_check_with_env(*term, expected_type.clone(), &scope, usage, track_usage)
-        .map_err(|err| t_context(err, None, loc.clone()))?;
+    Ctx {
+      ref loc,
+      term,
+      module,
+    } => {
+      let TypedTerm { term, typ } =
+        type_check_with_env(*term, expected_type.clone(), &scope, usage, track_usage)
+          .map_err(|err| t_context(err, None, loc.clone()))?;
 
-      *tt.mut_term() = ctx(tt.term().clone(), loc.clone());
-      Ok(tt)
+      let term = ctx_arc(term, loc.clone(), module.clone());
+      Ok(TypedTerm { term, typ })
     }
     Forall {
       name: _,

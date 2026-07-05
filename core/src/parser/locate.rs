@@ -8,7 +8,10 @@ use std::{
   fmt::{self, Display, Formatter},
   hash::{Hash, Hasher},
   str::FromStr,
+  sync::Arc,
 };
+
+use crate::parser::ModuleContext;
 
 /// Parser info
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +19,7 @@ pub struct Info<X> {
   /// The offset represents the position of the fragment relatively to
   /// the input of the parser. It starts at offset 0.
   pub offset: usize,
+  pub module_context: Arc<ModuleContext>,
 
   /// Offset relative to the start of a line
   pub line_offset: usize,
@@ -43,6 +47,7 @@ impl<X: Default> Default for Info<X> {
       line: Default::default(),
       extra: Default::default(),
       line_offset: Default::default(),
+      module_context: Default::default(),
     }
   }
 }
@@ -65,6 +70,7 @@ impl<X> Info<X> {
       line_offset: self.line_offset,
       line: self.line,
       extra: f(self.extra),
+      module_context: Default::default(),
     }
   }
 }
@@ -123,13 +129,14 @@ impl<T> LocatedSpan<T, ()> {
   /// `nom_locate` assume span offsets are relative to the beginning of the
   /// same input. In these cases, you probably want to use the
   /// `nom::traits::Slice` trait instead.
-  pub fn new(program: T) -> LocatedSpan<T, ()> {
+  pub fn new(program: T, context: ModuleContext) -> LocatedSpan<T, ()> {
     LocatedSpan {
       info: Info {
         offset: 0,
         line_offset: 1,
         line: 1,
         extra: (),
+        module_context: Arc::new(context),
       },
       fragment: program,
     }
@@ -171,33 +178,9 @@ impl<T, X> LocatedSpan<T, X> {
         line_offset: 1,
         line: 1,
         extra,
+        module_context: Default::default(),
       },
       fragment: program,
-    }
-  }
-
-  /// Similar to `new_extra`, but allows overriding offset and line.
-  ///
-  /// # Safety
-  ///
-  /// Giving an offset too large may result in undefined behavior, as some
-  /// methods move back along the fragment assuming any negative index within
-  /// the offset is valid.
-  pub unsafe fn new_from_raw_offset(
-    offset: usize,
-    line_offset: usize,
-    line: u32,
-    fragment: T,
-    extra: X,
-  ) -> LocatedSpan<T, X> {
-    LocatedSpan {
-      info: Info {
-        offset,
-        line_offset,
-        line,
-        extra,
-      },
-      fragment,
     }
   }
 
@@ -230,7 +213,7 @@ impl<T, X> LocatedSpan<T, X> {
   ///
   /// fn main() {
   ///     use nom::Parser;
-  /// let span = LocatedSpan::new("$10");
+  ///     let span = LocatedSpan::new("$10", Default::default());
   ///     // matches the $ and then matches the decimal number afterwards,
   ///     // converting it into a `u8` and putting that value in the span
   ///     let (_, (_, n)) = (
@@ -270,7 +253,7 @@ impl<T, X> LocatedSpan<T, X> {
   /// }
   ///
   /// fn main() {
-  ///     let span = LocatedSpan::new("key=value");
+  ///     let span = LocatedSpan::new("key=value", Default::default());
   ///     let (_, pair) = parse_pair(span).unwrap();
   ///     assert_eq!(pair, ("key", "value"));
   /// }
@@ -429,6 +412,7 @@ impl<T: AsBytes, X> LocatedSpan<T, X> {
           offset: self.info.offset,
           line_offset: self.info.line_offset,
           extra: self.info.extra.clone(),
+          module_context: self.info.module_context.clone(),
         },
         fragment: next_fragment,
       };
@@ -452,6 +436,7 @@ impl<T: AsBytes, X> LocatedSpan<T, X> {
         line_offset,
         offset: next_offset,
         extra: self.info.extra.clone(),
+        module_context: self.info.module_context.clone(),
       },
       fragment: next_fragment,
     }

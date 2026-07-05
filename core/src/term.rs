@@ -4,13 +4,17 @@ pub mod mote;
 pub mod test;
 
 use crate::{
-  Map, Set, eval::constraint::check_instance_constraints_with_visiting, parser::locate::Info,
-  term::module::GlobalScope, vec_fmt,
+  Map, Set,
+  eval::constraint::check_instance_constraints_with_visiting,
+  parser::{ModuleContext, locate::Info},
+  term::module::GlobalScope,
+  vec_fmt,
 };
 use std::{
   fmt::Display,
   hash::Hash,
   path::{Component, Path, PathBuf},
+  sync::Arc,
 };
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord, Default)]
@@ -1238,7 +1242,7 @@ pub struct TypingContext {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedTerm {
   pub term: Term,
-  typ: Term,
+  pub typ: Term,
 }
 
 impl Typed for TypedTerm {
@@ -1371,6 +1375,7 @@ pub enum Term {
   /// Meta info about a term
   Ctx {
     loc: SourceRange,
+    module: Arc<ModuleContext>,
     term: Box<Term>,
   },
   /// Propositions
@@ -1403,7 +1408,7 @@ impl Term {
         typ: _,
         body: _,
       } => true,
-      Ctx { loc: _, term } => term.is_forall(),
+      Ctx { term, .. } => term.is_forall(),
       Pi {
         arg,
         ret: _,
@@ -1431,7 +1436,7 @@ impl Term {
         typ: _,
         body: _,
       } => true,
-      Ctx { loc: _, term } => term.is_type(),
+      Ctx { term, .. } => term.is_type(),
       _ => false,
     }
   }
@@ -1478,7 +1483,7 @@ impl Term {
       },
       Ntv { native: _ } => "ntv",
       Con(_) => "con",
-      Ctx { loc: _, term: _ } => "ctx",
+      Ctx { .. } => "ctx",
       Forall {
         name: _,
         typ: _,
@@ -1599,7 +1604,7 @@ impl Display for Term {
           write!(f, "{typ_name}.{name}")
         }
       }
-      Ctx { loc: _, term } => write!(f, "{term}"),
+      Ctx { term, .. } => write!(f, "{term}"),
       Pi {
         arg, ret, arg_name, ..
       } => {
@@ -1672,8 +1677,12 @@ pub fn oper(left: Term, operator: &str, right: Term) -> Term {
   )
 }
 
-pub fn ctx(term: Term, loc: SourceRange) -> Term {
+pub fn ctx(term: Term, loc: SourceRange, module: ModuleContext) -> Term {
+  ctx_arc(term, loc, Arc::new(module))
+}
+pub fn ctx_arc(term: Term, loc: SourceRange, module: Arc<ModuleContext>) -> Term {
   Term::Ctx {
+    module,
     loc,
     term: Box::new(term),
   }
@@ -1994,7 +2003,7 @@ pub fn def_with_native(
   Ok(def(name, vec![], typ, term, attributes))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct ModulePath(Vec<Identifier>);
 
 impl From<PathBuf> for ModulePath {

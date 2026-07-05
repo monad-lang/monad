@@ -748,7 +748,7 @@ def join_identifiers (ids : List Identifier) : String := match ids {
 def join_ids_rest (hd : Identifier) (rest : List Identifier) : String :=
     match rest {
         List.empty => show_identifier hd,
-        List.cons x y => String.concat (show_identifier hd) (String.concat "_" (join_identifiers rest)),
+        List.cons x y => String.concat (show_identifier hd) (String.concat "__" (join_identifiers rest)),
     }
 
 type DefResult {

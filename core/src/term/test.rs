@@ -244,15 +244,9 @@ impl Similar for Term {
   fn similar(&self, other: &Self) -> bool {
     use Term::{Ctx, Forall, Lam, Lit, Pi, Var};
     match (self, other) {
-      (
-        Ctx { loc: _, term },
-        Ctx {
-          loc: _,
-          term: o_term,
-        },
-      ) => (*term).similar(&**o_term),
-      (Ctx { loc: _, term }, _) => (*term).similar(other),
-      (_, Ctx { loc: _, term }) => (*other).similar(&**term),
+      (Ctx { term, .. }, Ctx { term: o_term, .. }) => (*term).similar(&**o_term),
+      (Ctx { term, .. }, _) => (*term).similar(other),
+      (_, Ctx { term, .. }) => (*other).similar(&**term),
       (
         Lam {
           param: p1,
@@ -469,10 +463,17 @@ pub fn defs_class_with_doc(
 #[test]
 fn term_similar() {
   let loc: SourceRange = Default::default();
-  let a = app(ctx(var("a"), loc.clone()), ctx(var("b"), loc.clone()));
+  let module: ModuleContext = Default::default();
+  let a = app(
+    ctx(var("a"), loc.clone(), module.clone()),
+    ctx(var("b"), loc.clone(), module.clone()),
+  );
   let b = app(var("a"), var("b"));
   similar!(b, a);
-  let a = app(ctx(var("a"), loc.clone()), ctx(var("b"), loc.clone()));
+  let a = app(
+    ctx(var("a"), loc.clone(), module.clone()),
+    ctx(var("b"), loc.clone(), module.clone()),
+  );
   let b = app(var("a"), var("b"));
   similar!(b, a);
 }

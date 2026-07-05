@@ -5,9 +5,12 @@ use nom::{
   error::{ContextError, ErrorKind},
 };
 
-use crate::diag::{self, Diagnostic, Severity, SubDiagnostic};
 use crate::parser::locate::LocatedSpan;
 use crate::term::{Location, SourceRange};
+use crate::{
+  diag::{self, Diagnostic, Severity, SubDiagnostic},
+  parser::ModuleContext,
+};
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum ParseErrorKind {
@@ -131,7 +134,7 @@ fn describe_nom_error(kind: &ErrorKind) -> &'static str {
 pub fn parse_error_to_diagnostic(
   source: &str,
   error: &OwnedError,
-  path: Option<&std::path::PathBuf>,
+  context: &ModuleContext,
 ) -> Diagnostic {
   let (line_num, column) = get_error_line_column(source, error);
 
@@ -170,7 +173,7 @@ pub fn parse_error_to_diagnostic(
     severity: Severity::Error,
     message: "parse error".to_string(),
     location,
-    path: path.cloned(),
+    path: context.file.clone(),
     sub_diagnostics,
     suggestions: vec![],
     context_name: None,
@@ -225,7 +228,7 @@ pub fn display_parse_error(
   error: &OwnedError,
   f: &mut impl std::fmt::Write,
 ) -> std::fmt::Result {
-  let diag = parse_error_to_diagnostic(source, error, None);
+  let diag = parse_error_to_diagnostic(source, error, &Default::default());
   write!(f, "{}", diag::render_diagnostic(&diag, Some(source), false))
 }
 
@@ -233,12 +236,12 @@ pub fn display_parse_error(
 pub struct ParseFileError {
   pub source: String,
   pub error: OwnedError,
-  pub path: Option<std::path::PathBuf>,
+  pub context: ModuleContext,
 }
 
 impl std::fmt::Display for ParseFileError {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let diag = parse_error_to_diagnostic(&self.source, &self.error, self.path.as_ref());
+    let diag = parse_error_to_diagnostic(&self.source, &self.error, &self.context);
     write!(
       f,
       "{}",

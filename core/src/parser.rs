@@ -283,11 +283,12 @@ fn opt_type_annotation<X: Clone>(input: Span<X>) -> Res<Term, X> {
 
 fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let extra = input.extra().clone();
+  let module = (&*input.info.module_context).clone();
   let input = input.map_extra(|_| ());
   let (input, value) = set_res_extra(
     parse_string_literal(input.into_fragment())
       .map_err(|e| e.map(|f: nom::error::Error<&str>| f.into()))
-      .map(|(i, v)| (Span::new(i), v)),
+      .map(|(i, v)| (Span::new(i, module), v)),
     extra,
   )?;
   Ok((
@@ -300,11 +301,12 @@ fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
 
 fn char_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let extra = input.extra().clone();
+  let module = (&*input.info.module_context).clone();
   let input = input.map_extra(|_| ());
   let (input, value) = set_res_extra(
     parse_char_literal(input.into_fragment())
       .map_err(|e| e.map(|f: nom::error::Error<&str>| f.into()))
-      .map(|(i, v)| (Span::new(i), v)),
+      .map(|(i, v)| (Span::new(i, module), v)),
     extra,
   )?;
   Ok((
@@ -1010,11 +1012,13 @@ fn desugar_list_literal(elements: Vec<Term>) -> Term {
 }
 
 pub fn term<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let module = (&*input.info.module_context).clone();
   let (input, start) = info(input)?;
   let (input, term) = binop(input)?;
   let (input, end) = info(input)?;
   let loc = SourceRange::new(start.into(), end.into());
-  Ok((input, ctx(term, loc)))
+
+  Ok((input, ctx(term, loc, module)))
 }
 
 fn def_name<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
@@ -1841,14 +1845,26 @@ fn decls_parser(input: Span) -> Res<ParsedModule> {
 }
 
 pub fn parse_file(input: &str) -> Result<ParsedModule, ParseFileError> {
-  parse_file_with_path(input, None)
+  parse_file_with_path(input, &Default::default())
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ModuleContext {
+  pub path: ModulePath,
+  pub file: Option<std::path::PathBuf>,
+}
+
+impl ModuleContext {
+  pub fn new(path: ModulePath, file: Option<std::path::PathBuf>) -> Self {
+    Self { path, file }
+  }
 }
 
 pub fn parse_file_with_path(
   input: &str,
-  path: Option<&std::path::PathBuf>,
+  context: &ModuleContext,
 ) -> Result<ParsedModule, ParseFileError> {
-  let span = Span::new(input);
+  let span = Span::new(input, context.clone());
   match decls_parser(span).finish() {
     Ok((_, decls)) => Ok(decls),
     Err(e) => {
@@ -1856,7 +1872,7 @@ pub fn parse_file_with_path(
       Err(ParseFileError {
         source: input.to_string(),
         error: err,
-        path: path.cloned(),
+        context: context.clone(),
       })
     }
   }

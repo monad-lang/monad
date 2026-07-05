@@ -9,10 +9,12 @@ pub mod test;
 pub mod r#type;
 
 use std::fmt::Display;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::eval::native::{NativeError, native_execute};
 use crate::eval::r#type::TypeError;
+use crate::parser::ModuleContext;
 use crate::term::Term::Forall;
 use crate::term::module::{Scope, ScopeError};
 use crate::term::{
@@ -33,7 +35,11 @@ pub enum Error {
   Eval(EvalError),
   Type(TypeError),
   Native(NativeError),
-  Context { loc: SourceRange, err: Box<Error> },
+  Context {
+    module: ModuleContext,
+    loc: SourceRange,
+    err: Box<Error>,
+  },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,8 +121,12 @@ impl Display for Error {
       Error::Eval(eval_error) => write!(f, "eval: {eval_error}"),
       Error::Type(type_error) => write!(f, "type: {type_error}"),
       Error::Native(native_error) => write!(f, "native: {native_error}"),
-      Error::Context { loc, err } => {
-        write!(f, "{err} at {}:{}", loc.start.line, loc.start.column)
+      Error::Context { loc, err, module } => {
+        write!(
+          f,
+          "{err} at {}:{} in {}",
+          loc.start.line, loc.start.column, module.path
+        )
       }
     }
   }
@@ -127,6 +137,18 @@ fn wrap_error(error: Error, loc: Option<SourceRange>) -> Error {
     Some(loc) => Error::Context {
       loc,
       err: Box::new(error),
+      module: Default::default(),
+    },
+    None => error,
+  }
+}
+
+fn wrap_error_context(error: Error, loc: Option<SourceRange>, module: Arc<ModuleContext>) -> Error {
+  match loc {
+    Some(loc) => Error::Context {
+      loc,
+      err: Box::new(error),
+      module: (*module).clone(),
     },
     None => error,
   }
@@ -192,9 +214,10 @@ impl From<&Error> for crate::diag::Diagnostic {
         diag.message = format!("native: {}", diag.message);
         diag
       }
-      Error::Context { loc, err } => {
+      Error::Context { loc, err, module } => {
         let mut diag: crate::diag::Diagnostic = err.as_ref().into();
         diag.location = Some(loc.clone());
+        diag.path = module.file.clone();
         diag
       }
     }
@@ -230,7 +253,7 @@ fn resolve_name<'a>(name: &'a NameRef, scope: &'a Scope<'a>) -> Result<&'a Term,
 
 /// Run a beta reduction
 pub fn eval(main_term: Term, scope: &Scope, options: &EvalOptions) -> Result<Term, Error> {
-  eval_inner(main_term, scope, options, None, None)
+  eval_inner(main_term, scope, options, None, Default::default(), None)
 }
 
 pub fn eval_test(
@@ -240,7 +263,14 @@ pub fn eval_test(
   timeout: std::time::Duration,
 ) -> Result<Term, Error> {
   let deadline = Instant::now() + timeout;
-  eval_inner(term, scope, options, None, Some(deadline))
+  eval_inner(
+    term,
+    scope,
+    options,
+    None,
+    Default::default(),
+    Some(deadline),
+  )
 }
 
 fn eval_inner(
@@ -248,6 +278,7 @@ fn eval_inner(
   scope: &Scope,
   options: &EvalOptions,
   mut current_loc: Option<SourceRange>,
+  mut current_module: Arc<ModuleContext>,
   deadline: Option<Instant>,
 ) -> Result<Term, Error> {
   let mut steps: u64 = 0;
@@ -262,21 +293,34 @@ fn eval_inner(
     }
     if let Some(deadline) = deadline {
       if Instant::now() > deadline {
-        return Err(wrap_error(Error::Eval(EvalError::TimeOut), current_loc));
+        return Err(wrap_error_context(
+          Error::Eval(EvalError::TimeOut),
+          current_loc,
+          current_module.clone(),
+        ));
       }
     }
     steps += 1;
     main_term = apply_dot_macro(main_term);
     main_term = match main_term {
-      Ctx { loc, term } => {
+      Ctx { loc, term, module } => {
         if current_loc.is_none() {
           current_loc = Some(loc);
         }
+        current_module = module.clone();
         *term
       }
       App { fun, arg } => {
         let loc = current_loc.take();
-        eval_app(*fun, *arg, scope, options, loc, deadline)?
+        eval_app(
+          *fun,
+          *arg,
+          scope,
+          options,
+          loc,
+          current_module.clone(),
+          deadline,
+        )?
       }
       Var { name } => {
         let mut term = resolve_name(&name, scope)?.clone();
@@ -301,7 +345,14 @@ fn eval_inner(
         value: Literal::Match { value, cases },
       } => {
         let loc = current_loc.take();
-        let value = eval_inner(*value, scope, options, loc.clone(), deadline)?;
+        let value = eval_inner(
+          *value,
+          scope,
+          options,
+          loc.clone(),
+          current_module.clone(),
+          deadline,
+        )?;
         if let Con(Constructor {
           name,
           typ_name: _,
@@ -352,7 +403,14 @@ fn eval_inner(
         value: Literal::If { value, then, els },
       } => {
         let loc = current_loc.take();
-        let value = eval_inner(*value, scope, options, loc.clone(), deadline)?;
+        let value = eval_inner(
+          *value,
+          scope,
+          options,
+          loc.clone(),
+          current_module.clone(),
+          deadline,
+        )?;
         let b = recognize_bool(&value, loc)?;
         if b { *then } else { *els }
       }
@@ -546,11 +604,12 @@ pub fn apply_dot_macro_recursive(term: Term) -> Term {
         value: Literal::StructUpdate { base, fields },
       }
     }
-    Ctx { loc, term } => {
+    Ctx { loc, term, module } => {
       let term = apply_dot_macro_recursive(*term);
       Ctx {
         loc,
         term: Box::new(term),
+        module,
       }
     }
     t => t,
@@ -624,6 +683,7 @@ fn eval_app(
   scope: &Scope,
   options: &EvalOptions,
   loc: Option<SourceRange>,
+  current_module: Arc<ModuleContext>,
   deadline: Option<Instant>,
 ) -> Result<Term, Error> {
   // Class method dispatch: evaluate arg first to determine runtime type,
@@ -642,7 +702,14 @@ fn eval_app(
       _ => None,
     };
     if let Some(class_def) = class_def {
-      let arg_eval = eval_inner(arg, scope, options, loc.clone(), deadline)?;
+      let arg_eval = eval_inner(
+        arg,
+        scope,
+        options,
+        loc.clone(),
+        current_module.clone(),
+        deadline,
+      )?;
       if let Some(arg_type) = infer_arg_type(&arg_eval) {
         let param_name = class_def
           .class
@@ -668,11 +735,32 @@ fn eval_app(
         }
       }
       // Dispatch failed; fall through to normal resolution
-      let fun_eval = eval_inner(fun, scope, options, loc.clone(), deadline)?;
+      let fun_eval = eval_inner(
+        fun,
+        scope,
+        options,
+        loc.clone(),
+        current_module.clone(),
+        deadline,
+      )?;
       (fun_eval, arg_eval)
     } else {
-      let fun_eval = eval_inner(fun, scope, options, loc.clone(), deadline)?;
-      let arg_eval = eval_inner(arg, scope, options, loc.clone(), deadline)?;
+      let fun_eval = eval_inner(
+        fun,
+        scope,
+        options,
+        loc.clone(),
+        current_module.clone(),
+        deadline,
+      )?;
+      let arg_eval = eval_inner(
+        arg,
+        scope,
+        options,
+        loc.clone(),
+        current_module.clone(),
+        deadline,
+      )?;
       (fun_eval, arg_eval)
     }
   };
@@ -686,7 +774,14 @@ fn eval_app(
     Ntv { native } => {
       let index = native.args.iter().filter(|a| a.is_some()).count() + 1;
       if let Some(result) = native_apply_arg(native, index, arg_evaluated) {
-        let result_eval = eval_inner(result, scope, options, loc.clone(), deadline)?;
+        let result_eval = eval_inner(
+          result,
+          scope,
+          options,
+          loc.clone(),
+          current_module,
+          deadline,
+        )?;
         Ok(result_eval)
       } else {
         Err(wrap_error(
@@ -699,8 +794,24 @@ fn eval_app(
       fun: fun2,
       arg: arg_internal,
     } => {
-      let f = eval_app(*fun2, *arg_internal, scope, options, loc.clone(), deadline)?;
-      let f2 = eval_app(f, arg_evaluated, scope, options, loc.clone(), deadline)?;
+      let f = eval_app(
+        *fun2,
+        *arg_internal,
+        scope,
+        options,
+        loc.clone(),
+        current_module.clone(),
+        deadline,
+      )?;
+      let f2 = eval_app(
+        f,
+        arg_evaluated,
+        scope,
+        options,
+        loc.clone(),
+        current_module,
+        deadline,
+      )?;
       Ok(f2)
     }
     _ => Err(wrap_error(
@@ -869,9 +980,10 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       }
     }
     Lit { value: _ } => term,
-    Ctx { loc, term } => Ctx {
+    Ctx { loc, term, module } => Ctx {
       loc,
       term: Box::new(substitute(*term, nref, new_term)),
+      module,
     },
     Forall { name, typ, body } => {
       let typ = substitute(*typ, nref, new_term);

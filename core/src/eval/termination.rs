@@ -106,7 +106,11 @@ fn as_recursive_call_any(term: &Term, names: &RecursiveNames) -> Option<Recursiv
         args.push((**arg).clone());
         current = fun;
       }
-      Ctx { loc: ctx_loc, term } => {
+      Ctx {
+        loc: ctx_loc,
+        term,
+        module: _,
+      } => {
         loc = ctx_loc.clone();
         current = term;
       }

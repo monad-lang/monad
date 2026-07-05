@@ -167,7 +167,7 @@ pub fn load_module(
   mut loaded: LoadedModules,
 ) -> Result<LoadedModules, String> {
   let text = fs::read_to_string(file).map_err(|e| format!("{e}"))?;
-  load_module_from_text(&text, path.clone(), &mut loaded).map_err(|e| format!("{e}"))?;
+  load_module_from_text(&text, path, &mut loaded).map_err(|e| format!("{e}"))?;
   Ok(loaded)
 }
 
@@ -193,7 +193,7 @@ pub fn run(
   loaded.config.benchmark = options.benchmark;
   let search_paths = build_default_search_paths(&input, &extra_mote_paths);
   loaded.set_search_paths(search_paths);
-  load_module_from_text(&source, path.clone(), &mut loaded).map_err(|e| format!("{e}"))?;
+  load_module_from_text(&source, &path, &mut loaded).map_err(|e| format!("{e}"))?;
   let module = loaded
     .get_module(&path)
     .ok_or_else(|| format!("Module {path} not loaded"))?;

@@ -7,6 +7,7 @@ use crate::eval::native::{NativeFun, load_native_funs};
 use crate::eval::r#type::{
   TypeError, UsageEnv, derive_instance_key, render_type_error_with_source, type_check_module_decls,
 };
+use crate::parser::ModuleContext;
 use crate::term::{
   Inductive, Instance, InstanceKey, ModulePath, SourceContext, Term, TypeConstraint,
 };
@@ -1821,18 +1822,24 @@ pub fn load_decls(
     })
     .ok_or_else(|| format!("module not found: {path}"))?;
   let text = read_to_string(&file_path).map_err(|e| e.to_string())?;
-  load_decls_from_text_with_path(&text, Some(&file_path))
+  load_decls_from_text_with_path(
+    &text,
+    &ModuleContext {
+      file: Some(file_path),
+      path: path.clone(),
+    },
+  )
 }
 
 pub fn load_decls_from_text(text: &str) -> Result<Vec<SourceContext<Decl>>, String> {
-  load_decls_from_text_with_path(text, None)
+  load_decls_from_text_with_path(text, &Default::default())
 }
 
 pub fn load_decls_from_text_with_path(
   text: &str,
-  path: Option<&std::path::PathBuf>,
+  context: &ModuleContext,
 ) -> Result<Vec<SourceContext<Decl>>, String> {
-  let parsed = parse_file_with_path(text, path).map_err(|e| format!("{e}"))?;
+  let parsed = parse_file_with_path(text, &context).map_err(|e| format!("{e}"))?;
   Ok(parsed.decls)
 }
 
@@ -1855,12 +1862,13 @@ fn filter_cfg_test_decls(
 
 pub fn load_module_from_text(
   text: &str,
-  path: ModulePath,
+  path: &ModulePath,
   loaded: &mut LoadedModules,
 ) -> Result<(), LoadingError> {
   let file_path = path.to_file_path();
+  let module_context = ModuleContext::new(path.clone(), Some(file_path));
   let parse_start = Instant::now();
-  let init_decls = load_decls_from_text_with_path(text, Some(&file_path))
+  let init_decls = load_decls_from_text_with_path(text, &module_context)
     .map_err(|e| format!("parse error for {}: {e}", path))?;
   let parse_dur = parse_start.elapsed();
   let mut in_progress = crate::empty_set();
@@ -1882,7 +1890,7 @@ pub fn load_module_from_text(
     );
   }
   loaded.add_module(module(
-    path,
+    path.clone(),
     ParsedModule {
       decls: init_decls,
       module_doc: None,
@@ -1937,14 +1945,14 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
     let init_text = include_str!("../../../init/init.mo");
     let process_text = include_str!("../../../init/process.mo");
 
-    load_module_from_text(prelude_text, prelude_path, &mut loaded)?;
-    load_module_from_text(id_text, id_path, &mut loaded)?;
-    load_module_from_text(io_text, io_path, &mut loaded)?;
-    load_module_from_text(number_text, number_path, &mut loaded)?;
-    load_module_from_text(math_text, math_path, &mut loaded)?;
-    load_module_from_text(string_text, string_path, &mut loaded)?;
-    load_module_from_text(init_text, init_path, &mut loaded)?;
-    load_module_from_text(process_text, process_path, &mut loaded)?;
+    load_module_from_text(prelude_text, &prelude_path, &mut loaded)?;
+    load_module_from_text(id_text, &id_path, &mut loaded)?;
+    load_module_from_text(io_text, &io_path, &mut loaded)?;
+    load_module_from_text(number_text, &number_path, &mut loaded)?;
+    load_module_from_text(math_text, &math_path, &mut loaded)?;
+    load_module_from_text(string_text, &string_path, &mut loaded)?;
+    load_module_from_text(init_text, &init_path, &mut loaded)?;
+    load_module_from_text(process_text, &process_path, &mut loaded)?;
   }
 
   #[cfg(not(feature = "embed-stdlib"))]
