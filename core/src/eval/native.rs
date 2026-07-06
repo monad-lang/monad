@@ -54,6 +54,7 @@ impl From<&NativeError> for crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     }
   }
 }

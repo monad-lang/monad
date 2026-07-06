@@ -286,7 +286,8 @@ fn expand_and_type_check(input: &str) -> Result<(), String> {
   let decls = elaborate_decls(parsed.decls, &loaded);
   let decls = expand_macros(decls, &loaded).map_err(|e| format!("{e}"))?;
   let global = loaded.scope_of_decls(&path, &decls);
-  let (oks, errs) = type_check_decls(decls.clone(), &global.scope());
+  let module_context = Arc::new(ModuleContext::new(path.clone(), None));
+  let (oks, errs) = type_check_decls(decls.clone(), &global.scope(), module_context);
   if !errs.is_empty() {
     return Err(
       errs
@@ -313,11 +314,12 @@ fn expand_fails(input: &str) -> String {
     panic!("expand_fails parse error: {e}");
   });
   let decls = elaborate_decls(parsed.decls, &loaded);
+  let module_context = Arc::new(ModuleContext::new(path.clone(), None));
   match expand_macros(decls.clone(), &loaded) {
     Err(e) => e.to_string(),
     Ok(_) => {
       let global = loaded.scope_of_decls(&path, &decls);
-      let (_oks, errs) = type_check_decls(decls.clone(), &global.scope());
+      let (_oks, errs) = type_check_decls(decls.clone(), &global.scope(), module_context);
       if errs.is_empty() {
         panic!("expected expansion or type error, but succeeded");
       }
@@ -493,7 +495,8 @@ fn expand_and_type_check_with_loaded(input: &str, loaded: &LoadedModules) -> Res
   let decls = expand_macros(decls, loaded).map_err(|e| format!("{e}"))?;
   let path = ModulePath::top("test_macro");
   let global = loaded.scope_of_decls(&path, &decls);
-  let (_oks, errs) = type_check_decls(decls.clone(), &global.scope());
+  let module_context = Arc::new(ModuleContext::new(path.clone(), None));
+  let (_oks, errs) = type_check_decls(decls.clone(), &global.scope(), module_context);
   if !errs.is_empty() {
     return Err(
       errs

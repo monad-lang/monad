@@ -53,6 +53,7 @@ pub enum TypeError {
   Context {
     name: Option<ModulePath>,
     loc: SourceRange,
+    module: Arc<ModuleContext>,
     err: Box<TypeError>,
   },
   InstanceDecl(String, SourceRange),
@@ -134,10 +135,15 @@ impl Display for TypeError {
         write!(f, "Expected function type found: {}", s)?;
         fmt_loc(loc, f)
       }
-      TypeError::Context { loc, err, name } => {
+      TypeError::Context {
+        loc,
+        err,
+        name,
+        module,
+      } => {
         write!(f, "{} at {}:{}", err, loc.start.line, loc.start.column)?;
         if let Some(name) = name {
-          write!(f, " in {name}")?;
+          write!(f, " in {name} in {:?}", module.file)?;
         }
         Ok(())
       }
@@ -325,6 +331,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::Scope(scope_error, loc) => Diagnostic {
       severity: Severity::Error,
@@ -334,6 +341,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::ExpectedPi(s, loc) => Diagnostic {
       severity: Severity::Error,
@@ -343,14 +351,26 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
-    TypeError::Context { loc, err, name } => {
+    TypeError::Context {
+      loc,
+      err,
+      name,
+      module,
+    } => {
       let mut diag = err_to_diagnostic(err);
       if let Some(name) = name {
         diag.context_name = Some(format!("{name}"));
       }
       if diag.location.is_none() {
         diag.location = loc_opt(loc);
+      }
+      if diag.path.is_none() {
+        diag.path = module.file.clone();
+      }
+      if diag.path.is_none() {
+        diag.module_path = Some(module.path.clone());
       }
       diag
     }
@@ -362,6 +382,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::Generic(s, loc) => Diagnostic {
       severity: Severity::Error,
@@ -371,6 +392,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::ConstructorMismatch { params, args, loc } => Diagnostic {
       severity: Severity::Error,
@@ -384,6 +406,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::ExpectedType(e, loc) => Diagnostic {
       severity: Severity::Error,
@@ -393,6 +416,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::FreeVarMismatch {
       name,
@@ -415,6 +439,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::TypeMismatch {
       expected,
@@ -437,6 +462,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       ],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::MissingField(identifier, loc) => Diagnostic {
       severity: Severity::Error,
@@ -446,6 +472,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::ArgumentMismatch {
       expected,
@@ -468,6 +495,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       ],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::Instance(instance_error, loc) => Diagnostic {
       severity: Severity::Error,
@@ -477,6 +505,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::InductiveMismatch {
       name,
@@ -495,6 +524,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::ConstructorUnknown(identifier, constructors, loc) => {
       let mut diag = Diagnostic {
@@ -505,6 +535,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
         sub_diagnostics: vec![],
         suggestions: vec![],
         context_name: None,
+        module_path: None,
       };
       if !constructors.is_empty() {
         let names: Vec<String> = constructors.iter().map(|n| n.to_string()).collect();
@@ -528,6 +559,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::Overflow { value, target, loc } => Diagnostic {
       severity: Severity::Error,
@@ -537,6 +569,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::LinearUsedMultipleTimes(id, loc) => Diagnostic {
       severity: Severity::Error,
@@ -546,6 +579,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::LinearUnused(id, loc) => Diagnostic {
       severity: Severity::Error,
@@ -555,6 +589,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::AffineUsedMultipleTimes(id, loc) => Diagnostic {
       severity: Severity::Error,
@@ -564,6 +599,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::ErasedUsedAtRuntime(id, loc) => Diagnostic {
       severity: Severity::Error,
@@ -575,6 +611,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::QttSubsumption {
       name,
@@ -603,6 +640,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::Many(_errs) => Diagnostic {
       severity: Severity::Error,
@@ -612,6 +650,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::StructNoConstructors { loc } => Diagnostic {
       severity: Severity::Error,
@@ -621,6 +660,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::ExpectedStructName { found, loc } => Diagnostic {
       severity: Severity::Error,
@@ -630,6 +670,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::StructUpdateExpectedInductive { found, loc } => Diagnostic {
       severity: Severity::Error,
@@ -639,6 +680,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::StructTooManyFields { max, found, loc } => Diagnostic {
       severity: Severity::Error,
@@ -648,6 +690,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::MacroExpansion(err) => Diagnostic {
       severity: Severity::Error,
@@ -657,6 +700,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
     TypeError::Termination(err) => Diagnostic {
       severity: Severity::Error,
@@ -666,6 +710,7 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     },
   }
 }
@@ -876,11 +921,17 @@ fn check_strict_positivity(ind: &Inductive) -> Result<(), TypeError> {
   Ok(())
 }
 
-fn t_context(err: TypeError, name: Option<ModulePath>, loc: SourceRange) -> TypeError {
+fn t_context(
+  err: TypeError,
+  name: Option<ModulePath>,
+  loc: SourceRange,
+  module: Arc<ModuleContext>,
+) -> TypeError {
   TypeError::Context {
     loc,
     err: Box::new(err),
     name,
+    module,
   }
 }
 
@@ -2895,7 +2946,7 @@ fn type_check_with_env(
     } => {
       let TypedTerm { term, typ } =
         type_check_with_env(*term, expected_type.clone(), &scope, usage, track_usage)
-          .map_err(|err| t_context(err, None, loc.clone()))?;
+          .map_err(|err| t_context(err, None, loc.clone(), module.clone()))?;
 
       let term = ctx_arc(term, loc.clone(), module.clone());
       Ok(TypedTerm { term, typ })
@@ -3039,6 +3090,7 @@ fn type_check_def(mut def_: Def, scope: &Scope) -> Result<Def, TypeError> {
 pub fn type_check_decls(
   decls: Vec<SourceContext<Decl>>,
   scope: &Scope,
+  module: Arc<ModuleContext>,
 ) -> (Vec<SourceContext<Decl>>, Vec<TypeError>) {
   let res = decls
     .into_iter()
@@ -3050,6 +3102,7 @@ pub fn type_check_decls(
           name: Some(decl.to_ref().clone()),
           loc: ctx.loc.clone(),
           err: Box::new(err),
+          module: module.clone(),
         })
     })
     .collect();
@@ -3253,7 +3306,9 @@ pub fn type_check_module_decls(
   let scope_dur = scope_start.elapsed();
 
   let tc_start = Instant::now();
-  let (oks, errs) = type_check_decls(decls.clone(), &global.scope());
+  // TODO include file name
+  let module_context = Arc::new(ModuleContext::new(path.clone(), None));
+  let (oks, errs) = type_check_decls(decls.clone(), &global.scope(), module_context);
   let tc_dur = tc_start.elapsed();
   if benchmark {
     eprintln!(

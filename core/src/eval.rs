@@ -36,7 +36,7 @@ pub enum Error {
   Type(TypeError),
   Native(NativeError),
   Context {
-    module: ModuleContext,
+    module: Arc<ModuleContext>,
     loc: SourceRange,
     err: Box<Error>,
   },
@@ -110,6 +110,7 @@ impl From<&EvalError> for crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     }
   }
 }
@@ -132,29 +133,22 @@ impl Display for Error {
   }
 }
 
-fn wrap_error(error: Error, loc: Option<SourceRange>) -> Error {
+fn wrap_error(error: Error, loc: Option<SourceRange>, module: Arc<ModuleContext>) -> Error {
   match loc {
     Some(loc) => Error::Context {
       loc,
       err: Box::new(error),
-      module: Default::default(),
+      module,
     },
     None => error,
   }
 }
 
-fn wrap_error_context(error: Error, loc: Option<SourceRange>, module: Arc<ModuleContext>) -> Error {
-  match loc {
-    Some(loc) => Error::Context {
-      loc,
-      err: Box::new(error),
-      module: (*module).clone(),
-    },
-    None => error,
-  }
-}
-
-pub fn recognize_bool(value: &Term, loc: Option<SourceRange>) -> Result<bool, Error> {
+pub fn recognize_bool(
+  value: &Term,
+  loc: Option<SourceRange>,
+  module: Arc<ModuleContext>,
+) -> Result<bool, Error> {
   if let Con(Constructor {
     name,
     typ_name,
@@ -174,6 +168,7 @@ pub fn recognize_bool(value: &Term, loc: Option<SourceRange>) -> Result<bool, Er
       value: value.clone(),
     }),
     loc,
+    module,
   ))
 }
 
@@ -217,6 +212,7 @@ impl From<&Error> for crate::diag::Diagnostic {
       Error::Context { loc, err, module } => {
         let mut diag: crate::diag::Diagnostic = err.as_ref().into();
         diag.location = Some(loc.clone());
+        diag.module_path = Some(module.path.clone());
         diag.path = module.file.clone();
         diag
       }
@@ -288,12 +284,13 @@ fn eval_inner(
         return Err(wrap_error(
           Error::Eval(EvalError::RecursionDepthExceeded { max }),
           current_loc,
+          current_module,
         ));
       }
     }
     if let Some(deadline) = deadline {
       if Instant::now() > deadline {
-        return Err(wrap_error_context(
+        return Err(wrap_error(
           Error::Eval(EvalError::TimeOut),
           current_loc,
           current_module.clone(),
@@ -339,7 +336,8 @@ fn eval_inner(
       }
       Ntv { native } => {
         let loc = current_loc.take();
-        native_execute(native, scope).map_err(|e| wrap_error(Error::Native(e), loc))?
+        native_execute(native, scope)
+          .map_err(|e| wrap_error(Error::Native(e), loc, current_module.clone()))?
       }
       Lit {
         value: Literal::Match { value, cases },
@@ -376,6 +374,7 @@ fn eval_inner(
                     value: value.clone(),
                   }),
                   loc.clone(),
+                  current_module.clone(),
                 ));
               }
             }
@@ -388,6 +387,7 @@ fn eval_inner(
                 value: value.clone(),
               }),
               loc.clone(),
+              current_module,
             ));
           }
         } else {
@@ -396,6 +396,7 @@ fn eval_inner(
               value: value.clone(),
             }),
             loc.clone(),
+            current_module,
           ));
         }
       }
@@ -411,7 +412,7 @@ fn eval_inner(
           current_module.clone(),
           deadline,
         )?;
-        let b = recognize_bool(&value, loc)?;
+        let b = recognize_bool(&value, loc, current_module.clone())?;
         if b { *then } else { *els }
       }
       Quote { term } => Term::Lit {
@@ -424,6 +425,7 @@ fn eval_inner(
         return Err(wrap_error(
           Error::Eval(EvalError::StructLiteralNotDesugared),
           loc,
+          current_module,
         ));
       }
       Lit {
@@ -433,6 +435,7 @@ fn eval_inner(
         return Err(wrap_error(
           Error::Eval(EvalError::StructUpdateNotDesugared),
           loc,
+          current_module,
         ));
       }
       _ => break,
@@ -666,6 +669,7 @@ fn unwrap_decl_lambda(
   name: &NameRef,
   scope: &Scope,
   loc: Option<SourceRange>,
+  current_module: Arc<ModuleContext>,
 ) -> Result<Term, Error> {
   let term = scope.resolve_name(name).map_err(Error::Scope)?;
   match term {
@@ -673,6 +677,7 @@ fn unwrap_decl_lambda(
     _ => Err(wrap_error(
       Error::Eval(EvalError::NotALambda { term: term.clone() }),
       loc,
+      current_module,
     )),
   }
 }
@@ -768,7 +773,7 @@ fn eval_app(
     println!("eval_app: fun={} arg={}", fun_evaluated, arg_evaluated);
   }
   match fun_evaluated {
-    Var { name } => unwrap_decl_lambda(arg_evaluated, &name, scope, loc.clone()),
+    Var { name } => unwrap_decl_lambda(arg_evaluated, &name, scope, loc.clone(), current_module),
     Lam { param, body } => Ok(substitute_lam(param, *body, &arg_evaluated)),
     Forall { body, .. } => Ok(*body),
     Ntv { native } => {
@@ -787,6 +792,7 @@ fn eval_app(
         Err(wrap_error(
           Error::Eval(EvalError::NativeArgumentOverflow),
           loc.clone(),
+          current_module,
         ))
       }
     }
@@ -819,6 +825,7 @@ fn eval_app(
         term: fun_evaluated.clone(),
       }),
       loc.clone(),
+      current_module,
     )),
   }
 }

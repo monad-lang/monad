@@ -50,6 +50,7 @@ impl From<&MacroError> for crate::diag::Diagnostic {
       sub_diagnostics: vec![],
       suggestions: vec![],
       context_name: None,
+      module_path: None,
     }
   }
 }

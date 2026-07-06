@@ -177,6 +177,7 @@ pub fn parse_error_to_diagnostic(
     sub_diagnostics,
     suggestions: vec![],
     context_name: None,
+    module_path: None,
   }
 }
 

@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use crate::term::SourceRange;
+use crate::term::{ModulePath, SourceRange};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
@@ -39,6 +39,7 @@ pub struct Diagnostic {
   pub message: String,
   pub location: Option<SourceRange>,
   pub path: Option<PathBuf>,
+  pub module_path: Option<ModulePath>,
   pub sub_diagnostics: Vec<SubDiagnostic>,
   pub suggestions: Vec<Suggestion>,
   pub context_name: Option<String>,
