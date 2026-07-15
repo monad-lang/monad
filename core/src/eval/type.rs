@@ -911,7 +911,7 @@ fn check_strict_pos(type_name: &ModulePath, typ: &Term, polarity: bool) -> Resul
   }
 }
 
-fn check_strict_positivity(ind: &Inductive) -> Result<(), TypeError> {
+pub(crate) fn check_strict_positivity(ind: &Inductive) -> Result<(), TypeError> {
   let name = ind.name();
   for cons in ind.constructors() {
     for param in cons.params() {
@@ -2103,6 +2103,12 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
     Lit {
       value: Literal::Term(t),
     } => free_vars(t, known_names),
+    // A transparent source-location wrapper — dozens of other `Term`
+    // methods (`as_var`, `as_app`, `is_forall`, ...) already see through
+    // it. Without this arm, a free var parsed inside a `Ctx`-wrapped
+    // sub-term (e.g. a return type's nested application) is invisible to
+    // this scan, silently skipping its implicit `Forall` wrapping.
+    Term::Ctx { term, .. } => free_vars(term, known_names),
     _ => empty_set(),
   }
 }
@@ -2426,15 +2432,43 @@ fn type_check_with_env(
       }
     }
     Lit { value } => match value {
-      Literal::StructLit { ref fields } => {
-        let struct_type = {
-          if let Var { name } = &expected_type
-            && let Some(name) = name.to_path()
-          {
-            Some(name.clone())
-          } else {
-            None
+      Literal::StructLit {
+        ref fields,
+        ref type_name,
+      } => {
+        // An explicit `{ ... : StructType }` annotation takes priority
+        // over the ambient `expected_type` — it's what lets a struct
+        // literal be resolved even where there's no expected type at all
+        // (e.g. passed to a generic function, or on its own as an
+        // `infer`-mode expression), not just where a known Pi/let
+        // annotation already pins it down.
+        let annotated_type = match type_name.as_deref() {
+          Some(Var { name }) => {
+            Some(
+              name
+                .to_path()
+                .ok_or_else(|| TypeError::ExpectedStructName {
+                  found: expected_type.clone(),
+                  loc: SourceRange::default(),
+                })?,
+            )
           }
+          Some(other) => {
+            return Err(TypeError::ExpectedStructName {
+              found: other.clone(),
+              loc: SourceRange::default(),
+            });
+          }
+          None => None,
+        };
+        let struct_type = if annotated_type.is_some() {
+          annotated_type.clone()
+        } else if let Var { name } = &expected_type
+          && let Some(name) = name.to_path()
+        {
+          Some(name.clone())
+        } else {
+          None
         };
         if struct_type.is_none() && expected_type.is_known() {
           return Err(TypeError::ExpectedStructName {
@@ -2484,7 +2518,20 @@ fn type_check_with_env(
             args,
             num_args: mk_cons.params.len(),
           });
-          Ok(typed_term(con, expected_type.clone()))
+          // When resolved purely from an explicit `: StructType`
+          // annotation with no ambient expected type (`expected_type` not
+          // known), `expected_type.clone()` would be `Hole` — tag the
+          // result with the struct's own real type instead, so the
+          // annotation actually makes the literal's type *inferable*, not
+          // just checkable against a type someone else already knew.
+          let result_type = if expected_type.is_known() {
+            expected_type.clone()
+          } else {
+            Var {
+              name: NameRef::P(struct_name.clone()),
+            }
+          };
+          Ok(typed_term(con, result_type))
         } else {
           Ok(typed_term(Lit { value }, expected_type))
         }
@@ -2663,7 +2710,15 @@ fn type_check_with_env(
             branch_t.clone(),
           ))
         } else {
-          Err(ExpectedInductive(con.typ().clone(), SourceRange::default()))
+          // Improve error message when type is Hole
+          if !con.typ().is_known() {
+            Err(Generic(
+              "Cannot infer type for match expression. Consider adding a type annotation to the value being matched.".to_string(),
+              SourceRange::default(),
+            ))
+          } else {
+            Err(ExpectedInductive(con.typ().clone(), SourceRange::default()))
+          }
         }
       }
       Literal::If { value, then, els } => {
@@ -2795,7 +2850,36 @@ fn type_check_with_env(
           } else {
             None
           };
-          let scope = scope.with_param(&param);
+          // Create a new parameter with the inferred type for scope lookup
+          // This ensures that when the body looks up this parameter, it gets the inferred type.
+          // Reuse the already fully-resolved `arg_type` (post add_forall_to_type +
+          // match_resolve_type) rather than re-reading the raw, pre-resolution `arg` —
+          // that raw type can still be an uninstantiated generic/forall variable.
+          let base_arg_type = arg_type.clone();
+          // Guard against leaking a still-polymorphic type into scope: a
+          // `Term::Forall` counts as "known" per `is_known()`, so a param
+          // whose real type is a generic callback (e.g. `{K}->{V}->...`,
+          // not yet instantiated for this call site) would otherwise be
+          // registered with that open type — which then collides with a
+          // later, independent instantiation of the same-named type
+          // variables from a recursive/nested call to the same generic
+          // function. Only apply the inferred type when it's fully
+          // concrete (no leading Forall left to resolve).
+          let (leading_foralls, _) = unwrap_forall(base_arg_type.clone());
+          let is_concrete = leading_foralls.is_empty();
+          let param_with_inferred_type =
+            if !param.typ().is_known() && base_arg_type.is_known() && is_concrete {
+              match &param {
+                Par::P(p) => Par::P(crate::term::param(p.name.clone(), base_arg_type.clone())),
+                Par::I { mult, .. } => Par::I {
+                  typ: Box::new(base_arg_type.clone()),
+                  mult: mult.clone(),
+                },
+              }
+            } else {
+              param.clone()
+            };
+          let scope = scope.with_param(&param_with_inferred_type);
           let return_type = *ret.clone();
           let return_type = add_forall_to_type(return_type, &vars);
           let (body, return_type) =

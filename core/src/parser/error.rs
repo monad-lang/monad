@@ -111,10 +111,23 @@ impl<I1, I2: From<I1>> From<nom::error::Error<I1>> for ParseError<I2> {
 pub type OwnedError = ParseError<LocatedSpan<String>>;
 
 pub fn get_error_line_column(source: &str, error: &OwnedError) -> (usize, usize) {
-  let offset = error.input.info.offset;
-  let line_num = error.input.info.line as usize;
+  // `info.offset`/`info.line` are running counters that can desync from the
+  // error's true position — e.g. under `many0`/`many1` backtracking (which
+  // silently discards a failed attempt's progress), or after the
+  // position-reset bug in `string_literal`/`char_literal`. The fragment
+  // itself is always accurate: it's the literal remaining suffix of
+  // `source`, from the error position to EOF. Recover the true offset from
+  // its length instead of trusting the counters, falling back to them only
+  // if the fragment is somehow longer than the source (should not happen).
+  let fragment_len = error.input.fragment().len();
+  let offset = if fragment_len <= source.len() {
+    source.len() - fragment_len
+  } else {
+    error.input.info.offset.min(source.len())
+  };
 
-  let prefix = &source[..offset.min(source.len())];
+  let prefix = &source[..offset];
+  let line_num = prefix.matches('\n').count() + 1;
   let column = prefix.chars().rev().take_while(|&c| c != '\n').count() + 1;
 
   (line_num, column)

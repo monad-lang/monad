@@ -27,7 +27,7 @@ use crate::{
 };
 use locate::{LocatedSpan, info};
 use nom::{
-  Finish, IResult, Parser,
+  Finish, IResult, Input, Parser,
   branch::alt,
   bytes::complete::{tag, take_until, take_while},
   character::complete::{
@@ -283,12 +283,15 @@ fn opt_type_annotation<X: Clone>(input: Span<X>) -> Res<Term, X> {
 
 fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let extra = input.extra().clone();
-  let module = (&*input.info.module_context).clone();
   let input = input.map_extra(|_| ());
+  let original = input.clone();
   let (input, value) = set_res_extra(
     parse_string_literal(input.into_fragment())
       .map_err(|e| e.map(|f: nom::error::Error<&str>| f.into()))
-      .map(|(i, v)| (Span::new(i, module), v)),
+      .map(|(i, v)| {
+        let consumed = original.input_len() - i.len();
+        (original.take_from(consumed), v)
+      }),
     extra,
   )?;
   Ok((
@@ -301,12 +304,15 @@ fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
 
 fn char_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let extra = input.extra().clone();
-  let module = (&*input.info.module_context).clone();
   let input = input.map_extra(|_| ());
+  let original = input.clone();
   let (input, value) = set_res_extra(
     parse_char_literal(input.into_fragment())
       .map_err(|e| e.map(|f: nom::error::Error<&str>| f.into()))
-      .map(|(i, v)| (Span::new(i, module), v)),
+      .map(|(i, v)| {
+        let consumed = original.input_len() - i.len();
+        (original.take_from(consumed), v)
+      }),
     extra,
   )?;
   Ok((
@@ -657,10 +663,22 @@ fn match_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
 }
 
 enum DoStatement {
-  Let { name: Identifier, value: Term },
-  Bind { name: Identifier, value: Term },
-  Return { value: Term },
-  Expr { value: Term },
+  Let {
+    name: Identifier,
+    value: Term,
+    typ: Term,
+  },
+  Bind {
+    name: Identifier,
+    value: Term,
+    typ: Term,
+  },
+  Return {
+    value: Term,
+  },
+  Expr {
+    value: Term,
+  },
 }
 
 fn do_statement<X: Clone>(input: Span<X>) -> Res<DoStatement, X> {
@@ -671,29 +689,25 @@ fn do_statement<X: Clone>(input: Span<X>) -> Res<DoStatement, X> {
     ),
     map(
       (
-        tag("let"),
-        ws1,
-        name,
-        ws0,
-        tag("<-"),
-        ws0,
-        term,
-        opt(char(';')),
+        delimited(
+          (tag("let"), ws1),
+          (terminated(name, ws0), opt_type_annotation),
+          delimited(ws0, tag("<-"), ws0),
+        ),
+        terminated(term, opt(char(';'))),
       ),
-      |(_, _, name, _, _, _, value, _)| DoStatement::Bind { name, value },
+      |((name, typ), value)| DoStatement::Bind { name, value, typ },
     ),
     map(
       (
-        tag("let"),
-        ws1,
-        name,
-        ws0,
-        assignment_operator,
-        ws0,
-        term,
-        opt(char(';')),
+        delimited(
+          (tag("let"), ws1),
+          (terminated(name, ws0), opt_type_annotation),
+          delimited(ws0, assignment_operator, ws0),
+        ),
+        terminated(term, opt(char(';'))),
       ),
-      |(_, _, name, _, _, _, value, _)| DoStatement::Let { name, value },
+      |((name, typ), value)| DoStatement::Let { name, value, typ },
     ),
     map((term, opt(char(';'))), |(value, _)| DoStatement::Expr {
       value,
@@ -702,13 +716,50 @@ fn do_statement<X: Clone>(input: Span<X>) -> Res<DoStatement, X> {
   .parse(input)
 }
 
+/// Custom parser for do block statements that preserves error positions.
+/// Unlike many0(preceded(ws0, do_statement)), this parser doesn't reset
+/// the input position when a statement fails to parse, ensuring errors
+/// point to the actual problem location rather than an earlier position.
+/// This parser does NOT consume the closing brace - it leaves that for the caller.
+fn do_statements_parser<X: Clone>(input: Span<X>) -> Res<Vec<DoStatement>, X> {
+  let mut input = input;
+  let mut stmts = Vec::new();
+
+  loop {
+    // Consume leading whitespace
+    let (new_input, _) = ws0(input)?;
+    input = new_input;
+
+    // Try to parse a statement
+    match preceded(ws0, do_statement).parse(input.clone()) {
+      Ok((new_input, stmt)) => {
+        stmts.push(stmt);
+        input = new_input;
+      }
+      Err(e) => {
+        // If we failed to parse a statement, check if it's because we hit the closing brace
+        // or if it's a real error that should be propagated
+        if char::<_, E<X>>('}')(input.clone()).is_ok() {
+          // We're at the closing brace, stop successfully
+          break;
+        } else {
+          // Real error - propagate it with its position preserved
+          return Err(e);
+        }
+      }
+    }
+  }
+
+  Ok((input, stmts))
+}
+
 fn do_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, _) = tag("do")(input)?;
   let (input, _) = ws1(input)?;
   let (input, _) = char('{')(input)?;
   let (input, _) = ws0(input)?;
 
-  let (input, stmts) = many0(preceded(ws0, do_statement)).parse(input)?;
+  let (input, stmts) = do_statements_parser(input)?;
 
   let (input, _) = ws0(input)?;
   let (input, _) = context("closing brace for do block", char('}')).parse(input)?;
@@ -723,25 +774,20 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
   let mut body = match stmts_iter.next() {
     Some(DoStatement::Return { value }) => app(pvar(vec!["Monad", "pure"]), value),
     Some(DoStatement::Expr { value }) => value,
-    Some(DoStatement::Let { name, value }) => lets(
-      vec![LetVar {
-        name,
-        typ: Term::Hole,
-        value,
-      }],
-      Term::Hole,
-    ),
-    Some(DoStatement::Bind { name, value }) => {
+    Some(DoStatement::Let { name, value, typ }) => {
+      lets(vec![LetVar { name, typ, value }], Term::Hole)
+    }
+    Some(DoStatement::Bind { name, value, typ }) => {
       let body = Term::Hole;
       let lambda_body = lets(
         vec![LetVar {
           name: name.clone(),
-          typ: Term::Hole,
+          typ: typ.clone(),
           value: Term::Hole,
         }],
         body,
       );
-      let lambda = lam(param(name, Term::Hole), lambda_body);
+      let lambda = lam(param(name, typ), lambda_body);
       app(app(pvar(vec!["Monad", "bind"]), value), lambda)
     }
     None => Term::Hole,
@@ -757,18 +803,11 @@ fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {
         let lambda = lam(underscore, body);
         body = app(app(pvar(vec!["Monad", "bind"]), value), lambda);
       }
-      DoStatement::Let { name, value } => {
-        body = lets(
-          vec![LetVar {
-            name,
-            typ: Term::Hole,
-            value,
-          }],
-          body,
-        );
+      DoStatement::Let { name, value, typ } => {
+        body = lets(vec![LetVar { name, typ, value }], body);
       }
-      DoStatement::Bind { name, value } => {
-        let lambda = lam(param(name, Term::Hole), body);
+      DoStatement::Bind { name, value, typ } => {
+        let lambda = lam(param(name, typ), body);
         body = app(app(pvar(vec!["Monad", "bind"]), value), lambda);
       }
     }
@@ -1158,7 +1197,7 @@ fn def_parser(input: Span) -> Res<Def> {
   } else if input.fragment().starts_with("{") {
     let (input, _) = char('{')(input)?;
     let (input, _) = ws0(input)?;
-    let (input, stmts) = many0(preceded(ws0, do_statement)).parse(input)?;
+    let (input, stmts) = do_statements_parser(input)?;
     let (input, _) = ws0(input)?;
     let (input, _) = context("closing brace for function body", char('}')).parse(input)?;
     let body = desugar_do_statements(stmts);
@@ -1618,16 +1657,18 @@ fn struct_or_update_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   alt((
     parse_struct_update,
     map(
-      pair(
+      (
         many0(terminated(
           struct_val_field_parser,
           (ws0, opt(char(',')), ws0),
         )),
-        preceded(ws0, context("closing brace for struct literal", char('}'))),
+        opt(terminated(preceded((char(':'), ws0), type_expression), ws0)),
+        context("closing brace for struct literal", char('}')),
       ),
-      |(fields, _)| Term::Lit {
+      |(fields, type_name, _)| Term::Lit {
         value: Literal::StructLit {
           fields: fields.into_iter().collect(),
+          type_name: type_name.map(Box::new),
         },
       },
     ),

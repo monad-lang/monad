@@ -21,6 +21,7 @@ mod do_notation;
 mod docstrings;
 mod expressions;
 mod lists;
+mod position;
 mod regression;
 mod tuples;
 mod types;

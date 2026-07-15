@@ -20,6 +20,7 @@ def IO.println (s: String) : IO Unit
 @[native "write_file"]
 def IO.write_file (path : String) (content : String) : IO Unit
 
+// TODO Return Option and none on failure
 @[native "read_file"]
 def IO.read_file (path : String) : IO String
 
@@ -31,5 +32,5 @@ def IO.get_env (s : String) : IO (Option String)
 
 
 // TODO support constraints
-// def IO.println [ToString A] (a: A) : IO Unit :=
-//   IO.println_raw (ToString.to_string a)
+// def IO.fprintln [ToString A] (a: A) : IO Unit :=
+//   IO.println (ToString.to_string a)

@@ -134,6 +134,7 @@ def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name 
     let runtime_obj := String.concat output_dir "/monad_runtime.o";
     let output_path := String.concat output_dir (String.concat "/" output_name);
 
+    println <| "Writing LLVM IR to: " ++ ir_path;
     IO.write_file ir_path ir_text;
 
     let result <- exec_cmd "llc" [ "-filetype=obj", ir_path, "-o", obj_path];
@@ -160,7 +161,7 @@ def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name 
 /// Load a file and all its transitive dependencies, returning a single list of declarations.
 /// This function uses the module loading infrastructure to resolve all `use` dependencies.
 @[partial]
-def load_file_decls_with_dependencies (file_path : String) : Option (List Decl) :=
+def load_file_decls_with_dependencies (file_path : String) : IO (Option (List Decl)) :=
     // Extract the directory from the file path to use as base_dir for resolving relative imports
     let base_dir : String := lang.module.extract_directory file_path in
     // Extract module name from file path (remove .mo extension and directory)
@@ -190,12 +191,13 @@ struct CompileOptions {
 /// Parse a source file and compile + run it via LLVM.
 @[partial]
 def compile_file (file_path : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
+    println <| "compiling: " ++ file_path ++ " to " ++ output_dir ++ "/" ++ output_name;
     // First try to load with module boundaries preserved
-    let res <- load_file_modules file_path;
-    match (res : Result String LoadedModules) {
+    let res : Result String LoadedModules <- load_file_modules file_path;
+    match res {
         Result.ok loaded => do {
             println <| "modules loaded:\n" ++ Show.show loaded;
-            let mod_ := compile_loaded_modules_to_ir loaded;
+            let mod_ <- compile_loaded_modules_to_ir loaded;
             let ir_text := emit_module mod_;
             let ir_path := output_dir ++ "/" ++ output_name ++ ".ll";
             let obj_path := output_dir ++ "/" ++ output_name ++ ".o";
@@ -265,8 +267,7 @@ def Command.from_args (args : List String) : Command :=
 def main (args : List String) : IO I64 {
     let out_dir := "/tmp";
     let verbose := false;
-    // TODO fix type annotations in do let expressions
-    let cmd : Command := Command.from_args args in
+    let cmd : Command := Command.from_args args;
     match cmd {
         compile file_path out_name => do {
             let file_path := second_arg args;
@@ -278,9 +279,8 @@ def main (args : List String) : IO I64 {
         pretty file_path => do {
             println <| "loading " ++ file_path;
             // TODO fix type checking bug on res
-            // let res <- load_file_modules file_path;
-            let res : Result String LoadedModules := err "TODO" in
-            match (res : Result String LoadedModules) {
+            let res : Result String LoadedModules <- load_file_modules file_path;
+            match res {
                 ok loaded => do {
                     println <| "modules loaded:\n" ++ Show.show loaded;
                     return 0
@@ -324,4 +324,3 @@ def third_arg (args : List String) : String :=
             List.empty => List.empty
         } in
     second_arg tail
-

@@ -19,6 +19,12 @@ rustyline = { version = "17.0.2", optional = true }
 default = []
 embed-stdlib = []
 kernel = []
+# Route module-level type checking through the OLD (name-keyed unifier)
+# checker instead of the new De-Bruijn/MetaId-based one, which is the
+# default. Exists purely to keep the old checker reachable as a working
+# baseline/reference during the cutover — see
+# plans/implementations/typechecker-de-bruijn-core.md.
+legacy-checker = []
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 repl = ["dep:rustyline"]
 cli = ["dep:clap"]

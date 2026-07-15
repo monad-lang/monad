@@ -4,8 +4,10 @@ pub mod test;
 use super::*;
 use crate::Set;
 use crate::eval::native::{NativeFun, load_native_funs};
+#[cfg(feature = "legacy-checker")]
+use crate::eval::r#type::type_check_module_decls;
 use crate::eval::r#type::{
-  TypeError, UsageEnv, derive_instance_key, render_type_error_with_source, type_check_module_decls,
+  TypeError, UsageEnv, derive_instance_key, render_type_error_with_source,
 };
 use crate::parser::ModuleContext;
 use crate::term::{
@@ -1790,7 +1792,13 @@ fn load_module_files_impl(
   let mut loaded = load_decl_uses_modules(&decls, loaded, in_progress)?;
   let decls = filter_cfg_test_decls(decls, loaded.config.test_mode);
   let tc_start = Instant::now();
+  // See the identical `#[cfg(...)]` swap (and its doc comment) in
+  // `load_module_from_text` above — same default-to-new-checker,
+  // `legacy-checker`-falls-back-to-old policy.
+  #[cfg(feature = "legacy-checker")]
   let decls = type_check_module_decls(path, decls, &loaded)?;
+  #[cfg(not(feature = "legacy-checker"))]
+  let decls = crate::core_check_module::type_check_module_decls_new(path, decls, &loaded)?;
   let tc_dur = tc_start.elapsed();
   if loaded.config.benchmark {
     eprintln!(
@@ -1876,7 +1884,17 @@ pub fn load_module_from_text(
   *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
   let init_decls = filter_cfg_test_decls(init_decls, loaded.config.test_mode);
   let tc_start = Instant::now();
-  let init_decls = type_check_module_decls(&path, init_decls, loaded).map_err(|e| {
+  // Default: the new (De-Bruijn/MetaId-based) checker — see
+  // plans/implementations/typechecker-de-bruijn-core.md. `legacy-checker`
+  // keeps the old name-keyed-unifier checker reachable as a fallback/
+  // baseline; both return the identical `Result<_, TypeError>` shape, so
+  // the error-rendering below is shared unchanged.
+  #[cfg(feature = "legacy-checker")]
+  let init_decls_result = type_check_module_decls(&path, init_decls, loaded);
+  #[cfg(not(feature = "legacy-checker"))]
+  let init_decls_result =
+    crate::core_check_module::type_check_module_decls_new(&path, init_decls, loaded);
+  let init_decls = init_decls_result.map_err(|e| {
     let file_path = path.to_file_path();
     let rendered = render_type_error_with_source(text, &e, false, Some(&file_path));
     LoadingError::Generic(rendered)
@@ -1922,7 +1940,7 @@ fn load_module_file(
 ) -> Result<(), LoadingError> {
   let text = std::fs::read_to_string(&file_path)
     .map_err(|e| LoadingError::Generic(format!("failed to read {}: {}", file_path.display(), e)))?;
-  load_module_from_text(&text, module_path.clone(), loaded)
+  load_module_from_text(&text, module_path, loaded)
 }
 
 pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingError> {

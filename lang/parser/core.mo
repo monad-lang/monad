@@ -111,6 +111,5 @@ def kw_member (s : String) (kws : List String) : Bool :=
 		}
 
 
-@[partial]
 def is_empty (s : String) : Bool := (String.length s) == 0
 

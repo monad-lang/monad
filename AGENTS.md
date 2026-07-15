@@ -216,7 +216,7 @@ def greet (name : String) : IO Unit {
 // Do block with multiple statements
 def multi_step : IO Unit {
     println "Step 1";
-    let value := 42
+    let value := 42;
     println "Done"
 }
 ```
@@ -228,15 +228,15 @@ Do notation provides syntactic sugar for monadic operations. It can be used with
 ```monad
 // Standard do notation
 def example : IO Unit := do {
-    let x <- get_value
-    let y := x + 1
+    let x <- get_value;
+    let y := x + 1;
     return y
 }
 
 // Do block in function definition (equivalent)
 def example : IO Unit {
-    let x <- get_value
-    let y := x + 1
+    let x <- get_value;
+    let y := x + 1;
     return y
 }
 ```
@@ -256,6 +256,38 @@ Multiple expressions must be separated by semicolons:
 def multi : IO Unit {
     println "first";
     println "second"
+}
+```
+
+Do notation does not (yet) support nested return statements.
+
+<!-- TODO: Give accurate parser errors for this scenario. -->
+<!-- TODO: Support more convenient do notation with nested return. -->
+
+```monad
+// WRONG return needs to be top level. Will cause cascading parse error.
+def nested : IO Unit {
+    println "first";
+    if b then return a
+    else return c
+}
+
+// CORRECT use a second do-block
+def nested : IO Unit {
+    println "first";
+    if b then do {
+        return a
+    }
+    else do {
+        return c
+    }
+}
+
+// CORRECT extract return
+def nested : IO Unit {
+    println "first";
+    return if b then a
+    else c
 }
 ```
 
@@ -669,23 +701,6 @@ def id_str (s : String) : String := s
 map_parse id_str (tag "x") "xy"
 ```
 
-### `struct` Definitions with Tab Indentation Fail to Parse
-
-**Problem**: `parser.mo` uses tab indentation throughout. The Rust parser's `struct_inner_parser` does not handle tab-indented field declarations, causing cascading parse errors (e.g., `unexpected token` at `pos : Location`). `types.mo` uses 4-space indentation and parses structs correctly.
-
-**Symptom**: The parse error appears far from the actual `struct` definition (e.g., at `///` docstring on line 1 or `custom String` on line 8), making diagnosis difficult. The `struct` tab issue cascades backward through the entire module.
-
-**Workarounds** (pick one):
-
-1. Use `type` syntax instead of `struct` in tab-indented files:
-   ```monad
-   // In parser.mo (tabs): use `type` syntax
-   type LocatedSpan {
-       mk (fragment : String) (location : Location)
-   }
-   ```
-2. Place `struct` definitions in space-indented files (e.g., `types.mo`).
-
 ### Struct Field Access via Dot Syntax Is Not Valid Monad
 
 **Problem**: Writing `loc.offset` or `span.fragment` to access struct fields appears natural but does NOT work. Dot syntax in Monad is method-call syntax (`x.fun` desugars to `Type.fun x`), NOT field access. Using dot syntax on a struct produces "unexpected token" or "not a function" errors.
@@ -727,28 +742,10 @@ Key patterns when writing self-hosted Monad code:
 4. **Use `open TypeName`** — constructor names (like `success`/`fail`) are not available without opening the type.
 5. **Type checker limitation with `ParseResult`** — matches on `ParseResult A` must avoid nested matches on `ParseResult B` where `B != A` (different type variables). Use separate functions to extract values at each level.
 
-### ~~Known Parser Limitation (FIXED)~~
-
-The operator precedence parser (`parse_expr` in `parser.rs:751`) did **not** consume function application (juxtaposition) arguments before `match`. This was **fixed** in commit 3a20c69 by reordering `base_term` to try `application` before `non_app_term`, creating a `term_inner`/`non_app_term` hierarchy.
-
-Tests: `test_match_with_app_scrutinee`, `test_match_with_two_var_scrutinee` in `core/src/parser/test/regression.rs`.
-
-### ~~Match Type Checker Bug (FIXED)~~
-
-The match type-checker was returning the original un-type-checked match expression, discarding the type-checked case bodies. This meant operator resolutions like `==` → `instance-BEq-I64.beq` inside match bodies were lost, causing Forall types to reach the evaluator.
-
-**Fixed** in commit 48cd5fe: match now returns a new `match_term` with type-checked case bodies.
-
-Tests: `test_struct_eq_in_match`, `test_eq_in_plain_match` in `init/tests.mo`.
-
 ### Known Type Checker Issues
 
-1. **~~`List.cons` forall inference~~** (FIXED): `List.cons x List.empty` now infers `A` from argument types. Verified: `List.cons 5 (List.cons 3 List.empty)` evaluates as `(List I64)`.
-2. **~~`def` type aliases~~** (FIXED): `def Parser (O : Type) : Type := String -> ParseResult O` — type checker now reduces `def` aliases during type comparison via `resolve_def_alias` in `match_resolve_type_inner`.
-3. **~~`FromListLiteral` class methods~~** (FIXED): List literals `[x]` desugar correctly. Verified: `[1, 2, 3]` evaluates as `(List I64)`.
-4. **~~`==` operator~~** (FIXED): `5 == 5` now resolves through `BEq.beq` instance dispatch. Verified: works correctly.
-5. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Inner opens are not applied to module exports. Functions using `open`-ed constructors must be defined inside the same module. Workaround: bind results to a typed parameter before matching (see `many0`/`many1` implementation pattern in `init/parser.mo`).
-6. **Forall inference on polymorphic combinators works with named functions**: The type checker correctly instantiates `{A B : Type}` forall parameters on functions like `map_parse` and `bind_parse` when called with concrete named functions (e.g., `map_parse id_str (tag "x") "xy"`). Using lambdas fails due to the parser limitation above (lambda expressions not supported as direct arguments). When a combinator call fails with "Variable mismatch, expected ... found {B : Type} -> {A : Type} -> ...", first check for parser issues (lambda arguments) before suspecting type checker bugs.
+1. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Inner opens are not applied to module exports. Functions using `open`-ed constructors must be defined inside the same module. Workaround: bind results to a typed parameter before matching (see `many0`/`many1` implementation pattern in `init/parser.mo`).
+2. **Forall inference on polymorphic combinators works with named functions**: The type checker correctly instantiates `{A B : Type}` forall parameters on functions like `map_parse` and `bind_parse` when called with concrete named functions (e.g., `map_parse id_str (tag "x") "xy"`). Using lambdas fails due to the parser limitation above (lambda expressions not supported as direct arguments). When a combinator call fails with "Variable mismatch, expected ... found {B : Type} -> {A : Type} -> ...", first check for parser issues (lambda arguments) before suspecting type checker bugs.
 
 ## Committing Changes
 
@@ -775,8 +772,9 @@ Before committing, ensure:
 cargo fmt
 cargo build --package monad-core 2>&1 | grep -E "warning:|error"
 cargo test
-cargo run -- test init/tests.mo
-cargo run -- test init/parser.mo
+cargo run -- test init/
+cargo run -- test std/
+cargo run -- test lang/
 ```
 
 ## Coding Agent Guide

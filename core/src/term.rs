@@ -1126,6 +1126,15 @@ pub enum Literal {
   },
   StructLit {
     fields: Map<Identifier, Term>,
+    /// Optional explicit annotation of which struct this literal builds:
+    /// `{ x := 1, y := 2 : Point }`. Lets the checker resolve the struct
+    /// name directly, the same way an ordinary `(expr : Type)` ascription
+    /// would, without depending on an ambient expected type from context
+    /// (which a struct literal doesn't always have — e.g. passed to a
+    /// generic function, or returned from a branch that isn't itself
+    /// annotated) — scoped inside the literal's own braces since wrapping
+    /// the whole `{ ... }` in parens reads awkwardly.
+    type_name: Option<Box<Term>>,
   },
   StructUpdate {
     base: Identifier,
@@ -1177,13 +1186,16 @@ impl Display for Literal {
         write!(f, "match {value} {{\n {}\n}}", cs)
       }
       Literal::If { value, then, els } => write!(f, "if {value} then {then} else {els}"),
-      Literal::StructLit { fields } => {
+      Literal::StructLit { fields, type_name } => {
         let fields_str = fields
           .iter()
           .map(|(k, v)| format!("{k} := {v}"))
           .collect::<Vec<_>>()
           .join(", ");
-        write!(f, "{{ {fields_str} }}")
+        match type_name {
+          Some(t) => write!(f, "{{ {fields_str} : {t} }}"),
+          None => write!(f, "{{ {fields_str} }}"),
+        }
       }
       Literal::StructUpdate { base, fields } => {
         let fields_str = fields
@@ -2478,6 +2490,9 @@ pub struct Infix {
 impl Infix {
   pub fn name(&self) -> &ModulePath {
     &self.name
+  }
+  pub fn operator(&self) -> &Operator {
+    &self.operator
   }
 }
 

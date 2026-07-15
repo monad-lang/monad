@@ -1,7 +1,9 @@
+use io
 use lang.types
 use lang.codegen.ir
 use lang.module
 
+open IO
 open LLVMType
 open LLVMValue
 
@@ -1200,13 +1202,25 @@ def ends_with_main (name : String) : Bool :=
 /// Compile all loaded modules to a single LLVM module.
 /// All declarations from all modules are compiled together with fully qualified names.
 @[partial]
-def compile_loaded_modules_to_ir (loaded : LoadedModules) : LLVMModule := 
-    let main_mod := get_loaded_main loaded in
-    let all_mods := get_loaded_all loaded in
-    // Collect all declarations with module prefixes to avoid name collisions
-    let all_decls := collect_all_decls_from_modules_with_prefix all_mods List.empty in
+def compile_loaded_modules_to_ir (loaded : LoadedModules) : IO LLVMModule := do {
+    let main_mod := get_loaded_main loaded;
+    let all_mods := get_loaded_all loaded;
+    
+    // Debug: log loaded modules count
+    let module_count := List.length all_mods;
+    println ("Loaded " ++ I64.to_string module_count ++ " modules");
+    
+    // Collect all declarations without module prefixes
+    let all_decls := collect_all_decls_from_modules all_mods List.empty;
+    
+    // Debug: log def count
+    let def_count := List.length all_decls;
+    println ("Total defs collected: " ++ I64.to_string def_count);
+    
     // Compile all declarations together
-    compile_db_module all_decls
+    let mod_ := compile_db_module all_decls;
+    return mod_
+}
 
 @[partial]
 def collect_all_decls_from_modules_with_prefix (modules : List ModuleInfo) (acc : List Decl) : List Decl := match modules {

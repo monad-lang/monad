@@ -1,4 +1,11 @@
 use super::*;
+// These tests exercise module-loading/scoping mechanics specifically
+// against the OLD checker (unaffected by the new-checker-is-default
+// cutover — see `Cargo.toml`'s `legacy-checker` feature) — imported here
+// unconditionally rather than relying on `module.rs`'s own `use`, which is
+// now gated behind that feature since production call sites no longer
+// need it by default.
+use crate::eval::r#type::type_check_module_decls;
 use crate::parser::parse_file;
 #[test]
 fn test_simple_instance() {

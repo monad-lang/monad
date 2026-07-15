@@ -35,6 +35,26 @@ fn test_do_parser_let_and_bind() {
   );
   similar!(r, expected);
 }
+#[test]
+fn test_do_parser_typed_let_and_bind() {
+  let do_block = |s: &'static str| do_parser::<()>(s.into());
+  let (_, r) = do_block(r#"do { let x : I64 := 1; let y : MState <- monadic; return y }"#).unwrap();
+  let expected = lets(
+    vec![LetVar {
+      name: id("x"),
+      typ: var("I64"),
+      value: num(1),
+    }],
+    app(
+      app(pvar(vec!["Monad", "bind"]), var("monadic")),
+      lam(
+        param(id("y"), var("MState")),
+        app(pvar(vec!["Monad", "pure"]), var("y")),
+      ),
+    ),
+  );
+  similar!(r, expected);
+}
 
 #[test]
 fn test_do_parser_multiple_binds() {
@@ -211,6 +231,47 @@ fn test_def_do_block_multiple_exprs() {
       apps(var("println"), vec![str("first")]),
     ),
     lam(par("_"), apps(var("println"), vec![str("second")])),
+  );
+  similar!(
+    res,
+    def(
+      mpt("multi"),
+      vec![],
+      app2("IO", "Unit"),
+      expected_body,
+      vec![]
+    )
+  );
+}
+
+#[test]
+fn test_def_do_block_match() {
+  let pure = |a| app(pvar(vec!["Monad", "pure"]), a);
+  let bind = |a| app(pvar(vec!["Monad", "bind"]), a);
+  let s = r#"def multi : IO Unit {
+    println "first";
+    match val {
+      con1 => mon,
+      con2 a => do {
+        return b
+      }
+    }
+  }"#
+    .into();
+  let (_, res) = def_parser(s).unwrap();
+
+  let expected_body = app(
+    bind(apps(var("println"), vec![str("first")])),
+    lam(
+      par("_"),
+      match_term(
+        var("val"),
+        vec![
+          case(id("con1"), vec![], var("mon")),
+          case(id("con2"), vec![id("a")], pure(var("b"))),
+        ],
+      ),
+    ),
   );
   similar!(
     res,

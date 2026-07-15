@@ -29,11 +29,17 @@ use crate::term::module::{
 use crate::term::{Constructor, ModulePath, SearchPaths, mpt, strings_to_list_term};
 use crate::term::{app, id};
 
+pub mod core_check;
+pub mod core_check_module;
+pub mod core_term;
+pub mod core_unify;
 pub mod diag;
 pub mod eval;
 pub mod eval_term;
 pub mod lower;
+pub mod lower_core;
 pub mod parser;
+pub mod raise_core;
 pub mod runtime;
 pub mod term;
 
@@ -459,16 +465,15 @@ fn test_one_file(
   for ctx in &test_defs {
     let def = ctx.value();
     let name = def.name.to_string();
+    // `def` was already fully type-checked and elaborated by `load_module` above
+    // (module.defs() returns the post-type-check decls, with e.g. `==` already
+    // resolved to a concrete `instance-BEq-*.beq` call). Re-running `type_check`
+    // on that already-elaborated term can spuriously fail: elaboration commits
+    // generic calls to a specific concrete instance, which is no longer flexible
+    // enough for the checker to re-derive the same polymorphic instantiation from
+    // scratch. There's no need to check it again — just use it directly.
     let term = def.term.clone();
-
-    let (term, typ) = match type_check(term, Hole, &global.scope()) {
-      Ok(tt) => tt.to_tuple(),
-      Err(e) => {
-        failed += 1;
-        failures.push((name.clone(), format!("type error: {e}")));
-        continue;
-      }
-    };
+    let typ = def.typ().clone();
 
     if options.debug {
       output_lines.push(format!("test {name} : {typ}"));
@@ -747,5 +752,72 @@ pub fn run_tests(
     run_tests_sequential(&files, &master_loaded, &options, test_timeout)
   } else {
     run_tests_parallel(&files, &master_loaded, &options, num_threads, test_timeout)
+  }
+}
+
+#[cfg(test)]
+mod test {
+  use super::*;
+
+  /// Regression test for `test_one_file`: it used to redundantly re-run
+  /// `type_check` on a def's already-elaborated term (with `Hole` as the
+  /// expected type), discarding the def's own checked type. For a generic
+  /// function called via an unannotated lambda, elaboration had already
+  /// committed the call to one concrete instance, which the redundant
+  /// second check could no longer re-derive the same polymorphic
+  /// instantiation for — spuriously failing tests that `load_module`
+  /// already type-checked successfully. `test_one_file` now reuses the
+  /// def's own term/type directly instead of re-checking.
+  #[test]
+  fn test_direct_generic_call_via_lambda_does_not_regress() {
+    let dir = PathBuf::from("/tmp").join(format!(
+      "monad-test-generic-lambda-{:x}",
+      std::process::id()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("generic_lambda_test.mo");
+    fs::write(
+      &file,
+      r#"
+def my_any {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
+    match xs {
+        empty => false,
+        cons a tail =>
+            if pred a
+            then true
+            else my_any pred tail,
+        _ => false
+    }
+
+@[test]
+def test_direct_generic_call : Bool :=
+    my_any (fn a => a == "c") ["a", "b", "c"]
+"#,
+    )
+    .unwrap();
+
+    // `run_tests` unconditionally loads `std/test.mo` (for `Test.assert`);
+    // resolve it via the workspace root rather than relying on cwd, since
+    // `cargo test` runs with cwd set to this crate's directory, not the
+    // workspace root where `std/` actually lives.
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .parent()
+      .unwrap()
+      .to_path_buf();
+    let result = run_tests(
+      vec![file],
+      EvalOptions::default(),
+      1,
+      None,
+      vec![workspace_root],
+    );
+
+    fs::remove_dir_all(&dir).unwrap();
+
+    assert!(
+      result.is_ok(),
+      "Direct (non-piped) generic call via an unannotated lambda should pass: {:?}",
+      result
+    );
   }
 }

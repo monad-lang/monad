@@ -168,7 +168,10 @@ fn test_struct_val() {
   similar!(
     r,
     Term::Lit {
-      value: Literal::StructLit { fields: Map::new() }
+      value: Literal::StructLit {
+        fields: Map::new(),
+        type_name: None
+      }
     }
   );
   let (_, r) = p(r#"{a := b}"#.into()).unwrap();
@@ -176,7 +179,8 @@ fn test_struct_val() {
     r,
     Term::Lit {
       value: Literal::StructLit {
-        fields: Map::from([(id("a"), var("b"))])
+        fields: Map::from([(id("a"), var("b"))]),
+        type_name: None
       }
     }
   );
@@ -191,11 +195,23 @@ fn test_struct_val() {
             id("b"),
             Term::Lit {
               value: Literal::StructLit {
-                fields: Map::from([(id("c"), num(0))])
+                fields: Map::from([(id("c"), num(0))]),
+                type_name: None
               }
             }
           )
-        ])
+        ]),
+        type_name: None
+      }
+    }
+  );
+  let (_, r) = p(r#"{a := b : Point}"#.into()).unwrap();
+  similar!(
+    r,
+    Term::Lit {
+      value: Literal::StructLit {
+        fields: Map::from([(id("a"), var("b"))]),
+        type_name: Some(Box::new(var("Point")))
       }
     }
   );
@@ -244,10 +260,14 @@ fn test_term() {
             (
               id("map"),
               Term::Lit {
-                value: Literal::StructLit { fields: Map::new() }
+                value: Literal::StructLit {
+                  fields: Map::new(),
+                  type_name: None
+                }
               }
             )
-          ])
+          ]),
+          type_name: None
         }
       }
     )

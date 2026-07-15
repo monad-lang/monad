@@ -116,7 +116,8 @@ def typecheck_file (file_path : String) : IO Bool := do {
     // Convert file path to ModulePath (e.g., "lang/module.mo" -> [id "lang", id "module"])
     let mp := file_path_to_module_path file_path;
     // Load module with all dependencies
-    return match load_module_with_dependencies "" mp {
+    let mb_scope <- load_module_with_dependencies "" mp;
+    return match mb_scope {
         Option.some scope =>
             // Parse the file and typecheck with the loaded scope
             match parse_all_decls content {

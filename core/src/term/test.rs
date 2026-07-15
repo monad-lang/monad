@@ -213,11 +213,25 @@ impl Similar for Literal {
           els: e2,
         },
       ) => (*v1).similar(&**v2) && (*t1).similar(&**t2) && (*e1).similar(&**e2),
-      (StructLit { fields: f1 }, StructLit { fields: f2 }) => {
+      (
+        StructLit {
+          fields: f1,
+          type_name: t1,
+        },
+        StructLit {
+          fields: f2,
+          type_name: t2,
+        },
+      ) => {
         f1.len() == f2.len()
           && f1
             .iter()
             .all(|(k, v)| f2.get(k).map(|v2| v.similar(v2)).unwrap_or(false))
+          && match (t1, t2) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.similar(b),
+            _ => false,
+          }
       }
       (
         StructUpdate {

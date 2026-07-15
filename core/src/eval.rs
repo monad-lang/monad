@@ -586,14 +586,15 @@ pub fn apply_dot_macro_recursive(term: Term) -> Term {
       }
     }
     Lit {
-      value: Literal::StructLit { fields },
+      value: Literal::StructLit { fields, type_name },
     } => {
       let fields = fields
         .into_iter()
         .map(|(k, v)| (k, apply_dot_macro_recursive(v)))
         .collect();
+      let type_name = type_name.map(|t| Box::new(apply_dot_macro_recursive(*t)));
       Term::Lit {
-        value: Literal::StructLit { fields },
+        value: Literal::StructLit { fields, type_name },
       }
     }
     Lit {
@@ -965,14 +966,15 @@ fn substitute(term: Term, nref: &NameRef, new_term: &Term) -> Term {
       if_term(value, then, els)
     }
     Lit {
-      value: Literal::StructLit { fields },
+      value: Literal::StructLit { fields, type_name },
     } => {
       let fields = fields
         .into_iter()
         .map(|(k, v)| (k, substitute(v, nref, new_term)))
         .collect();
+      let type_name = type_name.map(|t| Box::new(substitute(*t, nref, new_term)));
       Term::Lit {
-        value: Literal::StructLit { fields },
+        value: Literal::StructLit { fields, type_name },
       }
     }
     Lit {

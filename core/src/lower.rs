@@ -874,6 +874,7 @@ mod tests {
     let t = Term::Lit {
       value: TLit::StructLit {
         fields: crate::Map::new(),
+        type_name: None,
       },
     };
     assert!(lower_term(&t, &scope).is_err());

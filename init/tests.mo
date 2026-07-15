@@ -104,7 +104,7 @@ def test_get_neg1 : Bool :=
 
 @[test]
 def test_get_empty : Bool :=
-    none == (List.get 0 List.empty)
+    none == (List.get 0 ([] : List I64))
 
 def first_of_empty : Option I64 :=
     List.first List.empty
@@ -576,3 +576,32 @@ def test_bord_bool_gt_true_true : Bool :=
 @[test]
 def test_bord_bool_gt_false_false : Bool :=
     Bool.not (BOrd.gt false false)
+
+// -- Type propagation tests --
+
+@[test]
+def test_match_with_let_annotation : Bool :=
+    let result : Option I64 := Option.some 42 in
+    match result {
+        Option.some x => true,
+        Option.none => false
+    }
+
+@[test]
+def test_do_bind_with_match : IO Bool := do {
+    let x : Option I64 <- IO.io (Option.some 42);
+    match x {
+        Option.some _ => IO.io true,
+        Option.none => IO.io false
+    }
+}
+
+// -- Type inference tests (without annotations) --
+
+@[test]
+def test_let_match_no_annotation : Bool :=
+    let result := Option.some 42 in
+    match result {
+        Option.some _ => true,
+        Option.none => false
+    }
