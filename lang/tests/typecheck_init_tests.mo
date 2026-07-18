@@ -143,7 +143,7 @@ def test_typecheck_init_string : Bool := typecheck_file "init/string.mo" "string
 def test_typecheck_init_init : Bool := typecheck_file "init/init.mo" "init"
 
 @[test]
-def test_typecheck_init_parser : Bool := typecheck_file "init/parser.mo" "parser"
+def test_typecheck_init_parser : Bool := typecheck_file "lang/parser/combinators.mo" "combinators"
 
 // --- Most complex init/ file ---
 

@@ -1,6 +1,6 @@
 /// Key-value map type class. Types implementing Map provide ordered
 /// key-value storage with insertion, lookup, and deletion.
-class Map (M: Type -> Type -> Type) {
+class Map (M: (K : Type) -> (V : Type) -> Type) {
   def empty : M K V
   def insert (key: K) (val: V) (m: M K V) : M K V
   def lookup (key: K) (m: M K V) : Option V
@@ -11,6 +11,15 @@ class Map (M: Type -> Type -> Type) {
 type BTreeMap K V {
   empty,
   node (key: K) (val: V) (left: BTreeMap K V) (right: BTreeMap K V) (height: I64)
+}
+
+def BTreeMap.beq [BEq K, BEq V] (a b : BTreeMap K V) : Bool :=
+  BTreeMap.fold (fn r ka va =>
+    r && Map.lookup ka b == some va
+  ) true a
+
+instance [BEq K, BEq V] BEq BTreeMap K V {
+  def beq (a b : BTreeMap K V) : Bool := BTreeMap.beq a b
 }
 
 /// Eliminator: apply a function if the tree is a node, otherwise return default.

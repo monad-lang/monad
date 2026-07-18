@@ -63,7 +63,7 @@ def test_scope_init_math : Bool := build_scope_for_file "init/math.mo" "math"
 def test_scope_init_number : Bool := build_scope_for_file "init/number.mo" "number"
 
 @[test]
-def test_scope_init_parser_file : Bool := build_scope_for_file "init/parser.mo" "parser"
+def test_scope_init_parser_file : Bool := build_scope_for_file "lang/parser/combinators.mo" "combinators"
 
 @[test]
 def test_scope_init_prelude : Bool := build_scope_for_file "init/prelude.mo" "prelude"

@@ -56,6 +56,42 @@ instance BEq String {
 	def beq (a b : String) : Bool := String.beq a b
 }
 
+def bytes_lt (a b : List U8) : Bool :=
+	match a {
+		empty => match b {
+			empty => false,
+			cons _ _ => true
+		},
+		cons xa ta => match b {
+			empty => false,
+			cons xb tb =>
+				if U8.lt xa xb then true
+				else if U8.gt xa xb then false
+				else bytes_lt ta tb
+		}
+	}
+
+def bytes_gt (a b : List U8) : Bool :=
+	match a {
+		empty => false,
+		cons xa ta => match b {
+			empty => true,
+			cons xb tb =>
+				if U8.gt xa xb then true
+				else if U8.lt xa xb then false
+				else bytes_gt ta tb
+		}
+	}
+
+def String.lt (a b : String) : Bool := bytes_lt (String.to_list a) (String.to_list b)
+
+def String.gt (a b : String) : Bool := bytes_gt (String.to_list a) (String.to_list b)
+
+instance BOrd String {
+	def lt (a b : String) : Bool := String.lt a b
+	def gt (a b : String) : Bool := String.gt a b
+}
+
 instance ToString String {
 	def to_string (s : String) : String := s
 }
