@@ -729,6 +729,22 @@ def test_parse_with_whitespace : Bool :=
     err _ => false
   }
 
+/// Regression test for a std/map.mo BTreeMap.rotate_ll/rotate_rr bug where objects
+/// with 4+ keys could silently lose a member on parse (see plans/bootstrapping/
+/// json-parser-serializer-plan.md for the root cause and fix).
+@[test]
+def test_parse_object_four_keys : Bool :=
+  match Json.parse "{\"a\":1,\"b\":2,\"c\":3,\"d\":4}" {
+    ok j =>
+      let expected :=
+        Map.insert "a" (num (int 1))
+        (Map.insert "b" (num (int 2))
+        (Map.insert "c" (num (int 3))
+        (Map.insert "d" (num (int 4)) BTreeMap.empty))) in
+      Json.beq j (object expected),
+    err _ => false
+  }
+
 // ─── Tests: serializer ───
 
 @[test]

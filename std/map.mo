@@ -73,10 +73,7 @@ def BTreeMap.rotate_lr {K V : Type} (root_key: K) (root_val: V) (l_key: K) (l_va
 
 /// Left-left single rotation.
 def BTreeMap.rotate_ll {K V : Type} (root_key: K) (root_val: V) (l_key: K) (l_val: V) (ll: BTreeMap K V) (lr: BTreeMap K V) (right: BTreeMap K V) : BTreeMap K V :=
-  BTreeMap.with_node ll
-    (fn llk llv lll llr _ =>
-      BTreeMap.create_node llk llv lll (BTreeMap.create_node root_key root_val llr right))
-    (BTreeMap.create_node root_key root_val BTreeMap.empty right)
+  BTreeMap.create_node l_key l_val ll (BTreeMap.create_node root_key root_val lr right)
 
 /// Handle right-heavy imbalance: check children heights and apply RR or RL rotation.
 def BTreeMap.balance_right_heavy {K V : Type} (key: K) (val: V) (left: BTreeMap K V) (right: BTreeMap K V) : BTreeMap K V :=
@@ -99,10 +96,7 @@ def BTreeMap.rotate_rl {K V : Type} (root_key: K) (root_val: V) (left: BTreeMap 
 
 /// Right-right single rotation.
 def BTreeMap.rotate_rr {K V : Type} (root_key: K) (root_val: V) (left: BTreeMap K V) (r_key: K) (r_val: V) (rl: BTreeMap K V) (rr: BTreeMap K V) : BTreeMap K V :=
-  BTreeMap.with_node rr
-    (fn rrk rrv rrl rrr _ =>
-      BTreeMap.create_node rrk rrv (BTreeMap.create_node root_key root_val left rrl) rrr)
-    (BTreeMap.create_node root_key root_val left BTreeMap.empty)
+  BTreeMap.create_node r_key r_val (BTreeMap.create_node root_key root_val left rl) rr
 
 /// Find the leftmost (minimum) node in the tree.
 @[terminating]
@@ -183,7 +177,11 @@ def BTreeMap.delete_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) 
         BTreeMap.with_node left
           (fn lk lv ll lr lh =>
             BTreeMap.with_node right
-              (fn rk rv rl rr rh => BTreeMap.balance rk rv left rl)
+              (fn rk rv rl rr rh =>
+                BTreeMap.with_node (BTreeMap.min_node right)
+                  (fn mk mv _ _ _ =>
+                    BTreeMap.balance mk mv left (BTreeMap.delete_loop lt gt mk right))
+                  right)
               left)
           right)
     BTreeMap.empty
@@ -231,7 +229,11 @@ instance [BOrd K] Map BTreeMap {
           BTreeMap.with_node left
             (fn lk lv ll lr lh =>
               BTreeMap.with_node right
-                (fn rk rv rl rr rh => BTreeMap.balance rk rv left rl)
+                (fn rk rv rl rr rh =>
+                  BTreeMap.with_node (BTreeMap.min_node right)
+                    (fn mk mv _ _ _ =>
+                      BTreeMap.balance mk mv left (Map.delete mk right))
+                    right)
                 left)
             right)
       BTreeMap.empty
