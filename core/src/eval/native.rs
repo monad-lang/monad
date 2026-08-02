@@ -161,6 +161,22 @@ pub fn file_exists(terms: Vec<Term>) -> Result<Term, NativeError> {
   Ok(io_term(bool_to_term(exists)))
 }
 
+pub fn get_env(terms: Vec<Term>) -> Result<Term, NativeError> {
+  let name = extract_string_at(&terms, 0)?;
+  let result = match std::env::var(&name) {
+    Ok(value) => {
+      let some_term = Term::Var {
+        name: crate::term::NameRef::Id(id("some")),
+      };
+      app(some_term, str(&value))
+    }
+    Err(_) => Term::Var {
+      name: crate::term::NameRef::Id(id("none")),
+    },
+  };
+  Ok(io_term(result))
+}
+
 pub fn exec_cmd(terms: Vec<Term>) -> Result<Term, NativeError> {
   let cmd = extract_string_at(&terms, 0)?;
   let args_term = terms.get(1).ok_or(NativeError::MissingArgs {
@@ -934,6 +950,7 @@ pub fn load_native_funs() -> Map<Identifier, NativeFun> {
     (id("write_file"), s(write_file)),
     (id("read_file"), s(read_file)),
     (id("file_exists"), s(file_exists)),
+    (id("get_env"), s(get_env)),
     (id("fork_io"), sa(fork_io)),
     (id("await_fiber"), sa(await_fiber)),
     (id("cancel_fiber"), sa(cancel_fiber)),
@@ -1020,6 +1037,41 @@ mod tests {
       Term::Con(Constructor { name, args, .. }) if name.as_str() == "io" => args.first()?.as_ref(),
       _ => None,
     }
+  }
+
+  #[test]
+  fn test_get_env_returns_some_when_set() {
+    let var_name = format!("MONAD_TEST_GET_ENV_SET_{}", std::process::id());
+    unsafe {
+      std::env::set_var(&var_name, "hello");
+    }
+    let result = get_env(vec![str(&var_name)]).unwrap();
+    let inner = get_io_inner(&result).expect("expected IO wrapper");
+    match inner {
+      Term::App { fun, arg } => {
+        assert!(
+          matches!(fun.as_ref(), Term::Var { name } if name.as_id().map(|i| i.as_str()) == Some("some"))
+        );
+        assert_eq!(**arg, str("hello"));
+      }
+      other => panic!("expected some(...), got {:?}", other),
+    }
+    unsafe {
+      std::env::remove_var(&var_name);
+    }
+  }
+
+  #[test]
+  fn test_get_env_returns_none_when_unset() {
+    let var_name = format!("MONAD_TEST_GET_ENV_UNSET_{}", std::process::id());
+    unsafe {
+      std::env::remove_var(&var_name);
+    }
+    let result = get_env(vec![str(&var_name)]).unwrap();
+    let inner = get_io_inner(&result).expect("expected IO wrapper");
+    assert!(
+      matches!(inner, Term::Var { name } if name.as_id().map(|i| i.as_str()) == Some("none"))
+    );
   }
 
   #[test]

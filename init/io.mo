@@ -26,6 +26,9 @@ def IO.read_file (path : String) : IO String
 @[native "file_exists"]
 def IO.file_exists (path : String) : IO Bool
 
+@[native "get_env"]
+def IO.get_env (s : String) : IO (Option String)
+
 
 // TODO support constraints
 // def IO.println [ToString A] (a: A) : IO Unit :=

@@ -6,8 +6,10 @@ use std::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
-  pub mote: MoteMeta,
+  /// `None` for a virtual workspace root (a manifest with `[workspace]` but no `[mote]`).
+  pub mote: Option<MoteMeta>,
   pub dependencies: BTreeMap<String, Dependency>,
+  pub workspace: Option<Workspace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +17,48 @@ pub struct MoteMeta {
   pub name: String,
   pub version: String,
   pub edition: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Workspace {
+  /// Member path patterns relative to the manifest's directory, e.g. `"motes/*"` or `"pkgs/engine"`.
+  pub members: Vec<String>,
+}
+
+impl Workspace {
+  /// Expands member patterns into concrete directories containing a `mote.toml`.
+  /// Supports exact paths and a single trailing `/*` wildcard (one level deep).
+  pub fn resolve_members(&self, root_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut dirs = Vec::new();
+    for pattern in &self.members {
+      if let Some(prefix) = pattern.strip_suffix("/*") {
+        let parent = root_dir.join(prefix);
+        let entries = std::fs::read_dir(&parent).map_err(|e| {
+          format!(
+            "workspace member pattern '{pattern}': failed to read {}: {e}",
+            parent.display()
+          )
+        })?;
+        let mut matched: Vec<PathBuf> = entries
+          .filter_map(|e| e.ok())
+          .map(|e| e.path())
+          .filter(|p| p.is_dir() && p.join("mote.toml").is_file())
+          .collect();
+        matched.sort();
+        dirs.extend(matched);
+      } else {
+        let dir = root_dir.join(pattern);
+        if !dir.join("mote.toml").is_file() {
+          return Err(format!(
+            "workspace member '{pattern}': no mote.toml found at {}",
+            dir.display()
+          ));
+        }
+        dirs.push(dir);
+      }
+    }
+    Ok(dirs)
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,9 +97,10 @@ pub struct LockedModule {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct RawManifest {
-  mote: RawMoteMeta,
+  mote: Option<RawMoteMeta>,
   #[serde(default)]
   dependencies: BTreeMap<String, RawDependency>,
+  workspace: Option<RawWorkspace>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -63,6 +108,12 @@ struct RawMoteMeta {
   name: String,
   version: String,
   edition: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawWorkspace {
+  #[serde(default)]
+  members: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -131,12 +182,17 @@ impl Manifest {
     let raw: RawManifest =
       toml::from_str(content).map_err(|e| format!("Failed to parse mote.toml: {e}"))?;
 
+    if raw.mote.is_none() && raw.workspace.is_none() {
+      return Err("mote.toml must have a [mote] or [workspace] section".to_string());
+    }
+
     Ok(Self {
-      mote: MoteMeta {
-        name: raw.mote.name,
-        version: raw.mote.version,
-        edition: raw.mote.edition,
-      },
+      mote: raw.mote.map(|m| MoteMeta {
+        name: m.name,
+        version: m.version,
+        edition: m.edition,
+      }),
+      workspace: raw.workspace.map(|w| Workspace { members: w.members }),
       dependencies: raw
         .dependencies
         .into_iter()
@@ -298,6 +354,11 @@ pub struct ResolvedMote {
 pub struct Installer;
 
 impl Installer {
+  pub fn install_dir(project_dir: &Path, name: &str, version: &str) -> PathBuf {
+    let motes_dir = project_dir.join("motes");
+    mote_install_dir(&motes_dir, name, version)
+  }
+
   pub fn install(
     deps: &ResolvedDeps,
     project_dir: &Path,
@@ -426,22 +487,29 @@ impl Resolver {
             )
           })?;
 
+          let dep_mote = dep_manifest.mote.as_ref().ok_or_else(|| {
+            format!(
+              "dependency {dep_name}: manifest at {} has no [mote] section (virtual workspace roots cannot be used as dependencies)",
+              dep_dir.display()
+            )
+          })?;
+
           let deps = dep_manifest.dependencies.clone();
 
           if let Some(&locked_version) = locked.get(dep_name.as_str()) {
-            if dep_manifest.mote.version != locked_version {
+            if dep_mote.version != locked_version {
               return Err(format!(
                 "lockfile conflict for mote '{}': locked at version {} but resolved {} at {}",
                 dep_name,
                 locked_version,
-                dep_manifest.mote.version,
+                dep_mote.version,
                 dep_dir.display()
               ));
             }
           }
 
           if let Some(existing) = resolved.get(&dep_name) {
-            if dep_manifest.mote.version != existing.version {
+            if dep_mote.version != existing.version {
               return Err(format!(
                 "version conflict for mote '{}': version {} at {} conflicts with version {} at {}",
                 dep_name,
@@ -451,7 +519,7 @@ impl Resolver {
                   .as_ref()
                   .map(|p| p.display().to_string())
                   .unwrap_or_else(|| "unknown".into()),
-                dep_manifest.mote.version,
+                dep_mote.version,
                 dep_dir.display(),
               ));
             }
@@ -461,8 +529,8 @@ impl Resolver {
           resolved.insert(
             dep_name.clone(),
             ResolvedMote {
-              name: dep_manifest.mote.name.clone(),
-              version: dep_manifest.mote.version.clone(),
+              name: dep_mote.name.clone(),
+              version: dep_mote.version.clone(),
               source_path: Some(dep_dir.clone()),
               dependencies: deps.clone(),
             },
@@ -503,9 +571,10 @@ name = "my-mote"
 version = "0.1.0"
 "#;
     let raw: RawManifest = toml::from_str(toml_str).unwrap();
-    assert_eq!(raw.mote.name, "my-mote");
-    assert_eq!(raw.mote.version, "0.1.0");
-    assert!(raw.mote.edition.is_none());
+    let mote = raw.mote.unwrap();
+    assert_eq!(mote.name, "my-mote");
+    assert_eq!(mote.version, "0.1.0");
+    assert!(mote.edition.is_none());
     assert!(raw.dependencies.is_empty());
   }
 
@@ -518,8 +587,9 @@ version = "0.1.0"
 edition = "2026"
 "#;
     let raw: RawManifest = toml::from_str(toml_str).unwrap();
-    assert_eq!(raw.mote.name, "my-mote");
-    assert_eq!(raw.mote.edition.as_deref(), Some("2026"));
+    let mote = raw.mote.unwrap();
+    assert_eq!(mote.name, "my-mote");
+    assert_eq!(mote.edition.as_deref(), Some("2026"));
   }
 
   #[test]
@@ -571,8 +641,9 @@ version = "1.2.3"
     std::fs::write(&mote_toml, content).unwrap();
 
     let manifest = Manifest::parse(&mote_toml).unwrap();
-    assert_eq!(manifest.mote.name, "test-mote");
-    assert_eq!(manifest.mote.version, "1.2.3");
+    let mote = manifest.mote.unwrap();
+    assert_eq!(mote.name, "test-mote");
+    assert_eq!(mote.version, "1.2.3");
     assert!(manifest.dependencies.is_empty());
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -594,7 +665,7 @@ version = "0.1.0"
     .unwrap();
 
     let (path, manifest) = Manifest::discover(&dir).expect("Should find mote.toml");
-    assert_eq!(manifest.mote.name, "found-in-root");
+    assert_eq!(manifest.mote.unwrap().name, "found-in-root");
     assert_eq!(path, mote_toml.canonicalize().unwrap());
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -617,7 +688,7 @@ version = "0.2.0"
     .unwrap();
 
     let (path, manifest) = Manifest::discover(&sub).expect("Should walk up to find mote.toml");
-    assert_eq!(manifest.mote.name, "walked-up");
+    assert_eq!(manifest.mote.unwrap().name, "walked-up");
     assert_eq!(path, mote_toml.canonicalize().unwrap());
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1397,5 +1468,144 @@ mylib = { path = "motes/mylib" }
       dir.file_name().unwrap().to_string_lossy(),
       "weird_name_-1.0.0-beta.1"
     );
+  }
+
+  // --- Workspace tests ---
+
+  #[test]
+  fn test_parse_virtual_workspace_manifest() {
+    let toml_str = r#"
+[workspace]
+members = ["motes/*"]
+"#;
+    let manifest = Manifest::parse_str(toml_str).unwrap();
+    assert!(manifest.mote.is_none());
+    let workspace = manifest.workspace.unwrap();
+    assert_eq!(workspace.members, vec!["motes/*".to_string()]);
+  }
+
+  #[test]
+  fn test_parse_mote_with_workspace() {
+    let toml_str = r#"
+[mote]
+name = "root"
+version = "1.0.0"
+
+[workspace]
+members = ["motes/lib-a", "motes/lib-b"]
+"#;
+    let manifest = Manifest::parse_str(toml_str).unwrap();
+    assert_eq!(manifest.mote.unwrap().name, "root");
+    let workspace = manifest.workspace.unwrap();
+    assert_eq!(
+      workspace.members,
+      vec!["motes/lib-a".to_string(), "motes/lib-b".to_string()]
+    );
+  }
+
+  #[test]
+  fn test_manifest_requires_mote_or_workspace() {
+    let err = Manifest::parse_str("").unwrap_err();
+    assert!(
+      err.contains("must have a [mote] or [workspace] section"),
+      "got: {err}"
+    );
+  }
+
+  #[test]
+  fn test_workspace_resolve_members_glob() {
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-workspace-glob-{:x}",
+      std::process::id()
+    ));
+    let lib_a_dir = root.join("motes").join("lib-a");
+    let lib_b_dir = root.join("motes").join("lib-b");
+    let not_a_mote_dir = root.join("motes").join("not-a-mote");
+
+    setup_mote(&lib_a_dir, "lib-a", "0.1.0", &[]);
+    setup_mote(&lib_b_dir, "lib-b", "0.1.0", &[]);
+    std::fs::create_dir_all(&not_a_mote_dir).unwrap();
+
+    let workspace = Workspace {
+      members: vec!["motes/*".to_string()],
+    };
+    let mut members = workspace.resolve_members(&root).unwrap();
+    members.sort();
+
+    assert_eq!(members, vec![lib_a_dir.clone(), lib_b_dir.clone()]);
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_workspace_resolve_members_exact_path() {
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-workspace-exact-{:x}",
+      std::process::id()
+    ));
+    let engine_dir = root.join("pkgs").join("engine");
+    setup_mote(&engine_dir, "engine", "0.1.0", &[]);
+
+    let workspace = Workspace {
+      members: vec!["pkgs/engine".to_string()],
+    };
+    let members = workspace.resolve_members(&root).unwrap();
+    assert_eq!(members, vec![engine_dir]);
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_workspace_resolve_members_missing_exact_path_errors() {
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-workspace-missing-{:x}",
+      std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+
+    let workspace = Workspace {
+      members: vec!["pkgs/nonexistent".to_string()],
+    };
+    let err = workspace.resolve_members(&root).unwrap_err();
+    assert!(err.contains("no mote.toml found"), "got: {err}");
+
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn test_workspace_member_cross_dependency_resolves() {
+    // Virtual workspace root with two members; lib-a depends on sibling lib-b via path.
+    let root = PathBuf::from("/tmp").join(format!(
+      "monad-test-workspace-cross-dep-{:x}",
+      std::process::id()
+    ));
+    let lib_a_dir = root.join("motes").join("lib-a");
+    let lib_b_dir = root.join("motes").join("lib-b");
+
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+      root.join("mote.toml"),
+      r#"
+[workspace]
+members = ["motes/*"]
+"#,
+    )
+    .unwrap();
+
+    setup_mote(&lib_a_dir, "lib-a", "0.1.0", &[("lib-b", ">=0.1.0")]);
+    setup_mote(&lib_b_dir, "lib-b", "0.1.0", &[]);
+
+    let (_root_path, root_manifest) = Manifest::discover(&root).unwrap();
+    assert!(root_manifest.mote.is_none());
+    let workspace = root_manifest.workspace.clone().unwrap();
+    let member_dirs = workspace.resolve_members(&root).unwrap();
+    assert_eq!(member_dirs.len(), 2);
+
+    let lib_a_manifest = Manifest::parse(&lib_a_dir.join("mote.toml")).unwrap();
+    let resolved = Resolver::resolve(&lib_a_manifest, &lib_a_dir, None).unwrap();
+    assert_eq!(resolved.motes.len(), 1);
+    assert_eq!(resolved.motes[0].name, "lib-b");
+
+    std::fs::remove_dir_all(&root).unwrap();
   }
 }
