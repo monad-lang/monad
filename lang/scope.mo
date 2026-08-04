@@ -69,9 +69,10 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
         Decl.class_d cls => build_scope_class cls path acc,
         Decl.instance_d ins => scope_data_add_instance acc ins,
         Decl.infix_d op name => scope_data_add_infix acc op name,
-        Decl.use_d _ => acc,
-        Decl.open_d _ => acc,
-        Decl.struct_d _ => acc
+        Decl.use_d _ _ => acc,
+        Decl.open_d _ _ => acc,
+        Decl.struct_d _ => acc,
+        Decl.scoped_open_d _ _ inner => build_scope_one_decl inner path acc
     }
 
 def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData :=

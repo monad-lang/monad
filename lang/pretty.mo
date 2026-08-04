@@ -466,12 +466,80 @@ def show_decl (d : Decl) : String := match d {
     class_d cls => show_class cls,
     instance_d ins => show_instance ins,
     infix_d op path => show_infix_decl op path,
-    use_d path =>
+    use_d path filter =>
         let path_str := show_module_path path in
-        String.concat "use " path_str,
-    open_d path =>
+        String.concat (String.concat "use " path_str) (show_use_filter filter),
+    open_d path filter =>
         let path_str := show_module_path path in
-        String.concat "open " path_str,
+        String.concat (String.concat "open " path_str) (show_open_filter filter),
+    scoped_open_d path filter inner =>
+        let path_str := show_module_path path in
+        let header := String.concat (String.concat "open " path_str) (show_open_filter filter) in
+        String.concat (String.concat header " in ") (show_decl inner),
+}
+
+/// A single item inside a `use Module { ... }` brace filter. Mirrors
+/// Rust's `Display for UseItem` (core/src/term.rs).
+@[partial]
+def show_use_item (item : UseItem) : String := match item {
+    UseItem.use_name name => show_identifier name,
+    UseItem.use_rename name alias =>
+        String.concat (String.concat (show_identifier name) " as ") (show_identifier alias),
+    UseItem.use_glob => "*",
+    UseItem.use_sub name items =>
+        String.concat (String.concat (show_identifier name) " ") (show_use_items_braced items),
+    UseItem.use_sub_rename name alias items =>
+        let header := String.concat (String.concat (show_identifier name) " as ") (show_identifier alias) in
+        String.concat (String.concat header " ") (show_use_items_braced items),
+}
+
+@[partial]
+def show_use_items_joined (items : List UseItem) : String := match items {
+    List.empty => "",
+    List.cons hd rest => show_use_items_joined_rest hd rest,
+}
+
+@[partial]
+def show_use_items_joined_rest (hd : UseItem) (rest : List UseItem) : String :=
+    match rest {
+        List.empty => show_use_item hd,
+        List.cons x y =>
+            let sep := String.concat (show_use_item hd) ", " in
+            String.concat sep (show_use_items_joined rest),
+    }
+
+@[partial]
+def show_use_items_braced (items : List UseItem) : String :=
+    String.concat (String.concat "{" (show_use_items_joined items)) "}"
+
+/// What a `use` declaration imports. Bare `use Module` (deprecated)
+/// renders as no suffix at all.
+def show_use_filter (filter : UseFilter) : String := match filter {
+    UseFilter.use_bare => "",
+    UseFilter.use_items items => String.concat " " (show_use_items_braced items),
+}
+
+@[partial]
+def show_identifier_list_joined (names : List Identifier) : String := match names {
+    List.empty => "",
+    List.cons hd rest => show_identifier_list_joined_rest hd rest,
+}
+
+@[partial]
+def show_identifier_list_joined_rest (hd : Identifier) (rest : List Identifier) : String :=
+    match rest {
+        List.empty => show_identifier hd,
+        List.cons x y =>
+            let sep := String.concat (show_identifier hd) ", " in
+            String.concat sep (show_identifier_list_joined rest),
+    }
+
+/// What an `open` declaration makes unqualified. `open_all` (no braces)
+/// renders as no suffix at all.
+def show_open_filter (filter : OpenFilter) : String := match filter {
+    OpenFilter.open_all => "",
+    OpenFilter.open_only names =>
+        String.concat (String.concat " {" (show_identifier_list_joined names)) "}",
 }
 
 /// Tests
@@ -700,13 +768,31 @@ def test_show_debug_name_unnamed : Bool :=
 
 @[test]
 def test_show_decl_use : Bool :=
-    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "prelude") List.empty)) in
+    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "prelude") List.empty)) UseFilter.use_bare in
     show_decl d == "use prelude"
 
 @[test]
 def test_show_decl_open : Bool :=
-    let d := Decl.open_d (ModulePath.mp (List.cons (Identifier.id "IO") List.empty)) in
+    let d := Decl.open_d (ModulePath.mp (List.cons (Identifier.id "IO") List.empty)) OpenFilter.open_all in
     show_decl d == "open IO"
+
+@[test]
+def test_show_decl_use_glob : Bool :=
+    let items := List.cons UseItem.use_glob List.empty in
+    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "io") List.empty)) (UseFilter.use_items items) in
+    show_decl d == "use io {*}"
+
+@[test]
+def test_show_decl_open_filtered : Bool :=
+    let names := List.cons (Identifier.id "println") List.empty in
+    let d := Decl.open_d (ModulePath.mp (List.cons (Identifier.id "IO") List.empty)) (OpenFilter.open_only names) in
+    show_decl d == "open IO {println}"
+
+@[test]
+def test_show_decl_scoped_open : Bool :=
+    let inner := Decl.def_d (Def.mk (ModulePath.mp (List.cons (Identifier.id "z") List.empty)) Term.hole Term.hole List.empty List.empty) in
+    let d := Decl.scoped_open_d (ModulePath.mp (List.cons (Identifier.id "Nat") List.empty)) OpenFilter.open_all inner in
+    show_decl d == "open Nat in def z : _ := _"
 
 @[test]
 def test_show_decl_infix : Bool :=

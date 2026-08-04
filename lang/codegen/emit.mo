@@ -843,7 +843,9 @@ def compile_db_module (decls : List Decl) : LLVMModule :=
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
     }
 
-/// Extract def_d entries from a list of Decl.
+/// Extract def_d entries from a list of Decl. A def wrapped in
+/// Decl.scoped_open_d is intentionally invisible to codegen for now
+/// (deliberate gap — see Decl.scoped_open_d's doc comment).
 @[partial]
 def extract_defs (decls : List Decl) : List Def := match decls {
     List.empty => List.empty,

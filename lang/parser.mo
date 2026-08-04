@@ -351,28 +351,211 @@ def ctx_of_params_loop (params : List Param) (acc : List Identifier) : List Iden
 		List.empty => acc
 	}
 
-// use module.path
+// Shared `{ ... }` brace-list helpers for `use`/`open` filters. `brace_open`
+// consumes `{` plus any following whitespace so the item parser starts
+// clean; `brace_close` skips leading whitespace before matching `}`, since
+// the item/separator parsers don't skip trailing whitespace themselves.
 
 @[partial]
-def use_parser (input : String) : ParseResult Decl :=
-	match tag "use" input {
-		success rem _ => match module_path_parser (skip_spaces rem) {
-			success rem2 path => success rem2 (Decl.use_d path),
+def brace_open (input : String) : ParseResult String :=
+	match tag "{" input {
+		success rem out => success (skip_spaces rem) out,
+		fail e => fail e
+	}
+
+@[partial]
+def brace_close (input : String) : ParseResult String :=
+	tag "}" (skip_spaces input)
+
+@[partial]
+def brace_sep (input : String) : ParseResult String :=
+	match tag "," (skip_spaces input) {
+		success rem out => success (skip_spaces rem) out,
+		fail e => fail e
+	}
+
+@[partial]
+def as_kw (input : String) : ParseResult String :=
+	tag "as" (skip_spaces input)
+
+// use module.path { items }
+//
+// A single item inside `use Module { ... }`: `*` (glob), `name`,
+// `name as alias`, `name { items }` (sub-module), or
+// `name as alias { items }` (renamed sub-module). Tried in that order
+// since each is a strict prefix of the next — alt_fold retries every
+// alternative from the same original input on failure, so no manual
+// backtracking is needed here.
+
+@[partial]
+def use_brace_item (input : String) : ParseResult UseItem :=
+	alt_fold [use_brace_item_glob, use_brace_item_sub_rename, use_brace_item_sub,
+	          use_brace_item_rename, use_brace_item_name] input
+
+@[partial]
+def use_brace_item_glob (input : String) : ParseResult UseItem :=
+	match tag "*" input {
+		success rem _ => success rem UseItem.use_glob,
+		fail e => fail e
+	}
+
+@[partial]
+def use_brace_item_name (input : String) : ParseResult UseItem :=
+	match identifier input {
+		success rem name => success rem (UseItem.use_name (Identifier.id name)),
+		fail e => fail e
+	}
+
+@[partial]
+def use_brace_item_rename (input : String) : ParseResult UseItem :=
+	match identifier input {
+		success rem name => use_brace_item_rename_alias name rem,
+		fail e => fail e
+	}
+
+@[partial]
+def use_brace_item_rename_alias (name : String) (input : String) : ParseResult UseItem :=
+	match as_kw (skip_spaces input) {
+		success rem _ => match identifier (skip_spaces rem) {
+			success rem2 alias => success rem2 (UseItem.use_rename (Identifier.id name) (Identifier.id alias)),
 			fail e => fail e
 		},
 		fail e => fail e
 	}
 
-// open module.path
+@[partial]
+def use_brace_item_sub (input : String) : ParseResult UseItem :=
+	match identifier input {
+		success rem name => use_brace_item_sub_items name rem,
+		fail e => fail e
+	}
+
+@[partial]
+def use_brace_item_sub_items (name : String) (input : String) : ParseResult UseItem :=
+	match use_brace_items (skip_spaces input) {
+		success rem items => success rem (UseItem.use_sub (Identifier.id name) items),
+		fail e => fail e
+	}
+
+@[partial]
+def use_brace_item_sub_rename (input : String) : ParseResult UseItem :=
+	match identifier input {
+		success rem name => use_brace_item_sub_rename_alias name rem,
+		fail e => fail e
+	}
+
+@[partial]
+def use_brace_item_sub_rename_alias (name : String) (input : String) : ParseResult UseItem :=
+	match as_kw (skip_spaces input) {
+		success rem _ => match identifier (skip_spaces rem) {
+			success rem2 alias => use_brace_item_sub_rename_items name alias rem2,
+			fail e => fail e
+		},
+		fail e => fail e
+	}
+
+@[partial]
+def use_brace_item_sub_rename_items (name : String) (alias : String) (input : String) : ParseResult UseItem :=
+	match use_brace_items (skip_spaces input) {
+		success rem items => success rem (UseItem.use_sub_rename (Identifier.id name) (Identifier.id alias) items),
+		fail e => fail e
+	}
+
+@[partial]
+def use_brace_items (input : String) : ParseResult (List UseItem) :=
+	delimited_by brace_open (separated_by brace_sep use_brace_item) brace_close input
+
+@[partial]
+def use_brace_filter (input : String) : ParseResult UseFilter :=
+	map_parse UseFilter.use_items use_brace_items input
+
+/// Optional `{ items }` filter after `use Module`. Absent braces yield
+/// `UseFilter.use_bare` (deprecated bare use) without failing the parse.
+@[partial]
+def use_opt_filter (input : String) : ParseResult UseFilter :=
+	let after_ws : String := skip_spaces input in
+	match use_brace_filter after_ws {
+		success rem filter => success rem filter,
+		fail e => success after_ws UseFilter.use_bare
+	}
+
+@[partial]
+def use_parser (input : String) : ParseResult Decl :=
+	match tag "use" input {
+		success rem _ => match module_path_parser (skip_spaces rem) {
+			success rem2 path => use_after_path path rem2,
+			fail e => fail e
+		},
+		fail e => fail e
+	}
+
+@[partial]
+def use_after_path (path : ModulePath) (input : String) : ParseResult Decl :=
+	match use_opt_filter input {
+		success rem filter => success rem (Decl.use_d path filter),
+		fail e => fail e
+	}
+
+// open module.path [{names}] [in decl]
+//
+// Optional braces (unlike `use`, still mandatory) restrict `open` to a
+// plain identifier list — no glob/rename/sub-module forms. An optional
+// trailing `in <decl>` (one of def/class/instance/struct/type) makes the
+// open apply only to that one wrapped declaration.
+
+@[partial]
+def open_names (input : String) : ParseResult (List Identifier) :=
+	map_parse (List.map Identifier.id) (separated_by brace_sep identifier) input
+
+@[partial]
+def open_filter_only (input : String) : ParseResult OpenFilter :=
+	map_parse OpenFilter.open_only (delimited_by brace_open open_names brace_close) input
+
+@[partial]
+def open_opt_filter (input : String) : ParseResult OpenFilter :=
+	let after_ws : String := skip_spaces input in
+	match open_filter_only after_ws {
+		success rem filter => success rem filter,
+		fail e => success after_ws OpenFilter.open_all
+	}
+
+@[partial]
+def in_kw (input : String) : ParseResult String :=
+	tag "in" (skip_spaces input)
+
+@[partial]
+def scoped_open_inner_decl (input : String) : ParseResult Decl :=
+	alt_fold [def_parser, class_parser, instance_parser, struct_parser, type_parser] (skip_spaces input)
 
 @[partial]
 def open_parser (input : String) : ParseResult Decl :=
 	match tag "open" input {
 		success rem _ => match module_path_parser (skip_spaces rem) {
-			success rem2 path => success rem2 (Decl.open_d path),
+			success rem2 path => open_after_path path rem2,
 			fail e => fail e
 		},
 		fail e => fail e
+	}
+
+@[partial]
+def open_after_path (path : ModulePath) (input : String) : ParseResult Decl :=
+	match open_opt_filter input {
+		success rem filter => open_after_filter path filter rem,
+		fail e => fail e
+	}
+
+@[partial]
+def open_after_filter (path : ModulePath) (filter : OpenFilter) (input : String) : ParseResult Decl :=
+	match opt (preceded_by in_kw scoped_open_inner_decl) input {
+		success rem maybe_decl => success rem (open_build path filter maybe_decl),
+		fail e => fail e
+	}
+
+@[partial]
+def open_build (path : ModulePath) (filter : OpenFilter) (maybe_decl : Option Decl) : Decl :=
+	match maybe_decl {
+		Option.some decl => Decl.scoped_open_d path filter decl,
+		Option.none => Decl.open_d path filter
 	}
 
 // infix:prec (op) := path
@@ -2563,12 +2746,26 @@ def test_match_bound_var : Bool :=
 
 // ─── Canonical decl parser smoke tests (Phase 8) ─────────────────────
 
+@[partial]
+def use_filter_is_bare (filter : UseFilter) : Bool :=
+    match filter {
+        UseFilter.use_bare => true,
+        _ => false
+    }
+
+@[partial]
+def open_filter_is_all (filter : OpenFilter) : Bool :=
+    match filter {
+        OpenFilter.open_all => true,
+        _ => false
+    }
+
 @[test]
 def test_use_parser : Bool :=
     match use_parser "use prelude" {
         success rem out =>
             match out {
-                use_d path => String.beq rem "",
+                use_d path filter => (String.beq rem "") && use_filter_is_bare filter,
                 _ => false
             },
         fail _ => false
@@ -2579,7 +2776,188 @@ def test_open_parser : Bool :=
     match open_parser "open IO" {
         success rem out =>
             match out {
-                open_d path => String.beq rem "",
+                open_d path filter => (String.beq rem "") && open_filter_is_all filter,
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[partial]
+def use_item_is_glob (item : UseItem) : Bool :=
+    match item {
+        UseItem.use_glob => true,
+        _ => false
+    }
+
+@[test]
+def test_use_glob : Bool :=
+    match use_parser "use io {*}" {
+        success rem out =>
+            match out {
+                use_d path filter =>
+                    match filter {
+                        UseFilter.use_items items =>
+                            match items {
+                                List.cons item rest => (List.is_empty rest) && (use_item_is_glob item),
+                                _ => false
+                            },
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_use_empty_braces : Bool :=
+    match use_parser "use io {}" {
+        success rem out =>
+            match out {
+                use_d path filter =>
+                    match filter {
+                        UseFilter.use_items items => List.is_empty items,
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_use_nested_simple : Bool :=
+    match use_parser "use io {file {read}}" {
+        success rem out =>
+            match out {
+                use_d path filter =>
+                    match filter {
+                        UseFilter.use_items items =>
+                            match items {
+                                List.cons item rest =>
+                                    match item {
+                                        UseItem.use_sub name sub_items =>
+                                            match sub_items {
+                                                List.cons inner sub_rest =>
+                                                    match inner {
+                                                        UseItem.use_name inner_name =>
+                                                            (List.is_empty rest) && (List.is_empty sub_rest)
+                                                                && (String.beq (show_identifier name) "file") && (String.beq (show_identifier inner_name) "read"),
+                                                        _ => false
+                                                    },
+                                                _ => false
+                                            },
+                                        _ => false
+                                    },
+                                _ => false
+                            },
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_use_nested_rename : Bool :=
+    match use_parser "use io {file as f {read}}" {
+        success rem out =>
+            match out {
+                use_d path filter =>
+                    match filter {
+                        UseFilter.use_items items =>
+                            match items {
+                                List.cons item rest =>
+                                    match item {
+                                        UseItem.use_sub_rename name alias sub_items =>
+                                            (List.is_empty rest) && (String.beq (show_identifier name) "file") && (String.beq (show_identifier alias) "f"),
+                                        _ => false
+                                    },
+                                _ => false
+                            },
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_use_nested_deep : Bool :=
+    match use_parser "use io {a {b {c}}}" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+@[test]
+def test_use_multiple_rename : Bool :=
+    match use_parser "use io {read as r, write as w}" {
+        success rem out =>
+            match out {
+                use_d path filter =>
+                    match filter {
+                        UseFilter.use_items items =>
+                            match items {
+                                List.cons a rest =>
+                                    match rest {
+                                        List.cons b rest2 => List.is_empty rest2,
+                                        _ => false
+                                    },
+                                _ => false
+                            },
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_open_brace_filter : Bool :=
+    match open_parser "open io {println}" {
+        success rem out =>
+            match out {
+                open_d path filter =>
+                    match filter {
+                        OpenFilter.open_only names =>
+                            match names {
+                                List.cons name rest => (List.is_empty rest) && (String.beq (show_identifier name) "println"),
+                                _ => false
+                            },
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_scoped_open_def : Bool :=
+    match open_parser "open io in def main : IO Unit := println \"hi\"" {
+        success rem out =>
+            match out {
+                scoped_open_d path filter decl =>
+                    match decl {
+                        def_d _ => open_filter_is_all filter,
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_scoped_open_filtered : Bool :=
+    match open_parser "open io {println} in def main : IO Unit := println \"hi\"" {
+        success rem out =>
+            match out {
+                scoped_open_d path filter decl =>
+                    match decl {
+                        def_d _ =>
+                            match filter {
+                                OpenFilter.open_only _ => true,
+                                _ => false
+                            },
+                        _ => false
+                    },
                 _ => false
             },
         fail _ => false
@@ -2674,9 +3052,11 @@ def test_decl_parser_fail : Bool :=
 @[partial]
 def debug_decl_kind (d : Decl) : String :=
     match d {
-        use_d _ => "use_d",
-        open_d _ => "open_d",
+        use_d _ _ => "use_d",
+        open_d _ _ => "open_d",
+        scoped_open_d _ _ _ => "scoped_open_d",
         def_d _ => "def_d",
+        inductive_d _ => "inductive_d",
         infix_d _ _ => "infix_d",
         struct_d _ => "struct_d",
         class_d _ => "class_d",

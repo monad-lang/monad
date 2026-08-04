@@ -323,14 +323,14 @@ def test_show_decl_infix : Bool :=
 @[test]
 def test_show_decl_use : Bool :=
     let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "prelude") List.empty) in
-    let decl : Decl := Decl.use_d path in
+    let decl : Decl := Decl.use_d path UseFilter.use_bare in
     let result : String := show_decl decl in
     String.beq result "use prelude"
 
 @[test]
 def test_show_decl_open : Bool :=
     let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "IO") List.empty) in
-    let decl : Decl := Decl.open_d path in
+    let decl : Decl := Decl.open_d path OpenFilter.open_all in
     let result : String := show_decl decl in
     String.beq result "open IO"
 

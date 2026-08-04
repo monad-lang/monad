@@ -7,6 +7,7 @@ open Monad
 use lang.types
 use lang.parser
 use lang.parser.core
+use lang.pretty
 use std.list
 
 open ParseResult
@@ -294,3 +295,48 @@ def test_string_has_some_decls : Bool :=
 def test_scope_has_some_decls : Bool :=
     let count := count_decls_in_file "lang/scope.mo" in
     I64.gt count 0
+
+// ================ use/open brace syntax round-trip tests ================
+// parse -> pretty-print -> re-parse should succeed for the new syntax.
+
+@[partial]
+def parse_decl_succeeds (r : ParseResult Decl) : Bool :=
+    match r {
+        success _ _ => true,
+        fail _ => false
+    }
+
+@[test]
+def test_roundtrip_use_glob : Bool :=
+    match use_parser "use io {*}" {
+        success _ out => parse_decl_succeeds (use_parser (show_decl out)),
+        fail _ => false
+    }
+
+@[test]
+def test_roundtrip_use_nested : Bool :=
+    match use_parser "use io {file {read}}" {
+        success _ out => parse_decl_succeeds (use_parser (show_decl out)),
+        fail _ => false
+    }
+
+@[test]
+def test_roundtrip_use_nested_rename : Bool :=
+    match use_parser "use io {file as f {read}}" {
+        success _ out => parse_decl_succeeds (use_parser (show_decl out)),
+        fail _ => false
+    }
+
+@[test]
+def test_roundtrip_open_filtered : Bool :=
+    match open_parser "open io {println}" {
+        success _ out => parse_decl_succeeds (open_parser (show_decl out)),
+        fail _ => false
+    }
+
+@[test]
+def test_roundtrip_scoped_open : Bool :=
+    match open_parser "open io {println} in def main : IO Unit := println \"hi\"" {
+        success _ out => parse_decl_succeeds (open_parser (show_decl out)),
+        fail _ => false
+    }

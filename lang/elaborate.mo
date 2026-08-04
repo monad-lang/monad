@@ -263,6 +263,9 @@ def names_of_decl (decl : Decl) : List Identifier :=
                     let empty : List Identifier := List.empty in
                     List.cons name empty,
             },
+        // A scoped-open'd decl's own name is intentionally NOT collected
+        // here yet (deliberate gap — full scoped-open semantics are out of
+        // scope for now, see Decl.scoped_open_d's doc comment).
         _ => List.empty,
     }
 
@@ -294,8 +297,9 @@ def elaborate_decl (decl : Decl) (known_names : List Identifier) : Decl :=
         Decl.struct_d s => Decl.struct_d (elaborate_struct s known_names),
         Decl.instance_d i => Decl.instance_d (elaborate_instance i known_names),
         Decl.infix_d op p => Decl.infix_d op p,
-        Decl.use_d p => Decl.use_d p,
-        Decl.open_d p => Decl.open_d p,
+        Decl.use_d p filter => Decl.use_d p filter,
+        Decl.open_d p filter => Decl.open_d p filter,
+        Decl.scoped_open_d p filter inner => Decl.scoped_open_d p filter (elaborate_decl inner known_names),
     }
 
 /// Elaborate all declarations in a module.

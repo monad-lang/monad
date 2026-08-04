@@ -73,6 +73,18 @@ instance Show ModulePath {
     def show (mp : ModulePath) : String := show_module_path mp
 }
 
+/// Identifiers can't contain ".", so the dotted-string-join used by
+/// show_identifier/show_module_path is collision-free as an ordering key.
+instance BOrd Identifier {
+    def lt (a b : Identifier) : Bool := BOrd.lt (show_identifier a) (show_identifier b)
+    def gt (a b : Identifier) : Bool := BOrd.gt (show_identifier a) (show_identifier b)
+}
+
+instance BOrd ModulePath {
+    def lt (a b : ModulePath) : Bool := BOrd.lt (show_module_path a) (show_module_path b)
+    def gt (a b : ModulePath) : Bool := BOrd.gt (show_module_path a) (show_module_path b)
+}
+
 type NameRef {
     nid (Identifier),
     nmp (ModulePath),
@@ -281,6 +293,30 @@ type Struct {
     mk (name: Identifier) (fields: List StructField)
 }
 
+/// A single item inside a `use Module { ... }` brace filter. Mirrors the
+/// Rust host's `UseItem` (core/src/term.rs).
+type UseItem {
+    use_name (name: Identifier),
+    use_rename (name: Identifier) (alias: Identifier),
+    use_glob,
+    use_sub (name: Identifier) (items: List UseItem),
+    use_sub_rename (name: Identifier) (alias: Identifier) (items: List UseItem),
+}
+
+/// What names a `use` declaration imports. Bare `use Module` (no braces)
+/// is deprecated but still parses. Mirrors Rust's `UseFilter`.
+type UseFilter {
+    use_bare,
+    use_items (items: List UseItem),
+}
+
+/// What names an `open` declaration makes unqualified. Mirrors Rust's
+/// `OpenFilter`.
+type OpenFilter {
+    open_all,
+    open_only (names: List Identifier),
+}
+
 // Canonical Decl uses de Bruijn Term. DeclV0 is the legacy variant.
 type Decl {
     def_d (Def),
@@ -289,8 +325,12 @@ type Decl {
     class_d (Class),
     instance_d (Instance),
     infix_d (op: Operator) (path: ModulePath),
-    use_d (path: ModulePath),
-    open_d (path: ModulePath),
+    use_d (path: ModulePath) (filter: UseFilter),
+    open_d (path: ModulePath) (filter: OpenFilter),
+    /// `open ModulePath [{filter}] in <decl>` — the module is opened only
+    /// for the scope of the wrapped declaration (def/type/struct/class/
+    /// instance). Mirrors Rust's `Decl::ScopedOpen`.
+    scoped_open_d (path: ModulePath) (filter: OpenFilter) (decl: Decl),
 }
 
 def Decl.to_name (d : Decl) : ModulePath :=

@@ -230,7 +230,7 @@ def test_names_of_decl_class : Bool :=
 @[test]
 def test_names_of_decl_use_empty : Bool :=
     let mp : ModulePath := ModulePath.mp no_ids in
-    let decl : Decl := Decl.use_d mp in
+    let decl : Decl := Decl.use_d mp UseFilter.use_bare in
     let names : List Identifier := names_of_decl decl in
     match names {
         List.empty => true,

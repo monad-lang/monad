@@ -72,7 +72,7 @@ def extract_use_decls_go (decls : List Decl) (acc : List ModulePath) : List Modu
         List.empty => acc,
         List.cons d rest =>
             match d {
-                Decl.use_d path => extract_use_decls_go rest (List.cons path acc),
+                Decl.use_d path _ => extract_use_decls_go rest (List.cons path acc),
                 _ => extract_use_decls_go rest acc
             }
     }
@@ -614,7 +614,7 @@ def typecheck_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) :
     match d {
         Decl.def_d df => typecheck_def_with_scope df scope locals,
         Decl.inductive_d ind => typecheck_inductive_with_scope ind scope locals,
-        _ => true  // Skip use, open, infix, class, instance for now
+        _ => true  // Skip use, open, scoped_open, infix, class, instance for now
     }
 
 /// Type check a definition with scope
