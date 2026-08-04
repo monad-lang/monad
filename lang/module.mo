@@ -37,9 +37,9 @@ def prelude_module_path : ModulePath := ModulePath.mp [Identifier.id "prelude"]
 def init_module_path : ModulePath := ModulePath.mp [Identifier.id "init"]
 
 /// Parse all declarations from source text.
-/// Uses t2_decls_parser which properly handles docstrings.
+/// Uses decls_parser which properly handles docstrings.
 def parse_all_decls (input : String) : ParseResult (List Decl) :=
-    lang.parser.t2_decls_parser input
+    lang.parser.decls_parser input
 
 /// Parse source text, returning the parsed declarations or none on parse error.
 def try_parse_decls (input : String) : Option (List Decl) :=

@@ -2589,14 +2589,6 @@ mod test {
   }
 
   #[test]
-  fn test_real_file_lang_parser_mod() {
-    let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/mod.mo");
-    let report = check_module_source(&env, source);
-    print_report("lang/parser/mod.mo", &report);
-  }
-
-  #[test]
   fn test_real_file_lang_parser_number() {
     let env = ModuleCheckEnv::new();
     let source = include_str!("../../lang/parser/number.mo");

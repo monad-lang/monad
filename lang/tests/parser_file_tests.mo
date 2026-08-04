@@ -95,7 +95,7 @@ def all_files_utf8 : List String :=
 def parse_file (path : String) : Bool :=
     match IO.read_file path {
         io content =>
-            match t2_decls_parser content {
+            match decls_parser content {
                 success _ _ => true,
                 fail _ => false
             },
@@ -259,7 +259,7 @@ def test_parse_all_utf8_files : Bool := parse_all all_files_utf8
 def count_decls_in_file (path : String) : I64 :=
     match IO.read_file path {
         io content =>
-            match t2_decls_parser content {
+            match decls_parser content {
                 success _ decls => list_length decls,
                 fail _ => 0
             },

@@ -15,7 +15,7 @@ def is_not_quote (c : String) : Bool :=
 
 /// Parse a string literal and return it as a Term
 @[partial]
-def t2_string_parse (input: String) : ParseResult Term :=
+def string_parse (input: String) : ParseResult Term :=
 	match delimited_by (tag "\"") (take_while is_not_quote) (tag "\"") input {
 		success rem content => success rem (Term.lit (Literal.str content)),
 		fail e => fail e

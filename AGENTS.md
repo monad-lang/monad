@@ -684,21 +684,30 @@ class BEq A {
 
 **Fix**: Rename the field (e.g., `class` → `cls`). See the warning under [Type Definitions](#type-definitions) for the full list of reserved keywords.
 
-### Lambda Expressions Not Supported as Direct Function Arguments
+### Lambda Parameter Type Annotations Require Parens
 
-**Problem**: Using `fn` (or `\ `) lambda expressions as direct arguments in function application (e.g., `map_parse (fn s : String => s) ...`) produces a cascading parse error: "unexpected token" at the lambda keyword. This is a Rust parser limitation — lambda expressions are not accepted in application argument position.
+**Problem**: Writing `fn s : String => s` (an annotated lambda parameter with no parens around `s : String`) produces a parse error — this is not, and never was, valid syntax. Note this is *not* about lambda expressions in argument position; it fails the same way as a standalone `def` body too.
 
-**Workaround**: Define a named helper function and pass it instead:
+**Root cause**: `lam_param` (`core/src/parser.rs:394`) parses a bare identifier as an unannotated param (`param(i, Hole)`), or an *entirely parenthesized* `(name : Type)`/`(name : Type := default)` for an annotated one — mirroring `def`'s own parameter syntax. There is no bare `name : Type` form.
+
+**Fix**: Wrap the annotated parameter in parens:
 
 ```monad
-// BROKEN — lambda as direct argument:
-map_parse (fn s : String => s) (tag "x") "xy"
+// BROKEN — no parens around the annotated param:
+fn s : String => s
 
-// WORKING — named helper:
-@[partial]
-def id_str (s : String) : String := s
-...
-map_parse id_str (tag "x") "xy"
+// CORRECT:
+fn (s : String) => s
+```
+
+Lambda expressions (both annotated-with-parens and unannotated) parse and
+type-check fine as **direct arguments in function application**, including
+to generic/polymorphic functions — confirmed with `map_parse`/`bind_parse`:
+
+```monad
+map_parse (fn (s : String) => s) (tag "x") "xy"   // works
+map_parse (fn s => s) (tag "x") "xy"               // works
+bind_parse (tag "x") (fn (s : String) => tag "y") "xy"  // works
 ```
 
 ### Struct Field Access via Dot Syntax Is Not Valid Monad
@@ -745,7 +754,7 @@ Key patterns when writing self-hosted Monad code:
 ### Known Type Checker Issues
 
 1. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Inner opens are not applied to module exports. Functions using `open`-ed constructors must be defined inside the same module. Workaround: bind results to a typed parameter before matching (see `many0`/`many1` implementation pattern in `init/parser.mo`).
-2. **Forall inference on polymorphic combinators works with named functions**: The type checker correctly instantiates `{A B : Type}` forall parameters on functions like `map_parse` and `bind_parse` when called with concrete named functions (e.g., `map_parse id_str (tag "x") "xy"`). Using lambdas fails due to the parser limitation above (lambda expressions not supported as direct arguments). When a combinator call fails with "Variable mismatch, expected ... found {B : Type} -> {A : Type} -> ...", first check for parser issues (lambda arguments) before suspecting type checker bugs.
+2. **Forall inference on polymorphic combinators**: The type checker correctly instantiates implicit forall parameters on functions like `map_parse` and `bind_parse`, whether called with a concrete named function (`map_parse id_str (tag "x") "xy"`) or an inline lambda, annotated or not (`map_parse (fn s => s) (tag "x") "xy"`) — confirmed directly. If a combinator call fails with "Variable mismatch, expected ... found {B : Type} -> {A : Type} -> ...", the cause is elsewhere (e.g. a genuine type mismatch); it is not a lambda-argument limitation.
 
 ## Committing Changes
 
@@ -960,7 +969,8 @@ Monad source files, the safest resolution strategy is:
   because upstream changed their parameter names (making the conflict
   resolution merge them back as "separate" definitions).
 
-**`fn` lambda limitation during reapplication**: When reapplying compactions
-that use `bind_parse`/`map_parse`, inline `fn` lambda arguments fail type
-inference. Use nested pattern matches or named helper functions instead
-(see Known Issues above).
+**`fn` lambda parameter syntax**: When reapplying compactions that use
+`bind_parse`/`map_parse`, inline `fn` lambda arguments work fine
+(including generic combinators) as long as annotated parameters are
+parenthesized — `fn (s : String) => ...`, not `fn s : String => ...` (see
+Known Issues above).

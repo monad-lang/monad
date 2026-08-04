@@ -1,7 +1,7 @@
 use lang.types
 open types
 
-/// Free variable sentinel index from parser (t2_sentinel = -1).
+/// Free variable sentinel index from parser (sentinel = -1).
 /// de Bruijn index >= 0 means bound; -1 means free/unknown.
 def sentinel : I64 := -1
 
