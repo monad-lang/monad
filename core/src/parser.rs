@@ -17,9 +17,9 @@ use crate::{
     Multiplicity, NameRef, NumSuffix, Open, OpenFilter, Operator, Param, SourceContext,
     SourceRange, StructField,
     Term::{self, Hole, Var},
-    TypeConstraint, Use, UseFilter, app, apps, case, class, class_def, ctx, def, def_with_native,
-    float_suffix, forall, foralls, id, if_term, induct_constructor, inductive, infix, instance,
-    ivar, lam, lams, lets, match_term,
+    TypeConstraint, Use, UseFilter, UseItem, app, apps, case, class, class_def, ctx, def,
+    def_with_native, float_suffix, forall, foralls, id, if_term, induct_constructor, inductive,
+    infix, instance, ivar, lam, lams, lets, match_term,
     module::ParsedModule,
     mpvar, num_suffix, opr, param, param_with_default, param_with_mult, pi_name, pi_typs,
     pi_with_mult, pvar, stru, stru_field_with_mult, type_constraint, var_id,
@@ -1676,46 +1676,56 @@ fn struct_or_update_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
   .parse(input)
 }
 
-fn use_hiding_filter(input: Span) -> Res<UseFilter> {
-  let (input, _) = preceded((ws0, tag("hiding"), ws0), char('(')).parse(input)?;
-  let (input, names) = many1(terminated(identifier, ws0)).parse(input)?;
-  let (input, _) = context("closing parenthesis for use hiding filter", char(')')).parse(input)?;
-  Ok((input, UseFilter::Hiding(names)))
-}
-
-fn use_paren_filter(input: Span) -> Res<UseFilter> {
-  let (input, _) = char('(').parse(input)?;
-  let (input, items) = many1(terminated(
-    alt((
-      map(
-        separated_pair(identifier, (ws0, tag("as"), ws0), identifier),
-        |(a, b)| (a, b),
+/// A single item inside a `use Module { ... }` brace filter, e.g. `name`,
+/// `name as alias`, `*`, or a nested `name { items }` sub-module import.
+/// Tried in this order: `*` first (unambiguous), then sub-module-with-rename
+/// before sub-module before rename before plain name, since each is a
+/// strict prefix of the previous.
+fn use_brace_item(input: Span) -> Res<UseItem> {
+  alt((
+    map(char('*'), |_| UseItem::Glob),
+    map(
+      (
+        identifier,
+        preceded((ws1, tag("as"), ws1), identifier),
+        preceded(ws0, use_brace_items),
       ),
-      map(identifier, |i: Identifier| (i.clone(), i)),
-    )),
-    (ws0, opt(char(',')), ws0),
+      |(name, alias, items)| UseItem::SubModuleRename { name, alias, items },
+    ),
+    map(
+      (identifier, preceded(ws0, use_brace_items)),
+      |(name, items)| UseItem::SubModule { name, items },
+    ),
+    map(
+      (identifier, preceded((ws1, tag("as"), ws1), identifier)),
+      |(name, alias)| UseItem::Rename(name, alias),
+    ),
+    map(identifier, UseItem::Name),
   ))
-  .parse(input)?;
-  let (input, _) = context("closing parenthesis for use filter", char(')')).parse(input)?;
-  if items.iter().any(|(a, b)| a != b) {
-    Ok((input, UseFilter::Rename(items)))
-  } else {
-    Ok((
-      input,
-      UseFilter::Only(items.into_iter().map(|(a, _)| a).collect()),
-    ))
-  }
+  .parse(input)
 }
 
-fn use_opt_filter(input: Span) -> Res<Option<UseFilter>> {
+fn use_brace_items(input: Span) -> Res<Vec<UseItem>> {
+  delimited(
+    (char('{'), ws0),
+    many0(terminated(use_brace_item, (ws0, opt(char(',')), ws0))),
+    context("closing brace for use filter", char('}')),
+  )
+  .parse(input)
+}
+
+fn use_brace_filter(input: Span) -> Res<UseFilter> {
+  map(use_brace_items, UseFilter::Items).parse(input)
+}
+
+/// Optional `{ items }` filter after a `use Module`. Absent braces yield
+/// `UseFilter::Bare` (deprecated bare use — see `bare_use_warnings`).
+fn use_opt_filter(input: Span) -> Res<UseFilter> {
   let (input, _) = ws0(input)?;
-  if let Ok((input, filter)) = use_hiding_filter.parse(input.clone()) {
-    return Ok((input, Some(filter)));
+  if let Ok((input, filter)) = use_brace_filter.parse(input.clone()) {
+    return Ok((input, filter));
   }
-  if let Ok((input, filter)) = use_paren_filter.parse(input.clone()) {
-    return Ok((input, Some(filter)));
-  }
-  Ok((input, None))
+  Ok((input, UseFilter::Bare))
 }
 
 fn use_parser(input: Span) -> Res<Use> {
@@ -1729,7 +1739,6 @@ fn use_parser(input: Span) -> Res<Use> {
   let (input, module_path) =
     alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
   let (input, filter) = use_opt_filter(input)?;
-  let filter = filter.unwrap_or(UseFilter::All);
   let (input, end) = info(input)?;
   let source_location = SourceRange::new(start.into(), end.into());
   Ok((
@@ -1744,20 +1753,18 @@ fn use_parser(input: Span) -> Res<Use> {
   ))
 }
 
-fn open_parser(input: Span) -> Res<Open> {
-  let (input, attrs) = opt_attributes(input)?;
-  let (input, _) = ws0(input)?;
-  let (input, start) = info(input)?;
-  let (input, _) = tag("open")(input)?;
-  let (input, _) = ws1(input)?;
+/// Shared by plain `open` and scoped `open ... in decl`: the module path
+/// plus an optional `{ names }` filter (braces are optional for `open`,
+/// unlike the now-mandatory braces on `use`).
+fn open_module_path_and_filter(input: Span) -> Res<(ModulePath, OpenFilter)> {
   let (input, module_path) =
     alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
   let (input, filter) = opt(preceded(
-    (ws0, tag("using"), ws0),
+    ws0,
     delimited(
-      char('('),
-      many1(terminated(identifier, ws0)),
-      context("closing parenthesis for open using filter", char(')')),
+      char('{'),
+      many0(terminated(identifier, (ws0, opt(char(',')), ws0))),
+      context("closing brace for open filter", char('}')),
     ),
   ))
   .parse(input)?;
@@ -1765,23 +1772,61 @@ fn open_parser(input: Span) -> Res<Open> {
     Some(names) => OpenFilter::Only(names),
     None => OpenFilter::All,
   };
+  Ok((input, (module_path, filter)))
+}
+
+/// The declaration kinds a scoped `open Module in <decl>` may wrap.
+fn scoped_open_inner_decl(input: Span) -> Res<Decl> {
+  alt((
+    map(def_parser, Decl::Def),
+    map(class_parser, Decl::Type),
+    map(instance_parser, Decl::Ins),
+    map(struct_parser, Decl::Type),
+    map(inductive_parser, Decl::Type),
+  ))
+  .parse(input)
+}
+
+/// Parses both plain `open Module [{names}]` and scoped
+/// `open Module [{names}] in <decl>`, since they share the `open` prefix
+/// and module-path/filter parsing.
+fn open_parser(input: Span) -> Res<Decl> {
+  let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, start) = info(input)?;
+  let (input, _) = tag("open")(input)?;
+  let (input, _) = ws1(input)?;
+  let (input, (module_path, filter)) = open_module_path_and_filter(input)?;
+  let (input, scoped) =
+    opt(preceded((ws1, tag("in"), ws1), scoped_open_inner_decl)).parse(input)?;
   let (input, end) = info(input)?;
   let source_location = SourceRange::new(start.into(), end.into());
 
-  Ok((
-    input,
-    Open {
-      module_path,
-      source_location,
-      filter,
-      attributes: attrs,
-    },
-  ))
+  match scoped {
+    Some(decl) => Ok((
+      input,
+      Decl::ScopedOpen {
+        module_path,
+        filter,
+        attributes: attrs,
+        decl: Box::new(decl),
+      },
+    )),
+    None => Ok((
+      input,
+      Decl::Open(Open {
+        module_path,
+        source_location,
+        filter,
+        attributes: attrs,
+      }),
+    )),
+  }
 }
 fn decl_parser_no_macro(input: Span) -> Res<Decl> {
   let (input, decl) = alt((
     map(use_parser, Decl::Use),
-    map(open_parser, Decl::Open),
+    open_parser,
     decl_gen_parser,
     map(defmacro_parser, Decl::DefMacro),
     map(def_parser, Decl::Def),
@@ -1801,7 +1846,7 @@ fn decl_parser(input: Span) -> Res<SourceContext<Decl>> {
   let (input, start) = info(input)?;
   let (input, decl) = alt((
     map(use_parser, Decl::Use),
-    map(open_parser, Decl::Open),
+    open_parser,
     decl_gen_parser,
     map(defmacro_parser, Decl::DefMacro),
     map(def_parser, Decl::Def),

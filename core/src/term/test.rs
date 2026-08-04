@@ -375,6 +375,20 @@ impl Similar for Decl {
       (Decl::Open(o1), Decl::Open(o2)) => o1.similar(o2),
       (Decl::Infix(i1), Decl::Infix(i2)) => i1.similar(i2),
       (Decl::Ins(i1), Decl::Ins(i2)) => i1.similar(i2),
+      (
+        Decl::ScopedOpen {
+          module_path: mp1,
+          filter: f1,
+          decl: d1,
+          ..
+        },
+        Decl::ScopedOpen {
+          module_path: mp2,
+          filter: f2,
+          decl: d2,
+          ..
+        },
+      ) => mp1 == mp2 && f1 == f2 && d1.similar(d2),
       _ => self == other,
     }
   }
@@ -396,7 +410,7 @@ pub fn decl_use(name_path: Vec<&str>) -> Decl {
   Decl::Use(Use {
     source_location: Default::default(),
     module_path: ModulePath::new(ids),
-    filter: UseFilter::All,
+    filter: UseFilter::Bare,
     public: false,
     attributes: vec![],
   })

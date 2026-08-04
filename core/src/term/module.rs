@@ -3,6 +3,7 @@ pub mod test;
 
 use super::*;
 use crate::Set;
+use crate::diag::{Diagnostic, Severity, Suggestion};
 use crate::eval::native::{NativeFun, load_native_funs};
 #[cfg(feature = "legacy-checker")]
 use crate::eval::r#type::type_check_module_decls;
@@ -408,6 +409,45 @@ impl GlobalScopeData {
       }
     }
 
+    // Flatten each `use` declaration's filter (including nested sub-module
+    // imports, e.g. `use io {file {read}}`) into a map from module path to
+    // the bare names it's allowed to contribute. `UseFilter::Bare` (no
+    // braces, deprecated) allows everything, matching pre-brace-syntax
+    // behavior.
+    let mut filter_map: Map<ModulePath, AllowedNames> = Map::new();
+    for use_decl in module.get_uses() {
+      if !test_mode && use_decl.has_cfg_test_attr() {
+        continue;
+      }
+      match &use_decl.filter {
+        UseFilter::Bare => {
+          merge_allowed(
+            &mut filter_map,
+            use_decl.module_path.clone(),
+            AllowedNames::All,
+          );
+        }
+        UseFilter::Items(items) => {
+          for item in items {
+            for (path, allowed) in item.flatten(&use_decl.module_path) {
+              merge_allowed(&mut filter_map, path, allowed);
+            }
+          }
+        }
+      }
+    }
+
+    // Make sub-modules named in a nested `use` filter (e.g. `io.file` from
+    // `use io {file {read}}`) visible for qualified access too, not just
+    // the top-level `use`d module.
+    for sub_path in filter_map.keys() {
+      if !visible_modules.contains_key(sub_path)
+        && let Some(mo) = loaded.get_module(sub_path)
+      {
+        visible_modules.insert(mo.path(), mo);
+      }
+    }
+
     // Build def_refs from all visible modules
     let mut def_refs: Map<ModulePath, (Term, Term, ModulePath)> = Map::new();
     let mut bare_names: Map<ModulePath, ModulePath> = Map::new();
@@ -415,23 +455,15 @@ impl GlobalScopeData {
 
     for (_mod_path, modu) in &visible_modules {
       let is_current = modu.path() == module.path();
-      let use_decl = module
-        .get_uses()
-        .iter()
-        .find(|u| &u.module_path == modu.path());
-      let is_used = use_decl.is_some();
-      let filter = use_decl.map(|u| &u.filter);
+      let allowed = filter_map.get(modu.path());
+      let is_used = allowed.is_some();
 
       for d in modu.get_def_refs(&opens, test_mode) {
         let bare_name = d.name.clone();
 
-        let included = match filter {
-          Some(UseFilter::All) => true,
-          Some(UseFilter::Only(names)) => names.contains(bare_name.last()),
-          Some(UseFilter::Hiding(names)) => !names.contains(bare_name.last()),
-          Some(UseFilter::Rename(pairs)) => pairs
-            .iter()
-            .any(|(_, new_name)| new_name == bare_name.last()),
+        let included = match allowed {
+          Some(AllowedNames::All) => true,
+          Some(AllowedNames::Only(names)) => names.contains(bare_name.last()),
           None => true,
         };
 
@@ -569,6 +601,25 @@ impl GlobalScopeData {
       infixes,
       conflicts,
     }
+  }
+}
+
+/// Merge a flattened `(ModulePath, AllowedNames)` entry into a filter map,
+/// unioning `Only` name sets and letting `All` dominate.
+fn merge_allowed(map: &mut Map<ModulePath, AllowedNames>, path: ModulePath, allowed: AllowedNames) {
+  match map.get_mut(&path) {
+    None => {
+      map.insert(path, allowed);
+    }
+    Some(AllowedNames::All) => {}
+    Some(existing) => match allowed {
+      AllowedNames::All => *existing = AllowedNames::All,
+      AllowedNames::Only(names) => {
+        if let AllowedNames::Only(existing_names) = existing {
+          existing_names.extend(names);
+        }
+      }
+    },
   }
 }
 
@@ -1291,13 +1342,47 @@ impl<'a> GlobalScope<'a> {
     }
   }
 
-  fn load_decl(
+  fn load_decl<'o>(
     &mut self,
     ctx: &'a SourceContext<Decl>,
-    opens: &Vec<&'a Open>,
+    opens: &Vec<&'o Open>,
     module: &'a ModulePath,
   ) {
-    match ctx.value() {
+    self.load_decl_inner(ctx.value(), &ctx.loc, opens, module);
+  }
+
+  /// Core of `load_decl`, taking the declaration and its source location
+  /// separately so `Decl::ScopedOpen` can recurse into its boxed inner
+  /// declaration with a locally-synthesized `Open` chained onto `opens`
+  /// (the synthesized `Open` only needs to live for this call, not for
+  /// `'a`, hence the independent `'o` lifetime).
+  fn load_decl_inner<'o>(
+    &mut self,
+    decl: &'a Decl,
+    loc: &'a SourceRange,
+    opens: &Vec<&'o Open>,
+    module: &'a ModulePath,
+  ) {
+    match decl {
+      Decl::ScopedOpen {
+        module_path,
+        filter,
+        decl: inner,
+        ..
+      } => {
+        let synthetic_open = Open {
+          source_location: loc.clone(),
+          module_path: module_path.clone(),
+          filter: filter.clone(),
+          attributes: vec![],
+        };
+        let augmented_opens: Vec<&Open> = opens
+          .iter()
+          .copied()
+          .chain(std::iter::once(&synthetic_open))
+          .collect();
+        self.load_decl_inner(inner, loc, &augmented_opens, module);
+      }
       Decl::Def(def) | Decl::DefMacro(def) => {
         let name = &def.name;
         let names = name.open(opens);
@@ -1309,7 +1394,7 @@ impl<'a> GlobalScope<'a> {
             typ: &def.typ,
             term: &def.term,
             module,
-            loc: &ctx.loc,
+            loc,
           })
           .chain([DefRef {
             name: name.clone(),
@@ -1317,7 +1402,7 @@ impl<'a> GlobalScope<'a> {
             typ: &def.typ,
             term: &def.term,
             module,
-            loc: &ctx.loc,
+            loc,
           }])
           .map(|d| (d.name.clone(), d))
           .collect();
@@ -1340,7 +1425,7 @@ impl<'a> GlobalScope<'a> {
                 typ: &cons.typ,
                 term: &cons.term,
                 module,
-                loc: &ctx.loc,
+                loc,
               })
               .chain([DefRef {
                 name: name.clone(),
@@ -1348,7 +1433,7 @@ impl<'a> GlobalScope<'a> {
                 typ: &cons.typ,
                 term: &cons.term,
                 module,
-                loc: &ctx.loc,
+                loc,
               }])
               .collect::<Vec<DefRef>>();
 
@@ -1384,7 +1469,7 @@ impl<'a> GlobalScope<'a> {
             typ: &ind.typ,
             term: &ind.term,
             module,
-            loc: &ctx.loc,
+            loc,
           }])
           .map(|d| (d.name.clone(), d))
           .collect();
@@ -1412,7 +1497,7 @@ impl<'a> GlobalScope<'a> {
               typ: &imp.typ,
               term: &imp.term,
               module,
-              loc: &ctx.loc,
+              loc,
             }
           })
           .map(|d| (d.name.clone(), d))
@@ -2029,6 +2114,90 @@ pub struct Module {
   infix: Map<Operator, SourceContext<Infix>>,
   instances: Vec<SourceContext<Instance>>,
   doc: Option<Documentation>,
+  /// `open Module [{filter}] in <decl>` scopes recorded for defs/types/
+  /// instances that are otherwise stored normally in the maps above. The
+  /// `SourceContext<Decl>` is the (unwrapped) inner declaration this open
+  /// applies to, used to look up which def a scoped open covers.
+  pub(crate) scoped_opens: Vec<(Open, SourceContext<Decl>)>,
+}
+
+/// Bare `use Module` (no braces) is deprecated in favor of explicit
+/// `use Module {...}` selection. Scans a file's own `use` declarations
+/// (not transitively-loaded dependencies — callers should only run this
+/// against the directly-requested top-level file's `Module::get_uses()`,
+/// to avoid duplicate warnings for a shared module every dependent file
+/// happens to `use`) and returns one warning `Diagnostic` per bare `use`.
+pub fn bare_use_warnings(
+  uses: &[SourceContext<Use>],
+  path: Option<&std::path::PathBuf>,
+) -> Vec<Diagnostic> {
+  uses
+    .iter()
+    .filter_map(|ctx| {
+      let u = ctx.value();
+      if u.filter != UseFilter::Bare {
+        return None;
+      }
+      Some(Diagnostic {
+        severity: Severity::Warning,
+        message: format!("bare `use {}` without braces is deprecated", u.module_path),
+        location: Some(u.source_location.clone()),
+        path: path.cloned(),
+        suggestions: vec![Suggestion {
+          message: format!("use `use {} {{*}}` instead", u.module_path),
+        }],
+        ..Default::default()
+      })
+    })
+    .collect()
+}
+
+/// Recursively unwrap `Decl::ScopedOpen` wrappers, recording each one's
+/// `Open` + inner declaration into `scoped_opens` and returning the
+/// declarations with `ScopedOpen` replaced by their inner decl, so normal
+/// decl-kind filtering (by `Decl::Def`, `Decl::Type`, etc.) still applies.
+pub(crate) fn unwrap_scoped_opens(
+  decls: Vec<SourceContext<Decl>>,
+  scoped_opens: &mut Vec<(Open, SourceContext<Decl>)>,
+) -> Vec<SourceContext<Decl>> {
+  decls
+    .into_iter()
+    .map(|ctx| unwrap_scoped_open(ctx, scoped_opens))
+    .collect()
+}
+
+fn unwrap_scoped_open(
+  ctx: SourceContext<Decl>,
+  scoped_opens: &mut Vec<(Open, SourceContext<Decl>)>,
+) -> SourceContext<Decl> {
+  match ctx.value {
+    Decl::ScopedOpen {
+      module_path,
+      filter,
+      attributes,
+      decl,
+    } => {
+      let open = Open {
+        source_location: ctx.loc.clone(),
+        module_path,
+        filter,
+        attributes,
+      };
+      let inner_ctx = SourceContext {
+        loc: ctx.loc,
+        doc: ctx.doc,
+        value: *decl,
+      };
+      let inner_ctx = unwrap_scoped_open(inner_ctx, scoped_opens);
+      scoped_opens.push((open, inner_ctx.clone()));
+      inner_ctx
+    }
+    other => SourceContext {
+      loc: ctx.loc,
+      doc: ctx.doc,
+      value: other,
+    },
+  }
 }
 
 impl Module {
@@ -2117,6 +2286,23 @@ impl Module {
 
   pub fn add_decl(&mut self, decl: Decl) {
     match decl {
+      Decl::ScopedOpen {
+        module_path,
+        filter,
+        attributes,
+        decl,
+      } => {
+        let open = Open {
+          source_location: Default::default(),
+          module_path,
+          filter,
+          attributes,
+        };
+        self
+          .scoped_opens
+          .push((open, SourceContext::no_ctx((*decl).clone())));
+        self.add_decl(*decl);
+      }
       Decl::Use(u) => self.uses.push(SourceContext::no_ctx(u)),
       Decl::Open(o) => self.opens.push(SourceContext::no_ctx(o)),
       Decl::Infix(inf) => {
@@ -2372,7 +2558,8 @@ pub fn names_of_decls(decls: &[SourceContext<Decl>]) -> HashSet<ModulePath> {
 
 /// Create a new module
 pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
-  let decls = parsed.decls;
+  let mut scoped_opens: Vec<(Open, SourceContext<Decl>)> = Vec::new();
+  let decls = unwrap_scoped_opens(parsed.decls, &mut scoped_opens);
   let defs = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
@@ -2438,6 +2625,7 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
     opens,
     infix,
     doc: parsed.module_doc,
+    scoped_opens,
   }
 }
 impl Display for Module {

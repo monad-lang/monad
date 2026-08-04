@@ -5,8 +5,41 @@ use super::*;
 // unconditionally rather than relying on `module.rs`'s own `use`, which is
 // now gated behind that feature since production call sites no longer
 // need it by default.
+use crate::diag::Severity;
 use crate::eval::r#type::type_check_module_decls;
 use crate::parser::parse_file;
+
+fn uses_of(source: &str) -> Vec<SourceContext<Use>> {
+  parse_file(source.into())
+    .unwrap()
+    .decls
+    .into_iter()
+    .filter_map(|ctx| {
+      let loc = ctx.loc.clone();
+      let doc = ctx.doc.clone();
+      match ctx.value {
+        Decl::Use(u) => Some(SourceContext { loc, doc, value: u }),
+        _ => None,
+      }
+    })
+    .collect()
+}
+
+#[test]
+fn test_bare_use_emits_warning() {
+  let uses = uses_of("use IO\n");
+  let warnings = bare_use_warnings(&uses, None);
+  assert_eq!(warnings.len(), 1);
+  assert_eq!(warnings[0].severity, Severity::Warning);
+  assert!(warnings[0].message.contains("deprecated"));
+  assert!(warnings[0].suggestions[0].message.contains("{*}"));
+}
+
+#[test]
+fn test_braced_use_emits_no_warning() {
+  let uses = uses_of("use IO {*}\n");
+  assert!(bare_use_warnings(&uses, None).is_empty());
+}
 #[test]
 fn test_simple_instance() {
   let mut loaded = LoadedModules::empty();
@@ -348,7 +381,7 @@ fn test_selective_use_only_filter() {
   ));
 
   let path_b = ModulePath::top("test_sel_b");
-  let parsed_b = parse_file(&format!("use {} (foo)", path_a.as_str().unwrap())).unwrap();
+  let parsed_b = parse_file(&format!("use {} {{foo}}", path_a.as_str().unwrap())).unwrap();
   let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
     .inspect_err(|e| eprintln!("{e}"))
     .unwrap();
@@ -365,4 +398,110 @@ fn test_selective_use_only_filter() {
 
   assert!(global.find_any_ref(&mpt("foo"), &sort1()).is_ok());
   assert!(global.find_any_ref(&mpt("bar"), &sort1()).is_err());
+}
+
+#[test]
+fn test_use_glob_equivalent_to_bare() {
+  let loaded = default_modules().unwrap();
+
+  let path_a = ModulePath::top("test_glob_a");
+  let parsed_a = parse_file(
+    r#"
+    def foo : I64 := 1
+    def bar : I64 := 2
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_a = type_check_module_decls(&path_a, parsed_a.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
+
+  let path_b = ModulePath::top("test_glob_b");
+  let parsed_b = parse_file(&format!("use {} {{*}}", path_a.as_str().unwrap())).unwrap();
+  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
+
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&path_b).expect("scope should exist");
+
+  // `{*}` makes every name bare-accessible, same as old bare `use`.
+  assert!(global.find_any_ref(&mpt("foo"), &sort1()).is_ok());
+  assert!(global.find_any_ref(&mpt("bar"), &sort1()).is_ok());
+}
+
+#[test]
+fn test_use_nested_submodule_makes_bare_name_and_qualified_access_available() {
+  let loaded = default_modules().unwrap();
+
+  let path_sub = ModulePath::new(vec![id("test_nest_c"), id("sub")]);
+  let parsed_sub = parse_file(
+    r#"
+    def read : I64 := 1
+    def write : I64 := 2
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_sub = type_check_module_decls(&path_sub, parsed_sub.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path_sub.clone(),
+    ParsedModule {
+      decls: decls_sub,
+      module_doc: None,
+    },
+  ));
+
+  let path_top = ModulePath::top("test_nest_c");
+  let parsed_top = parse_file("def marker : I64 := 0".into()).unwrap();
+  let decls_top = type_check_module_decls(&path_top, parsed_top.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_top.clone(),
+    ParsedModule {
+      decls: decls_top,
+      module_doc: None,
+    },
+  ));
+
+  let path_d = ModulePath::top("test_nest_d");
+  let parsed_d = parse_file("use test_nest_c {sub {read}}".into()).unwrap();
+  let decls_d = type_check_module_decls(&path_d, parsed_d.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_d.clone(),
+    ParsedModule {
+      decls: decls_d,
+      module_doc: None,
+    },
+  ));
+
+  let loaded_scopes = loaded.scopes();
+  let global = loaded_scopes.global(&path_d).expect("scope should exist");
+
+  // `read` was explicitly selected -> bare-accessible.
+  assert!(global.find_any_ref(&mpt("read"), &sort1()).is_ok());
+  // `write` was not selected by the nested filter -> not bare-accessible.
+  assert!(global.find_any_ref(&mpt("write"), &sort1()).is_err());
 }

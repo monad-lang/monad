@@ -410,6 +410,24 @@ fn test_type_check_hello_full() {
   assert!(r.is_ok(), "hello.mo style code should type check");
 }
 
+// Smoke test for the new `Decl::ScopedOpen` AST variant under the legacy
+// checker: confirms `open Module in def ...` parses and compiles through
+// `type_check_module_decls` without hitting the (removed) silent
+// pass-through — see `type_check_decl`'s `ScopedOpen` arm doc comment for
+// why this deliberately uses a fully-qualified reference rather than
+// relying on the scoped open's names actually being reachable unqualified
+// (a known legacy-checker limitation, unlike the default checker).
+#[cfg(feature = "legacy-checker")]
+#[test]
+fn test_scoped_open_compiles_under_legacy_checker() {
+  let mut loaded = default_modules().unwrap();
+  let path = ModulePath::top("test_scoped_open_legacy");
+  let parsed = parse_file("open Nat in def z : Nat := Nat.zero\n".into()).unwrap();
+  let r =
+    type_check_module_decls(&path, parsed.decls, &mut loaded).map_err(|e| eprintln!("error: {e}"));
+  assert!(r.is_ok(), "scoped open should compile under legacy checker");
+}
+
 // See the comment on `test_type_check_hello_style_pipe` above — same
 // OLD-checker-specific generic-Pi matching quirk.
 #[cfg(feature = "legacy-checker")]

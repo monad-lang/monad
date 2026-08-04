@@ -806,6 +806,7 @@ fn decl_kind(decl: &Decl) -> &'static str {
   match decl {
     Decl::Use(_) => "use",
     Decl::Open(_) => "open",
+    Decl::ScopedOpen { .. } => "scoped_open",
     Decl::Def(_) => "def",
     Decl::DefMacro(_) => "defmacro",
     Decl::Type(_) => "type",
@@ -1051,6 +1052,35 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
         let name = def.name.to_string();
         let result = check_one_def(&mut mctx, &mut ctx, &structs, def, &config);
         report.defs.push(DefOutcome { name, result });
+      }
+      Decl::ScopedOpen {
+        module_path,
+        filter,
+        decl: inner,
+        ..
+      } => {
+        // Mirrors `type_check_module_decls_new`'s `Decl::ScopedOpen`
+        // handling: widen `unqualified_aliases` with the scoped open's
+        // names, but only for checking this one wrapped `def`.
+        let scoped_open_val = Open {
+          source_location: SourceRange::default(),
+          module_path: module_path.clone(),
+          filter: filter.clone(),
+          attributes: vec![],
+        };
+        let mut scoped_opens: Vec<&Open> = opens.clone();
+        scoped_opens.push(&scoped_open_val);
+        let scoped_aliases = compute_unqualified_aliases(&known_globals, &scoped_opens);
+        let mut scoped_config = config.clone();
+        scoped_config.unqualified_aliases.extend(scoped_aliases);
+        match &**inner {
+          Decl::Def(def) => {
+            let name = def.name.to_string();
+            let result = check_one_def(&mut mctx, &mut ctx, &structs, def, &scoped_config);
+            report.defs.push(DefOutcome { name, result });
+          }
+          other => report.skipped.push(decl_kind(other)),
+        }
       }
       other => report.skipped.push(decl_kind(other)),
     }
@@ -1788,6 +1818,12 @@ pub fn type_check_module_decls_new(
     }
   }
   let aliases = compute_unqualified_aliases(&known_globals, &opens);
+  // Owned copy of `opens`, independent of `expanded`'s borrow (`opens`
+  // itself holds `&Open`s borrowed from `expanded`'s `Decl::Open` decls) —
+  // needed below since `Decl::ScopedOpen` handling in the per-decl loop
+  // must build an augmented opens list while `expanded` is being moved
+  // into that same loop.
+  let owned_opens: Vec<Open> = opens.iter().map(|o| (*o).clone()).collect();
   let config = LowerConfig {
     infix,
     unqualified_aliases: aliases,
@@ -1886,6 +1922,52 @@ pub fn type_check_module_decls_new(
           // rather than erroring on cases this phase doesn't cover yet.
           Ok(None) => Ok(decl.clone()),
           Err(e) => Err(e),
+        }
+      }
+      Decl::ScopedOpen {
+        ref module_path,
+        ref filter,
+        ref decl,
+        ..
+      } => {
+        // Widen `unqualified_aliases` with names the scoped `open` makes
+        // reachable, but ONLY for checking this one wrapped declaration —
+        // `config`/`opens` outside this arm are left untouched, so the
+        // widening never leaks to sibling decls. Re-wrap the checked inner
+        // decl back into `ScopedOpen` (rather than unwrapping it here) so
+        // this function's `Vec<SourceContext<Decl>> -> Vec<SourceContext<Decl>>`
+        // contract stays intact; `Module::add_decl` unwraps it later.
+        let scoped_open_val = Open {
+          source_location: SourceRange::default(),
+          module_path: module_path.clone(),
+          filter: filter.clone(),
+          attributes: vec![],
+        };
+        let mut scoped_opens: Vec<&Open> = owned_opens.iter().collect();
+        scoped_opens.push(&scoped_open_val);
+        let scoped_aliases = compute_unqualified_aliases(&known_globals, &scoped_opens);
+        let mut scoped_config = config.clone();
+        scoped_config.unqualified_aliases.extend(scoped_aliases);
+
+        let rewrap = |inner: Decl| Decl::ScopedOpen {
+          module_path: module_path.clone(),
+          filter: filter.clone(),
+          attributes: vec![],
+          decl: Box::new(inner),
+        };
+        match &**decl {
+          Decl::Def(def) => check_one_def_new(
+            &mut mctx,
+            &mut ctx,
+            &structs,
+            def,
+            &scoped_config,
+            &global_atom_paths,
+            &known_class_methods,
+            &known_instances,
+          )
+          .map(|d| rewrap(Decl::Def(d))),
+          other_inner => Ok(rewrap(other_inner.clone())),
         }
       }
       Decl::Generated(inner) => {
@@ -2086,6 +2168,33 @@ mod test {
       "open Nat\ndef z : Nat := zero\ndef one : Nat := succ zero\n",
     );
     assert_eq!(report.passed(), 2, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_harness_scoped_open_applies_only_to_its_own_decl() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(&env, "open Nat in def z : Nat := zero\n");
+    assert_eq!(report.passed(), 1, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_harness_scoped_open_does_not_leak_to_sibling_defs() {
+    // `zero`/`succ` are only reachable inside the scoped-open'd `z` — the
+    // sibling `bad` def (outside the scope) must NOT see them unqualified.
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "open Nat in def z : Nat := zero\ndef bad : Nat := succ zero\n",
+    );
+    assert_eq!(report.passed(), 1, "report: {report:?}");
+    assert_eq!(report.failed(), 1, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_harness_scoped_open_with_filter() {
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(&env, "open Nat {zero} in def z : Nat := zero\n");
+    assert_eq!(report.passed(), 1, "report: {report:?}");
   }
 
   #[test]

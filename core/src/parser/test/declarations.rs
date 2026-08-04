@@ -470,44 +470,210 @@ fn module_test() {
 
 #[test]
 fn test_selective_use_only() {
-  use crate::term::{UseFilter, id};
-  let s = "use IO (println, print)".into();
+  use crate::term::{UseFilter, UseItem, id};
+  let s = "use IO {println, print}".into();
   let (_, res) = use_parser(s).unwrap();
   assert_eq!(res.module_path, mpt("IO"));
   assert_eq!(
     res.filter,
-    UseFilter::Only(vec![id("println"), id("print")])
+    UseFilter::Items(vec![
+      UseItem::Name(id("println")),
+      UseItem::Name(id("print"))
+    ])
   );
-}
-
-#[test]
-fn test_selective_use_hiding() {
-  use crate::term::{UseFilter, id};
-  let s = "use IO hiding (readFile)".into();
-  let (_, res) = use_parser(s).unwrap();
-  assert_eq!(res.module_path, mpt("IO"));
-  assert_eq!(res.filter, UseFilter::Hiding(vec![id("readFile")]));
 }
 
 #[test]
 fn test_selective_use_rename() {
-  use crate::term::{UseFilter, id};
-  let s = "use IO (println as show)".into();
+  use crate::term::{UseFilter, UseItem, id};
+  let s = "use IO {println as show}".into();
   let (_, res) = use_parser(s).unwrap();
   assert_eq!(res.module_path, mpt("IO"));
   assert_eq!(
     res.filter,
-    UseFilter::Rename(vec![(id("println"), id("show"))])
+    UseFilter::Items(vec![UseItem::Rename(id("println"), id("show"))])
   );
 }
 
 #[test]
-fn test_selective_use_all() {
+fn test_use_bare_still_parses() {
   use crate::term::UseFilter;
   let s = "use IO".into();
   let (_, res) = use_parser(s).unwrap();
   assert_eq!(res.module_path, mpt("IO"));
-  assert_eq!(res.filter, UseFilter::All);
+  assert_eq!(res.filter, UseFilter::Bare);
+}
+
+#[test]
+fn test_use_glob() {
+  use crate::term::{UseFilter, UseItem};
+  let s = "use IO {*}".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(res.module_path, mpt("IO"));
+  assert_eq!(res.filter, UseFilter::Items(vec![UseItem::Glob]));
+}
+
+#[test]
+fn test_use_empty_braces() {
+  use crate::term::UseFilter;
+  let s = "use IO {}".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(res.module_path, mpt("IO"));
+  assert_eq!(res.filter, UseFilter::Items(vec![]));
+}
+
+#[test]
+fn test_use_nested_simple() {
+  use crate::term::{UseFilter, UseItem, id};
+  let s = "use IO {file {read}}".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(res.module_path, mpt("IO"));
+  assert_eq!(
+    res.filter,
+    UseFilter::Items(vec![UseItem::SubModule {
+      name: id("file"),
+      items: vec![UseItem::Name(id("read"))],
+    }])
+  );
+}
+
+#[test]
+fn test_use_nested_glob() {
+  use crate::term::{UseFilter, UseItem, id};
+  let s = "use IO {file {*}}".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(
+    res.filter,
+    UseFilter::Items(vec![UseItem::SubModule {
+      name: id("file"),
+      items: vec![UseItem::Glob],
+    }])
+  );
+}
+
+#[test]
+fn test_use_nested_deep() {
+  use crate::term::{UseFilter, UseItem, id};
+  let s = "use IO {a {b {c}}}".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(
+    res.filter,
+    UseFilter::Items(vec![UseItem::SubModule {
+      name: id("a"),
+      items: vec![UseItem::SubModule {
+        name: id("b"),
+        items: vec![UseItem::Name(id("c"))],
+      }],
+    }])
+  );
+}
+
+#[test]
+fn test_use_nested_rename() {
+  use crate::term::{UseFilter, UseItem, id};
+  let s = "use IO {file as myfile {read}}".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(
+    res.filter,
+    UseFilter::Items(vec![UseItem::SubModuleRename {
+      name: id("file"),
+      alias: id("myfile"),
+      items: vec![UseItem::Name(id("read"))],
+    }])
+  );
+}
+
+#[test]
+fn test_open_brace_filter() {
+  use crate::term::{Decl, OpenFilter, id};
+  let s = "open IO {println, print}".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::Open(open) => {
+      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(
+        open.filter,
+        OpenFilter::Only(vec![id("println"), id("print")])
+      );
+    }
+    other => panic!("expected Decl::Open, got {other:?}"),
+  }
+}
+
+#[test]
+fn test_open_no_braces_still_all() {
+  use crate::term::{Decl, OpenFilter};
+  let s = "open IO".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::Open(open) => {
+      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(open.filter, OpenFilter::All);
+    }
+    other => panic!("expected Decl::Open, got {other:?}"),
+  }
+}
+
+#[test]
+fn test_scoped_open_def() {
+  use crate::term::{Decl, OpenFilter};
+  let s = "open IO in def main : IO Unit := println \"hi\"".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::ScopedOpen {
+      module_path,
+      filter,
+      decl,
+      ..
+    } => {
+      assert_eq!(module_path, mpt("IO"));
+      assert_eq!(filter, OpenFilter::All);
+      assert!(matches!(*decl, Decl::Def(_)));
+    }
+    other => panic!("expected Decl::ScopedOpen, got {other:?}"),
+  }
+}
+
+#[test]
+fn test_scoped_open_filtered() {
+  use crate::term::{Decl, OpenFilter, id};
+  let s = "open IO {println} in def main : IO Unit := println \"hi\"".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::ScopedOpen {
+      module_path,
+      filter,
+      decl,
+      ..
+    } => {
+      assert_eq!(module_path, mpt("IO"));
+      assert_eq!(filter, OpenFilter::Only(vec![id("println")]));
+      assert!(matches!(*decl, Decl::Def(_)));
+    }
+    other => panic!("expected Decl::ScopedOpen, got {other:?}"),
+  }
+}
+
+#[test]
+fn test_scoped_open_type() {
+  use crate::term::Decl;
+  let s = "open Nat in struct Foo { x : Nat }".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::ScopedOpen { decl, .. } => assert!(matches!(*decl, Decl::Type(_))),
+    other => panic!("expected Decl::ScopedOpen, got {other:?}"),
+  }
+}
+
+#[test]
+fn test_scoped_open_instance() {
+  use crate::term::Decl;
+  let s = "open Nat in instance Show Nat { def show (n: Nat) : String := \"\" }".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::ScopedOpen { decl, .. } => assert!(matches!(*decl, Decl::Ins(_))),
+    other => panic!("expected Decl::ScopedOpen, got {other:?}"),
+  }
 }
 
 #[test]

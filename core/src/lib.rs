@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::diag::render_diagnostics;
 use crate::eval::r#type::render_type_error_with_source;
 use crate::eval::r#type::type_check;
 use crate::eval::{EvalOptions, eval, eval_test};
@@ -24,7 +25,7 @@ use crate::term::module::ParsedModule;
 #[cfg(feature = "repl")]
 use crate::term::module::module;
 use crate::term::module::{
-  LoadedModules, default_modules, load_module_files, load_module_from_text,
+  LoadedModules, bare_use_warnings, default_modules, load_module_files, load_module_from_text,
 };
 use crate::term::{Constructor, ModulePath, SearchPaths, mpt, strings_to_list_term};
 use crate::term::{app, id};
@@ -203,6 +204,13 @@ pub fn run(
   let module = loaded
     .get_module(&path)
     .ok_or_else(|| format!("Module {path} not loaded"))?;
+  let warnings = bare_use_warnings(module.get_uses(), Some(&input));
+  if !warnings.is_empty() {
+    eprintln!(
+      "{}",
+      render_diagnostics(&warnings, Some(&source), options.use_colors)
+    );
+  }
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path).expect("Module not loaded");
   if options.debug {
@@ -437,6 +445,11 @@ fn test_one_file(
   let mut output_lines: Vec<String> = Vec::new();
   if options.debug {
     output_lines.push(format!("{global}"));
+  }
+
+  let warnings = bare_use_warnings(module.get_uses(), Some(&file_path));
+  if !warnings.is_empty() {
+    output_lines.push(render_diagnostics(&warnings, None, options.use_colors));
   }
 
   let test_defs: Vec<_> = module

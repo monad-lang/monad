@@ -45,6 +45,21 @@ pub struct Diagnostic {
   pub context_name: Option<String>,
 }
 
+impl Default for Diagnostic {
+  fn default() -> Self {
+    Diagnostic {
+      severity: Severity::Error,
+      message: String::new(),
+      location: None,
+      path: None,
+      module_path: None,
+      sub_diagnostics: Vec::new(),
+      suggestions: Vec::new(),
+      context_name: None,
+    }
+  }
+}
+
 struct Colorizer {
   use_colors: bool,
 }
@@ -99,7 +114,19 @@ fn render_impl(
     writeln!(f, "{}In {}:{}", c.bold(), name, c.reset())?;
   }
 
-  write!(f, "{}{}{}: ", c.error(), c.bold(), diag.severity.label())?;
+  let severity_color = match diag.severity {
+    Severity::Error => c.error(),
+    Severity::Warning => c.warning(),
+    Severity::Note => c.note(),
+    Severity::Help => c.help(),
+  };
+  write!(
+    f,
+    "{}{}{}: ",
+    severity_color,
+    c.bold(),
+    diag.severity.label()
+  )?;
   write!(f, "{}{}", diag.message, c.reset())?;
 
   if let Some(loc) = &diag.location {

@@ -2214,10 +2214,121 @@ pub fn mp(v: Vec<&str>) -> ModulePath {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UseFilter {
+  /// `use Module` — bare, no braces. Deprecated: import all.
+  Bare,
+  /// `use Module { items }` — selective import.
+  Items(Vec<UseItem>),
+}
+
+/// A single item inside a `use Module { ... }` brace filter.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UseItem {
+  /// `name`
+  Name(Identifier),
+  /// `name as alias`
+  Rename(Identifier, Identifier),
+  /// `*`
+  Glob,
+  /// `name { items }`
+  SubModule {
+    name: Identifier,
+    items: Vec<UseItem>,
+  },
+  /// `name as alias { items }`
+  SubModuleRename {
+    name: Identifier,
+    alias: Identifier,
+    items: Vec<UseItem>,
+  },
+}
+
+/// What bare names a given (sub)module contributes, after flattening a
+/// `UseFilter` against its base module path.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AllowedNames {
   All,
-  Only(Vec<Identifier>),
-  Hiding(Vec<Identifier>),
-  Rename(Vec<(Identifier, Identifier)>),
+  Only(Set<Identifier>),
+}
+
+impl UseItem {
+  /// Expand a (possibly nested) `UseItem` into a flat map from module path
+  /// to the names allowed as bare names from that (sub)module. Also
+  /// registers an entry for the (sub)module itself so qualified access
+  /// through it works even with no bare names selected (e.g. `sub {}`).
+  pub fn flatten(&self, base_path: &ModulePath) -> Map<ModulePath, AllowedNames> {
+    let mut out = Map::new();
+    self.flatten_into(base_path, &mut out);
+    out
+  }
+
+  fn flatten_into(&self, base_path: &ModulePath, out: &mut Map<ModulePath, AllowedNames>) {
+    match self {
+      UseItem::Name(name) => {
+        add_allowed(out, base_path.clone(), name.clone());
+      }
+      UseItem::Rename(_from, to) => {
+        add_allowed(out, base_path.clone(), to.clone());
+      }
+      UseItem::Glob => {
+        out.insert(base_path.clone(), AllowedNames::All);
+      }
+      UseItem::SubModule { name, items } => {
+        let sub_path = base_path.append(vec![name.clone()]);
+        out
+          .entry(sub_path.clone())
+          .or_insert(AllowedNames::Only(Set::default()));
+        for item in items {
+          item.flatten_into(&sub_path, out);
+        }
+      }
+      UseItem::SubModuleRename { name, items, .. } => {
+        let sub_path = base_path.append(vec![name.clone()]);
+        out
+          .entry(sub_path.clone())
+          .or_insert(AllowedNames::Only(Set::default()));
+        for item in items {
+          item.flatten_into(&sub_path, out);
+        }
+      }
+    }
+  }
+}
+
+fn add_allowed(out: &mut Map<ModulePath, AllowedNames>, path: ModulePath, name: Identifier) {
+  match out
+    .entry(path)
+    .or_insert(AllowedNames::Only(Set::default()))
+  {
+    AllowedNames::All => {}
+    AllowedNames::Only(names) => {
+      names.insert(name);
+    }
+  }
+}
+
+impl Display for UseItem {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      UseItem::Name(name) => write!(f, "{name}"),
+      UseItem::Rename(name, alias) => write!(f, "{name} as {alias}"),
+      UseItem::Glob => write!(f, "*"),
+      UseItem::SubModule { name, items } => {
+        write!(f, "{name} {{{}}}", vec_fmt(items))
+      }
+      UseItem::SubModuleRename { name, alias, items } => {
+        write!(f, "{name} as {alias} {{{}}}", vec_fmt(items))
+      }
+    }
+  }
+}
+
+impl Display for UseFilter {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      UseFilter::Bare => Ok(()),
+      UseFilter::Items(items) => write!(f, " {{{}}}", vec_fmt(items)),
+    }
+  }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2512,12 +2623,23 @@ pub fn infix(operator: Operator, name: ModulePath) -> Infix {
 pub enum Decl {
   Use(Use),
   Open(Open),
+  /// `open ModulePath [{filter}] in <declaration>` — the module is opened
+  /// only for the scope of the wrapped declaration.
+  ScopedOpen {
+    module_path: ModulePath,
+    filter: OpenFilter,
+    attributes: Vec<Attribute>,
+    decl: Box<Decl>,
+  },
   Def(Def),
   DefMacro(Def),
   Type(Inductive),
   Ins(Instance),
   Infix(Infix),
-  MacroCall { name: Identifier, args: Vec<Term> },
+  MacroCall {
+    name: Identifier,
+    args: Vec<Term>,
+  },
   DeclGen(DeclGenDef),
   Generated(Vec<Decl>),
 }
@@ -2532,6 +2654,7 @@ impl Decl {
       Decl::Use(use_) => &use_.module_path,
       Decl::Ins(instance) => &instance.name,
       Decl::Open(open) => &open.module_path,
+      Decl::ScopedOpen { decl, .. } => decl.to_ref(),
       Decl::MacroCall { .. } => {
         use std::sync::OnceLock;
         static PLACEHOLDER: OnceLock<ModulePath> = OnceLock::new();

@@ -122,6 +122,31 @@ pub fn expand_macros(
         def.term = expand_term(def.term, &macro_defs, 0)?;
         batch.push(ctx.map(|_| Decl::Def(def)));
       }
+      Decl::ScopedOpen {
+        module_path,
+        filter,
+        attributes,
+        decl,
+      } => {
+        // Only the wrapped `Def`'s term can contain inline macro calls
+        // (`open Module in type|struct|class|instance ...` never do) — but
+        // still expand it here, or a `name!` call inside a scoped-open'd
+        // def's body would silently never get expanded (it can't reach the
+        // `Decl::Def` arm above, since it's nested inside `ScopedOpen`).
+        let inner = match *decl {
+          Decl::Def(mut def) => {
+            def.term = expand_term(def.term, &macro_defs, 0)?;
+            Decl::Def(def)
+          }
+          other => other,
+        };
+        batch.push(ctx.map(|_| Decl::ScopedOpen {
+          module_path,
+          filter,
+          attributes,
+          decl: Box::new(inner),
+        }));
+      }
       other => {
         batch.push(ctx.map(|_| other));
       }

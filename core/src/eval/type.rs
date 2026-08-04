@@ -3126,6 +3126,29 @@ pub fn type_check_decl(decl: Decl, scope: &Scope) -> Result<Decl, TypeError> {
     }
     Decl::MacroCall { .. } => Ok(decl),
     Decl::Infix(_) => Ok(decl), // TODO
+    Decl::ScopedOpen {
+      module_path,
+      filter,
+      attributes,
+      decl: inner,
+    } => {
+      // NOTE (legacy-checker limitation): unlike the default checker
+      // (`core_check_module.rs`, which builds a widened
+      // `unqualified_aliases` config per scoped open), this legacy
+      // `Scope`/`GlobalScope` has no notion of a temporary `open` layered
+      // on top of an already-built scope, so names the scoped open makes
+      // reachable are NOT resolvable here — only names already visible in
+      // the enclosing scope. Still type-check the inner decl against the
+      // base scope (rather than silently skipping it) so ordinary type
+      // errors in it are still caught.
+      let checked = type_check_decl(*inner, scope)?;
+      Ok(Decl::ScopedOpen {
+        module_path,
+        filter,
+        attributes,
+        decl: Box::new(checked),
+      })
+    }
     _ => Ok(decl),
   }
 }
@@ -3342,6 +3365,17 @@ pub fn elaborate_decl(decl: Decl, known_names: &Set<&ModulePath>) -> Decl {
     ),
     Type(ind) => Type(elaborate_inductive(ind, known_names)),
     Ins(ins) => Ins(elaborate_instance(ins, known_names)),
+    ScopedOpen {
+      module_path,
+      filter,
+      attributes,
+      decl,
+    } => ScopedOpen {
+      module_path,
+      filter,
+      attributes,
+      decl: Box::new(elaborate_decl(*decl, known_names)),
+    },
     _ => decl,
   }
 }
