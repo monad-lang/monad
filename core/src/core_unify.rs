@@ -17,7 +17,7 @@ use crate::core_term::{
   Atom, AtomTable, CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, MetaId, open_at,
   open_with,
 };
-use crate::term::ModulePath;
+use crate::term::{Identifier, ModulePath};
 
 // ---------------------------------------------------------------------------
 // MetaContext — the unifier's mutable state, keyed by MetaId, never a name
@@ -46,6 +46,14 @@ pub struct MetaContext {
   /// `new_with_atoms` once checking begins — the same table, continued,
   /// not a second independent one.
   atoms: AtomTable,
+  /// Opt-in capture of each `Match`/`if` node's resolved inductive
+  /// `Atom`, keyed by `(scrutinee, case names)` rather than traversal
+  /// position — see `core_program::CoreProgram::match_resolutions`'s doc
+  /// comment for why. `None` (the default, `Self::default()`) means
+  /// capture is off and `record_match_resolution` is a no-op — every
+  /// existing caller that never calls `enable_match_capture` pays
+  /// nothing extra.
+  match_resolutions: Option<Vec<(Vec<Identifier>, Atom)>>,
 }
 
 impl MetaContext {
@@ -79,6 +87,137 @@ impl MetaContext {
 
   pub fn atoms(&self) -> &AtomTable {
     &self.atoms
+  }
+
+  /// Turn on `Match`/`if`-node resolution capture (Phase 0 of
+  /// `plans/implementations/core-term-closure-evaluator.md`) — a no-op
+  /// if already enabled, so callers don't need to track whether they've
+  /// called this before.
+  pub fn enable_match_capture(&mut self) {
+    if self.match_resolutions.is_none() {
+      self.match_resolutions = Some(Vec::new());
+    }
+  }
+
+  /// Record a `Match`/`if` node's resolved inductive `Atom`, in
+  /// visitation order. No-op when capture isn't enabled (the default) —
+  /// safe to call unconditionally from `core_check.rs`'s `Match`
+  /// handling.
+  ///
+  /// Deliberately *not* keyed by the scrutinee's own content: `check`/
+  /// `infer` open enclosing binders (`Bound` -> a fresh `Free` atom)
+  /// before recursing into a body, so the scrutinee captured here is in
+  /// *opened* form — structurally different from the *closed*
+  /// (`Bound`-indexed) scrutinee that ends up in the final, stored
+  /// `CoreTerm` a lowering pass sees (confirmed empirically: every
+  /// captured scrutinee was `Free(atom)`, never `Bound(_)`, even for
+  /// matches deep inside a `Lam`). Instead, captures are consumed
+  /// strictly in the same left-to-right order they're recorded — see
+  /// `core_program::CoreProgram::match_resolutions`'s doc comment for how
+  /// callers keep this correctly scoped per-def.
+  pub(crate) fn record_match_resolution(&mut self, case_names: Vec<Identifier>, atom: Atom) {
+    if let Some(queue) = self.match_resolutions.as_mut() {
+      queue.push((case_names, atom));
+    }
+  }
+
+  /// Take everything captured so far, **leaving capture enabled** (an
+  /// empty queue, ready for the next def) if it was on. Callers drain
+  /// this once per def (right after that def's own `check`/`infer` call,
+  /// before moving to the next def) so each resulting queue is correctly
+  /// scoped to one def's own visitation order, without needing to
+  /// re-enable capture for every subsequent def in the same module's
+  /// check — see `core_check_module.rs::check_one_def_new`.
+  pub fn take_match_resolutions(&mut self) -> Vec<(Vec<Identifier>, Atom)> {
+    match self.match_resolutions.as_mut() {
+      Some(queue) => std::mem::take(queue),
+      None => Vec::new(),
+    }
+  }
+
+  /// Current length of the capture queue — `0` when capture isn't
+  /// enabled, consistent with `record_match_resolution`'s own no-op
+  /// behavior there. Lets a caller record where in the queue its OWN
+  /// contribution begins, before doing any of its own (possibly
+  /// speculative) capturing — see `splice_match_resolutions`'s doc
+  /// comment for why this matters beyond just "0".
+  pub(crate) fn match_resolutions_len(&self) -> usize {
+    self.match_resolutions.as_ref().map_or(0, Vec::len)
+  }
+
+  /// Run `f` with capture fully suppressed (a no-op restore if it was
+  /// already off) — for a SPECULATIVE/dry-run desugar whose only purpose
+  /// is discovering type information (`try_resolve_class_method`'s own
+  /// per-arg loop, `core_check.rs`, when a class method's own type
+  /// parameter isn't pinned yet) and whose result — and therefore
+  /// whatever match resolutions it resolves along the way — will be
+  /// entirely thrown away and redone for real once that information is
+  /// known. Whatever was captured before this call is untouched and
+  /// still there afterward; nothing `f` itself resolves leaves a trace.
+  pub(crate) fn without_match_capture<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+    let saved = self.match_resolutions.take();
+    let out = f(self);
+    self.match_resolutions = saved;
+    out
+  }
+
+  /// Run `f` with capture (if already enabled — a plain, uncaptured call
+  /// to `f` otherwise) redirected into a fresh, separate buffer instead
+  /// of the main queue, returned alongside `f`'s own result. Pairs with
+  /// `splice_match_resolutions`: used to redo a class method's
+  /// speculatively-desugared (and therefore capture-suppressed, via
+  /// `without_match_capture`) EARLY arguments for real, once whatever
+  /// later argument was going to pin the class method's own type
+  /// parameter has done so — the redo's captures need to end up ahead
+  /// of anything captured after the speculative pass (the class
+  /// method's own dictionary projection, plus any already-resolved
+  /// later argument), not merely appended after it, so they can't be
+  /// pushed onto the live queue directly; buffering first lets the
+  /// caller splice them into the right place.
+  pub(crate) fn capture_match_resolutions_into_buffer<T>(
+    &mut self,
+    f: impl FnOnce(&mut Self) -> T,
+  ) -> (T, Vec<(Vec<Identifier>, Atom)>) {
+    if self.match_resolutions.is_none() {
+      return (f(self), Vec::new());
+    }
+    let saved = self.match_resolutions.replace(Vec::new());
+    let out = f(self);
+    let buffer = std::mem::replace(&mut self.match_resolutions, saved).unwrap_or_default();
+    (out, buffer)
+  }
+
+  /// Splice `entries` into the capture queue at position `at` — the
+  /// counterpart to `capture_match_resolutions_into_buffer`. No-op when
+  /// capture isn't enabled.
+  ///
+  /// `at` must be the queue's own length at the moment the call being
+  /// redone STARTED (`match_resolutions_len()`, read before that call's
+  /// own argument loop) — NOT simply `0`. An earlier version of this
+  /// always spliced at the front, reasoning that a class method's own
+  /// speculatively-desugared arguments form a PREFIX of ITS OWN spine
+  /// (true — unification never un-resolves a type parameter once
+  /// pinned) — but that reasoning only accounts for entries captured
+  /// *within* the one call being redone, not entries a PRECEDING SIBLING
+  /// call already placed at the front of the very same live queue. A
+  /// real example that caught this: `let fr := Foldable.foldr(...) in
+  /// let fl := Foldable.foldl(...) in fr == fl` — splicing `fl`'s redo
+  /// at the front put its captures *before* `fr`'s own (already
+  /// correctly positioned) captures and self-capture, when they belong
+  /// after. Splicing at the CALLER's own entry-time length correctly
+  /// inserts relative to wherever this call's own contribution begins,
+  /// regardless of how much a preceding sibling already added.
+  pub(crate) fn splice_match_resolutions(
+    &mut self,
+    at: usize,
+    entries: Vec<(Vec<Identifier>, Atom)>,
+  ) {
+    if let Some(queue) = self.match_resolutions.as_mut() {
+      let at = at.min(queue.len());
+      let mut tail = queue.split_off(at);
+      queue.extend(entries);
+      queue.append(&mut tail);
+    }
   }
 
   /// Allocate a fresh, unsolved metavariable of the given type.

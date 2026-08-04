@@ -112,6 +112,9 @@ use crate::core_check::{
   KnownInstances, StructFields, StructInfo, StructKind, TyCtx, check, desugar_struct_literals,
   head_atom_of, infer, is_class_atom,
 };
+use crate::core_program::{
+  CheckedCoreDef, CoreConstructorInfo, CoreInductiveInfo, CoreInstanceInfo, CoreProgram,
+};
 use crate::core_term::{Atom, AtomTable, CoreLit, CoreTerm, DebugName, close, open_with};
 use crate::core_unify::{MetaContext, UnifyError, generalize, zonk};
 use crate::eval::macro_expand::expand_macros;
@@ -1621,6 +1624,13 @@ fn check_one_def_new(
   global_atom_paths: &Map<Atom, ModulePath>,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
+  // Phase 0 of `plans/implementations/core-term-closure-evaluator.md`:
+  // opt-in capture of this def's pre-`raise_core` `CoreTerm`, keyed by
+  // `capture_path` (usually `&def.name`, but instance-qualified for a
+  // per-instance method — see `check_one_instance_new`). `None` (every
+  // pre-existing call site) costs nothing extra.
+  mut core_out: Option<&mut CoreProgram>,
+  capture_path: &ModulePath,
 ) -> Result<Def, TypeError> {
   let self_atom = mctx.intern(def.name.clone());
   let mut new_def = def.clone();
@@ -1759,6 +1769,31 @@ fn check_one_def_new(
       &body_c,
       Some(&residual_typ),
     );
+    // Drain this def's own Match/if resolutions right now (AFTER
+    // desugar_struct_literals, not right after `check` — that pass is
+    // what injects dictionary-projection Match nodes and produces the
+    // FINAL body_c a lowering pass sees, so its traversal order is what
+    // needs to be captured, not check's own pre-desugar one — see
+    // `desugar_struct_literals`'s doc comment), before the NEXT def's
+    // check appends more onto the same shared MetaContext — see
+    // `CoreProgram::match_resolutions`'s doc comment for why this must
+    // stay scoped per-def, not merged at the end of the whole module's
+    // check.
+    if let Some(program) = core_out.as_deref_mut() {
+      program
+        .match_resolutions
+        .insert(capture_path.clone(), mctx.take_match_resolutions());
+    }
+    if let Some(program) = core_out {
+      program.defs.insert(
+        capture_path.clone(),
+        CheckedCoreDef {
+          term: body_c.clone(),
+          typ: residual_typ.clone(),
+          atom_paths: atom_paths.clone(),
+        },
+      );
+    }
     new_def.term = raise_core(&body_c, &atom_paths);
     Ok(new_def)
   } else {
@@ -1785,6 +1820,14 @@ fn check_one_def_new(
       &body_c,
       Some(&ty),
     );
+    // See the annotated branch above: drain this def's own resolutions
+    // now (AFTER desugar_struct_literals), before the next def's check
+    // appends more.
+    if let Some(program) = core_out.as_deref_mut() {
+      program
+        .match_resolutions
+        .insert(capture_path.clone(), mctx.take_match_resolutions());
+    }
     // Unlike the annotated branch, there's no pre-existing `Term` for an
     // inferred type — it has to be raised too, and (unlike the checked
     // term) it CAN contain unresolved metavariables at this point, so
@@ -1796,6 +1839,16 @@ fn check_one_def_new(
     let ty_generalized = generalize(mctx, &ty_zonked, |_m| {
       DebugName::Named(Identifier::new("T".to_string()))
     });
+    if let Some(program) = core_out {
+      program.defs.insert(
+        capture_path.clone(),
+        CheckedCoreDef {
+          term: body_c.clone(),
+          typ: ty_generalized.clone(),
+          atom_paths: atom_paths.clone(),
+        },
+      );
+    }
     new_def.typ = raise_core(&ty_generalized, &atom_paths);
     new_def.term = raise_core(&body_c, &atom_paths);
     Ok(new_def)
@@ -1833,6 +1886,19 @@ fn check_one_instance_new(
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
   class_method_order: &Map<ModulePath, Vec<Identifier>>,
+  // Phase 0 capture — see `check_one_def_new`'s doc comment. Each
+  // method's OWN `Def.name` is a bare, non-instance-qualified identifier
+  // (`instance_inner_parser` parses each method with an ordinary
+  // `def_parser`, same as a ordinary top-level def) — passing it through
+  // to `check_one_def_new` unqualified would collide across different
+  // instances' same-named methods (every `BEq` instance has a `beq`), so
+  // each method is captured under `instance.name().append([method_name])`
+  // instead, and the instance's own dictionary shape (which method path
+  // implements which class, in declared order) is recorded separately —
+  // no `CoreTerm::Con` for the instance's own assembled dictionary value
+  // is built or captured here; a lowering pass reconstructs it on demand
+  // from the per-method paths this records.
+  mut core_out: Option<&mut CoreProgram>,
 ) -> Result<Option<Def>, TypeError> {
   let Some(method_order) = class_method_order.get(&instance.class_name) else {
     return Ok(None);
@@ -1855,6 +1921,7 @@ fn check_one_instance_new(
     method_def
       .type_constraints
       .extend(instance.constraints.iter().cloned());
+    let method_capture_path = instance.name().clone().append(vec![method_name.clone()]);
     let checked = check_one_def_new(
       mctx,
       ctx,
@@ -1864,8 +1931,22 @@ fn check_one_instance_new(
       global_atom_paths,
       known_class_methods,
       known_instances,
+      core_out.as_deref_mut(),
+      &method_capture_path,
     )?;
     args.push(Some(checked.term));
+  }
+  if let Some(program) = core_out {
+    program.instances.insert(
+      instance.name().clone(),
+      CoreInstanceInfo {
+        class_name: instance.class_name.clone(),
+        method_paths: method_order
+          .iter()
+          .map(|m| instance.name().clone().append(vec![m.clone()]))
+          .collect(),
+      },
+    );
   }
   let cons = constructor(
     instance.class_name.last().clone(),
@@ -1924,6 +2005,24 @@ pub fn type_check_module_decls_new(
   decls: Vec<SourceContext<Decl>>,
   loaded: &LoadedModules,
 ) -> Result<Vec<SourceContext<Decl>>, TypeError> {
+  type_check_module_decls_new_inner(path, decls, loaded, None)
+}
+
+/// Same as `type_check_module_decls_new`, plus opt-in whole-program
+/// `CoreTerm` retention (Phase 0 of
+/// `plans/implementations/core-term-closure-evaluator.md`) — every
+/// checked def's/instance-method's pre-`raise_core` body, plus enough
+/// `Match`/inductive/instance metadata for a `CoreTerm -> IR` lowering
+/// pass to consume, are captured into `core_out` when `Some`. `None`
+/// (via `type_check_module_decls_new`'s thin wrapper, every existing
+/// call site) is behaviorally and cost-wise identical to before this was
+/// added.
+pub fn type_check_module_decls_new_inner(
+  path: &ModulePath,
+  decls: Vec<SourceContext<Decl>>,
+  loaded: &LoadedModules,
+  mut core_out: Option<&mut CoreProgram>,
+) -> Result<Vec<SourceContext<Decl>>, TypeError> {
   let decls: Vec<SourceContext<Decl>> = if loaded.config.test_mode {
     decls
   } else {
@@ -1939,6 +2038,40 @@ pub fn type_check_module_decls_new(
 
   let elaborated = elaborate_decls(decls, loaded);
   let expanded = expand_macros(elaborated, loaded).map_err(TypeError::MacroExpansion)?;
+  // Phase 0 capture: each inductive's constructors, in declaration order
+  // (order *is* the constructor's tag, matching the recursor-compilation
+  // convention `lower.rs`/`eval_term.rs` already use) — read directly off
+  // the surface `Decl::Type` data, no dependency on `register_inductive`'s
+  // internal `StructFields` bookkeeping.
+  if let Some(program) = core_out.as_deref_mut() {
+    for decl in &expanded {
+      if let Decl::Type(ind) = &**decl {
+        // A single-constructor ("struct-shaped") inductive's sole
+        // constructor's params, in declaration order — needed to
+        // re-order a `CoreLit::StructLit`/`StructUpdate` (keyed by field
+        // name, unordered) into an ordinary positional `Con` at lowering
+        // time.
+        let struct_field_names = match ind.constructors().as_slice() {
+          [only] => Some(only.params.iter().map(|p| p.name.clone()).collect()),
+          _ => None,
+        };
+        program.inductives.insert(
+          ind.name().clone(),
+          CoreInductiveInfo {
+            constructors: ind
+              .constructors()
+              .iter()
+              .map(|c| CoreConstructorInfo {
+                name: c.name().last().clone(),
+                arity: c.params.len() as u32,
+              })
+              .collect(),
+            struct_field_names,
+          },
+        );
+      }
+    }
+  }
   let mut atoms = AtomTable::new();
   let known_class_methods = collect_known_class_methods(loaded, &expanded, &mut atoms);
   let known_instances = collect_known_instances(loaded, &expanded);
@@ -2059,6 +2192,9 @@ pub fn type_check_module_decls_new(
   }
 
   let mut mctx = MetaContext::new_with_atoms(atoms);
+  if core_out.is_some() {
+    mctx.enable_match_capture();
+  }
   let mut errors: Vec<TypeError> = Vec::new();
   let mut checked: Vec<SourceContext<Decl>> = Vec::with_capacity(expanded.len());
   let module_context = std::sync::Arc::new(ModuleContext::new(path.clone(), None));
@@ -2084,17 +2220,22 @@ pub fn type_check_module_decls_new(
           Ok(decl.clone())
         }
       }
-      Decl::Def(def) => check_one_def_new(
-        &mut mctx,
-        &mut ctx,
-        &structs,
-        &def,
-        &config,
-        &global_atom_paths,
-        &known_class_methods,
-        &known_instances,
-      )
-      .map(Decl::Def),
+      Decl::Def(def) => {
+        let capture_path = def.name.clone();
+        check_one_def_new(
+          &mut mctx,
+          &mut ctx,
+          &structs,
+          &def,
+          &config,
+          &global_atom_paths,
+          &known_class_methods,
+          &known_instances,
+          core_out.as_deref_mut(),
+          &capture_path,
+        )
+        .map(Decl::Def)
+      }
       Decl::Type(ref ind) => check_strict_positivity(ind).map(|()| decl.clone()),
       Decl::Ins(ref instance) => {
         // `Module`'s own `instances` field (`term/module.rs`'s `module()`
@@ -2115,6 +2256,7 @@ pub fn type_check_module_decls_new(
           &known_class_methods,
           &known_instances,
           &class_method_order,
+          core_out.as_deref_mut(),
         ) {
           Ok(Some(dict_def)) => {
             checked.push(decl_ctx.with(Decl::Def(dict_def)));
@@ -2162,17 +2304,22 @@ pub fn type_check_module_decls_new(
           decl: Box::new(inner),
         };
         match &**decl {
-          Decl::Def(def) => check_one_def_new(
-            &mut mctx,
-            &mut ctx,
-            &structs,
-            def,
-            &scoped_config,
-            &global_atom_paths,
-            &known_class_methods,
-            &known_instances,
-          )
-          .map(|d| rewrap(Decl::Def(d))),
+          Decl::Def(def) => {
+            let capture_path = def.name.clone();
+            check_one_def_new(
+              &mut mctx,
+              &mut ctx,
+              &structs,
+              def,
+              &scoped_config,
+              &global_atom_paths,
+              &known_class_methods,
+              &known_instances,
+              core_out.as_deref_mut(),
+              &capture_path,
+            )
+            .map(|d| rewrap(Decl::Def(d)))
+          }
           other_inner => Ok(rewrap(other_inner.clone())),
         }
       }
@@ -2184,22 +2331,27 @@ pub fn type_check_module_decls_new(
         let mut first_err = None;
         for d in inner {
           match d {
-            Decl::Def(def) => match check_one_def_new(
-              &mut mctx,
-              &mut ctx,
-              &structs,
-              &def,
-              &config,
-              &global_atom_paths,
-              &known_class_methods,
-              &known_instances,
-            ) {
-              Ok(nd) => checked_inner.push(Decl::Def(nd)),
-              Err(e) => {
-                first_err = Some(e);
-                break;
+            Decl::Def(def) => {
+              let capture_path = def.name.clone();
+              match check_one_def_new(
+                &mut mctx,
+                &mut ctx,
+                &structs,
+                &def,
+                &config,
+                &global_atom_paths,
+                &known_class_methods,
+                &known_instances,
+                core_out.as_deref_mut(),
+                &capture_path,
+              ) {
+                Ok(nd) => checked_inner.push(Decl::Def(nd)),
+                Err(e) => {
+                  first_err = Some(e);
+                  break;
+                }
               }
-            },
+            }
             other => checked_inner.push(other),
           }
         }
@@ -2239,6 +2391,40 @@ pub fn type_check_module_decls_new(
   }
 
   Ok(checked)
+}
+
+/// Build a whole-program `CoreProgram` by checking `modules` (each an
+/// already-parsed, unchecked module's own `(path, decls)`) against
+/// `loaded` — Phase 0's driver.
+///
+/// `loaded` must already be a fully-loaded `LoadedModules` (built via the
+/// normal `default_modules()`/`load_module_from_text`/`load_module_files`
+/// pipeline, unmodified — this driver does not mutate it) so every
+/// module's own `check_one_def_new`/`check_one_instance_new` calls can
+/// resolve names against the complete set of already-checked siblings.
+/// Deliberately does NOT read `loaded.modules()`'s own stored decls —
+/// those are already the CHECKED, raised `Term`-based output of the
+/// normal loading pipeline, not the unchecked surface syntax this
+/// function's `type_check_module_decls_new_inner` calls need as input.
+/// Callers supply each module's raw decls directly (e.g. via
+/// `term::module::load_decls`/`load_decls_from_text_with_path`), which
+/// they already had in hand before the normal pipeline consumed and
+/// replaced them.
+///
+/// Modules can be checked in any order: each call only reads `loaded`
+/// (already fully populated, order-independent) for name resolution and
+/// writes its own independent output into `program` — there's no
+/// cross-call ordering dependency the way the real loading pipeline has
+/// via `load_decl_uses_modules`.
+pub fn check_all_modules_capturing_core(
+  modules: &[(ModulePath, Vec<SourceContext<Decl>>)],
+  loaded: &LoadedModules,
+) -> Result<CoreProgram, TypeError> {
+  let mut program = CoreProgram::new();
+  for (path, decls) in modules {
+    type_check_module_decls_new_inner(path, decls.clone(), loaded, Some(&mut program))?;
+  }
+  Ok(program)
 }
 
 #[cfg(test)]

@@ -142,6 +142,24 @@ pub fn is_class_atom(structs: &StructFields, atom: Atom) -> bool {
     .is_some_and(|info| info.kind == StructKind::Class)
 }
 
+/// The inductive `Atom` a `Match`/`if` node's scrutinee resolves to, given
+/// the scrutinee's own (already-known) type — the same
+/// `instantiate_foralls` + `head_atom_of` pair `match_case_field_types`
+/// uses internally, factored out so callers can capture it once per
+/// `Match` node (Phase 0 of
+/// `plans/implementations/core-term-closure-evaluator.md`) instead of
+/// only implicitly, per-case, inside that function. Returns `None` under
+/// the same conditions `match_case_field_types` would fall back to `Hole`
+/// typing for.
+pub(crate) fn resolve_match_inductive_atom(
+  mctx: &mut MetaContext,
+  structs: &StructFields,
+  scrutinee_ty: &CoreTerm,
+) -> Option<Atom> {
+  let forced = instantiate_foralls(mctx, structs, scrutinee_ty);
+  head_atom_of(mctx, &forced)
+}
+
 /// E2: the real field types for `case_name`'s pattern variables, given the
 /// scrutinee's own (already-known) type — substituting the constructor's
 /// declared param atoms with the scrutinee's own concrete type arguments
@@ -727,6 +745,15 @@ fn infer_lit(
     // disagreeing on result type) either way.
     CoreLit::Match { scrutinee, cases } => {
       let scrutinee_ty = infer(mctx, ctx, structs, scrutinee)?;
+      // Phase 0 capture happens in `desugar_struct_literals`'s own
+      // `Match` arm, not here — see that function's doc comment on why:
+      // it's the pass that produces the FINAL term structure (including
+      // dictionary-projection `Match` nodes it injects via
+      // `project_dict_field`), so its traversal order is what actually
+      // needs to line up with a lowering pass's, not `check`/`infer`'s
+      // (which run on the PRE-desugar term and would record resolutions
+      // in the wrong relative order once desugar-injected nodes are
+      // interleaved in).
       let mut common_ty: Option<CoreTerm> = None;
       for case in cases {
         let arity = case.dbgs.len() as u32;
@@ -901,6 +928,8 @@ pub fn check(
 
   if let CoreTerm::Lit(CoreLit::Match { scrutinee, cases }) = term {
     let scrutinee_ty = infer(mctx, ctx, structs, scrutinee)?;
+    // Phase 0 capture happens in `desugar_struct_literals`'s own `Match`
+    // arm, not here — see `infer`'s own `Match` arm for the rationale.
     for case in cases {
       let arity = case.dbgs.len() as u32;
       let (atoms, opened_value) = crate::core_unify::open_n(&case.value, 0, arity);
@@ -1147,6 +1176,14 @@ fn try_resolve_class_method(
   spine_args: &[&CoreTerm],
   expected: Option<&CoreTerm>,
 ) -> Option<CoreTerm> {
+  // Recorded before ANY of this call's own processing -- the position
+  // this call's own captures (both directly-captured non-speculative
+  // args and the redone-speculative-prefix splice below) belong
+  // relative to, regardless of how much a preceding SIBLING call (e.g.
+  // another class-method call earlier in the same `let` chain) already
+  // added to the very same live queue. See `splice_match_resolutions`'s
+  // own doc comment for the bug this fixes.
+  let queue_len_at_entry = mctx.match_resolutions_len();
   let (mut residual, named_metas) = instantiate_foralls_tracked(mctx, method_typ);
   let class_meta = *named_metas.get(&info.class_param_name)?;
   // Peek at the method's final return type (peeling exactly `spine_args.len()`
@@ -1177,31 +1214,35 @@ fn try_resolve_class_method(
     let _ = unify(mctx, &peek, expected);
   }
   let mut arg_tys: Vec<CoreTerm> = Vec::with_capacity(spine_args.len());
-  // Each arg's desugared form is cached here (alongside its `arg_ty` and
-  // whether `class_meta` was STILL unresolved when it was computed) so the
-  // final result-building loop below can often reuse it instead of calling
-  // `desugar_struct_literals` a second time — for a spine arg that is itself
-  // a nested class-method call (the `cons`/`cons`/.../`empty` chain a list
-  // literal `[e1, e2, ..., en]` desugars to), desugaring it is already O(n)
-  // in the remaining list length; doing it unconditionally twice at every
-  // nesting level compounds into O(2^n) overall (confirmed: an n-element
-  // list literal's compile time roughly doubled per extra element, timing
-  // out well before n=20) rather than the intended O(n).
+  let mut arg_ds: Vec<CoreTerm> = Vec::with_capacity(spine_args.len());
+  // Indices of args processed while `class_meta` was still unresolved —
+  // desugared below with capture SUPPRESSED (a dry run, for type
+  // information only; see the loop) and redone for real, in order,
+  // once `class_meta` is as resolved as it'll ever be (right after this
+  // loop). Always a PREFIX of `0..spine_args.len()`: unification only
+  // ever moves a meta from unresolved to resolved, never back, so once
+  // some arg's own `check` pins `class_meta`, every later arg sees it
+  // already resolved — never captured normally.
   //
-  // A blanket "always reuse" cache is UNSOUND, though: for `Default.default
-  // == 0i64` (`BEq.beq Default.default 0i64`), `class_meta` (`BEq`'s `A`) is
-  // still a bare, unresolved meta while `Default.default` (arg 1) is being
-  // desugared — nothing pins it down until `0i64` (arg 2) is checked against
-  // that same meta a moment later. Only THIS second arg's processing gives
-  // `class_meta` a concrete value; re-desugaring arg 1 with that now-known
-  // type is what lets `Default.default` resolve to `Default I64`, not a bare,
-  // unresolved dictionary reference. So an arg only needs redoing if
-  // `class_meta` was still unresolved at the moment IT was desugared — once
-  // `class_meta` is pinned (as it always is up front for a list literal,
-  // from the `expected` type its `[...]` was checked against), every
-  // subsequent arg's desugared form is already final and safe to reuse.
-  let mut arg_ds: Vec<(CoreTerm, bool)> = Vec::with_capacity(spine_args.len());
-  for &arg in spine_args {
+  // Why a dry run at all, rather than just doing every arg for real
+  // once and living with a possibly-stale result: for `Default.default
+  // == 0i64` (`BEq.beq Default.default 0i64`), `class_meta` (`BEq`'s
+  // `A`) is still bare while `Default.default` (arg 1) is desugared —
+  // nothing pins it down until `0i64` (arg 2) is checked a moment
+  // later. Only arg 2's processing gives `class_meta` a concrete value;
+  // re-desugaring arg 1 with that now-known type is what lets
+  // `Default.default` resolve to `Default I64`, not a bare, unresolved
+  // dictionary reference. Suppressing capture during the dry run (via
+  // `without_match_capture`) rather than just letting it capture
+  // normally matters because a dry-run arg can itself be a nested
+  // class-method call (a list literal's own `cons`/`cons`/.../`empty`
+  // chain, or — the concrete bug this fixes — `fn acc x => acc + x`'s
+  // own `HAdd.add`) whose resolution would otherwise land in the queue
+  // at the WRONG point (and, if the redo below re-captured it too, a
+  // second time) — see `speculative`'s own redo-and-splice, right after
+  // this loop, for where the REAL capture happens instead.
+  let mut speculative: Vec<usize> = Vec::new();
+  for (i, &arg) in spine_args.iter().enumerate() {
     let CoreTerm::Pi {
       arg: arg_ty, ret, ..
     } = residual.into_stripped_ctx()
@@ -1222,21 +1263,38 @@ fn try_resolve_class_method(
     // leaving the call site un-desugared (the exact bug behind
     // `BEq.beq [1, 2, 3] [1, 2, 3]` falling through to the evaluator's
     // runtime dispatch fallback instead of the real `List` instance).
-    let arg_d = desugar_struct_literals(
-      mctx,
-      ctx,
-      structs,
-      atom_paths,
-      known_class_methods,
-      known_instances,
-      dict_scope,
-      arg,
-      Some(&arg_ty),
-    );
+    let arg_d = if class_meta_unresolved_before {
+      speculative.push(i);
+      mctx.without_match_capture(|mctx| {
+        desugar_struct_literals(
+          mctx,
+          ctx,
+          structs,
+          atom_paths,
+          known_class_methods,
+          known_instances,
+          dict_scope,
+          arg,
+          Some(&arg_ty),
+        )
+      })
+    } else {
+      desugar_struct_literals(
+        mctx,
+        ctx,
+        structs,
+        atom_paths,
+        known_class_methods,
+        known_instances,
+        dict_scope,
+        arg,
+        Some(&arg_ty),
+      )
+    };
     check(mctx, ctx, structs, &arg_d, &arg_ty).ok()?;
     residual = force(mctx, open_with(&ret, &arg_d)).into_stripped_ctx();
     arg_tys.push(*arg_ty);
-    arg_ds.push((arg_d, class_meta_unresolved_before));
+    arg_ds.push(arg_d);
   }
   if head_atom_of(mctx, &CoreTerm::Meta(class_meta)).is_none()
     && let Some(expected) = expected
@@ -1259,6 +1317,44 @@ fn try_resolve_class_method(
       &CoreTerm::Meta(class_meta),
       &CoreTerm::Free(default_atom),
     );
+  }
+  // Redo every speculatively-desugared (dry-run, capture-suppressed) arg
+  // for real, now that `class_meta` is as resolved as it'll ever be —
+  // capturing into a scratch buffer rather than the live queue directly,
+  // since these captures belong BEFORE this call's own dictionary
+  // projection (captured below, via `project_dict_field`) and before
+  // any later, already-resolved sibling arg's own (already correctly
+  // positioned) captures — appending them to the live queue here, after
+  // the fact, would put them in exactly the wrong place. Spliced at
+  // `queue_len_at_entry`, not the queue's front — a PRECEDING sibling
+  // class-method call (e.g. an earlier `let`-bound call in the same
+  // chain) may already have added its own, correctly-positioned entries
+  // before this call ever started; splicing at 0 would incorrectly shove
+  // this call's own entries ahead of that unrelated, already-settled
+  // work. See `splice_match_resolutions`'s own doc comment.
+  if !speculative.is_empty() {
+    let (redone, buffer) = mctx.capture_match_resolutions_into_buffer(|mctx| {
+      speculative
+        .iter()
+        .map(|&i| {
+          desugar_struct_literals(
+            mctx,
+            ctx,
+            structs,
+            atom_paths,
+            known_class_methods,
+            known_instances,
+            dict_scope,
+            spine_args[i],
+            Some(&arg_tys[i]),
+          )
+        })
+        .collect::<Vec<_>>()
+    });
+    for (&i, arg_d) in speculative.iter().zip(redone) {
+      arg_ds[i] = arg_d;
+    }
+    mctx.splice_match_resolutions(queue_len_at_entry, buffer);
   }
   let forced_class_meta = force(mctx, CoreTerm::Meta(class_meta)).into_stripped_ctx();
   // A class-method reference no longer gets rewritten to a different
@@ -1322,30 +1418,10 @@ fn try_resolve_class_method(
     }
     result
   };
-  for ((&arg, arg_ty), (arg_d, class_meta_unresolved_before)) in
-    spine_args.iter().zip(arg_tys.iter()).zip(arg_ds)
-  {
-    // Reuses each arg's already-desugared form from the loop above (see the
-    // comment on `arg_ds`) UNLESS `class_meta` was still unresolved at the
-    // time — in that case a later sibling arg may since have pinned it down
-    // (the `Default.default == 0i64` case), so this arg needs re-desugaring
-    // now that `arg_ty` (still the very same Pi-arg type as before) resolves
-    // to something concrete via `mctx`.
-    let arg_d = if class_meta_unresolved_before {
-      desugar_struct_literals(
-        mctx,
-        ctx,
-        structs,
-        atom_paths,
-        known_class_methods,
-        known_instances,
-        dict_scope,
-        arg,
-        Some(arg_ty),
-      )
-    } else {
-      arg_d
-    };
+  // Every arg's final, correctly-captured desugared form is already
+  // settled (either captured directly in the main loop, or redone and
+  // spliced in above) — just apply them, in order.
+  for arg_d in arg_ds {
     result = CoreTerm::App {
       fun: Box::new(result),
       arg: Box::new(arg_d),
@@ -1565,10 +1641,19 @@ fn project_dict_field(
   let fields = &structs.structs.get(&class_atom)?.fields;
   let idx = fields.iter().position(|(name, _)| name == method_name)?;
   let bound_index = (fields.len() - 1 - idx) as u32;
+  let case_name = class_path.last().clone();
+  // Phase 0 capture: this Match's "constructor" name is the class's own
+  // name, and the inductive it dispatches on is the class-as-single-
+  // constructor-inductive registered under `class_atom` — both already
+  // in hand here, no scrutinee-type inference needed (unlike an ordinary
+  // `match`/`if`). Captured here rather than in `check`/`infer` since
+  // this function *creates* the Match node — see `desugar_struct_literals`'s
+  // doc comment for why capture lives in this pass, not the earlier one.
+  mctx.record_match_resolution(vec![case_name.clone()], class_atom);
   Some(CoreTerm::Lit(CoreLit::Match {
     scrutinee: Box::new(CoreTerm::Free(dict_atom)),
     cases: vec![CoreMatchCase {
-      name: class_path.last().clone(),
+      name: case_name,
       dbgs: vec![DebugName::Anonymous; fields.len()],
       value: Box::new(CoreTerm::Bound(bound_index)),
     }],
@@ -2046,8 +2131,8 @@ pub fn desugar_struct_literals(
       )),
     }),
 
-    CoreTerm::Lit(CoreLit::Match { scrutinee, cases }) => CoreTerm::Lit(CoreLit::Match {
-      scrutinee: Box::new(desugar_struct_literals(
+    CoreTerm::Lit(CoreLit::Match { scrutinee, cases }) => {
+      let scrutinee_d = desugar_struct_literals(
         mctx,
         ctx,
         structs,
@@ -2057,54 +2142,92 @@ pub fn desugar_struct_literals(
         dict_scope,
         scrutinee,
         None,
-      )),
-      cases: cases
-        .iter()
-        .map(|case| {
-          let arity = case.dbgs.len() as u32;
-          let (atoms, opened_value) = open_n(&case.value, 0, arity);
-          // E2: same real-field-types-instead-of-`Hole` substitution as
-          // `infer`/`check`'s own `Match` arms — this pass re-derives
-          // types independently (see this function's own doc comment on
-          // why: class-method resolution happens HERE, not during the
-          // earlier `check` pass, so class-method calls on a
-          // pattern-bound variable — e.g. a recursive
-          // `Foldable.foldr`/`BEq.beq` self-call on a list's own tail —
-          // need the SAME real typing here too, or the class param can
-          // never be pinned down and the call is left unresolved
-          // (E2's whole point) even though `check` already succeeded.
-          let scrutinee_ty = infer(mctx, ctx, structs, scrutinee).ok();
-          let field_tys = scrutinee_ty
-            .as_ref()
-            .and_then(|ty| match_case_field_types(mctx, structs, ty, &case.name));
-          let mut ctx2 = ctx.clone();
-          for (i, atom) in atoms.iter().enumerate() {
-            let field_ty = field_tys
+      );
+      // Phase 0 capture — this is the pass that produces the FINAL term
+      // structure (it's also what injects dictionary-projection `Match`
+      // nodes elsewhere, via `project_dict_field`), so capturing here
+      // (rather than in `check`/`infer`, which run on the pre-desugar
+      // term) is what keeps traversal order consistent for a later
+      // lowering pass. Recurses into `scrutinee` first (above), matching
+      // `infer`'s own order, before recording this node's own
+      // resolution — a nested match inside the scrutinee pushes its
+      // resolution first, exactly as a single unified left-to-right walk
+      // would.
+      if let Ok(ty) = infer(mctx, ctx, structs, scrutinee)
+        && let Some(atom) = resolve_match_inductive_atom(mctx, structs, &ty)
+      {
+        mctx.record_match_resolution(cases.iter().map(|c| c.name.clone()).collect(), atom);
+        // The resolved inductive atom is captured into `match_resolutions`
+        // above, but nothing guarantees it also appears as a literal
+        // `Free(atom)` node anywhere else in this def's own body — a
+        // `match` scrutinizing a value of some inductive type never
+        // itself mentions that type by name (only bare constructor case
+        // names survive into `CoreMatchCase`, see its own doc comment),
+        // so `atom_paths` (built by walking `Free` nodes elsewhere in the
+        // term) can genuinely end up never containing it, even though
+        // `lower_core_ir.rs`'s `lower_match` needs to resolve exactly
+        // this atom via that same def's own `atom_paths` map. A real
+        // case this bites: `match some_fn args { T.a .. => .., T.b .. =>
+        // .. }` where `T` is never otherwise named in the def (confirmed
+        // via `chain`'s `match step n s { Step.ok .., Step.stop .. }` in
+        // `core/benches/core_eval_bench.rs`'s `PARSER_COMBINATOR_SHAPED`
+        // workload — `chain`'s signature/body never mentions `Step` by
+        // name, so nothing else ever adds it). Insert it directly here,
+        // at the one point this atom is actually resolved.
+        if let Some(path) = mctx.atoms().path_of(atom) {
+          atom_paths.insert(atom, path.clone());
+        }
+      }
+      CoreTerm::Lit(CoreLit::Match {
+        scrutinee: Box::new(scrutinee_d),
+        cases: cases
+          .iter()
+          .map(|case| {
+            let arity = case.dbgs.len() as u32;
+            let (atoms, opened_value) = open_n(&case.value, 0, arity);
+            // E2: same real-field-types-instead-of-`Hole` substitution as
+            // `infer`/`check`'s own `Match` arms — this pass re-derives
+            // types independently (see this function's own doc comment on
+            // why: class-method resolution happens HERE, not during the
+            // earlier `check` pass, so class-method calls on a
+            // pattern-bound variable — e.g. a recursive
+            // `Foldable.foldr`/`BEq.beq` self-call on a list's own tail —
+            // need the SAME real typing here too, or the class param can
+            // never be pinned down and the call is left unresolved
+            // (E2's whole point) even though `check` already succeeded.
+            let scrutinee_ty = infer(mctx, ctx, structs, scrutinee).ok();
+            let field_tys = scrutinee_ty
               .as_ref()
-              .and_then(|f| f.get(atoms.len() - 1 - i))
-              .cloned()
-              .unwrap_or(CoreTerm::Hole);
-            ctx2.insert(*atom, field_ty);
-          }
-          let d = desugar_struct_literals(
-            mctx,
-            &ctx2,
-            structs,
-            atom_paths,
-            known_class_methods,
-            known_instances,
-            dict_scope,
-            &opened_value,
-            expected,
-          );
-          CoreMatchCase {
-            name: case.name.clone(),
-            dbgs: case.dbgs.clone(),
-            value: Box::new(close_n(&d, 0, &atoms)),
-          }
-        })
-        .collect(),
-    }),
+              .and_then(|ty| match_case_field_types(mctx, structs, ty, &case.name));
+            let mut ctx2 = ctx.clone();
+            for (i, atom) in atoms.iter().enumerate() {
+              let field_ty = field_tys
+                .as_ref()
+                .and_then(|f| f.get(atoms.len() - 1 - i))
+                .cloned()
+                .unwrap_or(CoreTerm::Hole);
+              ctx2.insert(*atom, field_ty);
+            }
+            let d = desugar_struct_literals(
+              mctx,
+              &ctx2,
+              structs,
+              atom_paths,
+              known_class_methods,
+              known_instances,
+              dict_scope,
+              &opened_value,
+              expected,
+            );
+            CoreMatchCase {
+              name: case.name.clone(),
+              dbgs: case.dbgs.clone(),
+              value: Box::new(close_n(&d, 0, &atoms)),
+            }
+          })
+          .collect(),
+      })
+    }
 
     CoreTerm::Lit(CoreLit::StructLit { fields, type_name }) => {
       let atom = type_name.or_else(|| {

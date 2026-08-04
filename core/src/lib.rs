@@ -10,10 +10,6 @@ use std::time::Instant;
 use crate::diag::render_diagnostics;
 use crate::eval::r#type::type_check;
 use crate::eval::{EvalOptions, eval, eval_test};
-#[cfg(feature = "kernel")]
-use crate::eval_term::EvalTerm;
-#[cfg(feature = "kernel")]
-use crate::lower::LowerContext;
 #[cfg(feature = "repl")]
 use crate::parser::{ReplInput, repl_parser};
 use crate::term::Decl;
@@ -34,13 +30,18 @@ use crate::term::{app, id};
 
 pub mod core_check;
 pub mod core_check_module;
+pub mod core_eval;
+pub mod core_ir;
+pub mod core_native;
+pub mod core_parity;
+pub mod core_program;
 pub mod core_term;
 pub mod core_unify;
+pub mod core_value;
 pub mod diag;
 pub mod eval;
-pub mod eval_term;
-pub mod lower;
 pub mod lower_core;
+pub mod lower_core_ir;
 pub mod parser;
 pub mod raise_core;
 pub mod runtime;
@@ -180,14 +181,47 @@ pub fn load_module(
   Ok(loaded)
 }
 
-#[cfg(feature = "kernel")]
-/// Evaluate a type-checked Term through the EvalTerm kernel pipeline.
-/// Returns the resulting EvalTerm (no conversion back to Term yet).
-pub fn eval_kernel(term: Term, scope: &crate::term::module::Scope) -> Result<EvalTerm, String> {
-  let mut ctx = LowerContext::new(scope);
-  let lowered = ctx.lower(&term).map_err(|e| format!("lower: {e}"))?;
-  let env = ctx.finish(scope).map_err(|e| format!("env: {e}"))?;
-  crate::eval_term::eval_entry(&lowered, &env).map_err(|e| format!("eval: {e}"))
+/// Evaluate a source module's `main` def through the `CoreTerm`-closure
+/// evaluator (`core_check_module::check_all_modules_capturing_core`
+/// (Phase 0) -> `lower_core_ir::lower_program` (Phase 2) ->
+/// `core_eval::force_global` (Phases 3-5)).
+///
+/// Unlike the tree-walker's `eval()` (which walks an already-checked
+/// `Term` produced by the OLD checker path against a `Scope`), this
+/// rebuilds a whole-program `CoreProgram` from scratch every call:
+/// `check_all_modules_capturing_core` needs every module's raw,
+/// unchecked `Decl`s (see its own doc comment) run back through the NEW
+/// capturing checker — including the `init` package
+/// itself, since `default_modules()`'s own already-checked copy of it
+/// (used here purely for name/scope resolution) never populates a
+/// `CoreProgram` on its own.
+pub fn eval_core_program(path: &ModulePath, source: &str) -> Result<core_value::Value, String> {
+  let loaded = default_modules().map_err(|e| format!("{e}"))?;
+  let decls = crate::term::module::load_decls_from_text_with_path(source, &Default::default())
+    .map_err(|e| format!("parse {path}: {e}"))?;
+
+  let mut modules = crate::term::module::init_package_sources()
+    .map_err(|e| format!("{e}"))?
+    .into_iter()
+    .map(|(p, text)| {
+      crate::term::module::load_decls_from_text_with_path(&text, &Default::default())
+        .map(|d| (p.clone(), d))
+        .map_err(|e| format!("parse {p}: {e}"))
+    })
+    .collect::<Result<Vec<_>, String>>()?;
+  modules.push((path.clone(), decls));
+
+  let program = core_check_module::check_all_modules_capturing_core(&modules, &loaded)
+    .map_err(|e| format!("check: {e}"))?;
+  let lowered = lower_core_ir::lower_program(&program).map_err(|e| format!("lower: {e:?}"))?;
+  let main_idx = lowered
+    .index_of(&mpt("main"))
+    .ok_or_else(|| "main not found".to_string())?;
+  let natives = core_value::NativeTable::from_lowered(&lowered);
+  let globals = core_value::GlobalTable::new(lowered.globals);
+  let mut cache = core_value::GlobalCache::new(globals.len());
+  core_eval::force_global(main_idx, &globals, &natives, &mut cache)
+    .map_err(|e| format!("eval: {e}"))
 }
 
 pub fn run(
@@ -252,25 +286,12 @@ pub fn run(
     other => other.clone(),
   };
   println!("Eval type {typ}");
-  #[cfg(feature = "kernel")]
-  {
-    let kernel_result = eval_kernel(input_term.clone(), &global.scope())
-      .map_err(|e| format!("kernel: {e}"))
-      .inspect_err(|e| eprintln!("{e}"))?;
-    println!("Kernel result {kernel_result}");
-    if options.debug {
-      eprintln!("Note: kernel evaluator used (feature \"kernel\" enabled)");
-    }
-  }
-  #[cfg(not(feature = "kernel"))]
-  {
-    let term = eval(input_term, &global.scope(), &options)
-      .map_err(|e| format!("{e}"))
-      .inspect_err(|e| eprintln!("{e}"))?;
+  let term = eval(input_term, &global.scope(), &options)
+    .map_err(|e| format!("{e}"))
+    .inspect_err(|e| eprintln!("{e}"))?;
 
-    if options.debug {
-      println!("Eval result {term}");
-    }
+  if options.debug {
+    println!("Eval result {term}");
   }
   Ok(())
 }
@@ -1302,5 +1323,33 @@ def test_direct_generic_call : Bool :=
       "Direct (non-piped) generic call via an unannotated lambda should pass: {:?}",
       result
     );
+  }
+
+  /// `eval_core_program` (Phase 6 of
+  /// `plans/implementations/core-term-closure-evaluator.md`) end-to-end,
+  /// via the public API rather than hand-assembling the pipeline (see
+  /// `core_eval_native_integration_test.rs`'s own `run()` helper, which
+  /// this mirrors internally).
+  #[test]
+  fn eval_core_program_evaluates_real_arithmetic_end_to_end() {
+    let source = r#"
+use init
+
+@[terminating]
+def fib (n : I64) : I64 :=
+    if n == 0
+    then 0
+    else if n == 1
+    then 1
+    else (fib (n - 1)) + (fib (n - 2))
+
+def main : I64 := fib 10
+"#;
+    let result = eval_core_program(&ModulePath::top("'eval_core_program_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, _)) => assert_eq!(n, 55),
+      other => panic!("expected an int literal, got {other:?}"),
+    }
   }
 }

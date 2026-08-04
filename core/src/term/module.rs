@@ -2087,67 +2087,72 @@ fn stdlib_dir() -> std::path::PathBuf {
     .join("init")
 }
 
-/// Load a module from a file on disk (non-embed path).
-#[cfg(not(feature = "embed-stdlib"))]
-fn load_module_file(
-  file_path: std::path::PathBuf,
-  module_path: &ModulePath,
-  loaded: &mut LoadedModules,
-) -> Result<(), LoadingError> {
-  let text = std::fs::read_to_string(&file_path)
-    .map_err(|e| LoadingError::Generic(format!("failed to read {}: {}", file_path.display(), e)))?;
-  load_module_from_text(&text, module_path, loaded)
+/// `(module path, source text)` pairs for the `init` package, in
+/// dependency order (`prelude`/`id`/`io`/`number` have no deps; `math`
+/// depends on `number`; `string` depends on `math`; `init` depends on
+/// `io`/`number`/`math`/`string`; `process` is last) — the same order
+/// `init_module` below loads them in, factored out so a caller that needs
+/// the raw `Decl`s (not just an already-checked `Module`) can get them
+/// without hand-duplicating this path/order list. Respects `embed-stdlib`
+/// exactly like `init_module` does: compiled-in text when that feature is
+/// on, read from disk at runtime (via `stdlib_dir()`) otherwise.
+pub fn init_package_sources() -> Result<Vec<(ModulePath, String)>, LoadingError> {
+  let names = [
+    "'prelude", "id", "io", "number", "math", "string", "init", "process",
+  ];
+
+  #[cfg(feature = "embed-stdlib")]
+  let texts: [&str; 8] = [
+    include_str!("../../../init/prelude.mo"),
+    include_str!("../../../init/id.mo"),
+    include_str!("../../../init/io.mo"),
+    include_str!("../../../init/number.mo"),
+    include_str!("../../../init/math.mo"),
+    include_str!("../../../init/string.mo"),
+    include_str!("../../../init/init.mo"),
+    include_str!("../../../init/process.mo"),
+  ];
+  #[cfg(feature = "embed-stdlib")]
+  let sources = names
+    .into_iter()
+    .zip(texts)
+    .map(|(name, text)| (ModulePath::top(name), text.to_string()))
+    .collect();
+
+  #[cfg(not(feature = "embed-stdlib"))]
+  let sources = {
+    let dir = stdlib_dir();
+    let files = [
+      "prelude.mo",
+      "id.mo",
+      "io.mo",
+      "number.mo",
+      "math.mo",
+      "string.mo",
+      "init.mo",
+      "process.mo",
+    ];
+    let mut sources = Vec::with_capacity(names.len());
+    for (name, file) in names.into_iter().zip(files) {
+      let text = std::fs::read_to_string(dir.join(file)).map_err(|e| {
+        LoadingError::Generic(format!(
+          "failed to read {}: {}",
+          dir.join(file).display(),
+          e
+        ))
+      })?;
+      sources.push((ModulePath::top(name), text));
+    }
+    sources
+  };
+
+  Ok(sources)
 }
 
 pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingError> {
-  let prelude_path = ModulePath::top("'prelude");
-  let id_path = ModulePath::top("id");
-  let io_path = ModulePath::top("io");
-  let init_path = ModulePath::top("init");
-  let math_path = ModulePath::top("math");
-  let string_path = ModulePath::top("string");
-  let number_path = ModulePath::top("number");
-  let process_path = ModulePath::top("process");
-
-  #[cfg(feature = "embed-stdlib")]
-  {
-    let prelude_text = include_str!("../../../init/prelude.mo");
-    let id_text = include_str!("../../../init/id.mo");
-    let io_text = include_str!("../../../init/io.mo");
-    let number_text = include_str!("../../../init/number.mo");
-    let math_text = include_str!("../../../init/math.mo");
-    let string_text = include_str!("../../../init/string.mo");
-    let init_text = include_str!("../../../init/init.mo");
-    let process_text = include_str!("../../../init/process.mo");
-
-    load_module_from_text(prelude_text, &prelude_path, &mut loaded)?;
-    load_module_from_text(id_text, &id_path, &mut loaded)?;
-    load_module_from_text(io_text, &io_path, &mut loaded)?;
-    load_module_from_text(number_text, &number_path, &mut loaded)?;
-    load_module_from_text(math_text, &math_path, &mut loaded)?;
-    load_module_from_text(string_text, &string_path, &mut loaded)?;
-    load_module_from_text(init_text, &init_path, &mut loaded)?;
-    load_module_from_text(process_text, &process_path, &mut loaded)?;
+  for (path, text) in init_package_sources()? {
+    load_module_from_text(&text, &path, &mut loaded)?;
   }
-
-  #[cfg(not(feature = "embed-stdlib"))]
-  {
-    let dir = stdlib_dir();
-    // Load in dependency order:
-    //   prelude, id, io, number: no deps
-    //   math: depends on number
-    //   string: depends on math
-    //   init: depends on io, number, math, string
-    load_module_file(dir.join("prelude.mo"), &prelude_path, &mut loaded)?;
-    load_module_file(dir.join("id.mo"), &id_path, &mut loaded)?;
-    load_module_file(dir.join("io.mo"), &io_path, &mut loaded)?;
-    load_module_file(dir.join("number.mo"), &number_path, &mut loaded)?;
-    load_module_file(dir.join("math.mo"), &math_path, &mut loaded)?;
-    load_module_file(dir.join("string.mo"), &string_path, &mut loaded)?;
-    load_module_file(dir.join("init.mo"), &init_path, &mut loaded)?;
-    load_module_file(dir.join("process.mo"), &process_path, &mut loaded)?;
-  }
-
   Ok(loaded)
 }
 

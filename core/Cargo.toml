@@ -19,7 +19,12 @@ rustyline = { version = "17.0.2", optional = true }
 [features]
 default = []
 embed-stdlib = []
-kernel = []
+# Marker feature gating `core_eval_bench` only -- the `CoreTerm`-closure
+# evaluator (`core_check_module`, `lower_core_ir`, `core_value`,
+# `core_eval`, `core_native`) is NOT itself feature-gated; it compiles
+# and is tested unconditionally. This feature exists purely so `cargo
+# bench` doesn't run the (expensive) new-evaluator benchmark by default.
+core-eval = []
 # Route module-level type checking through the OLD (name-keyed unifier)
 # checker instead of the new De-Bruijn/MetaId-based one, which is the
 # default. Exists purely to keep the old checker reachable as a working
@@ -32,3 +37,13 @@ cli = ["dep:clap"]
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "eval_bench"
+harness = false
+
+[[bench]]
+name = "core_eval_bench"
+harness = false
+required-features = ["core-eval"]
