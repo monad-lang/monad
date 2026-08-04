@@ -352,25 +352,21 @@ def ctx_of_params_loop (params : List Param) (acc : List Identifier) : List Iden
 // clean; `brace_close` skips leading whitespace before matching `}`, since
 // the item/separator parsers don't skip trailing whitespace themselves.
 
-@[partial]
 def brace_open (input : String) : ParseResult String :=
 	match tag "{" input {
 		success rem out => success (skip_spaces rem) out,
 		fail e => fail e
 	}
 
-@[partial]
 def brace_close (input : String) : ParseResult String :=
 	tag "}" (skip_spaces input)
 
-@[partial]
 def brace_sep (input : String) : ParseResult String :=
 	match tag "," (skip_spaces input) {
 		success rem out => success (skip_spaces rem) out,
 		fail e => fail e
 	}
 
-@[partial]
 def as_kw (input : String) : ParseResult String :=
 	tag "as" (skip_spaces input)
 
@@ -388,14 +384,12 @@ def use_brace_item (input : String) : ParseResult UseItem :=
 	alt_fold [use_brace_item_glob, use_brace_item_sub_rename, use_brace_item_sub,
 	          use_brace_item_rename, use_brace_item_name] input
 
-@[partial]
 def use_brace_item_glob (input : String) : ParseResult UseItem :=
 	match tag "*" input {
 		success rem _ => success rem UseItem.use_glob,
 		fail e => fail e
 	}
 
-@[partial]
 def use_brace_item_name (input : String) : ParseResult UseItem :=
 	match identifier input {
 		success rem name => success rem (UseItem.use_name (Identifier.id name)),
@@ -409,7 +403,6 @@ def use_brace_item_rename (input : String) : ParseResult UseItem :=
 		fail e => fail e
 	}
 
-@[partial]
 def use_brace_item_rename_alias (name : String) (input : String) : ParseResult UseItem :=
 	match as_kw (skip_spaces input) {
 		success rem _ => match identifier (skip_spaces rem) {
@@ -461,13 +454,11 @@ def use_brace_item_sub_rename_items (name : String) (alias : String) (input : St
 def use_brace_items (input : String) : ParseResult (List UseItem) :=
 	delimited_by brace_open (separated_by brace_sep use_brace_item) brace_close input
 
-@[partial]
 def use_brace_filter (input : String) : ParseResult UseFilter :=
 	map_parse UseFilter.use_items use_brace_items input
 
 /// Optional `{ items }` filter after `use Module`. Absent braces yield
 /// `UseFilter.use_bare` (deprecated bare use) without failing the parse.
-@[partial]
 def use_opt_filter (input : String) : ParseResult UseFilter :=
 	let after_ws : String := skip_spaces input in
 	match use_brace_filter after_ws {
@@ -485,7 +476,6 @@ def use_parser (input : String) : ParseResult Decl :=
 		fail e => fail e
 	}
 
-@[partial]
 def use_after_path (path : ModulePath) (input : String) : ParseResult Decl :=
 	match use_opt_filter input {
 		success rem filter => success rem (Decl.use_d path filter),
@@ -499,15 +489,12 @@ def use_after_path (path : ModulePath) (input : String) : ParseResult Decl :=
 // trailing `in <decl>` (one of def/class/instance/struct/type) makes the
 // open apply only to that one wrapped declaration.
 
-@[partial]
 def open_names (input : String) : ParseResult (List Identifier) :=
 	map_parse (List.map Identifier.id) (separated_by brace_sep identifier) input
 
-@[partial]
 def open_filter_only (input : String) : ParseResult OpenFilter :=
 	map_parse OpenFilter.open_only (delimited_by brace_open open_names brace_close) input
 
-@[partial]
 def open_opt_filter (input : String) : ParseResult OpenFilter :=
 	let after_ws : String := skip_spaces input in
 	match open_filter_only after_ws {
@@ -515,11 +502,9 @@ def open_opt_filter (input : String) : ParseResult OpenFilter :=
 		fail e => success after_ws OpenFilter.open_all
 	}
 
-@[partial]
 def in_kw (input : String) : ParseResult String :=
 	tag "in" (skip_spaces input)
 
-@[partial]
 def scoped_open_inner_decl (input : String) : ParseResult Decl :=
 	alt_fold [def_parser, class_parser, instance_parser, struct_parser, type_parser] (skip_spaces input)
 
@@ -547,7 +532,6 @@ def open_after_filter (path : ModulePath) (filter : OpenFilter) (input : String)
 		fail e => fail e
 	}
 
-@[partial]
 def open_build (path : ModulePath) (filter : OpenFilter) (maybe_decl : Option Decl) : Decl :=
 	match maybe_decl {
 		Option.some decl => Decl.scoped_open_d path filter decl,
@@ -560,57 +544,48 @@ def open_build (path : ModulePath) (filter : OpenFilter) (maybe_decl : Option De
 // discarded — the resulting Decl.infix_d never records it), so it's
 // expressed with `opt` rather than a hand-rolled fail-branch fallback.
 
-@[partial]
 def infix_parser (input : String) : ParseResult Decl :=
 	match tag "infix" input {
 		success rem _ => infix_after_kw rem,
 		fail e => fail e
 	}
 
-@[partial]
 def infix_precedence_clause (input : String) : ParseResult I64 :=
 	preceded_by infix_colon_tag number input
 
-@[partial]
 def infix_colon_tag (input : String) : ParseResult String :=
 	tag ":" (skip_spaces input)
 
-@[partial]
 def infix_after_kw (input : String) : ParseResult Decl :=
 	match opt infix_precedence_clause input {
 		success rem _ => infix_paren rem,
 		fail e => fail e
 	}
 
-@[partial]
 def infix_paren (input : String) : ParseResult Decl :=
 	match tag "(" (skip_spaces input) {
 		success rem _ => infix_op rem,
 		fail e => fail e
 	}
 
-@[partial]
 def infix_op (input : String) : ParseResult Decl :=
 	match operator_parse (skip_spaces input) {
 		success rem op => infix_close rem op,
 		fail e => fail e
 	}
 
-@[partial]
 def infix_close (input : String) (op : String) : ParseResult Decl :=
 	match tag ")" (skip_spaces input) {
 		success rem _ => infix_assign rem op,
 		fail e => fail e
 	}
 
-@[partial]
 def infix_assign (input : String) (op : String) : ParseResult Decl :=
 	match tag ":=" (skip_spaces input) {
 		success rem _ => infix_path rem op,
 		fail e => fail e
 	}
 
-@[partial]
 def infix_path (input : String) (op : String) : ParseResult Decl :=
 	match module_path_parser (skip_spaces input) {
 		success rem path => success rem (Decl.infix_d (Operator.operator op) path),
