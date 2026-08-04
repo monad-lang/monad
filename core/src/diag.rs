@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use crate::term::{ModulePath, SourceRange};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Severity {
   Error,
   Warning,
@@ -22,18 +23,18 @@ impl Severity {
   }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct SubDiagnostic {
   pub severity: Severity,
   pub message: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Suggestion {
   pub message: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Diagnostic {
   pub severity: Severity,
   pub message: String,

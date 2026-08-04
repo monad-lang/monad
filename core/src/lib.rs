@@ -768,6 +768,111 @@ pub fn run_tests(
   }
 }
 
+/// One target file's check result — every parse/type error found in it,
+/// with real positions. Kept free of any JSON/LSP-shape opinions (field
+/// names, 0- vs 1-indexing, `uri` vs `path`) on purpose: that's a wire-
+/// format concern for whichever CLI/LSP layer serializes this, not
+/// something `core` should know about.
+#[derive(Debug, Clone)]
+pub struct FileCheckResult {
+  pub path: PathBuf,
+  pub diagnostics: Vec<crate::diag::Diagnostic>,
+}
+
+/// Parse and type-check every `.mo` file under `inputs` (directories are
+/// expanded recursively via `collect_mo_files`, same as `run_tests`), but
+/// — unlike `run_tests` — never evaluates `@[test]` defs or anything else;
+/// this only ever runs the checker, so it's usable as a fast, side-
+/// effect-free "does this compile" pass. Reuses `load_module_files` (the
+/// same real loader `Run`/`Test` go through) file by file rather than
+/// reimplementing loading/checking, so `check`'s notion of "does this
+/// file type-check" can never drift from what actually running it means.
+///
+/// A file that fails to load contributes its `TypeError` (or, for a
+/// generic loader failure — e.g. a missing `use`d module — a single
+/// synthetic `Diagnostic` with no location) as that file's diagnostics;
+/// `master_loaded` only advances past files that loaded successfully, so
+/// one broken file can't prevent the rest from being checked.
+pub fn check_files(
+  inputs: Vec<PathBuf>,
+  extra_mote_paths: Vec<PathBuf>,
+) -> Result<Vec<FileCheckResult>, String> {
+  let inputs = if inputs.is_empty() {
+    vec![PathBuf::from(".")]
+  } else {
+    inputs
+  };
+
+  let mut files: Vec<PathBuf> = Vec::new();
+  for input in &inputs {
+    if input.is_dir() {
+      files.extend(collect_mo_files(input));
+    } else {
+      files.push(input.clone());
+    }
+  }
+  files.sort();
+  files.dedup();
+
+  let mut master_loaded = default_modules().map_err(|e| format!("{e}"))?;
+  let search_paths = build_default_search_paths(&inputs[0], &extra_mote_paths);
+  master_loaded.set_search_paths(search_paths);
+
+  // Skip files already satisfied by the embedded default modules — same
+  // filter `run_tests` applies, for the same reason: a bare re-check of
+  // e.g. `prelude` would just report "already loaded", not a real result.
+  let files: Vec<PathBuf> = files
+    .into_iter()
+    .filter(|file| {
+      let path: ModulePath = file.clone().into();
+      let is_default = master_loaded.get_module(&path).is_some() || {
+        let last = path.last();
+        master_loaded
+          .get_module(&ModulePath::single(last.clone()))
+          .is_some()
+      };
+      !is_default
+    })
+    .collect();
+
+  let mut results = Vec::with_capacity(files.len());
+  for file in &files {
+    let path: ModulePath = file.clone().into();
+    let diagnostics = match fs::read_to_string(file) {
+      Err(e) => vec![crate::diag::Diagnostic {
+        message: format!("{e}"),
+        path: Some(file.clone()),
+        ..Default::default()
+      }],
+      Ok(text) => {
+        let mut loaded = master_loaded.clone();
+        match crate::term::module::load_module_from_text_typed(&text, &path, &mut loaded) {
+          Ok(()) => {
+            master_loaded = loaded;
+            Vec::new()
+          }
+          Err(crate::term::module::LoadingError::Type(type_error)) => {
+            crate::eval::r#type::type_error_as_diagnostics(&type_error, Some(file))
+          }
+          Err(crate::term::module::LoadingError::Generic(message)) => {
+            vec![crate::diag::Diagnostic {
+              message,
+              path: Some(file.clone()),
+              ..Default::default()
+            }]
+          }
+        }
+      }
+    };
+    results.push(FileCheckResult {
+      path: file.clone(),
+      diagnostics,
+    });
+  }
+
+  Ok(results)
+}
+
 #[cfg(test)]
 mod test {
   use super::*;

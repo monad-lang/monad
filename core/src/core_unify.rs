@@ -77,6 +77,10 @@ impl MetaContext {
     &mut self.atoms
   }
 
+  pub fn atoms(&self) -> &AtomTable {
+    &self.atoms
+  }
+
   /// Allocate a fresh, unsolved metavariable of the given type.
   pub fn fresh_meta(&mut self, typ: CoreTerm) -> MetaId {
     let id = MetaId::fresh();

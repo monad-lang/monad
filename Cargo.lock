@@ -270,6 +270,8 @@ dependencies = [
  "clap",
  "monad-core",
  "rustyline",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -284,6 +286,7 @@ dependencies = [
  "pretty_assertions",
  "rustyline",
  "serde",
+ "serde_json",
  "toml",
 ]
 

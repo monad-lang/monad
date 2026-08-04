@@ -2003,6 +2003,49 @@ pub fn load_module_from_text(
   Ok(())
 }
 
+/// Like `load_module_from_text`, but for a caller (`check_files`) that
+/// wants the STRUCTURED `TypeError` a type-check failure produced —
+/// `LoadingError::Type(e)`, not `load_module_from_text`'s own
+/// `LoadingError::Generic(rendered_string)` — so it can turn each
+/// individual error into its own positioned `Diagnostic` instead of one
+/// opaque pre-rendered text blob. A separate function rather than a
+/// parameter on `load_module_from_text` itself: that function's callers
+/// (`Run`/`Test`/`Repl`, via `load_module`/`load_module_files`) all just
+/// `Display` the error as one human-readable string today, and changing
+/// its own error branch would flow through to `LoadingError::Type`'s
+/// plainer `Display` (no source-context box) for those, an unrelated UX
+/// regression this function avoids entirely by never touching the
+/// original. Everything before the type-check step is intentionally
+/// identical to `load_module_from_text` (parsing/scope logic is shared,
+/// unchanged, and not what this function exists to affect).
+pub fn load_module_from_text_typed(
+  text: &str,
+  path: &ModulePath,
+  loaded: &mut LoadedModules,
+) -> Result<(), LoadingError> {
+  let file_path = path.to_file_path();
+  let module_context = ModuleContext::new(path.clone(), Some(file_path));
+  let init_decls = load_decls_from_text_with_path(text, &module_context)
+    .map_err(|e| format!("parse error for {}: {e}", path))?;
+  let mut in_progress = crate::empty_set();
+  *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
+  let init_decls = filter_cfg_test_decls(init_decls, loaded.config.test_mode);
+  #[cfg(feature = "legacy-checker")]
+  let init_decls_result = type_check_module_decls(&path, init_decls, loaded);
+  #[cfg(not(feature = "legacy-checker"))]
+  let init_decls_result =
+    crate::core_check_module::type_check_module_decls_new(&path, init_decls, loaded);
+  let init_decls = init_decls_result.map_err(LoadingError::Type)?;
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls: init_decls,
+      module_doc: None,
+    },
+  ));
+  Ok(())
+}
+
 /// Returns the path to the `init/` stdlib directory when loading from filesystem.
 #[cfg(not(feature = "embed-stdlib"))]
 fn stdlib_dir() -> std::path::PathBuf {

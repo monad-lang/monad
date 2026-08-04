@@ -17,7 +17,7 @@ use std::{
   sync::Arc,
 };
 
-#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord, Default, serde::Serialize)]
 pub struct Location {
   /// Column offset relative to the start of a line (1-indexed).
   pub column: usize,
@@ -36,7 +36,7 @@ impl<X> From<Info<X>> for Location {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord, Default, serde::Serialize)]
 pub struct SourceRange {
   pub start: Location,
   pub end: Location,
@@ -53,7 +53,7 @@ impl SourceRange {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct Identifier(String);
 
 /// Documentation for a declaration (function, type, class, etc.)
@@ -2015,7 +2015,7 @@ pub fn def_with_native(
   Ok(def(name, vec![], typ, term, attributes))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default, serde::Serialize)]
 pub struct ModulePath(Vec<Identifier>);
 
 impl From<PathBuf> for ModulePath {

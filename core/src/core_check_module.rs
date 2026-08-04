@@ -112,8 +112,8 @@ use crate::core_check::{
   KnownInstances, StructFields, StructInfo, StructKind, TyCtx, check, desugar_struct_literals,
   head_atom_of, infer, is_class_atom,
 };
-use crate::core_term::{Atom, AtomTable, CoreTerm, DebugName, close, open_with};
-use crate::core_unify::{MetaContext, generalize, zonk};
+use crate::core_term::{Atom, AtomTable, CoreLit, CoreTerm, DebugName, close, open_with};
+use crate::core_unify::{MetaContext, UnifyError, generalize, zonk};
 use crate::eval::macro_expand::expand_macros;
 use crate::eval::termination::check_termination_all;
 use crate::eval::r#type::{TypeError, check_strict_positivity, elaborate_decls};
@@ -1397,8 +1397,161 @@ fn lower_error_to_type_error(e: LowerError) -> TypeError {
   TypeError::Generic(format!("{e:?}"), SourceRange::default())
 }
 
-fn infer_error_to_type_error(e: InferError) -> TypeError {
-  TypeError::Generic(format!("{e:?}"), SourceRange::default())
+/// Best-effort `Atom` -> readable name for error messages. Deliberately
+/// NOT `raise_core` (which panics on a `Free` atom missing from its
+/// `atom_paths` table) — an atom reaching here is, by construction, one
+/// `infer`/`check` just failed on, so it may never have been registered
+/// anywhere a full raiser would expect. Falls back to a placeholder
+/// rather than ever panicking on an error-reporting path.
+fn render_atom(atom: Atom, atoms: &AtomTable) -> String {
+  match atoms.path_of(atom) {
+    Some(path) => path.to_string(),
+    None => "<unknown>".to_string(),
+  }
+}
+
+/// Best-effort `CoreTerm` -> readable string for error messages, mirroring
+/// `raise_core`'s traversal but never panicking: an unresolved `Meta`
+/// prints as `_` (same convention as an unannotated hole) instead of
+/// requiring the term to have already been zonked, and a `Free` atom
+/// missing from `atoms` falls back to `render_atom`'s placeholder instead
+/// of panicking. `bound_names` mirrors `raise_core::Raiser`'s own binder
+/// stack (innermost last, `Bound(0)` = last-pushed).
+fn render_core_term(term: &CoreTerm, atoms: &AtomTable, bound_names: &mut Vec<String>) -> String {
+  match term {
+    CoreTerm::Bound(i) => bound_names
+      .len()
+      .checked_sub(1 + *i as usize)
+      .and_then(|idx| bound_names.get(idx))
+      .cloned()
+      .unwrap_or_else(|| "_".to_string()),
+    CoreTerm::Free(atom) => render_atom(*atom, atoms),
+    CoreTerm::Meta(_) => "_".to_string(),
+    CoreTerm::Forall { dbg, typ, body } => {
+      let name = dbg.as_str().to_string();
+      let typ_s = render_core_term(typ, atoms, bound_names);
+      bound_names.push(name.clone());
+      let body_s = render_core_term(body, atoms, bound_names);
+      bound_names.pop();
+      format!("forall ({name} : {typ_s}), {body_s}")
+    }
+    CoreTerm::Pi { dbg, arg, ret, .. } => {
+      let name = dbg.as_str().to_string();
+      let arg_s = render_core_term(arg, atoms, bound_names);
+      bound_names.push(name);
+      let ret_s = render_core_term(ret, atoms, bound_names);
+      bound_names.pop();
+      format!("{arg_s} -> {ret_s}")
+    }
+    CoreTerm::Lam {
+      dbg,
+      param_typ,
+      body,
+    } => {
+      let name = dbg.as_str().to_string();
+      let typ_s = render_core_term(param_typ, atoms, bound_names);
+      bound_names.push(name.clone());
+      let body_s = render_core_term(body, atoms, bound_names);
+      bound_names.pop();
+      format!("fn ({name} : {typ_s}) => {body_s}")
+    }
+    CoreTerm::App { fun, arg } => {
+      format!(
+        "({} {})",
+        render_core_term(fun, atoms, bound_names),
+        render_core_term(arg, atoms, bound_names)
+      )
+    }
+    CoreTerm::Sort { level } => {
+      if *level == 0 {
+        "Type".to_string()
+      } else {
+        format!("Type{level}")
+      }
+    }
+    CoreTerm::Hole => "_".to_string(),
+    CoreTerm::Lit(lit) => render_core_lit(lit, atoms, bound_names),
+    CoreTerm::Con(c) => c.typ_name.to_string(),
+    CoreTerm::Ntv(n) => n.native_name.to_string(),
+  }
+}
+
+fn render_core_lit(lit: &CoreLit, atoms: &AtomTable, bound_names: &mut Vec<String>) -> String {
+  match lit {
+    CoreLit::Str { value } => format!("{value:?}"),
+    CoreLit::Char { value } => format!("{value:?}"),
+    CoreLit::Num { value, suffix } => format!("{value}{suffix:?}"),
+    CoreLit::Float { value, suffix } => format!("{}{suffix:?}", value.0),
+    CoreLit::Match { scrutinee, .. } => {
+      format!(
+        "match {} {{ .. }}",
+        render_core_term(scrutinee, atoms, bound_names)
+      )
+    }
+    CoreLit::If { cond, .. } => {
+      format!(
+        "if {} then .. else ..",
+        render_core_term(cond, atoms, bound_names)
+      )
+    }
+    CoreLit::StructLit { .. } => "{ .. }".to_string(),
+    CoreLit::StructUpdate { base, .. } => {
+      format!(
+        "{} with {{ .. }}",
+        render_core_term(base, atoms, bound_names)
+      )
+    }
+  }
+}
+
+fn render_unify_error(e: &UnifyError, atoms: &AtomTable) -> String {
+  match e {
+    // `left`/`right` are just "the two sides `unify` was called with", not
+    // a defined expected/actual pair (see `core_unify.rs`'s single
+    // `mismatch(left, right)` call site) — phrase neutrally rather than
+    // asserting a direction the type doesn't actually guarantee.
+    UnifyError::Mismatch { left, right } => format!(
+      "type mismatch: `{}` vs. `{}`",
+      render_core_term(left, atoms, &mut Vec::new()),
+      render_core_term(right, atoms, &mut Vec::new()),
+    ),
+    UnifyError::OccursCheck { term, .. } => format!(
+      "infinite type: `{}` occurs in itself",
+      render_core_term(term, atoms, &mut Vec::new()),
+    ),
+    UnifyError::UnsupportedPattern { left, right } => format!(
+      "unsupported higher-order unification between `{}` and `{}`",
+      render_core_term(left, atoms, &mut Vec::new()),
+      render_core_term(right, atoms, &mut Vec::new()),
+    ),
+  }
+}
+
+fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
+  let message = match &e {
+    InferError::Unify(u) => render_unify_error(u, atoms),
+    InferError::UnboundVariable(atom) => {
+      format!("unbound variable `{}`", render_atom(*atom, atoms))
+    }
+    InferError::UnknownMeta(_) => {
+      "internal error: reference to an unknown metavariable".to_string()
+    }
+    InferError::UnexpectedBound(_) => {
+      "internal error: unexpected bound variable in inference".to_string()
+    }
+    InferError::CannotInferHole => {
+      "cannot infer the type of a hole; add a type annotation".to_string()
+    }
+    InferError::ExpectedFunctionType(t) => format!(
+      "expected a function type, found `{}`",
+      render_core_term(t, atoms, &mut Vec::new())
+    ),
+    InferError::CannotInfer(t) => format!(
+      "cannot infer the type of `{}`; add a type annotation",
+      render_core_term(t, atoms, &mut Vec::new())
+    ),
+  };
+  TypeError::Generic(message, SourceRange::default())
 }
 
 /// Like `check_one_def`, but for the real production entry point
@@ -1536,7 +1689,8 @@ fn check_one_def_new(
         body: Box::new(close(&body_c, dict_atom)),
       };
     }
-    check(mctx, ctx, structs, &body_c, &residual_typ).map_err(infer_error_to_type_error)?;
+    check(mctx, ctx, structs, &body_c, &residual_typ)
+      .map_err(|e| infer_error_to_type_error(e, mctx.atoms()))?;
     // `check` never mutates the term it's checking (see `raise_core`'s
     // module doc), but the evaluator refuses to run a bare struct literal
     // (see `desugar_struct_literals`'s doc comment) — so unlike other
@@ -1566,7 +1720,8 @@ fn check_one_def_new(
         .iter()
         .map(|(a, p)| (*a, p.clone())),
     );
-    let ty = infer(mctx, ctx, structs, &body_c).map_err(infer_error_to_type_error)?;
+    let ty =
+      infer(mctx, ctx, structs, &body_c).map_err(|e| infer_error_to_type_error(e, mctx.atoms()))?;
     ctx.insert(self_atom, ty.clone());
     let body_c = desugar_struct_literals(
       mctx,

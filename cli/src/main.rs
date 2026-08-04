@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use monad_core::{
+  check_files,
+  diag::{Diagnostic, Severity, render_diagnostics},
   eval::EvalOptions,
   run, run_tests,
   term::mote::{Manifest, Resolver},
@@ -70,6 +72,25 @@ enum Commands {
     #[arg(long = "manifest-path", value_name = "PATH")]
     manifest_path: Option<PathBuf>,
   },
+
+  Check {
+    /// Files or directories to check. Directories are scanned recursively
+    /// for `.mo` files. Defaults to the current directory if omitted.
+    #[arg(value_name = "PATHS")]
+    inputs: Vec<PathBuf>,
+    /// Emit machine-readable JSON (for editor/agent integrations) instead
+    /// of the default human-readable text report.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+    #[arg(long, default_value_t = false, overrides_with = "no_color")]
+    color: bool,
+    #[arg(long = "no-color", default_value_t = false)]
+    no_color: bool,
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
+  },
 }
 
 #[derive(Debug, Parser)]
@@ -120,6 +141,164 @@ fn augment_mote_paths(mote_path: &mut Vec<PathBuf>, manifest_path: Option<&PathB
       }
     }
   }
+}
+
+// --- `check --json` wire format -------------------------------------------
+//
+// A deliberately separate, hand-written shape from `monad_core::diag`'s
+// internal `Diagnostic` (1-indexed `Location`, Rust field names) — this is
+// the CLI's own translation to the LSP-conventional shape (0-indexed
+// `Position`, `uri`, camelCase `filesChecked`) agent/editor tooling
+// expects, matching the "structured CLI tools" shape from
+// `plans/library-ideas/language-server.md`. Converting here (not in
+// `core`) keeps `monad-core` itself unaware of LSP conventions.
+
+#[derive(serde::Serialize)]
+struct JsonPosition {
+  line: u32,
+  character: usize,
+}
+
+#[derive(serde::Serialize)]
+struct JsonRange {
+  start: JsonPosition,
+  end: JsonPosition,
+}
+
+#[derive(serde::Serialize)]
+struct JsonDiagnostic {
+  range: JsonRange,
+  severity: String,
+  message: String,
+}
+
+#[derive(serde::Serialize)]
+struct JsonFileReport {
+  uri: String,
+  diagnostics: Vec<JsonDiagnostic>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsonSummary {
+  errors: usize,
+  warnings: usize,
+  files_checked: usize,
+}
+
+#[derive(serde::Serialize)]
+struct JsonCheckReport {
+  files: Vec<JsonFileReport>,
+  summary: JsonSummary,
+}
+
+/// LSP `Position` is 0-indexed; `core`'s `Location` is 1-indexed (see its
+/// doc comment) — converts at this one boundary, `saturating_sub` so a
+/// (should-never-happen) `0` line/column from a `SourceRange::default()`
+/// placeholder can't underflow instead of panicking.
+fn to_json_position(loc: &monad_core::term::Location) -> JsonPosition {
+  JsonPosition {
+    line: loc.line.saturating_sub(1),
+    character: loc.column.saturating_sub(1),
+  }
+}
+
+fn to_json_diagnostic(diag: &Diagnostic) -> JsonDiagnostic {
+  let range = match &diag.location {
+    Some(loc) => JsonRange {
+      start: to_json_position(&loc.start),
+      end: to_json_position(&loc.end),
+    },
+    None => JsonRange {
+      start: JsonPosition {
+        line: 0,
+        character: 0,
+      },
+      end: JsonPosition {
+        line: 0,
+        character: 0,
+      },
+    },
+  };
+  JsonDiagnostic {
+    range,
+    severity: match diag.severity {
+      Severity::Error => "error",
+      Severity::Warning => "warning",
+      Severity::Note => "note",
+      Severity::Help => "help",
+    }
+    .to_string(),
+    message: diag.message.clone(),
+  }
+}
+
+fn path_to_uri(path: &std::path::Path) -> String {
+  let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+  format!("file://{}", abs.display())
+}
+
+fn run_check(inputs: Vec<PathBuf>, json: bool, use_colors: bool, mote_path: Vec<PathBuf>) -> ! {
+  let results = match check_files(inputs, mote_path) {
+    Ok(results) => results,
+    Err(e) => {
+      eprintln!("error: {e}");
+      std::process::exit(2);
+    }
+  };
+
+  let mut error_count = 0usize;
+  let mut warning_count = 0usize;
+  for result in &results {
+    for d in &result.diagnostics {
+      match d.severity {
+        Severity::Error => error_count += 1,
+        Severity::Warning => warning_count += 1,
+        _ => {}
+      }
+    }
+  }
+
+  if json {
+    let report = JsonCheckReport {
+      files: results
+        .iter()
+        .map(|r| JsonFileReport {
+          uri: path_to_uri(&r.path),
+          diagnostics: r.diagnostics.iter().map(to_json_diagnostic).collect(),
+        })
+        .collect(),
+      summary: JsonSummary {
+        errors: error_count,
+        warnings: warning_count,
+        files_checked: results.len(),
+      },
+    };
+    match serde_json::to_string_pretty(&report) {
+      Ok(s) => println!("{s}"),
+      Err(e) => {
+        eprintln!("error: failed to serialize report: {e}");
+        std::process::exit(2);
+      }
+    }
+  } else {
+    for result in &results {
+      if !result.diagnostics.is_empty() {
+        print!(
+          "{}",
+          render_diagnostics(&result.diagnostics, None, use_colors)
+        );
+      }
+    }
+    println!(
+      "{} file(s) checked, {} error(s), {} warning(s)",
+      results.len(),
+      error_count,
+      warning_count
+    );
+  }
+
+  std::process::exit(if error_count > 0 { 1 } else { 0 });
 }
 
 fn main() -> Result<(), String> {
@@ -225,6 +404,22 @@ fn execute(command: Commands) -> Result<(), String> {
         }
       }
       result
+    }
+    Commands::Check {
+      inputs,
+      json,
+      color,
+      no_color,
+      mut mote_path,
+      manifest_path,
+    } => {
+      let use_colors = color && !no_color;
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      // `run_check` always exits the process itself (it needs a 3-way
+      // 0/1/2 exit code — success/errors-found/internal-failure — that
+      // `execute`'s shared `Result<(), String>` return convention, used
+      // by every other command, can't distinguish).
+      run_check(inputs, json, use_colors, mote_path)
     }
   }
 }

@@ -150,6 +150,15 @@ impl AtomTable {
   pub fn intern(&mut self, path: ModulePath) -> Atom {
     *self.0.entry(path).or_insert_with(Atom::fresh)
   }
+
+  /// Reverse lookup for error rendering only — an `Atom`'s originating
+  /// `ModulePath`, if this table interned one for it. A linear scan is
+  /// fine here: only ever called on an already-failed check's error path
+  /// (rendering a handful of `Diagnostic` messages), never in the hot
+  /// path of checking itself.
+  pub fn path_of(&self, atom: Atom) -> Option<&ModulePath> {
+    self.0.iter().find(|(_, a)| **a == atom).map(|(p, _)| p)
+  }
 }
 
 // ---------------------------------------------------------------------------
