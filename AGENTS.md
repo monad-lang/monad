@@ -755,8 +755,49 @@ Key patterns when writing self-hosted Monad code:
 
 1. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Inner opens are not applied to module exports. Functions using `open`-ed constructors must be defined inside the same module. Workaround: bind results to a typed parameter before matching (see `many0`/`many1` implementation pattern in `init/parser.mo`).
 2. **Forall inference on polymorphic combinators**: The type checker correctly instantiates implicit forall parameters on functions like `map_parse` and `bind_parse`, whether called with a concrete named function (`map_parse id_str (tag "x") "xy"`) or an inline lambda, annotated or not (`map_parse (fn s => s) (tag "x") "xy"`) — confirmed directly. If a combinator call fails with "Variable mismatch, expected ... found {B : Type} -> {A : Type} -> ...", the cause is elsewhere (e.g. a genuine type mismatch); it is not a lambda-argument limitation.
+3. **`Map.insert`/`Map.lookup` (typeclass method dispatch) can fail at
+   runtime with `eval error: scope: scope: Map.lookup not found` inside
+   deeply-recursive self-hosted-compiler code paths** — specifically
+   observed when a self-hosted function using `Map`/`BOrd` class methods
+   (`std/map.mo`'s `instance [BOrd K] Map BTreeMap`) gets called
+   repeatedly through `lang.module`'s dynamic module-loading/dependency-
+   walk (`load_module_with_dependencies`, exercised by
+   `lang/tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main`, the
+   only test that exercises that runtime path). Not reproduced when the
+   same `BTreeMap` usage is type-checked directly (e.g. `lang/json.mo`
+   alone) — the failure is specific to this recursive/dynamic-scope
+   context, not to `BTreeMap`/`BOrd` in general. A workaround exists
+   (bypass the `Map`/`BOrd` class methods and call
+   `BTreeMap.insert_loop`/`BTreeMap.lookup_loop` directly with the
+   ordering passed as **plain function values**, e.g. built from
+   `String.lt`/`String.gt` rather than `BOrd.lt`/`BOrd.gt`) — but see the
+   next item before reaching for it.
+4. **`BTreeMap` is markedly SLOWER than a plain `List` + linear scan for
+   the small collection sizes typical in this self-hosted compiler's own
+   code, once everything runs through the tree-walking evaluator.**
+   Measured directly: replacing `lang/module.mo`'s `List ModulePath` +
+   `list_contains` cycle-detection sets with `BTreeMap ModulePath Unit`
+   (using the plain-function-value workaround from the item above, to
+   dodge the dispatch bug) took `test_typecheck_lang_main` from 2.1s to
+   29s; additionally converting `elaborate.mo`'s `union_ids`/`id_member`
+   the same way pushed it to 53s — a ~25x regression overall, not an
+   improvement, despite the asymptotic complexity genuinely being better
+   on paper (O(n log n) vs O(n²)). The self-hosted interpreter's per-call
+   overhead for tree-node allocation/rebalancing dominates at the
+   collection sizes actually seen here (module counts, free-variable
+   lists — tens, not thousands), so the crossover point where `BTreeMap`
+   would actually win is never reached in practice. **Do not replace
+   `List`+linear-scan with `BTreeMap` in self-hosted (`lang/*.mo`) code
+   without measuring end-to-end wall-clock time first** (e.g.
+   `time cargo run -- test lang/tests/typecheck_lang_tests.mo`) — Big-O
+   analysis alone is not a reliable guide to real performance here.
 
 ## Committing Changes
+
+### Commit Message Format
+
+Do not include a `Claude-Session:` trailer (or link) in commit messages
+for this repo.
 
 ### Pre-commit Hooks
 
