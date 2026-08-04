@@ -286,10 +286,6 @@ def op_precedence (op : String) : I64 :=
 	op_lookup_prec op op_table
 
 @[partial]
-def op_is_right_assoc (op : String) : Bool :=
-	op_lookup_rassoc op op_table
-
-@[partial]
 def ids_to_module_path (ids : List String) : ModulePath :=
 	ModulePath.mp (List.map Identifier.id ids)
 
@@ -558,64 +554,65 @@ def open_build (path : ModulePath) (filter : OpenFilter) (maybe_decl : Option De
 		Option.none => Decl.open_d path filter
 	}
 
-// infix:prec (op) := path
+// infix [:N] (op) := path
+//
+// The `:N` precedence clause is genuinely optional (parsed and then
+// discarded — the resulting Decl.infix_d never records it), so it's
+// expressed with `opt` rather than a hand-rolled fail-branch fallback.
 
 @[partial]
 def infix_parser (input : String) : ParseResult Decl :=
-	infix_kw (tag "infix" input)
-
-@[partial]
-def infix_kw (r : ParseResult String) : ParseResult Decl :=
-	match r {
-		success rem _ => infix_colon (tag ":" (skip_spaces rem)) rem,
+	match tag "infix" input {
+		success rem _ => infix_after_kw rem,
 		fail e => fail e
 	}
 
 @[partial]
-def infix_colon (r : ParseResult String) (orig : String) : ParseResult Decl :=
-	match r {
-		success rem _ => infix_prec (number rem),
-		fail _ => infix_paren (tag "(" (skip_spaces orig)) orig
-	}
+def infix_precedence_clause (input : String) : ParseResult I64 :=
+	preceded_by infix_colon_tag number input
 
 @[partial]
-def infix_prec (r : ParseResult I64) : ParseResult Decl :=
-	match r {
-		success rem _ => infix_paren (tag "(" (skip_spaces rem)) rem,
+def infix_colon_tag (input : String) : ParseResult String :=
+	tag ":" (skip_spaces input)
+
+@[partial]
+def infix_after_kw (input : String) : ParseResult Decl :=
+	match opt infix_precedence_clause input {
+		success rem _ => infix_paren rem,
 		fail e => fail e
 	}
 
 @[partial]
-def infix_paren (r : ParseResult String) (orig : String) : ParseResult Decl :=
-	match r {
-		success rem _ => infix_op (operator_parse (skip_spaces rem)),
+def infix_paren (input : String) : ParseResult Decl :=
+	match tag "(" (skip_spaces input) {
+		success rem _ => infix_op rem,
 		fail e => fail e
 	}
 
 @[partial]
-def infix_op (r : ParseResult String) : ParseResult Decl :=
-	match r {
-		success rem op => infix_close (tag ")" (skip_spaces rem)) op,
+def infix_op (input : String) : ParseResult Decl :=
+	match operator_parse (skip_spaces input) {
+		success rem op => infix_close rem op,
 		fail e => fail e
 	}
 
 @[partial]
-def infix_close (r : ParseResult String) (op : String) : ParseResult Decl :=
-	match r {
-		success rem _ => infix_assign (tag ":=" (skip_spaces rem)) op,
+def infix_close (input : String) (op : String) : ParseResult Decl :=
+	match tag ")" (skip_spaces input) {
+		success rem _ => infix_assign rem op,
 		fail e => fail e
 	}
 
 @[partial]
-def infix_assign (r : ParseResult String) (op : String) : ParseResult Decl :=
-	match r {
-		success rem _ => infix_path (module_path_parser (skip_spaces rem)) op,
+def infix_assign (input : String) (op : String) : ParseResult Decl :=
+	match tag ":=" (skip_spaces input) {
+		success rem _ => infix_path rem op,
 		fail e => fail e
 	}
 
 @[partial]
-def infix_path (r : ParseResult ModulePath) (op : String) : ParseResult Decl :=
-	match r {
+def infix_path (input : String) (op : String) : ParseResult Decl :=
+	match module_path_parser (skip_spaces input) {
 		success rem path => success rem (Decl.infix_d (Operator.operator op) path),
 		fail e => fail e
 	}
@@ -1065,6 +1062,16 @@ def type_constraint_list (input : String) : ParseResult (List TypeConstraint) :=
     separated_by (tag ",") (preceded_by ws0 type_constraint_one) input
 
 // class [constraints] Name params { def method sig, def method sig := default }
+//
+// A long continuation chain (class_kw -> ... -> class_close below) because
+// each grammar choice point needs its own function: optional `[...]`
+// constraints before the name, then the class's own type params (either
+// bare identifiers or one-or-more parenthesized groups — class_params
+// through class_try_more_parens_or_brace), then a brace-delimited list of
+// methods where each method is `def name (params) : ret_type [:=
+// default_body]` with its own multi-step param-list and optional
+// default-value parsing (class_methods/class_methods_single loop over
+// entries; class_method_* parses one method's signature + default).
 
 @[partial]
 def class_parser (input : String) : ParseResult Decl :=
@@ -1317,6 +1324,12 @@ def class_close (r : ParseResult String) (name : Identifier) (methods : List Cla
 	}
 
 // instance [constraints] Class args { def method := body }
+//
+// Same shape as class_parser above: optional `[...]` constraints, the
+// class name, zero-or-more argument terms (instance_args_or_brace loop),
+// then a brace-delimited list of `def name (params) := body` method
+// implementations (instance_methods loop; instance_method_* parses one
+// method).
 
 @[partial]
 def instance_parser (input : String) : ParseResult Decl :=
@@ -2220,6 +2233,22 @@ def lambda_body (r: ParseResult Term) (name: Identifier) : ParseResult Term :=
     }
 
 // ─── Term expression (application + operators) ─────────────────────────
+//
+// Simple recursive-descent, not a full Pratt/precedence-climbing parser:
+// 1. Parse one atom as the left-hand side (expr_first).
+// 2. Repeatedly try to parse another atom and apply it (juxtaposition,
+//    e.g. `f x y`) — expr_rest/expr_rest_next loop until that fails.
+// 3. Once no more bare atoms apply, look for an infix operator
+//    (expr_op/expr_op_try). An operator with precedence 0 in op_table
+//    (core.mo) — i.e. not a recognized operator — stops parsing here
+//    (expr_op_prec_val) rather than erroring, so the caller can try to
+//    consume it as something else.
+// 4. Otherwise recurse into `expression` again for the right-hand side
+//    (expr_op_rhs_ws/expr_op_rhs_expr) — this makes every recognized
+//    operator right-associative by construction. op_table's own
+//    right_assoc flag (op_lookup_rassoc, core.mo) is never consulted by
+//    this parser at all — only op_precedence's "is this a known operator"
+//    check is used.
 
 @[partial]
 def expression (ctx: List Identifier) (input: String) : ParseResult Term :=
@@ -2966,6 +2995,17 @@ def test_scoped_open_filtered : Bool :=
 @[test]
 def test_infix_parser : Bool :=
     match infix_parser "infix (++) := List.append" {
+        success rem out =>
+            match out {
+                infix_d op path => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+@[test]
+def test_infix_parser_with_precedence : Bool :=
+    match infix_parser "infix:5 (++) := List.append" {
         success rem out =>
             match out {
                 infix_d op path => String.beq rem "",
