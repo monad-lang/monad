@@ -625,6 +625,162 @@ def Json.object_set (key : String) (value : Json) (o : BTreeMap String Json) : B
 def Json.object_delete (key : String) (o : BTreeMap String Json) : BTreeMap String Json :=
   Map.delete key o
 
+// ─── Serde: Serializer / Deserializer classes ───
+//
+// NOTE: generic container instances (e.g. `instance [Json.Serializer A] Json.Serializer
+// (List A)`) work for Serializer-shaped classes, where the instance's type parameter is
+// forward-inferable from the argument being serialized — used just below. They do NOT
+// work for Deserializer-shaped classes, where the type parameter only appears in the
+// return type (`Json -> Result String D`): resolving a generic container instance
+// through an annotation-only call site still fails with an internal `UnboundVariable`
+// error, confirmed via a minimal smoke test. So List deserialization is done via a
+// hand-written function that takes the element deserializer as an explicit argument,
+// not via a generic instance.
+
+class Json.Serializer (S: Type) {
+  def serialize (value: S) : Json
+}
+
+class Json.Deserializer (D: Type) {
+  def deserialize (json: Json) : Result String D
+}
+
+instance Json.Serializer Bool {
+  def serialize (b: Bool) : Json := Json.make_bool b
+}
+
+instance Json.Serializer I64 {
+  def serialize (n: I64) : Json := Json.make_num_int n
+}
+
+instance Json.Serializer String {
+  def serialize (s: String) : Json := Json.make_str s
+}
+
+instance Json.Deserializer Bool {
+  def deserialize (j: Json) : Result String Bool := Json.get_bool j
+}
+
+instance Json.Deserializer String {
+  def deserialize (j: Json) : Result String String := Json.get_str j
+}
+
+def Json.number_to_i64 (n : Json.Number) : Result String I64 :=
+  match n {
+    int i => ok i,
+    float _ => err "expected integer"
+  }
+
+def Json.get_num_i64 (r : Result String Json.Number) : Result String I64 :=
+  match r {
+    ok n => Json.number_to_i64 n,
+    err e => err e
+  }
+
+instance Json.Deserializer I64 {
+  def deserialize (j: Json) : Result String I64 := Json.get_num_i64 (Json.get_num j)
+}
+
+/// List serialization: a real generic instance, not a hand-written helper — see NOTE
+/// above. `A`'s dictionary is forward-inferable from `xs : List A`, so
+/// `Json.Serializer.serialize` dispatches correctly both here and at call sites.
+instance [Json.Serializer A] Json.Serializer (List A) {
+  def serialize (xs: List A) : Json :=
+    Json.make_array (List.map Json.Serializer.serialize xs)
+}
+
+def Json.sequence_result_cons {A : Type} (a : A) (rest : Result String (List A)) : Result String (List A) :=
+  match rest {
+    ok xs => ok (List.cons a xs),
+    err e => err e
+  }
+
+/// Turn a `List (Result String A)` into a `Result String (List A)`, short-circuiting on
+/// the first error. Deliberately unconstrained (no class methods called here) so it's
+/// entirely unaffected by the generic-instance-resolution limitation noted above.
+def Json.sequence_result {A : Type} (results : List (Result String A)) : Result String (List A) :=
+  match results {
+    List.empty => ok List.empty,
+    List.cons r rest =>
+      match r {
+        ok a => Json.sequence_result_cons a (Json.sequence_result rest),
+        err e => err e
+      }
+  }
+
+/// Deserialize a `List A` given an explicit element deserializer.
+def Json.deserialize_list {A : Type} (deserialize_elem : Json -> Result String A) (j : Json) : Result String (List A) :=
+  match Json.get_array j {
+    ok arr => Json.sequence_result (List.map deserialize_elem arr),
+    err e => err e
+  }
+
+/// Look up a field by name in a JSON object and deserialize it via an explicit element
+/// deserializer (same shape as Json.deserialize_list above, and for the same reason: a
+/// `[Json.Deserializer A]`-constrained version of this function fails to type-check on
+/// its own definition in this compiler — user-declared classes don't support deferred
+/// constraint resolution the way builtin classes like BEq appear to).
+@[partial]
+def Json.deserialize_field {A : Type} (deserialize_elem : Json -> Result String A) (name: String) (obj: BTreeMap String Json) : Result String A :=
+  match Map.lookup name obj {
+    some j => deserialize_elem j,
+    none => err (String.concat "missing field: " name)
+  }
+
+// ─── Serde: worked example (Person) ───
+
+struct Person {
+  name : String,
+  age : I64,
+}
+
+instance Json.Serializer Person {
+  def serialize (p : Person) : Json :=
+    match p {
+      mk name age =>
+        Json.make_object (
+          Map.insert "name" (Json.Serializer.serialize name) (
+          Map.insert "age" (Json.Serializer.serialize age) BTreeMap.empty))
+    }
+}
+
+/// Person's own field accessors are written directly against Json.get_str/get_num_i64
+/// rather than through the generic Json.deserialize_field, because routing a struct's
+/// several fields through it would require the checker to infer Json.deserialize_field's
+/// {A : Type} across a chain of match arms purely from Person.mk's argument types — an
+/// extra round of type inference this compiler isn't reliable at (see NOTE above).
+/// Json.deserialize_field is still useful on its own, at a single call site with an
+/// explicit result-type annotation (see test_deserialize_field_i64 below).
+def Person.get_name (obj : BTreeMap String Json) : Result String String :=
+  match Map.lookup "name" obj {
+    some j => Json.get_str j,
+    none => err "missing field: name"
+  }
+
+def Person.get_age (obj : BTreeMap String Json) : Result String I64 :=
+  match Map.lookup "age" obj {
+    some j => Json.get_num_i64 (Json.get_num j),
+    none => err "missing field: age"
+  }
+
+def Person.deserialize_with_name (obj : BTreeMap String Json) (name : String) : Result String Person :=
+  match Person.get_age obj {
+    ok age => ok (Person.mk name age),
+    err e => err e
+  }
+
+instance Json.Deserializer Person {
+  def deserialize (j: Json) : Result String Person :=
+    match Json.get_object j {
+      ok obj =>
+        match Person.get_name obj {
+          ok name => Person.deserialize_with_name obj name,
+          err e => err e
+        },
+      err e => err e
+    }
+}
+
 // ─── Tests: parser ───
 
 @[test]
@@ -901,3 +1057,135 @@ def test_json_object_manipulation : Bool :=
   json_option_eq (Json.object_get "a" o1) (num (int 1)) &&
   json_option_is_none (Json.object_get "a" o3) &&
   json_option_eq (Json.object_get "b" o3) (num (int 2))
+
+// ─── Tests: Serde ───
+
+@[test]
+def test_serializer_bool : Bool :=
+  Json.beq (Json.Serializer.serialize true) (bool true) &&
+  Json.beq (Json.Serializer.serialize false) (bool false)
+
+@[test]
+def test_serializer_i64 : Bool :=
+  Json.beq (Json.Serializer.serialize (neg_i64 7)) (num (int (neg_i64 7)))
+
+@[test]
+def test_serializer_string : Bool :=
+  Json.beq (Json.Serializer.serialize "hi") (str "hi")
+
+@[test]
+def test_deserializer_bool : Bool :=
+  match (Json.Deserializer.deserialize (bool true) : Result String Bool) {
+    ok b => b,
+    err _ => false
+  }
+
+@[test]
+def test_deserializer_i64 : Bool :=
+  match (Json.Deserializer.deserialize (num (int 42)) : Result String I64) {
+    ok n => n == 42,
+    err _ => false
+  }
+
+@[test]
+def test_deserializer_string : Bool :=
+  match (Json.Deserializer.deserialize (str "hi") : Result String String) {
+    ok s => s == "hi",
+    err _ => false
+  }
+
+@[test]
+def test_deserializer_i64_wrong_type : Bool :=
+  match (Json.Deserializer.deserialize (str "hi") : Result String I64) {
+    ok _ => false,
+    err _ => true
+  }
+
+@[test]
+def test_serialize_list_i64 : Bool :=
+  Json.to_string (Json.Serializer.serialize [1, 2, 3]) == "[1,2,3]"
+
+@[test]
+def test_serialize_list_string : Bool :=
+  Json.to_string (Json.Serializer.serialize ["a", "b"]) == "[\"a\",\"b\"]"
+
+def json_deserialize_i64 (j : Json) : Result String I64 :=
+  Json.Deserializer.deserialize j
+
+def json_deserialize_string (j : Json) : Result String String :=
+  Json.Deserializer.deserialize j
+
+@[test]
+def test_deserialize_list_i64 : Bool :=
+  match Json.deserialize_list json_deserialize_i64 (array [num (int 1), num (int 2), num (int 3)]) {
+    ok xs => xs == [1, 2, 3],
+    err _ => false
+  }
+
+@[test]
+def test_deserialize_list_string : Bool :=
+  match Json.deserialize_list json_deserialize_string (array [str "a", str "b"]) {
+    ok xs => xs == ["a", "b"],
+    err _ => false
+  }
+
+@[test]
+def test_deserialize_field_i64 : Bool :=
+  let obj := Map.insert "age" (num (int 30)) BTreeMap.empty in
+  match Json.deserialize_field json_deserialize_i64 "age" obj {
+    ok n => n == 30,
+    err _ => false
+  }
+
+@[test]
+def test_deserialize_field_missing : Bool :=
+  match Json.deserialize_field json_deserialize_i64 "missing" BTreeMap.empty {
+    ok _ => false,
+    err _ => true
+  }
+
+@[test]
+def test_deserialize_list_error_short_circuits : Bool :=
+  match Json.deserialize_list json_deserialize_i64 (array [num (int 1), str "bad", num (int 3)]) {
+    ok _ => false,
+    err _ => true
+  }
+
+@[test]
+def test_person_serialize : Bool :=
+  let p := Person.mk "Alice" 30 in
+  Json.to_string (Json.Serializer.serialize p) == "{\"age\":30,\"name\":\"Alice\"}"
+
+@[test]
+def test_person_deserialize : Bool :=
+  match Json.parse "{\"name\":\"Alice\",\"age\":30}" {
+    ok j =>
+      match (Json.Deserializer.deserialize j : Result String Person) {
+        ok p => match p { mk name age => name == "Alice" && age == 30 },
+        err _ => false
+      },
+    err _ => false
+  }
+
+@[test]
+def test_person_deserialize_missing_field : Bool :=
+  match Json.parse "{\"name\":\"Alice\"}" {
+    ok j =>
+      match (Json.Deserializer.deserialize j : Result String Person) {
+        ok _ => false,
+        err _ => true
+      },
+    err _ => false
+  }
+
+@[test]
+def test_person_roundtrip : Bool :=
+  let p := Person.mk "Bob" 25 in
+  match Json.parse (Json.to_string (Json.Serializer.serialize p)) {
+    ok j =>
+      match (Json.Deserializer.deserialize j : Result String Person) {
+        ok p2 => match p2 { mk name age => name == "Bob" && age == 25 },
+        err _ => false
+      },
+    err _ => false
+  }
