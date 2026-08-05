@@ -17,7 +17,6 @@ use crate::eval_term::EvalTerm;
 use crate::lower::LowerContext;
 #[cfg(feature = "repl")]
 use crate::parser::{ReplInput, repl_parser};
-#[cfg(feature = "repl")]
 use crate::term::Decl;
 use crate::term::Term::{self, Con, Hole};
 #[cfg(feature = "repl")]
@@ -27,7 +26,10 @@ use crate::term::module::module;
 use crate::term::module::{
   LoadedModules, bare_use_warnings, default_modules, load_module_files, load_module_from_text,
 };
-use crate::term::{Constructor, ModulePath, SearchPaths, mpt, strings_to_list_term};
+use crate::term::{
+  Constructor, InductiveVariant, ModulePath, Named, SearchPaths, SourceContext, SourceRange, mpt,
+  strings_to_list_term,
+};
 use crate::term::{app, id};
 
 pub mod core_check;
@@ -867,6 +869,147 @@ pub fn check_files(
     results.push(FileCheckResult {
       path: file.clone(),
       diagnostics,
+    });
+  }
+
+  Ok(results)
+}
+
+/// Coarse-grained symbol classification — enough to distinguish the
+/// handful of top-level decl kinds a workspace symbol index cares about,
+/// not a full mirror of `InductiveVariant`/`Decl`'s own variant set (e.g.
+/// `Use`/`Open`/`Infix` decls aren't symbols at all, so they're simply
+/// skipped rather than given a `SymbolKind` of their own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolKind {
+  Function,
+  Struct,
+  Class,
+  Enum,
+  Instance,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolInfo {
+  pub name: String,
+  pub kind: SymbolKind,
+  pub location: Option<SourceRange>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileSymbols {
+  pub path: PathBuf,
+  pub symbols: Vec<SymbolInfo>,
+}
+
+/// Top-level `Def`/`Type`/`Ins` decls (with their real, decl-level
+/// `SourceContext` span) for every named symbol `check_module_source`'s
+/// `Vec<SourceContext<Decl>>` output. Only ever needs decl-level spans
+/// (already correct — see Phase 0's notes), not the sub-expression-level
+/// `CoreTerm` span work Phase 0b covers, since a symbol's *location* is
+/// just "where the whole declaration is", not "which sub-expression".
+fn symbols_from_decls(decls: &[SourceContext<Decl>]) -> Vec<SymbolInfo> {
+  let mut symbols = Vec::new();
+  for ctx in decls {
+    let location = Some(ctx.loc.clone());
+    match ctx.value() {
+      Decl::Def(def) => symbols.push(SymbolInfo {
+        name: def.name.to_string(),
+        kind: SymbolKind::Function,
+        location,
+      }),
+      Decl::Type(ind) => {
+        let kind = match ind.variant() {
+          InductiveVariant::Struct => SymbolKind::Struct,
+          InductiveVariant::Class => SymbolKind::Class,
+          InductiveVariant::Generic => SymbolKind::Enum,
+        };
+        symbols.push(SymbolInfo {
+          name: ind.name().to_string(),
+          kind,
+          location,
+        });
+      }
+      Decl::Ins(instance) => symbols.push(SymbolInfo {
+        name: instance.name().to_string(),
+        kind: SymbolKind::Instance,
+        location,
+      }),
+      _ => {}
+    }
+  }
+  symbols
+}
+
+/// Workspace symbol index: every named `def`/`type`/`instance` in each
+/// target file, with its declaration-level location. Shares `check_files`'
+/// file-collection and per-file loading (`load_module_from_text_typed`) —
+/// a file that fails to load simply contributes no symbols, since a
+/// symbol table over broken code isn't this function's job (that's
+/// `check_files`'s).
+pub fn symbols_for_files(
+  inputs: Vec<PathBuf>,
+  extra_mote_paths: Vec<PathBuf>,
+) -> Result<Vec<FileSymbols>, String> {
+  let inputs = if inputs.is_empty() {
+    vec![PathBuf::from(".")]
+  } else {
+    inputs
+  };
+
+  let mut files: Vec<PathBuf> = Vec::new();
+  for input in &inputs {
+    if input.is_dir() {
+      files.extend(collect_mo_files(input));
+    } else {
+      files.push(input.clone());
+    }
+  }
+  files.sort();
+  files.dedup();
+
+  let mut master_loaded = default_modules().map_err(|e| format!("{e}"))?;
+  let search_paths = build_default_search_paths(&inputs[0], &extra_mote_paths);
+  master_loaded.set_search_paths(search_paths);
+
+  let files: Vec<PathBuf> = files
+    .into_iter()
+    .filter(|file| {
+      let path: ModulePath = file.clone().into();
+      let is_default = master_loaded.get_module(&path).is_some() || {
+        let last = path.last();
+        master_loaded
+          .get_module(&ModulePath::single(last.clone()))
+          .is_some()
+      };
+      !is_default
+    })
+    .collect();
+
+  let mut results = Vec::with_capacity(files.len());
+  for file in &files {
+    let path: ModulePath = file.clone().into();
+    let symbols = match fs::read_to_string(file) {
+      Err(_) => Vec::new(),
+      Ok(text) => {
+        let mut loaded = master_loaded.clone();
+        match crate::term::module::load_module_from_text_typed(&text, &path, &mut loaded) {
+          Ok(()) => {
+            let symbols = loaded
+              .get_module(&path)
+              .map(|m| symbols_from_decls(m.clone().to_decls().as_slice()))
+              .unwrap_or_default();
+            master_loaded = loaded;
+            symbols
+          }
+          Err(_) => Vec::new(),
+        }
+      }
+    };
+    results.push(FileSymbols {
+      path: file.clone(),
+      symbols,
     });
   }
 

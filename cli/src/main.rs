@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use monad_core::{
-  check_files,
+  SymbolKind, check_files,
   diag::{Diagnostic, Severity, render_diagnostics},
   eval::EvalOptions,
-  run, run_tests,
+  run, run_tests, symbols_for_files,
   term::mote::{Manifest, Resolver},
 };
 
@@ -86,6 +86,20 @@ enum Commands {
     color: bool,
     #[arg(long = "no-color", default_value_t = false)]
     no_color: bool,
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
+  },
+
+  Symbols {
+    /// Files or directories to index. Directories are scanned recursively
+    /// for `.mo` files. Defaults to the current directory if omitted.
+    #[arg(value_name = "PATHS")]
+    inputs: Vec<PathBuf>,
+    /// Emit machine-readable JSON instead of a plain text listing.
+    #[arg(long, default_value_t = false)]
+    json: bool,
     #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
     mote_path: Vec<PathBuf>,
     #[arg(long = "manifest-path", value_name = "PATH")]
@@ -301,6 +315,97 @@ fn run_check(inputs: Vec<PathBuf>, json: bool, use_colors: bool, mote_path: Vec<
   std::process::exit(if error_count > 0 { 1 } else { 0 });
 }
 
+#[derive(serde::Serialize)]
+struct JsonSymbol {
+  name: String,
+  kind: SymbolKind,
+  range: JsonRange,
+}
+
+#[derive(serde::Serialize)]
+struct JsonSymbolFile {
+  uri: String,
+  symbols: Vec<JsonSymbol>,
+}
+
+fn symbol_kind_label(kind: SymbolKind) -> &'static str {
+  match kind {
+    SymbolKind::Function => "function",
+    SymbolKind::Struct => "struct",
+    SymbolKind::Class => "class",
+    SymbolKind::Enum => "enum",
+    SymbolKind::Instance => "instance",
+  }
+}
+
+fn run_symbols(inputs: Vec<PathBuf>, json: bool, mote_path: Vec<PathBuf>) -> ! {
+  let results = match symbols_for_files(inputs, mote_path) {
+    Ok(results) => results,
+    Err(e) => {
+      eprintln!("error: {e}");
+      std::process::exit(2);
+    }
+  };
+
+  if json {
+    let files: Vec<JsonSymbolFile> = results
+      .iter()
+      .map(|r| JsonSymbolFile {
+        uri: path_to_uri(&r.path),
+        symbols: r
+          .symbols
+          .iter()
+          .map(|s| JsonSymbol {
+            name: s.name.clone(),
+            kind: s.kind,
+            range: match &s.location {
+              Some(loc) => JsonRange {
+                start: to_json_position(&loc.start),
+                end: to_json_position(&loc.end),
+              },
+              None => JsonRange {
+                start: JsonPosition {
+                  line: 0,
+                  character: 0,
+                },
+                end: JsonPosition {
+                  line: 0,
+                  character: 0,
+                },
+              },
+            },
+          })
+          .collect(),
+      })
+      .collect();
+    match serde_json::to_string_pretty(&files) {
+      Ok(s) => println!("{s}"),
+      Err(e) => {
+        eprintln!("error: failed to serialize symbols: {e}");
+        std::process::exit(2);
+      }
+    }
+  } else {
+    for result in &results {
+      println!("{}", result.path.display());
+      for symbol in &result.symbols {
+        let loc = symbol
+          .location
+          .as_ref()
+          .map(|l| format!("{}:{}", l.start.line, l.start.column))
+          .unwrap_or_else(|| "?".to_string());
+        println!(
+          "  {} {} ({loc})",
+          symbol_kind_label(symbol.kind),
+          symbol.name
+        );
+      }
+    }
+  }
+
+  std::process::exit(0);
+}
+
 fn main() -> Result<(), String> {
   let cli = Cli::parse();
   execute(cli.command)
@@ -420,6 +525,15 @@ fn execute(command: Commands) -> Result<(), String> {
       // `execute`'s shared `Result<(), String>` return convention, used
       // by every other command, can't distinguish).
       run_check(inputs, json, use_colors, mote_path)
+    }
+    Commands::Symbols {
+      inputs,
+      json,
+      mut mote_path,
+      manifest_path,
+    } => {
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      run_symbols(inputs, json, mote_path)
     }
   }
 }
