@@ -1,0 +1,31 @@
+// Read a TOML file passed on the command line, parse it, and print the result.
+//
+// Usage: monad run examples/toml.mo <file.toml>
+
+use std.map
+use lang.toml
+
+def print_parse_error (e : Toml.ParseError) : IO Unit :=
+  IO.println (String.concat "Parse error: " (Toml.ParseError.to_string e))
+
+def print_parsed (r : Result Toml.ParseError (BTreeMap String Toml.Value)) : IO Unit :=
+  match r {
+    ok t => IO.println (Toml.to_string t),
+    err e => print_parse_error e
+  }
+
+def run_file (path : String) : IO Unit {
+  let exists <- IO.file_exists path;
+  if exists
+  then do {
+    let content <- IO.read_file path;
+    print_parsed (Toml.parse content)
+  }
+  else IO.println (String.concat "File not found: " path)
+}
+
+def main (args : List String) : IO Unit :=
+  match List.last args {
+    Option.some path => run_file path,
+    Option.none => IO.println "usage: monad run examples/toml.mo <file.toml>"
+  }
