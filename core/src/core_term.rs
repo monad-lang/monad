@@ -253,7 +253,7 @@ pub enum CoreLit {
   },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 pub enum CoreTerm {
   /// De Bruijn index: a bound-variable occurrence, counted from its
   /// nearest enclosing binder (0 = innermost).
@@ -294,9 +294,266 @@ pub enum CoreTerm {
   Lit(CoreLit),
   Con(CoreConstructor),
   Ntv(CoreNative),
-  // `Ctx` (source-location wrapper) and `Quote`/`Ann` stay surface-only —
-  // see the plan's Diagnostics section and this module's/`lower_core`'s
-  // doc comments.
+
+  /// Transparent source-location wrapper, added for
+  /// `plans/implementations/typechecker-de-bruijn-core.md`'s Diagnostics
+  /// follow-up — carries a `SourceRange` for error attribution without
+  /// being a "real" term shape of its own. `Quote`/`Ann` still stay
+  /// surface-only (unrelated to location tracking).
+  ///
+  /// Deliberately excluded from `PartialEq`/`Eq`/`Hash` (see the manual
+  /// impls below, which strip `Ctx` before comparing/hashing) — a
+  /// `Ctx`-wrapped term must be indistinguishable from its unwrapped
+  /// inner term to every EXISTING equality-based check in the unifier
+  /// (fast-path `a == b` comparisons, etc.), exactly like `DebugName` is
+  /// excluded for binder names. Anything that inspects a `CoreTerm`'s
+  /// *shape* via `match`, on the other hand, cannot be made transparent
+  /// this way (Rust's `match` doesn't go through `PartialEq`) — those
+  /// call `strip_ctx`/`strip_ctx_loc` explicitly; the compiler flags
+  /// every exhaustive match that doesn't handle this variant yet.
+  Ctx {
+    loc: crate::term::SourceRange,
+    term: Box<CoreTerm>,
+  },
+}
+
+impl CoreTerm {
+  /// Peel any number of nested `Ctx` wrappers, returning the innermost
+  /// non-`Ctx` term. Every function that inspects a `CoreTerm`'s shape
+  /// (rather than just recursing into an already-known field) should
+  /// call this — or `strip_ctx_loc` — before matching, so a `Ctx`
+  /// wrapper can never cause a real `Forall`/`Pi`/`App`/etc. to look like
+  /// an unrecognized shape.
+  pub fn strip_ctx(&self) -> &CoreTerm {
+    let mut t = self;
+    while let CoreTerm::Ctx { term, .. } = t {
+      t = term;
+    }
+    t
+  }
+
+  /// Like `strip_ctx`, but also returns the OUTERMOST wrapper's location
+  /// (if there was at least one) — the position an error about this term
+  /// should be attributed to, since that's the location closest to what
+  /// the user actually wrote (an inner `Ctx`, if any, belongs to a
+  /// sub-term nested further down, not this term as a whole).
+  pub fn strip_ctx_loc(&self) -> (&CoreTerm, Option<&crate::term::SourceRange>) {
+    match self {
+      CoreTerm::Ctx { loc, term } => (term.strip_ctx(), Some(loc)),
+      other => (other, None),
+    }
+  }
+
+  /// Owned equivalent of `strip_ctx` — for callers that already have (or
+  /// need) an owned `CoreTerm` and want to match on it by value (moving
+  /// fields out of it) rather than by reference.
+  pub fn into_stripped_ctx(self) -> CoreTerm {
+    let mut t = self;
+    while let CoreTerm::Ctx { term, .. } = t {
+      t = *term;
+    }
+    t
+  }
+}
+
+impl PartialEq for CoreTerm {
+  fn eq(&self, other: &Self) -> bool {
+    use CoreTerm::*;
+    match (self.strip_ctx(), other.strip_ctx()) {
+      (Bound(a), Bound(b)) => a == b,
+      (Free(a), Free(b)) => a == b,
+      (Meta(a), Meta(b)) => a == b,
+      (
+        Forall {
+          typ: t1, body: b1, ..
+        },
+        Forall {
+          typ: t2, body: b2, ..
+        },
+      ) => t1 == t2 && b1 == b2,
+      (
+        Pi {
+          arg: a1,
+          ret: r1,
+          mult: m1,
+          ..
+        },
+        Pi {
+          arg: a2,
+          ret: r2,
+          mult: m2,
+          ..
+        },
+      ) => a1 == a2 && r1 == r2 && m1 == m2,
+      (
+        Lam {
+          param_typ: p1,
+          body: b1,
+          ..
+        },
+        Lam {
+          param_typ: p2,
+          body: b2,
+          ..
+        },
+      ) => p1 == p2 && b1 == b2,
+      (App { fun: f1, arg: a1 }, App { fun: f2, arg: a2 }) => f1 == f2 && a1 == a2,
+      (Sort { level: l1 }, Sort { level: l2 }) => l1 == l2,
+      (Hole, Hole) => true,
+      (Lit(a), Lit(b)) => a == b,
+      (Con(a), Con(b)) => a == b,
+      (Ntv(a), Ntv(b)) => a == b,
+      _ => false,
+    }
+  }
+}
+impl Eq for CoreTerm {}
+
+impl std::hash::Hash for CoreTerm {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    use CoreTerm::*;
+    // Discriminant tag first (on the STRIPPED term, so a `Ctx`-wrapped
+    // value hashes identically to its unwrapped form, consistent with
+    // the `PartialEq` impl above — required: equal values must hash
+    // equally).
+    match self.strip_ctx() {
+      Bound(i) => {
+        0u8.hash(state);
+        i.hash(state);
+      }
+      Free(a) => {
+        1u8.hash(state);
+        a.hash(state);
+      }
+      Meta(m) => {
+        2u8.hash(state);
+        m.hash(state);
+      }
+      Forall { typ, body, .. } => {
+        3u8.hash(state);
+        typ.hash(state);
+        body.hash(state);
+      }
+      Pi { arg, ret, mult, .. } => {
+        4u8.hash(state);
+        arg.hash(state);
+        ret.hash(state);
+        mult.hash(state);
+      }
+      Lam {
+        param_typ, body, ..
+      } => {
+        5u8.hash(state);
+        param_typ.hash(state);
+        body.hash(state);
+      }
+      App { fun, arg } => {
+        6u8.hash(state);
+        fun.hash(state);
+        arg.hash(state);
+      }
+      Sort { level } => {
+        7u8.hash(state);
+        level.hash(state);
+      }
+      Hole => 8u8.hash(state),
+      Lit(l) => {
+        9u8.hash(state);
+        l.hash(state);
+      }
+      Con(c) => {
+        10u8.hash(state);
+        c.hash(state);
+      }
+      Ntv(n) => {
+        11u8.hash(state);
+        n.hash(state);
+      }
+      Ctx { .. } => unreachable!("strip_ctx never returns a Ctx"),
+    }
+  }
+}
+
+/// Discriminant order for `Ord`/`PartialOrd` below — arbitrary (no
+/// consumer relies on any particular ordering, only that it's total and
+/// consistent with `PartialEq`/`Hash`), matching the tag order already
+/// used by the `Hash` impl above.
+fn core_term_rank(t: &CoreTerm) -> u8 {
+  use CoreTerm::*;
+  match t {
+    Bound(_) => 0,
+    Free(_) => 1,
+    Meta(_) => 2,
+    Forall { .. } => 3,
+    Pi { .. } => 4,
+    Lam { .. } => 5,
+    App { .. } => 6,
+    Sort { .. } => 7,
+    Hole => 8,
+    Lit(_) => 9,
+    Con(_) => 10,
+    Ntv(_) => 11,
+    Ctx { .. } => unreachable!("only called on an already-stripped term"),
+  }
+}
+
+impl PartialOrd for CoreTerm {
+  fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    Some(self.cmp(other))
+  }
+}
+
+impl Ord for CoreTerm {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    use CoreTerm::*;
+    let (a, b) = (self.strip_ctx(), other.strip_ctx());
+    match (a, b) {
+      (Bound(x), Bound(y)) => x.cmp(y),
+      (Free(x), Free(y)) => x.cmp(y),
+      (Meta(x), Meta(y)) => x.cmp(y),
+      (
+        Forall {
+          typ: t1, body: b1, ..
+        },
+        Forall {
+          typ: t2, body: b2, ..
+        },
+      ) => t1.cmp(t2).then_with(|| b1.cmp(b2)),
+      (
+        Pi {
+          arg: a1,
+          ret: r1,
+          mult: m1,
+          ..
+        },
+        Pi {
+          arg: a2,
+          ret: r2,
+          mult: m2,
+          ..
+        },
+      ) => a1.cmp(a2).then_with(|| r1.cmp(r2)).then_with(|| m1.cmp(m2)),
+      (
+        Lam {
+          param_typ: p1,
+          body: b1,
+          ..
+        },
+        Lam {
+          param_typ: p2,
+          body: b2,
+          ..
+        },
+      ) => p1.cmp(p2).then_with(|| b1.cmp(b2)),
+      (App { fun: f1, arg: a1 }, App { fun: f2, arg: a2 }) => f1.cmp(f2).then_with(|| a1.cmp(a2)),
+      (Sort { level: l1 }, Sort { level: l2 }) => l1.cmp(l2),
+      (Hole, Hole) => std::cmp::Ordering::Equal,
+      (Lit(x), Lit(y)) => x.cmp(y),
+      (Con(x), Con(y)) => x.cmp(y),
+      (Ntv(x), Ntv(y)) => x.cmp(y),
+      _ => core_term_rank(a).cmp(&core_term_rank(b)),
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +622,10 @@ pub(crate) fn open_at(term: &CoreTerm, depth: u32, replacement: &CoreTerm) -> Co
       num_args: n.num_args,
       args: open_at_args(&n.args, depth, replacement),
     }),
+    CoreTerm::Ctx { loc, term } => CoreTerm::Ctx {
+      loc: loc.clone(),
+      term: Box::new(open_at(term, depth, replacement)),
+    },
   }
 }
 
@@ -489,6 +750,10 @@ fn close_at(term: &CoreTerm, depth: u32, atom: Atom) -> CoreTerm {
       num_args: n.num_args,
       args: close_at_args(&n.args, depth, atom),
     }),
+    CoreTerm::Ctx { loc, term } => CoreTerm::Ctx {
+      loc: loc.clone(),
+      term: Box::new(close_at(term, depth, atom)),
+    },
   }
 }
 
@@ -614,6 +879,10 @@ pub fn subst_meta(term: &CoreTerm, target: MetaId, replacement: &CoreTerm) -> Co
       num_args: n.num_args,
       args: subst_meta_args(&n.args, target, replacement),
     }),
+    CoreTerm::Ctx { loc, term } => CoreTerm::Ctx {
+      loc: loc.clone(),
+      term: Box::new(subst_meta(term, target, replacement)),
+    },
   }
 }
 
@@ -793,6 +1062,9 @@ impl Printer {
         }
         write!(f, ")")
       }
+      // Transparent for display purposes too: a `Ctx` wrapper is metadata
+      // for error attribution, not part of what a term "looks like".
+      CoreTerm::Ctx { term, .. } => self.print(term, f),
     }
   }
 

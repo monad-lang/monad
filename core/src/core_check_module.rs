@@ -1473,6 +1473,10 @@ fn render_core_term(term: &CoreTerm, atoms: &AtomTable, bound_names: &mut Vec<St
     CoreTerm::Lit(lit) => render_core_lit(lit, atoms, bound_names),
     CoreTerm::Con(c) => c.typ_name.to_string(),
     CoreTerm::Ntv(n) => n.native_name.to_string(),
+    // Transparent for rendering: a `Ctx` wrapper is metadata for error
+    // attribution (see `infer_error_to_type_error`, which reads it
+    // separately via `strip_ctx_loc`), not part of what the term "is".
+    CoreTerm::Ctx { term, .. } => render_core_term(term, atoms, bound_names),
   }
 }
 
@@ -1527,7 +1531,41 @@ fn render_unify_error(e: &UnifyError, atoms: &AtomTable) -> String {
   }
 }
 
+/// A `CoreTerm`'s own best-known source location, if it (or its outermost
+/// `Ctx` wrapper) has one — see `CoreTerm::strip_ctx_loc`.
+fn source_range_of(t: &CoreTerm) -> Option<SourceRange> {
+  t.strip_ctx_loc().1.cloned()
+}
+
+/// The most precise location available for an `InferError` — the
+/// sub-expression that actually caused it, now that `CoreTerm::Ctx`
+/// carries real spans through lowering/checking, not just the enclosing
+/// def's whole span. `left`/`right` in a `Mismatch` are "the two sides
+/// `unify` was called with" in `(actual, expected)` order (see
+/// `render_unify_error`'s identical note) — the actual/inferred side is
+/// more likely to trace back to a real written expression, so it's tried
+/// first; falls back to `None` (the caller then falls back to the
+/// enclosing decl's own location, via `TypeError::Context`) for error
+/// kinds with no associated term at all (`UnboundVariable`, ...).
+fn infer_error_location(e: &InferError) -> Option<SourceRange> {
+  match e {
+    InferError::Unify(UnifyError::Mismatch { left, right }) => {
+      source_range_of(left).or_else(|| source_range_of(right))
+    }
+    InferError::Unify(UnifyError::OccursCheck { term, .. }) => source_range_of(term),
+    InferError::Unify(UnifyError::UnsupportedPattern { left, right }) => {
+      source_range_of(left).or_else(|| source_range_of(right))
+    }
+    InferError::ExpectedFunctionType(t) | InferError::CannotInfer(t) => source_range_of(t),
+    InferError::UnboundVariable(_)
+    | InferError::UnknownMeta(_)
+    | InferError::UnexpectedBound(_)
+    | InferError::CannotInferHole => None,
+  }
+}
+
 fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
+  let location = infer_error_location(&e);
   let message = match &e {
     InferError::Unify(u) => render_unify_error(u, atoms),
     InferError::UnboundVariable(atom) => {
@@ -1551,7 +1589,7 @@ fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
       render_core_term(t, atoms, &mut Vec::new())
     ),
   };
-  TypeError::Generic(message, SourceRange::default())
+  TypeError::Generic(message, location.unwrap_or_default())
 }
 
 /// Like `check_one_def`, but for the real production entry point

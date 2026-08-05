@@ -373,6 +373,12 @@ impl<'p> Raiser<'p> {
       CoreTerm::Lit(lit) => self.expand_lit(lit, work),
       CoreTerm::Con(c) => self.expand_con(c, work),
       CoreTerm::Ntv(n) => self.expand_ntv(n, work),
+      // Transparent: a raised `Term` has no `CoreTerm::Ctx`-equivalent
+      // slot to put the location in at this stage (raising only ever
+      // runs on an already-checked term headed for the evaluator/kernel,
+      // not for diagnostics), so just expand straight through to what
+      // the wrapper contains.
+      CoreTerm::Ctx { term, .. } => self.expand(term, work),
     }
   }
 

@@ -323,7 +323,7 @@ pub fn instantiate_foralls(
   structs: &StructFields,
   typ: &CoreTerm,
 ) -> CoreTerm {
-  let mut current = force(mctx, typ.clone());
+  let mut current = force(mctx, typ.clone()).into_stripped_ctx();
   loop {
     current = match current {
       CoreTerm::Forall {
@@ -332,13 +332,13 @@ pub fn instantiate_foralls(
         ..
       } => {
         let instantiated = instantiate(mctx, &inner_typ, &body);
-        force(mctx, instantiated)
+        force(mctx, instantiated).into_stripped_ctx()
       }
       CoreTerm::Pi { arg, ret, .. }
         if head_atom_of(mctx, &arg).is_some_and(|a| is_class_atom(structs, a)) =>
       {
         let m = mctx.fresh_meta(*arg);
-        force(mctx, open_with(&ret, &CoreTerm::Meta(m)))
+        force(mctx, open_with(&ret, &CoreTerm::Meta(m))).into_stripped_ctx()
       }
       other => return other,
     };
@@ -377,7 +377,7 @@ fn try_absorb_into_forall(
   fun_ty: &CoreTerm,
   arg: &CoreTerm,
 ) -> Option<CoreTerm> {
-  let mut current = force(mctx, fun_ty.clone());
+  let mut current = force(mctx, fun_ty.clone()).into_stripped_ctx();
   let mut peeled: Vec<MetaId> = Vec::new();
   loop {
     current = match current {
@@ -388,7 +388,7 @@ fn try_absorb_into_forall(
       } => {
         let m = mctx.fresh_meta((*inner_typ).clone());
         peeled.push(m);
-        force(mctx, open_with(&body, &CoreTerm::Meta(m)))
+        force(mctx, open_with(&body, &CoreTerm::Meta(m))).into_stripped_ctx()
       }
       CoreTerm::Pi { .. } => return None,
       _ => break,
@@ -422,7 +422,12 @@ fn expect_pi(
   mctx: &mut MetaContext,
   expected: &CoreTerm,
 ) -> Result<(CoreTerm, CoreTerm, Multiplicity), InferError> {
-  match force(mctx, expected.clone()) {
+  // `.into_stripped_ctx()`: this match's final arm is a wildcard
+  // (`other => Err(InferError::ExpectedFunctionType(other))`), which the
+  // compiler can't flag as missing a `Ctx` case — without stripping, a
+  // `Ctx`-wrapped `Pi` would be spuriously reported as "not a function
+  // type" instead of being recognized.
+  match force(mctx, expected.clone()).into_stripped_ctx() {
     CoreTerm::Pi { arg, ret, mult, .. } => Ok((*arg, *ret, mult)),
     CoreTerm::Meta(m) => {
       let arg_meta = mctx.fresh_meta(CoreTerm::Sort { level: 1 });
@@ -471,6 +476,12 @@ pub fn infer(
   term: &CoreTerm,
 ) -> Result<CoreTerm, InferError> {
   match term {
+    // Transparent: strip the location wrapper and re-dispatch on the
+    // real shape. `infer`'s own signature has no location to attribute
+    // an error to yet (that's threaded in by callers via `Ctx`'s own
+    // presence further up the term, not by `infer` itself), so this is a
+    // pure pass-through for now.
+    CoreTerm::Ctx { term, .. } => infer(mctx, ctx, structs, term),
     CoreTerm::Bound(i) => Err(InferError::UnexpectedBound(*i)),
     CoreTerm::Hole => Err(InferError::CannotInferHole),
 
@@ -529,9 +540,14 @@ pub fn infer(
     // infer `value`'s own type and use *that* as the bound variable's
     // type when inferring `body`, rather than routing through
     // `expect_pi`/`unify` at all.
-    CoreTerm::App { fun, arg } if matches!(fun.as_ref(), CoreTerm::Lam { param_typ, .. } if matches!(param_typ.as_ref(), CoreTerm::Hole)) =>
+    // `.strip_ctx()` on both the function position and its param type: a
+    // `Ctx`-wrapped `Lam`/`Hole` here would otherwise silently miss this
+    // guard (falling through to the generic `App` arm below) and hit
+    // `expect_pi`'s known `Hole`-can't-become-a-function-type failure
+    // this arm exists specifically to avoid.
+    CoreTerm::App { fun, arg } if matches!(fun.as_ref().strip_ctx(), CoreTerm::Lam { param_typ, .. } if matches!(param_typ.as_ref().strip_ctx(), CoreTerm::Hole)) =>
     {
-      let CoreTerm::Lam { body, .. } = fun.as_ref() else {
+      let CoreTerm::Lam { body, .. } = fun.as_ref().strip_ctx() else {
         unreachable!()
       };
       let arg_ty = infer(mctx, ctx, structs, arg)?;
@@ -778,6 +794,27 @@ pub fn check(
   term: &CoreTerm,
   expected: &CoreTerm,
 ) -> Result<(), InferError> {
+  // Keep the un-stripped `term` around for the generic fallback below: a
+  // `UnifyError::Mismatch` compares TYPES (`term`'s inferred type vs.
+  // `expected`), and a type is almost always synthesized/looked-up
+  // (`ctx.get(atom)`, a class registry, ...) rather than parsed at this
+  // position — so it essentially never carries a `Ctx` location of its
+  // own, even though `term` (the actual written expression) usually
+  // does. Attaching `term`'s location to a location-less `Mismatch`
+  // there is what makes "type mismatch" diagnostics point at the
+  // expression that's actually wrong instead of falling back to the
+  // enclosing def's start line.
+  let original_term = term;
+  // Strip once, up front, and shadow both parameters for everything
+  // else — `check` is a long chain of `if let CoreTerm::X = term`/
+  // `expected` special cases (not a single top-level `match`), so
+  // patching each individually is exactly the kind of "333 sites, easy
+  // to miss one" situation the `Ctx` design is meant to avoid.
+  // `strip_ctx` is a zero-cost reference walk (no clone), so shadowing
+  // costs nothing and every check below sees the real shape regardless
+  // of how many `Ctx` layers wrapped it.
+  let term = term.strip_ctx();
+  let expected = expected.strip_ctx();
   if matches!(term, CoreTerm::Hole) {
     return Ok(());
   }
@@ -830,9 +867,9 @@ pub fn check(
   if let CoreTerm::App { fun, arg } = term
     && let CoreTerm::Lam {
       param_typ, body, ..
-    } = fun.as_ref()
+    } = fun.as_ref().strip_ctx()
   {
-    let arg_ty = if matches!(param_typ.as_ref(), CoreTerm::Hole) {
+    let arg_ty = if matches!(param_typ.as_ref().strip_ctx(), CoreTerm::Hole) {
       infer(mctx, ctx, structs, arg)?
     } else {
       check(mctx, ctx, structs, arg, param_typ)?;
@@ -894,8 +931,8 @@ pub fn check(
   if let CoreTerm::Lit(CoreLit::StructLit {
     fields,
     type_name: None,
-  }) = term
-    && let CoreTerm::Free(atom) = force(mctx, expected.clone())
+  }) = term.strip_ctx()
+    && let CoreTerm::Free(atom) = force(mctx, expected.clone()).into_stripped_ctx()
   {
     return check_struct_fields(
       mctx,
@@ -954,18 +991,59 @@ pub fn check(
 
   let inferred = infer(mctx, ctx, structs, term)?;
   let inferred = instantiate_foralls(mctx, structs, &inferred);
-  unify(mctx, &inferred, expected)?;
+  unify(mctx, &inferred, expected)
+    .map_err(|e| attach_location(InferError::Unify(e), original_term))?;
   Ok(())
+}
+
+/// If `e` is a `Mismatch`/`UnsupportedPattern` whose sides have no
+/// location of their own (the common case — see `check`'s generic
+/// fallback, which is this function's only caller), attach `term`'s own
+/// location (the actual written expression `check` was called on) to its
+/// `left` side, so the eventual `Diagnostic` points at the expression
+/// that's wrong instead of falling back to the enclosing def's start
+/// line. A no-op if `term` itself has no location, or if the error
+/// already does (e.g. a nested unify failure inside `left`/`right`'s own
+/// structure that already found a more specific position).
+fn attach_location(e: InferError, term: &CoreTerm) -> InferError {
+  let Some(loc) = term.strip_ctx_loc().1 else {
+    return e;
+  };
+  let wrap = |t: CoreTerm| -> CoreTerm {
+    if t.strip_ctx_loc().1.is_some() {
+      t
+    } else {
+      CoreTerm::Ctx {
+        loc: loc.clone(),
+        term: Box::new(t),
+      }
+    }
+  };
+  match e {
+    InferError::Unify(UnifyError::Mismatch { left, right }) => {
+      InferError::Unify(UnifyError::Mismatch {
+        left: wrap(left),
+        right,
+      })
+    }
+    InferError::Unify(UnifyError::UnsupportedPattern { left, right }) => {
+      InferError::Unify(UnifyError::UnsupportedPattern {
+        left: wrap(left),
+        right,
+      })
+    }
+    other => other,
+  }
 }
 
 /// Peel `App(App(App(head, a0), a1), a2)` into `(head, [a0, a1, a2])` —
 /// application order, outermost `App`'s `arg` last.
 fn spine_of(term: &CoreTerm) -> (&CoreTerm, Vec<&CoreTerm>) {
   let mut args = Vec::new();
-  let mut current = term;
+  let mut current = term.strip_ctx();
   while let CoreTerm::App { fun, arg } = current {
     args.push(arg.as_ref());
-    current = fun.as_ref();
+    current = fun.as_ref().strip_ctx();
   }
   args.reverse();
   (current, args)
@@ -984,7 +1062,7 @@ fn spine_of(term: &CoreTerm) -> (&CoreTerm, Vec<&CoreTerm>) {
 /// Returns `None` if `term` doesn't resolve to a `Free`/`App`-of-`Free`
 /// shape at all (still a `Meta`, a `Pi`, etc.).
 pub(crate) fn head_atom_of(mctx: &mut MetaContext, term: &CoreTerm) -> Option<Atom> {
-  match force(mctx, term.clone()) {
+  match force(mctx, term.clone()).into_stripped_ctx() {
     CoreTerm::Free(atom) => Some(atom),
     CoreTerm::App { fun, .. } => head_atom_of(mctx, &fun),
     _ => None,
@@ -1001,7 +1079,7 @@ fn instantiate_foralls_tracked(
   typ: &CoreTerm,
 ) -> (CoreTerm, Map<Identifier, MetaId>) {
   let mut named = Map::new();
-  let mut current = force(mctx, typ.clone());
+  let mut current = force(mctx, typ.clone()).into_stripped_ctx();
   while let CoreTerm::Forall {
     dbg,
     typ: inner_typ,
@@ -1012,7 +1090,7 @@ fn instantiate_foralls_tracked(
     if let DebugName::Named(name) = &dbg {
       named.insert(name.clone(), m);
     }
-    current = force(mctx, open_with(&body, &CoreTerm::Meta(m)));
+    current = force(mctx, open_with(&body, &CoreTerm::Meta(m))).into_stripped_ctx();
   }
   (current, named)
 }
@@ -1088,13 +1166,13 @@ fn try_resolve_class_method(
   // whether anything actually changed (the O(2^n) list-literal blowup this
   // function's `arg_ds` cache exists to avoid).
   if let Some(expected) = expected {
-    let mut peek = residual.clone();
+    let mut peek = residual.clone().into_stripped_ctx();
     for _ in spine_args {
       let CoreTerm::Pi { ret, .. } = peek else {
         break;
       };
       let placeholder = mctx.fresh_meta(CoreTerm::Hole);
-      peek = force(mctx, open_with(&ret, &CoreTerm::Meta(placeholder)));
+      peek = force(mctx, open_with(&ret, &CoreTerm::Meta(placeholder))).into_stripped_ctx();
     }
     let _ = unify(mctx, &peek, expected);
   }
@@ -1126,7 +1204,7 @@ fn try_resolve_class_method(
   for &arg in spine_args {
     let CoreTerm::Pi {
       arg: arg_ty, ret, ..
-    } = residual
+    } = residual.into_stripped_ctx()
     else {
       return None;
     };
@@ -1156,7 +1234,7 @@ fn try_resolve_class_method(
       Some(&arg_ty),
     );
     check(mctx, ctx, structs, &arg_d, &arg_ty).ok()?;
-    residual = force(mctx, open_with(&ret, &arg_d));
+    residual = force(mctx, open_with(&ret, &arg_d)).into_stripped_ctx();
     arg_tys.push(*arg_ty);
     arg_ds.push((arg_d, class_meta_unresolved_before));
   }
@@ -1182,7 +1260,7 @@ fn try_resolve_class_method(
       &CoreTerm::Free(default_atom),
     );
   }
-  let forced_class_meta = force(mctx, CoreTerm::Meta(class_meta));
+  let forced_class_meta = force(mctx, CoreTerm::Meta(class_meta)).into_stripped_ctx();
   // A class-method reference no longer gets rewritten to a different
   // global (`instance-BEq-List.beq`, resolved through the OLD, entirely
   // separate `Module::get_def_refs` per-instance-method registration,
@@ -1331,7 +1409,7 @@ fn try_insert_dict_args(
     let class_path = atom_paths.get(&class_atom)?.clone();
     dict_slots.push((class_path, *arg.clone()));
     let placeholder = mctx.fresh_meta(*arg);
-    residual = force(mctx, open_with(&ret, &CoreTerm::Meta(placeholder)));
+    residual = force(mctx, open_with(&ret, &CoreTerm::Meta(placeholder))).into_stripped_ctx();
   }
   if dict_slots.is_empty() {
     return None;
@@ -1340,12 +1418,12 @@ fn try_insert_dict_args(
   for &arg in spine_args {
     let CoreTerm::Pi {
       arg: arg_ty, ret, ..
-    } = residual
+    } = residual.into_stripped_ctx()
     else {
       return None;
     };
     check(mctx, ctx, structs, arg, &arg_ty).ok()?;
-    residual = force(mctx, open_with(&ret, arg));
+    residual = force(mctx, open_with(&ret, arg)).into_stripped_ctx();
     arg_tys.push(*arg_ty);
   }
   let mut result = CoreTerm::Free(head_atom);
@@ -1399,7 +1477,7 @@ fn try_insert_dict_args(
 /// and in which order), not have them silently consumed the way an
 /// ordinary call site wants.
 fn instantiate_foralls_only(mctx: &mut MetaContext, typ: &CoreTerm) -> CoreTerm {
-  let mut current = force(mctx, typ.clone());
+  let mut current = force(mctx, typ.clone()).into_stripped_ctx();
   while let CoreTerm::Forall {
     typ: inner_typ,
     body,
@@ -1407,7 +1485,7 @@ fn instantiate_foralls_only(mctx: &mut MetaContext, typ: &CoreTerm) -> CoreTerm 
   } = current
   {
     let instantiated = instantiate(mctx, &inner_typ, &body);
-    current = force(mctx, instantiated);
+    current = force(mctx, instantiated).into_stripped_ctx();
   }
   current
 }
@@ -1538,7 +1616,7 @@ fn resolve_instance_dict_args(
     // the tail, still needing "BEq A" for the element type) must thread
     // the CALLER's own bound dictionary through rather than trying (and
     // failing) a global lookup for a type variable that isn't concrete.
-    if let CoreTerm::Free(_) = force(mctx, elem_ty.as_ref().clone())
+    if let CoreTerm::Free(_) = force(mctx, elem_ty.as_ref().clone()).into_stripped_ctx()
       && let Some(&bound) = dict_scope.get(constraint.class())
     {
       dict_args.push(CoreTerm::Free(bound));
@@ -1697,7 +1775,7 @@ pub fn desugar_struct_literals(
       // (a real, possibly-dependent Pi return type CAN reference the
       // parameter) before recursing, then close back over that atom to
       // reconstruct a proper `Lam` body.
-      let ret_hint = expected.and_then(|e| match force(mctx, e.clone()) {
+      let ret_hint = expected.and_then(|e| match force(mctx, e.clone()).into_stripped_ctx() {
         CoreTerm::Pi { ret, .. } => Some(*ret),
         _ => None,
       });
@@ -1771,9 +1849,9 @@ pub fn desugar_struct_literals(
         dbg,
         param_typ,
         body,
-      } = fun.as_ref()
+      } = fun.as_ref().strip_ctx()
       {
-        let arg_expected = if matches!(param_typ.as_ref(), CoreTerm::Hole) {
+        let arg_expected = if matches!(param_typ.as_ref().strip_ctx(), CoreTerm::Hole) {
           None
         } else {
           Some(param_typ.as_ref())
@@ -1789,7 +1867,7 @@ pub fn desugar_struct_literals(
           arg,
           arg_expected,
         );
-        let arg_ty = if matches!(param_typ.as_ref(), CoreTerm::Hole) {
+        let arg_ty = if matches!(param_typ.as_ref().strip_ctx(), CoreTerm::Hole) {
           infer(mctx, ctx, structs, arg).unwrap_or_else(|_| (**param_typ).clone())
         } else {
           (**param_typ).clone()
@@ -2030,7 +2108,7 @@ pub fn desugar_struct_literals(
 
     CoreTerm::Lit(CoreLit::StructLit { fields, type_name }) => {
       let atom = type_name.or_else(|| {
-        expected.and_then(|e| match force(mctx, e.clone()) {
+        expected.and_then(|e| match force(mctx, e.clone()).into_stripped_ctx() {
           CoreTerm::Free(a) => Some(a),
           _ => None,
         })
@@ -2270,6 +2348,20 @@ pub fn desugar_struct_literals(
         })
         .collect(),
     }),
+    CoreTerm::Ctx { loc, term } => CoreTerm::Ctx {
+      loc: loc.clone(),
+      term: Box::new(desugar_struct_literals(
+        mctx,
+        ctx,
+        structs,
+        atom_paths,
+        known_class_methods,
+        known_instances,
+        dict_scope,
+        term,
+        expected,
+      )),
+    },
   }
 }
 

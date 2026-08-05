@@ -148,6 +148,16 @@ pub fn force(mctx: &MetaContext, term: CoreTerm) -> CoreTerm {
       Some(sol) => force(mctx, sol.clone()),
       None => CoreTerm::Meta(m),
     },
+    // Must see through `Ctx` here rather than falling into the `other`
+    // wildcard below — a solved metavariable wrapped in `Ctx` (e.g. a
+    // def's own body position) would otherwise never get resolved, since
+    // `CoreTerm::Ctx { .. }` doesn't match `CoreTerm::Meta(_)` structurally.
+    // Preserves the wrapper around the forced result so callers matching
+    // on `force`'s own output still see (and can strip) the same location.
+    CoreTerm::Ctx { loc, term: inner } => CoreTerm::Ctx {
+      loc,
+      term: Box::new(force(mctx, *inner)),
+    },
     other => other,
   }
 }
@@ -170,6 +180,7 @@ fn occurs(mctx: &MetaContext, target: MetaId, term: &CoreTerm) -> bool {
     CoreTerm::Lit(lit) => occurs_lit(mctx, target, lit),
     CoreTerm::Con(c) => occurs_args(mctx, target, &c.args),
     CoreTerm::Ntv(n) => occurs_args(mctx, target, &n.args),
+    CoreTerm::Ctx { term, .. } => occurs(mctx, target, term),
   }
 }
 
@@ -220,6 +231,18 @@ fn bind(mctx: &mut MetaContext, m: MetaId, term: CoreTerm) -> Result<(), UnifyEr
 pub fn unify(mctx: &mut MetaContext, a: &CoreTerm, b: &CoreTerm) -> Result<(), UnifyError> {
   let a = force(mctx, a.clone());
   let b = force(mctx, b.clone());
+  // Strip any `Ctx` location wrapper before dispatching on shape — this
+  // match's final arm is a wildcard (`_ => Err(mismatch(a, b))`), which
+  // the compiler can't flag as missing a `Ctx` case the way an exhaustive
+  // match would: without this, a `Ctx`-wrapped `Forall`/`Pi`/`App`/etc.
+  // would silently fail to match ANY of the specific-shape arms below and
+  // fall straight into "these don't unify", spuriously rejecting valid
+  // programs. `unify`'s own recursive calls on sub-terms (`t1`/`t2`,
+  // `arg`/`ret`, ...) each re-strip at their own entry, so nested `Ctx`
+  // wrappers deeper in the tree are handled the same way, one level at a
+  // time.
+  let a = a.strip_ctx().clone();
+  let b = b.strip_ctx().clone();
   match (&a, &b) {
     (CoreTerm::Hole, _) | (_, CoreTerm::Hole) => Ok(()),
 
@@ -631,6 +654,10 @@ pub fn zonk(mctx: &MetaContext, term: &CoreTerm) -> CoreTerm {
       num_args: n.num_args,
       args: zonk_args(mctx, &n.args),
     }),
+    CoreTerm::Ctx { loc, term } => CoreTerm::Ctx {
+      loc: loc.clone(),
+      term: Box::new(zonk(mctx, term)),
+    },
   }
 }
 
@@ -740,6 +767,10 @@ fn close_meta_at(term: &CoreTerm, depth: u32, target: MetaId) -> CoreTerm {
       num_args: n.num_args,
       args: close_meta_at_args(&n.args, depth, target),
     }),
+    CoreTerm::Ctx { loc, term } => CoreTerm::Ctx {
+      loc: loc.clone(),
+      term: Box::new(close_meta_at(term, depth, target)),
+    },
   }
 }
 
@@ -823,6 +854,7 @@ fn unresolved_metas_in_order(mctx: &MetaContext, term: &CoreTerm, out: &mut Vec<
     CoreTerm::Lit(lit) => unresolved_metas_in_order_lit(mctx, lit, out),
     CoreTerm::Con(c) => unresolved_metas_in_order_args(mctx, &c.args, out),
     CoreTerm::Ntv(n) => unresolved_metas_in_order_args(mctx, &n.args, out),
+    CoreTerm::Ctx { term, .. } => unresolved_metas_in_order(mctx, term, out),
   }
 }
 

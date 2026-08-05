@@ -247,10 +247,17 @@ pub fn lower_term(ctx: &mut LowerContext, term: &Term) -> Result<CoreTerm, Lower
     Term::Sort { level } => Ok(CoreTerm::Sort { level: *level }),
     Term::Hole => Ok(CoreTerm::Hole),
 
-    // Transparent wrapper: source-location info isn't represented in
-    // CoreTerm yet (the plan's Diagnostics section flags a Ctx-equivalent
-    // as a follow-up) — lower straight through for now.
-    Term::Ctx { term, .. } => lower_term(ctx, term),
+    // Carry the source location into CoreTerm's own `Ctx` wrapper (added
+    // for `plans/implementations/typechecker-de-bruijn-core.md`'s
+    // Diagnostics follow-up) rather than discarding it — every function
+    // that inspects a `CoreTerm`'s shape strips this transparently (see
+    // `CoreTerm::strip_ctx`/`strip_ctx_loc`/`into_stripped_ctx`), so
+    // wrapping here doesn't change what anything downstream sees, only
+    // what error-reporting can recover.
+    Term::Ctx { loc, term, .. } => Ok(CoreTerm::Ctx {
+      loc: loc.clone(),
+      term: Box::new(lower_term(ctx, term)?),
+    }),
     // `(term : typ)` desugars to `App(Lam{param_typ: typ, body: Bound(0)},
     // term)` — the exact same "immediately-applied identity function"
     // shape `let x : T := v in x` already lowers to — rather than simply
