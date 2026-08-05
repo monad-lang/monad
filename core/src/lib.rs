@@ -847,23 +847,9 @@ pub fn check_files(
         ..Default::default()
       }],
       Ok(text) => {
-        let mut loaded = master_loaded.clone();
-        match crate::term::module::load_module_from_text_typed(&text, &path, &mut loaded) {
-          Ok(()) => {
-            master_loaded = loaded;
-            Vec::new()
-          }
-          Err(crate::term::module::LoadingError::Type(type_error)) => {
-            crate::eval::r#type::type_error_as_diagnostics(&type_error, Some(file))
-          }
-          Err(crate::term::module::LoadingError::Generic(message)) => {
-            vec![crate::diag::Diagnostic {
-              message,
-              path: Some(file.clone()),
-              ..Default::default()
-            }]
-          }
-        }
+        let (diagnostics, updated) = check_one_source(file, &text, &path, master_loaded.clone());
+        master_loaded = updated;
+        diagnostics
       }
     };
     results.push(FileCheckResult {
@@ -873,6 +859,53 @@ pub fn check_files(
   }
 
   Ok(results)
+}
+
+/// Type-check one file's given `source` text against `loaded`, returning
+/// its diagnostics and (whether or not it loaded successfully — a failed
+/// load still returns `loaded` unchanged, not consumed) the resulting
+/// `LoadedModules`. The shared per-file primitive both `check_files`
+/// (disk-reading, multi-file, batch CLI) and `check_source` (single
+/// in-memory buffer, the LSP server's `didOpen`/`didChange` path) build
+/// on, so the two can never drift on what "does this file check" means.
+fn check_one_source(
+  path: &PathBuf,
+  source: &str,
+  module_path: &ModulePath,
+  mut loaded: LoadedModules,
+) -> (Vec<crate::diag::Diagnostic>, LoadedModules) {
+  match crate::term::module::load_module_from_text_typed(source, module_path, &mut loaded) {
+    Ok(()) => (Vec::new(), loaded),
+    Err(crate::term::module::LoadingError::Type(type_error)) => (
+      crate::eval::r#type::type_error_as_diagnostics(&type_error, Some(path)),
+      loaded,
+    ),
+    Err(crate::term::module::LoadingError::Generic(message)) => (
+      vec![crate::diag::Diagnostic {
+        message,
+        path: Some(path.clone()),
+        ..Default::default()
+      }],
+      loaded,
+    ),
+  }
+}
+
+/// Type-check a single file's CURRENT in-memory content — unlike
+/// `check_files` (which always reads from disk), this is what the LSP
+/// server calls on `textDocument/didOpen`/`didChange`, where the editor's
+/// buffer may have unsaved changes that differ from what's on disk.
+pub fn check_source(
+  path: &Path,
+  source: &str,
+  extra_mote_paths: Vec<PathBuf>,
+) -> Result<Vec<crate::diag::Diagnostic>, String> {
+  let path = path.to_path_buf();
+  let module_path: ModulePath = path.clone().into();
+  let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
+  loaded.set_search_paths(build_default_search_paths(&path, &extra_mote_paths));
+  let (diagnostics, _) = check_one_source(&path, source, &module_path, loaded);
+  Ok(diagnostics)
 }
 
 /// Coarse-grained symbol classification — enough to distinguish the
@@ -1002,18 +1035,9 @@ pub fn symbols_for_files(
     let symbols = match fs::read_to_string(file) {
       Err(_) => Vec::new(),
       Ok(text) => {
-        let mut loaded = master_loaded.clone();
-        match crate::term::module::load_module_from_text_typed(&text, &path, &mut loaded) {
-          Ok(()) => {
-            let symbols = loaded
-              .get_module(&path)
-              .map(|m| symbols_from_decls(m.clone().to_decls().as_slice()))
-              .unwrap_or_default();
-            master_loaded = loaded;
-            symbols
-          }
-          Err(_) => Vec::new(),
-        }
+        let (symbols, updated) = symbols_one_source(&text, &path, master_loaded.clone());
+        master_loaded = updated;
+        symbols
       }
     };
     results.push(FileSymbols {
@@ -1023,6 +1047,43 @@ pub fn symbols_for_files(
   }
 
   Ok(results)
+}
+
+/// The shared per-file primitive `symbols_for_files` (disk-reading,
+/// multi-file) and `symbols_from_source` (single in-memory buffer, the
+/// LSP server's path) both build on — mirrors `check_one_source`.
+fn symbols_one_source(
+  source: &str,
+  module_path: &ModulePath,
+  mut loaded: LoadedModules,
+) -> (Vec<SymbolInfo>, LoadedModules) {
+  match crate::term::module::load_module_from_text_typed(source, module_path, &mut loaded) {
+    Ok(()) => {
+      let symbols = loaded
+        .get_module(module_path)
+        .map(|m| symbols_from_decls(m.clone().to_decls().as_slice()))
+        .unwrap_or_default();
+      (symbols, loaded)
+    }
+    Err(_) => (Vec::new(), loaded),
+  }
+}
+
+/// Symbol index for a single file's CURRENT in-memory content — unlike
+/// `symbols_for_files` (which always reads from disk), this is what the
+/// LSP server's `hover`/`definition` handlers call, so a lookup reflects
+/// the editor's buffer even before it's been saved.
+pub fn symbols_from_source(
+  path: &Path,
+  source: &str,
+  extra_mote_paths: Vec<PathBuf>,
+) -> Result<Vec<SymbolInfo>, String> {
+  let path = path.to_path_buf();
+  let module_path: ModulePath = path.clone().into();
+  let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
+  loaded.set_search_paths(build_default_search_paths(&path, &extra_mote_paths));
+  let (symbols, _) = symbols_one_source(source, &module_path, loaded);
+  Ok(symbols)
 }
 
 #[cfg(test)]

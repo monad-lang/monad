@@ -1,3 +1,5 @@
+mod lsp;
+
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
@@ -140,6 +142,16 @@ enum Commands {
     #[arg(long = "manifest-path", value_name = "PATH")]
     manifest_path: Option<PathBuf>,
   },
+
+  /// Start the LSP server (stdio JSON-RPC). Diagnostics and navigation
+  /// (hover/definition/documentSymbol) only — no completions, rename,
+  /// semantic tokens, or code actions yet (see `lsp` module docs).
+  Lsp {
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
+  },
 }
 
 #[derive(Debug, Parser)]
@@ -203,15 +215,15 @@ fn augment_mote_paths(mote_path: &mut Vec<PathBuf>, manifest_path: Option<&PathB
 // `core`) keeps `monad-core` itself unaware of LSP conventions.
 
 #[derive(serde::Serialize)]
-struct JsonPosition {
-  line: u32,
-  character: usize,
+pub(crate) struct JsonPosition {
+  pub(crate) line: u32,
+  pub(crate) character: usize,
 }
 
 #[derive(serde::Serialize)]
-struct JsonRange {
-  start: JsonPosition,
-  end: JsonPosition,
+pub(crate) struct JsonRange {
+  pub(crate) start: JsonPosition,
+  pub(crate) end: JsonPosition,
 }
 
 #[derive(serde::Serialize)]
@@ -245,7 +257,7 @@ struct JsonCheckReport {
 /// doc comment) — converts at this one boundary, `saturating_sub` so a
 /// (should-never-happen) `0` line/column from a `SourceRange::default()`
 /// placeholder can't underflow instead of panicking.
-fn to_json_position(loc: &monad_core::term::Location) -> JsonPosition {
+pub(crate) fn to_json_position(loc: &monad_core::term::Location) -> JsonPosition {
   JsonPosition {
     line: loc.line.saturating_sub(1),
     character: loc.column.saturating_sub(1),
@@ -255,7 +267,7 @@ fn to_json_position(loc: &monad_core::term::Location) -> JsonPosition {
 /// `SourceRange` -> `JsonRange`, falling back to `0:0-0:0` when there's no
 /// location at all (an internal-error diagnostic with nothing to point
 /// at) rather than making every caller handle the `None` case itself.
-fn location_to_json_range(loc: Option<&monad_core::term::SourceRange>) -> JsonRange {
+pub(crate) fn location_to_json_range(loc: Option<&monad_core::term::SourceRange>) -> JsonRange {
   match loc {
     Some(loc) => JsonRange {
       start: to_json_position(&loc.start),
@@ -289,7 +301,7 @@ fn to_json_diagnostic(diag: &Diagnostic) -> JsonDiagnostic {
   }
 }
 
-fn path_to_uri(path: &std::path::Path) -> String {
+pub(crate) fn path_to_uri(path: &std::path::Path) -> String {
   let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
   format!("file://{}", abs.display())
 }
@@ -372,7 +384,7 @@ struct JsonSymbolFile {
   symbols: Vec<JsonSymbol>,
 }
 
-fn symbol_kind_label(kind: SymbolKind) -> &'static str {
+pub(crate) fn symbol_kind_label(kind: SymbolKind) -> &'static str {
   match kind {
     SymbolKind::Function => "function",
     SymbolKind::Struct => "struct",
@@ -456,7 +468,7 @@ fn run_symbols(inputs: Vec<PathBuf>, json: bool, mote_path: Vec<PathBuf>) -> ! {
 /// Identifier characters: alphanumeric, `_`, `.` (Monad's path
 /// separator), `'` (allowed in identifiers, e.g. `x'`). Returns `None` if
 /// the position isn't on an identifier character at all.
-fn identifier_at(source: &str, line: u32, col: usize) -> Option<(String, usize, usize)> {
+pub(crate) fn identifier_at(source: &str, line: u32, col: usize) -> Option<(String, usize, usize)> {
   let line_text = source.lines().nth((line as usize).checked_sub(1)?)?;
   let chars: Vec<char> = line_text.chars().collect();
   let idx = col.checked_sub(1)?;
@@ -479,23 +491,33 @@ fn identifier_at(source: &str, line: u32, col: usize) -> Option<(String, usize, 
   Some((name, start + 1, end + 2))
 }
 
-/// Find `name` in `file`'s own symbol index — exact match first (the
-/// common case: cursor on a bare `add`), then "declared name ends with
-/// `.name`" as a fallback for a qualified reference (`List.map` typed at
-/// the call site resolving to a symbol whose own recorded name already
-/// includes a module prefix).
-fn find_symbol_by_name(file: &Path, name: &str, mote_path: Vec<PathBuf>) -> Option<SymbolInfo> {
+/// Match `name` against an already-computed symbol list — exact match
+/// first (the common case: cursor on a bare `add`), then "declared name
+/// ends with `.name`" as a fallback for a qualified reference (`List.map`
+/// typed at the call site resolving to a symbol whose own recorded name
+/// already includes a module prefix). Pure lookup, no I/O — shared by the
+/// disk-based CLI path (`find_symbol_in_file`) and the LSP server's
+/// in-memory-buffer path (`lsp::hover`/`lsp::definition`, which computes
+/// its own symbol list via `symbols_from_source` instead of reading the
+/// file back off disk).
+pub(crate) fn find_symbol_by_name<'a>(
+  symbols: &'a [SymbolInfo],
+  name: &str,
+) -> Option<&'a SymbolInfo> {
+  symbols.iter().find(|s| s.name == name).or_else(|| {
+    symbols
+      .iter()
+      .find(|s| s.name.ends_with(&format!(".{name}")))
+  })
+}
+
+/// Disk-reading convenience wrapper: compute `file`'s own symbol index
+/// (via `symbols_for_files`, same as the `symbols` command) and look
+/// `name` up in it.
+fn find_symbol_in_file(file: &Path, name: &str, mote_path: Vec<PathBuf>) -> Option<SymbolInfo> {
   let results = symbols_for_files(vec![file.to_path_buf()], mote_path).ok()?;
   let symbols = results.into_iter().find(|r| r.path == file)?.symbols;
-  symbols
-    .iter()
-    .find(|s| s.name == name)
-    .or_else(|| {
-      symbols
-        .iter()
-        .find(|s| s.name.ends_with(&format!(".{name}")))
-    })
-    .cloned()
+  find_symbol_by_name(&symbols, name).cloned()
 }
 
 #[derive(serde::Serialize)]
@@ -520,7 +542,7 @@ fn run_hover(
 ) -> Result<(), String> {
   let source = std::fs::read_to_string(&file).map_err(|e| format!("{e}"))?;
   let found = identifier_at(&source, line, col).and_then(|(name, start_col, end_col)| {
-    find_symbol_by_name(&file, &name, mote_path).map(|sym| (sym, start_col, end_col))
+    find_symbol_in_file(&file, &name, mote_path).map(|sym| (sym, start_col, end_col))
   });
 
   match found {
@@ -571,7 +593,7 @@ fn run_definition(
 ) -> Result<(), String> {
   let source = std::fs::read_to_string(&file).map_err(|e| format!("{e}"))?;
   let found = identifier_at(&source, line, col)
-    .and_then(|(name, _, _)| find_symbol_by_name(&file, &name, mote_path));
+    .and_then(|(name, _, _)| find_symbol_in_file(&file, &name, mote_path));
 
   match found {
     None => {
@@ -755,6 +777,17 @@ fn execute(command: Commands) -> Result<(), String> {
     } => {
       augment_mote_paths(&mut mote_path, manifest_path.as_ref());
       let result = run_definition(file, line, col, json, mote_path);
+      if let Err(ref e) = result {
+        eprintln!("error: {e}");
+      }
+      result
+    }
+    Commands::Lsp {
+      mut mote_path,
+      manifest_path,
+    } => {
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      let result = lsp::run(mote_path);
       if let Err(ref e) = result {
         eprintln!("error: {e}");
       }
