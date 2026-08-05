@@ -1,8 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use monad_core::{
-  SymbolKind, check_files,
+  SymbolInfo, SymbolKind, check_files,
   diag::{Diagnostic, Severity, render_diagnostics},
   eval::EvalOptions,
   run, run_tests, symbols_for_files,
@@ -98,6 +98,41 @@ enum Commands {
     #[arg(value_name = "PATHS")]
     inputs: Vec<PathBuf>,
     /// Emit machine-readable JSON instead of a plain text listing.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
+  },
+
+  /// Type signature (and, for a def, its full type) of the identifier at
+  /// a position. LINE/COL are 1-indexed, matching the positions already
+  /// shown in `check`'s own diagnostics (e.g. "at 3:1").
+  Hover {
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+    #[arg(value_name = "LINE")]
+    line: u32,
+    #[arg(value_name = "COL")]
+    col: usize,
+    #[arg(long, default_value_t = false)]
+    json: bool,
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
+  },
+
+  /// Where the identifier at a position is defined. LINE/COL are
+  /// 1-indexed, same convention as `hover`/`check`.
+  Definition {
+    #[arg(value_name = "FILE")]
+    file: PathBuf,
+    #[arg(value_name = "LINE")]
+    line: u32,
+    #[arg(value_name = "COL")]
+    col: usize,
     #[arg(long, default_value_t = false)]
     json: bool,
     #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
@@ -217,8 +252,11 @@ fn to_json_position(loc: &monad_core::term::Location) -> JsonPosition {
   }
 }
 
-fn to_json_diagnostic(diag: &Diagnostic) -> JsonDiagnostic {
-  let range = match &diag.location {
+/// `SourceRange` -> `JsonRange`, falling back to `0:0-0:0` when there's no
+/// location at all (an internal-error diagnostic with nothing to point
+/// at) rather than making every caller handle the `None` case itself.
+fn location_to_json_range(loc: Option<&monad_core::term::SourceRange>) -> JsonRange {
+  match loc {
     Some(loc) => JsonRange {
       start: to_json_position(&loc.start),
       end: to_json_position(&loc.end),
@@ -233,7 +271,11 @@ fn to_json_diagnostic(diag: &Diagnostic) -> JsonDiagnostic {
         character: 0,
       },
     },
-  };
+  }
+}
+
+fn to_json_diagnostic(diag: &Diagnostic) -> JsonDiagnostic {
+  let range = location_to_json_range(diag.location.as_ref());
   JsonDiagnostic {
     range,
     severity: match diag.severity {
@@ -320,6 +362,8 @@ struct JsonSymbol {
   name: String,
   kind: SymbolKind,
   range: JsonRange,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  detail: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -358,22 +402,8 @@ fn run_symbols(inputs: Vec<PathBuf>, json: bool, mote_path: Vec<PathBuf>) -> ! {
           .map(|s| JsonSymbol {
             name: s.name.clone(),
             kind: s.kind,
-            range: match &s.location {
-              Some(loc) => JsonRange {
-                start: to_json_position(&loc.start),
-                end: to_json_position(&loc.end),
-              },
-              None => JsonRange {
-                start: JsonPosition {
-                  line: 0,
-                  character: 0,
-                },
-                end: JsonPosition {
-                  line: 0,
-                  character: 0,
-                },
-              },
-            },
+            range: location_to_json_range(s.location.as_ref()),
+            detail: s.detail.clone(),
           })
           .collect(),
       })
@@ -404,6 +434,171 @@ fn run_symbols(inputs: Vec<PathBuf>, json: bool, mote_path: Vec<PathBuf>) -> ! {
   }
 
   std::process::exit(0);
+}
+
+// --- `hover`/`definition` --------------------------------------------------
+//
+// Deliberately name-based, not a walk of the checked term tree to the exact
+// sub-expression under the cursor: `identifier_at` extracts the token
+// touching the cursor by a plain text scan, then both commands look it up
+// by NAME in the target file's own symbol index (`symbols_for_files`) —
+// same scope as `symbols --json`, single-file only, no cross-file `use`
+// resolution and no scope-awareness (a local variable shadowing a
+// same-named top-level def resolves to the top-level one). Getting exact
+// sub-expression resolution and cross-file `use`-aware lookup right needs
+// walking the checked (pre-raise) `CoreTerm` — `raise_core` intentionally
+// discards `Ctx` when producing the final `Term` (see its own doc comment),
+// so that's a larger, separately-scoped follow-up, not attempted here.
+
+/// The identifier/path token touching 1-indexed `(line, col)` in `source`
+/// — e.g. `"add"`, `"List.map"` — plus its own 1-indexed `(start_col,
+/// end_col)` span on that line, for reporting a precise hover range.
+/// Identifier characters: alphanumeric, `_`, `.` (Monad's path
+/// separator), `'` (allowed in identifiers, e.g. `x'`). Returns `None` if
+/// the position isn't on an identifier character at all.
+fn identifier_at(source: &str, line: u32, col: usize) -> Option<(String, usize, usize)> {
+  let line_text = source.lines().nth((line as usize).checked_sub(1)?)?;
+  let chars: Vec<char> = line_text.chars().collect();
+  let idx = col.checked_sub(1)?;
+  if idx >= chars.len() {
+    return None;
+  }
+  let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.' || c == '\'';
+  if !is_ident(chars[idx]) {
+    return None;
+  }
+  let mut start = idx;
+  while start > 0 && is_ident(chars[start - 1]) {
+    start -= 1;
+  }
+  let mut end = idx;
+  while end + 1 < chars.len() && is_ident(chars[end + 1]) {
+    end += 1;
+  }
+  let name: String = chars[start..=end].iter().collect();
+  Some((name, start + 1, end + 2))
+}
+
+/// Find `name` in `file`'s own symbol index — exact match first (the
+/// common case: cursor on a bare `add`), then "declared name ends with
+/// `.name`" as a fallback for a qualified reference (`List.map` typed at
+/// the call site resolving to a symbol whose own recorded name already
+/// includes a module prefix).
+fn find_symbol_by_name(file: &Path, name: &str, mote_path: Vec<PathBuf>) -> Option<SymbolInfo> {
+  let results = symbols_for_files(vec![file.to_path_buf()], mote_path).ok()?;
+  let symbols = results.into_iter().find(|r| r.path == file)?.symbols;
+  symbols
+    .iter()
+    .find(|s| s.name == name)
+    .or_else(|| {
+      symbols
+        .iter()
+        .find(|s| s.name.ends_with(&format!(".{name}")))
+    })
+    .cloned()
+}
+
+#[derive(serde::Serialize)]
+struct JsonHover {
+  contents: String,
+  kind: String,
+  range: JsonRange,
+}
+
+#[derive(serde::Serialize)]
+struct JsonLocation {
+  uri: String,
+  range: JsonRange,
+}
+
+fn run_hover(
+  file: PathBuf,
+  line: u32,
+  col: usize,
+  json: bool,
+  mote_path: Vec<PathBuf>,
+) -> Result<(), String> {
+  let source = std::fs::read_to_string(&file).map_err(|e| format!("{e}"))?;
+  let found = identifier_at(&source, line, col).and_then(|(name, start_col, end_col)| {
+    find_symbol_by_name(&file, &name, mote_path).map(|sym| (sym, start_col, end_col))
+  });
+
+  match found {
+    None => {
+      if json {
+        println!("null");
+      } else {
+        println!("(no symbol found at {line}:{col})");
+      }
+    }
+    Some((sym, start_col, end_col)) => {
+      let contents = sym
+        .detail
+        .clone()
+        .unwrap_or_else(|| format!("{} {}", symbol_kind_label(sym.kind), sym.name));
+      if json {
+        let hover = JsonHover {
+          contents,
+          kind: symbol_kind_label(sym.kind).to_string(),
+          range: JsonRange {
+            start: JsonPosition {
+              line: line.saturating_sub(1),
+              character: start_col.saturating_sub(1),
+            },
+            end: JsonPosition {
+              line: line.saturating_sub(1),
+              character: end_col.saturating_sub(1),
+            },
+          },
+        };
+        let s = serde_json::to_string_pretty(&hover)
+          .map_err(|e| format!("failed to serialize hover: {e}"))?;
+        println!("{s}");
+      } else {
+        println!("{contents}");
+      }
+    }
+  }
+  Ok(())
+}
+
+fn run_definition(
+  file: PathBuf,
+  line: u32,
+  col: usize,
+  json: bool,
+  mote_path: Vec<PathBuf>,
+) -> Result<(), String> {
+  let source = std::fs::read_to_string(&file).map_err(|e| format!("{e}"))?;
+  let found = identifier_at(&source, line, col)
+    .and_then(|(name, _, _)| find_symbol_by_name(&file, &name, mote_path));
+
+  match found {
+    None => {
+      if json {
+        println!("null");
+      } else {
+        println!("(no definition found at {line}:{col})");
+      }
+    }
+    Some(sym) => {
+      if json {
+        let loc = JsonLocation {
+          uri: path_to_uri(&file),
+          range: location_to_json_range(sym.location.as_ref()),
+        };
+        let s = serde_json::to_string_pretty(&loc)
+          .map_err(|e| format!("failed to serialize location: {e}"))?;
+        println!("{s}");
+      } else {
+        match &sym.location {
+          Some(loc) => println!("{}:{}:{}", file.display(), loc.start.line, loc.start.column),
+          None => println!("{} (no location)", file.display()),
+        }
+      }
+    }
+  }
+  Ok(())
 }
 
 fn main() -> Result<(), String> {
@@ -534,6 +729,36 @@ fn execute(command: Commands) -> Result<(), String> {
     } => {
       augment_mote_paths(&mut mote_path, manifest_path.as_ref());
       run_symbols(inputs, json, mote_path)
+    }
+    Commands::Hover {
+      file,
+      line,
+      col,
+      json,
+      mut mote_path,
+      manifest_path,
+    } => {
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      let result = run_hover(file, line, col, json, mote_path);
+      if let Err(ref e) = result {
+        eprintln!("error: {e}");
+      }
+      result
+    }
+    Commands::Definition {
+      file,
+      line,
+      col,
+      json,
+      mut mote_path,
+      manifest_path,
+    } => {
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      let result = run_definition(file, line, col, json, mote_path);
+      if let Err(ref e) = result {
+        eprintln!("error: {e}");
+      }
+      result
     }
   }
 }

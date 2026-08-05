@@ -895,6 +895,12 @@ pub struct SymbolInfo {
   pub name: String,
   pub kind: SymbolKind,
   pub location: Option<SourceRange>,
+  /// A short human-readable summary — a `def`'s full type signature
+  /// (rendered via `Term`'s `Display`), `None` for kinds that don't have
+  /// an obvious one-line summary yet (`Struct`/`Class`/`Enum`/`Instance`).
+  /// This is what `hover --json` shows for a symbol; `symbols --json`
+  /// exposes it too (LSP's `SymbolInformation.detail` has the same role).
+  pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -918,6 +924,7 @@ fn symbols_from_decls(decls: &[SourceContext<Decl>]) -> Vec<SymbolInfo> {
         name: def.name.to_string(),
         kind: SymbolKind::Function,
         location,
+        detail: Some(def.typ.to_string()),
       }),
       Decl::Type(ind) => {
         let kind = match ind.variant() {
@@ -929,12 +936,14 @@ fn symbols_from_decls(decls: &[SourceContext<Decl>]) -> Vec<SymbolInfo> {
           name: ind.name().to_string(),
           kind,
           location,
+          detail: None,
         });
       }
       Decl::Ins(instance) => symbols.push(SymbolInfo {
         name: instance.name().to_string(),
         kind: SymbolKind::Instance,
         location,
+        detail: None,
       }),
       _ => {}
     }
