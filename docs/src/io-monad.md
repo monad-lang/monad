@@ -7,8 +7,8 @@ Monad provides a safe way to perform side effects through the `IO` monad.
 `IO A` represents a computation that, when executed, produces an `A` and may have side effects:
 
 ```monad
-use io
-open IO
+use io {IO}
+open IO {println}
 
 def main (args : List String) : IO Unit := println "Hello, World!"
 ```
@@ -18,8 +18,8 @@ def main (args : List String) : IO Unit := println "Hello, World!"
 ### Printing Output
 
 ```monad
-use io
-open IO
+use io {IO}
+open IO {println}
 
 def main (args : List String) : IO Unit :=
     println "Hello, World!"
@@ -56,8 +56,8 @@ The `do` block sequences IO actions. Two equivalent syntaxes are available:
 ### Standard `do { ... }` syntax
 
 ```monad
-use io
-open IO
+use io {IO}
+open IO {println}
 
 def greet : IO Unit :=
     do {
@@ -72,8 +72,8 @@ def greet : IO Unit :=
 Functions can use `{ ... }` directly instead of `:= do { ... }`:
 
 ```monad
-use io
-open IO
+use io {IO}
+open IO {println}
 
 def greet : IO Unit {
     println "Enter your name:"
@@ -110,19 +110,19 @@ def multiStep : IO Unit {
 IO operations are implemented as native functions that call Rust code:
 
 ```monad
-@[native println]
+#[native println]
 def IO.println (s : String) : IO Unit
 ```
 
-The `@[native name]` attribute marks a function as implemented in Rust.
+The `#[native name]` attribute marks a function as implemented in Rust.
 
 ## Running IO Programs
 
 The runtime executes the `main` function:
 
 ```monad
-use io
-open IO
+use io {IO}
+open IO {println}
 
 def main (args : List String) : IO Unit :=
     println "Starting..."
@@ -139,9 +139,9 @@ Command-line arguments are passed to `main` as `List String`.
 ## Combining IO with Other Types
 
 ```monad
-use io
-use init
-open IO
+use io {IO}
+use init {}
+open IO {println}
 
 def printResult (r : Result String I64) : IO Unit :=
     match r {

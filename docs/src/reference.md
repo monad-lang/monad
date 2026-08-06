@@ -157,29 +157,31 @@ def p := { x := 3, y := 4 }
 
 ## Attributes
 
-Declarations can be annotated with `@[...]` attributes:
+Declarations can be annotated with `#[...]` attributes:
 
 ```monad
-@[native "function_name"]   // Declare a Rust-native function
-@[test]                     // Mark as a test (run via `cargo run -- test <file>`)
+#[native "function_name"]   // Declare a Rust-native function
+#[test]                     // Mark as a test (run via `cargo run -- test <file>`)
 ```
+
+`@[...]` is the older spelling of the same syntax — it still parses, but the compiler warns and suggests `#[...]` instead.
 
 ## Native Functions
 
 Mark functions as implemented in Rust:
 
 ```monad
-@[native nativeName]
+#[native nativeName]
 def functionName (params) : ReturnType
 ```
 
 Example from the standard library:
 
 ```monad
-@[native println]
+#[native println]
 def IO.println (s : String) : IO Unit
 
-@[native num_add]
+#[native num_add]
 def I64.add (a b : I64) : I64
 ```
 
@@ -297,22 +299,24 @@ def multiStep : IO Unit {
 }
 
 // Native function
-@[native println]
+#[native println]
 def IO.println (s : String) : IO Unit
 ```
 
 ## Modules
 
 ```monad
-// Import module
-use io
+// Import module, listing exactly the names needed
+use io {IO}
 
-// Open module (no prefix needed)
-open IO
+// Open module (no prefix needed), same explicit-names convention
+open IO {println}
 
-// Access by path
+// Access by path — always works, whether or not a name is also open'd
 IO.println "hello"
 ```
+
+`{*}` imports/opens everything; a bare `use`/`open` with no braces at all still parses but is deprecated in favor of an explicit filter.
 
 ## Dot Macro
 
@@ -410,7 +414,7 @@ cargo run -- run file.mo
 # Run with debug output
 cargo run -- run file.mo -- --debug
 
-# Run @[test] annotated definitions
+# Run #[test] annotated definitions
 cargo run -- test file.mo
 
 # Compile to native binary (requires llvm feature)

@@ -14,8 +14,8 @@ The Monad language is a dependently typed programming language with compatibilit
 Here is a simple example:
 
 ```monad
-use io
-open IO
+use io {IO}
+open IO {println}
 
 def main (args : List String) : IO Unit := println "Hello, World!"
 ```
@@ -38,9 +38,9 @@ cargo run -- run hello.mo
 ## Quick Example
 
 ```monad
-use io
-use init
-open IO
+use io {IO}
+use init {}
+open IO {println}
 
 def factorial (n : I64) : I64 :=
     if n == 0

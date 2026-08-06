@@ -55,7 +55,7 @@ monad-rs run examples/hello.mo
 # Run with debug output
 cargo run -- run examples/hello.mo -- --debug
 
-# Run @[test] annotated definitions
+# Run #[test] annotated definitions
 cargo run -- test init/tests.mo
 
 # Run the bootstrapped cli in lang/main.mo
@@ -428,31 +428,34 @@ infix:20 (++) := List.append
 ### Module Imports
 
 ```monad
-// Load a module
-use prelude
-use io
+// Load a module, listing exactly the names needed
+use io {IO}
 
 // Open namespace. Make defs available without given prefix.
-open IO
+open IO {println}
 ```
+
+`{*}` imports/opens everything explicitly; a bare `use`/`open` (no braces) still parses but is deprecated in favor of an explicit filter.
 
 ### Native Functions
 
-Call Rust functions from Monad using the `@[native "..."]` attribute:
+Call Rust functions from Monad using the `#[native "..."]` attribute:
 
 ```monad
-@[native "add"]
+#[native "add"]
 def add (a: I64) (b: I64) : I64
 ```
 
 ## Attributes
 
-Declarations can be annotated with `@[...]` attributes:
+Declarations can be annotated with `#[...]` attributes:
 
 ```monad
-@[native "function_name"]   // Declare a Rust-native function
-@[test]                     // Mark as a test (run via `cargo run -- test <file>`)
+#[native "function_name"]   // Declare a Rust-native function
+#[test]                     // Mark as a test (run via `cargo run -- test <file>`)
 ```
+
+`@[...]` is the older spelling of the same syntax — it still parses, but the compiler warns and suggests `#[...]` instead.
 
 ## Operators
 
@@ -536,14 +539,14 @@ cargo test eval::test
 # Run tests from a single file
 cargo run -- test init/tests.mo
 
-# Run tests from an entire directory (recursively finds all .mo files with @[test])
+# Run tests from an entire directory (recursively finds all .mo files with #[test])
 cargo run -- test init/
 
 # Run all test suites
 cargo run -- test init/ && cargo run -- test examples/
 ```
 
-The test runner supports both files and directories. When given a directory, it recursively scans for `.mo` files and runs any definitions annotated with `@[test]`, reporting pass/fail.
+The test runner supports both files and directories. When given a directory, it recursively scans for `.mo` files and runs any definitions annotated with `#[test]`, reporting pass/fail.
 
 ### Pre-commit
 
@@ -581,7 +584,7 @@ type MyType {
 1. Add Rust implementation in `core/src/eval/native.rs`
 2. Declare in a `.mo` file:
 ```monad
-@[native "function_name"]
+#[native "function_name"]
 def function_name (args: Types) : ReturnType
 ```
 
@@ -945,7 +948,7 @@ scope builder (`module.rs`) is usually the culprit.
 
 1. **Add a parser test** (`core/src/parser/test/`) if the bug involves syntax
 2. **Add an eval test** (`core/src/eval/test.rs`) if the bug involves evaluation
-3. **Add a Monad test** — use `@[test]` in:
+3. **Add a Monad test** — use `#[test]` in:
    - `init/tests.mo` for bugs involving core language semantics (prelude types, operators, etc.)
    - `std/<module>_test.mo` for bugs in `std/` modules (concurrency, collections, etc.)
    - Never add `std/`-dependent tests to `init/tests.mo` — `init/` must not depend on `std/`

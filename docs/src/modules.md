@@ -8,44 +8,48 @@ Each `.mo` file is a module. The module name is derived from the file path.
 
 ## Importing Modules
 
-Use `use` to bring a module into scope:
+Use `use` to bring a module into scope, listing exactly the names you need in `{...}`:
 
 ```monad
-use io
-use init
-use math
+use io {IO}
+use init {IO}
+use math {}
 ```
 
-After `use io`, you can access definitions with their full path:
+An empty `{}` still imports the module (for qualified access) without bringing any bare names into scope.
+
+After `use io {...}`, you can access definitions with their full path:
 
 ```monad
-use io
+use io {IO}
 
 def main (args : List String) : IO Unit := IO.println "Hello"
 ```
 
+Bare `use io` (no braces) still parses but is deprecated — the compiler warns and suggests `use io {*}`.
+
 ## Opening Modules
 
-Use `open` to make a module's definitions available without prefixes:
+Use `open` to make a module's definitions available without prefixes, again naming exactly what you need:
 
 ```monad
-use io
-open IO
+use io {IO}
+open IO {println}
 
 def main (args : List String) : IO Unit := println "Hello"
 ```
 
-Now `println` is available directly instead of `IO.println`.
+Now `println` is available directly instead of `IO.println`. Like `use`, a bare `open IO` (no braces) still parses but is deprecated in favor of an explicit filter — `open IO {*}` if you genuinely need everything.
 
 ## Opening Standard Types
 
 The prelude opens several types by default:
 
 ```monad
-open Unit    // makes `unit` available
-open Bool    // makes `true`, `false` available
-open Result  // makes `ok`, `err` available
-open Option  // makes `some`, `none` available
+open Unit {unit}                  // makes `unit` available
+open Bool {and, false, not, or, true}
+open Result {err, ok}
+open Option {none, some}
 ```
 
 ## Module Paths
@@ -53,7 +57,7 @@ open Option  // makes `some`, `none` available
 Definitions are accessed using dot notation:
 
 ```monad
-use init
+use init {}
 
 def result : I64 := I64.add 3 4
 ```
@@ -77,9 +81,9 @@ Monad ships with several standard modules:
 ## Complete Example
 
 ```monad
-use io
-use init
-open IO
+use io {IO}
+use init {}
+open IO {println}
 
 def say_hello (s : String) : IO Unit := println s
 
@@ -90,11 +94,16 @@ def main (args : List String) : IO Unit :=
         |> say_hello
 ```
 
+## Unused Imports
+
+The compiler warns when an explicitly-listed `use`/`open` name is never referenced in the file — remove it, or run `monad-rs organize-imports --write` to have the compiler rewrite (and, where a `use` contributes nothing at all, delete) the declaration for you.
+
 ## Summary
 
 - Each `.mo` file is a module
-- `use` brings modules into scope
-- `open` makes definitions available without prefixes
+- `use Module {names}` brings a module into scope, selecting exactly which names become bare-accessible
+- `open Module {names}` makes definitions available without prefixes
+- `{*}` imports/opens everything explicitly; bare `use`/`open` (no braces) still works but is deprecated
 - Dot notation accesses definitions by path
 - Standard library modules provide common functionality
 

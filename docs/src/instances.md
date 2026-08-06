@@ -72,8 +72,8 @@ Monad uses instance resolution to find matching instances:
 Once an instance is defined, its methods are available through the class:
 
 ```monad
-use init
-use math
+use init {}
+use math {}
 
 def result : I64 := 3 + 4  // Uses I64.add via Add instance
 ```

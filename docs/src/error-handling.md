@@ -103,8 +103,8 @@ def findUser (id : I64) : Result DatabaseError String :=
 Error handling in effectful code:
 
 ```monad
-use io
-open IO
+use io {IO}
+open IO {println}
 
 def main (args : List String) : IO Unit :=
     match List.first args {

@@ -13,8 +13,8 @@ Before getting started, ensure you have:
 Let's start with the classic "Hello, World!" program:
 
 ```monad
-use io
-open IO
+use io {IO}
+open IO {println}
 
 def main (args : List String) : IO Unit := println "Hello, World!"
 ```
@@ -149,8 +149,8 @@ def greet (name : String) : IO Unit := println name
 Monad supports infix operators with defined precedence:
 
 ```monad
-use init
-use math
+use init {}
+use math {}
 
 def result : I64 := 3 + 4 * 2  // 11 (multiplication binds tighter)
 ```
