@@ -1,25 +1,24 @@
-use std.test
 
-@[test]
+#[test]
 def test_addition : Bool :=
   1 + 2 == 3
 
-@[test]
+#[test]
 def test_subtraction : Bool :=
   5 - 3 == 2
 
-@[test]
+#[test]
 def test_bool : Bool :=
   true && true
 
-@[test]
+#[test]
 def test_list : Bool :=
   not (List.is_empty [1, 2, 3])
 
-@[test]
+#[test]
 def test_string : Bool :=
   "hello" == "hello"
 
-@[test]
+#[test]
 def test_function_call : Bool :=
   Bool.not false == true

@@ -8,7 +8,7 @@
 ///   - List.length, List.filter, List.sum
 ///   - list_show helper (explicit show function, for concrete call sites)
 
-use std.show
+use std.show {Show}
 
 
 class Show A {
@@ -110,25 +110,25 @@ def List.sum (xs : List I64) : I64 :=
         _ => 0
     }
 
-@[test]
+#[test]
 def test_length : Bool :=
     [1, 2, 3, 4]
         |> List.length
         |> BEq.beq 4
 
-@[test]
+#[test]
 def test_sum : Bool :=
     [1, 2, 3, 4]
         |> List.sum
         |> BEq.beq 10
     
-@[test]
+#[test]
 def test_contains : Bool :=
     ["a", "b", "c"]
         // |> List.contains "c" // TODO fix instance resolution
         |> List.any (fn a => a == "c")
 
-@[test]
+#[test]
 def test_not_contains : Bool :=
     ["a", "b", "c"]
         |> List.all (fn a => not (a == "d"))

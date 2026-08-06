@@ -1,13 +1,23 @@
-use std.test
-use std.map
-use std.list
+// TODO: `BTreeMap`/`empty`/`fold`/`to_list` are all used throughout this
+// file (bare type annotations and `Map`-class method calls) but are
+// deliberately NOT listed here. Explicitly naming ANY of `std.map`'s
+// `Map`-class-instance-related exports here exposes a pre-existing latent
+// bug in instance/dictionary resolution for `instance [BOrd K] Map
+// BTreeMap {...}` (methods resolve to the wrong dictionary at runtime —
+// "expected function found: K -> V -> M K V -> M K V" — even though
+// type-checking succeeds); everything below remains available regardless
+// via the same always-on mechanism that lets any top-level type/def
+// resolve without being explicitly `use`d. Fix properly and restore an
+// explicit name list once the underlying bug is fixed.
+use std.map {}
+use std.list {all, length}
 
-@[test]
+#[test]
 def test_empty_to_list : Bool :=
   let m : BTreeMap I64 String := Map.empty in
   List.is_empty (BTreeMap.to_list m)
 
-@[test]
+#[test]
 def test_fold_empty : Bool :=
   let m : BTreeMap I64 I64 := Map.empty in
   BEq.beq (BTreeMap.fold (fn (acc: I64) (k: I64) (v: I64) => acc + v) 0 m) 0
@@ -47,7 +57,7 @@ def map_delete_all (keys : List String) (m : BTreeMap String I64) : BTreeMap Str
     List.cons k rest => map_delete_all rest (Map.delete k m)
   }
 
-@[test]
+#[test]
 def test_insert_avl_drop_repro : Bool :=
   let m1 : BTreeMap String I64 := Map.insert "d" 4 Map.empty in
   let m2 := Map.insert "c" 3 m1 in
@@ -59,7 +69,7 @@ def test_insert_avl_drop_repro : Bool :=
 def int_map_has_all_keys (keys : List I64) (m : BTreeMap I64 I64) : Bool :=
   List.all (fn k => match Map.lookup k m { Option.some _ => true, Option.none => false }) keys
 
-@[test]
+#[test]
 def test_insert_rotate_rr : Bool :=
   let m1 : BTreeMap I64 I64 := Map.insert 1 1 Map.empty in
   let m2 := Map.insert 2 2 m1 in
@@ -67,7 +77,7 @@ def test_insert_rotate_rr : Bool :=
   BEq.beq (List.length (BTreeMap.to_list m3)) 3 &&
   int_map_has_all_keys [1, 2, 3] m3
 
-@[test]
+#[test]
 def test_insert_rotate_ll : Bool :=
   let m1 : BTreeMap I64 I64 := Map.insert 3 3 Map.empty in
   let m2 := Map.insert 2 2 m1 in
@@ -75,7 +85,7 @@ def test_insert_rotate_ll : Bool :=
   BEq.beq (List.length (BTreeMap.to_list m3)) 3 &&
   int_map_has_all_keys [1, 2, 3] m3
 
-@[test]
+#[test]
 def test_insert_rotate_lr : Bool :=
   let m1 : BTreeMap I64 I64 := Map.insert 3 3 Map.empty in
   let m2 := Map.insert 1 1 m1 in
@@ -83,7 +93,7 @@ def test_insert_rotate_lr : Bool :=
   BEq.beq (List.length (BTreeMap.to_list m3)) 3 &&
   int_map_has_all_keys [1, 2, 3] m3
 
-@[test]
+#[test]
 def test_insert_rotate_rl : Bool :=
   let m1 : BTreeMap I64 I64 := Map.insert 1 1 Map.empty in
   let m2 := Map.insert 3 3 m1 in
@@ -91,7 +101,7 @@ def test_insert_rotate_rl : Bool :=
   BEq.beq (List.length (BTreeMap.to_list m3)) 3 &&
   int_map_has_all_keys [1, 2, 3] m3
 
-@[test]
+#[test]
 def test_insert_many_unsorted : Bool :=
   let keys := ["m", "b", "x", "a", "z", "k", "d", "q", "c", "y", "n", "e"] in
   let m := map_insert_all keys (Map.empty : BTreeMap String I64) in
@@ -105,7 +115,7 @@ def test_insert_many_unsorted : Bool :=
 // successor, and discarded the rest of `right` (`rr`) entirely. Fixed using
 // the existing BTreeMap.min_node helper plus a recursive Map.delete call.
 
-@[test]
+#[test]
 def test_delete_leaf : Bool :=
   let m1 : BTreeMap String I64 := Map.insert "b" 2 Map.empty in
   let m2 := Map.insert "a" 1 m1 in
@@ -115,7 +125,7 @@ def test_delete_leaf : Bool :=
   map_has_all_keys ["b", "c"] m4 &&
   Bool.not (map_has_key "a" m4)
 
-@[test]
+#[test]
 def test_delete_one_child : Bool :=
   let m1 : BTreeMap String I64 := Map.insert "c" 3 Map.empty in
   let m2 := Map.insert "b" 2 m1 in
@@ -125,7 +135,7 @@ def test_delete_one_child : Bool :=
   map_has_all_keys ["a", "b"] m4 &&
   Bool.not (map_has_key "c" m4)
 
-@[test]
+#[test]
 def test_delete_two_children : Bool :=
   let keys := ["d", "b", "f", "a", "c", "e", "g"] in
   let m := map_insert_all keys (Map.empty : BTreeMap String I64) in
@@ -134,7 +144,7 @@ def test_delete_two_children : Bool :=
   map_has_all_keys ["a", "b", "c", "e", "f", "g"] m2 &&
   Bool.not (map_has_key "d" m2)
 
-@[test]
+#[test]
 def test_insert_then_delete_all : Bool :=
   let insert_keys := ["m", "b", "x", "a", "z", "k", "d", "q", "c", "y", "n", "e"] in
   let delete_keys := ["e", "n", "y", "c", "q", "d", "k", "z", "a", "x", "b", "m"] in

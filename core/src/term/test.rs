@@ -114,7 +114,7 @@ impl Similar for ClassDef {
 }
 impl Similar for Infix {
   fn similar(&self, other: &Infix) -> bool {
-    self.name == other.name && self.operator == other.operator
+    self.name == other.name && self.operator == other.operator && self.vis == other.vis
   }
 }
 
@@ -127,6 +127,7 @@ impl Similar for Inductive {
       && self.params.similar(&other.params)
       && self.constructors.similar(&other.constructors)
       && self.attributes == other.attributes
+      && self.vis == other.vis
   }
 }
 impl Similar for InductConstructor {
@@ -338,6 +339,7 @@ impl Similar for Instance {
       && self.args.similar(&other.args)
       && self.impls_map.similar(&other.impls_map)
       && self.attributes == other.attributes
+      && self.vis == other.vis
   }
 }
 
@@ -348,6 +350,7 @@ impl Similar for Def {
       && self.term.similar(&other.term)
       && self.type_constraints.similar(&other.type_constraints)
       && self.attributes == other.attributes
+      && self.vis == other.vis
   }
 }
 impl Similar for Use {
@@ -462,7 +465,7 @@ pub fn decl_inductive_with_doc(
 }
 
 pub fn decl_infix(operator: Operator, name: ModulePath) -> Decl {
-  Decl::Infix(Infix { operator, name })
+  Decl::Infix(infix(operator, name))
 }
 
 pub fn decl_def(name: ModulePath, type_cons: Vec<TypeConstraint>, typ: Term, term: Term) -> Decl {

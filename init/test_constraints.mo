@@ -1,7 +1,5 @@
-use std.test
-use init
-use io
-open IO
+use init {is_empty, to_string}
+open IO {}
 
 // ============================================
 // Constraint Solver Tests
@@ -45,34 +43,34 @@ instance [Show I64] ShowDouble I64 {
 // --- Tests ---
 
 // Test 1: Basic instance without constraints works
-@[test]
+#[test]
 def test_show_i64 : Bool :=
     I64.to_string 42 == I64.to_string 42
 
 // Test 2: Instance with satisfied constraint works
 // ShowWrap I64 requires Show I64, which exists
-@[test]
+#[test]
 def test_show_wrap_i64 : Bool :=
     ShowWrap.show_wrap 42 == I64.to_string 42
 
 // Test 3: Multiple instances with same constraint work
-@[test]
+#[test]
 def test_show_double_i64 : Bool :=
     ShowDouble.show_double 42 == I64.to_string 42
 
 // Test 4: Verify that constraint resolution is recursive
 // This tests that the solver checks Show I64 when resolving ShowWrap I64
-@[test]
+#[test]
 def test_constraint_chain : Bool :=
     ShowWrap.show_wrap 100 == I64.to_string 100
 
 // Test 5: String instances work (BEq String, ToString String exist)
-@[test]
+#[test]
 def test_string_operations : Bool :=
     not (String.is_empty "hello")
 
 // Test 6: List operations work (FromListLiteral List exists)
-@[test]
+#[test]
 def test_list_operations : Bool :=
     not (List.is_empty [1, 2, 3])
 
@@ -80,7 +78,7 @@ def test_list_operations : Bool :=
 def get_five : Option I64 :=
     some 5
 
-@[test]
+#[test]
 def test_option_operations : Bool :=
     match get_five {
       some _ => true,
@@ -88,23 +86,23 @@ def test_option_operations : Bool :=
     }
 
 // Test 8: BEq Bool instance works
-@[test]
+#[test]
 def test_beq_bool_true : Bool :=
     true == true
 
-@[test]
+#[test]
 def test_beq_bool_false : Bool :=
     not (true == false)
 
-@[test]
+#[test]
 def test_beq_bool_false2 : Bool :=
     not (false == true)
 
-@[test]
+#[test]
 def test_beq_bool_true2 : Bool :=
     false == false
 
 // Test 9: Append String instance works
-@[test]
+#[test]
 def test_append_string : Bool :=
     "a" ++ "b" == "ab"

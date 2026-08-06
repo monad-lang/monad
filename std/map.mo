@@ -99,7 +99,7 @@ def BTreeMap.rotate_rr {K V : Type} (root_key: K) (root_val: V) (left: BTreeMap 
   BTreeMap.create_node r_key r_val (BTreeMap.create_node root_key root_val left rl) rr
 
 /// Find the leftmost (minimum) node in the tree.
-@[terminating]
+#[terminating]
 def BTreeMap.min_node (m: BTreeMap K V) : BTreeMap K V :=
   BTreeMap.with_node m
     (fn k v left right h =>
@@ -136,7 +136,7 @@ def BTreeMap.to_list_asc (m: BTreeMap K V) (acc: List (Pair K V)) : List (Pair K
 /// NOTE: this function is ready for use but requires compiler support for
 /// evaluating class method references (BOrd.lt/BOrd.gt) passed as arguments
 /// from constrained instance bodies.
-@[terminating]
+#[terminating]
 def BTreeMap.insert_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (val: V) (m: BTreeMap K V) : BTreeMap K V :=
   BTreeMap.with_node m
     (fn k v left right h =>
@@ -150,7 +150,7 @@ def BTreeMap.insert_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) 
     (BTreeMap.node key val BTreeMap.empty BTreeMap.empty 1)
 
 /// Recursive lookup helper.
-@[terminating]
+#[terminating]
 def BTreeMap.lookup_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (m: BTreeMap K V) : Option V :=
   match m {
     BTreeMap.empty => Option.none,
@@ -163,7 +163,7 @@ def BTreeMap.lookup_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) 
   }
 
 /// Recursive delete helper.
-@[terminating]
+#[terminating]
 def BTreeMap.delete_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (m: BTreeMap K V) : BTreeMap K V :=
   BTreeMap.with_node m
     (fn k v left right h =>
@@ -190,7 +190,7 @@ def BTreeMap.delete_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) 
 instance [BOrd K] Map BTreeMap {
   def empty : BTreeMap K V := BTreeMap.empty
 
-  @[terminating]
+  #[terminating]
   def insert (key: K) (val: V) (m: BTreeMap K V) : BTreeMap K V :=
     BTreeMap.with_node m
       (fn k v left right h =>
@@ -203,7 +203,7 @@ instance [BOrd K] Map BTreeMap {
         else BTreeMap.node key val left right h)
       (BTreeMap.node key val BTreeMap.empty BTreeMap.empty 1)
 
-  @[terminating]
+  #[terminating]
   def lookup (key: K) (m: BTreeMap K V) : Option V :=
     match m {
       BTreeMap.empty => Option.none,
@@ -215,7 +215,7 @@ instance [BOrd K] Map BTreeMap {
         else Option.some v
     }
 
-  @[terminating]
+  #[terminating]
   def delete (key: K) (m: BTreeMap K V) : BTreeMap K V :=
     BTreeMap.with_node m
       (fn k v left right h =>
@@ -270,7 +270,7 @@ def HashMap.empty_buckets {K V : Type} : Buckets16 K V :=
     (List.empty : List (Pair K V)) (List.empty : List (Pair K V))
 
 /// Look up the bucket at a given U64 index.
-@[terminating]
+#[terminating]
 def HashMap.get_bucket {K V : Type} (b: Buckets16 K V) (idx: U64) : List (Pair K V) :=
   match b {
     Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
@@ -293,7 +293,7 @@ def HashMap.get_bucket {K V : Type} (b: Buckets16 K V) (idx: U64) : List (Pair K
   }
 
 /// Return buckets with bucket at idx replaced by new_val.
-@[terminating]
+#[terminating]
 def HashMap.set_bucket {K V : Type} (b: Buckets16 K V) (idx: U64) (new_val: List (Pair K V)) : Buckets16 K V :=
   match b {
     Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
@@ -323,7 +323,7 @@ def HashMap.set_bucket {K V : Type} (b: Buckets16 K V) (idx: U64) (new_val: List
 instance [Hashable K, BOrd K] Map HashMap {
   def empty : HashMap K V := HashMap.map HashMap.empty_buckets
 
-  @[terminating]
+  #[terminating]
   def insert (key: K) (val: V) (m: HashMap K V) : HashMap K V :=
     match m {
       HashMap.map buckets =>
@@ -334,7 +334,7 @@ instance [Hashable K, BOrd K] Map HashMap {
         HashMap.map (HashMap.set_bucket buckets idx new_bucket)
     }
 
-  @[terminating]
+  #[terminating]
   def lookup (key: K) (m: HashMap K V) : Option V :=
     match m {
       HashMap.map buckets =>
@@ -343,7 +343,7 @@ instance [Hashable K, BOrd K] Map HashMap {
         HashMap.bucket_lookup BOrd.lt BOrd.gt key bucket
     }
 
-  @[terminating]
+  #[terminating]
   def delete (key: K) (m: HashMap K V) : HashMap K V :=
     match m {
       HashMap.map buckets =>
@@ -357,7 +357,7 @@ instance [Hashable K, BOrd K] Map HashMap {
 
 /// Insert (key, val) into a single bucket, replacing existing key if present.
 /// Equality check: not (lt a b) && not (gt a b)  (equivalent to a == b for total orders).
-@[terminating]
+#[terminating]
 def HashMap.bucket_insert {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (val: V) (bucket: List (Pair K V)) : List (Pair K V) :=
   match bucket {
     List.empty => List.cons (Pair.pair key val) List.empty,
@@ -371,7 +371,7 @@ def HashMap.bucket_insert {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool)
   }
 
 /// Look up a key in a single bucket.
-@[terminating]
+#[terminating]
 def HashMap.bucket_lookup {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (bucket: List (Pair K V)) : Option V :=
   match bucket {
     List.empty => Option.none,
@@ -385,7 +385,7 @@ def HashMap.bucket_lookup {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool)
   }
 
 /// Delete a key from a single bucket.
-@[terminating]
+#[terminating]
 def HashMap.bucket_delete {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (bucket: List (Pair K V)) : List (Pair K V) :=
   match bucket {
     List.empty => List.empty,

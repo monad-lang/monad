@@ -8,6 +8,7 @@ use super::*;
 use crate::diag::Severity;
 use crate::eval::r#type::type_check_module_decls;
 use crate::parser::parse_file;
+use crate::term::organize_imports::{apply_text_edits, compute_organize_import_edits};
 
 fn uses_of(source: &str) -> Vec<SourceContext<Use>> {
   parse_file(source.into())
@@ -19,6 +20,22 @@ fn uses_of(source: &str) -> Vec<SourceContext<Use>> {
       let doc = ctx.doc.clone();
       match ctx.value {
         Decl::Use(u) => Some(SourceContext { loc, doc, value: u }),
+        _ => None,
+      }
+    })
+    .collect()
+}
+
+fn opens_of(source: &str) -> Vec<SourceContext<Open>> {
+  parse_file(source.into())
+    .unwrap()
+    .decls
+    .into_iter()
+    .filter_map(|ctx| {
+      let loc = ctx.loc.clone();
+      let doc = ctx.doc.clone();
+      match ctx.value {
+        Decl::Open(o) => Some(SourceContext { loc, doc, value: o }),
         _ => None,
       }
     })
@@ -39,6 +56,362 @@ fn test_bare_use_emits_warning() {
 fn test_braced_use_emits_no_warning() {
   let uses = uses_of("use IO {*}\n");
   assert!(bare_use_warnings(&uses, None).is_empty());
+}
+
+#[test]
+fn test_bare_open_emits_warning() {
+  let opens = opens_of("open IO\n");
+  let warnings = bare_open_warnings(&opens, None);
+  assert_eq!(warnings.len(), 1);
+  assert_eq!(warnings[0].severity, Severity::Warning);
+  assert!(warnings[0].message.contains("deprecated"));
+  assert!(warnings[0].suggestions[0].message.contains("{*}"));
+}
+
+#[test]
+fn test_glob_open_emits_no_warning() {
+  let opens = opens_of("open IO {*}\n");
+  assert!(bare_open_warnings(&opens, None).is_empty());
+}
+
+#[test]
+fn test_filtered_open_emits_no_warning() {
+  let opens = opens_of("open IO {println}\n");
+  assert!(bare_open_warnings(&opens, None).is_empty());
+}
+
+fn module_of(source: &str) -> Module {
+  let parsed = parse_file(source.into()).unwrap();
+  module(
+    ModulePath::top("_"),
+    ParsedModule {
+      decls: parsed.decls,
+      module_doc: None,
+    },
+  )
+}
+
+#[test]
+fn test_unused_use_name_warning() {
+  let modu = module_of(
+    r#"
+    use fakemod {used_name, unused_name}
+
+    def f : I64 := used_name
+    "#,
+  );
+  let referenced = collect_referenced_names(&modu);
+  let warnings = unused_use_name_warnings(modu.get_uses(), &referenced, None);
+  assert_eq!(warnings.len(), 1);
+  assert_eq!(warnings[0].severity, Severity::Warning);
+  assert!(warnings[0].message.contains("unused_name"));
+  assert!(!warnings[0].message.contains("used_name,"));
+}
+
+#[test]
+fn test_qualified_reference_counts_as_used() {
+  // `fakemod.q_name` (qualified) should count as a use of `q_name`, even
+  // though `q_name` is never referenced as a bare name.
+  let modu = module_of(
+    r#"
+    use fakemod {q_name}
+
+    def f : I64 := fakemod.q_name
+    "#,
+  );
+  let referenced = collect_referenced_names(&modu);
+  let warnings = unused_use_name_warnings(modu.get_uses(), &referenced, None);
+  assert!(warnings.is_empty());
+}
+
+#[test]
+fn test_match_pattern_constructor_counts_as_used() {
+  // A constructor referenced only in match-pattern position (never as a
+  // call-position `Term::Var`) must still be recorded as "referenced" —
+  // this is how `open`-imported constructors used only in match arms are
+  // recognized (see `MatchCase::name` handling in `collect_referenced_names`).
+  let modu = module_of(
+    r#"
+    type Color { red, green, blue }
+
+    def f (c: Color) : Bool :=
+        match c {
+            red => true,
+            green => false,
+            blue => false
+        }
+    "#,
+  );
+  let referenced = collect_referenced_names(&modu);
+  assert!(referenced.contains(&ModulePath::single(id("red"))));
+  assert!(referenced.contains(&ModulePath::single(id("green"))));
+  assert!(referenced.contains(&ModulePath::single(id("blue"))));
+}
+
+#[test]
+fn test_organize_imports_use_minimal_names() {
+  let loaded = default_modules().unwrap();
+
+  let path_a = ModulePath::top("test_organize_a");
+  let parsed_a = parse_file(
+    r#"
+    def used_fn : I64 := 1
+    def unused_fn : I64 := 2
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_a = type_check_module_decls(&path_a, parsed_a.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
+
+  let path_b = ModulePath::top("test_organize_b");
+  let source_b = format!(
+    "use {}\n\ndef f : I64 := used_fn\n",
+    path_a.as_str().unwrap()
+  );
+  let parsed_b = parse_file(source_b.as_str().into()).unwrap();
+  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
+
+  let module_b = loaded.get_module(&path_b).unwrap();
+  let edits = compute_organize_import_edits(module_b, &loaded);
+  assert_eq!(edits.len(), 1);
+  let new_source = apply_text_edits(&source_b, edits);
+  assert!(
+    new_source.contains("use test_organize_a {used_fn}"),
+    "got: {new_source:?}"
+  );
+  assert!(!new_source.contains("unused_fn"));
+  // Rewritten source must still parse.
+  assert!(parse_file(new_source.as_str().into()).is_ok());
+}
+
+#[test]
+fn test_organize_imports_deletes_fully_unused_use() {
+  // A `use` whose target contributes nothing this file actually
+  // references gets DELETED outright, not rewritten to a no-op `use X
+  // {}` — the line (and its newline) disappears entirely.
+  let loaded = default_modules().unwrap();
+
+  let path_a = ModulePath::top("test_organize_unused_a");
+  let parsed_a = parse_file(
+    r#"
+    def never_used : I64 := 1
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_a = type_check_module_decls(&path_a, parsed_a.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
+
+  let path_b = ModulePath::top("test_organize_unused_b");
+  let source_b = format!("use {}\n\ndef f : I64 := 1\n", path_a.as_str().unwrap());
+  let parsed_b = parse_file(source_b.as_str().into()).unwrap();
+  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
+
+  let module_b = loaded.get_module(&path_b).unwrap();
+  let edits = compute_organize_import_edits(module_b, &loaded);
+  assert_eq!(edits.len(), 1);
+  let new_source = apply_text_edits(&source_b, edits);
+  assert_eq!(new_source, "\ndef f : I64 := 1\n", "got: {new_source:?}");
+  assert!(!new_source.contains("use "));
+  assert!(parse_file(new_source.as_str().into()).is_ok());
+}
+
+#[test]
+fn test_organize_imports_open_and_attribute_together() {
+  let loaded = default_modules().unwrap();
+
+  let path_a = ModulePath::top("test_organize_open_a");
+  let parsed_a = parse_file(
+    r#"
+    def helper : I64 := 1
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_a = type_check_module_decls(&path_a, parsed_a.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
+
+  // `open` on an external module needs a paired `use` to actually load
+  // it (same as real .mo files always pair the two) — `open` alone only
+  // affects bare-name *filtering* of an already-visible module.
+  let path_b = ModulePath::top("test_organize_open_b");
+  let source_b = format!(
+    "use {}\nopen {}\n\n@[partial]\ndef f : I64 := helper\n",
+    path_a.as_str().unwrap(),
+    path_a.as_str().unwrap()
+  );
+  let parsed_b = parse_file(source_b.as_str().into()).unwrap();
+  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
+
+  let module_b = loaded.get_module(&path_b).unwrap();
+  let edits = compute_organize_import_edits(module_b, &loaded);
+  // One for the bare `use`, one for the bare `open`, one for `@[partial]`.
+  assert_eq!(edits.len(), 3);
+  let new_source = apply_text_edits(&source_b, edits);
+  assert!(
+    new_source.contains("use test_organize_open_a {helper}"),
+    "got: {new_source:?}"
+  );
+  assert!(
+    new_source.contains("open test_organize_open_a {helper}"),
+    "got: {new_source:?}"
+  );
+  assert!(new_source.contains("#[partial]"), "got: {new_source:?}");
+  assert!(!new_source.contains("@["), "got: {new_source:?}");
+  assert!(parse_file(new_source.as_str().into()).is_ok());
+}
+
+#[test]
+fn test_organize_imports_open_local_inductive() {
+  // `open TypeName {...}` targeting a type defined in the SAME file (no
+  // paired `use` needed or possible) — the common real-world shape, e.g.
+  // `lang/eval_term.mo` opening `EvalTerm`/`Region`/etc. it just declared.
+  let loaded = default_modules().unwrap();
+
+  let path = ModulePath::top("test_organize_local_open");
+  let source = r#"
+type Color {
+  red,
+  green,
+  blue,
+}
+
+open Color
+
+def is_warm (c: Color) : Bool :=
+  match c {
+    red => true,
+    green => false,
+    blue => false
+  }
+"#;
+  let parsed = parse_file(source.into()).unwrap();
+  let decls = type_check_module_decls(&path, parsed.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path.clone(),
+    ParsedModule {
+      decls,
+      module_doc: None,
+    },
+  ));
+
+  let modu = loaded.get_module(&path).unwrap();
+  let edits = compute_organize_import_edits(modu, &loaded);
+  assert_eq!(edits.len(), 1);
+  let new_source = apply_text_edits(source, edits);
+  assert!(
+    new_source.contains("open Color {blue, green, red}"),
+    "got: {new_source:?}"
+  );
+  assert!(parse_file(new_source.as_str().into()).is_ok());
+}
+
+#[test]
+fn test_glob_use_never_flagged_unused() {
+  let modu = module_of(
+    r#"
+    use fakemod {*}
+
+    def f : I64 := 1
+    "#,
+  );
+  let referenced = collect_referenced_names(&modu);
+  let warnings = unused_use_name_warnings(modu.get_uses(), &referenced, None);
+  assert!(warnings.is_empty());
+}
+
+#[test]
+fn test_deprecated_attribute_warnings() {
+  let path = ModulePath::top("_");
+  let parsed = parse_file(
+    r#"
+    @[partial]
+    def f (n : I64) : I64 :=
+        if n == 0
+        then 1
+        else f (n - 1)
+
+    #[partial]
+    def g (n : I64) : I64 :=
+        if n == 0
+        then 1
+        else g (n - 1)
+    "#
+    .into(),
+  )
+  .unwrap();
+  let modu = module(
+    path,
+    ParsedModule {
+      decls: parsed.decls,
+      module_doc: None,
+    },
+  );
+  let warnings = deprecated_attribute_warnings(&modu, None);
+  // Only the `@[...]`-spelled attribute on `f` should warn; `g`'s `#[...]`
+  // attribute should not.
+  assert_eq!(warnings.len(), 1);
+  assert_eq!(warnings[0].severity, Severity::Warning);
+  assert!(warnings[0].message.contains("@[partial...]"));
+  assert!(warnings[0].suggestions[0].message.contains("#[partial...]"));
 }
 #[test]
 fn test_simple_instance() {
@@ -353,6 +726,78 @@ fn test_module_conflict_detection_bare_name_ambiguous() {
   assert!(global.find_ref(&prefixed_a).is_some());
   let prefixed_b = path_b.clone().extend(mpt("shared_name"));
   assert!(global.find_ref(&prefixed_b).is_some());
+}
+
+// --- Visibility (`pub`/`priv`) enforcement ---
+//
+// NOTE: these tests exercise the OLD checker's scope-resolution
+// (`GlobalScopeData::from_module`/`type_check_module_decls`, the path this
+// file's tests always use regardless of the `legacy-checker` Cargo
+// feature's default — see the file-header comment). The NEW default
+// checker (`core_check_module::type_check_module_decls_new`, used by
+// `cargo run` without `--features legacy-checker`) does not go through
+// `GlobalScopeData` at all — `ground_truth_from_loaded` flattens every
+// loaded module's defs into one global namespace with no per-module
+// scoping, so it does not respect `use {name}` selective filtering OR
+// `priv` today. That's a pre-existing gap in the new checker's
+// architecture, orthogonal to (and larger than) visibility — fixing it
+// means giving the new checker real per-module scoped name resolution,
+// which is out of scope here. `priv` is fully enforced wherever
+// `GlobalScopeData` is the resolution path (this old checker, and the
+// LSP's hover/definition, both of which use it directly).
+
+#[test]
+fn test_priv_def_invisible_from_other_module() {
+  let loaded = default_modules().unwrap();
+
+  let path_a = ModulePath::top("test_vis_a");
+  let parsed_a = parse_file(
+    r#"
+    priv def secret_val : I64 := 42
+    pub def public_val : I64 := 7
+    def default_val : I64 := 1
+    "#
+    .into(),
+  )
+  .unwrap();
+  let decls_a = type_check_module_decls(&path_a, parsed_a.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
+
+  let path_b = ModulePath::top("test_vis_b");
+  let parsed_b = parse_file(&format!(r#"use {} {{*}}"#, path_a.as_str().unwrap())).unwrap();
+  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded)
+    .inspect_err(|e| eprintln!("{e}"))
+    .unwrap();
+  loaded.add_module(module(
+    path_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
+
+  let loaded_scopes = loaded.scopes();
+  let global_a = loaded_scopes.global(&path_a).expect("scope should exist");
+  let global_b = loaded_scopes.global(&path_b).expect("scope should exist");
+
+  // Visible from within its own module...
+  assert!(global_a.find_ref(&mpt("secret_val")).is_some());
+  // ...but not from another module, even with `use {*}`.
+  assert!(global_b.find_ref(&mpt("secret_val")).is_none());
+
+  // `pub` and the default (package-private, currently == public) remain
+  // visible from other modules.
+  assert!(global_b.find_ref(&mpt("public_val")).is_some());
+  assert!(global_b.find_ref(&mpt("default_val")).is_some());
 }
 
 #[test]

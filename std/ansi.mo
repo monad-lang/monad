@@ -5,8 +5,8 @@
 // NO_COLOR is set. This is a deliberate scope cut (see
 // implementations/ansi-colors.md in the plans repo), not an oversight.
 
-use io
-open IO
+use io {IO, get_env}
+open IO {get_env}
 
 type Color {
     black, red, green, yellow, blue, magenta, cyan, white,
@@ -122,68 +122,67 @@ def colored (s : String) (color : Color) : IO String :=
 
 // ---------- Tests ----------
 
-use std.test
 
-@[test]
+#[test]
 def test_escape_reset : Bool :=
     escape Modifier.reset == "\u{1b}[0m"
 
-@[test]
+#[test]
 def test_escape_fg_red : Bool :=
     escape (Modifier.fg Color.red) == "\u{1b}[31m"
 
-@[test]
+#[test]
 def test_escape_bg_blue : Bool :=
     escape (Modifier.bg Color.blue) == "\u{1b}[44m"
 
-@[test]
+#[test]
 def test_escape_style_bold : Bool :=
     escape (Modifier.style Style.bold) == "\u{1b}[1m"
 
-@[test]
+#[test]
 def test_escape_color256 : Bool :=
     escape (Modifier.fg (Color.color256 42u8)) == "\u{1b}[38;5;42m"
 
-@[test]
+#[test]
 def test_escape_true_color : Bool :=
     escape (Modifier.fg (Color.true_color 1u8 2u8 3u8)) == "\u{1b}[38;2;1;2;3m"
 
-@[test]
+#[test]
 def test_red_wraps_and_resets : Bool :=
     red "x" == "\u{1b}[31mx\u{1b}[0m"
 
-@[test]
+#[test]
 def test_green_wraps_and_resets : Bool :=
     green "x" == "\u{1b}[32mx\u{1b}[0m"
 
-@[test]
+#[test]
 def test_bold_wraps_and_resets : Bool :=
     bold "x" == "\u{1b}[1mx\u{1b}[0m"
 
-@[test]
+#[test]
 def test_fail_is_bold_red : Bool :=
     fail "x" == bold (red "x")
 
-@[test]
+#[test]
 def test_pass_is_bold_green : Bool :=
     pass "x" == bold (green "x")
 
-@[test]
+#[test]
 def test_env_flag_set_some : Bool :=
     env_flag_set (Option.some "1")
 
-@[test]
+#[test]
 def test_env_flag_set_none : Bool :=
     Bool.not (env_flag_set Option.none)
 
-@[test]
+#[test]
 def test_term_is_dumb_true : Bool :=
     term_is_dumb (Option.some "dumb")
 
-@[test]
+#[test]
 def test_term_is_dumb_false_for_other_term : Bool :=
     Bool.not (term_is_dumb (Option.some "xterm-256color"))
 
-@[test]
+#[test]
 def test_term_is_dumb_false_when_unset : Bool :=
     Bool.not (term_is_dumb Option.none)

@@ -208,6 +208,19 @@ impl ModuleCheckEnv {
 /// `loaded` is whatever's been loaded so far, not the fixed default set) —
 /// factored out so the real cutover entry point and this harness's own
 /// `ModuleCheckEnv` share one implementation rather than drifting apart.
+///
+/// KNOWN GAP: this registers every def from every loaded module into one
+/// flat, ungated namespace (both bare and qualified names) — there is no
+/// per-consuming-module scoping here at all, so neither `use Module
+/// {name}` selective-import filtering nor `priv`/`pub` visibility
+/// (`visibility-declarations.md`) is enforced by the new/default checker.
+/// (The old checker's `GlobalScopeData::from_module`/`from_modules`, used
+/// when built with `--features legacy-checker` and always used by the LSP,
+/// DOES enforce both — see `DefRef.vis`/`Visibility::Priv` filtering
+/// there.) Closing this gap for the new checker means giving it real
+/// per-module scoped resolution here, which is a substantially larger,
+/// separate undertaking than adding `priv`/`pub` itself — tracked as
+/// follow-up work, not attempted in this pass.
 pub fn ground_truth_from_loaded(
   loaded: &LoadedModules,
   atoms: &mut AtomTable,

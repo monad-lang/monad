@@ -3,10 +3,9 @@
 /// Demonstrates creating lenses for struct fields, using view/set/over,
 /// and prisms for working with sum types.
 
-use std.test
-use init.optics
-open Lens
-open Prism
+use init.optics {Lens, Prism, lens, mkPrism, over, over_prism, preview, set, view}
+open Lens {}
+open Prism {mkPrism}
 
 // --- Domain types ---
 
@@ -26,7 +25,7 @@ type Shape {
     rectangle (w : F64) (h : F64),
 }
 
-open Shape
+open Shape {circle, rectangle}
 
 // --- Lenses for Person ---
 
@@ -110,14 +109,14 @@ def double_f (x : F64) : F64 := x * 2.0
 
 // --- Tests ---
 
-@[test]
+#[test]
 def test_basic_lens_view : Bool :=
     let addr : Address := { street := "Main St", city := "Springfield" } in
     let p : Person := { name := "Alice", age := 30, address := addr } in
     let n_val : String := view name_lens p in
     n_val == "Alice"
 
-@[test]
+#[test]
 def test_basic_lens_set_age : Bool :=
     let addr : Address := { street := "Main St", city := "Springfield" } in
     let p : Person := { name := "Alice", age := 30, address := addr } in
@@ -125,7 +124,7 @@ def test_basic_lens_set_age : Bool :=
     let a_val : I64 := view age_lens p2 in
     a_val == 31
 
-@[test]
+#[test]
 def test_lens_over_age_keeps_name : Bool :=
     let addr : Address := { street := "Main St", city := "Springfield" } in
     let p : Person := { name := "Alice", age := 30, address := addr } in
@@ -134,7 +133,7 @@ def test_lens_over_age_keeps_name : Bool :=
     let a_val : I64 := view age_lens p2 in
     n_val == "Alice" && a_val == 31
 
-@[test]
+#[test]
 def test_lens_chained_set : Bool :=
     let addr : Address := { street := "Main St", city := "Springfield" } in
     let p : Person := { name := "Alice", age := 30, address := addr } in
@@ -144,7 +143,7 @@ def test_lens_chained_set : Bool :=
     let a_val : I64 := view age_lens p3 in
     n_val == "Bob" && a_val == 25
 
-@[test]
+#[test]
 def test_lens_nested_address_street : Bool :=
     let addr : Address := { street := "Main St", city := "Springfield" } in
     let p : Person := { name := "Alice", age := 30, address := addr } in
@@ -152,7 +151,7 @@ def test_lens_nested_address_street : Bool :=
     let s_val : String := view street_lens p_addr in
     s_val == "Main St"
 
-@[test]
+#[test]
 def test_lens_nested_address_update : Bool :=
     let addr : Address := { street := "Main St", city := "Springfield" } in
     let p : Person := { name := "Alice", age := 30, address := addr } in
@@ -163,7 +162,7 @@ def test_lens_nested_address_update : Bool :=
     let s_val : String := view street_lens final_addr in
     s_val == "Oak Ave"
 
-@[test]
+#[test]
 def test_prism_circle_double_radius : Bool :=
     let s : Shape := circle 5.0 in
     let s2 : Shape := over_prism circle_prism double_f s in
@@ -173,7 +172,7 @@ def test_prism_circle_double_radius : Bool :=
         some r => let r_val : F64 := r in r_val == 10.0
     }
 
-@[test]
+#[test]
 def test_prism_rectangle_unchanged_by_circle_prism : Bool :=
     let s : Shape := rectangle 10.0 20.0 in
     let s2 : Shape := over_prism circle_prism double_f s in
@@ -182,7 +181,7 @@ def test_prism_rectangle_unchanged_by_circle_prism : Bool :=
         rectangle w h => let w_val : F64 := w in let h_val : F64 := h in w_val == 10.0 && h_val == 20.0
     }
 
-@[test]
+#[test]
 def test_prism_rectangle_preview_dimensions : Bool :=
     let s : Shape := rectangle 4.0 7.0 in
     let val : Option (Pair F64 F64) := preview rectangle_prism s in

@@ -2,7 +2,7 @@
 //
 // Usage: monad run examples/json.mo <file.json>
 
-use lang.json
+use lang.json {Json, ParseError, parse, to_string}
 
 def print_parse_error (e : Json.ParseError) : IO Unit :=
   IO.println (String.concat "Parse error: " (Json.ParseError.to_string e))

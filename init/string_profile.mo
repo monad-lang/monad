@@ -1,10 +1,9 @@
 
-use std.test
-use std.bench
+use std.bench {now, report}
 
 // ── Bridge overhead ──
 
-@[test]
+#[test]
 def profile_to_list : Bool :=
 	let long := String.repeat "x" 100 in
 	let start := Bench.now in
@@ -12,7 +11,7 @@ def profile_to_list : Bool :=
 	let elapsed := I64.sub Bench.now start in
 	Bench.report "to_list (100 bytes)" elapsed
 
-@[test]
+#[test]
 def profile_from_list : Bool :=
 	let bytes := String.to_list (String.repeat "x" 100) in
 	let start := Bench.now in
@@ -22,7 +21,7 @@ def profile_from_list : Bool :=
 
 // ── Native concat ──
 
-@[test]
+#[test]
 def profile_concat_native : Bool :=
 	let a := String.repeat "hello" 20 in
 	let b := String.repeat "world" 20 in
@@ -33,7 +32,7 @@ def profile_concat_native : Bool :=
 
 // ── Length ──
 
-@[test]
+#[test]
 def profile_length_native : Bool :=
 	let long := String.repeat "x" 100 in
 	let start := Bench.now in
@@ -43,7 +42,7 @@ def profile_length_native : Bool :=
 
 // ── Contains ──
 
-@[test]
+#[test]
 def profile_contains_short : Bool :=
 	let haystack := String.repeat "abcde" 20 in
 	let start := Bench.now in
@@ -51,7 +50,7 @@ def profile_contains_short : Bool :=
 	let elapsed := I64.sub Bench.now start in
 	Bench.report "contains (100 bytes, short needle)" elapsed
 
-@[test]
+#[test]
 def profile_contains_miss : Bool :=
 	let haystack := String.repeat "abcde" 20 in
 	let start := Bench.now in
@@ -61,7 +60,7 @@ def profile_contains_miss : Bool :=
 
 // ── Reverse ──
 
-@[test]
+#[test]
 def profile_reverse : Bool :=
 	let long := String.repeat "hello " 20 in
 	let start := Bench.now in
@@ -71,7 +70,7 @@ def profile_reverse : Bool :=
 
 // ── Trim ──
 
-@[test]
+#[test]
 def profile_trim : Bool :=
 	let body := String.repeat "x" 50 in
 	let padded := String.concat "  " (String.concat body "  ") in
@@ -82,7 +81,7 @@ def profile_trim : Bool :=
 
 // ── Repeat ──
 
-@[test]
+#[test]
 def profile_repeat_10 : Bool :=
 	let start := Bench.now in
 	let ignored2 := String.repeat "hello" 10 in
@@ -91,7 +90,7 @@ def profile_repeat_10 : Bool :=
 
 // ── starts_with ──
 
-@[test]
+#[test]
 def profile_starts_with_true : Bool :=
 	let long := String.repeat "hello " 20 in
 	let start := Bench.now in
@@ -99,7 +98,7 @@ def profile_starts_with_true : Bool :=
 	let elapsed := I64.sub Bench.now start in
 	Bench.report "starts_with true (120 bytes)" elapsed
 
-@[test]
+#[test]
 def profile_starts_with_false : Bool :=
 	let long := String.repeat "hello " 20 in
 	let start := Bench.now in

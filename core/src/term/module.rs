@@ -309,6 +309,7 @@ impl Builtins {
       term: &self.sort_0,
       typ: &self.sort_0,
       loc: &self.loc,
+      vis: Visibility::Pub,
     }
   }
 
@@ -320,6 +321,7 @@ impl Builtins {
       term: &self.sort_1,
       typ: &self.sort_1,
       loc: &self.loc,
+      vis: Visibility::Pub,
     }
   }
 
@@ -331,6 +333,7 @@ impl Builtins {
       term: &self.sort_0,
       typ: &self.sort_0,
       loc: &self.loc,
+      vis: Visibility::Pub,
     }
   }
 }
@@ -468,6 +471,12 @@ impl GlobalScopeData {
         };
 
         if !included {
+          continue;
+        }
+
+        // `priv` declarations are invisible from every module except the
+        // one that defines them — see `visibility-declarations.md`.
+        if !is_current && d.vis == Visibility::Priv {
           continue;
         }
 
@@ -857,9 +866,17 @@ impl<'a> GlobalScope<'a> {
     let mut conflicts: Map<ModulePath, Vec<ModulePath>> = Map::new();
 
     for (mp_mod, module) in &modules {
-      let is_used = **mp_mod != *current_path && used_modules.contains(mp_mod);
+      let is_current = **mp_mod == *current_path;
+      let is_used = !is_current && used_modules.contains(mp_mod);
 
       for d in module.get_def_refs(&opens, test_mode) {
+        // `priv` declarations are invisible from every module except the
+        // one that defines them — see `visibility-declarations.md`.
+        // `PackagePrivate` (the default) and `Pub` are unfiltered here (no
+        // package-boundary enforcement exists yet).
+        if !is_current && d.vis == Visibility::Priv {
+          continue;
+        }
         if is_used {
           let prefixed_name = module.path().clone().extend(d.name.clone());
           let prefixed_def = DefRef {
@@ -869,6 +886,7 @@ impl<'a> GlobalScope<'a> {
             term: d.term,
             module: d.module,
             loc: d.loc,
+            vis: d.vis,
           };
           def_refs.insert(prefixed_def.name.clone(), prefixed_def);
 
@@ -965,6 +983,10 @@ impl<'a> GlobalScope<'a> {
             term,
             module,
             loc: default_source_range(),
+            // `data.def_refs` never contains `Priv` entries from other
+            // modules to begin with (filtered out in `from_module`), so
+            // any placeholder non-`Priv` value is safe here.
+            vis: Visibility::Pub,
           },
         )
       })
@@ -1395,6 +1417,7 @@ impl<'a> GlobalScope<'a> {
             term: &def.term,
             module,
             loc,
+            vis: def.vis,
           })
           .chain([DefRef {
             name: name.clone(),
@@ -1403,6 +1426,7 @@ impl<'a> GlobalScope<'a> {
             term: &def.term,
             module,
             loc,
+            vis: def.vis,
           }])
           .map(|d| (d.name.clone(), d))
           .collect();
@@ -1426,6 +1450,7 @@ impl<'a> GlobalScope<'a> {
                 term: &cons.term,
                 module,
                 loc,
+                vis: ind.vis,
               })
               .chain([DefRef {
                 name: name.clone(),
@@ -1434,6 +1459,7 @@ impl<'a> GlobalScope<'a> {
                 term: &cons.term,
                 module,
                 loc,
+                vis: ind.vis,
               }])
               .collect::<Vec<DefRef>>();
 
@@ -1470,6 +1496,7 @@ impl<'a> GlobalScope<'a> {
             term: &ind.term,
             module,
             loc,
+            vis: ind.vis,
           }])
           .map(|d| (d.name.clone(), d))
           .collect();
@@ -1495,6 +1522,7 @@ impl<'a> GlobalScope<'a> {
               name: full_name.clone(),
               full_path: full_name,
               typ: &imp.typ,
+              vis: instance.vis,
               term: &imp.term,
               module,
               loc,
@@ -2195,6 +2223,387 @@ pub fn bare_use_warnings(
     .collect()
 }
 
+/// Bare `open Module` (no braces at all) is deprecated in favor of explicit
+/// `open Module {*}` — mirrors `bare_use_warnings`. Note `open Module
+/// {name1, name2}` (an `OpenFilter::Only` selection) is not bare and does
+/// not warn; only the fully-implicit "no braces" form does.
+pub fn bare_open_warnings(
+  opens: &[SourceContext<Open>],
+  path: Option<&std::path::PathBuf>,
+) -> Vec<Diagnostic> {
+  opens
+    .iter()
+    .filter_map(|ctx| {
+      let o = ctx.value();
+      if o.filter != OpenFilter::All {
+        return None;
+      }
+      Some(Diagnostic {
+        severity: Severity::Warning,
+        message: format!("bare `open {}` without braces is deprecated", o.module_path),
+        location: Some(o.source_location.clone()),
+        path: path.cloned(),
+        suggestions: vec![Suggestion {
+          message: format!("use `open {} {{*}}` instead", o.module_path),
+        }],
+        ..Default::default()
+      })
+    })
+    .collect()
+}
+
+/// `@[...]` is the deprecated predecessor of `#[...]` (identical semantics,
+/// see `Attribute::legacy_syntax`). Scans every attribute-bearing
+/// declaration in a module (defs, macro defs, inductives/structs/classes,
+/// instances and their method impls, `use`/`open`) and returns one warning
+/// `Diagnostic` per `@[...]`-spelled attribute found.
+pub fn deprecated_attribute_warnings(
+  module: &Module,
+  path: Option<&std::path::PathBuf>,
+) -> Vec<Diagnostic> {
+  fn warn(attr: &Attribute, path: Option<&std::path::PathBuf>) -> Option<Diagnostic> {
+    if !attr.legacy_syntax {
+      return None;
+    }
+    Some(Diagnostic {
+      severity: Severity::Warning,
+      message: format!("`@[{}...]` is deprecated", attr.name),
+      location: Some(attr.source_location.clone()),
+      path: path.cloned(),
+      suggestions: vec![Suggestion {
+        message: format!("use `#[{}...]` instead", attr.name),
+      }],
+      ..Default::default()
+    })
+  }
+
+  let mut warnings = Vec::new();
+  for ctx in module.defs() {
+    warnings.extend(ctx.value().attributes.iter().filter_map(|a| warn(a, path)));
+  }
+  for ctx in module.get_macro_defs() {
+    warnings.extend(ctx.value().attributes.iter().filter_map(|a| warn(a, path)));
+  }
+  for ind in module.inductives() {
+    warnings.extend(ind.attributes.iter().filter_map(|a| warn(a, path)));
+  }
+  for ctx in module.instances() {
+    let inst = ctx.value();
+    warnings.extend(inst.attributes.iter().filter_map(|a| warn(a, path)));
+    for def in inst.impls_map.values() {
+      warnings.extend(def.attributes.iter().filter_map(|a| warn(a, path)));
+    }
+  }
+  for ctx in module.get_uses() {
+    warnings.extend(ctx.value().attributes.iter().filter_map(|a| warn(a, path)));
+  }
+  for ctx in module.get_opens() {
+    warnings.extend(ctx.value().attributes.iter().filter_map(|a| warn(a, path)));
+  }
+  warnings
+}
+
+/// Walk a `Par` (lambda/pi parameter) for referenced names — its type, and
+/// (for explicit `Par::P` params) its default value expression, if any.
+fn collect_par_names(par: &Par, names: &mut Set<ModulePath>) {
+  match par {
+    Par::P(param) => collect_param_names(param, names),
+    Par::I { typ, .. } => collect_term_names(typ, names),
+  }
+}
+
+fn collect_param_names(param: &Param, names: &mut Set<ModulePath>) {
+  collect_term_names(&param.typ, names);
+  if let Some(default) = &param.default {
+    collect_term_names(default, names);
+  }
+}
+
+fn collect_literal_names(lit: &Literal, names: &mut Set<ModulePath>) {
+  match lit {
+    Literal::Str { .. }
+    | Literal::Char { .. }
+    | Literal::Num { .. }
+    | Literal::Float { .. }
+    | Literal::Foreign(_) => {}
+    Literal::Term(t) => collect_term_names(t, names),
+    Literal::Match { value, cases } => {
+      collect_term_names(value, names);
+      for case in cases {
+        // The pattern's constructor name is a bare `Identifier` here (not a
+        // `Term::Var`) — this is how `open`-imported constructors used only
+        // in match arms (never as a call-position reference) get counted.
+        names.insert(ModulePath::single(case.name.clone()));
+        collect_term_names(&case.value, names);
+      }
+    }
+    Literal::If { value, then, els } => {
+      collect_term_names(value, names);
+      collect_term_names(then, names);
+      collect_term_names(els, names);
+    }
+    Literal::StructLit { fields, type_name } => {
+      for t in fields.values() {
+        collect_term_names(t, names);
+      }
+      if let Some(tn) = type_name {
+        collect_term_names(tn, names);
+      }
+    }
+    Literal::StructUpdate { base, fields } => {
+      names.insert(ModulePath::single(base.clone()));
+      for t in fields.values() {
+        collect_term_names(t, names);
+      }
+    }
+  }
+}
+
+/// Collect every name referenced as a free variable anywhere in `term`
+/// (its own name if it's a `Var`, plus everything nested inside it). Runs
+/// on the raw parsed AST — see `collect_referenced_names` for why.
+fn collect_term_names(term: &Term, names: &mut Set<ModulePath>) {
+  match term {
+    Term::Forall { typ, body, .. } => {
+      collect_term_names(typ, names);
+      collect_term_names(body, names);
+    }
+    Term::Pi { arg, ret, .. } => {
+      collect_term_names(arg, names);
+      collect_term_names(ret, names);
+    }
+    Term::Var { name } => {
+      if let Some(p) = name.to_path() {
+        names.insert(p);
+      }
+    }
+    Term::Lam { param, body } => {
+      collect_par_names(param, names);
+      collect_term_names(body, names);
+    }
+    Term::App { fun, arg } => {
+      collect_term_names(fun, names);
+      collect_term_names(arg, names);
+    }
+    Term::Ann { term, typ } => {
+      collect_term_names(term, names);
+      collect_term_names(typ, names);
+    }
+    Term::Lit { value } => collect_literal_names(value, names),
+    Term::Ntv { native } => {
+      for arg in native.args() {
+        if let Some(t) = arg {
+          collect_term_names(t, names);
+        }
+      }
+    }
+    Term::Con(c) => {
+      names.insert(c.typ_name.clone());
+      for arg in &c.args {
+        if let Some(t) = arg {
+          collect_term_names(t, names);
+        }
+      }
+    }
+    Term::Ctx { term, .. } => collect_term_names(term, names),
+    Term::Sort { .. } | Term::Hole => {}
+    Term::Quote { term } => collect_term_names(term, names),
+  }
+}
+
+/// Collect every name referenced anywhere in a module's own declarations —
+/// as a free variable (`Term::Var`), a match-pattern constructor
+/// (`MatchCase::name`), a type-constraint class, or an infix target.
+///
+/// Intended to run on the raw parsed AST, before lowering/de-Bruijn-
+/// indexing (the same timing as `bare_use_warnings`) — a conservative
+/// approximation where a local binding that shadows an imported name
+/// makes that import look "used" even where every real reference is
+/// shadowed. This can only cause false negatives (misses some genuinely-
+/// dead imports), never false positives — the correct bias for both
+/// `unused_use_name_warnings` (a spurious warning is worse than a missed
+/// one) and the `organize-imports` codemod's minimal-set computation (a
+/// superset is safe; a subset that omits an actually-used name would break
+/// compilation).
+///
+/// IMPORTANT: in the real pipeline (`check_one_source`,
+/// `organize_imports_for_files`), the `Module` this actually runs on has
+/// already been through `load_module_from_text_typed` — i.e. it's the
+/// POST-elaboration term tree, not the pristine parse. Elaboration
+/// resolves a bare reference like `println` to its *declaring* def's own
+/// full name (`IO.println`, since that's how `io.mo` itself wrote it) —
+/// which is not necessarily `<use-target-module>.<name>`. Callers matching
+/// against this set MUST therefore check by an entry's LAST segment (see
+/// `referenced_contains_name`), not just the bare name or
+/// `<module>.<name>` qualification, or they'll wrongly conclude an
+/// actually-used name is unreferenced. A fully scope-aware, pre-
+/// elaboration-only version is future work — deliberately not done here.
+pub fn collect_referenced_names(module: &Module) -> Set<ModulePath> {
+  let mut names = Set::default();
+  for ctx in module.defs() {
+    let def = ctx.value();
+    collect_term_names(&def.term, &mut names);
+    collect_term_names(&def.typ, &mut names);
+    for tc in &def.type_constraints {
+      names.insert(tc.class().clone());
+    }
+  }
+  for ctx in module.get_macro_defs() {
+    let def = ctx.value();
+    collect_term_names(&def.term, &mut names);
+    collect_term_names(&def.typ, &mut names);
+  }
+  for ind in module.inductives() {
+    collect_term_names(ind.typ(), &mut names);
+    for tc in &ind.constraints {
+      names.insert(tc.class().clone());
+    }
+    for cons in ind.constructors() {
+      collect_term_names(cons.typ(), &mut names);
+      for p in cons.params() {
+        collect_param_names(p, &mut names);
+      }
+    }
+    for default in ind.defaults.values() {
+      collect_term_names(default, &mut names);
+    }
+    for tcs in ind.method_constraints.values() {
+      for tc in tcs {
+        names.insert(tc.class().clone());
+      }
+    }
+  }
+  for ctx in module.instances() {
+    let inst = ctx.value();
+    names.insert(inst.class_name.clone());
+    for tc in &inst.constraints {
+      names.insert(tc.class().clone());
+    }
+    for arg in &inst.args {
+      collect_term_names(arg, &mut names);
+    }
+    for def in inst.impls_map.values() {
+      collect_term_names(&def.term, &mut names);
+      collect_term_names(&def.typ, &mut names);
+      for tc in &def.type_constraints {
+        names.insert(tc.class().clone());
+      }
+    }
+  }
+  for ctx in module.infix() {
+    names.insert(ctx.value().name().clone());
+  }
+  names
+}
+
+/// Whether `referenced` (from `collect_referenced_names`) shows evidence
+/// that `name` was used, allowing for post-elaboration qualification: a
+/// bare match, a qualified match under `context_path` (e.g. `<use-target>.
+/// <name>`), OR — the case elaboration actually produces, see
+/// `collect_referenced_names`'s doc comment — any entry whose LAST
+/// segment is `name`, regardless of its prefix (`IO.println` still counts
+/// as evidence `println` was used, even though `IO` isn't `context_path`
+/// at all). That last check is deliberately broad: a coincidental same-
+/// name def from a genuinely unrelated module would also pass it, but
+/// that only ever causes a *safe* over-inclusion (a name listed in a
+/// `use`/`open` brace list that turns out not to be strictly needed —
+/// harmless), never the unsafe direction (omitting a name that's
+/// genuinely needed, which would break compilation).
+pub fn referenced_contains_name(
+  referenced: &Set<ModulePath>,
+  context_path: &ModulePath,
+  name: &Identifier,
+) -> bool {
+  let bare = ModulePath::single(name.clone());
+  let qualified = context_path.append(vec![name.clone()]);
+  referenced.contains(&bare)
+    || referenced.contains(&qualified)
+    || referenced.iter().any(|p| p.last() == name)
+}
+
+/// Unused names in `use`-filter selections: for every `UseFilter::Items`
+/// filter, flags any `UseItem::Name`/`Rename` entry never referenced in
+/// `referenced` (checked both bare and fully-qualified) — see
+/// `collect_referenced_names` for how `referenced` is built and its
+/// conservative-approximation tradeoff. `UseFilter::Bare` (no explicit
+/// list) has nothing to flag. Glob items and bare sub-module names are not
+/// themselves checked (there's no single name to be "unused"); names
+/// nested inside a `SubModule`/`SubModuleRename` filter are checked via the
+/// same recursive flattening `UseItem::flatten` does.
+pub fn unused_use_name_warnings(
+  uses: &[SourceContext<Use>],
+  referenced: &Set<ModulePath>,
+  path: Option<&std::path::PathBuf>,
+) -> Vec<Diagnostic> {
+  uses
+    .iter()
+    .flat_map(|ctx| {
+      let u = ctx.value();
+      let UseFilter::Items(items) = &u.filter else {
+        return Vec::new();
+      };
+      let mut flat: Map<ModulePath, AllowedNames> = Map::new();
+      for item in items {
+        for (k, v) in item.flatten(&u.module_path) {
+          merge_allowed(&mut flat, k, v);
+        }
+      }
+      flat
+        .into_iter()
+        .filter_map(|(module_path, allowed)| {
+          let AllowedNames::Only(names) = allowed else {
+            return None;
+          };
+          // Only a single-name entry (the common case for a leaf import)
+          // can be pinpointed as "this specific name is unused" — report
+          // the whole `use` line's location since `UseItem` doesn't carry
+          // its own per-item span.
+          let unused: Vec<&Identifier> = names
+            .iter()
+            .filter(|name| !referenced_contains_name(referenced, &module_path, name))
+            .collect();
+          if unused.is_empty() {
+            return None;
+          }
+          let names_str = unused
+            .iter()
+            .map(|n| n.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+          Some(Diagnostic {
+            severity: Severity::Warning,
+            message: format!("unused import `{names_str}` from `{module_path}`"),
+            location: Some(u.source_location.clone()),
+            path: path.cloned(),
+            suggestions: vec![Suggestion {
+              message: format!("remove `{names_str}` from `use {}`", u.module_path),
+            }],
+            ..Default::default()
+          })
+        })
+        .collect::<Vec<_>>()
+    })
+    .collect()
+}
+
+/// All non-fatal, style/deprecation-level warnings for a successfully
+/// loaded module, combined: bare `use`, bare `open`, deprecated `@[...]`
+/// attributes, and unused `use`-filter names (`unused_use_name_warnings`).
+/// This is the single entry point every warning-surfacing call site
+/// (`run`, the test runner, `check_files`/`check_source`, the LSP) should
+/// call, so new warning kinds only need wiring in once.
+pub fn module_warnings(module: &Module, path: Option<&std::path::PathBuf>) -> Vec<Diagnostic> {
+  let mut warnings = bare_use_warnings(module.get_uses(), path);
+  warnings.extend(bare_open_warnings(module.get_opens(), path));
+  warnings.extend(deprecated_attribute_warnings(module, path));
+  warnings.extend(unused_use_name_warnings(
+    module.get_uses(),
+    &collect_referenced_names(module),
+    path,
+  ));
+  warnings
+}
+
 /// Recursively unwrap `Decl::ScopedOpen` wrappers, recording each one's
 /// `Open` + inner declaration into `scoped_opens` and returning the
 /// declarations with `ScopedOpen` replaced by their inner decl, so normal
@@ -2413,6 +2822,7 @@ impl Module {
             full_path: name,
             typ: &imp.typ,
             term: &imp.term,
+            vis: instance.vis,
           }
         })
       })
@@ -2430,6 +2840,7 @@ impl Module {
             term: &ind.term,
             module: &self.path,
             loc: &ctx.loc,
+            vis: ind.vis,
           }]
         } else {
           ind
@@ -2448,6 +2859,7 @@ impl Module {
                   term: &cons.term,
                   module: &self.path,
                   loc: &ctx.loc,
+                  vis: ind.vis,
                 })
                 .chain([DefRef {
                   name: name.clone(),
@@ -2456,6 +2868,7 @@ impl Module {
                   term: &cons.term,
                   module: &self.path,
                   loc: &ctx.loc,
+                  vis: ind.vis,
                 }])
                 .collect::<Vec<DefRef>>()
             })
@@ -2466,6 +2879,7 @@ impl Module {
               term: &ind.term,
               module: &self.path,
               loc: &ctx.loc,
+              vis: ind.vis,
             }])
             .collect()
         }
@@ -2487,6 +2901,7 @@ impl Module {
             term: &def.term,
             module: &self.path,
             loc: &def.loc,
+            vis: def.vis,
           })
           .chain([DefRef {
             name: name.clone(),
@@ -2495,6 +2910,7 @@ impl Module {
             term: &def.term,
             module: &self.path,
             loc: &def.loc,
+            vis: def.vis,
           }])
           .collect::<Vec<DefRef>>()
       })
@@ -2644,9 +3060,13 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
   let infix = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
-      Decl::Infix(infix @ Infix { operator, name: _ }) => {
-        Some((operator.clone(), ctx.with(infix.clone())))
-      }
+      Decl::Infix(
+        infix @ Infix {
+          operator,
+          name: _,
+          vis: _,
+        },
+      ) => Some((operator.clone(), ctx.with(infix.clone()))),
       _ => None,
     })
     .fold(Map::new(), merge_dup_detect);

@@ -24,7 +24,7 @@ use crate::term::module::ParsedModule;
 #[cfg(feature = "repl")]
 use crate::term::module::module;
 use crate::term::module::{
-  LoadedModules, bare_use_warnings, default_modules, load_module_files, load_module_from_text,
+  LoadedModules, default_modules, load_module_files, load_module_from_text, module_warnings,
 };
 use crate::term::{
   Constructor, InductiveVariant, ModulePath, Named, SearchPaths, SourceContext, SourceRange, mpt,
@@ -206,7 +206,7 @@ pub fn run(
   let module = loaded
     .get_module(&path)
     .ok_or_else(|| format!("Module {path} not loaded"))?;
-  let warnings = bare_use_warnings(module.get_uses(), Some(&input));
+  let warnings = module_warnings(module, Some(&input));
   if !warnings.is_empty() {
     eprintln!(
       "{}",
@@ -449,7 +449,7 @@ fn test_one_file(
     output_lines.push(format!("{global}"));
   }
 
-  let warnings = bare_use_warnings(module.get_uses(), Some(&file_path));
+  let warnings = module_warnings(module, Some(&file_path));
   if !warnings.is_empty() {
     output_lines.push(render_diagnostics(&warnings, None, options.use_colors));
   }
@@ -770,6 +770,113 @@ pub fn run_tests(
   }
 }
 
+/// One target file's `organize-imports` result: the rewritten source if
+/// anything changed (`None` means the file already has no bare
+/// `use`/`open`/`@[...]` to convert), or the error that kept it from being
+/// checked at all (parse/type error — same as `check_files`, a broken file
+/// is reported rather than silently skipped or guessed at).
+#[derive(Debug, Clone)]
+pub struct OrganizeImportsResult {
+  pub path: PathBuf,
+  pub new_source: Option<String>,
+  pub error: Option<String>,
+}
+
+/// Compute `organize-imports` edits for every `.mo` file under `inputs`
+/// (directories expanded recursively, same as `check_files`), reusing one
+/// incrementally-growing `LoadedModules` across the batch so cross-file
+/// `use`/`open` targets resolve — mirrors `check_files`'s structure
+/// exactly (same file-collection, same `master_loaded` threading, same
+/// "skip files already satisfied by the embedded defaults" filter) so the
+/// two commands can't drift on what counts as "the file set" or "loaded
+/// successfully". Pure computation — callers decide whether to print a
+/// diff or write `new_source` back to disk.
+pub fn organize_imports_for_files(
+  inputs: Vec<PathBuf>,
+  extra_mote_paths: Vec<PathBuf>,
+) -> Result<Vec<OrganizeImportsResult>, String> {
+  let inputs = if inputs.is_empty() {
+    vec![PathBuf::from(".")]
+  } else {
+    inputs
+  };
+
+  let mut files: Vec<PathBuf> = Vec::new();
+  for input in &inputs {
+    if input.is_dir() {
+      files.extend(collect_mo_files(input));
+    } else {
+      files.push(input.clone());
+    }
+  }
+  files.sort();
+  files.dedup();
+
+  let mut master_loaded = default_modules().map_err(|e| format!("{e}"))?;
+  let search_paths = build_default_search_paths(&inputs[0], &extra_mote_paths);
+  master_loaded.set_search_paths(search_paths);
+
+  let files: Vec<PathBuf> = files
+    .into_iter()
+    .filter(|file| {
+      let path: ModulePath = file.clone().into();
+      let is_default = master_loaded.get_module(&path).is_some() || {
+        let last = path.last();
+        master_loaded
+          .get_module(&ModulePath::single(last.clone()))
+          .is_some()
+      };
+      !is_default
+    })
+    .collect();
+
+  let mut results = Vec::with_capacity(files.len());
+  for file in &files {
+    let path: ModulePath = file.clone().into();
+    let text = match fs::read_to_string(file) {
+      Err(e) => {
+        results.push(OrganizeImportsResult {
+          path: file.clone(),
+          new_source: None,
+          error: Some(format!("{e}")),
+        });
+        continue;
+      }
+      Ok(text) => text,
+    };
+    match crate::term::module::load_module_from_text_typed(&text, &path, &mut master_loaded) {
+      Ok(()) => {
+        let module = master_loaded
+          .get_module(&path)
+          .expect("just-loaded module must be present");
+        let edits =
+          crate::term::organize_imports::compute_organize_import_edits(module, &master_loaded);
+        let new_source = if edits.is_empty() {
+          None
+        } else {
+          Some(crate::term::organize_imports::apply_text_edits(
+            &text, edits,
+          ))
+        };
+        results.push(OrganizeImportsResult {
+          path: file.clone(),
+          new_source,
+          error: None,
+        });
+      }
+      Err(e) => {
+        results.push(OrganizeImportsResult {
+          path: file.clone(),
+          new_source: None,
+          error: Some(format!("{e}")),
+        });
+      }
+    }
+  }
+
+  Ok(results)
+}
+
 /// One target file's check result — every parse/type error found in it,
 /// with real positions. Kept free of any JSON/LSP-shape opinions (field
 /// names, 0- vs 1-indexing, `uri` vs `path`) on purpose: that's a wire-
@@ -875,7 +982,13 @@ fn check_one_source(
   mut loaded: LoadedModules,
 ) -> (Vec<crate::diag::Diagnostic>, LoadedModules) {
   match crate::term::module::load_module_from_text_typed(source, module_path, &mut loaded) {
-    Ok(()) => (Vec::new(), loaded),
+    Ok(()) => {
+      let warnings = loaded
+        .get_module(module_path)
+        .map(|module| module_warnings(module, Some(path)))
+        .unwrap_or_default();
+      (warnings, loaded)
+    }
     Err(crate::term::module::LoadingError::Type(type_error)) => (
       crate::eval::r#type::type_error_as_diagnostics(&type_error, Some(path)),
       loaded,
@@ -906,6 +1019,33 @@ pub fn check_source(
   loaded.set_search_paths(build_default_search_paths(&path, &extra_mote_paths));
   let (diagnostics, _) = check_one_source(&path, source, &module_path, loaded);
   Ok(diagnostics)
+}
+
+/// `organize-imports` edits for a single file's CURRENT in-memory
+/// content — the LSP server's `textDocument/codeAction` and
+/// `workspace/executeCommand("monad.organizeImports")` handlers build on
+/// this, same "single in-memory buffer" shape as `check_source`. Returns
+/// an empty edit list (not an error) if the file doesn't parse/type-check
+/// — there's nothing sound to compute a minimal import list from, and the
+/// real problem already surfaces via `check_source`'s diagnostics.
+pub fn organize_imports_for_source(
+  path: &Path,
+  source: &str,
+  extra_mote_paths: Vec<PathBuf>,
+) -> Result<Vec<crate::term::organize_imports::TextEdit>, String> {
+  let path = path.to_path_buf();
+  let module_path: ModulePath = path.clone().into();
+  let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
+  loaded.set_search_paths(build_default_search_paths(&path, &extra_mote_paths));
+  match crate::term::module::load_module_from_text_typed(source, &module_path, &mut loaded) {
+    Ok(()) => {
+      let module = loaded
+        .get_module(&module_path)
+        .expect("just-loaded module must be present");
+      Ok(crate::term::organize_imports::compute_organize_import_edits(module, &loaded))
+    }
+    Err(_) => Ok(Vec::new()),
+  }
 }
 
 /// Coarse-grained symbol classification — enough to distinguish the

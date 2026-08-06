@@ -1,5 +1,6 @@
 pub mod module;
 pub mod mote;
+pub mod organize_imports;
 #[cfg(test)]
 pub mod test;
 
@@ -355,6 +356,7 @@ pub fn stru(
     attributes,
     defaults,
     method_constraints: Map::new(),
+    vis: Visibility::default(),
   }
 }
 
@@ -453,6 +455,7 @@ pub fn inductive(
     attributes,
     defaults: Map::new(),
     method_constraints: Map::new(),
+    vis: Visibility::default(),
   }
 }
 
@@ -521,7 +524,23 @@ pub fn class(
     attributes,
     defaults: Map::new(),
     method_constraints,
+    vis: Visibility::default(),
   }
+}
+
+/// Visibility of a declaration.
+///
+/// `priv` is enforced immediately (module boundaries already exist); the
+/// distinction between `pub` and the default `PackagePrivate` is a no-op
+/// until a package system exists — see `visibility-declarations.md`. `use`
+/// stays binary (`Use.public: bool`) and does not use this type; `priv`
+/// does not apply to `use`/`open`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum Visibility {
+  Pub,
+  Priv,
+  #[default]
+  PackagePrivate,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -535,6 +554,7 @@ pub struct Instance {
   cons: Constructor,
   typ: Term,
   pub attributes: Vec<Attribute>,
+  pub(crate) vis: Visibility,
 }
 
 impl Instance {
@@ -699,6 +719,7 @@ pub fn instance(
     params,
     typ,
     attributes,
+    vis: Visibility::default(),
   }
 }
 
@@ -728,6 +749,7 @@ pub struct Inductive {
   pub attributes: Vec<Attribute>,
   pub defaults: Map<Identifier, Term>,
   pub method_constraints: Map<Identifier, Vec<TypeConstraint>>,
+  pub(crate) vis: Visibility,
 }
 
 pub trait AsVarRef {
@@ -1888,6 +1910,7 @@ pub struct Def {
   pub term: Term,
   pub(crate) type_constraints: Vec<TypeConstraint>,
   pub attributes: Vec<Attribute>,
+  pub(crate) vis: Visibility,
 }
 
 /// A declaration-generating macro definition.
@@ -1945,6 +1968,7 @@ pub fn def(
     typ,
     term,
     attributes,
+    vis: Visibility::default(),
   }
 }
 
@@ -1967,10 +1991,41 @@ pub enum AttrArg {
   Group(Vec<AttrArg>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Attribute {
   pub name: Identifier,
   pub args: Vec<AttrArg>,
+  /// Location of the whole `@[...]`/`#[...]` block, used to render the
+  /// `@[...]` deprecation warning (see `deprecated_attribute_warnings`).
+  pub source_location: SourceRange,
+  /// `true` if written with the deprecated `@[...]` delimiter, `false` if
+  /// written with the current `#[...]` delimiter. Purely syntactic — every
+  /// semantic consumer (`has_native_attr`, `has_test_attr`, ...) only looks
+  /// at `name`/`args`, which are identical either way.
+  pub legacy_syntax: bool,
+}
+
+/// Attribute equality is structural (name + args only) and ignores
+/// provenance (`source_location`, `legacy_syntax`) — two attributes that
+/// mean the same thing are equal regardless of where they were parsed from
+/// or which delimiter spelled them.
+impl PartialEq for Attribute {
+  fn eq(&self, other: &Self) -> bool {
+    self.name == other.name && self.args == other.args
+  }
+}
+
+/// Build an `Attribute` with no known source location, spelled as `#[...]`
+/// (`legacy_syntax: false`). For use outside the parser (synthetic defs,
+/// tests) where provenance doesn't matter — `Attribute`'s `PartialEq` is
+/// structural (name + args) and ignores both fields this sets.
+pub fn attribute(name: Identifier, args: Vec<AttrArg>) -> Attribute {
+  Attribute {
+    name,
+    args,
+    source_location: SourceRange::default(),
+    legacy_syntax: false,
+  }
 }
 
 impl Native {
@@ -2133,7 +2188,7 @@ impl ModulePath {
         self
           .remove_prefix(&open.module_path)
           .and_then(|opened| match &open.filter {
-            OpenFilter::All => Some(opened),
+            OpenFilter::All | OpenFilter::Glob => Some(opened),
             OpenFilter::Only(names) => {
               if names.contains(opened.last()) {
                 Some(opened)
@@ -2357,7 +2412,12 @@ impl Use {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpenFilter {
+  /// `open Module` — bare, no braces. Deprecated (see
+  /// `bare_open_warnings`); semantics: import all, same as `Glob`.
   All,
+  /// `open Module {*}` — explicit "import everything", the non-deprecated
+  /// spelling of `All`'s semantics.
+  Glob,
   Only(Vec<Identifier>),
 }
 
@@ -2530,6 +2590,13 @@ pub struct DefRef<'a> {
   full_path: ModulePath,
   typ: &'a Term,
   term: &'a Term,
+  /// Visibility of the declaration this ref points at — a top-level `Def`'s
+  /// own `vis`, or (for instance method impls / constructors / class
+  /// methods) the owning `Instance`/`Inductive`'s `vis`, per
+  /// `visibility-declarations.md`: "visibility is on the instance/type
+  /// itself", not the individual member. Used by `GlobalScopeData` to hide
+  /// `Priv` declarations from other modules.
+  pub(crate) vis: Visibility,
 }
 
 impl<'a> Typed for DefRef<'a> {
@@ -2551,7 +2618,12 @@ impl<'a> DefRef<'a> {
       term: self.term,
       loc: self.loc,
       module: self.module,
+      vis: self.vis,
     }
+  }
+
+  pub fn vis(&self) -> Visibility {
+    self.vis
   }
 
   pub fn to_var_ref(&self) -> VarRef<'_> {
@@ -2596,6 +2668,7 @@ impl<'a> Named for DefRef<'a> {
 pub struct Infix {
   operator: Operator,
   name: ModulePath,
+  pub(crate) vis: Visibility,
 }
 
 impl Infix {
@@ -2609,13 +2682,21 @@ impl Infix {
 
 impl Display for Infix {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let Infix { operator, name } = self;
+    let Infix {
+      operator,
+      name,
+      vis: _,
+    } = self;
     write!(f, "({operator}) := {name}")
   }
 }
 
 pub fn infix(operator: Operator, name: ModulePath) -> Infix {
-  Infix { operator, name }
+  Infix {
+    operator,
+    name,
+    vis: Visibility::default(),
+  }
 }
 
 /// Declarations in a module

@@ -293,6 +293,8 @@ fn test_native() {
       pi(typ("I64"), pi(typ("I64"), typ("I64"))),
       expected_term,
       vec![Attribute {
+        source_location: Default::default(),
+        legacy_syntax: false,
         name: id("native"),
         args: vec![AttrArg::Ident(id("num_add"))]
       }]
@@ -505,6 +507,21 @@ fn test_use_bare_still_parses() {
 }
 
 #[test]
+fn test_use_bare_source_location_excludes_trailing_whitespace() {
+  // Regression test: `use_opt_filter` used to consume-and-keep trailing
+  // whitespace/blank-lines (looking for a `{` that isn't there) even on
+  // the bare-use fallback path, so `Use.source_location.end` would land
+  // well past the module path — e.g. right before the next declaration.
+  // That's harmless for warning display but corrupts any byte-precise
+  // splice (`organize_imports`'s `TextEdit`s) built from it: the edit
+  // would eat the blank-line separator before the next declaration too.
+  let s = "use std.show\n\n\ndef x : I64 := 1".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert_eq!(res.source_location.end.line, 1);
+  assert_eq!(res.source_location.end.column, 13); // just past "use std.show"
+}
+
+#[test]
 fn test_use_glob() {
   use crate::term::{UseFilter, UseItem};
   let s = "use IO {*}".into();
@@ -609,6 +626,20 @@ fn test_open_no_braces_still_all() {
     Decl::Open(open) => {
       assert_eq!(open.module_path, mpt("IO"));
       assert_eq!(open.filter, OpenFilter::All);
+    }
+    other => panic!("expected Decl::Open, got {other:?}"),
+  }
+}
+
+#[test]
+fn test_open_glob() {
+  use crate::term::{Decl, OpenFilter};
+  let s = "open IO {*}".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::Open(open) => {
+      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(open.filter, OpenFilter::Glob);
     }
     other => panic!("expected Decl::Open, got {other:?}"),
   }
@@ -730,5 +761,111 @@ fn test_parse_mixed_multiplicity_params() {
   match res.value() {
     Decl::Def(_) => {} // Just verify it parses
     _ => panic!("Expected Def"),
+  }
+}
+
+#[test]
+fn test_visibility_def() {
+  let (_, res) = def_parser(r#"pub def f : I64 := 1"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::Pub);
+
+  let (_, res) = def_parser(r#"priv def f : I64 := 1"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::Priv);
+
+  let (_, res) = def_parser(r#"def f : I64 := 1"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::PackagePrivate);
+}
+
+#[test]
+fn test_visibility_def_after_attribute() {
+  // visibility comes before attributes: `pub @[attr] def`, not `@[attr] pub def`.
+  let (_, res) = def_parser(r#"pub @[partial] def f : I64 := 1"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::Pub);
+  assert!(res.has_partial_attr());
+}
+
+#[test]
+fn test_visibility_type() {
+  let (_, res) = inductive_parser(r#"pub type Foo { mk }"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::Pub);
+
+  let (_, res) = inductive_parser(r#"priv type Foo { mk }"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::Priv);
+
+  let (_, res) = inductive_parser(r#"type Foo { mk }"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::PackagePrivate);
+}
+
+#[test]
+fn test_visibility_class() {
+  let (_, res) = class_parser(r#"pub class Show A { def show (a: A) : String }"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::Pub);
+
+  let (_, res) = class_parser(r#"priv class Show A { def show (a: A) : String }"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::Priv);
+
+  let (_, res) = class_parser(r#"class Show A { def show (a: A) : String }"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::PackagePrivate);
+}
+
+#[test]
+fn test_visibility_struct() {
+  let struct_parser = |s: &'static str| struct_parser::<()>(s.into());
+  let (_, res) = struct_parser(r#"pub struct Foo { x : I64 }"#).unwrap();
+  assert_eq!(res.vis, Visibility::Pub);
+
+  let (_, res) = struct_parser(r#"priv struct Foo { x : I64 }"#).unwrap();
+  assert_eq!(res.vis, Visibility::Priv);
+
+  let (_, res) = struct_parser(r#"struct Foo { x : I64 }"#).unwrap();
+  assert_eq!(res.vis, Visibility::PackagePrivate);
+}
+
+#[test]
+fn test_visibility_instance() {
+  let s = r#"pub instance Show I64 { def show (x: I64) : String := "int" }"#.into();
+  let (_, res) = instance_parser(s).unwrap();
+  assert_eq!(res.vis, Visibility::Pub);
+
+  let s = r#"priv instance Show I64 { def show (x: I64) : String := "int" }"#.into();
+  let (_, res) = instance_parser(s).unwrap();
+  assert_eq!(res.vis, Visibility::Priv);
+
+  let s = r#"instance Show I64 { def show (x: I64) : String := "int" }"#.into();
+  let (_, res) = instance_parser(s).unwrap();
+  assert_eq!(res.vis, Visibility::PackagePrivate);
+}
+
+#[test]
+fn test_visibility_infix() {
+  let (_, res) = infix_parser(r#"pub infix (++) := myConcat"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::Pub);
+
+  let (_, res) = infix_parser(r#"priv infix (++) := myConcat"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::Priv);
+
+  let (_, res) = infix_parser(r#"infix (++) := myConcat"#.into()).unwrap();
+  assert_eq!(res.vis, Visibility::PackagePrivate);
+}
+
+#[test]
+fn test_visibility_pub_priv_is_parse_error() {
+  // Only one visibility keyword is allowed.
+  assert!(
+    decl_parser(r#"pub priv def f : I64 := 1"#.into())
+      .finish()
+      .is_err()
+  );
+}
+
+#[test]
+fn test_visibility_use_unaffected() {
+  // `use` keeps its own binary `pub use`/bare `use` handling; `priv use` is
+  // not a thing (priv does not apply to use/open).
+  let s = r#"pub use io {*}"#.into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::Use(u) => assert!(u.public),
+    _ => panic!("Expected Use"),
   }
 }

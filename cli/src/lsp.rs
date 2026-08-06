@@ -1,11 +1,16 @@
-//! Minimal stdio JSON-RPC LSP server — diagnostics + navigation only
-//! (`hover`, `definition`, `documentSymbol`), matching the plan's phase
-//! ordering ("ship diagnostics + navigation first"). Completions, rename,
-//! semantic tokens, and code actions need error-tolerant parsing (the
-//! parser stops at the first syntax error; no recovery/partial-AST
-//! support yet) — explicitly out of scope here, not an oversight, and
-//! the server's own advertised `capabilities` only claim what's actually
-//! implemented.
+//! Minimal stdio JSON-RPC LSP server — diagnostics + navigation
+//! (`hover`, `definition`, `documentSymbol`) plus one codemod
+//! (`organize-imports`, reachable both as a `source.organizeImports`
+//! code action and as the `monad.organizeImports` executable command),
+//! matching the plan's phase ordering ("ship diagnostics + navigation
+//! first"). Completions, rename, semantic tokens, and general code
+//! actions need error-tolerant parsing (the parser stops at the first
+//! syntax error; no recovery/partial-AST support yet) — explicitly out of
+//! scope here, not an oversight, and the server's own advertised
+//! `capabilities` only claim what's actually implemented.
+//! `organize-imports` is the one exception: it only ever needs a file
+//! that already parses cleanly (nothing sound to compute from a broken
+//! one anyway), so it doesn't run into that limitation.
 //!
 //! No debounce: every `didChange` re-checks synchronously on the same
 //! thread that reads stdin, matching the CLI's own agent-mode behavior
@@ -16,19 +21,30 @@
 //! files under rapid keystrokes — an acceptable v1 tradeoff, not
 //! something silently wrong.
 //!
-//! Diagnostics/hover/definition/documentSymbol all operate on the
-//! editor's in-memory buffer (`Document.text`, updated on every
-//! `didChange`), not what's saved on disk — via `monad_core::check_source`/
-//! `symbols_from_source`, the same single-source entry points `core`
-//! exposes specifically for this.
+//! Diagnostics/hover/definition/documentSymbol/codeAction/executeCommand
+//! all operate on the editor's in-memory buffer (`Document.text`, updated
+//! on every `didChange`), not what's saved on disk — via
+//! `monad_core::check_source`/`symbols_from_source`/
+//! `organize_imports_for_source`, the same single-source entry points
+//! `core` exposes specifically for this.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-use monad_core::{SymbolInfo, check_source, diag::Severity, symbols_from_source};
+use monad_core::{
+  SymbolInfo, check_source, diag::Severity, organize_imports_for_source, symbols_from_source,
+};
 
 use crate::{find_symbol_by_name, identifier_at, location_to_json_range, symbol_kind_label};
+
+/// Command id for the one `workspace/executeCommand` this server
+/// supports — organizes the given document's imports/annotations, same
+/// computation as the `monad-rs organize-imports` CLI subcommand and the
+/// `source.organizeImports` code action below (all three share
+/// `organize_imports_for_source`, so they can't drift on what "organize
+/// imports" means).
+const ORGANIZE_IMPORTS_COMMAND: &str = "monad.organizeImports";
 
 /// One open document's current buffer content. LSP full-document sync
 /// (`TextDocumentSyncKind::Full`, the only kind this server advertises)
@@ -46,6 +62,9 @@ pub fn run(mote_path: Vec<PathBuf>) -> Result<(), String> {
 
   let mut documents: HashMap<String, Document> = HashMap::new();
   let mut shutting_down = false;
+  // Monotonic id for server-initiated requests (currently just
+  // `workspace/applyEdit`, sent by the executeCommand handler below).
+  let mut next_request_id: u64 = 1;
 
   loop {
     let body = match read_message(&mut reader).map_err(|e| format!("transport error: {e}"))? {
@@ -60,11 +79,19 @@ pub fn run(mote_path: Vec<PathBuf>) -> Result<(), String> {
       }
     };
     let id = msg.get("id").cloned();
-    let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    let method = msg.get("method").and_then(|m| m.as_str());
     let params = msg
       .get("params")
       .cloned()
       .unwrap_or(serde_json::Value::Null);
+
+    let Some(method) = method else {
+      // No `method` field: this is a RESPONSE to a request WE sent (the
+      // only one is `workspace/applyEdit`, fired fire-and-forget by
+      // `execute_command` below) — not a client request needing a
+      // handler, so it must NOT fall into the "method not found" branch.
+      continue;
+    };
 
     match method {
       "initialize" => send_response(&mut writer, id, initialize_result())?,
@@ -91,6 +118,15 @@ pub fn run(mote_path: Vec<PathBuf>) -> Result<(), String> {
       "textDocument/documentSymbol" => {
         document_symbol(&documents, &mut writer, id, &params, &mote_path)?
       }
+      "textDocument/codeAction" => code_action(&documents, &mut writer, id, &params, &mote_path)?,
+      "workspace/executeCommand" => execute_command(
+        &documents,
+        &mut writer,
+        id,
+        &params,
+        &mote_path,
+        &mut next_request_id,
+      )?,
       _ => {
         // A notification with no handler is fine to ignore per the LSP
         // spec; a REQUEST with no handler must get an error response, or
@@ -180,13 +216,33 @@ fn send_notification(
   )
 }
 
+/// Send a server-initiated REQUEST (currently only `workspace/applyEdit`).
+/// Fire-and-forget: the eventual response comes back as a message with an
+/// `id` but no `method`, which the main loop's dispatch already treats as
+/// a no-op rather than an unhandled request (see the `let Some(method) =
+/// method else { continue }` guard there) — this server has no need to
+/// correlate the response to anything, so it's simply not tracked.
+fn send_request(
+  writer: &mut impl Write,
+  id: u64,
+  method: &str,
+  params: serde_json::Value,
+) -> Result<(), String> {
+  write_message(
+    writer,
+    &serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+  )
+}
+
 fn initialize_result() -> serde_json::Value {
   serde_json::json!({
     "capabilities": {
       "textDocumentSync": 1, // Full
       "hoverProvider": true,
       "definitionProvider": true,
-      "documentSymbolProvider": true
+      "documentSymbolProvider": true,
+      "codeActionProvider": { "codeActionKinds": ["source.organizeImports"] },
+      "executeCommandProvider": { "commands": [ORGANIZE_IMPORTS_COMMAND] }
     },
     "serverInfo": { "name": "monad-lsp", "version": env!("CARGO_PKG_VERSION") }
   })
@@ -435,4 +491,266 @@ fn document_symbol(
     })
     .collect();
   send_response(writer, Some(id), serde_json::Value::Array(items))
+}
+
+// --- organize-imports codemod --------------------------------------------
+//
+// Shared by both entry points below (the `source.organizeImports` code
+// action and the `monad.organizeImports` command) so they can't drift on
+// what "organize this document's imports" computes — same
+// `organize_imports_for_source` the `monad-rs organize-imports` CLI
+// subcommand uses.
+
+/// A `WorkspaceEdit` (LSP shape: `{changes: {uri: TextEdit[]}}`) for
+/// organizing `uri`'s current buffer content, or `None` if there's
+/// nothing to change (file already fully converted, or doesn't
+/// parse/type-check — same "nothing sound to compute" case
+/// `organize_imports_for_source` itself treats as zero edits).
+fn organize_imports_workspace_edit(
+  uri: &str,
+  text: &str,
+  path: &std::path::Path,
+  mote_path: &[PathBuf],
+) -> Option<serde_json::Value> {
+  let edits = organize_imports_for_source(path, text, mote_path.to_vec()).ok()?;
+  if edits.is_empty() {
+    return None;
+  }
+  let lsp_edits: Vec<serde_json::Value> = edits
+    .iter()
+    .map(|e| {
+      let range = serde_json::to_value(location_to_json_range(Some(&e.range)))
+        .unwrap_or(serde_json::Value::Null);
+      serde_json::json!({ "range": range, "newText": e.replacement })
+    })
+    .collect();
+  Some(serde_json::json!({ "changes": { uri: lsp_edits } }))
+}
+
+/// `textDocument/codeAction` — offers "Organize Imports" as a
+/// `source.organizeImports`-kind action with the `WorkspaceEdit` embedded
+/// directly (the client applies it locally; no server round-trip needed),
+/// so editors with a "organize imports" keybinding/lightbulb entry
+/// (VS Code's `editor.action.organizeImports` looks for exactly this
+/// action kind) pick it up automatically.
+fn code_action(
+  documents: &HashMap<String, Document>,
+  writer: &mut impl Write,
+  id: Option<serde_json::Value>,
+  params: &serde_json::Value,
+  mote_path: &[PathBuf],
+) -> Result<(), String> {
+  let Some(id) = id else {
+    return Ok(());
+  };
+  let actions = (|| -> Option<Vec<serde_json::Value>> {
+    let uri = text_document_uri(params)?;
+    let doc = documents.get(uri)?;
+    let path = uri_to_path(uri)?;
+    let edit = organize_imports_workspace_edit(uri, &doc.text, &path, mote_path)?;
+    Some(vec![serde_json::json!({
+      "title": "Organize Imports",
+      "kind": "source.organizeImports",
+      "edit": edit,
+    })])
+  })()
+  .unwrap_or_default();
+  send_response(writer, Some(id), serde_json::Value::Array(actions))
+}
+
+/// `workspace/executeCommand` — the same fix as `code_action`, but
+/// reachable as a directly-invokable named command (e.g. bound to a
+/// keybinding or run from a command palette) rather than only surfacing
+/// through the code-action lightbulb. Since a server can't write to the
+/// client's buffer itself, it pushes the edit via a server-initiated
+/// `workspace/applyEdit` request instead of returning it in the response.
+fn execute_command(
+  documents: &HashMap<String, Document>,
+  writer: &mut impl Write,
+  id: Option<serde_json::Value>,
+  params: &serde_json::Value,
+  mote_path: &[PathBuf],
+  next_request_id: &mut u64,
+) -> Result<(), String> {
+  let command = params.get("command").and_then(|c| c.as_str()).unwrap_or("");
+  if command == ORGANIZE_IMPORTS_COMMAND {
+    // Accept either `["uri-string", ...]` or `[{"uri": "..."}, ...]` as
+    // `arguments` — clients vary in which shape they pass through.
+    let uri = params
+      .get("arguments")
+      .and_then(|a| a.as_array())
+      .and_then(|arr| arr.first())
+      .and_then(|first| {
+        first
+          .as_str()
+          .or_else(|| first.get("uri").and_then(|u| u.as_str()))
+      });
+    if let Some(uri) = uri
+      && let Some(doc) = documents.get(uri)
+      && let Some(path) = uri_to_path(uri)
+      && let Some(edit) = organize_imports_workspace_edit(uri, &doc.text, &path, mote_path)
+    {
+      let req_id = *next_request_id;
+      *next_request_id += 1;
+      send_request(
+        writer,
+        req_id,
+        "workspace/applyEdit",
+        serde_json::json!({ "label": "Organize Imports", "edit": edit }),
+      )?;
+    }
+  }
+  if let Some(id) = id {
+    send_response(writer, Some(id), serde_json::Value::Null)?;
+  }
+  Ok(())
+}
+
+#[cfg(test)]
+mod test {
+  use super::*;
+
+  #[test]
+  fn test_initialize_advertises_organize_imports() {
+    let caps = initialize_result();
+    let kinds = caps["capabilities"]["codeActionProvider"]["codeActionKinds"]
+      .as_array()
+      .expect("codeActionKinds should be an array");
+    assert!(kinds.iter().any(|k| k == "source.organizeImports"));
+    let commands = caps["capabilities"]["executeCommandProvider"]["commands"]
+      .as_array()
+      .expect("commands should be an array");
+    assert!(commands.iter().any(|c| c == ORGANIZE_IMPORTS_COMMAND));
+  }
+
+  #[test]
+  fn test_organize_imports_workspace_edit_for_bare_open() {
+    let uri = "file:///tmp/monad-lsp-test-bare-open.mo";
+    let path = uri_to_path(uri).unwrap();
+    let text = "open IO\n\ndef x : I64 := 1\n";
+    let edit = organize_imports_workspace_edit(uri, text, &path, &[])
+      .expect("bare `open IO` should produce an edit");
+    let changes = &edit["changes"][uri];
+    let edits = changes.as_array().expect("changes should be an array");
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0]["newText"], "open IO {}");
+    assert_eq!(edits[0]["range"]["start"]["line"], 0);
+    assert_eq!(edits[0]["range"]["start"]["character"], 0);
+  }
+
+  #[test]
+  fn test_organize_imports_workspace_edit_none_when_already_explicit() {
+    let uri = "file:///tmp/monad-lsp-test-explicit.mo";
+    let path = uri_to_path(uri).unwrap();
+    let text = "open IO {}\n\ndef x : I64 := 1\n";
+    assert!(organize_imports_workspace_edit(uri, text, &path, &[]).is_none());
+  }
+
+  #[test]
+  fn test_organize_imports_workspace_edit_none_on_parse_error() {
+    let uri = "file:///tmp/monad-lsp-test-broken.mo";
+    let path = uri_to_path(uri).unwrap();
+    let text = "def x : I64 := \n"; // incomplete, doesn't parse
+    assert!(organize_imports_workspace_edit(uri, text, &path, &[]).is_none());
+  }
+
+  #[test]
+  fn test_code_action_response_shape() {
+    let uri = "file:///tmp/monad-lsp-test-codeaction.mo";
+    let mut documents = HashMap::new();
+    documents.insert(
+      uri.to_string(),
+      Document {
+        text: "open IO\n\ndef x : I64 := 1\n".to_string(),
+      },
+    );
+    let params = serde_json::json!({
+      "textDocument": { "uri": uri },
+      "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } },
+      "context": { "diagnostics": [] },
+    });
+    let mut buf: Vec<u8> = Vec::new();
+    code_action(
+      &documents,
+      &mut buf,
+      Some(serde_json::json!(1)),
+      &params,
+      &[],
+    )
+    .unwrap();
+    let response = parse_single_message(&buf);
+    let actions = response["result"].as_array().expect("result is an array");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0]["kind"], "source.organizeImports");
+    assert!(actions[0]["edit"]["changes"][uri].is_array());
+  }
+
+  #[test]
+  fn test_execute_command_sends_apply_edit_request() {
+    let uri = "file:///tmp/monad-lsp-test-execcommand.mo";
+    let mut documents = HashMap::new();
+    documents.insert(
+      uri.to_string(),
+      Document {
+        text: "open IO\n\ndef x : I64 := 1\n".to_string(),
+      },
+    );
+    let params = serde_json::json!({
+      "command": ORGANIZE_IMPORTS_COMMAND,
+      "arguments": [uri],
+    });
+    let mut buf: Vec<u8> = Vec::new();
+    let mut next_id = 1u64;
+    execute_command(
+      &documents,
+      &mut buf,
+      Some(serde_json::json!(7)),
+      &params,
+      &[],
+      &mut next_id,
+    )
+    .unwrap();
+    let messages = parse_all_messages(&buf);
+    assert_eq!(messages.len(), 2);
+    // First: the server-initiated `workspace/applyEdit` request.
+    assert_eq!(messages[0]["method"], "workspace/applyEdit");
+    assert!(messages[0]["params"]["edit"]["changes"][uri].is_array());
+    // Second: the response to the original executeCommand request.
+    assert_eq!(messages[1]["id"], 7);
+    assert_eq!(next_id, 2); // request id counter advanced
+  }
+
+  /// Parse the single `Content-Length`-framed message written to `buf`.
+  fn parse_single_message(buf: &[u8]) -> serde_json::Value {
+    parse_all_messages(buf).into_iter().next().unwrap()
+  }
+
+  /// Parse every `Content-Length`-framed message concatenated in `buf`,
+  /// in write order.
+  fn parse_all_messages(buf: &[u8]) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let mut rest = buf;
+    loop {
+      let text = std::str::from_utf8(rest).unwrap();
+      let Some(header_end) = text.find("\r\n\r\n") else {
+        break;
+      };
+      let header = &text[..header_end];
+      let len: usize = header
+        .lines()
+        .find_map(|l| l.strip_prefix("Content-Length: "))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+      let body_start = header_end + 4;
+      let body = &text[body_start..body_start + len];
+      out.push(serde_json::from_str(body).unwrap());
+      rest = &rest[body_start + len..];
+      if rest.is_empty() {
+        break;
+      }
+    }
+    out
+  }
 }

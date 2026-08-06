@@ -32,6 +32,6 @@ instance IndexedMonad Protocol {
         Protocol.protocol a
 }
 
-@[test]
+#[test]
 def test_indexed_monad_compiles : Bool :=
     true

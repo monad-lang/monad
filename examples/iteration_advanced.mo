@@ -1,5 +1,4 @@
-use std.test
-use init.foldable
+use init.foldable {Foldable}
 
 def multiply (x : I64) (y : I64) : I64 := x * y
 
@@ -15,16 +14,16 @@ def length (t : List A) : I64 :=
 def reverse (t : List A) : List A :=
   (Foldable.foldl (fn acc x => List.cons x acc) [] t : List A)
 
-@[test]
+#[test]
 def test_sum : Bool := sum [1, 2, 3, 4] == 10
 
-@[test]
+#[test]
 def test_product : Bool := product [2, 3, 4] == 24
 
-@[test]
+#[test]
 def test_length : Bool := length [1, 2, 3] == 3
 
-@[test]
+#[test]
 def test_reverse : Bool :=
   let rev : List I64 := reverse [1, 2, 3] in
   match rev {
@@ -32,13 +31,13 @@ def test_reverse : Bool :=
     empty => false
   }
 
-@[test]
+#[test]
 def test_any : Bool :=
   let f := fn (x : I64) => x == 3 in
   let t : List I64 := [1, 2, 3] in
   Foldable.foldr (fn x acc => f x || acc) false t
 
-@[test]
+#[test]
 def test_all : Bool :=
   let f := fn (x : I64) => x == x in
   let t : List I64 := [1, 2, 3] in

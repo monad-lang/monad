@@ -99,21 +99,29 @@ type Unit {
 	unit
 }
 
-open Unit
+// TODO: the `open ... {...}` filters below are hand-verified against
+// bare usage across the WHOLE codebase, not just this file — prelude's
+// own `open`s are unconditionally chained into every other file's scope
+// (see `GlobalScopeData::from_module`), so a filter based on what THIS
+// file alone references (what `monad-rs organize-imports` computes by
+// default) would under-count and break other files that rely on these
+// names being ambiently bare (e.g. `unit`, `not`, `err`). Re-verify by
+// hand if this file's `open`s ever change.
+open Unit {unit}
 
 type Bool {
 	true,
 	false
 }
 
-open Bool
+open Bool {and, false, not, or, true}
 
 /// Trivially true proposition (unit in Prop)
 type True : Prop {
     trivial
 }
 
-open True
+open True {trivial}
 
 /// Propositional equality: Eq A a b lives in Prop (Sort 0)
 type Eq (A : Sort 1) (a : A) (b : A) : Prop {
@@ -121,7 +129,7 @@ type Eq (A : Sort 1) (a : A) (b : A) : Prop {
 }
 
 /// Native J eliminator for propositional equality
-@[native "eq_rec"]
+#[native "eq_rec"]
 def Eq.rec (A : Sort 1) (a : A) (P : (b : A) -> Eq A a b -> Sort 1)
     (h : P a (Eq.refl a)) (b : A) (e : Eq A a b) : P b e
 
@@ -197,14 +205,14 @@ type Pair A B {
 	pair (first : A) (second : B)
 }
 
-open Result
+open Result {err, ok}
 
 type Option A {
 	some (a: A),
 	none
 }
 
-open Option
+open Option {none, some}
 
 def Option.get_or_default (default : A) (self : Option A) : A :=
 	match self {

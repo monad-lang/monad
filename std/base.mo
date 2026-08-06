@@ -20,7 +20,7 @@ type Ordering {
     gt
 }
 
-open Ordering
+open Ordering {eq, gt, lt}
 
 /// Total ordering with three-way comparison.
 class [BEq A] Ord A {
@@ -227,33 +227,32 @@ def ordering_show (o : Ordering) : String :=
 
 // ---------- Tests ----------
 
-use std.test
 
-@[test]
+#[test]
 def test_beq_ordering_lt_lt : Bool :=
     BEq.beq lt lt
 
-@[test]
+#[test]
 def test_beq_ordering_eq_eq : Bool :=
     BEq.beq eq eq
 
-@[test]
+#[test]
 def test_beq_ordering_gt_gt : Bool :=
     BEq.beq gt gt
 
-@[test]
+#[test]
 def test_beq_ordering_lt_eq : Bool :=
     Bool.not (BEq.beq lt eq)
 
-@[test]
+#[test]
 def test_beq_ordering_lt_gt : Bool :=
     Bool.not (BEq.beq lt gt)
 
-@[test]
+#[test]
 def test_beq_ordering_eq_gt : Bool :=
     Bool.not (BEq.beq eq gt)
 
-@[test]
+#[test]
 def test_ord_lt_lt_eq : Bool :=
     match Ord.compare lt eq {
         lt => true,
@@ -261,7 +260,7 @@ def test_ord_lt_lt_eq : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_ord_lt_eq_gt : Bool :=
     match Ord.compare eq gt {
         lt => true,
@@ -269,7 +268,7 @@ def test_ord_lt_eq_gt : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_ord_lt_lt_gt : Bool :=
     match Ord.compare lt gt {
         lt => true,
@@ -277,7 +276,7 @@ def test_ord_lt_lt_gt : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_ord_gt_eq_lt : Bool :=
     match Ord.compare eq lt {
         lt => false,
@@ -285,7 +284,7 @@ def test_ord_gt_eq_lt : Bool :=
         gt => true
     }
 
-@[test]
+#[test]
 def test_ord_gt_gt_eq : Bool :=
     match Ord.compare gt eq {
         lt => false,
@@ -293,7 +292,7 @@ def test_ord_gt_gt_eq : Bool :=
         gt => true
     }
 
-@[test]
+#[test]
 def test_ord_eq_eq_eq : Bool :=
     match Ord.compare eq eq {
         lt => false,
@@ -301,22 +300,22 @@ def test_ord_eq_eq_eq : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_semigroup_string_concat : Bool :=
     let result : String := Semigroup.combine "hello" "world" in
     result == "helloworld"
 
-@[test]
+#[test]
 def test_semigroup_string_empty_left : Bool :=
     let result : String := Semigroup.combine "" "world" in
     result == "world"
 
-@[test]
+#[test]
 def test_semigroup_string_empty_right : Bool :=
     let result : String := Semigroup.combine "hello" "" in
     result == "hello"
 
-@[test]
+#[test]
 def test_semigroup_string_assoc : Bool :=
     let a : String := "a" in
     let b : String := "b" in
@@ -325,38 +324,38 @@ def test_semigroup_string_assoc : Bool :=
     let right : String := Semigroup.combine a (Semigroup.combine b c) in
     left == right
 
-@[test]
+#[test]
 def test_monoid_empty_string : Bool :=
     let empty_str : String := Monoid.empty in
     empty_str == ""
 
-@[test]
+#[test]
 def test_default_bool : Bool :=
     Default.default == false
 
-@[test]
+#[test]
 def test_default_i64 : Bool :=
     Default.default == 0i64
 
-@[test]
+#[test]
 def test_default_i64_ne_not_false : Bool :=
     Bool.not (Default.default == 1i64)
 
-@[test]
+#[test]
 def test_enum_succ : Bool :=
     let s1 := Enum.succ lt in
     let s2 := Enum.succ eq in
     let s3 := Enum.succ gt in
     BEq.beq s1 eq && BEq.beq s2 gt && BEq.beq s3 lt
 
-@[test]
+#[test]
 def test_enum_pred : Bool :=
     let p1 := Enum.pred gt in
     let p2 := Enum.pred lt in
     let p3 := Enum.pred eq in
     BEq.beq p1 eq && BEq.beq p2 gt && BEq.beq p3 lt
 
-@[test]
+#[test]
 def test_enum_to_nat : Bool :=
     let n0 := Enum.to_nat lt in
     let n1 := Enum.to_nat eq in
@@ -366,21 +365,21 @@ def test_enum_to_nat : Bool :=
     let two := Nat.succ (Nat.succ Nat.zero) in
     Nat.eq n0 zero && Nat.eq n1 one && Nat.eq n2 two
 
-@[test]
+#[test]
 def test_enum_from_nat : Bool :=
     let f0 := Enum.from_nat Nat.zero in
     let f1 := Enum.from_nat (Nat.succ Nat.zero) in
     BEq.beq f0 lt && BEq.beq f1 eq
 
-@[test]
+#[test]
 def test_bounded_min : Bool :=
     BEq.beq Bounded.min_bound lt
 
-@[test]
+#[test]
 def test_bounded_max : Bool :=
     BEq.beq Bounded.max_bound gt
 
-@[test]
+#[test]
 def test_ord_i64_lt : Bool :=
     match Ord.compare 1i64 5i64 {
         lt => true,
@@ -388,7 +387,7 @@ def test_ord_i64_lt : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_ord_i64_eq : Bool :=
     match Ord.compare 42i64 42i64 {
         lt => false,
@@ -396,7 +395,7 @@ def test_ord_i64_eq : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_ord_i64_gt : Bool :=
     match Ord.compare 10i64 3i64 {
         lt => false,
@@ -404,7 +403,7 @@ def test_ord_i64_gt : Bool :=
         gt => true
     }
 
-@[test]
+#[test]
 def test_ord_bool_false_true : Bool :=
     match Ord.compare false true {
         lt => true,
@@ -412,7 +411,7 @@ def test_ord_bool_false_true : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_ord_bool_true_false : Bool :=
     match Ord.compare true false {
         lt => false,
@@ -420,7 +419,7 @@ def test_ord_bool_true_false : Bool :=
         gt => true
     }
 
-@[test]
+#[test]
 def test_ord_bool_true_true : Bool :=
     match Ord.compare true true {
         lt => false,
@@ -428,7 +427,7 @@ def test_ord_bool_true_true : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_ord_u8_lt : Bool :=
     match Ord.compare 1u8 5u8 {
         lt => true,
@@ -436,7 +435,7 @@ def test_ord_u8_lt : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_ord_u8_eq : Bool :=
     match Ord.compare 42u8 42u8 {
         lt => false,
@@ -444,7 +443,7 @@ def test_ord_u8_eq : Bool :=
         gt => false
     }
 
-@[test]
+#[test]
 def test_ord_u8_gt : Bool :=
     match Ord.compare 10u8 3u8 {
         lt => false,
@@ -452,42 +451,42 @@ def test_ord_u8_gt : Bool :=
         gt => true
     }
 
-@[test]
+#[test]
 def test_ordering_show_lt : Bool :=
     ordering_show lt == "lt"
 
-@[test]
+#[test]
 def test_ordering_show_eq : Bool :=
     ordering_show eq == "eq"
 
-@[test]
+#[test]
 def test_ordering_show_gt : Bool :=
     ordering_show gt == "gt"
 
-@[test]
+#[test]
 def test_ord_i8_lt : Bool :=
     BEq.beq (Ord.compare 0i8 5i8) lt
 
-@[test]
+#[test]
 def test_ord_i8_eq : Bool :=
     BEq.beq (Ord.compare 5i8 5i8) eq
 
-@[test]
+#[test]
 def test_ord_i8_gt : Bool :=
     BEq.beq (Ord.compare 5i8 0i8) gt
 
-@[test]
+#[test]
 def test_ord_u16_lt : Bool :=
     BEq.beq (Ord.compare 0u16 5u16) lt
 
-@[test]
+#[test]
 def test_ord_u16_gt : Bool :=
     BEq.beq (Ord.compare 5u16 0u16) gt
 
-@[test]
+#[test]
 def test_ord_f64_lt : Bool :=
     BEq.beq (Ord.compare 0.0f64 5.0f64) lt
 
-@[test]
+#[test]
 def test_ord_f64_gt : Bool :=
     BEq.beq (Ord.compare 5.0f64 0.0f64) gt

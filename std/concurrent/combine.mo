@@ -1,7 +1,7 @@
 // Structured concurrency combinators: all, race, scoped, sleepIO, Duration.
 // Builds on forkIO/await_fiber/cancel_fiber from std.concurrent.fiber.
 
-use std.concurrent.fiber
+use std.concurrent.fiber {Fiber, await_fiber, cancel_fiber}
 
 struct Duration {
     millis : I64,
@@ -11,16 +11,16 @@ type Scope {
     scope
 }
 
-@[native sleep_io]
+#[native sleep_io]
 def sleepIO (ms : I64) : IO Unit
 
-@[native scope_new]
+#[native scope_new]
 def scope_new : IO Scope
 
-@[native scope_fork]
+#[native scope_fork]
 def scope_fork (s : Scope) (action : Unit -> IO A) : IO (Fiber A)
 
-@[native scope_drop]
+#[native scope_drop]
 def scope_drop (s : Scope) : IO Unit
 
 // Await all fibers in order, collecting results.
@@ -35,7 +35,7 @@ def all_aux (fibers : List (Fiber A)) (acc : List A) : IO (List A) :=
 def all {A : Type} (fibers : List (Fiber A)) : IO (List A) :=
   all_aux fibers List.empty
 
-@[partial]
+#[partial]
 def cancel_all (fibers : List (Fiber A)) : IO Unit :=
   match fibers {
     List.empty => IO.io Unit.unit,
@@ -46,7 +46,7 @@ def cancel_all (fibers : List (Fiber A)) : IO Unit :=
   }
 
 // Race: cancel all but the first fiber, await the first.
-@[partial]
+#[partial]
 def race (fibers : List (Fiber A)) : IO A :=
   match fibers {
     List.cons f rest => do {

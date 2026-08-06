@@ -1,9 +1,9 @@
-use greet
+use greet {greet}
 
-@[test]
+#[test]
 def test_mote_greet : Bool :=
   greet.greet "World" == "Hello, World!"
 
-@[test]
+#[test]
 def test_mote_greet_empty : Bool :=
   greet.greet "" == "Hello, !"

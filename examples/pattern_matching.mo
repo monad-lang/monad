@@ -1,34 +1,33 @@
-use std.test
 
-@[test]
+#[test]
 def test_match_bool : Bool :=
   match true {
     true => true,
     false => false
   }
 
-@[test]
+#[test]
 def test_match_list_empty : Bool :=
   match List.empty {
     empty => true,
     cons h t => false
   }
 
-@[test]
+#[test]
 def test_match_list_nonempty : Bool :=
   match [1, 2, 3] {
     empty => false,
     cons h t => h == 1
   }
 
-@[test]
+#[test]
 def test_match_wildcard : Bool :=
   match [1, 2, 3] {
     empty => false,
     cons _ _ => true
   }
 
-@[test]
+#[test]
 def test_match_guard : Bool :=
   match [1, 2, 3] {
     empty => false,

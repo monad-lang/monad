@@ -641,6 +641,7 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -683,6 +684,7 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -726,9 +728,12 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![crate::term::Attribute {
+        source_location: Default::default(),
+        legacy_syntax: false,
         name: id("terminating"),
         args: vec![],
       }],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -768,9 +773,12 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![crate::term::Attribute {
+        source_location: Default::default(),
+        legacy_syntax: false,
         name: id("partial"),
         args: vec![],
       }],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -795,6 +803,7 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -831,6 +840,7 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -872,6 +882,7 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -891,6 +902,7 @@ mod tests {
       term: num(0),
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -917,6 +929,7 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -944,6 +957,7 @@ mod tests {
       ),
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let g_def = Def {
@@ -952,6 +966,7 @@ mod tests {
       term: lam(param(id("x"), Term::Hole), var("x")),
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let defs = [&f_def, &g_def];
@@ -975,6 +990,7 @@ mod tests {
       ),
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let g_def = Def {
@@ -986,6 +1002,7 @@ mod tests {
       ),
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let defs = [&f_def, &g_def];
@@ -1092,6 +1109,7 @@ mod tests {
       term: even_body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let odd_def = Def {
@@ -1100,6 +1118,7 @@ mod tests {
       term: odd_body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination_group(&[&even_def, &odd_def]);
@@ -1149,6 +1168,7 @@ mod tests {
       term: f_body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let g_def = Def {
@@ -1157,6 +1177,7 @@ mod tests {
       term: g_body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination_group(&[&f_def, &g_def]);
@@ -1203,6 +1224,7 @@ mod tests {
       term: make_body(b_term),
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
     let b_def = Def {
       name: b_name,
@@ -1210,6 +1232,7 @@ mod tests {
       term: make_body(c_term),
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
     let c_def = Def {
       name: c_name,
@@ -1217,6 +1240,7 @@ mod tests {
       term: make_body(a_term),
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination_group(&[&a_def, &b_def, &c_def]);
@@ -1290,6 +1314,7 @@ mod tests {
       term: f_body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
     let g_def = Def {
       name: g_name,
@@ -1297,6 +1322,7 @@ mod tests {
       term: g_body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
     let h_def = Def {
       name: h_name,
@@ -1304,6 +1330,7 @@ mod tests {
       term: h_body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let defs = [&f_def, &g_def, &h_def];
@@ -1345,6 +1372,7 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);
@@ -1393,6 +1421,7 @@ mod tests {
       term: body,
       type_constraints: vec![],
       attributes: vec![],
+      vis: Default::default(),
     };
 
     let result = check_termination(&def);

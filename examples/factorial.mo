@@ -1,9 +1,8 @@
-use io
-use init
-use math
-open IO
+use io {IO, println}
+use init {IO, println}
+open IO {println}
 
-@[terminating]
+#[terminating]
 def factorial (n : I64) : I64 :=
     if n == 0
     then 1

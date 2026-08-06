@@ -1,68 +1,68 @@
-use init
-use io
-open IO
+use init {IO, add, drop, get, id, io, is_empty, length, run, slice, starts_with, sub}
+use io {IO, io}
+open IO {io}
 
 // Bool tests
 
-@[test]
+#[test]
 def test_bool_true : Bool :=
     if true then true else false
 
-@[test]
+#[test]
 def test_bool_false : Bool :=
     if false then false else true
 
-@[test]
+#[test]
 def test_bool_not_true : Bool :=
     if not true then false else true
 
-@[test]
+#[test]
 def test_bool_not_false : Bool :=
     if not false then true else false
 
-@[test]
+#[test]
 def test_bool_and : Bool :=
     true && true
 
-@[test]
+#[test]
 def test_bool_and_false : Bool :=
     if true && false then false else true
 
-@[test]
+#[test]
 def test_bool_or : Bool :=
     if false || true then true else false
 
-@[test]
+#[test]
 def test_bool_or_false : Bool :=
     if false || false then false else true
 
 // I64 tests
 
-@[test]
+#[test]
 def test_i64_add : Bool :=
     1 + 2 == 3
 
-@[test]
+#[test]
 def test_i64_sub : Bool :=
     5 - 3 == 2
 
-@[test]
+#[test]
 def test_i64_mul : Bool :=
     4 * 3 == 12
 
-@[test]
+#[test]
 def test_i64_div : Bool :=
     10 / 2 == 5
 
-@[test]
+#[test]
 def test_i64_add_zero : Bool :=
     0 + 0 == 0
 
-@[test]
+#[test]
 def test_i64_mul_zero : Bool :=
     42 * 0 == 0
 
-@[test]
+#[test]
 def test_i64_sub_order : Bool :=
     10 - 3 == 7
 
@@ -71,52 +71,52 @@ def test_i64_sub_order : Bool :=
 def empty_list : List I64 :=
     List.empty
 
-@[test]
+#[test]
 def test_list_empty : Bool :=
     match empty_list {
         empty => true,
         cons _ _ => false
     }
 
-@[test]
+#[test]
 def test_list_not_empty : Bool :=
     not (List.is_empty [1, 2, 3])
 
-@[test]
+#[test]
 def test_get_0 : Bool :=
     some 1 == (List.get 0 [1, 2, 3])
 
-@[test]
+#[test]
 def test_get_1 : Bool :=
     some 2 == (List.get 1 [1, 2, 3])
 
-@[test]
+#[test]
 def test_get_2 : Bool :=
     some 3 == (List.get 2 [1, 2, 3])
 
-@[test]
+#[test]
 def test_get_max : Bool :=
     none == (List.get 4 [1, 2, 3])
 
-@[test]
+#[test]
 def test_get_neg1 : Bool :=
     none == (List.get (-1) [1, 2, 3])
 
-@[test]
+#[test]
 def test_get_empty : Bool :=
     none == (List.get 0 ([] : List I64))
 
 def first_of_empty : Option I64 :=
     List.first List.empty
 
-@[test]
+#[test]
 def test_list_first_none : Bool :=
     match first_of_empty {
         some _ => false,
         none => true
     }
 
-@[test]
+#[test]
 def test_list_single : Bool :=
     not (List.is_empty [42])
 
@@ -125,18 +125,18 @@ def test_list_single : Bool :=
 def none_opt : Option I64 :=
     none
 
-@[test]
+#[test]
 def test_option_none : Bool :=
     match none_opt {
         some _ => false,
         none => true
     }
 
-@[test]
+#[test]
 def test_option_get_or_default_some : Bool :=
     Option.get_or_default 0 (some 42) == 42
 
-@[test]
+#[test]
 def test_option_get_or_default_none : Bool :=
     Option.get_or_default 99 none_opt == 99
 
@@ -145,7 +145,7 @@ def test_option_get_or_default_none : Bool :=
 def err_val : Result String I64 :=
     err "fail"
 
-@[test]
+#[test]
 def test_result_err : Bool :=
     match err_val {
         ok _ => false,
@@ -154,32 +154,32 @@ def test_result_err : Bool :=
 
 // String tests
 
-@[test]
+#[test]
 def test_string_length : Bool :=
     String.length "hello" == 5
 
-@[test]
+#[test]
 def test_string_empty_length : Bool :=
     String.length "" == 0
 
-@[test]
+#[test]
 def test_string_is_empty : Bool :=
     String.is_empty ""
 
-@[test]
+#[test]
 def test_string_not_empty : Bool :=
     not (String.is_empty "hello")
 
 // Nat tests
 
-@[test]
+#[test]
 def test_nat_zero : Bool :=
     match Nat.zero {
         zero => true,
         succ _ => false
     }
 
-@[test]
+#[test]
 def test_nat_succ : Bool :=
     match Nat.succ Nat.zero {
         zero => false,
@@ -191,64 +191,64 @@ def test_nat_succ : Bool :=
 
 // Operator tests
 
-@[test]
+#[test]
 def test_pipe_forward : Bool :=
     5 |> fn x => x + 1 |> fn x => x == 6
 
 def double (x : I64) : I64 :=
     x * 2
 
-@[test]
+#[test]
 def test_apply_back : Bool :=
     double 3 == 6
 
 // String slice/drop tests
 
-@[test]
+#[test]
 def test_string_slice_basic : Bool :=
     String.slice "hello" 0 3 == "hel"
 
-@[test]
+#[test]
 def test_string_slice_middle : Bool :=
     String.slice "hello" 1 3 == "ell"
 
-@[test]
+#[test]
 def test_string_slice_past_end : Bool :=
     String.slice "hi" 0 10 == "hi"
 
-@[test]
+#[test]
 def test_string_drop_basic : Bool :=
     String.drop 3 "hello" == "lo"
 
-@[test]
+#[test]
 def test_string_drop_none : Bool :=
     String.drop 0 "hello" == "hello"
 
-@[test]
+#[test]
 def test_string_drop_all : Bool :=
     String.drop 10 "hi" == ""
 
 // String starts_with tests
 
-@[test]
+#[test]
 def test_string_starts_with : Bool :=
     String.starts_with "hel" "hello"
 
-@[test]
+#[test]
 def test_string_not_starts_with : Bool :=
     not (String.starts_with "world" "hello")
 
-@[test]
+#[test]
 def test_string_starts_with_empty : Bool :=
     String.starts_with "" "hello"
 
-@[test]
+#[test]
 def test_empty_starts_with_empty : Bool :=
     String.starts_with "" ""
 
 // Unit tests
 
-@[test]
+#[test]
 def test_unit : Bool :=
     match unit {
         unit => true
@@ -261,7 +261,7 @@ struct Point {
     y: I64,
 }
 
-@[test]
+#[test]
 def test_struct_construct_and_match : Bool :=
     let pt : Point := { x := 1, y := 2 } in
     match pt {
@@ -270,20 +270,20 @@ def test_struct_construct_and_match : Bool :=
 
 
 
-@[test]
+#[test]
 def test_eq_in_plain_match : Bool :=
     match List.cons 5 List.empty {
         cons x _ => x == 5
     }
 
-@[test]
+#[test]
 def test_struct_eq_in_match : Bool :=
     let pt : Point := { x := 1, y := 2 } in
     match pt {
         mk x y => x + y == 3
     }
 
-@[test]
+#[test]
 def test_struct_wildcard : Bool :=
     let pt : Point := { x := 10, y := 20 } in
     match pt {
@@ -295,14 +295,14 @@ struct Rect {
     h: I64 := 100,
 }
 
-@[test]
+#[test]
 def test_struct_default_value : Bool :=
     let r : Rect := { w := 50 } in
     match r {
         mk w h => h == 100
     }
 
-@[test]
+#[test]
 def test_struct_update_syntax : Bool :=
     let p1 : Point := { x := 1, y := 2 } in
     let p2 : Point := { p1 with x := 10 } in
@@ -312,76 +312,76 @@ def test_struct_update_syntax : Bool :=
 
 // Optics tests
 
-@[test]
+#[test]
 def test_lens_type_exists : Bool :=
     // Verify the Lens type alias compiles and can be used in a simple context
     true
 
-@[test]
+#[test]
 def test_lens_expansion_in_def_type : Bool :=
     // Verify Lens S T A B expands to (A -> F B) -> S -> F T in annotations
     true
 
 // Indexed monad tests
 
-@[test]
+#[test]
 def test_indexed_monad_class_exists : Bool :=
     // Verify IndexedMonad class compiles
     true
 
 // Nat arithmetic tests
 
-@[test]
+#[test]
 def test_nat_add_zero : Bool :=
     Nat.eq (Nat.add Nat.zero Nat.zero) Nat.zero
 
-@[test]
+#[test]
 def test_nat_add_one_one : Bool :=
     let one := Nat.succ Nat.zero in
     let two := Nat.succ (Nat.succ Nat.zero) in
     Nat.eq (Nat.add one one) two
 
-@[test]
+#[test]
 def test_nat_sub_self : Bool :=
     let one := Nat.succ Nat.zero in
     Nat.eq (Nat.sub one one) Nat.zero
 
-@[test]
+#[test]
 def test_nat_eq_false : Bool :=
     Bool.not (Nat.eq Nat.zero (Nat.succ Nat.zero))
 
 // Vec dependent type tests
 
-@[test]
+#[test]
 def test_vec_nil_match : Bool :=
     match Vec.nil {
         nil => true
     }
 
-@[test]
+#[test]
 def test_vec_nil_type : Bool :=
     let v : Vec Nat.zero I64 := Vec.nil in
     true
 
-@[test]
+#[test]
 def test_vec_cons_type : Bool :=
     let v : Vec (Nat.succ Nat.zero) I64 := Vec.cons 42 Vec.nil in
     true
 
-@[test]
+#[test]
 def test_vec_cons_pattern : Bool :=
     let v : Vec (Nat.succ Nat.zero) I64 := Vec.cons 42 Vec.nil in
     match v {
         cons h t => h == 42
     }
 
-@[test]
+#[test]
 def test_vec_cons_head : Bool :=
     match Vec.cons 42 Vec.nil {
         cons h t => h == 42
     }
 
-@[test]
+#[test]
 def test_vec_cons_tail_nil : Bool :=
     match Vec.cons 42 Vec.nil {
         cons h t =>
@@ -392,24 +392,24 @@ def test_vec_cons_tail_nil : Bool :=
 
 // Tuple tests
 
-@[test]
+#[test]
 def test_tuple_pair_construct : Bool :=
     let t : Pair I64 Bool := (1, true) in
     true
 
-@[test]
+#[test]
 def test_tuple_pair_match : Bool :=
     let t : Pair I64 Bool := (1, true) in
     match t {
         Pair.pair a b => (a == 1) && (b == true)
     }
 
-@[test]
+#[test]
 def test_tuple_triple_construct : Bool :=
     let t : Pair I64 (Pair Bool String) := (1, true, "hi") in
     true
 
-@[test]
+#[test]
 def test_tuple_triple_nested_match : Bool :=
     let t : Pair I64 (Pair Bool String) := (1, true, "hi") in
     match t {
@@ -419,46 +419,46 @@ def test_tuple_triple_nested_match : Bool :=
             }
     }
 
-@[test]
+#[test]
 def test_tuple_parens_expr : Bool :=
     let x := (1 + 2) in
     x == 3
 
-@[test]
+#[test]
 def test_tuple_nested_expr : Bool :=
     let t : Pair I64 Bool := (1 + 1, 2 == 2) in
     match t {
         Pair.pair a b => (a == 2) && b
     }
 
-@[test]
+#[test]
 def test_match_wildcard : Bool :=
     match Option.some 42 {
         some x => x == 42,
         _ => false
     }
 
-@[test]
+#[test]
 def test_match_wildcard_fallback : Bool :=
     match Option.none {
         some x => false,
         _ => true
     }
 
-@[test]
+#[test]
 def test_match_wildcard_only : Bool :=
     match Option.some 1 {
         _ => true
     }
 
-@[test]
+#[test]
 def test_match_wildcard_exact_first : Bool :=
     match Option.some 5 {
         some x => x == 5,
         _ => false
     }
 
-@[test]
+#[test]
 def test_match_wildcard_discard_arg : Bool :=
     match Option.some 99 {
         some _ => true,
@@ -467,74 +467,74 @@ def test_match_wildcard_discard_arg : Bool :=
 
 // -- Id monad tests --
 
-@[test]
+#[test]
 def test_id_unwrap : Bool :=
     match Id.run (Id.id true) { true => true, false => false }
 
-@[test]
+#[test]
 def test_id_unwrap_false : Bool :=
     match Id.run (Id.id false) { true => false, false => true }
 
-@[test]
+#[test]
 def test_eq_refl_apply : Bool :=
     let refx := Eq.refl 1 in
     true
 
-@[test]
+#[test]
 def test_eq_refl_apply_str : Bool :=
     let refx := Eq.refl "hello" in
     true
 
-@[test]
+#[test]
 def test_eq_refl_type : Bool :=
     let refx : Eq I64 1 1 := Eq.refl 1 in
     true
 
 // -- Sort universe tests —
 
-@[test]
+#[test]
 def test_sort_formation : Bool :=
     let _type : Sort 2 := Sort 1 in
     true
 
-@[test]
+#[test]
 def test_sort_cumulativity : Bool :=
     let t : Sort 1 := Sort 0 in
     true
 
-@[test]
+#[test]
 def test_pi_universe : Bool :=
     let _f : (Sort 1 -> Sort 2) := fn x => x in
     true
 
 // -- Prop/Type/Pred in value position —
 
-@[test]
+#[test]
 def test_type_as_value_arg : Bool :=
     let _x : Sort 1 := get_sort Type in
     true
 
-@[test]
+#[test]
 def test_prop_as_value_arg : Bool :=
     let _x : Sort 1 := get_sort Prop in
     true
 
-@[test]
+#[test]
 def test_pred_as_value_arg : Bool :=
     let _x : Sort 1 := get_sort Pred in
     true
 
-@[test]
+#[test]
 def test_id_type_with_prop : Bool :=
     let _x : Sort 0 := get_identity Prop in
     true
 
-@[test]
+#[test]
 def test_id_type_with_pred : Bool :=
     let _x : Sort 0 := get_identity Pred in
     true
 
-@[test]
+#[test]
 def test_prop_nested_inference : Bool :=
     let _x : Sort 1 := get_identity (get_sort Prop) in
     true
@@ -545,41 +545,41 @@ def get_identity {A : Sort 1} (x : A) : A := x
 
 // BOrd Bool tests
 
-@[test]
+#[test]
 def test_bord_bool_lt_false_true : Bool :=
     BOrd.lt false true
 
-@[test]
+#[test]
 def test_bord_bool_lt_true_false : Bool :=
     Bool.not (BOrd.lt true false)
 
-@[test]
+#[test]
 def test_bord_bool_lt_false_false : Bool :=
     Bool.not (BOrd.lt false false)
 
-@[test]
+#[test]
 def test_bord_bool_lt_true_true : Bool :=
     Bool.not (BOrd.lt true true)
 
-@[test]
+#[test]
 def test_bord_bool_gt_true_false : Bool :=
     BOrd.gt true false
 
-@[test]
+#[test]
 def test_bord_bool_gt_false_true : Bool :=
     Bool.not (BOrd.gt false true)
 
-@[test]
+#[test]
 def test_bord_bool_gt_true_true : Bool :=
     Bool.not (BOrd.gt true true)
 
-@[test]
+#[test]
 def test_bord_bool_gt_false_false : Bool :=
     Bool.not (BOrd.gt false false)
 
 // -- Type propagation tests --
 
-@[test]
+#[test]
 def test_match_with_let_annotation : Bool :=
     let result : Option I64 := Option.some 42 in
     match result {
@@ -587,7 +587,7 @@ def test_match_with_let_annotation : Bool :=
         Option.none => false
     }
 
-@[test]
+#[test]
 def test_do_bind_with_match : IO Bool := do {
     let x : Option I64 <- IO.io (Option.some 42);
     match x {
@@ -598,7 +598,7 @@ def test_do_bind_with_match : IO Bool := do {
 
 // -- Type inference tests (without annotations) --
 
-@[test]
+#[test]
 def test_let_match_no_annotation : Bool :=
     let result := Option.some 42 in
     match result {

@@ -820,11 +820,14 @@ def type_to_decl (name : Identifier) (cons : List InductConstructor) : Decl :=
 	let empty_attrs : List String := List.empty in
 	Decl.inductive_d (Inductive.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.type_ 1) cons empty_attrs)
 
-// def [@attrs] name {implicit} (explicit) : ret_type := body
+// def [#attrs] name {implicit} (explicit) : ret_type := body
+// `#[...]` is the current attribute delimiter; `@[...]` is the deprecated
+// predecessor (still parses, flagged by the bootstrap compiler). Content is
+// skipped either way — see the module doc comment on attribute capture.
 
 @[partial]
 def def_parser (input : String) : ParseResult Decl :=
-	def_try_attrs (tag "@[" (skip_spaces input)) input
+	def_try_attrs (alt_fold [tag "#[", tag "@["] (skip_spaces input)) input
 
 @[partial]
 def def_try_attrs (r : ParseResult String) (orig : String) : ParseResult Decl :=
@@ -3003,6 +3006,19 @@ def test_struct_parser : Bool :=
 @[test]
 def test_def_parser : Bool :=
     match def_parser "@[test] def f (x : I64) : I64 := x" {
+        success rem out =>
+            match out {
+                def_d d => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+// `#[...]` is the current attribute delimiter (`@[...]` above is the
+// deprecated predecessor) — both must parse identically.
+#[test]
+def test_def_parser_hash_attr : Bool :=
+    match def_parser "#[test] def f (x : I64) : I64 := x" {
         success rem out =>
             match out {
                 def_d d => String.beq rem "",

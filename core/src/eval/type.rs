@@ -1224,6 +1224,7 @@ pub fn type_check_instance<'a>(
         term,
         type_constraints: vec![],
         attributes: vec![],
+        vis: Default::default(),
       };
       default_impls.push((param.name.clone(), def));
     } else {

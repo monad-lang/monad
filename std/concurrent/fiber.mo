@@ -5,11 +5,11 @@ type Fiber (A : Type) {
   fiber
 }
 
-@[native fork_io]
+#[native fork_io]
 def forkIO (action : Unit -> IO A) : IO (Fiber A)
 
-@[native await_fiber]
+#[native await_fiber]
 def await_fiber (f : Fiber A) : IO A
 
-@[native cancel_fiber]
+#[native cancel_fiber]
 def cancel_fiber (f : Fiber A) : IO Unit

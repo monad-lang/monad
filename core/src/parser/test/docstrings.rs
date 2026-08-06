@@ -203,3 +203,32 @@ instance Functor (Option A) {
     _ => panic!("Expected Ins decl"),
   }
 }
+
+#[test]
+fn test_module_doc_with_blank_line_does_not_swallow_next_decl() {
+  // Regression test: a module-level doc comment containing a blank `///`
+  // line used to have its inner `ws0` (whitespace-or-comment skip) treat
+  // the FOLLOWING `///`-prefixed line as "just more whitespace to skip"
+  // (since `///` itself starts with the `//` prefix `line_comment` looks
+  // for), cascading into consuming whatever came after the doc block
+  // entirely — here, the `use` declaration disappeared without a trace
+  // (no parse error, just silently absent from `decls`).
+  let s: Span<'static, ()> = r#"/// doc comment
+///
+/// more doc
+use std.show
+
+def x : I64 := 1
+"#
+  .into();
+  let (_, parsed) = decls_parser(s).unwrap();
+  assert_eq!(parsed.decls.len(), 2, "decls: {:?}", parsed.decls);
+  match parsed.decls[0].value() {
+    Decl::Use(u) => assert_eq!(u.module_path.to_string(), "std.show"),
+    other => panic!("Expected Use decl, got {other:?}"),
+  }
+  match parsed.decls[1].value() {
+    Decl::Def(d) => assert_eq!(d.name().as_str(), Some("x")),
+    other => panic!("Expected Def decl, got {other:?}"),
+  }
+}

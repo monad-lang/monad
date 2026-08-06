@@ -1,15 +1,19 @@
-use std.test
-use std.map
+// TODO: see the matching TODO in std/map_tests.mo — `BTreeMap`/`HashMap`/
+// `empty` are all used throughout this file but are deliberately NOT
+// listed here; explicitly naming any of `std.map`'s `Map`-class-instance-
+// related exports exposes the same pre-existing latent instance/
+// dictionary-resolution bug.
+use std.map {}
 
 /// Verify Map.empty and Map.insert type-check and evaluate.
-@[test]
+#[test]
 def test_map_empty_insert_typecheck : Bool :=
   let m : BTreeMap I64 String := Map.empty in
   let m : BTreeMap I64 String := Map.insert 1 "one" m in
   true
 
 /// Verify Map.lookup evaluates correctly after insert.
-@[test]
+#[test]
 def test_map_insert_lookup : Bool :=
   let m : BTreeMap I64 String := Map.empty in
   let m : BTreeMap I64 String := Map.insert 1 "one" m in
@@ -19,7 +23,7 @@ def test_map_insert_lookup : Bool :=
   }
 
 /// Verify that looking up a missing key returns none.
-@[test]
+#[test]
 def test_map_lookup_missing : Bool :=
   let m : BTreeMap I64 String := Map.empty in
   let m : BTreeMap I64 String := Map.insert 1 "one" m in
@@ -29,7 +33,7 @@ def test_map_lookup_missing : Bool :=
   }
 
 /// Verify that delete removes a key.
-@[test]
+#[test]
 def test_map_delete : Bool :=
   let m : BTreeMap I64 String := Map.empty in
   let m : BTreeMap I64 String := Map.insert 1 "one" m in
@@ -43,7 +47,7 @@ def test_map_delete : Bool :=
 /// ─── HashMap tests ──────────────────────────────────────────
 
 /// Verify HashMap.empty and HashMap.insert type-check and evaluate.
-@[test]
+#[test]
 def test_hashmap_empty_insert : Bool :=
   let m : HashMap I64 String := Map.empty in
   let m : HashMap I64 String := Map.insert 1 "one" m in
@@ -59,7 +63,7 @@ def _disabled_test_hashmap_insert_lookup : Bool :=
   }
 
 /// Verify HashMap.lookup returns none for missing key.
-@[test]
+#[test]
 def test_hashmap_lookup_missing : Bool :=
   let m : HashMap I64 String := Map.empty in
   let m : HashMap I64 String := Map.insert 1 "one" m in

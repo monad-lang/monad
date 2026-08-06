@@ -9,6 +9,8 @@ fn test_attr_arg_named() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("deprecated"),
     args: vec![
       AttrArg::Named {
@@ -37,6 +39,8 @@ fn test_attr_arg_nested() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Named {
       name: id("outer"),
@@ -62,6 +66,8 @@ fn test_attr_arg_mixed() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("custom"),
     args: vec![
       AttrArg::Str("arg1".to_string()),
@@ -116,6 +122,8 @@ fn test_native_with_named_arg() {
       pi(typ("I64"), pi(typ("I64"), typ("I64"))),
       expected_term,
       vec![Attribute {
+        source_location: Default::default(),
+        legacy_syntax: false,
         name: id("native"),
         args: vec![AttrArg::Named {
           name: id("name"),
@@ -135,6 +143,8 @@ fn test_attr_arg_group() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Group(vec![
       AttrArg::Num(1),
@@ -158,6 +168,8 @@ fn test_attr_arg_group_trailing_comma() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Group(vec![AttrArg::Num(1), AttrArg::Num(2)])],
   }];
@@ -177,6 +189,8 @@ fn test_attr_arg_nested_group() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Named {
       name: id("outer"),
@@ -208,6 +222,8 @@ fn test_attr_arg_named_with_group() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Named {
       name: id("outer"),
@@ -234,6 +250,8 @@ fn test_attr_arg_nested_groups() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Group(vec![
       AttrArg::Group(vec![AttrArg::Num(1), AttrArg::Num(2)]),
@@ -257,6 +275,8 @@ fn test_attr_test() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("test"),
     args: vec![],
   }];
@@ -276,6 +296,8 @@ fn test_attr_native_string() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("native"),
     args: vec![AttrArg::Str("eq_rec".to_string())],
   }];
@@ -298,6 +320,8 @@ fn test_attr_terminating() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("terminating"),
     args: vec![],
   }];
@@ -320,6 +344,8 @@ fn test_attr_partial() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("partial"),
     args: vec![],
   }];
@@ -339,6 +365,8 @@ fn test_attr_cfg_test_on_use() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("cfg"),
     args: vec![AttrArg::Ident(id("test"))],
   }];
@@ -358,6 +386,8 @@ fn test_attr_cfg_test_on_open() {
   let (_, res) = decl_parser(s).unwrap();
 
   let expected_attrs = vec![Attribute {
+    source_location: Default::default(),
+    legacy_syntax: false,
     name: id("cfg"),
     args: vec![AttrArg::Ident(id("test"))],
   }];
@@ -365,5 +395,123 @@ fn test_attr_cfg_test_on_open() {
   match res.value() {
     Decl::Open(o) => assert_eq!(o.attributes, expected_attrs),
     _ => panic!("expected Open, got {:?}", res.value()),
+  }
+}
+
+// --- #[...] (current syntax) vs @[...] (deprecated syntax) ---
+
+#[test]
+fn test_attr_hash_test() {
+  // `#[test]` parses identically to `@[test]`, just via the new delimiter.
+  let s = r#"#[test]
+    def test_addition : Bool :=
+        1 + 1 == 2
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  match res.value() {
+    Decl::Def(def) => {
+      assert_eq!(def.attributes.len(), 1);
+      assert_eq!(def.attributes[0].name, id("test"));
+      assert!(def.attributes[0].args.is_empty());
+      assert!(!def.attributes[0].legacy_syntax);
+    }
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_hash_native_string() {
+  let s = r#"#[native "eq_rec"]
+    def eq_rec {A : Sort 1} {a : A} {b : A} (P : (b : A) -> Eq A a b -> Sort 1) (h : P a (Eq.refl a)) (e : Eq A a b) : P b e
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+
+  match res.value() {
+    Decl::Def(def) => {
+      assert_eq!(def.attributes.len(), 1);
+      assert_eq!(def.attributes[0].name, id("native"));
+      assert_eq!(
+        def.attributes[0].args,
+        vec![AttrArg::Str("eq_rec".to_string())]
+      );
+      assert!(!def.attributes[0].legacy_syntax);
+    }
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_hash_partial() {
+  let s = r#"#[partial]
+    def arbitrary (n : I64) : I64 :=
+        if n == 0
+        then 1
+        else arbitrary (n - 1)
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::Def(def) => assert!(def.has_partial_attr()),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_attr_hash_terminating() {
+  let (_, res) = attribute_parser::<()>(r#"#[terminating]"#.into()).unwrap();
+  assert_eq!(res.name, id("terminating"));
+  assert!(res.args.is_empty());
+  assert!(!res.legacy_syntax);
+}
+
+#[test]
+fn test_attr_hash_cfg_test_on_use() {
+  let s = r#"#[cfg test]
+    use std.test
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::Use(u) => {
+      assert_eq!(u.attributes.len(), 1);
+      assert_eq!(u.attributes[0].name, id("cfg"));
+      assert!(!u.attributes[0].legacy_syntax);
+    }
+    _ => panic!("expected Use, got {:?}", res.value()),
+  }
+}
+
+#[test]
+fn test_legacy_syntax_flag() {
+  // `@[...]` sets legacy_syntax: true; `#[...]` sets it false; both parse
+  // to the exact same name/args content.
+  let (_, at) = attribute_parser::<()>(r#"@[native num_add]"#.into()).unwrap();
+  let (_, hash) = attribute_parser::<()>(r#"#[native num_add]"#.into()).unwrap();
+  assert!(at.legacy_syntax);
+  assert!(!hash.legacy_syntax);
+  assert_eq!(at, hash); // PartialEq ignores legacy_syntax/source_location
+}
+
+#[test]
+fn test_multiple_attributes_mixed_syntax() {
+  // Both delimiters can be mixed on the same declaration.
+  let s = r#"@[partial] #[test]
+    def f (n : I64) : I64 :=
+        if n == 0
+        then 1
+        else f (n - 1)
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::Def(def) => {
+      assert_eq!(def.attributes.len(), 2);
+      assert!(def.attributes[0].legacy_syntax);
+      assert!(!def.attributes[1].legacy_syntax);
+    }
+    _ => panic!("expected Def"),
   }
 }

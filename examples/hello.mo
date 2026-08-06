@@ -1,5 +1,5 @@
-use io
-open IO
+use io {IO, println}
+open IO {println}
 
 def say_hello (s : String) : IO Unit := println s
 

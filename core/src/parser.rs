@@ -17,9 +17,9 @@ use crate::{
     Multiplicity, NameRef, NumSuffix, Open, OpenFilter, Operator, Param, SourceContext,
     SourceRange, StructField,
     Term::{self, Hole, Var},
-    TypeConstraint, Use, UseFilter, UseItem, app, apps, case, class, class_def, ctx, def,
-    def_with_native, float_suffix, forall, foralls, id, if_term, induct_constructor, inductive,
-    infix, instance, ivar, lam, lams, lets, match_term,
+    TypeConstraint, Use, UseFilter, UseItem, Visibility, app, apps, case, class, class_def, ctx,
+    def, def_with_native, float_suffix, forall, foralls, id, if_term, induct_constructor,
+    inductive, infix, instance, ivar, lam, lams, lets, match_term,
     module::ParsedModule,
     mpvar, num_suffix, opr, param, param_with_default, param_with_mult, pi_name, pi_typs,
     pi_with_mult, pvar, stru, stru_field_with_mult, type_constraint, var_id,
@@ -31,7 +31,7 @@ use nom::{
   branch::alt,
   bytes::complete::{tag, take_until, take_while},
   character::complete::{
-    alpha1, char, digit1, i64, line_ending, multispace0, multispace1, not_line_ending,
+    alpha1, char, digit1, i64, line_ending, multispace0, multispace1, not_line_ending, space0,
   },
   combinator::{eof, map, not, opt, peek, recognize, success, verify},
   error::context,
@@ -132,9 +132,17 @@ fn ws1<X: Clone>(input: Span<X>) -> Res<Span<X>, X> {
 }
 
 fn doc_comment<X: Clone>(input: Span<X>) -> Res<Documentation, X> {
+  // NOTE: the whitespace skipped between `///` and a doc line's text must
+  // be same-line-only (`space0`: spaces/tabs), NOT the general `ws0`
+  // (which also matches `line_comment` — and `///` itself starts with the
+  // `//` prefix `line_comment` looks for). Using `ws0` here used to let an
+  // EMPTY `///` line's trailing `ws0` swallow the newline plus treat the
+  // next `///`-prefixed line as "just another comment to skip", cascading
+  // into consuming an unrelated declaration (e.g. a `use`) that happened
+  // to follow as if it were that empty line's doc text.
   map(
     many1(terminated(
-      preceded(tag("///"), preceded(ws0, not_line_ending)),
+      preceded(tag("///"), preceded(space0, not_line_ending)),
       line_ending,
     )),
     |lines| Documentation::new(lines.join("\n").trim().to_string()),
@@ -1126,24 +1134,55 @@ fn attr_arg_parser<X: Clone>(input: Span<X>) -> Res<Vec<AttrArg>, X> {
   .parse(input)
 }
 
-fn attribute_parser<X: Clone>(input: Span<X>) -> Res<Attribute, X> {
-  delimited(
-    (tag("@["), ws0),
-    (name, many0(preceded(ws1, attr_arg_parser))),
-    (ws0, context("closing bracket for attribute", tag("]"))),
+/// `pub`/`priv` visibility prefix on a declaration. Defaults to
+/// `Visibility::PackagePrivate` when omitted. Parsed before attributes and
+/// the declaration keyword: `visibility? attributes? keyword ...`.
+/// Does not apply to `use`/`open` — `use` keeps its own binary `pub use`
+/// handling (see `use_parser`); `open` has no visibility at all.
+fn vis_parser<X: Clone>(input: Span<X>) -> Res<Visibility, X> {
+  map(
+    opt(alt((
+      map(terminated(tag("pub"), ws1), |_| Visibility::Pub),
+      map(terminated(tag("priv"), ws1), |_| Visibility::Priv),
+    ))),
+    |v| v.unwrap_or_default(),
   )
-  .map(|(name, args_vecs)| Attribute {
-    name,
-    args: args_vecs.into_iter().flatten().collect(),
-  })
   .parse(input)
 }
 
+/// `#[...]` is the current annotation syntax; `@[...]` is the deprecated
+/// predecessor (still parses, flagged by `deprecated_attribute_warnings`).
+/// Both delimiters accept identical content — see `attr_arg_parser`.
+fn attribute_parser<X: Clone>(input: Span<X>) -> Res<Attribute, X> {
+  let (input, start) = info(input)?;
+  let (input, legacy_syntax) =
+    alt((map(tag("#["), |_| false), map(tag("@["), |_| true))).parse(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, (name, args_vecs)) = (name, many0(preceded(ws1, attr_arg_parser))).parse(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, _) = context("closing bracket for attribute", tag("]")).parse(input)?;
+  let (input, end) = info(input)?;
+  Ok((
+    input,
+    Attribute {
+      name,
+      args: args_vecs.into_iter().flatten().collect(),
+      source_location: SourceRange::new(start.into(), end.into()),
+      legacy_syntax,
+    },
+  ))
+}
+
 fn opt_attributes<X: Clone>(input: Span<X>) -> Res<Vec<Attribute>, X> {
-  many0(attribute_parser).parse(input)
+  // `ws0` before each attribute allows stacking (`@[a]\n#[b]\ndef ...` or
+  // `@[a] #[b] def ...`) — the trailing `ws0` before the declaration
+  // keyword (already present in each caller) handles the gap after the
+  // last attribute.
+  many0(preceded(ws0, attribute_parser)).parse(input)
 }
 
 fn def_parser(input: Span) -> Res<Def> {
+  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("def")(input)?;
@@ -1186,13 +1225,14 @@ fn def_parser(input: Span) -> Res<Def> {
         ))
       })?;
 
-    let def = def_with_native(native_name, name.clone(), params.clone(), return_typ, attrs)
+    let mut def = def_with_native(native_name, name.clone(), params.clone(), return_typ, attrs)
       .map_err(|e| {
         nom::Err::Failure(ParseError::new(
           input.clone(),
           error::ParseErrorKind::Native(e),
         ))
       })?;
+    def.vis = vis;
     return Ok((input, def));
   } else if input.fragment().starts_with("{") {
     let (input, _) = char('{')(input)?;
@@ -1214,7 +1254,9 @@ fn def_parser(input: Span) -> Res<Def> {
     if !implicit_params.is_empty() {
       typ = foralls(implicit_params, typ);
     }
-    Ok((input, def(name, type_cons, typ, term, attrs)))
+    let mut d = def(name, type_cons, typ, term, attrs);
+    d.vis = vis;
+    Ok((input, d))
   } else {
     let mut full_typ = return_typ;
     for param in params.iter().rev() {
@@ -1224,7 +1266,9 @@ fn def_parser(input: Span) -> Res<Def> {
       full_typ = foralls(implicit_params, full_typ);
     }
     let body = lams(params, term);
-    Ok((input, def(name, type_cons, full_typ, body, attrs)))
+    let mut d = def(name, type_cons, full_typ, body, attrs);
+    d.vis = vis;
+    Ok((input, d))
   }
 }
 
@@ -1333,6 +1377,7 @@ fn macro_call_decl_parser(input: Span) -> Res<Decl> {
 }
 
 fn defmacro_parser(input: Span) -> Res<Def> {
+  let (input, vis) = vis_parser(input)?;
   let (input, _) = tag("defmacro")(input)?;
   let (input, _) = ws1(input)?;
   let (input, name) = def_name(input)?;
@@ -1343,14 +1388,19 @@ fn defmacro_parser(input: Span) -> Res<Def> {
   let (input, _) = ws0(input)?;
   let (input, term) = term(input)?;
   if params.is_empty() {
-    Ok((input, def(name, vec![], Hole, term, vec![])))
+    let mut d = def(name, vec![], Hole, term, vec![]);
+    d.vis = vis;
+    Ok((input, d))
   } else {
     let body = lams(params, term);
-    Ok((input, def(name, vec![], Hole, body, vec![])))
+    let mut d = def(name, vec![], Hole, body, vec![]);
+    d.vis = vis;
+    Ok((input, d))
   }
 }
 
 fn infix_parser(input: Span) -> Res<Infix> {
+  let (input, vis) = vis_parser(input)?;
   let (input, _) = tag("infix")(input)?;
   let (input, _) = ws1(input)?;
   let (input, operator) = operator_parens(input)?;
@@ -1359,7 +1409,9 @@ fn infix_parser(input: Span) -> Res<Infix> {
   let (input, _) = ws0(input)?;
   let (input, name) = def_name(input)?;
 
-  Ok((input, infix(operator, name)))
+  let mut i = infix(operator, name);
+  i.vis = vis;
+  Ok((input, i))
 }
 
 fn class_def_parser<X: Clone>(input: Span<X>) -> Res<ClassDef, X> {
@@ -1434,6 +1486,7 @@ fn all_type_cons_parser<X: Clone>(input: Span<X>) -> Res<Vec<TypeConstraint>, X>
 }
 
 fn class_parser(input: Span) -> Res<Inductive> {
+  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("class")(input)?;
   let (input, _) = ws0(input)?;
@@ -1444,16 +1497,15 @@ fn class_parser(input: Span) -> Res<Inductive> {
   let (input, params) = many1(terminated(lam_param, ws0)).parse(input)?;
   let (input, defs) = class_inner_parser(input)?;
 
-  Ok((
-    input,
-    class(
-      name,
-      constraints.unwrap_or_else(Vec::new),
-      params,
-      defs,
-      attrs,
-    ),
-  ))
+  let mut ind = class(
+    name,
+    constraints.unwrap_or_else(Vec::new),
+    params,
+    defs,
+    attrs,
+  );
+  ind.vis = vis;
+  Ok((input, ind))
 }
 
 fn instance_inner_parser(input: Span) -> Res<Vec<Def>> {
@@ -1466,6 +1518,7 @@ fn instance_inner_parser(input: Span) -> Res<Vec<Def>> {
 }
 
 fn instance_parser(input: Span) -> Res<Instance> {
+  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("instance")(input)?;
   let (input, _) = ws0(input)?;
@@ -1480,18 +1533,17 @@ fn instance_parser(input: Span) -> Res<Instance> {
   let (input, args) = many0(terminated(term_inner, ws0)).parse(input)?;
   let (input, defs) = instance_inner_parser(input)?;
 
-  Ok((
-    input,
-    instance(
-      name,
-      class_name,
-      constraints.unwrap_or_else(Vec::new),
-      implicit_params,
-      args,
-      defs,
-      attrs,
-    ),
-  ))
+  let mut inst = instance(
+    name,
+    class_name,
+    constraints.unwrap_or_else(Vec::new),
+    implicit_params,
+    args,
+    defs,
+    attrs,
+  );
+  inst.vis = vis;
+  Ok((input, inst))
 }
 
 #[derive(Clone, Debug)]
@@ -1546,6 +1598,7 @@ fn inductive_inner_parser<'a>(
 }
 
 fn inductive_parser(input: Span) -> Res<Inductive> {
+  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("type")(input)?;
   let (input, _) = ws0(input)?;
@@ -1572,17 +1625,16 @@ fn inductive_parser(input: Span) -> Res<Inductive> {
     (),
   )?;
 
-  Ok((
-    input,
-    inductive(
-      name,
-      constraints.unwrap_or_else(Vec::new),
-      params,
-      typ,
-      constructors,
-      attrs,
-    ),
-  ))
+  let mut ind = inductive(
+    name,
+    constraints.unwrap_or_else(Vec::new),
+    params,
+    typ,
+    constructors,
+    attrs,
+  );
+  ind.vis = vis;
+  Ok((input, ind))
 }
 
 fn struct_field_parser<X: Clone>(input: Span<X>) -> Res<StructField, X> {
@@ -1606,6 +1658,7 @@ fn struct_inner_parser<X: Clone>(input: Span<X>) -> Res<Vec<StructField>, X> {
 }
 
 fn struct_parser<X: Clone>(input: Span<X>) -> Res<Inductive, X> {
+  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
   let (input, _) = tag("struct")(input)?;
   let (input, _) = ws0(input)?;
@@ -1617,7 +1670,9 @@ fn struct_parser<X: Clone>(input: Span<X>) -> Res<Inductive, X> {
   let (input, params) = cons_params(input)?;
   let (input, fields) = struct_inner_parser(input)?;
 
-  Ok((input, stru(name, constraints, params, fields, attrs)))
+  let mut ind = stru(name, constraints, params, fields, attrs);
+  ind.vis = vis;
+  Ok((input, ind))
 }
 
 fn struct_val_field_parser<X: Clone>(input: Span<X>) -> Res<(Identifier, Term), X> {
@@ -1721,10 +1776,17 @@ fn use_brace_filter(input: Span) -> Res<UseFilter> {
 /// Optional `{ items }` filter after a `use Module`. Absent braces yield
 /// `UseFilter::Bare` (deprecated bare use — see `bare_use_warnings`).
 fn use_opt_filter(input: Span) -> Res<UseFilter> {
-  let (input, _) = ws0(input)?;
-  if let Ok((input, filter)) = use_brace_filter.parse(input.clone()) {
+  let (after_ws, _) = ws0(input.clone())?;
+  if let Ok((input, filter)) = use_brace_filter.parse(after_ws) {
     return Ok((input, filter));
   }
+  // No brace filter found — return the ORIGINAL (pre-`ws0`) position, not
+  // the whitespace-advanced one, so `Use.source_location.end` (computed by
+  // the caller right after this) stops precisely after the module path
+  // instead of swallowing trailing blank lines/comments looking for a `{`
+  // that isn't there. The next declaration's own leading-whitespace-skip
+  // (`decls_space_parser`) still consumes that gap, same as for every
+  // other declaration kind — nothing is left unparsed.
   Ok((input, UseFilter::Bare))
 }
 
@@ -1754,8 +1816,10 @@ fn use_parser(input: Span) -> Res<Use> {
 }
 
 /// Shared by plain `open` and scoped `open ... in decl`: the module path
-/// plus an optional `{ names }` filter (braces are optional for `open`,
-/// unlike the now-mandatory braces on `use`).
+/// plus an optional `{ names }`/`{*}` filter (braces are optional for
+/// `open`, unlike the now-mandatory braces on `use`; a bare `open Module`
+/// still parses but is deprecated — see `bare_open_warnings` — in favor of
+/// the explicit `open Module {*}`).
 fn open_module_path_and_filter(input: Span) -> Res<(ModulePath, OpenFilter)> {
   let (input, module_path) =
     alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
@@ -1763,15 +1827,18 @@ fn open_module_path_and_filter(input: Span) -> Res<(ModulePath, OpenFilter)> {
     ws0,
     delimited(
       char('{'),
-      many0(terminated(identifier, (ws0, opt(char(',')), ws0))),
-      context("closing brace for open filter", char('}')),
+      alt((
+        map(preceded(ws0, char('*')), |_| OpenFilter::Glob),
+        map(
+          many0(terminated(identifier, (ws0, opt(char(',')), ws0))),
+          OpenFilter::Only,
+        ),
+      )),
+      (ws0, context("closing brace for open filter", char('}'))),
     ),
   ))
   .parse(input)?;
-  let filter = match filter {
-    Some(names) => OpenFilter::Only(names),
-    None => OpenFilter::All,
-  };
+  let filter = filter.unwrap_or(OpenFilter::All);
   Ok((input, (module_path, filter)))
 }
 

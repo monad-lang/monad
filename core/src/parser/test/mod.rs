@@ -2,8 +2,9 @@ use super::*;
 use crate::{
   Map, similar,
   term::{
-    AttrArg, Attribute, Decl, LetVar, Literal, Named, Native, Par, Term, app, app2, dpar, forall,
-    induct_constructor, mp, mpt, mpv, num, oper, par, pi, pi_var, pvar, str, stru_field,
+    AttrArg, Attribute, Decl, LetVar, Literal, Named, Native, Par, Term, Visibility, app, app2,
+    dpar, forall, induct_constructor, mp, mpt, mpv, num, oper, par, pi, pi_var, pvar, str,
+    stru_field,
     test::{decl_def, decl_inductive, decl_infix, decl_open, decl_use, defs_class},
     typ, var,
   },

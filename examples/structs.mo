@@ -1,5 +1,9 @@
-use io
-open IO
+// TODO: see the matching TODO in examples/do_block.mo — `IO`/`println`
+// are used below (via the companion `open IO {println}`, which is
+// unaffected) but deliberately NOT listed in THIS `use`; naming anything
+// here breaks implicit `Monad IO` instance lookup at runtime.
+use io {}
+open IO {println}
 
 // Basic struct definition
 struct Point {
@@ -19,21 +23,21 @@ struct Buffer {
     size: I64,
 }
 
-@[test]
+#[test]
 def test_struct_construct_and_match : Bool :=
     let pt : Point := { x := 1, y := 2 } in
     match pt {
         mk x y => x + y == 3
     }
 
-@[test]
+#[test]
 def test_struct_default_value : Bool :=
     let r : Rect := { w := 50 } in
     match r {
         mk w h => h == 100
     }
 
-@[test]
+#[test]
 def test_struct_update : Bool :=
     let p1 : Point := { x := 1, y := 2 } in
     let p2 : Point := { p1 with x := 10 } in
@@ -41,21 +45,21 @@ def test_struct_update : Bool :=
         mk x y => x == 10 && y == 2
     }
 
-@[test]
+#[test]
 def test_struct_linear : Bool :=
     let buf : Buffer := { data := "hi", size := 2 } in
     match buf {
         mk data size => String.length data == size
     }
 
-@[test]
+#[test]
 def test_struct_wildcard : Bool :=
     let pt : Point := { x := 99, y := 0 } in
     match pt {
         mk x _ => x == 99
     }
 
-@[test]
+#[test]
 def test_struct_field_eq : Bool :=
     let pt : Point := { x := 5, y := 5 } in
     match pt {

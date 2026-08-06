@@ -7,7 +7,7 @@ use monad_core::{
   SymbolInfo, SymbolKind, check_files,
   diag::{Diagnostic, Severity, render_diagnostics},
   eval::EvalOptions,
-  run, run_tests, symbols_for_files,
+  organize_imports_for_files, run, run_tests, symbols_for_files,
   term::mote::{Manifest, Resolver},
 };
 
@@ -137,6 +137,26 @@ enum Commands {
     col: usize,
     #[arg(long, default_value_t = false)]
     json: bool,
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
+  },
+
+  /// Rewrite bare `use Module`/`open Module` declarations to explicit
+  /// `use/open Module {name1, name2}` (minimal name list — only what the
+  /// file actually references) and `@[...]` attributes to `#[...]`.
+  /// Prints a diff by default; pass `--write` to apply it.
+  OrganizeImports {
+    /// Files or directories to convert. Directories are scanned
+    /// recursively for `.mo` files. Defaults to the current directory if
+    /// omitted.
+    #[arg(value_name = "PATHS")]
+    inputs: Vec<PathBuf>,
+    /// Apply the rewrite to disk. Without this flag, only a diff is
+    /// printed and nothing is written.
+    #[arg(long, default_value_t = false)]
+    write: bool,
     #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
     mote_path: Vec<PathBuf>,
     #[arg(long = "manifest-path", value_name = "PATH")]
@@ -367,6 +387,61 @@ fn run_check(inputs: Vec<PathBuf>, json: bool, use_colors: bool, mote_path: Vec<
   }
 
   std::process::exit(if error_count > 0 { 1 } else { 0 });
+}
+
+/// Print a minimal line-level diff between `old` and `new` — every edit
+/// this tool makes is confined to a single `use`/`open`/attribute line, so
+/// a full unified-diff algorithm isn't needed: walk both files' lines in
+/// lockstep and report wherever they differ.
+fn print_line_diff(path: &Path, old: &str, new: &str) {
+  println!("--- {}", path.display());
+  let old_lines: Vec<&str> = old.lines().collect();
+  let new_lines: Vec<&str> = new.lines().collect();
+  for (i, (o, n)) in old_lines.iter().zip(new_lines.iter()).enumerate() {
+    if o != n {
+      println!("  {}:", i + 1);
+      println!("  - {o}");
+      println!("  + {n}");
+    }
+  }
+}
+
+fn run_organize_imports(
+  inputs: Vec<PathBuf>,
+  write: bool,
+  mote_path: Vec<PathBuf>,
+) -> Result<(), String> {
+  let results = organize_imports_for_files(inputs, mote_path)?;
+
+  let mut changed = 0usize;
+  let mut errors = 0usize;
+  for result in &results {
+    if let Some(e) = &result.error {
+      eprintln!("error: {}: {e}", result.path.display());
+      errors += 1;
+      continue;
+    }
+    let Some(new_source) = &result.new_source else {
+      continue;
+    };
+    changed += 1;
+    let old_source = std::fs::read_to_string(&result.path).map_err(|e| format!("{e}"))?;
+    print_line_diff(&result.path, &old_source, new_source);
+    if write {
+      std::fs::write(&result.path, new_source).map_err(|e| format!("{e}"))?;
+    }
+  }
+
+  if write {
+    println!("{changed} file(s) rewritten, {errors} error(s)");
+  } else {
+    println!("{changed} file(s) would be rewritten, {errors} error(s) (pass --write to apply)");
+  }
+
+  if errors > 0 {
+    return Err(format!("{errors} file(s) failed to load"));
+  }
+  Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -777,6 +852,19 @@ fn execute(command: Commands) -> Result<(), String> {
     } => {
       augment_mote_paths(&mut mote_path, manifest_path.as_ref());
       let result = run_definition(file, line, col, json, mote_path);
+      if let Err(ref e) = result {
+        eprintln!("error: {e}");
+      }
+      result
+    }
+    Commands::OrganizeImports {
+      inputs,
+      write,
+      mut mote_path,
+      manifest_path,
+    } => {
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      let result = run_organize_imports(inputs, write, mote_path);
       if let Err(ref e) = result {
         eprintln!("error: {e}");
       }

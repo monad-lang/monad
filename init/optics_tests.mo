@@ -1,7 +1,7 @@
-use std.test
-use init.optics
-open Lens
-open Prism
+use std.test {}
+use init.optics {Lens, Prism, lens, mkPrism, over, over_prism, preview, review, set, set_prism, view}
+open Lens {}
+open Prism {mkPrism}
 
 // Test structures
 
@@ -42,19 +42,19 @@ def double (x : I64) : I64 := x * 2
 
 // -- Lens tests --
 
-@[test]
+#[test]
 def test_lens_view : Bool :=
     let pt : Point := { x := 3, y := 5 } in
     let x_val : I64 := view x_lens pt in
     x_val == 3
 
-@[test]
+#[test]
 def test_lens_view_y : Bool :=
     let pt : Point := { x := 3, y := 5 } in
     let y_val : I64 := view y_lens pt in
     y_val == 5
 
-@[test]
+#[test]
 def test_lens_set : Bool :=
     let pt : Point := { x := 3, y := 5 } in
     let pt2 : Point := set x_lens 10 pt in
@@ -62,7 +62,7 @@ def test_lens_set : Bool :=
     let y_val : I64 := view y_lens pt2 in
     x_val == 10 && y_val == 5
 
-@[test]
+#[test]
 def test_lens_set_y : Bool :=
     let pt : Point := { x := 3, y := 5 } in
     let pt2 : Point := set y_lens 20 pt in
@@ -70,7 +70,7 @@ def test_lens_set_y : Bool :=
     let y_val : I64 := view y_lens pt2 in
     x_val == 3 && y_val == 20
 
-@[test]
+#[test]
 def test_lens_over : Bool :=
     let pt : Point := { x := 3, y := 5 } in
     let pt2 : Point := over x_lens inc pt in
@@ -78,7 +78,7 @@ def test_lens_over : Bool :=
     let y_val : I64 := view y_lens pt2 in
     x_val == 4 && y_val == 5
 
-@[test]
+#[test]
 def test_lens_over_y : Bool :=
     let pt : Point := { x := 3, y := 5 } in
     let pt2 : Point := over y_lens double pt in
@@ -86,7 +86,7 @@ def test_lens_over_y : Bool :=
     let y_val : I64 := view y_lens pt2 in
     x_val == 3 && y_val == 10
 
-@[test]
+#[test]
 def test_lens_set_idempotent : Bool :=
     let pt : Point := { x := 3, y := 5 } in
     let pt2 : Point := set x_lens 10 pt in
@@ -94,7 +94,7 @@ def test_lens_set_idempotent : Bool :=
     let x_val : I64 := view x_lens pt3 in
     x_val == 10
 
-@[test]
+#[test]
 def test_lens_over_compose : Bool :=
     let pt : Point := { x := 3, y := 5 } in
     let pt2 : Point := over x_lens inc pt in
@@ -109,7 +109,7 @@ type Shape {
     rectangle (w : F64) (h : F64),
 }
 
-open Shape
+open Shape {circle, rectangle}
 
 /// Helper: preview for circle prism.
 def preview_circle (s : Shape) : Option F64 :=
@@ -142,7 +142,7 @@ def double_f (x : F64) : F64 := x * 2.0
 
 // -- Prism tests --
 
-@[test]
+#[test]
 def test_prism_preview_match : Bool :=
     let c : Shape := circle 3.0 in
     let val : Option F64 := preview circle_prism c in
@@ -151,7 +151,7 @@ def test_prism_preview_match : Bool :=
         some r => let r_val : F64 := r in r_val == 3.0
     }
 
-@[test]
+#[test]
 def test_prism_preview_nomatch : Bool :=
     let r : Shape := rectangle 2.0 4.0 in
     let val : Option F64 := preview circle_prism r in
@@ -160,7 +160,7 @@ def test_prism_preview_nomatch : Bool :=
         some _ => false
     }
 
-@[test]
+#[test]
 def test_prism_review : Bool :=
     let c : Shape := review circle_prism 5.0 in
     let val : Option F64 := preview circle_prism c in
@@ -169,7 +169,7 @@ def test_prism_review : Bool :=
         some r => let r_val : F64 := r in r_val == 5.0
     }
 
-@[test]
+#[test]
 def test_prism_over : Bool :=
     let c : Shape := circle 3.0 in
     let c2 : Shape := over_prism circle_prism double_f c in
@@ -179,7 +179,7 @@ def test_prism_over : Bool :=
         some r => let r_val : F64 := r in r_val == 6.0
     }
 
-@[test]
+#[test]
 def test_prism_over_nomatch : Bool :=
     let r : Shape := rectangle 2.0 4.0 in
     let r2 : Shape := over_prism circle_prism double_f r in
@@ -188,7 +188,7 @@ def test_prism_over_nomatch : Bool :=
         rectangle w h => let w_val : F64 := w in let h_val : F64 := h in w_val == 2.0 && h_val == 4.0
     }
 
-@[test]
+#[test]
 def test_prism_set : Bool :=
     let c : Shape := circle 3.0 in
     let c2 : Shape := set_prism circle_prism 7.0 c in
@@ -198,7 +198,7 @@ def test_prism_set : Bool :=
         some r => let r_val : F64 := r in r_val == 7.0
     }
 
-@[test]
+#[test]
 def test_prism_rectangle_preview : Bool :=
     let r : Shape := rectangle 3.0 5.0 in
     let val : Option (Pair F64 F64) := preview rectangle_prism r in
