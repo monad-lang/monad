@@ -1,7 +1,18 @@
-use lang.types
-open types
-use lang.scope
-use lang.typecheck.unify
+use lang.types {
+  Con, DebugName, Identifier, Inductive, Instance, InstanceKey, Literal,
+  LocalScope, LocalVar, MatchCase, ModulePath, NameRef, Native, Param, Scope,
+  ScopeClassDef, ScopeDef, ScopeError, Similar, Term, TypeConstraint, TypeError,
+  app, con, custom, forall, hole, id, if_, lam, list_rev_loop, list_reverse, lit,
+  many, match_, mc, mk, mp, name, named, nid, not_a_type, ntv, num, pi, str,
+  type_, unknown_var, unnamed, var,
+}
+open types {}
+use lang.scope {
+  inductive_has_constructor, scope_find_class_def_by_name, scope_find_inductive,
+  scope_find_inductive_by_constructor, scope_push_local, scope_resolve_instance,
+  scope_resolve_name,
+}
+use lang.typecheck.unify {unify}
 
 /// A type-checked term paired with its type.
 struct TypedTerm {
@@ -145,7 +156,7 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
     }
 
 /// Type check a match expression.
-@[terminating]
+#[terminating]
 def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match type_check value_ Term.hole scope local_types locals {
         ok sc_tt =>
@@ -220,7 +231,7 @@ def type_check_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee
 /// Recursively type-check each case, accumulating checked cases and a
 /// progressively unified body type. `acc_cases` is built in reverse order
 /// and reversed at the end.
-@[terminating]
+#[terminating]
 def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) (acc_typ : Term) (acc_cases : List MatchCase) : Result TypeError CaseAcc :=
     match cases {
         List.cons hd rest =>
@@ -248,11 +259,11 @@ def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scr
     }
 
 /// List reverse helper.
-@[terminating]
+#[terminating]
 def list_reverse {A : Type} (xs : List A) : List A :=
     list_rev_loop xs List.empty
 
-@[terminating]
+#[terminating]
 def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
     match xs {
         List.cons x rest => list_rev_loop rest (List.cons x acc),

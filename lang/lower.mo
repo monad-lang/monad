@@ -1,7 +1,15 @@
-use lang.types
-use lang.eval_term
-open Term
-open DebugName
+use lang.types {
+  Identifier, NameRef, ParamV0, Term, TermV0, affine, app, con, ctx, forall, hole,
+  i64, id, if_, lam, linear, lit, many, match_, mk, name, nid, nmp, nop, ntv, num,
+  param_many_v0, pi, str, type_, unnamed, var, zero,
+}
+use lang.eval_term {
+  EvalTerm, Region, eapp, eborrow, econst, elam, elit, eprim, eproj, eproj_field,
+  erecursor, eregion, esort, evar, l_bool, l_float, l_int, l_sort, l_str, mk,
+  r_param, r_stack,
+}
+open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
+open DebugName {unnamed}
 
 /// Find the de Bruijn index of an identifier in the binding context.
 /// Returns Option.none if not found (treat as global/const).
@@ -82,7 +90,7 @@ def single_ctx (id: Identifier) : List Identifier :=
 
 // ─── Variable lowering tests ───────────────────────────────────────────
 
-@[test]
+#[test]
 def test_lower_var_str : Bool :=
   let t : TermV0 := TermV0.lit (LiteralV0.str "hello") in
   match lower_v0 empty_ctx t {
@@ -94,7 +102,7 @@ def test_lower_var_str : Bool :=
     _ => false
   }
 
-@[test]
+#[test]
 def test_lower_var_num : Bool :=
   let t : TermV0 := TermV0.lit (LiteralV0.num 42 NumSuffix.i64) in
   match lower_v0 empty_ctx t {
@@ -106,7 +114,7 @@ def test_lower_var_num : Bool :=
     _ => false
   }
 
-@[test]
+#[test]
 def test_lower_var_bound : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let t : TermV0 := TermV0.var (NameRef.nid id_x) in
@@ -115,7 +123,7 @@ def test_lower_var_bound : Bool :=
     _ => false
   }
 
-@[test]
+#[test]
 def test_lower_var_free : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let t : TermV0 := TermV0.var (NameRef.nid id_x) in
@@ -126,7 +134,7 @@ def test_lower_var_free : Bool :=
 
 // ─── Lambda lowering tests ─────────────────────────────────────────────
 
-@[test]
+#[test]
 def test_lower_lam_identity : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let t : TermV0 := TermV0.lam
@@ -145,7 +153,7 @@ def test_lower_lam_identity : Bool :=
     _ => false
   }
 
-@[test]
+#[test]
 def test_lower_lam_nested : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let id_y : Identifier := Identifier.id "y" in
@@ -177,7 +185,7 @@ def test_lower_lam_nested : Bool :=
 
 // ─── Application lowering tests ────────────────────────────────────────
 
-@[test]
+#[test]
 def test_lower_app_simple : Bool :=
   let id_x : Identifier := Identifier.id "x" in
   let f : TermV0 := TermV0.lam
@@ -199,7 +207,7 @@ def test_lower_app_simple : Bool :=
 
 // ─── Forall/Pi erasure tests ───────────────────────────────────────────
 
-@[test]
+#[test]
 def test_lower_forall_erased : Bool :=
   let id_a : Identifier := Identifier.id "a" in
   let t : TermV0 := TermV0.forall id_a TermV0.hole (TermV0.lit (LiteralV0.num 42 NumSuffix.i64)) in
@@ -212,7 +220,7 @@ def test_lower_forall_erased : Bool :=
     _ => false
   }
 
-@[test]
+#[test]
 def test_lower_pi_erased : Bool :=
   let t : TermV0 := TermV0.pi TermV0.hole TermV0.hole in
   match lower_v0 empty_ctx t {
@@ -222,7 +230,7 @@ def test_lower_pi_erased : Bool :=
 
 // ─── Sort lowering tests ───────────────────────────────────────────────
 
-@[test]
+#[test]
 def test_lower_sort : Bool :=
   let t : TermV0 := TermV0.type_ 1 in
   match lower_v0 empty_ctx t {
@@ -232,7 +240,7 @@ def test_lower_sort : Bool :=
 
 // ─── Hole lowering tests ───────────────────────────────────────────────
 
-@[test]
+#[test]
 def test_lower_hole : Bool :=
   let t : TermV0 := TermV0.hole in
   match lower_v0 empty_ctx t {
@@ -254,14 +262,14 @@ type KEvalEnv {
   kenv_push (val: EvalTerm) (rest: KEvalEnv),
 }
 
-open KEvalEnv
+open KEvalEnv {kenv_empty, kenv_push}
 
 type KernelResult {
   kr_ok (v: EvalTerm),
   kr_err (msg: String),
 }
 
-open KernelResult
+open KernelResult {kr_err, kr_ok}
 
 def kenv_lookup (env: KEvalEnv) (idx: I64) : Option EvalTerm :=
   match env {
@@ -272,7 +280,7 @@ def kenv_lookup (env: KEvalEnv) (idx: I64) : Option EvalTerm :=
       else kenv_lookup rest (idx - 1)
   }
 
-@[partial]
+#[partial]
 def e2e_eval (term: EvalTerm) (env: KEvalEnv) : KernelResult :=
   match term {
     EvalTerm.evar idx =>
@@ -323,7 +331,7 @@ def e2e_eval (term: EvalTerm) (env: KEvalEnv) : KernelResult :=
       }
   }
 
-@[test]
+#[test]
 def test_e2e_literal : Bool :=
   let n : EvalTerm := EvalTerm.elit (EvalLiteral.l_int 7) in
   match e2e_eval n kenv_empty {
@@ -352,7 +360,7 @@ def test_e2e_literal : Bool :=
     kr_err msg => false
   }
 
-@[test]
+#[test]
 def test_e2e_identity : Bool :=
   // (λx. x) 99 → 99 via e2e_eval directly
   let body : EvalTerm := EvalTerm.elam Multiplicity.many (EvalTerm.evar 0) in
@@ -384,7 +392,7 @@ def test_e2e_identity : Bool :=
     kr_err msg => false
   }
 
-@[test]
+#[test]
 def test_e2e_lower_plus_eval : Bool :=
   // Full pipeline: TermV0 → lower → e2e_eval
   // TermV0: (λx. x) "hello" → "hello"
@@ -422,7 +430,7 @@ def test_e2e_lower_plus_eval : Bool :=
     kr_err msg => false
   }
 
-@[test]
+#[test]
 def test_e2e_nested : Bool :=
   // Full pipeline: (λx. λy. y) 10 "world" → "world"
   let y_name : NameRef := NameRef.nid (Identifier.id "y") in
@@ -506,7 +514,7 @@ def lower (t: Term) : EvalTerm :=
 
 // ─── De Bruijn lowerer tests ───────────────────────────────────────
 
-@[test]
+#[test]
 def test_lower_debruijn_var : Bool :=
     let t : Term := Term.var 3 DebugName.unnamed in
     match lower t {
@@ -514,7 +522,7 @@ def test_lower_debruijn_var : Bool :=
         _ => false
     }
 
-@[test]
+#[test]
 def test_lower_debruijn_lam : Bool :=
     let body : Term := Term.var 0 DebugName.unnamed in
     let lam_term : Term := Term.lam DebugName.unnamed (Term.type_ 1) body in
@@ -531,7 +539,7 @@ def test_lower_debruijn_lam : Bool :=
         _ => false
     }
 
-@[test]
+#[test]
 def test_lower_debruijn_app : Bool :=
     let f : Term := Term.var 0 DebugName.unnamed in
     let a : Term := Term.var 1 DebugName.unnamed in
@@ -545,7 +553,7 @@ def test_lower_debruijn_app : Bool :=
         _ => false
     }
 
-@[test]
+#[test]
 def test_lower_debruijn_lit_num : Bool :=
     let t : Term := Term.lit (Literal.num 42 NumSuffix.i64) in
     match lower t {
@@ -557,7 +565,7 @@ def test_lower_debruijn_lit_num : Bool :=
         _ => false
     }
 
-@[test]
+#[test]
 def test_lower_debruijn_lit_str : Bool :=
     let t : Term := Term.lit (Literal.str "hello") in
     match lower t {
@@ -569,7 +577,7 @@ def test_lower_debruijn_lit_str : Bool :=
         _ => false
     }
 
-@[test]
+#[test]
 def test_lower_debruijn_forall_erase : Bool :=
     let body : Term := Term.var 0 DebugName.unnamed in
     let forall_term : Term := Term.forall DebugName.unnamed (Term.type_ 1) body in
@@ -578,7 +586,7 @@ def test_lower_debruijn_forall_erase : Bool :=
         _ => false
     }
 
-@[test]
+#[test]
 def test_lower_debruijn_pi_erase : Bool :=
     let t : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
     match lower t {
@@ -589,7 +597,7 @@ def test_lower_debruijn_pi_erase : Bool :=
 // ─── De Bruijn end-to-end pipeline tests ───────────────────────────
 // Full pipeline: Term → lower → e2e_eval → result.
 
-@[test]
+#[test]
 def test_e2e_debruijn_identity : Bool :=
     let body : Term := Term.var 0 DebugName.unnamed in
     let lam_term : Term := Term.lam DebugName.unnamed (Term.type_ 1) body in
@@ -609,7 +617,7 @@ def test_e2e_debruijn_identity : Bool :=
         kr_err msg => false
     }
 
-@[test]
+#[test]
 def test_e2e_debruijn_nested : Bool :=
     let inner_body : Term := Term.var 0 DebugName.unnamed in
     let inner_lam : Term := Term.lam DebugName.unnamed (Term.type_ 1) inner_body in

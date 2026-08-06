@@ -1,7 +1,7 @@
 /// Character predicate functions for the self-hosted Monad parser.
 
-use lang.parser.core
-use std.list
+use lang.parser.core {kw_list, kw_member}
+use std.list {any, length}
 
 // --- Char predicates ---
 
@@ -10,7 +10,7 @@ def is_digit (c : String) : Bool :=
         |> List.any (fn a => a == c)
 
 
-@[partial]
+#[partial]
 def is_alpha_lower (c : String) : Bool :=
 	if String.beq "a" c then true
 	else if String.beq "b" c then true
@@ -28,7 +28,7 @@ def is_alpha_lower (c : String) : Bool :=
 	else false
 
 
-@[partial]
+#[partial]
 def is_alpha_lower2 (c : String) : Bool :=
 	if String.beq "n" c then true
 	else if String.beq "o" c then true
@@ -45,7 +45,7 @@ def is_alpha_lower2 (c : String) : Bool :=
 	else String.beq "z" c
 
 
-@[partial]
+#[partial]
 def is_alpha_upper (c : String) : Bool :=
 	if String.beq "A" c then true
 	else if String.beq "B" c then true
@@ -63,7 +63,7 @@ def is_alpha_upper (c : String) : Bool :=
 	else false
 
 
-@[partial]
+#[partial]
 def is_alpha_upper2 (c : String) : Bool :=
 	if String.beq "N" c then true
 	else if String.beq "O" c then true
@@ -80,7 +80,7 @@ def is_alpha_upper2 (c : String) : Bool :=
 	else String.beq "Z" c
 
 
-@[partial]
+#[partial]
 def is_alpha (c : String) : Bool :=
 	if is_alpha_lower c then true
 	else if is_alpha_lower2 c then true
@@ -88,19 +88,19 @@ def is_alpha (c : String) : Bool :=
 	else is_alpha_upper2 c
 
 
-@[partial]
+#[partial]
 def is_alphanumeric (c : String) : Bool :=
 	if is_digit c then true
 	else is_alpha c
 
 
-@[partial]
+#[partial]
 def is_ident_char (c : String) : Bool :=
 	if is_alphanumeric c then true
 	else String.beq "_" c
 
 
-@[partial]
+#[partial]
 def is_space (c : String) : Bool :=
 	if String.beq " " c then true
 	else if String.beq "\t" c then true
@@ -110,7 +110,7 @@ def is_space (c : String) : Bool :=
 
 // --- Keyword check ---
 
-@[partial]
+#[partial]
 def is_keyword (s : String) : Bool :=
 	kw_member s kw_list
 
@@ -123,7 +123,7 @@ def is_prefix (pre : String) (s : String) : Bool :=
 
 // --- Identifier start check ---
 
-@[partial]
+#[partial]
 def ident_start (c : String) : Bool :=
 	if is_alpha c then true
 	else String.beq "_" c

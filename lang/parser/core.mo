@@ -1,7 +1,7 @@
 /// Self-hosted Monad grammar parser core types and constants.
 
-use lang.types
-use std.list
+use lang.types {mk}
+use std.list {length}
 
 
 type ParseError {
@@ -16,7 +16,7 @@ type ParseResult O {
 	}
 
 
-open ParseResult
+open ParseResult {}
 
 
 type OpEntry {
@@ -48,7 +48,7 @@ def op_table : List OpEntry :=
 	 OpEntry.mk "/" 70 false]
 
 
-@[partial]
+#[partial]
 def op_char_member (c : String) (chars : List String) : Bool := 
 	match chars {
 		List.cons ch rest => if String.beq ch c then true else op_char_member c rest,
@@ -56,28 +56,28 @@ def op_char_member (c : String) (chars : List String) : Bool :=
 		}
 
 
-@[partial]
+#[partial]
 def op_entry_name (entry : OpEntry) : String := 
 	match entry {
 		OpEntry.mk o _ _ => o
 		}
 
 
-@[partial]
+#[partial]
 def op_entry_prec (entry : OpEntry) : I64 := 
 	match entry {
 		OpEntry.mk _ p _ => p
 		}
 
 
-@[partial]
+#[partial]
 def op_entry_rassoc (entry : OpEntry) : Bool := 
 	match entry {
 		OpEntry.mk _ _ r => r
 		}
 
 
-@[partial]
+#[partial]
 def op_lookup_prec (op_str : String) (table : List OpEntry) : I64 := 
 	match table {
 		List.cons entry rest =>
@@ -87,7 +87,7 @@ def op_lookup_prec (op_str : String) (table : List OpEntry) : I64 :=
 		}
 
 
-@[partial]
+#[partial]
 def op_lookup_rassoc (op_str : String) (table : List OpEntry) : Bool := 
 	match table {
 		List.cons entry rest =>
@@ -103,7 +103,7 @@ def kw_list : List String :=
 	 "do", "return", "for", "quote", "with"]
 
 
-@[partial]
+#[partial]
 def kw_member (s : String) (kws : List String) : Bool := 
 	match kws {
 		List.cons kw rest => if String.beq kw s then true else kw_member s rest,

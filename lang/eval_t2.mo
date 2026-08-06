@@ -1,7 +1,10 @@
-use lang.types
-use lang.eval_term
-open Term
-open DebugName
+use lang.types {
+  Con, ModulePath, Native, Term, app, con, forall, hole, i64, id, if_, lam, lit,
+  match_, mk, mp, ntv, num, pi, str, type_, unnamed, var,
+}
+use lang.eval_term {mk}
+open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
+open DebugName {unnamed}
 
 // ─── Term environment-based evaluator ─────────────────────────────────
 // Evaluates Term using an environment (stack of values for de Bruijn
@@ -12,11 +15,11 @@ type T2EvalEnv {
     t2e_push (val: Term) (rest: T2EvalEnv),
 }
 
-open T2EvalEnv
+open T2EvalEnv {t2e_empty, t2e_push}
 
 // Look up a de Bruijn index in the evaluation environment.
 // Index 0 = most recently pushed value (head of env).
-@[partial]
+#[partial]
 def t2e_lookup (env: T2EvalEnv) (idx: I64) : Option Term :=
     match env {
         t2e_empty => Option.none,
@@ -31,12 +34,12 @@ type T2EvalResult {
     t2e_err (msg: String),
 }
 
-open T2EvalResult
+open T2EvalResult {t2e_err, t2e_ok}
 
 /// Evaluate a Term under an environment.
 /// Call-by-value: lambdas are values, apps evaluate fun and arg first,
 /// then if fun is a lam, push arg onto env and evaluate the body.
-@[partial]
+#[partial]
 def t2e_eval (term: Term) (env: T2EvalEnv) : T2EvalResult :=
     match term {
         var idx dbg =>
@@ -78,7 +81,7 @@ def t2e_eval (term: Term) (env: T2EvalEnv) : T2EvalResult :=
 
 // ─── Term evaluator tests ────────────────────────────────────────────
 
-@[test]
+#[test]
 def test_t2e_lit : Bool :=
     let t : Term := Term.lit (Literal.str "hello") in
     match t2e_eval t t2e_empty {
@@ -104,7 +107,7 @@ def test_t2e_lit : Bool :=
         t2e_err msg => false
     }
 
-@[test]
+#[test]
 def test_t2e_identity : Bool :=
     // (λx. x) 42 → 42
     let body : Term := Term.var 0 DebugName.unnamed in
@@ -134,7 +137,7 @@ def test_t2e_identity : Bool :=
         t2e_err msg => false
     }
 
-@[test]
+#[test]
 def test_t2e_lam_value : Bool :=
     // λx. x is a value already
     let body : Term := Term.var 0 DebugName.unnamed in
@@ -156,7 +159,7 @@ def test_t2e_lam_value : Bool :=
         t2e_err msg => false
     }
 
-@[test]
+#[test]
 def test_t2e_nested_app : Bool :=
     // (λx. λy. y) 10 "world" → "world"
     let inner_body : Term := Term.var 0 DebugName.unnamed in
@@ -188,7 +191,7 @@ def test_t2e_nested_app : Bool :=
         t2e_err msg => false
     }
 
-@[test]
+#[test]
 def test_t2e_shadowing : Bool :=
     // (λx. λx. x) 1 2 → 2  (inner x shadows outer)
     let inner_body : Term := Term.var 0 DebugName.unnamed in
@@ -220,7 +223,7 @@ def test_t2e_shadowing : Bool :=
         t2e_err msg => false
     }
 
-@[test]
+#[test]
 def test_t2e_env_lookup : Bool :=
     // Resolve var 0 from explicit env
     let val_term : Term := Term.lit (Literal.num 99 NumSuffix.i64) in
@@ -249,7 +252,7 @@ def test_t2e_env_lookup : Bool :=
         t2e_err msg => false
     }
 
-@[test]
+#[test]
 def test_t2e_ntv_value : Bool :=
     // native terms are values
     let none_opt : Option Term := Option.none in
@@ -273,7 +276,7 @@ def test_t2e_ntv_value : Bool :=
         t2e_err msg => false
     }
 
-@[test]
+#[test]
 def test_t2e_con_value : Bool :=
     // constructors are values
     let none_opt : Option Term := Option.none in
@@ -298,7 +301,7 @@ def test_t2e_con_value : Bool :=
         t2e_err msg => false
     }
 
-@[test]
+#[test]
 def test_t2e_unbound_var : Bool :=
     // unresolvable variable should be an error
     let v : Term := Term.var 0 DebugName.unnamed in

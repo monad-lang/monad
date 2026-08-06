@@ -1,30 +1,32 @@
-use process
-use lang.types
-use lang.codegen.ir
-use lang.codegen.emit
+use process {exec_cmd}
+use lang.types {
+  Def, Term, TypeConstraint, i64, id, lit, mk, mp, name, num, type_,
+}
+use lang.codegen.ir {emit_module, mk}
+use lang.codegen.emit {compile_db_decls_ir, mk}
 
-open Term
-open Literal
-open Identifier
-open DebugName
-open NumSuffix
-open Param
-open Def
-open ModulePath
-open Monad
-open IO
+open Term {lit, type_}
+open Literal {num}
+open Identifier {id}
+open DebugName {}
+open NumSuffix {i64}
+open Param {mk}
+open Def {mk, name}
+open ModulePath {mp}
+open Monad {}
+open IO {println, write_file}
 
-@[partial]
+#[partial]
 def mk_def (name : String) (body : Term) : Def :=
     Def.mk (ModulePath.mp [Identifier.id name]) (Term.type_ 1) body
         ([] : List TypeConstraint) ([] : List String)
 
-@[partial]
+#[partial]
 def mk_i64 (n : I64) : Term :=
     Term.lit (Literal.num n NumSuffix.i64)
 
 /// Simple test: compile and run a program that returns 42
-@[test]
+#[test]
 def test_compile_42 : IO Bool := do {
     let defs := [mk_def "main" (mk_i64 42)];
     

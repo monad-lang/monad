@@ -1,18 +1,21 @@
-use lang.types
-use lang.codegen.ir
-use lang.codegen.emit
+use lang.types {
+  app, con, forall, hole, i64, id, if_, lam, lit, match_, mc, mk, mp, named, num,
+  pi, str, type_, unnamed, var, zero,
+}
+use lang.codegen.ir {emit_module, mk}
+use lang.codegen.emit {check_contains, compile_db_decls_ir, mk}
 
-open Term
-open Literal
-open Identifier
-open DebugName
-open NumSuffix
-open Param
-open Def
-open ModulePath
+open Term {app, con, forall, hole, lam, lit, pi, type_, var}
+open Literal {if_, match_, num, str}
+open Identifier {id}
+open DebugName {named, unnamed}
+open NumSuffix {i64}
+open Param {mk}
+open Def {mk}
+open ModulePath {mp}
 
 /// Test that we can compile a simple function and verify it produces LLVM IR
-@[test]
+#[test]
 def test_compile_simple_function : Bool :=
     let id := Identifier.id "simple" in
     let body := Term.lit (Literal.num 42 NumSuffix.i64) in
@@ -28,7 +31,7 @@ def test_compile_simple_function : Bool :=
     check_contains text "simple"
 
 /// Test that we can compile a function with arithmetic
-@[test]
+#[test]
 def test_compile_arithmetic : Bool :=
     let id := Identifier.id "add_values" in
     let x_id := Identifier.id "x" in
@@ -48,7 +51,7 @@ def test_compile_arithmetic : Bool :=
     check_contains text "add i64"
 
 /// Test that we can compile multiple definitions
-@[test]
+#[test]
 def test_compile_multiple_defs : Bool :=
     let id1 := Identifier.id "const1" in
     let def1 := Def.mk
@@ -70,7 +73,7 @@ def test_compile_multiple_defs : Bool :=
     check_contains text "const1" && check_contains text "const2"
 
 /// Test that compilation produces valid LLVM module structure
-@[test]
+#[test]
 def test_llvm_module_structure : Bool :=
     let mod_ := lang.codegen.emit.compile_db_decls_ir List.empty in
     let text := lang.codegen.ir.emit_module mod_ in
@@ -79,7 +82,7 @@ def test_llvm_module_structure : Bool :=
     else false
 
 /// Test compilation of subtraction
-@[test]
+#[test]
 def test_compile_subtraction : Bool :=
     let id := Identifier.id "subtract" in
     let x_id := Identifier.id "x" in
@@ -100,7 +103,7 @@ def test_compile_subtraction : Bool :=
     check_contains text "sub i64"
 
 /// Test compilation of multiplication
-@[test]
+#[test]
 def test_compile_multiplication : Bool :=
     let id := Identifier.id "multiply" in
     let x_id := Identifier.id "x" in
@@ -121,7 +124,7 @@ def test_compile_multiplication : Bool :=
     check_contains text "mul i64"
 
 /// Test compilation of division
-@[test]
+#[test]
 def test_compile_division : Bool :=
     let id := Identifier.id "divide" in
     let x_id := Identifier.id "x" in
@@ -142,7 +145,7 @@ def test_compile_division : Bool :=
     check_contains text "sdiv i64"
 
 /// Test compilation of equality comparison
-@[test]
+#[test]
 def test_compile_equality : Bool :=
     let id := Identifier.id "equals" in
     let x_id := Identifier.id "x" in
@@ -163,7 +166,7 @@ def test_compile_equality : Bool :=
     check_contains text "icmp eq i64"
 
 /// Test compilation of nested arithmetic expressions
-@[test]
+#[test]
 def test_compile_nested_arithmetic : Bool :=
     let id := Identifier.id "nested" in
     let x_id := Identifier.id "x" in
@@ -187,7 +190,7 @@ def test_compile_nested_arithmetic : Bool :=
     check_contains text "mul i64" && check_contains text "add i64"
 
 /// Test compilation with string literals
-@[test]
+#[test]
 def test_compile_string_literal : Bool :=
     let id := Identifier.id "greet" in
     let body := Term.lit (Literal.str "hello") in
@@ -203,7 +206,7 @@ def test_compile_string_literal : Bool :=
     check_contains text "hello"
 
 /// Test that main function is renamed to main_monad
-@[test]
+#[test]
 def test_main_renaming : Bool :=
     let id := Identifier.id "main" in
     let body := Term.lit (Literal.num 0 NumSuffix.i64) in
@@ -219,7 +222,7 @@ def test_main_renaming : Bool :=
     check_contains text "main_monad"
 
 /// Test compilation with if-then-else (using native equality)
-@[test]
+#[test]
 def test_compile_if_then_else : Bool :=
     let id := Identifier.id "if_test" in
     let one := Term.lit (Literal.num 1 NumSuffix.i64) in
@@ -243,7 +246,7 @@ def test_compile_if_then_else : Bool :=
     check_contains text "br i1"
 
 /// Test compilation of less-than comparison
-@[test]
+#[test]
 def test_compile_less_than : Bool :=
     let id := Identifier.id "less_than" in
     let x_id := Identifier.id "x" in
@@ -264,7 +267,7 @@ def test_compile_less_than : Bool :=
     check_contains text "icmp slt i64"
 
 /// Test compilation of greater-than comparison
-@[test]
+#[test]
 def test_compile_greater_than : Bool :=
     let id := Identifier.id "greater_than" in
     let x_id := Identifier.id "x" in
@@ -285,7 +288,7 @@ def test_compile_greater_than : Bool :=
     check_contains text "icmp sgt i64"
 
 /// Test compilation of not-equal comparison
-@[test]
+#[test]
 def test_compile_not_equal : Bool :=
     let id := Identifier.id "not_equal" in
     let x_id := Identifier.id "x" in
@@ -306,7 +309,7 @@ def test_compile_not_equal : Bool :=
     check_contains text "icmp ne i64"
 
 /// Test compilation of nested function application with multiple parameters
-@[test]
+#[test]
 def test_compile_multi_param_function : Bool :=
     let id := Identifier.id "add_three" in
     let x_id := Identifier.id "x" in
@@ -333,7 +336,7 @@ def test_compile_multi_param_function : Bool :=
     check_contains text "add i64"
 
 /// Test compilation of nested lambdas (currying)
-@[test]
+#[test]
 def test_compile_nested_lambdas : Bool :=
     let id := Identifier.id "make_adder" in
     let x_id := Identifier.id "x" in
@@ -355,7 +358,7 @@ def test_compile_nested_lambdas : Bool :=
     check_contains text "make_adder"
 
 /// Test compilation with constant folding for arithmetic
-@[test]
+#[test]
 def test_compile_constant_folding : Bool :=
     let id := Identifier.id "const_add" in
     let five := Term.lit (Literal.num 5 NumSuffix.i64) in
@@ -375,7 +378,7 @@ def test_compile_constant_folding : Bool :=
     check_contains text "8"
 
 /// Test compilation of if-then-else with greater-than condition
-@[test]
+#[test]
 def test_compile_if_with_gt : Bool :=
     let id := Identifier.id "if_gt_test" in
     let ten := Term.lit (Literal.num 10 NumSuffix.i64) in
@@ -399,7 +402,7 @@ def test_compile_if_with_gt : Bool :=
     check_contains text "br i1"
 
 /// Test compilation of constructor application
-@[test]
+#[test]
 def test_compile_constructor : Bool :=
     let id := Identifier.id "make_pair" in
     let x_id := Identifier.id "x" in
@@ -422,7 +425,7 @@ def test_compile_constructor : Bool :=
     check_contains text "make_pair"
 
 /// Test compilation of nested let-like expressions via lambda application
-@[test]
+#[test]
 def test_compile_complex_expression : Bool :=
     let id := Identifier.id "complex" in
     let x_id := Identifier.id "x" in
@@ -447,7 +450,7 @@ def test_compile_complex_expression : Bool :=
     check_contains text "mul i64" && check_contains text "add i64"
 
 /// Test compilation with all four arithmetic operations
-@[test]
+#[test]
 def test_compile_all_arithmetic : Bool :=
     let id := Identifier.id "arith_all" in
     let a_id := Identifier.id "a" in
@@ -476,7 +479,7 @@ def test_compile_all_arithmetic : Bool :=
     check_contains text "mul i64" && check_contains text "sdiv i64"
 
 /// Test compilation of deeply nested if-then-else
-@[test]
+#[test]
 def test_compile_nested_if : Bool :=
     let id := Identifier.id "nested_if" in
     let one := Term.lit (Literal.num 1 NumSuffix.i64) in
@@ -504,7 +507,7 @@ def test_compile_nested_if : Bool :=
     check_contains text "br i1"
 
 /// Test compilation of boolean true literal (constructor)
-@[test]
+#[test]
 def test_compile_bool_true : Bool :=
     let id := Identifier.id "bool_true" in
     let bool_name := Identifier.id "Bool" in
@@ -523,7 +526,7 @@ def test_compile_bool_true : Bool :=
     check_contains text "bool_true"
 
 /// Test compilation of boolean false literal (constructor)
-@[test]
+#[test]
 def test_compile_bool_false : Bool :=
     let id := Identifier.id "bool_false" in
     let bool_name := Identifier.id "Bool" in
@@ -542,7 +545,7 @@ def test_compile_bool_false : Bool :=
     check_contains text "bool_false"
 
 /// Test compilation of Bool.not function call
-@[test]
+#[test]
 def test_compile_bool_not : Bool :=
     let id := Identifier.id "test_not" in
     let x_id := Identifier.id "x" in
@@ -566,7 +569,7 @@ def test_compile_bool_not : Bool :=
     check_contains text "test_not"
 
 /// Test compilation of if-then-else with boolean literals
-@[test]
+#[test]
 def test_compile_if_with_bool_literals : Bool :=
     let id := Identifier.id "if_bool" in
     let bool_name := Identifier.id "Bool" in
@@ -589,7 +592,7 @@ def test_compile_if_with_bool_literals : Bool :=
     check_contains text "br i1"
 
 /// Test compilation of List.empty constructor
-@[test]
+#[test]
 def test_compile_list_empty : Bool :=
     let id := Identifier.id "list_empty" in
     let list_name := Identifier.id "List" in
@@ -608,7 +611,7 @@ def test_compile_list_empty : Bool :=
     check_contains text "list_empty"
 
 /// Test compilation of List.cons constructor
-@[test]
+#[test]
 def test_compile_list_cons : Bool :=
     let id := Identifier.id "list_cons" in
     let x_id := Identifier.id "x" in
@@ -632,7 +635,7 @@ def test_compile_list_cons : Bool :=
     check_contains text "list_cons"
 
 /// Test compilation of match expression with boolean
-@[test]
+#[test]
 def test_compile_match_bool : Bool :=
     let id := Identifier.id "match_bool" in
     let x_id := Identifier.id "x" in
@@ -656,7 +659,7 @@ def test_compile_match_bool : Bool :=
     check_contains text "match_bool"
 
 /// Test compilation of recursive factorial function
-@[test]
+#[test]
 def test_compile_recursive_factorial : Bool :=
     let id := Identifier.id "factorial" in
     let n_id := Identifier.id "n" in
@@ -686,7 +689,7 @@ def test_compile_recursive_factorial : Bool :=
     check_contains text "factorial"
 
 /// Test compilation of nested boolean expressions
-@[test]
+#[test]
 def test_compile_nested_bool_expr : Bool :=
     let id := Identifier.id "nested_bool" in
     let a_id := Identifier.id "a" in
@@ -717,7 +720,7 @@ def test_compile_nested_bool_expr : Bool :=
     check_contains text "br i1"
 
 /// Test compilation of Option.some constructor
-@[test]
+#[test]
 def test_compile_option_some : Bool :=
     let id := Identifier.id "option_some" in
     let x_id := Identifier.id "x" in
@@ -738,7 +741,7 @@ def test_compile_option_some : Bool :=
     check_contains text "option_some"
 
 /// Test compilation of Option.none constructor
-@[test]
+#[test]
 def test_compile_option_none : Bool :=
     let id := Identifier.id "option_none" in
     let option_name := Identifier.id "Option" in
@@ -757,7 +760,7 @@ def test_compile_option_none : Bool :=
     check_contains text "option_none"
 
 /// Test compilation of Pair.pair constructor
-@[test]
+#[test]
 def test_compile_pair : Bool :=
     let id := Identifier.id "make_pair" in
     let x_id := Identifier.id "x" in
@@ -780,7 +783,7 @@ def test_compile_pair : Bool :=
     check_contains text "make_pair"
 
 /// Test compilation of Result.ok constructor
-@[test]
+#[test]
 def test_compile_result_ok : Bool :=
     let id := Identifier.id "result_ok" in
     let x_id := Identifier.id "x" in
@@ -801,7 +804,7 @@ def test_compile_result_ok : Bool :=
     check_contains text "result_ok"
 
 /// Test compilation of Result.err constructor
-@[test]
+#[test]
 def test_compile_result_err : Bool :=
     let id := Identifier.id "result_err" in
     let e_id := Identifier.id "e" in
@@ -822,7 +825,7 @@ def test_compile_result_err : Bool :=
     check_contains text "result_err"
 
 /// Test compilation with multiple nested constructors (Pair of Options)
-@[test]
+#[test]
 def test_compile_nested_constructors : Bool :=
     let id := Identifier.id "nested_pair_option" in
     let x_id := Identifier.id "x" in
@@ -852,7 +855,7 @@ def test_compile_nested_constructors : Bool :=
     check_contains text "nested_pair_option"
 
 /// Test compilation of mutually recursive functions (even and odd)
-@[test]
+#[test]
 def test_compile_mutual_recursion : Bool :=
     let even_id := Identifier.id "even" in
     let odd_id := Identifier.id "odd" in
@@ -878,7 +881,7 @@ def test_compile_mutual_recursion : Bool :=
     check_contains text "even" && check_contains text "odd"
 
 /// Test compilation with complex control flow (multiple nested ifs and arithmetic)
-@[test]
+#[test]
 def test_compile_complex_control_flow : Bool :=
     let id := Identifier.id "complex_flow" in
     let x_id := Identifier.id "x" in
@@ -913,7 +916,7 @@ def test_compile_complex_control_flow : Bool :=
     check_contains text "br i1"
 
 /// Test compilation of constructor with multiple fields (3-element tuple via nested Pairs)
-@[test]
+#[test]
 def test_compile_triple : Bool :=
     let id := Identifier.id "triple" in
     let x_id := Identifier.id "x" in
@@ -941,7 +944,7 @@ def test_compile_triple : Bool :=
     check_contains text "triple"
 
 /// Test compilation of nested list constructors (List of Lists)
-@[test]
+#[test]
 def test_compile_nested_list : Bool :=
     let id := Identifier.id "nested_list" in
     let x_id := Identifier.id "x" in
@@ -966,7 +969,7 @@ def test_compile_nested_list : Bool :=
     check_contains text "nested_list"
 
 /// Test compilation of chained native function applications
-@[test]
+#[test]
 def test_compile_chained_natives : Bool :=
     let id := Identifier.id "chained_ops" in
     let x_id := Identifier.id "x" in
@@ -993,7 +996,7 @@ def test_compile_chained_natives : Bool :=
     check_contains text "add i64" && check_contains text "mul i64" && check_contains text "sub i64"
 
 /// Test compilation of mixed boolean and arithmetic operations
-@[test]
+#[test]
 def test_compile_mixed_bool_arith : Bool :=
     let id := Identifier.id "mixed_ops" in
     let x_id := Identifier.id "x" in
@@ -1021,7 +1024,7 @@ def test_compile_mixed_bool_arith : Bool :=
     check_contains text "br i1" && check_contains text "add i64"
 
 /// Test compilation of Result with both ok and err cases
-@[test]
+#[test]
 def test_compile_result_both : Bool :=
     let id := Identifier.id "result_both" in
     let x_id := Identifier.id "x" in
@@ -1053,7 +1056,7 @@ def test_compile_result_both : Bool :=
     check_contains text "result_both"
 
 /// Test compilation of deeply nested if-then-else with arithmetic
-@[test]
+#[test]
 def test_compile_deeply_nested_if : Bool :=
     let id := Identifier.id "deep_nested_if" in
     let x_id := Identifier.id "x" in
@@ -1086,7 +1089,7 @@ def test_compile_deeply_nested_if : Bool :=
     check_contains text "br i1"
 
 /// Test compilation of lambda with multiple parameters applied to arguments
-@[test]
+#[test]
 def test_compile_lambda_multi_arg : Bool :=
     let id := Identifier.id "lam_multi_arg" in
     let x_id := Identifier.id "x" in
@@ -1121,7 +1124,7 @@ def test_compile_lambda_multi_arg : Bool :=
     check_contains text "lam_multi_arg"
 
 /// Test compilation of forall type
-@[test]
+#[test]
 def test_compile_forall_type : Bool :=
     let id := Identifier.id "forall_test" in
     let a_id := Identifier.id "A" in
@@ -1141,7 +1144,7 @@ def test_compile_forall_type : Bool :=
     check_contains text "forall_test"
 
 /// Test compilation of pi type
-@[test]
+#[test]
 def test_compile_pi_type : Bool :=
     let id := Identifier.id "pi_test" in
     let a_id := Identifier.id "A" in
@@ -1163,7 +1166,7 @@ def test_compile_pi_type : Bool :=
     check_contains text "pi_test"
 
 /// Test compilation of type_ (universe) term
-@[test]
+#[test]
 def test_compile_type_universe : Bool :=
     let id := Identifier.id "type_universe" in
     let term_ := Term.type_ 1 in
@@ -1178,7 +1181,7 @@ def test_compile_type_universe : Bool :=
     check_contains text "type_universe"
 
 /// Test compilation of hole term
-@[test]
+#[test]
 def test_compile_hole : Bool :=
     let id := Identifier.id "hole_test" in
     let term_ := Term.hole in
@@ -1193,7 +1196,7 @@ def test_compile_hole : Bool :=
     check_contains text "hole_test"
 
 /// Test compilation of partial application (currying)
-@[test]
+#[test]
 def test_compile_partial_application : Bool :=
     let id := Identifier.id "partial_app" in
     let x_id := Identifier.id "x" in
@@ -1215,7 +1218,7 @@ def test_compile_partial_application : Bool :=
     check_contains text "partial_app"
 
 /// Test compilation of multiple definitions with dependencies
-@[test]
+#[test]
 def test_compile_defs_with_deps : Bool :=
     let helper_id := Identifier.id "helper" in
     let main_id := Identifier.id "main_with_helper" in
@@ -1247,7 +1250,7 @@ def test_compile_defs_with_deps : Bool :=
     check_contains text "helper" && check_contains text "main_with_helper"
 
 /// Test compilation of match expression with multiple cases
-@[test]
+#[test]
 def test_compile_match_multiple_cases : Bool :=
     let id := Identifier.id "match_multi" in
     let x_id := Identifier.id "x" in
@@ -1273,7 +1276,7 @@ def test_compile_match_multiple_cases : Bool :=
     check_contains text "match_multi"
 
 /// Test compilation of comparison operators (simplified version)
-@[test]
+#[test]
 def test_compile_comparison_ops : Bool :=
     let id := Identifier.id "comparison_ops" in
     let x_id := Identifier.id "x" in
@@ -1295,7 +1298,7 @@ def test_compile_comparison_ops : Bool :=
     check_contains text "comparison_ops"
 
 /// Test compilation of arithmetic operators (simplified version)
-@[test]
+#[test]
 def test_compile_arithmetic_ops : Bool :=
     let id := Identifier.id "arithmetic_ops" in
     let x_id := Identifier.id "x" in
@@ -1317,7 +1320,7 @@ def test_compile_arithmetic_ops : Bool :=
     check_contains text "arithmetic_ops"
 
 /// Test compilation of recursive Fibonacci function
-@[test]
+#[test]
 def test_compile_fibonacci : Bool :=
     let id := Identifier.id "fibonacci" in
     let n_id := Identifier.id "n" in
@@ -1350,7 +1353,7 @@ def test_compile_fibonacci : Bool :=
     check_contains text "fibonacci"
 
 /// Test compilation of multiple nested lists (List (List (List A)))
-@[test]
+#[test]
 def test_compile_triple_nested_list : Bool :=
     let id := Identifier.id "triple_nested" in
     let x_id := Identifier.id "x" in
@@ -1380,7 +1383,7 @@ def test_compile_triple_nested_list : Bool :=
     check_contains text "triple_nested"
 
 /// Test compilation with all available constructors (Bool, List, Option, Pair, Result)
-@[test]
+#[test]
 def test_compile_all_constructors : Bool :=
     let id := Identifier.id "all_ctors" in
     // Create one of each constructor type
@@ -1420,7 +1423,7 @@ def test_compile_all_constructors : Bool :=
     check_contains text "all_ctors"
 
 /// Test compilation of Nat.zero constructor
-@[test]
+#[test]
 def test_compile_nat_zero : Bool :=
     let id := Identifier.id "nat_zero" in
     let nat_name := Identifier.id "Nat" in
@@ -1439,7 +1442,7 @@ def test_compile_nat_zero : Bool :=
     check_contains text "nat_zero"
 
 /// Test compilation of Nat.succ constructor
-@[test]
+#[test]
 def test_compile_nat_succ : Bool :=
     let id := Identifier.id "nat_succ" in
     let x_id := Identifier.id "x" in
@@ -1462,7 +1465,7 @@ def test_compile_nat_succ : Bool :=
     check_contains text "nat_succ"
 
 /// Test compilation of nested Nat constructors (succ(succ(zero)))
-@[test]
+#[test]
 def test_compile_nested_nat : Bool :=
     let id := Identifier.id "nested_nat" in
     let nat_name := Identifier.id "Nat" in
@@ -1485,7 +1488,7 @@ def test_compile_nested_nat : Bool :=
     check_contains text "nested_nat"
 
 /// Test compilation of complex nested constructors (List of Option of Nat)
-@[test]
+#[test]
 def test_compile_list_option_nat : Bool :=
     let id := Identifier.id "list_option_nat" in
     let nat_name := Identifier.id "Nat" in
@@ -1520,7 +1523,7 @@ def test_compile_list_option_nat : Bool :=
     check_contains text "list_option_nat"
 
 /// Test compilation of deeply nested Nat (succ(succ(succ(zero))))
-@[test]
+#[test]
 def test_compile_nat_three : Bool :=
     let id := Identifier.id "nat_three" in
     let nat_name := Identifier.id "Nat" in
@@ -1545,7 +1548,7 @@ def test_compile_nat_three : Bool :=
     check_contains text "nat_three"
 
 /// Test compilation of Option containing List of Nat
-@[test]
+#[test]
 def test_compile_option_list_nat : Bool :=
     let id := Identifier.id "option_list_nat" in
     let nat_name := Identifier.id "Nat" in
@@ -1574,7 +1577,7 @@ def test_compile_option_list_nat : Bool :=
     check_contains text "option_list_nat"
 
 /// Test compilation of Pair of Nat and List
-@[test]
+#[test]
 def test_compile_pair_nat_list : Bool :=
     let id := Identifier.id "pair_nat_list" in
     let nat_name := Identifier.id "Nat" in
@@ -1601,7 +1604,7 @@ def test_compile_pair_nat_list : Bool :=
     check_contains text "pair_nat_list"
 
 /// Test compilation of Result with Nat values
-@[test]
+#[test]
 def test_compile_result_nat : Bool :=
     let id := Identifier.id "result_nat" in
     let nat_name := Identifier.id "Nat" in
@@ -1624,7 +1627,7 @@ def test_compile_result_nat : Bool :=
     check_contains text "result_nat"
 
 /// Test compilation of nested Result (Result (Option Nat))
-@[test]
+#[test]
 def test_compile_result_option_nat : Bool :=
     let id := Identifier.id "result_option_nat" in
     let nat_name := Identifier.id "Nat" in
@@ -1651,7 +1654,7 @@ def test_compile_result_option_nat : Bool :=
     check_contains text "result_option_nat"
 
 /// Test compilation of match on Nat.zero
-@[test]
+#[test]
 def test_compile_match_nat_zero : Bool :=
     let id := Identifier.id "match_nat_zero" in
     let x_id := Identifier.id "x" in
@@ -1674,7 +1677,7 @@ def test_compile_match_nat_zero : Bool :=
     check_contains text "match_nat_zero"
 
 /// Test compilation of match on Nat with zero and succ cases
-@[test]
+#[test]
 def test_compile_match_nat_zero_succ : Bool :=
     let id := Identifier.id "match_nat_both" in
     let x_id := Identifier.id "x" in
@@ -1699,7 +1702,7 @@ def test_compile_match_nat_zero_succ : Bool :=
     check_contains text "match_nat_both"
 
 /// Test compilation of recursive Nat addition
-@[test]
+#[test]
 def test_compile_nat_add : Bool :=
     let id := Identifier.id "nat_add" in
     let a_id := Identifier.id "a" in
@@ -1736,7 +1739,7 @@ def test_compile_nat_add : Bool :=
     check_contains text "nat_add"
 
 /// Test compilation of recursive Nat multiplication
-@[test]
+#[test]
 def test_compile_nat_mul : Bool :=
     let id := Identifier.id "nat_mul" in
     let a_id := Identifier.id "a" in
@@ -1773,7 +1776,7 @@ def test_compile_nat_mul : Bool :=
     check_contains text "nat_mul"
 
 /// Test compilation of Nat predecessor function using match
-@[test]
+#[test]
 def test_compile_nat_pred : Bool :=
     let id := Identifier.id "nat_pred" in
     let n_id := Identifier.id "n" in
@@ -1804,7 +1807,7 @@ def test_compile_nat_pred : Bool :=
     check_contains text "nat_pred"
 
 /// Test compilation of String.beq (boolean equality)
-@[test]
+#[test]
 def test_compile_string_beq : Bool :=
     let id := Identifier.id "string_beq_test" in
     let s1 := Term.lit (Literal.str "hello") in
@@ -1823,7 +1826,7 @@ def test_compile_string_beq : Bool :=
     check_contains text "string_beq_test"
 
 /// Test compilation of String.concat
-@[test]
+#[test]
 def test_compile_string_concat : Bool :=
     let id := Identifier.id "string_concat_test" in
     let s1 := Term.lit (Literal.str "hello") in
@@ -1842,7 +1845,7 @@ def test_compile_string_concat : Bool :=
     check_contains text "string_concat_test"
 
 /// Test compilation of List.is_empty using match
-@[test]
+#[test]
 def test_compile_list_is_empty : Bool :=
     let id := Identifier.id "list_is_empty" in
     let x_id := Identifier.id "x" in
@@ -1868,7 +1871,7 @@ def test_compile_list_is_empty : Bool :=
     check_contains text "list_is_empty"
 
 /// Test compilation of Option.is_some using match
-@[test]
+#[test]
 def test_compile_option_is_some : Bool :=
     let id := Identifier.id "option_is_some" in
     let x_id := Identifier.id "x" in
@@ -1893,7 +1896,7 @@ def test_compile_option_is_some : Bool :=
     check_contains text "option_is_some"
 
 /// Test compilation of Monad.pure (IO)
-@[test]
+#[test]
 def test_compile_io_pure : Bool :=
     let id := Identifier.id "io_pure_test" in
     let x_id := Identifier.id "x" in
@@ -1912,7 +1915,7 @@ def test_compile_io_pure : Bool :=
     check_contains text "io_pure_test"
 
 /// Test compilation of Monad.bind (IO)
-@[test]
+#[test]
 def test_compile_io_bind : Bool :=
     let id := Identifier.id "io_bind_test" in
     let x_id := Identifier.id "x" in
@@ -1931,7 +1934,7 @@ def test_compile_io_bind : Bool :=
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "io_bind_test"
 
-@[partial]
+#[partial]
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true

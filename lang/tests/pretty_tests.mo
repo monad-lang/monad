@@ -1,15 +1,26 @@
-use lang.types
-open types
-use lang.pretty
+use lang.types {
+  Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor, Inductive,
+  Instance, Literal, MatchCase, ModulePath, Native, Operator, Param, Struct,
+  StructField, Term, TypeConstraint, affine, app, class_d, con, def_d, f64,
+  forall, hole, i32, i64, i8, id, if_, inductive_d, infix_d, lam, linear, lit,
+  many, match_, mc, mk, mp, name, named, ntv, num, open_all, open_d, operator, pi,
+  show_identifier, show_module_path, str, struct_d, type_, u32, unnamed, use_bare,
+  use_d, var, zero,
+}
+open types {}
+use lang.pretty {
+  show_decl, show_instance, show_match_case, show_multiplicity, show_num_suffix,
+  show_term, show_universe,
+}
 
-open Term
-open Literal
-open Decl
-open DebugName
-open Identifier
-open ModulePath
-open NumSuffix
-open Multiplicity
+open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
+open Literal {if_, match_, num, str}
+open Decl {class_d, def_d, inductive_d, infix_d, open_d, struct_d, use_d}
+open DebugName {named, unnamed}
+open Identifier {id}
+open ModulePath {mp}
+open NumSuffix {f64, i32, i64, i8, u32}
+open Multiplicity {affine, linear, many, zero}
 
 // --- Helper definitions (typed to avoid forall inference issues) ---
 
@@ -43,20 +54,20 @@ def none_term : Option Term := Option.none
 
 // --- show_identifier tests ---
 
-@[test]
+#[test]
 def test_show_identifier : Bool :=
     let result : String := show_identifier test_id_x in
     String.beq result "x"
 
 // --- show_module_path tests ---
 
-@[test]
+#[test]
 def test_show_module_path_single : Bool :=
     let path : ModulePath := ModulePath.mp (List.cons test_id_A List.empty) in
     let result : String := show_module_path path in
     String.beq result "A"
 
-@[test]
+#[test]
 def test_show_module_path_dotted : Bool :=
     let path : ModulePath := ModulePath.mp (List.cons test_id_A (List.cons test_id_x List.empty)) in
     let result : String := show_module_path path in
@@ -64,109 +75,109 @@ def test_show_module_path_dotted : Bool :=
 
 // --- show_num_suffix tests ---
 
-@[test]
+#[test]
 def test_show_num_suffix_i64 : Bool :=
     let result : String := show_num_suffix NumSuffix.i64 in
     String.beq result "i64"
 
-@[test]
+#[test]
 def test_show_num_suffix_i8 : Bool :=
     let result : String := show_num_suffix NumSuffix.i8 in
     String.beq result "i8"
 
-@[test]
+#[test]
 def test_show_num_suffix_u32 : Bool :=
     let result : String := show_num_suffix NumSuffix.u32 in
     String.beq result "u32"
 
-@[test]
+#[test]
 def test_show_num_suffix_f64 : Bool :=
     let result : String := show_num_suffix NumSuffix.f64 in
     String.beq result "f64"
 
 // --- show_multiplicity tests ---
 
-@[test]
+#[test]
 def test_show_mult_zero : Bool :=
     let result : String := show_multiplicity Multiplicity.zero in
     String.beq result "0"
 
-@[test]
+#[test]
 def test_show_mult_many : Bool :=
     let result : String := show_multiplicity Multiplicity.many in
     String.beq result ""
 
-@[test]
+#[test]
 def test_show_mult_linear : Bool :=
     let result : String := show_multiplicity Multiplicity.linear in
     String.beq result "!"
 
-@[test]
+#[test]
 def test_show_mult_affine : Bool :=
     let result : String := show_multiplicity Multiplicity.affine in
     String.beq result "?"
 
 // --- show_universe tests ---
 
-@[test]
+#[test]
 def test_show_universe_prop : Bool :=
     let result : String := show_universe 0 in
     String.beq result "Prop"
 
-@[test]
+#[test]
 def test_show_universe_type : Bool :=
     let result : String := show_universe 1 in
     String.beq result "Type"
 
-@[test]
+#[test]
 def test_show_universe_type_2 : Bool :=
     let result : String := show_universe 2 in
     String.beq result "Type 1"
 
-@[test]
+#[test]
 def test_show_universe_type_5 : Bool :=
     let result : String := show_universe 5 in
     String.beq result "Type 4"
 
 // --- show_term tests ---
 
-@[test]
+#[test]
 def test_show_term_var : Bool :=
     let term : Term := Term.var 0 (DebugName.named test_id_x) in
     let result : String := show_term term in
     String.beq result "x"
 
-@[test]
+#[test]
 def test_show_term_var_unnamed : Bool :=
     let term : Term := Term.var 0 DebugName.unnamed in
     let result : String := show_term term in
     String.beq result "_"
 
-@[test]
+#[test]
 def test_show_term_hole : Bool :=
     let result : String := show_term Term.hole in
     String.beq result "_"
 
-@[test]
+#[test]
 def test_show_term_sort_prop : Bool :=
     let term : Term := Term.type_ 0 in
     let result : String := show_term term in
     String.beq result "Prop"
 
-@[test]
+#[test]
 def test_show_term_sort_type : Bool :=
     let term : Term := Term.type_ 1 in
     let result : String := show_term term in
     String.beq result "Type"
 
-@[test]
+#[test]
 def test_show_term_lam_simple : Bool :=
     let body : Term := Term.var 0 (DebugName.named test_id_x) in
     let lam : Term := Term.lam (DebugName.named test_id_x) (Term.type_ 1) body in
     let result : String := show_term lam in
     String.beq result "(fn x : Type => x)"
 
-@[test]
+#[test]
 def test_show_term_app_simple : Bool :=
     let fun : Term := Term.var 0 (DebugName.named (Identifier.id "f")) in
     let arg : Term := Term.var 1 (DebugName.named test_id_x) in
@@ -174,7 +185,7 @@ def test_show_term_app_simple : Bool :=
     let result : String := show_term app in
     String.beq result "(f x)"
 
-@[test]
+#[test]
 def test_show_term_pi_simple : Bool :=
     let arg : Term := Term.type_ 1 in
     let ret : Term := Term.type_ 1 in
@@ -182,7 +193,7 @@ def test_show_term_pi_simple : Bool :=
     let result : String := show_term pi in
     String.beq result "(Type -> Type)"
 
-@[test]
+#[test]
 def test_show_term_forall_simple : Bool :=
     let kind : Term := Term.type_ 1 in
     let body : Term := Term.var 0 (DebugName.named test_id_A) in
@@ -192,28 +203,28 @@ def test_show_term_forall_simple : Bool :=
 
 // --- show_literal tests ---
 
-@[test]
+#[test]
 def test_show_literal_str : Bool :=
     let lit : Literal := Literal.str "hello" in
     let term : Term := Term.lit lit in
     let result : String := show_term term in
     String.beq result "\"hello\""
 
-@[test]
+#[test]
 def test_show_literal_num_i64 : Bool :=
     let lit : Literal := Literal.num 42 NumSuffix.i64 in
     let term : Term := Term.lit lit in
     let result : String := show_term term in
     String.beq result "42i64"
 
-@[test]
+#[test]
 def test_show_literal_num_i32 : Bool :=
     let lit : Literal := Literal.num 10 NumSuffix.i32 in
     let term : Term := Term.lit lit in
     let result : String := show_term term in
     String.beq result "10i32"
 
-@[test]
+#[test]
 def test_show_literal_if : Bool :=
     let cond : Term := Term.lit (Literal.str "x") in
     let then_ : Term := Term.lit (Literal.num 1 NumSuffix.i64) in
@@ -223,7 +234,7 @@ def test_show_literal_if : Bool :=
     let result : String := show_term term in
     String.beq result "if \"x\" then 1i64 else 0i64"
 
-@[test]
+#[test]
 def test_show_literal_match_simple : Bool :=
     let scrut : Term := Term.lit (Literal.num 5 NumSuffix.i64) in
     let case_none : MatchCase := MatchCase.mc (Identifier.id "none") empty_id_list (Term.lit (Literal.num 0 NumSuffix.i64)) in
@@ -236,7 +247,7 @@ def test_show_literal_match_simple : Bool :=
 
 // --- show_native tests ---
 
-@[test]
+#[test]
 def test_show_term_native : Bool :=
     let ntv : Native := Native.mk test_id_s 0 empty_opt_terms in
     let term : Term := Term.ntv ntv in
@@ -245,7 +256,7 @@ def test_show_term_native : Bool :=
 
 // --- show_con tests ---
 
-@[test]
+#[test]
 def test_show_term_con_no_args : Bool :=
     let typ_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
     let con : Con := Con.mk (Identifier.id "none") typ_path 0 empty_opt_terms in
@@ -253,7 +264,7 @@ def test_show_term_con_no_args : Bool :=
     let result : String := show_term term in
     String.beq result "Option.none"
 
-@[test]
+#[test]
 def test_show_term_con_with_args : Bool :=
     let typ_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
     let arg1 : Option Term := Option.some (Term.lit (Literal.num 42 NumSuffix.i64)) in
@@ -265,7 +276,7 @@ def test_show_term_con_with_args : Bool :=
 
 // --- show_decl tests ---
 
-@[test]
+#[test]
 def test_show_decl_def : Bool :=
     let name : ModulePath := ModulePath.mp (List.cons (Identifier.id "id") List.empty) in
     let typ : Term := Term.pi (Term.type_ 1) (Term.pi (Term.var 2 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_A))) in
@@ -275,7 +286,7 @@ def test_show_decl_def : Bool :=
     let result : String := show_decl decl in
     String.beq result "def id : (Type -> (A -> A)) := (fn x : A => x)"
 
-@[test]
+#[test]
 def test_show_decl_inductive : Bool :=
     let type_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Bool") List.empty) in
     let true_cn : InductConstructor := InductConstructor.mk
@@ -290,7 +301,7 @@ def test_show_decl_inductive : Bool :=
     let result : String := show_decl decl in
     String.beq result "type Bool {\n  true,\n  false\n}"
 
-@[test]
+#[test]
 def test_show_decl_struct : Bool :=
     let field_x : StructField := StructField.mk (Identifier.id "x") (Term.type_ 1) none_term in
     let field_y : StructField := StructField.mk (Identifier.id "y") (Term.type_ 1) none_term in
@@ -300,7 +311,7 @@ def test_show_decl_struct : Bool :=
     let result : String := show_decl decl in
     String.beq result "struct Point {\n  x : Type,\n  y : Type\n}"
 
-@[test]
+#[test]
 def test_show_decl_class_simple : Bool :=
     let meth_typ : Term := Term.pi (Term.var 1 (DebugName.named test_id_A)) (Term.pi (Term.var 0 (DebugName.named test_id_A)) (Term.type_ 0)) in
     let meth : ClassDef := ClassDef.mk (Identifier.id "eq") meth_typ none_term in
@@ -312,7 +323,7 @@ def test_show_decl_class_simple : Bool :=
     let result : String := show_decl decl in
     String.beq result "class Eq (A : Type) {\n  def eq : (A -> (A -> Prop))\n}"
 
-@[test]
+#[test]
 def test_show_decl_infix : Bool :=
     let op : Operator := Operator.operator "++" in
     let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "append") List.empty) in
@@ -320,14 +331,14 @@ def test_show_decl_infix : Bool :=
     let result : String := show_decl decl in
     String.beq result "infix: ++ := append"
 
-@[test]
+#[test]
 def test_show_decl_use : Bool :=
     let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "prelude") List.empty) in
     let decl : Decl := Decl.use_d path UseFilter.use_bare in
     let result : String := show_decl decl in
     String.beq result "use prelude"
 
-@[test]
+#[test]
 def test_show_decl_open : Bool :=
     let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "IO") List.empty) in
     let decl : Decl := Decl.open_d path OpenFilter.open_all in
@@ -336,7 +347,7 @@ def test_show_decl_open : Bool :=
 
 // --- show_instance tests ---
 
-@[test]
+#[test]
 def test_show_instance : Bool :=
     let cls_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let args : List Term := List.cons (Term.type_ 1) List.empty in
@@ -346,14 +357,14 @@ def test_show_instance : Bool :=
 
 // --- show_match_case tests ---
 
-@[test]
+#[test]
 def test_show_match_case_no_args : Bool :=
     let body : Term := Term.lit (Literal.num 0 NumSuffix.i64) in
     let mc : MatchCase := MatchCase.mc (Identifier.id "none") empty_id_list body in
     let result : String := show_match_case mc in
     String.beq result "none => 0i64"
 
-@[test]
+#[test]
 def test_show_match_case_with_args : Bool :=
     let body : Term := Term.var 0 (DebugName.named test_id_x) in
     let args : List Identifier := List.cons test_id_x (List.cons test_id_y List.empty) in

@@ -1,42 +1,41 @@
-use process
-use lang.types
-use lang.module
-use lang.codegen.ir
-use lang.codegen.emit
+use lang.types {mk, name}
+use lang.module {mk}
+use lang.codegen.ir {LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMModule, mk}
+use lang.codegen.emit {mk}
 
-open Term
-open Literal
-open Identifier
-open DebugName
-open NumSuffix
-open Param
-open Def
-open ModulePath
-open Monad
+open Term {}
+open Literal {}
+open Identifier {}
+open DebugName {}
+open NumSuffix {}
+open Param {mk}
+open Def {mk, name}
+open ModulePath {}
+open Monad {}
 
 /// Extract the name from an LLVMFunction
-@[partial]
+#[partial]
 def get_function_name (func : LLVMFunction) : String := 
     match func {
         LLVMFunction.mk name _ _ _ _ => name
     }
 
 /// Extract the name from an LLVMGlobal
-@[partial]
+#[partial]
 def get_global_name (global : LLVMGlobal) : String := 
     match global {
         LLVMGlobal.mk name _ _ _ => name
     }
 
 /// Extract the name from an LLVMDeclaration
-@[partial]
+#[partial]
 def get_declaration_name (decl : LLVMDeclaration) : String := 
     match decl {
         LLVMDeclaration.mk name _ _ => name
     }
 
 /// Extract names from a list using a extraction function
-@[partial]
+#[partial]
 def extract_names (items : List A) (getter : A -> String) : List String := 
     match items {
         List.empty => List.empty,
@@ -44,7 +43,7 @@ def extract_names (items : List A) (getter : A -> String) : List String :=
     }
 
 /// Get all defined symbol names from an LLVMModule
-@[partial]
+#[partial]
 def get_module_symbol_names (mod : LLVMModule) : List String := 
     match mod {
         LLVMModule.mk _ globals functions declarations =>
@@ -52,6 +51,6 @@ def get_module_symbol_names (mod : LLVMModule) : List String :=
     }
 
 /// Check if IR text contains a symbol definition
-@[partial]
+#[partial]
 def ir_contains_symbol (ir_text : String) (symbol : String) : Bool := 
     String.contains ir_text symbol

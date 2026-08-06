@@ -1,23 +1,29 @@
 /// Module loading infrastructure for the self-hosted compiler.
 /// Parses source text and builds scope data from declarations.
 
-use io
-use lang.types
-use lang.parser
-use lang.parser.core
-use lang.parser.combinators
-use lang.scope
-use lang.typecheck.infer
-use std.list
-use std.show
+use io {IO, file_exists, println, read_file}
+use lang.types {
+  Decl, Def, Identifier, InductConstructor, Inductive, LoadedModules, LocalScope,
+  LocalVar, ModulePath, NameRef, Scope, ScopeData, ScopeInstance, Term, def_d,
+  hole, id, inductive_d, mk, mp, name, nid, to_name, use_d,
+}
+use lang.parser {decls_parser, module_path_to_string}
+use lang.parser.core {ParseResult, fail, mk, success}
+use lang.scope {
+  build_scope_from_decls, list_append, modpath_eq, scope_data_empty,
+  scope_find_inductive, scope_resolve_name,
+}
+use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
+use std.list {Show, all, length}
+use std.show {Show}
 
-open IO
-open types
-open parser
-open parser.core
-open ParseResult
-open scope
-open infer
+open IO {file_exists, println, read_file}
+open types {}
+open parser {}
+open parser.core {}
+open ParseResult {fail, success}
+open scope {}
+open infer {}
 
 /// Module path for the init directory
 def init_module_file_path (name : String) : String := "init/" ++ name ++ ".mo"
@@ -66,7 +72,7 @@ def parse_module (path : ModulePath) (text : String) : ScopeData :=
 def extract_use_decls (decls : List Decl) : List ModulePath :=
     extract_use_decls_go decls List.empty
 
-@[partial]
+#[partial]
 def extract_use_decls_go (decls : List Decl) (acc : List ModulePath) : List ModulePath :=
     match decls {
         List.empty => acc,
@@ -84,7 +90,7 @@ def identifier_to_string (id : Identifier) : String :=
     }
 
 /// Convert a ModulePath to a file path string (without .mo extension)
-@[terminating]
+#[terminating]
 def module_path_to_file (mp : ModulePath) : String :=
     match mp {
         ModulePath.mp ids =>
@@ -103,7 +109,7 @@ def module_path_to_file (mp : ModulePath) : String :=
 def file_exists (path : String) : IO Bool := IO.file_exists path
 
 /// Convert a ModulePath to a string representation
-@[partial]
+#[partial]
 def module_path_to_string (mp : ModulePath) : String :=
     match mp {
         ModulePath.mp ids =>
@@ -119,7 +125,7 @@ def module_path_to_string (mp : ModulePath) : String :=
     }
 
 /// Convert a file path to a ModulePath
-@[partial]
+#[partial]
 def file_path_to_module_path (path : String) : ModulePath :=
     let last_slash : I64 := string_find_last_slash path in
     let file_name : String :=
@@ -141,7 +147,7 @@ def string_find_last_slash (s : String) : I64 :=
 /// '/' character as U8
 def slash_byte : U8 := 47u8
 
-@[terminating]
+#[terminating]
 def string_find_last_slash_go (s : String) (idx : I64) : I64 :=
     if I64.lt 0 idx then
         match (String.get s (idx - 1) : Option U8) {
@@ -178,7 +184,7 @@ def path_join (a : String) (b : String) : String :=
 
 /// Resolve a module path to a file path, trying different directories
 /// First tries relative to base_dir, then falls back to standard locations
-@[partial]
+#[partial]
 def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option String) {
     let mp_str := module_path_to_file mp;
     let with_extension := String.concat mp_str ".mo";
@@ -233,7 +239,7 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
 }
 
 /// Try to read a module file from disk, relative to a base directory
-@[partial]
+#[partial]
 def try_read_module_file (base_dir : String) (mp : ModulePath) : IO (Option String) {
     let resolved : Option String <- resolve_module_file base_dir mp;
     match resolved {
@@ -248,13 +254,13 @@ def try_read_module_file (base_dir : String) (mp : ModulePath) : IO (Option Stri
 }
 
 /// Try to read a module file from disk (default base directory is empty)
-@[partial]
+#[partial]
 def try_read_module_file_default (mp : ModulePath) : IO (Option String) :=
     try_read_module_file "" mp
 
 /// Load a module by its ModulePath, returning parsed declarations or none
 /// base_dir is the directory to resolve relative imports from
-@[partial]
+#[partial]
 def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List Decl)) {
     let file : Option String <- try_read_module_file base_dir mp;
     match file {
@@ -273,13 +279,13 @@ def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List D
 
 
 /// Load a module by its ModulePath with default base directory
-@[partial]
+#[partial]
 def load_module_decls_default (mp : ModulePath) : IO (Option (List Decl)) :=
     load_module_decls "" mp
 
 /// Build a Scope from a ModulePath by loading and parsing the file
 /// base_dir is the directory to resolve relative imports from
-@[partial]
+#[partial]
 def load_module_scope (base_dir : String) (mp : ModulePath) : IO (Option ScopeData) {
     let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
     match opt_decls {
@@ -294,13 +300,13 @@ def load_module_scope (base_dir : String) (mp : ModulePath) : IO (Option ScopeDa
 }
 
 /// Build a Scope from a ModulePath with default base directory
-@[partial]
+#[partial]
 def load_module_scope_default (mp : ModulePath) : IO (Option ScopeData) :=
     load_module_scope "" mp
 
 /// Extract all transitive dependencies from a list of declarations
 /// with a base directory for resolving relative imports
-@[partial]
+#[partial]
 def extract_all_dependencies (base_dir : String) (decls : List Decl) : IO (List ModulePath) :=
     let direct_deps : List ModulePath := extract_use_decls decls in
     let empty_mp_list : List ModulePath := List.empty in
@@ -310,7 +316,7 @@ def extract_all_dependencies (base_dir : String) (decls : List Decl) : IO (List 
 /// Extract all transitive dependencies with cycle detection
 /// visiting: modules currently being visited (for cycle detection)
 /// visited: modules already fully processed
-@[partial]
+#[partial]
 def extract_all_dependencies_go
     (base_dir : String)
     (to_visit : List ModulePath)
@@ -354,7 +360,7 @@ def extract_all_dependencies_go
     }
 
 /// Check if a list contains a specific ModulePath
-@[partial]
+#[partial]
 def list_contains (xs : List ModulePath) (x : ModulePath) : Bool :=
     match xs {
         List.empty => false,
@@ -398,14 +404,14 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
 }
 
 /// Load all dependencies for a module with default base directory
-@[partial]
+#[partial]
 def load_module_with_dependencies_default (mp : ModulePath) : IO (Option Scope) :=
     load_module_with_dependencies "" mp
 
 /// Load all declarations for a module and its transitive dependencies.
 /// Returns Option (List Decl) where the list contains all declarations from
 /// the module and all its dependencies, suitable for compilation.
-@[partial]
+#[partial]
 def load_module_decls_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Option (List Decl)) {
     // First load the main module's declarations
     let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
@@ -435,7 +441,7 @@ def load_module_decls_with_dependencies (base_dir : String) (mp : ModulePath) : 
 }
 
 /// Load declarations for a list of module paths
-@[partial]
+#[partial]
 def load_dependency_decls (base_dir : String) (deps : List ModulePath) (acc : List Decl) : IO (List Decl) :=
     match deps {
         List.empty => do {
@@ -470,7 +476,7 @@ def load_module_decls_with_dependencies_default (mp : ModulePath) : IO (Option (
 
 /// Load scope data for a list of module paths, with base directory for resolution
 /// Each module is loaded once, and we try to resolve it from the base_dir
-@[partial]
+#[partial]
 def load_dependency_scopes (base_dir : String) (deps : List ModulePath) (acc : List ScopeData) : IO (List ScopeData) :=
     match deps {
         List.empty => do {
@@ -500,7 +506,7 @@ def load_dependency_scopes (base_dir : String) (deps : List ModulePath) (acc : L
     }
 
 /// Merge two ScopeData structures
-@[partial]
+#[partial]
 def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
     match sd1 {
         ScopeData.mk dr1 cd1 ins1 ind1 cls1 inf1 conf1 =>
@@ -519,12 +525,12 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
     }
 
 /// Merge lists of ScopeData
-@[partial]
+#[partial]
 def merge_scope_data_list (sds : List ScopeData) : ScopeData :=
     let empty : ScopeData := scope_data_empty in
     merge_scope_data_list_go sds empty
 
-@[partial]
+#[partial]
 def merge_scope_data_list_go (sds : List ScopeData) (acc : ScopeData) : ScopeData :=
     match sds {
         List.empty => acc,
@@ -534,7 +540,7 @@ def merge_scope_data_list_go (sds : List ScopeData) (acc : ScopeData) : ScopeDat
     }
 
 /// Merge two lists of ScopeInstance
-@[partial]
+#[partial]
 def merge_instances (ins1 : List ScopeInstance) (ins2 : List ScopeInstance) : List ScopeInstance :=
     match ins1 {
         List.empty => ins2,
@@ -544,7 +550,7 @@ def merge_instances (ins1 : List ScopeInstance) (ins2 : List ScopeInstance) : Li
     }
 
 /// Helper: append two lists
-@[partial]
+#[partial]
 def list_append (xs : List A) (ys : List A) : List A :=
     match xs {
         List.empty => ys,
@@ -555,14 +561,14 @@ def list_append (xs : List A) (ys : List A) : List A :=
 
 /// Build a scope with all dependencies loaded for type checking a file
 /// The file_path is used to determine the directory for resolving relative imports
-@[partial]
+#[partial]
 def build_scope_with_deps (file_path : String) (mod_name : String) : IO (Option Scope) :=
     let base_dir : String := extract_directory file_path in
     let mp : ModulePath := ModulePath.mp [Identifier.id mod_name] in
     load_module_with_dependencies base_dir mp
 
 /// Build scope and type check a file with its dependencies loaded
-@[partial]
+#[partial]
 def typecheck_file_with_deps (file_path : String) (mod_name : String) : IO Bool {
     let exists : Bool <- file_exists file_path;
     if exists then do {
@@ -597,7 +603,7 @@ def typecheck_file_with_deps (file_path : String) (mod_name : String) : IO Bool 
 
 
 /// Type check all declarations in a module with a given scope
-@[partial]
+#[partial]
 def typecheck_module_with_scope (scope : Scope) (decls : List Decl) (locals : LocalScope) : Bool :=
     match decls {
         List.empty => true,
@@ -609,7 +615,7 @@ def typecheck_module_with_scope (scope : Scope) (decls : List Decl) (locals : Lo
     }
 
 /// Type check a single declaration with scope
-@[partial]
+#[partial]
 def typecheck_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) : Bool :=
     match d {
         Decl.def_d df => typecheck_def_with_scope df scope locals,
@@ -618,7 +624,7 @@ def typecheck_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) :
     }
 
 /// Type check a definition with scope
-@[partial]
+#[partial]
 def typecheck_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) : Bool :=
     match df {
         Def.mk _name typ body _constraints _attrs =>
@@ -633,7 +639,7 @@ def typecheck_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) : 
     }
 
 /// Check if a term is a hole
-@[partial]
+#[partial]
 def is_term_hole (t : Term) : Bool :=
     match t {
         Term.hole => true,
@@ -641,7 +647,7 @@ def is_term_hole (t : Term) : Bool :=
     }
 
 /// Type check an inductive with scope
-@[partial]
+#[partial]
 def typecheck_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) : Bool :=
     match ind {
         Inductive.mk _name _params _typ constructors _attrs =>
@@ -649,7 +655,7 @@ def typecheck_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : L
     }
 
 /// Type check all constructors with scope
-@[partial]
+#[partial]
 def typecheck_constructors_with_scope (cons : List InductConstructor) (scope : Scope) (locals : LocalScope) : Bool :=
     match cons {
         List.empty => true,
@@ -661,7 +667,7 @@ def typecheck_constructors_with_scope (cons : List InductConstructor) (scope : S
     }
 
 /// Type check a single constructor with scope
-@[partial]
+#[partial]
 def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals : LocalScope) : Bool :=
     match c {
         InductConstructor.mk _name params typ =>
@@ -671,7 +677,7 @@ def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (lo
             }
     }
 
-@[test]
+#[test]
 def test_parse_all_decls_empty : Bool :=
     let result : ParseResult (List Decl) := parse_all_decls "" in
     match result {
@@ -681,7 +687,7 @@ def test_parse_all_decls_empty : Bool :=
 
 // --- Integration: parse source text, build scope, resolve names ---
 
-@[test]
+#[test]
 def test_parse_def_resolve : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def foo : Bool := true" in
@@ -708,7 +714,7 @@ def test_parse_def_resolve : Bool :=
         ParseResult.fail _ => false
     }
 
-@[test]
+#[test]
 def test_parse_type_resolve_inductive : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }" in
@@ -729,7 +735,7 @@ def test_parse_type_resolve_inductive : Bool :=
         ParseResult.fail _ => false
     }
 
-@[test]
+#[test]
 def test_parse_type_constructor_resolves : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }" in
@@ -756,7 +762,7 @@ def test_parse_type_constructor_resolves : Bool :=
         ParseResult.fail _ => false
     }
 
-@[test]
+#[test]
 def test_parse_if_body_def_resolves : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def test_bool_true : Bool := if true then true else false" in
@@ -783,7 +789,7 @@ def test_parse_if_body_def_resolves : Bool :=
         ParseResult.fail _ => false
     }
 
-@[test]
+#[test]
 def test_parse_multiple_decls_resolve : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def a : Bool := true type T { mk }" in
@@ -810,7 +816,7 @@ def test_parse_multiple_decls_resolve : Bool :=
         ParseResult.fail _ => false
     }
 
-@[test]
+#[test]
 def test_parse_module_builds_scope : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let sd : ScopeData := parse_module path "def hello : Bool := true" in
@@ -832,7 +838,7 @@ def test_parse_module_builds_scope : Bool :=
         Result.err _ => false
     }
 
-@[test]
+#[test]
 def test_parse_use_decl_ignored_in_scope : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "use prelude def bar : Bool := true" in
@@ -893,19 +899,19 @@ instance Show LoadedModules {
     def show (m : LoadedModules) : String := show_loaded_modules m
 }
 
-@[partial]
+#[partial]
 def get_loaded_main (loaded : LoadedModules) : ModuleInfo :=
     match loaded {
         LoadedModules.mk main_module all_modules => main_module
     }
 
-@[partial]
+#[partial]
 def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
     match loaded {
         LoadedModules.mk main_module all_modules => all_modules
     }
 
-@[partial]
+#[partial]
 def list_contains_module_info (modules : List ModuleInfo) (mp : ModulePath) : Bool :=
     match modules {
         List.empty => false,
@@ -919,7 +925,7 @@ def list_contains_module_info (modules : List ModuleInfo) (mp : ModulePath) : Bo
             }
     }
 
-@[partial]
+#[partial]
 def get_module_info_path (mi : ModuleInfo) : ModulePath :=
     match mi {
         ModuleInfo.mk path file_path decls => path
@@ -935,7 +941,7 @@ def get_module_info_decls (mi : ModuleInfo) : List Decl :=
         ModuleInfo.mk path file_path decls => decls
     }
 
-@[partial]
+#[partial]
 def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option ModuleInfo) {
     let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
     let actual_base_dir : String :=
@@ -956,7 +962,7 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option Mod
     }
 }
 
-@[partial]
+#[partial]
 def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
     let base_dir : String := extract_directory file_path;
     let last_slash : I64 := string_find_last_slash file_path;
@@ -995,7 +1001,7 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
     }
 }
 
-@[partial]
+#[partial]
 def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (acc : List ModuleInfo) : IO (Result String (List ModuleInfo)) :=
     match deps {
         List.empty => do {

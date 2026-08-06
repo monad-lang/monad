@@ -1,6 +1,12 @@
-use lang.types
-use lang.eval_term
-open EvalTerm
+use lang.types {app, id, lam, lit, many}
+use lang.eval_term {
+  EvalTerm, eapp, eborrow, econst, elam, elit, eprim, eproj, eproj_field,
+  erecursor, eregion, esort, evar, l_bool, l_float, l_int, l_sort, l_str,
+}
+open EvalTerm {
+  eapp, eborrow, econst, elam, elit, eprim, eproj, eproj_field, erecursor,
+  eregion, esort, evar,
+}
 
 // ─── EvalTerm environment-based evaluator ──────────────────────────────
 // Evaluates EvalTerm (from lang.eval_term) using an environment
@@ -11,10 +17,10 @@ type KEvalEnv {
   kenv_push (val: EvalTerm) (rest: KEvalEnv),
 }
 
-open KEvalEnv
+open KEvalEnv {kenv_empty, kenv_push}
 
 /// Look up a de Bruijn index in the evaluation environment.
-@[partial]
+#[partial]
 def kenv_lookup (env: KEvalEnv) (idx: I64) : Option EvalTerm :=
   match env {
     kenv_empty => Option.none,
@@ -29,11 +35,11 @@ type KernelResult {
   kr_err (msg: String),
 }
 
-open KernelResult
+open KernelResult {kr_err, kr_ok}
 
 /// Evaluate an EvalTerm under an environment.
 /// Variables resolved via kenv_lookup. Lambdas extend the env on application.
-@[partial]
+#[partial]
 def keval (term: EvalTerm) (env: KEvalEnv) : KernelResult :=
   match term {
     EvalTerm.evar idx =>
@@ -86,7 +92,7 @@ def keval (term: EvalTerm) (env: KEvalEnv) : KernelResult :=
 
 // ─── EvalTerm evaluator tests ──────────────────────────────────────────
 
-@[test]
+#[test]
 def test_keval_lit : Bool :=
   let t : EvalTerm := EvalTerm.elit (EvalLiteral.l_int 7) in
   match keval t kenv_empty {
@@ -105,7 +111,7 @@ def test_keval_lit : Bool :=
     kr_err msg => false
   }
 
-@[test]
+#[test]
 def test_keval_identity : Bool :=
   let body : EvalTerm := EvalTerm.evar 0 in
   let id : EvalTerm := EvalTerm.elam Multiplicity.many body in
@@ -124,7 +130,7 @@ def test_keval_identity : Bool :=
     kr_err msg => false
   }
 
-@[test]
+#[test]
 def test_keval_lam_value : Bool :=
   let lam : EvalTerm := EvalTerm.elam Multiplicity.many (EvalTerm.evar 0) in
   match keval lam kenv_empty {
@@ -136,7 +142,7 @@ def test_keval_lam_value : Bool :=
     kr_err msg => false
   }
 
-@[test]
+#[test]
 def test_keval_const : Bool :=
   let c : EvalTerm := EvalTerm.econst 5 in
   match keval c kenv_empty {
@@ -148,7 +154,7 @@ def test_keval_const : Bool :=
     kr_err msg => false
   }
 
-@[test]
+#[test]
 def test_keval_nested_app : Bool :=
   let
     body : EvalTerm := EvalTerm.evar 0;

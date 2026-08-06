@@ -1,4 +1,4 @@
-use std.show
+use std.show {Show}
 
 type Identifier {
     id String
@@ -758,31 +758,31 @@ instance Similar Term {
 
 // ─── Term construction tests (Phase 0) ─────────────────────────────
 
-@[test]
+#[test]
 def test_term_var : Bool :=
     let v : Term := Term.var 0 (DebugName.named (Identifier.id "x")) in
     true
 
-@[test]
+#[test]
 def test_term_lam : Bool :=
     let body : Term := Term.var 0 (DebugName.unnamed) in
     let l : Term := Term.lam DebugName.unnamed body body in
     true
 
-@[test]
+#[test]
 def test_term_forall : Bool :=
     let body : Term := Term.var 0 (DebugName.unnamed) in
     let f : Term := Term.forall DebugName.unnamed body body in
     true
 
-@[test]
+#[test]
 def test_term_pi : Bool :=
     let arg : Term := Term.type_ 1 in
     let ret : Term := Term.type_ 1 in
     let p : Term := Term.pi arg ret in
     true
 
-@[test]
+#[test]
 def test_term_dep_pi : Bool :=
     // Dependent pi: pi Nat (var 0 "n") — ret references arg at index 0
     let arg : Term := Term.type_ 0 in
@@ -790,19 +790,19 @@ def test_term_dep_pi : Bool :=
     let p : Term := Term.pi arg ret in
     true
 
-@[test]
+#[test]
 def test_term_app : Bool :=
     let f : Term := Term.var 0 (DebugName.unnamed) in
     let a : Term := Term.var 1 (DebugName.unnamed) in
     let app : Term := Term.app f a in
     true
 
-@[test]
+#[test]
 def test_term_lit : Bool :=
     let l : Term := Term.lit (Literal.str "hello") in
     true
 
-@[test]
+#[test]
 def test_term_ntv : Bool :=
     // Work around Native.mk forall-inference bug with List.empty
     // by using a non-empty list of args
@@ -812,7 +812,7 @@ def test_term_ntv : Bool :=
     let n : Term := Term.ntv ntv_val in
     true
 
-@[test]
+#[test]
 def test_term_con : Bool :=
     // Work around Con.mk/ModulePath.mp forall-inference bugs with List.empty
     // by using non-empty lists
@@ -823,12 +823,12 @@ def test_term_con : Bool :=
     let c : Term := Term.con con_val in
     true
 
-@[test]
+#[test]
 def test_term_type : Bool :=
     let t : Term := Term.type_ 0 in
     true
 
-@[test]
+#[test]
 def test_term_hole : Bool :=
     let h : Term := Term.hole in
     true

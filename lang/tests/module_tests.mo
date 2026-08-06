@@ -1,8 +1,15 @@
-use lang.types
-use lang.scope
+use lang.types {
+  Decl, Def, Identifier, InductConstructor, Inductive, LocalScope, LocalVar,
+  ModulePath, NameRef, Param, Scope, ScopeData, ScopeDef, ScopeError,
+  TypeConstraint, def_d, hole, id, inductive_d, mk, mp, nid, type_,
+}
+use lang.scope {
+  build_scope_from_decls, resolve_def_in_scope_by_name, scope_find_inductive,
+  scope_resolve_name,
+}
 
-open types
-open scope
+open types {}
+open scope {}
 
 // --- Helpers ---
 
@@ -34,7 +41,7 @@ def empty_constructors : List InductConstructor := List.empty
 
 // --- Test: Empty module has builtins ---
 
-@[test]
+#[test]
 def test_parse_empty_has_builtins : Bool :=
     let path : ModulePath := test_module_path in
     let sd : ScopeData := build_scope_from_decls path empty_decls_list in
@@ -48,7 +55,7 @@ def test_parse_empty_has_builtins : Bool :=
 
 // --- Test: Build scope with a manually constructed def ---
 
-@[test]
+#[test]
 def test_scope_def_resolves : Bool :=
     let path : ModulePath := test_module_path in
     let defname : ModulePath := name_to_path (Identifier.id "add") in
@@ -65,7 +72,7 @@ def test_scope_def_resolves : Bool :=
 
 // --- Test: Build scope with a manually constructed inductive ---
 
-@[test]
+#[test]
 def test_scope_inductive_found : Bool :=
     let path : ModulePath := test_module_path in
     let color_path : ModulePath := name_to_path (Identifier.id "Color") in
@@ -83,7 +90,7 @@ def test_scope_inductive_found : Bool :=
 
 // --- Test: Constructor resolves as def ---
 
-@[test]
+#[test]
 def test_scope_constructor_resolves : Bool :=
     let path : ModulePath := test_module_path in
     let color_path : ModulePath := name_to_path (Identifier.id "Color") in
@@ -103,7 +110,7 @@ def test_scope_constructor_resolves : Bool :=
 
 // --- Test: Unknown name does not resolve ---
 
-@[test]
+#[test]
 def test_scope_unknown_name_fails : Bool :=
     let path : ModulePath := test_module_path in
     let sd : ScopeData := build_scope_from_decls path empty_decls_list in
@@ -117,7 +124,7 @@ def test_scope_unknown_name_fails : Bool :=
 
 // --- Test: Builtins present (Type resolution) ---
 
-@[test]
+#[test]
 def test_builtin_type_resolves : Bool :=
     let path : ModulePath := test_module_path in
     let sd : ScopeData := build_scope_from_decls path empty_decls_list in

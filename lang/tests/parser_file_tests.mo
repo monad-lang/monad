@@ -1,19 +1,18 @@
 /// Integration tests for parsing Monad files
 /// Tests that the self hosted parser can parse all Monad source files
 
-use io
-open IO
-open Monad
-use lang.types
-use lang.parser
-use lang.parser.core
-use lang.pretty
-use std.list
+use io {io, read_file}
+open IO {io, read_file}
+open Monad {}
+use lang.types {Decl}
+use lang.parser {decls_parser, open_parser, use_parser}
+use lang.parser.core {ParseResult, fail, success}
+use lang.pretty {show_decl}
 
-open ParseResult
+open ParseResult {fail, success}
 
 /// All init/ files to parse (safe - no box-drawing characters)
-@[partial]
+#[partial]
 def init_files_safe : List String :=
     ["init/id.mo",
      "init/init.mo",
@@ -24,12 +23,12 @@ def init_files_safe : List String :=
      "init/tests.mo"]
 
 /// All std/ files to parse
-@[partial]
+#[partial]
 def std_files : List String :=
     ["std/test.mo"]
 
 /// All examples/ files to parse (safe - no box-drawing characters)
-@[partial]
+#[partial]
 def example_files_safe : List String :=
     ["examples/do_block.mo",
      "examples/factorial.mo",
@@ -43,7 +42,7 @@ def example_files_safe : List String :=
      "examples/tests.mo"]
 
 /// All lang/ files to parse (safe - no box-drawing characters)
-@[partial]
+#[partial]
 def lang_files_safe : List String :=
     ["lang/elaborate.mo",
      "lang/main.mo",
@@ -52,13 +51,13 @@ def lang_files_safe : List String :=
      "lang/scope.mo"]
 
 /// All init/ files with UTF-8 characters (previously blocked by byte indexing)
-@[partial]
+#[partial]
 def init_files_utf8 : List String :=
     ["init/string_profile.mo",
      "init/optics.mo"]
 
 /// All std/ files with UTF-8 characters
-@[partial]
+#[partial]
 def std_files_utf8 : List String :=
     ["std/test_map_full.mo",
      "std/list_tests3b.mo",
@@ -67,13 +66,13 @@ def std_files_utf8 : List String :=
      "std/list.mo"]
 
 /// All examples/ files with UTF-8 characters
-@[partial]
+#[partial]
 def example_files_utf8 : List String :=
     ["examples/indexed_monads.mo",
      "examples/optics.mo"]
 
 /// All lang/ files with UTF-8 characters (self hosting)
-@[partial]
+#[partial]
 def lang_files_utf8 : List String :=
     ["lang/parser.mo",
      "lang/types.mo",
@@ -84,7 +83,7 @@ def lang_files_utf8 : List String :=
      "lang/codegen/emit.mo"]
 
 /// All files with UTF-8 characters
-@[partial]
+#[partial]
 def all_files_utf8 : List String :=
     init_files_utf8 ++
     std_files_utf8 ++
@@ -92,7 +91,7 @@ def all_files_utf8 : List String :=
     lang_files_utf8
 
 /// Parse a single file and return success status
-@[partial]
+#[partial]
 def parse_file (path : String) : Bool :=
     match IO.read_file path {
         io content =>
@@ -104,7 +103,7 @@ def parse_file (path : String) : Bool :=
     }
 
 /// Parse multiple files
-@[partial]
+#[partial]
 def parse_all (files : List String) : Bool :=
     match files {
         List.empty => true,
@@ -114,149 +113,149 @@ def parse_all (files : List String) : Bool :=
 
 // ================ init/ file tests ================
 
-@[test]
+#[test]
 def test_parse_init_all_safe : Bool := parse_all init_files_safe
 
-@[test]
+#[test]
 def test_parse_init_id : Bool := parse_file "init/id.mo"
 
-@[test]
+#[test]
 def test_parse_init_io : Bool := parse_file "init/io.mo"
 
-@[test]
+#[test]
 def test_parse_init_math : Bool := parse_file "init/math.mo"
 
-@[test]
+#[test]
 def test_parse_init_number : Bool := parse_file "init/number.mo"
 
-@[test]
+#[test]
 def test_parse_init_string : Bool := parse_file "init/string.mo"
 
-@[test]
+#[test]
 def test_parse_init_tests : Bool := parse_file "init/tests.mo"
 
 // ================ std/ file tests ================
 
-@[test]
+#[test]
 def test_parse_std_all : Bool := parse_all std_files
 
-@[test]
+#[test]
 def test_parse_std_test : Bool := parse_file "std/test.mo"
 
 // ================ examples/ file tests ================
 
-@[test]
+#[test]
 def test_parse_examples_all_safe : Bool := parse_all example_files_safe
 
-@[test]
+#[test]
 def test_parse_examples_hello : Bool := parse_file "examples/hello.mo"
 
-@[test]
+#[test]
 def test_parse_examples_factorial : Bool := parse_file "examples/factorial.mo"
 
-@[test]
+#[test]
 def test_parse_examples_do_block : Bool := parse_file "examples/do_block.mo"
 
-@[test]
+#[test]
 def test_parse_examples_pattern_matching : Bool := parse_file "examples/pattern_matching.mo"
 
-@[test]
+#[test]
 def test_parse_examples_structs : Bool := parse_file "examples/structs.mo"
 
-@[test]
+#[test]
 def test_parse_examples_iteration : Bool := parse_file "examples/iteration.mo"
 
 // ================ lang/ file tests (self hosting) ================
 
-@[test]
+#[test]
 def test_parse_lang_all_safe : Bool := parse_all lang_files_safe
 
-@[test]
+#[test]
 def test_parse_lang_elaborate : Bool := parse_file "lang/elaborate.mo"
 
-@[test]
+#[test]
 def test_parse_lang_main : Bool := parse_file "lang/main.mo"
 
-@[test]
+#[test]
 def test_parse_lang_module : Bool := parse_file "lang/module.mo"
 
-@[test]
+#[test]
 def test_parse_lang_pretty : Bool := parse_file "lang/pretty.mo"
 
-@[test]
+#[test]
 def test_parse_lang_scope : Bool := parse_file "lang/scope.mo"
 
 // ================ UTF-8 file tests (previously blocked) ================
 
-@[test]
+#[test]
 def test_parse_init_all_utf8 : Bool := parse_all init_files_utf8
 
-@[test]
+#[test]
 def test_parse_init_string_profile : Bool := parse_file "init/string_profile.mo"
 
-@[test]
+#[test]
 def test_parse_init_optics : Bool := parse_file "init/optics.mo"
 
-@[test]
+#[test]
 def test_parse_std_all_utf8 : Bool := parse_all std_files_utf8
 
-@[test]
+#[test]
 def test_parse_std_test_map_full : Bool := parse_file "std/test_map_full.mo"
 
-@[test]
+#[test]
 def test_parse_std_list_tests3b : Bool := parse_file "std/list_tests3b.mo"
 
-@[test]
+#[test]
 def test_parse_std_map : Bool := parse_file "std/map.mo"
 
-@[test]
+#[test]
 def test_parse_std_base : Bool := parse_file "std/base.mo"
 
-@[test]
+#[test]
 def test_parse_std_list : Bool := parse_file "std/list.mo"
 
-@[test]
+#[test]
 def test_parse_examples_all_utf8 : Bool := parse_all example_files_utf8
 
-@[test]
+#[test]
 def test_parse_examples_indexed_monads : Bool := parse_file "examples/indexed_monads.mo"
 
-@[test]
+#[test]
 def test_parse_examples_optics : Bool := parse_file "examples/optics.mo"
 
-@[test]
+#[test]
 def test_parse_lang_all_utf8 : Bool := parse_all lang_files_utf8
 
-@[test]
+#[test]
 def test_parse_lang_parser : Bool := parse_file "lang/parser.mo"
 
-@[test]
+#[test]
 def test_parse_lang_types : Bool := parse_file "lang/types.mo"
 
-@[test]
+#[test]
 def test_parse_lang_eval : Bool := parse_file "lang/eval.mo"
 
-@[test]
+#[test]
 def test_parse_lang_eval_t2 : Bool := parse_file "lang/eval_t2.mo"
 
-@[test]
+#[test]
 def test_parse_lang_eval_term : Bool := parse_file "lang/eval_term.mo"
 
-@[test]
+#[test]
 def test_parse_lang_lower : Bool := parse_file "lang/lower.mo"
 
-@[test]
+#[test]
 def test_parse_codegen_emit : Bool := parse_file "lang/codegen/emit.mo"
 
 // ================ All files combined ================
 
-@[test]
+#[test]
 def test_parse_all_utf8_files : Bool := parse_all all_files_utf8
 
 // ================ Helper for counting declarations ================
 
 /// Count declarations in a file
-@[partial]
+#[partial]
 def count_decls_in_file (path : String) : I64 :=
     match IO.read_file path {
         io content =>
@@ -268,11 +267,11 @@ def count_decls_in_file (path : String) : I64 :=
     }
 
 /// Helper: get list length as I64
-@[partial]
+#[partial]
 def list_length (xs : List A) : I64 :=
     list_length_help xs 0
 
-@[partial]
+#[partial]
 def list_length_help (xs : List A) (acc : I64) : I64 :=
     match xs {
         List.empty => acc,
@@ -281,17 +280,17 @@ def list_length_help (xs : List A) (acc : I64) : I64 :=
 
 // ================ Declaration count tests ================
 
-@[test]
+#[test]
 def test_hello_has_some_decls : Bool :=
     let count := count_decls_in_file "examples/hello.mo" in
     I64.gt count 0
 
-@[test]
+#[test]
 def test_string_has_some_decls : Bool :=
     let count := count_decls_in_file "init/string.mo" in
     I64.gt count 0
 
-@[test]
+#[test]
 def test_scope_has_some_decls : Bool :=
     let count := count_decls_in_file "lang/scope.mo" in
     I64.gt count 0
@@ -299,42 +298,42 @@ def test_scope_has_some_decls : Bool :=
 // ================ use/open brace syntax round-trip tests ================
 // parse -> pretty-print -> re-parse should succeed for the new syntax.
 
-@[partial]
+#[partial]
 def parse_decl_succeeds (r : ParseResult Decl) : Bool :=
     match r {
         success _ _ => true,
         fail _ => false
     }
 
-@[test]
+#[test]
 def test_roundtrip_use_glob : Bool :=
     match use_parser "use io {*}" {
         success _ out => parse_decl_succeeds (use_parser (show_decl out)),
         fail _ => false
     }
 
-@[test]
+#[test]
 def test_roundtrip_use_nested : Bool :=
     match use_parser "use io {file {read}}" {
         success _ out => parse_decl_succeeds (use_parser (show_decl out)),
         fail _ => false
     }
 
-@[test]
+#[test]
 def test_roundtrip_use_nested_rename : Bool :=
     match use_parser "use io {file as f {read}}" {
         success _ out => parse_decl_succeeds (use_parser (show_decl out)),
         fail _ => false
     }
 
-@[test]
+#[test]
 def test_roundtrip_open_filtered : Bool :=
     match open_parser "open io {println}" {
         success _ out => parse_decl_succeeds (open_parser (show_decl out)),
         fail _ => false
     }
 
-@[test]
+#[test]
 def test_roundtrip_scoped_open : Bool :=
     match open_parser "open io {println} in def main : IO Unit := println \"hi\"" {
         success _ out => parse_decl_succeeds (open_parser (show_decl out)),

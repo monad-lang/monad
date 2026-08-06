@@ -1,17 +1,24 @@
-use lang.types
-open types
-use lang.scope
-open scope
-use lang.typecheck.infer
+use lang.types {
+  DebugName, Decl, Identifier, InductConstructor, Inductive, MatchCase,
+  ModulePath, Param, Scope, ScopeClassDef, ScopeData, Similar, Term, TypeError,
+  app, forall, hole, id, if_, inductive_d, lam, lit, match_, mc, mk, mp, named,
+  not_a_type, pi, type_, unknown_var, unnamed, var,
+}
+open types {}
+use lang.scope {build_scope_from_decls, scope_find_inductive}
+open scope {}
+use lang.typecheck.infer {
+  TypedTerm, empty_local_types, empty_locals, mk, sentinel, type_check,
+}
 
-open Term
-open DebugName
-open Identifier
-open ModulePath
-open Multiplicity
-open Literal
-open NumSuffix
-open TypeError
+open Term {app, forall, hole, lam, lit, pi, type_, var}
+open DebugName {named, unnamed}
+open Identifier {id}
+open ModulePath {mp}
+open Multiplicity {}
+open Literal {if_, match_}
+open NumSuffix {}
+open TypeError {not_a_type, unknown_var}
 
 // --- Test scope setup: empty decls with builtins (Type, Prop) ---
 
@@ -29,35 +36,35 @@ def run_check (t : Term) (e : Term) : Result TypeError TypedTerm :=
 
 // --- Sort / universe tests ---
 
-@[test]
+#[test]
 def test_sort_prop_is_type : Bool :=
     match run_check (Term.type_ 0) (Term.type_ 1) {
         ok _ => true,
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_sort_type_is_type1 : Bool :=
     match run_check (Term.type_ 1) (Term.type_ 2) {
         ok _ => true,
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_sort_cumulativity_prop_in_type : Bool :=
     match run_check (Term.type_ 0) (Term.type_ 2) {
         ok _ => true,
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_sort_cumulativity_type_in_type2 : Bool :=
     match run_check (Term.type_ 1) (Term.type_ 3) {
         ok _ => true,
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_sort_reject_too_small : Bool :=
     match run_check (Term.type_ 2) (Term.type_ 1) {
         ok _ => false,
@@ -67,7 +74,7 @@ def test_sort_reject_too_small : Bool :=
         },
     }
 
-@[test]
+#[test]
 def test_sort_infer_prop : Bool :=
     match run_check (Term.type_ 0) Term.hole {
         ok tt =>
@@ -75,7 +82,7 @@ def test_sort_infer_prop : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_sort_infer_type : Bool :=
     match run_check (Term.type_ 1) Term.hole {
         ok tt =>
@@ -85,7 +92,7 @@ def test_sort_infer_type : Bool :=
 
 // --- Variable tests ---
 
-@[test]
+#[test]
 def test_var_bound_simple : Bool :=
     let dbg : DebugName := DebugName.unnamed in
     let types : List Term := List.cons (Term.type_ 1) List.empty in
@@ -95,7 +102,7 @@ def test_var_bound_simple : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_var_bound_oob : Bool :=
     let dbg : DebugName := DebugName.unnamed in
     match type_check (Term.var 0 dbg) Term.hole test_scope empty_local_types empty_locals {
@@ -106,7 +113,7 @@ def test_var_bound_oob : Bool :=
         },
     }
 
-@[test]
+#[test]
 def test_var_free_unnamed : Bool :=
     let dbg : DebugName := DebugName.unnamed in
     match run_check (Term.var sentinel dbg) Term.hole {
@@ -115,7 +122,7 @@ def test_var_free_unnamed : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_var_free_unknown : Bool :=
     let id : Identifier := Identifier.id "no_such_var" in
     let dbg : DebugName := DebugName.named id in
@@ -129,7 +136,7 @@ def test_var_free_unknown : Bool :=
 
 // --- Pi tests ---
 
-@[test]
+#[test]
 def test_pi_simple : Bool :=
     let t : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
     match run_check t Term.hole {
@@ -138,7 +145,7 @@ def test_pi_simple : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_pi_dependent : Bool :=
     let dbg : DebugName := DebugName.named (Identifier.id "A") in
     let arg : Term := Term.type_ 1 in
@@ -151,7 +158,7 @@ def test_pi_dependent : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_pi_arg_is_not_type : Bool :=
     let id : Identifier := Identifier.id "x" in
     let dbg : DebugName := DebugName.named id in
@@ -164,7 +171,7 @@ def test_pi_arg_is_not_type : Bool :=
 
 // --- Lambda tests ---
 
-@[test]
+#[test]
 def test_lam_check_mode : Bool :=
     let dbg : DebugName := DebugName.named (Identifier.id "x") in
     let body : Term := Term.var 0 dbg in
@@ -177,7 +184,7 @@ def test_lam_check_mode : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_lam_infer_mode : Bool :=
     let dbg : DebugName := DebugName.named (Identifier.id "x") in
     let body : Term := Term.var 0 dbg in
@@ -193,7 +200,7 @@ def test_lam_infer_mode : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_lam_unnamed : Bool :=
     let dbg : DebugName := DebugName.unnamed in
     let body : Term := Term.var 0 dbg in
@@ -207,7 +214,7 @@ def test_lam_unnamed : Bool :=
 
 // --- Application tests ---
 
-@[test]
+#[test]
 def test_app_id : Bool :=
     let x_dbg : DebugName := DebugName.named (Identifier.id "x") in
     let arg_typ : Term := Term.type_ 1 in
@@ -219,7 +226,7 @@ def test_app_id : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_app_with_hole_return : Bool :=
     let x_dbg : DebugName := DebugName.named (Identifier.id "x") in
     let arg_typ : Term := Term.type_ 1 in
@@ -233,7 +240,7 @@ def test_app_with_hole_return : Bool :=
 
 // --- Forall tests ---
 
-@[test]
+#[test]
 def test_forall_infer : Bool :=
     let a_dbg : DebugName := DebugName.named (Identifier.id "A") in
     let kind : Term := Term.type_ 1 in
@@ -245,7 +252,7 @@ def test_forall_infer : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_forall_unnamed : Bool :=
     let dbg : DebugName := DebugName.unnamed in
     let kind : Term := Term.type_ 1 in
@@ -258,7 +265,7 @@ def test_forall_unnamed : Bool :=
 
 // --- If tests ---
 
-@[test]
+#[test]
 def test_if_simple : Bool :=
     let cond : Term := Term.var 0 (DebugName.unnamed) in
     let then_ : Term := Term.type_ 1 in
@@ -273,7 +280,7 @@ def test_if_simple : Bool :=
 
 // --- Match tests (basic structure) ---
 
-@[test]
+#[test]
 def test_match_empty_cases : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let t : Term := Term.lit (Literal.match_ scrutinee List.empty) in
@@ -282,7 +289,7 @@ def test_match_empty_cases : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_match_single_case : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body : Term := Term.type_ 1 in
@@ -298,7 +305,7 @@ def test_match_single_case : Bool :=
 
 // BUG: type_check_cases only processes the head case and drops the rest.
 // Two cases with both valid bodies: the match succeeds (but rest is ignored).
-@[test]
+#[test]
 def test_match_multi_case_bodies_ok : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body1 : Term := Term.type_ 1 in
@@ -315,7 +322,7 @@ def test_match_multi_case_bodies_ok : Bool :=
 // KNOWN BUG: type_check_cases only processes the head case and drops the rest.
 // The second case body has a type error, which should be caught.
 // All cases are now checked and their types unified.
-@[test]
+#[test]
 def test_match_multi_case_second_fails : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body1 : Term := Term.type_ 1 in
@@ -334,7 +341,7 @@ def test_match_multi_case_second_fails : Bool :=
 // Constructor pattern args are added to the local scope and local_types,
 // so the case body can reference them. Pattern arg "x" is now bound with
 // Term.hole type before type-checking the case body.
-@[test]
+#[test]
 def test_match_case_args_bound : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let arg_id : Identifier := Identifier.id "x" in
@@ -379,7 +386,7 @@ def maybe_scope : Scope :=
         parent := Option.none,
     }
 
-@[test]
+#[test]
 def test_match_inductive_in_scope : Bool :=
     match scope_find_inductive (ModulePath.mp (List.cons (Identifier.id "Maybe") List.empty)) maybe_scope {
         ok _ => true,
@@ -388,7 +395,7 @@ def test_match_inductive_in_scope : Bool :=
 
 // Match on a scrutinee with a valid constructor name. Constructor validation
 // looks up the constructor in the inductive and verifies it exists.
-@[test]
+#[test]
 def test_match_valid_constructor : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body : Term := Term.type_ 1 in
@@ -412,7 +419,7 @@ def test_match_valid_constructor : Bool :=
 // Second constructor "bogus" is not in Maybe — should be rejected.
 // validate_cases_against_inductive finds Maybe via "some" constructor,
 // then rejects "bogus" which is not in Maybe's constructors.
-@[test]
+#[test]
 def test_match_invalid_constructor : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body : Term := Term.type_ 1 in
@@ -435,7 +442,7 @@ def test_match_invalid_constructor : Bool :=
 
 // Wildcard case (name "_") with no args. Wildcard handling now works
 // correctly: args verification and branch type accumulation are implemented.
-@[test]
+#[test]
 def test_match_wildcard : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body : Term := Term.type_ 1 in
@@ -453,7 +460,7 @@ def test_match_wildcard : Bool :=
 // Wildcard pattern with arguments should be rejected. The wildcard "_"
 // must have zero args. type_check_match_case verifies this and returns
 // an error if args is non-empty.
-@[test]
+#[test]
 def test_match_wildcard_rejects_args : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body : Term := Term.type_ 1 in
@@ -473,7 +480,7 @@ def test_match_wildcard_rejects_args : Bool :=
 // Match on a scrutinee that is a bound variable with a known type.
 // The scrutinee's type is now available for constructor validation and
 // branch type checking.
-@[test]
+#[test]
 def test_match_bound_scrutinee : Bool :=
     let scrutinee : Term := Term.var 0 (DebugName.unnamed) in
     let body : Term := Term.type_ 1 in
@@ -495,7 +502,7 @@ def test_match_bound_scrutinee : Bool :=
 // Here case1 has type type_1 (infers to type_2) and case2 has a different
 // type. All case bodies are checked and their types are unified, so the
 // mismatch is detected.
-@[test]
+#[test]
 def test_match_branch_type_conflict : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body1 : Term := Term.type_ 1 in
@@ -511,7 +518,7 @@ def test_match_branch_type_conflict : Bool :=
 
 // --- Error tests: type mismatch in if ---
 
-@[test]
+#[test]
 def test_if_branch_mismatch : Bool :=
     let bool_typ : Term := Term.type_ 1 in
     let cond : Term := Term.var 0 (DebugName.unnamed) in
@@ -526,7 +533,7 @@ def test_if_branch_mismatch : Bool :=
 
 // --- Error tests: app on non-function ---
 
-@[test]
+#[test]
 def test_app_non_function : Bool :=
     let t : Term := Term.app (Term.type_ 1) (Term.type_ 1) in
     match run_check t Term.hole {
@@ -538,7 +545,7 @@ def test_app_non_function : Bool :=
 
 // --- Complex test: app-lam-pi chain ---
 
-@[test]
+#[test]
 def test_lam_app_chain : Bool :=
     let x_dbg : DebugName := DebugName.named (Identifier.id "x") in
     let y_dbg : DebugName := DebugName.named (Identifier.id "y") in
@@ -555,7 +562,7 @@ def test_lam_app_chain : Bool :=
 
 // --- Test: pi-of-pi (higher-kinded type) ---
 
-@[test]
+#[test]
 def test_pi_of_pi : Bool :=
     let dbg : DebugName := DebugName.named (Identifier.id "F") in
     let arg : Term := Term.pi (Term.type_ 1) (Term.type_ 1) in
@@ -588,7 +595,7 @@ def classdef_scope : Scope :=
     } in
     { module_id := empty_path, scope := sd_with_cd, parent := Option.none }
 
-@[test]
+#[test]
 def test_class_method_resolve : Bool :=
     let t : Term := Term.var sentinel (DebugName.named (Identifier.id "beq")) in
     match type_check t Term.hole classdef_scope empty_local_types empty_locals {
@@ -598,7 +605,7 @@ def test_class_method_resolve : Bool :=
 
 // --- Test: unknown class method still fails ---
 
-@[test]
+#[test]
 def test_class_method_unknown : Bool :=
     let t : Term := Term.var sentinel (DebugName.named (Identifier.id "nope")) in
     match type_check t Term.hole classdef_scope empty_local_types empty_locals {
@@ -608,7 +615,7 @@ def test_class_method_unknown : Bool :=
 
 // --- Test: class method type is used as term type ---
 
-@[test]
+#[test]
 def test_class_method_type : Bool :=
     let t : Term := Term.var sentinel (DebugName.named (Identifier.id "beq")) in
     match type_check t Term.hole classdef_scope empty_local_types empty_locals {

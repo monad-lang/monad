@@ -1,4 +1,12 @@
-use lang.types
+use lang.types {
+  Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
+  Instance, InstanceKey, LoadedModules, LocalScope, LocalVar, Module, ModulePath,
+  NameRef, Operator, Param, Scope, ScopeClassDef, ScopeData, ScopeDef, ScopeError,
+  ScopeInstance, Similar, Term, class_d, class_not_found, def_d, hole, id,
+  inductive_d, inductive_not_found, infix_d, instance_d, instance_not_found, mk,
+  mp, name, name_not_found, nid, nmp, nop, open_d, scoped_open_d, struct_d, type_,
+  use_d,
+}
 
 // --- Helper: empty ScopeData ---
 
@@ -235,7 +243,7 @@ def inductive_has_constructor (ind : Inductive) (con_name : ModulePath) : Bool :
             }
     }
 
-@[terminating]
+#[terminating]
 def inductive_has_constructor_rest (cns : List InductConstructor) (con_name : ModulePath) : Bool :=
     match cns {
         List.empty => false,
@@ -255,7 +263,7 @@ def find_constructor_in_inductive (ind : Inductive) (con_name : ModulePath) : Op
         mk _ _ _ constructors _ => find_constructor_in_list constructors con_name
     }
 
-@[terminating]
+#[terminating]
 def find_constructor_in_list (cns : List InductConstructor) (con_name : ModulePath) : Option InductConstructor :=
     match cns {
         List.empty => Option.none,
@@ -316,13 +324,13 @@ def scope_push_local (lv : LocalVar) (ls : LocalScope) : LocalScope :=
 
 // --- scope_find_local ---
 
-@[terminating]
+#[terminating]
 def scope_find_local (name : Identifier) (ls : LocalScope) : Option LocalVar :=
     match ls {
         mk vars parent => find_local_in_list vars name parent
     }
 
-@[terminating]
+#[terminating]
 def find_local_in_list (vars : List LocalVar) (name : Identifier) (parent : Option LocalScope) : Option LocalVar :=
     match vars {
         List.empty =>

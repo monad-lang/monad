@@ -1,75 +1,79 @@
-use io
-open IO
-use process
-use lang.types
-use lang.codegen.ir
-use lang.codegen.emit
-use lang.module
-use lang.parser
-use lang.pretty
-use lang.parser.core
-use lang.parser.combinators
-use lang.typecheck.infer
-use lang.scope
-use std.list
+use io {IO, println, read_file, write_file}
+open IO {println, read_file, write_file}
+use process {exec_cmd}
+use lang.types {
+  Decl, Def, LoadedModules, LocalScope, ModulePath, Scope, Term, TypeConstraint,
+  app, i64, id, if_, lam, lit, mk, mp, name, named, nid, num, type_, var,
+}
+use lang.codegen.ir {add, emit_module, mk}
+use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, mk, ok}
+use lang.module {
+  LoadedModules, extract_directory, load_file_modules,
+  load_module_decls_with_dependencies, mk, string_find_last_slash,
+  try_parse_decls,
+}
+use lang.parser.core {mk}
+use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
+use lang.scope {add_builtins, scope_data_empty}
+use std.list {Show, length}
 
-open LLVMType
-open LLVMValue
-open Term
-open Literal
-open Identifier
-open DebugName
-open ParseResult
-open NumSuffix
-open Param
-open Def
-open ModulePath
-open TypeError
+open LLVMType {}
+open LLVMValue {add}
+open Term {app, lam, lit, type_, var}
+open Literal {if_, num}
+open Identifier {id}
+open DebugName {named}
+open ParseResult {}
+open NumSuffix {i64}
+open Param {mk}
+open Def {mk, name}
+open ModulePath {mp}
+open TypeError {}
 
 
-@[partial]
+#[partial]
 def empty_str_list : List String := []
 
-@[partial]
+#[partial]
 def mk_var (name : String) : Term :=
     Term.var 0 (DebugName.named (Identifier.id name))
 
-@[partial]
+#[partial]
 def mk_native_app (op_name : String) (a : I64) (b : I64) : Term :=
     let nid := mk_var op_name in
     Term.app (Term.app nid (Term.lit (Literal.num a NumSuffix.i64)))
         (Term.lit (Literal.num b NumSuffix.i64))
 
-@[partial]
+#[partial]
 def mk_native_app_t (op_name : String) (a : Term) (b : Term) : Term :=
     let nid := mk_var op_name in
     Term.app (Term.app nid a) b
 
-@[partial]
+#[partial]
 def mk_call (fn_name : String) (arg : Term) : Term :=
     Term.app (mk_var fn_name) arg
 
-@[partial]
+#[partial]
 def mk_i64 (n : I64) : Term :=
     Term.lit (Literal.num n NumSuffix.i64)
 
-@[partial]
+#[partial]
 def mk_lam (name : String) (body : Term) : Term :=
     Term.lam (DebugName.named (Identifier.id name)) (Term.type_ 1) body
 
 /// Empty local scope for type checking
-@[partial]
+#[partial]
 def empty_locals : LocalScope := {
     vars := List.empty,
     parent := Option.none,
 }
 
 /// Empty list of local types for type checking
-@[partial]
+#[partial]
 def empty_local_types : List Term := List.empty
 
 /// Create a scope with builtins for type checking
-@[partial]
+#[partial]
 def make_scope_with_builtins : Scope :=
     let empty_path := ModulePath.mp List.empty in
     let sd := lang.scope.scope_data_empty in
@@ -81,7 +85,7 @@ def make_scope_with_builtins : Scope :=
     }
 
 /// Type-check a list of Defs. Returns true if all type-check successfully.
-@[partial]
+#[partial]
 def typecheck_defs (defs : List Def) : Bool :=
     match defs {
         List.empty => true,
@@ -93,7 +97,7 @@ def typecheck_defs (defs : List Def) : Bool :=
     }
 
 /// Type-check a single Def by checking its term.
-@[partial]
+#[partial]
 def typecheck_def (def_ : Def) : Bool :=
     match def_ {
         Def.mk name typ term_ constraints attrs =>
@@ -105,7 +109,7 @@ def typecheck_def (def_ : Def) : Bool :=
     }
 
 /// Type-check a list of Defs and print results
-@[partial]
+#[partial]
 def typecheck_and_print (defs : List Def) : IO I64 :=
     if typecheck_defs defs then do {
         println "Type check: PASS";
@@ -115,17 +119,17 @@ def typecheck_and_print (defs : List Def) : IO I64 :=
         return 1
     }
 
-@[partial]
+#[partial]
 def mk_def (name : String) (body : Term) : Def :=
     Def.mk (ModulePath.mp [Identifier.id name]) (Term.type_ 1) body
         ([] : List TypeConstraint) ([] : List String)
 
-@[partial]
+#[partial]
 def mk_if (cond : Term) (then_ : Term) (else_ : Term) : Term :=
     Term.lit (Literal.if_ cond then_ else_)
 
 /// Parse a source file and compile + run it via LLVM.
-@[partial]
+#[partial]
 def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name : String) (verbose: Bool) : IO I64 {
     let mod_ := compile_db_module decls;
     let ir_text := emit_module mod_;
@@ -160,7 +164,7 @@ def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name 
 
 /// Load a file and all its transitive dependencies, returning a single list of declarations.
 /// This function uses the module loading infrastructure to resolve all `use` dependencies.
-@[partial]
+#[partial]
 def load_file_decls_with_dependencies (file_path : String) : IO (Option (List Decl)) :=
     // Extract the directory from the file path to use as base_dir for resolving relative imports
     let base_dir : String := lang.module.extract_directory file_path in
@@ -189,7 +193,7 @@ struct CompileOptions {
 }
 
 /// Parse a source file and compile + run it via LLVM.
-@[partial]
+#[partial]
 def compile_file (file_path : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
     println <| "compiling: " ++ file_path ++ " to " ++ output_dir ++ "/" ++ output_name;
     // First try to load with module boundaries preserved
@@ -297,7 +301,7 @@ def main (args : List String) : IO I64 {
     }
 }
 
-@[partial]
+#[partial]
 def print_help : IO I64 {
     println "Usage: monad compile <path> [name]  Parse and compile a .mo source file";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";

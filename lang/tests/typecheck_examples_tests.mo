@@ -1,18 +1,20 @@
-use io
-use lang.types
-use lang.module
-use lang.parser
-use lang.parser.core
-use lang.scope
-use lang.typecheck.infer
+use io {io, read_file}
+use lang.types {
+  Decl, Def, InductConstructor, Inductive, LocalScope, ModulePath, Scope,
+  ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
+}
+use lang.module {mk, parse_all_decls}
+use lang.parser.core {fail, mk, success}
+use lang.scope {build_scope_from_decls}
+use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
-open IO
-open types
-open module
-open parser
-open parser.core
-open scope
-open infer
+open IO {io, read_file}
+open types {}
+open module {}
+open parser {}
+open parser.core {}
+open scope {}
+open infer {}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -104,7 +106,7 @@ def typecheck_file (file_path : String) (mod_name : String) : Bool :=
 
 // --- examples/ non-test files ---
 
-@[test]
+#[test]
 def test_typecheck_examples_do_block : Bool := typecheck_file "examples/do_block.mo" "do_block"
 
 // These examples depend on external modules (io, init, math, etc.) and require module loading
@@ -114,7 +116,7 @@ def test_typecheck_examples_do_block : Bool := typecheck_file "examples/do_block
 // @[test]
 // def test_typecheck_examples_hello : Bool := typecheck_file "examples/hello.mo" "hello"
 
-@[test]
+#[test]
 def test_typecheck_examples_indexed_monads : Bool := typecheck_file "examples/indexed_monads.mo" "indexed_monads"
 
 // @[test]
@@ -123,13 +125,13 @@ def test_typecheck_examples_indexed_monads : Bool := typecheck_file "examples/in
 // @[test]
 // def test_typecheck_examples_iteration_advanced : Bool := typecheck_file "examples/iteration_advanced.mo" "iteration_advanced"
 
-@[test]
+#[test]
 def test_typecheck_examples_optics : Bool := typecheck_file "examples/optics.mo" "optics"
 
 // @[test]
 // def test_typecheck_examples_pattern_matching : Bool := typecheck_file "examples/pattern_matching.mo" "pattern_matching"
 
-@[test]
+#[test]
 def test_typecheck_examples_structs : Bool := typecheck_file "examples/structs.mo" "structs"
 
 // TODO this can not be tested without full mote support

@@ -114,6 +114,15 @@ fn visible_full_paths(module: &Module, loaded: &LoadedModules) -> Vec<ModulePath
       .iter()
       .map(|ctx| ctx.value().module_path.clone()),
   );
+  // `prelude`/`init` (and, transitively through `init`'s `pub use`, `io`/
+  // `math`/`string`/`number`/`id`) are ambiently visible to every file
+  // regardless of its own `use` declarations (`GlobalScopeData::
+  // from_module`'s "default implicit modules") — an `open SomeType {...}`
+  // whose type lives in one of those (e.g. `open IO {println}`, `IO`
+  // reached via `init`'s re-export of `io`, with no `use io` anywhere in
+  // the file) needs them seeded here too, not just this file's own uses.
+  stack.push(ModulePath::top("'prelude"));
+  stack.push(ModulePath::top("init"));
   let mut visited: Set<ModulePath> = Set::default();
   while let Some(path) = stack.pop() {
     if !visited.insert(path.clone()) {
@@ -192,12 +201,51 @@ fn select_referenced(
   names
 }
 
-fn names_to_brace_list(names: &[Identifier]) -> String {
-  names
-    .iter()
-    .map(|n| n.as_str())
+/// Keep generated `use`/`open` lines from growing unreadably wide —
+/// modules like `lang.types` export dozens of names, and a single
+/// `use lang.types {Con, DebugName, Identifier, ...}` line can run well
+/// past 200 characters. Past this width the brace list wraps across
+/// multiple lines instead (still valid syntax: whitespace/newlines are
+/// unrestricted inside `{...}`).
+const MAX_LINE_WIDTH: usize = 80;
+
+/// Render `keyword module_path {names...}`, wrapping the name list across
+/// multiple 2-space-indented lines once the compact single-line form
+/// would exceed `MAX_LINE_WIDTH`.
+fn format_import_decl(keyword: &str, module_path: &ModulePath, names: &[Identifier]) -> String {
+  let compact = format!(
+    "{keyword} {module_path} {{{}}}",
+    names
+      .iter()
+      .map(|n| n.as_str())
+      .collect::<Vec<_>>()
+      .join(", ")
+  );
+  if names.len() <= 1 || compact.len() <= MAX_LINE_WIDTH {
+    return compact;
+  }
+
+  let mut lines: Vec<String> = Vec::new();
+  let mut current = String::new();
+  for name in names {
+    let piece = name.as_str();
+    let sep = if current.is_empty() { "" } else { ", " };
+    if !current.is_empty() && current.len() + sep.len() + piece.len() + 1 > MAX_LINE_WIDTH {
+      lines.push(current);
+      current = String::new();
+    }
+    current.push_str(if current.is_empty() { "" } else { ", " });
+    current.push_str(piece);
+  }
+  if !current.is_empty() {
+    lines.push(current);
+  }
+  let body: String = lines
+    .into_iter()
+    .map(|l| format!("  {l},"))
     .collect::<Vec<_>>()
-    .join(", ")
+    .join("\n");
+  format!("{keyword} {module_path} {{\n{body}\n}}")
 }
 
 /// Delete the ENTIRE line `range` starts on — from column 1 through the
@@ -283,7 +331,7 @@ pub fn compute_organize_import_edits(module: &Module, loaded: &LoadedModules) ->
     } else {
       edits.push(TextEdit {
         range: u.source_location.clone(),
-        replacement: format!("use {} {{{}}}", u.module_path, names_to_brace_list(&names)),
+        replacement: format_import_decl("use", &u.module_path, &names),
       });
     }
   }
@@ -296,7 +344,7 @@ pub fn compute_organize_import_edits(module: &Module, loaded: &LoadedModules) ->
     let names = minimal_open_names(&o.module_path, module, loaded, &referenced);
     edits.push(TextEdit {
       range: o.source_location.clone(),
-      replacement: format!("open {} {{{}}}", o.module_path, names_to_brace_list(&names)),
+      replacement: format_import_decl("open", &o.module_path, &names),
     });
   }
 

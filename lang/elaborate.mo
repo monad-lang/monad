@@ -1,5 +1,11 @@
-use lang.types
-open types
+use lang.types {
+  Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Instance,
+  MatchCase, ModulePath, Param, Struct, Term, TypeConstraint, app, class_d, con,
+  def_d, forall, hole, id, id_member, if_, inductive_d, infix_d, instance_d, lam,
+  lit, match_, mc, mk, mp, name, named, ntv, num, open_d, pi, scoped_open_d, str,
+  struct_d, type_, union_ids, unnamed, use_d, var,
+}
+open types {}
 
 /// Free variable sentinel index from parser (sentinel = -1).
 /// de Bruijn index >= 0 means bound; -1 means free/unknown.

@@ -1,18 +1,22 @@
-use io
-use lang.types
-use lang.module
-use lang.parser
-use lang.parser.core
-use lang.scope
-use lang.typecheck.infer
+use io {IO, read_file}
+use lang.types {
+  Decl, Def, Identifier, InductConstructor, Inductive, LocalScope, ModulePath,
+  Scope, ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
+}
+use lang.module {
+  file_path_to_module_path, load_module_with_dependencies, mk, parse_all_decls,
+  string_find_last_slash, typecheck_module_with_scope,
+}
+use lang.parser.core {fail, mk, success}
+use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
-open IO
-open types
-open module
-open parser
-open parser.core
-open scope
-open infer
+open IO {read_file}
+open types {}
+open module {}
+open parser {}
+open parser.core {}
+open scope {}
+open infer {}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -40,7 +44,7 @@ def file_path_to_module_path (file_path : String) : ModulePath :=
 
 /// Helper to recursively build ModulePath from path string
 /// Processes from right to left, building up the identifier list
-@[terminating]
+#[terminating]
 def file_path_to_module_path_helper (path_str : String) (acc : List Identifier) : ModulePath := 
     let last_slash := string_find_last_slash path_str in
     if I64.lt last_slash 0
@@ -132,6 +136,6 @@ def typecheck_file (file_path : String) : IO Bool := do {
 // --- lang/ non-test files ---
 
 
-@[test]
+#[test]
 def test_typecheck_lang_main : IO Bool := typecheck_file "lang/main.mo"
 

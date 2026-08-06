@@ -20,17 +20,27 @@
 // (comment-free) line, like the one separating this NOTE from the header above, is
 // fine. Confirmed via a minimal repro; worth fixing upstream in the parser.
 
-use std.map
-use std.list
-use init.string
-use init.number
-use lang.parser.core
-use lang.parser.char_preds
-use lang.parser.combinators
-use lang.parser.number
+// TODO: `BTreeMap`/`beq`/`empty`/`map`/`to_list` are all used throughout
+// this file but are deliberately NOT listed here — see std/map_tests.mo's
+// matching TODO for why (a pre-existing latent instance/dictionary-
+// resolution bug: naming any of `std.map`'s `Map`-class-instance-related
+// exports in a non-empty `use` filter breaks `Map.insert`/etc. at runtime,
+// even though type-checking succeeds).
+use std.map {}
+use std.list {Show, filter}
+use init.string {beq, concat, drop, is_empty, slice, starts_with, to_list}
+use init.number {beq, sub, to_string}
+use lang.parser.core {
+  ParseError, ParseResult, custom, fail, is_empty, success, tag,
+}
+use lang.parser.char_preds {is_ident_char}
+use lang.parser.combinators {
+  alt, alt_fold, delimited_by, many0, map_parse, separated_by, tag, take_while,
+}
+use lang.parser.number {number}
 
-open ParseResult
-open Toml.Value
+open ParseResult {fail, success}
+open Toml.Value {array, boolean, integer, string, table}
 
 // ─── Types ───
 
@@ -59,7 +69,7 @@ def Toml.beq (a b : Toml.Value) : Bool :=
     table ta => match b { table tb => Toml.table_beq ta tb, _ => false },
   }
 
-@[partial]
+#[partial]
 def Toml.array_beq (a b : List Toml.Value) : Bool :=
   match a {
     List.empty => match b {
@@ -79,7 +89,7 @@ def Toml.pair_beq (a b : Pair String Toml.Value) : Bool :=
     }
   }
 
-@[partial]
+#[partial]
 def Toml.pairs_beq (a b : List (Pair String Toml.Value)) : Bool :=
   match a {
     List.empty => match b {
@@ -92,7 +102,7 @@ def Toml.pairs_beq (a b : List (Pair String Toml.Value)) : Bool :=
     }
   }
 
-@[partial]
+#[partial]
 def Toml.table_beq (a b : BTreeMap String Toml.Value) : Bool :=
   Toml.pairs_beq (BTreeMap.to_list a) (BTreeMap.to_list b)
 
@@ -130,7 +140,7 @@ type Toml.Line {
   kv (key : String) (value : Toml.Value),
 }
 
-open Toml.Line
+open Toml.Line {header, kv}
 
 // ─── Parser: helpers ───
 
@@ -215,7 +225,7 @@ def Toml.parse_escape (input : String) : ParseResult String :=
 def Toml.parse_string_content (input : String) : ParseResult (List String) :=
   many0 (alt Toml.parse_escape Toml.parse_string_char) input
 
-@[partial]
+#[partial]
 def toml_concat_list_body (hd : String) (tl : List String) : String :=
   String.concat hd (Toml.concat_list tl)
 
@@ -231,14 +241,14 @@ def toml_parse_string_close (r : ParseResult String) (s : String) : ParseResult 
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def toml_parse_string_content_result (r : ParseResult (List String)) : ParseResult Toml.Value :=
   match r {
     success rem chars => toml_parse_string_close (tag "\"" rem) (Toml.concat_list chars),
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def toml_parse_string_open (r : ParseResult String) : ParseResult Toml.Value :=
   match r {
     success rem _ => toml_parse_string_content_result (Toml.parse_string_content rem),
@@ -257,7 +267,7 @@ def toml_parse_integer_negative (r : ParseResult I64) : ParseResult I64 :=
     fail _ => fail (ParseError.custom "expected digits after -")
   }
 
-@[partial]
+#[partial]
 def toml_parse_integer_result (r : ParseResult String) (orig : String) : ParseResult I64 :=
   match r {
     success rem _ => toml_parse_integer_negative (number rem),
@@ -310,17 +320,17 @@ def toml_parse_array_result (r : ParseResult (List Toml.Value)) : ParseResult To
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def toml_parse_array_body (input : String) : ParseResult (List Toml.Value) :=
   delimited_by toml_ws (separated_by toml_comma Toml.parse_scalar) toml_ws input
 
 /// Parse a single-line array of scalars, e.g. `["a", "b"]` or `[1, 2, 3]`.
-@[partial]
+#[partial]
 def Toml.parse_array (input : String) : ParseResult Toml.Value :=
   toml_parse_array_result (delimited_by (tag "[") toml_parse_array_body (tag "]") input)
 
 /// Parse any TOML value that can appear on the right-hand side of `key = value`.
-@[partial]
+#[partial]
 def Toml.parse_value (input : String) : ParseResult Toml.Value :=
   alt_fold [Toml.parse_bool, Toml.parse_string, Toml.parse_array, Toml.parse_integer_value] input
 
@@ -426,7 +436,7 @@ def Toml.filter_some (opts : List (Option Toml.Line)) : List Toml.Line :=
     List.cons o rest => toml_filter_some_one o rest
   }
 
-@[partial]
+#[partial]
 def toml_filter_some_one (o : Option Toml.Line) (rest : List (Option Toml.Line)) : List Toml.Line :=
   match o {
     some l => List.cons l (Toml.filter_some rest),
@@ -464,7 +474,7 @@ def Toml.insert_at_path (path : List String) (value : Toml.Value) (root : BTreeM
     List.cons key rest => toml_insert_at_path_step key rest value root
   }
 
-@[partial]
+#[partial]
 def toml_insert_at_path_step (key : String) (rest : List String) (value : Toml.Value) (root : BTreeMap String Toml.Value) : BTreeMap String Toml.Value :=
   match rest {
     List.empty => Map.insert key value root,
@@ -484,7 +494,7 @@ def Toml.fold_line (acc : Pair (List String) (BTreeMap String Toml.Value)) (line
     Pair.pair path root => Toml.fold_line_body path root line
   }
 
-@[partial]
+#[partial]
 def Toml.fold_lines (acc : Pair (List String) (BTreeMap String Toml.Value)) (lines : List Toml.Line) : Pair (List String) (BTreeMap String Toml.Value) :=
   match lines {
     List.empty => acc,
@@ -500,7 +510,7 @@ def Toml.assemble (lines : List Toml.Line) : BTreeMap String Toml.Value :=
 // ─── Parser: top-level ───
 
 /// Main parse function: parse a full TOML document into its root table.
-@[partial]
+#[partial]
 def Toml.parse (s : String) : Result Toml.ParseError (BTreeMap String Toml.Value) :=
   match Toml.document s {
     success rem lines =>
@@ -512,7 +522,7 @@ def Toml.parse (s : String) : Result Toml.ParseError (BTreeMap String Toml.Value
 
 // ─── Serializer ───
 
-@[partial]
+#[partial]
 def Toml.escape_char (c : String) : String :=
   if String.beq "\"" c then "\\\""
   else if String.beq "\\" c then "\\\\"
@@ -521,7 +531,7 @@ def Toml.escape_char (c : String) : String :=
   else if String.beq "\r" c then "\\r"
   else c
 
-@[partial]
+#[partial]
 def Toml.escape_string (input : String) : String :=
   if is_empty input
   then ""
@@ -535,7 +545,7 @@ def Toml.string_to_string (s : String) : String :=
 def Toml.bool_to_string (b : Bool) : String :=
   if b then "true" else "false"
 
-@[partial]
+#[partial]
 def Toml.intercalate_rest (sep : String) (acc : String) (xs : List String) : String :=
   match xs {
     List.empty => acc,
@@ -551,7 +561,7 @@ def Toml.intercalate (sep : String) (xs : List String) : String :=
 /// Serialize a scalar or array value. NOTE: not meant to be called on a `table`
 /// (tables are only ever emitted as `[header]` sections by Toml.render_table) —
 /// returns "" defensively if it is.
-@[partial]
+#[partial]
 def Toml.value_to_string (v : Toml.Value) : String :=
   match v {
     string s => Toml.string_to_string s,
@@ -561,7 +571,7 @@ def Toml.value_to_string (v : Toml.Value) : String :=
     table _ => ""
   }
 
-@[partial]
+#[partial]
 def Toml.array_to_string (a : List Toml.Value) : String :=
   String.concat "[" (String.concat (Toml.intercalate "," (List.map Toml.value_to_string a)) "]")
 
@@ -596,7 +606,7 @@ def Toml.render_body (header_str : String) (scalars : List (Pair String Toml.Val
 /// Serialize one table (and everything nested under it) at `path` — root-level
 /// scalar/array keys first, then a depth-first walk of nested tables emitting
 /// `[dotted.path]` headers followed by their own scalar keys.
-@[partial]
+#[partial]
 def Toml.render_table (path : List String) (t : BTreeMap String Toml.Value) : String :=
   let pairs := BTreeMap.to_list t in
   let scalars := Toml.scalar_entries pairs in
@@ -604,20 +614,20 @@ def Toml.render_table (path : List String) (t : BTreeMap String Toml.Value) : St
   let body := Toml.render_body (Toml.render_header path) scalars in
   String.concat body (Toml.render_tables path tables)
 
-@[partial]
+#[partial]
 def Toml.render_tables (path : List String) (tables : List (Pair String Toml.Value)) : String :=
   match tables {
     List.empty => "",
     List.cons p rest => String.concat (Toml.render_one_table path p) (Toml.render_tables path rest)
   }
 
-@[partial]
+#[partial]
 def Toml.render_one_table (path : List String) (p : Pair String Toml.Value) : String :=
   match p {
     Pair.pair k v => Toml.render_one_table_value (List.append path [k]) v
   }
 
-@[partial]
+#[partial]
 def Toml.render_one_table_value (path : List String) (v : Toml.Value) : String :=
   match v {
     table t => Toml.render_table path t,
@@ -625,7 +635,7 @@ def Toml.render_one_table_value (path : List String) (v : Toml.Value) : String :
   }
 
 /// Serialize a root table to a full TOML document.
-@[partial]
+#[partial]
 def Toml.to_string (root : BTreeMap String Toml.Value) : String :=
   Toml.render_table List.empty root
 
@@ -689,35 +699,35 @@ def Toml.table_delete (key : String) (t : BTreeMap String Toml.Value) : BTreeMap
 
 // ─── Tests: parser — scalars ───
 
-@[test]
+#[test]
 def test_parse_string_kv : Bool :=
   match Toml.parse "name = \"example\"" {
     ok t => toml_table_lookup_eq "name" t (string "example"),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_integer_kv : Bool :=
   match Toml.parse "n = 42" {
     ok t => toml_table_lookup_eq "n" t (integer 42),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_negative_integer_kv : Bool :=
   match Toml.parse "n = -42" {
     ok t => toml_table_lookup_eq "n" t (integer (Toml.neg_i64 42)),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_bool_kv : Bool :=
   match Toml.parse "a = true\nb = false" {
     ok t => toml_table_lookup_eq "a" t (boolean true) && toml_table_lookup_eq "b" t (boolean false),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_string_with_escapes : Bool :=
   match Toml.parse "s = \"a\\nb\\tc\\\"d\"" {
     ok t => toml_table_lookup_eq "s" t (string "a\nb\tc\"d"),
@@ -738,21 +748,21 @@ def toml_table_lookup_missing (key : String) (t : BTreeMap String Toml.Value) : 
 
 // ─── Tests: parser — arrays ───
 
-@[test]
+#[test]
 def test_parse_int_array : Bool :=
   match Toml.parse "xs = [1, 2, 3]" {
     ok t => toml_table_lookup_eq "xs" t (array [integer 1, integer 2, integer 3]),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_string_array : Bool :=
   match Toml.parse "members = [\"core\", \"cli\", \"wasm\"]" {
     ok t => toml_table_lookup_eq "members" t (array [string "core", string "cli", string "wasm"]),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_empty_array : Bool :=
   match Toml.parse "xs = []" {
     ok t => toml_table_lookup_eq "xs" t (array List.empty),
@@ -761,7 +771,7 @@ def test_parse_empty_array : Bool :=
 
 // ─── Tests: parser — headers ───
 
-@[test]
+#[test]
 def test_parse_single_header : Bool :=
   match Toml.parse "[mote]\nname = \"example\"" {
     ok t =>
@@ -772,7 +782,7 @@ def test_parse_single_header : Bool :=
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_dotted_header : Bool :=
   match Toml.parse "[workspace.package]\nversion = \"0.1.2\"" {
     ok t =>
@@ -793,7 +803,7 @@ def toml_check_nested_package (v : Toml.Value) : Bool :=
     _ => false
   }
 
-@[test]
+#[test]
 def test_parse_empty_table_header : Bool :=
   match Toml.parse "[dependencies]" {
     ok t =>
@@ -806,21 +816,21 @@ def test_parse_empty_table_header : Bool :=
 
 // ─── Tests: parser — explicit unsupported grammar (parse errors) ───
 
-@[test]
+#[test]
 def test_parse_float_is_error : Bool :=
   match Toml.parse "x = 1.5" {
     ok _ => false,
     err _ => true
   }
 
-@[test]
+#[test]
 def test_parse_array_of_tables_is_error : Bool :=
   match Toml.parse "[[products]]\nname = \"a\"" {
     ok _ => false,
     err _ => true
   }
 
-@[test]
+#[test]
 def test_parse_dotted_key_outside_header_is_error : Bool :=
   match Toml.parse "a.b = 1" {
     ok _ => false,
@@ -833,7 +843,7 @@ def test_parse_dotted_key_outside_header_is_error : Bool :=
 def mote_toml_fixture : String :=
   "[mote]\nname = \"example\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n"
 
-@[test]
+#[test]
 def test_parse_mote_fixture : Bool :=
   match Toml.parse mote_toml_fixture {
     ok t =>
@@ -862,7 +872,7 @@ def toml_check_mote_table (v : Toml.Value) : Bool :=
 def cargo_workspace_toml_fixture : String :=
   "[workspace]\nmembers = [\"core\", \"cli\", \"wasm\"]\n\n[workspace.package]\nversion = \"0.1.2\"\nedition = \"2024\"\nlicense = \"ASL2\"\n"
 
-@[test]
+#[test]
 def test_parse_cargo_workspace_fixture : Bool :=
   match Toml.parse cargo_workspace_toml_fixture {
     ok t =>
@@ -895,7 +905,7 @@ def toml_check_workspace_package (found : Option Toml.Value) : Bool :=
 
 // ─── Tests: serializer ───
 
-@[test]
+#[test]
 def test_serialize_scalars : Bool :=
   Toml.value_to_string (string "hi") == "\"hi\"" &&
   Toml.value_to_string (integer 42) == "42" &&
@@ -903,28 +913,28 @@ def test_serialize_scalars : Bool :=
   Toml.value_to_string (boolean true) == "true" &&
   Toml.value_to_string (boolean false) == "false"
 
-@[test]
+#[test]
 def test_serialize_array : Bool :=
   Toml.value_to_string (array [integer 1, integer 2, integer 3]) == "[1,2,3]"
 
-@[test]
+#[test]
 def test_serialize_root_kv : Bool :=
   Toml.to_string (Map.insert "name" (string "example") BTreeMap.empty) == "name = \"example\"\n"
 
-@[test]
+#[test]
 def test_serialize_nested_table : Bool :=
   let inner := Map.insert "name" (string "example") BTreeMap.empty in
   let root := Map.insert "mote" (table inner) BTreeMap.empty in
   Toml.to_string root == "[mote]\nname = \"example\"\n"
 
-@[test]
+#[test]
 def test_serialize_empty_table : Bool :=
   let root := Map.insert "dependencies" (table BTreeMap.empty) BTreeMap.empty in
   Toml.to_string root == "[dependencies]\n"
 
 // ─── Tests: round-trip ───
 
-@[test]
+#[test]
 def test_roundtrip_mote_fixture : Bool :=
   match Toml.parse mote_toml_fixture {
     ok t1 =>
@@ -935,7 +945,7 @@ def test_roundtrip_mote_fixture : Bool :=
     err _ => false
   }
 
-@[test]
+#[test]
 def test_roundtrip_cargo_workspace_fixture : Bool :=
   match Toml.parse cargo_workspace_toml_fixture {
     ok t1 =>
@@ -946,7 +956,7 @@ def test_roundtrip_cargo_workspace_fixture : Bool :=
     err _ => false
   }
 
-@[test]
+#[test]
 def test_roundtrip_array : Bool :=
   let root := Map.insert "xs" (array [integer 1, integer 2, integer 3]) BTreeMap.empty in
   match Toml.parse (Toml.to_string root) {
@@ -956,7 +966,7 @@ def test_roundtrip_array : Bool :=
 
 // ─── Tests: helpers ───
 
-@[test]
+#[test]
 def test_toml_type_checkers : Bool :=
   Toml.is_string (string "a") &&
   Toml.is_integer (integer 1) &&
@@ -965,7 +975,7 @@ def test_toml_type_checkers : Bool :=
   Toml.is_table (table BTreeMap.empty) &&
   Bool.not (Toml.is_string (integer 1))
 
-@[test]
+#[test]
 def test_toml_accessors : Bool :=
   match Toml.get_string (string "a") {
     ok s => s == "a",
@@ -976,7 +986,7 @@ def test_toml_accessors : Bool :=
     err _ => true
   }
 
-@[test]
+#[test]
 def test_toml_table_manipulation : Bool :=
   let t1 := Toml.table_set "a" (integer 1) BTreeMap.empty in
   let t2 := Toml.table_set "b" (integer 2) t1 in

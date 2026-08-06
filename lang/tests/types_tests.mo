@@ -1,5 +1,11 @@
-use lang.types
-open types
+use lang.types {
+  Identifier, InductConstructor, Inductive, Infix, InstanceKey, LoadedModules,
+  LocalVar, Module, ModulePath, Multiplicity, Operator, Param, Scope,
+  ScopeClassDef, ScopeConflict, ScopeData, ScopeDef, ScopeError, ScopeInstance,
+  Similar, Term, hole, id, many, mk, mp, name_not_found, nid, nmp, nop, operator,
+  type_,
+}
+open types {}
 
 // --- Similar instances for scope types ---
 
@@ -93,7 +99,7 @@ instance Similar LoadedModules {
 
 // --- Scope type construction tests ---
 
-@[test]
+#[test]
 def test_infix_construct : Bool :=
     let expected_op : Operator := Operator.operator "+" in
     let expected_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "add") List.empty) in
@@ -105,7 +111,7 @@ def test_infix_construct : Bool :=
         mk op nm => Similar.similar op expected_op && Similar.similar nm expected_name
     }
 
-@[test]
+#[test]
 def test_instance_key_construct : Bool :=
     let expected_cls : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let key : InstanceKey := {
@@ -117,7 +123,7 @@ def test_instance_key_construct : Bool :=
         mk cls cons args => Similar.similar cls expected_cls
     }
 
-@[test]
+#[test]
 def test_scope_def_construct : Bool :=
     let expected_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "add") List.empty) in
     let expected_module : ModulePath := ModulePath.mp (List.cons (Identifier.id "Prelude") List.empty) in
@@ -131,7 +137,7 @@ def test_scope_def_construct : Bool :=
         mk nm modl sig body => Similar.similar nm expected_name && Similar.similar modl expected_module
     }
 
-@[test]
+#[test]
 def test_scope_class_def_construct : Bool :=
     let expected_full_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Eq") List.empty) in
     let expected_id : Identifier := Identifier.id "beq" in
@@ -146,7 +152,7 @@ def test_scope_class_def_construct : Bool :=
         mk _cls_name fnm id sig => Similar.similar fnm expected_full_name && Similar.similar id expected_id
     }
 
-@[test]
+#[test]
 def test_scope_instance_construct : Bool :=
     let expected_cn : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let si : ScopeInstance := {
@@ -157,7 +163,7 @@ def test_scope_instance_construct : Bool :=
         mk cn ins => Similar.similar cn expected_cn
     }
 
-@[test]
+#[test]
 def test_scope_conflict_construct : Bool :=
     let expected_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "foo") List.empty) in
     let sc : ScopeConflict := {
@@ -168,7 +174,7 @@ def test_scope_conflict_construct : Bool :=
         mk nm cands => Similar.similar nm expected_name
     }
 
-@[test]
+#[test]
 def test_local_var_construct : Bool :=
     let expected_id : Identifier := Identifier.id "x" in
     let expected_type : Term := Term.hole in
@@ -182,7 +188,7 @@ def test_local_var_construct : Bool :=
         mk nm typ mult => Similar.similar nm expected_id
     }
 
-@[test]
+#[test]
 def test_scope_data_construct : Bool :=
     let tcon : Identifier := Identifier.id "Bool" in
     let tdef_mp : ModulePath := ModulePath.mp (List.cons tcon List.empty) in
@@ -215,7 +221,7 @@ def test_scope_data_construct : Bool :=
         mk dr cd ins ind cls infs conf => true
     }
 
-@[test]
+#[test]
 def test_scope_construct : Bool :=
     let expected_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Prelude") List.empty) in
     let tcon : Identifier := Identifier.id "Bool" in
@@ -252,7 +258,7 @@ def test_scope_construct : Bool :=
         mk mod_id _ _ => Similar.similar mod_id expected_path
     }
 
-@[test]
+#[test]
 def test_module_construct : Bool :=
     let expected_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Prelude") List.empty) in
     let dummy_module : ModulePath := ModulePath.mp (List.cons (Identifier.id "Prelude") List.empty) in
@@ -273,7 +279,7 @@ def test_module_construct : Bool :=
         mk p inds defs infs ins => Similar.similar p expected_path
     }
 
-@[test]
+#[test]
 def test_loaded_modules_construct : Bool :=
     let lm : LoadedModules := {
         modules := List.empty,
@@ -282,7 +288,7 @@ def test_loaded_modules_construct : Bool :=
         mk mods => true
     }
 
-@[test]
+#[test]
 def test_scope_error_construct : Bool :=
     let expected_id : Identifier := Identifier.id "x" in
     let e : ScopeError := ScopeError.name_not_found (NameRef.nid expected_id) in

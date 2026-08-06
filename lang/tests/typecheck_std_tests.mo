@@ -1,18 +1,20 @@
-use io
-use lang.types
-use lang.module
-use lang.parser
-use lang.parser.core
-use lang.scope
-use lang.typecheck.infer
+use io {io, read_file}
+use lang.types {
+  Decl, Def, InductConstructor, Inductive, LocalScope, ModulePath, Scope,
+  ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
+}
+use lang.module {mk, parse_all_decls}
+use lang.parser.core {fail, mk, success}
+use lang.scope {build_scope_from_decls}
+use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
-open IO
-open types
-open module
-open parser
-open parser.core
-open scope
-open infer
+open IO {io, read_file}
+open types {}
+open module {}
+open parser {}
+open parser.core {}
+open scope {}
+open infer {}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -104,27 +106,27 @@ def typecheck_file (file_path : String) (mod_name : String) : Bool :=
 
 // --- std/ non-test files ---
 
-@[test]
+#[test]
 def test_typecheck_std_test : Bool := typecheck_file "std/test.mo" "test"
 
-@[test]
+#[test]
 def test_typecheck_std_base : Bool := typecheck_file "std/base.mo" "base"
 
-@[test]
+#[test]
 def test_typecheck_std_bench : Bool := typecheck_file "std/bench.mo" "bench"
 
-@[test]
+#[test]
 def test_typecheck_std_list : Bool := typecheck_file "std/list.mo" "list"
 
-@[test]
+#[test]
 def test_typecheck_std_map : Bool := typecheck_file "std/map.mo" "map"
 
 // --- std/concurrent/ files ---
 
-@[test]
+#[test]
 def test_typecheck_std_concurrent_fiber : Bool := typecheck_file "std/concurrent/fiber.mo" "concurrent_fiber"
 
-@[test]
+#[test]
 def test_typecheck_std_concurrent_combine : Bool := typecheck_file "std/concurrent/combine.mo" "concurrent_combine"
 
 // Note: Test files (list_tests*, map_tests*, etc.) require module loading

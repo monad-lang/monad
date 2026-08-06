@@ -1,19 +1,20 @@
-use io
-use lang.types
-use lang.module
-use lang.parser
-use lang.parser.core
-use lang.scope
-use lang.typecheck.infer
-use std.list
+use io {io, read_file}
+use lang.types {
+  Decl, Def, InductConstructor, Inductive, LocalScope, ModulePath, Scope,
+  ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
+}
+use lang.module {mk, parse_all_decls}
+use lang.parser.core {fail, mk, success}
+use lang.scope {build_scope_from_decls}
+use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
-open IO
-open types
-open module
-open parser
-open parser.core
-open scope
-open infer
+open IO {io, read_file}
+open types {}
+open module {}
+open parser {}
+open parser.core {}
+open scope {}
+open infer {}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -118,52 +119,52 @@ def typecheck_file (file_path : String) (mod_name : String) : Bool :=
 
 // --- Simple init/ files ---
 
-@[test]
+#[test]
 def test_typecheck_init_id : Bool := typecheck_file "init/id.mo" "id"
 
-@[test]
+#[test]
 def test_typecheck_init_io : Bool := typecheck_file "init/io.mo" "io"
 
-@[test]
+#[test]
 def test_typecheck_init_math : Bool := typecheck_file "init/math.mo" "math"
 
-@[test]
+#[test]
 def test_typecheck_init_number : Bool := typecheck_file "init/number.mo" "number"
 
 // --- More complex init/ files ---
 
-@[test]
+#[test]
 def test_typecheck_init_string : Bool := typecheck_file "init/string.mo" "string"
 
 // Skip process.mo for now - it has native functions with dependencies
 // @[test]
 // def test_typecheck_init_process : Bool := typecheck_file "init/process.mo" "process"
 
-@[test]
+#[test]
 def test_typecheck_init_init : Bool := typecheck_file "init/init.mo" "init"
 
-@[test]
+#[test]
 def test_typecheck_init_parser : Bool := typecheck_file "lang/parser/combinators.mo" "combinators"
 
 // --- Most complex init/ file ---
 
-@[test]
+#[test]
 def test_typecheck_init_prelude : Bool := typecheck_file "init/prelude.mo" "prelude"
 
 // --- Test files with type definitions ---
 
-@[test]
+#[test]
 def test_typecheck_init_foldable : Bool := typecheck_file "init/foldable.mo" "foldable"
 
-@[test]
+#[test]
 def test_typecheck_init_optics : Bool := typecheck_file "init/optics.mo" "optics"
 
-@[test]
+#[test]
 def test_typecheck_init_test_constraints : Bool := typecheck_file "init/test_constraints.mo" "test_constraints"
 
 // --- Remaining non-test init/ files ---
 
-@[test]
+#[test]
 def test_typecheck_init_string_profile : Bool := typecheck_file "init/string_profile.mo" "string_profile"
 
 // Test module dependency loading with init/process.mo which uses io

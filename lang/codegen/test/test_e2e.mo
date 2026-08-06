@@ -1,20 +1,22 @@
-use lang.types
-use lang.codegen.ir
-use lang.codegen.emit
+use lang.types {
+  Def, Identifier, TypeConstraint, i64, id, lam, lit, mk, mp, named, num, type_,
+}
+use lang.codegen.ir {emit_module, mk}
+use lang.codegen.emit {check_contains, compile_db_decls_ir, empty_attrs, mk}
 
-open Term
-open Literal
-open LLVMType
-open LLVMValue
-open LLVMInstruction
-open Identifier
-open DebugName
-open NumSuffix
-open Param
-open Def
-open ModulePath
+open Term {lam, lit, type_}
+open Literal {num}
+open LLVMType {}
+open LLVMValue {}
+open LLVMInstruction {}
+open Identifier {id}
+open DebugName {named}
+open NumSuffix {i64}
+open Param {mk}
+open Def {mk}
+open ModulePath {mp}
 
-@[test]
+#[test]
 def test_e2e_simple_literal : Bool :=
     let id := Identifier.id "myfunc" in
     let def_ := Def.mk
@@ -27,7 +29,7 @@ def test_e2e_simple_literal : Bool :=
     let text := emit_module mod_ in
     check_contains text "myfunc"
 
-@[test]
+#[test]
 def test_e2e_function_with_param : Bool :=
     let id := Identifier.id "add5" in
     let body := Term.lit (Literal.num 99 NumSuffix.i64) in
@@ -42,7 +44,7 @@ def test_e2e_function_with_param : Bool :=
     let text := emit_module mod_ in
     check_contains text "add5"
 
-@[test]
+#[test]
 def test_e2e_module_structure : Bool :=
     let mod_ := lang.codegen.emit.compile_db_decls_ir empty_defs in
     let text := emit_module mod_ in
@@ -50,13 +52,13 @@ def test_e2e_module_structure : Bool :=
     then check_contains text "Type Definitions"
     else false
 
-@[test]
+#[test]
 def test_e2e_runtime_decls_present : Bool :=
     let mod_ := lang.codegen.emit.compile_db_decls_ir empty_defs in
     let text := emit_module mod_ in
     check_contains text "monad_alloc"
 
-@[test]
+#[test]
 def test_e2e_calling_convention : Bool :=
     let id := Identifier.id "f" in
     let def_ := Def.mk
@@ -69,19 +71,19 @@ def test_e2e_calling_convention : Bool :=
     let text := emit_module mod_ in
     check_contains text "cc 9"
 
-@[partial]
+#[partial]
 def empty_defs : List Def := List.empty
 
-@[partial]
+#[partial]
 def empty_ids : List Identifier := List.empty
 
-@[partial]
+#[partial]
 def empty_cons : List TypeConstraint := List.empty
 
-@[partial]
+#[partial]
 def empty_attrs : List String := List.empty
 
-@[partial]
+#[partial]
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true

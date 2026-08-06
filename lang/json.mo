@@ -1,18 +1,40 @@
 /// JSON parsing and serialization
 
-use std.map
-use std.list
-use init.string
-use init.number
-use lang.parser.core
-use lang.parser.char_preds
-use lang.parser.combinators
-use lang.parser.whitespace
-use lang.parser.number
+// TODO: see the matching TODO in lang/toml.mo — `BTreeMap`/`beq`/`empty`/
+// `map`/`to_list` are all used throughout this file but are deliberately
+// NOT listed here; the same pre-existing latent instance/dictionary-
+// resolution bug.
+use std.map {}
+use std.list {Show, length}
+use init.string {beq, concat, drop, gt, is_empty, length, slice, to_list}
+use init.number {beq, gt, to_string}
+use lang.parser.core {
+  ParseError, ParseResult, custom, fail, is_empty, mk, success, tag,
+}
+use lang.parser.char_preds {is_space}
+use lang.parser.combinators {
+  alt, alt_fold, delimited_by, many0, map_parse, opt, separated_by, tag,
+  take_while, terminated_by,
+}
+use lang.parser.number {number}
 
-open ParseResult
-open Json
-open Json.Number
+open ParseResult {fail, success}
+open Json {
+  Deserializer, Number, ParseError, Serializer, array, array_beq, array_to_string,
+  beq, bool, bool_to_string, colon, comma, deserialize_field, deserialize_list,
+  eof, escape_char, escape_string, from_parse_error, get_array, get_bool, get_num,
+  get_num_i64, get_object, get_str, is_array, is_bool, is_null, is_num, is_object,
+  is_str, json, make_array, make_bool, make_num_int, make_object, make_str, null,
+  num, number_to_i64, number_to_json, object, object_beq, object_delete,
+  object_get, object_set, object_to_string, pair_beq, pair_to_string, pairs_beq,
+  parse, parse_array, parse_array_body, parse_bool, parse_escape, parse_escape_u,
+  parse_false, parse_integer, parse_null, parse_number, parse_number_value,
+  parse_object, parse_object_body, parse_object_member, parse_string,
+  parse_string_char, parse_string_content, parse_true, parse_value,
+  sequence_result, sequence_result_cons, str, string_to_string, take4, to_string,
+  ws,
+}
+open Json.Number {beq, float, int, to_string}
 
 // ─── Types ───
 
@@ -117,7 +139,7 @@ def Json.pairs_beq (a b : List (Pair String Json)) : Bool :=
     }
   }
 
-@[partial]
+#[partial]
 def Json.object_beq (a b : BTreeMap String Json) : Bool :=
   Json.pairs_beq (BTreeMap.to_list a) (BTreeMap.to_list b)
 
@@ -170,7 +192,7 @@ def Json.ParseError.to_string (e : Json.ParseError) : String :=
 // ─── Parser: helpers ───
 
 /// Helper function to concatenate a list of strings
-@[partial]
+#[partial]
 def String.concat_list (ss : List String) : String :=
   match ss {
     List.empty => "",
@@ -241,7 +263,7 @@ def parse_integer_negative (r : ParseResult I64) : ParseResult I64 :=
     fail _ => fail (ParseError.custom "expected digits after -")
   }
 
-@[partial]
+#[partial]
 def parse_integer_result (r : ParseResult String) (orig : String) : ParseResult I64 :=
   match r {
     success rem _ => parse_integer_negative (number rem),
@@ -270,7 +292,7 @@ def Json.parse_string_char (input : String) : ParseResult String :=
     then success (String.drop 1 input) ch
     else fail (ParseError.custom "invalid string character")
 
-@[partial]
+#[partial]
 def is_json_string_char (c : String) : Bool :=
   if String.beq "\"" c then false
   else if String.beq "\\" c then false
@@ -288,7 +310,7 @@ def parse_escape_u_result (r : ParseResult String) : ParseResult String :=
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def parse_escape_u_body (r : ParseResult String) (orig : String) : ParseResult String :=
   match r {
     success rem _ => parse_escape_u_result (Json.take4 rem),
@@ -342,14 +364,14 @@ def parse_string_close (r : ParseResult String) (s : String) : ParseResult Json 
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def parse_string_content_result (r : ParseResult (List String)) : ParseResult Json :=
   match r {
     success rem chars => parse_string_close (tag "\"" rem) (String.concat_list chars),
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def parse_string_open (r : ParseResult String) : ParseResult Json :=
   match r {
     success rem _ => parse_string_content_result (Json.parse_string_content rem),
@@ -368,41 +390,41 @@ def parse_array_result (r : ParseResult (List Json)) : ParseResult Json :=
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def Json.parse_array_body (input : String) : ParseResult (List Json) :=
   delimited_by Json.ws (separated_by Json.comma Json.parse_value) Json.ws input
 
 /// Parse a JSON array
-@[partial]
+#[partial]
 def Json.parse_array (input : String) : ParseResult Json :=
   parse_array_result (delimited_by (tag "[") Json.parse_array_body (tag "]") input)
 
-@[partial]
+#[partial]
 def parse_object_member_value (r : ParseResult Json) (key : String) : ParseResult (Pair String Json) :=
   match r {
     success rem val => success rem (Pair.pair key val),
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def parse_object_member_colon_result (r : ParseResult String) (key : String) : ParseResult (Pair String Json) :=
   match r {
     success rem _ => parse_object_member_value (Json.parse_value rem) key,
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def parse_object_member_colon (rem : String) (key : String) : ParseResult (Pair String Json) :=
   parse_object_member_colon_result (Json.colon rem) key
 
-@[partial]
+#[partial]
 def parse_object_member_key_str (rem : String) (key_json : Json) : ParseResult (Pair String Json) :=
   match key_json {
     str key => parse_object_member_colon rem key,
     _ => fail (ParseError.custom "expected string key")
   }
 
-@[partial]
+#[partial]
 def parse_object_member_key (r : ParseResult Json) : ParseResult (Pair String Json) :=
   match r {
     success rem key_json => parse_object_member_key_str rem key_json,
@@ -410,7 +432,7 @@ def parse_object_member_key (r : ParseResult Json) : ParseResult (Pair String Js
   }
 
 /// Parse an object member ("key" : value)
-@[partial]
+#[partial]
 def Json.parse_object_member (input : String) : ParseResult (Pair String Json) :=
   parse_object_member_key (Json.parse_string input)
 
@@ -431,12 +453,12 @@ def parse_object_result (r : ParseResult (List (Pair String Json))) : ParseResul
     fail e => fail e
   }
 
-@[partial]
+#[partial]
 def Json.parse_object_body (input : String) : ParseResult (List (Pair String Json)) :=
   delimited_by Json.ws (separated_by Json.comma Json.parse_object_member) Json.ws input
 
 /// Parse a JSON object
-@[partial]
+#[partial]
 def Json.parse_object (input : String) : ParseResult Json :=
   parse_object_result (delimited_by (tag "{") Json.parse_object_body (tag "}") input)
 
@@ -450,7 +472,7 @@ def Json.parse_number_value (input : String) : ParseResult Json :=
   parse_number_value_result (Json.parse_number input)
 
 /// Parse any JSON value
-@[partial]
+#[partial]
 def Json.parse_value (input : String) : ParseResult Json :=
   alt_fold
     [Json.parse_null,
@@ -464,12 +486,12 @@ def Json.parse_value (input : String) : ParseResult Json :=
 // ─── Parser: top-level ───
 
 /// Parse complete JSON document (whitespace-tolerant around the value)
-@[partial]
+#[partial]
 def Json.json (input : String) : ParseResult Json :=
   terminated_by (delimited_by Json.ws Json.parse_value Json.ws) Json.eof input
 
 /// Main parse function
-@[partial]
+#[partial]
 def Json.parse (s : String) : Result Json.ParseError Json :=
   match Json.json s {
     success rem val =>
@@ -481,7 +503,7 @@ def Json.parse (s : String) : Result Json.ParseError Json :=
 
 // ─── Serializer: string escaping ───
 
-@[partial]
+#[partial]
 def Json.escape_char (c : String) : String :=
   if String.beq "\"" c then "\\\""
   else if String.beq "\\" c then "\\\\"
@@ -495,7 +517,7 @@ def Json.escape_char (c : String) : String :=
 /// Escape special characters in a string for JSON output.
 /// NOTE: raw control characters (0x00-0x1F) other than \b \f \n \r \t are passed
 /// through unescaped rather than emitted as \u00XX — deferred, see plan notes.
-@[partial]
+#[partial]
 def Json.escape_string (input : String) : String :=
   if is_empty input
   then ""
@@ -519,7 +541,7 @@ def List.intercalate (sep : String) (xs : List String) : String :=
     List.cons hd tl => List.intercalate_rest sep hd tl
   }
 
-@[partial]
+#[partial]
 def List.intercalate_rest (sep : String) (acc : String) (xs : List String) : String :=
   match xs {
     List.empty => acc,
@@ -532,7 +554,7 @@ def Json.bool_to_string (b : Bool) : String :=
 def Json.string_to_string (s : String) : String :=
   String.concat "\"" (String.concat (Json.escape_string s) "\"")
 
-@[partial]
+#[partial]
 def Json.to_string (j : Json) : String :=
   match j {
     null => "null",
@@ -543,17 +565,17 @@ def Json.to_string (j : Json) : String :=
     object o => Json.object_to_string o
   }
 
-@[partial]
+#[partial]
 def Json.array_to_string (a : List Json) : String :=
   String.concat "[" (String.concat (List.intercalate "," (List.map Json.to_string a)) "]")
 
-@[partial]
+#[partial]
 def Json.pair_to_string (p : Pair String Json) : String :=
   match p {
     Pair.pair k v => String.concat (Json.string_to_string k) (String.concat ":" (Json.to_string v))
   }
 
-@[partial]
+#[partial]
 def Json.object_to_string (o : BTreeMap String Json) : String :=
   String.concat "{" (String.concat (List.intercalate "," (List.map Json.pair_to_string (BTreeMap.to_list o))) "}")
 
@@ -720,7 +742,7 @@ def Json.deserialize_list {A : Type} (deserialize_elem : Json -> Result String A
 /// `[Json.Deserializer A]`-constrained version of this function fails to type-check on
 /// its own definition in this compiler — user-declared classes don't support deferred
 /// constraint resolution the way builtin classes like BEq appear to).
-@[partial]
+#[partial]
 def Json.deserialize_field {A : Type} (deserialize_elem : Json -> Result String A) (name: String) (obj: BTreeMap String Json) : Result String A :=
   match Map.lookup name obj {
     some j => deserialize_elem j,
@@ -783,91 +805,91 @@ instance Json.Deserializer Person {
 
 // ─── Tests: parser ───
 
-@[test]
+#[test]
 def test_empty_object : Bool :=
   match Json.parse "{}" {
    ok o => Json.beq o (object BTreeMap.empty),
    err e => false,
   }
 
-@[test]
+#[test]
 def test_parse_null : Bool :=
   match Json.parse "null" {
     ok j => Json.beq j null,
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_true : Bool :=
   match Json.parse "true" {
     ok j => Json.beq j (bool true),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_false : Bool :=
   match Json.parse "false" {
     ok j => Json.beq j (bool false),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_integer : Bool :=
   match Json.parse "42" {
     ok j => Json.beq j (num (int 42)),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_negative_integer : Bool :=
   match Json.parse "-42" {
     ok j => Json.beq j (num (int (neg_i64 42))),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_string : Bool :=
   match Json.parse "\"hello\"" {
     ok j => Json.beq j (str "hello"),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_string_empty : Bool :=
   match Json.parse "\"\"" {
     ok j => Json.beq j (str ""),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_string_with_escapes : Bool :=
   match Json.parse "\"a\\nb\\tc\\\"d\"" {
     ok j => Json.beq j (str "a\nb\tc\"d"),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_empty_array : Bool :=
   match Json.parse "[]" {
     ok j => Json.beq j (array List.empty),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_array_simple : Bool :=
   match Json.parse "[1,2,3]" {
     ok j => Json.beq j (array [num (int 1), num (int 2), num (int 3)]),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_object_simple : Bool :=
   match Json.parse "{\"a\":1}" {
     ok j => Json.beq j (object (Map.insert "a" (num (int 1)) BTreeMap.empty)),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_nested_structures : Bool :=
   match Json.parse "{\"a\":[1,2],\"b\":{\"c\":true}}" {
     ok j =>
@@ -878,7 +900,7 @@ def test_parse_nested_structures : Bool :=
     err _ => false
   }
 
-@[test]
+#[test]
 def test_parse_with_whitespace : Bool :=
   match Json.parse " { \"a\" : [ 1 , 2 ] } " {
     ok j => Json.beq j (object (Map.insert "a" (array [num (int 1), num (int 2)]) BTreeMap.empty)),
@@ -888,7 +910,7 @@ def test_parse_with_whitespace : Bool :=
 /// Regression test for a std/map.mo BTreeMap.rotate_ll/rotate_rr bug where objects
 /// with 4+ keys could silently lose a member on parse (see plans/bootstrapping/
 /// json-parser-serializer-plan.md for the root cause and fix).
-@[test]
+#[test]
 def test_parse_object_four_keys : Bool :=
   match Json.parse "{\"a\":1,\"b\":2,\"c\":3,\"d\":4}" {
     ok j =>
@@ -903,81 +925,81 @@ def test_parse_object_four_keys : Bool :=
 
 // ─── Tests: serializer ───
 
-@[test]
+#[test]
 def test_serialize_null : Bool :=
   Json.to_string null == "null"
 
-@[test]
+#[test]
 def test_serialize_bool : Bool :=
   Json.to_string (bool true) == "true" && Json.to_string (bool false) == "false"
 
-@[test]
+#[test]
 def test_serialize_integer : Bool :=
   Json.to_string (num (int 42)) == "42"
 
-@[test]
+#[test]
 def test_serialize_negative_integer : Bool :=
   Json.to_string (num (int (neg_i64 42))) == "-42"
 
-@[test]
+#[test]
 def test_serialize_string : Bool :=
   Json.to_string (str "hello") == "\"hello\""
 
-@[test]
+#[test]
 def test_serialize_string_empty : Bool :=
   Json.to_string (str "") == "\"\""
 
-@[test]
+#[test]
 def test_serialize_string_with_escapes : Bool :=
   Json.to_string (str "a\nb\tc\"d") == "\"a\\nb\\tc\\\"d\""
 
-@[test]
+#[test]
 def test_serialize_empty_array : Bool :=
   Json.to_string (array List.empty) == "[]"
 
-@[test]
+#[test]
 def test_serialize_array : Bool :=
   Json.to_string (array [num (int 1), num (int 2), num (int 3)]) == "[1,2,3]"
 
-@[test]
+#[test]
 def test_serialize_empty_object : Bool :=
   Json.to_string (object BTreeMap.empty) == "{}"
 
-@[test]
+#[test]
 def test_serialize_object : Bool :=
   Json.to_string (object (Map.insert "a" (num (int 1)) BTreeMap.empty)) == "{\"a\":1}"
 
 // ─── Tests: round-trip ───
 
-@[test]
+#[test]
 def test_roundtrip_null : Bool :=
   match Json.parse (Json.to_string null) {
     ok j => Json.beq j null,
     err _ => false
   }
 
-@[test]
+#[test]
 def test_roundtrip_bool : Bool :=
   match Json.parse (Json.to_string (bool true)) {
     ok j => Json.beq j (bool true),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_roundtrip_integer : Bool :=
   match Json.parse (Json.to_string (num (int (neg_i64 7)))) {
     ok j => Json.beq j (num (int (neg_i64 7))),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_roundtrip_string : Bool :=
   match Json.parse (Json.to_string (str "hi\nthere")) {
     ok j => Json.beq j (str "hi\nthere"),
     err _ => false
   }
 
-@[test]
+#[test]
 def test_roundtrip_array : Bool :=
   let value := array [num (int 1), str "two", bool true, null] in
   match Json.parse (Json.to_string value) {
@@ -985,7 +1007,7 @@ def test_roundtrip_array : Bool :=
     err _ => false
   }
 
-@[test]
+#[test]
 def test_roundtrip_object : Bool :=
   let value := object (Map.insert "a" (num (int 1)) (Map.insert "b" (str "two") BTreeMap.empty)) in
   match Json.parse (Json.to_string value) {
@@ -993,7 +1015,7 @@ def test_roundtrip_object : Bool :=
     err _ => false
   }
 
-@[test]
+#[test]
 def test_roundtrip_nested : Bool :=
   let inner := Map.insert "c" (array [num (int 1), num (int 2)]) BTreeMap.empty in
   let value := object (Map.insert "a" (object inner) (Map.insert "b" null BTreeMap.empty)) in
@@ -1004,17 +1026,17 @@ def test_roundtrip_nested : Bool :=
 
 // ─── Tests: helpers ───
 
-@[test]
+#[test]
 def test_escape_string : Bool :=
   Json.escape_string "a\"b\\c" == "a\\\"b\\\\c"
 
-@[test]
+#[test]
 def test_list_intercalate : Bool :=
   List.intercalate "," ["a", "b", "c"] == "a,b,c" &&
   List.intercalate "," (List.empty : List String) == "" &&
   List.intercalate "," ["only"] == "only"
 
-@[test]
+#[test]
 def test_json_type_checkers : Bool :=
   Json.is_null null &&
   Json.is_bool (bool true) &&
@@ -1024,7 +1046,7 @@ def test_json_type_checkers : Bool :=
   Json.is_object (object BTreeMap.empty) &&
   Bool.not (Json.is_null (bool true))
 
-@[test]
+#[test]
 def test_json_accessors : Bool :=
   match Json.get_str (str "a") {
     ok s => s == "a",
@@ -1049,7 +1071,7 @@ def json_option_is_none (opt : Option Json) : Bool :=
     none => true
   }
 
-@[test]
+#[test]
 def test_json_object_manipulation : Bool :=
   let o1 := Json.object_set "a" (num (int 1)) BTreeMap.empty in
   let o2 := Json.object_set "b" (num (int 2)) o1 in
@@ -1060,52 +1082,52 @@ def test_json_object_manipulation : Bool :=
 
 // ─── Tests: Serde ───
 
-@[test]
+#[test]
 def test_serializer_bool : Bool :=
   Json.beq (Json.Serializer.serialize true) (bool true) &&
   Json.beq (Json.Serializer.serialize false) (bool false)
 
-@[test]
+#[test]
 def test_serializer_i64 : Bool :=
   Json.beq (Json.Serializer.serialize (neg_i64 7)) (num (int (neg_i64 7)))
 
-@[test]
+#[test]
 def test_serializer_string : Bool :=
   Json.beq (Json.Serializer.serialize "hi") (str "hi")
 
-@[test]
+#[test]
 def test_deserializer_bool : Bool :=
   match (Json.Deserializer.deserialize (bool true) : Result String Bool) {
     ok b => b,
     err _ => false
   }
 
-@[test]
+#[test]
 def test_deserializer_i64 : Bool :=
   match (Json.Deserializer.deserialize (num (int 42)) : Result String I64) {
     ok n => n == 42,
     err _ => false
   }
 
-@[test]
+#[test]
 def test_deserializer_string : Bool :=
   match (Json.Deserializer.deserialize (str "hi") : Result String String) {
     ok s => s == "hi",
     err _ => false
   }
 
-@[test]
+#[test]
 def test_deserializer_i64_wrong_type : Bool :=
   match (Json.Deserializer.deserialize (str "hi") : Result String I64) {
     ok _ => false,
     err _ => true
   }
 
-@[test]
+#[test]
 def test_serialize_list_i64 : Bool :=
   Json.to_string (Json.Serializer.serialize [1, 2, 3]) == "[1,2,3]"
 
-@[test]
+#[test]
 def test_serialize_list_string : Bool :=
   Json.to_string (Json.Serializer.serialize ["a", "b"]) == "[\"a\",\"b\"]"
 
@@ -1115,21 +1137,21 @@ def json_deserialize_i64 (j : Json) : Result String I64 :=
 def json_deserialize_string (j : Json) : Result String String :=
   Json.Deserializer.deserialize j
 
-@[test]
+#[test]
 def test_deserialize_list_i64 : Bool :=
   match Json.deserialize_list json_deserialize_i64 (array [num (int 1), num (int 2), num (int 3)]) {
     ok xs => xs == [1, 2, 3],
     err _ => false
   }
 
-@[test]
+#[test]
 def test_deserialize_list_string : Bool :=
   match Json.deserialize_list json_deserialize_string (array [str "a", str "b"]) {
     ok xs => xs == ["a", "b"],
     err _ => false
   }
 
-@[test]
+#[test]
 def test_deserialize_field_i64 : Bool :=
   let obj := Map.insert "age" (num (int 30)) BTreeMap.empty in
   match Json.deserialize_field json_deserialize_i64 "age" obj {
@@ -1137,26 +1159,26 @@ def test_deserialize_field_i64 : Bool :=
     err _ => false
   }
 
-@[test]
+#[test]
 def test_deserialize_field_missing : Bool :=
   match Json.deserialize_field json_deserialize_i64 "missing" BTreeMap.empty {
     ok _ => false,
     err _ => true
   }
 
-@[test]
+#[test]
 def test_deserialize_list_error_short_circuits : Bool :=
   match Json.deserialize_list json_deserialize_i64 (array [num (int 1), str "bad", num (int 3)]) {
     ok _ => false,
     err _ => true
   }
 
-@[test]
+#[test]
 def test_person_serialize : Bool :=
   let p := Person.mk "Alice" 30 in
   Json.to_string (Json.Serializer.serialize p) == "{\"age\":30,\"name\":\"Alice\"}"
 
-@[test]
+#[test]
 def test_person_deserialize : Bool :=
   match Json.parse "{\"name\":\"Alice\",\"age\":30}" {
     ok j =>
@@ -1167,7 +1189,7 @@ def test_person_deserialize : Bool :=
     err _ => false
   }
 
-@[test]
+#[test]
 def test_person_deserialize_missing_field : Bool :=
   match Json.parse "{\"name\":\"Alice\"}" {
     ok j =>
@@ -1178,7 +1200,7 @@ def test_person_deserialize_missing_field : Bool :=
     err _ => false
   }
 
-@[test]
+#[test]
 def test_person_roundtrip : Bool :=
   let p := Person.mk "Bob" 25 in
   match Json.parse (Json.to_string (Json.Serializer.serialize p)) {

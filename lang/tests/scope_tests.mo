@@ -1,11 +1,22 @@
-use lang.types
-open types
-use lang.scope
-open scope
+use lang.types {
+  Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
+  InstanceKey, LoadedModules, LocalScope, LocalVar, Module, ModulePath, NameRef,
+  Param, Scope, ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, Term,
+  TypeConstraint, def_d, hole, id, inductive_d, many, mk, mp, name, nmp,
+  param_many, type_,
+}
+open types {}
+use lang.scope {
+  build_scope_from_decls, build_scope_from_modules, list_append, modpath_eq,
+  resolve_def_in_scope_by_name, scope_data_empty, scope_find_inductive,
+  scope_find_inductive_by_constructor, scope_find_local, scope_globals,
+  scope_push_local, scope_resolve_instance, scope_resolve_name,
+}
+open scope {}
 
 // --- Build scope from empty decls ---
 
-@[test]
+#[test]
 def test_build_empty_scope : Bool :=
     let empty_id_list : List Identifier := List.empty in
     let empty_path : ModulePath := ModulePath.mp empty_id_list in
@@ -15,7 +26,7 @@ def test_build_empty_scope : Bool :=
 
 // --- Build scope with a def declaration ---
 
-@[test]
+#[test]
 def test_build_with_def : Bool :=
     let name : ModulePath := ModulePath.mp (List.cons (Identifier.id "add") List.empty) in
     let mod_id : Identifier := Identifier.id "Test" in
@@ -29,7 +40,7 @@ def test_build_with_def : Bool :=
 
 // --- Build scope with an inductive declaration ---
 
-@[test]
+#[test]
 def test_build_with_inductive : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
@@ -50,7 +61,7 @@ def test_build_with_inductive : Bool :=
 
 // --- scope_globals extracts ScopeData from Scope ---
 
-@[test]
+#[test]
 def test_scope_globals : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
@@ -65,7 +76,7 @@ def test_scope_globals : Bool :=
 
 // --- scope_find_inductive finds an inductive by name ---
 
-@[test]
+#[test]
 def test_scope_find_inductive_found : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
@@ -99,7 +110,7 @@ def test_scope_find_inductive_found : Bool :=
 
 // --- scope_find_inductive returns error when not found ---
 
-@[test]
+#[test]
 def test_scope_find_inductive_not_found : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
@@ -118,7 +129,7 @@ def test_scope_find_inductive_not_found : Bool :=
 
 // --- scope_push_local creates a new LocalScope ---
 
-@[test]
+#[test]
 def test_scope_push_local : Bool :=
     let lv : LocalVar := {
         name := Identifier.id "x",
@@ -135,7 +146,7 @@ def test_scope_push_local : Bool :=
 
 // --- scope_find_local finds a variable in LocalScope ---
 
-@[test]
+#[test]
 def test_scope_find_local_found : Bool :=
     let lv : LocalVar := {
         name := Identifier.id "x",
@@ -155,7 +166,7 @@ def test_scope_find_local_found : Bool :=
 
 // --- scope_find_local searches parent chain ---
 
-@[test]
+#[test]
 def test_scope_find_local_parent : Bool :=
     let lv1 : LocalVar := {
         name := Identifier.id "x",
@@ -185,7 +196,7 @@ def test_scope_find_local_parent : Bool :=
 
 // --- scope_find_local returns none when not found ---
 
-@[test]
+#[test]
 def test_scope_find_local_not_found : Bool :=
     let empty_parent : Option LocalScope := Option.none in
     let ls : LocalScope := {
@@ -200,7 +211,7 @@ def test_scope_find_local_not_found : Bool :=
 
 // --- scope_resolve_name finds a def in ScopeData ---
 
-@[test]
+#[test]
 def test_scope_resolve_name_found : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
@@ -239,7 +250,7 @@ def test_scope_resolve_name_found : Bool :=
 
 // --- scope_resolve_name returns error when not found ---
 
-@[test]
+#[test]
 def test_scope_resolve_name_not_found : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
@@ -263,7 +274,7 @@ def test_scope_resolve_name_not_found : Bool :=
 
 // --- Builtin Type resolves ---
 
-@[test]
+#[test]
 def test_builtin_type_resolves : Bool :=
     let empty_id_list : List Identifier := List.empty in
     let empty_path : ModulePath := ModulePath.mp empty_id_list in
@@ -283,7 +294,7 @@ def test_builtin_type_resolves : Bool :=
 
 // --- Builtin Type inductive is found ---
 
-@[test]
+#[test]
 def test_builtin_type_inductive : Bool :=
     let empty_id_list : List Identifier := List.empty in
     let empty_path : ModulePath := ModulePath.mp empty_id_list in
@@ -303,7 +314,7 @@ def test_builtin_type_inductive : Bool :=
 
 // --- build_scope_from_modules with empty modules ---
 
-@[test]
+#[test]
 def test_build_from_modules_empty : Bool :=
     let empty_id_list : List Identifier := List.empty in
     let empty_path : ModulePath := ModulePath.mp empty_id_list in
@@ -315,7 +326,7 @@ def test_build_from_modules_empty : Bool :=
 
 // --- build_scope_from_modules with one module ---
 
-@[test]
+#[test]
 def test_build_from_modules_one_def : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
@@ -360,7 +371,7 @@ def test_build_from_modules_one_def : Bool :=
 
 // --- scope_resolve_instance found ---
 
-@[test]
+#[test]
 def test_scope_resolve_instance_found : Bool :=
     let cls_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Monad") List.empty) in
     let inst_name : Identifier := Identifier.id "maybeMonad" in
@@ -401,7 +412,7 @@ def test_scope_resolve_instance_found : Bool :=
 
 // --- scope_resolve_instance not found ---
 
-@[test]
+#[test]
 def test_scope_resolve_instance_not_found : Bool :=
     let cls_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Monad") List.empty) in
     let sd : ScopeData := scope_data_empty in
@@ -427,7 +438,7 @@ def test_scope_resolve_instance_not_found : Bool :=
 
 // --- list_append appends two lists ---
 
-@[test]
+#[test]
 def test_list_append_empty : Bool :=
     let empty : List I64 := List.empty in
     let result : List I64 := list_append empty empty in
@@ -435,7 +446,7 @@ def test_list_append_empty : Bool :=
 
 // --- list_append with non-empty list ---
 
-@[test]
+#[test]
 def test_list_append_non_empty : Bool :=
     let xs : List I64 := List.cons (1 : I64) (List.cons (2 : I64) List.empty) in
     let ys : List I64 := List.cons (3 : I64) (List.cons (4 : I64) List.empty) in
@@ -444,7 +455,7 @@ def test_list_append_non_empty : Bool :=
 
 // --- scope_resolve_instance matches by class name ---
 
-@[test]
+#[test]
 def test_scope_resolve_instance_matches_class : Bool :=
     let cls_name1 : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let cls_name2 : ModulePath := ModulePath.mp (List.cons (Identifier.id "Monad") List.empty) in
@@ -491,7 +502,7 @@ def test_scope_resolve_instance_matches_class : Bool :=
 
 // --- build_scope_from_decls resolves a def through scope_resolve_name ---
 
-@[test]
+#[test]
 def test_build_scope_then_resolve_def : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
@@ -518,7 +529,7 @@ def test_build_scope_then_resolve_def : Bool :=
 
 // --- build_scope_from_decls resolves an inductive constructor ---
 
-@[test]
+#[test]
 def test_build_scope_then_resolve_constructor : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
@@ -553,7 +564,7 @@ def test_build_scope_then_resolve_constructor : Bool :=
 
 // --- instance_key_matches compares type args ---
 
-@[test]
+#[test]
 def test_instance_key_matches_type_args : Bool :=
     let cls_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let i64_typ : Term := Term.type_ 1 in
@@ -601,7 +612,7 @@ def test_instance_key_matches_type_args : Bool :=
         err _ => false,
     }
 
-@[test]
+#[test]
 def test_instance_key_matches_wrong_type_args : Bool :=
     let cls_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let i64_typ : Term := Term.type_ 1 in
@@ -643,7 +654,7 @@ def test_instance_key_matches_wrong_type_args : Bool :=
 
 // --- scope_find_inductive_by_constructor finds inductive by constructor name ---
 
-@[test]
+#[test]
 def test_find_inductive_by_constructor_found : Bool :=
     let ind_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Maybe") List.empty) in
     let some_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "some") List.empty) in
@@ -676,7 +687,7 @@ def test_find_inductive_by_constructor_found : Bool :=
         Option.none => false,
     }
 
-@[test]
+#[test]
 def test_find_inductive_by_constructor_not_found : Bool :=
     let ind_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Maybe") List.empty) in
     let some_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "some") List.empty) in

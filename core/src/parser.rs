@@ -1826,15 +1826,15 @@ fn open_module_path_and_filter(input: Span) -> Res<(ModulePath, OpenFilter)> {
   let (input, filter) = opt(preceded(
     ws0,
     delimited(
-      char('{'),
+      (char('{'), ws0),
       alt((
-        map(preceded(ws0, char('*')), |_| OpenFilter::Glob),
+        map(terminated(char('*'), ws0), |_| OpenFilter::Glob),
         map(
           many0(terminated(identifier, (ws0, opt(char(',')), ws0))),
           OpenFilter::Only,
         ),
       )),
-      (ws0, context("closing brace for open filter", char('}'))),
+      context("closing brace for open filter", char('}')),
     ),
   ))
   .parse(input)?;

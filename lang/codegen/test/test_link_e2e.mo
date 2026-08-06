@@ -1,20 +1,20 @@
-use io
-open IO
-use process
-use lang.types
-use lang.codegen.ir
-use lang.codegen.emit
+use io {IO, println, write_file}
+open IO {println, write_file}
+use process {exec_cmd}
+use lang.types {Def, i64, id, lit, mk, mp, num, type_}
+use lang.codegen.ir {emit_module, mk}
+use lang.codegen.emit {compile_db_decls_ir, mk}
 
-open LLVMType
-open LLVMValue
-open Term
-open Literal
-open Identifier
-open DebugName
-open NumSuffix
-open Param
-open Def
-open ModulePath
+open LLVMType {}
+open LLVMValue {}
+open Term {lit, type_}
+open Literal {num}
+open Identifier {id}
+open DebugName {}
+open NumSuffix {i64}
+open Param {mk}
+open Def {mk}
+open ModulePath {mp}
 
 /// Build a List String from four strings.
 def args4 (a : String) (b : String) (c : String) (d : String) : List String :=

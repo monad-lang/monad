@@ -1,38 +1,38 @@
-use lang.types
-use io
-use process
-use lang.codegen.ir
-use lang.codegen.emit
+use lang.types {Def, app, i64, id, lam, lit, mk, mp, named, num, type_, var}
+use io {IO, println, write_file}
+use process {exec_cmd}
+use lang.codegen.ir {emit_module, mk}
+use lang.codegen.emit {check_contains, compile_db_decls_ir, mk}
 
-open LLVMType
-open LLVMValue
-open Term
-open Literal
-open Identifier
-open NameRef
-open NumSuffix
-open Param
-open Def
-open ModulePath
+open LLVMType {}
+open LLVMValue {}
+open Term {app, lam, lit, type_, var}
+open Literal {num}
+open Identifier {id}
+open NameRef {}
+open NumSuffix {i64}
+open Param {mk}
+open Def {mk}
+open ModulePath {mp}
 
 /// Build a List String from four strings.
-@[partial]
+#[partial]
 def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
     List.cons a (List.cons b (List.cons c (List.cons d List.empty)))
 
 /// An empty List String, explicitly typed to avoid forall leakage.
-@[partial]
+#[partial]
 def empty_str_list : List String := List.empty
 
 /// Generate LLVM IR text from a list of Defs.
-@[partial]
+#[partial]
 def compile_defs_to_ir (defs : List Def) : String :=
     let module_ := compile_db_decls_ir defs in
     lang.codegen.ir.emit_module module_
 
 /// Full pipeline: compile Defs to IR, write to file, run llc,
 /// compile runtime, link, run the binary, return exit code.
-@[partial]
+#[partial]
 def compile_and_run (defs : List Def) (output_dir : String) (output_name : String) : IO I64 {
     let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
     let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
@@ -50,7 +50,7 @@ def compile_and_run (defs : List Def) (output_dir : String) (output_name : Strin
     exec_cmd output_path empty_str_list
 }
 
-@[test]
+#[test]
 def test_link_compile_defs_to_ir : Bool :=
     let id_val := Identifier.id "test" in
     let x_id := Identifier.id "x" in
@@ -63,7 +63,7 @@ def test_link_compile_defs_to_ir : Bool :=
     let text := compile_defs_to_ir (List.cons def_ List.empty) in
     check_contains text "add i64"
 
-@[partial]
+#[partial]
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true

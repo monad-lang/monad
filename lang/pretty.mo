@@ -1,11 +1,25 @@
-use lang.types
+use lang.types {
+  Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor,
+  Inductive, Instance, Literal, MatchCase, ModulePath, Multiplicity, Native,
+  NumSuffix, OpenFilter, Operator, Param, Struct, StructField, Term,
+  TypeConstraint, UseFilter, UseItem, affine, app, class_d, con, def_d, f32, f64,
+  forall, hole, i16, i32, i64, i8, id, if_, inductive_d, infix_d, instance_d, lam,
+  linear, lit, many, match_, mc, mk, mp, name, named, ntv, num, open_all, open_d,
+  open_only, operator, pi, scoped_open_d, show_identifier, show_module_path,
+  show_operator, str, struct_d, type_, u16, u32, u64, u8, unnamed, use_bare,
+  use_d, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename, var,
+  zero,
+}
 
-open Term
-open Literal
-open Decl
-open Multiplicity
-open DebugName
-open NumSuffix
+open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
+open Literal {if_, match_, num, str}
+open Decl {
+  class_d, def_d, inductive_d, infix_d, instance_d, open_d, scoped_open_d,
+  struct_d, use_d,
+}
+open Multiplicity {affine, linear, many, zero}
+open DebugName {named, unnamed}
+open NumSuffix {f32, f64, i16, i32, i64, i8, u16, u32, u64, u8}
 
 def show_num_suffix (suf : NumSuffix) : String := match suf {
     i8 => "i8",
@@ -37,7 +51,7 @@ def show_universe (level : I64) : String :=
     else if level == 1 then "Type"
     else String.concat "Type " (I64.to_string (level - 1))
 
-@[partial]
+#[partial]
 def show_param (p : Param) : String := match p {
     Param.mk name type_ mult default =>
         let mult_str := show_multiplicity mult in
@@ -54,7 +68,7 @@ def show_param (p : Param) : String := match p {
         },
 }
 
-@[partial]
+#[partial]
 def show_term (t : Term) : String := match t {
     var idx dbg => show_debug_name dbg,
     lam dbg typ body =>
@@ -97,7 +111,7 @@ def show_term (t : Term) : String := match t {
     hole => "_",
 }
 
-@[partial]
+#[partial]
 def show_literal (lit : Literal) : String := match lit {
     str value =>
         let lhs := String.concat "\"" value in
@@ -129,7 +143,7 @@ def show_match_cases (cases : List MatchCase) : String := match cases {
     List.cons first rest => show_match_cases_rest first rest,
 }
 
-@[partial]
+#[partial]
 def show_match_cases_rest (first : MatchCase) (rest : List MatchCase) : String :=
     match rest {
         List.empty => show_match_case first,
@@ -140,7 +154,7 @@ def show_match_cases_rest (first : MatchCase) (rest : List MatchCase) : String :
             String.concat sep rest_str,
     }
 
-@[partial]
+#[partial]
 def show_match_case (c : MatchCase) : String := match c {
     MatchCase.mc name args body =>
         let name_str := show_identifier name in
@@ -173,12 +187,12 @@ def show_id_list_rest (hd : Identifier) (rest : List Identifier) : String :=
             String.concat sp rest_str,
     }
 
-@[partial]
+#[partial]
 def show_native (n : Native) : String := match n {
     Native.mk name num_args args => "native",
 }
 
-@[partial]
+#[partial]
 def show_con (c : Con) : String := match c {
     Con.mk name typ_name num_args args =>
         let typ_str := show_module_path typ_name in
@@ -196,13 +210,13 @@ def show_con (c : Con) : String := match c {
         },
 }
 
-@[partial]
+#[partial]
 def show_opt_term_list (args : List (Option Term)) : String := match args {
     List.empty => "",
     List.cons hd rest => show_opt_term_rest hd rest,
 }
 
-@[partial]
+#[partial]
 def show_opt_term_rest (hd : Option Term) (rest : List (Option Term)) : String :=
     let head_str := match hd {
         Option.some t => show_term t,
@@ -216,7 +230,7 @@ def show_opt_term_rest (hd : Option Term) (rest : List (Option Term)) : String :
             String.concat sp rest_str,
     }
 
-@[partial]
+#[partial]
 def show_type_constraint (tc : TypeConstraint) : String := match tc {
     TypeConstraint.mk cls vars =>
         let cls_str := show_module_path cls in
@@ -227,7 +241,7 @@ def show_type_constraint (tc : TypeConstraint) : String := match tc {
         String.concat inner "]",
 }
 
-@[partial]
+#[partial]
 def show_def (d : Def) : String := match d {
     Def.mk name typ term constraints attrs =>
         let name_str := show_module_path name in
@@ -240,7 +254,7 @@ def show_def (d : Def) : String := match d {
         String.concat with_type eq_body,
 }
 
-@[partial]
+#[partial]
 def show_inductive (ind : Inductive) : String := match ind {
     Inductive.mk name params typ constructors attrs =>
         let name_str := show_module_path name in
@@ -258,13 +272,13 @@ def list_param_is_empty (ps : List Param) : Bool := match ps {
     List.cons x y => false,
 }
 
-@[partial]
+#[partial]
 def show_params (ps : List Param) : String := match ps {
     List.empty => "",
     List.cons hd rest => show_params_rest hd rest,
 }
 
-@[partial]
+#[partial]
 def show_params_rest (hd : Param) (rest : List Param) : String :=
     match rest {
         List.empty => show_param hd,
@@ -280,7 +294,7 @@ def show_induct_constructors (ctors : List InductConstructor) : String := match 
     List.cons hd rest => show_induct_ctors_rest hd rest,
 }
 
-@[partial]
+#[partial]
 def show_induct_ctors_rest (hd : InductConstructor) (rest : List InductConstructor) : String :=
     match rest {
         List.empty => show_induct_constructor hd,
@@ -291,7 +305,7 @@ def show_induct_ctors_rest (hd : InductConstructor) (rest : List InductConstruct
             String.concat sep rest_str,
     }
 
-@[partial]
+#[partial]
 def show_induct_constructor (c : InductConstructor) : String := match c {
     InductConstructor.mk name params typ =>
         let name_str := show_module_path name in
@@ -306,13 +320,13 @@ def show_induct_constructor (c : InductConstructor) : String := match c {
         with_params,
 }
 
-@[partial]
+#[partial]
 def show_induct_ctor_params (ps : List Param) : String := match ps {
     List.empty => "",
     List.cons hd rest => show_induct_ctor_params_rest hd rest,
 }
 
-@[partial]
+#[partial]
 def show_induct_ctor_params_rest (hd : Param) (rest : List Param) : String :=
     let name_str := show_identifier (param_name hd) in
     let type_str := show_term (param_type hd) in
@@ -334,7 +348,7 @@ def param_type (p : Param) : Term := match p {
     Param.mk name type_ mult default => type_,
 }
 
-@[partial]
+#[partial]
 def show_struct (s : Struct) : String := match s {
     Struct.mk name fields =>
         let name_str := show_identifier name in
@@ -350,7 +364,7 @@ def show_struct_fields (fs : List StructField) : String := match fs {
     List.cons hd rest => show_struct_fields_rest hd rest,
 }
 
-@[partial]
+#[partial]
 def show_struct_fields_rest (hd : StructField) (rest : List StructField) : String :=
     match rest {
         List.empty => show_struct_field hd,
@@ -361,7 +375,7 @@ def show_struct_fields_rest (hd : StructField) (rest : List StructField) : Strin
             String.concat sep rest_str,
     }
 
-@[partial]
+#[partial]
 def show_struct_field (f : StructField) : String := match f {
     StructField.mk name typ default =>
         let name_str := show_identifier name in
@@ -377,7 +391,7 @@ def show_struct_field (f : StructField) : String := match f {
         },
 }
 
-@[partial]
+#[partial]
 def show_class (cls : Class) : String := match cls {
     Class.mk name params constraints methods =>
         let name_str := show_identifier name in
@@ -400,7 +414,7 @@ def show_class_params (ps : List Param) : String := match ps {
     List.cons hd rest => show_class_params_rest hd rest,
 }
 
-@[partial]
+#[partial]
 def show_class_params_rest (hd : Param) (rest : List Param) : String :=
     let prefix := String.concat "(" (show_param hd) in
     match rest {
@@ -416,7 +430,7 @@ def show_class_defs (ms : List ClassDef) : String := match ms {
     List.cons hd rest => show_class_defs_rest hd rest,
 }
 
-@[partial]
+#[partial]
 def show_class_defs_rest (hd : ClassDef) (rest : List ClassDef) : String :=
     match rest {
         List.empty => show_class_def hd,
@@ -427,7 +441,7 @@ def show_class_defs_rest (hd : ClassDef) (rest : List ClassDef) : String :=
             String.concat sep rest_str,
     }
 
-@[partial]
+#[partial]
 def show_class_def (m : ClassDef) : String := match m {
     ClassDef.mk name typ default =>
         let name_str := show_identifier name in
@@ -450,7 +464,7 @@ def show_instance (ins : Instance) : String := match ins {
         String.concat "instance " cls_str,
 }
 
-@[partial]
+#[partial]
 def show_infix_decl (op : Operator) (path : ModulePath) : String :=
     let op_str := show_operator op in
     let path_str := show_module_path path in
@@ -458,7 +472,7 @@ def show_infix_decl (op : Operator) (path : ModulePath) : String :=
     let eq_part := String.concat " := " path_str in
     String.concat op_part eq_part
 
-@[partial]
+#[partial]
 def show_decl (d : Decl) : String := match d {
     def_d def_ => show_def def_,
     inductive_d ind => show_inductive ind,
@@ -480,7 +494,7 @@ def show_decl (d : Decl) : String := match d {
 
 /// A single item inside a `use Module { ... }` brace filter. Mirrors
 /// Rust's `Display for UseItem` (core/src/term.rs).
-@[partial]
+#[partial]
 def show_use_item (item : UseItem) : String := match item {
     UseItem.use_name name => show_identifier name,
     UseItem.use_rename name alias =>
@@ -493,13 +507,13 @@ def show_use_item (item : UseItem) : String := match item {
         String.concat (String.concat header " ") (show_use_items_braced items),
 }
 
-@[partial]
+#[partial]
 def show_use_items_joined (items : List UseItem) : String := match items {
     List.empty => "",
     List.cons hd rest => show_use_items_joined_rest hd rest,
 }
 
-@[partial]
+#[partial]
 def show_use_items_joined_rest (hd : UseItem) (rest : List UseItem) : String :=
     match rest {
         List.empty => show_use_item hd,
@@ -508,7 +522,7 @@ def show_use_items_joined_rest (hd : UseItem) (rest : List UseItem) : String :=
             String.concat sep (show_use_items_joined rest),
     }
 
-@[partial]
+#[partial]
 def show_use_items_braced (items : List UseItem) : String :=
     String.concat (String.concat "{" (show_use_items_joined items)) "}"
 
@@ -519,13 +533,13 @@ def show_use_filter (filter : UseFilter) : String := match filter {
     UseFilter.use_items items => String.concat " " (show_use_items_braced items),
 }
 
-@[partial]
+#[partial]
 def show_identifier_list_joined (names : List Identifier) : String := match names {
     List.empty => "",
     List.cons hd rest => show_identifier_list_joined_rest hd rest,
 }
 
-@[partial]
+#[partial]
 def show_identifier_list_joined_rest (hd : Identifier) (rest : List Identifier) : String :=
     match rest {
         List.empty => show_identifier hd,
@@ -544,27 +558,27 @@ def show_open_filter (filter : OpenFilter) : String := match filter {
 
 /// Tests
 
-@[test]
+#[test]
 def test_show_var_named : Bool :=
     let id := Identifier.id "x" in
     let dbg := DebugName.named id in
     let t := Term.var 0 dbg in
     show_term t == "x"
 
-@[test]
+#[test]
 def test_show_var_unnamed : Bool :=
     let dbg := DebugName.unnamed in
     let t := Term.var 1 dbg in
     show_term t == "_"
 
-@[test]
+#[test]
 def test_show_lam_unnamed : Bool :=
     let dbg := DebugName.unnamed in
     let body := Term.var 0 DebugName.unnamed in
     let t := Term.lam dbg Term.hole body in
     show_term t == "(fn _ : _ => _)"
 
-@[test]
+#[test]
 def test_show_lam_named : Bool :=
     let id := Identifier.id "x" in
     let dbg := DebugName.named id in
@@ -572,7 +586,7 @@ def test_show_lam_named : Bool :=
     let t := Term.lam dbg (Term.type_ 1) body in
     show_term t == "(fn x : Type => x)"
 
-@[test]
+#[test]
 def test_show_forall_named : Bool :=
     let id := Identifier.id "A" in
     let dbg := DebugName.named id in
@@ -580,21 +594,21 @@ def test_show_forall_named : Bool :=
     let t := Term.forall dbg (Term.type_ 1) body in
     show_term t == "{A : Type} -> Type"
 
-@[test]
+#[test]
 def test_show_forall_unnamed : Bool :=
     let dbg := DebugName.unnamed in
     let body := Term.type_ 1 in
     let t := Term.forall dbg (Term.type_ 1) body in
     show_term t == "{_ : Type} -> Type"
 
-@[test]
+#[test]
 def test_show_pi : Bool :=
     let arg := Term.type_ 1 in
     let ret := Term.type_ 1 in
     let t := Term.pi arg ret in
     show_term t == "(Type -> Type)"
 
-@[test]
+#[test]
 def test_show_app : Bool :=
     let fun_id := Identifier.id "f" in
     let arg_id := Identifier.id "x" in
@@ -603,23 +617,23 @@ def test_show_app : Bool :=
     let t := Term.app fun_ arg in
     show_term t == "(f x)"
 
-@[test]
+#[test]
 def test_show_lit_str : Bool :=
     let t := Term.lit (Literal.str "hello") in
     show_term t == "\"hello\""
 
-@[test]
+#[test]
 def test_show_lit_num : Bool :=
     let t := Term.lit (Literal.num 42 NumSuffix.i64) in
     show_term t == "42i64"
 
-@[test]
+#[test]
 def test_show_ntv : Bool :=
     let ntv := Native.mk (Identifier.id "add") (0i64) List.empty in
     let t := Term.ntv ntv in
     show_term t == "native"
 
-@[test]
+#[test]
 def test_show_con_named_args : Bool :=
     let args := List.cons (Option.some (Term.var 0 DebugName.unnamed))
                          List.empty in
@@ -630,7 +644,7 @@ def test_show_con_named_args : Bool :=
     let t := Term.con con in
     show_term t == "(Option.some _)"
 
-@[test]
+#[test]
 def test_show_con_no_args : Bool :=
     let con := Con.mk (Identifier.id "true_")
                       (ModulePath.mp (List.cons (Identifier.id "Bool") List.empty))
@@ -639,27 +653,27 @@ def test_show_con_no_args : Bool :=
     let t := Term.con con in
     show_term t == "Bool.true_"
 
-@[test]
+#[test]
 def test_show_type_prop : Bool :=
     show_term (Term.type_ 0) == "Prop"
 
-@[test]
+#[test]
 def test_show_type_type : Bool :=
     show_term (Term.type_ 1) == "Type"
 
-@[test]
+#[test]
 def test_show_type_type1 : Bool :=
     show_term (Term.type_ 2) == "Type 1"
 
-@[test]
+#[test]
 def test_show_type_type2 : Bool :=
     show_term (Term.type_ 3) == "Type 2"
 
-@[test]
+#[test]
 def test_show_hole : Bool :=
     show_term Term.hole == "_"
 
-@[test]
+#[test]
 def test_show_literal_if : Bool :=
     let cond := Term.var 0 (DebugName.named (Identifier.id "x")) in
     let then_ := Term.lit (Literal.num 1 NumSuffix.i64) in
@@ -667,7 +681,7 @@ def test_show_literal_if : Bool :=
     let t := Term.lit (Literal.if_ cond then_ else_) in
     show_term t == "if x then 1i64 else 0i64"
 
-@[test]
+#[test]
 def test_show_literal_match : Bool :=
     let scrutinee := Term.var 0 (DebugName.named (Identifier.id "x")) in
     let case_name := Identifier.id "some" in
@@ -679,59 +693,59 @@ def test_show_literal_match : Bool :=
     let t := Term.lit (Literal.match_ scrutinee cases) in
     show_term t == "match x {\n some v => v\n}"
 
-@[test]
+#[test]
 def test_show_identifier : Bool :=
     show_identifier (Identifier.id "foo") == "foo"
 
-@[test]
+#[test]
 def test_show_operator : Bool :=
     show_operator (Operator.operator ">>=") == ">>="
 
-@[test]
+#[test]
 def test_show_module_path_single : Bool :=
     show_module_path (ModulePath.mp (List.cons (Identifier.id "List") List.empty)) == "List"
 
-@[test]
+#[test]
 def test_show_module_path_multi : Bool :=
     let ids := List.cons (Identifier.id "List") (List.cons (Identifier.id "append") List.empty) in
     show_module_path (ModulePath.mp ids) == "List.append"
 
-@[test]
+#[test]
 def test_show_num_suffix_i8 : Bool :=
     show_num_suffix NumSuffix.i8 == "i8"
 
-@[test]
+#[test]
 def test_show_num_suffix_i64 : Bool :=
     show_num_suffix NumSuffix.i64 == "i64"
 
-@[test]
+#[test]
 def test_show_num_suffix_f64 : Bool :=
     show_num_suffix NumSuffix.f64 == "f64"
 
-@[test]
+#[test]
 def test_show_multiplicity_zero : Bool :=
     show_multiplicity Multiplicity.zero == "0"
 
-@[test]
+#[test]
 def test_show_multiplicity_many : Bool :=
     show_multiplicity Multiplicity.many == ""
 
-@[test]
+#[test]
 def test_show_multiplicity_linear : Bool :=
     show_multiplicity Multiplicity.linear == "!"
 
-@[test]
+#[test]
 def test_show_multiplicity_affine : Bool :=
     show_multiplicity Multiplicity.affine == "?"
 
-@[test]
+#[test]
 def test_show_param_simple : Bool :=
     let id := Identifier.id "x" in
     let typ := Term.type_ 1 in
     let p := Param.mk id typ Multiplicity.many Option.none in
     show_param p == "x : Type"
 
-@[test]
+#[test]
 def test_show_param_with_default : Bool :=
     let id := Identifier.id "x" in
     let typ := Term.type_ 1 in
@@ -739,67 +753,67 @@ def test_show_param_with_default : Bool :=
     let p := Param.mk id typ Multiplicity.many (Option.some dflt) in
     show_param p == "x : Type := Type"
 
-@[test]
+#[test]
 def test_show_param_linear : Bool :=
     let id := Identifier.id "x" in
     let typ := Term.type_ 1 in
     let p := Param.mk id typ Multiplicity.linear Option.none in
     show_param p == "!x : Type"
 
-@[test]
+#[test]
 def test_show_universe_prop : Bool :=
     show_universe 0 == "Prop"
 
-@[test]
+#[test]
 def test_show_universe_type : Bool :=
     show_universe 1 == "Type"
 
-@[test]
+#[test]
 def test_show_universe_type1 : Bool :=
     show_universe 2 == "Type 1"
 
-@[test]
+#[test]
 def test_show_debug_name_named : Bool :=
     show_debug_name (DebugName.named (Identifier.id "x")) == "x"
 
-@[test]
+#[test]
 def test_show_debug_name_unnamed : Bool :=
     show_debug_name DebugName.unnamed == "_"
 
-@[test]
+#[test]
 def test_show_decl_use : Bool :=
     let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "prelude") List.empty)) UseFilter.use_bare in
     show_decl d == "use prelude"
 
-@[test]
+#[test]
 def test_show_decl_open : Bool :=
     let d := Decl.open_d (ModulePath.mp (List.cons (Identifier.id "IO") List.empty)) OpenFilter.open_all in
     show_decl d == "open IO"
 
-@[test]
+#[test]
 def test_show_decl_use_glob : Bool :=
     let items := List.cons UseItem.use_glob List.empty in
     let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "io") List.empty)) (UseFilter.use_items items) in
     show_decl d == "use io {*}"
 
-@[test]
+#[test]
 def test_show_decl_open_filtered : Bool :=
     let names := List.cons (Identifier.id "println") List.empty in
     let d := Decl.open_d (ModulePath.mp (List.cons (Identifier.id "IO") List.empty)) (OpenFilter.open_only names) in
     show_decl d == "open IO {println}"
 
-@[test]
+#[test]
 def test_show_decl_scoped_open : Bool :=
     let inner := Decl.def_d (Def.mk (ModulePath.mp (List.cons (Identifier.id "z") List.empty)) Term.hole Term.hole List.empty List.empty) in
     let d := Decl.scoped_open_d (ModulePath.mp (List.cons (Identifier.id "Nat") List.empty)) OpenFilter.open_all inner in
     show_decl d == "open Nat in def z : _ := _"
 
-@[test]
+#[test]
 def test_show_decl_infix : Bool :=
     let d := Decl.infix_d (Operator.operator ">>=") (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))) in
     show_decl d == "infix: >>= := Monad.bind"
 
-@[test]
+#[test]
 def test_show_decl_def : Bool :=
     let name := ModulePath.mp (List.cons (Identifier.id "id") List.empty) in
     let path := Identifier.id "x" in
@@ -809,7 +823,7 @@ def test_show_decl_def : Bool :=
     let decl := Decl.def_d d in
     show_decl decl == "def id : Type := (fn x : Type => x)"
 
-@[test]
+#[test]
 def test_show_decl_class : Bool :=
     let name := Identifier.id "Show" in
     let show_name := Identifier.id "show" in
@@ -819,14 +833,14 @@ def test_show_decl_class : Bool :=
     let decl := Decl.class_d cls in
     show_decl decl == "class Show {\n  def show : Type\n}"
 
-@[test]
+#[test]
 def test_show_decl_struct : Bool :=
     let name := Identifier.id "Point" in
     let field := StructField.mk (Identifier.id "x") (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
     let decl := Decl.struct_d (Struct.mk name (List.cons field List.empty)) in
     show_decl decl == "struct Point {\n  x : 0i64\n}"
 
-@[test]
+#[test]
 def test_show_decl_inductive : Bool :=
     let name := ModulePath.mp (List.cons (Identifier.id "Bool") List.empty) in
     let ct1 := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "true") List.empty)) List.empty (Term.type_ 1) in

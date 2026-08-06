@@ -646,6 +646,39 @@ fn test_open_glob() {
 }
 
 #[test]
+fn test_open_multiline_brace_filter() {
+  // Regression test: `open`'s brace-filter grammar used to be missing the
+  // leading whitespace-skip right after `{` that `use`'s already had
+  // (`use_brace_items`'s opening delimiter is `(char('{'), ws0)`; `open`'s
+  // was just `char('{')`) — a newline immediately after `{` (as any
+  // multi-line-wrapped `open X {\n  a, b,\n}` produces, e.g. via
+  // `monad-rs organize-imports`) made `identifier` fail on the very first
+  // attempt, so `many0` silently matched zero names and the parser choked
+  // looking for `}` right where the first name actually was.
+  use crate::term::{Decl, OpenFilter, id};
+  let s = "open IO {\n  println,\n  get_env,\n}".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::Open(open) => {
+      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(
+        open.filter,
+        OpenFilter::Only(vec![id("println"), id("get_env")])
+      );
+    }
+    other => panic!("expected Decl::Open, got {other:?}"),
+  }
+
+  // Multi-line glob too.
+  let s = "open IO {\n  *\n}".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::Open(open) => assert_eq!(open.filter, OpenFilter::Glob),
+    other => panic!("expected Decl::Open, got {other:?}"),
+  }
+}
+
+#[test]
 fn test_scoped_open_def() {
   use crate::term::{Decl, OpenFilter};
   let s = "open IO in def main : IO Unit := println \"hi\"".into();
