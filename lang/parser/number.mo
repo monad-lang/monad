@@ -1,26 +1,26 @@
 /// Number parsing functions for the self-hosted Monad parser.
 
-use lang.parser.core
-use lang.parser.char_preds
-use lang.parser.combinators
+use lang.parser.core {ParseResult, custom, fail, is_empty, success}
+use lang.parser.char_preds {is_digit}
+use lang.parser.combinators {take_while}
 
-open ParseResult
+open ParseResult {fail, success}
 
 
 // --- Number parser ---
 
-@[partial]
+#[partial]
 def is_digit_or_underscore (c : String) : Bool :=
 	if is_digit c then true
 	else String.beq "_" c
 
 
-@[partial]
+#[partial]
 def number (input : String) : ParseResult I64 :=
 	number_body (take_while is_digit_or_underscore input)
 
 
-@[partial]
+#[partial]
 def number_body (r : ParseResult String) : ParseResult I64 :=
 	match r {
 		success rem out =>
@@ -31,7 +31,7 @@ def number_body (r : ParseResult String) : ParseResult I64 :=
 	}
 
 
-@[partial]
+#[partial]
 def number_parse (s : String) (rem : String) : ParseResult I64 :=
 	if is_empty s
 	then fail (ParseError.custom "empty number")
@@ -42,7 +42,7 @@ def number_parse (s : String) (rem : String) : ParseResult I64 :=
 
 // --- Number parsing helpers ---
 
-@[partial]
+#[partial]
 def char_to_digit (c : String) : I64 :=
 	if String.beq "0" c then 0
 	else if String.beq "1" c then 1
@@ -56,18 +56,18 @@ def char_to_digit (c : String) : I64 :=
 	else 9
 
 
-@[partial]
+#[partial]
 def parse_digits (s : String) : I64 :=
 	parse_digits_loop s 0
 
 
-@[partial]
+#[partial]
 def parse_digits_loop (s : String) (acc : I64) : I64 :=
 	if is_empty s
 	then acc
 	else parse_digits_char (String.slice s 0 1) (String.drop 1 s) acc
 
 
-@[partial]
+#[partial]
 def parse_digits_char (ch : String) (rest : String) (acc : I64) : I64 :=
 	parse_digits_loop rest (I64.add (I64.mul acc 10) (char_to_digit ch))

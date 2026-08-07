@@ -24,7 +24,8 @@ use crate::term::module::ParsedModule;
 #[cfg(feature = "repl")]
 use crate::term::module::module;
 use crate::term::module::{
-  LoadedModules, default_modules, load_module_files, load_module_from_text, module_warnings,
+  LoadedModules, default_module_source_files, default_modules, load_module_files,
+  load_module_from_text, module_warnings,
 };
 use crate::term::{
   Constructor, InductiveVariant, ModulePath, Named, SearchPaths, SourceContext, SourceRange, mpt,
@@ -262,6 +263,20 @@ pub fn vec_fmt<T: Display>(v: &[T]) -> String {
     .map(|t| format!("{t}"))
     .collect::<Vec<String>>()
     .join(", ")
+}
+
+/// True when `file` is literally one of the on-disk source files backing an
+/// embedded default module (`init/prelude.mo`, `init/string.mo`, etc.) —
+/// compares canonicalized paths, not module-path names, so a file that
+/// merely shares a *name* with a default module (e.g. `lang/parser/
+/// number.mo` vs. the top-level `number` default) is never mistaken for
+/// it. Used to skip re-checking/re-testing files that `default_modules()`
+/// already loaded, without false-positiving on unrelated same-named files.
+fn is_default_module_file(file: &Path) -> bool {
+  let Ok(canon) = file.canonicalize() else {
+    return false;
+  };
+  default_module_source_files().contains(&canon)
 }
 
 fn build_default_search_paths(input: &PathBuf, extra_paths: &[PathBuf]) -> SearchPaths {
@@ -752,12 +767,7 @@ pub fn run_tests(
     .into_iter()
     .filter(|file| {
       let path: ModulePath = file.clone().into();
-      let is_default = master_loaded.get_module(&path).is_some() || {
-        let last = path.last();
-        master_loaded
-          .get_module(&ModulePath::single(last.clone()))
-          .is_some()
-      };
+      let is_default = master_loaded.get_module(&path).is_some() || is_default_module_file(file);
       !is_default
     })
     .collect();
@@ -820,12 +830,7 @@ pub fn organize_imports_for_files(
     .into_iter()
     .filter(|file| {
       let path: ModulePath = file.clone().into();
-      let is_default = master_loaded.get_module(&path).is_some() || {
-        let last = path.last();
-        master_loaded
-          .get_module(&ModulePath::single(last.clone()))
-          .is_some()
-      };
+      let is_default = master_loaded.get_module(&path).is_some() || is_default_module_file(file);
       !is_default
     })
     .collect();
@@ -934,12 +939,7 @@ pub fn check_files(
     .into_iter()
     .filter(|file| {
       let path: ModulePath = file.clone().into();
-      let is_default = master_loaded.get_module(&path).is_some() || {
-        let last = path.last();
-        master_loaded
-          .get_module(&ModulePath::single(last.clone()))
-          .is_some()
-      };
+      let is_default = master_loaded.get_module(&path).is_some() || is_default_module_file(file);
       !is_default
     })
     .collect();
@@ -1159,12 +1159,7 @@ pub fn symbols_for_files(
     .into_iter()
     .filter(|file| {
       let path: ModulePath = file.clone().into();
-      let is_default = master_loaded.get_module(&path).is_some() || {
-        let last = path.last();
-        master_loaded
-          .get_module(&ModulePath::single(last.clone()))
-          .is_some()
-      };
+      let is_default = master_loaded.get_module(&path).is_some() || is_default_module_file(file);
       !is_default
     })
     .collect();

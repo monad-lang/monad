@@ -3,28 +3,28 @@
 
 // I8
 
-@[native i8_add]
+#[native i8_add]
 def I8.add (a b : I8) : I8
 
-@[native i8_sub]
+#[native i8_sub]
 def I8.sub (a b : I8) : I8
 
-@[native i8_mul]
+#[native i8_mul]
 def I8.mul (a b : I8) : I8
 
-@[native i8_div]
+#[native i8_div]
 def I8.div (a b : I8) : I8
 
-@[native i8_eq]
+#[native i8_eq]
 def I8.beq (a b : I8) : Bool
 
-@[native i8_lt]
+#[native i8_lt]
 def I8.lt (a b : I8) : Bool
 
-@[native i8_gt]
+#[native i8_gt]
 def I8.gt (a b : I8) : Bool
 
-@[native i8_to_string]
+#[native i8_to_string]
 def I8.to_string (a : I8) : String
 
 instance Add I8 {
@@ -58,28 +58,28 @@ instance ToString I8 {
 
 // I16
 
-@[native i16_add]
+#[native i16_add]
 def I16.add (a b : I16) : I16
 
-@[native i16_sub]
+#[native i16_sub]
 def I16.sub (a b : I16) : I16
 
-@[native i16_mul]
+#[native i16_mul]
 def I16.mul (a b : I16) : I16
 
-@[native i16_div]
+#[native i16_div]
 def I16.div (a b : I16) : I16
 
-@[native i16_eq]
+#[native i16_eq]
 def I16.beq (a b : I16) : Bool
 
-@[native i16_lt]
+#[native i16_lt]
 def I16.lt (a b : I16) : Bool
 
-@[native i16_gt]
+#[native i16_gt]
 def I16.gt (a b : I16) : Bool
 
-@[native i16_to_string]
+#[native i16_to_string]
 def I16.to_string (a : I16) : String
 
 instance Add I16 {
@@ -113,28 +113,28 @@ instance ToString I16 {
 
 // I32
 
-@[native i32_add]
+#[native i32_add]
 def I32.add (a b : I32) : I32
 
-@[native i32_sub]
+#[native i32_sub]
 def I32.sub (a b : I32) : I32
 
-@[native i32_mul]
+#[native i32_mul]
 def I32.mul (a b : I32) : I32
 
-@[native i32_div]
+#[native i32_div]
 def I32.div (a b : I32) : I32
 
-@[native i32_eq]
+#[native i32_eq]
 def I32.beq (a b : I32) : Bool
 
-@[native i32_lt]
+#[native i32_lt]
 def I32.lt (a b : I32) : Bool
 
-@[native i32_gt]
+#[native i32_gt]
 def I32.gt (a b : I32) : Bool
 
-@[native i32_to_string]
+#[native i32_to_string]
 def I32.to_string (a : I32) : String
 
 instance Add I32 {
@@ -168,31 +168,31 @@ instance ToString I32 {
 
 // I64
 
-@[native i64_add]
+#[native i64_add]
 def I64.add (a b : I64) : I64
 
-@[native i64_sub]
+#[native i64_sub]
 def I64.sub (a b : I64) : I64
 
-@[native i64_mul]
+#[native i64_mul]
 def I64.mul (a b : I64) : I64
 
-@[native i64_div]
+#[native i64_div]
 def I64.div (a b : I64) : I64
 
-@[native i64_lt]
+#[native i64_lt]
 def I64.lt (a b : I64) : Bool
 
-@[native i64_gt]
+#[native i64_gt]
 def I64.gt (a b : I64) : Bool
 
-@[native i64_to_u64]
+#[native i64_to_u64]
 def I64.to_u64 (a : I64) : U64
 
-@[native i64_eq]
+#[native i64_eq]
 def I64.beq (a b : I64) : Bool
 
-@[native i64_to_string]
+#[native i64_to_string]
 def I64.to_string (a : I64) : String
 
 instance Add I64 {
@@ -230,31 +230,31 @@ instance Hashable I64 {
 
 // U8
 
-@[native u8_add]
+#[native u8_add]
 def U8.add (a b : U8) : U8
 
-@[native u8_sub]
+#[native u8_sub]
 def U8.sub (a b : U8) : U8
 
-@[native u8_mul]
+#[native u8_mul]
 def U8.mul (a b : U8) : U8
 
-@[native u8_div]
+#[native u8_div]
 def U8.div (a b : U8) : U8
 
-@[native u8_eq]
+#[native u8_eq]
 def U8.beq (a b : U8) : Bool
 
-@[native u8_to_u64]
+#[native u8_to_u64]
 def U8.to_u64 (a : U8) : U64
 
-@[native u8_lt]
+#[native u8_lt]
 def U8.lt (a b : U8) : Bool
 
-@[native u8_gt]
+#[native u8_gt]
 def U8.gt (a b : U8) : Bool
 
-@[native u8_to_string]
+#[native u8_to_string]
 def U8.to_string (a : U8) : String
 
 instance Add U8 {
@@ -288,28 +288,28 @@ instance ToString U8 {
 
 // U16
 
-@[native u16_add]
+#[native u16_add]
 def U16.add (a b : U16) : U16
 
-@[native u16_sub]
+#[native u16_sub]
 def U16.sub (a b : U16) : U16
 
-@[native u16_mul]
+#[native u16_mul]
 def U16.mul (a b : U16) : U16
 
-@[native u16_div]
+#[native u16_div]
 def U16.div (a b : U16) : U16
 
-@[native u16_eq]
+#[native u16_eq]
 def U16.beq (a b : U16) : Bool
 
-@[native u16_lt]
+#[native u16_lt]
 def U16.lt (a b : U16) : Bool
 
-@[native u16_gt]
+#[native u16_gt]
 def U16.gt (a b : U16) : Bool
 
-@[native u16_to_string]
+#[native u16_to_string]
 def U16.to_string (a : U16) : String
 
 instance Add U16 {
@@ -343,28 +343,28 @@ instance ToString U16 {
 
 // U32
 
-@[native u32_add]
+#[native u32_add]
 def U32.add (a b : U32) : U32
 
-@[native u32_sub]
+#[native u32_sub]
 def U32.sub (a b : U32) : U32
 
-@[native u32_mul]
+#[native u32_mul]
 def U32.mul (a b : U32) : U32
 
-@[native u32_div]
+#[native u32_div]
 def U32.div (a b : U32) : U32
 
-@[native u32_eq]
+#[native u32_eq]
 def U32.beq (a b : U32) : Bool
 
-@[native u32_lt]
+#[native u32_lt]
 def U32.lt (a b : U32) : Bool
 
-@[native u32_gt]
+#[native u32_gt]
 def U32.gt (a b : U32) : Bool
 
-@[native u32_to_string]
+#[native u32_to_string]
 def U32.to_string (a : U32) : String
 
 instance Add U32 {
@@ -398,34 +398,34 @@ instance ToString U32 {
 
 // U64
 
-@[native u64_add]
+#[native u64_add]
 def U64.add (a b : U64) : U64
 
-@[native u64_sub]
+#[native u64_sub]
 def U64.sub (a b : U64) : U64
 
-@[native u64_mul]
+#[native u64_mul]
 def U64.mul (a b : U64) : U64
 
-@[native u64_div]
+#[native u64_div]
 def U64.div (a b : U64) : U64
 
-@[native u64_mod]
+#[native u64_mod]
 def U64.mod (a b : U64) : U64
 
-@[native u64_xor]
+#[native u64_xor]
 def U64.xor (a b : U64) : U64
 
-@[native u64_eq]
+#[native u64_eq]
 def U64.beq (a b : U64) : Bool
 
-@[native u64_lt]
+#[native u64_lt]
 def U64.lt (a b : U64) : Bool
 
-@[native u64_gt]
+#[native u64_gt]
 def U64.gt (a b : U64) : Bool
 
-@[native u64_to_string]
+#[native u64_to_string]
 def U64.to_string (a : U64) : String
 
 instance Add U64 {
@@ -463,28 +463,28 @@ instance ToString U64 {
 
 // F32
 
-@[native f32_add]
+#[native f32_add]
 def F32.add (a b : F32) : F32
 
-@[native f32_sub]
+#[native f32_sub]
 def F32.sub (a b : F32) : F32
 
-@[native f32_mul]
+#[native f32_mul]
 def F32.mul (a b : F32) : F32
 
-@[native f32_div]
+#[native f32_div]
 def F32.div (a b : F32) : F32
 
-@[native f32_eq]
+#[native f32_eq]
 def F32.beq (a b : F32) : Bool
 
-@[native f32_lt]
+#[native f32_lt]
 def F32.lt (a b : F32) : Bool
 
-@[native f32_gt]
+#[native f32_gt]
 def F32.gt (a b : F32) : Bool
 
-@[native f32_to_string]
+#[native f32_to_string]
 def F32.to_string (a : F32) : String
 
 instance Add F32 {
@@ -518,28 +518,28 @@ instance ToString F32 {
 
 // F64
 
-@[native f64_add]
+#[native f64_add]
 def F64.add (a b : F64) : F64
 
-@[native f64_sub]
+#[native f64_sub]
 def F64.sub (a b : F64) : F64
 
-@[native f64_mul]
+#[native f64_mul]
 def F64.mul (a b : F64) : F64
 
-@[native f64_div]
+#[native f64_div]
 def F64.div (a b : F64) : F64
 
-@[native f64_eq]
+#[native f64_eq]
 def F64.beq (a b : F64) : Bool
 
-@[native f64_lt]
+#[native f64_lt]
 def F64.lt (a b : F64) : Bool
 
-@[native f64_gt]
+#[native f64_gt]
 def F64.gt (a b : F64) : Bool
 
-@[native f64_to_string]
+#[native f64_to_string]
 def F64.to_string (a : F64) : String
 
 instance Add F64 {

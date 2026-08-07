@@ -14,20 +14,20 @@ instance Monad IO {
     }
 }
 
-@[native print_str]
+#[native print_str]
 def IO.println (s: String) : IO Unit
 
-@[native "write_file"]
+#[native "write_file"]
 def IO.write_file (path : String) (content : String) : IO Unit
 
 // TODO Return Option and none on failure
-@[native "read_file"]
+#[native "read_file"]
 def IO.read_file (path : String) : IO String
 
-@[native "file_exists"]
+#[native "file_exists"]
 def IO.file_exists (path : String) : IO Bool
 
-@[native "get_env"]
+#[native "get_env"]
 def IO.get_env (s : String) : IO (Option String)
 
 

@@ -1,3 +1,3 @@
 // Math module - re-exports number operations
 
-pub use number
+pub use number {*}

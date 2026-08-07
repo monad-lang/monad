@@ -2151,6 +2151,38 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
   Ok(loaded)
 }
 
+/// The on-disk source files backing the embedded/default modules
+/// (`init_module` above), as canonicalized paths. Used by `check_files`/
+/// `run_tests`/`organize_imports_for_files` to recognize "this CLI argument
+/// literally is one of the always-loaded default modules" precisely — by
+/// comparing actual files, not by comparing the last segment of a module
+/// path, which false-positives on any file that merely happens to share a
+/// name with a default module (e.g. `lang/parser/number.mo` vs the
+/// top-level `number` default module).
+///
+/// Not feature-gated: the `init/` directory is part of the repo regardless
+/// of whether `embed-stdlib` baked its contents into the binary at compile
+/// time, so the same path list is valid for both build configurations.
+pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
+  let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .parent()
+    .expect("CARGO_MANIFEST_DIR has no parent")
+    .join("init");
+  [
+    "prelude.mo",
+    "id.mo",
+    "io.mo",
+    "number.mo",
+    "math.mo",
+    "string.mo",
+    "init.mo",
+    "process.mo",
+  ]
+  .iter()
+  .filter_map(|name| dir.join(name).canonicalize().ok())
+  .collect()
+}
+
 pub(crate) fn format_duration(d: std::time::Duration) -> String {
   let nanos = d.as_nanos();
   if nanos < 1_000 {

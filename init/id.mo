@@ -2,7 +2,7 @@
 type Id A {
     id (a : A)
 }
-open Id
+open Id {id}
 
 instance Functor Id {
     def map (f : A -> B) (a : Id A) : Id B :=

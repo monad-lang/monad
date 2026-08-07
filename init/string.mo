@@ -1,46 +1,46 @@
 
 /// String functions
 
-use math
+use math {}
 
-@[native string_eq]
+#[native string_eq]
 def String.beq (a b : String) : Bool
 
-@[native string_concat]
+#[native string_concat]
 def String.concat (a b : String) : String
 
-@[native string_length]
+#[native string_length]
 def String.length (s : String) : I64
 
-@[native string_slice]
+#[native string_slice]
 def String.slice (s : String) (start : I64) (len : I64) : String
 
-@[native string_drop]
+#[native string_drop]
 def String.drop (n : I64) (s : String) : String
 
-@[native string_starts_with]
+#[native string_starts_with]
 def String.starts_with (prefix : String) (s : String) : Bool
 
-@[native string_get]
+#[native string_get]
 def String.get (s : String) (i : I64) : Option U8
 
-@[native string_get_char]
+#[native string_get_char]
 def String.get_char (s : String) (i : I64) : Option Char
 
-@[native string_to_list]
+#[native string_to_list]
 def String.to_list (s : String) : List U8
 
-@[native string_from_list]
+#[native string_from_list]
 def String.from_list (bytes : List U8) : String
 
-@[native string_to_chars]
+#[native string_to_chars]
 def String.to_chars (s : String) : List Char
 
-@[native string_from_chars]
+#[native string_from_chars]
 def String.from_chars (bytes : List Chars) : String
 
 /// djb2 hash: hash = hash * 33 + byte
-@[terminating]
+#[terminating]
 def String.hash_bytes (bytes: List U8) (acc: U64) : U64 :=
   match bytes {
     List.empty => acc,
@@ -155,7 +155,7 @@ def String.ends_with (s : String) (suffix : String) : Bool :=
 
 // ── Repetition ──
 
-@[terminating]
+#[terminating]
 def String.repeat (s : String) (n : I64) : String :=
 	if I64.beq n 0
 	then ""
