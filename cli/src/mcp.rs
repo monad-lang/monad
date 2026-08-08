@@ -39,8 +39,8 @@ use serde_json::Value;
 
 use crate::{
   JsonCheckReport, JsonFileReport, JsonHover, JsonLocation, JsonPosition, JsonRange, JsonSummary,
-  JsonSymbol, JsonSymbolFile, find_symbol_in_file, identifier_at, location_to_json_range,
-  path_to_uri, symbol_kind_label, to_json_diagnostic,
+  JsonSymbol, JsonSymbolFile, identifier_at, location_to_json_range, path_to_uri, resolve_symbol,
+  symbol_kind_label, symbols_of_file, to_json_diagnostic,
 };
 
 pub fn run(mote_path: Vec<PathBuf>) -> Result<(), String> {
@@ -179,35 +179,43 @@ fn tool_definitions() -> Vec<Value> {
   vec![
     serde_json::json!({
       "name": "check",
-      "description": "Parse and type-check the given files (or the whole workspace if omitted). Returns structured diagnostics — same shape as `monad check --json`.",
+      "description": "Parse and type-check the given files (or the current directory if omitted). Returns structured diagnostics — same shape as `monad check --json`.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "paths": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Files or directories to check; defaults to the current directory."
+            "description": "Files or directories to check; defaults to the current directory. Ignored if workspace is true."
+          },
+          "workspace": {
+            "type": "boolean",
+            "description": "Check the whole resolved workspace instead of paths: the project's own src/ plus every dependency mote's src/ (resolved from the discovered mote.toml manifest). Defaults to false."
           }
         }
       }
     }),
     serde_json::json!({
       "name": "symbols",
-      "description": "List top-level defs/types/classes/instances across the given files (or the whole workspace if omitted) — same shape as `monad symbols --json`.",
+      "description": "List top-level defs/types/classes/instances across the given files (or the current directory if omitted) — same shape as `monad symbols --json`.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "paths": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Files or directories to index; defaults to the current directory."
+            "description": "Files or directories to index; defaults to the current directory. Ignored if workspace is true."
+          },
+          "workspace": {
+            "type": "boolean",
+            "description": "Index the whole resolved workspace instead of paths — see the check tool's workspace argument for exactly what that covers."
           }
         }
       }
     }),
     serde_json::json!({
       "name": "hover",
-      "description": "Type signature and doc summary of the identifier at a position — same shape as `monad hover --json`.",
+      "description": "Type signature and doc summary of the identifier at a position — same shape as `monad hover --json`. Resolves within the file first; if not found there, falls back to a workspace-wide search across the resolved mote graph (so an identifier imported from another mote resolves too).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -220,7 +228,7 @@ fn tool_definitions() -> Vec<Value> {
     }),
     serde_json::json!({
       "name": "definition",
-      "description": "Definition location of the identifier at a position — same shape as `monad definition --json`.",
+      "description": "Definition location of the identifier at a position — same shape as `monad definition --json`. Resolves within the file first; if not found there, falls back to a workspace-wide search across the resolved mote graph, returning a location in the defining file.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -240,7 +248,11 @@ fn tool_definitions() -> Vec<Value> {
           "paths": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Files or directories to convert; defaults to the current directory."
+            "description": "Files or directories to convert; defaults to the current directory. Ignored if workspace is true."
+          },
+          "workspace": {
+            "type": "boolean",
+            "description": "Convert the whole resolved workspace instead of paths — see the check tool's workspace argument for exactly what that covers."
           },
           "write": {
             "type": "boolean",
@@ -301,6 +313,25 @@ fn parse_paths(arguments: &Value) -> Vec<PathBuf> {
     .unwrap_or_default()
 }
 
+/// `paths` argument, or (when `workspace: true`) the server's own
+/// resolved `mote_path` instead — the project's own `src/` plus every
+/// dependency mote's `src/`, exactly the directories `--manifest-path`/
+/// manifest discovery already resolved at server startup. `check_files`/
+/// `symbols_for_files`/`organize_imports_for_files` already handle a list
+/// of directories as `inputs` by recursively walking each one, so this is
+/// the whole mechanism — no `core` changes needed for workspace mode.
+fn resolve_inputs(arguments: &Value, mote_path: &[PathBuf]) -> Vec<PathBuf> {
+  let workspace = arguments
+    .get("workspace")
+    .and_then(|v| v.as_bool())
+    .unwrap_or(false);
+  if workspace {
+    mote_path.to_vec()
+  } else {
+    parse_paths(arguments)
+  }
+}
+
 /// Shared `file`/`line`/`col` argument parsing for `hover`/`definition` —
 /// same 1-indexed convention as `monad hover`/`monad definition` and the
 /// LSP server's own position handling.
@@ -321,7 +352,7 @@ fn parse_position_args(arguments: &Value) -> Result<(PathBuf, u32, usize), Strin
 }
 
 fn tool_check(arguments: &Value, mote_path: &[PathBuf]) -> Result<Value, String> {
-  let results = check_files(parse_paths(arguments), mote_path.to_vec())?;
+  let results = check_files(resolve_inputs(arguments, mote_path), mote_path.to_vec())?;
 
   let mut errors = 0usize;
   let mut warnings = 0usize;
@@ -353,7 +384,7 @@ fn tool_check(arguments: &Value, mote_path: &[PathBuf]) -> Result<Value, String>
 }
 
 fn tool_symbols(arguments: &Value, mote_path: &[PathBuf]) -> Result<Value, String> {
-  let results = symbols_for_files(parse_paths(arguments), mote_path.to_vec())?;
+  let results = symbols_for_files(resolve_inputs(arguments, mote_path), mote_path.to_vec())?;
 
   let files: Vec<JsonSymbolFile> = results
     .iter()
@@ -377,8 +408,10 @@ fn tool_symbols(arguments: &Value, mote_path: &[PathBuf]) -> Result<Value, Strin
 fn tool_hover(arguments: &Value, mote_path: &[PathBuf]) -> Result<Value, String> {
   let (file, line, col) = parse_position_args(arguments)?;
   let source = std::fs::read_to_string(&file).map_err(|e| format!("{e}"))?;
+  let local_symbols = symbols_of_file(&file, mote_path.to_vec());
   let found = identifier_at(&source, line, col).and_then(|(name, start_col, end_col)| {
-    find_symbol_in_file(&file, &name, mote_path.to_vec()).map(|sym| (sym, start_col, end_col))
+    resolve_symbol(&name, &file, &local_symbols, mote_path)
+      .map(|(_, sym)| (sym, start_col, end_col))
   });
 
   let hover = found.map(|(sym, start_col, end_col)| {
@@ -407,11 +440,15 @@ fn tool_hover(arguments: &Value, mote_path: &[PathBuf]) -> Result<Value, String>
 fn tool_definition(arguments: &Value, mote_path: &[PathBuf]) -> Result<Value, String> {
   let (file, line, col) = parse_position_args(arguments)?;
   let source = std::fs::read_to_string(&file).map_err(|e| format!("{e}"))?;
+  let local_symbols = symbols_of_file(&file, mote_path.to_vec());
   let found = identifier_at(&source, line, col)
-    .and_then(|(name, _, _)| find_symbol_in_file(&file, &name, mote_path.to_vec()));
+    .and_then(|(name, _, _)| resolve_symbol(&name, &file, &local_symbols, mote_path));
 
-  let location = found.map(|sym| JsonLocation {
-    uri: path_to_uri(&file),
+  // `def_file` is the *defining* file — for a cross-file match (resolved
+  // via `resolve_symbol`'s workspace fallback) that's no longer `file`,
+  // the queried one.
+  let location = found.map(|(def_file, sym)| JsonLocation {
+    uri: path_to_uri(&def_file),
     range: location_to_json_range(sym.location.as_ref()),
   });
   serde_json::to_value(location).map_err(|e| format!("failed to serialize location: {e}"))
@@ -422,7 +459,8 @@ fn tool_organize_imports(arguments: &Value, mote_path: &[PathBuf]) -> Result<Val
     .get("write")
     .and_then(|v| v.as_bool())
     .unwrap_or(false);
-  let results = organize_imports_for_files(parse_paths(arguments), mote_path.to_vec())?;
+  let results =
+    organize_imports_for_files(resolve_inputs(arguments, mote_path), mote_path.to_vec())?;
 
   let mut files = Vec::with_capacity(results.len());
   let mut changed = 0usize;
@@ -688,5 +726,138 @@ mod test {
     assert_eq!(report["summary"]["changed"], 1);
     let on_disk = std::fs::read_to_string(path).unwrap();
     assert_eq!(on_disk, "open IO {}\n\ndef x : I64 := 1\n");
+  }
+
+  // --- workspace mode + cross-mote resolution ------------------------------
+
+  /// A 2-mote fixture: `dir_a/wsdep.mo` defines `shared_val`, and
+  /// `dir_b/consumer.mo` imports it via `use wsdep {shared_val}` — same
+  /// dependency shape as the checked-in `motes/example`/
+  /// `examples/test_mote.mo` pair, just built at test time under unique
+  /// tmp dirs (parallel test threads, so no path can be shared across
+  /// tests).
+  fn write_cross_mote_fixture(dir_a: &str, dir_b: &str) -> (PathBuf, PathBuf) {
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(format!("{dir_a}/wsdep.mo"), "def shared_val : I64 := 99\n").unwrap();
+    let consumer = format!("{dir_b}/consumer.mo");
+    std::fs::write(
+      &consumer,
+      "use wsdep {shared_val}\n\ndef use_it : I64 := shared_val\n",
+    )
+    .unwrap();
+    (PathBuf::from(dir_a), PathBuf::from(dir_b))
+  }
+
+  #[test]
+  fn test_hover_tool_resolves_cross_file_symbol() {
+    let (dir_a, dir_b) = write_cross_mote_fixture(
+      "/tmp/monad-mcp-test-ws-hover-a",
+      "/tmp/monad-mcp-test-ws-hover-b",
+    );
+    let mote_path = [dir_a, dir_b.clone()];
+    let response = dispatch(
+      "tools/call",
+      serde_json::json!({
+        "name": "hover",
+        "arguments": { "file": dir_b.join("consumer.mo").to_str().unwrap(), "line": 3, "col": 25 }
+      }),
+      &mote_path,
+    );
+    assert_eq!(response["result"]["isError"], false);
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let hover: Value = serde_json::from_str(text).unwrap();
+    assert!(hover["contents"].as_str().unwrap().contains("I64")); // shared_val's type
+  }
+
+  #[test]
+  fn test_definition_tool_resolves_cross_file_symbol() {
+    let (dir_a, dir_b) = write_cross_mote_fixture(
+      "/tmp/monad-mcp-test-ws-def-a",
+      "/tmp/monad-mcp-test-ws-def-b",
+    );
+    let mote_path = [dir_a, dir_b.clone()];
+    let response = dispatch(
+      "tools/call",
+      serde_json::json!({
+        "name": "definition",
+        "arguments": { "file": dir_b.join("consumer.mo").to_str().unwrap(), "line": 3, "col": 25 }
+      }),
+      &mote_path,
+    );
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let loc: Value = serde_json::from_str(text).unwrap();
+    let uri = loc["uri"].as_str().unwrap();
+    assert!(
+      uri.ends_with("wsdep.mo"),
+      "expected definition to point into wsdep.mo (the defining file), got {uri}"
+    );
+    assert!(!uri.contains("consumer.mo"));
+  }
+
+  #[test]
+  fn test_check_tool_workspace_mode_scans_all_mote_dirs() {
+    let dir_a = "/tmp/monad-mcp-test-ws-check-a";
+    let dir_b = "/tmp/monad-mcp-test-ws-check-b";
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(format!("{dir_a}/ok.mo"), "def x : I64 := 1\n").unwrap();
+    std::fs::write(format!("{dir_b}/bad.mo"), "def y : I64 := \"nope\"\n").unwrap();
+    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let response = dispatch(
+      "tools/call",
+      serde_json::json!({ "name": "check", "arguments": { "workspace": true } }),
+      &mote_path,
+    );
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let report: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(report["summary"]["filesChecked"], 2);
+    assert!(report["summary"]["errors"].as_u64().unwrap() > 0);
+  }
+
+  #[test]
+  fn test_symbols_tool_workspace_mode_scans_all_mote_dirs() {
+    let dir_a = "/tmp/monad-mcp-test-ws-symbols-a";
+    let dir_b = "/tmp/monad-mcp-test-ws-symbols-b";
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(format!("{dir_a}/one.mo"), "def alpha : I64 := 1\n").unwrap();
+    std::fs::write(format!("{dir_b}/two.mo"), "def beta : I64 := 2\n").unwrap();
+    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let response = dispatch(
+      "tools/call",
+      serde_json::json!({ "name": "symbols", "arguments": { "workspace": true } }),
+      &mote_path,
+    );
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let files: Value = serde_json::from_str(text).unwrap();
+    let all_names: Vec<String> = files
+      .as_array()
+      .unwrap()
+      .iter()
+      .flat_map(|f| f["symbols"].as_array().unwrap().iter())
+      .map(|s| s["name"].as_str().unwrap().to_string())
+      .collect();
+    assert!(all_names.contains(&"alpha".to_string()));
+    assert!(all_names.contains(&"beta".to_string()));
+  }
+
+  #[test]
+  fn test_organize_imports_tool_workspace_mode_scans_all_mote_dirs() {
+    let dir_a = "/tmp/monad-mcp-test-ws-organize-a";
+    let dir_b = "/tmp/monad-mcp-test-ws-organize-b";
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(format!("{dir_a}/one.mo"), "open IO\n\ndef x : I64 := 1\n").unwrap();
+    std::fs::write(format!("{dir_b}/two.mo"), "open IO\n\ndef y : I64 := 2\n").unwrap();
+    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let response = dispatch(
+      "tools/call",
+      serde_json::json!({ "name": "organize_imports", "arguments": { "workspace": true } }),
+      &mote_path,
+    );
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let report: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(report["summary"]["changed"], 2);
   }
 }

@@ -1,0 +1,19 @@
+{
+  "name": "monad-tools",
+  "displayName": "Monad Tools",
+  "description": "MCP tools for the Monad language — check, symbols, hover, definition, organize_imports, all workspace-aware across dependency motes — backed by the monad-rs mcp server in this repo.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Anders Christiansen Sørby",
+    "email": "anders@sorby.xyz"
+  },
+  "homepage": "https://monad-lang.org",
+  "repository": "https://tangled.org/monad-lang/monad",
+  "license": "ASL2",
+  "mcpServers": {
+    "monad": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/target/release/monad-rs",
+      "args": ["mcp"]
+    }
+  }
+}

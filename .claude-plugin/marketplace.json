@@ -1,0 +1,18 @@
+{
+  "name": "monad-tools",
+  "description": "MCP tools for the Monad language, exposing monad-rs's check/symbols/hover/definition/organize_imports as a workspace-aware tool set.",
+  "owner": {
+    "name": "Anders Christiansen Sørby",
+    "email": "anders@sorby.xyz"
+  },
+  "plugins": [
+    {
+      "name": "monad-tools",
+      "source": "./",
+      "description": "MCP tools for the Monad language — check, symbols, hover, definition, organize_imports.",
+      "version": "0.1.0",
+      "repository": "https://tangled.org/monad-lang/monad",
+      "license": "ASL2"
+    }
+  ]
+}

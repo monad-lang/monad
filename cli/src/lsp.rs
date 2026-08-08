@@ -1,16 +1,24 @@
 //! Minimal stdio JSON-RPC LSP server — diagnostics + navigation
-//! (`hover`, `definition`, `documentSymbol`) plus one codemod
-//! (`organize-imports`, reachable both as a `source.organizeImports`
-//! code action and as the `monad.organizeImports` executable command),
-//! matching the plan's phase ordering ("ship diagnostics + navigation
-//! first"). Completions, rename, semantic tokens, and general code
-//! actions need error-tolerant parsing (the parser stops at the first
-//! syntax error; no recovery/partial-AST support yet) — explicitly out of
-//! scope here, not an oversight, and the server's own advertised
-//! `capabilities` only claim what's actually implemented.
-//! `organize-imports` is the one exception: it only ever needs a file
-//! that already parses cleanly (nothing sound to compute from a broken
-//! one anyway), so it doesn't run into that limitation.
+//! (`hover`, `definition`, `documentSymbol`, `workspace/symbol`) plus one
+//! codemod (`organize-imports`, reachable both as a
+//! `source.organizeImports` code action and as the
+//! `monad.organizeImports` executable command), matching the plan's phase
+//! ordering ("ship diagnostics + navigation first"). Completions, rename,
+//! semantic tokens, and general code actions need error-tolerant parsing
+//! (the parser stops at the first syntax error; no recovery/partial-AST
+//! support yet) — explicitly out of scope here, not an oversight, and the
+//! server's own advertised `capabilities` only claim what's actually
+//! implemented. `organize-imports` is the one exception: it only ever
+//! needs a file that already parses cleanly (nothing sound to compute
+//! from a broken one anyway), so it doesn't run into that limitation.
+//!
+//! `hover`/`definition` resolve within the open document first, falling
+//! back (via `crate::resolve_symbol`) to a workspace-wide search across
+//! the resolved mote graph if not found locally — so an identifier
+//! imported from another mote resolves too. `workspace/symbol` and the
+//! custom `workspace/diagnoseWorkspace` notification search/check that
+//! same resolved workspace (project `src/` + every dependency mote's
+//! `src/`) on-disk, not just open buffers.
 //!
 //! No debounce: every `didChange` re-checks synchronously on the same
 //! thread that reads stdin, matching the CLI's own agent-mode behavior
@@ -33,10 +41,13 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 use monad_core::{
-  SymbolInfo, check_source, diag::Severity, organize_imports_for_source, symbols_from_source,
+  SymbolInfo, check_files, check_source, diag::Severity, organize_imports_for_source,
+  symbols_for_files, symbols_from_source,
 };
 
-use crate::{find_symbol_by_name, identifier_at, location_to_json_range, symbol_kind_label};
+use crate::{
+  identifier_at, location_to_json_range, path_to_uri, resolve_symbol, symbol_kind_label,
+};
 
 /// Command id for the one `workspace/executeCommand` this server
 /// supports — organizes the given document's imports/annotations, same
@@ -118,6 +129,14 @@ pub fn run(mote_path: Vec<PathBuf>) -> Result<(), String> {
       "textDocument/documentSymbol" => {
         document_symbol(&documents, &mut writer, id, &params, &mote_path)?
       }
+      "workspace/symbol" => workspace_symbol(&mut writer, id, &params, &mote_path)?,
+      // Custom notification (not standard LSP) — matches the name already
+      // sketched, unimplemented, in
+      // `plans/library-ideas/language-server.md`. A notification, not a
+      // request: fired to trigger a workspace-wide re-check (e.g. bound
+      // to an editor command), answered with a batch of
+      // `publishDiagnostics` notifications rather than a single response.
+      "workspace/diagnoseWorkspace" => diagnose_workspace(&mut writer, &mote_path)?,
       "textDocument/codeAction" => code_action(&documents, &mut writer, id, &params, &mote_path)?,
       "workspace/executeCommand" => execute_command(
         &documents,
@@ -241,6 +260,7 @@ fn initialize_result() -> serde_json::Value {
       "hoverProvider": true,
       "definitionProvider": true,
       "documentSymbolProvider": true,
+      "workspaceSymbolProvider": true,
       "codeActionProvider": { "codeActionKinds": ["source.organizeImports"] },
       "executeCommandProvider": { "commands": [ORGANIZE_IMPORTS_COMMAND] }
     },
@@ -371,6 +391,38 @@ fn publish_diagnostics(
   )
 }
 
+/// `workspace/diagnoseWorkspace` handler — type-checks the whole resolved
+/// workspace on-disk (via `check_files`, not the in-memory `documents`
+/// map, so files that aren't open still get checked) and publishes one
+/// `textDocument/publishDiagnostics` per file, same wire shape
+/// `publish_diagnostics` above uses for a single open document.
+fn diagnose_workspace(writer: &mut impl Write, mote_path: &[PathBuf]) -> Result<(), String> {
+  let results = check_files(mote_path.to_vec(), mote_path.to_vec()).unwrap_or_default();
+  for r in &results {
+    let uri = path_to_uri(&r.path);
+    let json_diags: Vec<serde_json::Value> = r
+      .diagnostics
+      .iter()
+      .map(|d| {
+        let range = serde_json::to_value(location_to_json_range(d.location.as_ref()))
+          .unwrap_or(serde_json::Value::Null);
+        serde_json::json!({
+          "range": range,
+          "severity": severity_to_lsp_number(d.severity),
+          "message": d.message,
+          "source": "monad",
+        })
+      })
+      .collect();
+    send_notification(
+      writer,
+      "textDocument/publishDiagnostics",
+      serde_json::json!({ "uri": uri, "diagnostics": json_diags }),
+    )?;
+  }
+  Ok(())
+}
+
 // --- navigation -----------------------------------------------------------
 
 /// `(0-indexed line, 0-indexed character)` from an LSP `Position` object,
@@ -405,7 +457,7 @@ fn hover(
     let (line, col) = position_1_indexed(params)?;
     let (name, start_col, end_col) = identifier_at(&doc.text, line, col)?;
     let symbols = symbols_from_source(&path, &doc.text, mote_path.to_vec()).ok()?;
-    let sym = find_symbol_by_name(&symbols, &name)?;
+    let (_, sym) = resolve_symbol(&name, &path, &symbols, mote_path)?;
     let contents = sym
       .detail
       .clone()
@@ -438,9 +490,19 @@ fn definition(
     let (line, col) = position_1_indexed(params)?;
     let (name, _, _) = identifier_at(&doc.text, line, col)?;
     let symbols = symbols_from_source(&path, &doc.text, mote_path.to_vec()).ok()?;
-    let sym = find_symbol_by_name(&symbols, &name)?;
+    let (def_path, sym) = resolve_symbol(&name, &path, &symbols, mote_path)?;
+    // Local match: echo the client's own `uri` string exactly, as before
+    // (some clients compare URIs by exact string match, so don't rebuild
+    // an equivalent-but-not-identical one via `path_to_uri`). Cross-file
+    // match: there's no client-given URI for the defining file, so build
+    // one.
+    let def_uri = if def_path == path {
+      uri.to_string()
+    } else {
+      path_to_uri(&def_path)
+    };
     let range = serde_json::to_value(location_to_json_range(sym.location.as_ref())).ok()?;
-    Some(serde_json::json!({ "uri": uri, "range": range }))
+    Some(serde_json::json!({ "uri": def_uri, "range": range }))
   })();
   send_response(writer, Some(id), result.unwrap_or(serde_json::Value::Null))
 }
@@ -488,6 +550,50 @@ fn document_symbol(
         "range": range,
         "selectionRange": range,
       })
+    })
+    .collect();
+  send_response(writer, Some(id), serde_json::Value::Array(items))
+}
+
+/// `workspace/symbol` — symbol search across the whole resolved
+/// workspace (project `src/` + every dependency mote's `src/`, same
+/// directories `mote_path` already resolves), unlike `document_symbol`
+/// above which is scoped to one open buffer. Operates on-disk (via
+/// `symbols_for_files`), not the in-memory `documents` map, since a
+/// workspace symbol can live in a file that isn't even open in the
+/// editor. No caching — see `resolve_symbol`'s doc comment for why
+/// that's an accepted v1 tradeoff here too.
+fn workspace_symbol(
+  writer: &mut impl Write,
+  id: Option<serde_json::Value>,
+  params: &serde_json::Value,
+  mote_path: &[PathBuf],
+) -> Result<(), String> {
+  let Some(id) = id else {
+    return Ok(());
+  };
+  let query = params
+    .get("query")
+    .and_then(|q| q.as_str())
+    .unwrap_or("")
+    .to_lowercase();
+  let results = symbols_for_files(mote_path.to_vec(), mote_path.to_vec()).unwrap_or_default();
+  let items: Vec<serde_json::Value> = results
+    .iter()
+    .flat_map(|r| {
+      let uri = path_to_uri(&r.path);
+      r.symbols
+        .iter()
+        .filter(|s| query.is_empty() || s.name.to_lowercase().contains(&query))
+        .map(move |s| {
+          let range = serde_json::to_value(location_to_json_range(s.location.as_ref()))
+            .unwrap_or(serde_json::Value::Null);
+          serde_json::json!({
+            "name": s.name,
+            "kind": symbol_kind_to_lsp_number(s.kind),
+            "location": { "uri": uri, "range": range },
+          })
+        })
     })
     .collect();
   send_response(writer, Some(id), serde_json::Value::Array(items))
@@ -718,6 +824,156 @@ mod test {
     // Second: the response to the original executeCommand request.
     assert_eq!(messages[1]["id"], 7);
     assert_eq!(next_id, 2); // request id counter advanced
+  }
+
+  // --- workspace/symbol, workspace/diagnoseWorkspace, cross-mote hover/
+  // definition ---------------------------------------------------------
+  //
+  // Same 2-mote fixture shape as `mcp::test`'s equivalent tests: `dir_a`'s
+  // file defines a symbol, `dir_b`'s file imports it via `use`. Built at
+  // test time under unique tmp dirs per test (parallel test threads, so
+  // no path can be shared across tests).
+
+  #[test]
+  fn test_workspace_symbol_finds_symbol_across_mote_dirs() {
+    let dir_a = "/tmp/monad-lsp-test-ws-symbol-a";
+    let dir_b = "/tmp/monad-lsp-test-ws-symbol-b";
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(format!("{dir_a}/one.mo"), "def alpha : I64 := 1\n").unwrap();
+    std::fs::write(format!("{dir_b}/two.mo"), "def beta : I64 := 2\n").unwrap();
+    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let params = serde_json::json!({ "query": "alph" });
+    let mut buf: Vec<u8> = Vec::new();
+    workspace_symbol(&mut buf, Some(serde_json::json!(1)), &params, &mote_path).unwrap();
+    let response = parse_single_message(&buf);
+    let items = response["result"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"], "alpha");
+  }
+
+  #[test]
+  fn test_workspace_symbol_empty_query_returns_all() {
+    let dir_a = "/tmp/monad-lsp-test-ws-symbol-all-a";
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::write(
+      format!("{dir_a}/one.mo"),
+      "def alpha : I64 := 1\ndef gamma : I64 := 2\n",
+    )
+    .unwrap();
+    let mote_path = [PathBuf::from(dir_a)];
+    let mut buf: Vec<u8> = Vec::new();
+    workspace_symbol(
+      &mut buf,
+      Some(serde_json::json!(1)),
+      &serde_json::json!({}),
+      &mote_path,
+    )
+    .unwrap();
+    let response = parse_single_message(&buf);
+    let items = response["result"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+  }
+
+  #[test]
+  fn test_diagnose_workspace_publishes_diagnostics_per_file() {
+    let dir_a = "/tmp/monad-lsp-test-ws-diag-a";
+    let dir_b = "/tmp/monad-lsp-test-ws-diag-b";
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(format!("{dir_a}/ok.mo"), "def x : I64 := 1\n").unwrap();
+    std::fs::write(format!("{dir_b}/bad.mo"), "def y : I64 := \"nope\"\n").unwrap();
+    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let mut buf: Vec<u8> = Vec::new();
+    diagnose_workspace(&mut buf, &mote_path).unwrap();
+    let messages = parse_all_messages(&buf);
+    assert_eq!(messages.len(), 2);
+    for m in &messages {
+      assert_eq!(m["method"], "textDocument/publishDiagnostics");
+    }
+    let has_error = messages.iter().any(|m| {
+      m["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["severity"] == 1)
+    });
+    assert!(
+      has_error,
+      "expected at least one error diagnostic among published files"
+    );
+  }
+
+  /// Writes the `dir_a`-defines/`dir_b`-imports fixture and the `consumer`
+  /// document's params, ready for `hover`/`definition`.
+  fn cross_mote_fixture(
+    dir_a: &str,
+    dir_b: &str,
+  ) -> ([PathBuf; 2], HashMap<String, Document>, serde_json::Value) {
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(format!("{dir_a}/wsdep.mo"), "def shared_val : I64 := 99\n").unwrap();
+    let consumer_uri = format!("file://{dir_b}/consumer.mo");
+    let mut documents = HashMap::new();
+    documents.insert(
+      consumer_uri.clone(),
+      Document {
+        text: "use wsdep {shared_val}\n\ndef use_it : I64 := shared_val\n".to_string(),
+      },
+    );
+    let params = serde_json::json!({
+      "textDocument": { "uri": consumer_uri },
+      "position": { "line": 2, "character": 24 },
+    });
+    (
+      [PathBuf::from(dir_a), PathBuf::from(dir_b)],
+      documents,
+      params,
+    )
+  }
+
+  #[test]
+  fn test_hover_resolves_cross_file_symbol() {
+    let (mote_path, documents, params) = cross_mote_fixture(
+      "/tmp/monad-lsp-test-ws-hover-a",
+      "/tmp/monad-lsp-test-ws-hover-b",
+    );
+    let mut buf: Vec<u8> = Vec::new();
+    hover(
+      &documents,
+      &mut buf,
+      Some(serde_json::json!(1)),
+      &params,
+      &mote_path,
+    )
+    .unwrap();
+    let response = parse_single_message(&buf);
+    let contents = response["result"]["contents"]["value"].as_str().unwrap();
+    assert!(contents.contains("I64")); // shared_val's type
+  }
+
+  #[test]
+  fn test_definition_resolves_cross_file_symbol_and_uses_defining_file_uri() {
+    let (mote_path, documents, params) = cross_mote_fixture(
+      "/tmp/monad-lsp-test-ws-def-a",
+      "/tmp/monad-lsp-test-ws-def-b",
+    );
+    let mut buf: Vec<u8> = Vec::new();
+    definition(
+      &documents,
+      &mut buf,
+      Some(serde_json::json!(1)),
+      &params,
+      &mote_path,
+    )
+    .unwrap();
+    let response = parse_single_message(&buf);
+    let uri = response["result"]["uri"].as_str().unwrap();
+    assert!(
+      uri.ends_with("wsdep.mo"),
+      "expected definition to point into wsdep.mo (the defining file), got {uri}"
+    );
+    assert!(!uri.contains("consumer.mo"));
   }
 
   /// Parse the single `Content-Length`-framed message written to `buf`.

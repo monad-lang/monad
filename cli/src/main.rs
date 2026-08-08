@@ -85,6 +85,14 @@ enum Commands {
     /// of the default human-readable text report.
     #[arg(long, default_value_t = false)]
     json: bool,
+    /// Check the whole resolved workspace instead of PATHS: the project's
+    /// own `src/` plus every dependency mote's `src/` (the same
+    /// directories manifest discovery/`--manifest-path` already resolve
+    /// into `--mote-path` for `use`/`open` resolution — this flag also
+    /// makes them the file set to check). Falls back to the
+    /// current-directory scan if no manifest is discoverable.
+    #[arg(long, default_value_t = false, conflicts_with = "inputs")]
+    workspace: bool,
     #[arg(long, default_value_t = false, overrides_with = "no_color")]
     color: bool,
     #[arg(long = "no-color", default_value_t = false)]
@@ -103,6 +111,10 @@ enum Commands {
     /// Emit machine-readable JSON instead of a plain text listing.
     #[arg(long, default_value_t = false)]
     json: bool,
+    /// Index the whole resolved workspace instead of PATHS — see `check
+    /// --workspace` for exactly what that covers.
+    #[arg(long, default_value_t = false, conflicts_with = "inputs")]
+    workspace: bool,
     #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
     mote_path: Vec<PathBuf>,
     #[arg(long = "manifest-path", value_name = "PATH")]
@@ -158,6 +170,10 @@ enum Commands {
     /// printed and nothing is written.
     #[arg(long, default_value_t = false)]
     write: bool,
+    /// Convert the whole resolved workspace instead of PATHS — see `check
+    /// --workspace` for exactly what that covers.
+    #[arg(long, default_value_t = false, conflicts_with = "inputs")]
+    workspace: bool,
     #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
     mote_path: Vec<PathBuf>,
     #[arg(long = "manifest-path", value_name = "PATH")]
@@ -541,14 +557,16 @@ fn run_symbols(inputs: Vec<PathBuf>, json: bool, mote_path: Vec<PathBuf>) -> ! {
 // Deliberately name-based, not a walk of the checked term tree to the exact
 // sub-expression under the cursor: `identifier_at` extracts the token
 // touching the cursor by a plain text scan, then both commands look it up
-// by NAME in the target file's own symbol index (`symbols_for_files`) —
-// same scope as `symbols --json`, single-file only, no cross-file `use`
-// resolution and no scope-awareness (a local variable shadowing a
-// same-named top-level def resolves to the top-level one). Getting exact
-// sub-expression resolution and cross-file `use`-aware lookup right needs
-// walking the checked (pre-raise) `CoreTerm` — `raise_core` intentionally
-// discards `Ctx` when producing the final `Term` (see its own doc comment),
-// so that's a larger, separately-scoped follow-up, not attempted here.
+// by NAME (`find_symbol_by_name`) — first in the target file's own symbol
+// index (`symbols_for_files`), then, via `resolve_symbol`, across the
+// whole resolved workspace if not found locally. Still no scope-awareness
+// (a local variable shadowing a same-named top-level def resolves to the
+// top-level one, and an ambiguous name present in two different mote
+// files resolves to whichever `symbols_for_files` happens to return
+// first) — getting that exactly right needs walking the checked
+// (pre-raise) `CoreTerm` — `raise_core` intentionally discards `Ctx` when
+// producing the final `Term` (see its own doc comment), so that's a
+// larger, separately-scoped follow-up, not attempted here.
 
 /// The identifier/path token touching 1-indexed `(line, col)` in `source`
 /// — e.g. `"add"`, `"List.map"` — plus its own 1-indexed `(start_col,
@@ -599,17 +617,54 @@ pub(crate) fn find_symbol_by_name<'a>(
   })
 }
 
-/// Disk-reading convenience wrapper: compute `file`'s own symbol index
-/// (via `symbols_for_files`, same as the `symbols` command) and look
-/// `name` up in it.
-pub(crate) fn find_symbol_in_file(
-  file: &Path,
+/// Disk-reading convenience wrapper: `file`'s own symbol index (via
+/// `symbols_for_files`, same as the `symbols` command) — the "local"
+/// input to `resolve_symbol` below for the disk-based CLI/MCP paths (the
+/// LSP server computes its own equivalent from the in-memory buffer via
+/// `symbols_from_source` instead of reading the file back off disk).
+pub(crate) fn symbols_of_file(file: &Path, mote_path: Vec<PathBuf>) -> Vec<SymbolInfo> {
+  symbols_for_files(vec![file.to_path_buf()], mote_path)
+    .ok()
+    .and_then(|results| results.into_iter().find(|r| r.path == file))
+    .map(|r| r.symbols)
+    .unwrap_or_default()
+}
+
+/// Resolve `name` to a definition: first within `local_symbols` (the
+/// querying file's own symbol table — preserves `find_symbol_by_name`'s
+/// existing local-file-wins, shadowing-friendly behavior and every
+/// existing test that only ever exercises single-file lookup), and only
+/// if not found there, across the whole resolved workspace (`mote_path`
+/// — the project's own `src/` plus every dependency mote's `src/`, the
+/// same directories manifest discovery/`--manifest-path` already resolve
+/// for `use`/`open` resolution, reused here as the set of files to search
+/// across for a name match). Returns the *defining* file's path alongside
+/// the symbol — for a cross-file hit that's no longer `local_file`, and
+/// callers must use the returned path (not `local_file`) when building a
+/// `Location`/URI in their response.
+///
+/// No caching: a miss re-walks and re-type-checks every `mote_path`
+/// directory via `symbols_for_files`. Matches this server's existing "no
+/// caching anywhere yet" reality (see e.g. `lsp.rs`'s own "no debounce"
+/// note) — an acceptable v1 tradeoff, not an oversight;
+/// `plans/library-ideas/language-server.md`'s "Performance
+/// Considerations" section already flags workspace-symbol caching as a
+/// known future optimization, not a new gap introduced here.
+pub(crate) fn resolve_symbol(
   name: &str,
-  mote_path: Vec<PathBuf>,
-) -> Option<SymbolInfo> {
-  let results = symbols_for_files(vec![file.to_path_buf()], mote_path).ok()?;
-  let symbols = results.into_iter().find(|r| r.path == file)?.symbols;
-  find_symbol_by_name(&symbols, name).cloned()
+  local_file: &Path,
+  local_symbols: &[SymbolInfo],
+  mote_path: &[PathBuf],
+) -> Option<(PathBuf, SymbolInfo)> {
+  if let Some(sym) = find_symbol_by_name(local_symbols, name) {
+    return Some((local_file.to_path_buf(), sym.clone()));
+  }
+  let results = symbols_for_files(mote_path.to_vec(), mote_path.to_vec()).ok()?;
+  results.into_iter().find_map(|r| {
+    find_symbol_by_name(&r.symbols, name)
+      .cloned()
+      .map(|s| (r.path, s))
+  })
 }
 
 #[derive(serde::Serialize)]
@@ -633,8 +688,10 @@ fn run_hover(
   mote_path: Vec<PathBuf>,
 ) -> Result<(), String> {
   let source = std::fs::read_to_string(&file).map_err(|e| format!("{e}"))?;
+  let local_symbols = symbols_of_file(&file, mote_path.clone());
   let found = identifier_at(&source, line, col).and_then(|(name, start_col, end_col)| {
-    find_symbol_in_file(&file, &name, mote_path).map(|sym| (sym, start_col, end_col))
+    resolve_symbol(&name, &file, &local_symbols, &mote_path)
+      .map(|(_, sym)| (sym, start_col, end_col))
   });
 
   match found {
@@ -684,8 +741,9 @@ fn run_definition(
   mote_path: Vec<PathBuf>,
 ) -> Result<(), String> {
   let source = std::fs::read_to_string(&file).map_err(|e| format!("{e}"))?;
+  let local_symbols = symbols_of_file(&file, mote_path.clone());
   let found = identifier_at(&source, line, col)
-    .and_then(|(name, _, _)| find_symbol_in_file(&file, &name, mote_path));
+    .and_then(|(name, _, _)| resolve_symbol(&name, &file, &local_symbols, &mote_path));
 
   match found {
     None => {
@@ -695,10 +753,10 @@ fn run_definition(
         println!("(no definition found at {line}:{col})");
       }
     }
-    Some(sym) => {
+    Some((def_file, sym)) => {
       if json {
         let loc = JsonLocation {
-          uri: path_to_uri(&file),
+          uri: path_to_uri(&def_file),
           range: location_to_json_range(sym.location.as_ref()),
         };
         let s = serde_json::to_string_pretty(&loc)
@@ -706,8 +764,13 @@ fn run_definition(
         println!("{s}");
       } else {
         match &sym.location {
-          Some(loc) => println!("{}:{}:{}", file.display(), loc.start.line, loc.start.column),
-          None => println!("{} (no location)", file.display()),
+          Some(loc) => println!(
+            "{}:{}:{}",
+            def_file.display(),
+            loc.start.line,
+            loc.start.column
+          ),
+          None => println!("{} (no location)", def_file.display()),
         }
       }
     }
@@ -822,6 +885,7 @@ fn execute(command: Commands) -> Result<(), String> {
     Commands::Check {
       inputs,
       json,
+      workspace,
       color,
       no_color,
       mut mote_path,
@@ -829,6 +893,7 @@ fn execute(command: Commands) -> Result<(), String> {
     } => {
       let use_colors = color && !no_color;
       augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      let inputs = if workspace { mote_path.clone() } else { inputs };
       // `run_check` always exits the process itself (it needs a 3-way
       // 0/1/2 exit code — success/errors-found/internal-failure — that
       // `execute`'s shared `Result<(), String>` return convention, used
@@ -838,10 +903,12 @@ fn execute(command: Commands) -> Result<(), String> {
     Commands::Symbols {
       inputs,
       json,
+      workspace,
       mut mote_path,
       manifest_path,
     } => {
       augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      let inputs = if workspace { mote_path.clone() } else { inputs };
       run_symbols(inputs, json, mote_path)
     }
     Commands::Hover {
@@ -877,10 +944,12 @@ fn execute(command: Commands) -> Result<(), String> {
     Commands::OrganizeImports {
       inputs,
       write,
+      workspace,
       mut mote_path,
       manifest_path,
     } => {
       augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      let inputs = if workspace { mote_path.clone() } else { inputs };
       let result = run_organize_imports(inputs, write, mote_path);
       if let Err(ref e) = result {
         eprintln!("error: {e}");
