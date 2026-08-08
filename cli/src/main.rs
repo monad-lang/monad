@@ -1,4 +1,5 @@
 mod lsp;
+mod mcp;
 
 use std::path::{Path, PathBuf};
 
@@ -172,6 +173,18 @@ enum Commands {
     #[arg(long = "manifest-path", value_name = "PATH")]
     manifest_path: Option<PathBuf>,
   },
+
+  /// Start the MCP server (stdio, newline-delimited JSON-RPC). Exposes
+  /// `check`/`symbols`/`hover`/`definition`/`organize_imports` as tools —
+  /// the same five operations as the CLI's own `--json` subcommands, for
+  /// agent clients that speak MCP instead of shelling out (see `mcp`
+  /// module docs).
+  Mcp {
+    #[arg(short = 'p', long = "mote-path", value_name = "DIR")]
+    mote_path: Vec<PathBuf>,
+    #[arg(long = "manifest-path", value_name = "PATH")]
+    manifest_path: Option<PathBuf>,
+  },
 }
 
 #[derive(Debug, Parser)]
@@ -247,28 +260,28 @@ pub(crate) struct JsonRange {
 }
 
 #[derive(serde::Serialize)]
-struct JsonDiagnostic {
+pub(crate) struct JsonDiagnostic {
   range: JsonRange,
   severity: String,
   message: String,
 }
 
 #[derive(serde::Serialize)]
-struct JsonFileReport {
+pub(crate) struct JsonFileReport {
   uri: String,
   diagnostics: Vec<JsonDiagnostic>,
 }
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct JsonSummary {
+pub(crate) struct JsonSummary {
   errors: usize,
   warnings: usize,
   files_checked: usize,
 }
 
 #[derive(serde::Serialize)]
-struct JsonCheckReport {
+pub(crate) struct JsonCheckReport {
   files: Vec<JsonFileReport>,
   summary: JsonSummary,
 }
@@ -306,7 +319,7 @@ pub(crate) fn location_to_json_range(loc: Option<&monad_core::term::SourceRange>
   }
 }
 
-fn to_json_diagnostic(diag: &Diagnostic) -> JsonDiagnostic {
+pub(crate) fn to_json_diagnostic(diag: &Diagnostic) -> JsonDiagnostic {
   let range = location_to_json_range(diag.location.as_ref());
   JsonDiagnostic {
     range,
@@ -445,7 +458,7 @@ fn run_organize_imports(
 }
 
 #[derive(serde::Serialize)]
-struct JsonSymbol {
+pub(crate) struct JsonSymbol {
   name: String,
   kind: SymbolKind,
   range: JsonRange,
@@ -454,7 +467,7 @@ struct JsonSymbol {
 }
 
 #[derive(serde::Serialize)]
-struct JsonSymbolFile {
+pub(crate) struct JsonSymbolFile {
   uri: String,
   symbols: Vec<JsonSymbol>,
 }
@@ -589,21 +602,25 @@ pub(crate) fn find_symbol_by_name<'a>(
 /// Disk-reading convenience wrapper: compute `file`'s own symbol index
 /// (via `symbols_for_files`, same as the `symbols` command) and look
 /// `name` up in it.
-fn find_symbol_in_file(file: &Path, name: &str, mote_path: Vec<PathBuf>) -> Option<SymbolInfo> {
+pub(crate) fn find_symbol_in_file(
+  file: &Path,
+  name: &str,
+  mote_path: Vec<PathBuf>,
+) -> Option<SymbolInfo> {
   let results = symbols_for_files(vec![file.to_path_buf()], mote_path).ok()?;
   let symbols = results.into_iter().find(|r| r.path == file)?.symbols;
   find_symbol_by_name(&symbols, name).cloned()
 }
 
 #[derive(serde::Serialize)]
-struct JsonHover {
+pub(crate) struct JsonHover {
   contents: String,
   kind: String,
   range: JsonRange,
 }
 
 #[derive(serde::Serialize)]
-struct JsonLocation {
+pub(crate) struct JsonLocation {
   uri: String,
   range: JsonRange,
 }
@@ -876,6 +893,17 @@ fn execute(command: Commands) -> Result<(), String> {
     } => {
       augment_mote_paths(&mut mote_path, manifest_path.as_ref());
       let result = lsp::run(mote_path);
+      if let Err(ref e) = result {
+        eprintln!("error: {e}");
+      }
+      result
+    }
+    Commands::Mcp {
+      mut mote_path,
+      manifest_path,
+    } => {
+      augment_mote_paths(&mut mote_path, manifest_path.as_ref());
+      let result = mcp::run(mote_path);
       if let Err(ref e) = result {
         eprintln!("error: {e}");
       }
