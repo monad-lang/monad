@@ -15,6 +15,7 @@ use lang.module {
 use lang.parser.core {mk}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 use lang.scope {add_builtins, scope_data_empty}
+use lang.cli {*}
 use std.list {Show, length}
 
 open LLVMType {}
@@ -246,38 +247,76 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
     }
 }
 
+// `Command` and its argv parser are hand-written (not `#[derive_cli]`) and
+// this file stays free of any macro/attribute-derive syntax on purpose: the
+// self-hosted compiler's own parser/typechecker (lang/parser.mo,
+// lang/typecheck/infer.mo) doesn't understand `#[derive_cli]` yet, and
+// lang/main.mo is one of the files the self-hosted parse/scope/typecheck
+// test suite (lang/tests/parser_file_tests.mo, scope_all_tests.mo,
+// typecheck_lang_tests.mo) re-parses with that self-hosted pipeline. It
+// does share `lang/cli.mo`'s small runtime helpers with the macro-derived
+// demo in lang/tests/cli_derive_tests.mo, though — same argv-munging
+// primitives either way.
 type Command {
-    compile (file: String) (out_name:String),
+    compile (file: String) (out_name: String) (verbose: Bool),
     pretty (file: String),
     help
 }
 
+/// `compile <path> [name]` (original positional form) and `compile <path>
+/// [--output/-o <name>] [--verbose/-v]` (flag form) both work; an explicit
+/// `--output`/`-o` wins over a positional name if both are given.
 def Command.from_args (args : List String) : Command :=
-    let cmd := first_arg args in
-    if cmd == "compile" then
-        let file_path := second_arg args in
-        let out_name := if third_arg args == ""
-            then "source"
-            else third_arg args in
-        Command.compile file_path out_name
-    else if cmd == "pretty" then
-        // TODO validate not empty
-        let file_path := second_arg args in
-        Command.pretty file_path
-    else
-        Command.help
+    match args {
+        List.cons cmd rest =>
+            if cmd == "compile" then
+                match Cli.take_flag "verbose" "v" rest {
+                    Cli.FlagResult.flag_result verbose rest1 =>
+                        match Cli.take_opt "output" "o" "" rest1 {
+                            Cli.OptResult.opt_result opt_out_name rest2 =>
+                                match Cli.take_positional rest2 {
+                                    Cli.PosResult.pos_result path_opt rest3 =>
+                                        match Cli.take_positional rest3 {
+                                            Cli.PosResult.pos_result name_opt _ =>
+                                                let out_name :=
+                                                    if String.is_empty opt_out_name then
+                                                        match name_opt {
+                                                            Option.some n => n,
+                                                            Option.none => "source",
+                                                        }
+                                                    else
+                                                        opt_out_name
+                                                in
+                                                match path_opt {
+                                                    Option.some path => Command.compile path out_name verbose,
+                                                    Option.none => Command.help,
+                                                },
+                                        },
+                                },
+                        },
+                }
+            else if cmd == "pretty" then
+                match Cli.take_positional rest {
+                    Cli.PosResult.pos_result path_opt _ =>
+                        match path_opt {
+                            Option.some path => Command.pretty path,
+                            Option.none => Command.help,
+                        },
+                }
+            else
+                Command.help,
+        List.empty => Command.help,
+    }
+
+// Smoke tests for `Command.from_args` live in lang/tests/main_tests.mo
+// (run via `cargo run -- test lang/tests/main_tests.mo`), not inline here.
 
 /// Current main entrypoint of self hosted compiler
 def main (args : List String) : IO I64 {
     let out_dir := "/tmp";
-    let verbose := false;
     let cmd : Command := Command.from_args args;
     match cmd {
-        compile file_path out_name => do {
-            let file_path := second_arg args;
-            let out_name := if third_arg args == ""
-                then "source"
-                else third_arg args;
+        compile file_path out_name verbose => do {
             compile_file file_path out_dir out_name verbose
         },
         pretty file_path => do {
@@ -303,28 +342,8 @@ def main (args : List String) : IO I64 {
 
 #[partial]
 def print_help : IO I64 {
-    println "Usage: monad compile <path> [name]  Parse and compile a .mo source file";
+    println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v]";
+    println "         Parse and compile a .mo source file";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
     return 0
 }
-def first_arg (args : List String) : String :=
-    match args {
-        List.cons cmd rest => cmd,
-        List.empty => ""
-    }
-
-def second_arg (args : List String) : String :=
-    let tail :=
-        match args {
-            List.cons cmd rest => rest,
-            List.empty => List.empty
-        } in
-    first_arg tail
-
-def third_arg (args : List String) : String :=
-    let tail :=
-        match args {
-            List.cons cmd rest => rest,
-            List.empty => List.empty
-        } in
-    second_arg tail

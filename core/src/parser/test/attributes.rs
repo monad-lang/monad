@@ -460,6 +460,52 @@ fn test_attr_hash_partial() {
 }
 
 #[test]
+fn test_attr_on_type_struct_class_instance() {
+  // Regression: `type`/`struct`/`class`/`instance` parsers each called
+  // `opt_attributes` but never consumed the whitespace/newline between the
+  // attribute and their own keyword (unlike `def_parser`, which does) — so
+  // `#[foo]\ntype X { ... }` (the conventional one-attribute-per-line style
+  // used everywhere for `#[test]\ndef ...`) silently failed to parse for
+  // every non-`def` declaration kind. Fixed by adding the missing `ws0`.
+  let s = r#"#[test]
+    type Foo { mk }
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::Type(induct) => assert!(induct.has_attr("test")),
+    other => panic!("expected Decl::Type, got {other:?}"),
+  }
+
+  let s = r#"#[test]
+    struct Bar { x : I64 }
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  match res.value() {
+    Decl::Type(induct) => assert!(induct.has_attr("test")),
+    other => panic!("expected Decl::Type, got {other:?}"),
+  }
+
+  let s = r#"#[test]
+    class MyClass A { def m : A }
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  assert!(
+    matches!(res.value(), Decl::Type(_)),
+    "expected Decl::Type (class)"
+  );
+
+  let s = r#"#[test]
+    instance MyClass I64 { def m : I64 := 0 }
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  assert!(matches!(res.value(), Decl::Ins(_)), "expected Decl::Ins");
+}
+
+#[test]
 fn test_attr_hash_terminating() {
   let (_, res) = attribute_parser::<()>(r#"#[terminating]"#.into()).unwrap();
   assert_eq!(res.name, id("terminating"));

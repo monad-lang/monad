@@ -21,8 +21,8 @@ use crate::{
     def, def_with_native, float_suffix, forall, foralls, id, if_term, induct_constructor,
     inductive, infix, instance, ivar, lam, lams, lets, match_term,
     module::ParsedModule,
-    mpvar, num_suffix, opr, param, param_with_default, param_with_mult, pi_name, pi_typs,
-    pi_with_mult, pvar, stru, stru_field_with_mult, type_constraint, var_id,
+    mpvar, num_suffix, opr, param, param_with_attrs, param_with_default, param_with_mult, pi_name,
+    pi_typs, pi_with_mult, pvar, stru, stru_field_with_mult, type_constraint, var_id,
   },
 };
 use locate::{LocatedSpan, info};
@@ -430,18 +430,44 @@ fn lam_param<X: Clone>(input: Span<X>) -> Res<Param, X> {
   .parse(input)
 }
 
+/// `#[arg]`-style attributes on a single named constructor parameter, e.g.
+/// `compile (#[arg] verbose : Bool)` — consumed by `#[derive_cli]`
+/// generation (`core/src/eval/derive_cli.rs`). Only meaningful ahead of the
+/// named-identifiers-with-type-annotation form below; the bare-type-only
+/// form (`some (A)`) has no name to attach per-field metadata to.
 fn cons_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
   alt((
     map(identifier, |t| vec![param(id(""), ivar(t))]),
     delimited(
       (char('('), ws0),
-      alt((
-        map(
-          separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
-          |(ids, typ)| ids.into_iter().map(|i| param(i, typ.clone())).collect(),
+      map(
+        (
+          opt_attributes,
+          ws0,
+          alt((
+            map(
+              separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
+              |(ids, typ)| {
+                ids
+                  .into_iter()
+                  .map(|i| param(i, typ.clone()))
+                  .collect::<Vec<Param>>()
+              },
+            ),
+            map(type_expression, |t| vec![param(id(""), t)]),
+          )),
         ),
-        map(type_expression, |t| vec![param(id(""), t)]),
-      )),
+        |(attrs, _, params): (Vec<Attribute>, _, Vec<Param>)| {
+          if attrs.is_empty() {
+            params
+          } else {
+            params
+              .into_iter()
+              .map(|p| param_with_attrs(p, attrs.clone()))
+              .collect()
+          }
+        },
+      ),
       (
         ws0,
         context("closing parenthesis for constructor parameter", char(')')),
@@ -1488,6 +1514,7 @@ fn all_type_cons_parser<X: Clone>(input: Span<X>) -> Res<Vec<TypeConstraint>, X>
 fn class_parser(input: Span) -> Res<Inductive> {
   let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
   let (input, _) = tag("class")(input)?;
   let (input, _) = ws0(input)?;
   let (input, constraints) = opt(all_type_cons_parser).parse(input)?;
@@ -1520,6 +1547,7 @@ fn instance_inner_parser(input: Span) -> Res<Vec<Def>> {
 fn instance_parser(input: Span) -> Res<Instance> {
   let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
   let (input, _) = tag("instance")(input)?;
   let (input, _) = ws0(input)?;
   let (input, implicit_params) = implicit_params(input)?;
@@ -1597,9 +1625,10 @@ fn inductive_inner_parser<'a>(
   .parse(input)
 }
 
-fn inductive_parser(input: Span) -> Res<Inductive> {
+pub(crate) fn inductive_parser(input: Span) -> Res<Inductive> {
   let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
   let (input, _) = tag("type")(input)?;
   let (input, _) = ws0(input)?;
   let (input, constraints) = opt(all_type_cons_parser).parse(input)?;
@@ -1660,6 +1689,7 @@ fn struct_inner_parser<X: Clone>(input: Span<X>) -> Res<Vec<StructField>, X> {
 fn struct_parser<X: Clone>(input: Span<X>) -> Res<Inductive, X> {
   let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
   let (input, _) = tag("struct")(input)?;
   let (input, _) = ws0(input)?;
   let (input, constraints) =

@@ -122,6 +122,19 @@ pub fn expand_macros(
         def.term = expand_term(def.term, &macro_defs, 0)?;
         batch.push(ctx.map(|_| Decl::Def(def)));
       }
+      Decl::Type(induct) => {
+        // `#[derive_cli]` runs against the already-parsed `Inductive` directly
+        // (see `derive_cli.rs`) rather than through the decl-gen macro
+        // machinery above — it needs to read back the type's own name and
+        // constructors, which `defmacro`/`decls{}` templates can't do.
+        if induct.has_attr("derive_cli") {
+          let generated = super::derive_cli::expand_derive_cli(&induct)
+            .map_err(|e| MacroError::Generic(e.to_string()))?;
+          batch.push(ctx.map(|_| Decl::Generated(vec![Decl::Type(induct), Decl::Def(generated)])));
+        } else {
+          batch.push(ctx.map(|_| Decl::Type(induct)));
+        }
+      }
       Decl::ScopedOpen {
         module_path,
         filter,
@@ -686,6 +699,7 @@ fn alpha_rename_body(term: Term) -> Term {
               typ: Box::new(alpha_rename_body(*param.typ)),
               mult: param.mult,
               default: param.default.clone(),
+              attrs: param.attrs.clone(),
             }),
             alpha_rename_body(body),
           )

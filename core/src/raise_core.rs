@@ -342,6 +342,7 @@ impl<'p> Raiser<'p> {
                 typ: Box::new(typ_t),
                 mult: Multiplicity::Many,
                 default: None,
+                attrs: Vec::new(),
               })
             };
             Res::Term(Term::Lam {

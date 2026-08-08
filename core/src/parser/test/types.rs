@@ -134,6 +134,28 @@ fn test_cons_param() {
 }
 
 #[test]
+fn test_cons_param_with_attribute() {
+  // `#[arg]` on a named constructor param — used by `#[derive_cli]`
+  // generation (core/src/eval/derive_cli.rs) to mark a field as a flag.
+  let (_, r) = cons_param::<()>(r#"(#[arg] verbose : Bool)"#.into()).unwrap();
+  assert_eq!(r.len(), 1);
+  assert_eq!(r[0].attrs.len(), 1);
+  assert_eq!(r[0].attrs[0].name.as_str(), "arg");
+  assert!(r[0].attrs[0].args.is_empty());
+  similar!(r, vec![dpar("verbose", typ("Bool"))]);
+
+  // Attribute-free params still parse with empty attrs (no regression).
+  let (_, r) = cons_param::<()>(r#"(path : String)"#.into()).unwrap();
+  assert!(r[0].attrs.is_empty());
+
+  // Multiple named params sharing one attribute group each get it.
+  let (_, r) = cons_param::<()>(r#"(#[arg] a b : Bool)"#.into()).unwrap();
+  assert_eq!(r.len(), 2);
+  assert_eq!(r[0].attrs.len(), 1);
+  assert_eq!(r[1].attrs.len(), 1);
+}
+
+#[test]
 fn test_parse_sort() {
   let (_, result) = type_base_expression::<()>("Sort 0".into()).unwrap();
   similar!(result, crate::term::Term::Sort { level: 0 });

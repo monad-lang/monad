@@ -951,6 +951,7 @@ mod tests {
       typ: Box::new(crate::term::Hole),
       mult: crate::term::Multiplicity::Zero,
       default: None,
+      attrs: Vec::new(),
     };
     let t = Term::Lam {
       param: Par::P(zero_param),
@@ -987,6 +988,7 @@ mod tests {
       typ: Box::new(crate::term::Hole),
       mult: crate::term::Multiplicity::Linear,
       default: None,
+      attrs: Vec::new(),
     };
     let t = Term::Lam {
       param: Par::P(linear_param),
@@ -1016,6 +1018,7 @@ mod tests {
       typ: Box::new(crate::term::Hole),
       mult: crate::term::Multiplicity::Affine,
       default: None,
+      attrs: Vec::new(),
     };
     let t = Term::Lam {
       param: Par::P(affine_param),
@@ -1046,6 +1049,7 @@ mod tests {
       typ: Box::new(crate::term::Hole),
       mult: crate::term::Multiplicity::Linear,
       default: None,
+      attrs: Vec::new(),
     };
     let inner = Term::Lam {
       param: Par::P(inner_param),
@@ -1056,6 +1060,7 @@ mod tests {
       typ: Box::new(crate::term::Hole),
       mult: crate::term::Multiplicity::Linear,
       default: None,
+      attrs: Vec::new(),
     };
     let outer = Term::Lam {
       param: Par::P(outer_param),
@@ -1092,6 +1097,7 @@ mod tests {
       typ: Box::new(crate::term::Hole),
       mult: crate::term::Multiplicity::Linear,
       default: None,
+      attrs: Vec::new(),
     };
     let inner = Term::Lam {
       param: Par::P(linear_param),

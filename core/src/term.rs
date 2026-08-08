@@ -777,6 +777,11 @@ impl Inductive {
   pub fn constructors(&self) -> &Vec<InductConstructor> {
     &self.constructors
   }
+  /// Whether this type carries a given attribute, e.g. `has_attr("derive_cli")`
+  /// for `#[derive_cli] type Command { ... }`. Mirrors `Def::has_test_attr`.
+  pub fn has_attr(&self, name: &str) -> bool {
+    self.attributes.iter().any(|a| a.name.as_str() == name)
+  }
 }
 
 pub trait Named {
@@ -869,12 +874,55 @@ impl Display for Par {
     }
   }
 }
-#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 pub struct Param {
   pub name: Identifier,
   pub typ: Box<Term>,
   pub mult: Multiplicity, // NEW: Many (default), Linear (!), or Affine (?)
   pub default: Option<Box<Term>>, // Default value for class parameters (:= syntax)
+  /// Per-parameter attributes, e.g. `#[arg]` on a constructor field for
+  /// `#[derive_cli]` generation (see `core/src/eval/derive_cli.rs`). Purely
+  /// additional metadata: excluded from equality/hashing/ordering below,
+  /// which stay structural over name/type/multiplicity/default — mirroring
+  /// `Attribute`'s own `PartialEq`, which likewise ignores provenance.
+  pub attrs: Vec<Attribute>,
+}
+
+/// Structural equality over name/type/multiplicity/default only — `attrs` is
+/// metadata, not part of a param's identity (see the field doc above).
+impl PartialEq for Param {
+  fn eq(&self, other: &Self) -> bool {
+    self.name == other.name
+      && self.typ == other.typ
+      && self.mult == other.mult
+      && self.default == other.default
+  }
+}
+impl Eq for Param {}
+
+impl std::hash::Hash for Param {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    self.name.hash(state);
+    self.typ.hash(state);
+    self.mult.hash(state);
+    self.default.hash(state);
+  }
+}
+
+impl PartialOrd for Param {
+  fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    Some(self.cmp(other))
+  }
+}
+impl Ord for Param {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    (&self.name, &self.typ, &self.mult, &self.default).cmp(&(
+      &other.name,
+      &other.typ,
+      &other.mult,
+      &other.default,
+    ))
+  }
 }
 
 impl Typed for Param {
@@ -911,6 +959,7 @@ pub fn param(name: Identifier, typ: Term) -> Param {
     typ: Box::new(typ),
     mult: Multiplicity::default(),
     default: None,
+    attrs: Vec::new(),
   }
 }
 
@@ -920,6 +969,7 @@ pub fn param_with_mult(name: Identifier, typ: Term, mult: Multiplicity) -> Param
     typ: Box::new(typ),
     mult,
     default: None,
+    attrs: Vec::new(),
   }
 }
 
@@ -929,7 +979,15 @@ pub fn param_with_default(name: Identifier, typ: Term, default: Option<Term>) ->
     typ: Box::new(typ),
     mult: Multiplicity::default(),
     default: default.map(Box::new),
+    attrs: Vec::new(),
   }
+}
+
+/// Attach parsed `#[...]` attributes to an already-built param — used by
+/// `cons_param` to record `#[arg]` etc. on constructor fields.
+pub fn param_with_attrs(mut p: Param, attrs: Vec<Attribute>) -> Param {
+  p.attrs = attrs;
+  p
 }
 
 pub fn dpar(s: &str, typ: Term) -> Param {

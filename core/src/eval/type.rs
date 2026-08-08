@@ -3311,6 +3311,7 @@ pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -
             typ: Box::new(p_typ.clone()),
             mult: p.mult.clone(),
             default: p.default.clone(),
+            attrs: p.attrs.clone(),
           };
           new_typ = forall(lam_param.clone(), new_typ);
           if matches!(*p.typ, Term::Sort { .. }) || !has_explicit_params {
