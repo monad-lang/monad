@@ -80,12 +80,17 @@ pub fn exec_native(
     "string_starts_with" => string_starts_with(args, natives),
     "string_slice" => string_slice(args),
     "string_drop" => string_drop(args),
-    "print_str" => print_str(args),
+    "print_str" => print_str(args, natives),
     "string_get" => string_get(args, natives),
+    "string_get_char" => string_get_char(args, natives),
     "string_to_list" => string_to_list(args, natives),
     "string_from_list" => string_from_list(args, natives),
     "bench_now" => bench_now(),
     "bench_report" => bench_report(args, natives),
+    "read_file" => read_file(args, natives),
+    "write_file" => write_file(args, natives),
+    "file_exists" => file_exists(args, natives),
+    "get_env" => get_env(args, natives),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
     // `NativeTable`'s range); this is the one call site that only has the
@@ -308,7 +313,20 @@ fn string_drop(args: &[Value]) -> Result<Value, CoreEvalError> {
   Ok(Value::Lit(IrLit::Str(result)))
 }
 
-fn print_str(args: &[Value]) -> Result<Value, CoreEvalError> {
+// TODO: `IO` is slated to be replaced with an opaque indexed monad whose
+// internal value isn't reachable via an ordinary constructor match --
+// this `io_io`-wrapping helper will need to change to whatever that
+// type's own (non-structural) construction mechanism ends up being once
+// that lands.
+fn io_wrap(natives: &NativeTable, inner: Value) -> Result<Value, CoreEvalError> {
+  let io = require_ctor(natives.well_known.io_io, "IO.io")?;
+  Ok(Value::Con {
+    tag: io.tag,
+    args: vec![inner],
+  })
+}
+
+fn print_str(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.is_empty() {
     return Err(CoreEvalError::NativeArgError(
       "print_str needs 1 arg".into(),
@@ -316,7 +334,15 @@ fn print_str(args: &[Value]) -> Result<Value, CoreEvalError> {
   }
   let s = extract_string(&args[0])?;
   println!("{s}");
-  Ok(Value::Lit(IrLit::Str(s.to_string())))
+  // `IO.println`'s declared type is `IO Unit`, and `Monad.bind`'s own
+  // `IO` instance (init/io.mo) pattern-matches its argument via `match a
+  // { io a => f a }` -- an unwrapped return value here was a real,
+  // pre-existing bug (this native predates this session's own changes),
+  // just never hit by anything that BINDS a `println` call via `<-`/
+  // `Monad.bind` rather than discarding its result outright. `Unit`'s
+  // own runtime shape still doesn't matter (never pattern-matched), so
+  // any inner value works -- kept as the string for minimal disruption.
+  io_wrap(natives, Value::Lit(IrLit::Str(s.to_string())))
 }
 
 fn string_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -341,6 +367,108 @@ fn string_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
     tag: some.tag,
     args: vec![Value::Lit(IrLit::Num(byte, NumSuffix::U8))],
   })
+}
+
+/// `String.get_char (s : String) (i : I64) : Option Char` — indexes by
+/// CHARACTER (not byte, unlike `string_get`'s `Option U8`), mirroring
+/// the tree-walker's own `eval::native::string_get_char` exactly.
+fn string_get_char(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "string_get_char needs 2 args".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  let idx = extract_int(&args[1])?;
+  let chars: Vec<char> = s.chars().collect();
+  if idx < 0 || idx as usize >= chars.len() {
+    let none = require_ctor(natives.well_known.option_none, "Option.none")?;
+    return Ok(Value::Con {
+      tag: none.tag,
+      args: Vec::new(),
+    });
+  }
+  let some = require_ctor(natives.well_known.option_some, "Option.some")?;
+  Ok(Value::Con {
+    tag: some.tag,
+    args: vec![Value::Lit(IrLit::Char(chars[idx as usize]))],
+  })
+}
+
+/// `IO.read_file (path : String) : IO String` — `Monad.bind`'s own `IO`
+/// instance (init/io.mo) pattern-matches its argument via `match a { io
+/// a => f a }`, so a real `IO.io`-wrapped `Con` is required, not a bare
+/// `String` (see `io_wrap`'s own doc comment); a read failure is a
+/// genuine evaluation error, same as the tree-walker's own
+/// `eval::native::read_file`.
+fn read_file(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "read_file needs 1 arg".into(),
+    ));
+  }
+  let path = extract_string(&args[0])?;
+  let content = std::fs::read_to_string(path)
+    .map_err(|e| CoreEvalError::NativeArgError(format!("read_file {path} failed: {e}")))?;
+  io_wrap(natives, Value::Lit(IrLit::Str(content)))
+}
+
+/// `IO.write_file (path : String) (content : String) : IO Unit` — see
+/// `read_file`'s own doc comment on why the `IO.io` wrapping is
+/// required; `Unit`'s own runtime shape still doesn't matter (never
+/// pattern-matched), so any inner value works.
+fn write_file(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "write_file needs 2 args".into(),
+    ));
+  }
+  let path = extract_string(&args[0])?;
+  let content = extract_string(&args[1])?;
+  std::fs::write(path, content)
+    .map_err(|e| CoreEvalError::NativeArgError(format!("write_file {path} failed: {e}")))?;
+  io_wrap(natives, Value::Lit(IrLit::Str(String::new())))
+}
+
+/// `IO.file_exists (path : String) : IO Bool` — see `read_file`'s own
+/// doc comment on why the `IO.io` wrapping is required.
+fn file_exists(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "file_exists needs 1 arg".into(),
+    ));
+  }
+  let path = extract_string(&args[0])?;
+  let exists = make_bool(natives, std::fs::metadata(path).is_ok())?;
+  io_wrap(natives, exists)
+}
+
+/// `IO.get_env (s : String) : IO (Option String)` — see `read_file`'s
+/// own doc comment on why the `IO.io` wrapping is required; the INNER
+/// `Option` needs the same real-`Con` treatment as `string_get`'s own
+/// `Option U8`, for the same reason.
+fn get_env(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError("get_env needs 1 arg".into()));
+  }
+  let name = extract_string(&args[0])?;
+  let opt = match std::env::var(name) {
+    Ok(value) => {
+      let some = require_ctor(natives.well_known.option_some, "Option.some")?;
+      Value::Con {
+        tag: some.tag,
+        args: vec![Value::Lit(IrLit::Str(value))],
+      }
+    }
+    Err(_) => {
+      let none = require_ctor(natives.well_known.option_none, "Option.none")?;
+      Value::Con {
+        tag: none.tag,
+        args: Vec::new(),
+      }
+    }
+  };
+  io_wrap(natives, opt)
 }
 
 fn string_to_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {

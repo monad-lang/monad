@@ -245,10 +245,16 @@ fn phase2_lowers_whole_program_to_ir() {
     })
     .copied()
     .collect();
-  assert_eq!(
-    match_bodies.len(),
-    2,
-    "expected exactly 2 lowered defs shaped like match_stack_cons/match_queue_cons, got: {:?}",
+  // >= 2, not == 2: `CoreProgram.defs` now stores every def under BOTH
+  // its bare AND module-qualified path (`insert_checked_def`,
+  // core_check_module.rs -- needed so a same-module self-reference and
+  // a cross-module reference to a non-colliding name both resolve),
+  // so `match_stack_cons`/`match_queue_cons` each get lowered (and
+  // counted here) once per key -- redundant work, not a correctness
+  // issue, and not this test's own concern (shape, not count).
+  assert!(
+    match_bodies.len() >= 2,
+    "expected at least 2 lowered defs shaped like match_stack_cons/match_queue_cons, got: {:?}",
     def_bodies
       .iter()
       .map(|ir| ir.to_string())

@@ -188,7 +188,12 @@ impl ModuleCheckEnv {
   pub fn new() -> Self {
     let loaded = default_modules().expect("default_modules() must load");
     let mut atoms = AtomTable::new();
-    let (ctx, infix, known_globals, structs) = ground_truth_from_loaded(&loaded, &mut atoms);
+    let GroundTruth {
+      ctx,
+      infix,
+      known_globals,
+      structs,
+    } = ground_truth_from_loaded(&loaded, &mut atoms);
     Self {
       loaded,
       ctx,
@@ -224,15 +229,14 @@ impl ModuleCheckEnv {
 /// per-module scoped resolution here, which is a substantially larger,
 /// separate undertaking than adding `priv`/`pub` itself — tracked as
 /// follow-up work, not attempted in this pass.
-pub fn ground_truth_from_loaded(
-  loaded: &LoadedModules,
-  atoms: &mut AtomTable,
-) -> (
-  TyCtx,
-  Map<Operator, ModulePath>,
-  Map<ModulePath, Atom>,
-  StructFields,
-) {
+pub struct GroundTruth {
+  pub ctx: TyCtx,
+  pub infix: Map<Operator, ModulePath>,
+  pub known_globals: Map<ModulePath, Atom>,
+  pub structs: StructFields,
+}
+
+pub fn ground_truth_from_loaded(loaded: &LoadedModules, atoms: &mut AtomTable) -> GroundTruth {
   let mut infix = Map::new();
   for module in loaded.modules() {
     for infix_ctx in module.infix() {
@@ -307,7 +311,12 @@ pub fn ground_truth_from_loaded(
       );
     }
   }
-  (ctx, infix, known_globals, structs)
+  GroundTruth {
+    ctx,
+    infix,
+    known_globals,
+    structs,
+  }
 }
 
 /// Every class method's atom, across every loaded module's classes plus
@@ -1608,6 +1617,70 @@ fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
   TypeError::Generic(message, location.unwrap_or_default())
 }
 
+/// Insert a checked def into `CoreProgram.defs` under `capture_path`
+/// (the CALLER's own choice -- module-qualified for an ordinary
+/// top-level def, instance-and-method-qualified for an instance
+/// method), AND, when it differs, ALSO under `def_name` bare.
+///
+/// Why both: `capture_path` alone isn't enough once two INDEPENDENT
+/// modules declare the same bare name (`list_contains` in both
+/// `lang.module` and `string`, confirmed for real in this corpus) --
+/// each module's own SELF/sibling references resolve via the qualified
+/// atom (`type_check_module_decls_new_inner`'s own `global_atom_paths`
+/// override forces this), so the qualified entry must exist. But
+/// `def_name` bare alone isn't enough EITHER: an ORDINARY,
+/// non-colliding cross-module reference (`fib`, in one module, calling
+/// `I64.add`, a native declared in a totally different, unrelated
+/// module) resolves via the BARE atom (nothing forces it to qualify a
+/// name it never itself declares), and an EXPLICIT, programmer-written
+/// qualified reference (`lang.parser.core.op_char_member`, spelled out
+/// in source) resolves via the QUALIFIED atom regardless of whether
+/// `op_char_member` happens to collide with anything (confirmed real:
+/// `ground_truth_from_loaded` dual-registers every def under both
+/// forms unconditionally, so a fully-qualified reference is valid
+/// syntax even for names nobody else declares). Inserting under BOTH
+/// keys, unconditionally, means whichever atom a given reference
+/// (bare or qualified, colliding or not, self or cross-module) happens
+/// to resolve to, some entry is there to find -- the only case left
+/// genuinely ambiguous is a THIRD file bare-referencing a name that
+/// collides between two OTHER modules it doesn't itself declare, where
+/// the bare slot ends up whichever colliding module happened to be
+/// checked last (unchanged from the pre-existing, accepted behavior).
+fn insert_checked_def(
+  program: &mut CoreProgram,
+  capture_path: &ModulePath,
+  def_name: &ModulePath,
+  checked: CheckedCoreDef,
+) {
+  if capture_path != def_name {
+    program.defs.insert(def_name.clone(), checked.clone());
+  }
+  program.defs.insert(capture_path.clone(), checked);
+}
+
+/// Same bare-and-qualified double-insert as `insert_checked_def`, for
+/// `CoreProgram::match_resolutions` -- needed for the exact same reason:
+/// `lower_program`'s per-def loop iterates `program.defs`'s own keys
+/// (now both bare and qualified, per `insert_checked_def`) and looks up
+/// `match_resolutions` using THAT SAME key for each one, so both need
+/// an entry or the bare-keyed duplicate lowers with an empty resolution
+/// queue.
+fn insert_match_resolutions(
+  program: &mut CoreProgram,
+  capture_path: &ModulePath,
+  def_name: &ModulePath,
+  resolutions: Vec<(Vec<Identifier>, Atom)>,
+) {
+  if capture_path != def_name {
+    program
+      .match_resolutions
+      .insert(def_name.clone(), resolutions.clone());
+  }
+  program
+    .match_resolutions
+    .insert(capture_path.clone(), resolutions);
+}
+
 /// Like `check_one_def`, but for the real production entry point
 /// (`type_check_module_decls_new`) rather than this file's own diagnostic
 /// harness: returns a fully checked, RAISED `Def` (its `.term`/`.typ`
@@ -1671,7 +1744,19 @@ fn check_one_def_new(
     // lowering never validates a path is "known" ahead of time (see
     // `LowerContext::resolved_atoms`'s doc comment).
     let mut atom_paths = global_atom_paths.clone();
-    atom_paths.extend(typ_lower_resolved.iter().map(|(a, p)| (*a, p.clone())));
+    // `global_atom_paths` is authoritative for any atom it already knows
+    // about (its own per-module override -- see `type_check_module_
+    // decls_new_inner`'s own doc comment -- specifically needs to WIN
+    // here, not get silently re-overwritten back to a bare path by a
+    // fresh, ordinary resolution for the exact same, already-known
+    // atom); only genuinely NEW atoms `global_atom_paths` has no entry
+    // for at all get filled in from this lowering's own resolution.
+    atom_paths.extend(
+      typ_lower_resolved
+        .iter()
+        .filter(|(a, _)| !global_atom_paths.contains_key(a))
+        .map(|(a, p)| (*a, p.clone())),
+    );
     if was_elaborated {
       // D3 may have inserted a dictionary `Pi` this def's SURFACE `.typ`
       // (still the literal, un-elaborated source annotation) doesn't
@@ -1703,10 +1788,14 @@ fn check_one_def_new(
 
     let mut body_lower_ctx = LowerContext::with_config(body_config, mctx.atoms_mut());
     let body_c = lower_term(&mut body_lower_ctx, &def.term).map_err(lower_error_to_type_error)?;
+    // `global_atom_paths` wins over a fresh resolution for an
+    // already-known atom here too -- see the identical filter above,
+    // on `typ_lower_resolved`, for why.
     atom_paths.extend(
       body_lower_ctx
         .resolved_atoms()
         .iter()
+        .filter(|(a, _)| !global_atom_paths.contains_key(a))
         .map(|(a, p)| (*a, p.clone())),
     );
     // D3: `residual_typ` may start with one or more dictionary `Pi`s
@@ -1780,13 +1869,18 @@ fn check_one_def_new(
     // stay scoped per-def, not merged at the end of the whole module's
     // check.
     if let Some(program) = core_out.as_deref_mut() {
-      program
-        .match_resolutions
-        .insert(capture_path.clone(), mctx.take_match_resolutions());
+      insert_match_resolutions(
+        program,
+        capture_path,
+        &def.name,
+        mctx.take_match_resolutions(),
+      );
     }
     if let Some(program) = core_out {
-      program.defs.insert(
-        capture_path.clone(),
+      insert_checked_def(
+        program,
+        capture_path,
+        &def.name,
         CheckedCoreDef {
           term: body_c.clone(),
           typ: residual_typ.clone(),
@@ -1800,10 +1894,14 @@ fn check_one_def_new(
     let mut body_lower_ctx = LowerContext::with_config(config.clone(), mctx.atoms_mut());
     let body_c = lower_term(&mut body_lower_ctx, &def.term).map_err(lower_error_to_type_error)?;
     let mut atom_paths = global_atom_paths.clone();
+    // `global_atom_paths` wins over a fresh resolution for an
+    // already-known atom here too -- see the identical filter in the
+    // `if def.typ.is_known()` branch above, for why.
     atom_paths.extend(
       body_lower_ctx
         .resolved_atoms()
         .iter()
+        .filter(|(a, _)| !global_atom_paths.contains_key(a))
         .map(|(a, p)| (*a, p.clone())),
     );
     let ty =
@@ -1824,9 +1922,12 @@ fn check_one_def_new(
     // now (AFTER desugar_struct_literals), before the next def's check
     // appends more.
     if let Some(program) = core_out.as_deref_mut() {
-      program
-        .match_resolutions
-        .insert(capture_path.clone(), mctx.take_match_resolutions());
+      insert_match_resolutions(
+        program,
+        capture_path,
+        &def.name,
+        mctx.take_match_resolutions(),
+      );
     }
     // Unlike the annotated branch, there's no pre-existing `Term` for an
     // inferred type — it has to be raised too, and (unlike the checked
@@ -1840,8 +1941,10 @@ fn check_one_def_new(
       DebugName::Named(Identifier::new("T".to_string()))
     });
     if let Some(program) = core_out {
-      program.defs.insert(
-        capture_path.clone(),
+      insert_checked_def(
+        program,
+        capture_path,
+        &def.name,
         CheckedCoreDef {
           term: body_c.clone(),
           typ: ty_generalized.clone(),
@@ -2077,8 +2180,12 @@ pub fn type_check_module_decls_new_inner(
   let known_instances = collect_known_instances(loaded, &expanded);
   let class_method_order = collect_class_method_order(loaded, &expanded);
 
-  let (mut ctx, mut infix, mut known_globals, mut structs) =
-    ground_truth_from_loaded(loaded, &mut atoms);
+  let GroundTruth {
+    mut ctx,
+    mut infix,
+    mut known_globals,
+    mut structs,
+  } = ground_truth_from_loaded(loaded, &mut atoms);
   for decl in &expanded {
     if let Decl::Infix(i) = &**decl {
       infix.insert(i.operator().clone(), i.name().clone());
@@ -2203,10 +2310,78 @@ pub fn type_check_module_decls_new_inner(
   // default/loaded-module name plus this file's own), reused for every
   // def (each def additionally extends its OWN copy with its peeled
   // Forall params — see `check_one_def_new`).
-  let global_atom_paths: Map<Atom, ModulePath> = known_globals
+  let mut global_atom_paths: Map<Atom, ModulePath> = known_globals
     .iter()
     .map(|(path, atom)| (*atom, path.clone()))
     .collect();
+  // Cross-module bare-name collision guard: `known_globals`'s BARE entry
+  // for a given name (`list_contains`, say) is shared across every
+  // MODULE that happens to declare something under that same bare name
+  // (`ground_truth_from_loaded` interns every loaded module's defs under
+  // their own bare `def.name`, one flat map for the whole program) --
+  // two genuinely independent modules (`lang.module`/`string`, in the
+  // real corpus) both declaring `list_contains` end up sharing ONE bare
+  // atom. `ctx`'s own TYPE lookup for THIS module's own self-references
+  // is already correct regardless (the `for decl in &expanded { ...
+  // known_globals.insert(def.name.clone(), atom) ... }` loop above, and
+  // `ctx`'s equivalent, re-register LAST, winning over whatever
+  // `ground_truth_from_loaded`'s cross-module iteration left there) --
+  // but `global_atom_paths` (this atom's PATH, not its type -- used by
+  // `lower_program`'s whole-program `GlobalInterner` to assign a GLOBAL
+  // SLOT during lowering) was still built from `known_globals`'s raw,
+  // still-bare KEY. Force THIS module's own defs'/instances' bare atoms
+  // to resolve through their OWN qualified path here, UNCONDITIONALLY
+  // (not just for names that happen to collide -- an earlier, narrower
+  // version of this fix needed to know which names were "genuinely
+  // colliding," but that's no longer necessary now that
+  // `insert_checked_def` inserts every def under BOTH its bare and
+  // qualified `CoreProgram.defs` keys unconditionally: a non-colliding
+  // name's bare and qualified slots simply hold the same body, so
+  // forcing every self-reference through the qualified one is free and
+  // always correct, colliding or not). This is what makes
+  // `insert_checked_def`'s qualified slot reachable at all from a
+  // same-module self-reference -- without it, `lang.module.mo`'s own
+  // `list_contains` and `string.mo`'s own `list_contains` would both
+  // still resolve their own bare self-references through the SAME
+  // shared bare slot (whichever module's body was inserted last).
+  // `Decl::Ins` (instance dictionaries) deliberately excluded here: an
+  // instance's own name is already a synthesized, near-globally-unique
+  // identifier ("instance-Similar-Identifier", one per (class, type)
+  // pair) — qualifying it too would force its self-references through
+  // the qualified path while `program.instances`/`check_one_instance_
+  // new` still register it under the bare name only, unconditionally
+  // (never double-inserted the way `insert_checked_def` handles
+  // `program.defs`) -- a real regression found running lang's own
+  // `Similar`-class tests (14 instances, one per lang.types.mo type)
+  // through this exact override before it was narrowed to `Decl::Def`.
+  //
+  // Gated on `core_out.is_some()`: this override's ENTIRE purpose is
+  // making `insert_checked_def`'s qualified `CoreProgram.defs` slot
+  // reachable from a same-module self-reference, which only matters
+  // when a `CoreProgram` is actually being captured (whole-program
+  // lowering, `lower_program`'s `GlobalInterner`). When `core_out` is
+  // `None` (`type_check_module_decls_new`'s ordinary single-module
+  // path, e.g. every `load_module_from_text` call), this function's
+  // OUTPUT is a raised old-style `Term` (`raise_core`, below, using this
+  // same `global_atom_paths`/`atom_paths`), consumed by the OLD
+  // Scope-based tree-walker -- which registers every def under its BARE
+  // name, never a module-qualified one. Forcing `atom_paths` to the
+  // qualified path here unconditionally made `raise_core` emit a
+  // `Term::Global` the old scope could never resolve (confirmed
+  // regression: `init/string.mo`'s `String.is_empty` calling its own
+  // sibling `String.length` raised to `Global("string.String.length")`,
+  // "not found" at runtime -- the old scope only knows `"String.length"`).
+  if core_out.is_some() {
+    for decl in &expanded {
+      match &**decl {
+        Decl::Def(def) => {
+          let bare_atom = mctx.atoms_mut().intern(def.name.clone());
+          global_atom_paths.insert(bare_atom, path.clone().extend(def.name.clone()));
+        }
+        _ => {}
+      }
+    }
+  }
   for decl_ctx in expanded {
     let decl = decl_ctx.value().clone();
     let result: Result<Decl, TypeError> = match decl {
@@ -2221,7 +2396,10 @@ pub fn type_check_module_decls_new_inner(
         }
       }
       Decl::Def(def) => {
-        let capture_path = def.name.clone();
+        // Module-qualified -- `insert_checked_def` (called from
+        // `check_one_def_new`) additionally stores this under `def.name`
+        // bare too, so either form finds it.
+        let capture_path = path.clone().extend(def.name.clone());
         check_one_def_new(
           &mut mctx,
           &mut ctx,
@@ -2305,7 +2483,9 @@ pub fn type_check_module_decls_new_inner(
         };
         match &**decl {
           Decl::Def(def) => {
-            let capture_path = def.name.clone();
+            // Module-qualified -- see the identical comment at the
+            // ordinary `Decl::Def` arm above.
+            let capture_path = path.clone().extend(def.name.clone());
             check_one_def_new(
               &mut mctx,
               &mut ctx,
@@ -2332,7 +2512,9 @@ pub fn type_check_module_decls_new_inner(
         for d in inner {
           match d {
             Decl::Def(def) => {
-              let capture_path = def.name.clone();
+              // Module-qualified -- see the identical comment at the
+              // ordinary `Decl::Def` arm above.
+              let capture_path = path.clone().extend(def.name.clone());
               match check_one_def_new(
                 &mut mctx,
                 &mut ctx,

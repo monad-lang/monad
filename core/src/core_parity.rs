@@ -78,6 +78,11 @@ impl ParitySummary {
 /// has been captured into one combined `CoreProgram`).
 struct DiscoveredTest {
   path: ModulePath,
+  /// The module this test was discovered in — needed to fall back to a
+  /// module-qualified `lowered.index_of` lookup when `path`'s own bare
+  /// name happens to collide with some OTHER loaded module's own def of
+  /// the same name (see `core_check_module.rs`'s `capture_path_for`).
+  module_path: ModulePath,
   tree_walker: ParityOutcome,
 }
 
@@ -255,6 +260,7 @@ pub fn run_parity_tests(
       };
       discovered.push(DiscoveredTest {
         path: def.name.clone(),
+        module_path: module_path.clone(),
         tree_walker: outcome,
       });
     }
@@ -302,9 +308,14 @@ pub fn run_parity_tests(
   // Resolve every test's global slot BEFORE `lowered.globals` is moved
   // into `GlobalTable::new` below -- `index_of` borrows `lowered` as a
   // whole, which a partial move out of one of its fields would forbid.
+  // Qualified by `t.module_path` (this test's own declaring module) --
+  // the bare slot could belong to some OTHER loaded module's same-named
+  // def instead, if one exists (see `insert_checked_def`'s own doc
+  // comment, core_check_module.rs); the qualified one is always this
+  // test's own.
   let indices: Vec<Option<u32>> = discovered
     .iter()
-    .map(|t| lowered.index_of(&t.path))
+    .map(|t| lowered.index_of(&t.module_path.clone().extend(t.path.clone())))
     .collect();
   let globals = GlobalTable::new(lowered.globals);
   let mut cache = GlobalCache::new(globals.len());

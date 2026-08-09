@@ -111,143 +111,37 @@ def parse_all (files : List String) : Bool :=
             if parse_file f then parse_all rest else false
     }
 
-// ================ init/ file tests ================
+// ================ Aggregate parse tests ================
+//
+// Only the `parse_all` aggregate tests are kept here -- the per-file
+// variants that used to sit alongside each of these (test_parse_init_id,
+// test_parse_lang_module, etc.) checked nothing an aggregate test didn't
+// already cover (`parse_all` fails the moment ANY listed file fails to
+// parse), so they were pure redundant surface area, not extra coverage.
 
 #[test]
 def test_parse_init_all_safe : Bool := parse_all init_files_safe
 
 #[test]
-def test_parse_init_id : Bool := parse_file "init/id.mo"
-
-#[test]
-def test_parse_init_io : Bool := parse_file "init/io.mo"
-
-#[test]
-def test_parse_init_math : Bool := parse_file "init/math.mo"
-
-#[test]
-def test_parse_init_number : Bool := parse_file "init/number.mo"
-
-#[test]
-def test_parse_init_string : Bool := parse_file "init/string.mo"
-
-#[test]
-def test_parse_init_tests : Bool := parse_file "init/tests.mo"
-
-// ================ std/ file tests ================
-
-#[test]
 def test_parse_std_all : Bool := parse_all std_files
-
-#[test]
-def test_parse_std_test : Bool := parse_file "std/test.mo"
-
-// ================ examples/ file tests ================
 
 #[test]
 def test_parse_examples_all_safe : Bool := parse_all example_files_safe
 
 #[test]
-def test_parse_examples_hello : Bool := parse_file "examples/hello.mo"
-
-#[test]
-def test_parse_examples_factorial : Bool := parse_file "examples/factorial.mo"
-
-#[test]
-def test_parse_examples_do_block : Bool := parse_file "examples/do_block.mo"
-
-#[test]
-def test_parse_examples_pattern_matching : Bool := parse_file "examples/pattern_matching.mo"
-
-#[test]
-def test_parse_examples_structs : Bool := parse_file "examples/structs.mo"
-
-#[test]
-def test_parse_examples_iteration : Bool := parse_file "examples/iteration.mo"
-
-// ================ lang/ file tests (self hosting) ================
-
-#[test]
 def test_parse_lang_all_safe : Bool := parse_all lang_files_safe
-
-#[test]
-def test_parse_lang_elaborate : Bool := parse_file "lang/elaborate.mo"
-
-#[test]
-def test_parse_lang_main : Bool := parse_file "lang/main.mo"
-
-#[test]
-def test_parse_lang_module : Bool := parse_file "lang/module.mo"
-
-#[test]
-def test_parse_lang_pretty : Bool := parse_file "lang/pretty.mo"
-
-#[test]
-def test_parse_lang_scope : Bool := parse_file "lang/scope.mo"
-
-// ================ UTF-8 file tests (previously blocked) ================
 
 #[test]
 def test_parse_init_all_utf8 : Bool := parse_all init_files_utf8
 
 #[test]
-def test_parse_init_string_profile : Bool := parse_file "init/string_profile.mo"
-
-#[test]
-def test_parse_init_optics : Bool := parse_file "init/optics.mo"
-
-#[test]
 def test_parse_std_all_utf8 : Bool := parse_all std_files_utf8
-
-#[test]
-def test_parse_std_test_map_full : Bool := parse_file "std/test_map_full.mo"
-
-#[test]
-def test_parse_std_list_tests3b : Bool := parse_file "std/list_tests3b.mo"
-
-#[test]
-def test_parse_std_map : Bool := parse_file "std/map.mo"
-
-#[test]
-def test_parse_std_base : Bool := parse_file "std/base.mo"
-
-#[test]
-def test_parse_std_list : Bool := parse_file "std/list.mo"
 
 #[test]
 def test_parse_examples_all_utf8 : Bool := parse_all example_files_utf8
 
 #[test]
-def test_parse_examples_indexed_monads : Bool := parse_file "examples/indexed_monads.mo"
-
-#[test]
-def test_parse_examples_optics : Bool := parse_file "examples/optics.mo"
-
-#[test]
 def test_parse_lang_all_utf8 : Bool := parse_all lang_files_utf8
-
-#[test]
-def test_parse_lang_parser : Bool := parse_file "lang/parser.mo"
-
-#[test]
-def test_parse_lang_types : Bool := parse_file "lang/types.mo"
-
-#[test]
-def test_parse_lang_eval : Bool := parse_file "lang/eval.mo"
-
-#[test]
-def test_parse_lang_eval_t2 : Bool := parse_file "lang/eval_t2.mo"
-
-#[test]
-def test_parse_lang_eval_term : Bool := parse_file "lang/eval_term.mo"
-
-#[test]
-def test_parse_lang_lower : Bool := parse_file "lang/lower.mo"
-
-#[test]
-def test_parse_codegen_emit : Bool := parse_file "lang/codegen/emit.mo"
-
-// ================ All files combined ================
 
 #[test]
 def test_parse_all_utf8_files : Bool := parse_all all_files_utf8

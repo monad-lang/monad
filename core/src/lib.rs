@@ -212,50 +212,6 @@ impl std::fmt::Display for BuildCoreProgramError {
   }
 }
 
-/// A top-level def declared with the same bare name in two DIFFERENT
-/// modules — `CoreProgram` (`core_program.rs`) keys `defs`/
-/// `match_resolutions`/etc. by a def's bare (non-module-qualified) name,
-/// which is safe for the ordinary one-module-at-a-time checking path
-/// (unrelated files never share a namespace there) but not for
-/// `check_all_modules_capturing_core`'s own capturing path, which
-/// deliberately combines every module `loaded` knows about into ONE
-/// `CoreProgram` at once. Left unchecked, the SECOND file's def would
-/// silently overwrite the first's in `program.defs` — no error, just a
-/// wrong body used for whichever file's tests reference that name later.
-/// Confirmed as a real (if so far harmless) risk during this branch's
-/// manual review: `test_foldr_foldl_equiv` exists verbatim in two
-/// different `init` files, and only stayed harmless because both copies
-/// happen to be byte-identical. Checked once, up front, rather than
-/// silently risking it on every `build_core_program` call.
-fn check_no_cross_module_def_name_collisions(
-  modules: &[(ModulePath, Vec<SourceContext<Decl>>)],
-) -> Result<(), String> {
-  let mut seen: std::collections::HashMap<&ModulePath, &ModulePath> =
-    std::collections::HashMap::new();
-  for (module_path, decls) in modules {
-    for decl in decls {
-      let Decl::Def(def) = decl.value() else {
-        continue;
-      };
-      match seen.get(&def.name) {
-        Some(&earlier_module) if earlier_module != module_path => {
-          return Err(format!(
-            "def `{}` is declared in both `{module_path}` and `{earlier_module}` — \
-             core-eval's capturing checker keys every top-level def by its bare name, \
-             so this collision would silently make one definition invisible to the \
-             other file's own code",
-            def.name
-          ));
-        }
-        _ => {
-          seen.insert(&def.name, module_path);
-        }
-      }
-    }
-  }
-  Ok(())
-}
-
 /// Build ONE combined `CoreProgram` (Phase 0's `check_all_modules_
 /// capturing_core`) covering the `init` package plus every OTHER module
 /// `loaded` now knows about — the shared machinery both `run()` and
@@ -309,9 +265,19 @@ fn build_core_program(
   }
   capture_modules.extend(extra_modules.iter().cloned());
 
-  check_no_cross_module_def_name_collisions(&capture_modules)
-    .map_err(BuildCoreProgramError::Setup)?;
-
+  // No cross-module bare-name collision check here anymore -- `CoreProgram`
+  // (`core_program.rs`) used to key `defs`/`match_resolutions` by a def's
+  // bare (non-module-qualified) name, which broke whenever two
+  // INDEPENDENT modules declared the same bare name (confirmed for real:
+  // `list_contains` in both `lang.module` and `string`; `main` itself,
+  // in any two files each with their own entry point -- near-universal,
+  // not a rare edge case). Fixed at the root in
+  // `core_check_module.rs`'s `type_check_module_decls_new_inner`:
+  // `capture_path` (this function's own capture key) and
+  // `global_atom_paths`'s per-module override both now use each def's
+  // full MODULE-qualified path, so two same-named-but-unrelated defs
+  // get distinct keys and distinct lowered global slots regardless of
+  // which order their modules happen to be checked in.
   core_check_module::check_all_modules_capturing_core(&capture_modules, loaded)
     .map_err(BuildCoreProgramError::Check)
 }
@@ -356,6 +322,25 @@ fn strings_to_list_value(
 /// itself, since `default_modules()`'s own already-checked copy of it
 /// (used here purely for name/scope resolution) never populates a
 /// `CoreProgram` on its own.
+/// `insert_checked_def` (`core_check_module.rs`) stores every def under
+/// BOTH its bare AND its module-qualified path — but only the qualified
+/// form (`path`'s own `main`, not bare `main`) is GUARANTEED to be
+/// *this* file's own `main` rather than some other loaded module's
+/// same-named one (the bare slot is whichever module's `main` happened
+/// to be checked last, when more than one exists) — since callers here
+/// always know exactly which file's `main` they want, always ask for it
+/// by its own qualified path.
+fn find_main_def<'a>(
+  program: &'a core_program::CoreProgram,
+  path: &ModulePath,
+) -> Option<&'a core_program::CheckedCoreDef> {
+  program.defs.get(&path.clone().extend(mpt("main")))
+}
+
+fn main_index(lowered: &lower_core_ir::LoweredProgram, path: &ModulePath) -> Option<u32> {
+  lowered.index_of(&path.clone().extend(mpt("main")))
+}
+
 pub fn eval_core_program(path: &ModulePath, source: &str) -> Result<core_value::Value, String> {
   let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
   // The ordinary (non-capturing) load is still needed here, even though
@@ -373,9 +358,7 @@ pub fn eval_core_program(path: &ModulePath, source: &str) -> Result<core_value::
   let program =
     build_core_program(&loaded, &[(path.clone(), decls)]).map_err(|e| format!("{e}"))?;
   let lowered = lower_core_ir::lower_program(&program).map_err(|e| format!("lower: {e:?}"))?;
-  let main_idx = lowered
-    .index_of(&mpt("main"))
-    .ok_or_else(|| "main not found".to_string())?;
+  let main_idx = main_index(&lowered, path).ok_or_else(|| "main not found".to_string())?;
   let natives = core_value::NativeTable::from_lowered(&lowered);
   let globals = core_value::GlobalTable::new(lowered.globals);
   let mut cache = core_value::GlobalCache::new(globals.len());
@@ -426,15 +409,13 @@ pub fn run(
   // for evaluation), using this def's own captured `atom_paths` to
   // resolve every atom back to a real, readable name the same way
   // `check_one_def_new` already does when raising a def's checked body.
-  let main_typ = program
-    .defs
-    .get(&mpt("main"))
+  let main_typ = find_main_def(&program, &path)
     .map(|d| raise_core::raise_core(&d.typ, &d.atom_paths).to_string())
     .unwrap_or_else(|| "?".to_string());
   println!("Eval type {main_typ}");
 
   let lowered = lower_core_ir::lower_program(&program).map_err(|e| format!("lower: {e:?}"))?;
-  let main_idx = lowered.index_of(&mpt("main")).ok_or("main not found")?;
+  let main_idx = main_index(&lowered, &path).ok_or("main not found")?;
   let natives = core_value::NativeTable::from_lowered(&lowered);
   let globals = core_value::GlobalTable::new(lowered.globals);
   let mut cache = core_value::GlobalCache::new(globals.len());
@@ -840,6 +821,13 @@ fn evaluate_one_test_file(
     .filter(|ctx| ctx.value().has_test_attr())
     .map(|ctx| {
       let def = ctx.value();
+      // Bare, matching `CoreProgram.defs`'/`lowered`'s own DEFAULT
+      // (non-colliding) capture key -- the later `lowered.index_of`
+      // lookup falls back to `path`-qualified only if this test's own
+      // name happened to collide with some OTHER loaded module's own
+      // def of the same name (see `core_check_module.rs`'s
+      // `capture_path_for`). Display name (second element) stays bare
+      // either way, for PASS/FAIL output.
       (def.name.clone(), def.name.to_string())
     })
     .collect();
@@ -880,7 +868,12 @@ fn evaluate_one_test_file(
 
   for (test_path, name) in &entries {
     let start = Instant::now();
-    let result = match lowered.index_of(test_path) {
+    // Qualified by `path` (this test file's own module) -- the bare
+    // slot could belong to some OTHER loaded module's same-named def
+    // instead, if one exists (see `insert_checked_def`'s own doc
+    // comment); the qualified one is always THIS file's own.
+    let idx = lowered.index_of(&path.clone().extend(test_path.clone()));
+    let result = match idx {
       None => Err("not present in the lowered program (skipped)".to_string()),
       Some(idx) => match test_timeout {
         Some(timeout) => {
