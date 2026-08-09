@@ -45,6 +45,11 @@ pub enum IrLit {
   /// `Term`/`CoreTerm`'s own recursive structure.
   Num(i64, crate::term::NumSuffix),
   Float(crate::term::F64Wrap, crate::term::NumSuffix),
+  /// A type universe (`Type`, `Prop`, `Pred`, `Sort n`) used as an
+  /// ordinary runtime VALUE, e.g. `get_sort Type` — see `lower_core_ir`'s
+  /// `CoreTerm::Sort` lowering arm for why this is enough (opaque,
+  /// structurally-inert) rather than real universe machinery.
+  Sort(u64),
 }
 
 impl Display for IrLit {
@@ -54,6 +59,7 @@ impl Display for IrLit {
       IrLit::Char(c) => write!(f, "{c:?}"),
       IrLit::Num(v, _) => write!(f, "{v}"),
       IrLit::Float(v, _) => write!(f, "{}", v.0),
+      IrLit::Sort(level) => write!(f, "Sort {level}"),
     }
   }
 }
@@ -122,6 +128,25 @@ pub enum CoreIr {
     arms: Vec<MatchArm>,
   },
 
+  /// Synthesized by `lower_core_ir::lower_match` in place of a real arm,
+  /// for a constructor tag the SOURCE `match` genuinely never covered
+  /// (no named case, no wildcard) — `arms` in `Match` must be a
+  /// complete, fixed-size array indexed by tag (unlike the tree-walker,
+  /// which dispatches by the scrutinee's actual runtime tag and simply
+  /// never reaches an uncovered case in a well-behaved program), so
+  /// SOME arm has to occupy that slot. Reaching this arm at runtime
+  /// means the program actually produced a value of the one constructor
+  /// the programmer asserted (via the missing wildcard) could never
+  /// occur — a real, if rare, runtime error (`CoreEvalError::
+  /// NonExhaustiveMatch`), not a lowering-time one; the alternative
+  /// (refusing to lower the whole def) is strictly worse, since it
+  /// breaks even the common case where that constructor is provably
+  /// never actually constructed.
+  MatchFail {
+    inductive: crate::term::ModulePath,
+    ctor: crate::term::Identifier,
+  },
+
   /// A (possibly partially applied) constructor. `tag` is this
   /// constructor's position among its inductive's constructors
   /// (declaration order, resolved once at lowering time via
@@ -162,6 +187,9 @@ impl Display for CoreIr {
           write!(f, " [{}] {}", arm.bind_count, arm.body)?;
         }
         write!(f, ")")
+      }
+      CoreIr::MatchFail { inductive, ctor } => {
+        write!(f, "(match-fail {inductive}.{ctor})")
       }
       CoreIr::Con { tag, arity, args } => {
         write!(f, "(con #{tag}/{arity}")?;

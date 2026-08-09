@@ -85,7 +85,7 @@ pub fn exec_native(
     "string_to_list" => string_to_list(args, natives),
     "string_from_list" => string_from_list(args, natives),
     "bench_now" => bench_now(),
-    "bench_report" => bench_report(args),
+    "bench_report" => bench_report(args, natives),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
     // `NativeTable`'s range); this is the one call site that only has the
@@ -403,7 +403,7 @@ fn bench_now() -> Result<Value, CoreEvalError> {
   Ok(Value::Lit(IrLit::Num(now, NumSuffix::I64)))
 }
 
-fn bench_report(args: &[Value]) -> Result<Value, CoreEvalError> {
+fn bench_report(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError(
       "bench_report needs 2 args".into(),
@@ -412,7 +412,14 @@ fn bench_report(args: &[Value]) -> Result<Value, CoreEvalError> {
   let label = extract_string(&args[0])?;
   let elapsed = extract_int(&args[1])?;
   println!("  BENCH {label}: {elapsed}ms");
-  Ok(Value::Lit(IrLit::Num(elapsed, NumSuffix::I64)))
+  // Declared `Bool` (`std/bench.mo`), same as the tree-walker's own
+  // `eval::native::bench_report` (`Ok(b_true())`) -- returning a bare
+  // `I64` here (the previous behavior) type-checked fine at compile time
+  // (natives aren't checked against their declared signature the way
+  // ordinary defs are) but broke every `#[test] def profile_* : Bool`
+  // caller at runtime, since `detect_test_result_value` only knows how
+  // to classify `Bool`/`IO`/`Result` constructors.
+  make_bool(natives, true)
 }
 
 #[cfg(test)]

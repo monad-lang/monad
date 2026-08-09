@@ -1855,20 +1855,44 @@ pub fn desugar_struct_literals(
         param_typ,
         None,
       );
-      // Mirrors `check`'s `Lam` arm: if `expected` is known to be a Pi,
-      // open both `body` and its return type with the SAME fresh atom
-      // (a real, possibly-dependent Pi return type CAN reference the
-      // parameter) before recursing, then close back over that atom to
-      // reconstruct a proper `Lam` body.
+      // Mirrors `check`'s `Lam` arm: open `body` (and, when known, its
+      // return type) with a fresh atom before recursing, then close back
+      // over that atom to reconstruct a proper `Lam` body. Previously
+      // this only happened when `expected` was a known Pi (`ret_hint`) —
+      // leaving `body` desugared in its raw, unopened `Bound`-form
+      // whenever it wasn't, with NO ctx entry at all for this lambda's
+      // own parameter, silently failing to resolve any class-method call
+      // inside that needed it. Concretely: an unannotated `let`-bound
+      // closure (`let f := fn (x : I64) => x == 3 in ...` — `expected` is
+      // `None` at the closure's OWN desugar site, since the enclosing
+      // `let` has no type annotation on `f`) always took the unopened
+      // path, leaving `x == 3`'s `BEq.beq` call unresolved even though
+      // `x`'s OWN annotation (`I64`) was right there — a real bug found
+      // running `examples/iteration_advanced.mo`'s own `test_all`/
+      // `test_any` through Phase 8's parity harness. Fixed narrowly: also
+      // open whenever `param_typ_d` itself is a real (non-`Hole`) type —
+      // an explicit annotation is exactly as good a reason to open as a
+      // `ret_hint` derived from `expected`, and costs nothing extra when
+      // it's available. Left UNCHANGED (still unopened) when BOTH
+      // `ret_hint` and `param_typ_d` are unknown -- genuinely nothing to
+      // open with, and (confirmed empirically: an earlier, broader
+      // "always open, even with `Hole`" version of this fix regressed
+      // std/map_tests.mo's `Map.empty`/`Map.insert` resolution, 34 tests)
+      // opening with a `Hole` type is NOT safely equivalent to not
+      // opening at all for every caller of this function — some
+      // downstream resolution genuinely depends on the previous
+      // behavior in that specific case, not yet root-caused, so left
+      // alone rather than risking a wrong guess.
       let ret_hint = expected.and_then(|e| match force(mctx, e.clone()).into_stripped_ctx() {
         CoreTerm::Pi { ret, .. } => Some(*ret),
         _ => None,
       });
-      let body_d = if let Some(ret) = ret_hint {
+      let should_open = ret_hint.is_some() || !matches!(param_typ_d.strip_ctx(), CoreTerm::Hole);
+      let body_d = if should_open {
         let atom = Atom::fresh();
         let ctx2 = open_ctx(ctx, atom, param_typ_d.clone());
         let opened_body = open_with(body, &CoreTerm::Free(atom));
-        let opened_ret = open_with(&ret, &CoreTerm::Free(atom));
+        let opened_ret = ret_hint.map(|ret| open_with(&ret, &CoreTerm::Free(atom)));
         // D5: this `Lam`'s own parameter is a dictionary (D3 elaboration
         // gave it a class-applied type, e.g. `BOrd A`) iff its type's
         // head atom is a known class — extend a LOCAL copy of
@@ -1901,7 +1925,7 @@ pub fn desugar_struct_literals(
           known_instances,
           scope_for_body,
           &opened_body,
-          Some(&opened_ret),
+          opened_ret.as_ref(),
         );
         close(&d, atom)
       } else {
@@ -2383,14 +2407,35 @@ pub fn desugar_struct_literals(
               v,
               Some(field_ty),
             ),
-            None => CoreTerm::Lit(CoreLit::Match {
-              scrutinee: Box::new(base_d.clone()),
-              cases: vec![CoreMatchCase {
-                name: Identifier::new("mk".to_string()),
-                dbgs: vec![DebugName::Anonymous; n],
-                value: Box::new(CoreTerm::Bound((n - 1 - idx) as u32)),
-              }],
-            }),
+            None => {
+              // Phase 0 capture: this inline field-projection `Match`
+              // (one per un-overridden field) is built directly here,
+              // the same way `project_dict_field` builds its own
+              // single-case dict-projection `Match` -- and, like that
+              // one, needs its own `record_match_resolution` call, or
+              // every OTHER `Match` node lowered later in this same def
+              // (an explicit `match` on the updated struct, a nested
+              // class-method call, ...) consumes the wrong queue entry
+              // once traversal reaches it. Concretely: `{ p1 with x :=
+              // 10 }` followed by `match p2 { mk x y => x == 10 }`
+              // desugars to N of these un-overridden-field Matches (one
+              // per field, here `y`) PLUS the explicit match's own "mk"
+              // PLUS `==`'s own "BEq" dict-projection Match; skipping
+              // this capture left the explicit match consuming "BEq"
+              // instead of "mk" (`MatchTraversalMismatch { expected:
+              // [mk], found: [BEq] }`), a real bug found running
+              // `init/tests.mo`'s own `test_struct_update_syntax`
+              // through Phase 8's parity harness.
+              mctx.record_match_resolution(vec![Identifier::new("mk".to_string())], atom);
+              CoreTerm::Lit(CoreLit::Match {
+                scrutinee: Box::new(base_d.clone()),
+                cases: vec![CoreMatchCase {
+                  name: Identifier::new("mk".to_string()),
+                  dbgs: vec![DebugName::Anonymous; n],
+                  value: Box::new(CoreTerm::Bound((n - 1 - idx) as u32)),
+                }],
+              })
+            }
           })
         })
         .collect();

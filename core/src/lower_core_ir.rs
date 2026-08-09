@@ -212,7 +212,19 @@ pub fn lower_term(ctx: &mut LowerCtx, term: &CoreTerm) -> Result<CoreIr, LowerCo
     CoreTerm::Meta(_) => Err(LowerCoreIrError::UnexpectedTypeLevelTerm("Meta")),
     CoreTerm::Forall { .. } => Err(LowerCoreIrError::UnexpectedTypeLevelTerm("Forall")),
     CoreTerm::Pi { .. } => Err(LowerCoreIrError::UnexpectedTypeLevelTerm("Pi")),
-    CoreTerm::Sort { .. } => Err(LowerCoreIrError::UnexpectedTypeLevelTerm("Sort")),
+    // `Type`/`Prop`/`Pred`/`Sort n` used in ordinary VALUE position (e.g.
+    // `get_sort Type`, `get_identity Prop` -- functions that take a
+    // universe as an argument and hand it back unchanged, never actually
+    // inspecting its structure). `CoreIr`/`Value` otherwise have no
+    // concept of universes at all (by design -- see this module's own
+    // doc comment on what's deliberately excluded), but an opaque,
+    // structurally-inert `IrLit::Sort(level)` is enough for a `Sort` to
+    // flow through locals/`App`/identity functions correctly without
+    // needing any REAL runtime universe machinery, the same way an
+    // uninspected `Str`/`Num` literal flows through unexamined -- a real
+    // gap found running `init/tests.mo`'s own `test_sort_formation`/
+    // `test_type_as_value_arg`/etc. through Phase 8's parity harness.
+    CoreTerm::Sort { level } => Ok(CoreIr::Lit(IrLit::Sort(*level))),
     CoreTerm::Hole => Err(LowerCoreIrError::UnexpectedTypeLevelTerm("Hole")),
     CoreTerm::Lam { body, .. } => Ok(core_ir::lam(lower_term(ctx, body)?)),
     // `let x := value in body` (and any other beta-redex-shaped `App`)
@@ -351,6 +363,18 @@ fn lower_if(
   Ok(core_ir::match_(cond_ir, arms))
 }
 
+/// `Type`/`Prop`/`Pred`'s own universe levels, matching
+/// `core_check_module.rs`'s E7 registration (`ctx.insert(atom,
+/// CoreTerm::Sort { level })`) exactly — `Pred` is a plain alias for
+/// `Prop`, same level, same as that registration.
+fn builtin_sort_level(path: &ModulePath) -> Option<u64> {
+  match path.to_string().as_str() {
+    "Type" => Some(1),
+    "Prop" | "Pred" => Some(0),
+    _ => None,
+  }
+}
+
 /// `match` compiles to constructor-tag dispatch: one arm per constructor
 /// of the scrutinee's inductive, in declaration order, filled from the
 /// matching named case or (if absent) the wildcard `_` case — mirroring
@@ -403,13 +427,57 @@ fn lower_match(
   }
   let mut arms = Vec::with_capacity(info.constructors.len());
   for ctor in &info.constructors {
-    let arm = named
-      .get(&ctor.name)
-      .cloned()
-      .or_else(|| wildcard.clone())
-      .ok_or_else(|| {
-        LowerCoreIrError::NonExhaustiveMatch(inductive_path.clone(), ctor.name.clone())
-      })?;
+    let arm = match named.get(&ctor.name).cloned() {
+      Some(arm) => arm,
+      None if wildcard.is_none() => {
+        // No named case AND no wildcard covers this constructor — the
+        // surface language allows this (`match List.cons 5 List.empty {
+        // cons x _ => x == 5 }` never mentions `empty` at all) whenever
+        // the programmer knows, informally, that constructor can't
+        // actually occur here; the tree-walker handles it by dispatching
+        // on the scrutinee's REAL runtime tag and simply never reaching
+        // an uncovered arm in a well-behaved program. `arms` here has to
+        // be a complete, fixed-size array indexed by tag regardless —
+        // synthesize a `MatchFail` arm for this one tag (a genuine
+        // runtime error, `CoreEvalError::NonExhaustiveMatch`, ONLY if
+        // this exact tag is ever actually dispatched to) instead of
+        // refusing to lower the whole def, which used to fail even the
+        // common case where this constructor is provably never
+        // constructed. See `CoreIr::MatchFail`'s own doc comment.
+        MatchArm {
+          bind_count: ctor.arity,
+          body: std::sync::Arc::new(CoreIr::MatchFail {
+            inductive: inductive_path.clone(),
+            ctor: ctor.name.clone(),
+          }),
+        }
+      }
+      None => {
+        let wildcard = wildcard.clone().unwrap();
+        // A wildcard case's own SOURCE pattern (`_`) always binds zero
+        // names (`case.dbgs.len() == 0` above), but at runtime `dispatch`
+        // (`core_eval.rs`) unconditionally pushes every one of the
+        // MATCHED constructor's own real fields into `env` before
+        // running the arm body — regardless of whether that body ever
+        // reads them. Reusing the wildcard's own `bind_count` (0) here
+        // is only correct for a nullary constructor; for anything else
+        // (e.g. `Option.some 1`'s `some`, arity 1) it desyncs `dispatch`'s
+        // own `args.len() != arm.bind_count` check, producing
+        // `ArityMismatch` (surfaced as "expected 0 constructor fields,
+        // got 1") the moment a wildcard-only match ever runs against a
+        // constructor with fields — a real bug found running
+        // `init/tests.mo`'s own `test_match_wildcard_only` through Phase
+        // 8's parity harness. Each constructor tag that falls through to
+        // the wildcard needs ITS OWN `bind_count` (`ctor.arity`), not the
+        // wildcard pattern's — the shared `body` itself is still safe to
+        // reuse unchanged, since a wildcard body never references any of
+        // these (extra, unused) bindings by construction.
+        MatchArm {
+          bind_count: ctor.arity,
+          body: wildcard.body,
+        }
+      }
+    };
     arms.push(arm);
   }
   Ok(core_ir::match_(scrutinee_ir, arms))
@@ -869,6 +937,21 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
       // Reserved above specifically because it was skipped (a known,
       // already-diagnosed gap — see `skipped`), not a mystery reference.
       globals.push(GlobalDef::Unresolved(path.clone()));
+    } else if let Some(level) = builtin_sort_level(path) {
+      // `Type`/`Prop`/`Pred` used as a VALUE (`get_sort Type`) — these
+      // are registered as known globals purely for type-checking
+      // (`core_check_module.rs`'s E7, `ctx.insert(atom, CoreTerm::Sort
+      // {..})`), entirely separate from `program.defs` (they're not real
+      // `.mo`-file defs at all), so they'd otherwise fall through to the
+      // "mystery reference" catch-all below and surface as
+      // `UnresolvedGlobal` the moment anything actually evaluates one —
+      // a real gap found running `init/tests.mo`'s own
+      // `test_type_as_value_arg`/`test_prop_as_value_arg`/etc. through
+      // Phase 8's parity harness. Same opaque `IrLit::Sort` literal
+      // `CoreTerm::Sort`'s own lowering arm produces.
+      globals.push(GlobalDef::Def(std::sync::Arc::new(CoreIr::Lit(
+        IrLit::Sort(level),
+      ))));
     } else {
       // A bare reference with no def, instance, or constructor behind
       // it at all — in practice this is a class method's own abstract

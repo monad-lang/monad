@@ -310,24 +310,11 @@ def test_struct_update_syntax : Bool :=
         mk x y => x == 10 && y == 2
     }
 
-// Optics tests
-
-#[test]
-def test_lens_type_exists : Bool :=
-    // Verify the Lens type alias compiles and can be used in a simple context
-    true
-
-#[test]
-def test_lens_expansion_in_def_type : Bool :=
-    // Verify Lens S T A B expands to (A -> F B) -> S -> F T in annotations
-    true
-
-// Indexed monad tests
-
-#[test]
-def test_indexed_monad_class_exists : Bool :=
-    // Verify IndexedMonad class compiles
-    true
+// Optics/indexed-monad tests: `Lens`/`IndexedMonad` compiling at all is
+// already exercised for free by every OTHER test in this file (any real
+// checker regression in either would fail the whole file to load, not
+// just one isolated test) -- `optics_tests.mo` is where `Lens`'s actual
+// behavior (get/set/over) gets real, non-trivial runtime coverage.
 
 // Nat arithmetic tests
 
@@ -361,12 +348,16 @@ def test_vec_nil_match : Bool :=
 #[test]
 def test_vec_nil_type : Bool :=
     let v : Vec Nat.zero I64 := Vec.nil in
-    true
+    match v {
+        nil => true
+    }
 
 #[test]
 def test_vec_cons_type : Bool :=
     let v : Vec (Nat.succ Nat.zero) I64 := Vec.cons 42 Vec.nil in
-    true
+    match v {
+        cons h t => h == 42
+    }
 
 #[test]
 def test_vec_cons_pattern : Bool :=
@@ -391,11 +382,11 @@ def test_vec_cons_tail_nil : Bool :=
     }
 
 // Tuple tests
-
-#[test]
-def test_tuple_pair_construct : Bool :=
-    let t : Pair I64 Bool := (1, true) in
-    true
+//
+// No separate "construct only" tests here -- `test_tuple_pair_match`/
+// `test_tuple_triple_nested_match` below build the exact same tuples and
+// additionally verify their contents via `match`, so a construct-only
+// twin would check strictly less while covering nothing new.
 
 #[test]
 def test_tuple_pair_match : Bool :=
@@ -403,11 +394,6 @@ def test_tuple_pair_match : Bool :=
     match t {
         Pair.pair a b => (a == 1) && (b == true)
     }
-
-#[test]
-def test_tuple_triple_construct : Bool :=
-    let t : Pair I64 (Pair Bool String) := (1, true, "hi") in
-    true
 
 #[test]
 def test_tuple_triple_nested_match : Bool :=
@@ -474,6 +460,15 @@ def test_id_unwrap : Bool :=
 #[test]
 def test_id_unwrap_false : Bool :=
     match Id.run (Id.id false) { true => false, false => true }
+
+// `Eq.refl`/`Sort`/`Prop`/`Type`-as-value tests below are genuinely
+// type-checking-only: `Eq`'s only inhabitant is `refl` and a `Sort`
+// value carries no runtime-observable structure at all (see
+// `lower_core_ir.rs`'s `IrLit::Sort` -- deliberately opaque), so there is
+// nothing further to inspect once construction/annotation type-checks;
+// `true` here is the correct body, not a stand-in for a missing
+// assertion, the same way a `#[test]` that only needs to confirm "this
+// compiles" legitimately can be.
 
 #[test]
 def test_eq_refl_apply : Bool :=

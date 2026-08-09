@@ -8,12 +8,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::diag::render_diagnostics;
+use crate::eval::r#type::render_type_error_with_source;
+#[cfg(feature = "repl")]
 use crate::eval::r#type::type_check;
 use crate::eval::{EvalOptions, eval, eval_test};
 #[cfg(feature = "repl")]
 use crate::parser::{ReplInput, repl_parser};
 use crate::term::Decl;
-use crate::term::Term::{self, Con, Hole};
+#[cfg(feature = "repl")]
+use crate::term::Term::Hole;
+use crate::term::Term::{self, Con};
+use crate::term::id;
 #[cfg(feature = "repl")]
 use crate::term::module::ParsedModule;
 #[cfg(feature = "repl")]
@@ -24,9 +29,7 @@ use crate::term::module::{
 };
 use crate::term::{
   Constructor, InductiveVariant, ModulePath, Named, SearchPaths, SourceContext, SourceRange, mpt,
-  strings_to_list_term,
 };
-use crate::term::{app, id};
 
 pub mod core_check;
 pub mod core_check_module;
@@ -181,38 +184,194 @@ pub fn load_module(
   Ok(loaded)
 }
 
+/// A `build_core_program` failure — kept as two variants rather than a
+/// single `String` so callers that want nice, source-annotated
+/// diagnostics for the common case (a real error in the user's own
+/// program, `Check`) can still get them via `render_type_error_with_source`,
+/// while the rarer "infrastructure" failures around it (a module
+/// genuinely missing from disk, a cross-file def-name collision) fall
+/// back to a plain message.
+pub enum BuildCoreProgramError {
+  /// Something went wrong assembling the capturing-check's module list
+  /// itself, before `check_all_modules_capturing_core` ever ran (a
+  /// `LoadingError`, a `load_decls` failure, this function's own
+  /// cross-module collision check).
+  Setup(String),
+  /// `check_all_modules_capturing_core` itself failed — an ordinary
+  /// type/syntax error in some module's own source, exactly the kind
+  /// `render_type_error_with_source` already knows how to render nicely.
+  Check(crate::eval::r#type::TypeError),
+}
+
+impl std::fmt::Display for BuildCoreProgramError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      BuildCoreProgramError::Setup(s) => write!(f, "{s}"),
+      BuildCoreProgramError::Check(e) => write!(f, "{e}"),
+    }
+  }
+}
+
+/// A top-level def declared with the same bare name in two DIFFERENT
+/// modules — `CoreProgram` (`core_program.rs`) keys `defs`/
+/// `match_resolutions`/etc. by a def's bare (non-module-qualified) name,
+/// which is safe for the ordinary one-module-at-a-time checking path
+/// (unrelated files never share a namespace there) but not for
+/// `check_all_modules_capturing_core`'s own capturing path, which
+/// deliberately combines every module `loaded` knows about into ONE
+/// `CoreProgram` at once. Left unchecked, the SECOND file's def would
+/// silently overwrite the first's in `program.defs` — no error, just a
+/// wrong body used for whichever file's tests reference that name later.
+/// Confirmed as a real (if so far harmless) risk during this branch's
+/// manual review: `test_foldr_foldl_equiv` exists verbatim in two
+/// different `init` files, and only stayed harmless because both copies
+/// happen to be byte-identical. Checked once, up front, rather than
+/// silently risking it on every `build_core_program` call.
+fn check_no_cross_module_def_name_collisions(
+  modules: &[(ModulePath, Vec<SourceContext<Decl>>)],
+) -> Result<(), String> {
+  let mut seen: std::collections::HashMap<&ModulePath, &ModulePath> =
+    std::collections::HashMap::new();
+  for (module_path, decls) in modules {
+    for decl in decls {
+      let Decl::Def(def) = decl.value() else {
+        continue;
+      };
+      match seen.get(&def.name) {
+        Some(&earlier_module) if earlier_module != module_path => {
+          return Err(format!(
+            "def `{}` is declared in both `{module_path}` and `{earlier_module}` — \
+             core-eval's capturing checker keys every top-level def by its bare name, \
+             so this collision would silently make one definition invisible to the \
+             other file's own code",
+            def.name
+          ));
+        }
+        _ => {
+          seen.insert(&def.name, module_path);
+        }
+      }
+    }
+  }
+  Ok(())
+}
+
+/// Build ONE combined `CoreProgram` (Phase 0's `check_all_modules_
+/// capturing_core`) covering the `init` package plus every OTHER module
+/// `loaded` now knows about — the shared machinery both `run()` and
+/// `run_tests()` need now that core-eval is the default evaluator (and
+/// `eval_core_program`'s own, narrower single-module case below).
+/// `loaded` must already have every module of interest loaded through
+/// the ordinary (non-capturing) pipeline first — this function only
+/// RE-READS each one's raw source text (`check_all_modules_capturing_core`
+/// needs unchecked `Decl`s, not `loaded`'s own already-checked copies —
+/// see that function's own doc comment) and re-checks it through the
+/// capturing path; it never loads a NEW module `loaded` doesn't already
+/// know about.
+/// `extra_modules` covers callers that already have a module's raw
+/// `Decl`s in hand from an IN-MEMORY source (`eval_core_program`'s own
+/// `source: &str` parameter, or `run()`'s already-read target file) —
+/// those never get re-read from disk (there may be no backing file to
+/// find at all, e.g. every `eval_core_program` caller in the test suite
+/// passes an inline string with no file on disk anywhere); every module
+/// `loaded` knows about that ISN'T in `extra_modules` (or the `init`
+/// package) IS re-read from disk, via search-path resolution, since
+/// that's the only way to get an on-disk module's raw source back once
+/// `loaded`'s own copy of it has already been checked/discarded.
+fn build_core_program(
+  loaded: &LoadedModules,
+  extra_modules: &[(ModulePath, Vec<SourceContext<Decl>>)],
+) -> Result<core_program::CoreProgram, BuildCoreProgramError> {
+  let init_sources = term::module::init_package_sources()
+    .map_err(|e| BuildCoreProgramError::Setup(format!("{e}")))?;
+  let init_paths: Set<ModulePath> = init_sources.iter().map(|(p, _)| p.clone()).collect();
+  let mut capture_modules: Vec<(ModulePath, Vec<SourceContext<Decl>>)> = init_sources
+    .into_iter()
+    .map(|(p, text)| {
+      term::module::load_decls_from_text_with_path(&text, &Default::default())
+        .map(|d| (p.clone(), d))
+        .map_err(|e| BuildCoreProgramError::Setup(format!("parse {p}: {e}")))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+
+  let extra_paths: Set<ModulePath> = extra_modules.iter().map(|(p, _)| p.clone()).collect();
+  for module in loaded.modules() {
+    let path = module.path().clone();
+    if init_paths.contains(&path) || extra_paths.contains(&path) {
+      continue;
+    }
+    let decls = term::module::load_decls(&path, loaded.search_paths()).map_err(|e| {
+      BuildCoreProgramError::Setup(format!(
+        "re-reading {path} for core-eval's capturing check: {e}"
+      ))
+    })?;
+    capture_modules.push((path, decls));
+  }
+  capture_modules.extend(extra_modules.iter().cloned());
+
+  check_no_cross_module_def_name_collisions(&capture_modules)
+    .map_err(BuildCoreProgramError::Setup)?;
+
+  core_check_module::check_all_modules_capturing_core(&capture_modules, loaded)
+    .map_err(BuildCoreProgramError::Check)
+}
+
+/// A `Value`-shaped `List String` built from CLI `argv` — the
+/// `core_value::Value` counterpart to `strings_to_list_term`, needed
+/// because `main`'s CLI arguments are applied AFTER forcing it to a
+/// `Value` (`run()`), not before type-checking the way the tree-walker
+/// applies them to a `Term`.
+fn strings_to_list_value(
+  well_known: &lower_core_ir::WellKnownCtors,
+  args: Vec<String>,
+) -> Result<core_value::Value, String> {
+  let empty = well_known
+    .list_empty
+    .ok_or_else(|| "List.empty not found (was the init package loaded?)".to_string())?;
+  let cons = well_known
+    .list_cons
+    .ok_or_else(|| "List.cons not found (was the init package loaded?)".to_string())?;
+  let mut result = core_value::Value::Con {
+    tag: empty.tag,
+    args: Vec::new(),
+  };
+  for s in args.into_iter().rev() {
+    result = core_value::Value::Con {
+      tag: cons.tag,
+      args: vec![core_value::Value::Lit(core_ir::IrLit::Str(s)), result],
+    };
+  }
+  Ok(result)
+}
+
 /// Evaluate a source module's `main` def through the `CoreTerm`-closure
-/// evaluator (`core_check_module::check_all_modules_capturing_core`
-/// (Phase 0) -> `lower_core_ir::lower_program` (Phase 2) ->
-/// `core_eval::force_global` (Phases 3-5)).
+/// evaluator (`build_core_program` (Phase 0) -> `lower_core_ir::
+/// lower_program` (Phase 2) -> `core_eval::force_global` (Phases 3-5)).
 ///
 /// Unlike the tree-walker's `eval()` (which walks an already-checked
 /// `Term` produced by the OLD checker path against a `Scope`), this
-/// rebuilds a whole-program `CoreProgram` from scratch every call:
-/// `check_all_modules_capturing_core` needs every module's raw,
-/// unchecked `Decl`s (see its own doc comment) run back through the NEW
-/// capturing checker — including the `init` package
+/// rebuilds a whole-program `CoreProgram` from scratch every call: the
+/// capturing checker needs every module's raw, unchecked `Decl`s run
+/// back through the NEW capturing checker — including the `init` package
 /// itself, since `default_modules()`'s own already-checked copy of it
 /// (used here purely for name/scope resolution) never populates a
 /// `CoreProgram` on its own.
 pub fn eval_core_program(path: &ModulePath, source: &str) -> Result<core_value::Value, String> {
-  let loaded = default_modules().map_err(|e| format!("{e}"))?;
-  let decls = crate::term::module::load_decls_from_text_with_path(source, &Default::default())
+  let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
+  // The ordinary (non-capturing) load is still needed here, even though
+  // `source`'s own decls are passed to `build_core_program` explicitly
+  // below (never re-read from disk — there may be no file backing
+  // `source` at all, e.g. every caller in this crate's own test suite
+  // passes an inline string) — this is what actually RESOLVES and loads
+  // any module `source` itself transitively `use`s, so `build_core_
+  // program`'s generic `loaded.modules()` scan can find and re-read
+  // those (see its own doc comment).
+  load_module_from_text(source, path, &mut loaded).map_err(|e| format!("{e}"))?;
+  let decls = term::module::load_decls_from_text_with_path(source, &Default::default())
     .map_err(|e| format!("parse {path}: {e}"))?;
 
-  let mut modules = crate::term::module::init_package_sources()
-    .map_err(|e| format!("{e}"))?
-    .into_iter()
-    .map(|(p, text)| {
-      crate::term::module::load_decls_from_text_with_path(&text, &Default::default())
-        .map(|d| (p.clone(), d))
-        .map_err(|e| format!("parse {p}: {e}"))
-    })
-    .collect::<Result<Vec<_>, String>>()?;
-  modules.push((path.clone(), decls));
-
-  let program = core_check_module::check_all_modules_capturing_core(&modules, &loaded)
-    .map_err(|e| format!("check: {e}"))?;
+  let program =
+    build_core_program(&loaded, &[(path.clone(), decls)]).map_err(|e| format!("{e}"))?;
   let lowered = lower_core_ir::lower_program(&program).map_err(|e| format!("lower: {e:?}"))?;
   let main_idx = lowered
     .index_of(&mpt("main"))
@@ -252,46 +411,53 @@ pub fn run(
   if options.debug {
     println!("{global}");
   }
-  let arg: Term = strings_to_list_term(args);
 
-  let def = module
-    .get_def(&mpt("main"))
-    .ok_or("main not found")?
-    .value();
+  let decls = term::module::load_decls_from_text_with_path(&source, &Default::default())
+    .map_err(|e| format!("parse {path}: {e}"))?;
+  let program = build_core_program(&loaded, &[(path.clone(), decls)]).map_err(|e| match e {
+    BuildCoreProgramError::Check(e) => {
+      render_type_error_with_source(&source, &e, options.use_colors, Some(&input))
+    }
+    BuildCoreProgramError::Setup(s) => s,
+  })?;
+  // `CoreTerm`'s own `Display` renders an unresolved `Free(Atom)` as a
+  // bare `@{id}` (it carries no name table of its own) -- raise the
+  // type back to an ordinary `Term` first, purely for THIS display (not
+  // for evaluation), using this def's own captured `atom_paths` to
+  // resolve every atom back to a real, readable name the same way
+  // `check_one_def_new` already does when raising a def's checked body.
+  let main_typ = program
+    .defs
+    .get(&mpt("main"))
+    .map(|d| raise_core::raise_core(&d.typ, &d.atom_paths).to_string())
+    .unwrap_or_else(|| "?".to_string());
+  println!("Eval type {main_typ}");
 
-  // `def` was already fully type-checked and elaborated by
-  // `load_module_from_text` above (module-level checking via
-  // `core_check_module::type_check_module_decls_new`). Re-running
-  // `type_check` here on `def.term` (optionally applied to `arg`) hits the
-  // same issue already documented on the test runner's identical case (see
-  // the comment on `def`/`term` above `run_test_eval`'s call site below):
-  // elaboration commits generic class-method calls — e.g. do-block-desugared
-  // `Monad.bind`/`Monad.pure` — to one concrete instance, which a second,
-  // from-scratch type-check pass can't always re-derive. That surfaced as a
-  // spurious "instance-<Class>-<Type> not found" for *any* `IO`-returning
-  // `main` (reproduces even on a trivial `def main : IO I64 { println "x";
-  // return 0 }`). Fix: use the already-elaborated term directly, exactly
-  // like the test runner already does, instead of re-checking it.
-  let input_term = if def.term.is_lam() {
-    app(def.term.clone(), arg)
-  } else {
-    def.term.clone()
-  };
-  // `def.typ()` is main's own (possibly function) type; after applying
-  // `arg` the term's actual type is the Pi's return side — non-dependent in
-  // practice (`main`'s only param is `args : List String`, never referenced
-  // in its own return type), so no substitution is needed to extract it.
-  let typ = match def.typ() {
-    Term::Pi { ret, .. } if def.term.is_lam() => (**ret).clone(),
-    other => other.clone(),
-  };
-  println!("Eval type {typ}");
-  let term = eval(input_term, &global.scope(), &options)
+  let lowered = lower_core_ir::lower_program(&program).map_err(|e| format!("lower: {e:?}"))?;
+  let main_idx = lowered.index_of(&mpt("main")).ok_or("main not found")?;
+  let natives = core_value::NativeTable::from_lowered(&lowered);
+  let globals = core_value::GlobalTable::new(lowered.globals);
+  let mut cache = core_value::GlobalCache::new(globals.len());
+  let main_value = core_eval::force_global(main_idx, &globals, &natives, &mut cache)
     .map_err(|e| format!("{e}"))
     .inspect_err(|e| eprintln!("{e}"))?;
 
+  // Apply CLI args only if `main` is actually a function -- mirrors the
+  // tree-walker's own `if def.term.is_lam() { app(...) } else { ... }`
+  // check, just against the FORCED runtime `Value` instead of the
+  // pre-eval `Term` (a `Value::Closure` is exactly what a `Lam`-headed
+  // `main` forces to).
+  let result = if let core_value::Value::Closure { .. } = &main_value {
+    let arg = strings_to_list_value(&natives.well_known, args)?;
+    core_eval::apply(main_value, arg, &globals, &natives, &mut cache)
+      .map_err(|e| format!("{e}"))
+      .inspect_err(|e| eprintln!("{e}"))?
+  } else {
+    main_value
+  };
+
   if options.debug {
-    println!("Eval result {term}");
+    println!("Eval result {result:?}");
   }
   Ok(())
 }
@@ -405,6 +571,47 @@ fn detect_test_result(term: &Term) -> TestResult {
   }
 }
 
+/// The `core_value::Value` counterpart to `detect_test_result` — same
+/// `Bool`/`IO`/`Result` unwrapping convention, reading well-known
+/// constructor *tags* (resolved once per test run, via `NativeTable::
+/// well_known`) instead of a `Term::Con`'s own `typ_name` field, since a
+/// runtime `Value::Con` carries no type name at all (see
+/// `lower_core_ir::WellKnownCtors`'s own doc comment for why). Shares
+/// `TestResult` with the tree-walker's own version so both evaluators'
+/// results print through the exact same PASS/FAIL/message formatting
+/// below — nothing downstream needs to know or care which evaluator
+/// actually produced a given `TestResult`.
+fn detect_test_result_value(
+  value: &core_value::Value,
+  well_known: &lower_core_ir::WellKnownCtors,
+) -> TestResult {
+  match value {
+    core_value::Value::Con { tag, args } => {
+      if well_known.bool_true.is_some_and(|t| t.tag == *tag) {
+        TestResult::Pass
+      } else if well_known.bool_false.is_some_and(|t| t.tag == *tag) {
+        TestResult::Fail
+      } else if well_known.io_io.is_some_and(|t| t.tag == *tag) {
+        match args.first() {
+          Some(inner) => detect_test_result_value(inner, well_known),
+          None => TestResult::FailWithMessage(format!("unexpected result: {value:?}")),
+        }
+      } else if well_known.result_ok.is_some_and(|t| t.tag == *tag) {
+        TestResult::Pass
+      } else if well_known.result_err.is_some_and(|t| t.tag == *tag) {
+        let msg = args.first().and_then(|v| match v {
+          core_value::Value::Lit(core_ir::IrLit::Str(s)) => Some(s.clone()),
+          _ => None,
+        });
+        TestResult::FailWithMessage(msg.unwrap_or_else(|| format!("{value:?}")))
+      } else {
+        TestResult::FailWithMessage(format!("unexpected result: {value:?}"))
+      }
+    }
+    other => TestResult::FailWithMessage(format!("unexpected result: {other:?}")),
+  }
+}
+
 fn extract_string_literal(term: &Term) -> Option<String> {
   match term {
     Term::Ctx { term, .. } => extract_string_literal(term),
@@ -441,172 +648,6 @@ struct FileOutput {
   failures: Vec<(String, String)>,
 }
 
-/// Process a single test file. Returns updated `LoadedModules` and the file result.
-fn test_one_file(
-  file: &Path,
-  path: &ModulePath,
-  mut loaded: LoadedModules,
-  options: &EvalOptions,
-  test_timeout: Option<std::time::Duration>,
-  file_index: usize,
-  total_files: usize,
-) -> (LoadedModules, FileOutput) {
-  let file_path = file.to_path_buf();
-
-  let header = format!(
-    "{YELLOW}[{}/{}] Testing {}...{RESET}",
-    file_index + 1,
-    total_files,
-    file_path.display()
-  );
-  println!("{header}");
-
-  let backup = loaded.clone();
-  loaded = match load_module(&file_path, path, loaded) {
-    Ok(l) => l,
-    Err(e) => {
-      return (
-        backup,
-        FileOutput {
-          passed: 0,
-          failed: 1,
-          output_lines: vec![format!("{RED}FAIL{RESET} {}", file_path.display())],
-          error_message: Some(format!("failed to compile {}: {e}", file_path.display())),
-          failures: Vec::new(),
-        },
-      );
-    }
-  };
-
-  let module = match loaded.get_module(path) {
-    Some(m) => m,
-    None => {
-      return (
-        loaded,
-        FileOutput {
-          passed: 0,
-          failed: 0,
-          output_lines: Vec::new(),
-          error_message: None,
-          failures: Vec::new(),
-        },
-      );
-    }
-  };
-
-  let loaded_scopes = loaded.scopes();
-  let global = loaded_scopes.global(path).expect("Module not loaded");
-
-  let mut output_lines: Vec<String> = Vec::new();
-  if options.debug {
-    output_lines.push(format!("{global}"));
-  }
-
-  let warnings = module_warnings(module, Some(&file_path));
-  if !warnings.is_empty() {
-    output_lines.push(render_diagnostics(&warnings, None, options.use_colors));
-  }
-
-  let test_defs: Vec<_> = module
-    .defs()
-    .into_iter()
-    .filter(|ctx| ctx.value().has_test_attr())
-    .collect();
-
-  if test_defs.is_empty() {
-    return (
-      loaded,
-      FileOutput {
-        passed: 0,
-        failed: 0,
-        output_lines: Vec::new(),
-        error_message: None,
-        failures: Vec::new(),
-      },
-    );
-  }
-
-  let mut passed = 0;
-  let mut failed = 0;
-  let mut failures: Vec<(String, String)> = Vec::new();
-
-  for ctx in &test_defs {
-    let def = ctx.value();
-    let name = def.name.to_string();
-    // `def` was already fully type-checked and elaborated by `load_module` above
-    // (module.defs() returns the post-type-check decls, with e.g. `==` already
-    // resolved to a concrete `instance-BEq-*.beq` call). Re-running `type_check`
-    // on that already-elaborated term can spuriously fail: elaboration commits
-    // generic calls to a specific concrete instance, which is no longer flexible
-    // enough for the checker to re-derive the same polymorphic instantiation from
-    // scratch. There's no need to check it again — just use it directly.
-    let term = def.term.clone();
-    let typ = def.typ().clone();
-
-    if options.debug {
-      output_lines.push(format!("test {name} : {typ}"));
-    }
-
-    let start = Instant::now();
-    let eval_result = run_test_eval(term.clone(), &global.scope(), &options, test_timeout);
-    let duration = start.elapsed();
-    let duration_str = format_duration(duration);
-
-    let result = match eval_result {
-      Ok(t) => t,
-      Err(e) => {
-        failed += 1;
-        failures.push((name.clone(), format!("eval error: {e}")));
-        continue;
-      }
-    };
-
-    if options.debug {
-      output_lines.push(format!("  eval: {result}"));
-    }
-
-    match detect_test_result(&result) {
-      TestResult::Pass => {
-        passed += 1;
-        output_lines.push(format!("{GREEN}PASS{RESET} {name} ({duration_str})"));
-      }
-      TestResult::Fail => {
-        failed += 1;
-        output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str})"));
-      }
-      TestResult::FailWithMessage(msg) => {
-        failed += 1;
-        output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str}): {msg}"));
-        failures.push((name.clone(), msg));
-      }
-    }
-  }
-
-  let total = passed + failed;
-  if failed > 0 {
-    output_lines.push(format!(
-      "{passed}/{total} tests passed in {}: {RED}FAILED{RESET}",
-      file_path.display()
-    ));
-  } else if passed > 0 {
-    output_lines.push(format!(
-      "{passed}/{total} tests passed in {}",
-      file_path.display()
-    ));
-  }
-
-  (
-    loaded,
-    FileOutput {
-      passed,
-      failed,
-      output_lines,
-      error_message: None,
-      failures,
-    },
-  )
-}
-
 fn print_file_output(result: &FileOutput) {
   for line in &result.output_lines {
     println!("{line}");
@@ -639,106 +680,6 @@ fn print_final_summary(
   }
 }
 
-fn run_tests_sequential(
-  files: &[PathBuf],
-  master_loaded: &LoadedModules,
-  options: &EvalOptions,
-  test_timeout: Option<std::time::Duration>,
-) -> Result<(), String> {
-  let mut total_passed = 0;
-  let mut total_failed = 0;
-  let mut overall_errors: Vec<String> = Vec::new();
-  let mut loaded = master_loaded.clone();
-  let total = files.len();
-
-  for (i, file) in files.iter().enumerate() {
-    let path: ModulePath = file.clone().into();
-    let (new_loaded, result) = test_one_file(file, &path, loaded, options, test_timeout, i, total);
-    loaded = new_loaded;
-
-    print_file_output(&result);
-
-    total_passed += result.passed;
-    total_failed += result.failed;
-
-    if let Some(ref err) = result.error_message {
-      eprintln!("  {err}");
-      overall_errors.push(err.clone());
-    }
-  }
-
-  print_final_summary(total_passed, total_failed, &overall_errors)
-}
-
-fn run_tests_parallel(
-  files: &[PathBuf],
-  master_loaded: &LoadedModules,
-  options: &EvalOptions,
-  num_threads: usize,
-  test_timeout: Option<std::time::Duration>,
-) -> Result<(), String> {
-  let n_threads = std::cmp::min(num_threads, files.len());
-  let chunk_size = files.len().div_ceil(n_threads);
-
-  let total_passed = Arc::new(AtomicUsize::new(0));
-  let total_failed = Arc::new(AtomicUsize::new(0));
-  let overall_errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-
-  let mut handles = Vec::with_capacity(n_threads);
-  for (chunk_idx, chunk) in files.chunks(chunk_size).enumerate() {
-    let mut loaded = master_loaded.clone();
-    let opts = options.clone();
-    let chunk_files: Vec<PathBuf> = chunk.to_vec();
-    let passed = Arc::clone(&total_passed);
-    let failed = Arc::clone(&total_failed);
-    let errors = Arc::clone(&overall_errors);
-    let total = files.len();
-    let base_idx = chunk_idx * chunk_size;
-
-    let handle = std::thread::Builder::new()
-      .stack_size(8 * 1024 * 1024)
-      .spawn(move || {
-        for (i, file) in chunk_files.iter().enumerate() {
-          let path: ModulePath = file.clone().into();
-          let (new_loaded, output) = test_one_file(
-            file,
-            &path,
-            loaded,
-            &opts,
-            test_timeout,
-            base_idx + i,
-            total,
-          );
-          loaded = new_loaded;
-
-          print_file_output(&output);
-
-          passed.fetch_add(output.passed, Ordering::Relaxed);
-          failed.fetch_add(output.failed, Ordering::Relaxed);
-          if let Some(ref err) = output.error_message {
-            eprintln!("  {err}");
-            errors.lock().unwrap().push(err.clone());
-          }
-        }
-      })
-      .expect("failed to spawn test thread");
-    handles.push(handle);
-  }
-
-  for handle in handles {
-    handle.join().expect("test thread panicked");
-  }
-
-  let total_passed = total_passed.load(Ordering::Relaxed);
-  let total_failed = total_failed.load(Ordering::Relaxed);
-  let overall_errors = Arc::try_unwrap(overall_errors)
-    .unwrap()
-    .into_inner()
-    .unwrap();
-
-  print_final_summary(total_passed, total_failed, &overall_errors)
-}
-
 fn format_duration(d: std::time::Duration) -> String {
   let nanos = d.as_nanos();
   if nanos < 1_000 {
@@ -752,6 +693,11 @@ fn format_duration(d: std::time::Duration) -> String {
   }
 }
 
+/// Tree-walker-specific test evaluation, kept solely for
+/// `core_parity.rs`'s Phase 8 harness — it deliberately runs BOTH the
+/// tree-walker and core-eval over the same corpus and diffs their
+/// results, so the tree-walker side still needs its own entry point
+/// even now that `run_tests` itself no longer uses it.
 fn run_test_eval(
   term: Term,
   scope: &crate::term::module::Scope,
@@ -761,6 +707,242 @@ fn run_test_eval(
   match test_timeout {
     Some(timeout) => eval_test(term, scope, options, timeout).map_err(|e| format!("{e}")),
     None => eval(term, scope, options).map_err(|e| format!("{e}")),
+  }
+}
+
+/// `force_global`, but bailing out after `timeout` instead of blocking
+/// forever — core-eval has no equivalent of the tree-walker's own
+/// `eval_test`/`eval_inner`'s cooperative per-step deadline check (that
+/// would mean threading a deadline through every recursive call in
+/// `core_eval.rs`), so this wraps the SAME call in a plain OS thread +
+/// channel instead: a generic, evaluator-agnostic timeout, at the cost
+/// of a real (if minor) one-thread-per-timed-call overhead, and a
+/// runaway call that times out CONTINUES running in its own thread in
+/// the background rather than actually stopping (Rust has no safe way
+/// to force-kill a thread) — acceptable for a CLI test runner that's
+/// about to exit once the whole suite finishes anyway, unlike a
+/// long-lived server that would need to actually reclaim the thread.
+/// `globals`/`natives` are `Arc`-wrapped (not plain refs) specifically
+/// so they can be moved into the spawned thread without needing it to
+/// borrow from (and therefore block) the calling scope.
+fn force_global_with_timeout(
+  idx: u32,
+  globals: Arc<core_value::GlobalTable>,
+  natives: Arc<core_value::NativeTable>,
+  timeout: std::time::Duration,
+) -> Result<core_value::Value, String> {
+  let (tx, rx) = std::sync::mpsc::channel();
+  std::thread::Builder::new()
+    .stack_size(8 * 1024 * 1024)
+    .spawn(move || {
+      let mut cache = core_value::GlobalCache::new(globals.len());
+      let result = core_eval::force_global(idx, &globals, &natives, &mut cache);
+      // A send failure just means the receiver already gave up and
+      // stopped listening (the timeout already fired) -- this thread is
+      // about to exit either way, nothing to do about it.
+      let _ = tx.send(result.map_err(|e| format!("{e}")));
+    })
+    .expect("failed to spawn eval thread");
+  rx.recv_timeout(timeout)
+    .unwrap_or_else(|_| Err(format!("timed out after {timeout:?}")))
+}
+
+/// Load, capturing-check, lower, and evaluate every `#[test]` def in one
+/// file, entirely in isolation from every OTHER test file in the run.
+///
+/// This isolation is deliberate, not incidental: `build_core_program`'s
+/// `CoreProgram` keys every top-level def by its bare (non-module-
+/// qualified) name across every module handed to it AT ONCE (see its
+/// own doc comment) — fine for `init` plus exactly one file (`run()`,
+/// `eval_core_program`), but genuinely unsafe across an arbitrary batch
+/// of test files, which (confirmed against the real corpus — two
+/// distinct `init` test files, `foldable_tests.mo` and
+/// `foldable_tests_fold.mo`, both declare a `#[test] def
+/// test_foldr_sum`) have no reason to avoid reusing each other's names.
+/// The tree-walker never combined separate files into one keyed table,
+/// so this was never a collision before core-eval became the default.
+/// Cloning a FIXED `base_loaded` (the state before ANY test file is
+/// loaded) fresh for every file, rather than accumulating `loaded`
+/// across files the way the old tree-walker runner did, is what
+/// preserves that guarantee: no test file's module is ever visible to
+/// another file's own capturing check, matching the tree-walker's own
+/// per-file independence exactly (just against a faster evaluator).
+fn evaluate_one_test_file(
+  file: &Path,
+  base_loaded: &LoadedModules,
+  options: &EvalOptions,
+  test_timeout: Option<std::time::Duration>,
+  file_index: usize,
+  total_files: usize,
+) -> FileOutput {
+  let file_path = file.to_path_buf();
+  let path: ModulePath = file_path.clone().into();
+
+  println!(
+    "{YELLOW}[{}/{}] Testing {}...{RESET}",
+    file_index + 1,
+    total_files,
+    file_path.display()
+  );
+
+  macro_rules! fail_file {
+    ($msg:expr) => {
+      return FileOutput {
+        passed: 0,
+        failed: 1,
+        output_lines: vec![format!("{RED}FAIL{RESET} {}", file_path.display())],
+        error_message: Some($msg),
+        failures: Vec::new(),
+      }
+    };
+  }
+
+  let source = match fs::read_to_string(&file_path) {
+    Ok(s) => s,
+    Err(e) => fail_file!(format!("failed to read {}: {e}", file_path.display())),
+  };
+
+  let mut loaded = base_loaded.clone();
+  if let Err(e) = load_module_from_text(&source, &path, &mut loaded) {
+    fail_file!(format!("failed to compile {}: {e}", file_path.display()));
+  }
+
+  let module = match loaded.get_module(&path) {
+    Some(m) => m,
+    None => {
+      return FileOutput {
+        passed: 0,
+        failed: 0,
+        output_lines: Vec::new(),
+        error_message: None,
+        failures: Vec::new(),
+      };
+    }
+  };
+
+  if options.debug {
+    let loaded_scopes = loaded.scopes();
+    let global = loaded_scopes.global(&path).expect("Module not loaded");
+    println!("{global}");
+  }
+
+  let warnings = module_warnings(module, Some(&file_path));
+  if !warnings.is_empty() {
+    println!(
+      "{}",
+      render_diagnostics(&warnings, None, options.use_colors)
+    );
+  }
+
+  let entries: Vec<(ModulePath, String)> = module
+    .defs()
+    .into_iter()
+    .filter(|ctx| ctx.value().has_test_attr())
+    .map(|ctx| {
+      let def = ctx.value();
+      (def.name.clone(), def.name.to_string())
+    })
+    .collect();
+
+  if entries.is_empty() {
+    return FileOutput {
+      passed: 0,
+      failed: 0,
+      output_lines: Vec::new(),
+      error_message: None,
+      failures: Vec::new(),
+    };
+  }
+
+  let decls = match term::module::load_decls_from_text_with_path(&source, &Default::default()) {
+    Ok(d) => d,
+    Err(e) => fail_file!(format!("parse {}: {e}", file_path.display())),
+  };
+  let program = match build_core_program(&loaded, &[(path.clone(), decls)]) {
+    Ok(p) => p,
+    Err(e) => fail_file!(format!("{e}")),
+  };
+  let lowered = match lower_core_ir::lower_program(&program) {
+    Ok(l) => l,
+    Err(e) => fail_file!(format!("lower {}: {e:?}", file_path.display())),
+  };
+
+  // `NativeTable::from_lowered` only borrows `lowered` -- computed before
+  // `lowered.globals` is moved out below.
+  let natives = Arc::new(core_value::NativeTable::from_lowered(&lowered));
+  let globals = Arc::new(core_value::GlobalTable::new(lowered.globals.clone()));
+  let mut cache = core_value::GlobalCache::new(globals.len());
+
+  let mut output_lines: Vec<String> = Vec::new();
+  let mut passed = 0;
+  let mut failed = 0;
+  let mut failures: Vec<(String, String)> = Vec::new();
+
+  for (test_path, name) in &entries {
+    let start = Instant::now();
+    let result = match lowered.index_of(test_path) {
+      None => Err("not present in the lowered program (skipped)".to_string()),
+      Some(idx) => match test_timeout {
+        Some(timeout) => {
+          force_global_with_timeout(idx, Arc::clone(&globals), Arc::clone(&natives), timeout)
+        }
+        None => {
+          core_eval::force_global(idx, &globals, &natives, &mut cache).map_err(|e| format!("{e}"))
+        }
+      },
+    };
+    let duration = start.elapsed();
+    let duration_str = format_duration(duration);
+
+    let value = match result {
+      Ok(v) => v,
+      Err(e) => {
+        failed += 1;
+        failures.push((name.clone(), format!("eval error: {e}")));
+        continue;
+      }
+    };
+
+    if options.debug {
+      output_lines.push(format!("  eval: {value:?}"));
+    }
+
+    match detect_test_result_value(&value, &natives.well_known) {
+      TestResult::Pass => {
+        passed += 1;
+        output_lines.push(format!("{GREEN}PASS{RESET} {name} ({duration_str})"));
+      }
+      TestResult::Fail => {
+        failed += 1;
+        output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str})"));
+      }
+      TestResult::FailWithMessage(msg) => {
+        failed += 1;
+        output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str}): {msg}"));
+        failures.push((name.clone(), msg));
+      }
+    }
+  }
+
+  let total = passed + failed;
+  if failed > 0 {
+    output_lines.push(format!(
+      "{passed}/{total} tests passed in {}: {RED}FAILED{RESET}",
+      file_path.display()
+    ));
+  } else if passed > 0 {
+    output_lines.push(format!(
+      "{passed}/{total} tests passed in {}",
+      file_path.display()
+    ));
+  }
+
+  FileOutput {
+    passed,
+    failed,
+    output_lines,
+    error_message: None,
+    failures,
   }
 }
 
@@ -810,12 +992,78 @@ pub fn run_tests(
     })
     .collect();
 
-  // Single file or single-threaded: run sequentially
+  let mut total_passed = 0;
+  let mut total_failed = 0;
+  let mut overall_errors: Vec<String> = Vec::new();
+  let total = files.len();
+
+  // `master_loaded` is never mutated after this point -- every file
+  // clones it fresh (inside `evaluate_one_test_file`), which is exactly
+  // what keeps files independent of each other (see that function's own
+  // doc comment). Single-threaded and multi-threaded dispatch below
+  // differ only in scheduling, not in this isolation guarantee.
   if num_threads <= 1 || files.len() <= 1 {
-    run_tests_sequential(&files, &master_loaded, &options, test_timeout)
+    for (i, file) in files.iter().enumerate() {
+      let output = evaluate_one_test_file(file, &master_loaded, &options, test_timeout, i, total);
+      print_file_output(&output);
+      total_passed += output.passed;
+      total_failed += output.failed;
+      if let Some(ref err) = output.error_message {
+        eprintln!("  {err}");
+        overall_errors.push(err.clone());
+      }
+    }
   } else {
-    run_tests_parallel(&files, &master_loaded, &options, num_threads, test_timeout)
+    let n_threads = std::cmp::min(num_threads, files.len());
+    let chunk_size = files.len().div_ceil(n_threads);
+
+    let passed_counter = Arc::new(AtomicUsize::new(0));
+    let failed_counter = Arc::new(AtomicUsize::new(0));
+    let overall_errors_shared: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let mut handles = Vec::with_capacity(n_threads);
+    for (chunk_idx, chunk) in files.chunks(chunk_size).enumerate() {
+      let chunk_files: Vec<PathBuf> = chunk.to_vec();
+      let base_loaded = master_loaded.clone();
+      let opts = options.clone();
+      let passed = Arc::clone(&passed_counter);
+      let failed = Arc::clone(&failed_counter);
+      let errors = Arc::clone(&overall_errors_shared);
+      let base_idx = chunk_idx * chunk_size;
+
+      let handle = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+          for (i, file) in chunk_files.iter().enumerate() {
+            let output =
+              evaluate_one_test_file(file, &base_loaded, &opts, test_timeout, base_idx + i, total);
+            print_file_output(&output);
+            passed.fetch_add(output.passed, Ordering::Relaxed);
+            failed.fetch_add(output.failed, Ordering::Relaxed);
+            if let Some(err) = output.error_message {
+              eprintln!("  {err}");
+              errors.lock().unwrap().push(err);
+            }
+          }
+        })
+        .expect("failed to spawn test thread");
+      handles.push(handle);
+    }
+    for handle in handles {
+      handle.join().expect("test thread panicked");
+    }
+
+    total_passed += passed_counter.load(Ordering::Relaxed);
+    total_failed += failed_counter.load(Ordering::Relaxed);
+    overall_errors.extend(
+      Arc::try_unwrap(overall_errors_shared)
+        .unwrap()
+        .into_inner()
+        .unwrap(),
+    );
   }
+
+  print_final_summary(total_passed, total_failed, &overall_errors)
 }
 
 /// One target file's `organize-imports` result: the rewritten source if

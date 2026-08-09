@@ -26,7 +26,7 @@ use crate::core_ir::{CoreIr, MatchArm};
 use crate::core_native::exec_native;
 use crate::core_value::{CoreEvalCycle, Env, EnvRef, GlobalCache, GlobalTable, NativeTable, Value};
 use crate::lower_core_ir::GlobalDef;
-use crate::term::ModulePath;
+use crate::term::{Identifier, ModulePath};
 
 #[derive(Debug, Clone)]
 pub enum CoreEvalError {
@@ -75,6 +75,11 @@ pub enum CoreEvalError {
   /// program — indicates the prelude wasn't loaded, not a normal runtime
   /// condition.
   MissingWellKnownCtor(&'static str),
+  /// A `match` with no wildcard, and no case for `ctor` either, actually
+  /// produced a value of `ctor` at runtime — see `CoreIr::MatchFail`'s
+  /// own doc comment for why this is a genuine (if rare) runtime error
+  /// rather than a lowering-time one, unlike every other variant here.
+  NonExhaustiveMatch(ModulePath, Identifier),
 }
 
 impl std::fmt::Display for CoreEvalError {
@@ -94,6 +99,12 @@ impl std::fmt::Display for CoreEvalError {
       CoreEvalError::NativeArgError(msg) => write!(f, "native call failed: {msg}"),
       CoreEvalError::MissingWellKnownCtor(name) => {
         write!(f, "missing well-known constructor: {name}")
+      }
+      CoreEvalError::NonExhaustiveMatch(inductive, ctor) => {
+        write!(
+          f,
+          "non-exhaustive match: {inductive}.{ctor} was constructed but not covered by this match"
+        )
       }
     }
   }
@@ -132,6 +143,10 @@ pub fn eval(
       let v = eval(scrutinee, env, globals, natives, cache)?;
       dispatch(v, arms, env, globals, natives, cache)
     }
+    CoreIr::MatchFail { inductive, ctor } => Err(CoreEvalError::NonExhaustiveMatch(
+      inductive.clone(),
+      ctor.clone(),
+    )),
     CoreIr::Con {
       tag,
       arity: _,
@@ -182,8 +197,11 @@ fn fire_or_accumulate(
 /// `EvalTerm`'s substitution-based beta reduction: extend the closure's
 /// *captured* environment by one binding (O(1) — one `Arc` allocation,
 /// no tree copy) and evaluate its body there, rather than rewriting the
-/// body to replace every occurrence of the bound variable.
-fn apply(
+/// body to replace every occurrence of the bound variable. Public so a
+/// caller that's already forced a global to a `Value` (e.g. `main`, in
+/// `lib.rs::run`) can apply further arguments to it (CLI `argv`) without
+/// re-deriving this match itself.
+pub fn apply(
   f: Value,
   a: Value,
   globals: &GlobalTable,

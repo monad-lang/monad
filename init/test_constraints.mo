@@ -1,5 +1,4 @@
 use init {is_empty, to_string}
-open IO {}
 
 // ============================================
 // Constraint Solver Tests
@@ -31,12 +30,12 @@ instance Show I64 {
 }
 
 // ShowWrap I64 requires Show I64 (which exists)
-instance [Show I64] ShowWrap I64 {
+instance ShowWrap I64 {
   def show_wrap (a : I64) : String := I64.to_string a
 }
 
 // ShowDouble I64 requires Show I64 (which exists)
-instance [Show I64] ShowDouble I64 {
+instance ShowDouble I64 {
   def show_double (a : I64) : String := I64.to_string a
 }
 
