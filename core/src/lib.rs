@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::diag::render_diagnostics;
-use crate::eval::r#type::render_type_error_with_source;
 use crate::eval::r#type::type_check;
 use crate::eval::{EvalOptions, eval, eval_test};
 #[cfg(feature = "kernel")]
@@ -225,19 +224,37 @@ pub fn run(
     .get_def(&mpt("main"))
     .ok_or("main not found")?
     .value();
+
+  // `def` was already fully type-checked and elaborated by
+  // `load_module_from_text` above (module-level checking via
+  // `core_check_module::type_check_module_decls_new`). Re-running
+  // `type_check` here on `def.term` (optionally applied to `arg`) hits the
+  // same issue already documented on the test runner's identical case (see
+  // the comment on `def`/`term` above `run_test_eval`'s call site below):
+  // elaboration commits generic class-method calls — e.g. do-block-desugared
+  // `Monad.bind`/`Monad.pure` — to one concrete instance, which a second,
+  // from-scratch type-check pass can't always re-derive. That surfaced as a
+  // spurious "instance-<Class>-<Type> not found" for *any* `IO`-returning
+  // `main` (reproduces even on a trivial `def main : IO I64 { println "x";
+  // return 0 }`). Fix: use the already-elaborated term directly, exactly
+  // like the test runner already does, instead of re-checking it.
   let input_term = if def.term.is_lam() {
     app(def.term.clone(), arg)
   } else {
     def.term.clone()
   };
-
-  let (term, typ) = type_check(input_term, Hole, &global.scope())
-    .map_err(|e| render_type_error_with_source(&source, &e, options.use_colors, Some(&input)))?
-    .to_tuple();
+  // `def.typ()` is main's own (possibly function) type; after applying
+  // `arg` the term's actual type is the Pi's return side — non-dependent in
+  // practice (`main`'s only param is `args : List String`, never referenced
+  // in its own return type), so no substitution is needed to extract it.
+  let typ = match def.typ() {
+    Term::Pi { ret, .. } if def.term.is_lam() => (**ret).clone(),
+    other => other.clone(),
+  };
   println!("Eval type {typ}");
   #[cfg(feature = "kernel")]
   {
-    let kernel_result = eval_kernel(term.clone(), &global.scope())
+    let kernel_result = eval_kernel(input_term.clone(), &global.scope())
       .map_err(|e| format!("kernel: {e}"))
       .inspect_err(|e| eprintln!("{e}"))?;
     println!("Kernel result {kernel_result}");
@@ -247,7 +264,7 @@ pub fn run(
   }
   #[cfg(not(feature = "kernel"))]
   {
-    let term = eval(term, &global.scope(), &options)
+    let term = eval(input_term, &global.scope(), &options)
       .map_err(|e| format!("{e}"))
       .inspect_err(|e| eprintln!("{e}"))?;
 

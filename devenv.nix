@@ -34,11 +34,11 @@
   '';
 
   scripts.bootstrap.exec = ''
-    cargo run --quiet -- run lang/main.mo $@
+    cargo run -- run lang/main.mo $@
   '';
 
   scripts.monad-rs.exec = ''
-    cargo run --quiet -- $@
+    cargo run -- $@
   '';
 
   # https://devenv.sh/basics/
