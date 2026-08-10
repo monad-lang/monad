@@ -166,7 +166,7 @@ pub fn eval(
       for a in args {
         evaluated.push(eval(a, env, globals, natives, cache)?);
       }
-      fire_or_accumulate(*native_id, evaluated, natives)
+      fire_or_accumulate(*native_id, evaluated, globals, natives, cache)
     }
   }
 }
@@ -177,17 +177,31 @@ pub fn eval(
 /// `CoreIr::Ntv`'s own (typically already-saturated — see
 /// `core_native.rs`'s doc comment) evaluation and `apply`'s incremental,
 /// one-arg-at-a-time accumulation.
+///
+/// Takes `globals`/`cache` (not just `natives`, unlike `exec_native`
+/// itself) purely for `await_fiber`'s sake: running a forked fiber's
+/// deferred action means applying its stored closure, which needs the
+/// same `apply` this function's own callers already have in scope. Every
+/// other native ignores them and goes through `exec_native` unchanged —
+/// see `core_native::await_fiber`'s own doc comment for why it alone
+/// needs this.
 fn fire_or_accumulate(
   native_id: u32,
   args: Vec<Value>,
+  globals: &GlobalTable,
   natives: &NativeTable,
+  cache: &mut GlobalCache,
 ) -> Result<Value, CoreEvalError> {
   let arity = natives.arity(native_id) as usize;
   if args.len() >= arity {
     let name = natives
       .name(native_id)
       .ok_or(CoreEvalError::UnknownNative(native_id))?;
-    exec_native(name.as_str(), &args, natives)
+    if name.as_str() == "await_fiber" {
+      crate::core_native::await_fiber(&args, globals, natives, cache)
+    } else {
+      exec_native(name.as_str(), &args, natives)
+    }
   } else {
     Ok(Value::PartialNtv { native_id, args })
   }
@@ -222,7 +236,7 @@ pub fn apply(
       mut args,
     } => {
       args.push(a);
-      fire_or_accumulate(native_id, args, natives)
+      fire_or_accumulate(native_id, args, globals, natives, cache)
     }
     Value::Lit(lit) => Err(CoreEvalError::NotAFunction(Value::Lit(lit))),
   }
@@ -284,6 +298,27 @@ pub fn force_global(
   natives: &NativeTable,
   cache: &mut GlobalCache,
 ) -> Result<Value, CoreEvalError> {
+  // A zero-arity native-attributed def (`Bench.now`/`scope_new`, both
+  // side-effecting — see `GlobalDef::Native`'s doc comment) is executed
+  // for its EFFECT, not just its value, unlike every other kind of
+  // global (an ordinary `def`'s body, a constructor), which is pure and
+  // safe to memoize once per `cache` — the whole point of the caching
+  // below. Bypassing the cache entirely for this one case (never reading
+  // a previous call's result, never storing this one) is what lets a
+  // second textual reference to the same native observe a fresh result
+  // rather than the first call's memoized one. Without this, `scope_new`
+  // called from two different `#[test]` defs sharing one `GlobalCache`
+  // (`run_tests`' own, e.g.) returns the SAME registry handle to both —
+  // the second test's `scope_drop`/`scope_fork` then fails with "scope
+  // <id> not found", since the first test's own `scope_drop` already
+  // removed it. A real bug this fixes, not a hypothetical one.
+  if let Some(GlobalDef::Native {
+    native_id,
+    arity: 0,
+  }) = globals.get(idx)
+  {
+    return fire_or_accumulate(*native_id, Vec::new(), globals, natives, cache);
+  }
   if let Some(v) = cache.get(idx) {
     return Ok(v.clone());
   }
@@ -316,7 +351,9 @@ pub fn force_global(
         // unused in practice, but not assumed away) `arity == 0` case by
         // firing immediately instead of leaving a permanently-`PartialNtv`
         // value nothing would ever apply an argument to.
-        GlobalDef::Native { native_id, .. } => fire_or_accumulate(*native_id, Vec::new(), natives)?,
+        GlobalDef::Native { native_id, .. } => {
+          fire_or_accumulate(*native_id, Vec::new(), globals, natives, cache)?
+        }
         GlobalDef::Unresolved(path) => return Err(CoreEvalError::UnresolvedGlobal(path.clone())),
       },
     )
@@ -498,6 +535,36 @@ mod tests {
     assert!(cache.get(0).is_some());
     let v2 = force_global(0, &globals, &natives, &mut cache).unwrap();
     assert!(matches!(v2, Value::Lit(IrLit::Num(5, _))));
+  }
+
+  #[test]
+  fn test_zero_arity_native_global_is_not_memoized() {
+    // Unlike `test_global_resolves_and_memoizes` above: a zero-arity
+    // native-attributed def (`Bench.now`/`scope_new` — always
+    // side-effecting, that's the whole reason they're natives rather
+    // than ordinary `def`s) must be re-run on every reference, never
+    // cached — see `force_global`'s own doc comment for the real bug
+    // this fixes (`scope_new` shared across two `#[test]` defs via one
+    // `GlobalCache` returning the same already-consumed registry handle
+    // to both).
+    let globals = GlobalTable::new(vec![GlobalDef::Native {
+      native_id: 0,
+      arity: 0,
+    }]);
+    let natives = NativeTable::new(
+      vec![crate::term::id("bench_now")],
+      vec![0],
+      Default::default(),
+    );
+    let mut cache = GlobalCache::new(1);
+    force_global(0, &globals, &natives, &mut cache).unwrap();
+    // The defining structural check (mirrors the memoized case's own
+    // "cache slot is populated" assertion, negated): a memoized global
+    // would have its slot populated after the first force; this one must
+    // NOT, so a second force still re-executes rather than reading a
+    // stale cached value.
+    assert!(cache.get(0).is_none());
+    force_global(0, &globals, &natives, &mut cache).unwrap();
   }
 
   #[test]

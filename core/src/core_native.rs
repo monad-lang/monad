@@ -91,6 +91,16 @@ pub fn exec_native(
     "write_file" => write_file(args, natives),
     "file_exists" => file_exists(args, natives),
     "get_env" => get_env(args, natives),
+    "fork_io" => fork_io(args, natives),
+    // `await_fiber` is NOT dispatched here — it needs `globals`/`cache`
+    // (not just `natives`) to actually run the fiber's deferred action;
+    // `core_eval::fire_or_accumulate` intercepts it before ever calling
+    // this function. See `await_fiber`'s own doc comment.
+    "cancel_fiber" => cancel_fiber(args, natives),
+    "sleep_io" => sleep_io(args, natives),
+    "scope_new" => scope_new(natives),
+    "scope_fork" => scope_fork(args, natives),
+    "scope_drop" => scope_drop(args, natives),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
     // `NativeTable`'s range); this is the one call site that only has the
@@ -548,6 +558,187 @@ fn bench_report(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
   // caller at runtime, since `detect_test_result_value` only knows how
   // to classify `Bool`/`IO`/`Result` constructors.
   make_bool(natives, true)
+}
+
+/// A forked-but-not-yet-awaited (or already-completed) fiber. Mirrors
+/// `eval::native::FiberHandle` exactly, just holding a `Value` (the
+/// closure to run) instead of a `Term` — see `fork_io`'s own doc comment
+/// for why forking defers rather than actually running anything.
+struct FiberHandle {
+  fiber: crate::runtime::fiber::Fiber<Value>,
+  action: Option<Value>,
+}
+
+/// A `scope_new`-allocated scope: just the set of fiber ids forked under
+/// it, so `scope_drop` can cancel every one still outstanding. Mirrors
+/// `eval::native::ScopeHandle`.
+struct ScopeHandle {
+  fiber_ids: std::sync::Mutex<Vec<u64>>,
+}
+
+/// Fiber/scope handles are opaque to surface code (`std/concurrent/
+/// fiber.mo`'s own doc comment: "do not pattern match on them") — a bare
+/// `Num` carrying `runtime::global`'s registry id is enough, the same way
+/// the tree-walker's own `Literal::Foreign(id)` served this purpose.
+/// `U64` since `runtime::global::register` itself returns `u64`.
+fn handle_value(id: u64) -> Value {
+  Value::Lit(IrLit::Num(id as i64, NumSuffix::U64))
+}
+
+fn extract_handle_id(v: &Value) -> Result<u64, CoreEvalError> {
+  match v {
+    Value::Lit(IrLit::Num(n, _)) => Ok(*n as u64),
+    other => Err(CoreEvalError::NativeArgError(format!(
+      "expected an opaque fiber/scope handle, got {other:?}"
+    ))),
+  }
+}
+
+/// `Unit`'s own runtime shape never matters (never pattern-matched, same
+/// as `io_wrap`'s callers elsewhere in this file) — an empty string is as
+/// good a placeholder as any.
+fn unit_value() -> Value {
+  Value::Lit(IrLit::Str(String::new()))
+}
+
+/// `forkIO (action : Unit -> IO A) : IO (Fiber A)` (`std/concurrent/
+/// fiber.mo`) — defers `action` rather than running it: registers a
+/// handle holding the still-unapplied closure. This "fiber" system is
+/// cooperative/lazy, not real OS-thread concurrency — `await_fiber` is
+/// what actually runs the action (applying it to `unit`), the first time
+/// it's awaited. Mirrors `eval::native::fork_io` exactly.
+fn fork_io(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let action = args
+    .first()
+    .cloned()
+    .ok_or_else(|| CoreEvalError::NativeArgError("fork_io needs 1 arg".into()))?;
+  if !matches!(action, Value::Closure { .. }) {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "forkIO expected a function (Unit -> IO A), got {action:?}"
+    )));
+  }
+  let handle = FiberHandle {
+    fiber: crate::runtime::fiber::Fiber::new(),
+    action: Some(action),
+  };
+  let id = crate::runtime::global::register(handle);
+  io_wrap(natives, handle_value(id))
+}
+
+/// `await_fiber (f : Fiber A) : IO A` — the one fiber/scope native that
+/// needs the full evaluator (`globals`/`cache`), not just `exec_native`'s
+/// ordinary `(name, args, natives)` shape: running the fiber's deferred
+/// action means applying its stored closure to `unit` via
+/// `core_eval::apply`. Dispatched directly from `core_eval::fire_or_
+/// accumulate`, bypassing `exec_native`'s generic table entirely — see
+/// that function's own doc comment. Mirrors `eval::native::await_fiber`.
+pub fn await_fiber(
+  args: &[Value],
+  globals: &crate::core_value::GlobalTable,
+  natives: &NativeTable,
+  cache: &mut crate::core_value::GlobalCache,
+) -> Result<Value, CoreEvalError> {
+  let f = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("await_fiber needs 1 arg".into()))?;
+  let id = extract_handle_id(f)?;
+  let handle = crate::runtime::global::take::<FiberHandle>(id)
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber handle {id} not found")))?;
+  if handle.fiber.is_done()
+    && handle.fiber.state() == crate::runtime::fiber::FiberState::Cancelled
+  {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "fiber {id} was cancelled"
+    )));
+  }
+  let action = handle
+    .action
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber {id} already awaited")))?;
+  let result = crate::core_eval::apply(action, unit_value(), globals, natives, cache)?;
+  handle.fiber.set_result(result.clone());
+  handle
+    .fiber
+    .set_state(crate::runtime::fiber::FiberState::Completed);
+  Ok(result)
+}
+
+/// `cancel_fiber (f : Fiber A) : IO Unit` — marks the fiber cancelled
+/// without running it (a no-op if it's already running/done, same as
+/// `Fiber::cancel`'s own guard). Mirrors `eval::native::cancel_fiber`.
+fn cancel_fiber(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let f = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("cancel_fiber needs 1 arg".into()))?;
+  let id = extract_handle_id(f)?;
+  crate::runtime::global::with::<FiberHandle, _>(id, |h| h.fiber.cancel())
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber handle {id} not found")))?;
+  io_wrap(natives, unit_value())
+}
+
+/// `sleepIO (ms : I64) : IO Unit` (`std/concurrent/combine.mo`). Mirrors
+/// `eval::native::sleep_io`.
+fn sleep_io(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let ms = extract_int(args.first().ok_or_else(|| {
+    CoreEvalError::NativeArgError("sleep_io needs 1 arg".into())
+  })?)?;
+  std::thread::sleep(std::time::Duration::from_millis(ms.max(0) as u64));
+  io_wrap(natives, unit_value())
+}
+
+/// `scope_new : IO Scope` — a zero-arg (point-free) native. Mirrors
+/// `eval::native::scope_new`.
+fn scope_new(natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let handle = ScopeHandle {
+    fiber_ids: std::sync::Mutex::new(Vec::new()),
+  };
+  let id = crate::runtime::global::register(handle);
+  io_wrap(natives, handle_value(id))
+}
+
+/// `scope_fork (s : Scope) (action : Unit -> IO A) : IO (Fiber A)` — like
+/// `fork_io`, defers `action` rather than running it, but also records
+/// the new fiber's id under `s`'s own `ScopeHandle` so `scope_drop` can
+/// cancel it later. Mirrors `eval::native::scope_fork`.
+fn scope_fork(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "scope_fork needs 2 args".into(),
+    ));
+  }
+  let scope_id = extract_handle_id(&args[0])?;
+  let action = args[1].clone();
+  if !matches!(action, Value::Closure { .. }) {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "scope_fork expected a function (Unit -> IO A), got {action:?}"
+    )));
+  }
+  let handle = FiberHandle {
+    fiber: crate::runtime::fiber::Fiber::new(),
+    action: Some(action),
+  };
+  let fiber_id = crate::runtime::global::register(handle);
+  crate::runtime::global::with::<ScopeHandle, _>(scope_id, |scope| {
+    scope.fiber_ids.lock().unwrap().push(fiber_id);
+  })
+  .ok_or_else(|| CoreEvalError::NativeArgError(format!("scope {scope_id} not found")))?;
+  io_wrap(natives, handle_value(fiber_id))
+}
+
+/// `scope_drop (s : Scope) : IO Unit` — cancels every fiber forked under
+/// `s` that hasn't been awaited/cancelled yet. Mirrors
+/// `eval::native::scope_drop`.
+fn scope_drop(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let s = args
+    .first()
+    .ok_or_else(|| CoreEvalError::NativeArgError("scope_drop needs 1 arg".into()))?;
+  let scope_id = extract_handle_id(s)?;
+  let handle = crate::runtime::global::take::<ScopeHandle>(scope_id)
+    .ok_or_else(|| CoreEvalError::NativeArgError(format!("scope {scope_id} not found")))?;
+  let fiber_ids = handle.fiber_ids.into_inner().unwrap();
+  for fid in &fiber_ids {
+    crate::runtime::global::with::<FiberHandle, _>(*fid, |h| h.fiber.cancel());
+  }
+  io_wrap(natives, unit_value())
 }
 
 #[cfg(test)]
