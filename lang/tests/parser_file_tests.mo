@@ -3,7 +3,6 @@
 
 use io {io, read_file}
 open IO {io, read_file}
-open Monad {}
 use lang.types {Decl}
 use lang.parser {decls_parser, open_parser, use_parser}
 use lang.parser.core {ParseResult, fail, success}

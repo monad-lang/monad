@@ -1883,14 +1883,38 @@ pub fn desugar_struct_literals(
       // downstream resolution genuinely depends on the previous
       // behavior in that specific case, not yet root-caused, so left
       // alone rather than risking a wrong guess.
-      let ret_hint = expected.and_then(|e| match force(mctx, e.clone()).into_stripped_ctx() {
-        CoreTerm::Pi { ret, .. } => Some(*ret),
-        _ => None,
-      });
+      let (ret_hint, arg_hint) = match expected.map(|e| force(mctx, e.clone()).into_stripped_ctx())
+      {
+        Some(CoreTerm::Pi { arg, ret, .. }) => {
+          (Some(*ret), Some(force(mctx, *arg).into_stripped_ctx()))
+        }
+        _ => (None, None),
+      };
       let should_open = ret_hint.is_some() || !matches!(param_typ_d.strip_ctx(), CoreTerm::Hole);
+      // The type to open this binder with: the lambda's own declared
+      // annotation when it has one, else (a bare `fn x => ...`/do-notation
+      // `<-` bind, whose `param_typ` desugars to `Hole`) the surrounding
+      // Pi's own argument type, when known from `expected` — e.g. `Monad.
+      // bind`'s `A -> M B` continuation parameter, whose `A` is exactly
+      // this lambda's real parameter type even though the lambda's own
+      // syntax never wrote it down. Without this, an unannotated
+      // do-notation `let x <- ...; match x {...}` opens `x` at `Hole`
+      // instead — `infer` on `x` then trivially succeeds (type `Hole`),
+      // but `resolve_match_inductive_atom` can't find a head atom on
+      // `Hole`, so the nested `match`'s own resolution silently never
+      // gets captured, desyncing every later capture in the same def
+      // relative to `lower_core_ir.rs`'s traversal (surfaces as
+      // `MatchTraversalMismatch`). Falls back to `param_typ_d` (`Hole`)
+      // unchanged when `arg_hint` isn't known either, same as before this
+      // fix.
+      let open_typ = if !matches!(param_typ_d.strip_ctx(), CoreTerm::Hole) {
+        param_typ_d.clone()
+      } else {
+        arg_hint.clone().unwrap_or_else(|| param_typ_d.clone())
+      };
       let body_d = if should_open {
         let atom = Atom::fresh();
-        let ctx2 = open_ctx(ctx, atom, param_typ_d.clone());
+        let ctx2 = open_ctx(ctx, atom, open_typ.clone());
         let opened_body = open_with(body, &CoreTerm::Free(atom));
         let opened_ret = ret_hint.map(|ret| open_with(&ret, &CoreTerm::Free(atom)));
         // D5: this `Lam`'s own parameter is a dictionary (D3 elaboration
@@ -1902,7 +1926,7 @@ pub fn desugar_struct_literals(
         // this bound atom instead of a global instance lookup; an
         // ordinary (non-dictionary) `Lam` just passes `dict_scope`
         // through unchanged.
-        let dict_class = head_atom_of(mctx, &param_typ_d)
+        let dict_class = head_atom_of(mctx, &open_typ)
           .filter(|a| is_class_atom(structs, *a))
           .and_then(|a| atom_paths.get(&a).cloned());
         let extended_scope;

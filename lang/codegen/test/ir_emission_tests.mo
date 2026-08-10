@@ -3,15 +3,8 @@ use lang.module {mk}
 use lang.codegen.ir {LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMModule, mk}
 use lang.codegen.emit {mk}
 
-open Term {}
-open Literal {}
-open Identifier {}
-open DebugName {}
-open NumSuffix {}
 open Param {mk}
 open Def {mk, name}
-open ModulePath {}
-open Monad {}
 
 /// Extract the name from an LLVMFunction
 #[partial]

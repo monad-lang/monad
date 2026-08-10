@@ -933,6 +933,12 @@ fn infix_symbol<X: Clone>(input: Span<X>) -> Res<Operator, X> {
     tag("+"),
     tag("-"),
     tag("."),
+    // No built-in meaning (unlike every other symbol above, which is
+    // wired to a native or a prelude `infix` binding) — freed up from its
+    // old role as the `@[...]` legacy attribute delimiter (see
+    // `attribute_parser`) so library code can bind it to any function via
+    // `infix (@) := someFunction`.
+    tag("@"),
   ])
   .parse(input)?;
 
@@ -956,7 +962,7 @@ fn operator_precedence(op: &Operator) -> Option<(u8, Associativity)> {
     "||" => Some((25, Associativity::Right)),
     "&&" => Some((30, Associativity::Right)),
     "==" | "!=" | "=" | "<" | ">" | "<=" | ">=" => Some((40, Associativity::Left)),
-    "++" => Some((50, Associativity::Right)),
+    "++" | "@" => Some((50, Associativity::Right)),
     ">>" | "<<" => Some((60, Associativity::Left)),
     "+" | "-" => Some((65, Associativity::Left)),
     "*" | "/" => Some((70, Associativity::Left)),
@@ -1161,10 +1167,11 @@ fn attr_arg_parser<X: Clone>(input: Span<X>) -> Res<Vec<AttrArg>, X> {
 }
 
 /// `pub`/`priv` visibility prefix on a declaration. Defaults to
-/// `Visibility::PackagePrivate` when omitted. Parsed before attributes and
-/// the declaration keyword: `visibility? attributes? keyword ...`.
+/// `Visibility::PackagePrivate` when omitted. Parsed after attributes,
+/// before the declaration keyword: `attributes? visibility? keyword ...`.
 /// Does not apply to `use`/`open` — `use` keeps its own binary `pub use`
-/// handling (see `use_parser`); `open` has no visibility at all.
+/// handling (see `use_parser`, which already puts `pub` after attributes);
+/// `open` has no visibility at all.
 fn vis_parser<X: Clone>(input: Span<X>) -> Res<Visibility, X> {
   map(
     opt(alt((
@@ -1176,13 +1183,11 @@ fn vis_parser<X: Clone>(input: Span<X>) -> Res<Visibility, X> {
   .parse(input)
 }
 
-/// `#[...]` is the current annotation syntax; `@[...]` is the deprecated
-/// predecessor (still parses, flagged by `deprecated_attribute_warnings`).
-/// Both delimiters accept identical content — see `attr_arg_parser`.
+/// `#[...]` is the (only) annotation syntax — see `attr_arg_parser` for
+/// its content grammar.
 fn attribute_parser<X: Clone>(input: Span<X>) -> Res<Attribute, X> {
   let (input, start) = info(input)?;
-  let (input, legacy_syntax) =
-    alt((map(tag("#["), |_| false), map(tag("@["), |_| true))).parse(input)?;
+  let (input, _) = tag("#[")(input)?;
   let (input, _) = ws0(input)?;
   let (input, (name, args_vecs)) = (name, many0(preceded(ws1, attr_arg_parser))).parse(input)?;
   let (input, _) = ws0(input)?;
@@ -1194,22 +1199,22 @@ fn attribute_parser<X: Clone>(input: Span<X>) -> Res<Attribute, X> {
       name,
       args: args_vecs.into_iter().flatten().collect(),
       source_location: SourceRange::new(start.into(), end.into()),
-      legacy_syntax,
     },
   ))
 }
 
 fn opt_attributes<X: Clone>(input: Span<X>) -> Res<Vec<Attribute>, X> {
-  // `ws0` before each attribute allows stacking (`@[a]\n#[b]\ndef ...` or
-  // `@[a] #[b] def ...`) — the trailing `ws0` before the declaration
+  // `ws0` before each attribute allows stacking (`#[a]\n#[b]\ndef ...` or
+  // `#[a] #[b] def ...`) — the trailing `ws0` before the declaration
   // keyword (already present in each caller) handles the gap after the
   // last attribute.
   many0(preceded(ws0, attribute_parser)).parse(input)
 }
 
 fn def_parser(input: Span) -> Res<Def> {
-  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, vis) = vis_parser(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("def")(input)?;
   let (input, _) = ws1(input)?;
@@ -1512,8 +1517,9 @@ fn all_type_cons_parser<X: Clone>(input: Span<X>) -> Res<Vec<TypeConstraint>, X>
 }
 
 fn class_parser(input: Span) -> Res<Inductive> {
-  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, vis) = vis_parser(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("class")(input)?;
   let (input, _) = ws0(input)?;
@@ -1545,8 +1551,9 @@ fn instance_inner_parser(input: Span) -> Res<Vec<Def>> {
 }
 
 fn instance_parser(input: Span) -> Res<Instance> {
-  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, vis) = vis_parser(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("instance")(input)?;
   let (input, _) = ws0(input)?;
@@ -1626,8 +1633,9 @@ fn inductive_inner_parser<'a>(
 }
 
 pub(crate) fn inductive_parser(input: Span) -> Res<Inductive> {
-  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, vis) = vis_parser(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("type")(input)?;
   let (input, _) = ws0(input)?;
@@ -1687,8 +1695,9 @@ fn struct_inner_parser<X: Clone>(input: Span<X>) -> Res<Vec<StructField>, X> {
 }
 
 fn struct_parser<X: Clone>(input: Span<X>) -> Res<Inductive, X> {
-  let (input, vis) = vis_parser(input)?;
   let (input, attrs) = opt_attributes(input)?;
+  let (input, _) = ws0(input)?;
+  let (input, vis) = vis_parser(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("struct")(input)?;
   let (input, _) = ws0(input)?;

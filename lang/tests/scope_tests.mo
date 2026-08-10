@@ -5,14 +5,12 @@ use lang.types {
   TypeConstraint, def_d, hole, id, inductive_d, many, mk, mp, name, nmp,
   param_many, type_,
 }
-open types {}
 use lang.scope {
   build_scope_from_decls, build_scope_from_modules, list_append, modpath_eq,
   resolve_def_in_scope_by_name, scope_data_empty, scope_find_inductive,
   scope_find_inductive_by_constructor, scope_find_local, scope_globals,
   scope_push_local, scope_resolve_instance, scope_resolve_name,
 }
-open scope {}
 
 // --- Build scope from empty decls ---
 

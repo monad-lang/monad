@@ -3,19 +3,16 @@ use lang.types {
   class_d, def_d, forall, hole, id, id_eq, id_member, many, mk, mp, named, pi,
   type_, unnamed, use_bare, use_d, var,
 }
-open types {}
 use lang.elaborate {
   elaborate_class, elaborate_decls, elaborate_def, elaborate_type, free_vars,
   names_of_decl, names_of_decls, sentinel,
 }
 
 open Term {forall, hole, pi, type_, var}
-open Literal {}
 open Decl {class_d, def_d, use_d}
 open DebugName {named, unnamed}
 open Identifier {id}
 open ModulePath {mp}
-open NumSuffix {}
 open Multiplicity {many}
 
 // --- Helper definitions ---

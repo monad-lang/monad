@@ -4,7 +4,6 @@
 /// and prisms for working with sum types.
 
 use init.optics {Lens, Prism, lens, mkPrism, over, over_prism, preview, set, view}
-open Lens {}
 open Prism {mkPrism}
 
 // --- Domain types ---

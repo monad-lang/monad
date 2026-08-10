@@ -7,11 +7,6 @@ use lang.parser.core {fail, success}
 use lang.scope {build_scope_from_decls, scope_resolve_name}
 
 open IO {io, read_file}
-open types {}
-open module {}
-open parser {}
-open parser.core {}
-open scope {}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,

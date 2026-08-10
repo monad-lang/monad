@@ -164,7 +164,7 @@ Declarations can be annotated with `#[...]` attributes:
 #[test]                     // Mark as a test (run via `cargo run -- test <file>`)
 ```
 
-`@[...]` is the older spelling of the same syntax — it still parses, but the compiler warns and suggests `#[...]` instead.
+Attributes come before visibility: `#[test] pub def ...`, not `pub #[test] def ...`.
 
 ## Native Functions
 

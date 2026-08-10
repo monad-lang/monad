@@ -258,7 +258,7 @@ fn test_struct() {
 
 #[test]
 fn test_native() {
-  let s = r#"@[native num_add]
+  let s = r#"#[native num_add]
     def add (a b : I64) : I64
     "#
   .into();
@@ -294,7 +294,6 @@ fn test_native() {
       expected_term,
       vec![Attribute {
         source_location: Default::default(),
-        legacy_syntax: false,
         name: id("native"),
         args: vec![AttrArg::Ident(id("num_add"))]
       }]
@@ -646,6 +645,24 @@ fn test_open_glob() {
 }
 
 #[test]
+fn test_open_empty_brace_filter_still_parses() {
+  // `open X {}` (zero names) still parses fine at the grammar level — it's
+  // rejected later, by the checker (`TypeError::EmptyOpenFilter`, see
+  // `core_check_module::test::test_empty_open_filter_is_rejected`), not
+  // here.
+  use crate::term::{Decl, OpenFilter};
+  let s = "open IO {}".into();
+  let (_, res) = open_parser(s).unwrap();
+  match res {
+    Decl::Open(open) => {
+      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(open.filter, OpenFilter::Only(vec![]));
+    }
+    other => panic!("expected Decl::Open, got {other:?}"),
+  }
+}
+
+#[test]
 fn test_open_multiline_brace_filter() {
   // Regression test: `open`'s brace-filter grammar used to be missing the
   // leading whitespace-skip right after `{` that `use`'s already had
@@ -810,9 +827,9 @@ fn test_visibility_def() {
 }
 
 #[test]
-fn test_visibility_def_after_attribute() {
-  // visibility comes before attributes: `pub @[attr] def`, not `@[attr] pub def`.
-  let (_, res) = def_parser(r#"pub @[partial] def f : I64 := 1"#.into()).unwrap();
+fn test_visibility_after_attribute() {
+  // visibility comes after attributes: `#[attr] pub def`, not `pub #[attr] def`.
+  let (_, res) = def_parser(r#"#[partial] pub def f : I64 := 1"#.into()).unwrap();
   assert_eq!(res.vis, Visibility::Pub);
   assert!(res.has_partial_attr());
 }

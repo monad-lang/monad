@@ -266,7 +266,7 @@ fn check_body_termination(
             def_name: def_name.clone(),
             call: format!("{}", body),
             suggestion: format!(
-              "{} — add @[terminating] if this function is well-founded",
+              "{} — add #[terminating] if this function is well-founded",
               msg
             ),
             loc: call.loc,
@@ -478,7 +478,7 @@ pub fn find_mutual_groups(
 /// Returns Ok if all self-calls use structural subterms on at least one
 /// parameter, or Err describing the first non-structural call found.
 pub fn check_termination(def: &Def) -> Result<(), TerminationError> {
-  // Skip if the definition has @[terminating] or @[partial] attribute
+  // Skip if the definition has #[terminating] or #[partial] attribute
   if def.has_terminating_attr() || def.has_partial_attr() {
     return Ok(());
   }
@@ -729,7 +729,6 @@ mod tests {
       type_constraints: vec![],
       attributes: vec![crate::term::Attribute {
         source_location: Default::default(),
-        legacy_syntax: false,
         name: id("terminating"),
         args: vec![],
       }],
@@ -739,7 +738,7 @@ mod tests {
     let result = check_termination(&def);
     assert!(
       result.is_ok(),
-      "@[terminating] should skip check: {}",
+      "#[terminating] should skip check: {}",
       result.unwrap_err()
     );
   }
@@ -774,7 +773,6 @@ mod tests {
       type_constraints: vec![],
       attributes: vec![crate::term::Attribute {
         source_location: Default::default(),
-        legacy_syntax: false,
         name: id("partial"),
         args: vec![],
       }],
@@ -784,7 +782,7 @@ mod tests {
     let result = check_termination(&def);
     assert!(
       result.is_ok(),
-      "@[partial] should skip check: {}",
+      "#[partial] should skip check: {}",
       result.unwrap_err()
     );
   }

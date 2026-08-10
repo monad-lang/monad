@@ -94,7 +94,6 @@ open LLVMValue {
 open LLVMInstruction {assign, branch, comment, jump, ret}
 open ParamPair {mk}
 open PhiPair {mk}
-open NativeOp {}
 
 #[partial]
 def show_bool (b : Bool) : String := match b {

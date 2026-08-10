@@ -16,7 +16,6 @@ type ParseResult O {
 	}
 
 
-open ParseResult {}
 
 
 type OpEntry {
@@ -24,11 +23,11 @@ type OpEntry {
 	}
 
 
-def op_chars : List String := 
-	["+", "&", "=", "|", "<", ">", "*", "/", "-", "!", "."]
+def op_chars : List String :=
+	["+", "&", "=", "|", "<", ">", "*", "/", "-", "!", ".", "@"]
 
 
-def op_table : List OpEntry := 
+def op_table : List OpEntry :=
 	[OpEntry.mk "|>" 5 false,
 	 OpEntry.mk "<|" 5 true,
 	 OpEntry.mk ">>=" 10 true,
@@ -40,6 +39,9 @@ def op_table : List OpEntry :=
 	 OpEntry.mk "==" 40 false,
 	 OpEntry.mk "!=" 40 false,
 	 OpEntry.mk "++" 50 true,
+	 // No built-in meaning — see the matching `tag("@")` entry in
+	 // `core/src/parser.rs`'s `infix_symbol`/`operator_precedence`.
+	 OpEntry.mk "@" 50 true,
 	 OpEntry.mk ">>" 60 false,
 	 OpEntry.mk "<<" 60 false,
 	 OpEntry.mk "+" 65 false,

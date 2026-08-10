@@ -1,6 +1,5 @@
 use std.test {}
 use init.optics {Lens, Prism, lens, mkPrism, over, over_prism, preview, review, set, set_prism, view}
-open Lens {}
 open Prism {mkPrism}
 
 // Test structures

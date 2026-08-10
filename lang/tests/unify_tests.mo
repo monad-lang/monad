@@ -2,7 +2,6 @@ use lang.types {
   Term, app, forall, hole, id, lit, named, pi, result_is_ok, str, type_, unnamed,
   var,
 }
-open types {}
 use lang.typecheck.unify {unify}
 
 def run_unify (a : Term) (b : Term) : Bool :=

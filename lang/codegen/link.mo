@@ -4,12 +4,9 @@ use process {exec_cmd}
 use lang.codegen.ir {emit_module, mk}
 use lang.codegen.emit {check_contains, compile_db_decls_ir, mk}
 
-open LLVMType {}
-open LLVMValue {}
 open Term {app, lam, lit, type_, var}
 open Literal {num}
 open Identifier {id}
-open NameRef {}
 open NumSuffix {i64}
 open Param {mk}
 open Def {mk}

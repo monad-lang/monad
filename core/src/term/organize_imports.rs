@@ -1,15 +1,14 @@
 //! The `organize-imports` codemod: rewrites bare `use Module`/`open
 //! Module` declarations to explicit `use/open Module {name1, name2}`
-//! (minimal name list — only what the file actually references) and
-//! `@[...]` attributes to `#[...]`. Driven by `cli`'s `organize-imports`
-//! subcommand via `compute_organize_import_edits` + `apply_text_edits`;
-//! see `core::lib::organize_imports_for_files` for the batch driver.
+//! (minimal name list — only what the file actually references). Driven
+//! by `cli`'s `organize-imports` subcommand via
+//! `compute_organize_import_edits` + `apply_text_edits`; see
+//! `core::lib::organize_imports_for_files` for the batch driver.
 
 use super::module::{LoadedModules, Module, collect_referenced_names, referenced_contains_name};
 use crate::Set;
 use crate::term::{
-  Attribute, Identifier, InductiveVariant, Location, ModulePath, Named, OpenFilter, SourceRange,
-  UseFilter,
+  Identifier, InductiveVariant, Location, ModulePath, Named, OpenFilter, SourceRange, UseFilter,
 };
 
 /// A byte-range-equivalent (line/column, via the existing `SourceRange`
@@ -270,40 +269,10 @@ fn delete_whole_line(range: &SourceRange) -> TextEdit {
   }
 }
 
-/// Replace just a legacy attribute's two-character `@[` opening delimiter
-/// with `#[` — its content (name/args) is identical either way (see
-/// `Attribute::legacy_syntax`), so only that prefix needs to change.
-fn legacy_attribute_edit(attr: &Attribute) -> TextEdit {
-  let start = attr.source_location.start.clone();
-  let mut end = start.clone();
-  end.column += 2; // width of "@[" / "#["
-  TextEdit {
-    range: SourceRange {
-      start,
-      end,
-      path: attr.source_location.path.clone(),
-    },
-    replacement: "#[".to_string(),
-  }
-}
-
-fn collect_legacy_attribute_edits<'a>(
-  attrs: impl IntoIterator<Item = &'a Attribute>,
-  edits: &mut Vec<TextEdit>,
-) {
-  edits.extend(
-    attrs
-      .into_iter()
-      .filter(|a| a.legacy_syntax)
-      .map(legacy_attribute_edit),
-  );
-}
-
 /// Compute every `organize-imports` edit for `module`: bare `use`/`open`
 /// declarations rewritten to explicit `{...}` (minimal name list, computed
-/// against `loaded`'s already-resolved modules), and `@[...]` attributes
-/// rewritten to `#[...]`. Pure computation — `apply_text_edits` does the
-/// actual splice.
+/// against `loaded`'s already-resolved modules). Pure computation —
+/// `apply_text_edits` does the actual splice.
 ///
 /// KNOWN LIMITATION: this computes each `use`/`open`'s minimal name list
 /// from what THIS file alone references. For most files that's exactly
@@ -346,29 +315,6 @@ pub fn compute_organize_import_edits(module: &Module, loaded: &LoadedModules) ->
       range: o.source_location.clone(),
       replacement: format_import_decl("open", &o.module_path, &names),
     });
-  }
-
-  for ctx in module.defs() {
-    collect_legacy_attribute_edits(&ctx.value().attributes, &mut edits);
-  }
-  for ctx in module.get_macro_defs() {
-    collect_legacy_attribute_edits(&ctx.value().attributes, &mut edits);
-  }
-  for ind in module.inductives() {
-    collect_legacy_attribute_edits(&ind.attributes, &mut edits);
-  }
-  for ctx in module.instances() {
-    let inst = ctx.value();
-    collect_legacy_attribute_edits(&inst.attributes, &mut edits);
-    for def in inst.impls_map.values() {
-      collect_legacy_attribute_edits(&def.attributes, &mut edits);
-    }
-  }
-  for ctx in module.get_uses() {
-    collect_legacy_attribute_edits(&ctx.value().attributes, &mut edits);
-  }
-  for ctx in module.get_opens() {
-    collect_legacy_attribute_edits(&ctx.value().attributes, &mut edits);
   }
 
   edits

@@ -678,7 +678,7 @@ fn test_simple_instance() {
     infix (+) := HAdd.add
     type I64 {}
 
-    @[native i64_add]
+    #[native i64_add]
     def I64.add (a b : I64) : I64
 
     instance HAdd I64 I64 I64 {
@@ -779,7 +779,7 @@ fn test_i64_eq_comparison() {
 
     type I64 {}
 
-    @[native i64_eq]
+    #[native i64_eq]
     def I64.beq (a b : I64) : Bool
 
     instance BEq I64 {
@@ -3242,7 +3242,7 @@ fn test_recursion_depth_simple_overflow() {
   let path = ModulePath::top("_test");
   let parsed = parse_file(
     r#"
-    @[terminating]
+    #[terminating]
     def loop_forever (x : I64) : I64 := loop_forever (x + 1)
     "#
     .into(),
@@ -3270,7 +3270,7 @@ fn test_recursion_depth_within_limit() {
   let parsed = parse_file(
     r#"
     use math
-    @[terminating]
+    #[terminating]
     def factorial (n : I64) : I64 :=
       if n == 0 then 1
       else n * factorial (n - 1)
@@ -3299,7 +3299,7 @@ fn test_recursion_depth_no_limit_works() {
   let parsed = parse_file(
     r#"
     use math
-    @[terminating]
+    #[terminating]
     def factorial (n : I64) : I64 :=
       if n == 0 then 1
       else n * factorial (n - 1)
@@ -3324,7 +3324,7 @@ fn test_recursion_depth_limit_exceeded() {
   let path = ModulePath::top("_test");
   let parsed = parse_file(
     r#"
-    @[terminating]
+    #[terminating]
     def loop_forever (x : I64) : I64 := loop_forever (x + 1)
     "#
     .into(),
@@ -3436,7 +3436,7 @@ fn test_cfg_test_use_skipped_in_non_test_mode() {
   let path = ModulePath::top("_test_cfg_use");
   let parsed = parse_file(
     r#"
-    @[cfg test]
+    #[cfg test]
     use init.test_helper
 
     use init
@@ -3476,7 +3476,7 @@ fn test_cfg_test_use_visible_in_test_mode() {
   let path = ModulePath::top("_test_cfg_use");
   let parsed = parse_file(
     r#"
-    @[cfg test]
+    #[cfg test]
     use init.test_helper
     use init
 

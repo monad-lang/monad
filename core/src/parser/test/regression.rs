@@ -81,7 +81,7 @@ fn test_parse_simple_def_with_parser() {
 
 #[test]
 fn test_parse_def_with_use_and_empty_line() {
-  let input = "use prelude\nuse std.test\n\n@[test]\ndef test_x : Bool := True\n";
+  let input = "use prelude\nuse std.test\n\n#[test]\ndef test_x : Bool := True\n";
   let r = parse_file(input);
   assert!(
     r.is_ok(),

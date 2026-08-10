@@ -18,12 +18,7 @@ use std.list {Show, all, length}
 use std.show {Show}
 
 open IO {file_exists, println, read_file}
-open types {}
-open parser {}
-open parser.core {}
 open ParseResult {fail, success}
-open scope {}
-open infer {}
 
 /// Module path for the init directory
 def init_module_file_path (name : String) : String := "init/" ++ name ++ ".mo"

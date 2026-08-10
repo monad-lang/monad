@@ -455,7 +455,7 @@ Declarations can be annotated with `#[...]` attributes:
 #[test]                     // Mark as a test (run via `cargo run -- test <file>`)
 ```
 
-`@[...]` is the older spelling of the same syntax — it still parses, but the compiler warns and suggests `#[...]` instead.
+Attributes come before visibility: `#[test] pub def ...`, not `pub #[test] def ...`.
 
 ## Operators
 
@@ -995,9 +995,9 @@ Monad source files, the safest resolution strategy is:
 2. **Reapply your edits on top**: Port each logical change set (function
    compactions, table conversions, etc.) onto the fresh upstream base.
 3. **Audit for leftover artifacts**: Check for:
-   - Double `@[partial]` annotations (both upstream and your stashed code
+   - Double `#[partial]` annotations (both upstream and your stashed code
      may have had one → both land after checkout/reapply)
-   - `@[partial]` on pure (non-parsing) helper functions (not needed)
+   - `#[partial]` on pure (non-parsing) helper functions (not needed)
    - Old helper functions that upstream renamed parameters on but you
      removed entirely (check with `rg -n 'helper_name' <file>`)
 4. **Verify**: Run `cargo run -- test <file>` and verify all tests pass.
@@ -1006,9 +1006,9 @@ Monad source files, the safest resolution strategy is:
 5. **Verify no unmerged files remain**: `git diff --name-only --diff-filter=U`
 
 **Common artifacts after checkout/reapply**:
-- Double `@[partial]`: the upstream `@[partial]` + your stashed `@[partial]`
+- Double `#[partial]`: the upstream `#[partial]` + your stashed `#[partial]`
   both survive. Remove duplicates.
-- `@[partial]` on pure helpers: `num_to_term`, `op_check` don't need it.
+- `#[partial]` on pure helpers: `num_to_term`, `op_check` don't need it.
 - Old helper definitions that were supposed to be deleted but survived
   because upstream changed their parameter names (making the conflict
   resolution merge them back as "separate" definitions).

@@ -295,7 +295,7 @@ fn test_main_mo_lines_1_20() {
 /// Test lines 1-30 from main.mo (adds first definition)
 #[test]
 fn test_main_mo_lines_1_30() {
-  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse lang.codegen.ir\nuse lang.codegen.emit\nuse lang.module\nuse lang.parser\nuse lang.pretty\nuse lang.parser.core\nuse lang.parser.combinators\nuse lang.typecheck.infer\nuse lang.scope\nuse std.list\n\nopen LLVMType\nopen LLVMValue\nopen Term\nopen Literal\nopen DebugName\nopen ParseResult\nopen NumSuffix\nopen Param\nopen Def\nopen ModulePath\nopen TypeError\n\n@[partial]\ndef empty_str_list : List String := []";
+  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse lang.codegen.ir\nuse lang.codegen.emit\nuse lang.module\nuse lang.parser\nuse lang.pretty\nuse lang.parser.core\nuse lang.parser.combinators\nuse lang.typecheck.infer\nuse lang.scope\nuse std.list\n\nopen LLVMType\nopen LLVMValue\nopen Term\nopen Literal\nopen DebugName\nopen ParseResult\nopen NumSuffix\nopen Param\nopen Def\nopen ModulePath\nopen TypeError\n\n#[partial]\ndef empty_str_list : List String := []";
   let result = parse_file(input);
   assert!(result.is_ok(), "Should parse lines 1-30 of main.mo");
 }

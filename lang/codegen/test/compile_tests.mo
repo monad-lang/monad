@@ -8,12 +8,10 @@ use lang.codegen.emit {compile_db_decls_ir, mk}
 open Term {lit, type_}
 open Literal {num}
 open Identifier {id}
-open DebugName {}
 open NumSuffix {i64}
 open Param {mk}
 open Def {mk, name}
 open ModulePath {mp}
-open Monad {}
 open IO {println, write_file}
 
 #[partial]

@@ -87,3 +87,27 @@ fn test_infix() {
   let (_, res) = infix_parser(s).unwrap();
   similar!(res, infix("+".into(), mpt("add")));
 }
+
+#[test]
+fn test_infix_at_operator() {
+  // `@` carries no built-in meaning — it's a plain operator token, exactly
+  // like `+`/`++`, that library code binds via `infix (@) := ...`.
+  let s = r#"infix (@) := my_append"#.into();
+  let (_, res) = infix_parser(s).unwrap();
+  similar!(res, infix("@".into(), mpt("my_append")));
+}
+
+#[test]
+fn test_at_operator_expr_parses_at_expected_precedence() {
+  // `@` sits at `++`'s tier (50, right-associative) — `a @ b @ c` should
+  // parse as `a @ (b @ c)`, the same shape `"a" ++ "b" ++ "c"` parses as.
+  let (_, res) = term::<()>(r#"a @ b @ c"#.into()).unwrap();
+  similar!(
+    res,
+    oper(
+      var_id(id("a")),
+      "@",
+      oper(var_id(id("b")), "@", var_id(id("c")))
+    )
+  );
+}

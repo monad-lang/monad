@@ -23,7 +23,7 @@ def test_fold_empty : Bool :=
   BEq.beq (BTreeMap.fold (fn (acc: I64) (k: I64) (v: I64) => acc + v) 0 m) 0
 
 // TODO fix
-// @[test]
+// #[test]
 // def test_empty_beq : Bool :=
 //   let m : BTreeMap I64 String := Map.empty in
 //   m == Map.empty

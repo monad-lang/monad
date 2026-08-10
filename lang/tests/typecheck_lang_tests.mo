@@ -11,12 +11,6 @@ use lang.parser.core {fail, mk, success}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
 open IO {read_file}
-open types {}
-open module {}
-open parser {}
-open parser.core {}
-open scope {}
-open infer {}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,

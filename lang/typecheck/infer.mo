@@ -6,7 +6,6 @@ use lang.types {
   many, match_, mc, mk, mp, name, named, nid, not_a_type, ntv, num, pi, str,
   type_, unknown_var, unnamed, var,
 }
-open types {}
 use lang.scope {
   inductive_has_constructor, scope_find_class_def_by_name, scope_find_inductive,
   scope_find_inductive_by_constructor, scope_push_local, scope_resolve_instance,

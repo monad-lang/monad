@@ -2053,36 +2053,28 @@ pub enum AttrArg {
 pub struct Attribute {
   pub name: Identifier,
   pub args: Vec<AttrArg>,
-  /// Location of the whole `@[...]`/`#[...]` block, used to render the
-  /// `@[...]` deprecation warning (see `deprecated_attribute_warnings`).
+  /// Location of the whole `#[...]` block.
   pub source_location: SourceRange,
-  /// `true` if written with the deprecated `@[...]` delimiter, `false` if
-  /// written with the current `#[...]` delimiter. Purely syntactic — every
-  /// semantic consumer (`has_native_attr`, `has_test_attr`, ...) only looks
-  /// at `name`/`args`, which are identical either way.
-  pub legacy_syntax: bool,
 }
 
 /// Attribute equality is structural (name + args only) and ignores
-/// provenance (`source_location`, `legacy_syntax`) — two attributes that
-/// mean the same thing are equal regardless of where they were parsed from
-/// or which delimiter spelled them.
+/// provenance (`source_location`) — two attributes that mean the same
+/// thing are equal regardless of where they were parsed from.
 impl PartialEq for Attribute {
   fn eq(&self, other: &Self) -> bool {
     self.name == other.name && self.args == other.args
   }
 }
 
-/// Build an `Attribute` with no known source location, spelled as `#[...]`
-/// (`legacy_syntax: false`). For use outside the parser (synthetic defs,
-/// tests) where provenance doesn't matter — `Attribute`'s `PartialEq` is
-/// structural (name + args) and ignores both fields this sets.
+/// Build an `Attribute` with no known source location. For use outside the
+/// parser (synthetic defs, tests) where provenance doesn't matter —
+/// `Attribute`'s `PartialEq` is structural (name + args) and ignores the
+/// field this leaves defaulted.
 pub fn attribute(name: Identifier, args: Vec<AttrArg>) -> Attribute {
   Attribute {
     name,
     args,
     source_location: SourceRange::default(),
-    legacy_syntax: false,
   }
 }
 

@@ -8,8 +8,6 @@ use lang.scope {
   scope_resolve_name,
 }
 
-open types {}
-open scope {}
 
 // --- Helpers ---
 

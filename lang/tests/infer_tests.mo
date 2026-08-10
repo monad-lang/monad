@@ -4,9 +4,7 @@ use lang.types {
   app, forall, hole, id, if_, inductive_d, lam, lit, match_, mc, mk, mp, named,
   not_a_type, pi, type_, unknown_var, unnamed, var,
 }
-open types {}
 use lang.scope {build_scope_from_decls, scope_find_inductive}
-open scope {}
 use lang.typecheck.infer {
   TypedTerm, empty_local_types, empty_locals, mk, sentinel, type_check,
 }
@@ -15,9 +13,7 @@ open Term {app, forall, hole, lam, lit, pi, type_, var}
 open DebugName {named, unnamed}
 open Identifier {id}
 open ModulePath {mp}
-open Multiplicity {}
 open Literal {if_, match_}
-open NumSuffix {}
 open TypeError {not_a_type, unknown_var}
 
 // --- Test scope setup: empty decls with builtins (Type, Prop) ---

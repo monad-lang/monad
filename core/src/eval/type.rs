@@ -97,6 +97,15 @@ pub enum TypeError {
   StructNoConstructors {
     loc: SourceRange,
   },
+  /// `open Module {}` — an explicit but empty name filter. Imports
+  /// nothing a plain `use Module {...}` didn't already provide: per
+  /// `docs/src/reference.md`, qualified access (`Module.name`) always
+  /// works once a module is `use`d, whether or not it's also `open`ed —
+  /// see `crate::term::module::validate_open_filters`.
+  EmptyOpenFilter {
+    module_path: crate::term::ModulePath,
+    loc: SourceRange,
+  },
   ExpectedStructName {
     found: Term,
     loc: SourceRange,
@@ -293,6 +302,13 @@ impl Display for TypeError {
       }
       TypeError::StructNoConstructors { loc } => {
         write!(f, "Structs must have at least one constructor")?;
+        fmt_loc(loc, f)
+      }
+      TypeError::EmptyOpenFilter { module_path, loc } => {
+        write!(
+          f,
+          "`open {module_path} {{}}` imports nothing — qualified access already works via `use`, remove this line"
+        )?;
         fmt_loc(loc, f)
       }
       TypeError::ExpectedStructName { found, loc } => {
@@ -659,6 +675,20 @@ fn err_to_diagnostic(err: &TypeError) -> crate::diag::Diagnostic {
       path: None,
       sub_diagnostics: vec![],
       suggestions: vec![],
+      context_name: None,
+      module_path: None,
+    },
+    TypeError::EmptyOpenFilter { module_path, loc } => Diagnostic {
+      severity: Severity::Error,
+      message: format!(
+        "`open {module_path} {{}}` imports nothing — qualified access already works via `use`, remove this line"
+      ),
+      location: loc_opt(loc),
+      path: None,
+      sub_diagnostics: vec![],
+      suggestions: vec![Suggestion {
+        message: format!("remove `open {module_path} {{}}`"),
+      }],
       context_name: None,
       module_path: None,
     },

@@ -5,7 +5,6 @@ use lang.types {
   lit, match_, mc, mk, mp, name, named, ntv, num, open_d, pi, scoped_open_d, str,
   struct_d, type_, union_ids, unnamed, use_d, var,
 }
-open types {}
 
 /// Free variable sentinel index from parser (sentinel = -1).
 /// de Bruijn index >= 0 means bound; -1 means free/unknown.

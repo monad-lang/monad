@@ -1061,9 +1061,9 @@ pub fn run_tests(
 
 /// One target file's `organize-imports` result: the rewritten source if
 /// anything changed (`None` means the file already has no bare
-/// `use`/`open`/`@[...]` to convert), or the error that kept it from being
-/// checked at all (parse/type error — same as `check_files`, a broken file
-/// is reported rather than silently skipped or guessed at).
+/// `use`/`open` to convert), or the error that kept it from being checked
+/// at all (parse/type error — same as `check_files`, a broken file is
+/// reported rather than silently skipped or guessed at).
 #[derive(Debug, Clone)]
 pub struct OrganizeImportsResult {
   pub path: PathBuf,
@@ -1174,7 +1174,7 @@ pub struct FileCheckResult {
 
 /// Parse and type-check every `.mo` file under `inputs` (directories are
 /// expanded recursively via `collect_mo_files`, same as `run_tests`), but
-/// — unlike `run_tests` — never evaluates `@[test]` defs or anything else;
+/// — unlike `run_tests` — never evaluates `#[test]` defs or anything else;
 /// this only ever runs the checker, so it's usable as a fast, side-
 /// effect-free "does this compile" pass. Reuses `load_module_files` (the
 /// same real loader `Run`/`Test` go through) file by file rather than
@@ -1534,7 +1534,7 @@ def my_any {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
         _ => false
     }
 
-@[test]
+#[test]
 def test_direct_generic_call : Bool :=
     my_any (fn a => a == "c") ["a", "b", "c"]
 "#,
@@ -1576,7 +1576,7 @@ def test_direct_generic_call : Bool :=
     let source = r#"
 use init
 
-@[terminating]
+#[terminating]
 def fib (n : I64) : I64 :=
     if n == 0
     then 0
@@ -1590,6 +1590,44 @@ def main : I64 := fib 10
       .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
     match result {
       core_value::Value::Lit(core_ir::IrLit::Num(n, _)) => assert_eq!(n, 55),
+      other => panic!("expected an int literal, got {other:?}"),
+    }
+  }
+
+  /// `@` carries no built-in meaning — `infix (@) := ...` binds it to an
+  /// ordinary function like any other operator (mirrors the arithmetic
+  /// test above, but exercises a user-defined `infix` declaration end to
+  /// end through the same `eval_core_program` pipeline).
+  #[test]
+  fn eval_core_program_user_defined_at_operator_end_to_end() {
+    let source = r#"
+use init
+
+def my_append (xs ys : List I64) : List I64 :=
+    match xs {
+        List.empty => ys,
+        List.cons h t => List.cons h (my_append t ys)
+    }
+
+infix (@) := my_append
+
+#[terminating]
+def sum (xs : List I64) : I64 :=
+    match xs {
+        List.empty => 0,
+        List.cons h t => h + sum t
+    }
+
+def main : I64 :=
+    sum (List.cons 1 (List.cons 2 List.empty) @ List.cons 3 List.empty)
+"#;
+    let result = eval_core_program(
+      &ModulePath::top("'eval_core_program_at_operator_test"),
+      source,
+    )
+    .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, _)) => assert_eq!(n, 6),
       other => panic!("expected an int literal, got {other:?}"),
     }
   }

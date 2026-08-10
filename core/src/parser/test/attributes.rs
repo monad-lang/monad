@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_attr_arg_named() {
-  let s = r#"@[deprecated {since := "1.0", reason := "use new"}]
+  let s = r#"#[deprecated {since := "1.0", reason := "use new"}]
     def foo : IO Unit := println "hi"
     "#
   .into();
@@ -10,7 +10,6 @@ fn test_attr_arg_named() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("deprecated"),
     args: vec![
       AttrArg::Named {
@@ -32,7 +31,7 @@ fn test_attr_arg_named() {
 
 #[test]
 fn test_attr_arg_nested() {
-  let s = r#"@[custom {outer := {inner := value}}]
+  let s = r#"#[custom {outer := {inner := value}}]
     def foo : IO Unit := println "hi"
     "#
   .into();
@@ -40,7 +39,6 @@ fn test_attr_arg_nested() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Named {
       name: id("outer"),
@@ -59,7 +57,7 @@ fn test_attr_arg_nested() {
 
 #[test]
 fn test_attr_arg_mixed() {
-  let s = r#"@[custom "arg1" {key := 42} another_arg]
+  let s = r#"#[custom "arg1" {key := 42} another_arg]
     def foo : IO Unit := println "hi"
     "#
   .into();
@@ -67,7 +65,6 @@ fn test_attr_arg_mixed() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("custom"),
     args: vec![
       AttrArg::Str("arg1".to_string()),
@@ -87,7 +84,7 @@ fn test_attr_arg_mixed() {
 
 #[test]
 fn test_native_with_named_arg() {
-  let s = r#"@[native {name := num_add}]
+  let s = r#"#[native {name := num_add}]
     def add (a b : I64) : I64
     "#
   .into();
@@ -123,7 +120,6 @@ fn test_native_with_named_arg() {
       expected_term,
       vec![Attribute {
         source_location: Default::default(),
-        legacy_syntax: false,
         name: id("native"),
         args: vec![AttrArg::Named {
           name: id("name"),
@@ -136,7 +132,7 @@ fn test_native_with_named_arg() {
 
 #[test]
 fn test_attr_arg_group() {
-  let s = r#"@[custom [1, "hello", ident]]
+  let s = r#"#[custom [1, "hello", ident]]
     def foo : IO Unit := println "hi"
     "#
   .into();
@@ -144,7 +140,6 @@ fn test_attr_arg_group() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Group(vec![
       AttrArg::Num(1),
@@ -161,7 +156,7 @@ fn test_attr_arg_group() {
 
 #[test]
 fn test_attr_arg_group_trailing_comma() {
-  let s = r#"@[custom [1, 2,]]
+  let s = r#"#[custom [1, 2,]]
     def foo : IO Unit := println "hi"
     "#
   .into();
@@ -169,7 +164,6 @@ fn test_attr_arg_group_trailing_comma() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Group(vec![AttrArg::Num(1), AttrArg::Num(2)])],
   }];
@@ -182,7 +176,7 @@ fn test_attr_arg_group_trailing_comma() {
 
 #[test]
 fn test_attr_arg_nested_group() {
-  let s = r#"@[custom {outer := {a := 1, b := 2}}]
+  let s = r#"#[custom {outer := {a := 1, b := 2}}]
     def foo : IO Unit := println "hi"
     "#
   .into();
@@ -190,7 +184,6 @@ fn test_attr_arg_nested_group() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Named {
       name: id("outer"),
@@ -215,7 +208,7 @@ fn test_attr_arg_nested_group() {
 
 #[test]
 fn test_attr_arg_named_with_group() {
-  let s = r#"@[custom {outer := [1, 2, 3]}]
+  let s = r#"#[custom {outer := [1, 2, 3]}]
     def foo : IO Unit := println "hi"
     "#
   .into();
@@ -223,7 +216,6 @@ fn test_attr_arg_named_with_group() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Named {
       name: id("outer"),
@@ -243,7 +235,7 @@ fn test_attr_arg_named_with_group() {
 
 #[test]
 fn test_attr_arg_nested_groups() {
-  let s = r#"@[custom [[1, 2], [3, 4]]]
+  let s = r#"#[custom [[1, 2], [3, 4]]]
     def foo : IO Unit := println "hi"
     "#
   .into();
@@ -251,7 +243,6 @@ fn test_attr_arg_nested_groups() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("custom"),
     args: vec![AttrArg::Group(vec![
       AttrArg::Group(vec![AttrArg::Num(1), AttrArg::Num(2)]),
@@ -267,7 +258,7 @@ fn test_attr_arg_nested_groups() {
 
 #[test]
 fn test_attr_test() {
-  let s = r#"@[test]
+  let s = r#"#[test]
     def test_addition : Bool :=
         1 + 1 == 2
     "#
@@ -276,7 +267,6 @@ fn test_attr_test() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("test"),
     args: vec![],
   }];
@@ -289,7 +279,7 @@ fn test_attr_test() {
 
 #[test]
 fn test_attr_native_string() {
-  let s = r#"@[native "eq_rec"]
+  let s = r#"#[native "eq_rec"]
     def eq_rec {A : Sort 1} {a : A} {b : A} (P : (b : A) -> Eq A a b -> Sort 1) (h : P a (Eq.refl a)) (e : Eq A a b) : P b e
     "#
   .into();
@@ -297,7 +287,6 @@ fn test_attr_native_string() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("native"),
     args: vec![AttrArg::Str("eq_rec".to_string())],
   }];
@@ -310,7 +299,7 @@ fn test_attr_native_string() {
 
 #[test]
 fn test_attr_terminating() {
-  let s = r#"@[terminating]
+  let s = r#"#[terminating]
     def factorial (n : I64) : I64 :=
         if n == 0
         then 1
@@ -321,7 +310,6 @@ fn test_attr_terminating() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("terminating"),
     args: vec![],
   }];
@@ -334,7 +322,7 @@ fn test_attr_terminating() {
 
 #[test]
 fn test_attr_partial() {
-  let s = r#"@[partial]
+  let s = r#"#[partial]
     def arbitrary (n : I64) : I64 :=
         if n == 0
         then 1
@@ -345,7 +333,6 @@ fn test_attr_partial() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("partial"),
     args: vec![],
   }];
@@ -358,7 +345,7 @@ fn test_attr_partial() {
 
 #[test]
 fn test_attr_cfg_test_on_use() {
-  let s = r#"@[cfg test]
+  let s = r#"#[cfg test]
     use std.test
     "#
   .into();
@@ -366,7 +353,6 @@ fn test_attr_cfg_test_on_use() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("cfg"),
     args: vec![AttrArg::Ident(id("test"))],
   }];
@@ -379,7 +365,7 @@ fn test_attr_cfg_test_on_use() {
 
 #[test]
 fn test_attr_cfg_test_on_open() {
-  let s = r#"@[cfg test]
+  let s = r#"#[cfg test]
     open IO
     "#
   .into();
@@ -387,7 +373,6 @@ fn test_attr_cfg_test_on_open() {
 
   let expected_attrs = vec![Attribute {
     source_location: Default::default(),
-    legacy_syntax: false,
     name: id("cfg"),
     args: vec![AttrArg::Ident(id("test"))],
   }];
@@ -398,11 +383,8 @@ fn test_attr_cfg_test_on_open() {
   }
 }
 
-// --- #[...] (current syntax) vs @[...] (deprecated syntax) ---
-
 #[test]
 fn test_attr_hash_test() {
-  // `#[test]` parses identically to `@[test]`, just via the new delimiter.
   let s = r#"#[test]
     def test_addition : Bool :=
         1 + 1 == 2
@@ -415,7 +397,6 @@ fn test_attr_hash_test() {
       assert_eq!(def.attributes.len(), 1);
       assert_eq!(def.attributes[0].name, id("test"));
       assert!(def.attributes[0].args.is_empty());
-      assert!(!def.attributes[0].legacy_syntax);
     }
     _ => panic!("expected Def"),
   }
@@ -437,7 +418,6 @@ fn test_attr_hash_native_string() {
         def.attributes[0].args,
         vec![AttrArg::Str("eq_rec".to_string())]
       );
-      assert!(!def.attributes[0].legacy_syntax);
     }
     _ => panic!("expected Def"),
   }
@@ -510,7 +490,6 @@ fn test_attr_hash_terminating() {
   let (_, res) = attribute_parser::<()>(r#"#[terminating]"#.into()).unwrap();
   assert_eq!(res.name, id("terminating"));
   assert!(res.args.is_empty());
-  assert!(!res.legacy_syntax);
 }
 
 #[test]
@@ -524,27 +503,15 @@ fn test_attr_hash_cfg_test_on_use() {
     Decl::Use(u) => {
       assert_eq!(u.attributes.len(), 1);
       assert_eq!(u.attributes[0].name, id("cfg"));
-      assert!(!u.attributes[0].legacy_syntax);
     }
     _ => panic!("expected Use, got {:?}", res.value()),
   }
 }
 
 #[test]
-fn test_legacy_syntax_flag() {
-  // `@[...]` sets legacy_syntax: true; `#[...]` sets it false; both parse
-  // to the exact same name/args content.
-  let (_, at) = attribute_parser::<()>(r#"@[native num_add]"#.into()).unwrap();
-  let (_, hash) = attribute_parser::<()>(r#"#[native num_add]"#.into()).unwrap();
-  assert!(at.legacy_syntax);
-  assert!(!hash.legacy_syntax);
-  assert_eq!(at, hash); // PartialEq ignores legacy_syntax/source_location
-}
-
-#[test]
-fn test_multiple_attributes_mixed_syntax() {
-  // Both delimiters can be mixed on the same declaration.
-  let s = r#"@[partial] #[test]
+fn test_multiple_attributes_stacked() {
+  // Several `#[...]` attributes can stack on the same declaration.
+  let s = r#"#[partial] #[test]
     def f (n : I64) : I64 :=
         if n == 0
         then 1
@@ -555,8 +522,8 @@ fn test_multiple_attributes_mixed_syntax() {
   match res.value() {
     Decl::Def(def) => {
       assert_eq!(def.attributes.len(), 2);
-      assert!(def.attributes[0].legacy_syntax);
-      assert!(!def.attributes[1].legacy_syntax);
+      assert_eq!(def.attributes[0].name, id("partial"));
+      assert_eq!(def.attributes[1].name, id("test"));
     }
     _ => panic!("expected Def"),
   }

@@ -6,9 +6,6 @@ use lang.codegen.emit {check_contains, compile_db_decls_ir, empty_attrs, mk}
 
 open Term {lam, lit, type_}
 open Literal {num}
-open LLVMType {}
-open LLVMValue {}
-open LLVMInstruction {}
 open Identifier {id}
 open DebugName {named}
 open NumSuffix {i64}

@@ -80,6 +80,42 @@ fn test_filtered_open_emits_no_warning() {
   assert!(bare_open_warnings(&opens, None).is_empty());
 }
 
+#[test]
+fn test_empty_open_filter_is_rejected() {
+  let decls = parse_file("open IO {}\n".into()).unwrap().decls;
+  match validate_open_filters(&decls) {
+    Err(TypeError::EmptyOpenFilter { module_path, .. }) => {
+      assert_eq!(module_path, mpt("IO"));
+    }
+    other => panic!("expected Err(TypeError::EmptyOpenFilter), got {other:?}"),
+  }
+}
+
+#[test]
+fn test_nonempty_open_filter_is_accepted() {
+  let decls = parse_file("open IO {println}\n".into()).unwrap().decls;
+  assert!(validate_open_filters(&decls).is_ok());
+}
+
+#[test]
+fn test_glob_and_bare_open_are_accepted() {
+  let decls = parse_file("open IO {*}\nopen Foo\n".into()).unwrap().decls;
+  assert!(validate_open_filters(&decls).is_ok());
+}
+
+#[test]
+fn test_empty_scoped_open_filter_is_rejected() {
+  let decls = parse_file("open IO {} in def f : I64 := 1\n".into())
+    .unwrap()
+    .decls;
+  match validate_open_filters(&decls) {
+    Err(TypeError::EmptyOpenFilter { module_path, .. }) => {
+      assert_eq!(module_path, mpt("IO"));
+    }
+    other => panic!("expected Err(TypeError::EmptyOpenFilter), got {other:?}"),
+  }
+}
+
 fn module_of(source: &str) -> Module {
   let parsed = parse_file(source.into()).unwrap();
   module(
@@ -254,7 +290,7 @@ fn test_organize_imports_deletes_fully_unused_use() {
 }
 
 #[test]
-fn test_organize_imports_open_and_attribute_together() {
+fn test_organize_imports_open_and_use_together() {
   let loaded = default_modules().unwrap();
 
   let path_a = ModulePath::top("test_organize_open_a");
@@ -282,7 +318,7 @@ fn test_organize_imports_open_and_attribute_together() {
   // affects bare-name *filtering* of an already-visible module.
   let path_b = ModulePath::top("test_organize_open_b");
   let source_b = format!(
-    "use {}\nopen {}\n\n@[partial]\ndef f : I64 := helper\n",
+    "use {}\nopen {}\n\ndef f : I64 := helper\n",
     path_a.as_str().unwrap(),
     path_a.as_str().unwrap()
   );
@@ -300,8 +336,8 @@ fn test_organize_imports_open_and_attribute_together() {
 
   let module_b = loaded.get_module(&path_b).unwrap();
   let edits = compute_organize_import_edits(module_b, &loaded);
-  // One for the bare `use`, one for the bare `open`, one for `@[partial]`.
-  assert_eq!(edits.len(), 3);
+  // One for the bare `use`, one for the bare `open`.
+  assert_eq!(edits.len(), 2);
   let new_source = apply_text_edits(&source_b, edits);
   assert!(
     new_source.contains("use test_organize_open_a {helper}"),
@@ -311,8 +347,6 @@ fn test_organize_imports_open_and_attribute_together() {
     new_source.contains("open test_organize_open_a {helper}"),
     "got: {new_source:?}"
   );
-  assert!(new_source.contains("#[partial]"), "got: {new_source:?}");
-  assert!(!new_source.contains("@["), "got: {new_source:?}");
   assert!(parse_file(new_source.as_str().into()).is_ok());
 }
 
@@ -379,41 +413,6 @@ fn test_glob_use_never_flagged_unused() {
 }
 
 #[test]
-fn test_deprecated_attribute_warnings() {
-  let path = ModulePath::top("_");
-  let parsed = parse_file(
-    r#"
-    @[partial]
-    def f (n : I64) : I64 :=
-        if n == 0
-        then 1
-        else f (n - 1)
-
-    #[partial]
-    def g (n : I64) : I64 :=
-        if n == 0
-        then 1
-        else g (n - 1)
-    "#
-    .into(),
-  )
-  .unwrap();
-  let modu = module(
-    path,
-    ParsedModule {
-      decls: parsed.decls,
-      module_doc: None,
-    },
-  );
-  let warnings = deprecated_attribute_warnings(&modu, None);
-  // Only the `@[...]`-spelled attribute on `f` should warn; `g`'s `#[...]`
-  // attribute should not.
-  assert_eq!(warnings.len(), 1);
-  assert_eq!(warnings[0].severity, Severity::Warning);
-  assert!(warnings[0].message.contains("@[partial...]"));
-  assert!(warnings[0].suggestions[0].message.contains("#[partial...]"));
-}
-#[test]
 fn test_simple_instance() {
   let mut loaded = LoadedModules::empty();
 
@@ -425,7 +424,7 @@ fn test_simple_instance() {
     }
     type I64 {}
 
-    @[native num_add]
+    #[native num_add]
     def I64.add (a b : I64) : I64
 
     instance HAdd I64 I64 I64 {

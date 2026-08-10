@@ -7,7 +7,6 @@ use lang.types {
   show_identifier, show_module_path, str, struct_d, type_, u32, unnamed, use_bare,
   use_d, var, zero,
 }
-open types {}
 use lang.pretty {
   show_decl, show_instance, show_match_case, show_multiplicity, show_num_suffix,
   show_term, show_universe,

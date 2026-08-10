@@ -5,12 +5,9 @@ use lang.types {Def, i64, id, lit, mk, mp, num, type_}
 use lang.codegen.ir {emit_module, mk}
 use lang.codegen.emit {compile_db_decls_ir, mk}
 
-open LLVMType {}
-open LLVMValue {}
 open Term {lit, type_}
 open Literal {num}
 open Identifier {id}
-open DebugName {}
 open NumSuffix {i64}
 open Param {mk}
 open Def {mk}

@@ -5,7 +5,6 @@ use lang.types {
   Similar, Term, hole, id, many, mk, mp, name_not_found, nid, nmp, nop, operator,
   type_,
 }
-open types {}
 
 // --- Similar instances for scope types ---
 

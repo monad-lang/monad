@@ -9,12 +9,6 @@ use lang.scope {build_scope_from_decls}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
 open IO {io, read_file}
-open types {}
-open module {}
-open parser {}
-open parser.core {}
-open scope {}
-open infer {}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -137,7 +131,7 @@ def test_typecheck_init_number : Bool := typecheck_file "init/number.mo" "number
 def test_typecheck_init_string : Bool := typecheck_file "init/string.mo" "string"
 
 // Skip process.mo for now - it has native functions with dependencies
-// @[test]
+// #[test]
 // def test_typecheck_init_process : Bool := typecheck_file "init/process.mo" "process"
 
 #[test]
@@ -170,24 +164,24 @@ def test_typecheck_init_string_profile : Bool := typecheck_file "init/string_pro
 // Test module dependency loading with init/process.mo which uses io
 // Note: This test is commented out because IO.read_file has a working directory issue
 // that affects init/process.mo and other files. This is a pre-existing issue.
-// @[test]
+// #[test]
 // def test_typecheck_init_process_with_deps : Bool := 
 //     typecheck_file_with_deps "init/process.mo" "process"
 
 // Note: test files (foldable_tests*, optics_tests, tests.mo) require module loading
 // and are skipped for now. They can be added once module dependency resolution is implemented.
 
-// @[test]
+// #[test]
 // def test_typecheck_init_foldable_tests : Bool := typecheck_file "init/foldable_tests.mo" "foldable_tests"
 // 
-// @[test]
+// #[test]
 // def test_typecheck_init_foldable_tests_fold : Bool := typecheck_file "init/foldable_tests_fold.mo" "foldable_tests_fold"
 // 
-// @[test]
+// #[test]
 // def test_typecheck_init_foldable_tests_semi_monoid : Bool := typecheck_file "init/foldable_tests_semi_monoid.mo" "foldable_tests_semi_monoid"
 // 
-// @[test]
+// #[test]
 // def test_typecheck_init_optics_tests : Bool := typecheck_file "init/optics_tests.mo" "optics_tests"
 // 
-// @[test]
+// #[test]
 // def test_typecheck_init_tests : Bool := typecheck_file "init/tests.mo" "tests"

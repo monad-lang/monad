@@ -1,5 +1,4 @@
 use lang.types {Similar, Term, TypeError, forall, hole, mismatch, pi, type_}
-open types {}
 
 /// Structural type unification. Returns the unified type.
 /// Holes match anything. Pi matches Pi structurally.

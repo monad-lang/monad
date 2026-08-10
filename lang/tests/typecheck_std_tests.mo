@@ -9,12 +9,6 @@ use lang.scope {build_scope_from_decls}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
 open IO {io, read_file}
-open types {}
-open module {}
-open parser {}
-open parser.core {}
-open scope {}
-open infer {}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,

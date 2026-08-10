@@ -1904,6 +1904,7 @@ fn load_module_files_impl(
   let parse_dur = parse_start.elapsed();
   let mut loaded = load_decl_uses_modules(&decls, loaded, in_progress)?;
   let decls = filter_cfg_test_decls(decls, loaded.config.test_mode);
+  validate_open_filters(&decls)?;
   let tc_start = Instant::now();
   // See the identical `#[cfg(...)]` swap (and its doc comment) in
   // `load_module_from_text` above — same default-to-new-checker,
@@ -1996,6 +1997,11 @@ pub fn load_module_from_text(
   let mut in_progress = crate::empty_set();
   *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
   let init_decls = filter_cfg_test_decls(init_decls, loaded.config.test_mode);
+  if let Err(e) = validate_open_filters(&init_decls) {
+    let file_path = path.to_file_path();
+    let rendered = render_type_error_with_source(text, &e, false, Some(&file_path));
+    return Err(LoadingError::Generic(rendered));
+  }
   let tc_start = Instant::now();
   // Default: the new (De-Bruijn/MetaId-based) checker — see
   // plans/implementations/typechecker-de-bruijn-core.md. `legacy-checker`
@@ -2058,6 +2064,7 @@ pub fn load_module_from_text_typed(
   let mut in_progress = crate::empty_set();
   *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
   let init_decls = filter_cfg_test_decls(init_decls, loaded.config.test_mode);
+  validate_open_filters(&init_decls)?;
   #[cfg(feature = "legacy-checker")]
   let init_decls_result = type_check_module_decls(&path, init_decls, loaded);
   #[cfg(not(feature = "legacy-checker"))]
@@ -2289,55 +2296,55 @@ pub fn bare_open_warnings(
     .collect()
 }
 
-/// `@[...]` is the deprecated predecessor of `#[...]` (identical semantics,
-/// see `Attribute::legacy_syntax`). Scans every attribute-bearing
-/// declaration in a module (defs, macro defs, inductives/structs/classes,
-/// instances and their method impls, `use`/`open`) and returns one warning
-/// `Diagnostic` per `@[...]`-spelled attribute found.
-pub fn deprecated_attribute_warnings(
-  module: &Module,
-  path: Option<&std::path::PathBuf>,
-) -> Vec<Diagnostic> {
-  fn warn(attr: &Attribute, path: Option<&std::path::PathBuf>) -> Option<Diagnostic> {
-    if !attr.legacy_syntax {
-      return None;
-    }
-    Some(Diagnostic {
-      severity: Severity::Warning,
-      message: format!("`@[{}...]` is deprecated", attr.name),
-      location: Some(attr.source_location.clone()),
-      path: path.cloned(),
-      suggestions: vec![Suggestion {
-        message: format!("use `#[{}...]` instead", attr.name),
-      }],
-      ..Default::default()
-    })
-  }
-
-  let mut warnings = Vec::new();
-  for ctx in module.defs() {
-    warnings.extend(ctx.value().attributes.iter().filter_map(|a| warn(a, path)));
-  }
-  for ctx in module.get_macro_defs() {
-    warnings.extend(ctx.value().attributes.iter().filter_map(|a| warn(a, path)));
-  }
-  for ind in module.inductives() {
-    warnings.extend(ind.attributes.iter().filter_map(|a| warn(a, path)));
-  }
-  for ctx in module.instances() {
-    let inst = ctx.value();
-    warnings.extend(inst.attributes.iter().filter_map(|a| warn(a, path)));
-    for def in inst.impls_map.values() {
-      warnings.extend(def.attributes.iter().filter_map(|a| warn(a, path)));
+/// `open Module {}` — an explicit but empty name filter — is a hard error,
+/// not just a deprecation warning like `bare_open_warnings` above: unlike
+/// a bare `open Module`, there's no non-empty spelling to suggest instead,
+/// since (per `docs/src/reference.md`'s own "access by path always works"
+/// rule) an empty filter imports nothing a plain `use Module {...}` didn't
+/// already provide. Scans both plain `Decl::Open` and (recursively, since
+/// `decl` can itself be another `ScopedOpen`) `Decl::ScopedOpen`, over the
+/// raw parsed decls — called once per file, before `unwrap_scoped_opens`
+/// flattens `ScopedOpen` away, from each of `load_module_from_text`/
+/// `load_module_from_text_typed`/the recursive dependency loader, so it
+/// fires identically regardless of which checker backend
+/// (`legacy-checker` or default) ends up running.
+pub fn validate_open_filters(decls: &[SourceContext<Decl>]) -> Result<(), TypeError> {
+  fn check_one(
+    module_path: &ModulePath,
+    filter: &OpenFilter,
+    loc: &SourceRange,
+  ) -> Result<(), TypeError> {
+    match filter {
+      OpenFilter::Only(names) if names.is_empty() => Err(TypeError::EmptyOpenFilter {
+        module_path: module_path.clone(),
+        loc: loc.clone(),
+      }),
+      _ => Ok(()),
     }
   }
-  for ctx in module.get_uses() {
-    warnings.extend(ctx.value().attributes.iter().filter_map(|a| warn(a, path)));
+  // `ScopedOpen` carries no `source_location` of its own (unlike `Open`)
+  // — `fallback_loc` (the enclosing `SourceContext`'s own location) is
+  // the closest thing available to point a diagnostic at, and is what
+  // `decl` recurses with for any `ScopedOpen` nested inside it too.
+  fn check_decl(decl: &Decl, fallback_loc: &SourceRange) -> Result<(), TypeError> {
+    match decl {
+      Decl::Open(o) => check_one(&o.module_path, &o.filter, &o.source_location),
+      Decl::ScopedOpen {
+        module_path,
+        filter,
+        decl,
+        ..
+      } => {
+        check_one(module_path, filter, fallback_loc)?;
+        check_decl(decl, fallback_loc)
+      }
+      _ => Ok(()),
+    }
   }
-  for ctx in module.get_opens() {
-    warnings.extend(ctx.value().attributes.iter().filter_map(|a| warn(a, path)));
+  for ctx in decls {
+    check_decl(ctx.value(), &ctx.loc)?;
   }
-  warnings
+  Ok(())
 }
 
 /// Walk a `Par` (lambda/pi parameter) for referenced names — its type, and
@@ -2624,15 +2631,14 @@ pub fn unused_use_name_warnings(
 }
 
 /// All non-fatal, style/deprecation-level warnings for a successfully
-/// loaded module, combined: bare `use`, bare `open`, deprecated `@[...]`
-/// attributes, and unused `use`-filter names (`unused_use_name_warnings`).
-/// This is the single entry point every warning-surfacing call site
-/// (`run`, the test runner, `check_files`/`check_source`, the LSP) should
-/// call, so new warning kinds only need wiring in once.
+/// loaded module, combined: bare `use`, bare `open`, and unused
+/// `use`-filter names (`unused_use_name_warnings`). This is the single
+/// entry point every warning-surfacing call site (`run`, the test runner,
+/// `check_files`/`check_source`, the LSP) should call, so new warning
+/// kinds only need wiring in once.
 pub fn module_warnings(module: &Module, path: Option<&std::path::PathBuf>) -> Vec<Diagnostic> {
   let mut warnings = bare_use_warnings(module.get_uses(), path);
   warnings.extend(bare_open_warnings(module.get_opens(), path));
-  warnings.extend(deprecated_attribute_warnings(module, path));
   warnings.extend(unused_use_name_warnings(
     module.get_uses(),
     &collect_referenced_names(module),

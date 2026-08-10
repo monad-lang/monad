@@ -159,7 +159,7 @@ fn test_eval_term_with_macro() {
     r#"
     use init
 
-    @[native "eval_term"]
+    #[native "eval_term"]
     def eval_term (t : A) : A
 
     defmacro twice x := quote { unquote x + unquote x }
