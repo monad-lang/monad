@@ -29,7 +29,93 @@ use crate::term::{Identifier, ModulePath, Multiplicity, TypeConstraint};
 /// binder (assigning it a fresh atom and an entry here) before recursing
 /// into its body, so by the time a variable occurrence could need a type
 /// lookup, it's always a `Free` with an entry, never a raw `Bound`.
-pub type TyCtx = Map<Atom, CoreTerm>;
+///
+/// Structured as a shared, immutable BASE (every globally-registered
+/// def/inductive/instance/etc., built up once via `insert` before checking
+/// begins) plus a small OVERLAY of locally-opened binders (`Lam` params,
+/// match-case field bindings, ...) added via `extend` during checking
+/// itself — mirrors `core_value::Env`/`EnvRef`'s own shared-tail,
+/// O(1)-extend design (this module's own `core_unify` sibling), adapted
+/// for atom-keyed (not de-Bruijn-indexed) lookup instead of a plain
+/// index. `extend` never touches `base` at all — one `Arc` refcount bump
+/// for the tail, one new overlay-cons allocation — unlike the plain
+/// `BTreeMap` this type used to be, whose every binder-open cloned the
+/// ENTIRE base (confirmed, on one real corpus file alone: ~9700 such
+/// clones of a ~2300-entry map over the course of checking it, ~17.5M
+/// total element-clones — the dominant cost behind the checker's
+/// real-world runtime, well beyond anything in `try_resolve_class_method`
+/// itself). `Atom`s are minted fresh (`Atom::fresh()`) and never reused,
+/// so an overlay entry can never collide with a base entry — overlay is
+/// simply checked first (fast path for the common case: a just-opened
+/// local binder), falling back to `base` (an ordinary `BTreeMap` lookup)
+/// for anything registered globally.
+#[derive(Debug, Clone)]
+pub struct TyCtx {
+  base: std::sync::Arc<Map<Atom, CoreTerm>>,
+  overlay: TyCtxOverlayRef,
+}
+
+#[derive(Debug)]
+enum TyCtxOverlay {
+  Nil,
+  Cons(Atom, CoreTerm, TyCtxOverlayRef),
+}
+
+type TyCtxOverlayRef = std::sync::Arc<TyCtxOverlay>;
+
+impl Default for TyCtx {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl TyCtx {
+  pub fn new() -> Self {
+    Self {
+      base: std::sync::Arc::new(Map::new()),
+      overlay: std::sync::Arc::new(TyCtxOverlay::Nil),
+    }
+  }
+
+  pub fn get(&self, atom: &Atom) -> Option<&CoreTerm> {
+    let mut cur = &self.overlay;
+    loop {
+      match cur.as_ref() {
+        TyCtxOverlay::Nil => return self.base.get(atom),
+        TyCtxOverlay::Cons(a, t, tail) => {
+          if a == atom {
+            return Some(t);
+          }
+          cur = tail;
+        }
+      }
+    }
+  }
+
+  /// Registration-time insert — copy-on-write into `base` (an O(1) `Arc`
+  /// refcount bump if this `TyCtx`'s base isn't currently shared with any
+  /// other clone, the common case during the one-time, sequential
+  /// "register every def/inductive/instance" phase this is meant for; a
+  /// real O(n) copy only the first time after a `.clone()` shared it, not
+  /// once per insert). NOT used for per-binder-open during type CHECKING
+  /// itself — see `extend` for that, the actual hot path this type
+  /// exists to make cheap.
+  pub fn insert(&mut self, atom: Atom, typ: CoreTerm) {
+    std::sync::Arc::make_mut(&mut self.base).insert(atom, typ);
+  }
+
+  /// O(1): the hot path. One `Arc` allocation for the new overlay frame,
+  /// `base` just `Arc::clone`d (refcount bump, no copy) — never touches
+  /// `base`'s own contents. Returns a NEW `TyCtx` rather than mutating in
+  /// place, matching every call site's own "open a binder into a fresh,
+  /// scoped ctx2" usage.
+  pub fn extend(&self, atom: Atom, typ: CoreTerm) -> Self {
+    Self {
+      base: self.base.clone(),
+      overlay: std::sync::Arc::new(TyCtxOverlay::Cons(atom, typ, self.overlay.clone())),
+    }
+  }
+}
 
 /// Whether a `StructInfo` entry describes an ordinary struct-like inductive
 /// or a `class` (registered the same way, one field per method — see
@@ -308,9 +394,7 @@ impl From<UnifyError> for InferError {
 }
 
 fn open_ctx(ctx: &TyCtx, atom: Atom, typ: CoreTerm) -> TyCtx {
-  let mut ctx = ctx.clone();
-  ctx.insert(atom, typ);
-  ctx
+  ctx.extend(atom, typ)
 }
 
 /// Instantiate every leading `Forall` of `typ` with a fresh metavariable
@@ -766,7 +850,7 @@ fn infer_lit(
             .and_then(|f| f.get(atoms.len() - 1 - i))
             .cloned()
             .unwrap_or(CoreTerm::Hole);
-          ctx2.insert(*atom, field_ty);
+          ctx2 = ctx2.extend(*atom, field_ty);
         }
         let case_ty = infer(mctx, &ctx2, structs, &opened_value)?;
         match &common_ty {
@@ -943,7 +1027,7 @@ pub fn check(
           .and_then(|f| f.get(atoms.len() - 1 - i))
           .cloned()
           .unwrap_or(CoreTerm::Hole);
-        ctx2.insert(*atom, field_ty);
+        ctx2 = ctx2.extend(*atom, field_ty);
       }
       check(mctx, &ctx2, structs, &opened_value, expected)?;
     }
@@ -1250,36 +1334,67 @@ fn try_resolve_class_method(
       return None;
     };
     let class_meta_unresolved_before = head_atom_of(mctx, &CoreTerm::Meta(class_meta)).is_none();
-    // Resolve any class-method call nested in `arg` (e.g. `[1, 2, 3]`
-    // desugared to `FromListLiteral.cons`/`.empty`) to its concrete
-    // instance/default BEFORE checking it against `arg_ty` — otherwise
-    // `check` (which never resolves class methods, only `desugar_struct_
-    // literals` does) leaves `arg`'s inferred type built from a still-bare,
-    // never-defaulted meta (e.g. `FromListLiteral`'s own `L`), and THIS
-    // class param (e.g. `BEq`'s `A`) ends up bound to a type containing
-    // that live, unresolved nested meta instead of the concrete type
-    // (`List I64` rather than `Meta(L) I64`) — `head_atom_of` below then
-    // has no head to find and this whole resolution silently fails,
-    // leaving the call site un-desugared (the exact bug behind
-    // `BEq.beq [1, 2, 3] [1, 2, 3]` falling through to the evaluator's
-    // runtime dispatch fallback instead of the real `List` instance).
+    // Two-tier: try the cheap path first (just `check` the RAW,
+    // undesugared `arg` — sufficient to pin `class_meta` whenever `arg`
+    // is already a concretely-typed value with no nested class-method
+    // call of its own needing resolution, the overwhelmingly common case
+    // for an ordinary chain like `Show.show`/`Append.append`). Only fall
+    // back to the full recursive `desugar_struct_literals` dry run when
+    // that's NOT enough — this is what avoids the O(2^depth) blowup a
+    // previous version of this function had (recursively, redundantly
+    // re-desugaring every nested class-method call inside every
+    // speculative argument, purely to throw the result away): `check`
+    // alone costs O(|arg|) and, critically, never re-enters this whole
+    // class-method-resolution machinery the way a full desugar does.
+    //
+    // The fallback exists because `check` (which never resolves class
+    // methods, only `desugar_struct_literals` does) can leave `arg`'s
+    // inferred type built from a still-bare, never-defaulted meta when
+    // `arg` itself contains a nested, still-unresolved class-method call
+    // — e.g. `[1, 2, 3]` parses straight to `FromListLiteral.cons`/
+    // `.empty` (`parser.rs`'s list-literal grammar), and `FromListLiteral`'s
+    // own type param (`L`, defaulting to `List`) only gets defaulted via
+    // `try_resolve_class_method`'s own "last resort" step below, which
+    // only runs when `desugar_struct_literals` actually visits that call.
+    // Skipping the fallback entirely for such cases would leave `class_meta`
+    // bound to a type containing that live, unresolved nested meta instead
+    // of a concrete one (`List I64` rather than `Meta(L) I64`) — the exact
+    // bug behind `BEq.beq [1, 2, 3] [1, 2, 3]` needing this fallback path
+    // to reach the real `List` instance rather than the evaluator's
+    // runtime dispatch fallback.
     let arg_d = if class_meta_unresolved_before {
       speculative.push(i);
-      mctx.without_match_capture(|mctx| {
-        desugar_struct_literals(
-          mctx,
-          ctx,
-          structs,
-          atom_paths,
-          known_class_methods,
-          known_instances,
-          dict_scope,
-          arg,
-          Some(&arg_ty),
-        )
-      })
+      check(mctx, ctx, structs, arg, &arg_ty).ok()?;
+      if head_atom_of(mctx, &CoreTerm::Meta(class_meta)).is_none() {
+        // Cheap path didn't pin `class_meta` — fall back to the full
+        // recursive desugar (captures still suppressed: this is still a
+        // dry run whose VALUE gets thrown away, overwritten by the real
+        // redo below once `class_meta` is resolved).
+        mctx.without_match_capture(|mctx| {
+          desugar_struct_literals(
+            mctx,
+            ctx,
+            structs,
+            atom_paths,
+            known_class_methods,
+            known_instances,
+            dict_scope,
+            arg,
+            Some(&arg_ty),
+          )
+        })
+      } else {
+        // Inert placeholder — unconditionally overwritten by the redo
+        // below for every index in `speculative`; only used in the
+        // meantime for `open_with(&ret, &arg_d)` just below, which is
+        // safe since no class method actually declared in this codebase
+        // has a return type depending on an earlier argument's runtime
+        // VALUE, only on type-level metas (see this function's own doc
+        // comment).
+        (*arg).clone()
+      }
     } else {
-      desugar_struct_literals(
+      let arg_d = desugar_struct_literals(
         mctx,
         ctx,
         structs,
@@ -1289,9 +1404,10 @@ fn try_resolve_class_method(
         dict_scope,
         arg,
         Some(&arg_ty),
-      )
+      );
+      check(mctx, ctx, structs, &arg_d, &arg_ty).ok()?;
+      arg_d
     };
-    check(mctx, ctx, structs, &arg_d, &arg_ty).ok()?;
     residual = force(mctx, open_with(&ret, &arg_d)).into_stripped_ctx();
     arg_tys.push(*arg_ty);
     arg_ds.push(arg_d);
@@ -2254,7 +2370,7 @@ pub fn desugar_struct_literals(
                 .and_then(|f| f.get(atoms.len() - 1 - i))
                 .cloned()
                 .unwrap_or(CoreTerm::Hole);
-              ctx2.insert(*atom, field_ty);
+              ctx2 = ctx2.extend(*atom, field_ty);
             }
             let d = desugar_struct_literals(
               mctx,
@@ -2570,6 +2686,68 @@ mod test {
 
   fn empty_ctx() -> TyCtx {
     TyCtx::new()
+  }
+
+  #[test]
+  fn test_tyctx_extend_is_visible_and_does_not_mutate_original() {
+    let ctx = empty_ctx();
+    let a = Atom::fresh();
+    let ctx2 = ctx.extend(a, sort0());
+    assert_eq!(ctx2.get(&a), Some(&sort0()));
+    // The original `ctx` must be untouched -- `extend` returns a NEW
+    // `TyCtx` sharing the old one's base/overlay, never mutates in place
+    // (every real call site relies on this: opening a binder into a
+    // fresh `ctx2` while the caller keeps using its own `ctx` unchanged).
+    assert_eq!(ctx.get(&a), None);
+  }
+
+  #[test]
+  fn test_tyctx_extend_shadows_but_overlay_entries_do_not_collide() {
+    // Atoms are minted fresh and never reused, so this isn't really
+    // "shadowing" in the name-collision sense -- just confirming a chain
+    // of `extend` calls each remains independently visible and findable,
+    // most-recent-first, the same left-to-right order `Env::extend`
+    // guarantees for the evaluator's own environment.
+    let ctx = empty_ctx();
+    let a = Atom::fresh();
+    let b = Atom::fresh();
+    let ctx = ctx.extend(a, sort0());
+    let ctx = ctx.extend(b, CoreTerm::Sort { level: 1 });
+    assert_eq!(ctx.get(&a), Some(&sort0()));
+    assert_eq!(ctx.get(&b), Some(&CoreTerm::Sort { level: 1 }));
+  }
+
+  #[test]
+  fn test_tyctx_insert_visible_via_clone() {
+    // `insert` (the registration-time, copy-on-write path) must still
+    // make its entry visible on every existing clone that shared the
+    // same base at the time of the call... actually the opposite: once
+    // `insert` triggers its own copy-on-write, EARLIER clones must NOT
+    // observe the new entry (this is what makes it safe to treat as an
+    // ordinary mutation from the caller's own point of view) -- confirmed
+    // here the same way `open_ctx`'s doc comment describes: `insert`'s
+    // COW is only ever meant to be observed by the `TyCtx` it was called
+    // through, not any earlier sibling clone.
+    let mut ctx = empty_ctx();
+    let clone_before = ctx.clone();
+    let a = Atom::fresh();
+    ctx.insert(a, sort0());
+    assert_eq!(ctx.get(&a), Some(&sort0()));
+    assert_eq!(clone_before.get(&a), None);
+  }
+
+  #[test]
+  fn test_tyctx_extend_after_insert_sees_base_entries_too() {
+    // The overlay/base split must be transparent to lookups -- an atom
+    // registered via `insert` (base) must resolve exactly like one added
+    // via `extend` (overlay), from the SAME `TyCtx`.
+    let mut ctx = empty_ctx();
+    let a = Atom::fresh();
+    ctx.insert(a, sort0());
+    let b = Atom::fresh();
+    let ctx2 = ctx.extend(b, CoreTerm::Sort { level: 1 });
+    assert_eq!(ctx2.get(&a), Some(&sort0()));
+    assert_eq!(ctx2.get(&b), Some(&CoreTerm::Sort { level: 1 }));
   }
 
   fn empty_structs() -> StructFields {

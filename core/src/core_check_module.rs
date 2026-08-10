@@ -243,7 +243,7 @@ pub fn ground_truth_from_loaded(loaded: &LoadedModules, atoms: &mut AtomTable) -
       infix.insert(infix_ctx.operator().clone(), infix_ctx.name().clone());
     }
   }
-  let mut ctx: TyCtx = Map::new();
+  let mut ctx: TyCtx = TyCtx::new();
   let mut known_globals: Map<ModulePath, Atom> = Map::new();
   let mut structs = StructFields::new();
   let config = LowerConfig {
