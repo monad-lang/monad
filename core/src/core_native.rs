@@ -91,6 +91,7 @@ pub fn exec_native(
     "write_file" => write_file(args, natives),
     "file_exists" => file_exists(args, natives),
     "get_env" => get_env(args, natives),
+    "exec_cmd" => exec_cmd(args, natives),
     "fork_io" => fork_io(args, natives),
     // `await_fiber` is NOT dispatched here — it needs `globals`/`cache`
     // (not just `natives`) to actually run the fiber's deferred action;
@@ -531,6 +532,54 @@ fn string_from_list(args: &[Value], natives: &NativeTable) -> Result<Value, Core
     CoreEvalError::NativeArgError(format!("invalid UTF-8 in string_from_list: {e}"))
   })?;
   Ok(Value::Lit(IrLit::Str(s)))
+}
+
+/// Reads a `List String` value into an owned `Vec<String>` — the
+/// argument-decoding counterpart to `string_from_list`'s `List U8`
+/// walk just above, same cons/empty tag-matching idiom, just decoding
+/// each element via `extract_string` instead of `extract_int`. Used by
+/// `exec_cmd` to decode its `args : List String` parameter.
+fn extract_string_list(v: &Value, natives: &NativeTable) -> Result<Vec<String>, CoreEvalError> {
+  let cons = require_ctor(natives.well_known.list_cons, "List.cons")?;
+  let empty = require_ctor(natives.well_known.list_empty, "List.empty")?;
+  let mut result = Vec::new();
+  let mut cur = v;
+  loop {
+    match cur {
+      Value::Con { tag, args } if *tag == empty.tag && args.is_empty() => break,
+      Value::Con { tag, args: cargs } if *tag == cons.tag && cargs.len() == cons.arity as usize => {
+        result.push(extract_string(&cargs[0])?.to_string());
+        cur = &cargs[1];
+      }
+      other => {
+        return Err(CoreEvalError::NativeArgError(format!(
+          "expected a List String value, got {other:?}"
+        )));
+      }
+    }
+  }
+  Ok(result)
+}
+
+/// `Process.exec_cmd (cmd : String) (args : List String) : IO I64` —
+/// ports `eval::native::exec_cmd`'s logic (`core/src/eval/native.rs`,
+/// the tree-walker's own native table) near-verbatim, retargeted from
+/// `Term` to `Value`/`IrLit`; see `read_file`'s own doc comment on why
+/// the `IO.io` wrapping is required.
+fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "exec_cmd needs 2 args".into(),
+    ));
+  }
+  let cmd = extract_string(&args[0])?;
+  let cmd_args = extract_string_list(&args[1], natives)?;
+  let status = std::process::Command::new(cmd)
+    .args(&cmd_args)
+    .status()
+    .map_err(|e| CoreEvalError::NativeArgError(format!("exec_cmd \"{cmd}\" failed: {e}")))?;
+  let exit_code = status.code().unwrap_or(-1) as i64;
+  io_wrap(natives, Value::Lit(IrLit::Num(exit_code, NumSuffix::I64)))
 }
 
 fn bench_now() -> Result<Value, CoreEvalError> {

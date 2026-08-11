@@ -13,10 +13,71 @@
 //! here).
 
 use crate::Map;
-use crate::core_ir::{self, CoreIr, IrLit, MatchArm};
+use crate::core_ir::{self, CoreIr, IrLit, IrRef, MatchArm};
 use crate::core_program::CoreProgram;
 use crate::core_term::{Atom, CoreConstructor, CoreLit, CoreNative, CoreTerm};
 use crate::term::{Identifier, ModulePath, mpt};
+
+/// Shift every `Local` reference in `ir` that resolves OUTSIDE `ir`'s own
+/// locally-bound scope (i.e. `>= cutoff`) up by `delta` — the standard de
+/// Bruijn "open a gap" operation, applied once at lowering time (not on
+/// every `eval`, which stays subst/shift-free per this module's own doc
+/// comment). Needed by `lower_match`'s wildcard-arm reuse: a wildcard
+/// case's source pattern (`_`) always binds zero names, so its body was
+/// lowered assuming NO extra frames sit between it and its enclosing
+/// scope — but `dispatch` (`core_eval.rs`) unconditionally pushes one
+/// frame per field of whichever constructor tag actually matched before
+/// running that body, for every tag the wildcard covers. Reusing the
+/// SAME body unchanged across tags with different arities (an earlier
+/// version of this function did, reasoning "the body never reads those
+/// extra bindings, so it's fine") is wrong: it doesn't matter whether the
+/// body ever reads the extra bindings — every `Local` reference the body
+/// makes to something OUTSIDE its own binder scope still needs to skip
+/// past them once they're actually there, exactly like opening any other
+/// binder. `Local`s bound *within* `ir` (by a nested `Lam` or `Match`
+/// arm) are left alone; only `cutoff` advances as the walk descends past
+/// each of those.
+fn shift_ir(ir: &IrRef, cutoff: u32, delta: u32) -> IrRef {
+  if delta == 0 {
+    return ir.clone();
+  }
+  match ir.as_ref() {
+    CoreIr::Local(i) => {
+      if *i >= cutoff {
+        std::sync::Arc::new(CoreIr::Local(i + delta))
+      } else {
+        ir.clone()
+      }
+    }
+    CoreIr::Global(_) | CoreIr::Lit(_) | CoreIr::MatchFail { .. } => ir.clone(),
+    CoreIr::Lam { body } => std::sync::Arc::new(CoreIr::Lam {
+      body: shift_ir(body, cutoff + 1, delta),
+    }),
+    CoreIr::App { fun, arg } => std::sync::Arc::new(CoreIr::App {
+      fun: shift_ir(fun, cutoff, delta),
+      arg: shift_ir(arg, cutoff, delta),
+    }),
+    CoreIr::Match { scrutinee, arms } => std::sync::Arc::new(CoreIr::Match {
+      scrutinee: shift_ir(scrutinee, cutoff, delta),
+      arms: arms
+        .iter()
+        .map(|arm| MatchArm {
+          bind_count: arm.bind_count,
+          body: shift_ir(&arm.body, cutoff + arm.bind_count, delta),
+        })
+        .collect(),
+    }),
+    CoreIr::Con { tag, arity, args } => std::sync::Arc::new(CoreIr::Con {
+      tag: *tag,
+      arity: *arity,
+      args: args.iter().map(|a| shift_ir(a, cutoff, delta)).collect(),
+    }),
+    CoreIr::Ntv { native_id, args } => std::sync::Arc::new(CoreIr::Ntv {
+      native_id: *native_id,
+      args: args.iter().map(|a| shift_ir(a, cutoff, delta)).collect(),
+    }),
+  }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LowerCoreIrError {
@@ -426,6 +487,12 @@ fn lower_match(
     }
   }
   let mut arms = Vec::with_capacity(info.constructors.len());
+  // Memoizes `shift_ir(&wildcard.body, 0, delta)` by `delta` (== a
+  // covered tag's own arity, since the wildcard's own `bind_count` is
+  // always 0) — several tags commonly share the same arity (e.g. every
+  // 1-field `Term` constructor: `lit`/`ntv`/`con`/`type_`), so this
+  // avoids re-walking the same body once per tag.
+  let mut shifted_wildcard_bodies: Map<u32, IrRef> = Map::new();
   for ctor in &info.constructors {
     let arm = match named.get(&ctor.name).cloned() {
       Some(arm) => arm,
@@ -469,12 +536,37 @@ fn lower_match(
         // `init/tests.mo`'s own `test_match_wildcard_only` through Phase
         // 8's parity harness. Each constructor tag that falls through to
         // the wildcard needs ITS OWN `bind_count` (`ctor.arity`), not the
-        // wildcard pattern's — the shared `body` itself is still safe to
-        // reuse unchanged, since a wildcard body never references any of
-        // these (extra, unused) bindings by construction.
+        // wildcard pattern's.
+        //
+        // The shared `body` itself is NOT safe to reuse unchanged, though
+        // (an earlier version of this function assumed it was, reasoning
+        // "a wildcard body never references any of these extra, unused
+        // bindings"): whether the body ever READS the extra bindings is
+        // irrelevant — the body was lowered assuming its own enclosing
+        // scope sits immediately outside it (0 frames of its own), and
+        // `dispatch` now interposes `ctor.arity` extra frames before it
+        // runs. Any `Local` reference the body makes to something OUTSIDE
+        // its own binder scope (e.g. an outer function parameter it
+        // closes over) needs to skip past those extra frames too, exactly
+        // like opening any other binder — otherwise it silently resolves
+        // to one of the newly-pushed constructor fields instead of the
+        // real outer value. Concretely: `match a { pat => ..., _ => match
+        // b { ... } }`'s wildcard arm body references `b` (bound outside
+        // this whole match); once this arm covers a tag with `arity > 0`,
+        // `b`'s reference must shift by that arity or it reads one of the
+        // matched constructor's own fields instead — confirmed via
+        // `lang/typecheck/unify.mo`'s `unify`, whose final wildcard arm
+        // (covering `Term.app`/`Term.lit`/... , all `arity > 0`) does
+        // exactly this, corrupting `Similar.similar a b`'s own `b`
+        // argument. `shift_ir` performs this adjustment once per distinct
+        // arity, at lowering time (not on every `eval`).
+        let body = shifted_wildcard_bodies
+          .entry(ctor.arity)
+          .or_insert_with(|| shift_ir(&wildcard.body, 0, ctor.arity))
+          .clone();
         MatchArm {
           bind_count: ctor.arity,
-          body: wildcard.body,
+          body,
         }
       }
     };

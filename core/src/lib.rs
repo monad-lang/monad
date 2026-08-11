@@ -714,7 +714,7 @@ fn force_global_with_timeout(
 ) -> Result<core_value::Value, String> {
   let (tx, rx) = std::sync::mpsc::channel();
   std::thread::Builder::new()
-    .stack_size(8 * 1024 * 1024)
+    .stack_size(64 * 1024 * 1024)
     .spawn(move || {
       let mut cache = core_value::GlobalCache::new(globals.len());
       let result = core_eval::force_global(idx, &globals, &natives, &mut cache);
@@ -1025,7 +1025,7 @@ pub fn run_tests(
       let base_idx = chunk_idx * chunk_size;
 
       let handle = std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(64 * 1024 * 1024)
         .spawn(move || {
           for (i, file) in chunk_files.iter().enumerate() {
             let output =
