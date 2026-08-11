@@ -413,34 +413,63 @@ fn collect_class_method_order(
 /// Every `instance`'s `(class, concrete-type-head) -> instance-name`
 /// entry, across every loaded module's instances plus the file's own —
 /// see `core_check::KnownInstances`'s doc comment.
+/// Needs `structs`/`atoms`/`infix` (for `term_references_class`, to
+/// compute each instance method's own `method_constraints` — see
+/// `KnownInstanceInfo`'s doc comment) — called after `register_type_decls`
+/// has fully populated `structs`, not at this file's original call site
+/// (right after parsing, before any of those exist).
 fn collect_known_instances(
   loaded: &LoadedModules,
   expanded: &[SourceContext<Decl>],
+  structs: &StructFields,
+  atoms: &mut AtomTable,
+  infix: &Map<Operator, ModulePath>,
 ) -> KnownInstances {
   let mut out = KnownInstances::new();
-  let mut visit = |instance: &crate::term::Instance| {
+  let mut visit = |instance: &crate::term::Instance, atoms: &mut AtomTable| {
     let Some(first_arg) = instance.args.first() else {
       return;
     };
     let Some(type_path) = term_head_path(first_arg) else {
       return;
     };
+    // Mirrors `elaborate_constrained_type`'s own per-constraint
+    // `term_references_class` decision (this same file) — the same
+    // question, asked here per (method, constraint) pair instead of
+    // during `check_one_def_new`, so `try_resolve_class_method` can look
+    // it up directly instead of re-deriving it (or, as an earlier
+    // version of this code did, ignoring it and appending every
+    // instance-level constraint to every method uniformly).
+    let method_constraints: Map<Identifier, Vec<TypeConstraint>> = instance
+      .impls_map
+      .iter()
+      .map(|(method_name, def)| {
+        let wrapped = instance
+          .constraints
+          .iter()
+          .filter(|c| term_references_class(&def.term, c.class(), structs, atoms, infix))
+          .cloned()
+          .collect();
+        (method_name.clone(), wrapped)
+      })
+      .collect();
     out.insert(
       (instance.class_name.clone(), type_path),
       KnownInstanceInfo {
         prefix: instance.name().clone(),
         constraints: instance.constraints.clone(),
+        method_constraints,
       },
     );
   };
   for module in loaded.modules() {
     for instance in module.instances() {
-      visit(instance);
+      visit(instance, atoms);
     }
   }
   for decl in expanded {
     if let Decl::Ins(instance) = &**decl {
-      visit(instance);
+      visit(instance, atoms);
     }
   }
   out
@@ -2177,7 +2206,6 @@ pub fn type_check_module_decls_new_inner(
   }
   let mut atoms = AtomTable::new();
   let known_class_methods = collect_known_class_methods(loaded, &expanded, &mut atoms);
-  let known_instances = collect_known_instances(loaded, &expanded);
   let class_method_order = collect_class_method_order(loaded, &expanded);
 
   let GroundTruth {
@@ -2217,6 +2245,10 @@ pub fn type_check_module_decls_new_inner(
     &config_no_aliases,
     &mut atoms,
   );
+  // Needs `structs`/`infix` fully populated (see `collect_known_instances`'s
+  // own doc comment) -- moved here from right after parsing, before
+  // `register_type_decls` had run.
+  let known_instances = collect_known_instances(loaded, &expanded, &structs, &mut atoms, &infix);
   for decl in &expanded {
     if let Decl::Def(def) = &**decl {
       let atom = atoms.intern(def.name.clone());

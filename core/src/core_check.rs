@@ -346,7 +346,28 @@ pub type KnownClassMethods = Map<Atom, ClassMethodInfo>;
 #[derive(Debug, Clone)]
 pub struct KnownInstanceInfo {
   pub prefix: ModulePath,
+  /// Every constraint declared on the `instance` line, regardless of
+  /// whether any given method actually needs a dictionary for it — kept
+  /// around for callers that want the instance's own declared constraint
+  /// set as a whole; `try_resolve_class_method` uses `method_constraints`
+  /// below instead, not this.
   pub constraints: Vec<TypeConstraint>,
+  /// Per-method subset of `constraints` — only the ones that method's OWN
+  /// body actually references (`core_check_module::term_references_class`,
+  /// the same check `elaborate_constrained_type` uses to decide whether to
+  /// add a method's leading dict `Pi` in the first place). NOT every
+  /// method of a constrained instance needs every one of the instance's
+  /// own constraints — e.g. `instance [BOrd K] Map BTreeMap { def empty :=
+  /// BTreeMap.empty }`'s `empty` never mentions `BOrd` at all, so it
+  /// compiles with arity 0, not 1 — appending a dict arg for `[BOrd K]` to
+  /// every method uniformly (as an earlier version of this type did, via
+  /// the single flat `constraints` field above) mismatches methods like
+  /// `empty` that don't actually take one, producing arity errors
+  /// ("expected 0 constructor fields, got 1"). Falls back to an empty
+  /// `Vec` (via `Map::get`'s `None` -> caller-side default) for a method
+  /// name that isn't in this map at all, matching "this method needs no
+  /// dict args" rather than erroring.
+  pub method_constraints: Map<Identifier, Vec<TypeConstraint>>,
 }
 
 /// Built once per file from every loaded module's `instance` declarations
@@ -1510,13 +1531,25 @@ fn try_resolve_class_method(
       .clone();
     let instance_info = known_instances.get(&(info.class_path.clone(), concrete_path))?;
     let instance_atom = mctx.intern(instance_info.prefix.clone());
+    // This method's OWN subset of the instance's constraints (not the
+    // flat `instance_info.constraints`, every one of the instance's own
+    // declared constraints regardless of whether THIS method's body
+    // actually uses it) -- see `KnownInstanceInfo::method_constraints`'s
+    // doc comment. A method with no recorded entry (shouldn't normally
+    // happen -- every instance method gets one via `collect_known_
+    // instances`) needs none, matching an empty constraint list.
+    let method_constraints = instance_info
+      .method_constraints
+      .get(&info.method_name)
+      .map(Vec::as_slice)
+      .unwrap_or(&[]);
     let dict_args = resolve_instance_dict_args(
       mctx,
       structs,
       atom_paths,
       known_instances,
       dict_scope,
-      &instance_info.constraints,
+      method_constraints,
       &forced_class_meta,
       &named_metas,
       class_meta,
