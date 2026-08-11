@@ -644,8 +644,7 @@ pub fn await_fiber(
   let id = extract_handle_id(f)?;
   let handle = crate::runtime::global::take::<FiberHandle>(id)
     .ok_or_else(|| CoreEvalError::NativeArgError(format!("fiber handle {id} not found")))?;
-  if handle.fiber.is_done()
-    && handle.fiber.state() == crate::runtime::fiber::FiberState::Cancelled
+  if handle.fiber.is_done() && handle.fiber.state() == crate::runtime::fiber::FiberState::Cancelled
   {
     return Err(CoreEvalError::NativeArgError(format!(
       "fiber {id} was cancelled"
@@ -678,9 +677,11 @@ fn cancel_fiber(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEval
 /// `sleepIO (ms : I64) : IO Unit` (`std/concurrent/combine.mo`). Mirrors
 /// `eval::native::sleep_io`.
 fn sleep_io(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
-  let ms = extract_int(args.first().ok_or_else(|| {
-    CoreEvalError::NativeArgError("sleep_io needs 1 arg".into())
-  })?)?;
+  let ms = extract_int(
+    args
+      .first()
+      .ok_or_else(|| CoreEvalError::NativeArgError("sleep_io needs 1 arg".into()))?,
+  )?;
   std::thread::sleep(std::time::Duration::from_millis(ms.max(0) as u64));
   io_wrap(natives, unit_value())
 }

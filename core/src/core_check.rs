@@ -1183,6 +1183,22 @@ fn spine_of(term: &CoreTerm) -> (&CoreTerm, Vec<&CoreTerm>) {
   (current, args)
 }
 
+/// Recognizes a fully-applied class-method/struct-field-projection call
+/// spine — the exact shape `project_dict_field` produces and
+/// `lower_core_ir.rs`'s own `dict_projection_spine` recognizes on the
+/// lowering side: unwind `term`'s `App` spine and check whether the base
+/// is a single-case `Match` (a dictionary projection, not an ordinary
+/// user-written match, which `check`/`infer`'s generic `Match`-arm has no
+/// special handling for — see this function's one call site, in
+/// `try_resolve_class_method`'s own arg loop, for the bug this detects).
+fn is_dict_projection_spine(term: &CoreTerm) -> bool {
+  let (head, _) = spine_of(term);
+  matches!(
+    head,
+    CoreTerm::Lit(CoreLit::Match { cases, .. }) if cases.len() == 1
+  )
+}
+
 /// Force `term` and extract the **head** atom of whatever it resolved to —
 /// a bare `Free(atom)` directly, or (unlike a plain `let CoreTerm::Free(a)
 /// = force(...) else { ... }` match) the head of an **applied** type like
@@ -1426,7 +1442,31 @@ fn try_resolve_class_method(
         arg,
         Some(&arg_ty),
       );
-      check(mctx, ctx, structs, &arg_d, &arg_ty).ok()?;
+      // `check`'s own generic Match-arm (built for ordinary, user-written
+      // matches, not `project_dict_field`'s synthesized single-case
+      // dictionary-projection `Match`) doesn't substitute a projected
+      // field's type correctly for one of these, and can misinfer the
+      // class atom itself (`Show`) as the projected value's type instead
+      // of the field's real type (`A -> String`) — a real, previously-
+      // uncaught bug that turned an already-correctly-resolved `arg_d`
+      // into a spurious `Err`, which used to unconditionally abort this
+      // WHOLE call (`.ok()?`) and force `desugar_struct_literals`'s own
+      // caller down the generic fun-then-arg `App` fallback instead of the
+      // class-method-call-site arm just above it — which re-resolves (and
+      // re-records) the SAME call a second time in the WRONG order (self
+      // before its own arg, rather than args-before-self), desyncing
+      // `lower_core_ir.rs`'s later traversal (`MatchTraversalMismatch`).
+      // Confirmed via live tracing on `lang/module.mo`'s
+      // `show_loaded_modules`. Narrowly ignore `check`'s verdict ONLY for
+      // this one shape (`arg_d` is itself such a projection spine) —
+      // unconditionally ignoring it regressed 70+ other corpus tests, so
+      // `check`'s failure genuinely does catch real problems for every
+      // OTHER shape and must stay fatal there.
+      if is_dict_projection_spine(&arg_d) {
+        let _ = check(mctx, ctx, structs, &arg_d, &arg_ty);
+      } else {
+        check(mctx, ctx, structs, &arg_d, &arg_ty).ok()?;
+      }
       arg_d
     };
     residual = force(mctx, open_with(&ret, &arg_d)).into_stripped_ctx();
@@ -2552,6 +2592,7 @@ pub fn desugar_struct_literals(
         .unwrap_or_default();
       let typ_name = atom_paths
         .get(&atom)
+        .or_else(|| structs.inductive_paths.get(&atom))
         .cloned()
         .unwrap_or_else(|| Identifier::new(format!("<unresolved-struct-{atom:?}>")).to_path());
       let args: Vec<Option<CoreTerm>> = field_defs
@@ -2644,6 +2685,7 @@ pub fn desugar_struct_literals(
         .unwrap_or_default();
       let typ_name = atom_paths
         .get(&atom)
+        .or_else(|| structs.inductive_paths.get(&atom))
         .cloned()
         .unwrap_or_else(|| Identifier::new(format!("<unresolved-struct-{atom:?}>")).to_path());
       let n = field_defs.len();

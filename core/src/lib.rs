@@ -1631,4 +1631,114 @@ def main : I64 :=
       other => panic!("expected an int literal, got {other:?}"),
     }
   }
+
+  /// Regression test for a `MatchTraversalMismatch` bug in
+  /// `core_check.rs`'s `try_resolve_class_method`: a non-speculative
+  /// arg (`class_meta` already resolved before this arg is processed)
+  /// that itself desugars to a dict-projection call — here,
+  /// `Show.show xs` where `xs : List I64` needs a NESTED `Show I64`
+  /// dictionary via `instance [Show A] Show (List A)` — used to have its
+  /// already-correct `arg_d` re-`check`ed and spuriously rejected
+  /// (`check`'s generic `Match`-arm mis-infers a synthesized dictionary-
+  /// projection `Match`'s field type), aborting `try_resolve_class_method`
+  /// entirely and forcing the caller down `desugar_struct_literals`'s
+  /// generic `App` fallback — which re-resolves (and re-records) the SAME
+  /// call a second time in the wrong order (self before its own arg),
+  /// desyncing `lower_core_ir.rs`'s later traversal. Mirrors the real bug
+  /// found in `lang/module.mo`'s `show_loaded_modules` (an `Append`/`Show`
+  /// chain inside a single-case `match`) at a scale small enough to keep
+  /// here. Confirmed this reproduces `MatchTraversalMismatch { expected:
+  /// [Append], found: [Show] }` before the fix, by temporarily reverting
+  /// it during investigation.
+  #[test]
+  fn eval_core_program_nested_class_method_inside_single_case_match_does_not_desync_match_queue() {
+    let source = r#"
+use init
+
+class Show A {
+    def show : A -> String
+}
+
+instance Show I64 {
+    def show (n : I64) : String := I64.to_string n
+}
+
+def list_show (show_elem : A -> String) (xs : List A) : String :=
+    match xs {
+        List.empty => "",
+        List.cons h t => show_elem h ++ list_show show_elem t
+    }
+
+instance [Show A] Show (List A) {
+    def show (xs : List A) : String := list_show (fn a => Show.show a) xs
+}
+
+struct Pair {
+    x : I64,
+    xs : List I64,
+}
+
+def show_pair (p : Pair) : String :=
+    match p {
+        mk x xs => "x=" ++ Show.show x ++ ",xs=" ++ Show.show xs
+    }
+
+def main : String := show_pair { x := 1, xs := List.cons 2 List.empty }
+"#;
+    let result = eval_core_program(&ModulePath::top("'group2_regression_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Str(s)) => assert_eq!(s, "x=1,xs=2"),
+      other => panic!("expected a string literal, got {other:?}"),
+    }
+  }
+
+  /// Regression test for an `UnknownInductive` bug in
+  /// `core_check.rs`'s `desugar_struct_literals`: an anonymous struct
+  /// literal's type atom (`atom`, derived from `expected` — the literal
+  /// itself carries no explicit type name) used to be looked up in
+  /// `atom_paths` alone, falling back to a synthetic
+  /// `<unresolved-struct-...>` placeholder when absent — unlike every
+  /// other atom-to-path lookup in this file, which also falls back to
+  /// `structs.inductive_paths`. `atom_paths` only gains an entry for a
+  /// struct type that appears as an explicit SOURCE TOKEN somewhere in
+  /// the def being lowered; a NESTED anonymous literal (here, `inner`'s
+  /// own `{ a := 1 }`) whose type is only ever implied by an enclosing
+  /// struct's field type — never spelled out as `Inner` anywhere in this
+  /// def's own source — never gets that entry, so the fallback used to
+  /// matter. Mirrors the real bug found in `lang/tests/types_tests.mo`'s
+  /// `test_scope_construct` (a `Scope { scope := { ... }, ... }` literal
+  /// with a bare, un-annotated nested struct value). Confirmed this
+  /// reproduces `UnknownInductive` before the fix, by temporarily
+  /// reverting it during investigation.
+  #[test]
+  fn eval_core_program_nested_anonymous_struct_literal_resolves_its_type() {
+    let source = r#"
+use init
+
+struct Inner {
+    a : I64,
+}
+
+struct Outer {
+    inner : Inner,
+    b : I64,
+}
+
+def main : I64 :=
+    let o : Outer := {
+        inner := { a := 1 },
+        b := 2,
+    } in
+    match o {
+        mk inner b => b
+    }
+"#;
+    let result = eval_core_program(&ModulePath::top("'group1_regression_test"), source)
+      .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      core_value::Value::Lit(core_ir::IrLit::Num(n, _)) => assert_eq!(n, 2),
+      other => panic!("expected an int literal, got {other:?}"),
+    }
+  }
 }
