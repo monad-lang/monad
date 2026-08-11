@@ -367,8 +367,13 @@ def test_enum_to_nat : Bool :=
 
 #[test]
 def test_enum_from_nat : Bool :=
-    let f0 := Enum.from_nat Nat.zero in
-    let f1 := Enum.from_nat (Nat.succ Nat.zero) in
+    // `Enum.from_nat : Nat -> A` has no way to infer `A` from its own
+    // argument (`Nat`, unrelated to `A`) or default to one (`class Enum
+    // A` declares no default, unlike e.g. `FromListLiteral`) — an
+    // explicit annotation is required here so `expected` can pin `A :=
+    // Ordering` the same way any other call site would provide it.
+    let f0 : Ordering := Enum.from_nat Nat.zero in
+    let f1 : Ordering := Enum.from_nat (Nat.succ Nat.zero) in
     BEq.beq f0 lt && BEq.beq f1 eq
 
 #[test]
