@@ -1518,6 +1518,8 @@ fn try_resolve_class_method(
       dict_scope,
       &instance_info.constraints,
       &forced_class_meta,
+      &named_metas,
+      class_meta,
     )?;
     let mut result = project_dict_field(
       mctx,
@@ -1776,21 +1778,88 @@ fn project_dict_field(
   }))
 }
 
+/// Resolve one constraint (`[SomeClass var]`) once its own concrete type
+/// (`var_ty`) is known — a bound dictionary already in scope (recursive
+/// self-call, e.g. `BEq (List A)`'s own `beq` calling itself on the tail,
+/// still needing "BEq A" for the element type — same "bare Free means
+/// still-abstract, check what's already bound" logic as
+/// `try_resolve_class_method`'s own top-level check), or a registered
+/// `known_instances` entry for `var_ty`'s own head. Shared by both of
+/// `resolve_instance_dict_args`'s two ways of finding `var_ty` below.
+fn resolve_constraint_dict(
+  mctx: &mut MetaContext,
+  structs: &StructFields,
+  atom_paths: &Map<Atom, ModulePath>,
+  known_instances: &KnownInstances,
+  dict_scope: &DictScope,
+  constraint: &TypeConstraint,
+  var_ty: &CoreTerm,
+) -> Option<CoreTerm> {
+  if let CoreTerm::Free(_) = force(mctx, var_ty.clone()).into_stripped_ctx()
+    && let Some(&bound) = dict_scope.get(constraint.class())
+  {
+    return Some(CoreTerm::Free(bound));
+  }
+  let atom = head_atom_of(mctx, var_ty)?;
+  let path = atom_paths
+    .get(&atom)
+    .or_else(|| structs.inductive_paths.get(&atom))?
+    .clone();
+  let instance = known_instances.get(&(constraint.class().clone(), path))?;
+  Some(CoreTerm::Free(mctx.intern(instance.prefix.clone())))
+}
+
 /// An instance is a def which is a value instance of the class — so a
 /// still-generic instance (`instance [BEq A] BEq (List A) {...}`) is a
 /// dictionary whose OWN methods each need one leading argument per
 /// instance-level constraint, resolved here exactly the way D4's
 /// `try_insert_dict_args` resolves an ordinary constrained def's own
 /// dictionary parameters. `concrete_meta` is the class param's fully
-/// resolved (forced) type, e.g. `List I64` — narrow, single-type-argument
-/// version (matching `KnownInstances`' own documented narrower-than-
-/// `InstanceKey` scope): each constraint's own variable is read directly
-/// off `concrete_meta`'s OWN application argument (`List I64`'s `I64`),
-/// not via general structural unification against the instance's own
-/// declared type template. Returns `None` if any constraint can't be
-/// resolved this way (multi-argument containers, no matching registered
-/// instance for the element type, ...) — same "approximate, don't guess"
-/// fallback style as everywhere else in this checker.
+/// resolved (forced) type, e.g. `List I64`.
+///
+/// Two different shapes of constrained var, tried in order:
+/// 1. A genuinely separate method-level implicit, distinct from the
+///    class's own param — e.g. `class Map (M : (K:Type) -> (V:Type) ->
+///    Type)` declares `K`/`V` as their own named foralls on `Map.empty`'s
+///    type (`M K V`), so `instance [BOrd K] Map BTreeMap`'s `K` has its
+///    OWN meta in `named_metas`, already pinned by this call site's own
+///    unification against `expected`/its args — completely independent
+///    of `concrete_meta` (`BTreeMap`'s own value has no `K`/`V` nested in
+///    it at all, unlike case 2 below, so this is the ONLY way `Map`-shaped
+///    constraints can ever resolve). Guarded by `var_meta != class_meta`:
+///    an instance constraint can (and often does, e.g. `instance [Show A]
+///    Show (List A)`) reuse the CLASS's own param name for its own,
+///    unrelated, INSTANCE-scoped variable — `named_metas` has only ONE
+///    entry per name, so a naive lookup would silently return the class
+///    param's own meta (`List I64` as a whole) instead of failing, badly
+///    mis-resolving case 2's shape. That's exactly the collision this
+///    guard exists to detect and fall through past.
+/// 2. Nested inside `concrete_meta`'s own application arguments (`List
+///    I64`'s `I64`; `BTreeMap K V`'s `K`/`V` for `instance [BEq K, BEq V]
+///    BEq BTreeMap K V`) — the original, narrower mechanism (matching
+///    `KnownInstances`' own documented narrower-than-`InstanceKey` scope),
+///    for a constraint whose var has no separate method-level meta of its
+///    own (the `Show (List A)` shape above). `concrete_meta`'s FULL
+///    application spine is unwound once, left to right (`BTreeMap K V` ->
+///    `[K, V]`, via `spine_of`), and each constraint takes its OWN
+///    positional argument when the counts line up — constraint `i` is
+///    declared to constrain the instance template's `i`-th own type
+///    argument, so `[BEq K, BEq V]` must resolve `K`'s dict from
+///    `args[0]` and `V`'s from `args[1]`, NOT both from the single
+///    outermost one (`args.last()`, `V`) an earlier, single-constraint-
+///    only version of this function did — that mismatch silently
+///    resolved `K`'s own dict using `V`'s concrete type instead, a real
+///    bug found running `std/map_tests.mo`'s `BTreeMap`-keyed `BEq`/`Map`
+///    instances (2+ constraints on a class param with 2+ own template
+///    arguments) through the corpus. Falls back to always using the
+///    single outermost argument when the counts DON'T line up (fewer
+///    template args than constraints, or vice versa) — safer than
+///    guessing a mapping.
+///
+/// Returns `None` if a constraint resolves via neither shape (no matching
+/// registered instance, ...) — same "approximate, don't guess" fallback
+/// style as everywhere else in this checker.
+#[allow(clippy::too_many_arguments)]
 fn resolve_instance_dict_args(
   mctx: &mut MetaContext,
   structs: &StructFields,
@@ -1799,37 +1868,51 @@ fn resolve_instance_dict_args(
   dict_scope: &DictScope,
   constraints: &[TypeConstraint],
   concrete_meta: &CoreTerm,
+  named_metas: &Map<Identifier, MetaId>,
+  class_meta: MetaId,
 ) -> Option<Vec<CoreTerm>> {
   if constraints.is_empty() {
     return Some(Vec::new());
   }
-  let CoreTerm::App { arg: elem_ty, .. } = concrete_meta else {
-    return None;
-  };
+  // Unwind `concrete_meta`'s own application spine once, left to right —
+  // `App(App(BTreeMap, K), V)` -> `[K, V]` (`spine_of` is defined above
+  // in this same file, already used by `try_resolve_class_method`).
+  let (_, template_args) = spine_of(concrete_meta);
+  let positional = template_args.len() == constraints.len();
   let mut dict_args = Vec::with_capacity(constraints.len());
-  for constraint in constraints {
-    if constraint.vars().len() != 1 {
+  for (i, constraint) in constraints.iter().enumerate() {
+    let [var_name] = constraint.vars().as_slice() else {
       return None;
-    }
-    // Same "bare Free means still-abstract, check what's already bound"
-    // logic as `try_resolve_class_method`'s own top-level check — a
-    // recursive self-call (`BEq (List A)`'s own `beq` calling itself on
-    // the tail, still needing "BEq A" for the element type) must thread
-    // the CALLER's own bound dictionary through rather than trying (and
-    // failing) a global lookup for a type variable that isn't concrete.
-    if let CoreTerm::Free(_) = force(mctx, elem_ty.as_ref().clone()).into_stripped_ctx()
-      && let Some(&bound) = dict_scope.get(constraint.class())
+    };
+    if let Some(&var_meta) = named_metas.get(var_name)
+      && var_meta != class_meta
     {
-      dict_args.push(CoreTerm::Free(bound));
+      let var_ty = CoreTerm::Meta(var_meta);
+      dict_args.push(resolve_constraint_dict(
+        mctx,
+        structs,
+        atom_paths,
+        known_instances,
+        dict_scope,
+        constraint,
+        &var_ty,
+      )?);
       continue;
     }
-    let elem_atom = head_atom_of(mctx, elem_ty)?;
-    let elem_path = atom_paths
-      .get(&elem_atom)
-      .or_else(|| structs.inductive_paths.get(&elem_atom))?
-      .clone();
-    let elem_instance = known_instances.get(&(constraint.class().clone(), elem_path))?;
-    dict_args.push(CoreTerm::Free(mctx.intern(elem_instance.prefix.clone())));
+    let elem_ty = if positional {
+      template_args[i]
+    } else {
+      *template_args.last()?
+    };
+    dict_args.push(resolve_constraint_dict(
+      mctx,
+      structs,
+      atom_paths,
+      known_instances,
+      dict_scope,
+      constraint,
+      elem_ty,
+    )?);
   }
   Some(dict_args)
 }
