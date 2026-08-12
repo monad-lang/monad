@@ -1741,4 +1741,70 @@ def main : I64 :=
       other => panic!("expected an int literal, got {other:?}"),
     }
   }
+
+  /// Regression test for a `MatchTraversalMismatch` bug in
+  /// `core_check.rs`'s `desugar_struct_literals`'s `Match` arm: a list
+  /// LITERAL used directly as a match scrutinee (`match [1, 2, 3] {
+  /// ... }`, parsing to a raw `FromListLiteral.cons`/`.empty` chain)
+  /// used to have its own `record_match_resolution` call silently
+  /// skipped — the plain `infer` this arm called on the RAW pre-desugar
+  /// scrutinee never resolves/defaults class methods (only
+  /// `desugar_struct_literals` itself does that), so it always landed on
+  /// a `Meta`-headed application type `resolve_match_inductive_atom`
+  /// can't turn into an atom. Skipping that one match's own resolution
+  /// WITHOUT also skipping its case bodies' own captures (an intervening
+  /// `BEq` dict projection from `h == 1`, recursed into regardless)
+  /// desynced the queue for `lower_core_ir.rs`'s later traversal.
+  ///
+  /// Fixed by re-deriving the scrutinee's type from the ALREADY-
+  /// desugared `scrutinee_d` whenever the raw attempt can't resolve one
+  /// (raw stays the primary path — trying `scrutinee_d` first or
+  /// unconditionally regressed several other corpus files, e.g. `std/
+  /// test_map_full.mo`, since `infer` on an already-desugared term can
+  /// itself land on an unresolvable type when that term contains a
+  /// synthesized single-case dict-projection `Match` — a separate, known
+  /// gap), and by reusing that ONE resolved type for the per-case
+  /// pattern-variable field-type lookup (E2) too, rather than
+  /// independently re-`infer`ring it a second time per case: `infer`
+  /// isn't idempotent across separate calls on the same term (each
+  /// `Forall` it crosses is instantiated with brand-new metas every
+  /// call), so a second, independent `infer(&scrutinee_d)` call was
+  /// observed to land back on an unresolved `Meta`-headed type even
+  /// right after the first call just resolved the identical term
+  /// concretely.
+  ///
+  /// Mirrors the real bug in `examples/pattern_matching.mo`'s
+  /// `test_match_list_nonempty`/`test_match_guard` (a list literal
+  /// scrutinee combined with a `BEq` call in one of the match's own
+  /// explicit arms; `test_match_guard`'s NESTED `match t { ... }` needed
+  /// the field-type fix too, since `t`'s own type is only resolvable via
+  /// the outer match's E2 field-type lookup). Confirmed this reproduces
+  /// `MatchTraversalMismatch { expected: [empty, cons], found: [BEq] }`
+  /// before the fix, by temporarily reverting it during investigation.
+  #[test]
+  fn eval_core_program_list_literal_match_scrutinee_with_class_method_in_arm_does_not_desync_match_queue()
+   {
+    let source = r#"
+use init
+
+def main : Bool :=
+    match [1, 2, 3] {
+        empty => false,
+        cons h t => h == 1
+    }
+"#;
+    let result = eval_core_program(
+      &ModulePath::top("'list_literal_match_regression_test"),
+      source,
+    )
+    .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
+    match result {
+      // `Bool` is an ordinary two-constructor inductive (see
+      // `core_native.rs`'s own module doc comment for why `CoreIr` has
+      // no `IrLit::Bool`), declared `true` then `false`
+      // (`init/prelude.mo`) — tag 0 is `true`.
+      core_value::Value::Con { tag, ref args } if args.is_empty() => assert_eq!(tag, 0),
+      other => panic!("expected Bool.true, got {other:?}"),
+    }
+  }
 }

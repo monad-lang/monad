@@ -2473,9 +2473,59 @@ pub fn desugar_struct_literals(
       // resolution — a nested match inside the scrutinee pushes its
       // resolution first, exactly as a single unified left-to-right walk
       // would.
-      if let Ok(ty) = infer(mctx, ctx, structs, scrutinee)
-        && let Some(atom) = resolve_match_inductive_atom(mctx, structs, &ty)
-      {
+      // Tries the raw pre-desugar `scrutinee` FIRST — `resolve_match_
+      // inductive_atom`'s own doc comment already explains why the
+      // caller should prefer re-deriving from the checker's OWN
+      // resolution over guessing from case names, and using the raw term
+      // here (matching `infer`'s own visitation order elsewhere in this
+      // pass) is what that requires for the COMMON case. Falls back to
+      // the already-desugared `scrutinee_d` only when the raw attempt
+      // can't resolve an atom at all: a scrutinee that's ITSELF a bare,
+      // still-polymorphic class-method call (e.g. a list LITERAL used
+      // directly as a match scrutinee — `match [1, 2, 3] { ... }` parses
+      // to a raw `FromListLiteral.cons`/`.empty` chain) has no class
+      // param pinned down yet at plain-`infer` time (`infer` never
+      // resolves/defaults class methods, only `desugar_struct_literals`
+      // does), so `infer(scrutinee)` lands on `Meta`-headed application
+      // types `resolve_match_inductive_atom` can't turn into an atom.
+      // Using ONLY the raw `scrutinee` there silently skipped this
+      // match's own `record_match_resolution` call below WITHOUT
+      // skipping the case bodies' own captures (recursed into further
+      // down regardless) — desyncing the queue for any later `Match`/
+      // class-method call in this def (surfaces as `MatchTraversalMismatch`,
+      // e.g. `match [1,2,3] { empty => .., cons h t => h == 1 }` popping
+      // `h == 1`'s own "BEq" dict-projection entry where this match's
+      // `[empty, cons]` entry was expected).
+      //
+      // Trying `scrutinee_d` FIRST (or unconditionally) instead of only
+      // as a fallback regressed several other corpus files (`std/
+      // test_map_full.mo` among them): `infer` on an already-desugared
+      // term — which may itself contain synthesized single-case dict-
+      // projection `Match` nodes `check`'s generic `Match` arm doesn't
+      // know how to type correctly (see `try_resolve_class_method`'s own
+      // `is_dict_projection_spine` doc comment for the same underlying
+      // gap) — doesn't always land on the same resolvable type `infer`
+      // on the raw term does. Raw stays the primary path; `scrutinee_d`
+      // only fills the gap raw alone can't cover.
+      //
+      // Resolved ONCE here and reused below for the per-case field-type
+      // lookup (E2), rather than re-running this same raw/`scrutinee_d`
+      // attempt independently per case: `infer` isn't idempotent across
+      // separate calls on the same term (each `Forall` it crosses gets
+      // instantiated with brand-new metas every time, and whether THOSE
+      // particular metas end up resolved depends on ambient unification
+      // state that can differ call to call) — a second, independent
+      // `infer(&scrutinee_d)` call from inside the per-case closure was
+      // observed to land back on an unresolved `Meta`-headed type even
+      // when THIS call just resolved the identical term concretely.
+      let scrutinee_ty = infer(mctx, ctx, structs, scrutinee)
+        .ok()
+        .filter(|ty| resolve_match_inductive_atom(mctx, structs, ty).is_some())
+        .or_else(|| infer(mctx, ctx, structs, &scrutinee_d).ok());
+      let scrutinee_atom = scrutinee_ty
+        .as_ref()
+        .and_then(|ty| resolve_match_inductive_atom(mctx, structs, ty));
+      if let Some(atom) = scrutinee_atom {
         mctx.record_match_resolution(cases.iter().map(|c| c.name.clone()).collect(), atom);
         // The resolved inductive atom is captured into `match_resolutions`
         // above, but nothing guarantees it also appears as a literal
@@ -2515,7 +2565,14 @@ pub fn desugar_struct_literals(
             // need the SAME real typing here too, or the class param can
             // never be pinned down and the call is left unresolved
             // (E2's whole point) even though `check` already succeeded.
-            let scrutinee_ty = infer(mctx, ctx, structs, scrutinee).ok();
+            // Reuses `scrutinee_ty` (resolved once, above) rather than
+            // re-inferring independently per case — needed for a
+            // pattern-bound field (`t` in `cons h t`) whose OWN type is
+            // only resolvable once the scrutinee's bare class-method
+            // chain (e.g. a list literal) has been desugared; without
+            // it, `t`'s field type here falls back to `Hole`, and a
+            // later NESTED match on `t` fails to resolve ITS own
+            // scrutinee type in turn.
             let field_tys = scrutinee_ty
               .as_ref()
               .and_then(|ty| match_case_field_types(mctx, structs, ty, &case.name));
