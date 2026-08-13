@@ -126,6 +126,8 @@ def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (loc
             ok (mk_typed (Term.lit value) (Term.type_ 1)),
         Literal.num n suffix =>
             ok (mk_typed (Term.lit value) (Term.type_ 1)),
+        Literal.flt text suffix =>
+            ok (mk_typed (Term.lit value) (Term.type_ 1)),
         Literal.if_ one two three =>
             type_check_if one two three expected_type scope local_types locals,
         Literal.match_ value_ cases =>

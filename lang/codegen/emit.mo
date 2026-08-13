@@ -293,6 +293,13 @@ def is_llvm_constant (val : LLVMValue) : Bool := match val {
 #[partial]
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
     Literal.num n suffix => CompileResult.ok c empty_instrs (LLVMValue.int_ n) empty_blocks empty_funcs empty_globals_list,
+    // No LLVMValue float-constant variant exists yet (codegen has no
+    // float support at all currently — a separate, unstarted piece of
+    // work; see Literal.flt's doc comment in lang/types.mo). Emitting a
+    // zero placeholder keeps this match total without pretending to
+    // support something that isn't there yet; nothing in the corpus
+    // reaches this arm today.
+    Literal.flt text suffix => CompileResult.ok c empty_instrs (LLVMValue.int_ 0) empty_blocks empty_funcs empty_globals_list,
     Literal.str s =>
         match fresh_label c "str" {
             CtxStrPair.mk ctx1 name =>

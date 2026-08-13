@@ -41,6 +41,7 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
         Term.lit lit_val => match lit_val {
             Literal.str _ => List.empty,
             Literal.num _ _ => List.empty,
+            Literal.flt _ _ => List.empty,
             Literal.if_ one two three =>
                 let a := free_vars one known_names in
                 let b := free_vars two known_names in

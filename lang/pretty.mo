@@ -12,7 +12,7 @@ use lang.types {
 }
 
 open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
-open Literal {if_, match_, num, str}
+open Literal {flt, if_, match_, num, str}
 open Decl {
   class_d, def_d, inductive_d, infix_d, instance_d, open_d, scoped_open_d,
   struct_d, use_d,
@@ -120,6 +120,9 @@ def show_literal (lit : Literal) : String := match lit {
         let num_str := I64.to_string value in
         let suf_str := show_num_suffix suffix in
         String.concat num_str suf_str,
+    flt text suffix =>
+        let suf_str := show_num_suffix suffix in
+        String.concat text suf_str,
     if_ cond then_ else_ =>
         let cond_str := show_term cond in
         let then_str := show_term then_ in

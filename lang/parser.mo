@@ -4,9 +4,9 @@ use lang.types {
   ClassDef, DebugName, Decl, Def, DoStmt, Identifier, InductConstructor,
   LocatedSpan, Location, MatchCase, ModulePath, NameRef, OpenFilter, Operator,
   Param, StructField, Term, TermV0, TypeConstraint, UseFilter, UseItem, app,
-  bind_s, class_d, con, ctx, custom, def_d, desugar_do, expr_s, forall, hole, i64,
+  bind_s, class_d, con, ctx, custom, def_d, desugar_do, expr_s, forall, hole,
   id, if_, inductive_d, infix_d, instance_d, lam, let_s, list_reverse, lit,
-  match_, mc, mk, mp, name, named, nid, nmp, nop, ntv, num, open_all, open_d,
+  match_, mc, mk, mp, name, named, nid, nmp, nop, ntv, open_all, open_d,
   open_only, operator, param_many, pi, ret_s, scoped_open_d, show_identifier,
   show_operator, struct_d, type_, unnamed, use_bare, use_d, use_glob, use_items,
   use_name, use_rename, use_sub, use_sub_rename, var,
@@ -21,7 +21,7 @@ use lang.parser.combinators {
   alt, alt_fold, bind_parse, delimited_by, many0, many1, map_parse, opt,
   preceded_by, separated_by, tag, take_while, terminated_by,
 }
-use lang.parser.number {number}
+use lang.parser.number {number, numeric_literal}
 use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
 use lang.parser.position {consume_span, new_span, span_fragment, span_location}
 use lang.parser.identifier {identifier}
@@ -2345,6 +2345,110 @@ def test_number_42 : Bool :=
 		fail _ => false
 	}
 
+/// Regression test for suffixed numeric literals: `33u64` used to
+/// mis-parse as juxtaposed application (`app (lit 33 i64) (var "u64")`)
+/// since `number_term` only ever built a bare i64 literal and left the
+/// suffix as trailing text — a wrong AST rather than a parse failure, so
+/// no `success`/`fail`-only test could have caught it. See
+/// `numeric_literal`'s doc comment (lang/parser/number.mo).
+#[test]
+def test_numeric_literal_suffix_u64 : Bool :=
+	match numeric_literal "33u64" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				Term.lit lit_val => match lit_val {
+					Literal.num n suffix => I64.beq n 33 && (match suffix {
+						NumSuffix.u64 => true,
+						_ => false
+					}),
+					_ => false
+				},
+				_ => false
+			}),
+		fail _ => false
+	}
+
+/// Regression test for float literals: `3.0` used to mis-parse through
+/// the registered `.` infix operator (juxtaposed int-dot-int
+/// application) rather than as one literal. Unsuffixed floats default
+/// to f64 (mirrors `float_suffix_parser`'s default, itself mirroring the
+/// Rust reference).
+#[test]
+def test_numeric_literal_float : Bool :=
+	match numeric_literal "3.0" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				Term.lit lit_val => match lit_val {
+					Literal.flt text suffix => String.beq text "3.0" && (match suffix {
+						NumSuffix.f64 => true,
+						_ => false
+					}),
+					_ => false
+				},
+				_ => false
+			}),
+		fail _ => false
+	}
+
+#[test]
+def test_numeric_literal_float_suffix : Bool :=
+	match numeric_literal "3.14f32" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				Term.lit lit_val => match lit_val {
+					Literal.flt text suffix => String.beq text "3.14" && (match suffix {
+						NumSuffix.f32 => true,
+						_ => false
+					}),
+					_ => false
+				},
+				_ => false
+			}),
+		fail _ => false
+	}
+
+/// Regression test for negative literals — this language's only form of
+/// unary minus (see `numeric_literal`'s doc comment for why there's no
+/// separate unary-negation operator). Before this fix `atom_term` had no
+/// way to parse a bare `-1` at all; `lang/parser.mo` and
+/// `lang/elaborate.mo`'s own `sentinel := -1` couldn't be re-parsed by
+/// the self-hosted parser.
+#[test]
+def test_numeric_literal_negative : Bool :=
+	match numeric_literal "-1" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				Term.lit lit_val => match lit_val {
+					Literal.num n _suffix => I64.beq n (-1),
+					_ => false
+				},
+				_ => false
+			}),
+		fail _ => false
+	}
+
+/// Confirms the negative-literal fix doesn't break binary subtraction:
+/// `a - 1` (spaced, the universal style for infix operators) must still
+/// take the operator-application path, not get swallowed as `app a
+/// (-1)` by `expr_rest_ws`'s juxtaposition-first attempt. The `-` must
+/// be immediately followed by a digit with no whitespace to count as a
+/// negative literal, so `"- 1"` (space before the digit) correctly
+/// fails `numeric_literal` and falls through to operator parsing.
+#[test]
+def test_expr_subtraction_not_negative_literal : Bool :=
+	let empty_ctx : List Identifier := List.empty in
+	match expression empty_ctx "a - 1" {
+		success rem out => String.beq rem "" && term_is_app_not_lit out,
+		fail _ => false
+	}
+
+#[partial]
+def term_is_app_not_lit (t : Term) : Bool :=
+	match t {
+		Term.app _ _ => true,
+		_ => false
+	}
+
 #[test]
 def test_number_fail_empty : Bool :=
 	match number "abc" {
@@ -2753,16 +2857,13 @@ def variable_got (r: ParseResult String) (ctx: List Identifier) : ParseResult Te
 
 // ─── Canonical literal parser (Phase 10) ───────────────────────────────
 
-def num_to_term (n: I64) : Term :=
-    Term.lit (Literal.num n NumSuffix.i64)
-
-#[partial]
-def number_term (input: String) : ParseResult Term :=
-    map_parse num_to_term number input
-
+// `numeric_literal` (lang.parser.number) handles the full
+// `[-]digits[.digits][suffix]` shape — int/float, sign, and suffix all
+// in one parser. See its doc comment for why the sign lives here rather
+// than as a separate unary-minus operator.
 #[partial]
 def literal_parser (input: String) : ParseResult Term :=
-    alt_fold [string_parse, number_term] input
+    alt_fold [string_parse, numeric_literal] input
 
 // Skip // and /// comment lines (consumed as whitespace). Named
 // `skip_docstrings` for historical reasons (it originally only matched
@@ -4108,6 +4209,21 @@ def test_def_parser : Bool :=
                 def_d d => String.beq rem "",
                 _ => false
             },
+        fail _ => false
+    }
+
+/// The self-hosted parser couldn't previously re-parse its own source:
+/// `lang/elaborate.mo`'s `def sentinel : I64 := -1` (unparenthesized
+/// negative literal body) is real, live corpus content, not a
+/// hypothetical.
+#[test]
+def test_def_parser_negative_body : Bool :=
+    match def_parser "def sentinel : I64 := -1" {
+        success rem out =>
+            String.beq rem "" && (match out {
+                def_d _ => true,
+                _ => false
+            }),
         fail _ => false
     }
 

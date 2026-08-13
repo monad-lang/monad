@@ -143,6 +143,16 @@ type NumSuffix {
 type Literal {
     str (value: String),
     num (value: I64) (suffix: NumSuffix),
+    /// A literal written with a decimal point (`3.0`, `3.14f32`). Kept as
+    /// the exact source text rather than a numeric value: self-hosted
+    /// Monad code has no native bridge to parse a decimal string into an
+    /// actual float bit pattern (unlike the Rust reference's
+    /// `Literal::Float { value: F64Wrap, .. }`, core/src/term.rs), so
+    /// `text` is the only representation available here — sufficient for
+    /// round-tripping through `show_term`/parsing back, though genuine
+    /// float codegen (`lang/codegen/emit.mo` has no float `LLVMValue`
+    /// variant at all yet) remains a separate, unstarted piece of work.
+    flt (text: String) (suffix: NumSuffix),
     if_ (one: Term) (two: Term) (three: Term),
     match_ (value: Term) (cases: List MatchCase),
 }
