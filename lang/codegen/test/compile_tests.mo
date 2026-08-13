@@ -17,7 +17,7 @@ open IO {println, write_file}
 #[partial]
 def mk_def (name : String) (body : Term) : Def :=
     Def.mk (ModulePath.mp [Identifier.id name]) (Term.type_ 1) body
-        ([] : List TypeConstraint) ([] : List String)
+        ([] : List TypeConstraint) ([] : List String) Visibility.package_private
 
 #[partial]
 def mk_i64 (n : I64) : Term :=

@@ -76,8 +76,8 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
         Decl.inductive_d ind => build_scope_inductive ind path acc,
         Decl.class_d cls => build_scope_class cls path acc,
         Decl.instance_d ins => scope_data_add_instance acc ins,
-        Decl.infix_d op name => scope_data_add_infix acc op name,
-        Decl.use_d _ _ => acc,
+        Decl.infix_d op name _vis => scope_data_add_infix acc op name,
+        Decl.use_d _ _ _ => acc,
         Decl.open_d _ _ => acc,
         Decl.struct_d _ => acc,
         Decl.scoped_open_d _ _ inner => build_scope_one_decl inner path acc
@@ -85,7 +85,7 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
 
 def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match df {
-        mk defname _ _ _ _ =>
+        mk defname _ _ _ _ _ =>
             let sd : ScopeDef := {
                 name := defname,
                 module := path,
@@ -98,7 +98,7 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
 def build_scope_inductive (ind : Inductive) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     let with_ind : ScopeData := scope_data_add_inductive acc ind in
     match ind {
-        mk _ _ _ constructors _ =>
+        mk _ _ _ constructors _ _ =>
             add_constructors_as_defs with_ind constructors path
     }
 
@@ -124,13 +124,13 @@ def add_constructors_go (acc : ScopeData) (cns : List InductConstructor) (path :
 
 def build_scope_class (cls : Class) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match cls {
-        mk clsname _ _ methods =>
+        mk clsname _ _ methods _vis =>
             let name_list : List Identifier := List.cons clsname List.empty in
             let cls_mp : ModulePath := ModulePath.mp name_list in
             let empty_params : List Param := List.empty in
             let empty_constructors : List InductConstructor := List.empty in
             let empty_attrs : List String := List.empty in
-            let dummy_ind : Inductive := Inductive.mk cls_mp empty_params (Term.type_ 1) empty_constructors empty_attrs in
+            let dummy_ind : Inductive := Inductive.mk cls_mp empty_params (Term.type_ 1) empty_constructors empty_attrs Visibility.package_private in
             let with_cls : ScopeData := scope_data_add_class acc dummy_ind in
             add_class_methods with_cls methods cls_mp
     }
@@ -230,7 +230,7 @@ def find_inductive_by_constructor_in_list (inds : List Inductive) (con_name : Mo
 
 def inductive_has_constructor (ind : Inductive) (con_name : ModulePath) : Bool :=
     match ind {
-        mk _ _ _ constructors _ =>
+        mk _ _ _ constructors _ _ =>
             match constructors {
                 List.empty => false,
                 List.cons cn rest =>
@@ -260,7 +260,7 @@ def inductive_has_constructor_rest (cns : List InductConstructor) (con_name : Mo
 
 def find_constructor_in_inductive (ind : Inductive) (con_name : ModulePath) : Option InductConstructor :=
     match ind {
-        mk _ _ _ constructors _ => find_constructor_in_list constructors con_name
+        mk _ _ _ constructors _ _ => find_constructor_in_list constructors con_name
     }
 
 #[terminating]
@@ -431,7 +431,7 @@ def find_inductive_in_list (inds : List Inductive) (name : ModulePath) : Option 
         List.empty => Option.none,
         List.cons ind rest =>
             match ind {
-                mk indname _ _ _ _ =>
+                mk indname _ _ _ _ _ =>
                     if modpath_eq indname name
                     then Option.some ind
                     else find_inductive_in_list rest name
@@ -442,7 +442,7 @@ def find_inductive_in_list (inds : List Inductive) (name : ModulePath) : Option 
 
 def scope_data_add_instance (sd : ScopeData) (ins : Instance) : ScopeData :=
     match ins {
-        mk _ cname _ _ =>
+        mk _ cname _ _ _ =>
             match sd {
                 mk dr cd insts ind cls infs conf =>
                     let updated_insts : List ScopeInstance := scope_add_to_instances insts cname ins in
@@ -536,7 +536,7 @@ def add_builtin_type (sd : ScopeData) : ScopeData :=
     let empty_params : List Param := List.empty in
     let empty_constructors : List InductConstructor := List.empty in
     let empty_attrs : List String := List.empty in
-    let type_ind : Inductive := Inductive.mk type_name empty_params Term.hole empty_constructors empty_attrs in
+    let type_ind : Inductive := Inductive.mk type_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
     let type_sd : ScopeDef := {
         name := type_name,
         module := ModulePath.mp empty_id_list,
@@ -553,7 +553,7 @@ def add_builtin_prop (sd : ScopeData) : ScopeData :=
     let empty_params : List Param := List.empty in
     let empty_constructors : List InductConstructor := List.empty in
     let empty_attrs : List String := List.empty in
-    let prop_ind : Inductive := Inductive.mk prop_name empty_params Term.hole empty_constructors empty_attrs in
+    let prop_ind : Inductive := Inductive.mk prop_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
     let prop_sd : ScopeDef := {
         name := prop_name,
         module := ModulePath.mp empty_id_list,
@@ -710,7 +710,7 @@ def first_matching_instance (candidates : List Instance) (key : InstanceKey) : R
 
 def instance_key_matches (ins : Instance) (key : InstanceKey) : Bool :=
     match ins {
-        mk _ cls_name constraints ins_args =>
+        mk _ cls_name constraints ins_args _ =>
             match key {
                 mk key_cls _ key_args =>
                     if Similar.similar cls_name key_cls

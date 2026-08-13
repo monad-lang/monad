@@ -155,10 +155,10 @@ def test_elaborate_def_free_var : Bool :=
     let typ : Term := pi v_A v_A in
     let body : Term := var 0 (named (Identifier.id "x")) in
     let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "f") List.empty) in
-    let d : Def := Def.mk mp typ body empty_constraints empty_attrs in
+    let d : Def := Def.mk mp typ body empty_constraints empty_attrs Visibility.package_private in
     let elaborated : Def := elaborate_def d no_ids in
     match elaborated {
-        Def.mk _ elab_typ _ _ _ =>
+        Def.mk _ elab_typ _ _ _ _ =>
             match elab_typ {
                 forall _ _ _ => true,
                 _ => false,
@@ -174,10 +174,10 @@ def test_elaborate_class_method : Bool :=
     let meth : ClassDef := ClassDef.mk (Identifier.id "eq") eq_typ none_term in
     let methods : List ClassDef := List.cons meth List.empty in
     let params : List Param := List.cons p_A List.empty in
-    let cls : Class := Class.mk id_Eq params empty_constraints methods in
+    let cls : Class := Class.mk id_Eq params empty_constraints methods Visibility.package_private in
     let elaborated : Class := elaborate_class cls no_ids in
     match elaborated {
-        Class.mk _ _ _ elaborated_methods =>
+        Class.mk _ _ _ elaborated_methods _ =>
             match elaborated_methods {
                 List.cons em _ =>
                     match em {
@@ -207,7 +207,7 @@ def test_elaborate_decls_empty : Bool :=
 #[test]
 def test_names_of_decl_def : Bool :=
     let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "f") List.empty) in
-    let d : Def := Def.mk mp (type_ 1) Term.hole empty_constraints empty_attrs in
+    let d : Def := Def.mk mp (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private in
     let decl : Decl := Decl.def_d d in
     let names : List Identifier := names_of_decl decl in
     match names {
@@ -220,7 +220,7 @@ def test_names_of_decl_def : Bool :=
 
 #[test]
 def test_names_of_decl_class : Bool :=
-    let cls : Class := Class.mk id_Eq empty_params empty_constraints empty_class_defs in
+    let cls : Class := Class.mk id_Eq empty_params empty_constraints empty_class_defs Visibility.package_private in
     let decl : Decl := Decl.class_d cls in
     let names : List Identifier := names_of_decl decl in
     match names {
@@ -234,7 +234,7 @@ def test_names_of_decl_class : Bool :=
 #[test]
 def test_names_of_decl_use_empty : Bool :=
     let mp : ModulePath := ModulePath.mp no_ids in
-    let decl : Decl := Decl.use_d mp UseFilter.use_bare in
+    let decl : Decl := Decl.use_d mp UseFilter.use_bare false in
     let names : List Identifier := names_of_decl decl in
     match names {
         List.empty => true,
@@ -247,8 +247,8 @@ def test_names_of_decl_use_empty : Bool :=
 def test_names_of_decls_multiple : Bool :=
     let mp_f : ModulePath := ModulePath.mp (List.cons (Identifier.id "f") List.empty) in
     let mp_g : ModulePath := ModulePath.mp (List.cons (Identifier.id "g") List.empty) in
-    let d1 : Decl := Decl.def_d (Def.mk mp_f (type_ 1) Term.hole empty_constraints empty_attrs) in
-    let d2 : Decl := Decl.def_d (Def.mk mp_g (type_ 1) Term.hole empty_constraints empty_attrs) in
+    let d1 : Decl := Decl.def_d (Def.mk mp_f (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private) in
+    let d2 : Decl := Decl.def_d (Def.mk mp_g (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private) in
     let decls : List Decl := List.cons d1 (List.cons d2 List.empty) in
     let names : List Identifier := names_of_decls decls in
     id_member (Identifier.id "f") names && id_member (Identifier.id "g") names

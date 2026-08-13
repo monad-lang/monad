@@ -280,7 +280,7 @@ def test_show_decl_def : Bool :=
     let name : ModulePath := ModulePath.mp (List.cons (Identifier.id "id") List.empty) in
     let typ : Term := Term.pi (Term.type_ 1) (Term.pi (Term.var 2 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_A))) in
     let body : Term := Term.lam (DebugName.named test_id_x) (Term.var 1 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_x)) in
-    let def_ : Def := Def.mk name typ body empty_constraints empty_attrs in
+    let def_ : Def := Def.mk name typ body empty_constraints empty_attrs Visibility.package_private in
     let decl : Decl := Decl.def_d def_ in
     let result : String := show_decl decl in
     String.beq result "def id : (Type -> (A -> A)) := (fn x : A => x)"
@@ -295,7 +295,7 @@ def test_show_decl_inductive : Bool :=
         (ModulePath.mp (List.cons (Identifier.id "false") List.empty))
         empty_params (Term.type_ 1) in
     let ctors : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
-    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) ctors empty_attrs in
+    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let decl : Decl := Decl.inductive_d ind in
     let result : String := show_decl decl in
     String.beq result "type Bool {\n  true,\n  false\n}"
@@ -305,7 +305,7 @@ def test_show_decl_struct : Bool :=
     let field_x : StructField := StructField.mk (Identifier.id "x") (Term.type_ 1) none_term in
     let field_y : StructField := StructField.mk (Identifier.id "y") (Term.type_ 1) none_term in
     let fields : List StructField := List.cons field_x (List.cons field_y List.empty) in
-    let s : Struct := Struct.mk (Identifier.id "Point") fields in
+    let s : Struct := Struct.mk (Identifier.id "Point") fields Visibility.package_private in
     let decl : Decl := Decl.struct_d s in
     let result : String := show_decl decl in
     String.beq result "struct Point {\n  x : Type,\n  y : Type\n}"
@@ -317,7 +317,7 @@ def test_show_decl_class_simple : Bool :=
     let param_ : Param := Param.mk test_id_A (Term.type_ 1) Multiplicity.many none_term in
     let params : List Param := List.cons param_ empty_params in
     let methods : List ClassDef := List.cons meth empty_class_defs in
-    let cls : Class := Class.mk (Identifier.id "Eq") params empty_constraints methods in
+    let cls : Class := Class.mk (Identifier.id "Eq") params empty_constraints methods Visibility.package_private in
     let decl : Decl := Decl.class_d cls in
     let result : String := show_decl decl in
     String.beq result "class Eq (A : Type) {\n  def eq : (A -> (A -> Prop))\n}"
@@ -326,14 +326,14 @@ def test_show_decl_class_simple : Bool :=
 def test_show_decl_infix : Bool :=
     let op : Operator := Operator.operator "++" in
     let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "append") List.empty) in
-    let decl : Decl := Decl.infix_d op path in
+    let decl : Decl := Decl.infix_d op path Visibility.package_private in
     let result : String := show_decl decl in
     String.beq result "infix: ++ := append"
 
 #[test]
 def test_show_decl_use : Bool :=
     let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "prelude") List.empty) in
-    let decl : Decl := Decl.use_d path UseFilter.use_bare in
+    let decl : Decl := Decl.use_d path UseFilter.use_bare false in
     let result : String := show_decl decl in
     String.beq result "use prelude"
 
@@ -350,7 +350,7 @@ def test_show_decl_open : Bool :=
 def test_show_instance : Bool :=
     let cls_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let args : List Term := List.cons (Term.type_ 1) List.empty in
-    let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args in
+    let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args Visibility.package_private in
     let result : String := show_instance ins in
     String.beq result "instance Show"
 

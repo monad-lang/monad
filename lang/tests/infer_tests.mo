@@ -373,7 +373,7 @@ def maybe_scope : Scope :=
     let empty_params : List Param := List.empty in
     let empty_attrs : List String := List.empty in
     let ind : Inductive := Inductive.mk
-        type_name empty_params (Term.type_ 1) cns empty_attrs in
+        type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
     let decls : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decls in
     {

@@ -45,9 +45,9 @@ def typecheck_decl (d : Decl) (path : ModulePath) (scope : Scope) : Bool :=
         _ => true  // Skip use, open, infix, class, instance for now
     }
 
-def typecheck_def (df : Def) (scope : Scope) : Bool := 
+def typecheck_def (df : Def) (scope : Scope) : Bool :=
     match df {
-        mk _name typ body _constraints _attrs =>
+        mk _name typ body _constraints _attrs _vis =>
             // Skip native/abstract definitions (body is Term.hole)
             if is_hole body then
                 true
@@ -58,9 +58,9 @@ def typecheck_def (df : Def) (scope : Scope) : Bool :=
                 }
     }
 
-def typecheck_inductive (ind : Inductive) (scope : Scope) : Bool := 
+def typecheck_inductive (ind : Inductive) (scope : Scope) : Bool :=
     match ind {
-        mk _name _params _typ constructors _attrs =>
+        mk _name _params _typ constructors _attrs _vis =>
             typecheck_constructors constructors scope
     }
 

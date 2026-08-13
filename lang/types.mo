@@ -164,6 +164,20 @@ type DebugName {
     unnamed,
 }
 
+/// Visibility of a declaration. Mirrors the Rust reference's
+/// `core::term::Visibility` exactly: `priv` is enforced immediately
+/// (module boundaries already exist), `pub` vs. the default
+/// `package_private` is a no-op until a package system exists. Applies to
+/// `def`/`type`/`class`/`struct`/`instance`/`infix` — NOT `use` (which
+/// gets its own separate `public: Bool` field directly on `Decl.use_d`,
+/// since `priv use` isn't a real form) or `open` (no visibility concept
+/// at all).
+type Visibility {
+    pub_,
+    priv_,
+    package_private,
+}
+
 type ParamV0 {
     mk (name: Identifier) (type_: TermV0) (mult: Multiplicity) (default: Option TermV0)
 }
@@ -254,12 +268,13 @@ struct Def {
     typ: Term,
     term: Term,
     constraints: List TypeConstraint,
-    attrs: List String
+    attrs: List String,
+    vis: Visibility
 }
 
 def Def.name (d : Def) : ModulePath :=
     match d {
-        mk name _ _ _ _ => name
+        mk name _ _ _ _ _ => name
     }
 
 // Canonical InductConstructor uses de Bruijn Term. InductConstructorV0 is the legacy V0 variant.
@@ -269,7 +284,7 @@ type InductConstructor {
 
 // Canonical Inductive uses de Bruijn Term. InductiveV0 is the legacy V0 variant.
 type Inductive {
-    mk (name: ModulePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List String)
+    mk (name: ModulePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List String) (vis: Visibility)
 }
 
 // Canonical ClassDef uses de Bruijn Term. ClassDefV0 is the legacy V0 variant.
@@ -279,7 +294,7 @@ type ClassDef {
 
 // Canonical Class uses de Bruijn Term. ClassV0 is the legacy V0 variant.
 type Class {
-    mk (name: Identifier) (params: List Param) (constraints: List TypeConstraint) (methods: List ClassDef)
+    mk (name: Identifier) (params: List Param) (constraints: List TypeConstraint) (methods: List ClassDef) (vis: Visibility)
 }
 
 // Canonical StructField uses de Bruijn Term. StructFieldV0 is the legacy V0 variant.
@@ -290,7 +305,7 @@ type StructField {
 
 // Canonical Struct uses de Bruijn Term. StructV0 is the legacy V0 variant.
 type Struct {
-    mk (name: Identifier) (fields: List StructField)
+    mk (name: Identifier) (fields: List StructField) (vis: Visibility)
 }
 
 /// A single item inside a `use Module { ... }` brace filter. Mirrors the
@@ -324,8 +339,8 @@ type Decl {
     struct_d (Struct),
     class_d (Class),
     instance_d (Instance),
-    infix_d (op: Operator) (path: ModulePath),
-    use_d (path: ModulePath) (filter: UseFilter),
+    infix_d (op: Operator) (path: ModulePath) (vis: Visibility),
+    use_d (path: ModulePath) (filter: UseFilter) (public: Bool),
     open_d (path: ModulePath) (filter: OpenFilter),
     /// `open ModulePath [{filter}] in <decl>` — the module is opened only
     /// for the scope of the wrapped declaration (def/type/struct/class/
@@ -341,7 +356,7 @@ def Decl.to_name (d : Decl) : ModulePath :=
 
 // Canonical Instance uses de Bruijn Term. InstanceV0 is the legacy V0 variant.
 type Instance {
-    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term)
+    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term) (vis: Visibility)
 }
 
 // --- Do-notation desugaring ---

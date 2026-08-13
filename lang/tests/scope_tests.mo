@@ -31,7 +31,7 @@ def test_build_with_def : Bool :=
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_attrs : List String := List.empty in
-    let def_decl : Def := Def.mk name Term.hole Term.hole empty_constraints empty_attrs in
+    let def_decl : Def := Def.mk name Term.hole Term.hole empty_constraints empty_attrs Visibility.package_private in
     let decls : List Decl := List.cons (Decl.def_d def_decl) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decls in
     true
@@ -52,7 +52,7 @@ def test_build_with_inductive : Bool :=
         empty_params (Term.type_ 1) in
     let cns : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
     let empty_attrs : List String := List.empty in
-    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs in
+    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
     let decls : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decls in
     true
@@ -85,7 +85,7 @@ def test_scope_find_inductive_found : Bool :=
         empty_params (Term.type_ 1) in
     let cns : List InductConstructor := List.cons true_cn List.empty in
     let empty_attrs : List String := List.empty in
-    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs in
+    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
     let sd : ScopeData := {
         def_refs := List.empty,
         class_defs := List.empty,
@@ -375,7 +375,7 @@ def test_scope_resolve_instance_found : Bool :=
     let inst_name : Identifier := Identifier.id "maybeMonad" in
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_args : List Term := List.empty in
-    let ins : Instance := Instance.mk inst_name cls_name empty_constraints empty_args in
+    let ins : Instance := Instance.mk inst_name cls_name empty_constraints empty_args Visibility.package_private in
     let si : ScopeInstance := {
         class_name := cls_name,
         instances := List.cons ins List.empty,
@@ -457,8 +457,8 @@ def test_list_append_non_empty : Bool :=
 def test_scope_resolve_instance_matches_class : Bool :=
     let cls_name1 : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let cls_name2 : ModulePath := ModulePath.mp (List.cons (Identifier.id "Monad") List.empty) in
-    let inst_show : Instance := Instance.mk (Identifier.id "showBool") cls_name1 List.empty List.empty in
-    let inst_monad : Instance := Instance.mk (Identifier.id "maybeMonad") cls_name2 List.empty List.empty in
+    let inst_show : Instance := Instance.mk (Identifier.id "showBool") cls_name1 List.empty List.empty Visibility.package_private in
+    let inst_monad : Instance := Instance.mk (Identifier.id "maybeMonad") cls_name2 List.empty List.empty Visibility.package_private in
     let si1 : ScopeInstance := {
         class_name := cls_name1,
         instances := List.cons inst_show List.empty,
@@ -493,7 +493,7 @@ def test_scope_resolve_instance_matches_class : Bool :=
     match result {
         ok ins =>
             match ins {
-                mk name cls _ _ => Similar.similar name (Identifier.id "maybeMonad")
+                mk name cls _ _ _ => Similar.similar name (Identifier.id "maybeMonad")
             },
         err _ => false
     }
@@ -505,7 +505,7 @@ def test_build_scope_then_resolve_def : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
     let def_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "add") List.empty) in
-    let def_decl : Def := Def.mk def_name Term.hole Term.hole List.empty List.empty in
+    let def_decl : Def := Def.mk def_name Term.hole Term.hole List.empty List.empty Visibility.package_private in
     let decls : List Decl := List.cons (Decl.def_d def_decl) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decls in
     let s : Scope := {
@@ -537,7 +537,7 @@ def test_build_scope_then_resolve_constructor : Bool :=
     let true_cn : InductConstructor := InductConstructor.mk true_name empty_params (Term.type_ 1) in
     let cns : List InductConstructor := List.cons true_cn List.empty in
     let empty_attrs : List String := List.empty in
-    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs in
+    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
     let decls : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decls in
     let s : Scope := {
@@ -571,12 +571,14 @@ def test_instance_key_matches_type_args : Bool :=
         (Identifier.id "showI64")
         cls_name
         List.empty
-        (List.cons i64_typ List.empty) in
+        (List.cons i64_typ List.empty)
+        Visibility.package_private in
     let show_bool : Instance := Instance.mk
         (Identifier.id "showBool")
         cls_name
         List.empty
-        (List.cons bool_typ List.empty) in
+        (List.cons bool_typ List.empty)
+        Visibility.package_private in
     let si : ScopeInstance := {
         class_name := cls_name,
         instances := List.cons show_i64 (List.cons show_bool List.empty),
@@ -605,7 +607,7 @@ def test_instance_key_matches_type_args : Bool :=
     match scope_resolve_instance cls_name key_i64 s {
         ok found =>
             match found {
-                mk name _ _ _ => Similar.similar name (Identifier.id "showI64"),
+                mk name _ _ _ _ => Similar.similar name (Identifier.id "showI64"),
             },
         err _ => false,
     }
@@ -619,7 +621,8 @@ def test_instance_key_matches_wrong_type_args : Bool :=
         (Identifier.id "showI64")
         cls_name
         List.empty
-        (List.cons i64_typ List.empty) in
+        (List.cons i64_typ List.empty)
+        Visibility.package_private in
     let si : ScopeInstance := {
         class_name := cls_name,
         instances := List.cons show_i64 List.empty,
@@ -660,7 +663,7 @@ def test_find_inductive_by_constructor_found : Bool :=
     let some_cn : InductConstructor := InductConstructor.mk some_mp List.empty (Term.type_ 1) in
     let none_cn : InductConstructor := InductConstructor.mk none_mp List.empty (Term.type_ 1) in
     let cns : List InductConstructor := List.cons some_cn (List.cons none_cn List.empty) in
-    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) cns List.empty in
+    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) cns List.empty Visibility.package_private in
     let sd : ScopeData := {
         def_refs := List.empty,
         class_defs := List.empty,
@@ -680,7 +683,7 @@ def test_find_inductive_by_constructor_found : Bool :=
     match scope_find_inductive_by_constructor some_mp s {
         Option.some found =>
             match found {
-                mk name _ _ _ _ => modpath_eq name ind_name,
+                mk name _ _ _ _ _ => modpath_eq name ind_name,
             },
         Option.none => false,
     }
@@ -690,7 +693,7 @@ def test_find_inductive_by_constructor_not_found : Bool :=
     let ind_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Maybe") List.empty) in
     let some_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "some") List.empty) in
     let some_cn : InductConstructor := InductConstructor.mk some_mp List.empty (Term.type_ 1) in
-    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) (List.cons some_cn List.empty) List.empty in
+    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) (List.cons some_cn List.empty) List.empty Visibility.package_private in
     let sd : ScopeData := {
         def_refs := List.empty,
         class_defs := List.empty,

@@ -241,13 +241,22 @@ def show_type_constraint (tc : TypeConstraint) : String := match tc {
         String.concat inner "]",
 }
 
+/// `pub `/`priv `, or "" for the default `package_private` (never written
+/// back out explicitly — round-trips as the same absence of a prefix).
+#[partial]
+def show_vis_prefix (vis : Visibility) : String := match vis {
+    Visibility.pub_ => "pub ",
+    Visibility.priv_ => "priv ",
+    Visibility.package_private => "",
+}
+
 #[partial]
 def show_def (d : Def) : String := match d {
-    Def.mk name typ term constraints attrs =>
+    Def.mk name typ term constraints attrs vis =>
         let name_str := show_module_path name in
         let type_str := show_term typ in
         let term_str := show_term term in
-        let prefix := String.concat "def " name_str in
+        let prefix := String.concat (show_vis_prefix vis) (String.concat "def " name_str) in
         let colon_type := String.concat " : " type_str in
         let with_type := String.concat prefix colon_type in
         let eq_body := String.concat " := " term_str in
@@ -256,9 +265,9 @@ def show_def (d : Def) : String := match d {
 
 #[partial]
 def show_inductive (ind : Inductive) : String := match ind {
-    Inductive.mk name params typ constructors attrs =>
+    Inductive.mk name params typ constructors attrs vis =>
         let name_str := show_module_path name in
-        let header := String.concat "type " name_str in
+        let header := String.concat (show_vis_prefix vis) (String.concat "type " name_str) in
         let with_params := if list_param_is_empty params then header
                            else String.concat header (String.concat " " (show_params params)) in
         let ctors_str := show_induct_constructors constructors in
@@ -350,9 +359,9 @@ def param_type (p : Param) : Term := match p {
 
 #[partial]
 def show_struct (s : Struct) : String := match s {
-    Struct.mk name fields =>
+    Struct.mk name fields vis =>
         let name_str := show_identifier name in
-        let header := String.concat "struct " name_str in
+        let header := String.concat (show_vis_prefix vis) (String.concat "struct " name_str) in
         let fields_str := show_struct_fields fields in
         let ob := String.concat header " {\n  " in
         let inner := String.concat ob fields_str in
@@ -393,9 +402,9 @@ def show_struct_field (f : StructField) : String := match f {
 
 #[partial]
 def show_class (cls : Class) : String := match cls {
-    Class.mk name params constraints methods =>
+    Class.mk name params constraints methods vis =>
         let name_str := show_identifier name in
-        let header := String.concat "class " name_str in
+        let header := String.concat (show_vis_prefix vis) (String.concat "class " name_str) in
         let with_params := match params {
             List.empty => header,
             List.cons x y =>
@@ -459,18 +468,22 @@ def show_class_def (m : ClassDef) : String := match m {
 }
 
 def show_instance (ins : Instance) : String := match ins {
-    Instance.mk name cls constraints args =>
+    Instance.mk name cls constraints args vis =>
         let cls_str := show_module_path cls in
-        String.concat "instance " cls_str,
+        String.concat (show_vis_prefix vis) (String.concat "instance " cls_str),
 }
 
 #[partial]
-def show_infix_decl (op : Operator) (path : ModulePath) : String :=
+def show_infix_decl (op : Operator) (path : ModulePath) (vis : Visibility) : String :=
     let op_str := show_operator op in
     let path_str := show_module_path path in
-    let op_part := String.concat "infix: " op_str in
+    let op_part := String.concat (show_vis_prefix vis) (String.concat "infix: " op_str) in
     let eq_part := String.concat " := " path_str in
     String.concat op_part eq_part
+
+#[partial]
+def show_use_pub_prefix (public : Bool) : String :=
+    if public then "pub " else ""
 
 #[partial]
 def show_decl (d : Decl) : String := match d {
@@ -479,10 +492,10 @@ def show_decl (d : Decl) : String := match d {
     struct_d s => show_struct s,
     class_d cls => show_class cls,
     instance_d ins => show_instance ins,
-    infix_d op path => show_infix_decl op path,
-    use_d path filter =>
+    infix_d op path vis => show_infix_decl op path vis,
+    use_d path filter public =>
         let path_str := show_module_path path in
-        String.concat (String.concat "use " path_str) (show_use_filter filter),
+        String.concat (String.concat (show_use_pub_prefix public) (String.concat "use " path_str)) (show_use_filter filter),
     open_d path filter =>
         let path_str := show_module_path path in
         String.concat (String.concat "open " path_str) (show_open_filter filter),
@@ -782,8 +795,13 @@ def test_show_debug_name_unnamed : Bool :=
 
 #[test]
 def test_show_decl_use : Bool :=
-    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "prelude") List.empty)) UseFilter.use_bare in
+    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "prelude") List.empty)) UseFilter.use_bare false in
     show_decl d == "use prelude"
+
+#[test]
+def test_show_decl_use_pub : Bool :=
+    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "prelude") List.empty)) UseFilter.use_bare true in
+    show_decl d == "pub use prelude"
 
 #[test]
 def test_show_decl_open : Bool :=
@@ -793,7 +811,7 @@ def test_show_decl_open : Bool :=
 #[test]
 def test_show_decl_use_glob : Bool :=
     let items := List.cons UseItem.use_glob List.empty in
-    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "io") List.empty)) (UseFilter.use_items items) in
+    let d := Decl.use_d (ModulePath.mp (List.cons (Identifier.id "io") List.empty)) (UseFilter.use_items items) false in
     show_decl d == "use io {*}"
 
 #[test]
@@ -804,13 +822,13 @@ def test_show_decl_open_filtered : Bool :=
 
 #[test]
 def test_show_decl_scoped_open : Bool :=
-    let inner := Decl.def_d (Def.mk (ModulePath.mp (List.cons (Identifier.id "z") List.empty)) Term.hole Term.hole List.empty List.empty) in
+    let inner := Decl.def_d (Def.mk (ModulePath.mp (List.cons (Identifier.id "z") List.empty)) Term.hole Term.hole List.empty List.empty Visibility.package_private) in
     let d := Decl.scoped_open_d (ModulePath.mp (List.cons (Identifier.id "Nat") List.empty)) OpenFilter.open_all inner in
     show_decl d == "open Nat in def z : _ := _"
 
 #[test]
 def test_show_decl_infix : Bool :=
-    let d := Decl.infix_d (Operator.operator ">>=") (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))) in
+    let d := Decl.infix_d (Operator.operator ">>=") (ModulePath.mp (List.cons (Identifier.id "Monad") (List.cons (Identifier.id "bind") List.empty))) Visibility.package_private in
     show_decl d == "infix: >>= := Monad.bind"
 
 #[test]
@@ -819,7 +837,7 @@ def test_show_decl_def : Bool :=
     let path := Identifier.id "x" in
     let var_t := Term.var 0 (DebugName.named path) in
     let lam := Term.lam (DebugName.named path) (Term.type_ 1) var_t in
-    let d := Def.mk name (Term.type_ 1) lam List.empty List.empty in
+    let d := Def.mk name (Term.type_ 1) lam List.empty List.empty Visibility.package_private in
     let decl := Decl.def_d d in
     show_decl decl == "def id : Type := (fn x : Type => x)"
 
@@ -829,7 +847,7 @@ def test_show_decl_class : Bool :=
     let show_name := Identifier.id "show" in
     let cd := ClassDef.mk show_name (Term.type_ 1) Option.none in
     let methods := List.cons cd List.empty in
-    let cls := Class.mk name List.empty List.empty methods in
+    let cls := Class.mk name List.empty List.empty methods Visibility.package_private in
     let decl := Decl.class_d cls in
     show_decl decl == "class Show {\n  def show : Type\n}"
 
@@ -837,7 +855,7 @@ def test_show_decl_class : Bool :=
 def test_show_decl_struct : Bool :=
     let name := Identifier.id "Point" in
     let field := StructField.mk (Identifier.id "x") (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
-    let decl := Decl.struct_d (Struct.mk name (List.cons field List.empty)) in
+    let decl := Decl.struct_d (Struct.mk name (List.cons field List.empty) Visibility.package_private) in
     show_decl decl == "struct Point {\n  x : 0i64\n}"
 
 #[test]
@@ -845,7 +863,7 @@ def test_show_decl_inductive : Bool :=
     let name := ModulePath.mp (List.cons (Identifier.id "Bool") List.empty) in
     let ct1 := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "true") List.empty)) List.empty (Term.type_ 1) in
     let ct2 := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "false") List.empty)) List.empty (Term.type_ 1) in
-    let decl := Decl.inductive_d (Inductive.mk name List.empty (Term.type_ 1) (List.cons ct1 (List.cons ct2 List.empty)) List.empty) in
+    let decl := Decl.inductive_d (Inductive.mk name List.empty (Term.type_ 1) (List.cons ct1 (List.cons ct2 List.empty)) List.empty Visibility.package_private) in
     show_decl decl == "type Bool {\n  true,\n  false\n}"
 
 

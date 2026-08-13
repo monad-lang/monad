@@ -131,18 +131,18 @@ def wrap_forall (typ : Term) (vars : List Identifier) : Term :=
 /// Mirrors Rust's elaborate_def (type.rs:2877).
 def elaborate_def (d : Def) (known_names : List Identifier) : Def :=
     match d {
-        Def.mk name typ term constraints attrs =>
+        Def.mk name typ term constraints attrs vis =>
             let elaborated_typ := elaborate_type typ constraints known_names in
-            Def.mk name elaborated_typ term constraints attrs,
+            Def.mk name elaborated_typ term constraints attrs vis,
     }
 
 /// Elaborate an inductive type definition.
 /// Mirrors Rust's elaborate_inductive (type.rs:2959).
 def elaborate_inductive (ind : Inductive) (known_names : List Identifier) : Inductive :=
     match ind {
-        Inductive.mk name params typ constructors attrs =>
+        Inductive.mk name params typ constructors attrs vis =>
             let elaborated_constructors := elaborate_constructors constructors known_names in
-            Inductive.mk name params typ elaborated_constructors attrs,
+            Inductive.mk name params typ elaborated_constructors attrs vis,
     }
 
 /// Elaborate a list of constructors.
@@ -181,11 +181,11 @@ def collect_param_names (params : List Param) : List Identifier :=
 /// Elaborate a class definition.
 def elaborate_class (cls : Class) (known_names : List Identifier) : Class :=
     match cls {
-        Class.mk name params constraints methods =>
+        Class.mk name params constraints methods vis =>
             let param_names := collect_param_names params in
             let extended_names := union_ids param_names known_names in
             let elaborated_methods := elaborate_class_defs methods extended_names in
-            Class.mk name params constraints elaborated_methods,
+            Class.mk name params constraints elaborated_methods vis,
     }
 
 /// Elaborate a list of class method definitions.
@@ -232,7 +232,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
     match decl {
         Decl.def_d d =>
             match d {
-                Def.mk name _ _ _ _ =>
+                Def.mk name _ _ _ _ _ =>
                     match mp_to_maybe_id name {
                         Option.some id =>
                             let empty : List Identifier := List.empty in
@@ -242,7 +242,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
             },
         Decl.inductive_d i =>
             match i {
-                Inductive.mk name _ _ _ _ =>
+                Inductive.mk name _ _ _ _ _ =>
                     match mp_to_maybe_id name {
                         Option.some id =>
                             let empty : List Identifier := List.empty in
@@ -252,19 +252,19 @@ def names_of_decl (decl : Decl) : List Identifier :=
             },
         Decl.class_d c =>
             match c {
-                Class.mk name _ _ _ =>
+                Class.mk name _ _ _ _ =>
                     let empty : List Identifier := List.empty in
                     List.cons name empty,
             },
         Decl.struct_d s =>
             match s {
-                Struct.mk name _ =>
+                Struct.mk name _ _ =>
                     let empty : List Identifier := List.empty in
                     List.cons name empty,
             },
         Decl.instance_d i =>
             match i {
-                Instance.mk name _ _ _ =>
+                Instance.mk name _ _ _ _ =>
                     let empty : List Identifier := List.empty in
                     List.cons name empty,
             },
@@ -301,8 +301,8 @@ def elaborate_decl (decl : Decl) (known_names : List Identifier) : Decl :=
         Decl.class_d c => Decl.class_d (elaborate_class c known_names),
         Decl.struct_d s => Decl.struct_d (elaborate_struct s known_names),
         Decl.instance_d i => Decl.instance_d (elaborate_instance i known_names),
-        Decl.infix_d op p => Decl.infix_d op p,
-        Decl.use_d p filter => Decl.use_d p filter,
+        Decl.infix_d op p vis => Decl.infix_d op p vis,
+        Decl.use_d p filter public => Decl.use_d p filter public,
         Decl.open_d p filter => Decl.open_d p filter,
         Decl.scoped_open_d p filter inner => Decl.scoped_open_d p filter (elaborate_decl inner known_names),
     }

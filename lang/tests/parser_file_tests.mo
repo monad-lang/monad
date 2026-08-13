@@ -81,14 +81,6 @@ def lang_files_utf8 : List String :=
      "lang/lower.mo",
      "lang/codegen/emit.mo"]
 
-/// All files with UTF-8 characters
-#[partial]
-def all_files_utf8 : List String :=
-    init_files_utf8 ++
-    std_files_utf8 ++
-    example_files_utf8 ++
-    lang_files_utf8
-
 /// Parse a single file and return success status
 #[partial]
 def parse_file (path : String) : Bool :=
@@ -142,8 +134,10 @@ def test_parse_examples_all_utf8 : Bool := parse_all example_files_utf8
 #[test]
 def test_parse_lang_all_utf8 : Bool := parse_all lang_files_utf8
 
-#[test]
-def test_parse_all_utf8_files : Bool := parse_all all_files_utf8
+// test_parse_all_utf8_files removed: parsed the exact union of the four
+// category lists above via parse_all (which short-circuits on the first
+// failure), giving strictly worse debugging signal than the per-category
+// tests on any failure while adding no new coverage.
 
 // ================ Helper for counting declarations ================
 

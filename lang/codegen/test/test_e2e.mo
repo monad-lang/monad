@@ -21,7 +21,8 @@ def test_e2e_simple_literal : Bool :=
         (Term.type_ 1)
         (Term.lit (Literal.num 42 NumSuffix.i64))
         empty_cons
-        empty_attrs in
+        empty_attrs
+        Visibility.package_private in
     let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     check_contains text "myfunc"
@@ -36,7 +37,8 @@ def test_e2e_function_with_param : Bool :=
         (Term.type_ 1)
         term_
         empty_cons
-        empty_attrs in
+        empty_attrs
+        Visibility.package_private in
     let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     check_contains text "add5"
@@ -63,7 +65,8 @@ def test_e2e_calling_convention : Bool :=
         (Term.type_ 1)
         (Term.lit (Literal.num 1 NumSuffix.i64))
         empty_cons
-        empty_attrs in
+        empty_attrs
+        Visibility.package_private in
     let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     check_contains text "cc 9"

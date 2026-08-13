@@ -73,7 +73,7 @@ def extract_use_decls_go (decls : List Decl) (acc : List ModulePath) : List Modu
         List.empty => acc,
         List.cons d rest =>
             match d {
-                Decl.use_d path _ => extract_use_decls_go rest (List.cons path acc),
+                Decl.use_d path _ _ => extract_use_decls_go rest (List.cons path acc),
                 _ => extract_use_decls_go rest acc
             }
     }
@@ -622,7 +622,7 @@ def typecheck_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) :
 #[partial]
 def typecheck_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) : Bool :=
     match df {
-        Def.mk _name typ body _constraints _attrs =>
+        Def.mk _name typ body _constraints _attrs _vis =>
             // Skip native/abstract definitions (body is Term.hole)
             if is_term_hole body then
                 true
@@ -633,11 +633,17 @@ def typecheck_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) : 
                 }
     }
 
-/// Check if a term is a hole
+/// Check if a term is a hole. Bodyless defs with params still have their
+/// `Term.hole` body wrapped in one lambda per param (`lam_params` in
+/// lang/parser.mo always wraps, even around a hole) — unwrap those first,
+/// or every such def looks like it has a real body and gets sent through
+/// `type_check` needlessly (see the identical fix and its rationale in
+/// lang/tests/typecheck_init_tests.mo's own `is_hole`).
 #[partial]
 def is_term_hole (t : Term) : Bool :=
     match t {
         Term.hole => true,
+        Term.lam _dbg _typ body => is_term_hole body,
         _ => false
     }
 
@@ -645,7 +651,7 @@ def is_term_hole (t : Term) : Bool :=
 #[partial]
 def typecheck_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) : Bool :=
     match ind {
-        Inductive.mk _name _params _typ constructors _attrs =>
+        Inductive.mk _name _params _typ constructors _attrs _vis =>
             typecheck_constructors_with_scope constructors scope locals
     }
 

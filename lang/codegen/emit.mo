@@ -793,7 +793,7 @@ def build_llvm_params_from_db (params : List Param) (idx : I64) : List ParamPair
 /// Compile a canonical Def (de Bruijn Term) to LLVM IR.
 #[partial]
 def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
-    Def.mk name typ term_ constraints attrs =>
+    Def.mk name typ term_ constraints attrs _vis =>
         let fn_name := module_path_to_str name in
         let params := collect_db_params term_ in
         let llvm_params := build_llvm_params_db params in
@@ -907,7 +907,7 @@ def compile_db_inductive_constructors (constructors : List InductConstructor) : 
 /// Compile a single canonical Inductive to LLVM constructor wrapper functions.
 #[partial]
 def compile_db_inductive (ind : Inductive) : List LLVMFunction := match ind {
-    Inductive.mk name params typ constructors attrs =>
+    Inductive.mk name params typ constructors attrs _vis =>
         compile_db_inductive_constructors constructors
 }
 
@@ -1158,7 +1158,7 @@ def test_compile_db_inductive_decls : Bool :=
     let none_ctor := InductConstructor.mk none_name empty_params_list (Term.type_ 1) in
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
     let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
-    let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs in
+    let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let funcs := compile_db_inductive_decls (List.cons ind List.empty) in
     let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls in
     let text := lang.codegen.ir.emit_module mod_ in
@@ -1272,16 +1272,16 @@ def prefix_decl_name (d : Decl) (module_path : ModulePath) : Decl := match d {
 
 #[partial]
 def prefix_def_name (def_ : Def) (module_path : ModulePath) : Def := match def_ {
-    Def.mk name typ term constraints attrs =>
+    Def.mk name typ term constraints attrs vis =>
         let prefixed_name := prefix_module_path module_path name in
-        Def.mk prefixed_name typ term constraints attrs,
+        Def.mk prefixed_name typ term constraints attrs vis,
 }
 
 #[partial]
 def prefix_inductive_name (ind : Inductive) (module_path : ModulePath) : Inductive := match ind {
-    Inductive.mk name params typ constructors attrs =>
+    Inductive.mk name params typ constructors attrs vis =>
         let prefixed_name := prefix_module_path module_path name in
-        Inductive.mk prefixed_name params typ (prefix_constructor_names constructors module_path) attrs,
+        Inductive.mk prefixed_name params typ (prefix_constructor_names constructors module_path) attrs vis,
 }
 
 #[partial]
