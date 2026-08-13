@@ -4227,6 +4227,66 @@ def test_def_parser_negative_body : Bool :=
         fail _ => false
     }
 
+// --- string_parse escape sequence tests ---
+//
+// Regression tests for `lang/parser/string.mo`'s escape handling: the
+// previous version (`take_while is_not_quote`) stopped at the *first*
+// raw `"` regardless of whether it was escaped, so any escaped quote
+// truncated the string early instead of failing outright — invisible
+// to a success/fail-only test, hence checking the decoded *content*
+// below, not just parse success.
+
+#[test]
+def test_string_parse_plain : Bool :=
+	match string_parse "\"hello\"" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "hello",
+		fail _ => false
+	}
+
+#[test]
+def test_string_parse_escaped_quote : Bool :=
+	match string_parse "\"a\\\"b\"" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "a\"b",
+		fail _ => false
+	}
+
+/// The specific ambiguity `string_body_escape`'s doc comment calls out:
+/// an escaped backslash immediately followed by the REAL closing quote
+/// must not be misread as "the quote is escaped too".
+#[test]
+def test_string_parse_escaped_backslash_before_close : Bool :=
+	match string_parse "\"a\\\\\"" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "a\\",
+		fail _ => false
+	}
+
+/// The exact corpus case that motivated this fix: `lang/json.mo`'s own
+/// test fixture string, containing escaped quotes, backslash-n, and
+/// backslash-t all in one literal.
+#[test]
+def test_string_parse_json_fixture : Bool :=
+	match string_parse "\"\\\"a\\\\nb\\\\tc\\\\\\\"d\\\"\"" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "\"a\\nb\\tc\\\"d\"",
+		fail _ => false
+	}
+
+#[test]
+def test_string_parse_unknown_escape_fails : Bool :=
+	match string_parse "\"a\\qb\"" {
+		success _ _ => false,
+		fail _ => true
+	}
+
+#[partial]
+def term_lit_str_eq (t : Term) (expected : String) : Bool :=
+	match t {
+		Term.lit lit_val => match lit_val {
+			Literal.str s => String.beq s expected,
+			_ => false
+		},
+		_ => false
+	}
+
 #[test]
 def test_def_do_block : Bool :=
     match def_parser "def main : Unit { return 0 }" {
