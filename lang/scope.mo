@@ -442,7 +442,7 @@ def find_inductive_in_list (inds : List Inductive) (name : ModulePath) : Option 
 
 def scope_data_add_instance (sd : ScopeData) (ins : Instance) : ScopeData :=
     match ins {
-        mk _ cname _ _ _ =>
+        mk _ cname _ _ _ _ =>
             match sd {
                 mk dr cd insts ind cls infs conf =>
                     let updated_insts : List ScopeInstance := scope_add_to_instances insts cname ins in
@@ -710,7 +710,7 @@ def first_matching_instance (candidates : List Instance) (key : InstanceKey) : R
 
 def instance_key_matches (ins : Instance) (key : InstanceKey) : Bool :=
     match ins {
-        mk _ cls_name constraints ins_args _ =>
+        mk _ cls_name constraints ins_args _ _ =>
             match key {
                 mk key_cls _ key_args =>
                     if Similar.similar cls_name key_cls

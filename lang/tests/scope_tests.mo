@@ -375,7 +375,7 @@ def test_scope_resolve_instance_found : Bool :=
     let inst_name : Identifier := Identifier.id "maybeMonad" in
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_args : List Term := List.empty in
-    let ins : Instance := Instance.mk inst_name cls_name empty_constraints empty_args Visibility.package_private in
+    let ins : Instance := Instance.mk inst_name cls_name empty_constraints empty_args Visibility.package_private List.empty in
     let si : ScopeInstance := {
         class_name := cls_name,
         instances := List.cons ins List.empty,
@@ -457,8 +457,8 @@ def test_list_append_non_empty : Bool :=
 def test_scope_resolve_instance_matches_class : Bool :=
     let cls_name1 : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let cls_name2 : ModulePath := ModulePath.mp (List.cons (Identifier.id "Monad") List.empty) in
-    let inst_show : Instance := Instance.mk (Identifier.id "showBool") cls_name1 List.empty List.empty Visibility.package_private in
-    let inst_monad : Instance := Instance.mk (Identifier.id "maybeMonad") cls_name2 List.empty List.empty Visibility.package_private in
+    let inst_show : Instance := Instance.mk (Identifier.id "showBool") cls_name1 List.empty List.empty Visibility.package_private List.empty in
+    let inst_monad : Instance := Instance.mk (Identifier.id "maybeMonad") cls_name2 List.empty List.empty Visibility.package_private List.empty in
     let si1 : ScopeInstance := {
         class_name := cls_name1,
         instances := List.cons inst_show List.empty,
@@ -493,7 +493,7 @@ def test_scope_resolve_instance_matches_class : Bool :=
     match result {
         ok ins =>
             match ins {
-                mk name cls _ _ _ => Similar.similar name (Identifier.id "maybeMonad")
+                mk name cls _ _ _ _ => Similar.similar name (Identifier.id "maybeMonad")
             },
         err _ => false
     }
@@ -572,13 +572,13 @@ def test_instance_key_matches_type_args : Bool :=
         cls_name
         List.empty
         (List.cons i64_typ List.empty)
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let show_bool : Instance := Instance.mk
         (Identifier.id "showBool")
         cls_name
         List.empty
         (List.cons bool_typ List.empty)
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let si : ScopeInstance := {
         class_name := cls_name,
         instances := List.cons show_i64 (List.cons show_bool List.empty),
@@ -607,7 +607,7 @@ def test_instance_key_matches_type_args : Bool :=
     match scope_resolve_instance cls_name key_i64 s {
         ok found =>
             match found {
-                mk name _ _ _ _ => Similar.similar name (Identifier.id "showI64"),
+                mk name _ _ _ _ _ => Similar.similar name (Identifier.id "showI64"),
             },
         err _ => false,
     }
@@ -622,7 +622,7 @@ def test_instance_key_matches_wrong_type_args : Bool :=
         cls_name
         List.empty
         (List.cons i64_typ List.empty)
-        Visibility.package_private in
+        Visibility.package_private List.empty in
     let si : ScopeInstance := {
         class_name := cls_name,
         instances := List.cons show_i64 List.empty,

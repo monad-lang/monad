@@ -264,7 +264,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
             },
         Decl.instance_d i =>
             match i {
-                Instance.mk name _ _ _ _ =>
+                Instance.mk name _ _ _ _ _ =>
                     let empty : List Identifier := List.empty in
                     List.cons name empty,
             },

@@ -684,46 +684,79 @@ def struct_fields (input : String) (name : Identifier) (vis : Visibility) : Pars
 		fail e => fail e
 	}
 
+/// Parse an optional multiplicity-prefix character before a struct
+/// field's name — `%` (Zero/Erased), `!` (Linear), `?` (Affine), or none
+/// at all (Many, the default). Mirrors the Rust reference's
+/// `multiplicity_prefix`. Never fails: an absent prefix is Many, same
+/// shape as `vis_parser` always succeeding with a default.
+#[partial]
+def multiplicity_prefix (input : String) : ParseResult Multiplicity :=
+	multiplicity_try_zero (tag "%" input) input
+
+#[partial]
+def multiplicity_try_zero (r : ParseResult String) (orig : String) : ParseResult Multiplicity :=
+	match r {
+		success rem _ => success rem Multiplicity.zero,
+		fail _ => multiplicity_try_linear (tag "!" orig) orig
+	}
+
+#[partial]
+def multiplicity_try_linear (r : ParseResult String) (orig : String) : ParseResult Multiplicity :=
+	match r {
+		success rem _ => success rem Multiplicity.linear,
+		fail _ => multiplicity_try_affine (tag "?" orig) orig
+	}
+
+#[partial]
+def multiplicity_try_affine (r : ParseResult String) (orig : String) : ParseResult Multiplicity :=
+	match r {
+		success rem _ => success rem Multiplicity.affine,
+		fail _ => success orig Multiplicity.many
+	}
+
 #[partial]
 def struct_one_field (ctx : List Identifier) (input : String) : ParseResult StructField :=
-	struct_field_name (identifier input) ctx
-
-#[partial]
-def struct_field_name (r : ParseResult String) (ctx : List Identifier) : ParseResult StructField :=
-	match r {
-		success rem name => struct_field_colon (tag ":" (skip_spaces rem)) (Identifier.id name) ctx,
+	match multiplicity_prefix input {
+		success rem mult => struct_field_name (identifier rem) ctx mult,
 		fail e => fail e
 	}
 
 #[partial]
-def struct_field_colon (r : ParseResult String) (name : Identifier) (ctx : List Identifier) : ParseResult StructField :=
+def struct_field_name (r : ParseResult String) (ctx : List Identifier) (mult : Multiplicity) : ParseResult StructField :=
 	match r {
-		success rem _ => struct_field_type (type_expression ctx (skip_spaces rem)) name ctx,
+		success rem name => struct_field_colon (tag ":" (skip_spaces rem)) (Identifier.id name) ctx mult,
 		fail e => fail e
 	}
 
 #[partial]
-def struct_field_type (r : ParseResult Term) (name : Identifier) (ctx : List Identifier) : ParseResult StructField :=
+def struct_field_colon (r : ParseResult String) (name : Identifier) (ctx : List Identifier) (mult : Multiplicity) : ParseResult StructField :=
 	match r {
-		success rem typ => struct_field_default (tag ":=" (skip_spaces rem)) rem name typ ctx,
+		success rem _ => struct_field_type (type_expression ctx (skip_spaces rem)) name ctx mult,
 		fail e => fail e
 	}
 
 #[partial]
-def struct_field_default (r : ParseResult String) (orig : String) (name : Identifier) (typ : Term) (ctx : List Identifier) : ParseResult StructField :=
+def struct_field_type (r : ParseResult Term) (name : Identifier) (ctx : List Identifier) (mult : Multiplicity) : ParseResult StructField :=
 	match r {
-		success rem _ => struct_field_default_val (expression ctx (skip_spaces rem)) name typ,
+		success rem typ => struct_field_default (tag ":=" (skip_spaces rem)) rem name typ ctx mult,
+		fail e => fail e
+	}
+
+#[partial]
+def struct_field_default (r : ParseResult String) (orig : String) (name : Identifier) (typ : Term) (ctx : List Identifier) (mult : Multiplicity) : ParseResult StructField :=
+	match r {
+		success rem _ => struct_field_default_val (expression ctx (skip_spaces rem)) name typ mult,
 		fail _ =>
 			let none : Option Term := Option.none in
-			success orig (StructField.mk name typ none)
+			success orig (StructField.mk name typ none mult)
 	}
 
 #[partial]
-def struct_field_default_val (r : ParseResult Term) (name : Identifier) (typ : Term) : ParseResult StructField :=
+def struct_field_default_val (r : ParseResult Term) (name : Identifier) (typ : Term) (mult : Multiplicity) : ParseResult StructField :=
 	match r {
 		success rem defval =>
 			let some_val : Option Term := Option.some defval in
-			success rem (StructField.mk name typ some_val),
+			success rem (StructField.mk name typ some_val mult),
 		fail e => fail e
 	}
 
@@ -1739,8 +1772,8 @@ def instance_apply_vis (dr : ParseResult Decl) (vis : Visibility) : ParseResult 
 			match decl {
 				instance_d inst =>
 					match inst {
-						Instance.mk name cls constraints args _ =>
-							success rem (Decl.instance_d (Instance.mk name cls constraints args vis))
+						Instance.mk name cls constraints args _ implicit_params =>
+							success rem (Decl.instance_d (Instance.mk name cls constraints args vis implicit_params))
 					},
 				_ => success rem decl
 			},
@@ -1750,7 +1783,102 @@ def instance_apply_vis (dr : ParseResult Decl) (vis : Visibility) : ParseResult 
 #[partial]
 def instance_kw (r : ParseResult String) : ParseResult Decl :=
 	match r {
-		success rem _ => instance_try_constraints (tag "[" (skip_spaces rem)) rem,
+		success rem _ =>
+			let empty : List Param := List.empty in
+			instance_implicit_params_loop (skip_spaces rem) empty,
+		fail e => fail e
+	}
+
+/// Parse zero or more `{name : Type}` implicit-binder clauses right after
+/// the `instance` keyword (e.g. `instance {A : Type} Show A { ... }`),
+/// mirroring the Rust reference's `implicit_params` (`fold_many0` over
+/// `implicit_param`). Unlike `def`'s implicit params (`def_implicit_param`,
+/// which deliberately discards its clause's content since `elaborate_def`
+/// auto-generalizes free type vars anyway), these ARE captured for real:
+/// `Instance.implicit_params` is load-bearing for instance resolution on
+/// the Rust side (substitution-based matching against a lookup key's
+/// args — see `Instance.params` in core/src/term.rs), so there's no
+/// auto-generalization step to fall back on here.
+#[partial]
+def instance_implicit_params_loop (input : String) (params : List Param) : ParseResult Decl :=
+	instance_implicit_try (tag "{" input) input params
+
+#[partial]
+def instance_implicit_try (r : ParseResult String) (orig : String) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem _ => instance_implicit_param (identifier (skip_spaces rem)) rem params,
+		fail _ =>
+			let rev : List Param := list_reverse params in
+			instance_apply_params (instance_try_constraints (tag "[" (skip_spaces orig)) orig) rev
+	}
+
+#[partial]
+def instance_implicit_param (r : ParseResult String) (brace_rem : String) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem2 name => instance_implicit_more_names rem2 brace_rem (List.cons (Identifier.id name) List.empty) params,
+		fail e => fail e
+	}
+
+/// After the first name in a `{...}` clause, try more space-separated
+/// names sharing one type (`{K V : Type}`), same shape as
+/// `def_explicit_more_names`.
+#[partial]
+def instance_implicit_more_names (input : String) (brace_rem : String) (names : List Identifier) (params : List Param) : ParseResult Decl :=
+	instance_implicit_more_names_try (identifier (skip_spaces input)) input brace_rem names params
+
+#[partial]
+def instance_implicit_more_names_try (r : ParseResult String) (orig : String) (brace_rem : String) (names : List Identifier) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem2 name => instance_implicit_more_names rem2 brace_rem (List.cons (Identifier.id name) names) params,
+		fail _ => instance_implicit_colon (tag ":" (skip_spaces orig)) names params
+	}
+
+#[partial]
+def instance_implicit_colon (r : ParseResult String) (names : List Identifier) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem2 _ =>
+			let empty_ctx : List Identifier := List.empty in
+			instance_implicit_type (type_expression empty_ctx rem2) names params,
+		fail e => fail e
+	}
+
+#[partial]
+def instance_implicit_type (r : ParseResult Term) (names : List Identifier) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem2 typ => instance_implicit_close (tag "}" rem2) names typ params,
+		fail e => fail e
+	}
+
+/// Closes a `{name : type}` clause and loops back for another one (the
+/// Rust reference's `fold_many0`) — unlike `def_implicit_close`, this
+/// keeps what it parsed: builds one real `Param` per name via the shared
+/// `params_for_names` helper and folds it into the accumulator before
+/// retrying.
+#[partial]
+def instance_implicit_close (r : ParseResult String) (names : List Identifier) (typ : Term) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem2 _ =>
+			instance_implicit_params_loop (skip_spaces rem2) (params_for_names (list_reverse names) typ params),
+		fail e => fail e
+	}
+
+/// Patch the collected implicit params onto the fully-parsed `Instance`,
+/// same "parse with a placeholder, patch the real value in afterward"
+/// pattern already used for `vis` (`instance_apply_vis`) and constraints
+/// (`instance_set_constraints`) — cheaper than threading `params` through
+/// every function from here down to `instance_close`.
+#[partial]
+def instance_apply_params (dr : ParseResult Decl) (params : List Param) : ParseResult Decl :=
+	match dr {
+		success rem decl =>
+			match decl {
+				instance_d inst =>
+					match inst {
+						Instance.mk name cls constraints args vis _ =>
+							success rem (Decl.instance_d (Instance.mk name cls constraints args vis params))
+					},
+				_ => success rem decl
+			},
 		fail e => fail e
 	}
 
@@ -1798,8 +1926,8 @@ def instance_set_constraints (dr : ParseResult Decl) (constraints : List TypeCon
 			match decl {
 				instance_d inst =>
 					match inst {
-						Instance.mk name cls _ args vis =>
-							success rem (Decl.instance_d (Instance.mk name cls constraints args vis))
+						Instance.mk name cls _ args vis implicit_params =>
+							success rem (Decl.instance_d (Instance.mk name cls constraints args vis implicit_params))
 					},
 				_ => success rem decl
 			},
@@ -2021,9 +2149,10 @@ def instance_close (r : ParseResult String) (cls : ModulePath) (args : List Term
 			let rev_methods : List Def := list_reverse methods in
 			let rev_args : List Term := list_reverse args in
 			let empty_constraints : List TypeConstraint := List.empty in
-			// Placeholder — instance_parser's instance_apply_vis patches
-			// the real value in afterward.
-			success rem (Decl.instance_d (Instance.mk (Identifier.id "_") cls empty_constraints rev_args Visibility.package_private)),
+			let empty_params : List Param := List.empty in
+			// Placeholder — instance_parser's instance_apply_vis and
+			// instance_apply_params patch the real values in afterward.
+			success rem (Decl.instance_d (Instance.mk (Identifier.id "_") cls empty_constraints rev_args Visibility.package_private empty_params)),
 		fail e => fail e
 	}
 
@@ -3144,6 +3273,84 @@ def test_instance_with_constraints : Bool :=
     fail _ => false
   }
 
+/// Regression test for the `instance {Param : Type} Class ...` implicit
+/// binder (unlike `def`'s implicit params, these are captured for real —
+/// see `instance_implicit_params_loop`'s doc comment).
+#[test]
+def test_instance_implicit_params : Bool :=
+	match instance_parser "instance {A : Type} Show A { def show x := x }" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				instance_d i => instance_has_one_param_named_A i,
+				_ => false
+			}),
+		fail _ => false
+	}
+
+#[partial]
+def instance_has_one_param_named_A (i : Instance) : Bool :=
+	match i {
+		Instance.mk _name _cls _constraints _args _vis implicit_params =>
+			match implicit_params {
+				List.cons p rest => param_named_A p && list_is_empty rest,
+				List.empty => false
+			}
+	}
+
+#[partial]
+def param_named_A (p : Param) : Bool :=
+	match p {
+		Param.mk pname _typ _mult _default => Similar.similar pname (Identifier.id "A")
+	}
+
+#[partial]
+def list_is_empty (ps : List Param) : Bool :=
+	match ps {
+		List.empty => true,
+		List.cons _ _ => false
+	}
+
+/// Multi-name implicit clause `{K V : Type}` — both names should produce
+/// their own `Param`, sharing the type (mirrors `test_def_implicit_multi_name`
+/// but, unlike that test, both names must actually survive into the AST).
+#[test]
+def test_instance_implicit_params_multi_name : Bool :=
+	match instance_parser "instance {K V : Type} Show K { def show x := x }" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				instance_d i => instance_has_two_params_named_K_V i,
+				_ => false
+			}),
+		fail _ => false
+	}
+
+#[partial]
+def instance_has_two_params_named_K_V (i : Instance) : Bool :=
+	match i {
+		Instance.mk _name _cls _constraints _args _vis implicit_params =>
+			match implicit_params {
+				List.cons p1 rest1 =>
+					match rest1 {
+						List.cons p2 rest2 =>
+							param_named_K p1 && param_named_V p2 && list_is_empty rest2,
+						List.empty => false
+					},
+				List.empty => false
+			}
+	}
+
+#[partial]
+def param_named_K (p : Param) : Bool :=
+	match p {
+		Param.mk pname _typ _mult _default => Similar.similar pname (Identifier.id "K")
+	}
+
+#[partial]
+def param_named_V (p : Param) : Bool :=
+	match p {
+		Param.mk pname _typ _mult _default => Similar.similar pname (Identifier.id "V")
+	}
+
 #[test]
 def test_class_with_paren_params : Bool :=
   match class_parser "class Functor (F : Type -> Type) { def map (f : A -> B) : F A -> F B }" {
@@ -3639,6 +3846,55 @@ def test_struct_parser : Bool :=
                 _ => false
             },
         fail _ => false
+    }
+
+/// Regression test for struct field multiplicity markers
+/// (`instance_implicit_params_loop`'s sibling feature for structs — see
+/// `multiplicity_prefix`'s doc comment). `!data` should parse as Linear
+/// while the unmarked `size` field defaults to Many.
+#[test]
+def test_struct_linear_field : Bool :=
+    match struct_parser "struct Buffer { !data : String, size : I64 }" {
+        success rem out =>
+            String.beq rem "" && (match out {
+                struct_d s => struct_first_field_is_linear s,
+                _ => false
+            }),
+        fail _ => false
+    }
+
+#[partial]
+def struct_first_field_is_linear (s : Struct) : Bool :=
+    match s {
+        Struct.mk _name fields _vis =>
+            match fields {
+                List.cons f rest => field_mult_is_linear f && field_mult_is_many_second rest,
+                List.empty => false
+            }
+    }
+
+#[partial]
+def field_mult_is_linear (f : StructField) : Bool :=
+    match f {
+        StructField.mk _name _typ _default mult =>
+            match mult {
+                Multiplicity.linear => true,
+                _ => false
+            }
+    }
+
+#[partial]
+def field_mult_is_many_second (fields : List StructField) : Bool :=
+    match fields {
+        List.cons f _rest =>
+            match f {
+                StructField.mk _name _typ _default mult =>
+                    match mult {
+                        Multiplicity.many => true,
+                        _ => false
+                    }
+            },
+        List.empty => false
     }
 
 #[test]

@@ -299,7 +299,12 @@ type Class {
 
 // Canonical StructField uses de Bruijn Term. StructFieldV0 is the legacy V0 variant.
 type StructField {
-    mk (name: Identifier) (typ: Term) (default: Option Term)
+    /// `mult` mirrors the Rust reference's `StructField.mult`
+    /// (core/src/term.rs): `!name : T` (Linear, must be consumed exactly
+    /// once), `?name : T` (Affine, at most once), `%name : T` (Zero /
+    /// Erased), or no prefix at all (Many, the default — the common
+    /// case). See examples/structs.mo's `Buffer.data` for a live `!` use.
+    mk (name: Identifier) (typ: Term) (default: Option Term) (mult: Multiplicity)
 }
 
 
@@ -356,7 +361,14 @@ def Decl.to_name (d : Decl) : ModulePath :=
 
 // Canonical Instance uses de Bruijn Term. InstanceV0 is the legacy V0 variant.
 type Instance {
-    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term) (vis: Visibility)
+    /// `implicit_params` holds any `{Name : Type}` binders written right
+    /// after `instance` (before the optional `[constraints]` and the class
+    /// name), e.g. `instance {A : Type} Show A { ... }`. Mirrors the Rust
+    /// reference's `Instance.params` (core/src/term.rs) — load-bearing for
+    /// instance resolution there (substitution-based matching against a
+    /// lookup key's args), not just documentation. Empty for the common
+    /// case of a fully-concrete instance like `instance Show Bool { ... }`.
+    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term) (vis: Visibility) (implicit_params: List Param)
 }
 
 // --- Do-notation desugaring ---

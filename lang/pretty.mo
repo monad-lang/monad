@@ -384,10 +384,23 @@ def show_struct_fields_rest (hd : StructField) (rest : List StructField) : Strin
             String.concat sep rest_str,
     }
 
+/// Source-level multiplicity prefix (parseable, round-trips through
+/// `multiplicity_prefix`) — distinct from `Multiplicity`'s own `Display`
+/// impl on the Rust side (core/src/term.rs), which uses "0"/"ω"/"!"/"?"
+/// for diagnostic printing, not source syntax. Many is the default and
+/// prints as nothing, matching `show_vis_prefix`'s package_private case.
+#[partial]
+def show_mult_prefix (mult : Multiplicity) : String := match mult {
+    Multiplicity.zero => "%",
+    Multiplicity.linear => "!",
+    Multiplicity.affine => "?",
+    Multiplicity.many => "",
+}
+
 #[partial]
 def show_struct_field (f : StructField) : String := match f {
-    StructField.mk name typ default =>
-        let name_str := show_identifier name in
+    StructField.mk name typ default mult =>
+        let name_str := String.concat (show_mult_prefix mult) (show_identifier name) in
         let type_str := show_term typ in
         let colon_type := String.concat " : " type_str in
         let base := String.concat name_str colon_type in
@@ -468,7 +481,7 @@ def show_class_def (m : ClassDef) : String := match m {
 }
 
 def show_instance (ins : Instance) : String := match ins {
-    Instance.mk name cls constraints args vis =>
+    Instance.mk name cls constraints args vis implicit_params =>
         let cls_str := show_module_path cls in
         String.concat (show_vis_prefix vis) (String.concat "instance " cls_str),
 }
@@ -854,7 +867,7 @@ def test_show_decl_class : Bool :=
 #[test]
 def test_show_decl_struct : Bool :=
     let name := Identifier.id "Point" in
-    let field := StructField.mk (Identifier.id "x") (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none in
+    let field := StructField.mk (Identifier.id "x") (Term.lit (Literal.num 0 NumSuffix.i64)) Option.none Multiplicity.many in
     let decl := Decl.struct_d (Struct.mk name (List.cons field List.empty) Visibility.package_private) in
     show_decl decl == "struct Point {\n  x : 0i64\n}"
 

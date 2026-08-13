@@ -302,8 +302,8 @@ def test_show_decl_inductive : Bool :=
 
 #[test]
 def test_show_decl_struct : Bool :=
-    let field_x : StructField := StructField.mk (Identifier.id "x") (Term.type_ 1) none_term in
-    let field_y : StructField := StructField.mk (Identifier.id "y") (Term.type_ 1) none_term in
+    let field_x : StructField := StructField.mk (Identifier.id "x") (Term.type_ 1) none_term Multiplicity.many in
+    let field_y : StructField := StructField.mk (Identifier.id "y") (Term.type_ 1) none_term Multiplicity.many in
     let fields : List StructField := List.cons field_x (List.cons field_y List.empty) in
     let s : Struct := Struct.mk (Identifier.id "Point") fields Visibility.package_private in
     let decl : Decl := Decl.struct_d s in
@@ -350,7 +350,7 @@ def test_show_decl_open : Bool :=
 def test_show_instance : Bool :=
     let cls_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let args : List Term := List.cons (Term.type_ 1) List.empty in
-    let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args Visibility.package_private in
+    let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args Visibility.package_private List.empty in
     let result : String := show_instance ins in
     String.beq result "instance Show"
 
