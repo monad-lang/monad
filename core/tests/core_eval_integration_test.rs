@@ -33,7 +33,7 @@ type Nat {
     succ (n : Nat)
 }
 
-@[terminating]
+#[terminating]
 def length (xs : Stack) : Nat :=
     match xs {
         cons _ tail => Nat.succ (length tail),

@@ -35,7 +35,7 @@ fn as_i64(v: &monad_core::core_value::Value) -> i64 {
 const FIB: &str = r#"
 use init
 
-@[terminating]
+#[terminating]
 def fib (n : I64) : I64 :=
     if n == 0
     then 0
@@ -60,13 +60,13 @@ fn phase5_evaluates_real_arithmetic_end_to_end() {
 const CLASS_DISPATCH: &str = r#"
 use init
 
-@[terminating]
+#[terminating]
 def build_list (n : I64) : List I64 :=
     if n == 0
     then List.empty
     else List.cons n (build_list (n - 1))
 
-@[terminating]
+#[terminating]
 def count_eq (target : I64) (xs : List I64) : I64 :=
     match xs {
         List.cons hd tl =>
@@ -90,7 +90,7 @@ fn phase5_evaluates_list_class_dispatch_end_to_end() {
 const STRING_OPS: &str = r#"
 use init
 
-@[terminating]
+#[terminating]
 def count_down (s : String) : I64 :=
     if String.beq s ""
     then 0
@@ -126,19 +126,19 @@ type Step {
     stop (rest : String)
 }
 
-@[partial]
+#[partial]
 def skip_one (s : String) : String :=
     if String.beq s ""
     then s
     else String.drop 1 s
 
-@[partial]
+#[partial]
 def step (label : I64) (s : String) : Step :=
     if String.beq s ""
     then Step.stop s
     else Step.ok (skip_one s) label
 
-@[terminating]
+#[terminating]
 def chain (n : I64) (s : String) : I64 :=
     match step n s {
         Step.ok rest label => label + (chain (label + 1) rest),
