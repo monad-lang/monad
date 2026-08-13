@@ -1449,78 +1449,178 @@ def class_constraints_or_name (input : String) (vis : Visibility) : ParseResult 
 #[partial]
 def class_try_constraints (r : ParseResult String) (orig : String) (vis : Visibility) : ParseResult Decl :=
 	match r {
-		success rem _ => class_name_after_bracket rem vis,
+		success rem _ => class_constraints_bracket rem vis,
 		fail _ => class_name (identifier (skip_spaces orig)) vis
 	}
 
+/// Parse the actual `[...]` constraint-list content (`type_constraint_list`,
+/// same helper `instance`'s own constraint parsing already used) instead
+/// of just `take_while`-skipping past it — the previous version consumed
+/// the bracket's text but threw it away outright, so e.g. `class [BEq A]
+/// Ord A { ... }` silently lost the `BEq A` constraint even though it
+/// parsed "successfully". See `class_params`'s doc comment for how the
+/// parsed constraints reach `Class.mk`.
 #[partial]
-def class_name_after_bracket (input : String) (vis : Visibility) : ParseResult Decl :=
-	class_find_bracket_close (take_while is_not_bracket input) input vis
+def class_constraints_bracket (input : String) (vis : Visibility) : ParseResult Decl :=
+	class_constraints_parsed (take_while is_not_bracket input) input vis
 
 #[partial]
-def class_find_bracket_close (r : ParseResult String) (orig : String) (vis : Visibility) : ParseResult Decl :=
+def class_constraints_parsed (r : ParseResult String) (orig : String) (vis : Visibility) : ParseResult Decl :=
 	match r {
-		success rem _ => class_name_after_close (tag "]" rem) orig vis,
+		success rem content =>
+			class_constraints_then_name (type_constraint_list content) rem vis,
 		fail _ => fail (ParseError.custom "expected ]")
 	}
 
 #[partial]
-def class_name_after_close (r : ParseResult String) (orig : String) (vis : Visibility) : ParseResult Decl :=
+def class_constraints_then_name (cr : ParseResult (List TypeConstraint)) (input : String) (vis : Visibility) : ParseResult Decl :=
+	match cr {
+		success _ constraints =>
+			class_constraints_close_bracket (tag "]" input) constraints vis,
+		fail _ =>
+			let empty_cs : List TypeConstraint := List.empty in
+			class_constraints_close_bracket (tag "]" input) empty_cs vis
+	}
+
+#[partial]
+def class_constraints_close_bracket (r : ParseResult String) (constraints : List TypeConstraint) (vis : Visibility) : ParseResult Decl :=
 	match r {
-		success rem _ => class_name (identifier (skip_spaces rem)) vis,
-		fail _ => class_name (identifier (skip_spaces orig)) vis
+		success rem _ =>
+			class_apply_constraints (class_name (identifier (skip_spaces rem)) vis) constraints,
+		fail _ => fail (ParseError.custom "expected ] after class constraint")
+	}
+
+/// Patch the real constraints onto the fully-parsed `Class` — see
+/// `class_params`'s doc comment for why this is done after the fact.
+#[partial]
+def class_apply_constraints (dr : ParseResult Decl) (constraints : List TypeConstraint) : ParseResult Decl :=
+	match dr {
+		success rem decl =>
+			match decl {
+				class_d cls =>
+					match cls {
+						Class.mk name params _ methods vis =>
+							success rem (Decl.class_d (Class.mk name params constraints methods vis))
+					},
+				_ => success rem decl
+			},
+		fail e => fail e
 	}
 
 #[partial]
 def class_name (r : ParseResult String) (vis : Visibility) : ParseResult Decl :=
 	match r {
 		success rem name =>
-			let empty_params : List Identifier := List.empty in
+			let empty_params : List Param := List.empty in
 			class_params rem (Identifier.id name) empty_params vis,
 		fail e => fail e
 	}
 
+/// Class-level params, same shape as `type_params_loop` (which fixed this
+/// exact bug for `type`/inductive params): bare identifiers (`class Map M
+/// { ... }`) become implicit `Type`-kinded params, `(name : Type-expr)`
+/// groups are parsed via `type_expression` — NOT the naive
+/// `take_while is_not_close_paren` the previous version used, which broke
+/// on any nested paren in the type (`class Map (M: (K : Type) -> (V :
+/// Type) -> Type) { ... }`, `std/map.mo`'s very first decl, stopped at
+/// the first `)` instead of the matching one). Both params AND
+/// constraints are captured for real now — `class_close` still builds
+/// the `Class` with placeholder empty lists, patched in afterward by
+/// `class_apply_params`/`class_apply_constraints` once the whole
+/// method-parsing subtree (which doesn't need either) has run, rather
+/// than threading two more accumulators through all ~30 method-parsing
+/// functions down to `class_close` (same "patch afterward" pattern
+/// `instance_parser` already uses for `vis`/constraints/implicit params).
 #[partial]
-def class_params (input : String) (name : Identifier) (params : List Identifier) (vis : Visibility) : ParseResult Decl :=
-	class_params_try (identifier (skip_spaces input)) input name params vis
+def class_params (input : String) (name : Identifier) (params : List Param) (vis : Visibility) : ParseResult Decl :=
+	class_params_try_bare (identifier (skip_spaces input)) input name params vis
 
 #[partial]
-def class_params_try (r : ParseResult String) (orig : String) (name : Identifier) (params : List Identifier) (vis : Visibility) : ParseResult Decl :=
+def class_params_try_bare (r : ParseResult String) (orig : String) (name : Identifier) (params : List Param) (vis : Visibility) : ParseResult Decl :=
 	match r {
-		success rem next => class_params rem name (List.cons (Identifier.id next) params) vis,
-		fail _ => class_try_paren (tag "(" (skip_spaces orig)) orig name vis
+		success rem next =>
+			class_params rem name (List.cons (param_many (Identifier.id next) (Term.type_ 1)) params) vis,
+		fail _ => class_params_try_paren (tag "(" (skip_spaces orig)) orig name params vis
 	}
 
 #[partial]
-def class_try_paren (r : ParseResult String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
+def class_params_try_paren (r : ParseResult String) (orig : String) (name : Identifier) (params : List Param) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem _ => class_params_paren_name (identifier (skip_spaces rem)) name params vis,
+		fail _ =>
+			let rev : List Param := list_reverse params in
+			class_apply_params (class_brace (tag "{" (skip_spaces orig)) name vis) rev
+	}
+
+#[partial]
+def class_params_paren_name (r : ParseResult String) (name : Identifier) (params : List Param) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem pname => class_params_paren_colon (tag ":" (skip_spaces rem)) pname name params vis,
+		fail e => fail e
+	}
+
+#[partial]
+def class_params_paren_colon (r : ParseResult String) (pname : String) (name : Identifier) (params : List Param) (vis : Visibility) : ParseResult Decl :=
 	match r {
 		success rem _ =>
-			class_paren_close (take_while is_not_close_paren rem) rem orig name vis,
-		fail _ => class_brace (tag "{" (skip_spaces orig)) name vis
+			let empty_ctx : List Identifier := List.empty in
+			class_params_paren_type (type_expression empty_ctx rem) pname name params vis,
+		fail e => fail e
 	}
 
 #[partial]
-def class_paren_close (r : ParseResult String) (rem : String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
+def class_params_paren_type (r : ParseResult Term) (pname : String) (name : Identifier) (params : List Param) (vis : Visibility) : ParseResult Decl :=
 	match r {
-		success after _ =>
-			class_paren_end (tag ")" (skip_spaces after)) after orig name vis,
-		fail _ => class_brace (tag "{" (skip_spaces orig)) name vis
+		success rem typ => class_params_paren_default (tag ":=" (skip_spaces rem)) rem pname typ name params vis,
+		fail e => fail e
 	}
 
+/// An optional `:= default` after a paren param's type — real usage:
+/// `init/prelude.mo`'s `class FromListLiteral (L : Type -> Type := List)`.
+/// Mirrors `struct_field_default`/`struct_field_default_val`'s shape.
 #[partial]
-def class_paren_end (r : ParseResult String) (orig : String) (orig2 : String) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
-	match r {
-		success rem _ =>
-			class_try_more_parens_or_brace (tag "(" (skip_spaces rem)) rem name vis,
-		fail _ => class_brace (tag "{" (skip_spaces orig)) name vis
-	}
-
-#[partial]
-def class_try_more_parens_or_brace (r : ParseResult String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
+def class_params_paren_default (r : ParseResult String) (orig : String) (pname : String) (typ : Term) (name : Identifier) (params : List Param) (vis : Visibility) : ParseResult Decl :=
 	match r {
 		success rem _ =>
-			class_paren_close (take_while is_not_close_paren rem) rem orig name vis,
-		fail _ => class_brace (tag "{" (skip_spaces orig)) name vis
+			let empty_ctx : List Identifier := List.empty in
+			class_params_paren_default_val (expression empty_ctx (skip_spaces rem)) pname typ name params vis,
+		fail _ =>
+			let none : Option Term := Option.none in
+			class_params_paren_close (tag ")" (skip_spaces orig)) (Param.mk (Identifier.id pname) typ Multiplicity.many none) name params vis
+	}
+
+#[partial]
+def class_params_paren_default_val (r : ParseResult Term) (pname : String) (typ : Term) (name : Identifier) (params : List Param) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem defval =>
+			let some_val : Option Term := Option.some defval in
+			class_params_paren_close (tag ")" (skip_spaces rem)) (Param.mk (Identifier.id pname) typ Multiplicity.many some_val) name params vis,
+		fail e => fail e
+	}
+
+#[partial]
+def class_params_paren_close (r : ParseResult String) (p : Param) (name : Identifier) (params : List Param) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem _ => class_params rem name (List.cons p params) vis,
+		fail e => fail e
+	}
+
+/// Patch the real params onto the fully-parsed `Class` — see
+/// `class_params`'s doc comment for why this is done after the fact
+/// rather than threaded through the method-parsing subtree.
+#[partial]
+def class_apply_params (dr : ParseResult Decl) (params : List Param) : ParseResult Decl :=
+	match dr {
+		success rem decl =>
+			match decl {
+				class_d cls =>
+					match cls {
+						Class.mk name _ constraints methods vis =>
+							success rem (Decl.class_d (Class.mk name params constraints methods vis))
+					},
+				_ => success rem decl
+			},
+		fail e => fail e
 	}
 
 #[partial]
@@ -1740,6 +1840,9 @@ def class_close (r : ParseResult String) (name : Identifier) (methods : List Cla
 			let rev_methods : List ClassDef := list_reverse methods in
 			let empty_params : List Param := List.empty in
 			let empty_constraints : List TypeConstraint := List.empty in
+			// Placeholders — class_apply_params/class_apply_constraints
+			// patch the real values in afterward (see class_params's doc
+			// comment; same pattern instance_close uses for vis).
 			success rem (Decl.class_d (Class.mk name empty_params empty_constraints rev_methods vis)),
 		fail e => fail e
 	}
@@ -3259,11 +3362,47 @@ def test_type_constraint_list_empty : Bool :=
 		fail _ => false
 	}
 
+/// Strengthened beyond a bare `success` check: `class_close` used to
+/// hardcode an empty constraint list regardless of what was actually
+/// parsed (see `class_params`'s doc comment) — a test that only checked
+/// `success`/`rem == ""` couldn't have caught that.
 #[test]
 def test_class_with_constraints : Bool :=
 	match class_parser "class [Functor F] Applicative F { def pure (a : A) : F A }" {
-		success rem _ => String.beq rem "",
+		success rem out =>
+			String.beq rem "" && (match out {
+				class_d c => class_has_one_functor_f_constraint c,
+				_ => false
+			}),
 		fail _ => false
+	}
+
+#[partial]
+def class_has_one_functor_f_constraint (c : Class) : Bool :=
+	match c {
+		Class.mk _name _params constraints _methods _vis =>
+			match constraints {
+				List.cons tc rest => constraint_is_functor_f tc && list_is_empty_tc rest,
+				List.empty => false
+			}
+	}
+
+#[partial]
+def constraint_is_functor_f (tc : TypeConstraint) : Bool :=
+	match tc {
+		TypeConstraint.mk cls vars =>
+			Similar.similar cls (ModulePath.mp (List.cons (Identifier.id "Functor") List.empty))
+				&& (match vars {
+					List.cons v _ => Similar.similar v (Identifier.id "F"),
+					List.empty => false
+				})
+	}
+
+#[partial]
+def list_is_empty_tc (cs : List TypeConstraint) : Bool :=
+	match cs {
+		List.empty => true,
+		List.cons _ _ => false
 	}
 
 #[test]
@@ -3352,15 +3491,79 @@ def param_named_V (p : Param) : Bool :=
 	}
 
 #[test]
+/// Strengthened beyond a bare `success` check — same rationale as
+/// `test_class_with_constraints`: `class_close` used to hardcode an
+/// empty *params* list too, regardless of what `(F : Type -> Type)`
+/// actually parsed.
+#[test]
 def test_class_with_paren_params : Bool :=
   match class_parser "class Functor (F : Type -> Type) { def map (f : A -> B) : F A -> F B }" {
-    success rem _ => String.beq rem "",
+    success rem out =>
+      String.beq rem "" && (match out {
+        class_d c => class_has_one_param_named_F c,
+        _ => false
+      }),
     fail _ => false
   }
 
+#[partial]
+def class_has_one_param_named_F (c : Class) : Bool :=
+	match c {
+		Class.mk _name params _constraints _methods _vis =>
+			match params {
+				List.cons p rest => param_named_F p && list_is_empty rest,
+				List.empty => false
+			}
+	}
+
+#[partial]
+def param_named_F (p : Param) : Bool :=
+	match p {
+		Param.mk pname _typ _mult _default => Similar.similar pname (Identifier.id "F")
+	}
+
+/// Strengthened beyond a bare `success` check: verifies the `:= List`
+/// default actually reaches the parsed `Param`, not just that the whole
+/// clause parses without error.
 #[test]
 def test_class_with_default_param : Bool :=
   match class_parser "class FromListLiteral (L : Type -> Type := List) { def cons (a : A) : L A -> L A }" {
+    success rem out =>
+      String.beq rem "" && (match out {
+        class_d c => class_has_one_param_L_with_default c,
+        _ => false
+      }),
+    fail _ => false
+  }
+
+#[partial]
+def class_has_one_param_L_with_default (c : Class) : Bool :=
+	match c {
+		Class.mk _name params _constraints _methods _vis =>
+			match params {
+				List.cons p rest => param_named_L_with_default p && list_is_empty rest,
+				List.empty => false
+			}
+	}
+
+#[partial]
+def param_named_L_with_default (p : Param) : Bool :=
+	match p {
+		Param.mk pname _typ _mult default =>
+			Similar.similar pname (Identifier.id "L") && (match default {
+				Option.some _ => true,
+				Option.none => false
+			})
+	}
+
+/// Regression test for the nested-parens bug: the previous param parser
+/// used `take_while is_not_close_paren`, which stops at the *first* `)`
+/// rather than the matching one — breaking outright on any nested paren
+/// inside a class param's type. `std/map.mo`'s very first decl has this
+/// exact shape.
+#[test]
+def test_class_with_nested_paren_param_type : Bool :=
+  match class_parser "class Map (M: (K : Type) -> (V : Type) -> Type) { def empty : M K V }" {
     success rem _ => String.beq rem "",
     fail _ => false
   }
