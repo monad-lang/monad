@@ -1,187 +1,117 @@
-use io {io, read_file}
-use lang.types {
-  Decl, Def, InductConstructor, Inductive, LocalScope, ModulePath, Scope,
-  ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
+use io {IO}
+use lang.types {LocalScope}
+use lang.module {
+  extract_directory, load_module_with_dependencies, parse_all_decls,
+  typecheck_module_with_scope,
 }
-use lang.module {mk, parse_all_decls}
-use lang.parser.core {fail, mk, success}
-use lang.scope {build_scope_from_decls}
-use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
-
-open IO {io, read_file}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
     parent := Option.none,
 }
 
-def make_scope (path : ModulePath) (sd : ScopeData) : Scope := {
-    module_id := path,
-    scope := sd,
-    parent := Option.none,
-}
-
-/// Try to type check all definitions in a module
-def typecheck_module (path : ModulePath) (scope : Scope) (decls : List Decl) : Bool := 
-    match decls {
-        List.empty => true,
-        List.cons d rest =>
-            let result : Bool := typecheck_decl d path scope in
-            if result then
-                typecheck_module path scope rest
-            else
-                false
-    }
-
-/// Type check a single declaration
-def typecheck_decl (d : Decl) (path : ModulePath) (scope : Scope) : Bool :=
-    match d {
-        Decl.def_d df => typecheck_def df scope,
-        Decl.inductive_d ind => typecheck_inductive ind scope,
-        _ => true  // Skip use, open, infix, class, instance for now
-    }
-
-/// Type check an inductive type
-def typecheck_inductive (ind : Inductive) (scope : Scope) : Bool :=
-    match ind {
-        mk _name _params _typ constructors _attrs =>
-            // For now, just check that all constructors are valid
-            typecheck_constructors constructors scope
-    }
-
-/// Type check all constructors in a list
-def typecheck_constructors (cons : List InductConstructor) (scope : Scope) : Bool :=
-    match cons {
-        List.empty => true,
-        List.cons c rest =>
-            let result : Bool := typecheck_constructor c scope in
-            if result then
-                typecheck_constructors rest scope
-            else
-                false
-    }
-
-/// Type check a single constructor
-def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
-    match c {
-        mk _name params typ =>
-            // Check the constructor type
-            match type_check typ Term.hole scope empty_local_types empty_locals {
-                ok _ => true,
-                err _ => false
-            }
-    }
-
-/// Check if a term is a hole (used for native/abstract definitions)
-def is_hole (t : Term) : Bool :=
-    match t {
-        Term.hole => true,
-        _ => false
-    }
-
-/// Type check a definition
-def typecheck_def (df : Def) (scope : Scope) : Bool :=
-    match df {
-        mk _name typ body _constraints _attrs =>
-            // Skip native/abstract definitions (body is Term.hole)
-            if is_hole body then
-                true
-            else
-                match type_check body Term.hole scope empty_local_types empty_locals {
-                    ok _ => true,
-                    err e => 
-                        // For now, just return false on error
-                        // In the future, we could print the error for debugging
-                        false,
-                }
-    }
-
-/// Build scope and try to type check a file
-def typecheck_file (file_path : String) (mod_name : String) : Bool := 
-    match IO.read_file file_path {
-        IO.io content => 
+/// Type check a file with its full dependency scope (ambient prelude/init
+/// included) — reuses the same `lang.module` pipeline
+/// `lang/tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main`
+/// already proves correct, instead of this file's own previous
+/// from-scratch reimplementation that only ever built scope from the
+/// target file's own decls. That meant any def relying on a name defined
+/// elsewhere in the ambient prelude/init chain (nearly everything, since
+/// prelude/init are auto-opened for every file) genuinely couldn't
+/// resolve — not a parser bug, but this test harness never exercising
+/// the same dependency-loading real compilation goes through. `mod_name`
+/// is used as the module's own path (matching `resolve_module_file`'s
+/// "look up bare module names under init/std/lang/examples" convention);
+/// `extract_directory file_path` is passed as the search base_dir so
+/// files outside those top-level dirs (e.g. `lang/parser/combinators.mo`)
+/// still resolve relative to their own directory.
+def typecheck_file (file_path : String) (mod_name : String) : IO Bool := do {
+    let content <- IO.read_file file_path;
+    let mp := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty);
+    let base_dir := extract_directory file_path;
+    let mb_scope <- load_module_with_dependencies base_dir mp;
+    return match mb_scope {
+        Option.some scope =>
             match parse_all_decls content {
-                success _ decls => 
-                    let path := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty) in
-                    let sd := build_scope_from_decls path decls in
-                    let scope := make_scope path sd in
-                    typecheck_module path scope decls,
-                fail _ => false
+                ParseResult.success _ decls =>
+                    typecheck_module_with_scope scope decls empty_local_scope,
+                ParseResult.fail _ => false
             },
-        _ => false
+        Option.none => false
     }
+}
 
 // --- Simple init/ files ---
 
 #[test]
-def test_typecheck_init_id : Bool := typecheck_file "init/id.mo" "id"
+def test_typecheck_init_id : IO Bool := typecheck_file "init/id.mo" "id"
 
 #[test]
-def test_typecheck_init_io : Bool := typecheck_file "init/io.mo" "io"
+def test_typecheck_init_io : IO Bool := typecheck_file "init/io.mo" "io"
 
 #[test]
-def test_typecheck_init_math : Bool := typecheck_file "init/math.mo" "math"
+def test_typecheck_init_math : IO Bool := typecheck_file "init/math.mo" "math"
 
 #[test]
-def test_typecheck_init_number : Bool := typecheck_file "init/number.mo" "number"
+def test_typecheck_init_number : IO Bool := typecheck_file "init/number.mo" "number"
 
 // --- More complex init/ files ---
 
 #[test]
-def test_typecheck_init_string : Bool := typecheck_file "init/string.mo" "string"
+def test_typecheck_init_string : IO Bool := typecheck_file "init/string.mo" "string"
 
 // Skip process.mo for now - it has native functions with dependencies
 // #[test]
-// def test_typecheck_init_process : Bool := typecheck_file "init/process.mo" "process"
+// def test_typecheck_init_process : IO Bool := typecheck_file "init/process.mo" "process"
 
 #[test]
-def test_typecheck_init_init : Bool := typecheck_file "init/init.mo" "init"
+def test_typecheck_init_init : IO Bool := typecheck_file "init/init.mo" "init"
 
 #[test]
-def test_typecheck_init_parser : Bool := typecheck_file "lang/parser/combinators.mo" "combinators"
+def test_typecheck_init_parser : IO Bool := typecheck_file "lang/parser/combinators.mo" "combinators"
 
 // --- Most complex init/ file ---
 
 #[test]
-def test_typecheck_init_prelude : Bool := typecheck_file "init/prelude.mo" "prelude"
+def test_typecheck_init_prelude : IO Bool := typecheck_file "init/prelude.mo" "prelude"
 
 // --- Test files with type definitions ---
 
 #[test]
-def test_typecheck_init_foldable : Bool := typecheck_file "init/foldable.mo" "foldable"
+def test_typecheck_init_foldable : IO Bool := typecheck_file "init/foldable.mo" "foldable"
 
 #[test]
-def test_typecheck_init_optics : Bool := typecheck_file "init/optics.mo" "optics"
+def test_typecheck_init_optics : IO Bool := typecheck_file "init/optics.mo" "optics"
 
 #[test]
-def test_typecheck_init_test_constraints : Bool := typecheck_file "init/test_constraints.mo" "test_constraints"
+def test_typecheck_init_test_constraints : IO Bool := typecheck_file "init/test_constraints.mo" "test_constraints"
 
 // --- Remaining non-test init/ files ---
 
 #[test]
-def test_typecheck_init_string_profile : Bool := typecheck_file "init/string_profile.mo" "string_profile"
+def test_typecheck_init_string_profile : IO Bool := typecheck_file "init/string_profile.mo" "string_profile"
 
 // Test module dependency loading with init/process.mo which uses io
 // Note: This test is commented out because IO.read_file has a working directory issue
 // that affects init/process.mo and other files. This is a pre-existing issue.
 // #[test]
-// def test_typecheck_init_process_with_deps : Bool := 
+// def test_typecheck_init_process_with_deps : IO Bool :=
 //     typecheck_file_with_deps "init/process.mo" "process"
 
 // Note: test files (foldable_tests*, optics_tests, tests.mo) require module loading
 // and are skipped for now. They can be added once module dependency resolution is implemented.
 
 // #[test]
-// def test_typecheck_init_foldable_tests : Bool := typecheck_file "init/foldable_tests.mo" "foldable_tests"
-// 
+// def test_typecheck_init_foldable_tests : IO Bool := typecheck_file "init/foldable_tests.mo" "foldable_tests"
+//
 // #[test]
-// def test_typecheck_init_foldable_tests_fold : Bool := typecheck_file "init/foldable_tests_fold.mo" "foldable_tests_fold"
-// 
+// def test_typecheck_init_foldable_tests_fold : IO Bool := typecheck_file "init/foldable_tests_fold.mo" "foldable_tests_fold"
+//
 // #[test]
-// def test_typecheck_init_foldable_tests_semi_monoid : Bool := typecheck_file "init/foldable_tests_semi_monoid.mo" "foldable_tests_semi_monoid"
-// 
+// def test_typecheck_init_foldable_tests_semi_monoid : IO Bool := typecheck_file "init/foldable_tests_semi_monoid.mo" "foldable_tests_semi_monoid"
+//
 // #[test]
-// def test_typecheck_init_optics_tests : Bool := typecheck_file "init/optics_tests.mo" "optics_tests"
-// 
+// def test_typecheck_init_optics_tests : IO Bool := typecheck_file "init/optics_tests.mo" "optics_tests"
+//
 // #[test]
-// def test_typecheck_init_tests : Bool := typecheck_file "init/tests.mo" "tests"
+// def test_typecheck_init_tests : IO Bool := typecheck_file "init/tests.mo" "tests"

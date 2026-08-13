@@ -1,127 +1,59 @@
-use io {io, read_file}
-use lang.types {
-  Decl, Def, InductConstructor, Inductive, LocalScope, ModulePath, Scope,
-  ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
+use io {IO}
+use lang.types {LocalScope}
+use lang.module {
+  extract_directory, load_module_with_dependencies, parse_all_decls,
+  typecheck_module_with_scope,
 }
-use lang.module {mk, parse_all_decls}
-use lang.parser.core {fail, mk, success}
-use lang.scope {build_scope_from_decls}
-use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
-
-open IO {io, read_file}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
     parent := Option.none,
 }
 
-def make_scope (path : ModulePath) (sd : ScopeData) : Scope := {
-    module_id := path,
-    scope := sd,
-    parent := Option.none,
-}
-
-def is_hole (t : Term) : Bool := 
-    match t {
-        Term.hole => true,
-        _ => false
-    }
-
-def typecheck_module (path : ModulePath) (scope : Scope) (decls : List Decl) : Bool := 
-    match decls {
-        List.empty => true,
-        List.cons d rest =>
-            let result : Bool := typecheck_decl d path scope in
-            if result then
-                typecheck_module path scope rest
-            else
-                false
-    }
-
-def typecheck_decl (d : Decl) (path : ModulePath) (scope : Scope) : Bool := 
-    match d {
-        Decl.def_d df => typecheck_def df scope,
-        Decl.inductive_d ind => typecheck_inductive ind scope,
-        _ => true  // Skip use, open, infix, class, instance for now
-    }
-
-def typecheck_def (df : Def) (scope : Scope) : Bool := 
-    match df {
-        mk _name typ body _constraints _attrs =>
-            // Skip native/abstract definitions (body is Term.hole)
-            if is_hole body then
-                true
-            else
-                match type_check body Term.hole scope empty_local_types empty_locals {
-                    ok _ => true,
-                    err _ => false,
-                }
-    }
-
-def typecheck_inductive (ind : Inductive) (scope : Scope) : Bool := 
-    match ind {
-        mk _name _params _typ constructors _attrs =>
-            typecheck_constructors constructors scope
-    }
-
-def typecheck_constructors (cons : List InductConstructor) (scope : Scope) : Bool := 
-    match cons {
-        List.empty => true,
-        List.cons c rest =>
-            let result : Bool := typecheck_constructor c scope in
-            if result then
-                typecheck_constructors rest scope
-            else
-                false
-    }
-
-def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool := 
-    match c {
-        mk _name params typ =>
-            match type_check typ Term.hole scope empty_local_types empty_locals {
-                ok _ => true,
-                err _ => false
-            }
-    }
-
-def typecheck_file (file_path : String) (mod_name : String) : Bool := 
-    match IO.read_file file_path {
-        IO.io content => 
+/// See lang/tests/typecheck_init_tests.mo's `typecheck_file` doc comment —
+/// same fix, same reason (ambient prelude/init dependency loading via
+/// lang.module's own proven pipeline, instead of building scope from only
+/// the target file's own decls).
+def typecheck_file (file_path : String) (mod_name : String) : IO Bool := do {
+    let content <- IO.read_file file_path;
+    let mp := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty);
+    let base_dir := extract_directory file_path;
+    let mb_scope <- load_module_with_dependencies base_dir mp;
+    return match mb_scope {
+        Option.some scope =>
             match parse_all_decls content {
-                success _ decls => 
-                    let path := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty) in
-                    let sd := build_scope_from_decls path decls in
-                    let scope := make_scope path sd in
-                    typecheck_module path scope decls,
-                fail _ => false
+                ParseResult.success _ decls =>
+                    typecheck_module_with_scope scope decls empty_local_scope,
+                ParseResult.fail _ => false
             },
-        _ => false
+        Option.none => false
     }
+}
 
 // --- std/ non-test files ---
 
 #[test]
-def test_typecheck_std_test : Bool := typecheck_file "std/test.mo" "test"
+def test_typecheck_std_test : IO Bool := typecheck_file "std/test.mo" "test"
 
 #[test]
-def test_typecheck_std_base : Bool := typecheck_file "std/base.mo" "base"
+def test_typecheck_std_base : IO Bool := typecheck_file "std/base.mo" "base"
 
 #[test]
-def test_typecheck_std_bench : Bool := typecheck_file "std/bench.mo" "bench"
+def test_typecheck_std_bench : IO Bool := typecheck_file "std/bench.mo" "bench"
 
 #[test]
-def test_typecheck_std_list : Bool := typecheck_file "std/list.mo" "list"
+def test_typecheck_std_list : IO Bool := typecheck_file "std/list.mo" "list"
 
 #[test]
-def test_typecheck_std_map : Bool := typecheck_file "std/map.mo" "map"
+def test_typecheck_std_map : IO Bool := typecheck_file "std/map.mo" "map"
 
 // --- std/concurrent/ files ---
 
 #[test]
-def test_typecheck_std_concurrent_fiber : Bool := typecheck_file "std/concurrent/fiber.mo" "concurrent_fiber"
+def test_typecheck_std_concurrent_fiber : IO Bool := typecheck_file "std/concurrent/fiber.mo" "concurrent_fiber"
 
 #[test]
-def test_typecheck_std_concurrent_combine : Bool := typecheck_file "std/concurrent/combine.mo" "concurrent_combine"
+def test_typecheck_std_concurrent_combine : IO Bool := typecheck_file "std/concurrent/combine.mo" "concurrent_combine"
 
 // Note: Test files (list_tests*, map_tests*, etc.) require module loading
 // and are skipped for now.
