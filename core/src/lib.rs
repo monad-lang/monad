@@ -3,7 +3,6 @@ use std::fmt::Display;
 use std::fs;
 use std::hash::{BuildHasherDefault, DefaultHasher, Hash};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -620,13 +619,54 @@ fn collect_mo_files(dir: &Path) -> Vec<PathBuf> {
   files
 }
 
+/// Outcome of evaluating one `#[test]`-attributed def — the public,
+/// every-test-not-just-failures counterpart of the private `TestResult`
+/// enum `detect_test_result_value` above produces. Kept as a separate
+/// type (rather than reusing `TestResult` itself) so `TestResult` stays
+/// free to remain private/printing-oriented while this one is part of
+/// `run_tests_for_files`'s public, structured result.
+#[derive(Debug, Clone)]
+pub enum TestOutcome {
+  Pass,
+  Fail,
+  FailWithMessage(String),
+}
+
+/// One `#[test]` def's result: name, outcome, wall time, and its own
+/// declaration-level location — captured from the same
+/// `SourceContext<Def>` `evaluate_one_test_file` already iterates over
+/// (see its `entries` computation below), not a second lookup. The
+/// location is what lets an LSP caller place a failure's diagnostic at
+/// the right spot without re-deriving it from a separate symbol scan.
+#[derive(Debug, Clone)]
+pub struct TestCaseResult {
+  pub name: String,
+  pub outcome: TestOutcome,
+  pub duration: std::time::Duration,
+  pub location: Option<SourceRange>,
+}
+
+/// One file's structured test result — the `run_tests_for_files`
+/// counterpart of `FileCheckResult`. `tests` is empty whenever
+/// `error_message` is `Some`: a file that failed to read/parse/compile
+/// never got to run any of its `#[test]` defs, mirroring `FileOutput`'s
+/// own `fail_file!` semantics below.
+#[derive(Debug, Clone)]
+pub struct FileTestResult {
+  pub path: PathBuf,
+  pub tests: Vec<TestCaseResult>,
+  pub error_message: Option<String>,
+}
+
 #[derive(Debug)]
 struct FileOutput {
+  path: PathBuf,
   passed: usize,
   failed: usize,
   output_lines: Vec<String>,
   error_message: Option<String>,
   failures: Vec<(String, String)>,
+  tests: Vec<TestCaseResult>,
 }
 
 fn print_file_output(result: &FileOutput) {
@@ -748,6 +788,20 @@ fn force_global_with_timeout(
 /// preserves that guarantee: no test file's module is ever visible to
 /// another file's own capturing check, matching the tree-walker's own
 /// per-file independence exactly (just against a faster evaluator).
+/// `quiet`: suppresses every `println!` this function would otherwise do
+/// (the progress line, the `options.debug` scope dump, and the rendered
+/// warnings) — required whenever the caller's stdout IS a protocol
+/// stream (MCP's newline-delimited JSON-RPC, LSP's `Content-Length`-
+/// framed JSON-RPC), where any stray text corrupts the stream rather
+/// than just looking ugly. `run_tests`'s own printing CLI path passes
+/// `quiet: false` and is unaffected; `run_tests_for_files` always passes
+/// `quiet: true`.
+///
+/// `test_name_filter`: `Some(name)` restricts evaluation to the
+/// `#[test]` def with that bare name (used by the LSP's per-test
+/// `monad.runTest` command so a single test can be re-run without paying
+/// for the whole file); `None` runs every `#[test]` def found, matching
+/// this function's original behavior.
 fn evaluate_one_test_file(
   file: &Path,
   base_loaded: &LoadedModules,
@@ -755,25 +809,31 @@ fn evaluate_one_test_file(
   test_timeout: Option<std::time::Duration>,
   file_index: usize,
   total_files: usize,
+  test_name_filter: Option<&str>,
+  quiet: bool,
 ) -> FileOutput {
   let file_path = file.to_path_buf();
   let path: ModulePath = file_path.clone().into();
 
-  println!(
-    "{YELLOW}[{}/{}] Testing {}...{RESET}",
-    file_index + 1,
-    total_files,
-    file_path.display()
-  );
+  if !quiet {
+    println!(
+      "{YELLOW}[{}/{}] Testing {}...{RESET}",
+      file_index + 1,
+      total_files,
+      file_path.display()
+    );
+  }
 
   macro_rules! fail_file {
     ($msg:expr) => {
       return FileOutput {
+        path: file_path.clone(),
         passed: 0,
         failed: 1,
         output_lines: vec![format!("{RED}FAIL{RESET} {}", file_path.display())],
         error_message: Some($msg),
         failures: Vec::new(),
+        tests: Vec::new(),
       }
     };
   }
@@ -792,33 +852,39 @@ fn evaluate_one_test_file(
     Some(m) => m,
     None => {
       return FileOutput {
+        path: file_path.clone(),
         passed: 0,
         failed: 0,
         output_lines: Vec::new(),
         error_message: None,
         failures: Vec::new(),
+        tests: Vec::new(),
       };
     }
   };
 
-  if options.debug {
+  if options.debug && !quiet {
     let loaded_scopes = loaded.scopes();
     let global = loaded_scopes.global(&path).expect("Module not loaded");
     println!("{global}");
   }
 
   let warnings = module_warnings(module, Some(&file_path));
-  if !warnings.is_empty() {
+  if !warnings.is_empty() && !quiet {
     println!(
       "{}",
       render_diagnostics(&warnings, None, options.use_colors)
     );
   }
 
-  let entries: Vec<(ModulePath, String)> = module
+  let entries: Vec<(ModulePath, String, Option<SourceRange>)> = module
     .defs()
     .into_iter()
     .filter(|ctx| ctx.value().has_test_attr())
+    .filter(|ctx| match test_name_filter {
+      Some(wanted) => ctx.value().name.to_string() == wanted,
+      None => true,
+    })
     .map(|ctx| {
       let def = ctx.value();
       // Bare, matching `CoreProgram.defs`'/`lowered`'s own DEFAULT
@@ -827,18 +893,25 @@ fn evaluate_one_test_file(
       // name happened to collide with some OTHER loaded module's own
       // def of the same name (see `core_check_module.rs`'s
       // `capture_path_for`). Display name (second element) stays bare
-      // either way, for PASS/FAIL output.
-      (def.name.clone(), def.name.to_string())
+      // either way, for PASS/FAIL output. Third element is this def's
+      // own declaration-level span, for `TestCaseResult::location`.
+      (
+        def.name.clone(),
+        def.name.to_string(),
+        Some(ctx.loc.clone()),
+      )
     })
     .collect();
 
   if entries.is_empty() {
     return FileOutput {
+      path: file_path.clone(),
       passed: 0,
       failed: 0,
       output_lines: Vec::new(),
       error_message: None,
       failures: Vec::new(),
+      tests: Vec::new(),
     };
   }
 
@@ -865,8 +938,9 @@ fn evaluate_one_test_file(
   let mut passed = 0;
   let mut failed = 0;
   let mut failures: Vec<(String, String)> = Vec::new();
+  let mut tests: Vec<TestCaseResult> = Vec::new();
 
-  for (test_path, name) in &entries {
+  for (test_path, name, location) in &entries {
     let start = Instant::now();
     // Qualified by `path` (this test file's own module) -- the bare
     // slot could belong to some OTHER loaded module's same-named def
@@ -891,12 +965,19 @@ fn evaluate_one_test_file(
       Ok(v) => v,
       Err(e) => {
         failed += 1;
-        failures.push((name.clone(), format!("eval error: {e}")));
+        let msg = format!("eval error: {e}");
+        failures.push((name.clone(), msg.clone()));
+        tests.push(TestCaseResult {
+          name: name.clone(),
+          outcome: TestOutcome::FailWithMessage(msg),
+          duration,
+          location: location.clone(),
+        });
         continue;
       }
     };
 
-    if options.debug {
+    if options.debug && !quiet {
       output_lines.push(format!("  eval: {value:?}"));
     }
 
@@ -904,15 +985,33 @@ fn evaluate_one_test_file(
       TestResult::Pass => {
         passed += 1;
         output_lines.push(format!("{GREEN}PASS{RESET} {name} ({duration_str})"));
+        tests.push(TestCaseResult {
+          name: name.clone(),
+          outcome: TestOutcome::Pass,
+          duration,
+          location: location.clone(),
+        });
       }
       TestResult::Fail => {
         failed += 1;
         output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str})"));
+        tests.push(TestCaseResult {
+          name: name.clone(),
+          outcome: TestOutcome::Fail,
+          duration,
+          location: location.clone(),
+        });
       }
       TestResult::FailWithMessage(msg) => {
         failed += 1;
         output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str}): {msg}"));
-        failures.push((name.clone(), msg));
+        failures.push((name.clone(), msg.clone()));
+        tests.push(TestCaseResult {
+          name: name.clone(),
+          outcome: TestOutcome::FailWithMessage(msg),
+          duration,
+          location: location.clone(),
+        });
       }
     }
   }
@@ -931,23 +1030,30 @@ fn evaluate_one_test_file(
   }
 
   FileOutput {
+    path: file_path,
     passed,
     failed,
     output_lines,
     error_message: None,
     failures,
+    tests,
   }
 }
 
-pub fn run_tests(
-  inputs: Vec<PathBuf>,
-  options: EvalOptions,
-  num_threads: usize,
-  test_timeout: Option<std::time::Duration>,
+/// Shared setup for both `run_tests` and `run_tests_for_files`:
+/// collected/sorted/deduped `.mo` files (skipping ones already covered
+/// by the embedded default modules) plus the `LoadedModules` base every
+/// file's `evaluate_one_test_file` call clones fresh from — the exact
+/// file-discovery/`std/test`-preload logic `run_tests` always had,
+/// factored out and named so the structured entry point can't drift from
+/// it.
+fn discover_test_files(
+  inputs: &[PathBuf],
+  options: &EvalOptions,
   extra_mote_paths: Vec<PathBuf>,
-) -> Result<(), String> {
+) -> Result<(Vec<PathBuf>, LoadedModules), String> {
   let mut files: Vec<PathBuf> = Vec::new();
-  for input in &inputs {
+  for input in inputs {
     if input.is_dir() {
       files.extend(collect_mo_files(input));
     } else {
@@ -985,10 +1091,43 @@ pub fn run_tests(
     })
     .collect();
 
-  let mut total_passed = 0;
-  let mut total_failed = 0;
-  let mut overall_errors: Vec<String> = Vec::new();
+  Ok((files, master_loaded))
+}
+
+/// Runs `evaluate_one_test_file` over every file in `files`, single- or
+/// multi-threaded per `num_threads` (`<=1` or one file: inline;
+/// otherwise chunked across OS threads) — the one dispatch both
+/// `run_tests` (live per-file progress printing) and `run_tests_for_files`
+/// (a structured batch report) build on, so they can't drift on
+/// scheduling/isolation semantics (see `evaluate_one_test_file`'s own
+/// doc comment on per-file independence). Printing happens HERE, per
+/// file, gated by `!quiet` — exactly where and when `run_tests` always
+/// printed it, so sharing this with the structured path costs it nothing.
+///
+/// Always returned in ORIGINAL `files` order, regardless of which
+/// thread/chunk finishes first — multi-threaded dispatch tags each
+/// `FileOutput` with its input index and sorts before returning, so a
+/// structured caller's output order is reproducible across runs.
+fn evaluate_test_files(
+  files: &[PathBuf],
+  master_loaded: &LoadedModules,
+  options: &EvalOptions,
+  num_threads: usize,
+  test_timeout: Option<std::time::Duration>,
+  test_name_filter: Option<&str>,
+  quiet: bool,
+) -> Vec<FileOutput> {
   let total = files.len();
+
+  fn report(output: &FileOutput, quiet: bool) {
+    if quiet {
+      return;
+    }
+    print_file_output(output);
+    if let Some(ref err) = output.error_message {
+      eprintln!("  {err}");
+    }
+  }
 
   // `master_loaded` is never mutated after this point -- every file
   // clones it fresh (inside `evaluate_one_test_file`), which is exactly
@@ -996,47 +1135,59 @@ pub fn run_tests(
   // doc comment). Single-threaded and multi-threaded dispatch below
   // differ only in scheduling, not in this isolation guarantee.
   if num_threads <= 1 || files.len() <= 1 {
-    for (i, file) in files.iter().enumerate() {
-      let output = evaluate_one_test_file(file, &master_loaded, &options, test_timeout, i, total);
-      print_file_output(&output);
-      total_passed += output.passed;
-      total_failed += output.failed;
-      if let Some(ref err) = output.error_message {
-        eprintln!("  {err}");
-        overall_errors.push(err.clone());
-      }
-    }
+    files
+      .iter()
+      .enumerate()
+      .map(|(i, file)| {
+        let output = evaluate_one_test_file(
+          file,
+          master_loaded,
+          options,
+          test_timeout,
+          i,
+          total,
+          test_name_filter,
+          quiet,
+        );
+        report(&output, quiet);
+        output
+      })
+      .collect()
   } else {
     let n_threads = std::cmp::min(num_threads, files.len());
     let chunk_size = files.len().div_ceil(n_threads);
 
-    let passed_counter = Arc::new(AtomicUsize::new(0));
-    let failed_counter = Arc::new(AtomicUsize::new(0));
-    let overall_errors_shared: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // Indexed so results can be restored to input order once every
+    // thread finishes, regardless of completion timing.
+    let outputs_shared: Arc<Mutex<Vec<(usize, FileOutput)>>> = Arc::new(Mutex::new(Vec::new()));
 
     let mut handles = Vec::with_capacity(n_threads);
     for (chunk_idx, chunk) in files.chunks(chunk_size).enumerate() {
       let chunk_files: Vec<PathBuf> = chunk.to_vec();
       let base_loaded = master_loaded.clone();
       let opts = options.clone();
-      let passed = Arc::clone(&passed_counter);
-      let failed = Arc::clone(&failed_counter);
-      let errors = Arc::clone(&overall_errors_shared);
+      let outputs = Arc::clone(&outputs_shared);
       let base_idx = chunk_idx * chunk_size;
+      // Owned copy: the spawned closure below must be `'static`, but
+      // `test_name_filter` only borrows from the caller's stack frame.
+      let filter = test_name_filter.map(|s| s.to_string());
 
       let handle = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {
           for (i, file) in chunk_files.iter().enumerate() {
-            let output =
-              evaluate_one_test_file(file, &base_loaded, &opts, test_timeout, base_idx + i, total);
-            print_file_output(&output);
-            passed.fetch_add(output.passed, Ordering::Relaxed);
-            failed.fetch_add(output.failed, Ordering::Relaxed);
-            if let Some(err) = output.error_message {
-              eprintln!("  {err}");
-              errors.lock().unwrap().push(err);
-            }
+            let output = evaluate_one_test_file(
+              file,
+              &base_loaded,
+              &opts,
+              test_timeout,
+              base_idx + i,
+              total,
+              filter.as_deref(),
+              quiet,
+            );
+            report(&output, quiet);
+            outputs.lock().unwrap().push((base_idx + i, output));
           }
         })
         .expect("failed to spawn test thread");
@@ -1046,17 +1197,97 @@ pub fn run_tests(
       handle.join().expect("test thread panicked");
     }
 
-    total_passed += passed_counter.load(Ordering::Relaxed);
-    total_failed += failed_counter.load(Ordering::Relaxed);
-    overall_errors.extend(
-      Arc::try_unwrap(overall_errors_shared)
-        .unwrap()
-        .into_inner()
-        .unwrap(),
-    );
+    let mut indexed = Arc::try_unwrap(outputs_shared)
+      .unwrap()
+      .into_inner()
+      .unwrap();
+    indexed.sort_by_key(|(i, _)| *i);
+    indexed.into_iter().map(|(_, output)| output).collect()
+  }
+}
+
+pub fn run_tests(
+  inputs: Vec<PathBuf>,
+  options: EvalOptions,
+  num_threads: usize,
+  test_timeout: Option<std::time::Duration>,
+  extra_mote_paths: Vec<PathBuf>,
+) -> Result<(), String> {
+  let (files, master_loaded) = discover_test_files(&inputs, &options, extra_mote_paths)?;
+  let outputs = evaluate_test_files(
+    &files,
+    &master_loaded,
+    &options,
+    num_threads,
+    test_timeout,
+    None,
+    false,
+  );
+
+  let mut total_passed = 0;
+  let mut total_failed = 0;
+  let mut overall_errors: Vec<String> = Vec::new();
+  for output in &outputs {
+    total_passed += output.passed;
+    total_failed += output.failed;
+    if let Some(ref err) = output.error_message {
+      overall_errors.push(err.clone());
+    }
   }
 
   print_final_summary(total_passed, total_failed, &overall_errors)
+}
+
+/// Batch, disk-reading, print-free test run — the `run_tests_for_files`
+/// counterpart of `check_files`. Reused by the CLI's `test --json`, the
+/// MCP `test` tool, and the LSP's `monad.runTest`/`monad.runFileTests`
+/// commands, none of which can tolerate `run_tests`'s own printing (it
+/// would corrupt MCP's newline-delimited or LSP's `Content-Length`-
+/// framed stdout stream — see `evaluate_one_test_file`'s `quiet`
+/// parameter).
+///
+/// Unlike `run_tests` (whose CLI-level `inputs` is effectively always
+/// non-empty), an empty `inputs` here defaults to the current directory,
+/// matching `check_files`/`symbols_for_files` — needed so a `workspace:
+/// true` (MCP) / zero-explicit-paths caller still gets sane recursive
+/// discovery, exactly like the `check`/`symbols` tools already promise.
+///
+/// `test_name_filter`: `Some(name)` restricts evaluation to `#[test]`
+/// defs with that bare name (used by the LSP's per-test `monad.runTest`
+/// command); `None` runs every `#[test]` def found, matching `run_tests`.
+pub fn run_tests_for_files(
+  inputs: Vec<PathBuf>,
+  options: EvalOptions,
+  num_threads: usize,
+  test_timeout: Option<std::time::Duration>,
+  extra_mote_paths: Vec<PathBuf>,
+  test_name_filter: Option<&str>,
+) -> Result<Vec<FileTestResult>, String> {
+  let inputs = if inputs.is_empty() {
+    vec![PathBuf::from(".")]
+  } else {
+    inputs
+  };
+  let (files, master_loaded) = discover_test_files(&inputs, &options, extra_mote_paths)?;
+  let outputs = evaluate_test_files(
+    &files,
+    &master_loaded,
+    &options,
+    num_threads,
+    test_timeout,
+    test_name_filter,
+    true,
+  );
+  Ok(
+    outputs
+      .into_iter()
+      .map(|o| FileTestResult {
+        path: o.path,
+        tests: o.tests,
+        error_message: o.error_message,
+      })
+      .collect(),
+  )
 }
 
 /// One target file's `organize-imports` result: the rewritten source if
@@ -1500,6 +1731,61 @@ pub fn symbols_from_source(
   Ok(symbols)
 }
 
+/// One `#[test]`-attributed `def`'s name and declaration-level location
+/// — the minimal "where do the test code lenses go" data
+/// `textDocument/codeLens` needs. Deliberately separate from
+/// `SymbolInfo`/`SymbolKind` (which has no "test" kind of its own):
+/// widening `symbols`/`workspace/symbol`'s existing wire format to
+/// distinguish test defs would be a compatibility change for every
+/// existing consumer of `monad symbols --json`, for zero benefit here.
+#[derive(Debug, Clone)]
+pub struct TestDefLocation {
+  pub name: String,
+  pub location: Option<SourceRange>,
+}
+
+/// Same shape as `symbols_from_decls`, filtered to `#[test]`-attributed
+/// `def`s only (`has_test_attr` — the exact predicate `evaluate_one_test_
+/// file`'s own `entries` computation already uses on checked defs, here
+/// applied to the same parsed `Decl::Def` `symbols_from_decls` iterates).
+fn test_defs_from_decls(decls: &[SourceContext<Decl>]) -> Vec<TestDefLocation> {
+  decls
+    .iter()
+    .filter_map(|ctx| match ctx.value() {
+      Decl::Def(def) if def.has_test_attr() => Some(TestDefLocation {
+        name: def.name.to_string(),
+        location: Some(ctx.loc.clone()),
+      }),
+      _ => None,
+    })
+    .collect()
+}
+
+/// Test-def locations for a single file's CURRENT in-memory content —
+/// the LSP server's `textDocument/codeLens` handler calls this, same
+/// "single in-memory buffer" shape as `symbols_from_source`. No batch
+/// (`_for_files`) counterpart exists: code lenses only ever operate on
+/// the open document, never a whole-workspace scan.
+pub fn test_defs_from_source(
+  path: &Path,
+  source: &str,
+  extra_mote_paths: Vec<PathBuf>,
+) -> Result<Vec<TestDefLocation>, String> {
+  let path = path.to_path_buf();
+  let module_path: ModulePath = path.clone().into();
+  let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
+  loaded.set_search_paths(build_default_search_paths(&path, &extra_mote_paths));
+  match crate::term::module::load_module_from_text_typed(source, &module_path, &mut loaded) {
+    Ok(()) => Ok(
+      loaded
+        .get_module(&module_path)
+        .map(|m| test_defs_from_decls(m.clone().to_decls().as_slice()))
+        .unwrap_or_default(),
+    ),
+    Err(_) => Ok(Vec::new()),
+  }
+}
+
 #[cfg(test)]
 mod test {
   use super::*;
@@ -1564,6 +1850,216 @@ def test_direct_generic_call : Bool :=
       "Direct (non-piped) generic call via an unannotated lambda should pass: {:?}",
       result
     );
+  }
+
+  /// `run_tests`'s own `std/test.mo` resolution needs the real workspace
+  /// root (see `test_direct_generic_call_via_lambda_does_not_regress`'s
+  /// comment above) — shared by every `run_tests_for_files`/
+  /// `test_defs_from_source` test below so they don't each re-derive it.
+  fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .parent()
+      .unwrap()
+      .to_path_buf()
+  }
+
+  /// A fresh, uniquely-named temp dir for one test — same convention as
+  /// `test_direct_generic_call_via_lambda_does_not_regress`'s own `dir`,
+  /// just parameterized by a per-test tag so parallel tests never share
+  /// a directory.
+  fn temp_test_dir(tag: &str) -> PathBuf {
+    let dir = PathBuf::from("/tmp").join(format!(
+      "monad-test-{tag}-{:x}-{:x}",
+      std::process::id(),
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+  }
+
+  #[test]
+  fn test_run_tests_for_files_reports_pass_and_fail() {
+    let dir = temp_test_dir("run-tests-pass-fail");
+    let file = dir.join("t.mo");
+    fs::write(
+      &file,
+      "#[test]\ndef test_a : Bool := true\n\n#[test]\ndef test_b : Bool := false\n",
+    )
+    .unwrap();
+
+    let results = run_tests_for_files(
+      vec![file],
+      EvalOptions::default(),
+      1,
+      None,
+      vec![workspace_root()],
+      None,
+    )
+    .unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(results.len(), 1);
+    let file_result = &results[0];
+    assert!(file_result.error_message.is_none());
+    assert_eq!(file_result.tests.len(), 2);
+    let outcome_of = |name: &str| {
+      &file_result
+        .tests
+        .iter()
+        .find(|t| t.name == name)
+        .unwrap()
+        .outcome
+    };
+    assert!(matches!(outcome_of("test_a"), TestOutcome::Pass));
+    assert!(matches!(outcome_of("test_b"), TestOutcome::Fail));
+  }
+
+  #[test]
+  fn test_run_tests_for_files_file_level_error_on_parse_failure() {
+    let dir = temp_test_dir("run-tests-parse-error");
+    let file = dir.join("broken.mo");
+    fs::write(&file, "def x : I64 := \n").unwrap(); // incomplete, doesn't parse
+
+    let results = run_tests_for_files(
+      vec![file],
+      EvalOptions::default(),
+      1,
+      None,
+      vec![workspace_root()],
+      None,
+    )
+    .unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert!(results[0].error_message.is_some());
+    assert!(results[0].tests.is_empty());
+  }
+
+  #[test]
+  fn test_run_tests_for_files_filters_by_test_name() {
+    let dir = temp_test_dir("run-tests-filter");
+    let file = dir.join("t.mo");
+    fs::write(
+      &file,
+      "#[test]\ndef test_a : Bool := true\n\n#[test]\ndef test_b : Bool := true\n",
+    )
+    .unwrap();
+
+    let results = run_tests_for_files(
+      vec![file],
+      EvalOptions::default(),
+      1,
+      None,
+      vec![workspace_root()],
+      Some("test_a"),
+    )
+    .unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].tests.len(), 1);
+    assert_eq!(results[0].tests[0].name, "test_a");
+  }
+
+  #[test]
+  fn test_run_tests_for_files_preserves_file_order_across_threads() {
+    let dir = temp_test_dir("run-tests-order");
+    let mut files = Vec::new();
+    for i in 0..4 {
+      let file = dir.join(format!("t{i}.mo"));
+      fs::write(&file, format!("#[test]\ndef test_t{i} : Bool := true\n")).unwrap();
+      files.push(file);
+    }
+    let mut expected = files.clone();
+    expected.sort();
+
+    let results = run_tests_for_files(
+      files,
+      EvalOptions::default(),
+      2, // multi-threaded dispatch
+      None,
+      vec![workspace_root()],
+      None,
+    )
+    .unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+
+    let actual: Vec<PathBuf> = results.into_iter().map(|r| r.path).collect();
+    assert_eq!(actual, expected);
+  }
+
+  /// Empty `inputs` must default to scanning the current directory
+  /// (matching `check_files`/`symbols_for_files`), not silently produce
+  /// zero results — confirmed by checking `vec![]` and `vec![PathBuf::
+  /// from(".")]` scan the identical file set, without actually changing
+  /// the test process's shared, global current directory (unsafe to do
+  /// from a single test in a parallel test binary).
+  #[test]
+  fn test_run_tests_for_files_defaults_empty_inputs_to_cwd() {
+    let empty_result = run_tests_for_files(
+      vec![],
+      EvalOptions::default(),
+      1,
+      None,
+      vec![workspace_root()],
+      None,
+    )
+    .unwrap();
+    let dot_result = run_tests_for_files(
+      vec![PathBuf::from(".")],
+      EvalOptions::default(),
+      1,
+      None,
+      vec![workspace_root()],
+      None,
+    )
+    .unwrap();
+
+    let empty_paths: Vec<PathBuf> = empty_result.into_iter().map(|r| r.path).collect();
+    let dot_paths: Vec<PathBuf> = dot_result.into_iter().map(|r| r.path).collect();
+    assert_eq!(empty_paths, dot_paths);
+  }
+
+  #[test]
+  fn test_test_defs_from_source_finds_test_attributed_defs_only() {
+    let source = "def plain : Bool := true\n\n#[test]\ndef test_one : Bool := true\n\n#[test]\ndef test_two : Bool := false\n";
+    let defs = test_defs_from_source(
+      &PathBuf::from("/tmp/monad-test-defs-mixed.mo"),
+      source,
+      vec![],
+    )
+    .unwrap();
+    let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, vec!["test_one", "test_two"]);
+    assert!(defs.iter().all(|d| d.location.is_some()));
+  }
+
+  #[test]
+  fn test_test_defs_from_source_empty_when_no_tests() {
+    let source = "def plain : Bool := true\n";
+    let defs = test_defs_from_source(
+      &PathBuf::from("/tmp/monad-test-defs-none.mo"),
+      source,
+      vec![],
+    )
+    .unwrap();
+    assert!(defs.is_empty());
+  }
+
+  #[test]
+  fn test_test_defs_from_source_empty_on_parse_error() {
+    let source = "def x : I64 := \n"; // incomplete, doesn't parse
+    let defs = test_defs_from_source(
+      &PathBuf::from("/tmp/monad-test-defs-broken.mo"),
+      source,
+      vec![],
+    )
+    .unwrap();
+    assert!(defs.is_empty());
   }
 
   /// `eval_core_program` (Phase 6 of

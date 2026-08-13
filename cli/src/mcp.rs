@@ -1,7 +1,7 @@
 //! Minimal stdio MCP server — exposes `check`/`symbols`/`hover`/
-//! `definition`/`organize_imports` as tools, the same five operations the
-//! CLI's own `--json` subcommands already provide (`monad
-//! check/symbols/hover/definition --json`, `monad organize-imports`).
+//! `definition`/`organize_imports`/`test` as tools, the same six
+//! operations the CLI's own `--json` subcommands already provide (`monad
+//! check/symbols/hover/definition/test --json`, `monad organize-imports`).
 //! This is the MCP analog of Phase 0 in
 //! `plans/library-ideas/language-server.md` ("ship structured CLI tools
 //! first, reuse everywhere") — every tool here is a thin wrapper over the
@@ -9,15 +9,16 @@
 //! so agent clients speaking MCP get identical results to shelling out to
 //! the CLI or driving the LSP server.
 //!
-//! `run`/`test` are deliberately NOT exposed as tools yet:
-//! `monad_core::run`/`run_tests` print directly to stdout/stderr and
-//! return `Result<(), String>`, not structured data — wiring those up
-//! needs either output capture or new structured return types in `core`,
-//! which is compiler-side work beyond "expose what already exists".
-//! Likewise, MCP **resources** and **prompts** (stdlib docs, examples,
-//! style-guide prompts) aren't implemented — static-content features, not
-//! derived from `monad_core`, and not needed for "agent calls the
-//! compiler".
+//! `run` is deliberately NOT exposed as a tool: `monad_core::run` prints
+//! directly to stdout/stderr and returns `Result<(), String>`, and its
+//! whole point is a program's side effects/output, not a pass/fail
+//! report the way `run_tests_for_files` (backing the `test` tool below)
+//! now is — there's no structured shape to give it that wouldn't just be
+//! "captured stdout as a string", which needs new output-capture
+//! plumbing in `core`, not just a new return type. Likewise, MCP
+//! **resources** and **prompts** (stdlib docs, examples, style-guide
+//! prompts) aren't implemented — static-content features, not derived
+//! from `monad_core`, and not needed for "agent calls the compiler".
 //!
 //! Transport is MCP's own framing, not LSP's: one JSON-RPC 2.0 object per
 //! line on stdin/stdout (no `Content-Length` header block), and no
@@ -34,14 +35,22 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 
-use monad_core::{check_files, diag::Severity, organize_imports_for_files, symbols_for_files};
+use monad_core::{
+  check_files, diag::Severity, organize_imports_for_files, run_tests_for_files, symbols_for_files,
+};
 use serde_json::Value;
 
 use crate::{
   JsonCheckReport, JsonFileReport, JsonHover, JsonLocation, JsonPosition, JsonRange, JsonSummary,
-  JsonSymbol, JsonSymbolFile, identifier_at, location_to_json_range, path_to_uri, resolve_symbol,
-  symbol_kind_label, symbols_of_file, to_json_diagnostic,
+  JsonSymbol, JsonSymbolFile, build_json_test_report, identifier_at, location_to_json_range,
+  path_to_uri, resolve_symbol, symbol_kind_label, symbols_of_file, to_json_diagnostic,
 };
+
+/// Server-side ceiling on one `test` tool call's total run time — no
+/// `timeout`/`jobs` argument is exposed to the MCP client in v1 (see
+/// `tool_test`'s own doc comment), so this bounds a runaway test suite
+/// instead of blocking the calling agent indefinitely.
+const MCP_TEST_TIMEOUT_SECS: u64 = 60;
 
 pub fn run(mote_path: Vec<PathBuf>) -> Result<(), String> {
   let stdin = io::stdin();
@@ -261,6 +270,24 @@ fn tool_definitions() -> Vec<Value> {
         }
       }
     }),
+    serde_json::json!({
+      "name": "test",
+      "description": "Run every #[test]-attributed def under the given files (or the current directory if omitted). Returns structured pass/fail per file — same shape as `monad test --json`.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Files or directories to run tests in; defaults to the current directory. Ignored if workspace is true."
+          },
+          "workspace": {
+            "type": "boolean",
+            "description": "Run tests across the whole resolved workspace instead of paths — see the check tool's workspace argument for exactly what that covers."
+          }
+        }
+      }
+    }),
   ]
 }
 
@@ -291,6 +318,7 @@ fn handle_tools_call(params: &Value, mote_path: &[PathBuf]) -> Value {
     "hover" => tool_hover(&arguments, mote_path),
     "definition" => tool_definition(&arguments, mote_path),
     "organize_imports" => tool_organize_imports(&arguments, mote_path),
+    "test" => tool_test(&arguments, mote_path),
     other => Err(format!("unknown tool: {other}")),
   };
   match outcome {
@@ -492,6 +520,29 @@ fn tool_organize_imports(arguments: &Value, mote_path: &[PathBuf]) -> Result<Val
   }))
 }
 
+/// Runs every `#[test]` def under `resolve_inputs(arguments, mote_path)`
+/// and returns the same structured report shape `build_json_test_report`
+/// gives `monad test --json` — see that function's own doc comment for
+/// the wire shape. No `timeout`/`jobs` arguments in v1: `MCP_TEST_TIMEOUT_
+/// SECS` bounds the whole call server-side instead, and thread count
+/// always uses every available core (`run_tests_for_files`'s single-
+/// threaded fallback for a 0/1-file batch already keeps small runs cheap).
+fn tool_test(arguments: &Value, mote_path: &[PathBuf]) -> Result<Value, String> {
+  let num_threads = std::thread::available_parallelism()
+    .map(|n| n.get())
+    .unwrap_or(1);
+  let results = run_tests_for_files(
+    resolve_inputs(arguments, mote_path),
+    monad_core::eval::EvalOptions::default(),
+    num_threads,
+    Some(std::time::Duration::from_secs(MCP_TEST_TIMEOUT_SECS)),
+    mote_path.to_vec(),
+    None,
+  )?;
+  serde_json::to_value(build_json_test_report(&results))
+    .map_err(|e| format!("failed to serialize test report: {e}"))
+}
+
 #[cfg(test)]
 mod test {
   use super::*;
@@ -546,7 +597,7 @@ mod test {
   }
 
   #[test]
-  fn test_tools_list_has_five_tools() {
+  fn test_tools_list_has_six_tools() {
     let response = dispatch("tools/list", serde_json::json!({}), &[]);
     let tools = response["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -557,7 +608,8 @@ mod test {
         "symbols",
         "hover",
         "definition",
-        "organize_imports"
+        "organize_imports",
+        "test"
       ]
     );
     for tool in tools {
@@ -859,5 +911,95 @@ mod test {
     let text = response["result"]["content"][0]["text"].as_str().unwrap();
     let report: Value = serde_json::from_str(text).unwrap();
     assert_eq!(report["summary"]["changed"], 2);
+  }
+
+  // --- `test` tool ----------------------------------------------------
+  //
+  // `run_tests_for_files` unconditionally loads `std/test.mo` (for
+  // `Test.assert`), same as `run_tests` itself — resolved via the real
+  // workspace root (this crate's `cargo test` cwd is `cli/`, not the
+  // workspace root where `std/` actually lives), mirroring `monad-
+  // core`'s own `run_tests`-adjacent tests' `workspace_root()` helper.
+
+  fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .parent()
+      .unwrap()
+      .to_path_buf()
+  }
+
+  #[test]
+  fn test_test_tool_reports_pass_and_fail_counts() {
+    let path = "/tmp/monad-mcp-test-test-pass-fail.mo";
+    std::fs::write(
+      path,
+      "#[test]\ndef test_ok : Bool := true\n\n#[test]\ndef test_bad : Bool := false\n",
+    )
+    .unwrap();
+    let response = dispatch(
+      "tools/call",
+      serde_json::json!({ "name": "test", "arguments": { "paths": [path] } }),
+      &[workspace_root()],
+    );
+    assert_eq!(response["result"]["isError"], false);
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let report: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(report["summary"]["passed"], 1);
+    assert_eq!(report["summary"]["failed"], 1);
+    assert_eq!(report["summary"]["filesTested"], 1);
+  }
+
+  #[test]
+  fn test_test_tool_reports_file_error_for_broken_file() {
+    let path = "/tmp/monad-mcp-test-test-broken.mo";
+    std::fs::write(path, "def x : I64 := \n").unwrap(); // incomplete, doesn't parse
+    let response = dispatch(
+      "tools/call",
+      serde_json::json!({ "name": "test", "arguments": { "paths": [path] } }),
+      &[workspace_root()],
+    );
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let report: Value = serde_json::from_str(text).unwrap();
+    assert!(report["files"][0]["error"].is_string());
+    assert!(report["files"][0]["tests"].as_array().unwrap().is_empty());
+  }
+
+  #[test]
+  fn test_test_tool_workspace_mode_scans_all_mote_dirs() {
+    let dir_a = "/tmp/monad-mcp-test-ws-test-a";
+    let dir_b = "/tmp/monad-mcp-test-ws-test-b";
+    std::fs::create_dir_all(dir_a).unwrap();
+    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::write(
+      format!("{dir_a}/one.mo"),
+      "#[test]\ndef test_one : Bool := true\n",
+    )
+    .unwrap();
+    std::fs::write(
+      format!("{dir_b}/two.mo"),
+      "#[test]\ndef test_two : Bool := true\n",
+    )
+    .unwrap();
+    // `workspace: true` reuses `mote_path` as BOTH the scanned input dirs
+    // and the module-resolution search paths (see `resolve_inputs`'s own
+    // doc comment) -- so `std/test.mo` must be reachable from inside one
+    // of the scanned dirs themselves. A trivial stub (never referenced by
+    // either fixture file, which don't call `Test.assert`) satisfies the
+    // load; it's also picked up as an extra scanned file with zero
+    // `#[test]` defs, accounted for in `filesTested` below.
+    std::fs::create_dir_all(format!("{dir_a}/std")).unwrap();
+    std::fs::write(format!("{dir_a}/std/test.mo"), "").unwrap();
+
+    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let response = dispatch(
+      "tools/call",
+      serde_json::json!({ "name": "test", "arguments": { "workspace": true } }),
+      &mote_path,
+    );
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let report: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(report["summary"]["passed"], 2);
+    assert_eq!(report["summary"]["failed"], 0);
+    assert_eq!(report["summary"]["filesTested"], 3);
   }
 }

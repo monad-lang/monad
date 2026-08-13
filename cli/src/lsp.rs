@@ -1,16 +1,20 @@
 //! Minimal stdio JSON-RPC LSP server — diagnostics + navigation
-//! (`hover`, `definition`, `documentSymbol`, `workspace/symbol`) plus one
+//! (`hover`, `definition`, `documentSymbol`, `workspace/symbol`), one
 //! codemod (`organize-imports`, reachable both as a
 //! `source.organizeImports` code action and as the
-//! `monad.organizeImports` executable command), matching the plan's phase
-//! ordering ("ship diagnostics + navigation first"). Completions, rename,
-//! semantic tokens, and general code actions need error-tolerant parsing
-//! (the parser stops at the first syntax error; no recovery/partial-AST
-//! support yet) — explicitly out of scope here, not an oversight, and the
-//! server's own advertised `capabilities` only claim what's actually
-//! implemented. `organize-imports` is the one exception: it only ever
-//! needs a file that already parses cleanly (nothing sound to compute
-//! from a broken one anyway), so it doesn't run into that limitation.
+//! `monad.organizeImports` executable command), and test running
+//! (`textDocument/codeLens` "▶ Run test"/"▶ Run N tests" lenses, backed
+//! by the `monad.runTest`/`monad.runFileTests` executable commands),
+//! matching the plan's phase ordering ("ship diagnostics + navigation
+//! first"). Completions, rename, semantic tokens, and general code
+//! actions need error-tolerant parsing (the parser stops at the first
+//! syntax error; no recovery/partial-AST support yet) — explicitly out
+//! of scope here, not an oversight, and the server's own advertised
+//! `capabilities` only claim what's actually implemented.
+//! `organize-imports` and test running are the two exceptions: the
+//! former only ever needs a file that already parses cleanly (nothing
+//! sound to compute from a broken one anyway); the latter needs the file
+//! to *evaluate*, which is orthogonal to error-tolerant parsing.
 //!
 //! `hover`/`definition` resolve within the open document first, falling
 //! back (via `crate::resolve_symbol`) to a workspace-wide search across
@@ -27,35 +31,59 @@
 //! (a separate, larger dependency) to do properly. Simpler and always
 //! correct, just potentially slower than an editor wants on very large
 //! files under rapid keystrokes — an acceptable v1 tradeoff, not
-//! something silently wrong.
+//! something silently wrong. `monad.runTest`/`monad.runFileTests` accept
+//! the same tradeoff even more visibly: this server's single-threaded
+//! read loop blocks for as long as the triggered test run takes (bounded
+//! by `TEST_COMMAND_TIMEOUT`), with no cancellation (`$/cancelRequest`
+//! is already a no-op here).
 //!
 //! Diagnostics/hover/definition/documentSymbol/codeAction/executeCommand
 //! all operate on the editor's in-memory buffer (`Document.text`, updated
 //! on every `didChange`), not what's saved on disk — via
 //! `monad_core::check_source`/`symbols_from_source`/
 //! `organize_imports_for_source`, the same single-source entry points
-//! `core` exposes specifically for this.
+//! `core` exposes specifically for this. `textDocument/codeLens` is the
+//! same (reads `Document.text`), but `monad.runTest`/`monad.runFileTests`
+//! themselves are the one exception: they run the file AS SAVED ON DISK
+//! (via `run_tests_for_files`, same on-disk convention as
+//! `diagnose_workspace`) — an unsaved edit isn't reflected in a test run
+//! until saved. There is no in-memory-buffer test-running path (it would
+//! need its own text-based overload of `evaluate_one_test_file`
+//! upstream, out of scope for v1).
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use monad_core::{
-  SymbolInfo, check_files, check_source, diag::Severity, organize_imports_for_source,
-  symbols_for_files, symbols_from_source,
+  SymbolInfo, TestOutcome, check_files, check_source, diag::Severity, organize_imports_for_source,
+  run_tests_for_files, symbols_for_files, symbols_from_source, test_defs_from_source,
 };
 
 use crate::{
   identifier_at, location_to_json_range, path_to_uri, resolve_symbol, symbol_kind_label,
 };
 
-/// Command id for the one `workspace/executeCommand` this server
-/// supports — organizes the given document's imports/annotations, same
-/// computation as the `monad-rs organize-imports` CLI subcommand and the
+/// Command id for the `workspace/executeCommand` that organizes the
+/// given document's imports/annotations, same computation as the
+/// `monad-rs organize-imports` CLI subcommand and the
 /// `source.organizeImports` code action below (all three share
 /// `organize_imports_for_source`, so they can't drift on what "organize
 /// imports" means).
 const ORGANIZE_IMPORTS_COMMAND: &str = "monad.organizeImports";
+/// Command id for running one named `#[test]` def, as offered by the
+/// per-test `textDocument/codeLens` entries `code_lens` emits below.
+const RUN_TEST_COMMAND: &str = "monad.runTest";
+/// Command id for running every `#[test]` def in one file, as offered by
+/// the whole-file `textDocument/codeLens` entry `code_lens` emits below.
+const RUN_FILE_TESTS_COMMAND: &str = "monad.runFileTests";
+/// Bounds one `monad.runTest`/`monad.runFileTests` invocation's total
+/// eval time — this server's read loop is single-threaded and
+/// synchronous (see the module doc comment's "no debounce" note, and
+/// `$/cancelRequest` is already a no-op here), so an unbounded test
+/// would wedge every OTHER request (hover, diagnostics, ...) for as long
+/// as it ran, with no way to recover.
+const TEST_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// One open document's current buffer content. LSP full-document sync
 /// (`TextDocumentSyncKind::Full`, the only kind this server advertises)
@@ -129,6 +157,7 @@ pub fn run(mote_path: Vec<PathBuf>) -> Result<(), String> {
       "textDocument/documentSymbol" => {
         document_symbol(&documents, &mut writer, id, &params, &mote_path)?
       }
+      "textDocument/codeLens" => code_lens(&documents, &mut writer, id, &params, &mote_path)?,
       "workspace/symbol" => workspace_symbol(&mut writer, id, &params, &mote_path)?,
       // Custom notification (not standard LSP) — matches the name already
       // sketched, unimplemented, in
@@ -262,7 +291,13 @@ fn initialize_result() -> serde_json::Value {
       "documentSymbolProvider": true,
       "workspaceSymbolProvider": true,
       "codeActionProvider": { "codeActionKinds": ["source.organizeImports"] },
-      "executeCommandProvider": { "commands": [ORGANIZE_IMPORTS_COMMAND] }
+      // No `resolveProvider`: every lens's command is embedded directly
+      // (see `code_lens` below), same as `code_action`'s embedded
+      // `WorkspaceEdit` — no `codeLens/resolve` round trip needed.
+      "codeLensProvider": {},
+      "executeCommandProvider": {
+        "commands": [ORGANIZE_IMPORTS_COMMAND, RUN_TEST_COMMAND, RUN_FILE_TESTS_COMMAND]
+      }
     },
     "serverInfo": { "name": "monad-lsp", "version": env!("CARGO_PKG_VERSION") }
   })
@@ -555,6 +590,63 @@ fn document_symbol(
   send_response(writer, Some(id), serde_json::Value::Array(items))
 }
 
+/// `textDocument/codeLens` — one "▶ Run test" lens per `#[test]` def in
+/// the open document (command `monad.runTest`, args `{uri, testName}`),
+/// plus one whole-file "▶ Run N test(s)" lens (command
+/// `monad.runFileTests`, args `{uri}`) placed at the first test's range
+/// when at least one test was found. Commands are embedded directly, not
+/// deferred to `codeLens/resolve` (see `initialize_result`'s own note).
+/// Empty array for a document with no open buffer, no resolvable path,
+/// or zero `#[test]` defs (no file-level lens either, in that last case
+/// — nothing to run).
+fn code_lens(
+  documents: &HashMap<String, Document>,
+  writer: &mut impl Write,
+  id: Option<serde_json::Value>,
+  params: &serde_json::Value,
+  mote_path: &[PathBuf],
+) -> Result<(), String> {
+  let Some(id) = id else {
+    return Ok(());
+  };
+  let lenses = (|| -> Option<Vec<serde_json::Value>> {
+    let uri = text_document_uri(params)?;
+    let doc = documents.get(uri)?;
+    let path = uri_to_path(uri)?;
+    let tests = test_defs_from_source(&path, &doc.text, mote_path.to_vec()).ok()?;
+    if tests.is_empty() {
+      return Some(Vec::new());
+    }
+
+    let mut lenses = Vec::with_capacity(tests.len() + 1);
+    let file_lens_range =
+      serde_json::to_value(location_to_json_range(tests[0].location.as_ref())).ok()?;
+    let noun = if tests.len() == 1 { "test" } else { "tests" };
+    lenses.push(serde_json::json!({
+      "range": file_lens_range,
+      "command": {
+        "title": format!("▶ Run {} {noun}", tests.len()),
+        "command": RUN_FILE_TESTS_COMMAND,
+        "arguments": [{ "uri": uri }],
+      }
+    }));
+    for t in &tests {
+      let range = serde_json::to_value(location_to_json_range(t.location.as_ref())).ok()?;
+      lenses.push(serde_json::json!({
+        "range": range,
+        "command": {
+          "title": "▶ Run test",
+          "command": RUN_TEST_COMMAND,
+          "arguments": [{ "uri": uri, "testName": t.name }],
+        }
+      }));
+    }
+    Some(lenses)
+  })()
+  .unwrap_or_default();
+  send_response(writer, Some(id), serde_json::Value::Array(lenses))
+}
+
 /// `workspace/symbol` — symbol search across the whole resolved
 /// workspace (project `src/` + every dependency mote's `src/`, same
 /// directories `mote_path` already resolves), unlike `document_symbol`
@@ -670,6 +762,158 @@ fn code_action(
 /// through the code-action lightbulb. Since a server can't write to the
 /// client's buffer itself, it pushes the edit via a server-initiated
 /// `workspace/applyEdit` request instead of returning it in the response.
+/// Appends an `Error`-severity `Diagnostic` for each `Fail`/
+/// `FailWithMessage` entry in `tests` (at its own declaration range) onto
+/// `diagnostics`, and returns `(passed, failed)` counts. Factored out of
+/// `run_tests_and_report` so the merge logic is unit-testable against a
+/// synthetic `Vec<Diagnostic>`, without needing a real warning-producing
+/// `.mo` snippet to exercise the "existing diagnostics preserved
+/// alongside a new test failure" case.
+fn append_test_failure_diagnostics(
+  diagnostics: &mut Vec<monad_core::diag::Diagnostic>,
+  path: &Path,
+  tests: &[monad_core::TestCaseResult],
+) -> (usize, usize) {
+  let mut passed = 0usize;
+  let mut failed = 0usize;
+  for t in tests {
+    let message = match &t.outcome {
+      TestOutcome::Pass => {
+        passed += 1;
+        continue;
+      }
+      TestOutcome::Fail => format!("test failed: {}", t.name),
+      TestOutcome::FailWithMessage(m) => format!("test failed: {}: {m}", t.name),
+    };
+    failed += 1;
+    diagnostics.push(monad_core::diag::Diagnostic {
+      severity: Severity::Error,
+      message,
+      location: t.location.clone(),
+      path: Some(path.to_path_buf()),
+      ..Default::default()
+    });
+  }
+  (passed, failed)
+}
+
+/// `TestCaseResult` -> the per-test JSON entry `monad/testResults`
+/// carries — see `run_tests_and_report`'s own doc comment for the full
+/// notification shape.
+fn test_case_to_json(t: &monad_core::TestCaseResult) -> serde_json::Value {
+  let (outcome, message) = match &t.outcome {
+    TestOutcome::Pass => ("pass", None),
+    TestOutcome::Fail => ("fail", None),
+    TestOutcome::FailWithMessage(m) => ("fail", Some(m.clone())),
+  };
+  serde_json::json!({
+    "name": t.name,
+    "outcome": outcome,
+    "message": message,
+    "durationMs": t.duration.as_secs_f64() * 1000.0,
+  })
+}
+
+/// Runs `monad_core::run_tests_for_files` for exactly one on-disk file
+/// (optionally filtered to a single test name via `test_name`, for
+/// `monad.runTest`; `None` runs every test in the file, for
+/// `monad.runFileTests`), then reports the result two ways:
+///
+/// 1. A custom `monad/testResults` notification with the full pass/
+///    fail/duration breakdown:
+///    ```jsonc
+///    {
+///      "uri": "file:///abs/path/to/file.mo",
+///      "error": null,                          // file-level compile/load failure, if any
+///      "summary": { "passed": 2, "failed": 1, "total": 3 },
+///      "tests": [
+///        { "name": "test_add", "outcome": "pass", "message": null, "durationMs": 0.08 },
+///        { "name": "test_sub", "outcome": "fail", "message": "expected 1 got 2", "durationMs": 0.05 }
+///      ]
+///    }
+///    ```
+/// 2. Every failing test's message as an ordinary
+///    `textDocument/publishDiagnostics` `Diagnostic` at its own
+///    declaration range (`source: "monad-test"`, vs. `"monad"` for
+///    ordinary compile diagnostics) — so failures show up as red
+///    squiggles/Problems-panel entries with zero custom client UI
+///    required, the same "batch report -> publishDiagnostics" shape
+///    `diagnose_workspace` already uses. `publishDiagnostics` REPLACES a
+///    URI's whole diagnostic set on every send, so this recomputes and
+///    MERGES in the file's ordinary `check_source` diagnostics first —
+///    publishing test-failure diagnostics alone would silently wipe out
+///    any type-check errors/warnings currently shown for this file until
+///    the next `didChange` re-triggers `publish_diagnostics`.
+///
+/// Reads the file FROM DISK (via `run_tests_for_files`, same as
+/// `diagnose_workspace`), not the in-memory `documents` buffer — an
+/// unsaved edit isn't reflected until saved; there is no in-memory-buffer
+/// test-running path yet (would need its own text-based overload of
+/// `evaluate_one_test_file`, out of scope for v1).
+fn run_tests_and_report(
+  writer: &mut impl Write,
+  uri: &str,
+  test_name: Option<&str>,
+  mote_path: &[PathBuf],
+) -> Result<(), String> {
+  let Some(path) = uri_to_path(uri) else {
+    return Ok(());
+  };
+  let source = std::fs::read_to_string(&path).unwrap_or_default();
+  let mut diagnostics = check_source(&path, &source, mote_path.to_vec()).unwrap_or_default();
+
+  let results = run_tests_for_files(
+    vec![path.clone()],
+    monad_core::eval::EvalOptions::default(),
+    1,
+    Some(TEST_COMMAND_TIMEOUT),
+    mote_path.to_vec(),
+    test_name,
+  )
+  .unwrap_or_default();
+  let Some(file_result) = results.into_iter().next() else {
+    return Ok(());
+  };
+
+  let (passed, failed) =
+    append_test_failure_diagnostics(&mut diagnostics, &path, &file_result.tests);
+  let json_tests: Vec<serde_json::Value> =
+    file_result.tests.iter().map(test_case_to_json).collect();
+
+  let json_diags: Vec<serde_json::Value> = diagnostics
+    .iter()
+    .map(|d| {
+      let source = if d.message.starts_with("test failed:") {
+        "monad-test"
+      } else {
+        "monad"
+      };
+      serde_json::json!({
+        "range": location_to_json_range(d.location.as_ref()),
+        "severity": severity_to_lsp_number(d.severity),
+        "message": d.message,
+        "source": source,
+      })
+    })
+    .collect();
+  send_notification(
+    writer,
+    "textDocument/publishDiagnostics",
+    serde_json::json!({ "uri": uri, "diagnostics": json_diags }),
+  )?;
+
+  send_notification(
+    writer,
+    "monad/testResults",
+    serde_json::json!({
+      "uri": uri,
+      "error": file_result.error_message,
+      "summary": { "passed": passed, "failed": failed, "total": passed + failed },
+      "tests": json_tests,
+    }),
+  )
+}
+
 fn execute_command(
   documents: &HashMap<String, Document>,
   writer: &mut impl Write,
@@ -679,33 +923,52 @@ fn execute_command(
   next_request_id: &mut u64,
 ) -> Result<(), String> {
   let command = params.get("command").and_then(|c| c.as_str()).unwrap_or("");
-  if command == ORGANIZE_IMPORTS_COMMAND {
-    // Accept either `["uri-string", ...]` or `[{"uri": "..."}, ...]` as
-    // `arguments` — clients vary in which shape they pass through.
-    let uri = params
-      .get("arguments")
-      .and_then(|a| a.as_array())
-      .and_then(|arr| arr.first())
-      .and_then(|first| {
-        first
-          .as_str()
-          .or_else(|| first.get("uri").and_then(|u| u.as_str()))
-      });
-    if let Some(uri) = uri
-      && let Some(doc) = documents.get(uri)
-      && let Some(path) = uri_to_path(uri)
-      && let Some(edit) = organize_imports_workspace_edit(uri, &doc.text, &path, mote_path)
-    {
-      let req_id = *next_request_id;
-      *next_request_id += 1;
-      send_request(
-        writer,
-        req_id,
-        "workspace/applyEdit",
-        serde_json::json!({ "label": "Organize Imports", "edit": edit }),
-      )?;
+  // Accept either `["uri-string", ...]` or `[{"uri": "...", ...}, ...]`
+  // as `arguments` — clients vary in which shape they pass through, and
+  // every command below takes a `uri` as its first argument either way.
+  let first_arg = params
+    .get("arguments")
+    .and_then(|a| a.as_array())
+    .and_then(|arr| arr.first());
+  let uri = first_arg.and_then(|first| {
+    first
+      .as_str()
+      .or_else(|| first.get("uri").and_then(|u| u.as_str()))
+  });
+
+  match command {
+    ORGANIZE_IMPORTS_COMMAND => {
+      if let Some(uri) = uri
+        && let Some(doc) = documents.get(uri)
+        && let Some(path) = uri_to_path(uri)
+        && let Some(edit) = organize_imports_workspace_edit(uri, &doc.text, &path, mote_path)
+      {
+        let req_id = *next_request_id;
+        *next_request_id += 1;
+        send_request(
+          writer,
+          req_id,
+          "workspace/applyEdit",
+          serde_json::json!({ "label": "Organize Imports", "edit": edit }),
+        )?;
+      }
     }
+    RUN_FILE_TESTS_COMMAND => {
+      if let Some(uri) = uri {
+        run_tests_and_report(writer, uri, None, mote_path)?;
+      }
+    }
+    RUN_TEST_COMMAND => {
+      if let Some(uri) = uri {
+        let test_name = first_arg
+          .and_then(|first| first.get("testName"))
+          .and_then(|t| t.as_str());
+        run_tests_and_report(writer, uri, test_name, mote_path)?;
+      }
+    }
+    _ => {}
   }
+
   if let Some(id) = id {
     send_response(writer, Some(id), serde_json::Value::Null)?;
   }
@@ -717,16 +980,19 @@ mod test {
   use super::*;
 
   #[test]
-  fn test_initialize_advertises_organize_imports() {
+  fn test_initialize_advertises_organize_imports_and_test_commands() {
     let caps = initialize_result();
     let kinds = caps["capabilities"]["codeActionProvider"]["codeActionKinds"]
       .as_array()
       .expect("codeActionKinds should be an array");
     assert!(kinds.iter().any(|k| k == "source.organizeImports"));
+    assert!(caps["capabilities"]["codeLensProvider"].is_object());
     let commands = caps["capabilities"]["executeCommandProvider"]["commands"]
       .as_array()
       .expect("commands should be an array");
     assert!(commands.iter().any(|c| c == ORGANIZE_IMPORTS_COMMAND));
+    assert!(commands.iter().any(|c| c == RUN_TEST_COMMAND));
+    assert!(commands.iter().any(|c| c == RUN_FILE_TESTS_COMMAND));
   }
 
   #[test]
@@ -974,6 +1240,195 @@ mod test {
       "expected definition to point into wsdep.mo (the defining file), got {uri}"
     );
     assert!(!uri.contains("consumer.mo"));
+  }
+
+  // --- `textDocument/codeLens`, `monad.runTest`/`monad.runFileTests` --
+
+  /// `run_tests_and_report`'s own `std/test.mo` resolution needs the
+  /// real workspace root (this crate's `cargo test` cwd is `cli/`, not
+  /// the workspace root where `std/` actually lives) — same convention
+  /// as `monad_core`'s and `mcp::test`'s own `workspace_root()` helpers.
+  fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .parent()
+      .unwrap()
+      .to_path_buf()
+  }
+
+  #[test]
+  fn test_code_lens_returns_one_lens_per_test_plus_file_lens() {
+    let uri = "file:///tmp/monad-lsp-test-codelens.mo";
+    let mut documents = HashMap::new();
+    documents.insert(
+      uri.to_string(),
+      Document {
+        text: "#[test]\ndef test_a : Bool := true\n\n#[test]\ndef test_b : Bool := true\n"
+          .to_string(),
+      },
+    );
+    let params = serde_json::json!({ "textDocument": { "uri": uri } });
+    let mut buf: Vec<u8> = Vec::new();
+    code_lens(
+      &documents,
+      &mut buf,
+      Some(serde_json::json!(1)),
+      &params,
+      &[],
+    )
+    .unwrap();
+    let response = parse_single_message(&buf);
+    let lenses = response["result"].as_array().unwrap();
+    assert_eq!(lenses.len(), 3);
+    assert_eq!(lenses[0]["command"]["command"], RUN_FILE_TESTS_COMMAND);
+    assert!(
+      lenses[0]["command"]["title"]
+        .as_str()
+        .unwrap()
+        .contains("2 tests")
+    );
+    assert_eq!(lenses[1]["command"]["command"], RUN_TEST_COMMAND);
+    assert_eq!(lenses[1]["command"]["arguments"][0]["testName"], "test_a");
+    assert_eq!(lenses[2]["command"]["arguments"][0]["testName"], "test_b");
+  }
+
+  #[test]
+  fn test_code_lens_empty_for_file_with_no_tests() {
+    let uri = "file:///tmp/monad-lsp-test-codelens-none.mo";
+    let mut documents = HashMap::new();
+    documents.insert(
+      uri.to_string(),
+      Document {
+        text: "def plain : Bool := true\n".to_string(),
+      },
+    );
+    let params = serde_json::json!({ "textDocument": { "uri": uri } });
+    let mut buf: Vec<u8> = Vec::new();
+    code_lens(
+      &documents,
+      &mut buf,
+      Some(serde_json::json!(1)),
+      &params,
+      &[],
+    )
+    .unwrap();
+    let response = parse_single_message(&buf);
+    assert_eq!(response["result"].as_array().unwrap().len(), 0);
+  }
+
+  #[test]
+  fn test_append_test_failure_diagnostics_preserves_existing_diagnostics() {
+    let mut diagnostics = vec![monad_core::diag::Diagnostic {
+      severity: Severity::Warning,
+      message: "unused variable x".to_string(),
+      ..Default::default()
+    }];
+    let tests = vec![
+      monad_core::TestCaseResult {
+        name: "test_ok".to_string(),
+        outcome: TestOutcome::Pass,
+        duration: std::time::Duration::ZERO,
+        location: None,
+      },
+      monad_core::TestCaseResult {
+        name: "test_bad".to_string(),
+        outcome: TestOutcome::FailWithMessage("expected 1 got 2".to_string()),
+        duration: std::time::Duration::ZERO,
+        location: None,
+      },
+    ];
+    let (passed, failed) =
+      append_test_failure_diagnostics(&mut diagnostics, &PathBuf::from("/tmp/x.mo"), &tests);
+    assert_eq!(passed, 1);
+    assert_eq!(failed, 1);
+    // Original warning preserved, one new failure diagnostic appended.
+    assert_eq!(diagnostics.len(), 2);
+    assert_eq!(diagnostics[0].message, "unused variable x");
+    assert!(diagnostics[1].message.contains("test_bad"));
+    assert!(diagnostics[1].message.contains("expected 1 got 2"));
+  }
+
+  #[test]
+  fn test_run_tests_and_report_publishes_test_results_notification_and_diagnostics() {
+    let path = "/tmp/monad-lsp-test-run-tests-report.mo";
+    std::fs::write(
+      path,
+      "#[test]\ndef test_ok : Bool := true\n\n#[test]\ndef test_bad : Bool := false\n",
+    )
+    .unwrap();
+    let uri = format!("file://{path}");
+    let mote_path = [workspace_root()];
+    let mut buf: Vec<u8> = Vec::new();
+    run_tests_and_report(&mut buf, &uri, None, &mote_path).unwrap();
+
+    let messages = parse_all_messages(&buf);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["method"], "textDocument/publishDiagnostics");
+    let diags = messages[0]["params"]["diagnostics"].as_array().unwrap();
+    assert_eq!(diags.len(), 1); // exactly the one failing test's diagnostic
+    assert_eq!(diags[0]["severity"], 1); // Error
+    assert_eq!(diags[0]["source"], "monad-test");
+
+    assert_eq!(messages[1]["method"], "monad/testResults");
+    let summary = &messages[1]["params"]["summary"];
+    assert_eq!(summary["passed"], 1);
+    assert_eq!(summary["failed"], 1);
+    assert_eq!(summary["total"], 2);
+  }
+
+  #[test]
+  fn test_run_tests_and_report_respects_test_name_filter() {
+    let path = "/tmp/monad-lsp-test-run-tests-filter.mo";
+    std::fs::write(
+      path,
+      "#[test]\ndef test_a : Bool := true\n\n#[test]\ndef test_b : Bool := true\n",
+    )
+    .unwrap();
+    let uri = format!("file://{path}");
+    let mote_path = [workspace_root()];
+    let mut buf: Vec<u8> = Vec::new();
+    run_tests_and_report(&mut buf, &uri, Some("test_a"), &mote_path).unwrap();
+
+    let messages = parse_all_messages(&buf);
+    let tests = messages[1]["params"]["tests"].as_array().unwrap();
+    assert_eq!(tests.len(), 1);
+    assert_eq!(tests[0]["name"], "test_a");
+  }
+
+  #[test]
+  fn test_execute_command_run_test_and_run_file_tests_dispatch() {
+    let path = "/tmp/monad-lsp-test-execcommand-runtests.mo";
+    std::fs::write(path, "#[test]\ndef test_a : Bool := true\n").unwrap();
+    let uri = format!("file://{path}");
+    let mote_path = [workspace_root()];
+    let documents = HashMap::new();
+    let mut next_id = 1u64;
+
+    for (command, arguments) in [
+      (RUN_FILE_TESTS_COMMAND, serde_json::json!([{ "uri": uri }])),
+      (
+        RUN_TEST_COMMAND,
+        serde_json::json!([{ "uri": uri, "testName": "test_a" }]),
+      ),
+    ] {
+      let params = serde_json::json!({ "command": command, "arguments": arguments });
+      let mut buf: Vec<u8> = Vec::new();
+      execute_command(
+        &documents,
+        &mut buf,
+        Some(serde_json::json!(1)),
+        &params,
+        &mote_path,
+        &mut next_id,
+      )
+      .unwrap();
+      // publishDiagnostics, monad/testResults, then the executeCommand
+      // request's own response — in that order.
+      let messages = parse_all_messages(&buf);
+      assert_eq!(messages.len(), 3);
+      assert_eq!(messages[0]["method"], "textDocument/publishDiagnostics");
+      assert_eq!(messages[1]["method"], "monad/testResults");
+      assert_eq!(messages[2]["id"], 1);
+    }
   }
 
   /// Parse the single `Content-Length`-framed message written to `buf`.

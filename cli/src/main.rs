@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use monad_core::{
-  SymbolInfo, SymbolKind, check_files,
+  FileTestResult, SymbolInfo, SymbolKind, TestOutcome, check_files,
   diag::{Diagnostic, Severity, render_diagnostics},
   eval::EvalOptions,
-  organize_imports_for_files, run, run_tests, symbols_for_files,
+  organize_imports_for_files, run, run_tests, run_tests_for_files, symbols_for_files,
   term::mote::{Manifest, Resolver},
 };
 
@@ -54,6 +54,10 @@ enum Commands {
   Test {
     #[arg(value_name = "PATHS", num_args = 1..)]
     inputs: Vec<PathBuf>,
+    /// Emit machine-readable JSON (for editor/agent integrations) instead
+    /// of the default human-readable PASS/FAIL text report.
+    #[arg(long, default_value_t = false)]
+    json: bool,
     #[arg(short, long, default_value_t = false)]
     debug: bool,
     #[arg(long, default_value_t = false)]
@@ -353,6 +357,124 @@ pub(crate) fn to_json_diagnostic(diag: &Diagnostic) -> JsonDiagnostic {
 pub(crate) fn path_to_uri(path: &std::path::Path) -> String {
   let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
   format!("file://{}", abs.display())
+}
+
+// --- `test`/`test --json` --------------------------------------------------
+//
+// DTOs + conversion helpers shared by the CLI's own `test --json` and
+// MCP's `test` tool (mirroring `JsonCheckReport`/`to_json_diagnostic`'s
+// same shared role for `check`), so the two can't drift on what a test
+// report looks like.
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct JsonTestCase {
+  name: String,
+  outcome: String, // "pass" | "fail"
+  #[serde(skip_serializing_if = "Option::is_none")]
+  message: Option<String>, // present only for a FailWithMessage outcome
+  duration_ms: f64,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct JsonFileTestReport {
+  uri: String,
+  tests: Vec<JsonTestCase>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct JsonTestSummary {
+  passed: usize,
+  failed: usize,
+  files_tested: usize,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct JsonTestReport {
+  files: Vec<JsonFileTestReport>,
+  summary: JsonTestSummary,
+}
+
+pub(crate) fn to_json_test_case(t: &monad_core::TestCaseResult) -> JsonTestCase {
+  let (outcome, message) = match &t.outcome {
+    TestOutcome::Pass => ("pass", None),
+    TestOutcome::Fail => ("fail", None),
+    TestOutcome::FailWithMessage(m) => ("fail", Some(m.clone())),
+  };
+  JsonTestCase {
+    name: t.name.clone(),
+    outcome: outcome.to_string(),
+    message,
+    duration_ms: t.duration.as_secs_f64() * 1000.0,
+  }
+}
+
+/// Shared by the CLI's `test --json` and MCP's `test` tool.
+pub(crate) fn build_json_test_report(results: &[FileTestResult]) -> JsonTestReport {
+  let mut passed = 0usize;
+  let mut failed = 0usize;
+  let files = results
+    .iter()
+    .map(|r| {
+      let tests: Vec<JsonTestCase> = r
+        .tests
+        .iter()
+        .map(|t| {
+          match t.outcome {
+            TestOutcome::Pass => passed += 1,
+            TestOutcome::Fail | TestOutcome::FailWithMessage(_) => failed += 1,
+          }
+          to_json_test_case(t)
+        })
+        .collect();
+      JsonFileTestReport {
+        uri: path_to_uri(&r.path),
+        tests,
+        error: r.error_message.clone(),
+      }
+    })
+    .collect();
+  JsonTestReport {
+    files,
+    summary: JsonTestSummary {
+      passed,
+      failed,
+      files_tested: results.len(),
+    },
+  }
+}
+
+/// `monad test --json`'s exit path — mirrors `run_check`'s json branch
+/// (same exit-code convention: 0 clean, 1 failures found, 2 internal
+/// error). Never falls through to `run_tests`'s own printing path,
+/// unlike the human-text path which stays byte-for-byte unchanged below.
+fn run_test_json(
+  inputs: Vec<PathBuf>,
+  options: EvalOptions,
+  num_threads: usize,
+  test_timeout: Option<std::time::Duration>,
+  mote_path: Vec<PathBuf>,
+) -> ! {
+  let results =
+    match run_tests_for_files(inputs, options, num_threads, test_timeout, mote_path, None) {
+      Ok(r) => r,
+      Err(e) => {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+      }
+    };
+  let report = build_json_test_report(&results);
+  match serde_json::to_string_pretty(&report) {
+    Ok(s) => println!("{s}"),
+    Err(e) => {
+      eprintln!("error: failed to serialize report: {e}");
+      std::process::exit(2);
+    }
+  }
+  std::process::exit(if report.summary.failed > 0 { 1 } else { 0 });
 }
 
 fn run_check(inputs: Vec<PathBuf>, json: bool, use_colors: bool, mote_path: Vec<PathBuf>) -> ! {
@@ -840,6 +962,7 @@ fn execute(command: Commands) -> Result<(), String> {
     }
     Commands::Test {
       inputs,
+      json,
       debug,
       benchmark,
       color,
@@ -862,18 +985,19 @@ fn execute(command: Commands) -> Result<(), String> {
             .unwrap_or(1)
         })
       };
-      let result = run_tests(
-        inputs,
-        EvalOptions {
-          debug,
-          benchmark,
-          use_colors,
-          max_recursion_depth: max_depth,
-        },
-        num_threads,
-        timeout.map(|s| std::time::Duration::from_secs_f64(s)),
-        mote_path,
-      );
+      let options = EvalOptions {
+        debug,
+        benchmark,
+        use_colors,
+        max_recursion_depth: max_depth,
+      };
+      let test_timeout = timeout.map(std::time::Duration::from_secs_f64);
+      if json {
+        // Diverges (exits the process) -- never falls through to
+        // `run_tests`'s own printing path below.
+        run_test_json(inputs, options, num_threads, test_timeout, mote_path);
+      }
+      let result = run_tests(inputs, options, num_threads, test_timeout, mote_path);
       match result {
         Ok(_) => (),
         Err(ref e) => {
@@ -978,5 +1102,73 @@ fn execute(command: Commands) -> Result<(), String> {
       }
       result
     }
+  }
+}
+
+#[cfg(test)]
+mod test {
+  use super::*;
+
+  #[test]
+  fn test_to_json_test_case_pass() {
+    let t = monad_core::TestCaseResult {
+      name: "test_a".to_string(),
+      outcome: TestOutcome::Pass,
+      duration: std::time::Duration::from_micros(80),
+      location: None,
+    };
+    let json = to_json_test_case(&t);
+    assert_eq!(json.name, "test_a");
+    assert_eq!(json.outcome, "pass");
+    assert!(json.message.is_none());
+    assert!((json.duration_ms - 0.08).abs() < 0.001);
+  }
+
+  #[test]
+  fn test_to_json_test_case_fail_with_message() {
+    let t = monad_core::TestCaseResult {
+      name: "test_b".to_string(),
+      outcome: TestOutcome::FailWithMessage("expected 1 got 2".to_string()),
+      duration: std::time::Duration::from_millis(1),
+      location: None,
+    };
+    let json = to_json_test_case(&t);
+    assert_eq!(json.outcome, "fail");
+    assert_eq!(json.message.as_deref(), Some("expected 1 got 2"));
+  }
+
+  #[test]
+  fn test_build_json_test_report_summary_counts() {
+    let results = vec![
+      FileTestResult {
+        path: PathBuf::from("/tmp/a.mo"),
+        tests: vec![
+          monad_core::TestCaseResult {
+            name: "test_a".to_string(),
+            outcome: TestOutcome::Pass,
+            duration: std::time::Duration::ZERO,
+            location: None,
+          },
+          monad_core::TestCaseResult {
+            name: "test_b".to_string(),
+            outcome: TestOutcome::Fail,
+            duration: std::time::Duration::ZERO,
+            location: None,
+          },
+        ],
+        error_message: None,
+      },
+      FileTestResult {
+        path: PathBuf::from("/tmp/broken.mo"),
+        tests: Vec::new(),
+        error_message: Some("parse error".to_string()),
+      },
+    ];
+    let report = build_json_test_report(&results);
+    assert_eq!(report.summary.passed, 1);
+    assert_eq!(report.summary.failed, 1);
+    assert_eq!(report.summary.files_tested, 2);
+    assert_eq!(report.files.len(), 2);
+    assert_eq!(report.files[1].error.as_deref(), Some("parse error"));
   }
 }
