@@ -100,18 +100,36 @@ def typecheck_file (file_path : String) (mod_name : String) : Bool :=
 
 // --- examples/ non-test files ---
 
-#[test]
-def test_typecheck_examples_do_block : Bool := typecheck_file "examples/do_block.mo" "do_block"
-
-// These examples depend on external modules (io, init, math, etc.) and require module loading
+// These examples depend on external modules (io, init, math, etc.) and require module loading.
+//
+// do_block.mo/indexed_monads.mo moved here (previously listed as live
+// #[test]s, both actually passing): `typecheck_file`'s single-file
+// `build_scope_from_decls` has no dependency loading at all (same gap
+// already documented for factorial/hello/iteration/pattern_matching
+// below) — do_block.mo needs `io`'s `IO`/`println`/`Monad.bind`,
+// indexed_monads.mo needs `init/prelude.mo`'s `Bool`. Both files'
+// LAST declarations (the ones needing these) simply weren't reached
+// before `lang/parser/combinators.mo`'s UTF-8 byte-stepping fix
+// (`utf8_char_width`): both files have an em dash in a comment ahead of
+// their real content, which used to truncate `decls_try` to a handful
+// of self-contained leading decls — so these two tests were previously
+// "passing" only by accident of the very bug this fix corrects, never
+// because `typecheck_file`'s dependency-free harness could actually
+// resolve `IO`/`Bool`. Confirmed by bisection (parsed decl count went
+// from a truncated few to the full 6/6 for both, with the newly-reached
+// defs the ones that genuinely fail to typecheck for lack of `io`/
+// `init/prelude.mo` in scope, not from any new parser regression).
+// #[test]
+// def test_typecheck_examples_do_block : Bool := typecheck_file "examples/do_block.mo" "do_block"
+//
 // #[test]
 // def test_typecheck_examples_factorial : Bool := typecheck_file "examples/factorial.mo" "factorial"
-// 
+//
 // #[test]
 // def test_typecheck_examples_hello : Bool := typecheck_file "examples/hello.mo" "hello"
-
-#[test]
-def test_typecheck_examples_indexed_monads : Bool := typecheck_file "examples/indexed_monads.mo" "indexed_monads"
+//
+// #[test]
+// def test_typecheck_examples_indexed_monads : Bool := typecheck_file "examples/indexed_monads.mo" "indexed_monads"
 
 // #[test]
 // def test_typecheck_examples_iteration : Bool := typecheck_file "examples/iteration.mo" "iteration"

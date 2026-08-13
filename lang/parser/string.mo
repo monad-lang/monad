@@ -3,7 +3,7 @@
 
 use lang.types {Term, lit, str}
 use lang.parser.core {ParseResult, custom, fail, is_empty, success, tag}
-use lang.parser.combinators {tag}
+use lang.parser.combinators {tag, utf8_char_width}
 
 open ParseResult {fail, success}
 
@@ -40,11 +40,19 @@ def escape_replacement (c : String) : Option String :=
 def string_body (input : String) : ParseResult String :=
 	string_body_loop input ""
 
+/// Steps by `utf8_char_width` rather than a hardcoded 1 byte — a plain
+/// (non-escaped) multi-byte UTF-8 character in a string literal's
+/// content (an em dash, an accented letter, ...) would otherwise land
+/// `String.slice`/`String.drop` mid-character and silently truncate the
+/// rest of the string (see `utf8_char_width`'s own doc comment,
+/// lang/parser/combinators.mo).
 #[partial]
 def string_body_loop (input : String) (acc : String) : ParseResult String :=
 	if is_empty input
 	then fail (ParseError.custom "unterminated string literal")
-	else string_body_char (String.slice input 0 1) (String.drop 1 input) acc
+	else
+		let width : I64 := utf8_char_width input in
+		string_body_char (String.slice input 0 width) (String.drop width input) acc
 
 #[partial]
 def string_body_char (ch : String) (rest : String) (acc : String) : ParseResult String :=
@@ -64,7 +72,9 @@ def string_body_char (ch : String) (rest : String) (acc : String) : ParseResult 
 def string_body_escape (input : String) (acc : String) : ParseResult String :=
 	if is_empty input
 	then fail (ParseError.custom "unterminated escape sequence")
-	else string_body_escape_char (String.slice input 0 1) (String.drop 1 input) acc
+	else
+		let width : I64 := utf8_char_width input in
+		string_body_escape_char (String.slice input 0 width) (String.drop width input) acc
 
 #[partial]
 def string_body_escape_char (ch : String) (rest : String) (acc : String) : ParseResult String :=

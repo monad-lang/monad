@@ -3339,6 +3339,29 @@ def test_skip_docstrings_multi : Bool :=
 	let rem : String := skip_docstrings "/// line1\n/// line2\n\ndef x := 1" in
 	String.beq rem "def x := 1"
 
+/// Regression test for the UTF-8 byte-vs-codepoint stepping bug
+/// (`utf8_char_width`, lang/parser/combinators.mo): a multi-byte
+/// character (an em dash, 3 bytes in UTF-8) inside a comment used to
+/// make `take_while`-based scanning silently stop right there —
+/// `String.slice`/`String.drop` both fall back to "" once the byte
+/// offset lands mid-character, indistinguishable from genuine
+/// end-of-input. Directly mirrors `lang/json.mo`/`lang/toml.mo`'s own
+/// blocked first declaration (an em dash in a doc comment before it).
+#[test]
+def test_skip_docstrings_utf8_em_dash : Bool :=
+	let rem : String := skip_docstrings "/// an em dash — right here\ndef x := 1" in
+	String.beq rem "def x := 1"
+
+/// Same bug, but inside a string literal's plain (non-escaped) content
+/// rather than a comment — exercises `string_body_loop`'s own
+/// `utf8_char_width` stepping (lang/parser/string.mo).
+#[test]
+def test_string_parse_utf8_em_dash : Bool :=
+	match string_parse "\"an em dash — right here\"" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "an em dash — right here",
+		fail _ => false
+	}
+
 #[test]
 def test_decls_with_docstring : Bool :=
 	match decls_parser "/// A test declaration\ndef x : I64 := 42" {

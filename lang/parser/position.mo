@@ -2,6 +2,7 @@
 /// Extracted from parser.mo as part of Phase C
 
 use lang.types {LocatedSpan, Location, mk}
+use lang.parser.combinators {utf8_char_width}
 
 /// Create a new LocatedSpan starting at offset 0, line 1, column 1
 #[partial]
@@ -22,12 +23,21 @@ def span_fragment (span : LocatedSpan) : String :=
 		mk frag loc => frag
 	}
 
-/// Count the number of newline characters in a string
+/// Count the number of newline characters in a string. Steps by
+/// `utf8_char_width` rather than a hardcoded 1 byte — a 1-byte slice
+/// into the middle of a multi-byte UTF-8 character isn't a valid
+/// boundary on either end, so both the char slice AND the remaining-
+/// string drop silently return "" (see `utf8_char_width`'s own doc
+/// comment, lang/parser/combinators.mo), which previously made this
+/// function stop counting entirely as soon as it hit any multi-byte
+/// character rather than just miscounting that one character.
 #[partial]
 def count_newlines (s : String) (acc : I64) : I64 :=
 	if String.is_empty s
 	then acc
-	else count_newlines_tail (String.slice s 0 1) (String.drop 1 s) acc
+	else
+		let width : I64 := utf8_char_width s in
+		count_newlines_tail (String.slice s 0 width) (String.drop width s) acc
 
 /// Helper for count_newlines
 #[partial]

@@ -254,6 +254,52 @@ def separated_by_ok (input : String) (acc : List B) : ParseResult (List B) :=
 	success input (list_reverse acc)
 
 
+// --- UTF-8 codepoint-width stepping ---
+//
+// `String.slice`/`String.drop` are byte-oriented (see their own doc
+// comments in core/src/core_native.rs); stepping by a hardcoded 1 byte
+// per iteration — as every scanner here used to — silently returns ""
+// once the offset lands mid-character for any multi-byte UTF-8 codepoint
+// (the native slice/drop fall back to empty rather than panic on a
+// non-boundary index). A scanner then sees `ch="" rest=""`, indistinguishable
+// from genuine end-of-input, and truncates everything after the
+// multi-byte character with zero diagnostic. Hit by any `take_while`-based
+// scan (comments, whitespace, `is_not_*`-style delimiters, ...) — not a
+// theoretical edge case: `lang/json.mo`/`lang/toml.mo` both hit this on
+// an em dash before their first real declaration.
+//
+// `utf8_char_width` reads just the lead byte (`String.get`, an O(1) byte
+// lookup — deliberately NOT `String.get_char`, which decodes the whole
+// remaining string into a `Vec<char>` on every call and would make every
+// scan quadratic) and applies the standard UTF-8 rule to determine how
+// many bytes the character it starts occupies, so a scanner can step by
+// the right amount instead of always 1.
+
+#[partial]
+def utf8_char_width (s : String) : I64 :=
+	match String.get s 0 {
+		Option.some byte => utf8_char_width_of_byte byte,
+		// Empty input — width is moot (take_while_loop already checks
+		// is_empty first), but 1 keeps this total.
+		Option.none => 1
+	}
+
+/// Standard UTF-8 lead-byte rule: `0xxxxxxx` (<0x80, i.e. <128u8) is a
+/// 1-byte ASCII char; `110xxxxx` (0xC0-0xDF, 192-223) starts a 2-byte
+/// sequence; `1110xxxx` (0xE0-0xEF, 224-239) starts 3 bytes; `11110xxx`
+/// (0xF0-0xF7, 240-247) starts 4. A byte in 0x80-0xBF (128-191) is a
+/// *continuation* byte — it should never be seen as a lead byte by a
+/// scanner that's stepping correctly, but falls back to width 1 rather
+/// than looping forever on malformed input.
+#[partial]
+def utf8_char_width_of_byte (byte : U8) : I64 :=
+	if U8.lt byte 128u8 then 1
+	else if U8.lt byte 192u8 then 1
+	else if U8.lt byte 224u8 then 2
+	else if U8.lt byte 240u8 then 3
+	else 4
+
+
 // --- take_while combinator ---
 
 #[partial]
@@ -265,7 +311,9 @@ def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
 def take_while_loop (pred : String -> Bool) (acc : String) (input : String) : ParseResult String :=
 	if is_empty input
 	then success input acc
-	else take_while_check pred acc input (String.slice input 0 1) (String.drop 1 input)
+	else
+		let width : I64 := utf8_char_width input in
+		take_while_check pred acc input (String.slice input 0 width) (String.drop width input)
 
 
 #[partial]

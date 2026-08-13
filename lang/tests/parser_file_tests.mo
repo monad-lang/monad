@@ -182,6 +182,28 @@ def test_scope_has_some_decls : Bool :=
     let count := count_decls_in_file "lang/scope.mo" in
     I64.gt count 0
 
+// `lang/json.mo`/`lang/toml.mo` both open with a `//`/`///` comment
+// containing an em dash (multi-byte UTF-8) before their very first real
+// declaration — before the `take_while`/`string_body` UTF-8 stepping
+// fix (see `utf8_char_width`'s doc comment, lang/parser/combinators.mo)
+// this silently truncated the parse to ZERO declarations (verified by
+// bisection while landing that fix). Both files still stop short of
+// their true decl count today (~194/~167 respectively, going by a raw
+// grep of top-level declaration keywords) — some other, not yet
+// identified construct further down still trips `decls_try`'s
+// silent-truncate-on-fail fallback — so these floors are deliberately
+// conservative (verified non-regression against the *specific* UTF-8
+// bug, not a claim of full-file completeness) rather than exact counts.
+#[test]
+def test_json_utf8_comment_does_not_truncate_to_zero : Bool :=
+    let count := count_decls_in_file "lang/json.mo" in
+    I64.gt count 5
+
+#[test]
+def test_toml_utf8_comment_does_not_truncate_to_zero : Bool :=
+    let count := count_decls_in_file "lang/toml.mo" in
+    I64.gt count 5
+
 // ================ use/open brace syntax round-trip tests ================
 // parse -> pretty-print -> re-parse should succeed for the new syntax.
 
