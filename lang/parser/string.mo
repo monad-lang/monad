@@ -49,7 +49,7 @@ def string_body (input : String) : ParseResult String :=
 #[partial]
 def string_body_loop (input : String) (acc : String) : ParseResult String :=
 	if is_empty input
-	then fail (ParseError.custom "unterminated string literal")
+	then fail (ParseError.custom "unterminated string literal" input)
 	else
 		let width : I64 := utf8_char_width input in
 		string_body_char (String.slice input 0 width) (String.drop width input) acc
@@ -71,7 +71,7 @@ def string_body_char (ch : String) (rest : String) (acc : String) : ParseResult 
 #[partial]
 def string_body_escape (input : String) (acc : String) : ParseResult String :=
 	if is_empty input
-	then fail (ParseError.custom "unterminated escape sequence")
+	then fail (ParseError.custom "unterminated escape sequence" input)
 	else
 		let width : I64 := utf8_char_width input in
 		string_body_escape_char (String.slice input 0 width) (String.drop width input) acc
@@ -80,7 +80,7 @@ def string_body_escape (input : String) (acc : String) : ParseResult String :=
 def string_body_escape_char (ch : String) (rest : String) (acc : String) : ParseResult String :=
 	match escape_replacement ch {
 		Option.some replacement => string_body_loop rest (String.concat acc replacement),
-		Option.none => fail (ParseError.custom "unknown escape sequence")
+		Option.none => fail (ParseError.custom "unknown escape sequence" rest)
 	}
 
 /// Parse a string literal and return it as a Term.

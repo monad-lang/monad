@@ -26,7 +26,7 @@ def number_body (r : ParseResult String) : ParseResult I64 :=
 	match r {
 		success rem out =>
 			if is_empty out
-			then fail (ParseError.custom "expected number")
+			then fail (ParseError.custom "expected number" rem)
 			else number_parse out rem,
 		fail e => fail e
 	}
@@ -35,10 +35,10 @@ def number_body (r : ParseResult String) : ParseResult I64 :=
 #[partial]
 def number_parse (s : String) (rem : String) : ParseResult I64 :=
 	if is_empty s
-	then fail (ParseError.custom "empty number")
+	then fail (ParseError.custom "empty number" rem)
 	else if is_digit (String.slice s 0 1)
 	then success rem (parse_digits s)
-	else fail (ParseError.custom "number must start with digit")
+	else fail (ParseError.custom "number must start with digit" rem)
 
 
 // --- Number parsing helpers ---

@@ -4,9 +4,33 @@ use lang.types {mk}
 use std.list {length}
 
 
+/// Every `fail` value carries not just a message but the input
+/// remaining right at the point of failure (`remaining` below) — this
+/// is what lets `lang/parser/position.mo`'s `location_of_remaining`
+/// recover a real line:column for a diagnostic (by diffing `remaining`
+/// against the original full source text) without needing to thread a
+/// `LocatedSpan` through every one of this parser's ~450 grammar
+/// functions the way the Rust reference does (nom-locate,
+/// core/src/parser/locate.rs) — `ParseError` is the only type that
+/// needed to change, not `ParseResult` itself. See
+/// `location_of_remaining`'s own doc comment for the full rationale.
 type ParseError {
-	tag String,
-	custom String,
+	tag (expected: String) (remaining: String),
+	custom (msg: String) (remaining: String),
+	}
+
+/// Pull `remaining` back out of an already-failed `ParseError` — for the
+/// handful of call sites that want to re-describe a failure with a more
+/// helpful message (e.g. "expected ] after class constraint" instead of
+/// a bare "tag ]") but don't have a conveniently-in-scope `orig`/`rem`
+/// local to attach; the wrapped error's own `remaining` is exactly the
+/// right position to reuse, since it's the same failure being
+/// re-described, not a new one.
+#[partial]
+def parse_error_remaining (e : ParseError) : String :=
+	match e {
+		tag _ remaining => remaining,
+		custom _ remaining => remaining,
 	}
 
 

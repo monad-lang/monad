@@ -31,7 +31,7 @@ use std.list {Show, filter}
 use init.string {beq, concat, drop, is_empty, slice, starts_with, to_list}
 use init.number {beq, sub, to_string}
 use lang.parser.core {
-  ParseError, ParseResult, custom, fail, is_empty, success, tag,
+  ParseError, ParseResult, custom, fail, is_empty, parse_error_remaining, success, tag,
 }
 use lang.parser.char_preds {is_ident_char}
 use lang.parser.combinators {
@@ -129,8 +129,8 @@ def Toml.ParseError.to_string (e : Toml.ParseError) : String :=
 /// Convert core ParseError to Toml.ParseError
 def Toml.from_parse_error (e : ParseError) : Toml.ParseError :=
   match e {
-    tag s => Toml.ParseError.expected s "",
-    custom s => Toml.ParseError.generic s
+    tag s _rem => Toml.ParseError.expected s "",
+    custom s _rem => Toml.ParseError.generic s
   }
 
 /// One assembled document line: either a `[table]`/`[a.b.c]` header (as a dotted
@@ -165,7 +165,7 @@ def Toml.is_key_char (c : String) : Bool :=
 
 def toml_bare_key_result (r : ParseResult String) : ParseResult String :=
   match r {
-    success rem out => if is_empty out then fail (ParseError.custom "expected key") else success rem out,
+    success rem out => if is_empty out then fail (ParseError.custom "expected key" rem) else success rem out,
     fail e => fail e
   }
 
@@ -184,7 +184,7 @@ def Toml.dotted_path (input : String) : ParseResult (List String) :=
 /// (single-line strings only — no multi-line strings in the MVP grammar).
 def toml_string_char_ok (input : String) (ch : String) : ParseResult String :=
   if is_toml_string_char ch then success (String.drop 1 input) ch
-  else fail (ParseError.custom "invalid string character")
+  else fail (ParseError.custom "invalid string character" input)
 
 def is_toml_string_char (c : String) : Bool :=
   if String.beq "\"" c then false
@@ -194,7 +194,7 @@ def is_toml_string_char (c : String) : Bool :=
 
 def Toml.parse_string_char (input : String) : ParseResult String :=
   if is_empty input
-  then fail (ParseError.custom "expected string character")
+  then fail (ParseError.custom "expected string character" input)
   else toml_string_char_ok input (String.slice input 0 1)
 
 /// Named escape sequences supported: `\" \\ \n \t \r` (a subset of JSON's set —
@@ -264,7 +264,7 @@ def Toml.neg_i64 (n : I64) : I64 := 0 - n
 def toml_parse_integer_negative (r : ParseResult I64) : ParseResult I64 :=
   match r {
     success rem n => success rem (Toml.neg_i64 n),
-    fail _ => fail (ParseError.custom "expected digits after -")
+    fail e => fail (ParseError.custom "expected digits after -" (parse_error_remaining e))
   }
 
 #[partial]
@@ -387,7 +387,7 @@ def Toml.parse_line (input : String) : ParseResult Toml.Line :=
 def toml_one_line_eol (rem : String) (line : Toml.Line) : ParseResult (Option Toml.Line) :=
   if is_empty rem then success rem (Option.some line)
   else if String.starts_with "\n" rem then success (String.drop 1 rem) (Option.some line)
-  else fail (ParseError.custom "expected newline after line")
+  else fail (ParseError.custom "expected newline after line" rem)
 
 def toml_one_line_trailing_ws (r : ParseResult String) (line : Toml.Line) : ParseResult (Option Toml.Line) :=
   match r {
@@ -415,7 +415,7 @@ def toml_one_line_parse (rem : String) : ParseResult (Option Toml.Line) :=
 // consuming input on an already-empty remainder loops forever. Failing here lets
 // many0 stop naturally via its own `fail _ => success input List.empty` branch.
 def toml_one_line_check_blank (rem : String) : ParseResult (Option Toml.Line) :=
-  if is_empty rem then fail (ParseError.custom "no more lines")
+  if is_empty rem then fail (ParseError.custom "no more lines" rem)
   else if String.starts_with "\n" rem then success (String.drop 1 rem) Option.none
   else toml_one_line_parse rem
 

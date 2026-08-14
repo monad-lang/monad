@@ -9,7 +9,7 @@ use std.list {Show, length}
 use init.string {beq, concat, drop, gt, is_empty, length, slice, to_list}
 use init.number {beq, gt, to_string}
 use lang.parser.core {
-  ParseError, ParseResult, custom, fail, is_empty, mk, success, tag,
+  ParseError, ParseResult, custom, fail, is_empty, mk, parse_error_remaining, success, tag,
 }
 use lang.parser.char_preds {is_space}
 use lang.parser.combinators {
@@ -178,8 +178,8 @@ instance BEq Json.ParseError {
 /// Convert core ParseError to Json.ParseError
 def Json.from_parse_error (e : ParseError) : Json.ParseError :=
   match e {
-    tag s => Json.ParseError.expected s "",
-    custom s => Json.ParseError.generic s
+    tag s _rem => Json.ParseError.expected s "",
+    custom s _rem => Json.ParseError.generic s
   }
 
 /// ParseError to string
@@ -203,7 +203,7 @@ def String.concat_list (ss : List String) : String :=
 def Json.eof (input : String) : ParseResult Unit :=
   if is_empty input
   then success input unit
-  else fail (ParseError.custom "expected end of input")
+  else fail (ParseError.custom "expected end of input" input)
 
 /// Optional whitespace
 def Json.ws (input : String) : ParseResult String :=
@@ -260,7 +260,7 @@ def neg_i64 (n : I64) : I64 := 0 - n
 def parse_integer_negative (r : ParseResult I64) : ParseResult I64 :=
   match r {
     success rem n => success rem (neg_i64 n),
-    fail _ => fail (ParseError.custom "expected digits after -")
+    fail e => fail (ParseError.custom "expected digits after -" (parse_error_remaining e))
   }
 
 #[partial]
@@ -285,12 +285,12 @@ def Json.parse_number (input : String) : ParseResult Json.Number :=
 /// Parse a single character that is not a quote or backslash
 def Json.parse_string_char (input : String) : ParseResult String :=
   if is_empty input
-  then fail (ParseError.custom "expected string character")
+  then fail (ParseError.custom "expected string character" input)
   else
     let ch : String := String.slice input 0 1 in
     if is_json_string_char ch
     then success (String.drop 1 input) ch
-    else fail (ParseError.custom "invalid string character")
+    else fail (ParseError.custom "invalid string character" input)
 
 #[partial]
 def is_json_string_char (c : String) : Bool :=
@@ -302,7 +302,7 @@ def is_json_string_char (c : String) : Bool :=
 def Json.take4 (input : String) : ParseResult String :=
   if I64.gt (String.length input) 3
   then success (String.drop 4 input) (String.slice input 0 4)
-  else fail (ParseError.custom "expected 4 hex digits")
+  else fail (ParseError.custom "expected 4 hex digits" input)
 
 def parse_escape_u_result (r : ParseResult String) : ParseResult String :=
   match r {
@@ -421,7 +421,7 @@ def parse_object_member_colon (rem : String) (key : String) : ParseResult (Pair 
 def parse_object_member_key_str (rem : String) (key_json : Json) : ParseResult (Pair String Json) :=
   match key_json {
     str key => parse_object_member_colon rem key,
-    _ => fail (ParseError.custom "expected string key")
+    _ => fail (ParseError.custom "expected string key" rem)
   }
 
 #[partial]

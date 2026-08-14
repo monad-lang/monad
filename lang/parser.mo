@@ -14,7 +14,7 @@ use lang.types {
 use std.list {filter, length}
 use lang.parser.core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
-  op_lookup_prec, op_table, success, tag,
+  op_lookup_prec, op_table, parse_error_remaining, success, tag,
 }
 use lang.parser.char_preds {is_ident_char, is_space}
 use lang.parser.combinators {
@@ -23,9 +23,10 @@ use lang.parser.combinators {
 }
 use lang.parser.number {number, numeric_literal}
 use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
-use lang.parser.position {consume_span, new_span, span_fragment, span_location}
+use lang.parser.position {consume_span, location_of_remaining, new_span, span_fragment, span_location}
 use lang.parser.identifier {identifier}
 use lang.parser.string {string_parse}
+use lang.parser.diagnostic {render_parse_error}
 open lang.parser.core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
   op_lookup_prec, op_table, success, tag,
@@ -104,7 +105,7 @@ def path_variable (input : String) : ParseResult TermV0 :=
                 success rem ids =>
                         if at_least_two ids
                         then success rem (TermV0.var (NameRef.nmp (ModulePath.mp (List.map Identifier.id ids))))
-                        else fail (ParseError.custom "not a dotted path"),
+                        else fail (ParseError.custom "not a dotted path" rem),
                 fail e => fail e
         }
 
@@ -180,7 +181,7 @@ def do_stmt_let_value (r: ParseResult Term) (name: Identifier) : ParseResult DoS
 def do_stmt_bind_arrow (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_bind_value (expression ctx (skip_spaces rem)) name,
-        fail _ => fail (ParseError.custom "expected := or <- after let in do block")
+        fail _ => fail (ParseError.custom "expected := or <- after let in do block" orig)
     }
 
 #[partial]
@@ -291,9 +292,9 @@ def is_op_char (c : String) : Bool :=
 #[partial]
 def op_check (s : String) (rem : String) : ParseResult String :=
 	if is_empty s
-	then fail (ParseError.custom "expected operator")
+	then fail (ParseError.custom "expected operator" rem)
 	else if I64.beq 0 (op_precedence s)
-		then fail (ParseError.custom "unknown operator")
+		then fail (ParseError.custom "unknown operator" rem)
 		else success rem s
 
 #[partial]
@@ -679,7 +680,7 @@ def struct_fields (input : String) (name : Identifier) (vis : Visibility) : Pars
 		success rem fields =>
 			match tag "}" (skip_spaces rem) {
 				success rem2 _ => success rem2 (Decl.struct_d (Struct.mk name fields vis)),
-				fail e => fail (ParseError.custom "expected }")
+				fail e => fail (ParseError.custom "expected }" rem)
 			},
 		fail e => fail e
 	}
@@ -881,7 +882,7 @@ def type_constructors (input : String) (name : Identifier) (params : List Param)
 		success rem cons =>
 			match tag "}" (skip_spaces rem) {
 				success rem2 _ => success rem2 (type_to_decl name (list_reverse params) kind cons vis),
-				fail e => fail (ParseError.custom "expected }")
+				fail e => fail (ParseError.custom "expected }" rem)
 			},
 		fail e => fail e
 	}
@@ -995,7 +996,7 @@ def type_cons_group_close (input : String) (name : Identifier) (ctx : List Ident
 def type_cons_group_close_try (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
 	match r {
 		success rem _ => type_cons_more_groups rem name ctx params,
-		fail _ => fail (ParseError.custom "expected , or ) in constructor fields")
+		fail _ => fail (ParseError.custom "expected , or ) in constructor fields" orig)
 	}
 
 /// After a group closes: another curried `(...)` group, or done.
@@ -1123,7 +1124,7 @@ def def_try_attrs (r : ParseResult String) (orig : String) : ParseResult Decl :=
 def def_attr_skip (r : ParseResult String) (rest : String) : ParseResult Decl :=
 	match r {
 		success rem _ => def_attr_close (tag "]" rem),
-		fail _ => fail (ParseError.custom "expected ]")
+		fail _ => fail (ParseError.custom "expected ]" rest)
 	}
 
 #[partial]
@@ -1322,7 +1323,7 @@ def def_ret_type (r : ParseResult String) (orig : String) (name : Identifier) (p
 		success rem _ =>
 			let empty_ctx : List Identifier := List.empty in
 			def_ret_expr (type_expression empty_ctx rem) name params vis,
-		fail _ => fail (ParseError.custom "expected : return type")
+		fail _ => fail (ParseError.custom "expected : return type" orig)
 	}
 
 #[partial]
@@ -1395,7 +1396,7 @@ def type_constraint_one_name (r : ParseResult ModulePath) (orig : String) : Pars
 		success rem cls =>
 			let empty_vars : List Identifier := List.empty in
 			type_constraint_vars (take_while is_ident_char (skip_spaces rem)) cls empty_vars rem,
-		fail _ => fail (ParseError.custom "expected class name in constraint")
+		fail _ => fail (ParseError.custom "expected class name in constraint" orig)
 	}
 
 #[partial]
@@ -1469,7 +1470,7 @@ def class_constraints_parsed (r : ParseResult String) (orig : String) (vis : Vis
 	match r {
 		success rem content =>
 			class_constraints_then_name (type_constraint_list content) rem vis,
-		fail _ => fail (ParseError.custom "expected ]")
+		fail _ => fail (ParseError.custom "expected ]" orig)
 	}
 
 #[partial]
@@ -1487,7 +1488,7 @@ def class_constraints_close_bracket (r : ParseResult String) (constraints : List
 	match r {
 		success rem _ =>
 			class_apply_constraints (class_name (identifier (skip_spaces rem)) vis) constraints,
-		fail _ => fail (ParseError.custom "expected ] after class constraint")
+		fail e => fail (ParseError.custom "expected ] after class constraint" (parse_error_remaining e))
 	}
 
 /// Patch the real constraints onto the fully-parsed `Class` — see
@@ -1790,7 +1791,7 @@ def build_pi_chain (param_types : List Term) (ret : Term) : Term := match param_
 def class_method_next_param (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (param_types : List Term) (vis : Visibility) : ParseResult Decl :=
 	match r {
 		success rem _ => class_method_param_loop rem mname name methods param_types vis,
-		fail _ => fail (ParseError.custom "expected ) or another parameter")
+		fail _ => fail (ParseError.custom "expected ) or another parameter" orig)
 	}
 
 #[partial]
@@ -1799,7 +1800,7 @@ def class_method_ret_type (r : ParseResult String) (mname : Identifier) (name : 
 		success rem _ =>
 			let empty_ctx : List Identifier := List.empty in
 			class_method_sig_type (type_expression empty_ctx rem) mname name methods vis,
-		fail _ => fail (ParseError.custom "expected : return type")
+		fail e => fail (ParseError.custom "expected : return type" (parse_error_remaining e))
 	}
 
 #[partial]
@@ -2001,7 +2002,7 @@ def instance_constraints_with_bracket (r : ParseResult String) (orig : String) :
 	match r {
 		success rem content =>
 			instance_constraints_then_name (type_constraint_list content) rem,
-		fail _ => fail (ParseError.custom "expected ]")
+		fail _ => fail (ParseError.custom "expected ]" orig)
 	}
 
 #[partial]
@@ -2019,7 +2020,7 @@ def instance_constraints_close_bracket (r : ParseResult String) (constraints : L
 	match r {
 		success rem _ =>
 			instance_set_constraints (instance_name (module_path_parser (skip_spaces rem))) constraints,
-		fail _ => fail (ParseError.custom "expected ] after instance constraint")
+		fail e => fail (ParseError.custom "expected ] after instance constraint" (parse_error_remaining e))
 	}
 
 #[partial]
@@ -2164,7 +2165,7 @@ def instance_method_untyped_finish (r : ParseResult String) (name : Identifier) 
 		success rem _ =>
 			let empty_ctx : List Identifier := List.empty in
 			instance_method_untyped_body (expression empty_ctx (skip_spaces rem)) name cls args methods,
-		fail _ => fail (ParseError.custom "expected := in instance method")
+		fail e => fail (ParseError.custom "expected := in instance method" (parse_error_remaining e))
 	}
 
 #[partial]
@@ -2193,7 +2194,7 @@ def instance_method_body_start (input : String) (name : Identifier) (params : Li
 def instance_method_body_assign (r : ParseResult String) (name : Identifier) (params : List Param) (ret_typ : Term) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
 	match r {
 		success rem _ => instance_method_body_block_or_expr rem name params ret_typ cls args methods,
-		fail _ => fail (ParseError.custom "expected := in instance method")
+		fail e => fail (ParseError.custom "expected := in instance method" (parse_error_remaining e))
 	}
 
 /// Body is either a `do { ... }` block or a bare expression — mirrors
@@ -2273,7 +2274,7 @@ def decl_parser (input : String) : ParseResult Decl :=
 def decl_fail_to_unknown (r : ParseResult Decl) : ParseResult Decl :=
 	match r {
 		success rem out => success rem out,
-		fail _ => fail (ParseError.custom "unknown declaration")
+		fail e => fail (ParseError.custom "unknown declaration" (parse_error_remaining e))
 	}
 
 // ─── Multiple declaration parser (file-level) ──────────────────────────
@@ -2306,6 +2307,37 @@ def decls_try (r : ParseResult Decl) (orig : String) (acc : List Decl) : ParseRe
 		// keyword boundaries AND validate recovered decls don't reference
 		// names that were never in scope at the top level).
 		fail _ => success orig (list_reverse acc)
+	}
+
+/// A `decls_parser` twin that actually propagates a real failure instead
+/// of silently truncating (`decls_try`'s own doc comment above explains
+/// why the lenient version can't just be flipped to strict in place: a
+/// resync-and-continue attempt at making truncation itself smarter
+/// regressed 12 typecheck tests by leaking a misparsed inner line as a
+/// spurious top-level decl). This is a SEPARATE function, not a
+/// replacement, specifically so nothing that already depends on the
+/// lenient behavior (`lang.module`'s scope-building, and by extension
+/// most of this corpus's own test suite — several real files still
+/// don't fully parse, e.g. `lang/json.mo`/`lang/toml.mo`/`std/map.mo`,
+/// see `lang/tests/parser_file_tests.mo`'s own conservative decl-count
+/// floor tests) breaks. Used only where a real diagnostic is actually
+/// wanted: `lang.module`'s `try_parse_decls_strict`, wired into
+/// `lang/main.mo`'s CLI compile-failure path.
+#[partial]
+def decls_parser_strict (input : String) : ParseResult (List Decl) :=
+	decls_skip_strict (skip_docstrings (skip_spaces input)) List.empty
+
+#[partial]
+def decls_skip_strict (input : String) (acc : List Decl) : ParseResult (List Decl) :=
+	if is_empty input
+	then success input (list_reverse acc)
+	else decls_try_strict (decl_parser input) acc
+
+#[partial]
+def decls_try_strict (r : ParseResult Decl) (acc : List Decl) : ParseResult (List Decl) :=
+	match r {
+		success rem decl => decls_skip_strict (skip_docstrings (skip_spaces rem)) (List.cons decl acc),
+		fail e => fail e
 	}
 
 // Top-level declaration dispatcher
@@ -2783,6 +2815,56 @@ def test_consume_multi_newline : Bool :=
 	let loc : Location := span_location next in
 	match loc {
 		mk off line col => I64.beq off 3 && I64.beq line 3 && I64.beq col 1
+	}
+
+/// Regression test for the `advance_location` bug found while activating
+/// this dead code for `location_of_remaining`: consuming *past* a
+/// newline (not stopping exactly at one, unlike every existing test
+/// above) used to reset column to 1 and then ignore every character
+/// after the last newline entirely — `"a\nbc"` produced column 1
+/// instead of the correct 3.
+#[test]
+def test_consume_newline_then_more_chars : Bool :=
+	let span : LocatedSpan := new_span "a\nbcd" in
+	let next : LocatedSpan := consume_span span 4 in
+	let loc : Location := span_location next in
+	match loc {
+		mk off line col => I64.beq off 4 && I64.beq line 2 && I64.beq col 3
+	}
+
+#[test]
+def test_location_of_remaining_no_consumption : Bool :=
+	let loc : Location := location_of_remaining "hello world" "hello world" in
+	match loc {
+		mk off line col => I64.beq off 0 && I64.beq line 1 && I64.beq col 1
+	}
+
+#[test]
+def test_location_of_remaining_single_line : Bool :=
+	let loc : Location := location_of_remaining "def add (a) : I64" ") : I64" in
+	match loc {
+		mk off line col => I64.beq off 10 && I64.beq line 1 && I64.beq col 11
+	}
+
+#[test]
+def test_location_of_remaining_multi_line : Bool :=
+	let loc : Location := location_of_remaining "def f :=\n  bad" "bad" in
+	match loc {
+		mk off line col => I64.beq off 11 && I64.beq line 2 && I64.beq col 3
+	}
+
+/// `location_of_remaining` must correctly account for a multi-byte
+/// character already consumed when computing the column of what's left
+/// — the same UTF-8 codepoint-vs-byte distinction `utf8_char_width`
+/// fixed for scanning itself (lang/parser/combinators.mo).
+#[test]
+def test_location_of_remaining_utf8 : Bool :=
+	let loc : Location := location_of_remaining "// — x" "x" in
+	match loc {
+		// "// — " is 5 *characters* (the em dash is 3 bytes but 1
+		// character) even though it's 7 bytes, so column 6 (1-indexed),
+		// not the byte-count-derived 8.
+		mk off line col => I64.beq off 7 && I64.beq line 1 && I64.beq col 6
 	}
 
 #[test]
@@ -4435,6 +4517,51 @@ def test_decls_decl_plus_noise : Bool :=
         success rem decls => true,
         fail _ => false
     }
+
+/// `decls_parser_strict`'s whole reason for existing: unlike the lenient
+/// `decls_parser` (whose `test_decls_decl_plus_noise` above passes by
+/// SILENTLY DISCARDING "garbage"), the strict twin correctly reports a
+/// real failure — this is genuinely-broken content, not end-of-file.
+#[test]
+def test_decls_parser_strict_reports_failure_on_garbage : Bool :=
+    match decls_parser_strict "use prelude  garbage" {
+        success _ _ => false,
+        fail _ => true
+    }
+
+/// On genuinely-complete, fully-parseable input, the strict and lenient
+/// parsers agree.
+#[test]
+def test_decls_parser_strict_succeeds_on_clean_input : Bool :=
+    match decls_parser_strict "use prelude open IO" {
+        success rem decls => String.beq rem "" && I64.beq (debug_decl_count decls) 2,
+        fail _ => false
+    }
+
+/// The rendered diagnostic for a real strict-mode failure round-trips
+/// through `location_of_remaining`/`render_parse_error` end to end,
+/// with the correct message and position — this is the exact shape
+/// `lang.module`'s `try_parse_decls_strict` (and, through it,
+/// `lang/main.mo`'s CLI error path) reports on a genuine parse failure.
+#[test]
+def test_decls_parser_strict_error_renders_with_position : Bool :=
+    let source : String := "use prelude\n\ngarbage here" in
+    match decls_parser_strict source {
+        success _ _ => false,
+        fail e =>
+            let rendered : String := render_parse_error source Option.none e in
+            string_contains_helper rendered "at 3:1" && string_contains_helper rendered "garbage here"
+    }
+
+#[partial]
+def string_contains_helper (haystack : String) (needle : String) : Bool :=
+    if I64.gt (String.length needle) (String.length haystack)
+    then false
+    else if String.beq (String.slice haystack 0 (String.length needle)) needle
+    then true
+    else if String.is_empty haystack
+    then false
+    else string_contains_helper (String.drop 1 haystack) needle
 
 #[test]
 def test_decls_count_two : Bool :=

@@ -15,7 +15,7 @@ open ParseResult {fail, success}
 def tag (s : String) (input : String) : ParseResult String :=
 	if is_prefix s input
 	then success (String.drop (String.length s) input) s
-	else fail (ParseError.tag s)
+	else fail (ParseError.tag s input)
 
 
 #[partial]
@@ -27,15 +27,15 @@ def alt (a : String -> ParseResult A) (b : String -> ParseResult A) (input : Str
 def alt_body (r : ParseResult A) (b : String -> ParseResult A) (input : String) : ParseResult A :=
 	match r {
 		success rem out => success rem out,
-		fail e1 => alt_second (b input) e1
+		fail e1 => alt_second (b input) e1 input
 	}
 
 
 #[partial]
-def alt_second (r : ParseResult A) (e1 : ParseError) : ParseResult A :=
+def alt_second (r : ParseResult A) (e1 : ParseError) (input : String) : ParseResult A :=
 	match r {
 		success rem out => success rem out,
-		fail e2 => fail (ParseError.custom "both alt failed")
+		fail e2 => fail (ParseError.custom "both alt failed" input)
 	}
 
 
@@ -68,7 +68,7 @@ def many1 (p : String -> ParseResult A) (input : String) : ParseResult (List A) 
 	match many0 p input {
 		success rem out =>
 			if List.is_empty out
-			then fail (ParseError.custom "expected at least one")
+			then fail (ParseError.custom "expected at least one" input)
 			else success rem out,
 		fail e => fail e
 	}
@@ -121,7 +121,7 @@ def bind_parse_fail (e : ParseError) : ParseResult B :=
 def alt_fold (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
 	match parsers {
 		List.cons p ps => alt_fold_try (p input) ps input,
-		List.empty => fail (ParseError.custom "alt_fold: empty list")
+		List.empty => fail (ParseError.custom "alt_fold: empty list" input)
 	}
 
 

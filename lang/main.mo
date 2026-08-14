@@ -4,7 +4,7 @@ use process {exec_cmd}
 use lang.types {Decl, LoadedModules}
 use lang.codegen.ir {emit_module}
 use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
-use lang.module {LoadedModules, load_file_modules, try_parse_decls}
+use lang.module {LoadedModules, load_file_modules, try_parse_decls, try_parse_decls_strict}
 use lang.cli {*}
 use std.list {Show}
 
@@ -73,8 +73,26 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
             match lang.module.try_parse_decls source {
                 Option.some decls => compile_parsed_decls decls output_dir output_name verbose,
                 Option.none => do {
-                    println (String.concat "Parse error: " file_path);
-                    return 1
+                    // `try_parse_decls` (leniently truncate-and-succeed) just
+                    // told us decls_parser bailed outright — genuinely rare
+                    // (it usually silently "succeeds" with a truncated decl
+                    // list instead), but when it does happen there's no
+                    // information left to build a diagnostic from. Re-parse
+                    // with the strict twin specifically to recover a real,
+                    // rendered, Rust-diag.rs-style error instead of the bare
+                    // "Parse error: <path>" this used to print.
+                    match try_parse_decls_strict source (Option.some file_path) {
+                        Result.ok _ => do {
+                            // Can't actually happen (strict succeeding implies
+                            // lenient does too), but keep this path total.
+                            println (String.concat "Parse error: " file_path);
+                            return 1
+                        },
+                        Result.err diagnostic => do {
+                            println diagnostic;
+                            return 1
+                        }
+                    }
                 }
             }
         }

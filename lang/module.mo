@@ -7,8 +7,9 @@ use lang.types {
   LocalVar, ModulePath, NameRef, Scope, ScopeData, ScopeInstance, Term, def_d,
   hole, id, inductive_d, mk, mp, name, nid, to_name, use_d,
 }
-use lang.parser {decls_parser, module_path_to_string}
+use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
+use lang.parser.diagnostic {render_parse_error}
 use lang.scope {
   build_scope_from_decls, list_append, modpath_eq, scope_data_empty,
   scope_find_inductive, scope_resolve_name,
@@ -48,6 +49,21 @@ def try_parse_decls (input : String) : Option (List Decl) :=
     match result {
         ParseResult.success _ decls => Option.some decls,
         ParseResult.fail _ => Option.none,
+    }
+
+/// A `try_parse_decls` twin built on `decls_parser_strict` instead of
+/// the lenient `decls_parser` — where `try_parse_decls` silently returns
+/// `Option.none` on ANY failure (indistinguishable from "the file is
+/// just empty" and, thanks to `decls_parser`'s own leniency, in
+/// practice almost never even reached — see `decls_parser_strict`'s doc
+/// comment, lang/parser.mo), this surfaces a real, rendered,
+/// Rust-diag.rs-style diagnostic on a genuine parse failure. `path` is
+/// threaded through only for the `--> path:L:C` line — pass
+/// `Option.none` if unknown.
+def try_parse_decls_strict (input : String) (path : Option String) : Result String (List Decl) :=
+    match decls_parser_strict input {
+        ParseResult.success _ decls => Result.ok decls,
+        ParseResult.fail e => Result.err (render_parse_error input path e),
     }
 
 /// Parse source text and build scope data for a module.
@@ -864,6 +880,42 @@ def test_parse_use_decl_ignored_in_scope : Bool :=
                 Result.err _ => false
             },
         ParseResult.fail _ => false
+    }
+
+// --- try_parse_decls_strict: real diagnostics on genuine parse failure ---
+
+#[test]
+def test_try_parse_decls_strict_ok_on_clean_input : Bool :=
+    match try_parse_decls_strict "use prelude open IO" Option.none {
+        Result.ok decls => I64.gt (List.length decls) 0,
+        Result.err _ => false
+    }
+
+/// Where `try_parse_decls` silently swallows this exact failure into
+/// `Option.none` with zero diagnostic content, the strict twin reports
+/// a real, rendered message with position.
+#[test]
+def test_try_parse_decls_strict_err_has_rendered_diagnostic : Bool :=
+    match try_parse_decls_strict "use prelude\n\ngarbage here" Option.none {
+        Result.ok _ => false,
+        Result.err msg => string_contains msg "at 3:1"
+    }
+
+#[partial]
+def string_contains (haystack : String) (needle : String) : Bool :=
+    if I64.gt (String.length needle) (String.length haystack)
+    then false
+    else if String.beq (String.slice haystack 0 (String.length needle)) needle
+    then true
+    else if String.is_empty haystack
+    then false
+    else string_contains (String.drop 1 haystack) needle
+
+#[test]
+def test_try_parse_decls_strict_err_includes_path : Bool :=
+    match try_parse_decls_strict "garbage" (Option.some "examples/broken.mo") {
+        Result.ok _ => false,
+        Result.err msg => string_contains msg "--> examples/broken.mo:1:1"
     }
 
 // === Multi-module loading with boundary preservation ===

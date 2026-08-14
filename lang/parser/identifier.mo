@@ -26,7 +26,7 @@ def identifier_try (r : ParseResult String) : ParseResult String :=
 	match r {
 		success rem out =>
 			if String.is_empty out
-			then fail (ParseError.custom "expected identifier")
+			then fail (ParseError.custom "expected identifier" rem)
 			else identifier_check_start out rem,
 			fail e => fail e
 	}
@@ -36,11 +36,11 @@ def identifier_try (r : ParseResult String) : ParseResult String :=
 def identifier_check_start (s : String) (rem : String) : ParseResult String :=
 	if ident_start (String.slice s 0 1)
 	then identifier_check_kw s rem
-	else fail (ParseError.custom "identifier cannot start with digit")
+	else fail (ParseError.custom "identifier cannot start with digit" rem)
 
 /// Check if the identifier is a reserved keyword
 #[partial]
 def identifier_check_kw (s : String) (rem : String) : ParseResult String :=
 	if is_keyword s
-	then fail (ParseError.custom ("reserved keyword: " ++ s))
+	then fail (ParseError.custom ("reserved keyword: " ++ s) rem)
 	else success rem s

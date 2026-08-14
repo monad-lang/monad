@@ -27,7 +27,7 @@ def ws1 (input : String) : ParseResult String :=
 #[partial]
 def ws1_body (r : ParseResult String) (input : String) : ParseResult String :=
 	match r {
-		success rem out => if is_empty out then fail (ParseError.custom "expected whitespace") else success rem out,
+		success rem out => if is_empty out then fail (ParseError.custom "expected whitespace" input) else success rem out,
 		fail e => fail e
 	}
 
