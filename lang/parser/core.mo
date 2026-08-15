@@ -62,6 +62,20 @@ def op_table : List OpEntry :=
 	 OpEntry.mk "&&" 30 true,
 	 OpEntry.mk "==" 40 false,
 	 OpEntry.mk "!=" 40 false,
+	 // Same precedence level as ==/!= (40), matching the Rust
+	 // reference's operator_precedence (core/src/parser.rs) exactly --
+	 // missing here, `infix (<) := BOrd.lt`/`infix (>) := BOrd.gt`
+	 // (init/prelude.mo) rejected as "unknown operator" (op_check,
+	 // lang/parser.mo), which truncated the ENTIRE rest of prelude.mo
+	 // under decls_parser's lenient truncate-on-failure behavior --
+	 // silently dropping every later declaration (List.last,
+	 // Option.get_or_default, ...) from self-hosted-compiled programs'
+	 // dependency loading. <=/>= added too for the same parity, even
+	 // though nothing currently declares them via `infix (...)`.
+	 OpEntry.mk "<" 40 false,
+	 OpEntry.mk ">" 40 false,
+	 OpEntry.mk "<=" 40 false,
+	 OpEntry.mk ">=" 40 false,
 	 OpEntry.mk "++" 50 true,
 	 // No built-in meaning — see the matching `tag("@")` entry in
 	 // `core/src/parser.rs`'s `infix_symbol`/`operator_precedence`.

@@ -1097,7 +1097,30 @@ def type_cons_more_groups (input : String) (name : Identifier) (ctx : List Ident
 def type_cons_try_next_group (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
 	match r {
 		success rem _ => type_cons_one_group_content rem name ctx params,
+		fail _ => type_cons_try_return_type orig name ctx params
+	}
+
+/// After all of a constructor's `(...)` param groups: an optional
+/// GADT-style trailing `: ReturnType` (`cons (a : A) (List A) : List
+/// A`, init/prelude.mo's own `List` -- previously this was always
+/// Term.hole here regardless, leaving `: List A` unconsumed, which
+/// hard-failed the enclosing `type` declaration's own closing-`}`
+/// check). Falls back to Term.hole (the prior, still-correct behavior
+/// for the common case of no explicit return type at all) whenever
+/// there's no `:` here, or what follows it isn't a valid type
+/// expression.
+#[partial]
+def type_cons_try_return_type (orig : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
+	match tag ":" (skip_spaces orig) {
+		success rem _ => type_cons_return_type (type_expression ctx (skip_spaces rem)) orig name params,
 		fail _ => success orig (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) (list_reverse params) (Term.hole))
+	}
+
+#[partial]
+def type_cons_return_type (r : ParseResult Term) (orig : String) (name : Identifier) (params : List Param) : ParseResult InductConstructor :=
+	match r {
+		success rem typ => success rem (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) (list_reverse params) typ),
+		fail _ => success orig (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) (list_reverse params) (Term.hole)),
 	}
 
 #[partial]
@@ -1466,7 +1489,23 @@ def def_body (input : String) (name : Identifier) (params : List Param) (typ : T
 #[partial]
 def def_body_assign (r : ParseResult String) (name : Identifier) (params : List Param) (typ : Term) (vis : Visibility) (orig : String) : ParseResult Decl :=
 	match r {
-		success rem _ => def_body_expr (expression (ctx_of_params params) (skip_spaces rem)) name params typ vis,
+		// type_expression, not plain expression -- a def's value can
+		// itself be a type-level Pi-arrow chain used as a value (a type
+		// synonym: `def Lens ... : Type := (A -> F B) -> S -> F T`,
+		// init/prelude.mo). type_expression is a strict superset of
+		// expression here: it falls through to plain `expression`
+		// (type_plain) whenever the dependent-paren-binder form doesn't
+		// apply, then ALSO checks for a trailing `->` that expression
+		// alone never looks for (`->` isn't a general value-level infix
+		// operator, so expression's own operator-precedence climbing
+		// correctly backtracks over it, leaving it unconsumed) --
+		// ordinary value defs with no top-level `->` parse identically
+		// either way. Previously `Lens` parsed as SUCCESS but silently
+		// left `-> S -> F T` unconsumed, which decls_try's lenient
+		// truncate-on-failure then hit as a bogus "next declaration"
+		// starting with `->`, truncating everything after it (including
+		// List.last, further down the same file).
+		success rem _ => def_body_expr (type_expression (ctx_of_params params) (skip_spaces rem)) name params typ vis,
 		fail _ => def_body_block_or_none (tag "{" (skip_spaces orig)) name params typ vis orig
 	}
 
@@ -3635,86 +3674,131 @@ def build_nested_lambdas (names : List Identifier) (body : Term) : Term :=
 
 // ─── Term expression (application + operators) ─────────────────────────
 //
-// Simple recursive-descent, not a full Pratt/precedence-climbing parser:
-// 1. Parse one atom as the left-hand side (expr_first).
+// Real precedence-climbing (a linear-time Pratt parser), threading a
+// `min_prec` floor through the recursion:
+// 1. Parse one atom as the left-hand side (expr_climb_first).
 // 2. Repeatedly try to parse another atom and apply it (juxtaposition,
-//    e.g. `f x y`) — expr_rest/expr_rest_next loop until that fails.
+//    e.g. `f x y`) — expr_climb_rest/expr_climb_rest_next loop until
+//    that fails.
 // 3. Once no more bare atoms apply, look for an infix operator
-//    (expr_op/expr_op_try). An operator with precedence 0 in op_table
-//    (core.mo) — i.e. not a recognized operator — stops parsing here
-//    (expr_op_prec_val) rather than erroring, so the caller can try to
-//    consume it as something else.
-// 4. Otherwise recurse into `expression` again for the right-hand side
-//    (expr_op_rhs_ws/expr_op_rhs_expr) — this makes every recognized
-//    operator right-associative by construction. op_table's own
-//    right_assoc flag (op_lookup_rassoc, core.mo) is never consulted by
-//    this parser at all — only op_precedence's "is this a known operator"
-//    check is used.
+//    (expr_climb_op/expr_climb_op_try). An operator with precedence 0
+//    in op_table (core.mo) — not a recognized operator — or below the
+//    current `min_prec` floor stops parsing here (expr_climb_op_prec)
+//    without consuming it, so the caller (an outer, lower-precedence
+//    level, or the caller of `expression` itself) can try to consume it
+//    as something else.
+// 4. Otherwise recurse for the right-hand side at a raised floor
+//    (expr_climb_op_rhs_ws) — `prec + 1` for a left-associative operator
+//    (so a further same-precedence operator immediately following is
+//    left for the OUTER loop to pick up, producing left-associative
+//    nesting) or `prec` unchanged for a right-associative one (so a
+//    further same-precedence operator IS allowed into the RHS,
+//    producing right-associative nesting) — op_table's right_assoc flag
+//    (op_lookup_rassoc, core.mo) is finally consulted, previously never
+//    was: this file used a naive "always recurse into a fresh top-level
+//    `expression` call for the RHS" scheme that made EVERY operator
+//    right-associative regardless of its declared associativity. This
+//    directly miscompiled examples/hello.mo's `main` (three
+//    left-associative `|>` in a row: `args |> List.last |> (...) |>
+//    say_hello` parsed as `args |> (List.last |> (... |> say_hello))`,
+//    an entirely different, nonsensical application structure) — not
+//    just a `|>`-specific issue, this affects any chain of same-
+//    precedence operators (e.g. `a - b - c`, `a && b && c`).
+// 5. After combining lhs/op/rhs, loop back (expr_climb_rest) to check
+//    for MORE operators at the SAME `min_prec` floor — needed for left-
+//    associative chains to keep building leftward (step 4's raised
+//    floor only limits what the RECURSIVE RHS call may consume, not
+//    this level's own continuation).
 
 #[partial]
 def expression (ctx: List Identifier) (input: String) : ParseResult Term :=
-    expr_first (atom_term ctx (skip_spaces input)) ctx
+    expr_climb ctx input 0
 
 #[partial]
-def expr_first (r: ParseResult Term) (ctx: List Identifier) : ParseResult Term :=
+def expr_climb (ctx: List Identifier) (input: String) (min_prec: I64) : ParseResult Term :=
+    expr_climb_first (atom_term ctx (skip_spaces input)) ctx min_prec
+
+#[partial]
+def expr_climb_first (r: ParseResult Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
     match r {
-        success rem lhs => expr_rest rem lhs ctx,
+        success rem lhs => expr_climb_rest rem lhs ctx min_prec,
         fail e => fail e
     }
 
 #[partial]
-def expr_rest (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
-    expr_rest_ws (take_while is_space input) lhs ctx
+def expr_climb_rest (input: String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
+    expr_climb_rest_ws (take_while is_space input) lhs ctx min_prec
 
 #[partial]
-def expr_rest_ws (r: ParseResult String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
+def expr_climb_rest_ws (r: ParseResult String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
     match r {
-        success rem _ => expr_rest_next (atom_term ctx rem) rem lhs ctx,
+        success rem _ => expr_climb_rest_next (atom_term ctx rem) rem lhs ctx min_prec,
         fail e => fail e
     }
 
 #[partial]
-def expr_rest_next (r: ParseResult Term) (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
+def expr_climb_rest_next (r: ParseResult Term) (input: String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
     match r {
-        success rem rhs => expr_rest rem (Term.app lhs rhs) ctx,
-        fail _ => expr_op input lhs ctx
+        success rem rhs => expr_climb_rest rem (Term.app lhs rhs) ctx min_prec,
+        fail _ => expr_climb_op input lhs ctx min_prec
     }
 
 #[partial]
-def expr_op (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
-    expr_op_try (operator_parse input) input lhs ctx
+def expr_climb_op (input: String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
+    expr_climb_op_try (operator_parse input) input lhs ctx min_prec
 
 #[partial]
-def expr_op_try (r: ParseResult String) (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
+def expr_climb_op_try (r: ParseResult String) (input: String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
     match r {
-        success rem op => expr_op_prec input lhs op rem ctx,
+        success rem op => expr_climb_op_prec input lhs op rem ctx min_prec,
         fail _ => success input lhs
     }
 
 #[partial]
-def expr_op_prec (input: String) (lhs: Term) (op: String) (rem: String) (ctx: List Identifier) : ParseResult Term :=
-    expr_op_prec_val (op_precedence op) input lhs op rem ctx
-
-#[partial]
-def expr_op_prec_val (prec: I64) (input: String) (lhs: Term) (op: String) (rem: String) (ctx: List Identifier) : ParseResult Term :=
+def expr_climb_op_prec (input: String) (lhs: Term) (op: String) (rem: String) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
+    let prec : I64 := op_precedence op in
     if I64.beq prec 0
     then success input lhs
-    else expr_op_rhs_ws (take_while is_space rem) lhs op ctx
+    else if I64.lt prec min_prec
+    then success input lhs
+    else expr_climb_op_rhs_ws (take_while is_space rem) lhs op ctx prec min_prec
 
 #[partial]
-def expr_op_rhs_ws (r: ParseResult String) (lhs: Term) (op: String) (ctx: List Identifier) : ParseResult Term :=
+def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: Term) (op: String) (ctx: List Identifier) (prec: I64) (min_prec: I64) : ParseResult Term :=
     match r {
-        success rem _ => expr_op_rhs_expr (expression ctx rem) lhs op ctx,
+        success rem _ =>
+            let next_min : I64 := if op_lookup_rassoc op op_table then prec else (prec + 1) in
+            expr_climb_op_rhs_expr (expr_climb ctx rem next_min) lhs op ctx min_prec,
         fail e => fail e
     }
 
+/// `|>`/`<|` are pure syntactic sugar for application (`x |> f` = `f x`,
+/// `f <| x` = `f x`) -- desugar them DIRECTLY to `Term.app`, not through
+/// the generic operator desugaring below. That generic path
+/// (`Term.var sentinel DebugName.unnamed`) throws away `op` entirely —
+/// `DebugName` has no operator-carrying variant to preserve it in — so
+/// nothing downstream (self-hosted typecheck, codegen) can ever recover
+/// which operator an application like this meant; every custom infix
+/// operator's `infix (...) := realFn` declaration (init/prelude.mo) is
+/// consequently unreachable from a parsed operator application. The
+/// Rust reference parser resolves this correctly elsewhere; this
+/// self-hosted parser doesn't yet, for ANY operator -- this is a real,
+/// separate, broader gap, not attempted here.
 #[partial]
-def expr_op_rhs_expr (r: ParseResult Term) (lhs: Term) (op: String) (ctx: List Identifier) : ParseResult Term :=
+def expr_climb_op_rhs_expr (r: ParseResult Term) (lhs: Term) (op: String) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
     match r {
         success rem rhs =>
-            // Operator desugars to: op lhs rhs → app (app (var SENTINEL op) lhs) rhs
-            let op_var : Term := Term.var sentinel DebugName.unnamed in
-            success rem (Term.app (Term.app op_var lhs) rhs),
+            let combined : Term :=
+                if String.beq op "|>"
+                then Term.app rhs lhs
+                else if String.beq op "<|"
+                then Term.app lhs rhs
+                else
+                    // Operator desugars to: op lhs rhs → app (app (var SENTINEL op) lhs) rhs
+                    let op_var : Term := Term.var sentinel DebugName.unnamed in
+                    Term.app (Term.app op_var lhs) rhs
+            in
+            expr_climb_rest rem combined ctx min_prec,
         fail e => fail e
     }
 
@@ -4393,6 +4477,58 @@ def test_t_operator : Bool :=
 	let empty_ctx : List Identifier := List.empty in
 	match expression empty_ctx "a ++ b" {
 		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+/// Regression test for expr_climb's precedence-climbing rewrite:
+/// `a |> f |> g` must parse LEFT-associatively (matching `|>`'s
+/// op_table entry, `OpEntry.mk "|>" 5 false`) as `g(f(a))` —
+/// `App(g, App(f, a))` — not right-associatively as `f(g)(a)` (the
+/// previous behavior: every operator recursed into a fresh top-level
+/// `expression` call for its RHS, greedily consuming any FURTHER
+/// same-precedence operator into that RHS regardless of op_table's
+/// declared associativity). This exact shape — 3+ chained `|>` at the
+/// same precedence — is examples/hello.mo's entire `main` function.
+#[test]
+def test_t_operator_chain_left_associative : Bool :=
+	let empty_ctx : List Identifier := List.empty in
+	match expression empty_ctx "a |> f |> g" {
+		success rem out =>
+			String.beq rem "" &&
+			match out {
+				Term.app fun_outer arg_outer =>
+					match fun_outer {
+						Term.var _ dbg_outer =>
+							match dbg_outer {
+								DebugName.named id_outer =>
+									String.beq (show_identifier id_outer) "g" &&
+									match arg_outer {
+										Term.app fun_inner arg_inner =>
+											match fun_inner {
+												Term.var _ dbg_inner =>
+													match dbg_inner {
+														DebugName.named id_inner =>
+															String.beq (show_identifier id_inner) "f" &&
+															match arg_inner {
+																Term.var _ dbg_a =>
+																	match dbg_a {
+																		DebugName.named id_a => String.beq (show_identifier id_a) "a",
+																		DebugName.unnamed => false,
+																	},
+																_ => false,
+															},
+														DebugName.unnamed => false,
+													},
+												_ => false,
+											},
+										_ => false,
+									},
+								DebugName.unnamed => false,
+							},
+						_ => false,
+					},
+				_ => false,
+			},
 		fail _ => false
 	}
 
