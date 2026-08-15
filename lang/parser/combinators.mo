@@ -1,7 +1,8 @@
 /// Parser combinator functions for the self-hosted Monad parser.
 
 use lang.parser.core {
-  ParseError, ParseResult, custom, fail, is_empty, success, tag,
+  ParseError, ParseResult, custom, fail, is_empty, parse_error_remaining,
+  success, tag,
 }
 use lang.parser.char_preds {is_prefix}
 use lang.types {custom, list_reverse}
@@ -16,6 +17,21 @@ def tag (s : String) (input : String) : ParseResult String :=
 	if is_prefix s input
 	then success (String.drop (String.length s) input) s
 	else fail (ParseError.tag s input)
+
+
+/// "Furthest progress wins" error selection — mirrors the Rust
+/// reference's `ParseError::or`/`append` (core/src/parser/error.rs),
+/// which compare `input.input_len()` between two candidate errors and
+/// keep whichever consumed more before failing (i.e. the deeper, more
+/// specific failure), rather than discarding one arbitrarily. A
+/// shorter `remaining` means more of the input was consumed before
+/// this error fired, so it wins; ties keep `e1` (matches Rust's `or`,
+/// which only replaces on strictly deeper progress).
+#[partial]
+def furthest_error (e1 : ParseError) (e2 : ParseError) : ParseError :=
+	if I64.lt (String.length (parse_error_remaining e2)) (String.length (parse_error_remaining e1))
+	then e2
+	else e1
 
 
 #[partial]
@@ -35,7 +51,7 @@ def alt_body (r : ParseResult A) (b : String -> ParseResult A) (input : String) 
 def alt_second (r : ParseResult A) (e1 : ParseError) (input : String) : ParseResult A :=
 	match r {
 		success rem out => success rem out,
-		fail e2 => fail (ParseError.custom "both alt failed" input)
+		fail e2 => fail (furthest_error e1 e2)
 	}
 
 
@@ -120,16 +136,45 @@ def bind_parse_fail (e : ParseError) : ParseResult B :=
 #[partial]
 def alt_fold (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
 	match parsers {
-		List.cons p ps => alt_fold_try (p input) ps input,
+		List.cons p ps => alt_fold_try (p input) ps input Option.none,
 		List.empty => fail (ParseError.custom "alt_fold: empty list" input)
 	}
 
 
+/// `best` is the furthest-progressed error seen across every alternative
+/// tried so far (see `furthest_error`) — threaded through the fold so
+/// that when every alternative fails, the final error reported is the
+/// deepest real failure among them, not whichever alternative happened
+/// to be tried last.
 #[partial]
-def alt_fold_try (r : ParseResult A) (parsers : List (String -> ParseResult A)) (input : String) : ParseResult A :=
+def alt_fold_try (r : ParseResult A) (parsers : List (String -> ParseResult A)) (input : String) (best : Option ParseError) : ParseResult A :=
 	match r {
 		success rem out => alt_fold_ok rem out,
-		fail e => alt_fold parsers input
+		fail e => alt_fold_next parsers input (Option.some (alt_fold_merge_best best e))
+	}
+
+
+#[partial]
+def alt_fold_merge_best (best : Option ParseError) (e : ParseError) : ParseError :=
+	match best {
+		Option.some b => furthest_error b e,
+		Option.none => e
+	}
+
+
+#[partial]
+def alt_fold_next (parsers : List (String -> ParseResult A)) (input : String) (best : Option ParseError) : ParseResult A :=
+	match parsers {
+		List.cons p ps => alt_fold_try (p input) ps input best,
+		List.empty => fail (alt_fold_best_or_default best input)
+	}
+
+
+#[partial]
+def alt_fold_best_or_default (best : Option ParseError) (input : String) : ParseError :=
+	match best {
+		Option.some e => e,
+		Option.none => ParseError.custom "alt_fold: empty list" input
 	}
 
 
@@ -347,5 +392,75 @@ def opt_some (rem : String) (out : A) : ParseResult (Option A) :=
 def opt_none (input : String) : ParseResult (Option A) :=
 	success input Option.none
 
+
+// --- Tests: furthest-failure-wins (alt / alt_fold) ---
+
+#[test]
+def test_furthest_error_picks_deeper : Bool :=
+	let e1 : ParseError := ParseError.tag "x" "abc" in
+	let e2 : ParseError := ParseError.custom "deep" "c" in
+	String.beq (parse_error_remaining (furthest_error e1 e2)) "c"
+
+#[test]
+def test_furthest_error_tie_keeps_first : Bool :=
+	let e1 : ParseError := ParseError.tag "x" "abc" in
+	let e2 : ParseError := ParseError.custom "other" "def" in
+	String.beq (parse_error_remaining (furthest_error e1 e2)) "abc"
+
+#[partial]
+def test_shallow_fail (input : String) : ParseResult String :=
+	fail (ParseError.tag "shallow" input)
+
+#[partial]
+def test_deep_fail (input : String) : ParseResult String :=
+	fail (ParseError.custom "deep failure" (String.drop 3 input))
+
+/// Both branches of `alt` fail here, but `test_deep_fail` consumed more
+/// (dropped 3 chars) before failing — the combined error must report
+/// that deeper failure, not a generic "both alt failed" anchored at the
+/// very start of the input.
+#[test]
+def test_alt_prefers_deeper_failure : Bool :=
+	match alt test_shallow_fail test_deep_fail "abcdef" {
+		success _ _ => false,
+		fail e => String.beq (parse_error_remaining e) "def"
+	}
+
+#[test]
+def test_alt_order_independent : Bool :=
+	match alt test_deep_fail test_shallow_fail "abcdef" {
+		success _ _ => false,
+		fail e => String.beq (parse_error_remaining e) "def"
+	}
+
+#[partial]
+def test_fold_fail_a (input : String) : ParseResult String :=
+	fail (ParseError.tag "a" input)
+
+#[partial]
+def test_fold_fail_b (input : String) : ParseResult String :=
+	fail (ParseError.custom "deepest" (String.drop 4 input))
+
+#[partial]
+def test_fold_fail_c (input : String) : ParseResult String :=
+	fail (ParseError.tag "c" input)
+
+/// Same idea as `test_alt_prefers_deeper_failure` but across an
+/// `alt_fold` list of more than two alternatives, with the deepest
+/// failure in the middle — confirms the running best-so-far survives
+/// the whole fold, not just a pairwise comparison.
+#[test]
+def test_alt_fold_prefers_deepest_failure : Bool :=
+	match alt_fold [test_fold_fail_a, test_fold_fail_b, test_fold_fail_c] "abcdefgh" {
+		success _ _ => false,
+		fail e => String.beq (parse_error_remaining e) "efgh"
+	}
+
+#[test]
+def test_alt_fold_empty_list_still_fails : Bool :=
+	match alt_fold ([] : List (String -> ParseResult String)) "abc" {
+		success _ _ => false,
+		fail _ => true
+	}
 
 // --- End of combinators ---

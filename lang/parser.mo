@@ -2395,13 +2395,25 @@ def decl_parsers : List (String -> ParseResult Decl) :=
 
 #[partial]
 def decl_parser (input : String) : ParseResult Decl :=
-	decl_fail_to_unknown (alt_fold decl_parsers input)
+	decl_fail_to_unknown (alt_fold decl_parsers input) input
 
+/// Now that `alt_fold` tracks furthest-progress-wins across
+/// `decl_parsers`'s alternatives (see `lang/parser/combinators.mo`'s
+/// `furthest_error`), a failure that got partway into a real construct
+/// (e.g. matched the `def` keyword, then failed inside its parameter
+/// list) already carries a specific, correctly-positioned message —
+/// relabeling it to "unknown declaration" would throw that away. Only
+/// fall back to the generic message when NONE of `decl_parsers` got
+/// any further than `decl_parser`'s own starting position (i.e. the
+/// input didn't match the start of any known declaration form at all).
 #[partial]
-def decl_fail_to_unknown (r : ParseResult Decl) : ParseResult Decl :=
+def decl_fail_to_unknown (r : ParseResult Decl) (input : String) : ParseResult Decl :=
 	match r {
 		success rem out => success rem out,
-		fail e => fail (ParseError.custom "unknown declaration" (parse_error_remaining e))
+		fail e =>
+			if I64.beq (String.length (parse_error_remaining e)) (String.length input)
+			then fail (ParseError.custom "unknown declaration" (parse_error_remaining e))
+			else fail e
 	}
 
 // ─── Multiple declaration parser (file-level) ──────────────────────────
@@ -5155,6 +5167,24 @@ def test_decl_parser_fail : Bool :=
     match decl_parser "foobar" {
         success rem out => false,
         fail _ => true
+    }
+
+/// End-to-end confirmation of the furthest-failure-wins fix
+/// (`lang/parser/combinators.mo`'s `alt_fold`/`furthest_error`) plus
+/// `decl_fail_to_unknown`'s relaxed relabeling: `def f (x` recognizes
+/// the `def` keyword and gets partway into its parameter list before
+/// failing on the missing `)` — that failure position is strictly
+/// deeper into the input than `decl_parser`'s own starting point, so
+/// it must survive as-is rather than being flattened to the generic
+/// "unknown declaration" fallback (which is reserved for input that
+/// doesn't match the start of any known declaration form at all, see
+/// `test_decl_parser_fail` above).
+#[test]
+def test_decl_parser_preserves_deep_failure_position : Bool :=
+    let source : String := "def f (x" in
+    match decl_parser source {
+        success _ _ => false,
+        fail e => Bool.not (I64.beq (String.length (parse_error_remaining e)) (String.length source))
     }
 
 // ─── AST debug helpers ───────────────────────────────────────────────────
