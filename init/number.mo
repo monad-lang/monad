@@ -189,6 +189,9 @@ def I64.gt (a b : I64) : Bool
 #[native i64_to_u64]
 def I64.to_u64 (a : I64) : U64
 
+#[native i64_to_u32]
+def I64.to_u32 (a : I64) : U32
+
 #[native i64_eq]
 def I64.beq (a b : I64) : Bool
 
@@ -247,6 +250,9 @@ def U8.beq (a b : U8) : Bool
 
 #[native u8_to_u64]
 def U8.to_u64 (a : U8) : U64
+
+#[native u8_to_u32]
+def U8.to_u32 (a : U8) : U32
 
 #[native u8_lt]
 def U8.lt (a b : U8) : Bool
@@ -395,6 +401,29 @@ instance BOrd U32 {
 instance ToString U32 {
 	def to_string (a : U32) : String := U32.to_string a
 }
+
+#[native u32_and]
+def U32.and (a b : U32) : U32
+
+#[native u32_or]
+def U32.or (a b : U32) : U32
+
+#[native u32_xor]
+def U32.xor (a b : U32) : U32
+
+#[native u32_shl]
+def U32.shl (a b : U32) : U32
+
+#[native u32_shr]
+def U32.shr (a b : U32) : U32
+
+#[native u32_to_u8]
+def U32.to_u8 (a : U32) : U8
+
+def U32.not (a : U32) : U32 := U32.xor a 4294967295u32 // 0xFFFFFFFF
+
+def U32.rotr (a n : U32) : U32 :=
+	U32.or (U32.shr a n) (U32.shl a (U32.sub 32u32 n))
 
 // U64
 

@@ -34,29 +34,54 @@ pub fn exec_native(
   natives: &NativeTable,
 ) -> Result<Value, CoreEvalError> {
   match name {
-    "i8_add" | "i16_add" | "i32_add" | "i64_add" | "u8_add" | "u16_add" | "u32_add" | "u64_add" => {
+    "i8_add" | "i16_add" | "i32_add" | "i64_add" | "u8_add" | "u16_add" | "u64_add" => {
       int_binop(args, |a, b| a.wrapping_add(b))
     }
-    "i8_sub" | "i16_sub" | "i32_sub" | "i64_sub" | "u8_sub" | "u16_sub" | "u32_sub" | "u64_sub" => {
+    "i8_sub" | "i16_sub" | "i32_sub" | "i64_sub" | "u8_sub" | "u16_sub" | "u64_sub" => {
       int_binop(args, |a, b| a.wrapping_sub(b))
     }
-    "i8_mul" | "i16_mul" | "i32_mul" | "i64_mul" | "u8_mul" | "u16_mul" | "u32_mul" | "u64_mul" => {
+    "i8_mul" | "i16_mul" | "i32_mul" | "i64_mul" | "u8_mul" | "u16_mul" | "u64_mul" => {
       int_binop(args, |a, b| a.wrapping_mul(b))
     }
-    "i8_div" | "i16_div" | "i32_div" | "i64_div" | "u8_div" | "u16_div" | "u32_div" | "u64_div" => {
+    "i8_div" | "i16_div" | "i32_div" | "i64_div" | "u8_div" | "u16_div" | "u64_div" => {
       int_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_div(b) })
     }
     "u64_mod" => int_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_rem(b) }),
     "u64_xor" => int_binop(args, |a, b| a ^ b),
-    "i8_eq" | "i16_eq" | "i32_eq" | "i64_eq" | "u8_eq" | "u16_eq" | "u32_eq" | "u64_eq" => {
+    "i8_eq" | "i16_eq" | "i32_eq" | "i64_eq" | "u8_eq" | "u16_eq" | "u64_eq" => {
       int_cmp(args, natives, |a, b| a == b)
     }
-    "i8_lt" | "i16_lt" | "i32_lt" | "i64_lt" | "u8_lt" | "u16_lt" | "u32_lt" | "u64_lt" => {
+    "i8_lt" | "i16_lt" | "i32_lt" | "i64_lt" | "u8_lt" | "u16_lt" | "u64_lt" => {
       int_cmp(args, natives, |a, b| a < b)
     }
-    "i8_gt" | "i16_gt" | "i32_gt" | "i64_gt" | "u8_gt" | "u16_gt" | "u32_gt" | "u64_gt" => {
+    "i8_gt" | "i16_gt" | "i32_gt" | "i64_gt" | "u8_gt" | "u16_gt" | "u64_gt" => {
       int_cmp(args, natives, |a, b| a > b)
     }
+    // `U32` is pulled out of the generic groups above and given
+    // width-correct treatment (mask to 32 bits before AND after each
+    // op) via `int_binop_width`/`int_div_width`/`int_cmp_width` — see
+    // those helpers' doc comments. The same missing-width-mask bug
+    // affects `I8`/`I16`/`I32`/`U8`/`U16` above too (confirmed via a
+    // live repro: `I8.add 100i8 100i8` compared against `-56i8` reports
+    // NOT EQUAL instead of wrapping+comparing correctly) — fixing those
+    // is a larger, separable change, tracked as a follow-up rather than
+    // done here. `U32` needed fixing now because SHA-256 depends on
+    // correct mod-2^32 wraparound.
+    "u32_add" => int_binop_width(args, NumSuffix::U32, i64::wrapping_add),
+    "u32_sub" => int_binop_width(args, NumSuffix::U32, i64::wrapping_sub),
+    "u32_mul" => int_binop_width(args, NumSuffix::U32, i64::wrapping_mul),
+    "u32_div" => int_div_width(args, NumSuffix::U32),
+    "u32_eq" => int_cmp_width(args, natives, NumSuffix::U32, |a, b| a == b),
+    "u32_lt" => int_cmp_width(args, natives, NumSuffix::U32, |a, b| a < b),
+    "u32_gt" => int_cmp_width(args, natives, NumSuffix::U32, |a, b| a > b),
+    "u32_and" => int_binop_width(args, NumSuffix::U32, |a, b| a & b),
+    "u32_or" => int_binop_width(args, NumSuffix::U32, |a, b| a | b),
+    "u32_xor" => int_binop_width(args, NumSuffix::U32, |a, b| a ^ b),
+    "u32_shl" => int_binop_width(args, NumSuffix::U32, |a, b| a.wrapping_shl(b as u32)),
+    "u32_shr" => int_binop_width(args, NumSuffix::U32, |a, b| a.wrapping_shr(b as u32)),
+    "u8_to_u32" => int_to_int(args, NumSuffix::U32),
+    "u32_to_u8" => int_to_int(args, NumSuffix::U8),
+    "i64_to_u32" => int_to_int(args, NumSuffix::U32),
     "f32_add" | "f64_add" => float_binop(args, |a, b| a + b),
     "f32_sub" | "f64_sub" => float_binop(args, |a, b| a - b),
     "f32_mul" | "f64_mul" => float_binop(args, |a, b| a * b),
@@ -172,6 +197,94 @@ fn int_binop(args: &[Value], op: fn(i64, i64) -> i64) -> Result<Value, CoreEvalE
   Ok(Value::Lit(IrLit::Num(op(a, b), NumSuffix::I64)))
 }
 
+/// Truncate/reinterpret `v`'s low bits to the Rust integer type matching
+/// `suffix`, then sign/zero-extend back to `i64` — i.e. project `v` onto
+/// its width's canonical range. Used to make width-specific natives
+/// (`u32_add` etc., unlike the generic, unmasked `int_binop` above)
+/// actually correct: `int_binop` computes on the raw, unmasked `i64`
+/// payload and always tags the result `NumSuffix::I64` regardless of the
+/// real operand width, so e.g. two `U32` values that are congruent mod
+/// 2^32 but carry different raw `i64` representations compare unequal.
+/// Confirmed live for `I8`: `I8.add 100i8 100i8` compared against the
+/// wrapped `-56i8` reports not-equal instead of wrapping+comparing
+/// correctly first. `U32` is fixed via this helper (see `int_binop_width`
+/// /`int_div_width`/`int_cmp_width` below); the same bug in
+/// `I8`/`I16`/`I32`/`U8`/`U16` is a separate, out-of-scope follow-up.
+fn mask_to_suffix(v: i64, suffix: NumSuffix) -> i64 {
+  match suffix {
+    NumSuffix::I8 => v as i8 as i64,
+    NumSuffix::I16 => v as i16 as i64,
+    NumSuffix::I32 => v as i32 as i64,
+    NumSuffix::I64 => v,
+    NumSuffix::U8 => v as u8 as i64,
+    NumSuffix::U16 => v as u16 as i64,
+    NumSuffix::U32 => v as u32 as i64,
+    NumSuffix::U64 => v as u64 as i64,
+    NumSuffix::F32 | NumSuffix::F64 => v, // not used for float ops
+  }
+}
+
+/// Width-correct counterpart to `int_binop`: masks both operands to
+/// `suffix`'s canonical range before calling `op`, and masks the result
+/// again before tagging it with `suffix` (instead of always `I64`).
+/// Since both operands are pre-masked, `op` itself can stay a plain
+/// `i64` closure — e.g. a masked `U32` sum is at most just under 2^33,
+/// nowhere near `i64`'s own range, so no separate `u32`-typed closure is
+/// needed even for `wrapping_shl`/`wrapping_shr` (the pre-masked operand
+/// is always non-negative, so plain `i64` shifts behave correctly).
+fn int_binop_width(
+  args: &[Value],
+  suffix: NumSuffix,
+  op: fn(i64, i64) -> i64,
+) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "int binop needs 2 args".into(),
+    ));
+  }
+  let a = mask_to_suffix(extract_int(&args[0])?, suffix);
+  let b = mask_to_suffix(extract_int(&args[1])?, suffix);
+  Ok(Value::Lit(IrLit::Num(
+    mask_to_suffix(op(a, b), suffix),
+    suffix,
+  )))
+}
+
+/// Width-correct division: masks operands, zero-checks the (masked)
+/// divisor, then masks the result. See `int_binop_width`'s doc comment.
+fn int_div_width(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError("int div needs 2 args".into()));
+  }
+  let a = mask_to_suffix(extract_int(&args[0])?, suffix);
+  let b = mask_to_suffix(extract_int(&args[1])?, suffix);
+  if b == 0 {
+    return Err(CoreEvalError::NativeArgError("division by zero".into()));
+  }
+  Ok(Value::Lit(IrLit::Num(
+    mask_to_suffix(a.wrapping_div(b), suffix),
+    suffix,
+  )))
+}
+
+/// Width-correct counterpart to `int_cmp`: masks both operands to
+/// `suffix`'s canonical range before comparing. See `int_binop_width`'s
+/// doc comment for why this matters (raw, unmasked comparison is the
+/// concrete bug this fixes for `U32`).
+fn int_cmp_width(
+  args: &[Value],
+  natives: &NativeTable,
+  suffix: NumSuffix,
+  op: fn(i64, i64) -> bool,
+) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError("int cmp needs 2 args".into()));
+  }
+  let a = mask_to_suffix(extract_int(&args[0])?, suffix);
+  let b = mask_to_suffix(extract_int(&args[1])?, suffix);
+  make_bool(natives, op(a, b))
+}
+
 fn int_cmp(
   args: &[Value],
   natives: &NativeTable,
@@ -229,7 +342,10 @@ fn int_to_int(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalError>
     return Err(CoreEvalError::NativeArgError("int cast needs 1 arg".into()));
   }
   let v = extract_int(&args[0])?;
-  Ok(Value::Lit(IrLit::Num(v, suffix)))
+  // Mask to the target width instead of passing the raw payload through
+  // unchanged — strictly safer (a no-op for an already-canonical value),
+  // and correct for narrowing casts like `u32_to_u8`.
+  Ok(Value::Lit(IrLit::Num(mask_to_suffix(v, suffix), suffix)))
 }
 
 fn float_to_string(args: &[Value]) -> Result<Value, CoreEvalError> {
