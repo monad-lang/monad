@@ -4,7 +4,7 @@ use process {exec_cmd}
 use lang.types {Decl, LoadedModules}
 use lang.codegen.ir {emit_module}
 use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
-use lang.module {LoadedModules, load_file_modules, try_parse_decls, try_parse_decls_strict}
+use lang.module {FileCheckResult, LoadedModules, check_file, load_file_modules, try_parse_decls, try_parse_decls_strict}
 use lang.cli {*}
 use std.list {Show}
 
@@ -99,6 +99,59 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
     }
 }
 
+/// Print one diagnostic per line — `check_file`'s per-file diagnostics
+/// are already fully rendered (parse diagnostics via
+/// `render_parse_error`, type errors via `render_type_error`), so this
+/// is just a sequenced println loop.
+#[partial]
+def print_diagnostics (diags : List String) : IO I64 :=
+    match diags {
+        List.empty => do { return 0 },
+        List.cons d rest => do {
+            println d;
+            print_diagnostics rest
+        }
+    }
+
+/// `checked`/`errors` accumulate across all files — errors are counted
+/// per-diagnostic (a file with 3 failing defs contributes 3), matching
+/// `monad-rs check`'s own error-tally convention. Quiet on a clean
+/// file (no diagnostics printed), matching `monad-rs check`'s
+/// summary-focused output.
+#[partial]
+def run_check_loop (files : List String) (checked : I64) (errors : I64) : IO I64 :=
+    match files {
+        List.empty => do {
+            println (I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)");
+            return (if I64.gt errors 0 then 1 else 0)
+        },
+        List.cons f rest => do {
+            let result : FileCheckResult <- check_file f;
+            match result {
+                FileCheckResult.mk _path diags =>
+                    match diags {
+                        List.empty => run_check_loop rest (checked + 1) errors,
+                        List.cons _ _ => do {
+                            print_diagnostics diags;
+                            run_check_loop rest (checked + 1) (errors + List.length diags)
+                        }
+                    }
+            }
+        }
+    }
+
+/// Parse + typecheck each file with `lang.module.check_file` — no
+/// execution, no compilation. See lang/module.mo's `check_file`/
+/// `check_module_with_scope` for what "does this file compile" means
+/// today: real parse diagnostics (strict, not the lenient
+/// truncate-and-succeed parser), plus every failing `def`/`type`
+/// declaration's type error — other declaration kinds (use/open/
+/// class/instance/struct) aren't checked yet, matching the self-hosted
+/// typechecker's current coverage.
+#[partial]
+def run_check (files : List String) : IO I64 :=
+    run_check_loop files 0 0
+
 // `Command` and its argv parser are hand-written (not `#[derive_cli]`) and
 // this file stays free of any macro/attribute-derive syntax on purpose: the
 // self-hosted compiler's own parser/typechecker (lang/parser.mo,
@@ -112,6 +165,7 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
 type Command {
     compile (file: String) (out_name: String) (verbose: Bool),
     pretty (file: String),
+    check (files: List String),
     help
 }
 
@@ -155,6 +209,8 @@ def Command.from_args (args : List String) : Command :=
                             Option.none => Command.help,
                         },
                 }
+            else if cmd == "check" then
+                if List.is_empty rest then Command.help else Command.check rest
             else
                 Command.help,
         List.empty => Command.help,
@@ -183,6 +239,9 @@ def main (args : List String) : IO I64 {
                 }
             }
         },
+        check files => do {
+            run_check files
+        },
         help => do {
             print_help
         }
@@ -194,5 +253,6 @@ def print_help : IO I64 {
     println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v]";
     println "         Parse and compile a .mo source file";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
+    println "       monad check <path>...  Parse and typecheck .mo source files (no execution)";
     return 0
 }

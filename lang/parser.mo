@@ -3307,7 +3307,7 @@ def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
 
 #[partial]
 def match_case_parser (ctx: List Identifier) (input: String) : ParseResult MatchCase :=
-    match_case_name (dotted_identifier (skip_spaces input)) ctx
+    match_case_name (dotted_identifier (skip_docstrings (skip_spaces input))) ctx
 
 /// A match case's constructor may be written qualified with its type name
 /// (`Identifier.id as => ...`) or bare (`id as => ...`) — both are common
@@ -3405,12 +3405,22 @@ def match_case_body (r: ParseResult Term) (name: Identifier) (args : List Identi
         fail e => fail e
     }
 
+/// Skips a trailing `,` after a match arm's body, plus any whitespace
+/// AND `//`/`///` comments before the next arm (or the closing `}`) —
+/// previously only `skip_spaces`, which left a comment line's `//`
+/// sitting right where `match_case_parser`'s next attempt (or
+/// `match_cases_parse`'s `}` check) expected a case pattern or the
+/// closing brace, breaking on ANY comment between match arms
+/// (unrelated to UTF-8 — a plain-ASCII `// comment` reproduces it too).
+/// Found via `check_file`/`decls_parser_strict` failing to strict-parse
+/// `lang/parser/combinators.mo`'s own `utf8_char_width`, which has
+/// exactly this shape.
 #[partial]
 def match_case_tail (input: String) : String :=
     match take_while is_space input {
         success after_sp _ =>
             match tag "," after_sp {
-                success rem _ => skip_spaces rem,
+                success rem _ => skip_docstrings (skip_spaces rem),
                 fail _ => after_sp
             },
         fail _ => input
@@ -3446,7 +3456,7 @@ def match_brace_open (r: ParseResult String) (scrutinee: Term) (ctx: List Identi
 #[partial]
 def match_cases_parse (r: ParseResult (List MatchCase)) (scrutinee: Term) : ParseResult Term :=
     match r {
-        success rem cases => match_close (tag "}" (skip_spaces rem)) scrutinee cases,
+        success rem cases => match_close (tag "}" (skip_docstrings (skip_spaces rem))) scrutinee cases,
         fail e => fail e
     }
 
@@ -4436,6 +4446,33 @@ def test_match_simple : Bool :=
 def test_match_multi : Bool :=
     let empty_ctx : List Identifier := List.empty in
     match match_parser empty_ctx "match x { zero => 0, one => 1 }" {
+        success rem out =>
+            match out {
+                lit val =>
+                    match val {
+                        match_ scrutinee cases => String.beq rem "",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// Regression test for `match_case_parser`/`match_case_tail`/
+/// `match_cases_parse`: a `//` comment between two match arms (or right
+/// after `{`, before the closing `}`) broke parsing — the case-parser
+/// entry point and the post-comma tail both only skipped whitespace
+/// (`skip_spaces`), never comments (`skip_docstrings`), so the `//`
+/// itself was left as the "next thing" a case pattern or `}` needed to
+/// match against. Unrelated to UTF-8/em-dashes specifically — any `//`
+/// comment reproduces it. Found via `check_file`/`decls_parser_strict`
+/// failing to strict-parse `lang/parser/combinators.mo`'s own
+/// `utf8_char_width`, which has exactly this shape.
+#[test]
+def test_match_case_comment_between_arms : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    let src : String := "match x {\n\tzero => 0,\n\t// a comment right here\n\tone => 1\n}" in
+    match match_parser empty_ctx src {
         success rem out =>
             match out {
                 lit val =>

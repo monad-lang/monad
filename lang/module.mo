@@ -14,6 +14,7 @@ use lang.scope {
   build_scope_from_decls, list_append, modpath_eq, scope_data_empty,
   scope_find_inductive, scope_resolve_name,
 }
+use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 use std.list {Show, all, length}
 use std.show {Show}
@@ -181,6 +182,22 @@ def extract_directory (file_path : String) : String :=
         ""
     else
         String.slice file_path 0 last_slash_idx
+
+/// Derive a module name from a file path — e.g. "examples/foo.mo" -> "foo".
+/// Factored out of `load_file_modules` (below) so `check_file` can reuse
+/// the exact same convention without a caller-supplied `mod_name`.
+def module_name_from_path (file_path : String) : String :=
+    let last_slash : I64 := string_find_last_slash file_path in
+    let file_name_only : String :=
+        if I64.lt last_slash 0 then
+            file_path
+        else
+            String.slice file_path (last_slash + 1) (String.length file_path)
+    in
+    if String.ends_with file_name_only ".mo" then
+        String.slice file_name_only 0 (String.length file_name_only - 3)
+    else
+        file_name_only
 
 /// Join two path components with a separator
 def path_join (a : String) (b : String) : String :=
@@ -418,6 +435,60 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
 #[partial]
 def load_module_with_dependencies_default (mp : ModulePath) : IO (Option Scope) :=
     load_module_with_dependencies "" mp
+
+/// Same as `load_module_with_dependencies`, but always includes
+/// `prelude`/`init` as implicit dependencies — matching
+/// `load_file_modules`'s own convention (its
+/// `all_dep_paths_with_prelude`, used by `compile`/`pretty`) — instead
+/// of relying purely on the file's own explicit `use` statements.
+/// `load_module_with_dependencies` itself (and `typecheck_file_with_deps`,
+/// which is built on it) deliberately keep their existing, narrower
+/// behavior — this is a separate function, not a replacement, so
+/// nothing that already depends on that behavior changes. Needed for
+/// `check_file`: almost every real `.mo` file relies on prelude/init
+/// implicitly (`String`, `Bool`, `List`, `FromListLiteral`, ...)
+/// without an explicit `use prelude`/`use init` line, and without
+/// this, `check` would report a wall of false-positive "unknown
+/// variable"/"unknown type" errors for nearly every file.
+#[partial]
+def load_module_with_dependencies_and_prelude (base_dir : String) (mp : ModulePath) : IO (Option Scope) {
+    let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
+    match opt_decls {
+        Option.some decls => do {
+            let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
+            let module_base_dir : String :=
+                match resolved_path_opt {
+                    Option.some fp => extract_directory fp,
+                    Option.none => base_dir
+                };
+            let direct_deps : List ModulePath := extract_use_decls decls;
+            let direct_deps_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ direct_deps;
+            let no_visited : List ModulePath := List.empty;
+            let all_deps : List ModulePath <- extract_all_dependencies_go module_base_dir direct_deps_with_prelude no_visited no_visited;
+            let loaded_deps : List ScopeData <- load_dependency_scopes module_base_dir all_deps List.empty;
+            let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
+            let this_scope : ScopeData := build_scope_from_decls mp decls;
+            let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
+            let scope : Scope := {
+                module_id := mp,
+                scope := final_scope,
+                parent := Option.none,
+            };
+            return Option.some scope
+        },
+        Option.none => do {
+            return Option.none
+        }
+    }
+}
+
+/// The `check`-flavored twin of `build_scope_with_deps` — see
+/// `load_module_with_dependencies_and_prelude`'s doc comment for why.
+#[partial]
+def build_scope_with_deps_and_prelude (file_path : String) (mod_name : String) : IO (Option Scope) :=
+    let base_dir : String := extract_directory file_path in
+    let mp : ModulePath := ModulePath.mp [Identifier.id mod_name] in
+    load_module_with_dependencies_and_prelude base_dir mp
 
 /// Load all declarations for a module and its transitive dependencies.
 /// Returns Option (List Decl) where the list contains all declarations from
@@ -693,6 +764,152 @@ def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (lo
                 Result.err _ => false
             }
     }
+
+// --- `check`: multi-error typecheck pass (lang/main.mo's `check` command) ---
+//
+// Same per-decl walk as `typecheck_module_with_scope`/
+// `typecheck_decl_with_scope` above, but rendering and *accumulating*
+// every failing declaration's `TypeError` (via
+// `lang.typecheck.diagnostic`'s `render_type_error`) instead of
+// short-circuiting on the first `false`. Safe to accumulate here —
+// unlike a parse failure, each decl already type-checks independently
+// in sequence, so one failing `def` doesn't affect whether the next
+// one can still be checked.
+//
+// KNOWN GAP (pre-existing, not introduced by `check` — the exact same
+// `type_check body Term.hole scope empty_local_types locals` call is
+// already made, unchanged, by `typecheck_def_with_scope` above, and
+// reproduces identically through it): any `def` with at least one
+// parameter reports a `TypeError.unknown_var` for its OWN parameter's
+// type annotation — confirmed with a minimal repro (`type Color {
+// red, green }` + `def id_color (c : Color) : Color := c` fails with
+// "unknown variable 'Color'", even though `Color` is in scope and a
+// zero-parameter `def c : Color := red` on the same scope succeeds
+// fine). A def's parameters desugar to nested `Term.lam` wrapping
+// around the body (`lam_params`, lang/parser.mo), and something in how
+// `lang.typecheck.infer`'s lambda-checking rule resolves a `Term.lam`'s
+// own `typ` field doesn't reach `scope` correctly yet — so this hits
+// bare type-parameter names (`A`/`B`/`C`), native types (`String`,
+// `U8`), and ordinary same-module or cross-module type names alike,
+// which in practice means most real-world parameterized defs (i.e.
+// most real code) report a false-positive type error today. This is a
+// real, separate self-hosted-typechecker completeness gap (same
+// category as `lang/scope.mo`'s struct-in-scope gap, documented in
+// `lang/tests/typecheck_examples_tests.mo`) — not something `check`
+// itself should paper over, and well beyond this change's scope to
+// fix. `check`'s *parse* phase (strict, via `try_parse_decls_strict`)
+// is unaffected and is where most everyday syntax-error bugs actually
+// get caught; the type-check phase is only
+// as complete as `lang.typecheck.infer` currently is.
+
+/// Same `def_d`/`inductive_d` coverage as `typecheck_decl_with_scope`
+/// — other decl kinds (use/open/scoped_open/infix/class/instance/
+/// struct) are skipped, matching today's typecheck harness; not
+/// expanding that separately-tracked gap here.
+#[partial]
+def check_module_with_scope (scope : Scope) (decls : List Decl) (locals : LocalScope) (path : Option String) : List String :=
+    match decls {
+        List.empty => List.empty,
+        List.cons d rest =>
+            let here : List String := check_decl_with_scope d scope locals path in
+            list_append here (check_module_with_scope scope rest locals path)
+    }
+
+#[partial]
+def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+    match d {
+        Decl.def_d df => check_def_with_scope df scope locals path,
+        Decl.inductive_d ind => check_inductive_with_scope ind scope locals path,
+        _ => List.empty
+    }
+
+#[partial]
+def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+    match df {
+        Def.mk name typ body _constraints _attrs _vis =>
+            if is_term_hole body then
+                List.empty
+            else
+                match type_check body Term.hole scope empty_local_types locals {
+                    Result.ok _ => List.empty,
+                    Result.err e => [render_type_error (module_path_to_string name) path e]
+                }
+    }
+
+#[partial]
+def check_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+    match ind {
+        Inductive.mk _name _params _typ constructors _attrs _vis =>
+            check_constructors_with_scope constructors scope locals path
+    }
+
+#[partial]
+def check_constructors_with_scope (cons : List InductConstructor) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+    match cons {
+        List.empty => List.empty,
+        List.cons c rest =>
+            let here : List String := check_constructor_with_scope c scope locals path in
+            list_append here (check_constructors_with_scope rest scope locals path)
+    }
+
+#[partial]
+def check_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+    match c {
+        InductConstructor.mk name _params typ =>
+            match type_check typ Term.hole scope empty_local_types locals {
+                Result.ok _ => List.empty,
+                Result.err e => [render_type_error (module_path_to_string name) path e]
+            }
+    }
+
+struct FileCheckResult {
+    path : String,
+    diagnostics : List String,
+}
+
+/// The `check`-flavored twin of `typecheck_file_with_deps` above —
+/// unlike that function (which uses the lenient `decls_parser` and
+/// collapses everything to a bare `Bool`), this uses
+/// `try_parse_decls_strict` on the target file's own content, so a
+/// genuine parse failure produces a real, rendered diagnostic instead
+/// of `false`, and it accumulates every failing declaration's rendered
+/// type-error message instead of stopping at the first one.
+/// Dependency resolution goes through `build_scope_with_deps_and_prelude`
+/// (prelude/init always implicitly included, matching `compile`'s own
+/// `load_file_modules` convention) rather than the narrower, existing
+/// `build_scope_with_deps` — only the file being checked itself gets
+/// strict *parse* treatment, keeping this change's blast radius
+/// contained to what `check` needs.
+#[partial]
+def check_file (file_path : String) : IO FileCheckResult {
+    let exists : Bool <- file_exists file_path;
+    if exists then do {
+        let content : String <- IO.read_file file_path;
+        let mod_name : String := module_name_from_path file_path;
+        let scope_opt : Option Scope <- build_scope_with_deps_and_prelude file_path mod_name;
+        match scope_opt {
+            Option.some scope =>
+                match try_parse_decls_strict content (Option.some file_path) {
+                    Result.ok decls => do {
+                        let empty_locs : LocalScope := {
+                            vars := List.empty,
+                            parent := Option.none,
+                        };
+                        let diags : List String := check_module_with_scope scope decls empty_locs (Option.some file_path);
+                        return { path := file_path, diagnostics := diags }
+                    },
+                    Result.err diagnostic => do {
+                        return { path := file_path, diagnostics := [diagnostic] }
+                    }
+                },
+            Option.none => do {
+                return { path := file_path, diagnostics := ["error: failed to load dependencies for " ++ file_path] }
+            }
+        }
+    } else do {
+        return { path := file_path, diagnostics := ["error: file not found: " ++ file_path] }
+    }
+}
 
 #[test]
 def test_parse_all_decls_empty : Bool :=
@@ -1018,17 +1235,7 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option Mod
 #[partial]
 def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
     let base_dir : String := extract_directory file_path;
-    let last_slash : I64 := string_find_last_slash file_path;
-    let file_name_only :=
-        if I64.lt last_slash 0 then
-            file_path
-        else
-            String.slice file_path (last_slash + 1) (String.length file_path);
-    let module_name : String :=
-        if String.ends_with file_name_only ".mo" then
-            String.slice file_name_only 0 (String.length file_name_only - 3)
-        else
-            file_name_only;
+    let module_name : String := module_name_from_path file_path;
     let mp : ModulePath := ModulePath.mp [Identifier.id module_name];
     println <| "loading module: " ++ module_name;
     let module : Option ModuleInfo <- load_module_with_info base_dir mp;
@@ -1089,5 +1296,77 @@ def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (ac
                     }
                 }
             },
+    }
+
+// --- Tests: check_module_with_scope / check_file ---
+
+#[partial]
+def string_contains_helper (haystack : String) (needle : String) : Bool :=
+    if I64.gt (String.length needle) (String.length haystack)
+    then false
+    else if String.beq (String.slice haystack 0 (String.length needle)) needle
+    then true
+    else if String.is_empty haystack
+    then false
+    else string_contains_helper (String.drop 1 haystack) needle
+
+#[test]
+def test_check_module_with_scope_all_pass : Bool :=
+    let path : ModulePath := ModulePath.mp List.empty in
+    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef c : Color := red" in
+    match result {
+        ParseResult.success _ decls =>
+            let sd : ScopeData := build_scope_from_decls path decls in
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none } in
+            let locals : LocalScope := { vars := List.empty, parent := Option.none } in
+            let diags : List String := check_module_with_scope scope decls locals Option.none in
+            match diags {
+                List.empty => true,
+                List.cons _ _ => false
+            },
+        ParseResult.fail _ => false
+    }
+
+/// Confirms `check_module_with_scope` *accumulates* — the failing
+/// `bad` def doesn't stop `good` (before it) from being reported as
+/// fine, and doesn't stop the walk from completing.
+#[test]
+def test_check_module_with_scope_accumulates_failures : Bool :=
+    let path : ModulePath := ModulePath.mp List.empty in
+    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef good : Color := red\ndef bad : Color := nonexistent_name" in
+    match result {
+        ParseResult.success _ decls =>
+            let sd : ScopeData := build_scope_from_decls path decls in
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none } in
+            let locals : LocalScope := { vars := List.empty, parent := Option.none } in
+            let diags : List String := check_module_with_scope scope decls locals Option.none in
+            match diags {
+                List.cons msg rest =>
+                    string_contains_helper msg "unknown variable" &&
+                    match rest {
+                        List.empty => true,
+                        List.cons _ _ => false
+                    },
+                List.empty => false
+            },
+        ParseResult.fail _ => false
+    }
+
+#[test]
+def test_check_file_reports_missing_file : Bool :=
+    match check_file "definitely/does/not/exist.mo" {
+        IO.io result =>
+            match result {
+                FileCheckResult.mk _path diags =>
+                    match diags {
+                        List.cons msg rest =>
+                            string_contains_helper msg "file not found" &&
+                            match rest {
+                                List.empty => true,
+                                List.cons _ _ => false
+                            },
+                        List.empty => false
+                    }
+            }
     }
 
