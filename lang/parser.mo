@@ -18,7 +18,7 @@ use lang.parser.core {
 }
 use lang.parser.char_preds {is_ident_char, is_space}
 use lang.parser.combinators {
-  alt, alt_fold, bind_parse, delimited_by, many0, many1, map_parse, opt,
+  alt, alt_fold, bind_parse, delimited_by, many1, map_parse, opt,
   preceded_by, separated_by, tag, take_while, terminated_by,
 }
 use lang.parser.number {number, numeric_literal}
@@ -324,6 +324,40 @@ def is_not_bracket (c : String) : Bool :=
 def is_not_attr_end (c : String) : Bool :=
 	if String.beq "]" c then false
 	else true
+
+/// Skip one leading `#[...]` attribute clause (e.g. `#[terminating]`),
+/// if present — a no-op (returns `input` unchanged) otherwise. Reused
+/// by `instance_methods` for per-method attributes (real usage:
+/// `std/map.mo`'s `#[terminating] def insert ...` inside `instance [BOrd
+/// K] Map BTreeMap { ... }`) — top-level `def`s already handle this via
+/// `def_try_attrs`/`def_attr_skip`, but instance methods went through
+/// `instance_methods`'s own separate, attribute-unaware `tag "def"`
+/// check, so any attributed method broke the ENTIRE enclosing
+/// `instance` block (a failed method fails the whole `instance_methods`
+/// loop, which fails the whole `instance` decl, which — via
+/// `decls_try`'s truncate-on-fail — silently dropped everything after
+/// it in the file).
+#[partial]
+def skip_one_attr (input : String) : String :=
+	skip_one_attr_try (tag "#[" input) input
+
+#[partial]
+def skip_one_attr_try (r : ParseResult String) (orig : String) : String :=
+	match r {
+		success rem _ => skip_one_attr_content (take_while is_not_attr_end rem) orig,
+		fail _ => orig
+	}
+
+#[partial]
+def skip_one_attr_content (r : ParseResult String) (orig : String) : String :=
+	match r {
+		success rem _ =>
+			match tag "]" rem {
+				success rem2 _ => skip_spaces rem2,
+				fail _ => orig
+			},
+		fail _ => orig
+	}
 
 #[partial]
 def lam_params (params : List Param) (body : Term) : Term :=
@@ -655,7 +689,7 @@ def struct_vis (input : String) (vis : Visibility) : ParseResult Decl :=
 #[partial]
 def struct_kw (r : ParseResult String) (vis : Visibility) : ParseResult Decl :=
 	match r {
-		success rem _ => struct_name (identifier (skip_spaces rem)) vis,
+		success rem _ => struct_name (dotted_def_name (skip_spaces rem)) vis,
 		fail e => fail e
 	}
 
@@ -777,7 +811,7 @@ def type_vis (input : String) (vis : Visibility) : ParseResult Decl :=
 #[partial]
 def type_kw (r : ParseResult String) (vis : Visibility) : ParseResult Decl :=
 	match r {
-		success rem _ => type_name (identifier (skip_spaces rem)) vis,
+		success rem _ => type_name (dotted_def_name (skip_spaces rem)) vis,
 		fail e => fail e
 	}
 
@@ -954,16 +988,71 @@ def type_cons_try_bare (r : ParseResult Term) (orig : String) (name : Identifier
 	}
 
 /// Parse one field inside an already-open `(...)` group: named (`a: A`,
-/// existing `type_one_param`) or bare/unnamed (`List Identifier`).
+/// possibly MULTIPLE names sharing one type — `(b0 b1 ... b15 : List
+/// (Pair K V))`, `std/map.mo`'s `Buckets16` constructor — or bare/
+/// unnamed (`List Identifier`). Multi-name support here mirrors
+/// `def_explicit_more_names`'s already-fixed shape for `def` params;
+/// this constructor-field path had its own separate (and, until now,
+/// single-name-only) implementation.
 #[partial]
 def type_cons_one_group_content (input : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
-	type_cons_group_item (type_one_param ctx input) input name ctx params
+	let cleaned : String := skip_spaces input in
+	type_cons_group_name (identifier cleaned) cleaned name ctx params
 
 #[partial]
-def type_cons_group_item (r : ParseResult Param) (orig : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
+def type_cons_group_name (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
 	match r {
-		success rem p => type_cons_group_after_item rem name ctx (List.cons p params),
+		success rem pname =>
+			let names : List Identifier := List.cons (Identifier.id pname) List.empty in
+			type_cons_group_more_names rem name ctx params names orig,
 		fail _ => type_cons_group_bare (type_expression ctx orig) orig name ctx params
+	}
+
+/// After the first field name, try more space-separated names sharing
+/// one type before requiring `:` — see `type_cons_one_group_content`'s
+/// doc comment. `field_start` is threaded through unchanged all the way
+/// from BEFORE the first name was even parsed — needed so
+/// `type_cons_group_colon` can backtrack all the way there (not just to
+/// the position after the last collected name) if no `:` ever turns up:
+/// a bare/unnamed field whose type is itself a multi-identifier
+/// application (`map (Buckets16 K V)`, no field name or colon at all)
+/// looks EXACTLY like "several field names with no type" until the
+/// colon check fails — at which point the only correct move is to
+/// re-parse the whole thing from `field_start` as a bare type
+/// expression, not hard-fail (that regressed `std/map.mo`'s `HashMap`
+/// constructor, whose sole field is exactly this shape).
+#[partial]
+def type_cons_group_more_names (input : String) (name : Identifier) (ctx : List Identifier) (params : List Param) (names : List Identifier) (field_start : String) : ParseResult InductConstructor :=
+	type_cons_group_more_names_try (identifier (skip_spaces input)) input name ctx params names field_start
+
+#[partial]
+def type_cons_group_more_names_try (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) (params : List Param) (names : List Identifier) (field_start : String) : ParseResult InductConstructor :=
+	match r {
+		success rem pname => type_cons_group_more_names rem name ctx params (List.cons (Identifier.id pname) names) field_start,
+		fail _ => type_cons_group_colon (tag ":" (skip_spaces orig)) name ctx params names field_start
+	}
+
+#[partial]
+def type_cons_group_colon (r : ParseResult String) (name : Identifier) (ctx : List Identifier) (params : List Param) (names : List Identifier) (field_start : String) : ParseResult InductConstructor :=
+	match r {
+		success rem _ => type_cons_group_type (type_expression ctx (skip_spaces rem)) name ctx params names,
+		fail _ => type_cons_group_bare (type_expression ctx field_start) field_start name ctx params
+	}
+
+/// Builds one `Param` per name (all sharing `typ`) directly onto the
+/// OUTER field accumulator `params` via the shared `params_for_names`
+/// helper — `names` (most-recent-first, reversed here back to
+/// declaration order) combined with `params_for_names`'s own "cons onto
+/// whatever accumulator it's given" behavior means this correctly
+/// interleaves with fields from other groups without a separate merge
+/// step.
+#[partial]
+def type_cons_group_type (r : ParseResult Term) (name : Identifier) (ctx : List Identifier) (params : List Param) (names : List Identifier) : ParseResult InductConstructor :=
+	match r {
+		success rem typ =>
+			let new_params : List Param := params_for_names (list_reverse names) typ params in
+			type_cons_group_after_item rem name ctx new_params,
+		fail e => fail e
 	}
 
 #[partial]
@@ -1038,30 +1127,6 @@ def type_cons_implicit_close (r : ParseResult String) (after_bracket : String) (
 			success after_bracket (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) empty_params (Term.hole))
 	}
 
-#[partial]
-def type_one_param (ctx : List Identifier) (input : String) : ParseResult Param :=
-	type_one_param_name (identifier input) ctx
-
-#[partial]
-def type_one_param_name (r : ParseResult String) (ctx : List Identifier) : ParseResult Param :=
-	match r {
-		success rem name => type_one_param_type (tag ":" (skip_spaces rem)) (Identifier.id name) ctx,
-		fail e => fail e
-	}
-
-#[partial]
-def type_one_param_type (r : ParseResult String) (name : Identifier) (ctx : List Identifier) : ParseResult Param :=
-	match r {
-		success rem _ => type_one_param_val (type_expression ctx (skip_spaces rem)) name,
-		fail e => fail e
-	}
-
-#[partial]
-def type_one_param_val (r : ParseResult Term) (name : Identifier) : ParseResult Param :=
-	match r {
-		success rem typ => success rem (param_many name typ),
-		fail e => fail e
-	}
 
 #[partial]
 def type_to_decl (name : Identifier) (params : List Param) (kind : Term) (cons : List InductConstructor) (vis : Visibility) : Decl :=
@@ -1165,9 +1230,70 @@ def dotted_def_name (input : String) : ParseResult String :=
 #[partial]
 def def_name (r : ParseResult String) (vis : Visibility) : ParseResult Decl :=
 	match r {
-		success rem name =>
-			let empty : List Param := List.empty in
-			def_params (def_params_loop (skip_spaces rem) empty) (Identifier.id name) vis,
+		success rem name => def_try_constraints (tag "[" (skip_spaces rem)) (skip_spaces rem) (Identifier.id name) vis,
+		fail e => fail e
+	}
+
+/// A `def`-level `[Constraint A, ...]` clause between the name and its
+/// params (real usage: `std/map.mo`'s `def BTreeMap.beq [BEq K, BEq V]
+/// (a b : BTreeMap K V) : Bool := ...`) — previously entirely
+/// unsupported (`class`/`instance`/`type` all already had their own
+/// `[...]` constraint parsing, `def` never did). Patches the parsed
+/// constraints onto the fully-parsed `Decl` afterward via
+/// `def_apply_constraints`, the same "placeholder now, patch later"
+/// pattern already used by `class`/`instance` (`def_to_decl` keeps
+/// hardcoding an empty constraint list as that placeholder) — avoids
+/// threading a new accumulator through the whole `def_params`/
+/// `def_body`/... chain down to `def_to_decl`.
+#[partial]
+def def_try_constraints (r : ParseResult String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem _ => def_constraints_content (take_while is_not_bracket rem) rem name vis,
+		fail _ => def_params_entry orig name vis
+	}
+
+#[partial]
+def def_constraints_content (r : ParseResult String) (orig : String) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem content => def_constraints_then_close (type_constraint_list content) rem name vis,
+		fail _ => fail (ParseError.custom "expected ]" orig)
+	}
+
+#[partial]
+def def_constraints_then_close (cr : ParseResult (List TypeConstraint)) (input : String) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
+	match cr {
+		success _ constraints => def_constraints_close_bracket (tag "]" input) constraints name vis,
+		fail _ =>
+			let empty_cs : List TypeConstraint := List.empty in
+			def_constraints_close_bracket (tag "]" input) empty_cs name vis
+	}
+
+#[partial]
+def def_constraints_close_bracket (r : ParseResult String) (constraints : List TypeConstraint) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem _ => def_apply_constraints (def_params_entry (skip_spaces rem) name vis) constraints,
+		fail e => fail (ParseError.custom "expected ] after def constraint" (parse_error_remaining e))
+	}
+
+#[partial]
+def def_params_entry (input : String) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
+	let empty : List Param := List.empty in
+	def_params (def_params_loop input empty) name vis
+
+/// Patch the real constraints onto the fully-parsed `Decl` — see
+/// `def_try_constraints`'s doc comment above.
+#[partial]
+def def_apply_constraints (dr : ParseResult Decl) (constraints : List TypeConstraint) : ParseResult Decl :=
+	match dr {
+		success rem decl =>
+			match decl {
+				def_d d =>
+					match d {
+						Def.mk name typ term _ attrs vis =>
+							success rem (Decl.def_d (Def.mk name typ term constraints attrs vis))
+					},
+				_ => success rem decl
+			},
 		fail e => fail e
 	}
 
@@ -1451,7 +1577,7 @@ def class_constraints_or_name (input : String) (vis : Visibility) : ParseResult 
 def class_try_constraints (r : ParseResult String) (orig : String) (vis : Visibility) : ParseResult Decl :=
 	match r {
 		success rem _ => class_constraints_bracket rem vis,
-		fail _ => class_name (identifier (skip_spaces orig)) vis
+		fail _ => class_name (dotted_def_name (skip_spaces orig)) vis
 	}
 
 /// Parse the actual `[...]` constraint-list content (`type_constraint_list`,
@@ -1487,7 +1613,7 @@ def class_constraints_then_name (cr : ParseResult (List TypeConstraint)) (input 
 def class_constraints_close_bracket (r : ParseResult String) (constraints : List TypeConstraint) (vis : Visibility) : ParseResult Decl :=
 	match r {
 		success rem _ =>
-			class_apply_constraints (class_name (identifier (skip_spaces rem)) vis) constraints,
+			class_apply_constraints (class_name (dotted_def_name (skip_spaces rem)) vis) constraints,
 		fail e => fail (ParseError.custom "expected ] after class constraint" (parse_error_remaining e))
 	}
 
@@ -2070,7 +2196,8 @@ def instance_brace (r : ParseResult String) (cls : ModulePath) (args : List Term
 
 #[partial]
 def instance_methods (input : String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
-	instance_try_close_or_def (tag "def" (skip_docstrings (skip_spaces input))) (skip_docstrings (skip_spaces input)) cls args methods
+	let cleaned : String := skip_one_attr (skip_docstrings (skip_spaces input)) in
+	instance_try_close_or_def (tag "def" cleaned) cleaned cls args methods
 
 #[partial]
 def instance_try_close_or_def (r : ParseResult String) (orig : String) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
@@ -2980,6 +3107,176 @@ def skip_docstrings_try_newline (r : ParseResult String) (orig : String) : Strin
 // ─── Term atom ──────────────────────────────────────────────────────────
 
 #[partial]
+// ─── General `let ... in ...` term (previously do-block-only) ─────────
+//
+// `let name [: Type] := value in body` desugars to an immediately-
+// applied lambda (`(fn name : Type => body) value`, mirroring the Rust
+// reference's `lets()`/`let_term()`, core/src/term.rs) — no new `Term`
+// variant needed, this is purely a parser-level construction, same as
+// `lambda_parser`'s own `fn`/`ꟛ`/`\` desugaring right below it.
+//
+// Previously `let` was ONLY ever recognized inside `do { }` blocks
+// (`do_stmt_try_let` above) — as a general expression usable anywhere a
+// term is expected (a def's body, inside `if`/`then`/`else` branches,
+// inside match arms, ...) it was entirely unparseable by this
+// self-hosted parser, despite being the single most common expression
+// form in the whole corpus (including this very file's own source, and
+// `lang/json.mo`/`lang/toml.mo`, whose truncated self-hosted parse this
+// fix was found while chasing down). Multiple chained `let`s
+// (`let a := 1 in let b := 2 in body`) fall out for free from ordinary
+// recursion — `body` below is a general `expression`, which can itself
+// be another `let_term_parser` match — matching how virtually all real
+// code writes multi-binding lets anyway (one `let ... in` per line, not
+// the Rust grammar's `many1`-per-single-`let` alternative shape).
+#[partial]
+def let_term_parser (ctx : List Identifier) (input : String) : ParseResult Term :=
+    let_term_kw (tag "let" input) ctx
+
+#[partial]
+def let_term_kw (r : ParseResult String) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => let_term_name (identifier (skip_spaces rem)) ctx,
+        fail e => fail e
+    }
+
+/// Tries `:=` (no type annotation) BEFORE `:` (annotation present) —
+/// not the other way around. `:` is a literal prefix of `:=`, so
+/// checking `:` first would wrongly "match" the leading colon of a
+/// bare `:=` too (`tag ":" ":= 1"` succeeds, leaving `"= 1"` — which
+/// then fails trying to parse `=` as a type expression). Trying `:=`
+/// first is unambiguous either way: it only matches when there's
+/// genuinely no annotation (`: T := v` doesn't start with the two
+/// characters `:=`, so this attempt correctly fails and falls through).
+#[partial]
+def let_term_name (r : ParseResult String) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem name => let_term_try_assign_no_type (tag ":=" (skip_spaces rem)) rem (Identifier.id name) ctx,
+        fail e => fail e
+    }
+
+#[partial]
+def let_term_try_assign_no_type (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => let_term_value (expression ctx (skip_spaces rem)) name Term.hole ctx,
+        fail _ => let_term_try_type (tag ":" (skip_spaces orig)) orig name ctx
+    }
+
+#[partial]
+def let_term_try_type (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => let_term_type (type_expression ctx rem) name ctx,
+        fail e => fail (ParseError.custom "expected ':' or ':=' in let expression" (parse_error_remaining e))
+    }
+
+#[partial]
+def let_term_type (r : ParseResult Term) (name : Identifier) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem typ => let_term_assign (tag ":=" (skip_spaces rem)) name typ ctx,
+        fail e => fail e
+    }
+
+#[partial]
+def let_term_assign (r : ParseResult String) (name : Identifier) (typ : Term) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => let_term_value (expression ctx (skip_spaces rem)) name typ ctx,
+        fail e => fail (ParseError.custom "expected := in let expression" (parse_error_remaining e))
+    }
+
+#[partial]
+def let_term_value (r : ParseResult Term) (name : Identifier) (typ : Term) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem value => let_term_in (tag "in" (skip_spaces rem)) name typ value ctx,
+        fail e => fail e
+    }
+
+#[partial]
+def let_term_in (r : ParseResult String) (name : Identifier) (typ : Term) (value : Term) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => let_term_body (expression (List.cons name ctx) (skip_spaces rem)) name typ value,
+        fail e => fail (ParseError.custom "expected 'in' in let expression" (parse_error_remaining e))
+    }
+
+#[partial]
+def let_term_body (r : ParseResult Term) (name : Identifier) (typ : Term) (value : Term) : ParseResult Term :=
+    match r {
+        success rem body =>
+            let lam_term : Term := Term.lam (DebugName.named name) typ body in
+            success rem (Term.app lam_term value),
+        fail e => fail e
+    }
+
+// ─── List literal (`[e1, e2, e3]`) ──────────────────────────────────────
+//
+// Desugars to `FromListLiteral.cons e1 (FromListLiteral.cons e2
+// (FromListLiteral.cons e3 FromListLiteral.empty))` — a right fold using
+// the `FromListLiteral` class's methods (`init/prelude.mo`), not the raw
+// `List.cons`/`List.empty` constructors directly, exactly mirroring the
+// Rust reference's `desugar_list_literal` (core/src/parser.rs). Bracket
+// syntax (`[`) was previously only ever recognized for class/instance
+// `[Constraint A]` clauses (`class_try_constraints`/
+// `instance_try_constraints`) — as a general term/expression, list
+// literals were entirely unparseable by this self-hosted parser, despite
+// being used constantly throughout the corpus (including this very
+// file's own `op_table`/`decl_parsers`/`atom_parsers` list literals).
+// `Term.var sentinel (DebugName.named (Identifier.id "..."))` for a
+// qualified free-variable reference mirrors `variable_try_path`'s own
+// representation for a dotted path (`Foo.bar` as one joined
+// `Identifier`, not a structured `ModulePath`) — the established
+// convention elsewhere in this file, not a new one invented here.
+#[partial]
+def list_literal_parser (ctx : List Identifier) (input : String) : ParseResult Term :=
+    list_literal_open (tag "[" input) ctx
+
+#[partial]
+def list_literal_open (r : ParseResult String) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ =>
+            let empty_acc : List Term := List.empty in
+            list_literal_elements (skip_spaces rem) ctx empty_acc,
+        fail e => fail e
+    }
+
+#[partial]
+def list_literal_elements (input : String) (ctx : List Identifier) (acc : List Term) : ParseResult Term :=
+    match tag "]" input {
+        success rem _ => success rem (build_list_literal (list_reverse acc)),
+        fail _ => list_literal_element (expression ctx input) ctx acc
+    }
+
+#[partial]
+def list_literal_element (r : ParseResult Term) (ctx : List Identifier) (acc : List Term) : ParseResult Term :=
+    match r {
+        success rem elem => list_literal_sep (skip_spaces rem) ctx (List.cons elem acc),
+        fail e => fail e
+    }
+
+/// A trailing comma before `]` is optional (`[1, 2, 3,]` and
+/// `[1, 2, 3]` both valid) — mirrors the Rust reference's
+/// `opt(char(','))`.
+#[partial]
+def list_literal_sep (input : String) (ctx : List Identifier) (acc : List Term) : ParseResult Term :=
+    match tag "," input {
+        success rem _ => list_literal_elements (skip_spaces rem) ctx acc,
+        fail _ => list_literal_close (tag "]" input) acc
+    }
+
+#[partial]
+def list_literal_close (r : ParseResult String) (acc : List Term) : ParseResult Term :=
+    match r {
+        success rem _ => success rem (build_list_literal (list_reverse acc)),
+        fail e => fail e
+    }
+
+#[partial]
+def build_list_literal (elems : List Term) : Term :=
+    match elems {
+        List.empty => Term.var sentinel (DebugName.named (Identifier.id "FromListLiteral.empty")),
+        List.cons e rest =>
+            let cons_var : Term := Term.var sentinel (DebugName.named (Identifier.id "FromListLiteral.cons")) in
+            Term.app (Term.app cons_var e) (build_list_literal rest),
+    }
+
+#[partial]
 def atom_term (ctx: List Identifier) (input: String) : ParseResult Term :=
     match alt_fold (atom_parsers ctx) input {
         success rem out => success rem out,
@@ -2992,7 +3289,7 @@ def atom_term (ctx: List Identifier) (input: String) : ParseResult Term :=
 
 #[partial]
 def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
-    [variable ctx, literal_parser, match_parser ctx, if_parser ctx]
+    [variable ctx, literal_parser, match_parser ctx, if_parser ctx, let_term_parser ctx, list_literal_parser ctx]
 
 // ─── Canonical match case parser (Phase 9) ─────────────────────────────
 
@@ -3013,7 +3310,7 @@ def match_case_parser (ctx: List Identifier) (input: String) : ParseResult Match
 def match_case_name (r: ParseResult (List String)) (ctx: List Identifier) : ParseResult MatchCase :=
     match r {
         success rem names =>
-            match_case_args (many0 identifier (skip_spaces rem)) (Identifier.id (list_last_or "" names)) ctx,
+            match_case_args (match_case_arg_names rem) (Identifier.id (list_last_or "" names)) ctx,
         fail e => fail e
     }
 
@@ -3024,26 +3321,75 @@ def list_last_or (default : String) (xs : List String) : String := match xs {
     List.cons x rest => if List.is_empty rest then x else list_last_or default rest,
 }
 
+/// The constructor's bound-variable names (`List.cons x rest => ...`
+/// binds `x` and `rest`) — zero or more space-separated identifiers
+/// before `=>`. Previously `many0 identifier (skip_spaces rem)` only
+/// skipped whitespace ONCE, before the *first* identifier attempt, not
+/// between each one `many0` itself tries — since `identifier` doesn't
+/// skip its own leading whitespace, that meant any pattern with 2+
+/// bound names (`List.cons x rest`, the single most common shape in
+/// this entire codebase) could only ever parse the first one, silently
+/// leaving " rest => ..." dangling and then failing at the `=>` tag
+/// right after — this was a genuine self-hosted-parser blocker, not
+/// specific to any one file (confirmed: `list_rev_loop`'s own canonical
+/// `List.cons x rest => ...` pattern, straight out of lang/types.mo,
+/// failed to parse via this self-hosted parser before this fix).
+#[partial]
+def match_case_arg_names (input : String) : ParseResult (List String) :=
+    match_case_arg_names_loop input List.empty
+
+#[partial]
+def match_case_arg_names_loop (input : String) (acc : List String) : ParseResult (List String) :=
+    match identifier (skip_spaces input) {
+        success rem name => match_case_arg_names_loop rem (List.cons name acc),
+        fail _ => success input (list_reverse acc)
+    }
+
 #[partial]
 def match_case_args (r: ParseResult (List String)) (name: Identifier) (ctx: List Identifier) : ParseResult MatchCase :=
     match r {
-        success rem _ => match_case_arrow (tag "=>" (skip_spaces rem)) name ctx,
+        success rem names => match_case_arrow (tag "=>" (skip_spaces rem)) name (id_list_of names) ctx,
         fail e => fail e
     }
 
 #[partial]
-def match_case_arrow (r: ParseResult String) (name: Identifier) (ctx: List Identifier) : ParseResult MatchCase :=
+def id_list_of (names : List String) : List Identifier :=
+    match names {
+        List.cons n rest => List.cons (Identifier.id n) (id_list_of rest),
+        List.empty => List.empty,
+    }
+
+/// Extends `ctx` with `args` (via `lambda_extend_ctx` — same "last
+/// name = innermost = index 0" fold `lambda_extend_ctx`'s own doc
+/// comment describes, and the exact convention
+/// `lang/typecheck/infer.mo`'s `prepend_holes`/`prepend_local_vars`
+/// independently use when building the matching `LocalScope`/
+/// `local_types` for typecheck — both sides have to agree on the same
+/// ordering or a body reference resolves to the WRONG bound variable
+/// instead of just failing loudly) before parsing the arm's body —
+/// otherwise a match arm's body referencing its own bound names
+/// (`mk name _ _ => name`, `examples/optics.mo`'s own `get_name`)
+/// resolves `name` as an unbound free variable instead of a properly-
+/// indexed bound one: it still PARSES (free-variable references are
+/// never a parse error), but fails to self-hosted-typecheck.
+#[partial]
+def match_case_arrow (r: ParseResult String) (name: Identifier) (args : List Identifier) (ctx: List Identifier) : ParseResult MatchCase :=
     match r {
-        success rem _ => match_case_body (expression ctx (skip_spaces rem)) name,
+        success rem _ => match_case_body (expression (lambda_extend_ctx args ctx) (skip_spaces rem)) name args,
         fail e => fail e
     }
 
+/// `args`, parsed by `match_case_arg_names` above, are threaded into
+/// the final `MatchCase.mc` for real now — a previous version always
+/// hardcoded an empty list here regardless of what was actually parsed,
+/// silently dropping the constructor's bound-variable names (used
+/// downstream by `lang/typecheck/infer.mo`'s `type_check_match_case` to
+/// bind them as locals, and by `lang/pretty.mo`'s printer).
 #[partial]
-def match_case_body (r: ParseResult Term) (name: Identifier) : ParseResult MatchCase :=
+def match_case_body (r: ParseResult Term) (name: Identifier) (args : List Identifier) : ParseResult MatchCase :=
     match r {
         success rem body =>
-            let empty_args : List Identifier := List.empty in
-            success (match_case_tail rem) (MatchCase.mc name empty_args body),
+            success (match_case_tail rem) (MatchCase.mc name args body),
         fail e => fail e
     }
 
@@ -3150,14 +3496,40 @@ def if_else_branch (r: ParseResult Term) (cond: Term) (then_b: Term) : ParseResu
 #[partial]
 def paren_expr (ctx: List Identifier) (input: String) : ParseResult Term :=
     match tag "(" input {
-        success rem _ => paren_inner (type_expression ctx rem),
+        success rem _ => paren_inner (type_expression ctx rem) ctx,
         fail e => fail e
     }
 
 #[partial]
-def paren_inner (r: ParseResult Term) : ParseResult Term :=
+def paren_inner (r: ParseResult Term) (ctx : List Identifier) : ParseResult Term :=
     match r {
-        success rem out => paren_close (tag ")" rem) out,
+        success rem out => paren_try_ann (skip_spaces rem) out ctx,
+        fail e => fail e
+    }
+
+/// Optional `: Type` type ascription inside parens (`(List.empty : List
+/// String)`) — parsed and discarded, not attached to the returned term:
+/// this self-hosted `Term` has no `Ann` variant (unlike the Rust
+/// reference's `Term::Ann`, core/src/parser.rs's `ann_parser`), so
+/// there's nowhere to attach it even if kept. Matches the established
+/// "parse for correctness, discard since nothing downstream needs it"
+/// pattern already used by `def_implicit_close` for implicit param
+/// clauses. Real usage — `List.intercalate "," (List.empty : List
+/// String)` in `lang/json.mo` — needs the ascription to disambiguate an
+/// otherwise type-unconstrained polymorphic empty list, but only the
+/// self-hosted parser's own AST loses that information; the Rust
+/// reference retains and uses it during typecheck.
+#[partial]
+def paren_try_ann (input : String) (out : Term) (ctx : List Identifier) : ParseResult Term :=
+    match tag ":" input {
+        success rem _ => paren_ann_type (type_expression ctx (skip_spaces rem)) out,
+        fail _ => paren_close (tag ")" input) out
+    }
+
+#[partial]
+def paren_ann_type (r : ParseResult Term) (out : Term) : ParseResult Term :=
+    match r {
+        success rem _ => paren_close (tag ")" (skip_spaces rem)) out,
         fail e => fail e
     }
 
@@ -3170,6 +3542,15 @@ def paren_close (r: ParseResult String) (out: Term) : ParseResult Term :=
 
 // ─── Term lambda ────────────────────────────────────────────────────────
 
+/// `fn a b c => body` — multiple curried params sugar (mirrors the Rust
+/// reference's `many1(lam_param)` + `lams()`, core/src/parser.rs/
+/// term.rs) for `fn a => fn b => fn c => body`. Previously only a
+/// single name was ever accepted (`lambda_name_outer_got` went straight
+/// to `=>` after one `identifier`), so any multi-param lambda —
+/// extremely common throughout the corpus, e.g. `std/map.mo`'s `fn r ka
+/// va => ...` — failed to parse at all: `def_parser`/`decls_parser`
+/// wouldn't even get partway through, since a failed lambda anywhere
+/// inside an expression fails the whole enclosing declaration.
 #[partial]
 def lambda_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
     lambda_kw (alt (alt (tag "fn") (tag "ꟛ")) (tag "\\") input) ctx
@@ -3177,33 +3558,57 @@ def lambda_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
 #[partial]
 def lambda_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
     match r {
-        success rem _ => lambda_name_outer (skip_spaces rem) ctx,
+        success rem _ =>
+            let empty_names : List Identifier := List.empty in
+            lambda_names (skip_spaces rem) ctx empty_names,
         fail e => fail e
     }
 
 #[partial]
-def lambda_name_outer (input: String) (ctx: List Identifier) : ParseResult Term :=
-    lambda_name_outer_got (identifier input) input ctx
-
-#[partial]
-def lambda_name_outer_got (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult Term :=
-    match r {
-        success rem name => lambda_arrow (tag "=>" (skip_spaces rem)) rem orig (Identifier.id name) ctx,
-        fail e => fail e
+def lambda_names (input : String) (ctx : List Identifier) (acc : List Identifier) : ParseResult Term :=
+    match identifier input {
+        success rem name => lambda_names (skip_spaces rem) ctx (List.cons (Identifier.id name) acc),
+        fail _ => lambda_names_done input ctx acc
     }
 
 #[partial]
-def lambda_arrow (r: ParseResult String) (rem: String) (orig: String) (name: Identifier) (ctx: List Identifier) : ParseResult Term :=
+def lambda_names_done (input : String) (ctx : List Identifier) (acc : List Identifier) : ParseResult Term :=
+    if List.is_empty acc
+    then fail (ParseError.custom "expected at least one lambda parameter" input)
+    else lambda_arrow (tag "=>" input) (list_reverse acc) ctx
+
+#[partial]
+def lambda_arrow (r: ParseResult String) (names: List Identifier) (ctx: List Identifier) : ParseResult Term :=
     match r {
-        success rem2 _ => lambda_body (expression (List.cons name ctx) (skip_spaces rem2)) name,
+        success rem2 _ => lambda_body (expression (lambda_extend_ctx names ctx) (skip_spaces rem2)) names,
         fail e => fail e
     }
 
+/// Prepends `names` (declaration order, e.g. `[a, b, c]`) so the
+/// *last*-declared name (`c`, innermost lambda, index 0) ends up at
+/// `ctx`'s own head — same "reversed = innermost first" convention
+/// `ctx_of_params`'s own doc comment describes.
 #[partial]
-def lambda_body (r: ParseResult Term) (name: Identifier) : ParseResult Term :=
+def lambda_extend_ctx (names : List Identifier) (ctx : List Identifier) : List Identifier :=
+    match names {
+        List.cons n rest => lambda_extend_ctx rest (List.cons n ctx),
+        List.empty => ctx,
+    }
+
+#[partial]
+def lambda_body (r: ParseResult Term) (names: List Identifier) : ParseResult Term :=
     match r {
-        success rem body => success rem (Term.lam (DebugName.named name) (Term.type_ 1) body),
+        success rem body => success rem (build_nested_lambdas names body),
         fail e => fail e
+    }
+
+/// `[a, b, c]`, `body` → `fn a => (fn b => (fn c => body))` — mirrors
+/// the Rust reference's `lams()` fold exactly (first param outermost).
+#[partial]
+def build_nested_lambdas (names : List Identifier) (body : Term) : Term :=
+    match names {
+        List.cons n rest => Term.lam (DebugName.named n) (Term.type_ 1) (build_nested_lambdas rest body),
+        List.empty => body,
     }
 
 // ─── Term expression (application + operators) ─────────────────────────
@@ -3460,6 +3865,47 @@ def test_type_implicit_params : Bool :=
 		fail _ => false
 	}
 
+/// Regression test for `type_cons_group_more_names`: multiple
+/// constructor-field names sharing one type in a single group
+/// (`buckets (b0 b1 b2 : I64)`) — real usage: `std/map.mo`'s
+/// `Buckets16` constructor (16 names, one type). Previously each field
+/// group only accepted a single name, hard-failing the whole
+/// declaration on the second name.
+#[test]
+def test_type_constructor_multi_name_group : Bool :=
+	match type_parser "type Buckets3 { buckets (b0 b1 b2 : I64) }" {
+		success rem decl => String.beq rem "",
+		fail _ => false
+	}
+
+/// Regression test for `type_cons_one_group_content`'s missing
+/// `skip_spaces`: a newline right after a constructor field group's
+/// opening `(` (before the first field name) — real usage:
+/// `std/map.mo`'s `Buckets16` constructor writes its opening paren and
+/// first field name on separate lines. Pre-existing bug (not introduced
+/// by the multi-name fix above), just never previously exercised by any
+/// single-line test.
+#[test]
+def test_type_constructor_group_leading_newline : Bool :=
+	match type_parser "type Buckets3 { buckets (\n  b0 b1 b2 : I64) }" {
+		success rem decl => String.beq rem "",
+		fail _ => false
+	}
+
+/// Regression test for `type_cons_group_colon`'s backtrack-to-bare-type
+/// fallback: `map (Buckets16 K V)` — a bare/unnamed field whose type is
+/// itself a multi-identifier application — looks exactly like "several
+/// field names with no type" until the trailing `:` check fails; the
+/// multi-name loop above must then re-parse the WHOLE thing as a bare
+/// type expression from where the field started, not hard-fail. Real
+/// usage: `std/map.mo`'s `HashMap` constructor.
+#[test]
+def test_type_constructor_bare_multi_word_type : Bool :=
+	match type_parser "type HashMap K V { map (Buckets16 K V) }" {
+		success rem decl => String.beq rem "",
+		fail _ => false
+	}
+
 #[test]
 def test_type_implicit_no_parens : Bool :=
 	match type_parser "type All { mk {A : Type} (val : A) }" {
@@ -3614,6 +4060,19 @@ def list_is_empty_tc (cs : List TypeConstraint) : Bool :=
 #[test]
 def test_instance_with_constraints : Bool :=
   match instance_parser "instance [Show A] Show A { def m := a }" {
+    success rem _ => String.beq rem "",
+    fail _ => false
+  }
+
+/// Regression test for `skip_one_attr`: an attributed instance method
+/// (`#[terminating] def ... := ...`) — previously broke the ENTIRE
+/// enclosing `instance` block, since `instance_methods` skipped
+/// docstrings but not `#[...]` attributes before checking for `def`.
+/// Real usage: `std/map.mo`'s `instance [BOrd K] Map BTreeMap { ...
+/// #[terminating] def insert ... }`.
+#[test]
+def test_instance_method_with_attribute : Bool :=
+  match instance_parser "instance Show A { #[terminating] def m := a }" {
     success rem _ => String.beq rem "",
     fail _ => false
   }
@@ -3860,6 +4319,34 @@ def test_t_lambda_nested : Bool :=
 		fail _ => false
 	}
 
+/// Regression test for `lambda_names`: `fn a b c => body` multi-param
+/// sugar for `fn a => fn b => fn c => body` — previously only a single
+/// name was ever accepted, blocking `std/map.mo`'s own `fn r ka va =>
+/// ...` (extremely common throughout the corpus). Checks the SHAPE
+/// nests correctly (3 lambdas deep), not just that it parses.
+#[test]
+def test_t_lambda_multi_param : Bool :=
+	let empty_ctx : List Identifier := List.empty in
+	match expression empty_ctx "fn a b c => a" {
+		success rem out => String.beq rem "" && term_is_three_deep_lam out,
+		fail _ => false
+	}
+
+#[partial]
+def term_is_three_deep_lam (t : Term) : Bool :=
+	match t {
+		Term.lam _dbg1 _typ1 body1 =>
+			match body1 {
+				Term.lam _dbg2 _typ2 body2 =>
+					match body2 {
+						Term.lam _dbg3 _typ3 _body3 => true,
+						_ => false
+					},
+				_ => false
+			},
+		_ => false
+	}
+
 #[test]
 def test_t_app_simple : Bool :=
 	// f x  →  app (var SENTINEL f) (var SENTINEL x)
@@ -3892,6 +4379,18 @@ def test_t_parens : Bool :=
 	// (x)  →  var (SENTINEL, x)
 	let empty_ctx : List Identifier := List.empty in
 	match expression empty_ctx "(x)" {
+		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+/// Regression test for `paren_try_ann`: a type ascription inside parens
+/// (`(x : List I64)`) — previously unparseable, blocking real corpus
+/// usage like `lang/json.mo`'s `(List.empty : List String)` (needed to
+/// disambiguate an otherwise type-unconstrained polymorphic value).
+#[test]
+def test_t_paren_type_ascription : Bool :=
+	let empty_ctx : List Identifier := List.empty in
+	match expression empty_ctx "(x : List I64)" {
 		success rem out => String.beq rem "",
 		fail _ => false
 	}
@@ -3935,6 +4434,76 @@ def test_match_multi : Bool :=
                 _ => false
             },
         fail _ => false
+    }
+
+/// Regression test for `match_case_arg_names`: a constructor pattern
+/// binding 2+ names (`List.cons x rest => ...`, the single most common
+/// match-arm shape in this entire codebase) used to only ever parse the
+/// FIRST bound name — `many0 identifier (skip_spaces rem)` skipped
+/// whitespace once before the first attempt, not between each one
+/// `many0` itself tries, so anything past the first name (`rest`) was
+/// left dangling and broke the subsequent `=>` match. Confirmed this
+/// blocked `lang/types.mo`'s own canonical `list_rev_loop` from
+/// re-parsing via the self-hosted parser.
+#[test]
+def test_match_case_multi_arg_pattern : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match match_parser empty_ctx "match xs { List.cons x rest => 1, List.empty => 0 }" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+/// The parsed bound names must actually reach the resulting `MatchCase`
+/// (a previous version hardcoded an empty `args` list regardless of
+/// what `match_case_arg_names` parsed — used downstream by
+/// `lang/typecheck/infer.mo`'s `type_check_match_case` to bind them as
+/// locals).
+#[test]
+def test_match_case_arg_names_captured : Bool :=
+    match match_case_parser List.empty "List.cons x rest => 1" {
+        success rem out => String.beq rem "" && match_case_has_two_args out,
+        fail _ => false
+    }
+
+#[partial]
+def match_case_has_two_args (mc : MatchCase) : Bool :=
+    match mc {
+        MatchCase.mc _name args _body =>
+            match args {
+                List.cons a1 rest1 =>
+                    match rest1 {
+                        List.cons a2 rest2 =>
+                            Similar.similar a1 (Identifier.id "x")
+                                && Similar.similar a2 (Identifier.id "rest")
+                                && (match rest2 { List.empty => true, _ => false }),
+                        List.empty => false
+                    },
+                List.empty => false
+            }
+    }
+
+/// Regression test for `match_case_arrow`'s `ctx` extension: a match
+/// arm's body referencing one of its own bound names (`mk name _ _ =>
+/// name`, `examples/optics.mo`'s own `get_name`) must resolve as a
+/// properly-indexed BOUND variable (`Term.var <real index> ...`), not a
+/// free one (`Term.var sentinel ...`) — the parse would "succeed"
+/// either way (a free-variable reference is never a parse error), so
+/// this checks the actual resolved index, not just success.
+#[test]
+def test_match_case_body_resolves_bound_name : Bool :=
+    match match_case_parser List.empty "mk name other => name" {
+        success rem out => String.beq rem "" && match_case_body_var_is_bound out,
+        fail _ => false
+    }
+
+#[partial]
+def match_case_body_var_is_bound (mc : MatchCase) : Bool :=
+    match mc {
+        MatchCase.mc _name _args body =>
+            match body {
+                Term.var idx _dbg => Bool.not (I64.beq idx sentinel),
+                _ => false
+            }
     }
 
 #[test]
@@ -3984,6 +4553,110 @@ def test_if_bound_var : Bool :=
                     },
                 _ => false
             },
+        fail _ => false
+    }
+
+/// Regression test for `let_term_parser`: a general `let name : Type :=
+/// value in body` expression, usable anywhere a term is expected — not
+/// just inside `do { }` blocks. Verifies it desugars to an
+/// immediately-applied lambda (`(fn name : Type => body) value`, no new
+/// `Term` variant), mirroring the Rust reference's `lets()`
+/// (core/src/term.rs).
+#[test]
+def test_let_term_desugars_to_applied_lambda : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "let x : I64 := 1 in x" {
+        success rem out => String.beq rem "" && term_is_app_of_lam out,
+        fail _ => false
+    }
+
+#[partial]
+def term_is_app_of_lam (t : Term) : Bool :=
+    match t {
+        Term.app fn_ _arg =>
+            match fn_ {
+                Term.lam _dbg _typ _body => true,
+                _ => false
+            },
+        _ => false
+    }
+
+/// `let` with no type annotation, and usable as a def's entire body
+/// (not wrapped in a `do` block) — both previously unparseable.
+#[test]
+def test_let_term_no_annotation_as_def_body : Bool :=
+    match def_parser "def f (x : I64) : I64 :=\n  let y := x in\n  y" {
+        success rem out => String.beq rem "" && (match out {
+            def_d _ => true,
+            _ => false
+        }),
+        fail _ => false
+    }
+
+/// Chained lets (`let a := ... in let b := ... in body`) fall out from
+/// ordinary recursion — `let_term_body` parses a general `expression`,
+/// which can itself be another `let`.
+#[test]
+def test_let_term_chained : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "let a := 1 in let b := 2 in a" {
+        success rem out => String.beq rem "" && term_is_app_of_lam out,
+        fail _ => false
+    }
+
+/// `let` inside an `if`/`then`/`else` branch — the exact shape that
+/// blocked `lang/json.mo`'s own `Json.parse_string_char` from parsing.
+#[test]
+def test_let_term_inside_if_branch : Bool :=
+    match def_parser "def f (x : I64) : I64 :=\n  if true\n  then x\n  else\n    let y := x in\n    y" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+/// Regression test for `list_literal_parser`: `[e1, e2, e3]` as a
+/// general term — previously `[` was only ever recognized for class/
+/// instance `[Constraint]` clauses, so list literals (used constantly
+/// throughout the corpus, including this parser's own source) failed
+/// to parse as an expression outright.
+#[test]
+def test_list_literal_desugars_to_cons_chain : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "[1, 2, 3]" {
+        success rem out => String.beq rem "" && term_is_app_of_lam_or_var out,
+        fail _ => false
+    }
+
+#[partial]
+def term_is_app_of_lam_or_var (t : Term) : Bool :=
+    match t {
+        Term.app _fn_ _arg => true,
+        _ => false
+    }
+
+#[test]
+def test_list_literal_empty : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "[]" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+#[test]
+def test_list_literal_trailing_comma : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "[1, 2, 3,]" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+/// The exact shape that blocked `lang/json.mo`'s own `op_table`-style
+/// declarations from parsing: a function applied to a list-literal
+/// argument (`h [1, 2, 3]`) — juxtaposed application must recognize `[`
+/// as a valid atom start, not just a standalone expression.
+#[test]
+def test_list_literal_as_application_argument : Bool :=
+    match def_parser "def f (input : String) : I64 :=\n  h [1, 2, 3]" {
+        success rem out => String.beq rem "",
         fail _ => false
     }
 
@@ -4315,6 +4988,47 @@ def test_def_parser : Bool :=
                 _ => false
             },
         fail _ => false
+    }
+
+/// Regression test for `def_try_constraints`: a `[Constraint, ...]`
+/// clause between a def's name and its params — real usage:
+/// `std/map.mo`'s `def BTreeMap.beq [BEq K, BEq V] (a b : BTreeMap K V)
+/// : Bool := ...`, previously unparseable (`class`/`instance`/`type`
+/// all already supported their own `[...]` clause, `def` never did).
+/// Checks the constraints actually reach the parsed `Def`, not just
+/// that the clause parses without error (`class`'s own equivalent bug
+/// — see `class_apply_constraints`'s doc comment — hid behind
+/// success-only tests for a long time).
+#[test]
+def test_def_parser_with_constraints : Bool :=
+    match def_parser "def eq [BEq A] (a b : A) : Bool := true" {
+        success rem out =>
+            String.beq rem "" && (match out {
+                def_d d => def_has_one_beq_a_constraint d,
+                _ => false
+            }),
+        fail _ => false
+    }
+
+#[partial]
+def def_has_one_beq_a_constraint (d : Def) : Bool :=
+    match d {
+        Def.mk _name _typ _term constraints _attrs _vis =>
+            match constraints {
+                List.cons tc rest => constraint_is_beq_a tc && list_is_empty_tc rest,
+                List.empty => false
+            }
+    }
+
+#[partial]
+def constraint_is_beq_a (tc : TypeConstraint) : Bool :=
+    match tc {
+        TypeConstraint.mk cls vars =>
+            Similar.similar cls (ModulePath.mp (List.cons (Identifier.id "BEq") List.empty))
+                && (match vars {
+                    List.cons v _ => Similar.similar v (Identifier.id "A"),
+                    List.empty => false
+                })
     }
 
 /// The self-hosted parser couldn't previously re-parse its own source:

@@ -23,88 +23,134 @@ def span_fragment (span : LocatedSpan) : String :=
 		mk frag loc => frag
 	}
 
-/// Count the number of newline characters in a string. Steps by
-/// `utf8_char_width` rather than a hardcoded 1 byte — a 1-byte slice
-/// into the middle of a multi-byte UTF-8 character isn't a valid
-/// boundary on either end, so both the char slice AND the remaining-
-/// string drop silently return "" (see `utf8_char_width`'s own doc
-/// comment, lang/parser/combinators.mo), which previously made this
-/// function stop counting entirely as soon as it hit any multi-byte
-/// character rather than just miscounting that one character.
+// --- Divide-and-conquer line/column scanning ---
+//
+// The Rust reference interpreter (core_eval.rs) has no tail-call
+// optimization: a single recursive call chain longer than roughly
+// 1000-1500 frames overflows the stack, even inside the test runner's
+// dedicated 64MB thread (confirmed by direct measurement — a bare
+// self-recursive countdown from 1500 crashes, from 1000 doesn't; this
+// is a pre-existing, systemic limitation of the interpreter itself, not
+// specific to any one function — `lang.parser.combinators.take_while`,
+// used throughout the whole grammar, crashes the exact same way if
+// asked to scan an entire large file in one call, though nothing in
+// normal parsing ever does that since every real token/construct is far
+// shorter than 1000 characters).
+//
+// `lang/json.mo` alone is ~37,000 characters, so a naive
+// one-character-at-a-time linear scan over its full consumed prefix (as
+// `location_of_remaining` needs to do to recover a line:column) crashes
+// well before reaching the end. `LineColScan` fixes this by scanning
+// via divide-and-conquer: split a chunk in half, scan each half
+// independently (recursing further only on chunks still over a safe
+// small threshold), then *combine* the two results — an associative,
+// monoid-shaped operation, so the combining itself doesn't care how the
+// splits were arranged. This keeps the recursion *depth* at O(log n)
+// (~16 for a file this size) while the *total* work stays O(n) — depth
+// is what the interpreter's stack can't afford, not total work.
+struct LineColScan {
+	newlines : I64,
+	chars : I64,
+	/// Characters since the last newline *within this chunk alone* — if
+	/// this chunk has no newline of its own, the whole chunk is
+	/// "trailing" (equal to `chars`).
+	trailing : I64,
+}
+
+/// Combine two adjacent chunks' scans, left-to-right.
 #[partial]
-def count_newlines (s : String) (acc : I64) : I64 :=
+def combine_line_col_scan (left : LineColScan) (right : LineColScan) : LineColScan :=
+	match left {
+		mk l_nl l_chars l_trail =>
+			match right {
+				mk r_nl r_chars r_trail =>
+					let trailing : I64 := if I64.gt r_nl 0 then r_trail else I64.add l_trail r_trail in
+					{ newlines := I64.add l_nl r_nl, chars := I64.add l_chars r_chars, trailing := trailing }
+			}
+	}
+
+/// Base case: scan a small chunk directly, one character at a time.
+/// Only ever called on chunks already below `dc_threshold` (see
+/// `line_col_scan`), so this stays well within the interpreter's real
+/// recursion-depth ceiling.
+#[partial]
+def line_col_scan_direct (s : String) (nl : I64) (chars : I64) (trailing : I64) : LineColScan :=
 	if String.is_empty s
-	then acc
-	else
-		let width : I64 := utf8_char_width s in
-		count_newlines_tail (String.slice s 0 width) (String.drop width s) acc
-
-/// Helper for count_newlines
-#[partial]
-def count_newlines_tail (c : String) (s : String) (acc : I64) : I64 :=
-	if String.beq "\n" c
-	then count_newlines s (I64.add acc 1)
-	else count_newlines s acc
-
-/// Count the characters (codepoints, not bytes) in a string, stepping by
-/// `utf8_char_width` like every other scanner in this module.
-#[partial]
-def char_count (s : String) (acc : I64) : I64 :=
-	if String.is_empty s
-	then acc
-	else
-		let width : I64 := utf8_char_width s in
-		char_count (String.drop width s) (I64.add acc 1)
-
-/// The substring of `s` after its last newline (the whole string if it
-/// has none) — used to compute the column after a multi-line consumed
-/// span: characters *before* the last newline don't affect the column,
-/// only how many come after it.
-#[partial]
-def text_after_last_newline (s : String) : String :=
-	text_after_last_newline_go s s
-
-/// `remaining_from_last_nl` trails `s` by one position each iteration
-/// while we scan `s` forward; whenever `s`'s head is a newline, we reset
-/// `remaining_from_last_nl` back to `s`'s current (post-newline) tail —
-/// so by the time `s` is exhausted, `remaining_from_last_nl` holds
-/// everything after the *last* newline seen (or the original string
-/// untouched if there was none).
-#[partial]
-def text_after_last_newline_go (s : String) (remaining_from_last_nl : String) : String :=
-	if String.is_empty s
-	then remaining_from_last_nl
+	then { newlines := nl, chars := chars, trailing := trailing }
 	else
 		let width : I64 := utf8_char_width s in
 		let ch : String := String.slice s 0 width in
 		let rest : String := String.drop width s in
 		if String.beq "\n" ch
-		then text_after_last_newline_go rest rest
-		else text_after_last_newline_go rest remaining_from_last_nl
+		then line_col_scan_direct rest (I64.add nl 1) (I64.add chars 1) 0
+		else line_col_scan_direct rest nl (I64.add chars 1) (I64.add trailing 1)
 
-/// Advance a location past the given consumed string. `consumed`'s own
-/// byte length determines the new `offset` (matching `String.slice`/
-/// `String.drop`'s byte semantics); `line`/`column` are derived from
-/// `consumed`'s actual newlines and characters, not a caller-supplied
-/// count — a previous version took a redundant `n` parameter and, worse,
-/// unconditionally reset `column` to 1 whenever `consumed` contained
-/// *any* newline, silently ignoring every character after the *last*
-/// one (e.g. consuming `"a\nbc"` produced column 1, not the correct 3) —
-/// untested before now since `consume_span`'s own existing tests always
-/// happened to consume exactly up through a trailing newline, never past
-/// one.
+/// Byte length above which `line_col_scan` splits rather than scanning
+/// directly — comfortably under the interpreter's ~1000-1500 frame
+/// ceiling (a UTF-8 chunk of this many *bytes* has at most this many
+/// characters, usually fewer), with margin for whatever's already on
+/// the stack from the caller (`decls_parser_strict`'s own parse attempt,
+/// `render_parse_error`'s own call chain).
+def dc_threshold : I64 := 400
+
+/// Scan `s` for newline/character/trailing-column bookkeeping via
+/// divide-and-conquer. See this module's own doc comment above
+/// (`LineColScan`) for why this can't just be a single linear scan.
+#[partial]
+def line_col_scan (s : String) : LineColScan :=
+	if I64.lt (String.length s) dc_threshold
+	then line_col_scan_direct s 0 0 0
+	else
+		let raw_mid : I64 := I64.div (String.length s) 2 in
+		let mid : I64 := safe_split_offset s raw_mid in
+		let left : String := String.slice s 0 mid in
+		let right : String := String.drop mid s in
+		combine_line_col_scan (line_col_scan left) (line_col_scan right)
+
+/// A byte in the 0x80-0xBF (128-191) range is a UTF-8 *continuation*
+/// byte — never a valid place to split a string, since it's the middle
+/// of a multi-byte character (see `utf8_char_width`'s own doc comment,
+/// lang/parser/combinators.mo, for the encoding rule this checks
+/// against).
+#[partial]
+def is_utf8_continuation_byte (byte : U8) : Bool :=
+	U8.gt byte 127u8 && U8.lt byte 192u8
+
+/// Nudge `approx` forward (at most 3 times — the longest a UTF-8
+/// sequence can be past its lead byte) until it lands on a real
+/// character boundary, so `line_col_scan`'s divide-and-conquer split
+/// never cuts a multi-byte character in half.
+#[partial]
+def safe_split_offset (s : String) (approx : I64) : I64 :=
+	match String.get s approx {
+		Option.some byte =>
+			if is_utf8_continuation_byte byte
+			then safe_split_offset s (I64.add approx 1)
+			else approx,
+		// Past the end of `s` (or `approx` already lands exactly on the
+		// end) — `String.slice`/`String.drop` already clamp out-of-range
+		// offsets safely, nothing further to adjust.
+		Option.none => approx
+	}
+
+/// Advance a location past the given consumed string, using
+/// `line_col_scan`'s divide-and-conquer scan rather than a linear pass —
+/// safe for a consumed prefix of any size (see this module's own doc
+/// comment on `LineColScan`). `consumed`'s own byte length determines
+/// the new `offset` (matching `String.slice`/`String.drop`'s byte
+/// semantics).
 #[partial]
 def advance_location (loc : Location) (consumed : String) : Location :=
 	match loc {
 		mk off line col =>
 			let byte_len : I64 := String.length consumed in
 			let new_off : I64 := I64.add off byte_len in
-			let newlines : I64 := count_newlines consumed 0 in
-			if I64.beq newlines 0
-			then Location.mk new_off line (I64.add col (char_count consumed 0))
-			else
-				let tail : String := text_after_last_newline consumed in
-				Location.mk new_off (I64.add line newlines) (I64.add 1 (char_count tail 0))
+			match line_col_scan consumed {
+				mk newlines _chars trailing =>
+					if I64.beq newlines 0
+					then Location.mk new_off line (I64.add col trailing)
+					else Location.mk new_off (I64.add line newlines) (I64.add 1 trailing)
+			}
 	}
 
 /// Consume n bytes from a LocatedSpan, advancing the location
