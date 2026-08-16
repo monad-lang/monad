@@ -547,8 +547,31 @@ def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (b
                             Option.none => base_dir
                         };
                     let direct_deps : List ModulePath := extract_use_decls decls;
-                    let no_visiting : List ModulePath := List.empty;
-                    let extra_deps : List ModulePath <- extract_all_dependencies_go module_base_dir direct_deps no_visiting base_covered;
+                    // Seed `visiting` (not `visited`) with `base_covered`: this
+                    // function returns `visited` verbatim once `to_visit` is
+                    // exhausted (line ~362), so seeding `visited` with
+                    // `base_covered` (as this used to do) made every call
+                    // return the ENTIRE base back to the caller as "extra"
+                    // deps -- `load_dependency_scopes` below then reloaded
+                    // all of prelude+init from scratch, on every single file,
+                    // defeating the whole point of `PreludeInitBase` caching
+                    // (measured directly, self-hosted-compiler-perf.md Step
+                    // 4: this was the dominant cost of the "scope" phase,
+                    // ~75% of it on a representative file). `visiting` and
+                    // `visited` are both monotonically-growing "already seen"
+                    // sets in this non-backtracking walk (neither is ever
+                    // popped/shrunk — a dependency's own subtree is walked
+                    // via the SAME sequential recursive call that continues
+                    // on to its siblings, not a separate stack frame), so
+                    // seeding `visiting` instead has the identical
+                    // skip-if-already-covered effect during the walk (a
+                    // `base_covered` entry now hits the "circular, skip"
+                    // branch rather than the "already processed, skip"
+                    // branch — same outcome) while leaving the returned
+                    // `visited` to correctly start empty and accumulate only
+                    // genuinely new, not-yet-loaded dependencies.
+                    let no_visited : List ModulePath := List.empty;
+                    let extra_deps : List ModulePath <- extract_all_dependencies_go module_base_dir direct_deps base_covered no_visited;
                     let loaded_extra : List ScopeData <- load_dependency_scopes module_base_dir extra_deps List.empty;
                     let merged_extra : ScopeData := merge_scope_data_list loaded_extra;
                     let merged_with_base : ScopeData := merge_scope_data base_sd merged_extra;
@@ -703,16 +726,33 @@ def merge_def_refs_into (acc : ScopeData) (pairs : List (Pair ModulePath ScopeDe
             }
     }
 
-/// Merge two ScopeData structures
+/// Merge two ScopeData structures. `sd1`'s entries win on conflict
+/// (folded into `sd2` last — see `merge_def_refs_into`'s doc comment).
+///
+/// Short-circuits when `sd2`'s `def_refs` is empty: the general path
+/// below pays `HashMap.to_list dr1` (an O(|dr1|) walk) followed by
+/// |dr1| individual `Map.insert` calls into `sd2` — each one rebuilding
+/// `Buckets16`'s full 16-field record (see `std/map.mo`'s
+/// `HashMap.set_bucket`) — even when `sd2` starts with nothing to
+/// resolve against, in which case the answer is trivially `dr1` itself,
+/// no walk or reinsertion needed. Real, if secondary, win: the dominant
+/// fix for this call site's actual cost was `load_module_with_
+/// dependencies_and_prelude_cached`'s own `extract_all_dependencies_go`
+/// seeding bug (see that call site's comment) — once `merged_extra`
+/// stopped being a full reload of `base_sd`, this short-circuit is what
+/// makes `merge_scope_data base_sd merged_extra` actually cheap for the
+/// common case of a file with no extra (non-prelude/init) dependencies,
+/// rather than still walking+reinserting `base_sd`'s several hundred
+/// entries into a now-genuinely-empty `merged_extra`.
 #[partial]
 def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
     match sd1 {
         ScopeData.mk dr1 cd1 ins1 ind1 cls1 inf1 conf1 =>
             match sd2 {
                 ScopeData.mk dr2 cd2 ins2 ind2 cls2 inf2 conf2 =>
-                    match merge_def_refs_into sd2 (HashMap.to_list dr1) {
-                        ScopeData.mk merged_dr _ _ _ _ _ _ => {
-                            def_refs := merged_dr,
+                    if HashMap.is_empty dr2 then
+                        {
+                            def_refs := dr1,
                             class_defs := list_append cd1 cd2,
                             instances := merge_instances ins1 ins2,
                             inductives := list_append ind1 ind2,
@@ -720,7 +760,18 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
                             infixes := list_append inf1 inf2,
                             conflicts := list_append conf1 conf2,
                         }
-                    }
+                    else
+                        match merge_def_refs_into sd2 (HashMap.to_list dr1) {
+                            ScopeData.mk merged_dr _ _ _ _ _ _ => {
+                                def_refs := merged_dr,
+                                class_defs := list_append cd1 cd2,
+                                instances := merge_instances ins1 ins2,
+                                inductives := list_append ind1 ind2,
+                                classes := list_append cls1 cls2,
+                                infixes := list_append inf1 inf2,
+                                conflicts := list_append conf1 conf2,
+                            }
+                        }
             }
     }
 

@@ -429,6 +429,31 @@ def HashMap.to_list {K V : Type} (m: HashMap K V) : List (Pair K V) :=
       }
   }
 
+/// Cheap (O(16) — 16 fixed bucket checks, never walks entries) emptiness
+/// test, split into two ≤8-wide `&&` chains per AGENTS.md's `||`/`&&`
+/// chain-length rule (same reasoning as `get_bucket`'s lo/hi split).
+/// Exists specifically so `lang/module.mo`'s `merge_scope_data` can
+/// short-circuit its `HashMap.to_list`-then-reinsert merge when the
+/// target side has nothing to add — see self-hosted-compiler-perf.md
+/// Step 4.
+def HashMap.buckets_all_empty_lo {K V : Type} (b0 b1 b2 b3 b4 b5 b6 b7 : List (Pair K V)) : Bool :=
+  List.is_empty b0 && List.is_empty b1 && List.is_empty b2 && List.is_empty b3
+  && List.is_empty b4 && List.is_empty b5 && List.is_empty b6 && List.is_empty b7
+
+def HashMap.buckets_all_empty_hi {K V : Type} (b8 b9 b10 b11 b12 b13 b14 b15 : List (Pair K V)) : Bool :=
+  List.is_empty b8 && List.is_empty b9 && List.is_empty b10 && List.is_empty b11
+  && List.is_empty b12 && List.is_empty b13 && List.is_empty b14 && List.is_empty b15
+
+def HashMap.is_empty {K V : Type} (m: HashMap K V) : Bool :=
+  match m {
+    HashMap.map buckets =>
+      match buckets {
+        Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+          HashMap.buckets_all_empty_lo b0 b1 b2 b3 b4 b5 b6 b7
+          && HashMap.buckets_all_empty_hi b8 b9 b10 b11 b12 b13 b14 b15
+      }
+  }
+
 /// NOTE: a generic `HashMap.insert_all [Hashable K, BOrd K] (pairs: List
 /// (Pair K V)) (acc: HashMap K V) : HashMap K V` (fold-inserting `pairs`
 /// into `acc`, the natural building block for a `HashMap.merge`) was
