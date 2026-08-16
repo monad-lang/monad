@@ -1,12 +1,15 @@
 use super::*;
-// These tests exercise module-loading/scoping mechanics specifically
-// against the OLD checker (unaffected by the new-checker-is-default
-// cutover — see `Cargo.toml`'s `legacy-checker` feature) — imported here
-// unconditionally rather than relying on `module.rs`'s own `use`, which is
-// now gated behind that feature since production call sites no longer
-// need it by default.
+// These tests exercise module-loading/scoping mechanics — most of them
+// (everything above the "Visibility (`pub`/`priv`) enforcement" section
+// below) only need SOME valid checked `Vec<Decl>` to feed into
+// `GlobalScopeData::from_module`/`compute_organize_import_edits`/etc.,
+// not anything specific to which checker produced it, so they were a
+// clean import-rename once the OLD checker (`eval::r#type::
+// type_check_module_decls`) was removed — this alias keeps every call
+// site below unchanged. `type_check_module_decls_new` is the new default
+// checker's own direct module-level entry point (`core_check_module.rs`).
+use crate::core_check_module::type_check_module_decls_new as type_check_module_decls;
 use crate::diag::Severity;
-use crate::eval::r#type::type_check_module_decls;
 use crate::parser::parse_file;
 use crate::term::organize_imports::{apply_text_edits, compute_organize_import_edits};
 

@@ -21,16 +21,13 @@ default = []
 embed-stdlib = []
 # Marker feature gating `core_eval_bench` only -- the `CoreTerm`-closure
 # evaluator (`core_check_module`, `lower_core_ir`, `core_value`,
-# `core_eval`, `core_native`) is NOT itself feature-gated; it compiles
-# and is tested unconditionally. This feature exists purely so `cargo
-# bench` doesn't run the (expensive) new-evaluator benchmark by default.
+# `core_eval`, `core_native`) is the crate's only evaluator/checker (the
+# old tree-walker and its name-keyed-unifier checker have been removed —
+# see `plans/implementations/core-term-closure-evaluator.md`) and is NOT
+# itself feature-gated; it compiles and is tested unconditionally. This
+# feature exists purely so `cargo bench` doesn't run the (expensive)
+# core-eval benchmark by default.
 core-eval = []
-# Route module-level type checking through the OLD (name-keyed unifier)
-# checker instead of the new De-Bruijn/MetaId-based one, which is the
-# default. Exists purely to keep the old checker reachable as a working
-# baseline/reference during the cutover — see
-# plans/implementations/typechecker-de-bruijn-core.md.
-legacy-checker = []
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 repl = ["dep:rustyline"]
 cli = ["dep:clap"]
@@ -38,10 +35,6 @@ cli = ["dep:clap"]
 [dev-dependencies]
 pretty_assertions = "1.4.1"
 criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "eval_bench"
-harness = false
 
 [[bench]]
 name = "core_eval_bench"

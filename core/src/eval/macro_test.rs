@@ -11,43 +11,21 @@
 //
 // See plans/hygienic-macros.md for the implementation plan.
 
-use super::*;
+use crate::core_check_module::type_check_module_decls_new;
 use crate::eval::macro_expand::expand_macros;
-use crate::eval::native::native_execute;
-use crate::eval::r#type::{elaborate_decls, type_check, type_check_decls, type_check_module_decls};
+use crate::eval::r#type::elaborate_decls;
 use crate::parser::parse_file;
 use crate::parser::{ReplInput, repl_parser};
-use crate::term::module::{GlobalScope, Scope};
 use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
-use crate::term::{Decl, Hole, Literal, ModulePath, NameRef, Native, Term, app, id, mpt, num, var};
+use crate::term::{
+  Decl, Hole, ModulePath, NameRef, SourceContext, Term, app, def, mpt, num, var,
+};
 
 fn parse_term(input: &str) -> Term {
   let ReplInput::Term(e) = repl_parser(input).unwrap() else {
     panic!("expected term")
   };
   e
-}
-
-fn empty_scope() -> Scope<'static> {
-  let loaded: &'static mut LoadedModules = Box::leak(Box::new(default_modules().unwrap()));
-  let mo = module(
-    ModulePath::top("_"),
-    ParsedModule {
-      decls: vec![],
-      module_doc: None,
-    },
-  );
-  loaded.add_module(mo);
-  let path: &'static ModulePath = Box::leak(Box::new(ModulePath::top("_")));
-  let global: &'static GlobalScope<'static> = Box::leak(Box::new(loaded.global(path).unwrap()));
-  Scope::new(global)
-}
-
-fn prelude_scope() -> Scope<'static> {
-  let loaded: &'static mut LoadedModules = Box::leak(Box::new(default_modules().unwrap()));
-  let path: &'static ModulePath = Box::leak(Box::new(loaded.builtins().prelude_path.clone()));
-  let global: &'static GlobalScope<'static> = Box::leak(Box::new(loaded.global(path).unwrap()));
-  Scope::new(global)
 }
 
 // ===== Section 1: Quote parsing & display =====
@@ -92,85 +70,27 @@ fn test_quote_keyword_reserved() {
   assert!(r.is_err(), "quote must be a reserved keyword");
 }
 
-// ===== Section 2: Quote evaluation (Term values) =====
+// Section 2 (Quote's RUNTIME value semantics — evaluating a `Quote` to a
+// `Term::Lit(Literal::Term(..))`, i.e. a term-as-value, via the legacy
+// tree-walker's own `eval()`) was removed along with that evaluator, for
+// the same reason as Section 3 above: this quoting-at-runtime feature's
+// only real consumer was the `eval_term` native (zero `.mo`-corpus
+// usage), already gone, and the CoreTerm pipeline's closure/`Value`-
+// based IR has no obvious "term as a first-class runtime value"
+// representation to port these three tests (`test_quote_eval_produces_
+// term_value`, `test_quote_body_not_evaluated`,
+// `test_quote_content_unbound_var_ok`) against — real design work, not
+// a mechanical port. Quote's role in macro EXPANSION (compile-time,
+// pre-lowering) is unaffected and still fully covered by sections 1 and
+// 4-9 below via `expand_macros`.
 
-#[test]
-fn test_quote_eval_produces_term_value() {
-  let scope = empty_scope();
-  let q = Term::Quote {
-    term: Box::new(num(42)),
-  };
-  let r = eval(q, &scope, &EvalOptions::default()).unwrap();
-  match r {
-    Term::Lit {
-      value: Literal::Term(inner),
-    } => assert_eq!(*inner, num(42)),
-    other => panic!("expected Lit::Term, got: {other}"),
-  }
-}
-
-#[test]
-fn test_quote_body_not_evaluated() {
-  let scope = empty_scope();
-  // div by zero would crash if quote evaluated its body
-  let q = Term::Quote {
-    term: Box::new(app(app(var("div"), num(1)), num(0))),
-  };
-  let r = eval(q, &scope, &EvalOptions::default());
-  assert!(r.is_ok(), "quote body must not be evaluated");
-}
-
-#[test]
-fn test_quote_content_unbound_var_ok() {
-  let scope = empty_scope();
-  let q = Term::Quote {
-    term: Box::new(var("x")),
-  };
-  let r = eval(q, &scope, &EvalOptions::default());
-  assert!(r.is_ok(), "unbound var inside quote must be accepted");
-}
-
-// ===== Section 3: eval_term — requires scope-aware native function =====
-
-#[test]
-fn test_eval_term_arithmetic() {
-  let scope = prelude_scope();
-  // Parse: quote { I64.add 1 2 }
-  let inner = parse_term("I64.add 1 2");
-  let quoted = Term::Lit {
-    value: Literal::Term(Box::new(inner)),
-  };
-  // eval_term is a scope-aware native function
-  let result = native_execute(
-    Native {
-      native_name: id("eval_term"),
-      num_args: 1,
-      args: vec![Some(quoted)],
-    },
-    &scope,
-  )
-  .unwrap();
-  assert_eq!(result, num(3), "eval_term should evaluate I64.add 1 2 to 3");
-}
-
-#[test]
-fn test_eval_term_with_macro() {
-  let r = expand_and_type_check(
-    r#"
-    use init
-
-    #[native "eval_term"]
-    def eval_term (t : A) : A
-
-    defmacro twice x := quote { unquote x + unquote x }
-    def main : I64 := eval_term (quote { 1 + twice! 2 })
-    "#,
-  );
-  if let Err(e) = &r {
-    eprintln!("eval_term with macro error: {e}");
-  }
-  assert!(r.is_ok(), "eval_term with macro should type check");
-}
+// Section 3 (eval_term — a scope-aware native that quote-evaluates a
+// term at runtime) was removed along with the legacy tree-walking
+// evaluator: `eval_term` had zero real `.mo`-corpus usage (nothing
+// anywhere declares `#[native "eval_term"]`), no CoreTerm-evaluator
+// equivalent, and its only two callers were the two tests that used to
+// live here (`test_eval_term_arithmetic`, `test_eval_term_with_macro`).
+// See plans/implementations/core-term-closure-evaluator.md.
 
 // ===== Section 4: unquote context recognition (expansion time) =====
 
@@ -203,9 +123,15 @@ fn test_unquote_inside_quote_recognized() {
 
 #[test]
 fn test_unquote_outside_quote_fails() {
-  let scope = prelude_scope();
+  // No standalone "check a bare Term" entry point survives the legacy
+  // checker's removal — `type_check_module_decls_new` (like
+  // `core/src/lib.rs`'s `eval_repl_term`) wraps the term of interest in
+  // a synthetic `main` def and checks that instead.
+  let loaded = default_modules().unwrap();
+  let path = ModulePath::top("test_unquote");
   let t = app(var("unquote"), num(42));
-  let r = type_check(t, Hole, &scope);
+  let decl = SourceContext::no_ctx(Decl::Def(def(mpt("main"), vec![], Hole, t, vec![])));
+  let r = type_check_module_decls_new(&path, vec![decl], &loaded);
   assert!(
     r.is_err(),
     "unquote outside quote must produce a type error"
@@ -285,18 +211,8 @@ fn expand_and_type_check(input: &str) -> Result<(), String> {
   let parsed = parse_file(input.into()).map_err(|e| format!("{e}"))?;
   let decls = elaborate_decls(parsed.decls, &loaded);
   let decls = expand_macros(decls, &loaded).map_err(|e| format!("{e}"))?;
-  let global = loaded.scope_of_decls(&path, &decls);
-  let module_context = Arc::new(ModuleContext::new(path.clone(), None));
-  let (oks, errs) = type_check_decls(decls.clone(), &global.scope(), module_context);
-  if !errs.is_empty() {
-    return Err(
-      errs
-        .into_iter()
-        .map(|e| e.to_string())
-        .collect::<Vec<_>>()
-        .join("\n"),
-    );
-  }
+  let oks =
+    type_check_module_decls_new(&path, decls, &loaded).map_err(|e| format!("{e}"))?;
   loaded.add_module(module(
     path.clone(),
     ParsedModule {
@@ -314,21 +230,15 @@ fn expand_fails(input: &str) -> String {
     panic!("expand_fails parse error: {e}");
   });
   let decls = elaborate_decls(parsed.decls, &loaded);
-  let module_context = Arc::new(ModuleContext::new(path.clone(), None));
   match expand_macros(decls.clone(), &loaded) {
     Err(e) => e.to_string(),
-    Ok(_) => {
-      let global = loaded.scope_of_decls(&path, &decls);
-      let (_oks, errs) = type_check_decls(decls.clone(), &global.scope(), module_context);
-      if errs.is_empty() {
-        panic!("expected expansion or type error, but succeeded");
-      }
-      errs
-        .into_iter()
-        .map(|e| e.to_string())
-        .collect::<Vec<_>>()
-        .join("\n")
-    }
+    // Matches this function's own pre-existing behavior from before the
+    // legacy-checker port: re-checks the PRE-expansion `decls`, not
+    // `expand_macros`'s own `Ok` value — not something introduced here.
+    Ok(_) => match type_check_module_decls_new(&path, decls.clone(), &loaded) {
+      Err(e) => e.to_string(),
+      Ok(_) => panic!("expected expansion or type error, but succeeded"),
+    },
   }
 }
 
@@ -494,19 +404,9 @@ fn expand_and_type_check_with_loaded(input: &str, loaded: &LoadedModules) -> Res
   let decls = elaborate_decls(parsed.decls, loaded);
   let decls = expand_macros(decls, loaded).map_err(|e| format!("{e}"))?;
   let path = ModulePath::top("test_macro");
-  let global = loaded.scope_of_decls(&path, &decls);
-  let module_context = Arc::new(ModuleContext::new(path.clone(), None));
-  let (_oks, errs) = type_check_decls(decls.clone(), &global.scope(), module_context);
-  if !errs.is_empty() {
-    return Err(
-      errs
-        .into_iter()
-        .map(|e| e.to_string())
-        .collect::<Vec<_>>()
-        .join("\n"),
-    );
-  }
-  Ok(())
+  type_check_module_decls_new(&path, decls, loaded)
+    .map(|_| ())
+    .map_err(|e| format!("{e}"))
 }
 
 #[test]
@@ -523,7 +423,7 @@ fn test_cross_module_macro_simple() {
     "#,
   )
   .unwrap();
-  let helper_decls = type_check_module_decls(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let helper_decls = type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
   let mut loaded = loaded;
   loaded.add_module(module(
     helper_path.clone(),
@@ -564,7 +464,7 @@ fn test_cross_module_macro_calls_same_module_def() {
     "#,
   )
   .unwrap();
-  let helper_decls = type_check_module_decls(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let helper_decls = type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
   let mut loaded = loaded;
   loaded.add_module(module(
     helper_path.clone(),

@@ -221,14 +221,16 @@ impl ModuleCheckEnv {
 /// flat, ungated namespace (both bare and qualified names) — there is no
 /// per-consuming-module scoping here at all, so neither `use Module
 /// {name}` selective-import filtering nor `priv`/`pub` visibility
-/// (`visibility-declarations.md`) is enforced by the new/default checker.
-/// (The old checker's `GlobalScopeData::from_module`/`from_modules`, used
-/// when built with `--features legacy-checker` and always used by the LSP,
-/// DOES enforce both — see `DefRef.vis`/`Visibility::Priv` filtering
-/// there.) Closing this gap for the new checker means giving it real
-/// per-module scoped resolution here, which is a substantially larger,
-/// separate undertaking than adding `priv`/`pub` itself — tracked as
-/// follow-up work, not attempted in this pass.
+/// (`visibility-declarations.md`) is enforced by this checker. (Scope
+/// resolution proper — `GlobalScopeData::from_module`/`from_modules` in
+/// `term/module.rs`, always used by the LSP and by every checked module's
+/// own `Scope` — DOES enforce both, since it works directly off each
+/// decl's own `vis` field regardless of which checker validated it — see
+/// `DefRef.vis`/`Visibility::Priv` filtering there.) Closing this gap for
+/// THIS checker's own flat namespace means giving it real per-module
+/// scoped resolution here, which is a substantially larger, separate
+/// undertaking than adding `priv`/`pub` itself — tracked as follow-up
+/// work, not attempted in this pass.
 pub struct GroundTruth {
   pub ctx: TyCtx,
   pub infix: Map<Operator, ModulePath>,
@@ -2114,15 +2116,15 @@ fn check_one_instance_new(
   )))
 }
 
-/// The real, production module-level entry point for the NEW checker —
-/// B0c of `plans/implementations/typechecker-de-bruijn-core.md`'s cutover
-/// phase. Matches `eval::type::type_check_module_decls`'s signature
-/// exactly (a drop-in replacement, swapped in at its two call sites in
-/// `term/module.rs` behind the `legacy-checker` Cargo feature — see that
-/// file), reusing the OLD checker's `elaborate_decls`/
-/// `check_strict_positivity`/`check_termination_all` (none of which are
-/// implicated in the name-collision bug this whole redesign targets —
-/// they don't touch unification) rather than reimplementing them.
+/// The real, production module-level entry point for the checker — B0c of
+/// `plans/implementations/typechecker-de-bruijn-core.md`'s cutover phase,
+/// now the sole checker (the old name-keyed-unifier checker it replaced,
+/// `eval::type::type_check_module_decls`, has been removed — see
+/// `plans/implementations/core-term-closure-evaluator.md`). Reuses
+/// `elaborate_decls`/`check_strict_positivity`/`check_termination_all`
+/// from the old checker's module (none of which are implicated in the
+/// name-collision bug this whole redesign targets — they don't touch
+/// unification) rather than reimplementing them.
 ///
 /// Known, documented gap relative to full parity: `Decl::Ins` (instance)
 /// bodies are NOT checked by this path — passed through unchanged, same

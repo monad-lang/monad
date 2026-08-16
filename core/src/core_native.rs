@@ -90,6 +90,8 @@ pub fn exec_native(
     "read_file" => read_file(args, natives),
     "write_file" => write_file(args, natives),
     "file_exists" => file_exists(args, natives),
+    "is_dir" => is_dir(args, natives),
+    "list_dir" => list_dir(args, natives),
     "get_env" => get_env(args, natives),
     "exec_cmd" => exec_cmd(args, natives),
     "fork_io" => fork_io(args, natives),
@@ -452,6 +454,53 @@ fn file_exists(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalE
   let path = extract_string(&args[0])?;
   let exists = make_bool(natives, std::fs::metadata(path).is_ok())?;
   io_wrap(natives, exists)
+}
+
+/// `IO.is_dir (path : String) : IO Bool` — see `file_exists`'s own doc
+/// comment; a nonexistent path is simply not-a-directory, not an error
+/// (matching `file_exists`'s own `.unwrap_or(false)`-shaped tolerance
+/// for a path that doesn't exist).
+fn is_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError("is_dir needs 1 arg".into()));
+  }
+  let path = extract_string(&args[0])?;
+  let is_dir = std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false);
+  let result = make_bool(natives, is_dir)?;
+  io_wrap(natives, result)
+}
+
+/// `IO.list_dir (path : String) : IO (List String)` — bare entry names
+/// (not full paths), sorted for deterministic output, one level only.
+/// Same `List.cons`/`List.empty` construction idiom as `string_to_list`
+/// just below, built right-to-left over a byte string's worth of
+/// entries instead of a `String`'s bytes.
+fn list_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "list_dir needs 1 arg".into(),
+    ));
+  }
+  let path = extract_string(&args[0])?;
+  let mut entries: Vec<String> = std::fs::read_dir(path)
+    .map_err(|e| CoreEvalError::NativeArgError(format!("list_dir {path} failed: {e}")))?
+    .filter_map(|entry| entry.ok())
+    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+    .collect();
+  entries.sort();
+  let cons = require_ctor(natives.well_known.list_cons, "List.cons")?;
+  let empty = require_ctor(natives.well_known.list_empty, "List.empty")?;
+  let mut result = Value::Con {
+    tag: empty.tag,
+    args: Vec::new(),
+  };
+  for entry in entries.into_iter().rev() {
+    result = Value::Con {
+      tag: cons.tag,
+      args: vec![Value::Lit(IrLit::Str(entry)), result],
+    };
+  }
+  io_wrap(natives, result)
 }
 
 /// `IO.get_env (s : String) : IO (Option String)` — see `read_file`'s

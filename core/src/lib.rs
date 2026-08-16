@@ -7,10 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::diag::render_diagnostics;
+use crate::eval::EvalOptions;
 use crate::eval::r#type::render_type_error_with_source;
-#[cfg(feature = "repl")]
-use crate::eval::r#type::type_check;
-use crate::eval::{EvalOptions, eval, eval_test};
 #[cfg(feature = "repl")]
 use crate::parser::{ReplInput, repl_parser};
 use crate::term::Decl;
@@ -35,7 +33,6 @@ pub mod core_check_module;
 pub mod core_eval;
 pub mod core_ir;
 pub mod core_native;
-pub mod core_parity;
 pub mod core_program;
 pub mod core_term;
 pub mod core_unify;
@@ -67,6 +64,73 @@ pub fn set_of<T: Eq + Hash>(vals: impl Iterator<Item = T>) -> Set<T> {
 
 pub type Map<K, V> = BTreeMap<K, V>;
 
+/// A `Value`, formatted for REPL display. `core_value::Value` has no
+/// `Display` of its own (see its own doc comment: it's deliberately kept
+/// separate from `CoreTerm`, and a *reduced* value's constructors/
+/// closures carry no name table to render with — see `raise_core`, which
+/// only knows how to raise a checker-time `CoreTerm`, not a runtime
+/// `Value`). A `Lit` still prints its real content (numbers/strings/etc,
+/// via `IrLit`'s own `Display`); anything else (a constructor, a still-
+/// partial closure/native) falls back to `Debug`, which is honest about
+/// showing raw tags/slots rather than pretending to a fidelity this
+/// function can't deliver without a whole name-resolving value-printer.
+fn format_repl_value(value: &core_value::Value) -> String {
+  match value {
+    core_value::Value::Lit(lit) => format!("{lit}"),
+    other => format!("{other:?}"),
+  }
+}
+
+/// Evaluate one REPL-entered term against everything accumulated in
+/// `repl_decls` so far, through the same `CoreTerm`-closure pipeline
+/// `run()` uses for a whole file — see `build_core_program`'s own doc
+/// comment. Wraps `term` in a synthetic, `Hole`-typed `def` (so the
+/// checker infers its type rather than requiring the user to annotate
+/// every REPL expression) appended to a throwaway copy of `repl_decls`,
+/// rather than mutating `repl_decls` itself — a bare expression is not a
+/// declaration and must not persist into later inputs the way an actual
+/// `def`/`type`/... entered at the prompt does.
+fn eval_repl_term(
+  loaded: &LoadedModules,
+  module_path: &ModulePath,
+  repl_decls: &[SourceContext<Decl>],
+  term: Term,
+  options: &EvalOptions,
+) -> Result<(), String> {
+  let tmp_name = mpt("__repl_result");
+  let tmp_decl = SourceContext::no_ctx(Decl::Def(crate::term::def(
+    tmp_name.clone(),
+    vec![],
+    Hole,
+    term,
+    vec![],
+  )));
+  let mut extra_decls = repl_decls.to_vec();
+  extra_decls.push(tmp_decl);
+
+  let full_path = module_path.clone().extend(tmp_name);
+  let program = build_core_program(loaded, &[(module_path.clone(), extra_decls)])
+    .map_err(|e| format!("Type error: {e}"))?;
+  let Some(checked) = program.defs.get(&full_path) else {
+    return Err("Type error: __repl_result not found after check".to_string());
+  };
+  if options.debug {
+    let typ = raise_core::raise_core(&checked.typ, &checked.atom_paths);
+    println!("Eval type {typ}");
+  }
+  let lowered = lower_core_ir::lower_program(&program).map_err(|e| format!("lower: {e:?}"))?;
+  let idx = lowered
+    .index_of(&full_path)
+    .ok_or_else(|| "__repl_result not found in lowered program".to_string())?;
+  let natives = core_value::NativeTable::from_lowered(&lowered);
+  let globals = core_value::GlobalTable::new(lowered.globals);
+  let mut cache = core_value::GlobalCache::new(globals.len());
+  let value =
+    core_eval::force_global(idx, &globals, &natives, &mut cache).map_err(|e| format!("{e}"))?;
+  println!("{}", format_repl_value(&value));
+  Ok(())
+}
+
 #[cfg(all(not(target_arch = "wasm32"), feature = "repl"))]
 pub fn repl(options: EvalOptions) -> Result<(), String> {
   let mut rl = DefaultEditor::new().map_err(|e| format!("{e}"))?;
@@ -86,8 +150,12 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
     },
   );
   loaded_modules.add_module(module);
-  let mut loaded_scopes = loaded_modules.scopes();
-  let mut global = loaded_scopes.global(&module_path).unwrap();
+  // Every non-`use` decl entered at the prompt so far — threaded into
+  // `eval_repl_term`'s own capturing check as `extra_modules` alongside
+  // the `init` package (see `build_core_program`), since a synthetic
+  // `'repl` module has no on-disk file `build_core_program` could
+  // otherwise re-read.
+  let mut repl_decls: Vec<SourceContext<Decl>> = vec![];
   loop {
     let readline = rl.readline(">> ");
     match readline {
@@ -104,31 +172,16 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
 
             match repl_input {
               ReplInput::Term(term) => {
-                let scope = global.scope();
-                let t = type_check(term, Hole, &scope);
-                match t {
-                  Ok(tt) => {
-                    let (term, typ) = tt.to_tuple();
-                    println!("Eval type {typ}");
-
-                    let term = eval(term, &scope, &options);
-                    match term {
-                      Ok(t) => println!("{t}"),
-                      Err(e) => eprintln!("error: {e}"),
-                    }
-                  }
-                  Err(e) => eprintln!("Type error: {e}"),
+                if let Err(e) =
+                  eval_repl_term(&loaded_modules, &module_path, &repl_decls, term, &options)
+                {
+                  eprintln!("{e}");
                 }
               }
               ReplInput::Decls(Decl::Use(u)) => {
-                if loaded_modules.get_module(&u.module_path).is_some() {
-                  // Module already loaded, just update scope
-                  loaded_scopes = loaded_modules.scopes();
-                  global = loaded_scopes.global(&module_path).unwrap();
-                } else {
+                if loaded_modules.get_module(&u.module_path).is_none() {
                   let loaded = loaded_modules.clone();
-                  let res = load_module_files(&u.module_path, loaded);
-                  match res {
+                  match load_module_files(&u.module_path, loaded) {
                     Ok(loaded) => {
                       if options.debug {
                         for module in loaded.modules() {
@@ -136,20 +189,18 @@ pub fn repl(options: EvalOptions) -> Result<(), String> {
                         }
                       }
                       loaded_modules = loaded;
-                      loaded_scopes = loaded_modules.scopes();
-                      global = loaded_scopes.global(&module_path).unwrap();
                     }
                     Err(e) => eprintln!("loading error {e}"),
                   }
                 }
+                repl_decls.push(SourceContext::no_ctx(Decl::Use(u)));
               }
               ReplInput::Decls(decl) => {
                 loaded_modules
                   .get_module_mut(&module_path)
                   .unwrap()
                   .add_decl(decl.clone());
-                loaded_scopes = loaded_modules.scopes();
-                global = loaded_scopes.global(&module_path).unwrap();
+                repl_decls.push(SourceContext::no_ctx(decl));
               }
             }
           }
@@ -711,23 +762,6 @@ fn format_duration(d: std::time::Duration) -> String {
     format!("{:.2}ms", d.as_secs_f64() * 1000.0)
   } else {
     format!("{:.2}s", d.as_secs_f64())
-  }
-}
-
-/// Tree-walker-specific test evaluation, kept solely for
-/// `core_parity.rs`'s Phase 8 harness — it deliberately runs BOTH the
-/// tree-walker and core-eval over the same corpus and diffs their
-/// results, so the tree-walker side still needs its own entry point
-/// even now that `run_tests` itself no longer uses it.
-fn run_test_eval(
-  term: Term,
-  scope: &crate::term::module::Scope,
-  options: &EvalOptions,
-  test_timeout: Option<std::time::Duration>,
-) -> Result<Term, String> {
-  match test_timeout {
-    Some(timeout) => eval_test(term, scope, options, timeout).map_err(|e| format!("{e}")),
-    None => eval(term, scope, options).map_err(|e| format!("{e}")),
   }
 }
 

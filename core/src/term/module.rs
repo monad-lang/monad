@@ -4,9 +4,6 @@ pub mod test;
 use super::*;
 use crate::Set;
 use crate::diag::{Diagnostic, Severity, Suggestion};
-use crate::eval::native::{NativeFun, load_native_funs};
-#[cfg(feature = "legacy-checker")]
-use crate::eval::r#type::type_check_module_decls;
 use crate::eval::r#type::{
   TypeError, UsageEnv, derive_instance_key, render_type_error_with_source,
 };
@@ -176,7 +173,6 @@ impl Default for LoadedModulesConfig {
 pub struct LoadedModules {
   modules: Map<ModulePath, Module>,
   builtins: Builtins,
-  native: Map<Identifier, NativeFun>,
   pub config: LoadedModulesConfig,
   search_paths: SearchPaths,
 }
@@ -198,11 +194,9 @@ impl LoadedModules {
   pub fn from(modules: Vec<Module>) -> Self {
     let modules = modules.into_iter().map(|m| (m.path().clone(), m)).collect();
     let builtins = Builtins::new();
-    let native = load_native_funs();
     LoadedModules {
       modules,
       builtins,
-      native,
       config: Default::default(),
       search_paths: SearchPaths::empty(),
     }
@@ -238,9 +232,7 @@ impl LoadedModules {
   }
 
   pub fn empty() -> LoadedModules {
-    let native = load_native_funs();
     LoadedModules {
-      native,
       modules: Map::new(),
       builtins: Builtins::new(),
       config: Default::default(),
@@ -1063,10 +1055,6 @@ impl<'a> GlobalScope<'a> {
 
   pub fn scope(&'a self) -> Scope<'a> {
     Scope::new(self)
-  }
-
-  pub fn get_native(&self, native_name: &Identifier) -> Option<&NativeFun> {
-    self.loaded.native.get(native_name)
   }
 
   pub fn builtins(&self) -> &Builtins {
@@ -1906,12 +1894,6 @@ fn load_module_files_impl(
   let decls = filter_cfg_test_decls(decls, loaded.config.test_mode);
   validate_open_filters(&decls)?;
   let tc_start = Instant::now();
-  // See the identical `#[cfg(...)]` swap (and its doc comment) in
-  // `load_module_from_text` above — same default-to-new-checker,
-  // `legacy-checker`-falls-back-to-old policy.
-  #[cfg(feature = "legacy-checker")]
-  let decls = type_check_module_decls(path, decls, &loaded)?;
-  #[cfg(not(feature = "legacy-checker"))]
   let decls = crate::core_check_module::type_check_module_decls_new(path, decls, &loaded)?;
   let tc_dur = tc_start.elapsed();
   if loaded.config.benchmark {
@@ -2003,14 +1985,10 @@ pub fn load_module_from_text(
     return Err(LoadingError::Generic(rendered));
   }
   let tc_start = Instant::now();
-  // Default: the new (De-Bruijn/MetaId-based) checker — see
-  // plans/implementations/typechecker-de-bruijn-core.md. `legacy-checker`
-  // keeps the old name-keyed-unifier checker reachable as a fallback/
-  // baseline; both return the identical `Result<_, TypeError>` shape, so
-  // the error-rendering below is shared unchanged.
-  #[cfg(feature = "legacy-checker")]
-  let init_decls_result = type_check_module_decls(&path, init_decls, loaded);
-  #[cfg(not(feature = "legacy-checker"))]
+  // The De-Bruijn/MetaId-based checker — see
+  // plans/implementations/typechecker-de-bruijn-core.md and
+  // plans/implementations/core-term-closure-evaluator.md (the old
+  // name-keyed-unifier checker this replaced has been removed entirely).
   let init_decls_result =
     crate::core_check_module::type_check_module_decls_new(&path, init_decls, loaded);
   let init_decls = init_decls_result.map_err(|e| {
@@ -2065,9 +2043,6 @@ pub fn load_module_from_text_typed(
   *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
   let init_decls = filter_cfg_test_decls(init_decls, loaded.config.test_mode);
   validate_open_filters(&init_decls)?;
-  #[cfg(feature = "legacy-checker")]
-  let init_decls_result = type_check_module_decls(&path, init_decls, loaded);
-  #[cfg(not(feature = "legacy-checker"))]
   let init_decls_result =
     crate::core_check_module::type_check_module_decls_new(&path, init_decls, loaded);
   let init_decls = init_decls_result.map_err(LoadingError::Type)?;
@@ -2305,9 +2280,7 @@ pub fn bare_open_warnings(
 /// `decl` can itself be another `ScopedOpen`) `Decl::ScopedOpen`, over the
 /// raw parsed decls — called once per file, before `unwrap_scoped_opens`
 /// flattens `ScopedOpen` away, from each of `load_module_from_text`/
-/// `load_module_from_text_typed`/the recursive dependency loader, so it
-/// fires identically regardless of which checker backend
-/// (`legacy-checker` or default) ends up running.
+/// `load_module_from_text_typed`/the recursive dependency loader.
 pub fn validate_open_filters(decls: &[SourceContext<Decl>]) -> Result<(), TypeError> {
   fn check_one(
     module_path: &ModulePath,
