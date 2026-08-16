@@ -2478,8 +2478,8 @@ def decls_try (r : ParseResult Decl) (orig : String) (acc : List Decl) : ParseRe
 		// broken multi-line construct (e.g. a class method whose own
 		// signature also happens to be valid as a standalone top-level
 		// def) as a spurious extra declaration — confirmed to regress
-		// `lang/tests/typecheck_init_tests.mo` /
-		// `lang/tests/typecheck_std_tests.mo` (12 tests). Reverted until
+		// `slow_tests/typecheck_init_tests.mo` /
+		// `slow_tests/typecheck_std_tests.mo` (12 tests). Reverted until
 		// resync can be scoped to not leak decls from inside a construct
 		// that failed as a whole (e.g. only resync at genuine top-level
 		// keyword boundaries AND validate recovered decls don't reference

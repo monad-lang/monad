@@ -843,7 +843,7 @@ def typecheck_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) : 
 /// lang/parser.mo always wraps, even around a hole) — unwrap those first,
 /// or every such def looks like it has a real body and gets sent through
 /// `type_check` needlessly (see the identical fix and its rationale in
-/// lang/tests/typecheck_init_tests.mo's own `is_hole`).
+/// slow_tests/typecheck_init_tests.mo's own `is_hole`).
 #[partial]
 def is_term_hole (t : Term) : Bool :=
     match t {

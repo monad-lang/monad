@@ -42,6 +42,22 @@ a different branch and cause confusion.
 │                     # pre-commit hook's `test init std lang examples`, since
 │                     # benchmarks are for occasional manual measurement, not
 │                     # every-commit correctness checking
+├── slow_tests/       # Real #[test]s, deliberately NOT swept by the pre-commit
+│                     # hook (same exclusion mechanism as bench/ -- outside its
+│                     # fixed `init std lang examples` directory list) because
+│                     # they're redundant with `lang/tests/typecheck_lang_
+│                     # tests.mo`'s `test_typecheck_lang_main`: checking
+│                     # lang/main.mo already type-checks its own decls against
+│                     # a scope built from its FULL transitive dependency
+│                     # closure (via `load_module_with_dependencies`), so
+│                     # separately re-running the same dependency-loading
+│                     # typecheck per individual init/std file adds ~2 minutes
+│                     # to every commit for no unique coverage. Still real,
+│                     # runnable tests (`cargo run -- test slow_tests`) -- just
+│                     # for manual/CI use, not the fast local commit path; a
+│                     # per-file failure here is more useful for pinpointing
+│                     # WHICH file broke than `test_typecheck_lang_main`'s own
+│                     # single pass/fail covering everything at once.
 └── plans/            # Symlink to external repo with design plans
 ```
 

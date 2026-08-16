@@ -3301,11 +3301,11 @@ mod test {
   }
 
   #[test]
-  fn test_real_file_lang_tests_typecheck_init_tests() {
+  fn test_real_file_slow_tests_typecheck_init_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/typecheck_init_tests.mo");
+    let source = include_str!("../../slow_tests/typecheck_init_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/typecheck_init_tests.mo", &report);
+    print_report("slow_tests/typecheck_init_tests.mo", &report);
   }
 
   #[test]
@@ -3317,11 +3317,11 @@ mod test {
   }
 
   #[test]
-  fn test_real_file_lang_tests_typecheck_std_tests() {
+  fn test_real_file_slow_tests_typecheck_std_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/typecheck_std_tests.mo");
+    let source = include_str!("../../slow_tests/typecheck_std_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/typecheck_std_tests.mo", &report);
+    print_report("slow_tests/typecheck_std_tests.mo", &report);
   }
 
   #[test]
