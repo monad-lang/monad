@@ -397,3 +397,70 @@ def HashMap.bucket_delete {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool)
           else List.cons pair (HashMap.bucket_delete lt gt key rest)
       }
   }
+
+/// Concatenate two `List (Pair K V)`s — a local helper rather than
+/// reaching for the prelude's own `List.append` (curried differently,
+/// per `lang/scope.mo`'s/`lang/module.mo`'s own local `list_append`
+/// helpers and their doc comments).
+#[terminating]
+def HashMap.concat_lists {K V : Type} (a : List (Pair K V)) (b : List (Pair K V)) : List (Pair K V) :=
+  match a {
+    List.empty => b,
+    List.cons x rest => List.cons x (HashMap.concat_lists rest b)
+  }
+
+#[terminating]
+def HashMap.concat_all {K V : Type} (lists : List (List (Pair K V))) : List (Pair K V) :=
+  match lists {
+    List.empty => List.empty,
+    List.cons hd rest => HashMap.concat_lists hd (HashMap.concat_all rest)
+  }
+
+/// Convert the map to a list of (key, value) pairs — unlike
+/// `BTreeMap.to_list`, in NO particular order (buckets are visited
+/// 0..15, each bucket's own chain in insertion order, which has no
+/// relationship to key order for a hash table).
+def HashMap.to_list {K V : Type} (m: HashMap K V) : List (Pair K V) :=
+  match m {
+    HashMap.map buckets =>
+      match buckets {
+        Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+          HashMap.concat_all [b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15]
+      }
+  }
+
+/// NOTE: a generic `HashMap.insert_all [Hashable K, BOrd K] (pairs: List
+/// (Pair K V)) (acc: HashMap K V) : HashMap K V` (fold-inserting `pairs`
+/// into `acc`, the natural building block for a `HashMap.merge`) was
+/// tried here and removed — it doesn't work. This is a *broader* form of
+/// the limitation `HashMap`'s own `instance` block already documents for
+/// `Map.insert` specifically: from a standalone `[Constraint]`-annotated
+/// function (as opposed to directly inside an `instance ... { }` body),
+/// EVERY class-method call misbehaves, not just generic `Map` dispatch —
+/// confirmed empirically by bisection:
+///   - Calling generic `Map.insert k v acc` from such a function raises
+///     `unresolved global: Map.insert` at runtime.
+///   - Calling `HashMap`'s own concrete bucket primitives instead
+///     (`Hashable.hash k`, `BOrd.lt`/`BOrd.gt` — the exact calls the
+///     `Map HashMap` instance's own `insert` body makes, and the
+///     workaround that fixed the above) still fails, but differently:
+///     a function no more complex than `match acc { HashMap.map _ =>
+///     true }` plus one `Hashable.hash k` call in the same body returns
+///     an under-applied `Closure` instead of its declared `Bool`, i.e.
+///     the call site ends up with fewer arguments than the compiled
+///     function expects — apparently from however constraint
+///     dictionaries get threaded through the class-method calls, not
+///     from `match` itself (a `[Constraint]`-annotated function that
+///     never calls a class method, e.g. `qux` in the bisection, matches
+///     `acc` against `HashMap.map _` with no issue).
+///   - The exact same code, monomorphic (no `[Constraint]` list, all
+///     types concrete — e.g. specialized to a single key type instead of
+///     generic `K`) works with no issue, calling ordinary `Map.insert`/
+///     `Map.lookup` exactly like `bench/scope_lookup.mo`'s
+///     `hashmap_build`/`hashmap_lookup_range` already do successfully.
+/// Net: this evaluator's class-method dispatch is reliable inside
+/// `instance` bodies and inside monomorphic call sites, not inside
+/// generic `[Constraint]`-annotated helper functions. Callers needing a
+/// `HashMap` fold/merge should write a monomorphic version specialized
+/// to their concrete key/value types (see `lang/scope.mo`'s
+/// `merge_def_refs`) rather than a generic one here.

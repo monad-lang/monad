@@ -1,4 +1,17 @@
 use std.show {Show}
+// `ScopeData.def_refs` below is a `std.map` `HashMap ModulePath ScopeDef`.
+// This import is required here (not just at `scope_data_empty`'s own
+// call sites in `lang/scope.mo`) — a real, isolated evaluator
+// limitation: a nullary class method like `Map.empty` (no argument
+// whose runtime constructor tag the interpreter could otherwise
+// dispatch on, unlike `Map.insert`/`Map.lookup`) fails at runtime with
+// `unresolved global: Map.empty` unless `std.map`'s `Map` instances are
+// also in scope in the module that DECLARES the struct field's type,
+// even when every call site already imports `std.map` itself. Empty
+// import: naming any of `std.map`'s `Map`-class-instance exports
+// explicitly hits a separate, pre-existing latent instance/dictionary-
+// resolution bug (`std/map_tests.mo`'s own documented workaround).
+use std.map {}
 
 type Identifier {
     id String
@@ -83,6 +96,22 @@ instance BOrd Identifier {
 instance BOrd ModulePath {
     def lt (a b : ModulePath) : Bool := BOrd.lt (show_module_path a) (show_module_path b)
     def gt (a b : ModulePath) : Bool := BOrd.gt (show_module_path a) (show_module_path b)
+}
+
+/// Same "collision-free as a string key" property `BOrd`'s own
+/// delegation above already relies on — hash the dotted-string join
+/// rather than writing a separate combining hash over the segment list.
+/// Needed for `lang/scope.mo`'s `ScopeData.def_refs` to use
+/// `std.map`'s `HashMap ModulePath ScopeDef` (see
+/// `bench/scope_lookup.mo` for why: at realistic sizes, `HashMap`
+/// clearly outperforms both `List`+linear-scan and `BTreeMap` for
+/// scope's lookup-heavy access pattern).
+instance Hashable Identifier {
+    def hash (a : Identifier) : U64 := String.hash (show_identifier a)
+}
+
+instance Hashable ModulePath {
+    def hash (mp : ModulePath) : U64 := String.hash (show_module_path mp)
 }
 
 type NameRef {
@@ -922,7 +951,7 @@ struct LocalVar {
 
 // All resolved entries for a single scope level.
 struct ScopeData {
-    def_refs : List ScopeDef,
+    def_refs : HashMap ModulePath ScopeDef,
     class_defs : List ScopeClassDef,
     instances : List ScopeInstance,
     inductives : List Inductive,

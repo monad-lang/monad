@@ -1,7 +1,10 @@
 use lang.core_eval {basic_native_table}
 use lang.core_ir {CoreIr, IrLit, MatchArm}
 use lang.core_value {GlobalDef, GlobalTable, NativeTable}
-use lang.scope {build_scope_from_decls, modpath_eq, scope_find_inductive, scope_globals, scope_resolve_name}
+use lang.scope {
+  build_scope_from_decls, modpath_eq, scope_data_empty, scope_find_inductive,
+  scope_globals, scope_resolve_name,
+}
 use lang.types {
   Con, Decl, Def, DebugName, Identifier, Inductive, InductConstructor, Literal,
   MatchCase, ModulePath, Native, Scope, ScopeData, ScopeDef, Term,
@@ -712,7 +715,4 @@ def irlit_is_num (l : IrLit) (expected : I64) : Bool :=
 def dummy_ctx : LowerCtx := LowerCtx.lower_ctx dummy_scope List.empty
 
 def dummy_scope : Scope :=
-  Scope.mk (ModulePath.mp List.empty) empty_scope_data Option.none
-
-def empty_scope_data : ScopeData :=
-  ScopeData.mk List.empty List.empty List.empty List.empty List.empty List.empty List.empty
+  Scope.mk (ModulePath.mp List.empty) scope_data_empty Option.none

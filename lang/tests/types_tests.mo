@@ -5,6 +5,7 @@ use lang.types {
   Similar, Term, hole, id, many, mk, mp, name_not_found, nid, nmp, nop, operator,
   type_,
 }
+use lang.scope {scope_data_add_def, scope_data_add_inductive, scope_data_empty}
 
 // --- Similar instances for scope types ---
 
@@ -207,15 +208,11 @@ def test_scope_data_construct : Bool :=
         sig := Term.hole,
         body := Term.hole,
     } in
-    let sd : ScopeData := {
-        def_refs := List.cons tdef_def List.empty,
-        class_defs := List.empty,
-        instances := List.empty,
-        inductives := List.cons dummy_type List.empty,
-        classes := List.empty,
-        infixes := List.empty,
-        conflicts := List.empty,
-    } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via scope_data_add_def/
+    // scope_data_add_inductive on top of scope_data_empty rather than a
+    // hand-written literal.
+    let sd : ScopeData := scope_data_add_inductive (scope_data_add_def scope_data_empty tdef_def) dummy_type in
     match sd {
         mk dr cd ins ind cls infs conf => true
     }
@@ -240,17 +237,13 @@ def test_scope_construct : Bool :=
         sig := Term.hole,
         body := Term.hole,
     } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via scope_data_add_def/
+    // scope_data_add_inductive on top of scope_data_empty rather than a
+    // hand-written literal.
     let scope : Scope := {
         module_id := expected_path,
-        scope := {
-            def_refs := List.cons dummy_def List.empty,
-            class_defs := List.empty,
-            instances := List.empty,
-            inductives := List.cons dummy_type List.empty,
-            classes := List.empty,
-            infixes := List.empty,
-            conflicts := List.empty,
-        },
+        scope := scope_data_add_inductive (scope_data_add_def scope_data_empty dummy_def) dummy_type,
         parent := Option.none,
     } in
     match scope {

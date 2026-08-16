@@ -7,7 +7,8 @@ use lang.types {
 }
 use lang.scope {
   build_scope_from_decls, build_scope_from_modules, list_append, modpath_eq,
-  resolve_def_in_scope_by_name, scope_data_empty, scope_find_inductive,
+  resolve_def_in_scope_by_name, scope_data_add_def, scope_data_add_inductive,
+  scope_data_add_instance, scope_data_empty, scope_find_inductive,
   scope_find_inductive_by_constructor, scope_find_local, scope_globals,
   scope_push_local, scope_resolve_instance, scope_resolve_name,
 }
@@ -86,15 +87,10 @@ def test_scope_find_inductive_found : Bool :=
     let cns : List InductConstructor := List.cons true_cn List.empty in
     let empty_attrs : List String := List.empty in
     let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
-    let sd : ScopeData := {
-        def_refs := List.empty,
-        class_defs := List.empty,
-        instances := List.empty,
-        inductives := List.cons ind List.empty,
-        classes := List.empty,
-        infixes := List.empty,
-        conflicts := List.empty,
-    } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via `scope_data_add_inductive` on
+    // top of `scope_data_empty` rather than a hand-written literal.
+    let sd : ScopeData := scope_data_add_inductive scope_data_empty ind in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -220,15 +216,10 @@ def test_scope_resolve_name_found : Bool :=
         sig := Term.hole,
         body := Term.hole,
     } in
-    let sd : ScopeData := {
-        def_refs := List.cons def_entry List.empty,
-        class_defs := List.empty,
-        instances := List.empty,
-        inductives := List.empty,
-        classes := List.empty,
-        infixes := List.empty,
-        conflicts := List.empty,
-    } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via `scope_data_add_def` on top of
+    // `scope_data_empty` rather than a hand-written literal.
+    let sd : ScopeData := scope_data_add_def scope_data_empty def_entry in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -376,19 +367,10 @@ def test_scope_resolve_instance_found : Bool :=
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_args : List Term := List.empty in
     let ins : Instance := Instance.mk inst_name cls_name empty_constraints empty_args Visibility.package_private List.empty in
-    let si : ScopeInstance := {
-        class_name := cls_name,
-        instances := List.cons ins List.empty,
-    } in
-    let sd : ScopeData := {
-        def_refs := List.empty,
-        class_defs := List.empty,
-        instances := List.cons si List.empty,
-        inductives := List.empty,
-        classes := List.empty,
-        infixes := List.empty,
-        conflicts := List.empty,
-    } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via `scope_data_add_instance` on
+    // top of `scope_data_empty` rather than a hand-written literal.
+    let sd : ScopeData := scope_data_add_instance scope_data_empty ins in
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
     let s : Scope := {
@@ -459,23 +441,10 @@ def test_scope_resolve_instance_matches_class : Bool :=
     let cls_name2 : ModulePath := ModulePath.mp (List.cons (Identifier.id "Monad") List.empty) in
     let inst_show : Instance := Instance.mk (Identifier.id "showBool") cls_name1 List.empty List.empty Visibility.package_private List.empty in
     let inst_monad : Instance := Instance.mk (Identifier.id "maybeMonad") cls_name2 List.empty List.empty Visibility.package_private List.empty in
-    let si1 : ScopeInstance := {
-        class_name := cls_name1,
-        instances := List.cons inst_show List.empty,
-    } in
-    let si2 : ScopeInstance := {
-        class_name := cls_name2,
-        instances := List.cons inst_monad List.empty,
-    } in
-    let sd : ScopeData := {
-        def_refs := List.empty,
-        class_defs := List.empty,
-        instances := List.cons si1 (List.cons si2 List.empty),
-        inductives := List.empty,
-        classes := List.empty,
-        infixes := List.empty,
-        conflicts := List.empty,
-    } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via `scope_data_add_instance` on
+    // top of `scope_data_empty` rather than a hand-written literal.
+    let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty inst_show) inst_monad in
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
     let s : Scope := {
@@ -579,19 +548,17 @@ def test_instance_key_matches_type_args : Bool :=
         List.empty
         (List.cons bool_typ List.empty)
         Visibility.package_private List.empty in
-    let si : ScopeInstance := {
-        class_name := cls_name,
-        instances := List.cons show_i64 (List.cons show_bool List.empty),
-    } in
-    let sd : ScopeData := {
-        def_refs := List.empty,
-        class_defs := List.empty,
-        instances := List.cons si List.empty,
-        inductives := List.empty,
-        classes := List.empty,
-        infixes := List.empty,
-        conflicts := List.empty,
-    } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via `scope_data_add_instance` on
+    // top of `scope_data_empty` rather than a hand-written literal.
+    // Insertion order reversed vs. the original hand-written list
+    // (`show_bool` first, `show_i64` last) — `scope_data_add_instance`
+    // prepends to its class's instance list, so this preserves the
+    // original `[show_i64, show_bool]` order: `show_i64`/`show_bool`
+    // here deliberately share the same `Term.type_ 1` arg (see above),
+    // so `first_matching_instance`'s scan needs this exact order to
+    // still return `show_i64` first, matching this test's intent.
+    let sd : ScopeData := scope_data_add_instance (scope_data_add_instance scope_data_empty show_bool) show_i64 in
     let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
@@ -623,19 +590,10 @@ def test_instance_key_matches_wrong_type_args : Bool :=
         List.empty
         (List.cons i64_typ List.empty)
         Visibility.package_private List.empty in
-    let si : ScopeInstance := {
-        class_name := cls_name,
-        instances := List.cons show_i64 List.empty,
-    } in
-    let sd : ScopeData := {
-        def_refs := List.empty,
-        class_defs := List.empty,
-        instances := List.cons si List.empty,
-        inductives := List.empty,
-        classes := List.empty,
-        infixes := List.empty,
-        conflicts := List.empty,
-    } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via `scope_data_add_instance` on
+    // top of `scope_data_empty` rather than a hand-written literal.
+    let sd : ScopeData := scope_data_add_instance scope_data_empty show_i64 in
     let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
@@ -664,15 +622,10 @@ def test_find_inductive_by_constructor_found : Bool :=
     let none_cn : InductConstructor := InductConstructor.mk none_mp List.empty (Term.type_ 1) in
     let cns : List InductConstructor := List.cons some_cn (List.cons none_cn List.empty) in
     let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) cns List.empty Visibility.package_private in
-    let sd : ScopeData := {
-        def_refs := List.empty,
-        class_defs := List.empty,
-        instances := List.empty,
-        inductives := List.cons ind List.empty,
-        classes := List.empty,
-        infixes := List.empty,
-        conflicts := List.empty,
-    } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via `scope_data_add_inductive` on
+    // top of `scope_data_empty` rather than a hand-written literal.
+    let sd : ScopeData := scope_data_add_inductive scope_data_empty ind in
     let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,
@@ -694,15 +647,10 @@ def test_find_inductive_by_constructor_not_found : Bool :=
     let some_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "some") List.empty) in
     let some_cn : InductConstructor := InductConstructor.mk some_mp List.empty (Term.type_ 1) in
     let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1) (List.cons some_cn List.empty) List.empty Visibility.package_private in
-    let sd : ScopeData := {
-        def_refs := List.empty,
-        class_defs := List.empty,
-        instances := List.empty,
-        inductives := List.cons ind List.empty,
-        classes := List.empty,
-        infixes := List.empty,
-        conflicts := List.empty,
-    } in
+    // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
+    // std.map {}` doc comment) — built via `scope_data_add_inductive` on
+    // top of `scope_data_empty` rather than a hand-written literal.
+    let sd : ScopeData := scope_data_add_inductive scope_data_empty ind in
     let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
     let s : Scope := {
         module_id := mod_path,

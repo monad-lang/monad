@@ -7,11 +7,19 @@ use lang.types {
   instance_not_found, mk, mp, name, name_not_found, nid, nmp, nop, open_d,
   scoped_open_d, struct_d, type_, use_d,
 }
+// `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
+// `bench/scope_lookup.mo`. Empty import: naming any of `std.map`'s
+// `Map`-class-instance exports explicitly hits a pre-existing latent
+// instance/dictionary-resolution bug (same workaround `bench/scope_lookup.mo`
+// and `std/map_tests.mo` already use) — everything remains available
+// regardless via the same always-on mechanism that lets any top-level
+// type/def resolve without being explicitly `use`d.
+use std.map {}
 
 // --- Helper: empty ScopeData ---
 
 def scope_data_empty : ScopeData := {
-    def_refs := List.empty,
+    def_refs := Map.empty,
     class_defs := List.empty,
     instances := List.empty,
     inductives := List.empty,
@@ -29,15 +37,18 @@ def modpath_eq (a : ModulePath) (b : ModulePath) : Bool :=
 
 def scope_data_add_def (sd : ScopeData) (d : ScopeDef) : ScopeData :=
     match sd {
-        mk dr cd ins ind cls infs conf => {
-            def_refs := List.cons d dr,
-            class_defs := cd,
-            instances := ins,
-            inductives := ind,
-            classes := cls,
-            infixes := infs,
-            conflicts := conf,
-        }
+        mk dr cd ins ind cls infs conf =>
+            match d {
+                mk dname _ _ _ => {
+                    def_refs := Map.insert dname d dr,
+                    class_defs := cd,
+                    instances := ins,
+                    inductives := ind,
+                    classes := cls,
+                    infixes := infs,
+                    conflicts := conf,
+                }
+            }
     }
 
 // --- Helper: add an Inductive to ScopeData ---
@@ -480,22 +491,19 @@ def resolve_def_in_scope_by_name (name : ModulePath) (s : Scope) : Result ScopeE
     }
 
 // --- ScopeData: find a ScopeDef by ModulePath in def_refs ---
+//
+// `def_refs` is a `HashMap ModulePath ScopeDef` (see `bench/scope_lookup.mo`
+// for why: at realistic scope sizes, `HashMap` clearly outperforms both
+// `List`+linear-scan and `BTreeMap` for this lookup-heavy access pattern) —
+// `Map.lookup`/`Map.insert` resolve correctly here because this function
+// (like the rest of `scope.mo`) is monomorphic over the concrete
+// `ModulePath`/`ScopeDef` types, not a generic `[Constraint]`-annotated
+// helper; see `std/map.mo`'s `HashMap.to_list` doc comment for the
+// evaluator limitation this sidesteps.
 
 def scope_data_find_def (sd : ScopeData) (name : ModulePath) : Option ScopeDef :=
     match sd {
-        mk dr _ _ _ _ _ _ => find_def_in_list dr name
-    }
-
-def find_def_in_list (defs : List ScopeDef) (name : ModulePath) : Option ScopeDef :=
-    match defs {
-        List.empty => Option.none,
-        List.cons d rest =>
-            match d {
-                mk dname _ _ _ =>
-                    if modpath_eq dname name
-                    then Option.some d
-                    else find_def_in_list rest name
-            }
+        mk dr _ _ _ _ _ _ => Map.lookup name dr
     }
 
 // --- ScopeData: find an Inductive by ModulePath ---
@@ -830,3 +838,15 @@ def list_append {A : Type} (xs : List A) (ys : List A) : List A :=
 
 // Exports
 // infix (++) := list_append
+
+// Regression test for the `unresolved global: Map.empty` evaluator
+// limitation documented on `lang/types.mo`'s `use std.map {}` — verifies
+// `scope_data_empty`'s `def_refs := Map.empty` actually resolves and
+// round-trips through `scope_data_find_def` at runtime.
+#[test]
+def test_scope_data_empty_lookup_misses : Bool :=
+    let sd := scope_data_empty in
+    match scope_data_find_def sd (ModulePath.mp List.empty) {
+        Option.some _ => false,
+        Option.none => true
+    }

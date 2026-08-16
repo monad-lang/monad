@@ -13,13 +13,17 @@ use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
 use lang.scope {
-  build_scope_from_decls, list_append, modpath_eq, scope_data_empty,
-  scope_find_inductive, scope_push_local, scope_resolve_name,
+  build_scope_from_decls, list_append, modpath_eq, scope_data_add_def,
+  scope_data_empty, scope_find_inductive, scope_push_local, scope_resolve_name,
 }
 use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 use std.list {Show, all, length}
 use std.show {Show}
+// `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
+// `lang/scope.mo`'s own `use std.map {}` doc comment for why the import
+// is empty).
+use std.map {}
 
 open IO {file_exists, is_dir, list_dir, println, read_file}
 open ParseResult {fail, success}
@@ -667,6 +671,37 @@ def load_dependency_scopes (base_dir : String) (deps : List ModulePath) (acc : L
         }
     }
 
+/// Fold `pairs` (a `HashMap.to_list` of one `ScopeData`'s `def_refs`)
+/// into `acc`'s `def_refs`, via `scope_data_add_def` — each entry
+/// present in both wins over whatever `acc` already had, matching
+/// `merge_scope_data`'s "`sd1` wins" precedence (`sd1`'s entries are
+/// the ones folded in, last).
+///
+/// Deliberately goes through `scope_data_add_def` (single `Map.insert`
+/// call embedded directly in a `ScopeData` struct literal, already
+/// proven to work) rather than returning a bare `HashMap ModulePath
+/// ScopeDef` from a standalone helper and assigning that to
+/// `merge_scope_data`'s own `def_refs :=` field directly — the latter
+/// hits a genuine, reproducible Rust-reference-checker bug: a
+/// user-defined function whose signature mentions a fully-applied
+/// generic type (`HashMap ModulePath ScopeDef`) returns a result that
+/// fails `type mismatch: HashMap vs. <unknown>` when placed into a
+/// struct-literal field of that same declared type, even though the
+/// exact same call succeeds as an ordinary `let`-bound value, and a
+/// direct `Map.insert ...` call (not wrapped in a user function)
+/// succeeds in that same field position. Isolated via bisection
+/// (`/home/anderscs/.claude/jobs/af024b08/tmp/module_merge_isolate*.mo`,
+/// not part of this repo) rather than assumed.
+#[terminating]
+def merge_def_refs_into (acc : ScopeData) (pairs : List (Pair ModulePath ScopeDef)) : ScopeData :=
+    match pairs {
+        List.empty => acc,
+        List.cons p rest =>
+            match p {
+                Pair.pair _ v => merge_def_refs_into (scope_data_add_def acc v) rest
+            }
+    }
+
 /// Merge two ScopeData structures
 #[partial]
 def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
@@ -674,14 +709,16 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         ScopeData.mk dr1 cd1 ins1 ind1 cls1 inf1 conf1 =>
             match sd2 {
                 ScopeData.mk dr2 cd2 ins2 ind2 cls2 inf2 conf2 =>
-                    {
-                        def_refs := list_append dr1 dr2,
-                        class_defs := list_append cd1 cd2,
-                        instances := merge_instances ins1 ins2,
-                        inductives := list_append ind1 ind2,
-                        classes := list_append cls1 cls2,
-                        infixes := list_append inf1 inf2,
-                        conflicts := list_append conf1 conf2,
+                    match merge_def_refs_into sd2 (HashMap.to_list dr1) {
+                        ScopeData.mk merged_dr _ _ _ _ _ _ => {
+                            def_refs := merged_dr,
+                            class_defs := list_append cd1 cd2,
+                            instances := merge_instances ins1 ins2,
+                            inductives := list_append ind1 ind2,
+                            classes := list_append cls1 cls2,
+                            infixes := list_append inf1 inf2,
+                            conflicts := list_append conf1 conf2,
+                        }
                     }
             }
     }
