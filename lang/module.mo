@@ -2,18 +2,19 @@
 /// Parses source text and builds scope data from declarations.
 
 use io {IO, file_exists, is_dir, list_dir, println, read_file}
+use lang.elaborate {free_vars}
 use lang.types {
   Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive,
-  LoadedModules, LocalScope, LocalVar, ModulePath, NameRef, Scope, ScopeData,
-  ScopeInstance, Struct, StructField, Term, def_d, hole, id, inductive_d, mk, mp,
-  name, nid, to_name, use_d,
+  LoadedModules, LocalScope, LocalVar, ModulePath, Multiplicity, NameRef, Scope,
+  ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id,
+  inductive_d, mk, mp, name, nid, to_name, union_ids, use_d,
 }
 use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
 use lang.scope {
   build_scope_from_decls, list_append, modpath_eq, scope_data_empty,
-  scope_find_inductive, scope_resolve_name,
+  scope_find_inductive, scope_push_local, scope_resolve_name,
 }
 use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
@@ -491,6 +492,84 @@ def build_scope_with_deps_and_prelude (file_path : String) (mod_name : String) :
     let mp : ModulePath := ModulePath.mp [Identifier.id mod_name] in
     load_module_with_dependencies_and_prelude base_dir mp
 
+// --- Corpus-check caching: build prelude+init once, reuse across files ---
+//
+// `check_file`/`load_module_with_dependencies_and_prelude` above always
+// walk, parse, and rebuild `ScopeData` for `prelude`+`init`'s full
+// transitive closure from scratch — correct for a single file, but
+// `lang/main.mo`'s `run_check_loop` calls `check_file` independently
+// once per file in a corpus run, so a 47-file `check init std examples`
+// redundantly repeats that same prelude/init load 47 times over (an
+// O(N·D) cost, N files times D shared-dependency size, instead of
+// O(D+N)) — and since this all runs *interpreted*, that redundancy is
+// the dominant cost of a corpus-check run, not `scope.mo`'s per-lookup
+// cost. `PreludeInitBase` + `build_prelude_init_base` below compute
+// that shared closure exactly once; `covered` (the module paths it
+// already resolved) seeds `extract_all_dependencies_go`'s `visited`
+// set for each subsequent per-file load, so a file's own transitive
+// walk correctly skips anything the shared base already covers instead
+// of rediscovering and reloading it.
+struct PreludeInitBase {
+    scope_data : ScopeData,
+    covered : List ModulePath,
+}
+
+#[partial]
+def build_prelude_init_base : IO PreludeInitBase := do {
+    let no_visiting : List ModulePath := List.empty;
+    let no_visited : List ModulePath := List.empty;
+    let roots : List ModulePath := [prelude_module_path, init_module_path];
+    let all_deps : List ModulePath <- extract_all_dependencies_go "" roots no_visiting no_visited;
+    let loaded_deps : List ScopeData <- load_dependency_scopes "" all_deps List.empty;
+    return { scope_data := merge_scope_data_list loaded_deps, covered := all_deps }
+}
+
+/// Same shape as `load_module_with_dependencies_and_prelude`, but reuses
+/// an already-built `PreludeInitBase` instead of loading prelude/init
+/// from scratch — only `mp`'s own additional `use` dependencies (beyond
+/// whatever `base` already covers) get freshly walked/loaded.
+#[partial]
+def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (base_dir : String) (mp : ModulePath) : IO (Option Scope) :=
+    match base {
+        PreludeInitBase.mk base_sd base_covered => do {
+            let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
+            match opt_decls {
+                Option.some decls => do {
+                    let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
+                    let module_base_dir : String :=
+                        match resolved_path_opt {
+                            Option.some fp => extract_directory fp,
+                            Option.none => base_dir
+                        };
+                    let direct_deps : List ModulePath := extract_use_decls decls;
+                    let no_visiting : List ModulePath := List.empty;
+                    let extra_deps : List ModulePath <- extract_all_dependencies_go module_base_dir direct_deps no_visiting base_covered;
+                    let loaded_extra : List ScopeData <- load_dependency_scopes module_base_dir extra_deps List.empty;
+                    let merged_extra : ScopeData := merge_scope_data_list loaded_extra;
+                    let merged_with_base : ScopeData := merge_scope_data base_sd merged_extra;
+                    let this_scope : ScopeData := build_scope_from_decls mp decls;
+                    let final_scope : ScopeData := merge_scope_data merged_with_base this_scope;
+                    let scope : Scope := {
+                        module_id := mp,
+                        scope := final_scope,
+                        parent := Option.none,
+                    };
+                    return Option.some scope
+                },
+                Option.none => do {
+                    return Option.none
+                }
+            }
+        }
+    }
+
+/// The `check_file`-flavored twin of `load_module_with_dependencies_and_prelude_cached`.
+#[partial]
+def build_scope_with_deps_and_prelude_cached (base : PreludeInitBase) (file_path : String) (mod_name : String) : IO (Option Scope) :=
+    let base_dir : String := extract_directory file_path in
+    let mp : ModulePath := ModulePath.mp [Identifier.id mod_name] in
+    load_module_with_dependencies_and_prelude_cached base base_dir mp
+
 /// Load all declarations for a module and its transitive dependencies.
 /// Returns Option (List Decl) where the list contains all declarations from
 /// the module and all its dependencies, suitable for compilation.
@@ -735,6 +814,71 @@ def is_term_hole (t : Term) : Bool :=
         _ => false
     }
 
+// --- Implicit type-parameter skolemization for `check` ---
+//
+// The self-hosted `check` pipeline never runs `lang.elaborate`'s
+// `elaborate_decls` (nothing in `lang/module.mo` calls it — confirmed
+// by grep), so a def's/struct's/class's own free type-parameter names
+// (`A`/`K`/`V`-style, e.g. `init/id.mo`'s `def Id.run (a : Id A) : A`)
+// never get `Forall`-wrapped, and even if they did, `check_def_with_
+// scope`'s `type_check body Term.hole scope empty_local_types locals`
+// call ignores the def's own `typ` field entirely (checks `body` in
+// pure infer mode) — so there'd be nowhere for a `Forall` on `typ` to
+// take effect anyway. Fully wiring elaboration through the whole
+// module-loading pipeline (so every downstream consumer sees Forall-
+// wrapped types) is real, separate design work; this instead solves
+// the immediate, narrower problem directly at each `check_*_with_scope`
+// call site: find the names that LOOK like implicit type parameters in
+// a def's parameter annotations, and — only for the ones that don't
+// already resolve as a real global name — bind them as ordinary locals
+// before checking, exactly what a proper Forall-skolemization step
+// would do.
+//
+// `collect_param_annotation_names` deliberately only walks the leading
+// `Term.lam` chain `lam_params` (lang/parser.mo) desugars a param list
+// into — i.e. each param's own type ANNOTATION — and stops at the
+// first non-`Lam` node (the actual computational body). This is a
+// deliberately narrow scope: it must NOT descend into the body's own
+// value-level references, or a genuinely misspelled/unbound name used
+// as a VALUE would get silently accepted as a bogus implicit local
+// instead of correctly reporting `unknown_var` — the whole point is to
+// only rescue names that only ever appear in TYPE position.
+#[partial]
+def collect_param_annotation_names (t : Term) : List Identifier :=
+    match t {
+        Term.lam _dbg typ_ body =>
+            union_ids (free_vars typ_ List.empty) (collect_param_annotation_names body),
+        _ => List.empty
+    }
+
+/// For each candidate name that does NOT already resolve as a real
+/// global (`scope_resolve_name` fails), bind it as an ordinary local —
+/// the skolemization step. Names that DO resolve globally (`String`,
+/// `Id`, a same-module type, ...) are left alone; `type_check` will
+/// resolve them the normal way.
+#[partial]
+def bind_unresolved_as_local_typevars (names : List Identifier) (scope : Scope) (locals : LocalScope) : LocalScope :=
+    match names {
+        List.empty => locals,
+        List.cons n rest =>
+            let nref : NameRef := NameRef.nid n in
+            match scope_resolve_name nref scope locals {
+                Result.ok _ => bind_unresolved_as_local_typevars rest scope locals,
+                Result.err _ =>
+                    let lv : LocalVar := { name := n, typ := Term.type_ 0, multiplicity := Multiplicity.many } in
+                    let extended : LocalScope := scope_push_local lv locals in
+                    bind_unresolved_as_local_typevars rest scope extended
+            }
+    }
+
+/// Skolemize `df`'s implicit type parameters (from both its declared
+/// `typ` and its parameters' own annotations) into `locals`, ready for
+/// `type_check`ing `df`'s body against.
+#[partial]
+def locals_with_def_typevars (df_typ : Term) (body : Term) (scope : Scope) (locals : LocalScope) : LocalScope :=
+    let candidates : List Identifier := union_ids (free_vars df_typ List.empty) (collect_param_annotation_names body) in
+    bind_unresolved_as_local_typevars candidates scope locals
+
 /// Type check an inductive with scope
 #[partial]
 def typecheck_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) : Bool :=
@@ -947,7 +1091,8 @@ def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path 
             if is_term_hole body then do {
                 return List.empty
             } else do {
-                return (match type_check body Term.hole scope empty_local_types locals {
+                let locals_ : LocalScope := locals_with_def_typevars typ body scope locals;
+                return (match type_check body Term.hole scope empty_local_types locals_ {
                     Result.ok _ => List.empty,
                     Result.err e => [render_type_error (module_path_to_string name) path e]
                 })
@@ -1013,6 +1158,45 @@ def check_file (file_path : String) (verbose : Bool) : IO FileCheckResult {
         let content : String <- IO.read_file file_path;
         let mod_name : String := module_name_from_path file_path;
         let scope_opt : Option Scope <- build_scope_with_deps_and_prelude file_path mod_name;
+        match scope_opt {
+            Option.some scope =>
+                match try_parse_decls_strict content (Option.some file_path) {
+                    Result.ok decls => do {
+                        let empty_locs : LocalScope := {
+                            vars := List.empty,
+                            parent := Option.none,
+                        };
+                        let diags : List String <- check_module_with_scope scope decls empty_locs (Option.some file_path) verbose;
+                        return { path := file_path, diagnostics := diags }
+                    },
+                    Result.err diagnostic => do {
+                        return { path := file_path, diagnostics := [diagnostic] }
+                    }
+                },
+            Option.none => do {
+                return { path := file_path, diagnostics := ["error: failed to load dependencies for " ++ file_path ++ " (a `use`d module failed to resolve or parse — re-run with a narrower file list, or check each `use`/`open` target under this file's search path, to isolate which one)"] }
+            }
+        }
+    } else do {
+        return { path := file_path, diagnostics := ["error: file not found: " ++ file_path] }
+    }
+}
+
+/// The `PreludeInitBase`-reusing twin of `check_file` — identical
+/// behavior, just avoids reloading prelude/init from scratch. This is
+/// what `lang/main.mo`'s `run_check_loop` actually calls now, building
+/// one `PreludeInitBase` up front and threading it through every file
+/// in a corpus run instead of each `check_file` call independently
+/// re-paying that cost — see `PreludeInitBase`'s own doc comment above
+/// for why this matters.
+#[partial]
+def check_file_cached (base : PreludeInitBase) (file_path : String) (verbose : Bool) : IO FileCheckResult {
+    let exists : Bool <- file_exists file_path;
+    if exists then do {
+        if verbose then println ("checking " ++ file_path) else do { return unit };
+        let content : String <- IO.read_file file_path;
+        let mod_name : String := module_name_from_path file_path;
+        let scope_opt : Option Scope <- build_scope_with_deps_and_prelude_cached base file_path mod_name;
         match scope_opt {
             Option.some scope =>
                 match try_parse_decls_strict content (Option.some file_path) {
