@@ -792,7 +792,22 @@ def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (lo
 // `lang.typecheck.infer`. Fixed there (mirroring `add_builtins`' own
 // `add_builtin_type`, which already did this correctly for the one
 // hardcoded `Type` pseudo-type) — confirmed via `examples/hello.mo`
-// dropping its two `unknown variable 'String'` errors.
+// dropping its two `unknown variable 'String'` errors. `struct Foo {
+// ... }` declarations had the identical gap (worse: `Decl.struct_d _ =>
+// acc` added NOTHING to scope at all, not even constructors) — fixed
+// the same way, `build_scope_struct` in `lang/scope.mo`, which also
+// synthesizes a one-constructor `Inductive` for the struct's implicit
+// `mk` so match-arm validation (`find_inductive_for_cases`/
+// `validate_cases_against_inductive`) has something real to check
+// against instead of silently skipping (see that function's own doc
+// comment for why "skip" was never a hard error, hence this was a
+// soundness gap rather than a blocker for already-passing files).
+// `examples/structs.mo`/`optics.mo` still fail `check` today, but for
+// an unrelated, more fundamental reason: the self-hosted PARSER doesn't
+// accept struct-literal (`{ field := value, ... }`) syntax yet, so
+// those two files never get past parsing to exercise this fix at all —
+// confirmed via a scratch file matching a struct's `mk` pattern without
+// any literal syntax, which resolves and checks cleanly now.
 //
 // STILL OPEN: bare Forall-bound type-PARAMETER names (`A`/`B`/`C` —
 // implicit/universal type variables, e.g. `init/id.mo`'s `def Id.run (a

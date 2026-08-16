@@ -2,10 +2,10 @@ use lang.types {
   Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
   Instance, InstanceKey, LoadedModules, LocalScope, LocalVar, Module, ModulePath,
   NameRef, Operator, Param, Scope, ScopeClassDef, ScopeData, ScopeDef, ScopeError,
-  ScopeInstance, Similar, Term, class_d, class_not_found, def_d, hole, id,
-  inductive_d, inductive_not_found, infix_d, instance_d, instance_not_found, mk,
-  mp, name, name_not_found, nid, nmp, nop, open_d, scoped_open_d, struct_d, type_,
-  use_d,
+  ScopeInstance, Similar, Struct, StructField, Term, class_d, class_not_found,
+  def_d, hole, id, inductive_d, inductive_not_found, infix_d, instance_d,
+  instance_not_found, mk, mp, name, name_not_found, nid, nmp, nop, open_d,
+  scoped_open_d, struct_d, type_, use_d,
 }
 
 // --- Helper: empty ScopeData ---
@@ -79,7 +79,7 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
         Decl.infix_d op name _vis => scope_data_add_infix acc op name,
         Decl.use_d _ _ _ => acc,
         Decl.open_d _ _ => acc,
-        Decl.struct_d _ => acc,
+        Decl.struct_d s => build_scope_struct s path acc,
         Decl.scoped_open_d _ _ inner => build_scope_one_decl inner path acc
     }
 
@@ -147,6 +147,57 @@ def add_constructors_go (acc : ScopeData) (cns : List InductConstructor) (path :
                     } in
                     let new_acc : ScopeData := scope_data_add_def acc sd in
                     add_constructors_go new_acc rest path
+            }
+    }
+
+/// The struct sibling of `build_scope_inductive` above, fixing the same
+/// class of gap for `struct Foo { ... }` declarations, which used to add
+/// NOTHING to scope at all (`Decl.struct_d _ => acc`) — so a struct
+/// used as an ordinary type name (a parameter annotation) failed with
+/// `unknown_var` for the same reason `Color`-style inductives did before
+/// `build_scope_inductive`'s own fix, and matching on a struct's
+/// implicit `mk` constructor got no real arity/completeness validation
+/// at all (`find_inductive_for_cases`/`validate_cases_against_inductive`
+/// in `lang.typecheck.infer` only consult `.inductives`, and structs
+/// were never in it — `validate_match_constructors`'s own doc comment
+/// says as much: "Returns ok if valid or if no inductive found (skip
+/// validation)", i.e. this was silently un-validated, not a hard error).
+///
+/// Fixed by registering the struct's own name as a `ScopeDef` (mirroring
+/// `build_scope_inductive`) *and* synthesizing a one-constructor
+/// `Inductive` (name `mk`, one `Param` per `StructField`, in field
+/// order) and adding THAT into `.inductives` too — this reuses the
+/// existing inductive-validation machinery as-is for structs' implicit
+/// constructor, rather than teaching that machinery a second, parallel
+/// notion of "struct." A struct's fields have no useful `typ` of their
+/// own to give the synthetic `Inductive`, so `Term.hole` stands in,
+/// matching `add_builtin_type`'s and the constructor registrations
+/// above's own placeholder convention (nothing downstream inspects it).
+def build_scope_struct (s : Struct) (path : ModulePath) (acc : ScopeData) : ScopeData :=
+    match s {
+        Struct.mk name fields vis =>
+            let type_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
+            let type_sd : ScopeDef := {
+                name := type_mp,
+                module := path,
+                sig := Term.hole,
+                body := Term.hole,
+            } in
+            let with_type_def : ScopeData := scope_data_add_def acc type_sd in
+            let mk_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty) in
+            let mk_params : List Param := struct_fields_to_params fields in
+            let mk_con : InductConstructor := InductConstructor.mk mk_mp mk_params Term.hole in
+            let synthetic_ind : Inductive := Inductive.mk type_mp List.empty Term.hole (List.cons mk_con List.empty) List.empty vis in
+            scope_data_add_inductive with_type_def synthetic_ind
+    }
+
+def struct_fields_to_params (fields : List StructField) : List Param :=
+    match fields {
+        List.empty => List.empty,
+        List.cons f rest =>
+            match f {
+                StructField.mk fname ftyp _default fmult =>
+                    List.cons (Param.mk fname ftyp fmult Option.none) (struct_fields_to_params rest)
             }
     }
 
