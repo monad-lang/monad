@@ -34,11 +34,11 @@
   '';
 
   scripts.bootstrap.exec = ''
-    cargo run -- run lang/main.mo $@
+    cargo run --release -- run lang/main.mo $@
   '';
 
   scripts.monad-rs.exec = ''
-    cargo run -- $@
+    cargo run --release -- $@
   '';
 
   # https://devenv.sh/basics/
@@ -54,7 +54,7 @@
     rust-tests = {
       enable = true;
       entry = ''
-        cargo test
+        cargo test --release
       '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";
@@ -62,7 +62,7 @@
     monad-tests = {
       enable = true;
       entry = ''
-        cargo run -- test init std lang examples
+        cargo run --release -- test init std lang examples
       '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";

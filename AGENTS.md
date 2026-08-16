@@ -68,6 +68,22 @@ bootstrap compile examples/hello.mo
 cargo run -- repl
 ```
 
+### Use `--release` for self-hosted-compiler workloads
+
+Running `lang/main.mo` (the self-hosted compiler) interprets a real
+compiler pipeline on top of the reference compiler's own `core_eval` —
+e.g. `cargo run -- run lang/main.mo -- check lang/main.mo` (self-hosted
+compiler checking itself) took 223s in a debug build vs 99s
+`--release` — a 2.2x speedup here (smaller than the 10-15x speedup
+`--release` gives the reference compiler's own `check`/`run` on an
+ordinary `.mo` file, since the self-hosted path's cost is dominated by
+interpreter dispatch/allocation overhead that `-O` optimizes less
+aggressively than typical Rust control flow). Prefer
+`cargo build --release` + `target/release/monad-rs run lang/main.mo --
+...` (or `cargo run --release -- run lang/main.mo -- ...`) over a plain
+debug build for any workload that runs `lang/main.mo` against a large
+file or corpus, rather than iterating on the reference compiler itself.
+
 ## Writing Monad Code
 
 ### File Structure
