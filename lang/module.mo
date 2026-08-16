@@ -24,6 +24,7 @@ use std.show {Show}
 // `lang/scope.mo`'s own `use std.map {}` doc comment for why the import
 // is empty).
 use std.map {}
+use std.bench {now, report}
 
 open IO {file_exists, is_dir, list_dir, println, read_file}
 open ParseResult {fail, success}
@@ -1233,20 +1234,39 @@ def check_file_cached (base : PreludeInitBase) (file_path : String) (verbose : B
         if verbose then println ("checking " ++ file_path) else do { return unit };
         let content : String <- IO.read_file file_path;
         let mod_name : String := module_name_from_path file_path;
+        // Self-hosted phase-timing (silent unless `--verbose`): `Bench.now`
+        // is a cheap native syscall, always taken; `Bench.report` (which
+        // does the actual `println!`) is gated on `verbose` so this adds
+        // no visible output — and no measurable cost — by default. Lets
+        // `--verbose` runs answer "which of scope/parse/check dominates
+        // wall time" directly, distinct from the Rust-level `--benchmark`
+        // flag (which only times the outer per-file load).
+        let scope_start : I64 := Bench.now;
         let scope_opt : Option Scope <- build_scope_with_deps_and_prelude_cached base file_path mod_name;
+        let scope_elapsed : I64 := I64.sub Bench.now scope_start;
+        let scope_logged : Bool := if verbose then Bench.report ("scope  " ++ file_path) scope_elapsed else true;
         match scope_opt {
             Option.some scope =>
-                match try_parse_decls_strict content (Option.some file_path) {
-                    Result.ok decls => do {
-                        let empty_locs : LocalScope := {
-                            vars := List.empty,
-                            parent := Option.none,
-                        };
-                        let diags : List String <- check_module_with_scope scope decls empty_locs (Option.some file_path) verbose;
-                        return { path := file_path, diagnostics := diags }
-                    },
-                    Result.err diagnostic => do {
-                        return { path := file_path, diagnostics := [diagnostic] }
+                do {
+                    let parse_start : I64 := Bench.now;
+                    let parse_result : Result String (List Decl) := try_parse_decls_strict content (Option.some file_path);
+                    let parse_elapsed : I64 := I64.sub Bench.now parse_start;
+                    let parse_logged : Bool := if verbose then Bench.report ("parse  " ++ file_path) parse_elapsed else true;
+                    match parse_result {
+                        Result.ok decls => do {
+                            let empty_locs : LocalScope := {
+                                vars := List.empty,
+                                parent := Option.none,
+                            };
+                            let check_start : I64 := Bench.now;
+                            let diags : List String <- check_module_with_scope scope decls empty_locs (Option.some file_path) verbose;
+                            let check_elapsed : I64 := I64.sub Bench.now check_start;
+                            let check_logged : Bool := if verbose then Bench.report ("check  " ++ file_path) check_elapsed else true;
+                            return { path := file_path, diagnostics := diags }
+                        },
+                        Result.err diagnostic => do {
+                            return { path := file_path, diagnostics := [diagnostic] }
+                        }
                     }
                 },
             Option.none => do {
