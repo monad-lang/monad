@@ -3,9 +3,10 @@
 
 use io {IO, file_exists, is_dir, list_dir, println, read_file}
 use lang.types {
-  Decl, Def, Identifier, InductConstructor, Inductive, LoadedModules, LocalScope,
-  LocalVar, ModulePath, NameRef, Scope, ScopeData, ScopeInstance, Term, def_d,
-  hole, id, inductive_d, mk, mp, name, nid, to_name, use_d,
+  Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive,
+  LoadedModules, LocalScope, LocalVar, ModulePath, NameRef, Scope, ScopeData,
+  ScopeInstance, Struct, StructField, Term, def_d, hole, id, inductive_d, mk, mp,
+  name, nid, to_name, use_d,
 }
 use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
@@ -828,10 +829,25 @@ def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (lo
 // actually get caught; the type-check phase is only as complete as
 // `lang.typecheck.infer` currently is.
 
-/// Same `def_d`/`inductive_d` coverage as `typecheck_decl_with_scope`
-/// — other decl kinds (use/open/scoped_open/infix/class/instance/
-/// struct) are skipped, matching today's typecheck harness; not
-/// expanding that separately-tracked gap here.
+/// Wider coverage than `typecheck_decl_with_scope`'s `def_d`/
+/// `inductive_d`-only: also checks `struct_d` (each field's type
+/// annotation) and `class_d` (each method's signature type). `use_d`/
+/// `open_d`/`scoped_open_d`/`infix_d` stay skipped — `use`/`open`
+/// targets are already resolved (or rejected) upstream during
+/// dependency/scope loading (`build_scope_with_deps_and_prelude`), so
+/// there's nothing left for a per-decl pass to add; `infix_d` has no
+/// body of its own to type-check. `instance_d` also stays skipped —
+/// matching the Rust reference `core_check_module.rs`'s own documented
+/// limitation ("`Decl::Ins` (instance) bodies are NOT checked by this
+/// path"), not a self-hosted-specific shortfall to close here.
+///
+/// Note: class method signatures routinely reference the class's own
+/// implicit type parameter (e.g. `class Show A { def show (a : A) :
+/// String }`'s `A`) — the same still-open Forall-bound-type-parameter
+/// gap documented above (`check_def_with_scope`'s `unknown_var 'A'`
+/// case) applies here too, so most classes are expected to report an
+/// error for that same, already-tracked reason until that gap closes,
+/// not a new one introduced by checking classes at all.
 ///
 /// `verbose` threads a per-declaration progress trace (which def/type/
 /// constructor is currently being checked) down through every level —
@@ -854,7 +870,73 @@ def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path
     match d {
         Decl.def_d df => check_def_with_scope df scope locals path verbose,
         Decl.inductive_d ind => check_inductive_with_scope ind scope locals path verbose,
+        Decl.struct_d s => check_struct_with_scope s scope locals path verbose,
+        Decl.class_d cls => check_class_with_scope cls scope locals path verbose,
         _ => do { return List.empty }
+    }
+
+#[partial]
+def check_struct_with_scope (s : Struct) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+    match s {
+        Struct.mk name fields _vis => do {
+            if verbose then println ("  checking struct " ++ identifier_to_string name) else do { return unit };
+            check_struct_fields_with_scope fields scope locals path verbose
+        }
+    }
+
+#[partial]
+def check_struct_fields_with_scope (fields : List StructField) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+    match fields {
+        List.empty => do { return List.empty },
+        List.cons f rest => do {
+            let here : List String <- check_struct_field_with_scope f scope locals path verbose;
+            let there : List String <- check_struct_fields_with_scope rest scope locals path verbose;
+            return (list_append here there)
+        }
+    }
+
+#[partial]
+def check_struct_field_with_scope (f : StructField) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+    match f {
+        StructField.mk name typ _default _mult => do {
+            if verbose then println ("    checking field " ++ identifier_to_string name) else do { return unit };
+            return (match type_check typ Term.hole scope empty_local_types locals {
+                Result.ok _ => List.empty,
+                Result.err e => [render_type_error (identifier_to_string name) path e]
+            })
+        }
+    }
+
+#[partial]
+def check_class_with_scope (cls : Class) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+    match cls {
+        Class.mk name _params _constraints methods _vis => do {
+            if verbose then println ("  checking class " ++ identifier_to_string name) else do { return unit };
+            check_class_methods_with_scope methods scope locals path verbose
+        }
+    }
+
+#[partial]
+def check_class_methods_with_scope (methods : List ClassDef) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+    match methods {
+        List.empty => do { return List.empty },
+        List.cons m rest => do {
+            let here : List String <- check_class_method_with_scope m scope locals path verbose;
+            let there : List String <- check_class_methods_with_scope rest scope locals path verbose;
+            return (list_append here there)
+        }
+    }
+
+#[partial]
+def check_class_method_with_scope (m : ClassDef) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+    match m {
+        ClassDef.mk name typ _default => do {
+            if verbose then println ("    checking method " ++ identifier_to_string name) else do { return unit };
+            return (match type_check typ Term.hole scope empty_local_types locals {
+                Result.ok _ => List.empty,
+                Result.err e => [render_type_error (identifier_to_string name) path e]
+            })
+        }
     }
 
 #[partial]
