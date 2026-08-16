@@ -837,6 +837,104 @@ Key patterns when writing self-hosted Monad code:
    without measuring end-to-end wall-clock time first** (e.g.
    `time cargo run -- test lang/tests/typecheck_lang_tests.mo`) — Big-O
    analysis alone is not a reliable guide to real performance here.
+5. **`self-hosted-compiler-perf.md` phase-timing infra**: `lang/module.mo`'s
+   `check_file_cached` now wraps its three phases (scope/dep resolution,
+   strict parse, typecheck) with `Bench.now`/`Bench.report` calls gated
+   on `verbose` — `run lang/main.mo -- check <files> --verbose` prints
+   `scope=`/`parse=`/`check=` timings per file, silent otherwise. This
+   is distinct from the Rust-level `--benchmark` flag (which only times
+   the outer per-file load, not phases *inside* the self-hosted checker
+   while it runs) — use this tool to answer "which phase dominates"
+   before touching self-hosted-checker performance, the same way item 4
+   above already demonstrates for data-structure choices.
+6. **Measured, not worth it: flattening `HashMap`'s 16-way bucket
+   dispatch** (`std/map.mo`'s `HashMap.get_bucket`/`set_bucket`,
+   originally a single 16-deep `if U64.beq N idx` chain). Splitting it
+   into two ≤8-deep tiers (mirroring `lang/parser.mo`'s
+   `is_alpha_lower`/`is_alpha_lower2` pattern, itself a real, proven win
+   for *parser* code) was tried and measured directly against
+   `bench/scope_lookup.mo`'s hashmap build/lookup benchmarks (3 trials
+   each side, n=200): before, ~18-23ms/~22-23ms; after, ~22-24ms/~27-28ms
+   — a consistent **~20-25% regression**, not an improvement. The extra
+   function-call overhead from splitting into `_lo`/`_hi` helpers
+   outweighs the saved comparisons in this tree-walking interpreter.
+   Reverted, no code change kept. A second data point (after item 4's
+   BTreeMap regression) that a proven win in one part of this
+   interpreter (parser recursion depth) doesn't automatically transfer
+   to another (hot-path dispatch call count) — measure per case.
+7. **Native `string_lt`/`string_gt`/`string_hash` fast paths**
+   (`core/src/core_native.rs` + `init/string.mo`): `String.beq` already
+   had a native path (`string_eq`, plain `&str == &str`); `String.lt`/
+   `String.gt`/`String.hash` didn't — they were self-hosted `.mo` code
+   that converted both operands through `String.to_list` (materializing
+   a full `List U8` linked list) before comparing/folding, even though
+   `Identifier`/`ModulePath`'s `BOrd`/`Hashable` instances
+   (`lang/types.mo`) delegate to them on every scope-`HashMap` op. When a
+   self-hosted function's cost is dominated by an allocation-heavy
+   conversion rather than genuine self-hosted logic, check whether a
+   native already exists for a sibling operation (here, `string_eq`)
+   before assuming the self-hosted version is the only option. The
+   self-hosted implementations were kept (renamed
+   `..._selfhosted`/`bytes_lt_selfhosted`/etc., not deleted) as the
+   intended long-term implementation to switch back to once more of the
+   compiler is self-hosted and the interpreter itself is faster (see
+   item 8) — this native fast path is explicitly temporary and
+   pragmatic, not a retreat from self-hosting.
+8. **Tail-call optimization in `core/src/core_eval.rs`**: `eval`'s `App`
+   case called `apply`, whose `Closure` branch called `eval(&body,
+   &extended, ...)` — a real recursive Rust call despite being
+   syntactically a tail call; `Match`'s dispatch had the identical
+   shape. Every self-recursive closure application (an ordinary
+   accumulator-style `.mo` loop) grew the native Rust stack by a frame
+   per iteration — confirmed by `bench/scope_lookup.mo` stack-
+   overflowing at n≈1000 even under 64MB worker-thread stacks.
+   `eval` is now a `loop` over owned `(cur_ir: IrRef, cur_env: EnvRef)`
+   state — `App` applying to a `Closure`, and `Match` dispatching to an
+   arm, `continue` the loop (reassign state, `Arc::clone`, O(1)) instead
+   of recursing. Every *other* recursive `eval` call (an `App`'s
+   `fun`/`arg`, a `Match`'s scrutinee, `Con`/`Ntv`'s argument list) stays
+   real Rust recursion on purpose — bounded by *static* source-term
+   nesting depth, not *dynamic* call count. This means genuinely
+   non-tail-recursive `.mo` code (e.g. `len xs = match xs { cons _ t =>
+   1 + len t, ... }`) still consumes O(N) Rust stack depth, same as any
+   language with TCO — the 64MB worker-thread stack (`core/src/lib.rs`)
+   stays in place as a backstop for that case, it did not become
+   unnecessary. Standing proof this works:
+   `core_eval::tests::test_tail_recursive_countdown_survives_a_million_iterations_on_default_stack`,
+   a self-recursive `Global` closure driven to n=1,000,000 under a
+   *default*-sized test-thread stack. Bonus, not the primary goal:
+   `test_typecheck_lang_main` (the compiler typechecking its own ~50-file
+   corpus) dropped from 600.5s to 409.6s (~32% faster) from fewer
+   allocations (no per-call `apply`/`dispatch` Rust frame).
+9. **Redundant prelude/init reload despite `PreludeInitBase` caching**
+   (`lang/module.mo`'s `load_module_with_dependencies_and_prelude_
+   cached`): a real bug, not a data-structure choice. It seeded
+   `extract_all_dependencies_go`'s `visited` accumulator with
+   `base_covered` so the dependency walk would skip re-visiting anything
+   already in the shared base — but that function returns `visited`
+   verbatim once its to-visit queue empties, so every call returned the
+   *entire* `base_covered` set back as "extra deps to load", and the
+   caller reloaded (re-parsed, re-scope-built) all of prelude+init from
+   scratch for every single file checked — precisely the O(N·D)
+   redundancy `PreludeInitBase` was built to eliminate. Fixed by seeding
+   `visiting` instead of `visited` — in this walk's non-backtracking
+   shape (a dependency's own subtree is processed via the same
+   sequential recursive call that continues on to its siblings, never
+   popped) the two parameters are already functionally equivalent "seen"
+   sets for skip purposes, so this changes nothing about what gets
+   skipped, only what gets returned. Paired with a `merge_scope_data`
+   short-circuit (new `HashMap.is_empty`, O(16) bucket check) for the
+   now-common case of merging against a genuinely empty scope. Combined
+   effect on `std/show.mo` (no extra non-base dependencies): scope-phase
+   time 4224ms → 712ms, ~6x. Files with real non-base dependencies within
+   `lang/` itself see a much smaller win (`lang/module.mo`: 418.8s →
+   367.3s, ~12%) since `PreludeInitBase` only covers prelude+init, not
+   cross-file dependencies within `lang/`/`std/` — **that remaining gap
+   (no caching for a file's dependencies on *other, non-base* corpus
+   files during a multi-file run) is a separate, larger architectural
+   change, explicitly out of scope here** (would need a whole-corpus,
+   not just prelude+init, module-scope cache) and is a natural next
+   target for a future performance pass.
 
 ## Committing Changes
 
