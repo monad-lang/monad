@@ -14,7 +14,7 @@ use crate::parser::{ReplInput, repl_parser};
 use crate::term::Decl;
 #[cfg(feature = "repl")]
 use crate::term::Term::Hole;
-use crate::term::Term::{self, Con};
+use crate::term::Term;
 use crate::term::id;
 #[cfg(feature = "repl")]
 use crate::term::module::ParsedModule;
@@ -25,7 +25,7 @@ use crate::term::module::{
   load_module_from_text, module_warnings,
 };
 use crate::term::{
-  Constructor, InductiveVariant, ModulePath, Named, SearchPaths, SourceContext, SourceRange, mpt,
+  InductiveVariant, ModulePath, Named, SearchPaths, SourceContext, SourceRange, mpt,
 };
 
 pub mod core_check;
@@ -466,31 +466,51 @@ pub fn run(
 
   let lowered = lower_core_ir::lower_program(&program).map_err(|e| format!("lower: {e:?}"))?;
   let main_idx = main_index(&lowered, &path).ok_or("main not found")?;
-  let natives = core_value::NativeTable::from_lowered(&lowered);
-  let globals = core_value::GlobalTable::new(lowered.globals);
-  let mut cache = core_value::GlobalCache::new(globals.len());
-  let main_value = core_eval::force_global(main_idx, &globals, &natives, &mut cache)
-    .map_err(|e| format!("{e}"))
-    .inspect_err(|e| eprintln!("{e}"))?;
 
-  // Apply CLI args only if `main` is actually a function -- mirrors the
-  // tree-walker's own `if def.term.is_lam() { app(...) } else { ... }`
-  // check, just against the FORCED runtime `Value` instead of the
-  // pre-eval `Term` (a `Value::Closure` is exactly what a `Lam`-headed
-  // `main` forces to).
-  let result = if let core_value::Value::Closure { .. } = &main_value {
-    let arg = strings_to_list_value(&natives.well_known, args)?;
-    core_eval::apply(main_value, arg, &globals, &natives, &mut cache)
-      .map_err(|e| format!("{e}"))
-      .inspect_err(|e| eprintln!("{e}"))?
-  } else {
-    main_value
-  };
+  // `core_eval`'s own recursion depth can exceed the OS default
+  // main-thread stack (commonly 8MB on Linux, see `ulimit -s`) for
+  // large/deeply-nested programs -- e.g. self-hosted-checking
+  // `lang/main.mo` (whose dependency closure pulls in `lang/parser.mo`
+  // at 5,563 lines) reliably stack-overflows here, at a consistent
+  // wall-clock point regardless of `RUST_MIN_STACK`, since that only
+  // affects threads spawned with an explicit `stack_size` -- never the
+  // main thread. `run_tests()`'s own evaluation paths
+  // (`force_global_with_timeout`, the parallel test-file workers) both
+  // already spawn a 64MB-stack thread for exactly this reason; `run()`'s
+  // single-shot eval never did. Match that existing precedent here.
+  let eval_result: Result<(), String> = std::thread::Builder::new()
+    .stack_size(64 * 1024 * 1024)
+    .spawn(move || {
+      let natives = core_value::NativeTable::from_lowered(&lowered);
+      let globals = core_value::GlobalTable::new(lowered.globals);
+      let mut cache = core_value::GlobalCache::new(globals.len());
+      let main_value = core_eval::force_global(main_idx, &globals, &natives, &mut cache)
+        .map_err(|e| format!("{e}"))
+        .inspect_err(|e| eprintln!("{e}"))?;
 
-  if options.debug {
-    println!("Eval result {result:?}");
-  }
-  Ok(())
+      // Apply CLI args only if `main` is actually a function -- mirrors
+      // the tree-walker's own `if def.term.is_lam() { app(...) } else {
+      // ... }` check, just against the FORCED runtime `Value` instead of
+      // the pre-eval `Term` (a `Value::Closure` is exactly what a
+      // `Lam`-headed `main` forces to).
+      let result = if let core_value::Value::Closure { .. } = &main_value {
+        let arg = strings_to_list_value(&natives.well_known, args)?;
+        core_eval::apply(main_value, arg, &globals, &natives, &mut cache)
+          .map_err(|e| format!("{e}"))
+          .inspect_err(|e| eprintln!("{e}"))?
+      } else {
+        main_value
+      };
+
+      if options.debug {
+        println!("Eval result {result:?}");
+      }
+      Ok(())
+    })
+    .map_err(|e| format!("failed to spawn eval thread: {e}"))?
+    .join()
+    .map_err(|_| "eval thread panicked".to_string())?;
+  eval_result
 }
 
 pub fn vec_fmt<T: Display>(v: &[T]) -> String {
@@ -562,56 +582,13 @@ enum TestResult {
   FailWithMessage(String),
 }
 
-fn detect_test_result(term: &Term) -> TestResult {
-  match term {
-    Term::Ctx { term, .. } => detect_test_result(term),
-    Con(Constructor {
-      name,
-      typ_name,
-      args,
-      ..
-    }) => {
-      if typ_name == &mpt("Bool") {
-        return if name == &id("true") {
-          TestResult::Pass
-        } else if name == &id("false") {
-          TestResult::Fail
-        } else {
-          TestResult::FailWithMessage(format!("unexpected result: {term}"))
-        };
-      }
-      if typ_name == &mpt("IO")
-        && let Some(Some(inner)) = args.first()
-      {
-        return detect_test_result(inner);
-      }
-      if typ_name == &mpt("Result") {
-        if name == &id("ok") {
-          return TestResult::Pass;
-        } else if name == &id("err") {
-          if let Some(Some(msg_term)) = args.first() {
-            let msg = extract_string_literal(msg_term);
-            return TestResult::FailWithMessage(msg.unwrap_or_else(|| msg_term.to_string()));
-          }
-          return TestResult::Fail;
-        }
-      }
-      TestResult::FailWithMessage(format!("unexpected result: {term}"))
-    }
-    _ => TestResult::FailWithMessage(format!("unexpected result: {term}")),
-  }
-}
-
-/// The `core_value::Value` counterpart to `detect_test_result` — same
-/// `Bool`/`IO`/`Result` unwrapping convention, reading well-known
-/// constructor *tags* (resolved once per test run, via `NativeTable::
-/// well_known`) instead of a `Term::Con`'s own `typ_name` field, since a
-/// runtime `Value::Con` carries no type name at all (see
-/// `lower_core_ir::WellKnownCtors`'s own doc comment for why). Shares
-/// `TestResult` with the tree-walker's own version so both evaluators'
-/// results print through the exact same PASS/FAIL/message formatting
-/// below — nothing downstream needs to know or care which evaluator
-/// actually produced a given `TestResult`.
+/// Reads well-known constructor *tags* (resolved once per test run, via
+/// `NativeTable::well_known`) to unwrap `Bool`/`IO`/`Result` values —
+/// used to be paired with a `Term`-level twin (`detect_test_result`,
+/// walking a `Term::Con`'s own `typ_name` field) for the tree-walking
+/// evaluator, removed along with it (see `core-term-closure-evaluator.md`
+/// — a runtime `Value::Con` carries no type name at all, only a tag, so
+/// the two were never quite the same shape to begin with).
 fn detect_test_result_value(
   value: &core_value::Value,
   well_known: &lower_core_ir::WellKnownCtors,
@@ -640,16 +617,6 @@ fn detect_test_result_value(
       }
     }
     other => TestResult::FailWithMessage(format!("unexpected result: {other:?}")),
-  }
-}
-
-fn extract_string_literal(term: &Term) -> Option<String> {
-  match term {
-    Term::Ctx { term, .. } => extract_string_literal(term),
-    Term::Lit {
-      value: crate::term::Literal::Str { value },
-    } => Some(value.clone()),
-    _ => None,
   }
 }
 
