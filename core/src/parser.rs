@@ -31,7 +31,8 @@ use nom::{
   branch::alt,
   bytes::complete::{tag, take_until, take_while},
   character::complete::{
-    alpha1, char, digit1, i64, line_ending, multispace0, multispace1, not_line_ending, space0,
+    alpha1, char, digit1, hex_digit1, i64, line_ending, multispace0, multispace1, not_line_ending,
+    space0,
   },
   combinator::{eof, map, not, opt, peek, recognize, success, verify},
   error::context,
@@ -351,6 +352,33 @@ fn num_suffix_parser<X: Clone>(input: Span<X>) -> Res<NumSuffix, X> {
     NumSuffix::from_suffix(s.fragment()).unwrap_or(NumSuffix::I64)
   };
   Ok((input, suffix))
+}
+
+/// `0xBADBEEF` / `0XFF` hex integer literals, with the same optional
+/// leading `-` and trailing numeric suffix (`0xFFu32`) as `num_literal`.
+/// Parses the digits as `u64` (not `i64`, unlike `num_literal`) and
+/// bit-reinterprets — so a full-width literal like
+/// `0xFFFFFFFFFFFFFFFFu64` round-trips correctly (as `u64::MAX`, stored
+/// as `-1` in the shared `i64` payload) instead of being rejected for
+/// having the top bit set, which `i64::from_str_radix` would do.
+fn hex_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, sign) = opt(char('-')).parse(input)?;
+  let (input, _) = alt((tag("0x"), tag("0X"))).parse(input)?;
+  let (input, digits) = hex_digit1(input)?;
+  let unsigned: u64 = u64::from_str_radix(digits.fragment(), 16).map_err(|_| {
+    nom::Err::Failure(ParseError::new(
+      input.clone(),
+      error::ParseErrorKind::Native(format!("invalid hex literal '0x{}'", digits.fragment())),
+    ))
+  })?;
+  let magnitude = unsigned as i64;
+  let value = if sign.is_some() {
+    magnitude.wrapping_neg()
+  } else {
+    magnitude
+  };
+  let (input, suffix) = num_suffix_parser(input)?;
+  Ok((input, num_suffix(value, suffix)))
 }
 
 fn num_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
@@ -1064,6 +1092,7 @@ fn literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
     list_literal,
     string_literal,
     char_literal,
+    hex_literal,
     float_literal,
     num_literal,
     struct_or_update_parser,

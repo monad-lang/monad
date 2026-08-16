@@ -36,6 +36,24 @@ def test_bool_or : Bool :=
 def test_bool_or_false : Bool :=
     if false || false then false else true
 
+// Numeric literal tests
+
+#[test]
+def test_hex_literal_i64 : Bool :=
+    0xFF == 255
+
+#[test]
+def test_hex_literal_u32_suffix : Bool :=
+    0xBADBEEFu32 == 195935983u32
+
+#[test]
+def test_hex_literal_negative : Bool :=
+    -0x10 == -16
+
+#[test]
+def test_hex_literal_uppercase_prefix : Bool :=
+    0XCAFE == 51966
+
 // I64 tests
 
 #[test]

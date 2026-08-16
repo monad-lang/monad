@@ -108,6 +108,30 @@ def is_space (c : String) : Bool :=
 	else String.beq "\r" c
 
 
+// --- Hex digit predicate ---
+
+#[partial]
+def is_hex_alpha (c : String) : Bool :=
+	if String.beq "a" c then true
+	else if String.beq "A" c then true
+	else if String.beq "b" c then true
+	else if String.beq "B" c then true
+	else if String.beq "c" c then true
+	else if String.beq "C" c then true
+	else if String.beq "d" c then true
+	else if String.beq "D" c then true
+	else if String.beq "e" c then true
+	else if String.beq "E" c then true
+	else if String.beq "f" c then true
+	else String.beq "F" c
+
+
+#[partial]
+def is_hex_digit (c : String) : Bool :=
+	if is_digit c then true
+	else is_hex_alpha c
+
+
 // --- Keyword check ---
 
 #[partial]

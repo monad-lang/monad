@@ -417,6 +417,8 @@ def example : I64 :=
 3.14      // F64 (default)
 3.14f32   // F32
 3.14f64   // F64
+0xFF      // I64, hex notation
+0xFFu32   // U32, hex notation
 ```
 
 ### Match Expressions

@@ -420,7 +420,7 @@ def U32.shr (a b : U32) : U32
 #[native u32_to_u8]
 def U32.to_u8 (a : U32) : U8
 
-def U32.not (a : U32) : U32 := U32.xor a 4294967295u32 // 0xFFFFFFFF
+def U32.not (a : U32) : U32 := U32.xor a 0xFFFFFFFFu32
 
 def U32.rotr (a n : U32) : U32 :=
 	U32.or (U32.shr a n) (U32.shl a (U32.sub 32u32 n))

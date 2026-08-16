@@ -2578,6 +2578,79 @@ def test_numeric_literal_suffix_u64 : Bool :=
 		fail _ => false
 	}
 
+/// Hex integer literal (`0xBADBEEF`) — see `numeric_literal_digits`'s
+/// `0x`/`0X`-prefix try in `lang/parser/number.mo`.
+#[test]
+def test_numeric_literal_hex : Bool :=
+	match numeric_literal "0xBADBEEF" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				Term.lit lit_val => match lit_val {
+					Literal.num n suffix => I64.beq n 195935983 && (match suffix {
+						NumSuffix.i64 => true,
+						_ => false
+					}),
+					_ => false
+				},
+				_ => false
+			}),
+		fail _ => false
+	}
+
+/// Uppercase `0X` prefix variant.
+#[test]
+def test_numeric_literal_hex_uppercase_prefix : Bool :=
+	match numeric_literal "0XFF" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				Term.lit lit_val => match lit_val {
+					Literal.num n suffix => I64.beq n 255 && (match suffix {
+						NumSuffix.i64 => true,
+						_ => false
+					}),
+					_ => false
+				},
+				_ => false
+			}),
+		fail _ => false
+	}
+
+/// Hex literal with a numeric suffix (`0xFFu32`).
+#[test]
+def test_numeric_literal_hex_suffix : Bool :=
+	match numeric_literal "0xFFu32" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				Term.lit lit_val => match lit_val {
+					Literal.num n suffix => I64.beq n 255 && (match suffix {
+						NumSuffix.u32 => true,
+						_ => false
+					}),
+					_ => false
+				},
+				_ => false
+			}),
+		fail _ => false
+	}
+
+/// Negative hex literal (`-0x10`) — same leading-`-` handling as decimal.
+#[test]
+def test_numeric_literal_hex_negative : Bool :=
+	match numeric_literal "-0x10" {
+		success rem out =>
+			String.beq rem "" && (match out {
+				Term.lit lit_val => match lit_val {
+					Literal.num n suffix => I64.beq n (I64.sub 0 16) && (match suffix {
+						NumSuffix.i64 => true,
+						_ => false
+					}),
+					_ => false
+				},
+				_ => false
+			}),
+		fail _ => false
+	}
+
 /// Regression test for float literals: `3.0` used to mis-parse through
 /// the registered `.` infix operator (juxtaposed int-dot-int
 /// application) rather than as one literal. Unsuffixed floats default
