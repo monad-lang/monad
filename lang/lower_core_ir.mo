@@ -7,7 +7,7 @@ use lang.scope {
 }
 use lang.types {
   Con, Decl, Def, DebugName, Identifier, Inductive, InductConstructor, Literal,
-  MatchCase, ModulePath, Native, Scope, ScopeData, ScopeDef, Term,
+  MatchCase, ModulePath, Native, Scope, ScopeDef, Term,
 }
 use lang.typecheck.infer {empty_locals}
 

@@ -3,15 +3,17 @@ use lang.types {
   LocalScope, LocalVar, MatchCase, ModulePath, NameRef, Native, Param, Scope,
   ScopeClassDef, ScopeDef, ScopeError, Similar, Term, TypeConstraint, TypeError,
   app, con, custom, forall, hole, id, if_, lam, list_rev_loop, list_reverse, lit,
-  many, match_, mc, mk, mp, name, named, nid, not_a_type, ntv, num, pi, str,
-  type_, unknown_var, unnamed, var,
+  many, match_, mc, mk, mp, name, named, nid, not_a_type, ntv, num, pi,
+  show_module_path, str, type_, unknown_constructor, unknown_var, unnamed, var,
 }
 use lang.scope {
-  inductive_has_constructor, scope_find_class_def_by_name, scope_find_inductive,
-  scope_find_inductive_by_constructor, scope_push_local, scope_resolve_instance,
-  scope_resolve_name,
+  find_constructor_in_inductive, inductive_has_constructor, list_append,
+  scope_data_add_inductive, scope_data_empty, scope_find_class_def_by_name,
+  scope_find_inductive, scope_find_inductive_by_constructor, scope_push_local,
+  scope_resolve_instance, scope_resolve_name,
 }
 use lang.typecheck.unify {unify}
+use std.list {length}
 
 /// A type-checked term paired with its type.
 struct TypedTerm {
@@ -519,10 +521,221 @@ def type_check_sort_full (level : I64) (expected_type : Term) : Result TypeError
             err (TypeError.not_a_type sort_term),
     }
 
-/// Type check a constructor application.
+/// Type check a constructor application: verifies the referenced
+/// inductive/constructor actually exist, that `c.num_args` matches the
+/// constructor's own declared arity, and that each PRESENT argument
+/// (`c.args` is sparse — `Option.none` marks an unfilled, not-yet-
+/// applied position, matching `lower_core_ir.mo`'s own doc comment on
+/// `Con`'s shape) type-checks against that positional param's declared
+/// type. Mirrors `core/src/core_check.rs`'s own `CoreTerm::Con` arm —
+/// including its "unregistered inductive" fallback (still individually
+/// check each present arg, just without field-type correlation, rather
+/// than rejecting outright) — scaled down to this checker's existing
+/// capabilities: no metavariable-based type-parameter recovery (unlike
+/// the Rust reference's `fresh_meta`/`unify` substitution), so a
+/// parametric constructor's arg types are checked against their
+/// LITERAL declared param types, not an instantiated one — the same
+/// simplification `type_check_app`/`extract_pi_ret` already make
+/// (comparing against a Pi's own declared arg type directly, no
+/// substitution either).
+///
+/// Note: unlike `type_check_con`, `type_check_ntv` just below needs no
+/// equivalent treatment — it was never actually a stub needing this
+/// kind of check. Neither `Term.con` nor `Term.ntv` is ever produced by
+/// this codebase's own parser (`lang/parser.mo`) today; both exist for
+/// the lowering/pretty-printing pipeline (`lang/lower_core_ir.mo`,
+/// `lang/pretty.mo`) and hand-built test fixtures. This still closes
+/// real technical debt (`type_check_con` was silently accepting any
+/// arity/shape) and is exercised by this file's own `#[test]`s below,
+/// even though no corpus `.mo` file's `check` run currently reaches it.
 def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
-    ok (mk_typed (Term.con c) expected_type)
+    match c {
+        mk cname typ_name num_args args =>
+            match typ_name {
+                ModulePath.mp ids =>
+                    let full_name : ModulePath := ModulePath.mp (list_append ids (List.cons cname List.empty)) in
+                    match scope_find_inductive typ_name scope {
+                        err _ =>
+                            match check_con_args_untyped args scope local_types locals {
+                                ok _ => ok (mk_typed (Term.con c) expected_type),
+                                err e => err e,
+                            },
+                        ok ind =>
+                            match find_constructor_in_inductive ind full_name {
+                                Option.none => err (TypeError.unknown_constructor (NameRef.nmp full_name)),
+                                Option.some ctor =>
+                                    match ctor {
+                                        InductConstructor.mk _ params _ =>
+                                            if I64.beq num_args (List.length params) then
+                                                match check_con_args_against_params args params scope local_types locals {
+                                                    ok _ => ok (mk_typed (Term.con c) expected_type),
+                                                    err e => err e,
+                                                }
+                                            else
+                                                err (TypeError.custom (con_arity_msg full_name num_args (List.length params)))
+                                    }
+                            }
+                    }
+            }
+    }
 
-/// Type check a native term.
+def con_arity_msg (full_name : ModulePath) (got : I64) (want : I64) : String :=
+    "constructor arity mismatch: " ++ show_module_path full_name ++ " expects "
+        ++ I64.to_string want ++ " arg(s), got " ++ I64.to_string got
+
+/// Individually type-check each present argument with no expected type
+/// (`Term.hole` — same "no information available" meaning `type_check`
+/// itself already gives `Term.hole` elsewhere) — the fallback for a
+/// constructor whose inductive type isn't registered in scope, matching
+/// `core_check.rs`'s own documented simplification for this case.
+#[terminating]
+def check_con_args_untyped (args : List (Option Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Bool :=
+    match args {
+        List.empty => ok true,
+        List.cons a rest =>
+            match a {
+                Option.none => check_con_args_untyped rest scope local_types locals,
+                Option.some term =>
+                    match type_check term Term.hole scope local_types locals {
+                        ok _ => check_con_args_untyped rest scope local_types locals,
+                        err e => err e,
+                    }
+            }
+    }
+
+/// Zip each present argument against the constructor's own declared
+/// params, positionally, checking each present arg against its param's
+/// literal declared type. If `args` somehow outlasts `params` (shouldn't
+/// happen once `type_check_con`'s own arity check has already run, but
+/// stay defensive rather than silently skipping the overflow), the
+/// remaining args fall back to `check_con_args_untyped`.
+#[terminating]
+def check_con_args_against_params (args : List (Option Term)) (params : List Param) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Bool :=
+    match args {
+        List.empty => ok true,
+        List.cons a rest =>
+            match params {
+                List.empty => check_con_args_untyped args scope local_types locals,
+                List.cons p prest =>
+                    match a {
+                        Option.none => check_con_args_against_params rest prest scope local_types locals,
+                        Option.some term =>
+                            match p {
+                                Param.mk _ ptyp _ _ =>
+                                    match type_check term ptyp scope local_types locals {
+                                        ok _ => check_con_args_against_params rest prest scope local_types locals,
+                                        err e => err e,
+                                    }
+                            }
+                    }
+            }
+    }
+
+/// Type check a native term. NOT a stub needing "real" checking despite
+/// looking like one — natives are opaque to the type checker BY DESIGN,
+/// mirroring `core/src/core_check.rs`'s own `CoreTerm::Ntv` arm exactly
+/// (its own doc comment: "there is no native-signature registry to
+/// consult, even in the real checker"). Accepting `expected_type`
+/// unconditionally is that same "no information, defer to the use
+/// site" behavior — Rust's `infer`/`check` split expresses it as
+/// `Ok(CoreTerm::Hole)` from `infer`, which then trivially unifies
+/// against whatever `check` compares it to; this checker's single
+/// bidirectional `expected_type` parameter already plays both roles.
 def type_check_ntv (n : Native) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     ok (mk_typed (Term.ntv n) expected_type)
+
+// --- Tests for type_check_con ---
+//
+// Neither `Term.con` nor `Term.ntv` is ever produced by this codebase's
+// own parser, so no corpus `.mo` file's `check` run exercises
+// `type_check_con` — these tests are its only real coverage. Builds a
+// minimal single-constructor `Box` inductive (one param, declared type
+// `Term.type_ 2`) directly into a fresh `Scope`, mirroring
+// `lang/tests/scope_tests.mo`/`types_tests.mo`'s own hand-built-fixture
+// convention. The param's argument uses `Term.type_ N` specifically
+// (not a literal/free-var) because `type_check_sort_full` is one of the
+// few leaf checkers that actually compares against `expected_type`
+// (see `type_check_ntv`'s own doc comment above: most leaf cases here
+// just infer and return, ignoring `expected_type` — a literal argument
+// would trivially "pass" any declared param type, proving nothing).
+
+def box_ctor_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Box") List.empty)
+
+def box_ctor_full_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Box") (List.cons (Identifier.id "box") List.empty))
+
+def box_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none
+
+def box_constructor : InductConstructor := InductConstructor.mk box_ctor_full_path (List.cons box_param List.empty) (Term.type_ 3)
+
+def box_inductive : Inductive := Inductive.mk box_ctor_path List.empty (Term.type_ 3) (List.cons box_constructor List.empty) List.empty Visibility.package_private
+
+def box_scope : Scope := {
+    module_id := box_ctor_path,
+    scope := scope_data_add_inductive scope_data_empty box_inductive,
+    parent := Option.none,
+}
+
+#[test]
+def test_type_check_con_valid_arg_ok : Bool :=
+    let arg : Term := Term.type_ 1 in
+    let c : Con := Con.mk (Identifier.id "box") box_ctor_path 1 (List.cons (Option.some arg) List.empty) in
+    match type_check_con c Term.hole box_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_con_wrong_arg_type_rejected : Bool :=
+    // `x`'s declared param type is `Term.type_ 2` — a sort at level 5
+    // is NOT a valid inhabitant (`type_check_sort_full`'s own
+    // `expected_level < level` branch), so this must be rejected.
+    let bad_arg : Term := Term.type_ 5 in
+    let c : Con := Con.mk (Identifier.id "box") box_ctor_path 1 (List.cons (Option.some bad_arg) List.empty) in
+    match type_check_con c Term.hole box_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_type_check_con_wrong_arity_rejected : Bool :=
+    // `box` declares exactly 1 param — claiming 2 must be rejected
+    // regardless of `args`' own content.
+    let arg : Term := Term.type_ 1 in
+    let c : Con := Con.mk (Identifier.id "box") box_ctor_path 2 (List.cons (Option.some arg) (List.cons (Option.some arg) List.empty)) in
+    match type_check_con c Term.hole box_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_type_check_con_unknown_constructor_rejected : Bool :=
+    let arg : Term := Term.type_ 1 in
+    let c : Con := Con.mk (Identifier.id "no_such_ctor") box_ctor_path 1 (List.cons (Option.some arg) List.empty) in
+    match type_check_con c Term.hole box_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_type_check_con_missing_arg_skipped : Bool :=
+    // A `None` slot (an unfilled, not-yet-applied position — see
+    // `Con`'s own doc comment on `type_check_con`) must not be
+    // typechecked, only skipped.
+    let c : Con := Con.mk (Identifier.id "box") box_ctor_path 1 (List.cons Option.none List.empty) in
+    match type_check_con c Term.hole box_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_con_unregistered_inductive_falls_back : Bool :=
+    // `typ_name` refers to an inductive that isn't in scope at all —
+    // still individually checks present args (a bad one is still
+    // caught), just without field-type correlation.
+    let unknown_typ : ModulePath := ModulePath.mp (List.cons (Identifier.id "NoSuchType") List.empty) in
+    let good_arg : Term := Term.type_ 1 in
+    let c_ok : Con := Con.mk (Identifier.id "whatever") unknown_typ 1 (List.cons (Option.some good_arg) List.empty) in
+    match type_check_con c_ok Term.hole box_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
