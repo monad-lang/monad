@@ -37,6 +37,11 @@ a different branch and cause confusion.
 ├── std/
 │   └── test.mo        # Test utilities (Test.assert)
 ├── examples/         # Example programs
+├── bench/            # Standalone .mo micro-benchmarks (Bench.now/Bench.report,
+│                     # #[test]-driven) -- deliberately NOT swept by the
+│                     # pre-commit hook's `test init std lang examples`, since
+│                     # benchmarks are for occasional manual measurement, not
+│                     # every-commit correctness checking
 └── plans/            # Symlink to external repo with design plans
 ```
 
