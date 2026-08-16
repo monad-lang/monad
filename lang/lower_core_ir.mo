@@ -95,7 +95,7 @@ def find_def_body (defs : List Def) (path : ModulePath) : Option Term :=
     List.empty => Option.none,
     List.cons d rest =>
       match d {
-        Def.mk name _typ term _constraints _attrs =>
+        Def.mk name _typ term _constraints _attrs _vis =>
           if modpath_eq name path
           then Option.some term
           else find_def_body rest path,
@@ -229,7 +229,7 @@ def list_has_constructor_named (cs : List InductConstructor) (name : Identifier)
 
 def inductive_has_constructor_named (ind : Inductive) (name : Identifier) : Bool :=
   match ind {
-    Inductive.mk _ _ _ constructors _ => list_has_constructor_named constructors name,
+    Inductive.mk _ _ _ constructors _ _ => list_has_constructor_named constructors name,
   }
 
 #[partial]
@@ -366,7 +366,7 @@ def lower_match_arms
     (k : List MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
   match ind {
-    Inductive.mk ind_name _ _ constructors _ =>
+    Inductive.mk ind_name _ _ constructors _ _ =>
       lower_match_arms_for_ctors ctx ind_name constructors cases acc k,
   }
 
@@ -444,7 +444,7 @@ def lower_con_with_inductive
     (acc : LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
   match ind {
-    Inductive.mk _ _ _ constructors _ =>
+    Inductive.mk _ _ _ constructors _ _ =>
       match find_ctor_tag constructors name {
         Option.some tag =>
           lower_sparse_args ctx args acc (fn present_args => fn acc1 =>

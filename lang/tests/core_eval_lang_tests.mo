@@ -45,7 +45,7 @@ def free_var (s : String) : Term := Term.var sentinel (named s)
 def num (n : I64) : Term := Term.lit (Literal.num n NumSuffix.i64)
 
 def def_decl (name : String) (term : Term) : Decl :=
-  Decl.def_d (Def.mk (mp1 name) Term.hole term List.empty List.empty)
+  Decl.def_d (Def.mk (mp1 name) Term.hole term List.empty List.empty Visibility.package_private)
 
 def build_ctx (decls : List Decl) : LowerCtx :=
   lower_ctx_from_decls (mp1 "test") decls
@@ -124,7 +124,7 @@ def z_ctor : InductConstructor := InductConstructor.mk (mp1 "z") List.empty Term
 def s_ctor : InductConstructor := InductConstructor.mk (mp1 "s") List.empty Term.hole
 
 def mynat_decl : Decl :=
-  Decl.inductive_d (Inductive.mk mynat_path List.empty Term.hole [z_ctor, s_ctor] List.empty)
+  Decl.inductive_d (Inductive.mk mynat_path List.empty Term.hole [z_ctor, s_ctor] List.empty Visibility.package_private)
 
 def mynat_z : Term := Term.con (Con.mk (Identifier.id "z") mynat_path 0 List.empty)
 
@@ -202,7 +202,7 @@ def true_ctor : InductConstructor := InductConstructor.mk (mp1 "true") List.empt
 def false_ctor : InductConstructor := InductConstructor.mk (mp1 "false") List.empty Term.hole
 
 def bool_decl : Decl :=
-  Decl.inductive_d (Inductive.mk bool_path List.empty Term.hole [true_ctor, false_ctor] List.empty)
+  Decl.inductive_d (Inductive.mk bool_path List.empty Term.hole [true_ctor, false_ctor] List.empty Visibility.package_private)
 
 def bool_true : Term := Term.con (Con.mk (Identifier.id "true") bool_path 0 List.empty)
 
