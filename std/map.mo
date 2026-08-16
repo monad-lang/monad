@@ -489,3 +489,46 @@ def HashMap.is_empty {K V : Type} (m: HashMap K V) : Bool :=
 /// `HashMap` fold/merge should write a monomorphic version specialized
 /// to their concrete key/value types (see `lang/scope.mo`'s
 /// `merge_def_refs`) rather than a generic one here.
+///
+/// `HashMap.merge_buckets` just below takes a different, better
+/// approach for the actual real-world need (`lang/module.mo`'s
+/// `merge_scope_data`, merging `ScopeData.def_refs`) — it needs no
+/// `[Constraint]` list at all, so it sidesteps this whole limitation
+/// rather than working around it.
+
+/// Merge two `HashMap`s bucket-by-bucket, WITHOUT re-hashing any key —
+/// safe specifically because both sides already used the SAME hash
+/// function to place their entries, so a key that landed in bucket `i`
+/// on one side always lands in bucket `i` on the other too. `m1`'s
+/// entries come FIRST in each merged bucket's list, so `m1` wins over
+/// `m2` on a duplicate key (matches `HashMap.bucket_lookup`'s own
+/// head-first linear scan — same "first argument wins" precedence
+/// `merge_scope_data`/`list_append`'s own callers already rely on).
+/// Needs no `[Hashable K, BOrd K]` constraint (unlike a `to_list`+
+/// refold merge through `Map.insert`) since it never calls
+/// `Hashable.hash`/`BOrd.lt`/`BOrd.gt` — just 16 `List.append` calls,
+/// one per bucket, however many entries each side holds. Measurably
+/// cheaper than the `to_list`+refold pattern this replaces in
+/// `lang/module.mo`'s `merge_scope_data` (that pattern rebuilds the
+/// WHOLE combined map via one `Map.insert`-equivalent call per entry,
+/// re-walking/reallocating a bucket on every single insert; this does a
+/// fixed 16 bucket-pair appends regardless of N) — see AGENTS.md's
+/// performance section for the measured before/after.
+def HashMap.merge_buckets {K V : Type} (m1: HashMap K V) (m2: HashMap K V) : HashMap K V :=
+  match m1 {
+    HashMap.map buckets1 =>
+      match m2 {
+        HashMap.map buckets2 =>
+          match buckets1 {
+            Buckets16.buckets a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 =>
+              match buckets2 {
+                Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+                  HashMap.map (Buckets16.buckets
+                    (List.append a0 b0) (List.append a1 b1) (List.append a2 b2) (List.append a3 b3)
+                    (List.append a4 b4) (List.append a5 b5) (List.append a6 b6) (List.append a7 b7)
+                    (List.append a8 b8) (List.append a9 b9) (List.append a10 b10) (List.append a11 b11)
+                    (List.append a12 b12) (List.append a13 b13) (List.append a14 b14) (List.append a15 b15))
+              }
+          }
+      }
+  }

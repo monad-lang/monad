@@ -863,18 +863,30 @@ Key patterns when writing self-hosted Monad code:
 6. **Measured, not worth it: flattening `HashMap`'s 16-way bucket
    dispatch** (`std/map.mo`'s `HashMap.get_bucket`/`set_bucket`,
    originally a single 16-deep `if U64.beq N idx` chain). Splitting it
-   into two ≤8-deep tiers (mirroring `lang/parser.mo`'s
+   into two <=8-deep tiers (mirroring `lang/parser.mo`'s
    `is_alpha_lower`/`is_alpha_lower2` pattern, itself a real, proven win
-   for *parser* code) was tried and measured directly against
-   `bench/scope_lookup.mo`'s hashmap build/lookup benchmarks (3 trials
-   each side, n=200): before, ~18-23ms/~22-23ms; after, ~22-24ms/~27-28ms
-   — a consistent **~20-25% regression**, not an improvement. The extra
-   function-call overhead from splitting into `_lo`/`_hi` helpers
-   outweighs the saved comparisons in this tree-walking interpreter.
-   Reverted, no code change kept. A second data point (after item 4's
+   for *parser* code) was tried and measured directly with a dedicated
+   isolated micro-benchmark (`bench/hashmap_bucket_dispatch.mo` — pure
+   `get_bucket`/`set_bucket` call volume, decoupled from `HashMap`'s own
+   hashing/allocation cost), reproduced across two independent runs at
+   two sizes (n=50000/200000): unflattened `set_bucket` 485-489ms/
+   1950-1956ms vs. flattened 638ms/2568ms; unflattened `get_bucket`
+   461-468ms/1837-1840ms vs. flattened 512ms/2045ms — a consistent
+   **~10-30% regression**, not an improvement. Root cause (inferred, not
+   separately measured): splitting into `get_bucket_lo`/`hi`
+   (`set_bucket_lo`/`hi`) trades fewer `U64.beq` comparisons per call for
+   one extra function-call boundary plus an extra `U64.lt` dispatch check
+   on *every* call, and this interpreter's per-call overhead outweighs
+   the comparisons saved at this chain depth (16 is apparently still
+   short enough that the `>15 levels` rule's *depth*-driven slowdown
+   hasn't kicked in yet; splitting adds a *call*, which is the more
+   expensive operation here). Reverted — `std/map.mo`'s `get_bucket`/
+   `set_bucket` remain the original single 16-way chain. Kept
+   `bench/hashmap_bucket_dispatch.mo` as standing infrastructure so this
+   isn't re-investigated blind. A second data point (after item 4's
    BTreeMap regression) that a proven win in one part of this
-   interpreter (parser recursion depth) doesn't automatically transfer
-   to another (hot-path dispatch call count) — measure per case.
+   interpreter (parser recursion depth) doesn't automatically transfer to
+   another (hot-path dispatch call count) — measure per case.
 7. **Native `string_lt`/`string_gt`/`string_hash` fast paths**
    (`core/src/core_native.rs` + `init/string.mo`): `String.beq` already
    had a native path (`string_eq`, plain `&str == &str`); `String.lt`/
@@ -894,9 +906,9 @@ Key patterns when writing self-hosted Monad code:
    item 8) — this native fast path is explicitly temporary and
    pragmatic, not a retreat from self-hosting.
 8. **Tail-call optimization in `core/src/core_eval.rs`**: `eval`'s `App`
-   case called `apply`, whose `Closure` branch called `eval(&body,
-   &extended, ...)` — a real recursive Rust call despite being
-   syntactically a tail call; `Match`'s dispatch had the identical
+   case called `apply`, whose `Closure` branch called
+   `eval(&body, &extended, ...)` — a real recursive Rust call despite
+   being syntactically a tail call; `Match`'s dispatch had the identical
    shape. Every self-recursive closure application (an ordinary
    accumulator-style `.mo` loop) grew the native Rust stack by a frame
    per iteration — confirmed by `bench/scope_lookup.mo` stack-
@@ -919,35 +931,73 @@ Key patterns when writing self-hosted Monad code:
    `test_typecheck_lang_main` (the compiler typechecking its own ~50-file
    corpus) dropped from 600.5s to 409.6s (~32% faster) from fewer
    allocations (no per-call `apply`/`dispatch` Rust frame).
-9. **Redundant prelude/init reload despite `PreludeInitBase` caching**
-   (`lang/module.mo`'s `load_module_with_dependencies_and_prelude_
-   cached`): a real bug, not a data-structure choice. It seeded
-   `extract_all_dependencies_go`'s `visited` accumulator with
-   `base_covered` so the dependency walk would skip re-visiting anything
-   already in the shared base — but that function returns `visited`
-   verbatim once its to-visit queue empties, so every call returned the
-   *entire* `base_covered` set back as "extra deps to load", and the
-   caller reloaded (re-parsed, re-scope-built) all of prelude+init from
-   scratch for every single file checked — precisely the O(N·D)
-   redundancy `PreludeInitBase` was built to eliminate. Fixed by seeding
-   `visiting` instead of `visited` — in this walk's non-backtracking
-   shape (a dependency's own subtree is processed via the same
-   sequential recursive call that continues on to its siblings, never
-   popped) the two parameters are already functionally equivalent "seen"
-   sets for skip purposes, so this changes nothing about what gets
-   skipped, only what gets returned. Paired with a `merge_scope_data`
-   short-circuit (new `HashMap.is_empty`, O(16) bucket check) for the
-   now-common case of merging against a genuinely empty scope. Combined
-   effect on `std/show.mo` (no extra non-base dependencies): scope-phase
-   time 4224ms → 712ms, ~6x. Files with real non-base dependencies within
-   `lang/` itself see a much smaller win (`lang/module.mo`: 418.8s →
-   367.3s, ~12%) since `PreludeInitBase` only covers prelude+init, not
-   cross-file dependencies within `lang/`/`std/` — **that remaining gap
-   (no caching for a file's dependencies on *other, non-base* corpus
-   files during a multi-file run) is a separate, larger architectural
-   change, explicitly out of scope here** (would need a whole-corpus,
-   not just prelude+init, module-scope cache) and is a natural next
-   target for a future performance pass.
+9. **Two independent, real fixes for `merge_scope_data`/`PreludeInitBase`
+   found and landed in parallel (on separate branches, later reconciled
+   by rebase) — both kept, since they address genuinely different parts
+   of the same cost.** Item 8's phase timing found the SCOPE phase
+   dominating per-file check time by up to ~90x over the CHECK phase
+   (e.g. `init/id.mo`: scope~4.3s vs. check~0.05s) — NOT the CHECK phase
+   where `union_ids`/`free_vars` (`lang/elaborate.mo`, `lang/types.mo`)
+   live, confirming `union_ids` is not worth optimizing.
+   - **Fix A** (`lang/module.mo`'s `load_module_with_dependencies_and_
+     prelude_cached`): `extract_all_dependencies_go`'s `visited`
+     accumulator was seeded with `base_covered` (the shared
+     `PreludeInitBase`'s already-loaded module set) so the walk would
+     skip re-visiting it — but that function returns `visited` verbatim
+     once its to-visit queue empties, so every call returned the
+     *entire* `base_covered` set back as "extra deps to load", and the
+     caller reloaded (re-parsed, re-scope-built) all of prelude+init
+     from scratch for every single file — precisely the O(N*D)
+     redundancy `PreludeInitBase` was built to eliminate. Fixed by
+     seeding `visiting` instead of `visited`: in this walk's
+     non-backtracking shape (a dependency's own subtree is processed via
+     the same sequential recursive call that continues on to its
+     siblings, never popped) the two parameters are already functionally
+     equivalent "seen" sets for skip purposes, so this changes nothing
+     about what gets skipped, only what gets correctly returned as
+     empty/small instead of the whole base.
+   - **Fix B** (`lang/module.mo`'s `merge_scope_data`, `std/map.mo`):
+     even with Fix A landed, `merge_scope_data base_sd merged_extra`
+     still merges the two `ScopeData`s' `def_refs` `HashMap`s every
+     file — the original implementation did this via `HashMap.to_list
+     dr1` (a full walk+concat of every bucket) followed by one
+     `Map.insert`-equivalent call per entry to fold it into the other
+     side, effectively rebuilding a `HashMap` from scratch bucket-by-
+     bucket-and-back on every call regardless of how large `dr1` was.
+     Replaced with `HashMap.merge_buckets`: merges two `HashMap`s
+     directly bucket-by-bucket via 16 `List.append` calls, needing NO
+     re-hashing at all — safe specifically because both sides already
+     hashed their keys with the same function, so a key in bucket `i` on
+     one side is always in bucket `i` on the other. Needs no
+     `[Hashable K, BOrd K]` constraint either (unlike the `to_list`+
+     refold approach it replaces), so it also sidesteps the
+     `[Constraint]`-annotated-function class-method-dispatch limitation
+     `std/map.mo` already documents elsewhere — and needs no empty-`sd2`
+     short-circuit either (a fixed 16 bucket-pair appends is already
+     cheap enough regardless of size).
+   - `bench/hashmap_bucket_dispatch.mo` (item 6) was tried FIRST as a
+     general "flatten `HashMap`'s dispatch" fix and found not to help;
+     these two much more targeted fixes (WHERE the redundant work
+     happened, and HOW one specific merge was implemented) are what
+     actually delivered the win — a reminder that a hot function's own
+     internals aren't the only place a real win can hide; how often and
+     against what it's actually called can matter just as much.
+   - Combined effect, both fixes together, measured after reconciling
+     them via rebase: `test_typecheck_lang_main` dropped from 545.05s
+     (the item-8/TCO baseline) to 78.99s — a further ~86% reduction
+     (~6.9x faster) on top of item 8's own already-large win. Full
+     corpus `check init std examples`: 51 files, 181 errors, unchanged
+     from before either fix (confirmed via a direct isolated stash
+     comparison on this exact combined commit), completing in well
+     under a minute where the pre-item-8 baseline could not finish
+     within a 590s timeout at all. Remaining known gap, explicitly out
+     of scope for both fixes: `PreludeInitBase` only covers prelude+
+     init, not a file's dependencies on *other, non-base* corpus files
+     during a multi-file run (real, non-base `use` dependencies within
+     `lang/`/`std/` still pay a real, uncached reload cost) — a
+     separate, larger architectural change (a whole-corpus, not just
+     prelude+init, module-scope cache) and a natural next target for a
+     future performance pass.
 
 ## Committing Changes
 

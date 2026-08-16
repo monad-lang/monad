@@ -13,8 +13,8 @@ use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
 use lang.scope {
-  build_scope_from_decls, list_append, modpath_eq, scope_data_add_def,
-  scope_data_empty, scope_find_inductive, scope_push_local, scope_resolve_name,
+  build_scope_from_decls, list_append, modpath_eq, scope_data_empty,
+  scope_find_inductive, scope_push_local, scope_resolve_name,
 }
 use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
@@ -695,83 +695,46 @@ def load_dependency_scopes (base_dir : String) (deps : List ModulePath) (acc : L
         }
     }
 
-/// Fold `pairs` (a `HashMap.to_list` of one `ScopeData`'s `def_refs`)
-/// into `acc`'s `def_refs`, via `scope_data_add_def` — each entry
-/// present in both wins over whatever `acc` already had, matching
-/// `merge_scope_data`'s "`sd1` wins" precedence (`sd1`'s entries are
-/// the ones folded in, last).
+/// Merge two ScopeData structures. `def_refs` merges via
+/// `HashMap.merge_buckets` (`std/map.mo`) — a direct bucket-to-bucket
+/// merge needing no `Hashable`/`BOrd` re-hashing at all, since both
+/// sides already hashed their keys with the same function. This
+/// replaced an earlier `HashMap.to_list dr1` + fold-via-`scope_data_
+/// add_def` pattern (one `Map.insert`-equivalent call per entry,
+/// rebuilding a bucket from scratch on every single insert) once
+/// `--verbose` phase timing (`lang/module.mo`'s `check_file_cached`)
+/// showed the SCOPE phase dominating per-file check time by ~90x over
+/// the CHECK phase (e.g. `init/id.mo`: scope≈4.3s vs. check≈0.05s),
+/// with `merge_scope_data` — called once per file via `build_scope_
+/// with_deps_and_prelude_cached`, merging the full shared `PreludeInit
+/// Base` scope every time — as the prime suspect; the `to_list`+refold
+/// pattern re-walks/reallocates the ENTIRE base map's buckets on every
+/// file regardless of how small that file's own `use` set is. See
+/// AGENTS.md's performance section for the measured before/after.
 ///
-/// Deliberately goes through `scope_data_add_def` (single `Map.insert`
-/// call embedded directly in a `ScopeData` struct literal, already
-/// proven to work) rather than returning a bare `HashMap ModulePath
-/// ScopeDef` from a standalone helper and assigning that to
-/// `merge_scope_data`'s own `def_refs :=` field directly — the latter
-/// hits a genuine, reproducible Rust-reference-checker bug: a
-/// user-defined function whose signature mentions a fully-applied
-/// generic type (`HashMap ModulePath ScopeDef`) returns a result that
-/// fails `type mismatch: HashMap vs. <unknown>` when placed into a
-/// struct-literal field of that same declared type, even though the
-/// exact same call succeeds as an ordinary `let`-bound value, and a
-/// direct `Map.insert ...` call (not wrapped in a user function)
-/// succeeds in that same field position. Isolated via bisection
-/// (`/home/anderscs/.claude/jobs/af024b08/tmp/module_merge_isolate*.mo`,
-/// not part of this repo) rather than assumed.
-#[terminating]
-def merge_def_refs_into (acc : ScopeData) (pairs : List (Pair ModulePath ScopeDef)) : ScopeData :=
-    match pairs {
-        List.empty => acc,
-        List.cons p rest =>
-            match p {
-                Pair.pair _ v => merge_def_refs_into (scope_data_add_def acc v) rest
-            }
-    }
-
-/// Merge two ScopeData structures. `sd1`'s entries win on conflict
-/// (folded into `sd2` last — see `merge_def_refs_into`'s doc comment).
-///
-/// Short-circuits when `sd2`'s `def_refs` is empty: the general path
-/// below pays `HashMap.to_list dr1` (an O(|dr1|) walk) followed by
-/// |dr1| individual `Map.insert` calls into `sd2` — each one rebuilding
-/// `Buckets16`'s full 16-field record (see `std/map.mo`'s
-/// `HashMap.set_bucket`) — even when `sd2` starts with nothing to
-/// resolve against, in which case the answer is trivially `dr1` itself,
-/// no walk or reinsertion needed. Real, if secondary, win: the dominant
-/// fix for this call site's actual cost was `load_module_with_
-/// dependencies_and_prelude_cached`'s own `extract_all_dependencies_go`
-/// seeding bug (see that call site's comment) — once `merged_extra`
-/// stopped being a full reload of `base_sd`, this short-circuit is what
-/// makes `merge_scope_data base_sd merged_extra` actually cheap for the
-/// common case of a file with no extra (non-prelude/init) dependencies,
-/// rather than still walking+reinserting `base_sd`'s several hundred
-/// entries into a now-genuinely-empty `merged_extra`.
+/// No empty-`sd2` short-circuit needed (an earlier revision of this
+/// function, built on the old `to_list`+refold algorithm, had one,
+/// since that algorithm's cost scaled with `|dr1|` regardless — see
+/// `load_module_with_dependencies_and_prelude_cached`'s own doc comment
+/// just above for the OTHER, larger fix that made `sd2`/`merged_extra`
+/// actually empty in the common case): `HashMap.merge_buckets` is a
+/// fixed 16 bucket-pair appends either way, cheap enough that special-
+/// casing emptiness wouldn't save anything measurable.
 #[partial]
 def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
     match sd1 {
         ScopeData.mk dr1 cd1 ins1 ind1 cls1 inf1 conf1 =>
             match sd2 {
                 ScopeData.mk dr2 cd2 ins2 ind2 cls2 inf2 conf2 =>
-                    if HashMap.is_empty dr2 then
-                        {
-                            def_refs := dr1,
-                            class_defs := list_append cd1 cd2,
-                            instances := merge_instances ins1 ins2,
-                            inductives := list_append ind1 ind2,
-                            classes := list_append cls1 cls2,
-                            infixes := list_append inf1 inf2,
-                            conflicts := list_append conf1 conf2,
-                        }
-                    else
-                        match merge_def_refs_into sd2 (HashMap.to_list dr1) {
-                            ScopeData.mk merged_dr _ _ _ _ _ _ => {
-                                def_refs := merged_dr,
-                                class_defs := list_append cd1 cd2,
-                                instances := merge_instances ins1 ins2,
-                                inductives := list_append ind1 ind2,
-                                classes := list_append cls1 cls2,
-                                infixes := list_append inf1 inf2,
-                                conflicts := list_append conf1 conf2,
-                            }
-                        }
+                    {
+                        def_refs := HashMap.merge_buckets dr1 dr2,
+                        class_defs := list_append cd1 cd2,
+                        instances := merge_instances ins1 ins2,
+                        inductives := list_append ind1 ind2,
+                        classes := list_append cls1 cls2,
+                        infixes := list_append inf1 inf2,
+                        conflicts := list_append conf1 conf2,
+                    }
             }
     }
 
