@@ -142,15 +142,17 @@ def run_hashmap_bench (n : I64) (label : String) : Bool :=
     let logged_lookup := Bench.report (String.concat "hash  lookup " label) lookup_elapsed in
     I64.beq hits n
 
-// Sizes kept modest: even a few hundred levels of self-hosted-interpreted
-// recursion (`list_build`/`map_build`/`*_lookup_range` are all "obviously"
-// tail-recursive by shape, but this interpreter apparently does not TCO
-// them) reliably stack-overflows well below `scope.mo`'s real several-
-// hundred-entry sizes — n=1000 overflowed even under `cargo run -- test`'s
-// own 64MB-stack test-worker threads. That in itself is real, relevant
-// data: it confirms per-call native-stack cost is high enough that even
-// "just build a scope of realistic size" is already expensive/risky in
-// this interpreter, regardless of which data structure is used.
+// Sizes originally kept modest: even a few hundred levels of
+// self-hosted-interpreted recursion (`list_build`/`map_build`/
+// `*_lookup_range` are all "obviously" tail-recursive by shape, but
+// `core_eval.rs`'s `eval` did not TCO them before self-hosted-compiler-
+// perf.md Step 3) reliably stack-overflowed well below `scope.mo`'s real
+// several-hundred-entry sizes — n=1000 overflowed even under
+// `cargo run -- test`'s own 64MB-stack test-worker threads. Step 3
+// trampolined `eval`'s tail positions (a closure application, a match
+// arm dispatch) into a native `loop`, removing that ceiling for exactly
+// this shape of recursion — the n=1000 tier below is the concrete proof:
+// it now runs to completion (previously did not, at any stack size).
 #[test]
 def bench_list_50 : Bool := run_list_bench 50 "n=50"
 
@@ -177,3 +179,12 @@ def bench_map_200 : Bool := run_map_bench 200 "n=200"
 
 #[test]
 def bench_hashmap_200 : Bool := run_hashmap_bench 200 "n=200"
+
+#[test]
+def bench_list_1000 : Bool := run_list_bench 1000 "n=1000"
+
+#[test]
+def bench_map_1000 : Bool := run_map_bench 1000 "n=1000"
+
+#[test]
+def bench_hashmap_1000 : Bool := run_hashmap_bench 1000 "n=1000"

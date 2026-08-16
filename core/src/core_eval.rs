@@ -22,7 +22,7 @@
 //! count it stays a `Value::PartialNtv`, exactly like an
 //! under-saturated `Value::Con`.
 
-use crate::core_ir::{CoreIr, MatchArm};
+use crate::core_ir::{CoreIr, IrRef};
 use crate::core_native::exec_native;
 use crate::core_value::{CoreEvalCycle, Env, EnvRef, GlobalCache, GlobalTable, NativeTable, Value};
 use crate::lower_core_ir::GlobalDef;
@@ -113,60 +113,159 @@ impl std::fmt::Display for CoreEvalError {
 /// Evaluate `ir` to a `Value` in environment `env`, against whole-program
 /// `globals`/`natives`, memoizing any global references forced along the
 /// way into `cache`.
+///
+/// Structured as a `loop` over owned `(cur_ir, cur_env)` state, not a
+/// plain recursive `match`, specifically so a tail call — `App` applying
+/// to a `Value::Closure`, or `Match` dispatching to an arm — becomes a
+/// loop `continue` (reassign `cur_ir`/`cur_env`, no new Rust stack frame)
+/// instead of a real recursive `eval` call. Without this, every
+/// self-recursive closure application (an ordinary accumulator-style
+/// loop written in `.mo`) grew the native Rust stack by a frame per
+/// iteration, even though it's syntactically a tail call — confirmed by
+/// `bench/scope_lookup.mo` stack-overflowing at n≈1000 even under 64MB
+/// worker-thread stacks (see self-hosted-compiler-perf.md Step 3).
+/// `CoreIr`'s recursive fields are already `IrRef = Arc<CoreIr>`, so
+/// reassigning `cur_ir`/`cur_env` each iteration is an `Arc::clone`
+/// (O(1) refcount bump), not a subtree copy.
+///
+/// Every OTHER recursive `eval` call below (evaluating `App`'s
+/// `fun`/`arg`, `Match`'s `scrutinee`, `Con`/`Ntv`'s argument list) stays
+/// real Rust recursion, deliberately: those are bounded by *static*
+/// source-term nesting depth, not by *dynamic* call count, so they don't
+/// need trampolining — only the two positions that can loop an unbounded
+/// number of times at runtime do. This means genuinely non-tail-recursive
+/// `.mo` code (e.g. `len xs = match xs { cons _ t => 1 + len t, ... }`,
+/// where the recursive call is wrapped by `+`) still consumes O(N) Rust
+/// stack depth, same as in any language with TCO — the 64MB worker-thread
+/// stack (`lib.rs`) stays in place as a backstop for that case.
 pub fn eval(
-  ir: &CoreIr,
+  ir: &IrRef,
   env: &EnvRef,
   globals: &GlobalTable,
   natives: &NativeTable,
   cache: &mut GlobalCache,
 ) -> Result<Value, CoreEvalError> {
-  match ir {
-    CoreIr::Local(i) => Env::get(env, *i)
-      .cloned()
-      .ok_or(CoreEvalError::UnboundLocal(*i)),
-    CoreIr::Global(idx) => force_global(*idx, globals, natives, cache),
-    CoreIr::Lam { body } => Ok(Value::Closure {
-      body: body.clone(),
-      env: env.clone(),
-    }),
-    CoreIr::App { fun, arg } => {
-      // Strict call-by-value: both sides are fully reduced to a Value
-      // before `apply` ever runs — no unevaluated thunk is ever
-      // substituted in, unlike `EvalTerm::eval`'s naive-call-by-name
-      // `subst`.
-      let f = eval(fun, env, globals, natives, cache)?;
-      let a = eval(arg, env, globals, natives, cache)?;
-      apply(f, a, globals, natives, cache)
-    }
-    CoreIr::Lit(l) => Ok(Value::Lit(l.clone())),
-    CoreIr::Match { scrutinee, arms } => {
-      let v = eval(scrutinee, env, globals, natives, cache)?;
-      dispatch(v, arms, env, globals, natives, cache)
-    }
-    CoreIr::MatchFail { inductive, ctor } => Err(CoreEvalError::NonExhaustiveMatch(
-      inductive.clone(),
-      ctor.clone(),
-    )),
-    CoreIr::Con {
-      tag,
-      arity: _,
-      args,
-    } => {
-      let mut evaluated = Vec::with_capacity(args.len());
-      for a in args {
-        evaluated.push(eval(a, env, globals, natives, cache)?);
+  let mut cur_ir: IrRef = ir.clone();
+  let mut cur_env: EnvRef = env.clone();
+  loop {
+    match cur_ir.as_ref() {
+      CoreIr::Local(i) => {
+        return Env::get(&cur_env, *i)
+          .cloned()
+          .ok_or(CoreEvalError::UnboundLocal(*i));
       }
-      Ok(Value::Con {
-        tag: *tag,
-        args: evaluated,
-      })
-    }
-    CoreIr::Ntv { native_id, args } => {
-      let mut evaluated = Vec::with_capacity(args.len());
-      for a in args {
-        evaluated.push(eval(a, env, globals, natives, cache)?);
+      CoreIr::Global(idx) => {
+        return force_global(*idx, globals, natives, cache);
       }
-      fire_or_accumulate(*native_id, evaluated, globals, natives, cache)
+      CoreIr::Lam { body } => {
+        return Ok(Value::Closure {
+          body: body.clone(),
+          env: cur_env.clone(),
+        });
+      }
+      CoreIr::App { fun, arg } => {
+        // Strict call-by-value: both sides are fully reduced to a Value
+        // before applying — no unevaluated thunk is ever substituted
+        // in, unlike `EvalTerm::eval`'s naive-call-by-name `subst`.
+        let f = eval(fun, &cur_env, globals, natives, cache)?;
+        let a = eval(arg, &cur_env, globals, natives, cache)?;
+        // Inlined from the former standalone `apply` (still kept, see
+        // below, for callers that already hold a `Value` to apply):
+        // the `Closure` branch is the actual tail-call fix — loop back
+        // instead of recursing into `eval` — every other branch
+        // terminates immediately, same as `apply` does today.
+        match f {
+          Value::Closure { body, env } => {
+            cur_env = Env::extend(&env, a);
+            cur_ir = body;
+            continue;
+          }
+          Value::Con { tag, mut args } => {
+            args.push(a);
+            return Ok(Value::Con { tag, args });
+          }
+          Value::PartialNtv {
+            native_id,
+            mut args,
+          } => {
+            args.push(a);
+            return fire_or_accumulate(native_id, args, globals, natives, cache);
+          }
+          Value::Lit(lit) => {
+            return Err(CoreEvalError::NotAFunction(Value::Lit(lit)));
+          }
+        }
+      }
+      CoreIr::Lit(l) => {
+        return Ok(Value::Lit(l.clone()));
+      }
+      CoreIr::Match { scrutinee, arms } => {
+        let v = eval(scrutinee, &cur_env, globals, natives, cache)?;
+        // Inlined from the former standalone `dispatch` (no external
+        // callers — folded in directly rather than kept as a separate
+        // function that would need its own tail-call handling): index
+        // straight into `arms` by the scrutinee's tag (no scan — this
+        // is exactly `lower_match`'s whole point), then extend the
+        // *enclosing* environment (`cur_env` — the one active where
+        // this `Match` node itself sits, NOT a fresh one) with the
+        // constructor's own fields. This matters: a match arm's body is
+        // not closed over just its own fields — `CoreMatchCase.value`
+        // is lowered without `open_n` (see `lower_core_ir.rs::
+        // lower_match`'s doc comment), so a `Bound`/`Local` index inside
+        // it can still count *past* the newly-introduced field bindings
+        // to reach an outer enclosing binder (e.g. `\x -> match xs {
+        // cons h t => x }` — `x`'s reference inside the arm has to walk
+        // past `h`/`t` to reach it). Fields are pushed in their natural
+        // (declaration) order, which leaves the *last*-declared field
+        // innermost (`Local(0)`), matching `project_dict_field`'s
+        // documented `fields.len()-1-idx` convention.
+        let Value::Con { tag, args } = v else {
+          return Err(CoreEvalError::NotAConstructor(v));
+        };
+        let arm = arms
+          .get(tag as usize)
+          .ok_or(CoreEvalError::CaseIndexOutOfBounds(tag))?;
+        if args.len() != arm.bind_count as usize {
+          return Err(CoreEvalError::ArityMismatch {
+            expected: arm.bind_count,
+            got: args.len() as u32,
+          });
+        }
+        let mut extended = cur_env.clone();
+        for field in args {
+          extended = Env::extend(&extended, field);
+        }
+        cur_env = extended;
+        cur_ir = arm.body.clone();
+        continue;
+      }
+      CoreIr::MatchFail { inductive, ctor } => {
+        return Err(CoreEvalError::NonExhaustiveMatch(
+          inductive.clone(),
+          ctor.clone(),
+        ));
+      }
+      CoreIr::Con {
+        tag,
+        arity: _,
+        args,
+      } => {
+        let mut evaluated = Vec::with_capacity(args.len());
+        for a in args {
+          evaluated.push(eval(a, &cur_env, globals, natives, cache)?);
+        }
+        return Ok(Value::Con {
+          tag: *tag,
+          args: evaluated,
+        });
+      }
+      CoreIr::Ntv { native_id, args } => {
+        let mut evaluated = Vec::with_capacity(args.len());
+        for a in args {
+          evaluated.push(eval(a, &cur_env, globals, natives, cache)?);
+        }
+        return fire_or_accumulate(*native_id, evaluated, globals, natives, cache);
+      }
     }
   }
 }
@@ -213,8 +312,13 @@ fn fire_or_accumulate(
 /// no tree copy) and evaluate its body there, rather than rewriting the
 /// body to replace every occurrence of the bound variable. Public so a
 /// caller that's already forced a global to a `Value` (e.g. `main`, in
-/// `lib.rs::run`) can apply further arguments to it (CLI `argv`) without
-/// re-deriving this match itself.
+/// `lib.rs::run`, or `await_fiber` in `core_native.rs`) can apply further
+/// arguments to it without re-deriving this match itself. Delegating the
+/// `Closure` branch into `eval` (trampolined — see its doc comment) means
+/// these callers get the same bounded-native-stack-growth guarantee for
+/// whatever closure they apply, with no changes needed on their end —
+/// `eval`'s own internal `App`-to-`Closure` tail calls are just the
+/// hottest, most common way this same code path gets reached.
 pub fn apply(
   f: Value,
   a: Value,
@@ -240,48 +344,6 @@ pub fn apply(
     }
     Value::Lit(lit) => Err(CoreEvalError::NotAFunction(Value::Lit(lit))),
   }
-}
-
-/// Constructor-tag dispatch: index straight into `arms` by the
-/// scrutinee's tag (no scan, unlike a name-keyed `match` — this is
-/// exactly `lower_match`'s whole point), then extend the *enclosing*
-/// environment (`env` — the one active where this `Match` node itself
-/// sits, NOT a fresh one) with the constructor's own fields. This
-/// matters: a match arm's body is not closed over just its own fields —
-/// `CoreMatchCase.value` is lowered without `open_n` (see
-/// `lower_core_ir.rs::lower_match`'s doc comment), so a `Bound`/`Local`
-/// index inside it can still count *past* the newly-introduced field
-/// bindings to reach an outer enclosing binder (e.g. `\x -> match xs {
-/// cons h t => x }` — `x`'s reference inside the arm has to walk past
-/// `h`/`t` to reach it). Fields are pushed in their natural (declaration)
-/// order, which leaves the *last*-declared field innermost (`Local(0)`),
-/// matching `project_dict_field`'s documented `fields.len()-1-idx`
-/// convention.
-fn dispatch(
-  scrutinee: Value,
-  arms: &[MatchArm],
-  env: &EnvRef,
-  globals: &GlobalTable,
-  natives: &NativeTable,
-  cache: &mut GlobalCache,
-) -> Result<Value, CoreEvalError> {
-  let Value::Con { tag, args } = scrutinee else {
-    return Err(CoreEvalError::NotAConstructor(scrutinee));
-  };
-  let arm = arms
-    .get(tag as usize)
-    .ok_or(CoreEvalError::CaseIndexOutOfBounds(tag))?;
-  if args.len() != arm.bind_count as usize {
-    return Err(CoreEvalError::ArityMismatch {
-      expected: arm.bind_count,
-      got: args.len() as u32,
-    });
-  }
-  let mut extended = env.clone();
-  for field in args {
-    extended = Env::extend(&extended, field);
-  }
-  eval(&arm.body, &extended, globals, natives, cache)
 }
 
 /// Force global slot `idx` to a `Value`, memoizing the result in
@@ -389,7 +451,8 @@ mod tests {
     let globals = GlobalTable::new(vec![]);
     let natives = empty_natives();
     let mut cache = GlobalCache::new(0);
-    eval(ir, &Env::nil(), &globals, &natives, &mut cache)
+    let ir_ref: IrRef = std::sync::Arc::new(ir.clone());
+    eval(&ir_ref, &Env::nil(), &globals, &natives, &mut cache)
   }
 
   #[test]
@@ -637,5 +700,84 @@ mod tests {
     let mut cache = GlobalCache::new(1);
     let v = force_global(0, &globals, &natives, &mut cache).unwrap();
     assert!(matches!(v, Value::Closure { .. }));
+  }
+
+  #[test]
+  fn test_tail_recursive_countdown_survives_a_million_iterations_on_default_stack() {
+    // The direct proof of self-hosted-compiler-perf.md Step 3's fix:
+    // a self-recursive `Global` closure shaped like an ordinary
+    // accumulator-style `.mo` loop --
+    //   countdown n acc = if n == 0 then acc else countdown (n-1) (acc+1)
+    // -- driven to a large N, run under whatever stack size this test
+    // binary's own thread already has (no `thread::Builder` stack
+    // override, unlike the 64MB worker-thread pattern `lib.rs` uses as a
+    // backstop for genuinely non-tail-recursive code). Before this fix,
+    // `bench/scope_lookup.mo` stack-overflowed at n≈1000 even under 64MB
+    // stacks -- every tail call grew the native Rust stack by a frame.
+    // `i64_eq`/`i64_sub`/`i64_add` are wired as ordinary named natives
+    // (arbitrary small ids/tags local to this test, not the real
+    // dispatch table's) purely to drive the loop's termination check and
+    // accumulator update without needing a real inductive `Bool`.
+    use crate::core_ir::IrLit;
+    use crate::lower_core_ir::{CtorTag, WellKnownCtors};
+    use crate::term::id;
+
+    let natives = NativeTable::new(
+      vec![id("i64_eq"), id("i64_sub"), id("i64_add")],
+      vec![2, 2, 2],
+      WellKnownCtors {
+        bool_true: Some(CtorTag { tag: 0, arity: 0 }),
+        bool_false: Some(CtorTag { tag: 1, arity: 0 }),
+        ..Default::default()
+      },
+    );
+
+    // \n -> \acc ->
+    //   match (i64_eq n 0) {
+    //     [tag 0, true]  => acc
+    //     [tag 1, false] => Global(0) (i64_sub n 1) (i64_add acc 1)
+    //   }
+    // Local(0) = acc (innermost), Local(1) = n, inside the body -- same
+    // De Bruijn convention `test_k_combinator_closure_captures_correct_
+    // binding` above already relies on. Both arms bind 0 fields (`Bool`
+    // constructors are nullary), so the match doesn't shift indices.
+    let body = core_ir::lam(core_ir::lam(core_ir::match_(
+      core_ir::ntv(0, vec![core_ir::local(1), num(0)]),
+      vec![
+        core_ir::arm(0, core_ir::local(0)),
+        core_ir::arm(
+          0,
+          core_ir::app(
+            core_ir::app(
+              core_ir::global(0),
+              core_ir::ntv(1, vec![core_ir::local(1), num(1)]),
+            ),
+            core_ir::ntv(2, vec![core_ir::local(0), num(1)]),
+          ),
+        ),
+      ],
+    )));
+    let globals = GlobalTable::new(vec![GlobalDef::Def(std::sync::Arc::new(body))]);
+    let mut cache = GlobalCache::new(1);
+    let countdown = force_global(0, &globals, &natives, &mut cache).unwrap();
+
+    let n: i64 = 1_000_000;
+    let with_n = apply(
+      countdown,
+      Value::Lit(IrLit::Num(n, NumSuffix::I64)),
+      &globals,
+      &natives,
+      &mut cache,
+    )
+    .unwrap();
+    let result = apply(
+      with_n,
+      Value::Lit(IrLit::Num(0, NumSuffix::I64)),
+      &globals,
+      &natives,
+      &mut cache,
+    )
+    .unwrap();
+    assert!(matches!(result, Value::Lit(IrLit::Num(v, _)) if v == n));
   }
 }
