@@ -27,6 +27,13 @@ def IO.read_file (path : String) : IO String
 #[native "file_exists"]
 def IO.file_exists (path : String) : IO Bool
 
+#[native "is_dir"]
+def IO.is_dir (path : String) : IO Bool
+
+// Bare entry names (not full paths), sorted, one directory level.
+#[native "list_dir"]
+def IO.list_dir (path : String) : IO (List String)
+
 #[native "get_env"]
 def IO.get_env (s : String) : IO (Option String)
 

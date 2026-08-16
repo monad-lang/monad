@@ -1,7 +1,7 @@
 /// Module loading infrastructure for the self-hosted compiler.
 /// Parses source text and builds scope data from declarations.
 
-use io {IO, file_exists, println, read_file}
+use io {IO, file_exists, is_dir, list_dir, println, read_file}
 use lang.types {
   Decl, Def, Identifier, InductConstructor, Inductive, LoadedModules, LocalScope,
   LocalVar, ModulePath, NameRef, Scope, ScopeData, ScopeInstance, Term, def_d,
@@ -19,7 +19,7 @@ use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 use std.list {Show, all, length}
 use std.show {Show}
 
-open IO {file_exists, println, read_file}
+open IO {file_exists, is_dir, list_dir, println, read_file}
 open ParseResult {fail, success}
 
 /// Module path for the init directory
@@ -776,90 +776,118 @@ def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (lo
 // in sequence, so one failing `def` doesn't affect whether the next
 // one can still be checked.
 //
-// KNOWN GAP (pre-existing, not introduced by `check` — the exact same
-// `type_check body Term.hole scope empty_local_types locals` call is
-// already made, unchanged, by `typecheck_def_with_scope` above, and
-// reproduces identically through it): any `def` with at least one
-// parameter reports a `TypeError.unknown_var` for its OWN parameter's
-// type annotation — confirmed with a minimal repro (`type Color {
-// red, green }` + `def id_color (c : Color) : Color := c` fails with
-// "unknown variable 'Color'", even though `Color` is in scope and a
-// zero-parameter `def c : Color := red` on the same scope succeeds
-// fine). A def's parameters desugar to nested `Term.lam` wrapping
-// around the body (`lam_params`, lang/parser.mo), and something in how
-// `lang.typecheck.infer`'s lambda-checking rule resolves a `Term.lam`'s
-// own `typ` field doesn't reach `scope` correctly yet — so this hits
-// bare type-parameter names (`A`/`B`/`C`), native types (`String`,
-// `U8`), and ordinary same-module or cross-module type names alike,
-// which in practice means most real-world parameterized defs (i.e.
-// most real code) report a false-positive type error today. This is a
-// real, separate self-hosted-typechecker completeness gap (same
-// category as `lang/scope.mo`'s struct-in-scope gap, documented in
-// `lang/tests/typecheck_examples_tests.mo`) — not something `check`
-// itself should paper over, and well beyond this change's scope to
-// fix. `check`'s *parse* phase (strict, via `try_parse_decls_strict`)
-// is unaffected and is where most everyday syntax-error bugs actually
-// get caught; the type-check phase is only
-// as complete as `lang.typecheck.infer` currently is.
+// KNOWN GAP, PARTIALLY FIXED: any `def` with at least one parameter
+// used to report a `TypeError.unknown_var` for its OWN parameter's
+// type annotation whenever that annotation referenced an inductive or
+// native type by name (`Color`-style user types AND `String`/`U8`-style
+// native types alike, since `init/prelude.mo` declares native
+// primitive types as ordinary zero-constructor `type X {}` inductives
+// that go through the exact same registration path) — root cause was
+// `lang/scope.mo`'s `build_scope_inductive` registering an inductive's
+// CONSTRUCTORS into scope but never the type's own NAME, so
+// `scope_resolve_name` (which only ever searches the def-lookup
+// namespace, never the separate `.inductives` list) couldn't resolve a
+// bare type name used as an ordinary term — e.g. a `def`'s parameter
+// type annotation, checked via `type_check_lam`'s infer-mode branch in
+// `lang.typecheck.infer`. Fixed there (mirroring `add_builtins`' own
+// `add_builtin_type`, which already did this correctly for the one
+// hardcoded `Type` pseudo-type) — confirmed via `examples/hello.mo`
+// dropping its two `unknown variable 'String'` errors.
+//
+// STILL OPEN: bare Forall-bound type-PARAMETER names (`A`/`B`/`C` —
+// implicit/universal type variables, e.g. `init/id.mo`'s `def Id.run (a
+// : Id A) : A := ...`, confirmed still failing with `unknown variable
+// 'A'`) are a separate, harder gap — `A` is never a global scope name
+// OR an inductive; it only exists as a `Forall`-bound name in the def's
+// own (separately elaborated) `typ` field, and nothing in this
+// `type_check body Term.hole scope empty_local_types locals` call ever
+// walks `df`'s `typ` to skolemize its Forall binders into `locals`
+// before checking `body`. Needs real design work (walk the elaborated
+// `typ`'s `Forall` chain and push each bound name into `locals` as a
+// `Term.type_ 0`-typed `LocalVar` before checking the body — or thread
+// the declared `typ` through as `expected_type` instead of `Term.hole`
+// and let `type_check_lam`'s Pi-branch handle it), not a small patch
+// like the fix above — tracked as a follow-up, not fixed here.
+// `check`'s *parse* phase (strict, via `try_parse_decls_strict`) is
+// unaffected either way and is where most everyday syntax-error bugs
+// actually get caught; the type-check phase is only as complete as
+// `lang.typecheck.infer` currently is.
 
 /// Same `def_d`/`inductive_d` coverage as `typecheck_decl_with_scope`
 /// — other decl kinds (use/open/scoped_open/infix/class/instance/
 /// struct) are skipped, matching today's typecheck harness; not
 /// expanding that separately-tracked gap here.
+///
+/// `verbose` threads a per-declaration progress trace (which def/type/
+/// constructor is currently being checked) down through every level —
+/// these all became `IO`-returning (were pure `Bool`/`List String`)
+/// purely to allow that `println`; the accumulation logic itself is
+/// unchanged.
 #[partial]
-def check_module_with_scope (scope : Scope) (decls : List Decl) (locals : LocalScope) (path : Option String) : List String :=
+def check_module_with_scope (scope : Scope) (decls : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match decls {
-        List.empty => List.empty,
-        List.cons d rest =>
-            let here : List String := check_decl_with_scope d scope locals path in
-            list_append here (check_module_with_scope scope rest locals path)
+        List.empty => do { return List.empty },
+        List.cons d rest => do {
+            let here : List String <- check_decl_with_scope d scope locals path verbose;
+            let there : List String <- check_module_with_scope scope rest locals path verbose;
+            return (list_append here there)
+        }
     }
 
 #[partial]
-def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match d {
-        Decl.def_d df => check_def_with_scope df scope locals path,
-        Decl.inductive_d ind => check_inductive_with_scope ind scope locals path,
-        _ => List.empty
+        Decl.def_d df => check_def_with_scope df scope locals path verbose,
+        Decl.inductive_d ind => check_inductive_with_scope ind scope locals path verbose,
+        _ => do { return List.empty }
     }
 
 #[partial]
-def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match df {
-        Def.mk name typ body _constraints _attrs _vis =>
-            if is_term_hole body then
-                List.empty
-            else
-                match type_check body Term.hole scope empty_local_types locals {
+        Def.mk name typ body _constraints _attrs _vis => do {
+            if verbose then println ("  checking def " ++ module_path_to_string name) else do { return unit };
+            if is_term_hole body then do {
+                return List.empty
+            } else do {
+                return (match type_check body Term.hole scope empty_local_types locals {
                     Result.ok _ => List.empty,
                     Result.err e => [render_type_error (module_path_to_string name) path e]
-                }
+                })
+            }
+        }
     }
 
 #[partial]
-def check_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+def check_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match ind {
-        Inductive.mk _name _params _typ constructors _attrs _vis =>
-            check_constructors_with_scope constructors scope locals path
+        Inductive.mk name _params _typ constructors _attrs _vis => do {
+            if verbose then println ("  checking type " ++ module_path_to_string name) else do { return unit };
+            check_constructors_with_scope constructors scope locals path verbose
+        }
     }
 
 #[partial]
-def check_constructors_with_scope (cons : List InductConstructor) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+def check_constructors_with_scope (cons : List InductConstructor) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match cons {
-        List.empty => List.empty,
-        List.cons c rest =>
-            let here : List String := check_constructor_with_scope c scope locals path in
-            list_append here (check_constructors_with_scope rest scope locals path)
+        List.empty => do { return List.empty },
+        List.cons c rest => do {
+            let here : List String <- check_constructor_with_scope c scope locals path verbose;
+            let there : List String <- check_constructors_with_scope rest scope locals path verbose;
+            return (list_append here there)
+        }
     }
 
 #[partial]
-def check_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals : LocalScope) (path : Option String) : List String :=
+def check_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match c {
-        InductConstructor.mk name _params typ =>
-            match type_check typ Term.hole scope empty_local_types locals {
+        InductConstructor.mk name _params typ => do {
+            if verbose then println ("    checking constructor " ++ module_path_to_string name) else do { return unit };
+            return (match type_check typ Term.hole scope empty_local_types locals {
                 Result.ok _ => List.empty,
                 Result.err e => [render_type_error (module_path_to_string name) path e]
-            }
+            })
+        }
     }
 
 struct FileCheckResult {
@@ -881,9 +909,10 @@ struct FileCheckResult {
 /// strict *parse* treatment, keeping this change's blast radius
 /// contained to what `check` needs.
 #[partial]
-def check_file (file_path : String) : IO FileCheckResult {
+def check_file (file_path : String) (verbose : Bool) : IO FileCheckResult {
     let exists : Bool <- file_exists file_path;
     if exists then do {
+        if verbose then println ("checking " ++ file_path) else do { return unit };
         let content : String <- IO.read_file file_path;
         let mod_name : String := module_name_from_path file_path;
         let scope_opt : Option Scope <- build_scope_with_deps_and_prelude file_path mod_name;
@@ -895,7 +924,7 @@ def check_file (file_path : String) : IO FileCheckResult {
                             vars := List.empty,
                             parent := Option.none,
                         };
-                        let diags : List String := check_module_with_scope scope decls empty_locs (Option.some file_path);
+                        let diags : List String <- check_module_with_scope scope decls empty_locs (Option.some file_path) verbose;
                         return { path := file_path, diagnostics := diags }
                     },
                     Result.err diagnostic => do {
@@ -903,13 +932,66 @@ def check_file (file_path : String) : IO FileCheckResult {
                     }
                 },
             Option.none => do {
-                return { path := file_path, diagnostics := ["error: failed to load dependencies for " ++ file_path] }
+                return { path := file_path, diagnostics := ["error: failed to load dependencies for " ++ file_path ++ " (a `use`d module failed to resolve or parse — re-run with a narrower file list, or check each `use`/`open` target under this file's search path, to isolate which one)"] }
             }
         }
     } else do {
         return { path := file_path, diagnostics := ["error: file not found: " ++ file_path] }
     }
 }
+
+// --- Directory-recursive corpus collection (self-hosted `find *.mo`) ---
+//
+// `IO.list_dir`/`IO.is_dir` are directory-listing natives — one level,
+// bare entry names, sorted. Everything below builds a recursive walk on
+// top of them, giving `check` (via `expand_check_paths`) parity with the
+// Rust reference's `check --workspace`/directory-argument support
+// without shelling out to `find`.
+
+/// Recursively collect every `*.mo` file under `dir`.
+#[partial]
+def collect_mo_files (dir : String) : IO (List String) := do {
+    let entries : List String <- list_dir dir;
+    collect_mo_files_entries dir entries
+}
+
+/// Walk `dir`'s own entries (as returned by `IO.list_dir`), recursing
+/// into subdirectories and keeping `.mo`-suffixed files.
+#[partial]
+def collect_mo_files_entries (dir : String) (entries : List String) : IO (List String) :=
+    match entries {
+        List.empty => do { return List.empty },
+        List.cons name rest => do {
+            let path : String := dir ++ "/" ++ name;
+            let is_directory : Bool <- is_dir path;
+            let here : List String <- if is_directory then
+                    collect_mo_files path
+                else if String.ends_with path ".mo" then do {
+                    return [path]
+                } else do {
+                    return List.empty
+                };
+            let there : List String <- collect_mo_files_entries dir rest;
+            return (list_append here there)
+        }
+    }
+
+/// Expand a list of CLI path arguments into a flat file list — any
+/// entry that's a directory is recursively walked for `.mo` files via
+/// `collect_mo_files`; a plain file argument is kept as-is (even if it
+/// doesn't end in `.mo`, matching `check`'s existing behavior of
+/// trusting an explicit file argument literally).
+#[partial]
+def expand_check_paths (paths : List String) : IO (List String) :=
+    match paths {
+        List.empty => do { return List.empty },
+        List.cons p rest => do {
+            let is_directory : Bool <- is_dir p;
+            let here : List String <- if is_directory then collect_mo_files p else do { return [p] };
+            let there : List String <- expand_check_paths rest;
+            return (list_append here there)
+        }
+    }
 
 #[test]
 def test_parse_all_decls_empty : Bool :=
@@ -1311,36 +1393,38 @@ def string_contains_helper (haystack : String) (needle : String) : Bool :=
     else string_contains_helper (String.drop 1 haystack) needle
 
 #[test]
-def test_check_module_with_scope_all_pass : Bool :=
-    let path : ModulePath := ModulePath.mp List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef c : Color := red" in
+def test_check_module_with_scope_all_pass : IO Bool := do {
+    let path : ModulePath := ModulePath.mp List.empty;
+    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef c : Color := red";
     match result {
-        ParseResult.success _ decls =>
-            let sd : ScopeData := build_scope_from_decls path decls in
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none } in
-            let locals : LocalScope := { vars := List.empty, parent := Option.none } in
-            let diags : List String := check_module_with_scope scope decls locals Option.none in
-            match diags {
+        ParseResult.success _ decls => do {
+            let sd : ScopeData := build_scope_from_decls path decls;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            let diags : List String <- check_module_with_scope scope decls locals Option.none false;
+            return (match diags {
                 List.empty => true,
                 List.cons _ _ => false
-            },
-        ParseResult.fail _ => false
+            })
+        },
+        ParseResult.fail _ => do { return false }
     }
+}
 
 /// Confirms `check_module_with_scope` *accumulates* — the failing
 /// `bad` def doesn't stop `good` (before it) from being reported as
 /// fine, and doesn't stop the walk from completing.
 #[test]
-def test_check_module_with_scope_accumulates_failures : Bool :=
-    let path : ModulePath := ModulePath.mp List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef good : Color := red\ndef bad : Color := nonexistent_name" in
+def test_check_module_with_scope_accumulates_failures : IO Bool := do {
+    let path : ModulePath := ModulePath.mp List.empty;
+    let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef good : Color := red\ndef bad : Color := nonexistent_name";
     match result {
-        ParseResult.success _ decls =>
-            let sd : ScopeData := build_scope_from_decls path decls in
-            let scope : Scope := { module_id := path, scope := sd, parent := Option.none } in
-            let locals : LocalScope := { vars := List.empty, parent := Option.none } in
-            let diags : List String := check_module_with_scope scope decls locals Option.none in
-            match diags {
+        ParseResult.success _ decls => do {
+            let sd : ScopeData := build_scope_from_decls path decls;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            let diags : List String <- check_module_with_scope scope decls locals Option.none false;
+            return (match diags {
                 List.cons msg rest =>
                     string_contains_helper msg "unknown variable" &&
                     match rest {
@@ -1348,13 +1432,15 @@ def test_check_module_with_scope_accumulates_failures : Bool :=
                         List.cons _ _ => false
                     },
                 List.empty => false
-            },
-        ParseResult.fail _ => false
+            })
+        },
+        ParseResult.fail _ => do { return false }
     }
+}
 
 #[test]
 def test_check_file_reports_missing_file : Bool :=
-    match check_file "definitely/does/not/exist.mo" {
+    match check_file "definitely/does/not/exist.mo" false {
         IO.io result =>
             match result {
                 FileCheckResult.mk _path diags =>

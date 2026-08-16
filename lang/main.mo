@@ -4,7 +4,7 @@ use process {exec_cmd}
 use lang.types {Decl, LoadedModules}
 use lang.codegen.ir {emit_module}
 use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
-use lang.module {FileCheckResult, LoadedModules, check_file, load_file_modules, try_parse_decls, try_parse_decls_strict}
+use lang.module {FileCheckResult, LoadedModules, check_file, expand_check_paths, load_file_modules, try_parse_decls, try_parse_decls_strict}
 use lang.cli {*}
 use std.list {Show}
 
@@ -115,25 +115,31 @@ def print_diagnostics (diags : List String) : IO I64 :=
 
 /// `checked`/`errors` accumulate across all files — errors are counted
 /// per-diagnostic (a file with 3 failing defs contributes 3), matching
-/// `monad-rs check`'s own error-tally convention. Quiet on a clean
-/// file (no diagnostics printed), matching `monad-rs check`'s
-/// summary-focused output.
+/// `monad-rs check`'s own error-tally convention. Every file gets an
+/// explicit `ok`/`FAIL` line (a passing file used to print nothing at
+/// all, indistinguishable from "not reached" — see the corpus-check
+/// driver this feeds, which needs a real per-file pass/fail matrix,
+/// not just a final count).
 #[partial]
-def run_check_loop (files : List String) (checked : I64) (errors : I64) : IO I64 :=
+def run_check_loop (files : List String) (checked : I64) (errors : I64) (verbose : Bool) : IO I64 :=
     match files {
         List.empty => do {
             println (I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)");
             return (if I64.gt errors 0 then 1 else 0)
         },
         List.cons f rest => do {
-            let result : FileCheckResult <- check_file f;
+            let result : FileCheckResult <- check_file f verbose;
             match result {
-                FileCheckResult.mk _path diags =>
+                FileCheckResult.mk path diags =>
                     match diags {
-                        List.empty => run_check_loop rest (checked + 1) errors,
+                        List.empty => do {
+                            println ("ok    " ++ path);
+                            run_check_loop rest (checked + 1) errors verbose
+                        },
                         List.cons _ _ => do {
+                            println ("FAIL  " ++ path ++ " (" ++ I64.to_string (List.length diags) ++ " error(s))");
                             print_diagnostics diags;
-                            run_check_loop rest (checked + 1) (errors + List.length diags)
+                            run_check_loop rest (checked + 1) (errors + List.length diags) verbose
                         }
                     }
             }
@@ -148,9 +154,20 @@ def run_check_loop (files : List String) (checked : I64) (errors : I64) : IO I64
 /// declaration's type error — other declaration kinds (use/open/
 /// class/instance/struct) aren't checked yet, matching the self-hosted
 /// typechecker's current coverage.
+///
+/// Any argument that's a directory is expanded to every `.mo` file
+/// under it first (`lang.module.expand_check_paths`, recursive, via
+/// `IO.list_dir`/`IO.is_dir`) — so `check init std lang examples` walks
+/// the whole corpus the same way `monad-rs check --workspace` does,
+/// without needing an external `find`. `verbose` (`--verbose`/`-v`)
+/// prints a per-declaration progress trace as each file is checked —
+/// for isolating exactly where a large file's check gets stuck, since
+/// the flat diagnostic list alone doesn't say where the checker got to.
 #[partial]
-def run_check (files : List String) : IO I64 :=
-    run_check_loop files 0 0
+def run_check (files : List String) (verbose : Bool) : IO I64 := do {
+    let expanded : List String <- expand_check_paths files;
+    run_check_loop expanded 0 0 verbose
+}
 
 // `Command` and its argv parser are hand-written (not `#[derive_cli]`) and
 // this file stays free of any macro/attribute-derive syntax on purpose: the
@@ -165,7 +182,7 @@ def run_check (files : List String) : IO I64 :=
 type Command {
     compile (file: String) (out_name: String) (verbose: Bool),
     pretty (file: String),
-    check (files: List String),
+    check (files: List String) (verbose: Bool),
     help
 }
 
@@ -210,7 +227,10 @@ def Command.from_args (args : List String) : Command :=
                         },
                 }
             else if cmd == "check" then
-                if List.is_empty rest then Command.help else Command.check rest
+                match Cli.take_flag "verbose" "v" rest {
+                    Cli.FlagResult.flag_result verbose rest1 =>
+                        if List.is_empty rest1 then Command.help else Command.check rest1 verbose,
+                }
             else
                 Command.help,
         List.empty => Command.help,
@@ -239,8 +259,8 @@ def main (args : List String) : IO I64 {
                 }
             }
         },
-        check files => do {
-            run_check files
+        check files verbose => do {
+            run_check files verbose
         },
         help => do {
             print_help
@@ -253,6 +273,8 @@ def print_help : IO I64 {
     println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v]";
     println "         Parse and compile a .mo source file";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
-    println "       monad check <path>...  Parse and typecheck .mo source files (no execution)";
+    println "       monad check <path>... [--verbose/-v]  Parse and typecheck .mo source files (no execution)";
+    println "         Any <path> that's a directory is recursively expanded to its *.mo files";
+    println "         --verbose/-v prints a per-declaration progress trace while checking";
     return 0
 }
