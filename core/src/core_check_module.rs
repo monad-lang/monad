@@ -1920,6 +1920,20 @@ fn check_one_def_new(
         },
       );
     }
+    // See `AtomTable::iter`'s own doc comment: a sub-term this branch's
+    // `body_c` was desugared/checked through (e.g. `desugar_struct_
+    // literals`, which can itself run inference internally) may
+    // reference an atom `mctx` interned along the way that lowering the
+    // def's own source text never captured — extend `atom_paths` with
+    // `mctx`'s full table as a fallback so `raise_core` below never sees
+    // an atom it can't resolve.
+    let fallback_atoms: Vec<(Atom, ModulePath)> = mctx
+      .atoms()
+      .iter()
+      .filter(|(_, a)| !atom_paths.contains_key(a))
+      .map(|(p, a)| (*a, p.clone()))
+      .collect();
+    atom_paths.extend(fallback_atoms);
     new_def.term = raise_core(&body_c, &atom_paths);
     Ok(new_def)
   } else {
@@ -1984,6 +1998,28 @@ fn check_one_def_new(
         },
       );
     }
+    // See `AtomTable::iter`'s own doc comment — the actual fix for the
+    // REPL's "Free(atom) missing from atom_paths" crash: `ty_generalized`
+    // is an INFERRED type (this branch runs when `def.typ` is `Hole` —
+    // no declared type to lower from source text at all), so it can
+    // reference an atom `mctx` interned during `infer` itself (e.g.
+    // `core_check.rs`'s `primitive_type`, for a literal's default type)
+    // that neither `global_atom_paths` (an early snapshot) nor
+    // `body_lower_ctx.resolved_atoms()` (lowering-pass-only) ever saw.
+    // Reliably reproduced by ANY REPL input before this fix (`cargo run
+    // -- repl` wraps each entered expression in exactly this kind of
+    // no-declared-type synthetic `def`) — confirmed via `1`, `"hello"`,
+    // `true` all panicking identically, and via a temporary debug print
+    // showing the missing atom was always `ty_generalized`'s own `Free`
+    // reference, freshly interned and absent from `atom_paths` even
+    // though `mctx.atoms()` already knew it.
+    let fallback_atoms: Vec<(Atom, ModulePath)> = mctx
+      .atoms()
+      .iter()
+      .filter(|(_, a)| !atom_paths.contains_key(a))
+      .map(|(p, a)| (*a, p.clone()))
+      .collect();
+    atom_paths.extend(fallback_atoms);
     new_def.typ = raise_core(&ty_generalized, &atom_paths);
     new_def.term = raise_core(&body_c, &atom_paths);
     Ok(new_def)

@@ -159,6 +159,20 @@ impl AtomTable {
   pub fn path_of(&self, atom: Atom) -> Option<&ModulePath> {
     self.0.iter().find(|(_, a)| **a == atom).map(|(p, _)| p)
   }
+
+  /// Every `(path, atom)` pair this table has interned so far — used to
+  /// extend a `raise_core`-bound `atom_paths` map with atoms this table
+  /// knows about but that map doesn't yet (see `core_check_module.rs`'s
+  /// `check_one_def_new`, the fix for the REPL's "Free(atom) missing
+  /// from atom_paths" crash: a def with no declared type has its
+  /// INFERRED type raised back to a `Term`, and that type can reference
+  /// an atom `core_check.rs`'s `primitive_type` interned fresh through
+  /// `mctx` during inference — never captured by the lowering-pass-only
+  /// sources an `atom_paths` map is normally built from, since nothing
+  /// was lowered from source text to produce it).
+  pub fn iter(&self) -> impl Iterator<Item = (&ModulePath, &Atom)> {
+    self.0.iter()
+  }
 }
 
 // ---------------------------------------------------------------------------

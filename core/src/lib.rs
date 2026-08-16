@@ -2304,4 +2304,48 @@ def main : Bool :=
       other => panic!("expected Bool.true, got {other:?}"),
     }
   }
+
+  /// Regression test for the REPL's "Free(atom) missing from atom_paths"
+  /// panic (`raise_core.rs:227`) — reliably reproduced by ANY REPL input
+  /// before the fix (`cargo run -- repl` then entering `1`, `"hello"`,
+  /// or `true` all panicked identically). Doesn't go through
+  /// `eval_repl_term` itself (gated behind the `repl` Cargo feature, not
+  /// enabled by this crate's own default `cargo test`) — instead
+  /// constructs the exact same shape of input `eval_repl_term` builds
+  /// internally (a `Hole`-typed synthetic `def`, `check_one_def_new`'s
+  /// "no declared type, infer one" branch — the ONLY branch that raises
+  /// an INFERRED type back to a `Term`, which is where the missing atom
+  /// came from: `core_check.rs`'s `primitive_type`, interning a
+  /// literal's default type fresh via `mctx` during inference, never
+  /// captured by lowering the def's own source text since there's no
+  /// type annotation to lower) and drives it through `build_core_
+  /// program` directly, the same function `eval_repl_term` itself calls.
+  #[test]
+  fn build_core_program_hole_typed_def_does_not_panic_on_missing_atom() {
+    let loaded = default_modules().expect("default_modules");
+    let module_path = ModulePath::top("'repl_regression_test");
+    for term in [
+      Term::Lit {
+        value: term::Literal::Num {
+          value: 1,
+          suffix: term::NumSuffix::I64,
+        },
+      },
+      Term::Lit {
+        value: term::Literal::Str {
+          value: "hello".to_string(),
+        },
+      },
+    ] {
+      let decl = SourceContext::no_ctx(Decl::Def(term::def(
+        mpt("__repl_result"),
+        vec![],
+        Term::Hole,
+        term,
+        vec![],
+      )));
+      build_core_program(&loaded, &[(module_path.clone(), vec![decl])])
+        .unwrap_or_else(|e| panic!("build_core_program failed (should succeed, not panic): {e}"));
+    }
+  }
 }
