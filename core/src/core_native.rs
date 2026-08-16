@@ -100,6 +100,9 @@ pub fn exec_native(
     "i64_to_u64" | "u8_to_u64" => int_to_int(args, NumSuffix::U64),
     "f32_to_string" | "f64_to_string" => float_to_string(args),
     "string_eq" => string_eq(args, natives),
+    "string_lt" => string_lt(args, natives),
+    "string_gt" => string_gt(args, natives),
+    "string_hash" => string_hash(args),
     "string_concat" => string_concat(args),
     "string_length" => string_length(args),
     "string_starts_with" => string_starts_with(args, natives),
@@ -369,6 +372,58 @@ fn string_eq(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
   make_bool(natives, a == b)
 }
 
+/// Byte-lexicographic `<`/`>`, matching `init/string.mo`'s self-hosted
+/// `bytes_lt`/`bytes_gt` semantics exactly (both walk `String.to_list`'s
+/// `List U8` byte-by-byte; Rust's `&str` `Ord` is also plain byte-wise
+/// comparison, since UTF-8's byte ordering agrees with codepoint
+/// ordering). See self-hosted-compiler-perf.md Step 2: a temporary,
+/// pragmatic native fast path for a self-hosted function whose cost was
+/// dominated by an allocation-heavy `String` -> `List U8` conversion
+/// rather than genuine self-hosted logic — mirrors `string_eq` above,
+/// which already had this native path.
+fn string_lt(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "string_lt needs 2 args".into(),
+    ));
+  }
+  let a = extract_string(&args[0])?;
+  let b = extract_string(&args[1])?;
+  make_bool(natives, a < b)
+}
+
+fn string_gt(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "string_gt needs 2 args".into(),
+    ));
+  }
+  let a = extract_string(&args[0])?;
+  let b = extract_string(&args[1])?;
+  make_bool(natives, a > b)
+}
+
+/// djb2 hash, bit-identical to `init/string.mo`'s self-hosted
+/// `String.hash_bytes`/`String.hash` (`hash = hash*33 + byte`, seed
+/// `5381`, folded left-to-right over the string's bytes — same wrapping
+/// `U64` semantics as `u64_mul`/`u64_add` above, so a plain Rust `u64`
+/// `wrapping_mul`/`wrapping_add` fold reproduces it exactly). Operates
+/// directly on `s.as_bytes()` (UTF-8 bytes in source order), the same
+/// bytes `String.to_list` would materialize as a `List U8` one cons cell
+/// at a time — this just skips that allocation.
+fn string_hash(args: &[Value]) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "string_hash needs 1 arg".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  let hash = s.as_bytes().iter().fold(5381u64, |acc, &b| {
+    acc.wrapping_mul(33).wrapping_add(b as u64)
+  });
+  Ok(Value::Lit(IrLit::Num(hash as i64, NumSuffix::U64)))
+}
+
 fn string_concat(args: &[Value]) -> Result<Value, CoreEvalError> {
   if args.len() < 2 {
     return Err(CoreEvalError::NativeArgError(
@@ -593,9 +648,7 @@ fn is_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError>
 /// entries instead of a `String`'s bytes.
 fn list_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
   if args.is_empty() {
-    return Err(CoreEvalError::NativeArgError(
-      "list_dir needs 1 arg".into(),
-    ));
+    return Err(CoreEvalError::NativeArgError("list_dir needs 1 arg".into()));
   }
   let path = extract_string(&args[0])?;
   let mut entries: Vec<String> = std::fs::read_dir(path)
@@ -1060,6 +1113,47 @@ mod tests {
     assert!(matches!(cat, Value::Lit(IrLit::Str(ref s)) if s == "foobar"));
     let len = exec_native("string_length", &[string("hello")], &natives).unwrap();
     assert!(matches!(len, Value::Lit(IrLit::Num(5, _))));
+  }
+
+  #[test]
+  fn test_string_lt_gt_match_byte_lexicographic_order() {
+    let natives = test_natives();
+    assert!(matches!(
+      exec_native("string_lt", &[string("abc"), string("abd")], &natives).unwrap(),
+      Value::Con { tag: 7, .. }
+    ));
+    assert!(matches!(
+      exec_native("string_lt", &[string("abd"), string("abc")], &natives).unwrap(),
+      Value::Con { tag: 8, .. }
+    ));
+    assert!(matches!(
+      exec_native("string_gt", &[string("abd"), string("abc")], &natives).unwrap(),
+      Value::Con { tag: 7, .. }
+    ));
+    assert!(matches!(
+      exec_native("string_gt", &[string("abc"), string("abc")], &natives).unwrap(),
+      Value::Con { tag: 8, .. }
+    ));
+    // Shorter-is-less when one is a prefix of the other, matching
+    // `bytes_lt`'s `empty`/`cons` case split exactly.
+    assert!(matches!(
+      exec_native("string_lt", &[string("ab"), string("abc")], &natives).unwrap(),
+      Value::Con { tag: 7, .. }
+    ));
+  }
+
+  #[test]
+  fn test_string_hash_matches_djb2_seed_5381() {
+    let natives = test_natives();
+    // djb2 of the empty string is just the seed.
+    let empty = exec_native("string_hash", &[string("")], &natives).unwrap();
+    assert!(matches!(
+      empty,
+      Value::Lit(IrLit::Num(5381, NumSuffix::U64))
+    ));
+    // djb2("a") = 5381*33 + 'a' (97) = 177670.
+    let a = exec_native("string_hash", &[string("a")], &natives).unwrap();
+    assert!(matches!(a, Value::Lit(IrLit::Num(177_670, NumSuffix::U64))));
   }
 
   #[test]

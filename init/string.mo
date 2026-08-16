@@ -39,24 +39,50 @@ def String.to_chars (s : String) : List Char
 #[native string_from_chars]
 def String.from_chars (bytes : List Chars) : String
 
+// --- Self-hosted reference implementations, kept intentionally ---
+//
+// The four defs below (`String.hash_bytes_selfhosted`/
+// `String.hash_selfhosted`, `bytes_lt_selfhosted`/`bytes_gt_selfhosted`,
+// `String.lt_selfhosted`/`String.gt_selfhosted`) are NOT dead code. Every
+// `String` comparison/hash used to run through here, converting through
+// `String.to_list` (materializing a full `List U8` linked list) before
+// comparing/folding — real self-hosted logic, but dominated by that
+// allocation-heavy conversion rather than the comparison/hash itself
+// (`String.beq` already had a native fast path, `string_eq`; these
+// didn't). See self-hosted-compiler-perf.md Step 2: the active
+// `String.hash`/`String.lt`/`String.gt` below now delegate to natives
+// (`string_hash`/`string_lt`/`string_gt`, bit-identical algorithms,
+// re-implemented in `core/src/core_native.rs`) as a temporary,
+// pragmatic win — every `Identifier`/`ModulePath` `BOrd`/`Hashable`
+// instance (`lang/types.mo`) pays this cost on every scope hashmap op.
+// Kept here, renamed rather than deleted, as the intended long-term
+// implementation to switch back to once more of the compiler is
+// self-hosted and the interpreter itself is faster (see the tail-call
+// optimization work in `core/src/core_eval.rs`, which reduces — but
+// does not eliminate — the interpreter-overhead argument against pure
+// `.mo` implementations of hot paths like this one).
+
 /// djb2 hash: hash = hash * 33 + byte
 #[terminating]
-def String.hash_bytes (bytes: List U8) (acc: U64) : U64 :=
+def String.hash_bytes_selfhosted (bytes: List U8) (acc: U64) : U64 :=
   match bytes {
     List.empty => acc,
     List.cons b rest =>
       let byte : U64 := U8.to_u64 b in
-      String.hash_bytes rest (U64.add (U64.mul acc 33u64) byte)
+      String.hash_bytes_selfhosted rest (U64.add (U64.mul acc 33u64) byte)
   }
 
-def String.hash (s : String) : U64 :=
-  String.hash_bytes (String.to_list s) 5381u64
+def String.hash_selfhosted (s : String) : U64 :=
+  String.hash_bytes_selfhosted (String.to_list s) 5381u64
+
+#[native string_hash]
+def String.hash (s : String) : U64
 
 instance BEq String {
 	def beq (a b : String) : Bool := String.beq a b
 }
 
-def bytes_lt (a b : List U8) : Bool :=
+def bytes_lt_selfhosted (a b : List U8) : Bool :=
 	match a {
 		empty => match b {
 			empty => false,
@@ -67,11 +93,11 @@ def bytes_lt (a b : List U8) : Bool :=
 			cons xb tb =>
 				if U8.lt xa xb then true
 				else if U8.gt xa xb then false
-				else bytes_lt ta tb
+				else bytes_lt_selfhosted ta tb
 		}
 	}
 
-def bytes_gt (a b : List U8) : Bool :=
+def bytes_gt_selfhosted (a b : List U8) : Bool :=
 	match a {
 		empty => false,
 		cons xa ta => match b {
@@ -79,13 +105,19 @@ def bytes_gt (a b : List U8) : Bool :=
 			cons xb tb =>
 				if U8.gt xa xb then true
 				else if U8.lt xa xb then false
-				else bytes_gt ta tb
+				else bytes_gt_selfhosted ta tb
 		}
 	}
 
-def String.lt (a b : String) : Bool := bytes_lt (String.to_list a) (String.to_list b)
+def String.lt_selfhosted (a b : String) : Bool := bytes_lt_selfhosted (String.to_list a) (String.to_list b)
 
-def String.gt (a b : String) : Bool := bytes_gt (String.to_list a) (String.to_list b)
+def String.gt_selfhosted (a b : String) : Bool := bytes_gt_selfhosted (String.to_list a) (String.to_list b)
+
+#[native string_lt]
+def String.lt (a b : String) : Bool
+
+#[native string_gt]
+def String.gt (a b : String) : Bool
 
 instance BOrd String {
 	def lt (a b : String) : Bool := String.lt a b

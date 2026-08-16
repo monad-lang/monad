@@ -16,8 +16,8 @@
 
 use monad_core::parser::{ReplInput, repl_parser};
 use monad_core::term::Decl;
-use monad_core::term::module::{ParsedModule, default_modules, load_module_files, module};
 use monad_core::term::ModulePath;
+use monad_core::term::module::{ParsedModule, default_modules, load_module_files, module};
 use wasm_bindgen::prelude::*;
 
 #[cfg(feature = "console_error_panic_hook")]

@@ -17,9 +17,7 @@ use crate::eval::r#type::elaborate_decls;
 use crate::parser::parse_file;
 use crate::parser::{ReplInput, repl_parser};
 use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
-use crate::term::{
-  Decl, Hole, ModulePath, NameRef, SourceContext, Term, app, def, mpt, num, var,
-};
+use crate::term::{Decl, Hole, ModulePath, NameRef, SourceContext, Term, app, def, mpt, num, var};
 
 fn parse_term(input: &str) -> Term {
   let ReplInput::Term(e) = repl_parser(input).unwrap() else {
@@ -211,8 +209,7 @@ fn expand_and_type_check(input: &str) -> Result<(), String> {
   let parsed = parse_file(input.into()).map_err(|e| format!("{e}"))?;
   let decls = elaborate_decls(parsed.decls, &loaded);
   let decls = expand_macros(decls, &loaded).map_err(|e| format!("{e}"))?;
-  let oks =
-    type_check_module_decls_new(&path, decls, &loaded).map_err(|e| format!("{e}"))?;
+  let oks = type_check_module_decls_new(&path, decls, &loaded).map_err(|e| format!("{e}"))?;
   loaded.add_module(module(
     path.clone(),
     ParsedModule {
@@ -423,7 +420,8 @@ fn test_cross_module_macro_simple() {
     "#,
   )
   .unwrap();
-  let helper_decls = type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let helper_decls =
+    type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
   let mut loaded = loaded;
   loaded.add_module(module(
     helper_path.clone(),
@@ -464,7 +462,8 @@ fn test_cross_module_macro_calls_same_module_def() {
     "#,
   )
   .unwrap();
-  let helper_decls = type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let helper_decls =
+    type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
   let mut loaded = loaded;
   loaded.add_module(module(
     helper_path.clone(),

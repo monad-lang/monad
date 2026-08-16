@@ -12,9 +12,9 @@ use crate::eval::r#type::render_type_error_with_source;
 #[cfg(feature = "repl")]
 use crate::parser::{ReplInput, repl_parser};
 use crate::term::Decl;
+use crate::term::Term;
 #[cfg(feature = "repl")]
 use crate::term::Term::Hole;
-use crate::term::Term;
 use crate::term::id;
 #[cfg(feature = "repl")]
 use crate::term::module::ParsedModule;
