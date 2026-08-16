@@ -95,11 +95,39 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             scope_data_add_def acc sd
     }
 
+/// Registers `ind` two ways: into `.inductives` (constructor/arity
+/// lookups — `scope_find_inductive` and friends) *and*, like
+/// `add_builtins`' own `add_builtin_type` does for the hardcoded
+/// `Type` pseudo-type just below, as a plain `ScopeDef` for the
+/// inductive's own NAME. That second registration used to be missing
+/// here — `scope_resolve_name`/`resolve_name_in_scope` only ever
+/// search `.def_refs` (never `.inductives`), so a type name referenced
+/// as an ordinary term (e.g. a `def`'s own parameter type annotation,
+/// checked via `type_check_lam`'s infer-mode branch in
+/// `lang/typecheck/infer.mo`) fell through to `TypeError.unknown_var`
+/// even though the type genuinely exists in scope — this is the
+/// self-hosted-typechecker gap documented at length in
+/// `lang/module.mo`'s `check_module_with_scope` (any parameterized
+/// `def` spuriously failing on its own parameter's type, hitting
+/// `Color`-style user types *and* `String`/`U8`-style native types
+/// alike, since `init/prelude.mo` declares native primitive types as
+/// ordinary zero-constructor `type X {}` inductives that go through
+/// this exact same path). `sig`/`body` both `Term.hole`, matching
+/// `add_builtin_type`'s own placeholder values — nothing downstream
+/// inspects a type-name `ScopeDef`'s signature today, only that the
+/// lookup succeeds.
 def build_scope_inductive (ind : Inductive) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     let with_ind : ScopeData := scope_data_add_inductive acc ind in
     match ind {
-        mk _ _ _ constructors _ _ =>
-            add_constructors_as_defs with_ind constructors path
+        mk name _ _ constructors _ _ =>
+            let type_sd : ScopeDef := {
+                name := name,
+                module := path,
+                sig := Term.hole,
+                body := Term.hole,
+            } in
+            let with_type_def : ScopeData := scope_data_add_def with_ind type_sd in
+            add_constructors_as_defs with_type_def constructors path
     }
 
 def add_constructors_as_defs (acc : ScopeData) (cns : List InductConstructor) (path : ModulePath) : ScopeData :=
