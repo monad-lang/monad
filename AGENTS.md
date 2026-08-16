@@ -516,12 +516,15 @@ List literals `[a, b, c]` are desugared in `desugar_list_literal` (parser.rs:620
 The AST structure is `app(app(cons, elem), acc)` — **NOT** `app(cons, app(elem, acc))`.
 For a single element: `[x]` => `app(app(cons, var("x")), empty)`
 
-### Evaluator (`core/src/eval.rs`)
-- Beta reduction happens in the `eval` function
-- Native functions are executed in `native_execute`
+### Evaluator (`core/src/core_eval.rs` + `core_native.rs`)
+The legacy tree-walking evaluator (`core/src/eval.rs`'s old `eval`/`eval_test`) has been removed — the closure-based `CoreTerm` evaluator is now the crate's only evaluator, reached via `check_all_modules_capturing_core` (`core_check_module.rs`) → `lower_core_ir::lower_program` → `core_eval::force_global`.
+- Beta reduction/closure application happens in `core_eval.rs`'s `force_global`/`apply`
+- Native functions are executed in `core_native.rs`'s `exec_native`
+- To trace evaluation, add tracing in `core_eval.rs` rather than a stray `println!` — `run --debug` already prints the checked type (`Eval type ...`) before evaluating
 
-### Type Checker (`core/src/eval/type.rs`)
-- Type checking and constraint resolution
+### Type Checker (`core/src/core_check_module.rs` + `core_unify.rs`)
+- Module-level type checking and de Bruijn/`MetaId`-based unification
+- `core/src/eval/type.rs` still holds shared pre-lowering infra used by the checker above: `elaborate_decls` (implicit `Forall` insertion), `check_strict_positivity`, the `TypeError` type and its diagnostics rendering — despite the `eval/` path, this file is not part of the (removed) legacy evaluator
 
 ## Testing
 
@@ -530,7 +533,8 @@ For a single element: `[x]` => `app(app(cons, var("x")), empty)`
 cargo test
 
 # Run a specific test
-cargo test eval::test
+cargo test core_check_module::
+cargo test core_eval::
 ```
 
 ### Running Monad Tests
@@ -854,7 +858,7 @@ ls plans/.opencode/skills/
    - **Parser errors** mention `parse` or show unexpected tokens
    - **Elaboration errors** mention free variables or implicit binding
    - **Type errors** mention `TypeError` and expected/found types
-   - **Eval errors** mention `EvalError`, stack overflow, or missing native
+   - **Eval errors** mention `CoreEvalError`, stack overflow, or missing native
    - **Panics** mean an `unreachable!()` was hit — often a missing case in a match
 
 ### Fast Iteration
@@ -864,7 +868,7 @@ ls plans/.opencode/skills/
 cargo build -p monad-core 2>&1 | head -20
 
 # Run a single test by name
-cargo test eval::test::some_test_name
+cargo test core_check_module::some_test_name
 
 # Run all parser tests
 cargo test parser
