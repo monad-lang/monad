@@ -46,6 +46,73 @@ def union_ids (a : List Identifier) (b : List Identifier) : List Identifier :=
             else List.cons hd (union_ids rest b),
         List.empty => b,
     }
+/// An argument to a `#[name arg1 arg2 ...]` attribute. Mirrors the Rust
+/// reference's `AttrArg` (core/src/term.rs) exactly, including the
+/// `named`/`group` shapes (`{name := value}` / `[item, ...]`) even
+/// though no real corpus attribute uses either yet — the combinator
+/// cost of supporting them now is near-zero and avoids a later
+/// breaking retype of `Attribute.args` once one does.
+type AttrArg {
+    ident (id: Identifier),
+    str (value: String),
+    num (value: I64),
+    named (name: Identifier) (value: AttrArg),
+    group (items: List AttrArg),
+}
+
+/// A single `#[name arg1 arg2 ...]` declaration/param annotation, e.g.
+/// `#[derive BEq BOrd Debug Lens]` — one `Attribute` with FOUR bare-
+/// `ident` args (confirmed against the reference grammar: attribute
+/// args are whitespace-separated and flattened onto the one attribute,
+/// not four stacked attributes). Deliberately has no `source_location`
+/// field (unlike the Rust reference's `Attribute`, whose own
+/// `PartialEq` ignores that field anyway) — no sibling decl-level type
+/// here (`Def`, `Inductive`, ...) carries source-location data, and
+/// nothing downstream would read it.
+struct Attribute {
+    name: Identifier,
+    args: List AttrArg,
+}
+
+/// Structural equality by name and args.
+def attr_eq (a : Attribute) (b : Attribute) : Bool :=
+    match a { Attribute.mk an aargs => match b { Attribute.mk bn bargs =>
+        id_eq an bn && attr_args_eq aargs bargs,
+    } }
+
+def attr_args_eq (a : List AttrArg) (b : List AttrArg) : Bool :=
+    match a {
+        List.empty => match b { List.empty => true, List.cons _ _ => false },
+        List.cons ah arest => match b {
+            List.empty => false,
+            List.cons bh brest => attr_arg_eq ah bh && attr_args_eq arest brest,
+        },
+    }
+
+def attr_arg_eq (a : AttrArg) (b : AttrArg) : Bool :=
+    match a {
+        AttrArg.ident ai => match b { AttrArg.ident bi => id_eq ai bi, _ => false },
+        AttrArg.str av => match b { AttrArg.str bv => String.beq av bv, _ => false },
+        AttrArg.num av => match b { AttrArg.num bv => I64.beq av bv, _ => false },
+        AttrArg.named an av => match b { AttrArg.named bn bv => id_eq an bn && attr_arg_eq av bv, _ => false },
+        AttrArg.group aitems => match b { AttrArg.group bitems => attr_args_eq aitems bitems, _ => false },
+    }
+
+instance BEq Attribute {
+    def beq (a b : Attribute) : Bool := attr_eq a b
+}
+
+/// Whether `attrs` contains an attribute named `name`, e.g.
+/// `has_attr (Identifier.id "derive_cli") ind_attrs`. Mirrors the Rust
+/// reference's `Inductive::has_attr`/`Def::has_test_attr`
+/// (core/src/term.rs).
+def has_attr (name : Identifier) (attrs : List Attribute) : Bool :=
+    match attrs {
+        List.cons hd rest =>
+            match hd { Attribute.mk n _ => if id_eq n name then true else has_attr name rest },
+        List.empty => false,
+    }
+
 type Operator {
     operator String
 }

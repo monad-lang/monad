@@ -399,6 +399,200 @@ def skip_one_attr_content (r : ParseResult String) (orig : String) : String :=
 		fail _ => orig
 	}
 
+// ─── Real attribute (`#[name arg1 arg2 ...]`) parsing ──────────────────
+//
+// Mirrors the Rust reference's `attribute_parser`/`attr_arg_parser`/
+// `opt_attributes` (core/src/parser.rs) — builds real `Attribute`/
+// `AttrArg` data instead of `skip_one_attr`/`def_try_attrs`'s own
+// skip-and-discard. NOT YET WIRED into `def_parser`/`type_parser`/
+// `Def`/`Inductive` construction — this is deliberately staged as its
+// own standalone piece (see plans/bootstrapping/self-hosted-compiler.md
+// for the staging rationale), verified here only via direct calls to
+// `attribute_parser` from this file's own tests.
+
+/// One `#[...]` attribute argument. Only bare `ident`/`str`/`num` args
+/// are exercised by any real corpus attribute (confirmed: no `.mo` file
+/// anywhere uses `name := value` or bracketed `[...]` group syntax) —
+/// the `named`/`group` alternatives below are included for structural
+/// completeness against the reference grammar but are correspondingly
+/// lower-confidence/less-tested.
+#[partial]
+def attr_arg_parser (input : String) : ParseResult AttrArg :=
+	attr_arg_try_group (tag "[" input) input
+
+#[partial]
+def attr_arg_try_group (r : ParseResult String) (orig : String) : ParseResult AttrArg :=
+	match r {
+		success rem _ => attr_arg_group_items (skip_spaces rem) List.empty,
+		fail _ => attr_arg_try_named_block (tag "{" orig) orig
+	}
+
+#[partial]
+def attr_arg_group_items (input : String) (acc : List AttrArg) : ParseResult AttrArg :=
+	match attr_arg_parser input {
+		success rem item => attr_arg_group_sep (skip_spaces rem) (List.cons item acc),
+		fail _ => attr_arg_group_close input (list_reverse acc)
+	}
+
+#[partial]
+def attr_arg_group_sep (input : String) (acc : List AttrArg) : ParseResult AttrArg :=
+	match tag "," input {
+		success rem _ => attr_arg_group_items (skip_spaces rem) acc,
+		fail _ => attr_arg_group_close input (list_reverse acc)
+	}
+
+#[partial]
+def attr_arg_group_close (input : String) (items : List AttrArg) : ParseResult AttrArg :=
+	match tag "]" (skip_spaces input) {
+		success rem _ => success rem (AttrArg.group items),
+		fail e => fail (ParseError.custom "expected ] to close attribute arg group" input)
+	}
+
+#[partial]
+def attr_arg_try_named_block (r : ParseResult String) (orig : String) : ParseResult AttrArg :=
+	match r {
+		success rem _ => attr_arg_named_items (skip_spaces rem) List.empty,
+		fail _ => attr_arg_try_bare orig
+	}
+
+#[partial]
+def attr_arg_named_items (input : String) (acc : List AttrArg) : ParseResult AttrArg :=
+	match attr_arg_named_one input {
+		success rem item => attr_arg_named_sep (skip_spaces rem) (List.cons item acc),
+		fail _ => attr_arg_named_close input (list_reverse acc)
+	}
+
+#[partial]
+def attr_arg_named_one (input : String) : ParseResult AttrArg :=
+	match identifier input {
+		success rem name => attr_arg_named_val (tag ":=" (skip_spaces rem)) (Identifier.id name),
+		fail e => fail e
+	}
+
+#[partial]
+def attr_arg_named_val (r : ParseResult String) (name : Identifier) : ParseResult AttrArg :=
+	match r {
+		success rem _ => attr_arg_named_value (attr_arg_parser (skip_spaces rem)) name,
+		fail e => fail e
+	}
+
+#[partial]
+def attr_arg_named_value (r : ParseResult AttrArg) (name : Identifier) : ParseResult AttrArg :=
+	match r {
+		success rem v => success rem (AttrArg.named name v),
+		fail e => fail e
+	}
+
+#[partial]
+def attr_arg_named_sep (input : String) (acc : List AttrArg) : ParseResult AttrArg :=
+	match tag "," input {
+		success rem _ => attr_arg_named_items (skip_spaces rem) acc,
+		fail _ => attr_arg_named_close input (list_reverse acc)
+	}
+
+/// A `{name := value, ...}` block wraps its entries in a single
+/// `AttrArg.group` here, rather than flattening each `named` entry
+/// directly onto the enclosing attribute's own arg list the way the
+/// Rust reference's `attr_arg_parser` does (it returns a `Vec<AttrArg>`
+/// per call specifically to support that flattening) — a deliberate
+/// simplification: with zero real corpus usage of this form either
+/// way, matching the reference's own multi-return-per-call shape isn't
+/// worth the added complexity it would need throughout this whole
+/// chain (`attr_arg_parser` would need to return `List AttrArg`
+/// everywhere, not just here).
+#[partial]
+def attr_arg_named_close (input : String) (items : List AttrArg) : ParseResult AttrArg :=
+	match tag "}" (skip_spaces input) {
+		success rem _ => success rem (AttrArg.group items),
+		fail e => fail (ParseError.custom "expected } to close attribute named block" input)
+	}
+
+#[partial]
+def attr_arg_try_bare (input : String) : ParseResult AttrArg :=
+	attr_arg_try_str (string_parse input) input
+
+#[partial]
+def attr_arg_try_str (r : ParseResult Term) (orig : String) : ParseResult AttrArg :=
+	match r {
+		success rem t => success rem (term_lit_to_attr_str t),
+		fail _ => attr_arg_try_num (numeric_literal orig) orig
+	}
+
+/// `string_parse` only ever succeeds with a `Term.lit (Literal.str _)`
+/// shape — this is a total function over that guaranteed shape, not a
+/// general `Term -> AttrArg` conversion.
+#[partial]
+def term_lit_to_attr_str (t : Term) : AttrArg :=
+	match t { Term.lit l => match l { Literal.str s => AttrArg.str s } }
+
+#[partial]
+def attr_arg_try_num (r : ParseResult Term) (orig : String) : ParseResult AttrArg :=
+	match r {
+		success rem t => success rem (term_lit_to_attr_num t),
+		fail _ => attr_arg_try_ident (identifier orig)
+	}
+
+/// `numeric_literal` only ever succeeds with a `Term.lit (Literal.num _
+/// _)` shape here — see `term_lit_to_attr_str`'s own doc comment.
+#[partial]
+def term_lit_to_attr_num (t : Term) : AttrArg :=
+	match t { Term.lit l => match l { Literal.num n _ => AttrArg.num n } }
+
+#[partial]
+def attr_arg_try_ident (r : ParseResult String) : ParseResult AttrArg :=
+	match r {
+		success rem name => success rem (AttrArg.ident (Identifier.id name)),
+		fail e => fail e
+	}
+
+/// One `#[name arg1 arg2 ...]` attribute. Mirrors `attribute_parser`
+/// (core/src/parser.rs): `"#["`, the attribute's own name, then zero or
+/// more whitespace-separated args, `"]"`.
+#[partial]
+def attribute_parser (input : String) : ParseResult Attribute :=
+	attribute_open (tag "#[" input)
+
+#[partial]
+def attribute_open (r : ParseResult String) : ParseResult Attribute :=
+	match r {
+		success rem _ => attribute_name (identifier (skip_spaces rem)),
+		fail e => fail e
+	}
+
+#[partial]
+def attribute_name (r : ParseResult String) : ParseResult Attribute :=
+	match r {
+		success rem name => attribute_args (skip_spaces rem) (Identifier.id name) List.empty,
+		fail e => fail e
+	}
+
+#[partial]
+def attribute_args (input : String) (name : Identifier) (acc : List AttrArg) : ParseResult Attribute :=
+	match attr_arg_parser input {
+		success rem arg => attribute_args (skip_spaces rem) name (List.cons arg acc),
+		fail _ => attribute_close input name (list_reverse acc)
+	}
+
+#[partial]
+def attribute_close (input : String) (name : Identifier) (args : List AttrArg) : ParseResult Attribute :=
+	match tag "]" (skip_spaces input) {
+		success rem _ => success rem (Attribute.mk name args),
+		fail e => fail (ParseError.custom "expected ] to close attribute" input)
+	}
+
+/// Zero or more stacked attributes ahead of a declaration (`#[a]\n#[b]\n
+/// def ...`). Mirrors `opt_attributes` (core/src/parser.rs).
+#[partial]
+def opt_attributes (input : String) : ParseResult (List Attribute) :=
+	opt_attributes_go (skip_spaces input) List.empty
+
+#[partial]
+def opt_attributes_go (input : String) (acc : List Attribute) : ParseResult (List Attribute) :=
+	match attribute_parser input {
+		success rem attr => opt_attributes_go (skip_spaces rem) (List.cons attr acc),
+		fail _ => success input (list_reverse acc)
+	}
+
 #[partial]
 def lam_params (params : List Param) (body : Term) : Term :=
 	let rev : List Param := list_reverse params in
@@ -5251,6 +5445,75 @@ def test_struct_update_backtrack_to_plain_literal : Bool :=
                 },
                 _ => false
             },
+        fail _ => false
+    }
+
+// --- Tests for attribute_parser/attr_arg_parser/opt_attributes ---
+// (NOT yet wired into def_parser/type_parser -- see this file's own
+// doc comment above `attribute_parser` -- exercised only directly here.)
+
+#[test]
+def test_attribute_parser_bare_name : Bool :=
+    match attribute_parser "#[test]" {
+        success rem attr =>
+            String.beq rem "" &&
+            match attr { Attribute.mk name args => id_eq name (Identifier.id "test") && I64.beq (List.length args) 0 },
+        fail _ => false
+    }
+
+/// The real corpus shape (`#[derive BEq BOrd Debug Lens]`) is ONE
+/// attribute with four bare-ident args, not four stacked attributes —
+/// confirmed against the reference grammar this round.
+#[test]
+def test_attribute_parser_multi_ident_args : Bool :=
+    match attribute_parser "#[derive BEq BOrd Debug Lens]" {
+        success rem attr =>
+            String.beq rem "" &&
+            match attr {
+                Attribute.mk name args =>
+                    id_eq name (Identifier.id "derive") && I64.beq (List.length args) 4,
+            },
+        fail _ => false
+    }
+
+#[test]
+def test_attribute_parser_string_and_num_args : Bool :=
+    match attribute_parser "#[native \"foo\" 42]" {
+        success rem attr =>
+            String.beq rem "" &&
+            match attr {
+                Attribute.mk _ args => match args {
+                    List.cons a1 rest =>
+                        match a1 { AttrArg.str s => String.beq s "foo", _ => false } &&
+                        match rest {
+                            List.cons a2 _ => match a2 { AttrArg.num n => I64.beq n 42, _ => false },
+                            List.empty => false,
+                        },
+                    List.empty => false,
+                },
+            },
+        fail _ => false
+    }
+
+#[test]
+def test_attribute_parser_unknown_input_fails : Bool :=
+    match attribute_parser "not an attribute" {
+        success _ _ => false,
+        fail _ => true
+    }
+
+#[test]
+def test_opt_attributes_stacked : Bool :=
+    match opt_attributes "#[test]\n#[partial]\ndef foo" {
+        success rem attrs =>
+            String.beq rem "def foo" && I64.beq (List.length attrs) 2,
+        fail _ => false
+    }
+
+#[test]
+def test_opt_attributes_none_present : Bool :=
+    match opt_attributes "def foo" {
+        success rem attrs => String.beq rem "def foo" && I64.beq (List.length attrs) 0,
         fail _ => false
     }
 

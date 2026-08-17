@@ -1505,7 +1505,7 @@ def test_runtime_decls_not_empty : Bool :=
 
 #[test]
 def test_module_emit_has_header : Bool :=
-    let text := lang.codegen.ir.emit_module (compile_db_decls_ir List.empty) in
+    let text := emit_module (compile_db_decls_ir List.empty) in
     let prefix := String.slice text 0 12 in
     String.beq prefix "; ModuleID ="
 
@@ -1527,7 +1527,7 @@ def test_compile_db_inductive_decls : Bool :=
     let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let funcs := compile_db_inductive_decls (List.cons ind List.empty) in
     let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls in
-    let text := lang.codegen.ir.emit_module mod_ in
+    let text := emit_module mod_ in
     // Constructor function names are qualified with their enclosing
     // type ("Option_Some"/"Option_None"), not just the bare constructor
     // name -- otherwise two different Inductives whose constructors
