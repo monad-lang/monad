@@ -2497,7 +2497,7 @@ def decls_try (r : ParseResult Decl) (orig : String) (acc : List Decl) : ParseRe
 /// lenient behavior (`lang.module`'s scope-building, and by extension
 /// most of this corpus's own test suite — several real files still
 /// don't fully parse, e.g. `lang/json.mo`/`lang/toml.mo`/`std/map.mo`,
-/// see `lang/tests/parser_file_tests.mo`'s own conservative decl-count
+/// see `slow_tests/parser_file_tests.mo`'s own conservative decl-count
 /// floor tests) breaks. Used only where a real diagnostic is actually
 /// wanted: `lang.module`'s `try_parse_decls_strict`, wired into
 /// `lang/main.mo`'s CLI compile-failure path.

@@ -44,20 +44,33 @@ a different branch and cause confusion.
 │                     # every-commit correctness checking
 ├── slow_tests/       # Real #[test]s, deliberately NOT swept by the pre-commit
 │                     # hook (same exclusion mechanism as bench/ -- outside its
-│                     # fixed `init std lang examples` directory list) because
-│                     # they're redundant with `lang/tests/typecheck_lang_
-│                     # tests.mo`'s `test_typecheck_lang_main`: checking
-│                     # lang/main.mo already type-checks its own decls against
-│                     # a scope built from its FULL transitive dependency
-│                     # closure (via `load_module_with_dependencies`), so
-│                     # separately re-running the same dependency-loading
-│                     # typecheck per individual init/std file adds ~2 minutes
-│                     # to every commit for no unique coverage. Still real,
-│                     # runnable tests (`cargo run -- test slow_tests`) -- just
-│                     # for manual/CI use, not the fast local commit path; a
-│                     # per-file failure here is more useful for pinpointing
-│                     # WHICH file broke than `test_typecheck_lang_main`'s own
-│                     # single pass/fail covering everything at once.
+│                     # fixed `init std lang examples` directory list). Five
+│                     # files, two different reasons to be here:
+│                     #   - typecheck_init_tests.mo/typecheck_std_tests.mo:
+│                     #     redundant with typecheck_lang_tests.mo's own
+│                     #     test_typecheck_lang_main (checking lang/main.mo
+│                     #     already type-checks against a scope built from its
+│                     #     FULL transitive dependency closure via
+│                     #     `load_module_with_dependencies`, so re-running the
+│                     #     same dependency-loading typecheck per individual
+│                     #     init/std file adds nothing unique).
+│                     #   - typecheck_lang_tests.mo/parser_file_tests.mo/
+│                     #     scope_all_tests.mo: NOT redundant, but measured
+│                     #     directly (`cargo run --release -- test init std
+│                     #     lang examples slow_tests --json`) to be 684s of
+│                     #     the corpus's 747.5s total (91.5%) -- one single
+│                     #     test (test_typecheck_lang_main) alone was 544.5s,
+│                     #     72.9% of everything. Moved here specifically so a
+│                     #     future CI (not yet built, see self-hosted-
+│                     #     compiler-perf.md's own AGENTS.md item 9 follow-up
+│                     #     note) can be the safety net for this coverage,
+│                     #     since local pre-commit no longer affords it.
+│                     # Still real, runnable tests (`cargo run -- test
+│                     # slow_tests`) -- just for manual/CI use, not the fast
+│                     # local commit path; a per-file failure here is more
+│                     # useful for pinpointing WHICH file broke than
+│                     # test_typecheck_lang_main's own single pass/fail
+│                     # covering everything at once.
 └── plans/            # Symlink to external repo with design plans
 ```
 
@@ -808,7 +821,7 @@ Key patterns when writing self-hosted Monad code:
    (`std/map.mo`'s `instance [BOrd K] Map BTreeMap`) gets called
    repeatedly through `lang.module`'s dynamic module-loading/dependency-
    walk (`load_module_with_dependencies`, exercised by
-   `lang/tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main`, the
+   `slow_tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main`, the
    only test that exercises that runtime path). Not reproduced when the
    same `BTreeMap` usage is type-checked directly (e.g. `lang/json.mo`
    alone) — the failure is specific to this recursive/dynamic-scope
@@ -835,7 +848,7 @@ Key patterns when writing self-hosted Monad code:
    would actually win is never reached in practice. **Do not replace
    `List`+linear-scan with `BTreeMap` in self-hosted (`lang/*.mo`) code
    without measuring end-to-end wall-clock time first** (e.g.
-   `time cargo run -- test lang/tests/typecheck_lang_tests.mo`) — Big-O
+   `time cargo run -- test slow_tests/typecheck_lang_tests.mo`) — Big-O
    analysis alone is not a reliable guide to real performance here.
 5. **`self-hosted-compiler-perf.md` phase-timing infra**: `lang/module.mo`'s
    `check_file_cached` now wraps its three phases (scope/dep resolution,

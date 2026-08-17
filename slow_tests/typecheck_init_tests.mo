@@ -12,7 +12,7 @@ def empty_local_scope : LocalScope := {
 
 /// Type check a file with its full dependency scope (ambient prelude/init
 /// included) — reuses the same `lang.module` pipeline
-/// `lang/tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main`
+/// `slow_tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main`
 /// already proves correct, instead of this file's own previous
 /// from-scratch reimplementation that only ever built scope from the
 /// target file's own decls. That meant any def relying on a name defined

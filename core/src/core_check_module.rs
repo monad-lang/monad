@@ -3262,11 +3262,11 @@ mod test {
   }
 
   #[test]
-  fn test_real_file_lang_tests_parser_file_tests() {
+  fn test_real_file_slow_tests_parser_file_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/parser_file_tests.mo");
+    let source = include_str!("../../slow_tests/parser_file_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/parser_file_tests.mo", &report);
+    print_report("slow_tests/parser_file_tests.mo", &report);
   }
 
   #[test]
@@ -3278,11 +3278,11 @@ mod test {
   }
 
   #[test]
-  fn test_real_file_lang_tests_scope_all_tests() {
+  fn test_real_file_slow_tests_scope_all_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/scope_all_tests.mo");
+    let source = include_str!("../../slow_tests/scope_all_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/scope_all_tests.mo", &report);
+    print_report("slow_tests/scope_all_tests.mo", &report);
   }
 
   #[test]
@@ -3310,11 +3310,11 @@ mod test {
   }
 
   #[test]
-  fn test_real_file_lang_tests_typecheck_lang_tests() {
+  fn test_real_file_slow_tests_typecheck_lang_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/typecheck_lang_tests.mo");
+    let source = include_str!("../../slow_tests/typecheck_lang_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/typecheck_lang_tests.mo", &report);
+    print_report("slow_tests/typecheck_lang_tests.mo", &report);
   }
 
   #[test]

@@ -184,7 +184,7 @@ def run_check (files : List String) (verbose : Bool) : IO I64 := do {
 // self-hosted compiler's own parser/typechecker (lang/parser.mo,
 // lang/typecheck/infer.mo) doesn't understand `#[derive_cli]` yet, and
 // lang/main.mo is one of the files the self-hosted parse/scope/typecheck
-// test suite (lang/tests/parser_file_tests.mo, scope_all_tests.mo,
+// test suite (slow_tests/parser_file_tests.mo, scope_all_tests.mo,
 // typecheck_lang_tests.mo) re-parses with that self-hosted pipeline. It
 // does share `lang/cli.mo`'s small runtime helpers with the macro-derived
 // demo in lang/tests/cli_derive_tests.mo, though — same argv-munging
