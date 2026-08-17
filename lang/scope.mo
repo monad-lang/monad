@@ -68,10 +68,116 @@ def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
 
 // --- build_scope_from_decls: build ScopeData from parsed declarations ---
 
+// Two-pass: pass 1 (`build_scope_from_decls_go`, unchanged) registers every
+// real `def`/`type`/`class`/`instance`/`infix` declaration exactly as
+// before, `use_d`/`open_d` still no-ops there. Pass 2 (`alias_decls_in_scope`,
+// below) re-walks the SAME decls' `use_d`/`open_d`/`scoped_open_d` against
+// the now-complete pass-1 result, registering BARE (or renamed) aliases
+// for the real qualified names they bring in -- this has to be a separate
+// pass, not folded into pass 1's single left-to-right walk, because an
+// `open`/`use` very commonly appears BEFORE the def(s) it aliases (e.g.
+// `init/prelude.mo`'s `open Bool {and, false, not, or, true}` precedes
+// `def Bool.not` itself) and pass 1's fold can't see forward.
+//
+// Deliberately narrower than the reference compiler's own `open`/`use`
+// handling in two ways, both confirmed safe by checking real usage
+// first: (1) only `def_refs` entries get aliased (not inductives/classes/
+// constructors -- no confirmed real corpus need for aliasing those bare,
+// only plain defs like `Bool.not`); (2) a glob filter (`OpenFilter.
+// open_all`/`UseFilter.use_items` containing `UseItem.use_glob`) is not
+// expanded -- doing so needs enumerating every entry under a path prefix
+// (a `HashMap.to_list`-shaped walk), which no confirmed real corpus case
+// currently needs (the one real glob, `lang/main.mo`'s `use lang.cli
+// {*}`, is only ever referenced through its own already-qualified
+// `Command.*` names, not bare) -- left for future work if that changes.
+// `scoped_open_d` (`open X in <decl>`, meant to scope its alias to just
+// the one wrapped declaration) is treated the same as a top-level open
+// (i.e. NOT actually scoped) -- true isolation would need per-decl scope
+// extension during typecheck, which this checker doesn't have, and no
+// non-test `.mo` file in the corpus was found using `scoped_open_d`'s
+// real scoping semantics (only `lang/parser.mo`'s own unit tests and
+// `lang/pretty.mo`'s round-trip fixture construct one directly).
 def build_scope_from_decls (path : ModulePath) (decls : List Decl) : ScopeData :=
     let empty : ScopeData := scope_data_empty in
     let with_decls : ScopeData := build_scope_from_decls_go decls path empty in
-    add_builtins with_decls
+    let with_builtins : ScopeData := add_builtins with_decls in
+    alias_decls_in_scope decls with_builtins
+
+def alias_decls_in_scope (decls : List Decl) (acc : ScopeData) : ScopeData :=
+    match decls {
+        List.empty => acc,
+        List.cons d ds => alias_decls_in_scope ds (alias_one_decl d acc)
+    }
+
+def alias_one_decl (d : Decl) (acc : ScopeData) : ScopeData :=
+    match d {
+        Decl.use_d path filter _public => apply_use_filter acc path filter,
+        Decl.open_d path filter => apply_open_filter acc path filter,
+        Decl.scoped_open_d path filter inner =>
+            alias_one_decl inner (apply_open_filter acc path filter),
+        _ => acc
+    }
+
+// --- Aliasing: register a bare/renamed name pointing at an already-real entry ---
+
+/// If `real_path` is a real, already-registered `def_refs` entry, ALSO
+/// register it under `alias_name` (bare, or a `use ... as` rename) --
+/// same `ScopeDef`, different key, matching how `scope_data_add_def`
+/// already inserts under whatever `.name` it's handed.
+def alias_def (acc : ScopeData) (real_path : ModulePath) (alias_name : Identifier) : ScopeData :=
+    match scope_data_find_def acc real_path {
+        Option.some sd =>
+            match sd {
+                mk _ module_ sig body =>
+                    let alias_mp : ModulePath := ModulePath.mp (List.cons alias_name List.empty) in
+                    let aliased : ScopeDef := {
+                        name := alias_mp,
+                        module := module_,
+                        sig := sig,
+                        body := body,
+                    } in
+                    scope_data_add_def acc aliased
+            },
+        Option.none => acc
+    }
+
+def path_extend (path : ModulePath) (name : Identifier) : ModulePath :=
+    match path {
+        ModulePath.mp ids => ModulePath.mp (list_append ids (List.cons name List.empty))
+    }
+
+def apply_open_filter (acc : ScopeData) (path : ModulePath) (filter : OpenFilter) : ScopeData :=
+    match filter {
+        OpenFilter.open_all => acc,
+        OpenFilter.open_only names => apply_open_names acc path names
+    }
+
+def apply_open_names (acc : ScopeData) (path : ModulePath) (names : List Identifier) : ScopeData :=
+    match names {
+        List.empty => acc,
+        List.cons n rest => apply_open_names (alias_def acc (path_extend path n) n) path rest
+    }
+
+def apply_use_filter (acc : ScopeData) (path : ModulePath) (filter : UseFilter) : ScopeData :=
+    match filter {
+        UseFilter.use_bare => acc,
+        UseFilter.use_items items => apply_use_items acc path items
+    }
+
+def apply_use_items (acc : ScopeData) (path : ModulePath) (items : List UseItem) : ScopeData :=
+    match items {
+        List.empty => acc,
+        List.cons item rest => apply_use_items (apply_use_item acc path item) path rest
+    }
+
+def apply_use_item (acc : ScopeData) (path : ModulePath) (item : UseItem) : ScopeData :=
+    match item {
+        UseItem.use_name n => alias_def acc (path_extend path n) n,
+        UseItem.use_rename n alias_name => alias_def acc (path_extend path n) alias_name,
+        UseItem.use_glob => acc,
+        UseItem.use_sub n items => apply_use_items acc (path_extend path n) items,
+        UseItem.use_sub_rename n _alias items => apply_use_items acc (path_extend path n) items,
+    }
 
 def build_scope_from_decls_go (decls : List Decl) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match decls {

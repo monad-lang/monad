@@ -416,9 +416,18 @@ type Instance {
 // Canonical DoStmt uses de Bruijn Term. DoStmtV0 is the legacy V0 variant.
 
 
+// `bind_s`/`let_s` carry the statement's own declared type (`Term.hole`
+// when unannotated, e.g. `let x <- expr;`/`let x := expr;`) -- without
+// it, `desugar_do_inner` had no way to give the desugared binder a real
+// type even when the source explicitly wrote one (`let x : T <- expr;`),
+// which broke downstream typecheck precision for that binding (e.g.
+// match-case validation on a do-block-bound value whose real type WAS
+// written down, just never threaded through -- see
+// plans/bootstrapping/self-hosted-compiler.md's changelog for the
+// lang/main.mo `main` repro this was found from).
 type DoStmt {
-    bind_s (name: Identifier) (expr: Term),
-    let_s (name: Identifier) (expr: Term),
+    bind_s (name: Identifier) (typ: Term) (expr: Term),
+    let_s (name: Identifier) (typ: Term) (expr: Term),
     ret_s (expr: Term),
     expr_s (expr: Term),
 }
@@ -436,11 +445,11 @@ def desugar_do_inner (stmts : List DoStmt) (rest : Term) : Term :=
     match stmts {
         List.cons s ss =>
             match s {
-                bind_s name expr =>
+                bind_s name typ expr =>
                     Term.app (Term.app monad_bind_term expr)
-                        (Term.lam (DebugName.named name) Term.hole (desugar_do_inner ss rest)),
-                let_s name expr =>
-                    Term.app (Term.lam (DebugName.named name) Term.hole (desugar_do_inner ss rest)) expr,
+                        (Term.lam (DebugName.named name) typ (desugar_do_inner ss rest)),
+                let_s name typ expr =>
+                    Term.app (Term.lam (DebugName.named name) typ (desugar_do_inner ss rest)) expr,
                 ret_s expr => Term.app monad_pure_term expr,
                 expr_s expr =>
                     Term.app (Term.app monad_bind_term expr)

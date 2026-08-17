@@ -13,8 +13,8 @@ use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
 use lang.scope {
-  build_scope_from_decls, list_append, modpath_eq, scope_data_empty,
-  scope_find_inductive, scope_push_local, scope_resolve_name,
+  alias_decls_in_scope, build_scope_from_decls, list_append, modpath_eq,
+  scope_data_empty, scope_find_inductive, scope_push_local, scope_resolve_name,
 }
 use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
@@ -425,9 +425,19 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
             let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
             let this_scope : ScopeData := build_scope_from_decls mp decls;
             let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
+            // Outer aliasing pass: `build_scope_from_decls`'s own alias pass
+            // (inside `this_scope`) only sees the CURRENT file's own decls,
+            // so it can't alias a name whose REAL entry lives in a
+            // dependency (e.g. `open IO {println}` where `IO` is declared
+            // in a different file) -- that dependency's entries only
+            // become visible once merged into `final_scope`, right here.
+            // Re-walking `decls`' own `use_d`/`open_d`s against the now-
+            // fully-merged scope catches exactly that case; same-file
+            // opens are already aliased (a no-op re-alias here, cheap).
+            let aliased_scope : ScopeData := alias_decls_in_scope decls final_scope;
             let scope : Scope := {
                 module_id := mp,
-                scope := final_scope,
+                scope := aliased_scope,
                 parent := Option.none,
             };
             return Option.some scope
@@ -577,9 +587,12 @@ def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (b
                     let merged_with_base : ScopeData := merge_scope_data base_sd merged_extra;
                     let this_scope : ScopeData := build_scope_from_decls mp decls;
                     let final_scope : ScopeData := merge_scope_data merged_with_base this_scope;
+                    // See `load_module_with_dependencies`'s own identical
+                    // outer-aliasing-pass comment above -- same reasoning.
+                    let aliased_scope : ScopeData := alias_decls_in_scope decls final_scope;
                     let scope : Scope := {
                         module_id := mp,
-                        scope := final_scope,
+                        scope := aliased_scope,
                         parent := Option.none,
                     };
                     return Option.some scope

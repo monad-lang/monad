@@ -166,32 +166,30 @@ def do_stmt_let_kind (input: String) (name: Identifier) (ctx: List Identifier) :
 #[partial]
 def do_stmt_let_kind_try (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
     match r {
-        success rem _ => do_stmt_let_value (expression ctx (skip_docstrings (skip_spaces rem))) name,
+        success rem _ => do_stmt_let_value (expression ctx (skip_docstrings (skip_spaces rem))) name Term.hole,
         fail _ => do_stmt_bind_arrow (tag "<-" (skip_spaces orig)) name orig ctx
     }
 
 #[partial]
-def do_stmt_let_value (r: ParseResult Term) (name: Identifier) : ParseResult DoStmt :=
+def do_stmt_let_value (r: ParseResult Term) (name: Identifier) (typ: Term) : ParseResult DoStmt :=
     match r {
-        success rem value => success rem (DoStmt.let_s name value),
+        success rem value => success rem (DoStmt.let_s name typ value),
         fail e => fail e
     }
 
 #[partial]
 def do_stmt_bind_arrow (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
     match r {
-        success rem _ => do_stmt_bind_value (expression ctx (skip_docstrings (skip_spaces rem))) name,
+        success rem _ => do_stmt_bind_value (expression ctx (skip_docstrings (skip_spaces rem))) name Term.hole,
         fail _ => do_stmt_let_try_type (tag ":" (skip_spaces orig)) name orig ctx
     }
 
 // A do-block `let`/bind statement may carry an optional type annotation
 // between the name and `:=`/`<-` (e.g. `let res : Result String X <-
-// load_file_modules file_path;`) -- parsed here and then discarded: like
-// `let_term_parser`'s own `: Type` handling above, `DoStmt.let_s`/`bind_s`
-// (lang/types.mo) only ever store `name`+`expr`, and `desugar_do_inner`
-// always binds the desugared lambda parameter at `Term.hole` (inferred)
-// regardless of whether a type was written, same as an unannotated
-// do-block let.
+// load_file_modules file_path;`) -- parsed here and threaded through into
+// `DoStmt.let_s`/`bind_s` (lang/types.mo), which now carry the statement's
+// own type (`Term.hole` when unannotated -- the two call sites above --
+// or the real parsed type here). `desugar_do_inner` uses it directly.
 #[partial]
 def do_stmt_let_try_type (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
     match r {
@@ -202,28 +200,28 @@ def do_stmt_let_try_type (r: ParseResult String) (name: Identifier) (orig: Strin
 #[partial]
 def do_stmt_let_typed (r: ParseResult Term) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
     match r {
-        success rem _ => do_stmt_let_typed_kind (tag ":=" (skip_spaces rem)) name rem ctx,
+        success rem typ => do_stmt_let_typed_kind (tag ":=" (skip_spaces rem)) name typ rem ctx,
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_let_typed_kind (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
+def do_stmt_let_typed_kind (r: ParseResult String) (name: Identifier) (typ: Term) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
     match r {
-        success rem _ => do_stmt_let_value (expression ctx (skip_docstrings (skip_spaces rem))) name,
-        fail _ => do_stmt_let_typed_bind (tag "<-" (skip_spaces orig)) name orig ctx
+        success rem _ => do_stmt_let_value (expression ctx (skip_docstrings (skip_spaces rem))) name typ,
+        fail _ => do_stmt_let_typed_bind (tag "<-" (skip_spaces orig)) name typ orig ctx
     }
 
 #[partial]
-def do_stmt_let_typed_bind (r: ParseResult String) (name: Identifier) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
+def do_stmt_let_typed_bind (r: ParseResult String) (name: Identifier) (typ: Term) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
     match r {
-        success rem _ => do_stmt_bind_value (expression ctx (skip_docstrings (skip_spaces rem))) name,
+        success rem _ => do_stmt_bind_value (expression ctx (skip_docstrings (skip_spaces rem))) name typ,
         fail _ => fail (ParseError.custom "expected := or <- after let in do block" orig)
     }
 
 #[partial]
-def do_stmt_bind_value (r: ParseResult Term) (name: Identifier) : ParseResult DoStmt :=
+def do_stmt_bind_value (r: ParseResult Term) (name: Identifier) (typ: Term) : ParseResult DoStmt :=
     match r {
-        success rem value => success rem (DoStmt.bind_s name value),
+        success rem value => success rem (DoStmt.bind_s name typ value),
         fail e => fail e
     }
 
@@ -237,8 +235,8 @@ def do_stmt_expr (r: ParseResult Term) : ParseResult DoStmt :=
 #[partial]
 def do_stmts_extend_ctx (stmt: DoStmt) (ctx: List Identifier) : List Identifier :=
     match stmt {
-        bind_s name _ => List.cons name ctx,
-        let_s name _ => List.cons name ctx,
+        bind_s name _ _ => List.cons name ctx,
+        let_s name _ _ => List.cons name ctx,
         _ => ctx
     }
 

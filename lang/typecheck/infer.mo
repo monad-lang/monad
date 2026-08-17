@@ -517,21 +517,47 @@ def nth_type (idx : I64) (types : List Term) : Option Term :=
             List.empty => Option.none,
         }
 
+/// Is this Term a bare, uninformative `Term.hole`?
+def is_hole (t : Term) : Bool :=
+    match t {
+        Term.hole => true,
+        _ => false,
+    }
+
 /// Type check a lambda expression.
 def type_check_lam (dbg : DebugName) (t : Term) (body : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match expected_type {
         Term.pi arg_typ ret_typ =>
-            let extended_types : List Term := List.cons arg_typ local_types in
+            // Prefer the lambda's OWN written param type `t` over `arg_typ`
+            // (the type `type_check_app` infers for the ARGUMENT this
+            // lambda is about to be applied to) whenever `t` isn't itself
+            // `Term.hole` -- an explicit annotation in the source is real
+            // information; `arg_typ` can be `Term.hole` even when the
+            // written annotation isn't, since ordinary top-level defs are
+            // registered in scope with `sig := Term.hole` (`build_scope_
+            // def`, lang/scope.mo) -- a cross-def reference's type comes
+            // back as a placeholder regardless of what its callee actually
+            // declared. This matters for every `let x : T := f y in body`
+            // (desugars to exactly this `App(Lam{t=T}, f y)` shape,
+            // `let_term_body`/do-block `let`, both lang/parser.mo) --
+            // without preferring `t`, `x`'s local type silently degrades
+            // to `Term.hole` even though `T` was written right there,
+            // breaking downstream precision (e.g. match-case validation
+            // needing `x`'s real type to disambiguate a constructor
+            // collision -- confirmed via lang/main.mo's own `main`, see
+            // plans/bootstrapping/self-hosted-compiler.md's changelog).
+            let bound_typ : Term := if is_hole t then arg_typ else t in
+            let extended_types : List Term := List.cons bound_typ local_types in
             let lv : LocalVar := {
                 name := debug_name_to_id dbg,
-                typ := arg_typ,
+                typ := bound_typ,
                 multiplicity := Multiplicity.many,
             } in
             let extended_locals : LocalScope := scope_push_local lv locals in
             match type_check body ret_typ scope extended_types extended_locals {
                 ok body_tt =>
                     let checked_body : Term := tt_term body_tt in
-                    let lam_term : Term := Term.lam dbg arg_typ checked_body in
+                    let lam_term : Term := Term.lam dbg bound_typ checked_body in
                     ok (mk_typed lam_term expected_type),
                 err e => err e,
             },
