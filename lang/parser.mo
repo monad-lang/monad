@@ -1030,11 +1030,44 @@ def struct_field_default_val (r : ParseResult Term) (name : Identifier) (typ : T
 	}
 
 // type Name { constructor1 (args), constructor2 }
+//
+// `#[...]` attributes (e.g. `#[derive_cli]`) previously didn't parse at
+// all before `type` (unlike `def`, which at least tolerated and
+// skipped them) — captured here via `opt_attributes` and patched onto
+// the fully-parsed `Decl` afterward, same "placeholder now, patch
+// later" shape `def_parser`'s own `def_try_attrs`/`def_apply_attrs`
+// use just above.
 
 #[partial]
 def type_parser (input : String) : ParseResult Decl :=
+	type_try_attrs (opt_attributes input) input
+
+#[partial]
+def type_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem attrs => type_apply_attrs (type_vis_entry rem) attrs,
+		fail _ => type_vis_entry orig
+	}
+
+#[partial]
+def type_vis_entry (input : String) : ParseResult Decl :=
 	match vis_parser input {
 		success rem vis => type_vis rem vis,
+		fail e => fail e
+	}
+
+#[partial]
+def type_apply_attrs (dr : ParseResult Decl) (attrs : List Attribute) : ParseResult Decl :=
+	match dr {
+		success rem decl =>
+			match decl {
+				inductive_d ind =>
+					match ind {
+						Inductive.mk name params kind cons _ vis =>
+							success rem (Decl.inductive_d (Inductive.mk name params kind cons attrs vis))
+					},
+				_ => success rem decl
+			},
 		fail e => fail e
 	}
 
@@ -1443,31 +1476,45 @@ def vis_require_ws (rem : String) (v : Visibility) (orig : String) : ParseResult
 	}
 
 // def [#attrs] name {implicit} (explicit) : ret_type := body
-// `#[...]` is the (only) attribute delimiter. Content is skipped — see the
-// module doc comment on attribute capture.
+// `#[...]` attributes are now captured for real via `opt_attributes`
+// (see that function's own doc comment above) rather than skipped —
+// `def_try_attrs` captures them once at the very start, then
+// `def_apply_attrs` patches them onto the already-fully-parsed `Decl`
+// afterward, exactly mirroring `def_apply_constraints`'s own
+// "placeholder now, patch later" pattern just below (see ITS doc
+// comment for why: avoids threading a new accumulator through the
+// whole `def_params`/`def_body`/... chain down to `def_to_decl`).
 
 #[partial]
 def def_parser (input : String) : ParseResult Decl :=
-	def_try_attrs (tag "#[" (skip_spaces input)) input
+	def_try_attrs (opt_attributes input) input
 
 #[partial]
-def def_try_attrs (r : ParseResult String) (orig : String) : ParseResult Decl :=
+def def_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult Decl :=
 	match r {
-		success rem _ => def_attr_skip (take_while is_not_attr_end rem) rem,
+		success rem attrs => def_apply_attrs (def_vis_done (vis_parser (skip_spaces rem))) attrs,
 		fail _ => def_vis_done (vis_parser (skip_spaces orig))
 	}
 
+/// Patch the real attrs onto the fully-parsed `Decl` — see
+/// `def_try_attrs`'s doc comment above. `attrs` is `List.empty` for
+/// the overwhelming majority of defs (no `#[...]` present at all —
+/// `opt_attributes` always succeeds, even with zero attributes found),
+/// so this only ever changes the constructed `Def`'s `attrs` field
+/// away from its own already-`List.empty` default when there really
+/// was one.
 #[partial]
-def def_attr_skip (r : ParseResult String) (rest : String) : ParseResult Decl :=
-	match r {
-		success rem _ => def_attr_close (tag "]" rem),
-		fail _ => fail (ParseError.custom "expected ]" rest)
-	}
-
-#[partial]
-def def_attr_close (r : ParseResult String) : ParseResult Decl :=
-	match r {
-		success rem _ => def_vis_done (vis_parser (skip_spaces rem)),
+def def_apply_attrs (dr : ParseResult Decl) (attrs : List Attribute) : ParseResult Decl :=
+	match dr {
+		success rem decl =>
+			match decl {
+				def_d d =>
+					match d {
+						Def.mk name typ term constraints _ vis =>
+							success rem (Decl.def_d (Def.mk name typ term constraints attrs vis))
+					},
+				_ => success rem decl
+			},
 		fail e => fail e
 	}
 
@@ -5521,6 +5568,115 @@ def test_opt_attributes_stacked : Bool :=
 def test_opt_attributes_none_present : Bool :=
     match opt_attributes "def foo" {
         success rem attrs => String.beq rem "def foo" && I64.beq (List.length attrs) 0,
+        fail _ => false
+    }
+
+// --- Tests for real attribute capture wired into def_parser/type_parser ---
+
+#[test]
+def test_def_parser_captures_test_attribute : Bool :=
+    match def_parser "#[test]\ndef foo (x : I64) : I64 := x" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.def_d d => match d {
+                    Def.mk _ _ _ _ attrs _ =>
+                        I64.beq (List.length attrs) 1 && has_attr (Identifier.id "test") attrs,
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// A plain (unattributed) def must still parse with an empty attrs
+/// list, exactly as before this round's change.
+#[test]
+def test_def_parser_no_attribute_present : Bool :=
+    match def_parser "def foo (x : I64) : I64 := x" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.def_d d => match d {
+                    Def.mk _ _ _ _ attrs _ => I64.beq (List.length attrs) 0,
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// A `#[terminating]`-attributed def -- the same real corpus shape as
+/// `std/map.mo`'s own `#[terminating] def insert ...` -- must still
+/// parse correctly and carry the real attribute now, not just tolerate
+/// and discard it.
+#[test]
+def test_def_parser_captures_terminating_attribute : Bool :=
+    match def_parser "#[terminating]\ndef loop (x : I64) : I64 := loop x" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.def_d d => match d {
+                    Def.mk _ _ _ _ attrs _ => has_attr (Identifier.id "terminating") attrs,
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+#[test]
+def test_type_parser_captures_derive_cli_attribute : Bool :=
+    match type_parser "#[derive_cli]\ntype Command { help, }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.inductive_d ind => match ind {
+                    Inductive.mk _ _ _ _ attrs _ =>
+                        I64.beq (List.length attrs) 1 && has_attr (Identifier.id "derive_cli") attrs,
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// `#[derive BEq BOrd Debug Lens]` -- confirmed against the reference
+/// grammar to be ONE attribute with four bare-ident args, not four
+/// stacked attributes (see the Step 1 tests for `attribute_parser`
+/// directly) -- must come through the same way once wired into
+/// `type_parser`.
+#[test]
+def test_type_parser_captures_multi_arg_derive_attribute : Bool :=
+    match type_parser "#[derive BEq BOrd]\ntype Point { mk (x : I64) (y : I64), }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.inductive_d ind => match ind {
+                    Inductive.mk _ _ _ _ attrs _ =>
+                        I64.beq (List.length attrs) 1 &&
+                        match attrs {
+                            List.cons attr _ =>
+                                match attr { Attribute.mk name args => id_eq name (Identifier.id "derive") && I64.beq (List.length args) 2 },
+                            List.empty => false,
+                        },
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// A plain (unattributed) type must still parse with an empty attrs
+/// list -- previously `type_parser` had no attribute tolerance AT ALL
+/// (unlike `def_parser`, which at least skipped `#[...]`), so this
+/// also confirms ordinary types are unaffected by adding it.
+#[test]
+def test_type_parser_no_attribute_present : Bool :=
+    match type_parser "type Command { help, }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.inductive_d ind => match ind {
+                    Inductive.mk _ _ _ _ attrs _ => I64.beq (List.length attrs) 0,
+                },
+                _ => false
+            },
         fail _ => false
     }
 
