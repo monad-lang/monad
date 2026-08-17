@@ -984,12 +984,26 @@ Key patterns when writing self-hosted Monad code:
      against what it's actually called can matter just as much.
    - Combined effect, both fixes together, measured after reconciling
      them via rebase: `test_typecheck_lang_main` dropped from 545.05s
-     (the item-8/TCO baseline) to 78.99s — a further ~86% reduction
-     (~6.9x faster) on top of item 8's own already-large win. Full
-     corpus `check init std examples`: 51 files, 181 errors, unchanged
-     from before either fix (confirmed via a direct isolated stash
-     comparison on this exact combined commit), completing in well
-     under a minute where the pre-item-8 baseline could not finish
+     (the item-8/TCO baseline) to **97.07s — an 82% reduction, ~5.6x
+     faster** — essentially identical to Fix B's own standalone number
+     (97.38s, measured before this rebase), not additionally improved by
+     Fix A on this specific end-to-end metric. That's expected, not a
+     sign Fix A is redundant: Fix B's bucket-merge is a fixed 16-append
+     cost regardless of `merged_extra`'s size, so shrinking
+     `merged_extra` (Fix A's effect) doesn't move `merge_scope_data`'s
+     own cost further once it's already cheap — but Fix A still matters
+     on its own terms, for the cost `merge_scope_data` never touches at
+     all: `load_dependency_scopes` actually parsing/scope-building
+     `extra_deps`' files. `test_typecheck_lang_main`'s own dependency
+     shape (mostly prelude+init-covered, little genuine `lang/`-internal
+     `extra_deps` per file) just doesn't happen to exercise that
+     saving much; files with real non-base dependencies still benefit
+     from Fix A the way its own commit measured directly (`std/show.mo`
+     scope phase 4224ms → 712ms; `lang/module.mo` 418.8s → 367.3s).
+     Full corpus `check init std examples`: 51 files, 181 errors,
+     unchanged from before either fix (confirmed via a direct isolated
+     stash comparison on this exact combined commit), completing in
+     well under a minute where the pre-item-8 baseline could not finish
      within a 590s timeout at all. Remaining known gap, explicitly out
      of scope for both fixes: `PreludeInitBase` only covers prelude+
      init, not a file's dependencies on *other, non-base* corpus files
