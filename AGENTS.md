@@ -606,7 +606,7 @@ The test runner supports both files and directories. When given a directory, it 
 
 ### Pre-commit
 
-The pre-commit config (`.pre-commit-config.yaml`) is managed by Nix via `git-hooks.nix`. Do NOT edit it directly. Instead, modify the Nix configuration that generates it. The `monad-tests` hook currently runs `cargo run -- test init/tests.mo`. If this hook fails, run `cargo run -- test init/` to see all test failures.
+The pre-commit config (`.pre-commit-config.yaml`) is managed by Nix via `git-hooks.nix`. Do NOT edit it directly. Instead, modify the Nix configuration that generates it. The `monad-tests` hook currently runs `cargo run --release -- test init std lang examples` (see `devenv.nix`) — recursing into every `.mo` file under those four directories, `lang/tests/` included. If this hook fails, run the same command directly (or narrow to one directory, e.g. `cargo run -- test lang/`) to see all test failures.
 
 ## Development Workflow
 
@@ -1022,7 +1022,7 @@ for this repo.
 
 ### Pre-commit Hooks
 
-Always commit with pre-commit hooks enabled. **Never** use `git commit --no-verify` — the pre-commit hooks ensure clippy, rustfmt, `cargo test`, and `cargo run -- test init/tests.mo` all pass before each commit. If a hook fails:
+Always commit with pre-commit hooks enabled. **Never** use `git commit --no-verify` — the pre-commit hooks ensure clippy, rustfmt, `cargo test`, and `cargo run --release -- test init std lang examples` all pass before each commit. If a hook fails:
 1. Read the error message to identify the issue
 2. Fix the underlying problem (code warnings, test failures, formatting)
 3. Stage the fix and retry the commit

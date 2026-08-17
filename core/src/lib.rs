@@ -12,6 +12,11 @@ use crate::eval::r#type::render_type_error_with_source;
 #[cfg(feature = "repl")]
 use crate::parser::{ReplInput, repl_parser};
 use crate::term::Decl;
+// Unused by the lib itself when `repl` is off (only `eval_repl_term` refers
+// to it bare), but still needed unqualified by `mod test`'s `use super::*`
+// regression test below -- cfg-gating this import would break that test's
+// compilation under a `repl`-less `cargo test`.
+#[cfg_attr(not(feature = "repl"), allow(unused_imports))]
 use crate::term::Term;
 #[cfg(feature = "repl")]
 use crate::term::Term::Hole;
@@ -74,6 +79,7 @@ pub type Map<K, V> = BTreeMap<K, V>;
 /// partial closure/native) falls back to `Debug`, which is honest about
 /// showing raw tags/slots rather than pretending to a fidelity this
 /// function can't deliver without a whole name-resolving value-printer.
+#[cfg(feature = "repl")]
 fn format_repl_value(value: &core_value::Value) -> String {
   match value {
     core_value::Value::Lit(lit) => format!("{lit}"),
@@ -90,6 +96,7 @@ fn format_repl_value(value: &core_value::Value) -> String {
 /// rather than mutating `repl_decls` itself — a bare expression is not a
 /// declaration and must not persist into later inputs the way an actual
 /// `def`/`type`/... entered at the prompt does.
+#[cfg(feature = "repl")]
 fn eval_repl_term(
   loaded: &LoadedModules,
   module_path: &ModulePath,
