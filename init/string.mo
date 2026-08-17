@@ -12,6 +12,9 @@ def String.concat (a b : String) : String
 #[native string_length]
 def String.length (s : String) : I64
 
+#[native string_to_lowercase]
+def String.to_lowercase (s : String) : String
+
 #[native string_slice]
 def String.slice (s : String) (start : I64) (len : I64) : String
 

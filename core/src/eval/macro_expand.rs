@@ -452,15 +452,29 @@ pub fn expand_macros(
         batch.push(ctx.map(|_| Decl::Def(def)));
       }
       Decl::Type(induct) => {
-        // `#[derive_cli]` runs against the already-parsed `Inductive` directly
-        // (see `derive_cli.rs`) rather than through the decl-gen macro
-        // machinery above — it needs to read back the type's own name and
-        // constructors, which `defmacro`/`decls{}` templates can't do.
         let mut generated: Vec<Decl> = Vec::new();
+        // `#[derive_cli]` — dispatches to the `derive_cli` decl-gen macro
+        // (`lang/cli.mo`), the same reflection-as-data mechanism every
+        // other derive uses (via `derive_cli_meta`, an ordinary
+        // `TypeInfo -> List Decl` function invoked through
+        // `reflect_type_info!`), through ordinary macro-call synthesis —
+        // same spirit as, and now literally the same code shape as, the
+        // `#[derive BEq BOrd Debug Lens]` loop just below. Requires the
+        // file to `use lang.cli {derive_cli}` (or a superset, e.g.
+        // `use lang.cli {*}`), same convention as any other cross-module
+        // decl-gen macro call.
         if induct.has_attr("derive_cli") {
-          let def = super::derive_cli::expand_derive_cli(&induct)
-            .map_err(|e| MacroError::Generic(e.to_string()))?;
-          generated.push(Decl::Def(def));
+          let call_args = vec![mpvar(induct.name().clone())];
+          let expanded = expand_macro_call(
+            &id("derive_cli"),
+            &call_args,
+            &decl_gen_defs,
+            &inductives,
+            loaded,
+            &current_decls,
+            current_path,
+          )?;
+          generated.extend(expanded);
         }
         // `#[derive BEq BOrd Debug Lens]` — generic dispatch to the
         // corresponding `derive_*!` decl-gen macro (`std/derive.mo`) via
@@ -498,16 +512,13 @@ pub fn expand_macros(
         // forever.
         batch.push(ctx.map(|_| Decl::Type(induct)));
         // The GENERATED decls, in contrast, DO need to be re-queued rather
-        // than pushed straight to `batch`: `instance BEq T { def beq ... :=
-        // reflect_beq! T a b }` and friends still have their own embedded
-        // term-level macro calls to expand, which only happens in the
-        // `Decl::Def`/`Decl::Ins` arms below — the same reason
-        // `Decl::MacroCall`'s own expansion result gets re-queued rather
-        // than appended directly. (`derive_cli`'s generated `Def` never
-        // needed this — it's built directly via Rust term construction,
-        // no embedded macro calls — which is why the original,
-        // derive_cli-only version of this arm got away with pushing
-        // straight to `batch`.)
+        // than pushed straight to `batch` — `expand_macro_call`'s own
+        // result can itself still contain further macro calls to expand
+        // (the same reason `Decl::MacroCall`'s own expansion result gets
+        // re-queued rather than appended directly), though in practice
+        // every current derive (`derive_cli`/`derive_beq`/`derive_bord`/
+        // `derive_debug`/`derive_lens`) bottoms out in concrete decls
+        // straight away, via `reflect_type_info!`.
         for d in generated.into_iter().rev() {
           queue.push_front(SourceContext::no_ctx(d));
         }

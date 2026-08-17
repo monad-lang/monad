@@ -1,39 +1,55 @@
-// `#[derive_cli]` tests — see `derive_cli.rs` for the generator and
+// `#[derive_cli]` tests — see `lang/cli.mo`'s `derive_cli_meta`/`derive_cli`
+// for the generator (an ordinary `TypeInfo -> List Decl` Monad function
+// invoked via `reflect_type_info!`, the same reflection-as-data
+// metaprogramming kernel `std/derive.mo`'s four derives use — see
+// `plans/review-and-reduce-the-greedy-nest.md`) and
 // `plans/library-ideas/cli-library.md` / the CLI plan for design context.
 
 use crate::core_check_module::type_check_module_decls_new as type_check_module_decls;
 use crate::parser::parse_file;
-use crate::term::module::{ParsedModule, default_modules, load_module_from_text, module};
-use crate::term::{Hole, ModulePath, SearchPaths, mpt};
-
-/// The real `lang/cli.mo` runtime helpers — included directly (rather than
-/// a hand-copied fixture) so these engine-level tests can never drift out of
-/// sync with the actual library `#[derive_cli]`-generated code calls into.
-const CLI_FIXTURE_SRC: &str = include_str!("../../../lang/cli.mo");
+use crate::term::module::{ParsedModule, default_modules, module};
+use crate::term::{Identifier, ModulePath, SearchPaths, mpt};
 
 /// Load `source` as a module (running the full elaborate -> expand_macros ->
 /// type-check pipeline, exactly like the real CLI's `test`/`run` commands),
-/// with the `Cli` fixture above pre-loaded and opened so generated
-/// `#[derive_cli]` code can resolve `Cli.take_flag`/`Cli.take_positional`.
+/// with the real `lang/cli.mo` pre-loaded (via `load_module_files`, its
+/// REAL on-disk path — not a synthetic name loaded from an `include_str!`
+/// snippet, which the reflection-as-data port made insufficient here: since
+/// `#[derive_cli]` now invokes `lang/cli.mo`'s own `derive_cli_meta`
+/// through `reflect_type_info!`/`MetaEvalContext`, that whole-program
+/// capture pass RE-READS every non-`init` loaded module's source from disk
+/// via search paths — `lib.rs::build_core_program`'s documented
+/// requirement, see `meta_compile.rs` — which only finds a module
+/// registered under its real path, findable via `SearchPaths`, same as
+/// `meta_test.rs`'s own `std/derive.mo` fixture) so generated
+/// `#[derive_cli]` code can resolve `Cli.take_flag`/`Cli.take_positional`
+/// (and `#[derive_cli]`'s own dispatch can resolve the `derive_cli`
+/// decl-gen macro `lang/cli.mo` now defines).
 fn load(source: &str) -> Result<(crate::term::module::LoadedModules, ModulePath), String> {
   let mut loaded = default_modules().map_err(|e| e.to_string())?;
-  // `lang/cli.mo` (included above) does `use std.list` — point search paths
-  // at the repo root (via `CARGO_MANIFEST_DIR`, which is `core/`, so `std/`
-  // is one level up) rather than relying on `cargo test`'s CWD.
+  // `lang/cli.mo` does `use std.list`/`use init.meta` — point search paths
+  // at the repo root (via `CARGO_MANIFEST_DIR`, which is `core/`, so
+  // `std/`/`init/`/`lang/` are one level up) rather than relying on
+  // `cargo test`'s CWD.
   let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
     .parent()
     .expect("core/ should have a parent dir")
     .to_path_buf();
-  let mut paths = SearchPaths::empty();
-  paths.push(repo_root);
-  loaded.set_search_paths(paths);
-  let fixture_path = ModulePath::top("cli_fixture");
-  load_module_from_text(CLI_FIXTURE_SRC, &fixture_path, &mut loaded).map_err(|e| e.to_string())?;
+  loaded.set_search_paths(SearchPaths::new(vec![repo_root]));
+  let loaded = crate::term::module::load_module_files(
+    &ModulePath::new(vec![
+      Identifier::new("lang".to_string()),
+      Identifier::new("cli".to_string()),
+    ]),
+    loaded,
+  )
+  .map_err(|e| e.to_string())?;
 
   let path = ModulePath::top("test_derive_cli");
-  let full_source = format!("use cli_fixture {{*}}\n\n{source}");
+  let full_source = format!("use lang.cli {{*}}\n\n{source}");
   let parsed = parse_file(full_source.as_str().into()).map_err(|e| e.to_string())?;
   let decls = type_check_module_decls(&path, parsed.decls, &loaded).map_err(|e| e.to_string())?;
+  let mut loaded = loaded;
   loaded.add_module(module(
     path.clone(),
     ParsedModule {
@@ -51,14 +67,16 @@ fn load(source: &str) -> Result<(crate::term::module::LoadedModules, ModulePath)
 // counterpart, `core_value::Value`, deliberately carries no name table
 // to render with (see `core/src/lib.rs`'s `format_repl_value` doc
 // comment) — a reduced `Value::Con`'s Debug output shows a raw tag, not
-// the constructor's real name "ok"/"err", so these six tests' string
+// the constructor's real name "ok"/"err", so these four tests' string
 // assertions have no equivalent to port against without first building
 // a real name-resolving runtime-value printer (`raise_core` only raises
 // checker-time `CoreTerm`s, not post-evaluation `Value`s) — design work
-// beyond this pass, not a mechanical port. The five tests below that
-// only check TYPE-CHECKING (not evaluating) `#[derive_cli]`-generated
-// code are unaffected and still give real coverage of the generator
-// itself (`derive_cli.rs`).
+// beyond this pass, not a mechanical port. The tests below that only
+// check TYPE-CHECKING (not evaluating) `#[derive_cli]`-generated code
+// are unaffected and still give real coverage of the generator itself
+// (`lang/cli.mo`'s `derive_cli_meta`) — and the actual end-to-end,
+// argv-evaluating proof lives in `lang/tests/cli_derive_tests.mo`, run
+// through the real `test` command (see that file's own header comment).
 
 const DEMO_SRC: &str = r#"
 #[derive_cli]
@@ -119,35 +137,24 @@ fn test_derive_cli_non_bool_arg_field_rejected() {
   );
 }
 
-#[test]
-fn test_derive_cli_no_constructors_rejected() {
-  // An inductive with zero constructors isn't valid Monad source to begin
-  // with (constructor_parser requires at least one), so this is exercised
-  // directly against the generator rather than through a parsed file.
-  use crate::eval::derive_cli::{DeriveCliError, expand_derive_cli};
-  use crate::term::{id, inductive};
-
-  let induct = inductive(
-    ModulePath::single(id("Empty")),
-    vec![],
-    vec![],
-    Hole,
-    vec![],
-    vec![],
-  );
-  let r = expand_derive_cli(&induct);
-  assert_eq!(
-    r,
-    Err(DeriveCliError::NoConstructors {
-      type_name: "Empty".to_string()
-    })
-  );
-}
+// `test_derive_cli_no_constructors_rejected` (the fifth test from before
+// this port) is gone, not just renamed: it called the old Rust
+// `expand_derive_cli` directly against a hand-built, zero-constructor
+// `Inductive` — its OWN comment already conceded "an inductive with zero
+// constructors isn't valid Monad source to begin with (constructor_parser
+// requires at least one)", i.e. it was testing a shape unreachable from
+// any real `.mo` file, in either the old generator or `derive_cli_meta`'s
+// (still-present, still-defensive) empty-`ctors` `Decl.d_error` branch.
+// Exercising this now would mean hand-building a `TypeInfo` `Value` and
+// invoking `derive_cli_meta` directly through `MetaEvalContext` — real new
+// test infrastructure nothing else in this file (or `meta_test.rs`) needs,
+// for a case that stays unreachable in practice either way.
 
 #[test]
 fn test_derive_cli_zero_arg_constructor_alone() {
-  // Regression for the `ok()`/`err()` raw-`Con` bug described in
-  // `derive_cli.rs` (search "narrow gap"): a single zero-param constructor
+  // Regression for the `ok()`/`err()` raw-`Con` bug `derive_cli_meta`'s
+  // own doc comment inherits from the Rust generator it replaced (search
+  // "narrow gap" in `lang/cli.mo`): a single zero-param constructor
   // wrapped in `Result.ok` is the minimal case that reproduced it.
   let src = r#"
     #[derive_cli]

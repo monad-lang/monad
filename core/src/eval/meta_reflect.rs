@@ -274,9 +274,15 @@ pub fn build_type_info_value(
     for field in ctor.params() {
       let name_v = str_value(field.name.as_str());
       let typ_v = term_to_expr_value(&field.typ, inductives)?;
+      let attr_values: Vec<Value> = field
+        .attrs
+        .iter()
+        .map(|a| str_value(a.name.as_str()))
+        .collect();
+      let attrs_v = list_value(inductives, attr_values)?;
       field_values.push(Value::Con {
         tag: field_info_tag,
-        args: vec![name_v, typ_v],
+        args: vec![name_v, typ_v, attrs_v],
       });
     }
     let fields_list = list_value(inductives, field_values)?;
@@ -519,6 +525,14 @@ fn reify_decl_value(v: Value, inductives: &Map<ModulePath, Inductive>) -> Result
             vec![],
           );
           Ok(Decl::Ins(ins))
+        }
+        "d_error" => {
+          let Value::Con { args, .. } = v else {
+            unreachable!()
+          };
+          let mut args = args;
+          let message = expect_str(pop_front(&mut args)?)?;
+          Err(MacroError::Generic(message))
         }
         other => Err(MacroError::Generic(format!(
           "meta: unknown Decl constructor `{other}`"

@@ -30,7 +30,7 @@ open Param {meta_param}
 open Decl {d_def, d_instance}
 
 def field_name_of (field : FieldInfo) : String :=
-    match field { field_info name typ => name }
+    match field { field_info name typ attrs => name }
 
 /// The getter half of a field's lens: `fn (s : T) => match s { ctor
 /// field1 field2 ... => <target field> }` — the (required single)
@@ -61,7 +61,7 @@ def rebuild_field (target : String) (field_name : String) : Expr :=
 /// One field -> its `Lens`-typed `def`, named `<Type>.<field>`.
 def lens_field_decl (type_name : String) (ctor_name : String) (field_names : List String) (field : FieldInfo) : Decl :=
     match field {
-        field_info fname ftyp =>
+        field_info fname ftyp fattrs =>
             d_def
                 (String.concat type_name (String.concat "." fname))
                 List.empty

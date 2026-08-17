@@ -136,7 +136,7 @@ fn test_cons_param() {
 #[test]
 fn test_cons_param_with_attribute() {
   // `#[arg]` on a named constructor param — used by `#[derive_cli]`
-  // generation (core/src/eval/derive_cli.rs) to mark a field as a flag.
+  // generation (`lang/cli.mo`'s `derive_cli_meta`) to mark a field as a flag.
   let (_, r) = cons_param::<()>(r#"(#[arg] verbose : Bool)"#.into()).unwrap();
   assert_eq!(r.len(), 1);
   assert_eq!(r[0].attrs.len(), 1);

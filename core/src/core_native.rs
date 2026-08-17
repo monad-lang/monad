@@ -137,6 +137,7 @@ const PURE_NATIVES: &[&str] = &[
   "string_get_char",
   "string_to_list",
   "string_from_list",
+  "string_to_lowercase",
 ];
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
@@ -232,6 +233,7 @@ pub fn exec_native(
     "string_hash" => string_hash(args),
     "string_concat" => string_concat(args),
     "string_length" => string_length(args),
+    "string_to_lowercase" => string_to_lowercase(args),
     "string_starts_with" => string_starts_with(args, natives),
     "string_slice" => string_slice(args),
     "string_drop" => string_drop(args),
@@ -570,6 +572,16 @@ fn string_length(args: &[Value]) -> Result<Value, CoreEvalError> {
   }
   let s = extract_string(&args[0])?;
   Ok(Value::Lit(IrLit::Num(s.len() as i64, NumSuffix::I64)))
+}
+
+fn string_to_lowercase(args: &[Value]) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "string_to_lowercase needs 1 arg".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  Ok(Value::Lit(IrLit::Str(s.to_lowercase())))
 }
 
 fn string_starts_with(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {

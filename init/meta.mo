@@ -12,11 +12,15 @@
 /// (`std/eval/meta_reflect.rs`) converts between these values and the
 /// compiler's real `Inductive`/`Term`/`Decl`.
 
-/// One field of one constructor: its declared name, and its type as a
+/// One field of one constructor: its declared name, its type as a
 /// constructible `Expr` (so it can be echoed straight into generated
-/// code, e.g. a lens's `Lens T field_typ` type).
+/// code, e.g. a lens's `Lens T field_typ` type), and its own attribute
+/// names (e.g. `["arg"]` for a `#[arg] verbose : Bool` field, `[]` for an
+/// unannotated one) — bare names only, no attribute arguments, matching
+/// what `derive_cli_meta` (`lang/cli.mo`) needs to tell a flag field from
+/// a positional one.
 type FieldInfo {
-    field_info (name : String) (typ : Expr)
+    field_info (name : String) (typ : Expr) (attrs : List String)
 }
 
 /// One constructor: its declared name, and its fields in declared order.
@@ -26,9 +30,9 @@ type CtorInfo {
 
 /// A type's full structure: its own name, and its constructors in
 /// declared order. Does not carry the type's own generic parameters
-/// (`Inductive.params`) or per-field attributes/defaults/multiplicity —
-/// no existing derive needs them; see the design doc for why this scope
-/// is deliberate, not an oversight.
+/// (`Inductive.params`) or per-field defaults/multiplicity — no existing
+/// derive needs them; see the design doc for why this scope is
+/// deliberate, not an oversight.
 type TypeInfo {
     type_info (name : String) (ctors : List CtorInfo)
 }
@@ -65,10 +69,19 @@ type Param {
 }
 
 /// A minimal, constructible mirror of the compiler's own `Decl` surface —
-/// just enough for the four derives this design targets: a `def` (name,
-/// params, return type, body) and an `instance` (class name, target
-/// type, methods — each itself a `d_def`).
+/// just enough for this design's target derives: a `def` (name, params,
+/// return type, body), an `instance` (class name, target type, methods —
+/// each itself a `d_def`), and `d_error`, the one deliberate non-mirror
+/// addition: a meta function has no other way to REJECT malformed input
+/// (`TypeInfo -> List Decl` has no error channel of its own) — a
+/// `d_error` anywhere in the returned list makes the whole
+/// `reflect_type_info!` invocation fail with `message` as a normal
+/// macro-expansion-time error (see `meta_reflect.rs::reify_decl_value`),
+/// short-circuiting before anything is spliced in. `derive_cli_meta`
+/// (`lang/cli.mo`) uses this for both of its hard failure cases (zero
+/// constructors; `#[arg]` on a non-`Bool` field).
 type Decl {
     d_def (name : String) (params : List Param) (ret_typ : Expr) (body : Expr),
     d_instance (class_name : String) (target_typ : Expr) (methods : List Decl),
+    d_error (message : String),
 }

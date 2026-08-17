@@ -881,8 +881,9 @@ pub struct Param {
   pub mult: Multiplicity, // NEW: Many (default), Linear (!), or Affine (?)
   pub default: Option<Box<Term>>, // Default value for class parameters (:= syntax)
   /// Per-parameter attributes, e.g. `#[arg]` on a constructor field for
-  /// `#[derive_cli]` generation (see `core/src/eval/derive_cli.rs`). Purely
-  /// additional metadata: excluded from equality/hashing/ordering below,
+  /// `#[derive_cli]` generation (see `lang/cli.mo`'s `derive_cli_meta`,
+  /// reflected into a `FieldInfo.attrs` list — `core/src/eval/meta_reflect.rs`).
+  /// Purely additional metadata: excluded from equality/hashing/ordering below,
   /// which stay structural over name/type/multiplicity/default — mirroring
   /// `Attribute`'s own `PartialEq`, which likewise ignores provenance.
   pub attrs: Vec<Attribute>,
