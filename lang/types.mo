@@ -184,6 +184,39 @@ type Literal {
     flt (text: String) (suffix: NumSuffix),
     if_ (one: Term) (two: Term) (three: Term),
     match_ (value: Term) (cases: List MatchCase),
+    /// A struct-literal expression (`{ field := value, ... }`),
+    /// optionally self-annotated with which struct it builds
+    /// (`{ field := value, ... : StructName }`) — lets the checker
+    /// resolve the struct name directly without needing an ambient
+    /// expected type from context (a struct literal doesn't always have
+    /// one, e.g. passed to a generic function). Mirrors the Rust
+    /// reference's `CoreLit::StructLit` (core/src/core_term.rs).
+    struct_lit (fields: List StructLitField) (type_name: Option Term),
+    /// `{ base with field := value, ... }` — a copy of `base` (an
+    /// existing struct VALUE, not a type name) with the listed fields
+    /// replaced. `base` is a resolved `Term` (typically `Term.var`) here
+    /// rather than a bare `Identifier`, unlike the Rust reference's own
+    /// SOURCE-level `term::Literal::StructUpdate` — this checker has no
+    /// separate parse-then-lower stage the way the reference's
+    /// `Literal` (pre-lowering) vs `CoreLit` (post-lowering,
+    /// `base: Box<CoreTerm>`) split does, so the parser resolves `base`
+    /// directly, matching every other variable reference elsewhere in
+    /// this file (`Term.var`/`variable`). Mirrors the Rust reference's
+    /// `CoreLit::StructUpdate`.
+    struct_update (base: Term) (fields: List StructLitField),
+}
+
+/// A single `name := value` field inside a struct-literal EXPRESSION
+/// (`{ x := 1, y := 2 }`) — as distinct from `StructField`'s
+/// DECLARATION shape (`x : T := default`). Mirrors one entry of the
+/// Rust reference's `CoreLit::StructLit`'s `fields: Map<Identifier,
+/// CoreTerm>`; order here doesn't matter (fields are matched by name)
+/// — the struct's own declared field order (from its registered
+/// `Param` list, see `build_scope_struct`) is what determines the
+/// final constructor-argument order once `type_check_lit` resolves
+/// this into a `Term.con`.
+type StructLitField {
+    mk (name: Identifier) (value: Term)
 }
 
 type Con {

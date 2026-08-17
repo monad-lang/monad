@@ -1,10 +1,12 @@
 use lang.types {
   Con, DebugName, Identifier, Inductive, Instance, InstanceKey, Literal,
   LocalScope, LocalVar, MatchCase, ModulePath, NameRef, Native, Param, Scope,
-  ScopeClassDef, ScopeDef, ScopeError, Similar, Term, TypeConstraint, TypeError,
-  app, con, custom, forall, hole, id, if_, lam, list_rev_loop, list_reverse, lit,
-  many, match_, mc, mk, mp, name, named, nid, not_a_type, ntv, num, pi,
-  show_module_path, str, type_, unknown_constructor, unknown_var, unnamed, var,
+  ScopeClassDef, ScopeDef, ScopeError, Similar, StructLitField, Term,
+  TypeConstraint, TypeError,
+  app, con, custom, forall, hole, id, id_eq, if_, lam, list_rev_loop,
+  list_reverse, lit, many, match_, mc, mk, mp, name, named, nid, not_a_type,
+  ntv, num, pi, show_module_path, str, type_, unknown_constructor,
+  unknown_type, unknown_var, unnamed, var,
 }
 use lang.scope {
   find_constructor_in_inductive, inductive_has_constructor, list_append,
@@ -134,6 +136,10 @@ def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (loc
             type_check_if one two three expected_type scope local_types locals,
         Literal.match_ value_ cases =>
             type_check_match value_ cases expected_type scope local_types locals,
+        Literal.struct_lit fields type_name =>
+            type_check_struct_lit fields type_name expected_type scope local_types locals,
+        Literal.struct_update base fields =>
+            type_check_struct_update base fields expected_type scope local_types locals,
     }
 
 /// Type check an if expression.
@@ -594,7 +600,8 @@ def debug_name_to_id (dbg : DebugName) : Identifier :=
 
 /// Type check a function application.
 def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
-    match type_check a Term.hole scope local_types locals {
+    let a_expected : Term := app_arg_expected_type f in
+    match type_check a a_expected scope local_types locals {
         ok a_tt =>
             let a_term : Term := tt_term a_tt in
             let a_typ : Term := tt_typ a_tt in
@@ -607,6 +614,30 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
                 err e => err e,
             },
         err e => err e,
+    }
+
+/// When `f` is an inline lambda with a KNOWN (non-hole) declared param
+/// type -- the shape every `let x : T := value in body` (and do-block
+/// equivalent) desugars to (`Term.app (Term.lam dbg T body) value`) --
+/// check the argument against that declared type instead of the
+/// otherwise-uninformative `Term.hole`. Without this, a term whose own
+/// checking depends entirely on an ambient expected type (a struct
+/// literal with no `: StructName` self-annotation is the motivating
+/// case -- field names alone don't determine a unique struct) has no
+/// way to learn it, since the argument is checked BEFORE `f`, and
+/// `type_check_lam`'s own `is_hole` preference (see its doc comment)
+/// only recovers `T` on the FUNCTION/bound-variable side, never threads
+/// it back to the argument being checked against it. Ordinary function
+/// application -- `f` anything other than an inline lambda, by far the
+/// common case (a named function reference, a partially-applied
+/// multi-arg call, ...) -- is completely unaffected: falls through to
+/// the previous `Term.hole` behavior unchanged. Mirrors the reference
+/// compiler's own dedicated `App(Lam{param_typ}, arg)` special case
+/// (`core_check.rs`).
+def app_arg_expected_type (f : Term) : Term :=
+    match f {
+        Term.lam _dbg param_typ _body => param_typ,
+        _ => Term.hole,
     }
 
 /// Extract the return type from the function's type after application.
@@ -730,6 +761,158 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
 def con_arity_msg (full_name : ModulePath) (got : I64) (want : I64) : String :=
     "constructor arity mismatch: " ++ show_module_path full_name ++ " expects "
         ++ I64.to_string want ++ " arg(s), got " ++ I64.to_string got
+
+/// Type check a struct-literal expression (`{ field := value, ... }`).
+/// Resolves which struct it builds (from its own self-annotation if
+/// present, otherwise from `expected_type`), reorders the literal's
+/// (unordered, name-matched) fields into the struct's own DECLARED
+/// field order, and reuses `check_con_args_against_params` -- the same
+/// per-argument type-checking `type_check_con` uses -- against the
+/// synthetic single-constructor `Inductive` `build_scope_struct`
+/// registers for every struct (name `mk`, mirroring the reference's own
+/// desugaring of a struct literal into a constructor application,
+/// `core/src/core_check.rs`'s `desugar_struct_literals`). Mirrors the
+/// reference's own leniency (`check_struct_fields`, core_check.rs):
+/// fields present in the literal are checked against their declared
+/// type; fields ABSENT from the literal (whether or not the struct
+/// declares a default for them) are not separately validated here --
+/// same as `check_con_args_against_params`'s existing `Option.none`
+/// handling for any other constructor call with sparse args.
+def type_check_struct_lit (fields : List StructLitField) (type_name : Option Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match struct_lit_head_name type_name expected_type {
+        Option.none =>
+            err (TypeError.custom "cannot infer struct type for struct literal (no `: StructName` annotation and no expected type from context)"),
+        Option.some sname =>
+            let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
+            match scope_find_inductive typ_mp scope {
+                err _ => err (TypeError.unknown_type (NameRef.nmp typ_mp)),
+                ok ind =>
+                    match ind {
+                        Inductive.mk _ _ _ ctors _ _ =>
+                            match ctors {
+                                List.empty => err (TypeError.custom (String.concat "struct has no registered constructor: " (show_module_path typ_mp))),
+                                List.cons ctor _ =>
+                                    match ctor {
+                                        InductConstructor.mk con_name params _ =>
+                                            let args : List (Option Term) := struct_lit_build_args params fields in
+                                            match check_con_args_against_params args params scope local_types locals {
+                                                err e => err e,
+                                                ok _ =>
+                                                    let mk_name : Identifier := struct_lit_con_name con_name in
+                                                    let c : Con := Con.mk mk_name typ_mp (List.length params) args in
+                                                    let result_typ : Term := match type_name {
+                                                        Option.some _ => Term.var sentinel (DebugName.named sname),
+                                                        Option.none => expected_type,
+                                                    } in
+                                                    ok (mk_typed (Term.con c) result_typ),
+                                            }
+                                    }
+                            }
+                    }
+            }
+    }
+
+/// The struct's own type name, wherever it comes from: the literal's
+/// own `: StructName` self-annotation if present, otherwise whatever
+/// concrete head type `expected_type` names -- same "prefer explicit,
+/// fall back to inference context" shape `type_check_lam`'s `is_hole`
+/// preference uses.
+def struct_lit_head_name (type_name : Option Term) (expected_type : Term) : Option Identifier :=
+    match type_name {
+        Option.some tn => type_head_name tn,
+        Option.none => type_head_name expected_type,
+    }
+
+/// `InductConstructor.mk`'s own `name` field is a full `ModulePath`
+/// (`build_scope_struct` registers it as `ModulePath.mp [mk]`) --
+/// `Con.mk` wants just the bare constructor `Identifier`, same as
+/// every other constructor-application site in this file.
+def struct_lit_con_name (con_mp : ModulePath) : Identifier :=
+    match con_mp {
+        ModulePath.mp ids =>
+            match list_last ids {
+                Option.some id => id,
+                Option.none => Identifier.id "mk",
+            }
+    }
+
+#[terminating]
+def list_last (ids : List Identifier) : Option Identifier :=
+    match ids {
+        List.empty => Option.none,
+        List.cons hd rest =>
+            match rest {
+                List.empty => Option.some hd,
+                List.cons _ _ => list_last rest,
+            }
+    }
+
+/// Reorders a struct literal's (name-matched, any-order) fields into
+/// the struct's own declared `Param` order, producing the sparse
+/// `List (Option Term)` shape `check_con_args_against_params`/`Con`
+/// expect. A literal field with no matching declared param is simply
+/// ignored (same leniency the reference's `check_struct_fields` has --
+/// it only ever walks the struct's OWN declared fields, never the
+/// literal's).
+#[terminating]
+def struct_lit_build_args (params : List Param) (fields : List StructLitField) : List (Option Term) :=
+    match params {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p {
+                Param.mk pname _ _ _ =>
+                    List.cons (struct_lit_find_field fields pname) (struct_lit_build_args rest fields)
+            }
+    }
+
+#[terminating]
+def struct_lit_find_field (fields : List StructLitField) (name : Identifier) : Option Term :=
+    match fields {
+        List.empty => Option.none,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk fname fvalue =>
+                    if id_eq fname name then Option.some fvalue else struct_lit_find_field rest name
+            }
+    }
+
+/// Type check a struct-update expression (`{ base with field := value,
+/// ... }`). Mirrors the reference's own acknowledged simplification for
+/// this construct (`infer_lit`'s `CoreLit::StructUpdate` arm,
+/// core/src/core_check.rs): `base`'s type IS knowable (it's an ordinary
+/// term), so the overall result type is `base`'s own type unchanged;
+/// each replacement field VALUE is still individually checked (to catch
+/// an outright ill-typed update), but not correlated with that
+/// specific field's own declared type -- the reference doesn't either
+/// (same missing-registry limitation plain `StructLit` without a
+/// self-annotation has).
+def type_check_struct_update (base : Term) (fields : List StructLitField) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match type_check base Term.hole scope local_types locals {
+        err e => err e,
+        ok base_tt =>
+            match struct_update_check_fields fields scope local_types locals {
+                err e => err e,
+                ok _ =>
+                    let base_term : Term := tt_term base_tt in
+                    let base_typ : Term := tt_typ base_tt in
+                    let updated : Term := Term.lit (Literal.struct_update base_term fields) in
+                    ok (mk_typed updated base_typ),
+            }
+    }
+
+#[terminating]
+def struct_update_check_fields (fields : List StructLitField) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Bool :=
+    match fields {
+        List.empty => ok true,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk _ value =>
+                    match type_check value Term.hole scope local_types locals {
+                        ok _ => struct_update_check_fields rest scope local_types locals,
+                        err e => err e,
+                    }
+            }
+    }
 
 /// Individually type-check each present argument with no expected type
 /// (`Term.hole` — same "no information available" meaning `type_check`
@@ -886,4 +1069,158 @@ def test_type_check_con_unregistered_inductive_falls_back : Bool :=
     match type_check_con c_ok Term.hole box_scope empty_local_types empty_locals {
         ok _ => true,
         err _ => false,
+    }
+
+// --- Tests for type_check_struct_lit ---
+//
+// A hand-built `Point { x, y }` scope, same fixture convention as
+// `box_scope` above -- mirrors exactly what `build_scope_struct`
+// (lang/scope.mo) itself registers for a real `struct Point { x : T,
+// y : T }` declaration (type path `[Point]`, single synthetic
+// constructor path `[mk]`).
+
+def point_type_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Point") List.empty)
+
+def point_mk_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty)
+
+def point_x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none
+
+def point_y_param : Param := Param.mk (Identifier.id "y") (Term.type_ 2) Multiplicity.many Option.none
+
+def point_params : List Param := List.cons point_x_param (List.cons point_y_param List.empty)
+
+def point_constructor : InductConstructor := InductConstructor.mk point_mk_path point_params Term.hole
+
+def point_inductive : Inductive := Inductive.mk point_type_path List.empty Term.hole (List.cons point_constructor List.empty) List.empty Visibility.package_private
+
+def point_scope : Scope := {
+    module_id := point_type_path,
+    scope := scope_data_add_inductive scope_data_empty point_inductive,
+    parent := Option.none,
+}
+
+def point_type_ref : Term := Term.var sentinel (DebugName.named (Identifier.id "Point"))
+
+#[test]
+def test_type_check_struct_lit_self_annotated_ok : Bool :=
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 (List.cons f2 List.empty) in
+    let type_name : Option Term := Option.some point_type_ref in
+    match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_struct_lit_from_expected_type_ok : Bool :=
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 (List.cons f2 List.empty) in
+    let no_annotation : Option Term := Option.none in
+    match type_check_struct_lit fields no_annotation point_type_ref point_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_struct_lit_no_annotation_no_expected_rejected : Bool :=
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 List.empty in
+    let no_annotation : Option Term := Option.none in
+    match type_check_struct_lit fields no_annotation Term.hole point_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_type_check_struct_lit_wrong_field_type_rejected : Bool :=
+    // `x`'s declared param type is `Term.type_ 2` -- a sort at level 5
+    // is not a valid inhabitant, same reasoning as
+    // `test_type_check_con_wrong_arg_type_rejected` above.
+    let bad_f : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 5) in
+    let fields : List StructLitField := List.cons bad_f List.empty in
+    let type_name : Option Term := Option.some point_type_ref in
+    match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_type_check_struct_lit_missing_field_ok : Bool :=
+    // Only `x` provided, `y` entirely absent -- must still succeed,
+    // mirroring the reference compiler's own leniency here
+    // (`check_struct_fields`, core_check.rs: only fields PRESENT in the
+    // literal are checked, absence isn't itself an error at this
+    // layer).
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 List.empty in
+    let type_name : Option Term := Option.some point_type_ref in
+    match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_struct_lit_unknown_struct_rejected : Bool :=
+    let unknown_ref : Term := Term.var sentinel (DebugName.named (Identifier.id "NoSuchStruct")) in
+    let fields : List StructLitField := List.empty in
+    let type_name : Option Term := Option.some unknown_ref in
+    match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_type_check_struct_lit_extra_unknown_field_ignored : Bool :=
+    // A literal field with no matching declared param is silently
+    // ignored, same leniency as the reference's own `check_struct_fields`
+    // (which only ever walks the struct's OWN declared fields).
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
+    let extra : StructLitField := StructLitField.mk (Identifier.id "z_not_a_field") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 (List.cons f2 (List.cons extra List.empty)) in
+    let type_name : Option Term := Option.some point_type_ref in
+    match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+// --- Tests for type_check_struct_update ---
+
+/// A bound local variable `p : Point` (de Bruijn index 0), for
+/// `{ p with ... }`-shaped tests.
+def point_local_types : List Term := List.cons point_type_ref empty_local_types
+
+def point_var : Term := Term.var 0 (DebugName.named (Identifier.id "p"))
+
+#[test]
+def test_type_check_struct_update_ok : Bool :=
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 List.empty in
+    match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_struct_update_result_type_is_base_type : Bool :=
+    let fields : List StructLitField := List.empty in
+    match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
+        ok tt => match type_head_name (tt_typ tt) {
+            Option.some id => id_eq id (Identifier.id "Point"),
+            Option.none => false,
+        },
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_struct_update_bad_base_rejected : Bool :=
+    // `base` is an out-of-range de Bruijn index -- `type_check base
+    // Term.hole ...` must reject it, same as any other ill-formed term.
+    let bad_base : Term := Term.var 99 (DebugName.named (Identifier.id "nope")) in
+    let fields : List StructLitField := List.empty in
+    match type_check_struct_update bad_base fields Term.hole point_scope point_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
     }

@@ -51,6 +51,15 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
             Literal.match_ value cases =>
                 let vv := free_vars value known_names in
                 free_vars_of_cases cases known_names vv,
+            Literal.struct_lit fields type_name =>
+                let field_vars := free_vars_of_struct_lit_fields fields known_names in
+                match type_name {
+                    Option.some tn => union_ids field_vars (free_vars tn known_names),
+                    Option.none => field_vars,
+                },
+            Literal.struct_update base fields =>
+                let field_vars := free_vars_of_struct_lit_fields fields known_names in
+                union_ids field_vars (free_vars base known_names),
         },
         Term.con c =>
             match c {
@@ -72,6 +81,19 @@ def free_vars_of_cases (cases : List MatchCase) (known_names : List Identifier) 
                     free_vars_of_cases rest known_names acc_,
             },
         List.empty => acc,
+    }
+
+/// Collect free vars from a struct literal's fields.
+def free_vars_of_struct_lit_fields (fields : List StructLitField) (known_names : List Identifier) : List Identifier :=
+    match fields {
+        List.cons elem rest =>
+            match elem {
+                StructLitField.mk _ value =>
+                    let hd_vars := free_vars value known_names in
+                    let rest_vars := free_vars_of_struct_lit_fields rest known_names in
+                    union_ids hd_vars rest_vars,
+            },
+        List.empty => List.empty,
     }
 
 /// Collect free vars from Option Term list (Con args).

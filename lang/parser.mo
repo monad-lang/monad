@@ -3462,6 +3462,144 @@ def build_list_literal (elems : List Term) : Term :=
             Term.app (Term.app cons_var e) (build_list_literal rest),
     }
 
+// ─── Struct-literal parser (`{ field := value, ... [: TypeExpr] }`) ────
+//
+// Mirrors the Rust reference's `struct_or_update_parser`/
+// `struct_val_field_parser` (core/src/parser.rs) — a bare `{` atom
+// distinct from `struct`'s own DECLARATION syntax (`field : Type`, no
+// `:=`) and from `do { ... }` (which requires the literal keyword `do`
+// before its own `{`, so there's no grammar collision with a bare `{`
+// atom here). `StructUpdate` (`x with { field := v, ... }`) is
+// deliberately not implemented — see `Literal.struct_lit`'s own doc
+// comment in lang/types.mo.
+#[partial]
+def struct_lit_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
+    struct_lit_open (tag "{" input) ctx
+
+#[partial]
+def struct_lit_open (r : ParseResult String) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => struct_update_try (variable ctx (skip_docstrings (skip_spaces rem))) ctx rem,
+        fail e => fail e
+    }
+
+/// `{ base with field := value, ... }` is tried FIRST (mirrors the
+/// reference's own `alt((parse_struct_update, ...))` ordering,
+/// `struct_or_update_parser`, core/src/parser.rs) — if `base` parses as
+/// a variable but no literal `with` keyword follows, this is an
+/// ordinary struct literal whose first field's NAME happens to also be
+/// a valid bare variable reference (e.g. `{ x := 1 }`'s `x`); back off
+/// entirely to `orig` (right after the opening `{`) and parse it as
+/// such, discarding whatever `variable` matched.
+#[partial]
+def struct_update_try (r : ParseResult Term) (ctx : List Identifier) (orig : String) : ParseResult Term :=
+    match r {
+        success rem base => struct_update_with (tag "with" (skip_docstrings (skip_spaces rem))) ctx base orig,
+        fail _ =>
+            let empty_acc : List StructLitField := List.empty in
+            struct_lit_fields (skip_docstrings (skip_spaces orig)) ctx empty_acc,
+    }
+
+#[partial]
+def struct_update_with (r : ParseResult String) (ctx : List Identifier) (base : Term) (orig : String) : ParseResult Term :=
+    match r {
+        success rem _ =>
+            let empty_acc : List StructLitField := List.empty in
+            struct_update_fields (skip_docstrings (skip_spaces rem)) ctx base empty_acc,
+        fail _ =>
+            let empty_acc : List StructLitField := List.empty in
+            struct_lit_fields (skip_docstrings (skip_spaces orig)) ctx empty_acc,
+    }
+
+#[partial]
+def struct_update_fields (input : String) (ctx : List Identifier) (base : Term) (acc : List StructLitField) : ParseResult Term :=
+    match struct_lit_field ctx input {
+        success rem field => struct_update_field_sep (skip_docstrings (skip_spaces rem)) ctx base (List.cons field acc),
+        fail _ => struct_update_finish input base (list_reverse acc)
+    }
+
+/// A trailing comma before the closing `}` is optional, same as
+/// `struct_lit_field_sep`.
+#[partial]
+def struct_update_field_sep (input : String) (ctx : List Identifier) (base : Term) (acc : List StructLitField) : ParseResult Term :=
+    match tag "," input {
+        success rem _ => struct_update_fields (skip_docstrings (skip_spaces rem)) ctx base acc,
+        fail _ => struct_update_finish input base (list_reverse acc)
+    }
+
+/// Unlike `struct_lit_close`, there is no trailing `: TypeExpr`
+/// self-annotation for a struct update — `base`'s own type already
+/// determines the result type. Mirrors `parse_struct_update`
+/// (core/src/parser.rs), which closes directly with `}`.
+#[partial]
+def struct_update_finish (input : String) (base : Term) (fields : List StructLitField) : ParseResult Term :=
+    match tag "}" (skip_docstrings (skip_spaces input)) {
+        success rem _ => success rem (Term.lit (Literal.struct_update base fields)),
+        fail e => fail (ParseError.custom "expected } to close struct update" input)
+    }
+
+#[partial]
+def struct_lit_fields (input : String) (ctx : List Identifier) (acc : List StructLitField) : ParseResult Term :=
+    match struct_lit_field ctx input {
+        success rem field => struct_lit_field_sep (skip_docstrings (skip_spaces rem)) ctx (List.cons field acc),
+        fail _ => struct_lit_close input (list_reverse acc)
+    }
+
+/// A trailing comma before the closing `}`/`:` is optional, same as the
+/// list-literal parser's own `list_literal_sep`.
+#[partial]
+def struct_lit_field_sep (input : String) (ctx : List Identifier) (acc : List StructLitField) : ParseResult Term :=
+    match tag "," input {
+        success rem _ => struct_lit_fields (skip_docstrings (skip_spaces rem)) ctx acc,
+        fail _ => struct_lit_close input (list_reverse acc)
+    }
+
+#[partial]
+def struct_lit_field (ctx : List Identifier) (input : String) : ParseResult StructLitField :=
+    match identifier input {
+        success rem name => struct_lit_field_eq (tag ":=" (skip_docstrings (skip_spaces rem))) ctx (Identifier.id name),
+        fail e => fail e
+    }
+
+#[partial]
+def struct_lit_field_eq (r : ParseResult String) (ctx : List Identifier) (name : Identifier) : ParseResult StructLitField :=
+    match r {
+        success rem _ => struct_lit_field_val (expression ctx (skip_docstrings (skip_spaces rem))) name,
+        fail e => fail e
+    }
+
+#[partial]
+def struct_lit_field_val (r : ParseResult Term) (name : Identifier) : ParseResult StructLitField :=
+    match r {
+        success rem value => success rem (StructLitField.mk name value),
+        fail e => fail e
+    }
+
+/// After the field list: an optional `: TypeExpr` self-annotation, then
+/// the mandatory closing `}`.
+#[partial]
+def struct_lit_close (input : String) (fields : List StructLitField) : ParseResult Term :=
+    match tag ":" (skip_docstrings (skip_spaces input)) {
+        success rem _ => struct_lit_type_name (type_expression List.empty (skip_docstrings (skip_spaces rem))) fields,
+        fail _ =>
+            let none_typ : Option Term := Option.none in
+            struct_lit_finish input fields none_typ
+    }
+
+#[partial]
+def struct_lit_type_name (r : ParseResult Term) (fields : List StructLitField) : ParseResult Term :=
+    match r {
+        success rem typ => struct_lit_finish rem fields (Option.some typ),
+        fail e => fail e
+    }
+
+#[partial]
+def struct_lit_finish (input : String) (fields : List StructLitField) (type_name : Option Term) : ParseResult Term :=
+    match tag "}" (skip_docstrings (skip_spaces input)) {
+        success rem _ => success rem (Term.lit (Literal.struct_lit fields type_name)),
+        fail e => fail (ParseError.custom "expected } to close struct literal" input)
+    }
+
 #[partial]
 def atom_term (ctx: List Identifier) (input: String) : ParseResult Term :=
     match alt_fold (atom_parsers ctx) input {
@@ -3484,7 +3622,7 @@ def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
     // `plans/bootstrapping/self-hosted-compiler.md` for the corpus impact
     // this had (137 real `do {` usages across lang/main.mo and
     // lang/module.mo, all previously unparseable).
-    [variable ctx, literal_parser, match_parser ctx, if_parser ctx, do_parser ctx, let_term_parser ctx, list_literal_parser ctx]
+    [variable ctx, literal_parser, match_parser ctx, if_parser ctx, do_parser ctx, let_term_parser ctx, list_literal_parser ctx, struct_lit_parser ctx]
 
 // ─── Canonical match case parser (Phase 9) ─────────────────────────────
 
@@ -5006,6 +5144,113 @@ def test_list_literal_trailing_comma : Bool :=
 def test_list_literal_as_application_argument : Bool :=
     match def_parser "def f (input : String) : I64 :=\n  h [1, 2, 3]" {
         success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+/// Regression test for `struct_lit_parser`: `{ field := value, ... }`
+/// as a general term — previously any bare `{` (outside `struct`'s own
+/// DECLARATION syntax) was entirely unparseable as a value expression.
+#[test]
+def test_struct_lit_empty : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "{}" {
+        success rem out => String.beq rem "" && term_is_struct_lit out,
+        fail _ => false
+    }
+
+#[partial]
+def term_is_struct_lit (t : Term) : Bool :=
+    match t {
+        Term.lit l => match l { Literal.struct_lit _ _ => true, _ => false },
+        _ => false
+    }
+
+#[test]
+def test_struct_lit_fields_no_annotation : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "{ x := 1, y := 2 }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Term.lit l => match l {
+                    Literal.struct_lit fields type_name =>
+                        I64.beq (List.length fields) 2 &&
+                        match type_name { Option.none => true, Option.some _ => false },
+                    _ => false
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+#[test]
+def test_struct_lit_trailing_comma_and_annotation : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "{ x := 1, y := 2, : Point }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Term.lit l => match l {
+                    Literal.struct_lit fields type_name =>
+                        I64.beq (List.length fields) 2 &&
+                        match type_name { Option.some _ => true, Option.none => false },
+                    _ => false
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// A struct literal used as a function argument (juxtaposed
+/// application) -- same shape check `list_literal_parser` needed
+/// (`test_list_literal_as_application_argument`).
+#[test]
+def test_struct_lit_as_application_argument : Bool :=
+    match def_parser "def f (input : String) : I64 :=\n  h { x := 1 }" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+/// Regression test for the struct-update alternative (`{ base with
+/// field := value, ... }`, `struct_update_try`/`struct_update_with`):
+/// previously only ordinary struct literals were parseable, so any
+/// real `{ x with ... }` usage (e.g. examples/structs.mo's own
+/// `test_struct_update`) failed to parse under this self-hosted
+/// parser's own STRICT mode.
+#[test]
+def test_struct_update_basic : Bool :=
+    let x : Identifier := Identifier.id "p1" in
+    let ctx : List Identifier := List.cons x List.empty in
+    match expression ctx "{ p1 with x := 10 }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Term.lit l => match l {
+                    Literal.struct_update _base fields => I64.beq (List.length fields) 1,
+                    _ => false
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// A bare struct literal whose first field's NAME happens to also be a
+/// valid variable reference (`x`) must NOT be misparsed as a
+/// struct-update with no `with` -- confirms the backtrack-to-`orig`
+/// fallback in `struct_update_try`/`struct_update_with` actually fires.
+#[test]
+def test_struct_update_backtrack_to_plain_literal : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "{ x := 1, y := 2 }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Term.lit l => match l {
+                    Literal.struct_lit fields _ => I64.beq (List.length fields) 2,
+                    _ => false
+                },
+                _ => false
+            },
         fail _ => false
     }
 

@@ -51,6 +51,13 @@ def init_module_path : ModulePath := ModulePath.mp [Identifier.id "init"]
 def parse_all_decls (input : String) : ParseResult (List Decl) :=
     lang.parser.decls_parser input
 
+/// `parse_all_decls`'s strict twin: fails (rather than silently
+/// truncating) on any unconsumed input, i.e. genuine test coverage
+/// that a file parses ENTIRELY, not just that its prefix does. See
+/// `decls_parser_strict`'s own doc comment (lang/parser.mo).
+def parse_all_decls_strict (input : String) : ParseResult (List Decl) :=
+    lang.parser.decls_parser_strict input
+
 /// Parse source text, returning the parsed declarations or none on parse error.
 def try_parse_decls (input : String) : Option (List Decl) :=
     let result : ParseResult (List Decl) := parse_all_decls input in

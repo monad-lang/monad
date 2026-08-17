@@ -313,8 +313,8 @@ def struct_fields_to_params (fields : List StructField) : List Param :=
         List.empty => List.empty,
         List.cons f rest =>
             match f {
-                StructField.mk fname ftyp _default fmult =>
-                    List.cons (Param.mk fname ftyp fmult Option.none) (struct_fields_to_params rest)
+                StructField.mk fname ftyp fdefault fmult =>
+                    List.cons (Param.mk fname ftyp fmult fdefault) (struct_fields_to_params rest)
             }
     }
 
