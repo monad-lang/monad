@@ -22,9 +22,16 @@ def init_files_safe : List String :=
      "init/tests.mo"]
 
 /// All std/ files to parse
+// `std/derive.mo` added here specifically as the real-corpus
+// verification target for `defmacro`/decl-position macro-call parsing
+// (plans/bootstrapping/self-hosted-compiler.md's metaprogramming-
+// grammar plan, step 6) -- it has 4 real `defmacro NAME T := decls {
+// reflect_type_info! T ...meta }` declarations (Form A, with a nested
+// decl-position macro call inside each `decls{}` body), previously
+// unparseable by this self-hosted parser at all.
 #[partial]
 def std_files : List String :=
-    ["std/test.mo"]
+    ["std/test.mo", "std/derive.mo"]
 
 /// All examples/ files to parse (safe - no box-drawing characters)
 #[partial]

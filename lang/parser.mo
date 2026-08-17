@@ -2727,11 +2727,284 @@ def instance_close (r : ParseResult String) (cls : ModulePath) (args : List Term
 		fail e => fail e
 	}
 
+// ─── `defmacro` (both forms) ─────────────────────────────────────────────
+//
+// `defmacro name params := <term>` (Decl.def_macro_d) and `defmacro name
+// params := decls { ... }` (Decl.decl_gen_d) share an identical prefix
+// (`"defmacro" name params :=`) — parsed ONCE here (unlike the Rust
+// reference's own fully-backtracking `alt(decl_gen_parser,
+// defmacro_parser)`, which reparses the shared prefix twice), then a
+// single dispatch point tries `decls {` first, falling back to a plain
+// term. Matches this file's own existing "try A, fall back to B" idiom
+// (`def_try_constraints`, above). Parsing/representation only — see
+// `Decl.def_macro_d`/`decl_gen_d`'s own doc comments in lang/types.mo.
+
+/// One macro parameter: a bare identifier (untyped, `typ = Term.hole`)
+/// or a parenthesized `(x : T)` group (optional multiplicity prefix).
+/// Mirrors the reference's own `macro_param` (core/src/parser.rs) --
+/// reuses the same building blocks `def`'s own explicit-param chain
+/// does (`multiplicity_prefix`), just without the `{implicit}`
+/// alternative (defmacro has no implicit-param syntax) and without
+/// multi-name-sharing-one-type support (`(x y : T)`) -- confirmed via
+/// the corpus's own 4 real `defmacro`s (std/derive.mo) that every one
+/// uses a single bare-identifier param; multi-name support here would
+/// be unverified complexity with nothing to test it against.
+#[partial]
+def macro_param (input : String) : ParseResult Param :=
+	macro_param_try_paren (tag "(" input) input
+
+#[partial]
+def macro_param_try_paren (r : ParseResult String) (orig : String) : ParseResult Param :=
+	match r {
+		success rem _ => macro_param_paren_mult (multiplicity_prefix rem) rem,
+		fail _ => macro_param_try_bare orig
+	}
+
+#[partial]
+def macro_param_try_bare (input : String) : ParseResult Param :=
+	match identifier input {
+		success rem name => success rem (param_many (Identifier.id name) Term.hole),
+		fail e => fail e
+	}
+
+#[partial]
+def macro_param_paren_mult (r : ParseResult Multiplicity) (orig : String) : ParseResult Param :=
+	match r {
+		success rem mult => macro_param_paren_name (identifier (skip_spaces rem)) mult,
+		fail e => fail e
+	}
+
+#[partial]
+def macro_param_paren_name (r : ParseResult String) (mult : Multiplicity) : ParseResult Param :=
+	match r {
+		success rem name => macro_param_paren_colon (tag ":" (skip_spaces rem)) (Identifier.id name) mult,
+		fail e => fail e
+	}
+
+#[partial]
+def macro_param_paren_colon (r : ParseResult String) (name : Identifier) (mult : Multiplicity) : ParseResult Param :=
+	match r {
+		success rem _ =>
+			let empty_ctx : List Identifier := List.empty in
+			macro_param_paren_type (type_expression empty_ctx (skip_spaces rem)) name mult,
+		fail e => fail e
+	}
+
+#[partial]
+def macro_param_paren_type (r : ParseResult Term) (name : Identifier) (mult : Multiplicity) : ParseResult Param :=
+	match r {
+		success rem typ => macro_param_paren_close (tag ")" (skip_spaces rem)) name typ mult,
+		fail e => fail e
+	}
+
+#[partial]
+def macro_param_paren_close (r : ParseResult String) (name : Identifier) (typ : Term) (mult : Multiplicity) : ParseResult Param :=
+	match r {
+		success rem _ =>
+			let none : Option Term := Option.none in
+			let no_attrs : List Attribute := List.empty in
+			success rem (Param.mk name typ mult none no_attrs),
+		fail e => fail e
+	}
+
+#[partial]
+def macro_params (input : String) : ParseResult (List Param) :=
+	macro_params_loop (skip_spaces input) List.empty
+
+#[partial]
+def macro_params_loop (input : String) (acc : List Param) : ParseResult (List Param) :=
+	match macro_param input {
+		success rem p => macro_params_loop (skip_spaces rem) (List.cons p acc),
+		fail _ => success input (list_reverse acc)
+	}
+
+#[partial]
+def defmacro_parser (input : String) : ParseResult Decl :=
+	defmacro_kw (tag "defmacro" input)
+
+#[partial]
+def defmacro_kw (r : ParseResult String) : ParseResult Decl :=
+	match r {
+		success rem _ => defmacro_ws1 (ws1 rem),
+		fail e => fail e
+	}
+
+#[partial]
+def defmacro_ws1 (r : ParseResult String) : ParseResult Decl :=
+	match r {
+		success rem _ => defmacro_name (dotted_def_name (skip_spaces rem)),
+		fail e => fail e
+	}
+
+#[partial]
+def defmacro_name (r : ParseResult String) : ParseResult Decl :=
+	match r {
+		success rem name => defmacro_params_result (macro_params rem) (Identifier.id name),
+		fail e => fail e
+	}
+
+#[partial]
+def defmacro_params_result (r : ParseResult (List Param)) (name : Identifier) : ParseResult Decl :=
+	match r {
+		success rem params => defmacro_assign (tag ":=" (skip_spaces rem)) name params,
+		fail e => fail e
+	}
+
+#[partial]
+def defmacro_assign (r : ParseResult String) (name : Identifier) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem _ =>
+			let after_assign : String := skip_spaces rem in
+			defmacro_try_decls_block (tag "decls" after_assign) after_assign name params,
+		fail e => fail e
+	}
+
+#[partial]
+def defmacro_try_decls_block (r : ParseResult String) (orig : String) (name : Identifier) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem _ => defmacro_decls_open (tag "{" (skip_spaces rem)) name params,
+		fail _ => defmacro_term_body (type_expression (ctx_of_params params) (skip_docstrings (skip_spaces orig))) name params
+	}
+
+#[partial]
+def defmacro_term_body (r : ParseResult Term) (name : Identifier) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem term =>
+			let body : Term := lam_params params term in
+			let mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
+			let no_attrs : List Attribute := List.empty in
+			let no_constraints : List TypeConstraint := List.empty in
+			success rem (Decl.def_macro_d (Def.mk mp Term.hole body no_constraints no_attrs Visibility.package_private)),
+		fail e => fail e
+	}
+
+/// `decls { ... }` (Form A's body) reuses the EXISTING `decls_skip`
+/// truncate-on-fail loop directly — the same one `decls_parser` (the
+/// module-level decl-list parser) already uses. Confirmed structurally
+/// identical to the reference's own `decls_until_end` (a hand-rolled
+/// loop, not nom combinators there either), and confirmed the
+/// reference's `decl_parser_no_macro`/`decl_parser` are byte-for-byte
+/// the same alternation (both allow NESTED `defmacro`/macro-call decls
+/// — needed since `std/derive.mo`'s own macros call `reflect_type_info!
+/// T ...meta` inside their own `decls{}` bodies) — so reusing this
+/// file's single, unified `decl_parser`/`decls_skip` here (rather than
+/// inventing a separate "no-macro" variant) matches the reference
+/// exactly, and needs no new termination-guarding machinery.
+#[partial]
+def defmacro_decls_open (r : ParseResult String) (name : Identifier) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem _ => defmacro_decls_result (decls_skip (skip_spaces rem) List.empty) name params,
+		fail e => fail e
+	}
+
+#[partial]
+def defmacro_decls_result (r : ParseResult (List Decl)) (name : Identifier) (params : List Param) : ParseResult Decl :=
+	match r {
+		success rem decls => defmacro_decls_close (tag "}" (skip_spaces rem)) name params decls,
+		fail e => fail e
+	}
+
+#[partial]
+def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : List Param) (decls : List Decl) : ParseResult Decl :=
+	match r {
+		success rem _ =>
+			let mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
+			let no_attrs : List Attribute := List.empty in
+			success rem (Decl.decl_gen_d mp params decls no_attrs),
+		fail e => fail (ParseError.custom "expected } to close decls block" "")
+	}
+
+// ─── Declaration-position `name! args...` ───────────────────────────────
+//
+// Mirrors the reference's `macro_call_decl_parser`/`macro_call_decl_arg`
+// (core/src/parser.rs). Args are whitespace-separated terms (not a
+// comma/paren-delimited call) parsed via a RESTRICTED atom set that
+// deliberately excludes `macro_call_term`/general application, guarded
+// by a lookahead so a second decl-level macro call on the next line
+// doesn't get swallowed as an extra argument of the first — real
+// corpus shape: `std/derive.mo`'s `reflect_type_info! T
+// derive_lens_meta` (two bare-identifier args).
+
+#[partial]
+def macro_call_decl_arg (input : String) : ParseResult Term :=
+	macro_call_decl_arg_guard (peek_not_macro_call input) input
+
+#[partial]
+def macro_call_decl_arg_guard (r : ParseResult String) (input : String) : ParseResult Term :=
+	match r {
+		success _ _ => macro_call_decl_arg_alt input,
+		fail e => fail e
+	}
+
+/// `peek(not(pair(identifier, tag "!")))` — succeeds (consuming
+/// nothing) unless `input` starts with `<identifier>!`, in which case
+/// it fails, causing `macro_call_decl_arg` as a whole to fail (never
+/// swallowing another macro call as an argument).
+#[partial]
+def peek_not_macro_call (input : String) : ParseResult String :=
+	match identifier input {
+		success rem _ =>
+			match tag "!" rem {
+				success _ _ => fail (ParseError.custom "unexpected macro call in argument position" input),
+				fail _ => success input ""
+			},
+		fail _ => success input ""
+	}
+
+#[partial]
+def macro_call_decl_arg_alt (input : String) : ParseResult Term :=
+	alt_fold [quote_term_parser List.empty, do_parser List.empty, let_term_parser List.empty,
+	          if_parser List.empty, match_parser List.empty, variable List.empty,
+	          literal_parser, lambda_parser List.empty, paren_expr List.empty] input
+
+#[partial]
+def macro_call_decl_parser (input : String) : ParseResult Decl :=
+	macro_call_decl_guard (peek_not_macro_call input) input
+
+#[partial]
+def macro_call_decl_guard (r : ParseResult String) (input : String) : ParseResult Decl :=
+	match r {
+		// `peek_not_macro_call` succeeding here (no `!`) means this ISN'T
+		// a macro call at all -- correctly fail so `decl_parsers`' other
+		// alternatives get a chance instead of misreporting "unexpected
+		// macro call" for completely ordinary input.
+		success _ _ => fail (ParseError.custom "not a macro call" input),
+		fail _ => macro_call_decl_name (identifier input) input
+	}
+
+#[partial]
+def macro_call_decl_name (r : ParseResult String) (orig : String) : ParseResult Decl :=
+	match r {
+		success rem name => macro_call_decl_bang (tag "!" rem) (Identifier.id name),
+		fail e => fail e
+	}
+
+#[partial]
+def macro_call_decl_bang (r : ParseResult String) (name : Identifier) : ParseResult Decl :=
+	match r {
+		success rem _ => macro_call_decl_args (skip_spaces rem) name List.empty,
+		fail e => fail e
+	}
+
+#[partial]
+def macro_call_decl_args (input : String) (name : Identifier) (acc : List Term) : ParseResult Decl :=
+	match macro_call_decl_arg input {
+		success rem t => macro_call_decl_args (skip_spaces rem) name (List.cons t acc),
+		fail _ => success input (Decl.macro_call_d name (list_reverse acc))
+	}
+
 // Canonical decl dispatcher
 
+// `#[partial]` needed now that `decl_parsers` is part of a genuine
+// mutual-recursion cycle (decl_parsers -> defmacro_parser ->
+// defmacro_decls_open -> decls_skip -> decl_parser -> decl_parsers,
+// for a nested `decls { ... }` block) -- same reason `atom_parsers`
+// above already carries it (that one cycles through the whole
+// expression grammar the same way).
+#[partial]
 def decl_parsers : List (String -> ParseResult Decl) :=
-	[use_parser, open_parser, infix_parser, def_parser,
-	 struct_parser, type_parser, class_parser, instance_parser]
+	[use_parser, open_parser, infix_parser, defmacro_parser, def_parser,
+	 struct_parser, type_parser, class_parser, instance_parser, macro_call_decl_parser]
 
 #[partial]
 def decl_parser (input : String) : ParseResult Decl :=
@@ -5873,6 +6146,139 @@ def test_macro_call_term_absent_falls_through_to_variable : Bool :=
         success rem out =>
             String.beq rem "" &&
             match out { Term.var _ _ => true, _ => false },
+        fail _ => false
+    }
+
+// --- Tests for defmacro (both forms) ---
+
+/// Form B: `defmacro name params := <term>` -> `Decl.def_macro_d`, a
+/// reused `Def` with `typ = Term.hole` and `term` wrapped in one lambda
+/// per param.
+#[test]
+def test_defmacro_term_body_basic : Bool :=
+    match decl_parser "defmacro double x := x" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.def_macro_d d => match d {
+                    Def.mk _ typ term _ _ _ =>
+                        (match typ { Term.hole => true, _ => false }) &&
+                        (match term { Term.lam _ _ _ => true, _ => false }),
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// A macro with no params at all -- `lam_params []` is identity, so the
+/// body term is stored bare, no lambda wrapping.
+#[test]
+def test_defmacro_term_body_no_params : Bool :=
+    match decl_parser "defmacro answer := 42" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.def_macro_d d => match d {
+                    Def.mk _ _ term _ _ _ => match term { Term.lit _ => true, _ => false },
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// Form A: `defmacro name params := decls { ... }` -> `Decl.decl_gen_d`,
+/// storing the literal (unexpanded) list of decls parsed out of the
+/// body -- the real corpus shape (`std/derive.mo`'s own `defmacro
+/// derive_lens T := decls { ... }`).
+#[test]
+def test_defmacro_decls_block_basic : Bool :=
+    match decl_parser "defmacro make_getter T := decls { def get_it (x : T) : T := x }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.decl_gen_d name params decls _attrs =>
+                    id_eq (Identifier.id "make_getter") (module_path_last name) &&
+                    I64.beq (List.length params) 1 &&
+                    I64.beq (List.length decls) 1,
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// The real corpus shape one level deeper: a `decls { ... }` body that
+/// itself contains a NESTED decl-position macro call (`std/derive.mo`'s
+/// own `defmacro derive_lens T := decls { reflect_type_info! T
+/// derive_lens_meta }`) -- confirms `decls_skip`'s reuse handles this
+/// (needs the full `decl_parsers` alternation, including
+/// `macro_call_decl_parser` itself, inside the nested block).
+#[test]
+def test_defmacro_decls_block_with_nested_macro_call : Bool :=
+    match decl_parser "defmacro derive_lens T := decls { reflect_type_info! T derive_lens_meta }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.decl_gen_d _ _ decls _attrs =>
+                    match decls {
+                        List.cons d _ => match d { Decl.macro_call_d name _ => id_eq name (Identifier.id "reflect_type_info"), _ => false },
+                        List.empty => false,
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+#[partial]
+def module_path_last (mp : ModulePath) : Identifier :=
+    match mp { ModulePath.mp ids => list_last_or_default ids (Identifier.id "") }
+
+#[partial]
+def list_last_or_default (ids : List Identifier) (default_ : Identifier) : Identifier :=
+    match ids {
+        List.empty => default_,
+        List.cons hd rest => match rest { List.empty => hd, List.cons _ _ => list_last_or_default rest default_ },
+    }
+
+// --- Tests for decl-position `name! args...` (Decl.macro_call_d), standalone ---
+
+#[test]
+def test_macro_call_decl_standalone_no_args : Bool :=
+    match decl_parser "foo!" {
+        success rem out =>
+            String.beq rem "" &&
+            match out { Decl.macro_call_d name args => id_eq name (Identifier.id "foo") && I64.beq (List.length args) 0, _ => false },
+        fail _ => false
+    }
+
+#[test]
+def test_macro_call_decl_standalone_with_args : Bool :=
+    match decl_parser "reflect_type_info! T derive_lens_meta" {
+        success rem out =>
+            String.beq rem "" &&
+            match out { Decl.macro_call_d name args => id_eq name (Identifier.id "reflect_type_info") && I64.beq (List.length args) 2, _ => false },
+        fail _ => false
+    }
+
+/// Two consecutive top-level macro calls: the SECOND call's own name
+/// must not be swallowed as an extra whitespace-separated argument of
+/// the first -- confirms `peek_not_macro_call`'s lookahead guard
+/// actually works, not just that a single call parses. Uses
+/// `decls_parser` (the module-level multi-decl loop) since a single
+/// `decl_parser` call only ever returns one `Decl`.
+#[test]
+def test_macro_call_decl_two_consecutive_not_swallowed : Bool :=
+    match decls_parser "derive_beq! Point\nderive_bord! Point" {
+        success rem decls =>
+            String.beq rem "" &&
+            I64.beq (List.length decls) 2 &&
+            match decls {
+                List.cons d1 rest =>
+                    (match d1 { Decl.macro_call_d n1 a1 => id_eq n1 (Identifier.id "derive_beq") && I64.beq (List.length a1) 1, _ => false }) &&
+                    (match rest {
+                        List.cons d2 _ => match d2 { Decl.macro_call_d n2 a2 => id_eq n2 (Identifier.id "derive_bord") && I64.beq (List.length a2) 1, _ => false },
+                        List.empty => false,
+                    }),
+                List.empty => false,
+            },
         fail _ => false
     }
 

@@ -530,6 +530,30 @@ type Decl {
     /// for the scope of the wrapped declaration (def/type/struct/class/
     /// instance). Mirrors Rust's `Decl::ScopedOpen`.
     scoped_open_d (path: ModulePath) (filter: OpenFilter) (decl: Decl),
+    /// `defmacro name params := <term>` — mirrors the Rust reference's
+    /// `Decl::DefMacro(Def)` (core/src/term.rs): literally reuses `Def`
+    /// (`typ` forced to `Term.hole`, `term` wrapped in one lambda per
+    /// param when `params` is non-empty via the existing `lam_params`
+    /// helper, lang/parser.mo — no new lambda-building logic needed).
+    /// Parsing/representation only — nothing expands or invokes this
+    /// yet (see plans/bootstrapping/self-hosted-compiler.md).
+    def_macro_d (Def),
+    /// `defmacro name params := decls { ... }` — the sibling
+    /// declaration-generating form. Mirrors the Rust reference's
+    /// `Decl::DeclGen(DeclGenDef)`, but with `DeclGenDef`'s fields
+    /// inlined directly here (matching this type's own `infix_d`/
+    /// `scoped_open_d` convention of inline fields over a separate
+    /// wrapper struct) rather than introduced as its own named type.
+    /// `decls` is the literal, unexpanded list of declarations parsed
+    /// out of the `decls { ... }` body.
+    decl_gen_d (name: ModulePath) (params: List Param) (decls: List Decl) (attrs: List Attribute),
+    /// Declaration-position `name! arg1 arg2 ...` (e.g. `derive_beq!
+    /// Point`, `reflect_type_info! T some_meta`). `name` is a bare
+    /// `Identifier`, NOT a `ModulePath` — differs from `defmacro`'s own
+    /// name shape, mirroring the Rust reference's `Decl::MacroCall`
+    /// exactly (core/src/term.rs). `args` are whitespace-separated
+    /// terms, not a comma/paren-delimited call.
+    macro_call_d (name: Identifier) (args: List Term),
 }
 
 def Decl.to_name (d : Decl) : ModulePath :=
