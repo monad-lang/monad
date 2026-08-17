@@ -165,7 +165,7 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
         ok sc_tt =>
             let sc_term : Term := tt_term sc_tt in
             let sc_typ : Term := tt_typ sc_tt in
-            match validate_match_constructors cases scope {
+            match validate_match_constructors cases sc_typ scope {
                 err e => err e,
                 ok _ => type_check_cases cases sc_term sc_typ expected_type scope local_types locals,
             },
@@ -174,15 +174,68 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
 
 /// Validate that all non-wildcard case constructors belong to the same inductive.
 /// Returns ok if valid or if no inductive found (skip validation).
-def validate_match_constructors (cases : List MatchCase) (scope : Scope) : Result TypeError Bool :=
-    match find_inductive_for_cases cases scope {
+def validate_match_constructors (cases : List MatchCase) (scrutinee_typ : Term) (scope : Scope) : Result TypeError Bool :=
+    match find_inductive_for_cases cases scrutinee_typ scope {
         Option.none => ok true,
         Option.some ind =>
             validate_cases_against_inductive cases ind,
     }
 
-/// Find the inductive that the first non-wildcard case constructor belongs to.
-def find_inductive_for_cases (cases : List MatchCase) (scope : Scope) : Option Inductive :=
+/// Unwrap a `Term.app f a` chain down to its head, returning the
+/// `Identifier` if that head is a named free/global variable (`Term.var
+/// _ (DebugName.named id)`) -- covers both a bare type reference
+/// (`List`) and an applied generic (`List Identifier`). `Option.none`
+/// for anything else (`Term.hole`, a bound/unnamed var, ...) -- those
+/// cases fall back to `find_inductive_for_cases_by_constructor` below.
+def type_head_name (t : Term) : Option Identifier :=
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => Option.some id,
+                DebugName.unnamed => Option.none,
+            },
+        Term.app f _ => type_head_name f,
+        _ => Option.none,
+    }
+
+/// Find the inductive a match's cases belong to. Prefers an exact
+/// lookup by the scrutinee's own inferred type name when one is known
+/// (`scope_find_inductive`, unambiguous by construction -- type names
+/// don't collide the way constructor names do) -- falls back to
+/// scanning by the first non-wildcard case's constructor name only
+/// when the scrutinee's type isn't concretely known (`Term.hole`, a
+/// generic type parameter, a lookup-by-name miss, ...), preserving
+/// this function's previous (still real, still sometimes needed)
+/// behavior exactly. The constructor-name scan alone is ambiguous
+/// whenever two inductives share a constructor name -- confirmed live:
+/// `init/prelude.mo` declares both `List` (`cons`/`empty`) and `Vec` (a
+/// length-indexed GADT-style type, also `cons`), so validating a plain
+/// `match x { List.cons hd rest => ..., List.empty => ... }` could pick
+/// `Vec` depending on scan order and then fail ("`Vec` has no
+/// `empty`") -- this was the single largest remaining blocker in
+/// `lang/codegen/emit.mo`'s corpus check. A scan-order-only fix
+/// ("prefer first-declared") was tried and reverted: it fixed this one
+/// collision but regressed a DIFFERENT one once more of the corpus
+/// started passing (measured: emit.mo's error count went 14 -> 44) --
+/// see `plans/bootstrapping/self-hosted-compiler.md`'s changelog. This
+/// version instead only ever ADDS a strictly-better preferred path and
+/// never changes the shared fallback's behavior, so it can't regress
+/// any case that previously worked.
+def find_inductive_for_cases (cases : List MatchCase) (scrutinee_typ : Term) (scope : Scope) : Option Inductive :=
+    match type_head_name scrutinee_typ {
+        Option.some id =>
+            match scope_find_inductive (ModulePath.mp (List.cons id List.empty)) scope {
+                ok ind => Option.some ind,
+                err _ => find_inductive_for_cases_by_constructor cases scope,
+            },
+        Option.none => find_inductive_for_cases_by_constructor cases scope,
+    }
+
+/// The original constructor-name-scan lookup, unchanged -- ambiguous
+/// when constructor names collide, but still the correct behavior when
+/// the scrutinee's own type isn't concretely known (see
+/// `find_inductive_for_cases`'s own doc comment above).
+def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Scope) : Option Inductive :=
     match cases {
         List.empty => Option.none,
         List.cons hd rest =>
@@ -190,7 +243,7 @@ def find_inductive_for_cases (cases : List MatchCase) (scope : Scope) : Option I
                 MatchCase.mc name _ _ =>
                     let wildcard_id : Identifier := Identifier.id "_" in
                     if Similar.similar name wildcard_id
-                    then find_inductive_for_cases rest scope
+                    then find_inductive_for_cases_by_constructor rest scope
                     else
                         let con_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
                         scope_find_inductive_by_constructor con_mp scope,
@@ -355,20 +408,6 @@ def last_dotted_segment_go (s : String) (idx : I64) : String :=
 def last_dotted_segment (s : String) : String :=
     last_dotted_segment_go s (String.length s - 1)
 
-/// Build a Pi-chain of `num_args` `Term.hole`-typed arguments ending in
-/// `ret` -- e.g. `con_pi_chain 2 ret` is `Term.hole -> Term.hole -> ret`.
-/// Deliberately doesn't try to recover the constructor's own declared
-/// param types (this checker doesn't track real dependent-type
-/// information for inductives anywhere yet -- `prepend_holes`, below,
-/// makes the exact same simplification for match-arm-bound constructor
-/// args), so `expected_type`/downstream unification is trusted for the
-/// actual argument types, same pragmatism `type_check_con`'s own
-/// untyped-args fallback already uses.
-#[terminating]
-def con_pi_chain (num_args : I64) (ret : Term) : Term :=
-    if I64.beq num_args 0 then ret
-    else Term.pi Term.hole (con_pi_chain (num_args - 1) ret)
-
 /// Fallback for `type_check_free_var`: `id` might be a qualified (or
 /// bare) CONSTRUCTOR reference in value position (`List.cons`,
 /// `Command.help`, `Option.none`, ...) rather than a def/class method.
@@ -381,17 +420,38 @@ def con_pi_chain (num_args : I64) (ret : Term) : Term :=
 /// via lang/codegen/emit.mo: ~100 of its "unknown variable" errors were
 /// all qualified constructor references -- `List.cons`, `Option.none`,
 /// `Def.mk`, `Inductive.mk`, ...).
+///
+/// Once found, this trusts `expected_type` AS-IS for the returned type
+/// -- no Pi-chain-building here (an earlier version of this function
+/// built one from the constructor's own arity, e.g. `Term.hole ->
+/// Term.hole -> expected_type` for a 2-arg constructor; that was WRONG
+/// and got caught by this round's own regression-check discipline: for
+/// a constructor applied to N args, `type_check_var` is reached exactly
+/// once, from the INNERMOST `type_check_app` frame, by which point
+/// `expected_type` has ALREADY been Pi-wrapped N times by that same
+/// recursive machinery (`type_check_app`'s own `f_expected := Term.pi
+/// a_typ expected_type` at each level) -- it's already exactly the
+/// right N-argument function-type shape. Wrapping more Pi's around an
+/// already-correctly-shaped type produced a type one level too deep,
+/// surfacing as `type mismatch: expected (List X), found (_ -> (_ ->
+/// _))` on any 2+-arg constructor value used inside a context whose own
+/// expected type starts as `Term.hole` (any match-arm body -- see
+/// `type_check_case_body_checked` above, which always checks a case
+/// body against `Term.hole`). Trusting `expected_type` directly matches
+/// `type_check_con`'s own established pattern exactly (`ok (mk_typed
+/// (Term.con c) expected_type)`) and `scope_resolve_name`'s success arm
+/// just above (which returns the def's own STORED signature,
+/// unconditionally, ignoring `expected_type` too) -- constructors just
+/// have no stored signature to return (`add_constructors_go` registers
+/// them with `sig := Term.hole`, unusable), so the caller-built
+/// `expected_type` is the only real type information available here.
 def type_check_free_var_con (id : Identifier) (expected_type : Term) (dbg : DebugName) (scope : Scope) : Result TypeError TypedTerm :=
     let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
     let con_mp : ModulePath := ModulePath.mp (List.cons bare_name List.empty) in
     match scope_find_inductive_by_constructor con_mp scope {
         Option.some ind =>
             match find_constructor_in_inductive ind con_mp {
-                Option.some ctor =>
-                    match ctor {
-                        InductConstructor.mk _ params _ =>
-                            ok (mk_typed (Term.var sentinel dbg) (con_pi_chain (List.length params) expected_type)),
-                    },
+                Option.some _ => ok (mk_typed (Term.var sentinel dbg) expected_type),
                 Option.none => err (TypeError.unknown_var (NameRef.nid id)),
             },
         Option.none => err (TypeError.unknown_var (NameRef.nid id)),
