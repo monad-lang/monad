@@ -3903,6 +3903,49 @@ def quote_term_finish (r : ParseResult String) (t : Term) (orig : String) : Pars
         fail e => fail (ParseError.custom "expected } to close quote" orig)
     }
 
+// ─── Term-position `name!` (`foo!`, `foo! 1 2`) ─────────────────────────
+//
+// Mirrors the Rust reference's `macro_call` (core/src/parser.rs):
+// `identifier` immediately (no space) followed by `!`. Produces
+// `Term.var_macro` -- see that variant's own doc comment in
+// lang/types.mo. `foo! 1 2` then falls out of the ordinary
+// application-of-atoms machinery already in this file for free, once
+// `foo!` itself parses as one atom -- no separate application-level
+// change needed, unlike the reference's own `application` parser
+// (which explicitly lists `macro_call` as a function-head alternative
+// alongside `variable`) purely because self-hosted's own atom-then-
+// juxtaposed-application loop already treats every atom uniformly this
+// way.
+//
+// MUST be tried before `variable ctx` in `atom_parsers` below -- this
+// is the one place in the whole metaprogramming-grammar plan where
+// alternation order is load-bearing for *correctness*, not just style.
+// `variable ctx` alone would happily match just `foo` on input
+// `foo! 1 2`, leaving `! 1 2` unconsumed -- which the operator-
+// precedence climber would then try (and typically fail, or worse,
+// silently misparse against some unrelated `!`-prefixed grammar) to
+// consume as a trailing infix operator, rather than this atom ever
+// getting a chance to recognize the whole `foo!` token. See this
+// file's own `test_macro_call_term_ordering_hazard_is_real` for a
+// standalone repro proving this isn't a hypothetical.
+#[partial]
+def macro_call_term (input : String) : ParseResult Term :=
+    macro_call_term_name (identifier input)
+
+#[partial]
+def macro_call_term_name (r : ParseResult String) : ParseResult Term :=
+    match r {
+        success rem name => macro_call_term_bang (tag "!" rem) name,
+        fail e => fail e
+    }
+
+#[partial]
+def macro_call_term_bang (r : ParseResult String) (name : String) : ParseResult Term :=
+    match r {
+        success rem _ => success rem (Term.var_macro sentinel (DebugName.named (Identifier.id name))),
+        fail e => fail e
+    }
+
 #[partial]
 def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
     // `do_parser` wires do-notation blocks (`do { ... }`) into the generic
@@ -3914,7 +3957,7 @@ def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
     // `plans/bootstrapping/self-hosted-compiler.md` for the corpus impact
     // this had (137 real `do {` usages across lang/main.mo and
     // lang/module.mo, all previously unparseable).
-    [quote_term_parser ctx, variable ctx, literal_parser, match_parser ctx, if_parser ctx, do_parser ctx, let_term_parser ctx, list_literal_parser ctx, struct_lit_parser ctx]
+    [quote_term_parser ctx, macro_call_term, variable ctx, literal_parser, match_parser ctx, if_parser ctx, do_parser ctx, let_term_parser ctx, list_literal_parser ctx, struct_lit_parser ctx]
 
 // ─── Canonical match case parser (Phase 9) ─────────────────────────────
 
@@ -5773,6 +5816,64 @@ def test_quote_term_no_brace_fails : Bool :=
     match expression empty_ctx "quote 1" {
         success _ _ => false,
         fail _ => true
+    }
+
+// --- Tests for macro_call_term (Term.var_macro) ---
+
+/// Demonstrates the raw ordering hazard `macro_call_term` being tried
+/// BEFORE `variable` in `atom_parsers` fixes: `variable` on its own
+/// happily matches just the identifier prefix of `foo!`, leaving `!`
+/// unconsumed -- not a hypothetical failure mode, just something
+/// `atom_parsers`' ordering now prevents from ever being reached.
+#[test]
+def test_variable_alone_would_misparse_macro_call_prefix : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match variable empty_ctx "foo! 1" {
+        success rem _ => not (String.beq rem ""),
+        fail _ => false
+    }
+
+#[test]
+def test_macro_call_term_basic : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "foo!" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Term.var_macro _ dbg => match dbg {
+                    DebugName.named id => id_eq id (Identifier.id "foo"),
+                    DebugName.unnamed => false,
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// `foo! 1 2` falls out of the ordinary atom-application machinery for
+/// free once `foo!` parses as one atom -- no separate application-level
+/// change was needed.
+#[test]
+def test_macro_call_term_with_args : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "foo! 1 2" {
+        success rem out =>
+            String.beq rem "" &&
+            match out { Term.app _ _ => true, _ => false },
+        fail _ => false
+    }
+
+/// A plain identifier with no `!` must still resolve to an ordinary
+/// `Term.var`, not `Term.var_macro` -- confirms `macro_call_term`
+/// being tried first doesn't change behavior for the common case.
+#[test]
+def test_macro_call_term_absent_falls_through_to_variable : Bool :=
+    let x_id : Identifier := Identifier.id "x" in
+    let ctx : List Identifier := List.cons x_id List.empty in
+    match expression ctx "x" {
+        success rem out =>
+            String.beq rem "" &&
+            match out { Term.var _ _ => true, _ => false },
+        fail _ => false
     }
 
 #[test]

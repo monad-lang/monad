@@ -398,6 +398,23 @@ type Term {
     /// ordinary identifier at parse time (recognized as magic only at
     /// expansion time, mirroring the reference exactly).
     quote_ (term: Term),
+    /// Term-position `name!` (`foo!`, `foo! 1 2`). Structurally
+    /// identical to `Term.var` (`idx`/`dbg`) -- `idx` is always
+    /// `sentinel` in practice, since macro names are resolved in a
+    /// separate namespace at expansion time, never via de Bruijn lookup
+    /// against a local `ctx` the way an ordinary bound variable is.
+    /// A separate sibling variant, not a tagged `Term.var`, because
+    /// self-hosted has no `NameRef` at the canonical term level to add
+    /// a `Macro` case to the way the Rust reference's
+    /// `Term::Var{name: NameRef::Macro(_)}` does (a qualified/dotted
+    /// name here is just one joined `Identifier` string, not a
+    /// structured `NameRef`) -- see
+    /// plans/bootstrapping/self-hosted-compiler.md for the alternatives
+    /// considered and rejected (baking `!` into the identifier string;
+    /// a 3rd `DebugName` variant, ruled out as live-regression-risky
+    /// since `DebugName` is matched exhaustively in several real
+    /// hot-path files).
+    var_macro (idx: I64) (dbg: DebugName),
 }
 
 /// Canonical TypeError uses de Bruijn Term. TypeErrorV0 is the legacy V0 variant.
