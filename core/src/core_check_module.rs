@@ -945,7 +945,8 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
   };
 
   let elaborated = elaborate_decls(parsed.decls, loaded);
-  let expanded = match expand_macros(elaborated, loaded) {
+  let synthetic_path = ModulePath::top("__check_module_source_target__");
+  let expanded = match expand_macros(elaborated, loaded, &synthetic_path) {
     Ok(d) => d,
     Err(e) => {
       return ModuleReport {
@@ -2171,7 +2172,7 @@ pub fn type_check_module_decls_new_inner(
   };
 
   let elaborated = elaborate_decls(decls, loaded);
-  let expanded = expand_macros(elaborated, loaded).map_err(TypeError::MacroExpansion)?;
+  let expanded = expand_macros(elaborated, loaded, path).map_err(TypeError::MacroExpansion)?;
   // Phase 0 capture: each inductive's constructors, in declaration order
   // (order *is* the constructor's tag, matching the recursor-compilation
   // convention `lower.rs`/`eval_term.rs` already use) — read directly off

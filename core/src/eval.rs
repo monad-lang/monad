@@ -5,6 +5,12 @@ pub mod derive_cli_test;
 pub mod macro_expand;
 #[cfg(test)]
 pub mod macro_test;
+pub mod meta_compile;
+#[cfg(test)]
+pub mod meta_compile_spike_test;
+pub mod meta_reflect;
+#[cfg(test)]
+pub mod meta_test;
 pub mod termination;
 pub mod r#type;
 

@@ -207,9 +207,14 @@ fn expand_and_type_check(input: &str) -> Result<(), String> {
   let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
   let path = ModulePath::top("test_macro");
   let parsed = parse_file(input.into()).map_err(|e| format!("{e}"))?;
-  let decls = elaborate_decls(parsed.decls, &loaded);
-  let decls = expand_macros(decls, &loaded).map_err(|e| format!("{e}"))?;
-  let oks = type_check_module_decls_new(&path, decls, &loaded).map_err(|e| format!("{e}"))?;
+  // `type_check_module_decls_new` already runs `elaborate_decls`/
+  // `expand_macros` internally (core_check_module.rs) — don't also run
+  // them here first, or a `Decl::Type` with a still-attached `#[derive
+  // ...]` attribute (deliberately left intact after its first expansion,
+  // so a second top-level `expand_macros` pass isn't a no-op for it) gets
+  // dispatched twice, generating duplicate decls.
+  let oks =
+    type_check_module_decls_new(&path, parsed.decls, &loaded).map_err(|e| format!("{e}"))?;
   loaded.add_module(module(
     path.clone(),
     ParsedModule {
@@ -227,7 +232,7 @@ fn expand_fails(input: &str) -> String {
     panic!("expand_fails parse error: {e}");
   });
   let decls = elaborate_decls(parsed.decls, &loaded);
-  match expand_macros(decls.clone(), &loaded) {
+  match expand_macros(decls.clone(), &loaded, &path) {
     Err(e) => e.to_string(),
     // Matches this function's own pre-existing behavior from before the
     // legacy-checker port: re-checks the PRE-expansion `decls`, not
@@ -395,13 +400,14 @@ fn test_hygiene_multiple_expansions_independent() {
 
 // ===== Section 9: Cross-module macros =====
 
-/// Run the full pipeline (elaborate → expand → type_check) using an existing LoadedModules.
+/// Run the full pipeline (elaborate → expand → type_check) using an
+/// existing LoadedModules. `type_check_module_decls_new` already runs
+/// `elaborate_decls`/`expand_macros` internally — see `expand_and_type_check`'s
+/// comment for why not also doing that here first matters.
 fn expand_and_type_check_with_loaded(input: &str, loaded: &LoadedModules) -> Result<(), String> {
   let parsed = parse_file(input.into()).map_err(|e| format!("{e}"))?;
-  let decls = elaborate_decls(parsed.decls, loaded);
-  let decls = expand_macros(decls, loaded).map_err(|e| format!("{e}"))?;
   let path = ModulePath::top("test_macro");
-  type_check_module_decls_new(&path, decls, loaded)
+  type_check_module_decls_new(&path, parsed.decls, loaded)
     .map(|_| ())
     .map_err(|e| format!("{e}"))
 }
@@ -490,6 +496,46 @@ fn test_cross_module_macro_calls_same_module_def() {
     r.is_ok(),
     "cross-module macro referencing own defs should succeed"
   );
+}
+
+#[test]
+fn test_cross_module_decl_gen_macro() {
+  let loaded = default_modules().unwrap();
+
+  let helper_path = ModulePath::top("decl_gen_helper");
+  let parsed_helper = parse_file(
+    r#"
+    use init
+
+    defmacro make_const name val := decls { def const_val : I64 := val }
+    "#,
+  )
+  .unwrap();
+  let helper_decls =
+    type_check_module_decls_new(&helper_path, parsed_helper.decls, &loaded).unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    helper_path.clone(),
+    ParsedModule {
+      decls: helper_decls,
+      module_doc: None,
+    },
+  ));
+
+  let r = expand_and_type_check_with_loaded(
+    r#"
+    use decl_gen_helper {make_const}
+    use init
+
+    make_const! x 10
+    def main : I64 := const_val + 1
+    "#,
+    &loaded,
+  );
+  if let Err(e) = &r {
+    eprintln!("cross-module decl-gen macro error: {e}");
+  }
+  assert!(r.is_ok(), "cross-module decl-gen macro should succeed");
 }
 
 // ===== Section 10: Integration examples (unless!, twice!, define_getter!) =====
@@ -582,6 +628,183 @@ fn test_macro_decl_gen_simple() {
     eprintln!("decl gen error: {e}");
   }
   assert!(r.is_ok(), "decl gen macro should type check");
+}
+
+// The old five-intrinsic reflection kernel (`reflect_fields!`/
+// `reflect_ctors!`/`reflect_ctor_fields!`/`reflect_pairwise_ctors!`/
+// `reflect_set_field!`) that `std/derive.mo`'s `derive_beq`/`derive_bord`/
+// `derive_debug`/`derive_lens` used to be built from is gone — all four
+// were ported to the reflection-as-data kernel (`reflect_type_info!`, see
+// `eval::meta_test` and `plans/review-and-reduce-the-greedy-nest.md`), and
+// this file's direct unit tests for the old kernel were removed along with
+// it. The one thing worth still asserting here is that a retired intrinsic
+// name reads as an ordinary undefined macro, not something silently
+// special-cased.
+
+#[test]
+fn test_retired_decl_position_reflect_fields_reports_macro_not_found() {
+  // `reflect_fields!` was decl-position (`derive_x T := decls { reflect_fields!
+  // T template }`) — a decl-position macro call with no matching builtin
+  // intrinsic or `decl_gen_defs` entry hits `expand_macro_call`'s explicit
+  // "not found" fallback immediately, at expansion time.
+  let err = expand_fails(
+    r#"
+    struct Point { x : I64, y : I64 }
+    reflect_fields! Point some_template
+    "#,
+  );
+  assert!(
+    err.contains("not found") || err.contains("MacroNotFound"),
+    "retired `reflect_fields!` (decl position) should read as an ordinary undefined macro, got: {err}"
+  );
+}
+
+#[test]
+fn test_retired_term_position_reflection_intrinsics_no_longer_expand() {
+  // `reflect_ctors!`/`reflect_ctor_fields!`/`reflect_pairwise_ctors!`/
+  // `reflect_set_field!` were term-position — same pre-existing behavior as
+  // any other undefined term-position macro call (see `expand_term`): an
+  // unresolved `name!` reference is left as-is rather than erroring
+  // immediately, so the failure surfaces later, during type-checking/
+  // lowering, not from `expand_macros` itself. Assert the whole pipeline
+  // fails either way, without pinning the exact (lowering-stage) error
+  // shape.
+  for name in [
+    "reflect_ctors",
+    "reflect_ctor_fields",
+    "reflect_pairwise_ctors",
+    "reflect_set_field",
+  ] {
+    let r = expand_and_type_check(&format!(
+      "struct Point {{ x : I64, y : I64 }}\ndef check (p : Point) : I64 := {name}! p\n"
+    ));
+    assert!(
+      r.is_err(),
+      "retired `{name}!` (term position) should no longer expand/type-check"
+    );
+  }
+}
+
+// Sanity: a plain macro call to an undefined name is still reported as
+// "macro not found", not accidentally swallowed by the builtin-intrinsic
+// check (i.e. the builtin check is scoped to the fixed intrinsic name
+// list, not "anything not in decl_gen_defs").
+#[test]
+fn test_undefined_macro_call_still_reports_not_found() {
+  let err = expand_fails("nonexistent_macro! 1 2\n");
+  assert!(
+    err.contains("not found") || err.contains("MacroNotFound"),
+    "expected an ordinary macro-not-found error, got: {err}"
+  );
+}
+
+// ===== `#[derive ...]` attribute dispatch (Decl::Type hook) =====
+//
+// Tests the dispatch MECHANISM itself — mapping `#[derive Name ...]`
+// target names to `derive_<lowercase>!` macro calls via the ordinary
+// `expand_macro_call` path — using locally-defined stub macros (shadowing
+// the real `std/derive.mo` names, current-module priority) rather than
+// the real BEq/BOrd/Debug/Lens machinery, which is already covered end to
+// end via `std/derive_tests.mo`. `Lens`/`BEq` are used as target names
+// here purely because they're in the fixed `derive_macro_name` table —
+// what these stub macros actually generate is unrelated to lenses or
+// equality.
+
+#[test]
+fn test_derive_attribute_dispatches_to_named_macro() {
+  let r = expand_and_type_check(
+    r#"
+    defmacro derive_lens T := decls { def lens_ran : Bool := true }
+
+    #[derive Lens]
+    type Foo { mk, }
+
+    def main : Bool := lens_ran
+    "#,
+  );
+  if let Err(e) = &r {
+    eprintln!("derive attribute dispatch error: {e}");
+  }
+  assert!(
+    r.is_ok(),
+    "#[derive Lens] should dispatch to the derive_lens! macro call"
+  );
+}
+
+#[test]
+fn test_derive_attribute_multiple_targets() {
+  let r = expand_and_type_check(
+    r#"
+    defmacro derive_beq T := decls { def beq_ran : Bool := true }
+    defmacro derive_lens T := decls { def lens_ran : Bool := true }
+
+    #[derive BEq Lens]
+    type Foo { mk, }
+
+    def main : Bool := beq_ran && lens_ran
+    "#,
+  );
+  if let Err(e) = &r {
+    eprintln!("derive attribute multi-target error: {e}");
+  }
+  assert!(
+    r.is_ok(),
+    "#[derive BEq Lens] should dispatch to both derive_beq! and derive_lens!"
+  );
+}
+
+#[test]
+fn test_derive_attribute_bracket_group_form() {
+  let r = expand_and_type_check(
+    r#"
+    defmacro derive_beq T := decls { def beq_ran : Bool := true }
+    defmacro derive_lens T := decls { def lens_ran : Bool := true }
+
+    #[derive [BEq, Lens]]
+    type Foo { mk, }
+
+    def main : Bool := beq_ran && lens_ran
+    "#,
+  );
+  if let Err(e) = &r {
+    eprintln!("derive attribute bracket-group error: {e}");
+  }
+  assert!(
+    r.is_ok(),
+    "#[derive [BEq, Lens]] (bracketed form) should dispatch the same as bare words"
+  );
+}
+
+#[test]
+fn test_derive_attribute_unknown_target_fails() {
+  let err = expand_fails(
+    r#"
+    #[derive Bogus]
+    type Foo { mk, }
+    "#,
+  );
+  assert!(
+    err.contains("unknown derive target") && err.contains("Bogus"),
+    "expected an unknown-derive-target error, got: {err}"
+  );
+}
+
+#[test]
+fn test_derive_attribute_absent_leaves_type_untouched() {
+  // Sanity: a plain, un-annotated type is not affected by the derive
+  // attribute hook — same spirit as derive_cli's own
+  // test_derive_cli_untouched_without_attribute.
+  let r = expand_and_type_check(
+    r#"
+    type Foo { mk, }
+
+    def main : Foo := Foo.mk
+    "#,
+  );
+  assert!(
+    r.is_ok(),
+    "a type with no #[derive ...] attribute should type-check unchanged"
+  );
 }
 
 #[test]

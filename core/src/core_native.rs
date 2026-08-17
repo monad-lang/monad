@@ -23,6 +23,133 @@ use crate::core_value::{NativeTable, Value};
 use crate::lower_core_ir::CtorTag;
 use crate::term::NumSuffix;
 
+/// Natives safe to run during macro-expansion-time "meta" evaluation
+/// (`core/src/eval/meta_compile.rs`) — deterministic, no IO/concurrency/
+/// mutable shared state. A **fail-closed allowlist**, not a blocklist: a
+/// native not on this list is unavailable in a pure `GlobalCache`
+/// (`GlobalCache::new_pure`, checked by `core_eval.rs`'s
+/// `fire_or_accumulate` before dispatch), including any native added to
+/// this file's `exec_native` match in the future that nobody explicitly
+/// adds here — the safe default for something a derive/meta handler
+/// might call. `await_fiber` (handled outside `exec_native`'s own match,
+/// directly in `core_eval.rs::fire_or_accumulate`) is excluded the same
+/// way, via the same check.
+const PURE_NATIVES: &[&str] = &[
+  "i8_add",
+  "i16_add",
+  "i32_add",
+  "i64_add",
+  "u8_add",
+  "u16_add",
+  "u32_add",
+  "u64_add",
+  "i8_sub",
+  "i16_sub",
+  "i32_sub",
+  "i64_sub",
+  "u8_sub",
+  "u16_sub",
+  "u32_sub",
+  "u64_sub",
+  "i8_mul",
+  "i16_mul",
+  "i32_mul",
+  "i64_mul",
+  "u8_mul",
+  "u16_mul",
+  "u32_mul",
+  "u64_mul",
+  "i8_div",
+  "i16_div",
+  "i32_div",
+  "i64_div",
+  "u8_div",
+  "u16_div",
+  "u32_div",
+  "u64_div",
+  "u64_mod",
+  "u64_xor",
+  "i8_eq",
+  "i16_eq",
+  "i32_eq",
+  "i64_eq",
+  "u8_eq",
+  "u16_eq",
+  "u32_eq",
+  "u64_eq",
+  "i8_lt",
+  "i16_lt",
+  "i32_lt",
+  "i64_lt",
+  "u8_lt",
+  "u16_lt",
+  "u32_lt",
+  "u64_lt",
+  "i8_gt",
+  "i16_gt",
+  "i32_gt",
+  "i64_gt",
+  "u8_gt",
+  "u16_gt",
+  "u32_gt",
+  "u64_gt",
+  "u32_and",
+  "u32_or",
+  "u32_xor",
+  "u32_shl",
+  "u32_shr",
+  "u8_to_u32",
+  "u32_to_u8",
+  "i64_to_u32",
+  "i64_to_u64",
+  "u8_to_u64",
+  "f32_add",
+  "f64_add",
+  "f32_sub",
+  "f64_sub",
+  "f32_mul",
+  "f64_mul",
+  "f32_div",
+  "f64_div",
+  "f32_eq",
+  "f64_eq",
+  "f32_lt",
+  "f64_lt",
+  "f32_gt",
+  "f64_gt",
+  "i8_to_string",
+  "i16_to_string",
+  "i32_to_string",
+  "i64_to_string",
+  "u8_to_string",
+  "u16_to_string",
+  "u32_to_string",
+  "u64_to_string",
+  "f32_to_string",
+  "f64_to_string",
+  "string_eq",
+  "string_concat",
+  "string_length",
+  "string_starts_with",
+  "string_slice",
+  "string_drop",
+  "string_get",
+  "string_get_char",
+  "string_to_list",
+  "string_from_list",
+];
+
+/// Explicitly excluded (for documentation/grep-ability, not consulted by
+/// `is_pure_native` — the allowlist above is authoritative): `print_str`
+/// (IO), `bench_now`/`bench_report` (non-deterministic timing),
+/// `read_file`/`write_file`/`file_exists`/`is_dir`/`list_dir`/`get_env`/
+/// `exec_cmd` (filesystem/process IO), `fork_io`/`cancel_fiber`/
+/// `sleep_io`/`scope_new`/`scope_fork`/`scope_drop`/`await_fiber`
+/// (concurrency/shared mutable state).
+pub fn is_pure_native(name: &str) -> bool {
+  PURE_NATIVES.contains(&name)
+}
+
 /// Execute a fully-saturated native call. Callers (`core_eval.rs`) are
 /// responsible for only invoking this once `args.len()` has reached the
 /// native's declared arity (`NativeTable::arity`) — this function doesn't

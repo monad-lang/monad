@@ -80,6 +80,12 @@ pub enum CoreEvalError {
   /// own doc comment for why this is a genuine (if rare) runtime error
   /// rather than a lowering-time one, unlike every other variant here.
   NonExhaustiveMatch(ModulePath, Identifier),
+  /// A native outside `core_native::is_pure_native`'s allowlist was
+  /// called against a `GlobalCache::new_pure` cache — see
+  /// `GlobalCache`'s `pure_only` field doc comment
+  /// (`core/src/core_value.rs`). Not possible against an ordinary
+  /// (`GlobalCache::new`) cache, which never sets this restriction.
+  ImpureNativeBlocked(String),
 }
 
 impl std::fmt::Display for CoreEvalError {
@@ -104,6 +110,13 @@ impl std::fmt::Display for CoreEvalError {
         write!(
           f,
           "non-exhaustive match: {inductive}.{ctor} was constructed but not covered by this match"
+        )
+      }
+      CoreEvalError::ImpureNativeBlocked(name) => {
+        write!(
+          f,
+          "native `{name}` is unavailable here — this code runs in a pure, IO/concurrency-free \
+           sandbox (macro-expansion-time evaluation)"
         )
       }
     }
@@ -296,6 +309,12 @@ fn fire_or_accumulate(
     let name = natives
       .name(native_id)
       .ok_or(CoreEvalError::UnknownNative(native_id))?;
+    // `await_fiber` is handled outside `exec_native`'s own allowlisted
+    // match (see this function's doc comment), so it needs its own
+    // purity check here rather than falling under `is_pure_native`.
+    if cache.is_pure_only() && !crate::core_native::is_pure_native(name.as_str()) {
+      return Err(CoreEvalError::ImpureNativeBlocked(name.to_string()));
+    }
     if name.as_str() == "await_fiber" {
       crate::core_native::await_fiber(&args, globals, natives, cache)
     } else {

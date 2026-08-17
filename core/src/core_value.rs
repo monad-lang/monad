@@ -231,13 +231,37 @@ enum Slot {
 /// across many, its choice — not baked into the table).
 pub struct GlobalCache {
   slots: Vec<Slot>,
+  /// When true, `core_eval.rs`'s `fire_or_accumulate` refuses to dispatch
+  /// any native not on `core_native::is_pure_native`'s allowlist (and
+  /// blocks `await_fiber`, checked the same way) — used by
+  /// `core/src/eval/meta_compile.rs` to run macro-expansion-time "meta"
+  /// evaluation in a sandbox with no IO/concurrency, per
+  /// `plans/review-and-reduce-the-greedy-nest.md`. `false` (via `new`,
+  /// every pre-existing call site) is the ordinary, unrestricted program
+  /// evaluator — zero behavior change there.
+  pure_only: bool,
 }
 
 impl GlobalCache {
   pub fn new(len: usize) -> Self {
     Self {
       slots: vec![Slot::Empty; len],
+      pure_only: false,
     }
+  }
+
+  /// Same as `new`, but natives are restricted to `core_native::is_pure_native`'s
+  /// allowlist for the lifetime of this cache — see the `pure_only` field
+  /// doc comment.
+  pub fn new_pure(len: usize) -> Self {
+    Self {
+      slots: vec![Slot::Empty; len],
+      pure_only: true,
+    }
+  }
+
+  pub fn is_pure_only(&self) -> bool {
+    self.pure_only
   }
 
   /// Already-forced value for `idx`, if any — an O(1) clone (never a

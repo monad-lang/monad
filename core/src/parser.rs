@@ -1419,13 +1419,49 @@ fn decl_gen_parser(input: Span) -> Res<Decl> {
   ))
 }
 
+/// Like `term_inner`, but rejects anything shaped like the head of a
+/// *new* macro-call declaration (`identifier!`, no space before `!`) —
+/// both the bare-macro-name-reference alternative (`macro_call`, which
+/// parses `name!` on its own — with no arguments — as an atomic `Term`)
+/// and, via the leading lookahead below, an ordinary `variable`/path
+/// parse of the same identifier.
+///
+/// Used specifically for decl-level macro-call argument parsing
+/// (`macro_call_decl_parser`) below: since that parser has no terminator
+/// and just keeps consuming `ws1`-separated atoms until one fails to
+/// parse, a *following* top-level `other_macro! arg` declaration would
+/// otherwise get silently swallowed as extra arguments to THIS call —
+/// either as a `macro_call` atom directly, or (once that alternative is
+/// removed) as an ordinary `variable` parse of `other_macro` that simply
+/// stops right before the `!`, leaving the decl list to choke on a lone
+/// `!` where it expects a new declaration. A parenthesized nested call
+/// (`outer! (inner! x)`) is unaffected, since `tuple_or_parens` is still
+/// in this list and the lookahead only inspects the immediate, unparenthesized
+/// input.
+fn macro_call_decl_arg<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, _) = peek(not(pair(identifier, char('!')))).parse(input)?;
+  alt((
+    quote_parser,
+    do_parser,
+    let_parser,
+    if_parser,
+    match_parser,
+    ann_parser,
+    variable,
+    literal,
+    lambda,
+    tuple_or_parens,
+  ))
+  .parse(input)
+}
+
 fn macro_call_decl_parser(input: Span) -> Res<Decl> {
   // Use peek to check that the identifier is followed by `!` before consuming
   let (input, _) = peek(pair(identifier, char('!'))).parse(input)?;
   let (input, name) = identifier(input)?;
   let (input, _) = char('!')(input)?;
   let (input, args) = fold_many0(
-    preceded(ws1, term_inner),
+    preceded(ws1, macro_call_decl_arg),
     Vec::new,
     |mut acc: Vec<Term>, arg| {
       acc.push(arg);
@@ -1958,6 +1994,17 @@ fn open_parser(input: Span) -> Res<Decl> {
     )),
   }
 }
+/// Same declaration grammar `decl_parser` uses, minus its own leading
+/// doc-comment/location bookkeeping — used for `decls { ... }` decl-gen
+/// macro template bodies (`defs_block_parser`). Despite the name (kept for
+/// historical reasons — it originally excluded decl-level macro calls
+/// entirely), it now DOES include `macro_call_decl_parser`: templates need
+/// to be able to call other decl-gen macros, including the built-in
+/// reflection intrinsic (`reflect_type_info!`) that drives the `derive_*!`
+/// macros in `std/derive.mo` — `defmacro derive_lens (T : Type) := decls {
+/// reflect_type_info! T derive_lens_meta }` needs
+/// `reflect_type_info! T derive_lens_meta` to parse as an ordinary nested
+/// `Decl::MacroCall` here.
 fn decl_parser_no_macro(input: Span) -> Res<Decl> {
   let (input, decl) = alt((
     map(use_parser, Decl::Use),
@@ -1970,6 +2017,7 @@ fn decl_parser_no_macro(input: Span) -> Res<Decl> {
     map(struct_parser, Decl::Type),
     map(inductive_parser, Decl::Type),
     map(infix_parser, Decl::Infix),
+    macro_call_decl_parser,
   ))
   .parse(input)?;
   Ok((input, decl))

@@ -284,7 +284,7 @@ impl std::fmt::Display for BuildCoreProgramError {
 /// package) IS re-read from disk, via search-path resolution, since
 /// that's the only way to get an on-disk module's raw source back once
 /// `loaded`'s own copy of it has already been checked/discarded.
-fn build_core_program(
+pub(crate) fn build_core_program(
   loaded: &LoadedModules,
   extra_modules: &[(ModulePath, Vec<SourceContext<Decl>>)],
 ) -> Result<core_program::CoreProgram, BuildCoreProgramError> {

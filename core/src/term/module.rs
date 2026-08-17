@@ -2201,6 +2201,14 @@ pub struct Module {
   opens: Vec<SourceContext<Open>>,
   defs: Map<ModulePath, SourceContext<Def>>,
   macro_defs: Map<ModulePath, SourceContext<Def>>,
+  /// Decl-gen macros (`defmacro name params := decls { ... }`) — kept
+  /// alongside `macro_defs` (rather than folded into it, since
+  /// `DeclGenDef` isn't a `Def`) so `use`-ing a module makes its decl-gen
+  /// macros callable too, not just the file that defines them. Previously
+  /// `Decl::DeclGen` was dropped entirely at module-storage time (see the
+  /// historical comment in `add_decl`), which meant decl-gen macros only
+  /// ever worked within the single file that declared them.
+  decl_gens: Map<ModulePath, SourceContext<DeclGenDef>>,
   infix: Map<Operator, SourceContext<Infix>>,
   instances: Vec<SourceContext<Instance>>,
   doc: Option<Documentation>,
@@ -2678,6 +2686,9 @@ impl Module {
   pub fn macro_defs_map(&self) -> &Map<ModulePath, SourceContext<Def>> {
     &self.macro_defs
   }
+  pub fn decl_gens_map(&self) -> &Map<ModulePath, SourceContext<DeclGenDef>> {
+    &self.decl_gens
+  }
   /// Convert module back to Decls again
   pub fn to_decls(self) -> Vec<SourceContext<Decl>> {
     let inductives = self
@@ -2691,6 +2702,10 @@ impl Module {
       .map(|ctx| ctx.with(Decl::Infix(ctx.value().clone())));
     let uses = self.uses.into_iter().map(|ctx| ctx.map(Decl::Use));
     let opens = self.opens.into_iter().map(|ctx| ctx.map(Decl::Open));
+    let decl_gens = self
+      .decl_gens
+      .into_values()
+      .map(|ctx| ctx.map(Decl::DeclGen));
     self
       .defs
       .values()
@@ -2701,6 +2716,7 @@ impl Module {
           .values()
           .map(|ctx| ctx.clone().map(Decl::DefMacro)),
       )
+      .chain(decl_gens)
       .chain(uses)
       .chain(opens)
       .chain(inductives)
@@ -2788,10 +2804,10 @@ impl Module {
           .macro_defs
           .insert(def.name.clone(), SourceContext::no_ctx(def));
       }
-      Decl::DeclGen(_gd) => {
-        // DeclGen defs use the macro_defs map since they serve a similar purpose.
-        // Convert to Def with the decls stored in the term field for storage, but
-        // expand_macros will look them up separately.
+      Decl::DeclGen(gd) => {
+        self
+          .decl_gens
+          .insert(gd.name.clone(), SourceContext::no_ctx(gd));
       }
       Decl::MacroCall { .. } => {
         panic!("MacroCall should be expanded before add_decl");
@@ -3049,6 +3065,13 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
       _ => None,
     })
     .fold(Map::new(), merge_dup_detect);
+  let decl_gens = decls
+    .iter()
+    .filter_map(|ctx| match ctx.value() {
+      Decl::DeclGen(gd) => Some((gd.name.clone(), ctx.with(gd.clone()))),
+      _ => None,
+    })
+    .fold(Map::new(), merge_dup_detect);
   let inductives = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
@@ -3099,6 +3122,7 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
     path,
     defs,
     macro_defs,
+    decl_gens,
     inductives,
     uses,
     opens,

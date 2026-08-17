@@ -1649,16 +1649,34 @@ pub fn elaborate_decl(decl: Decl, known_names: &Set<&ModulePath>) -> Decl {
   match decl {
     Def(def) => Def(elaborate_def(def, known_names)),
     DefMacro(def) => DefMacro(elaborate_def(def, known_names)),
-    DeclGen(gd) => DeclGen(DeclGenDef {
-      name: gd.name,
-      params: gd.params,
-      decls: gd
-        .decls
-        .into_iter()
-        .map(|d| elaborate_decl(d, known_names))
-        .collect(),
-      attributes: gd.attributes,
-    }),
+    DeclGen(gd) => {
+      // The macro's own params (`defmacro lens_field T field_name field_typ
+      // := decls { ... }`) must be treated as already-bound names while
+      // elaborating the template body — otherwise a param used in a type
+      // annotation position (e.g. `def T.field_name : field_typ := ...`)
+      // gets mistaken for a genuine free type variable and wrapped in a
+      // bogus implicit `Forall`, which then survives macro-parameter
+      // substitution untouched (a `Forall`'s own bound name shadows
+      // `subst_macro`'s replacement) instead of resolving to the caller's
+      // actual argument.
+      let param_paths: Vec<ModulePath> = gd
+        .params
+        .iter()
+        .map(|p| ModulePath::single(p.name.clone()))
+        .collect();
+      let mut extended_known_names = known_names.clone();
+      extended_known_names.extend(param_paths.iter());
+      DeclGen(DeclGenDef {
+        name: gd.name,
+        params: gd.params,
+        decls: gd
+          .decls
+          .into_iter()
+          .map(|d| elaborate_decl(d, &extended_known_names))
+          .collect(),
+        attributes: gd.attributes,
+      })
+    }
     Generated(inner) => Generated(
       inner
         .into_iter()
