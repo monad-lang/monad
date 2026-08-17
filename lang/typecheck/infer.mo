@@ -335,6 +335,68 @@ def type_check_var (idx : I64) (dbg : DebugName) (expected_type : Term) (scope :
     else
         type_check_bound_var idx dbg local_types
 
+/// Extract the last dotted segment of a name string (e.g. "List.cons" ->
+/// "cons", "cons" -> "cons") -- `String.get`-driven scan mirrors
+/// `lang/module.mo`'s own `string_find_last_slash_go` (same idiom,
+/// different delimiter). Used by `type_check_free_var_con` below.
+#[terminating]
+def last_dotted_segment_go (s : String) (idx : I64) : String :=
+    if I64.lt idx 0 then s
+    else
+        match (String.get s idx : Option U8) {
+            Option.some byte_val =>
+                if U8.beq byte_val 46u8 then // '.' is ASCII 46
+                    String.slice s (idx + 1) (String.length s)
+                else
+                    last_dotted_segment_go s (idx - 1),
+            Option.none => s
+        }
+
+def last_dotted_segment (s : String) : String :=
+    last_dotted_segment_go s (String.length s - 1)
+
+/// Build a Pi-chain of `num_args` `Term.hole`-typed arguments ending in
+/// `ret` -- e.g. `con_pi_chain 2 ret` is `Term.hole -> Term.hole -> ret`.
+/// Deliberately doesn't try to recover the constructor's own declared
+/// param types (this checker doesn't track real dependent-type
+/// information for inductives anywhere yet -- `prepend_holes`, below,
+/// makes the exact same simplification for match-arm-bound constructor
+/// args), so `expected_type`/downstream unification is trusted for the
+/// actual argument types, same pragmatism `type_check_con`'s own
+/// untyped-args fallback already uses.
+#[terminating]
+def con_pi_chain (num_args : I64) (ret : Term) : Term :=
+    if I64.beq num_args 0 then ret
+    else Term.pi Term.hole (con_pi_chain (num_args - 1) ret)
+
+/// Fallback for `type_check_free_var`: `id` might be a qualified (or
+/// bare) CONSTRUCTOR reference in value position (`List.cons`,
+/// `Command.help`, `Option.none`, ...) rather than a def/class method.
+/// Constructors are registered in scope under their bare name only
+/// (`lang/scope.mo`'s `add_constructors_go`, the same convention
+/// `match_case_name`'s pattern-stripping already relies on for match
+/// arms), so a qualified value reference like `List.cons` never
+/// resolves via `scope_resolve_name`'s plain `def_refs` lookup -- this
+/// was `type_check_free_var`'s biggest single remaining gap (confirmed
+/// via lang/codegen/emit.mo: ~100 of its "unknown variable" errors were
+/// all qualified constructor references -- `List.cons`, `Option.none`,
+/// `Def.mk`, `Inductive.mk`, ...).
+def type_check_free_var_con (id : Identifier) (expected_type : Term) (dbg : DebugName) (scope : Scope) : Result TypeError TypedTerm :=
+    let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
+    let con_mp : ModulePath := ModulePath.mp (List.cons bare_name List.empty) in
+    match scope_find_inductive_by_constructor con_mp scope {
+        Option.some ind =>
+            match find_constructor_in_inductive ind con_mp {
+                Option.some ctor =>
+                    match ctor {
+                        InductConstructor.mk _ params _ =>
+                            ok (mk_typed (Term.var sentinel dbg) (con_pi_chain (List.length params) expected_type)),
+                    },
+                Option.none => err (TypeError.unknown_var (NameRef.nid id)),
+            },
+        Option.none => err (TypeError.unknown_var (NameRef.nid id)),
+    }
+
 /// Look up a free variable by debug name in the scope.
 def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope) (locals : LocalScope) : Result TypeError TypedTerm :=
     match dbg {
@@ -365,7 +427,7 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                                     },
                             },
                         err _ =>
-                            err (TypeError.unknown_var nref),
+                            type_check_free_var_con id expected_type dbg scope,
                     },
             },
         DebugName.unnamed =>

@@ -951,12 +951,27 @@ def type_brace (r : ParseResult String) (name : Identifier) (params : List Param
 		fail e => fail e
 	}
 
+/// `preceded_by`'s own `before` parser needs a `String -> ParseResult
+/// String` shape (matching `ws0`'s), so a comment-aware skip can't be
+/// spliced in as bare `skip_docstrings (skip_spaces ...)` (a plain
+/// `String -> String`) the way every OTHER site in this file does --
+/// this wraps it to fit. Fixes a doc comment between two constructor
+/// variants (`type X { a (...), /// doc\n b (...) }`) breaking the
+/// whole type declaration -- same underlying comment-skip gap as
+/// `match_case_arrow`/`if_then_branch`/etc. elsewhere in this file, just
+/// needing a different shape here since `type_constructors` goes
+/// through the generic `separated_by`/`preceded_by` combinators instead
+/// of a hand-written per-branch chain.
+#[partial]
+def ws0_and_comments (input : String) : ParseResult String :=
+	success (skip_docstrings (skip_spaces input)) input
+
 #[partial]
 def type_constructors (input : String) (name : Identifier) (params : List Param) (kind : Term) (vis : Visibility) : ParseResult Decl :=
 	let empty_ctx : List Identifier := List.empty in
-	match separated_by (tag ",") (preceded_by ws0 (type_one_constructor empty_ctx)) input {
+	match separated_by (tag ",") (preceded_by ws0_and_comments (type_one_constructor empty_ctx)) input {
 		success rem cons =>
-			match tag "}" (skip_spaces rem) {
+			match tag "}" (skip_docstrings (skip_spaces rem)) {
 				success rem2 _ => success rem2 (type_to_decl name (list_reverse params) kind cons vis),
 				fail e => fail (ParseError.custom "expected }" rem)
 			},
