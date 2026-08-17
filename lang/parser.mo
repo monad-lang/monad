@@ -1692,16 +1692,32 @@ def def_implicit_close (r : ParseResult String) (brace_rem : String) (name : Str
 #[partial]
 def def_params_try_explicit (r : ParseResult String) (orig : String) (params : List Param) : ParseResult (List Param) :=
 	match r {
-		success rem _ => def_explicit_param (identifier (skip_spaces rem)) rem params,
+		// `opt_attributes` captured right after the opening `(` -- the
+		// one real per-param attribute shape (`#[arg]`, e.g.
+		// `(#[arg] verbose : Bool)` in a #[derive_cli]-annotated type's
+		// constructor) is on a CONSTRUCTOR field, not a `def` param
+		// (see lang/tests/cli_derive_tests.mo, deliberately Rust-host-
+		// only per its own doc comment) -- so this specific path has no
+		// in-scope real corpus target, unlike every other piece of this
+		// plan. Lower-confidence, hand-repro-only per
+		// plans/bootstrapping/self-hosted-compiler.md's own staging.
+		success rem _ => def_explicit_attrs (opt_attributes rem) rem params,
 		fail _ =>
 			let rev : List Param := list_reverse params in
 			success orig rev
 	}
 
 #[partial]
-def def_explicit_param (r : ParseResult String) (close_rem : String) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_attrs (r : ParseResult (List Attribute)) (close_rem : String) (params : List Param) : ParseResult (List Param) :=
 	match r {
-		success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) List.empty) params,
+		success rem attrs => def_explicit_param (identifier (skip_spaces rem)) close_rem params attrs,
+		fail e => fail e
+	}
+
+#[partial]
+def def_explicit_param (r : ParseResult String) (close_rem : String) (params : List Param) (attrs : List Attribute) : ParseResult (List Param) :=
+	match r {
+		success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) List.empty) params attrs,
 		fail e => fail e
 	}
 
@@ -1711,36 +1727,36 @@ def def_explicit_param (r : ParseResult String) (close_rem : String) (params : L
 /// `(a : Type) (b : Type)`. `names` accumulates most-recently-parsed-first
 /// (reverse declaration order), mirroring how `params` itself accumulates.
 #[partial]
-def def_explicit_more_names (input : String) (close_rem : String) (names : List Identifier) (params : List Param) : ParseResult (List Param) :=
-	def_explicit_more_names_try (identifier (skip_spaces input)) input close_rem names params
+def def_explicit_more_names (input : String) (close_rem : String) (names : List Identifier) (params : List Param) (attrs : List Attribute) : ParseResult (List Param) :=
+	def_explicit_more_names_try (identifier (skip_spaces input)) input close_rem names params attrs
 
 #[partial]
-def def_explicit_more_names_try (r : ParseResult String) (orig : String) (close_rem : String) (names : List Identifier) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_more_names_try (r : ParseResult String) (orig : String) (close_rem : String) (names : List Identifier) (params : List Param) (attrs : List Attribute) : ParseResult (List Param) :=
 	match r {
-		success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) names) params,
-		fail _ => def_explicit_colon (tag ":" (skip_spaces orig)) close_rem names params
+		success rem name => def_explicit_more_names rem close_rem (List.cons (Identifier.id name) names) params attrs,
+		fail _ => def_explicit_colon (tag ":" (skip_spaces orig)) close_rem names params attrs
 	}
 
 #[partial]
-def def_explicit_colon (r : ParseResult String) (close_rem : String) (names : List Identifier) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_colon (r : ParseResult String) (close_rem : String) (names : List Identifier) (params : List Param) (attrs : List Attribute) : ParseResult (List Param) :=
 	match r {
 		success rem _ =>
 			let empty_ctx : List Identifier := List.empty in
-			def_explicit_type (type_expression empty_ctx rem) close_rem names params,
+			def_explicit_type (type_expression empty_ctx rem) close_rem names params attrs,
 		fail e => fail e
 	}
 
 #[partial]
-def def_explicit_type (r : ParseResult Term) (close_rem : String) (names : List Identifier) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_type (r : ParseResult Term) (close_rem : String) (names : List Identifier) (params : List Param) (attrs : List Attribute) : ParseResult (List Param) :=
 	match r {
-		success rem typ => def_explicit_close (tag ")" rem) close_rem names typ params,
+		success rem typ => def_explicit_close (tag ")" rem) close_rem names typ params attrs,
 		fail e => fail e
 	}
 
 #[partial]
-def def_explicit_close (r : ParseResult String) (close_rem : String) (names : List Identifier) (typ : Term) (params : List Param) : ParseResult (List Param) :=
+def def_explicit_close (r : ParseResult String) (close_rem : String) (names : List Identifier) (typ : Term) (params : List Param) (attrs : List Attribute) : ParseResult (List Param) :=
 	match r {
-		success rem _ => def_params_loop (skip_spaces rem) (params_for_names (list_reverse names) typ params),
+		success rem _ => def_params_loop (skip_spaces rem) (params_for_names_attrs (list_reverse names) typ attrs params),
 		fail e => fail e
 	}
 
@@ -1753,6 +1769,26 @@ def def_explicit_close (r : ParseResult String) (close_rem : String) (names : Li
 def params_for_names (names : List Identifier) (typ : Term) (params : List Param) : List Param := match names {
 	List.empty => params,
 	List.cons n rest => params_for_names rest typ (List.cons (param_many n typ) params),
+}
+
+/// Sibling to `params_for_names` used only by the explicit-param chain
+/// above (which now always has a captured `attrs` list, possibly
+/// empty) — applies `attrs` to every `Param` built from this one
+/// `(...)` group. Deliberately NOT merged into `params_for_names`
+/// itself: `def`'s own `{implicit}` params and `instance`'s implicit-
+/// param chain (`instance_implicit_params_loop`) both go through
+/// `params_for_names` directly and never need `#[arg]`-style attrs —
+/// threading an always-empty extra parameter through those two other
+/// call sites for no benefit isn't worth it. All names in a shared-type
+/// group get the SAME attrs if attributed — untested design choice
+/// (no real corpus example combines `#[arg]` with a multi-name group
+/// either way).
+#[partial]
+def params_for_names_attrs (names : List Identifier) (typ : Term) (attrs : List Attribute) (params : List Param) : List Param := match names {
+	List.empty => params,
+	List.cons n rest =>
+		let none : Option Term := Option.none in
+		params_for_names_attrs rest typ attrs (List.cons (Param.mk n typ Multiplicity.many none attrs) params),
 }
 
 #[partial]
@@ -6279,6 +6315,51 @@ def test_macro_call_decl_two_consecutive_not_swallowed : Bool :=
                     }),
                 List.empty => false,
             },
+        fail _ => false
+    }
+
+// --- Tests for per-def-param #[arg] attribute capture ---
+//
+// Lower-confidence/lower-priority per the plan -- the real corpus
+// #[arg] usage (lang/tests/cli_derive_tests.mo) is on a constructor
+// field, not a `def` param, and is deliberately Rust-host-only. These
+// are hand-written repros only.
+
+#[test]
+def test_def_param_captures_arg_attribute : Bool :=
+    let empty_params : List Param := List.empty in
+    match def_params_loop "(#[arg] verbose : Bool)" empty_params {
+        success rem params =>
+            String.beq rem "" &&
+            match params {
+                List.cons p _ => match p {
+                    Param.mk _ _ _ _ attrs => I64.beq (List.length attrs) 1 && has_attr (Identifier.id "arg") attrs,
+                },
+                List.empty => false,
+            },
+        fail _ => false
+    }
+
+/// A plain (unattributed) `def` param must still parse with an empty
+/// attrs list -- confirms adding the capture doesn't change ordinary
+/// def-param parsing.
+#[test]
+def test_def_param_no_attribute_present : Bool :=
+    match def_parser "def foo (x : I64) : I64 := x" {
+        success rem out =>
+            String.beq rem "" &&
+            match out { Decl.def_d _ => true, _ => false },
+        fail _ => false
+    }
+
+/// Multi-name group with `#[arg]` -- both names get the same captured
+/// attrs (the documented, untested-by-real-corpus design choice).
+#[test]
+def test_def_param_multi_name_group_with_attribute : Bool :=
+    match def_parser "def foo (#[arg] a b : Bool) : I64 := 1" {
+        success rem out =>
+            String.beq rem "" &&
+            match out { Decl.def_d _ => true, _ => false },
         fail _ => false
     }
 
