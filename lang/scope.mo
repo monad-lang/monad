@@ -314,7 +314,8 @@ def struct_fields_to_params (fields : List StructField) : List Param :=
         List.cons f rest =>
             match f {
                 StructField.mk fname ftyp fdefault fmult =>
-                    List.cons (Param.mk fname ftyp fmult fdefault) (struct_fields_to_params rest)
+                    let no_attrs : List Attribute := List.empty in
+                    List.cons (Param.mk fname ftyp fmult fdefault no_attrs) (struct_fields_to_params rest)
             }
     }
 
@@ -325,7 +326,7 @@ def build_scope_class (cls : Class) (path : ModulePath) (acc : ScopeData) : Scop
             let cls_mp : ModulePath := ModulePath.mp name_list in
             let empty_params : List Param := List.empty in
             let empty_constructors : List InductConstructor := List.empty in
-            let empty_attrs : List String := List.empty in
+            let empty_attrs : List Attribute := List.empty in
             let dummy_ind : Inductive := Inductive.mk cls_mp empty_params (Term.type_ 1) empty_constructors empty_attrs Visibility.package_private in
             let with_cls : ScopeData := scope_data_add_class acc dummy_ind in
             add_class_methods with_cls methods cls_mp
@@ -728,7 +729,7 @@ def add_builtin_type (sd : ScopeData) : ScopeData :=
     let type_name : ModulePath := ModulePath.mp (List.cons type_id empty_id_list) in
     let empty_params : List Param := List.empty in
     let empty_constructors : List InductConstructor := List.empty in
-    let empty_attrs : List String := List.empty in
+    let empty_attrs : List Attribute := List.empty in
     let type_ind : Inductive := Inductive.mk type_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
     let type_sd : ScopeDef := {
         name := type_name,
@@ -745,7 +746,7 @@ def add_builtin_prop (sd : ScopeData) : ScopeData :=
     let prop_name : ModulePath := ModulePath.mp (List.cons prop_id empty_id_list) in
     let empty_params : List Param := List.empty in
     let empty_constructors : List InductConstructor := List.empty in
-    let empty_attrs : List String := List.empty in
+    let empty_attrs : List Attribute := List.empty in
     let prop_ind : Inductive := Inductive.mk prop_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
     let prop_sd : ScopeDef := {
         name := prop_name,
@@ -926,7 +927,7 @@ def term_args_match (ins_args : List Term) (key_args : List Param) : Bool :=
                 List.empty => false,
                 List.cons p rest_key =>
                     match p {
-                        mk _ p_typ _ _ =>
+                        mk _ p_typ _ _ _ =>
                             if Similar.similar t p_typ
                             then term_args_match rest_ins rest_key
                             else false,

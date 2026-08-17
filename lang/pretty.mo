@@ -53,7 +53,7 @@ def show_universe (level : I64) : String :=
 
 #[partial]
 def show_param (p : Param) : String := match p {
-    Param.mk name type_ mult default =>
+    Param.mk name type_ mult default _attrs =>
         let mult_str := show_multiplicity mult in
         let name_str := show_identifier name in
         let type_str := show_term type_ in
@@ -353,11 +353,11 @@ def show_induct_ctor_params_rest (hd : Param) (rest : List Param) : String :=
     }
 
 def param_name (p : Param) : Identifier := match p {
-    Param.mk name type_ mult default => name,
+    Param.mk name type_ mult default _attrs => name,
 }
 
 def param_type (p : Param) : Term := match p {
-    Param.mk name type_ mult default => type_,
+    Param.mk name type_ mult default _attrs => type_,
 }
 
 #[partial]
@@ -771,7 +771,7 @@ def test_show_multiplicity_affine : Bool :=
 def test_show_param_simple : Bool :=
     let id := Identifier.id "x" in
     let typ := Term.type_ 1 in
-    let p := Param.mk id typ Multiplicity.many Option.none in
+    let p := Param.mk id typ Multiplicity.many Option.none List.empty in
     show_param p == "x : Type"
 
 #[test]
@@ -779,14 +779,14 @@ def test_show_param_with_default : Bool :=
     let id := Identifier.id "x" in
     let typ := Term.type_ 1 in
     let dflt := Term.type_ 1 in
-    let p := Param.mk id typ Multiplicity.many (Option.some dflt) in
+    let p := Param.mk id typ Multiplicity.many (Option.some dflt) List.empty in
     show_param p == "x : Type := Type"
 
 #[test]
 def test_show_param_linear : Bool :=
     let id := Identifier.id "x" in
     let typ := Term.type_ 1 in
-    let p := Param.mk id typ Multiplicity.linear Option.none in
+    let p := Param.mk id typ Multiplicity.linear Option.none List.empty in
     show_param p == "!x : Type"
 
 #[test]

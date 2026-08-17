@@ -196,7 +196,7 @@ def collect_param_names (params : List Param) : List Identifier :=
     match params {
         List.cons param rest =>
             match param {
-                Param.mk name _ _ _ => List.cons name (collect_param_names rest),
+                Param.mk name _ _ _ _ => List.cons name (collect_param_names rest),
             },
         List.empty => List.empty,
     }

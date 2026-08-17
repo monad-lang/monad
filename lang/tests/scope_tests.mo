@@ -31,7 +31,7 @@ def test_build_with_def : Bool :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
     let empty_constraints : List TypeConstraint := List.empty in
-    let empty_attrs : List String := List.empty in
+    let empty_attrs : List Attribute := List.empty in
     let def_decl : Def := Def.mk name Term.hole Term.hole empty_constraints empty_attrs Visibility.package_private in
     let decls : List Decl := List.cons (Decl.def_d def_decl) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decls in
@@ -52,7 +52,7 @@ def test_build_with_inductive : Bool :=
         (ModulePath.mp (List.cons (Identifier.id "false") List.empty))
         empty_params (Term.type_ 1) in
     let cns : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
-    let empty_attrs : List String := List.empty in
+    let empty_attrs : List Attribute := List.empty in
     let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
     let decls : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decls in
@@ -85,7 +85,7 @@ def test_scope_find_inductive_found : Bool :=
         (ModulePath.mp (List.cons (Identifier.id "true") List.empty))
         empty_params (Term.type_ 1) in
     let cns : List InductConstructor := List.cons true_cn List.empty in
-    let empty_attrs : List String := List.empty in
+    let empty_attrs : List Attribute := List.empty in
     let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_inductive` on
@@ -505,7 +505,7 @@ def test_build_scope_then_resolve_constructor : Bool :=
     let empty_params : List Param := List.empty in
     let true_cn : InductConstructor := InductConstructor.mk true_name empty_params (Term.type_ 1) in
     let cns : List InductConstructor := List.cons true_cn List.empty in
-    let empty_attrs : List String := List.empty in
+    let empty_attrs : List Attribute := List.empty in
     let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
     let decls : List Decl := List.cons (Decl.inductive_d ind) List.empty in
     let sd : ScopeData := build_scope_from_decls mod_path decls in

@@ -371,7 +371,7 @@ def maybe_scope : Scope :=
         (Term.type_ 1) in
     let cns : List InductConstructor := List.cons some_cn (List.cons none_cn List.empty) in
     let empty_params : List Param := List.empty in
-    let empty_attrs : List String := List.empty in
+    let empty_attrs : List Attribute := List.empty in
     let ind : Inductive := Inductive.mk
         type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
     let decls : List Decl := List.cons (Decl.inductive_d ind) List.empty in

@@ -17,7 +17,7 @@ open IO {println, write_file}
 #[partial]
 def mk_def (name : String) (body : Term) : Def :=
     Def.mk (ModulePath.mp [Identifier.id name]) (Term.type_ 1) body
-        ([] : List TypeConstraint) ([] : List String) Visibility.package_private
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private
 
 #[partial]
 def mk_i64 (n : I64) : Term :=
@@ -133,7 +133,7 @@ def test_compile_multiarg_call : IO Bool := do {
     let sub_body := Term.app (Term.app sub_var x_var) y_var;
     let subtract_term := Term.lam (DebugName.named x_id) (Term.type_ 1) (Term.lam (DebugName.named y_id) (Term.type_ 1) sub_body);
     let subtract_def := Def.mk (ModulePath.mp (List.cons (Identifier.id "subtract") List.empty)) (Term.type_ 1) subtract_term
-        ([] : List TypeConstraint) ([] : List String) Visibility.package_private;
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
     let subtract_ref := Term.var 0 (DebugName.named (Identifier.id "subtract"));
     let main_body := Term.app (Term.app subtract_ref (mk_i64 10)) (mk_i64 3);
     let main_def := mk_def "main" main_body;

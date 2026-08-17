@@ -81,7 +81,7 @@ def empty_ids : List Identifier := List.empty
 def empty_cons : List TypeConstraint := List.empty
 
 #[partial]
-def empty_attrs : List String := List.empty
+def empty_attrs : List Attribute := List.empty
 
 #[partial]
 def check_contains (text : String) (needle : String) : Bool :=

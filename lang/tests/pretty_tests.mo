@@ -39,7 +39,7 @@ def empty_params : List Param := List.empty
 
 def empty_constraints : List TypeConstraint := List.empty
 
-def empty_attrs : List String := List.empty
+def empty_attrs : List Attribute := List.empty
 
 def empty_opt_terms : List (Option Term) := List.empty
 
@@ -314,7 +314,8 @@ def test_show_decl_struct : Bool :=
 def test_show_decl_class_simple : Bool :=
     let meth_typ : Term := Term.pi (Term.var 1 (DebugName.named test_id_A)) (Term.pi (Term.var 0 (DebugName.named test_id_A)) (Term.type_ 0)) in
     let meth : ClassDef := ClassDef.mk (Identifier.id "eq") meth_typ none_term in
-    let param_ : Param := Param.mk test_id_A (Term.type_ 1) Multiplicity.many none_term in
+    let no_attrs : List Attribute := List.empty in
+    let param_ : Param := Param.mk test_id_A (Term.type_ 1) Multiplicity.many none_term no_attrs in
     let params : List Param := List.cons param_ empty_params in
     let methods : List ClassDef := List.cons meth empty_class_defs in
     let cls : Class := Class.mk (Identifier.id "Eq") params empty_constraints methods Visibility.package_private in

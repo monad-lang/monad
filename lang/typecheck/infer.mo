@@ -860,7 +860,7 @@ def struct_lit_build_args (params : List Param) (fields : List StructLitField) :
         List.empty => List.empty,
         List.cons p rest =>
             match p {
-                Param.mk pname _ _ _ =>
+                Param.mk pname _ _ _ _ =>
                     List.cons (struct_lit_find_field fields pname) (struct_lit_build_args rest fields)
             }
     }
@@ -952,7 +952,7 @@ def check_con_args_against_params (args : List (Option Term)) (params : List Par
                         Option.none => check_con_args_against_params rest prest scope local_types locals,
                         Option.some term =>
                             match p {
-                                Param.mk _ ptyp _ _ =>
+                                Param.mk _ ptyp _ _ _ =>
                                     match type_check term ptyp scope local_types locals {
                                         ok _ => check_con_args_against_params rest prest scope local_types locals,
                                         err e => err e,
@@ -994,7 +994,7 @@ def box_ctor_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Box")
 
 def box_ctor_full_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Box") (List.cons (Identifier.id "box") List.empty))
 
-def box_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none
+def box_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none List.empty
 
 def box_constructor : InductConstructor := InductConstructor.mk box_ctor_full_path (List.cons box_param List.empty) (Term.type_ 3)
 
@@ -1083,9 +1083,9 @@ def point_type_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Poi
 
 def point_mk_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty)
 
-def point_x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none
+def point_x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none List.empty
 
-def point_y_param : Param := Param.mk (Identifier.id "y") (Term.type_ 2) Multiplicity.many Option.none
+def point_y_param : Param := Param.mk (Identifier.id "y") (Term.type_ 2) Multiplicity.many Option.none List.empty
 
 def point_params : List Param := List.cons point_x_param (List.cons point_y_param List.empty)
 

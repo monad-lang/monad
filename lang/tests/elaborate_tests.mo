@@ -28,7 +28,7 @@ def v_Bool : Term := var sentinel (named id_Bool)
 
 def no_ids : List Identifier := List.empty
 def empty_constraints : List TypeConstraint := List.empty
-def empty_attrs : List String := List.empty
+def empty_attrs : List Attribute := List.empty
 def empty_class_defs : List ClassDef := List.empty
 def empty_params : List Param := List.empty
 def none_term : Option Term := Option.none
@@ -169,7 +169,8 @@ def test_elaborate_def_free_var : Bool :=
 
 #[test]
 def test_elaborate_class_method : Bool :=
-    let p_A : Param := Param.mk id_A (type_ 1) Multiplicity.many none_term in
+    let no_attrs : List Attribute := List.empty in
+    let p_A : Param := Param.mk id_A (type_ 1) Multiplicity.many none_term no_attrs in
     let eq_typ : Term := pi v_A (pi v_A (type_ 0)) in
     let meth : ClassDef := ClassDef.mk (Identifier.id "eq") eq_typ none_term in
     let methods : List ClassDef := List.cons meth List.empty in

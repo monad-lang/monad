@@ -603,7 +603,7 @@ def lam_params_loop (params : List Param) (body : Term) : Term :=
 	match params {
 		List.cons p rest =>
 			match p {
-				Param.mk name type_ mult default =>
+				Param.mk name type_ mult default _attrs =>
 					lam_params_loop rest (Term.lam (DebugName.named name) type_ body)
 			},
 		List.empty => body
@@ -612,7 +612,7 @@ def lam_params_loop (params : List Param) (body : Term) : Term :=
 #[partial]
 def def_to_decl (body : Term) (name : Identifier) (typ : Term) (vis : Visibility) : Decl :=
 	let empty_constraints : List TypeConstraint := List.empty in
-	let empty_attrs : List String := List.empty in
+	let empty_attrs : List Attribute := List.empty in
 	Decl.def_d (Def.mk (ModulePath.mp (List.cons name List.empty)) typ body empty_constraints empty_attrs vis)
 
 // --- Canonical declaration parsers (de Bruijn Term) ---
@@ -629,7 +629,7 @@ def ctx_of_params_loop (params : List Param) (acc : List Identifier) : List Iden
 	match params {
 		List.cons p rest =>
 			match p {
-				Param.mk name type_ mult default =>
+				Param.mk name type_ mult default _attrs =>
 					ctx_of_params_loop rest (List.cons name acc)
 			},
 		List.empty => acc
@@ -1402,7 +1402,7 @@ def type_cons_implicit_close (r : ParseResult String) (after_bracket : String) (
 
 #[partial]
 def type_to_decl (name : Identifier) (params : List Param) (kind : Term) (cons : List InductConstructor) (vis : Visibility) : Decl :=
-	let empty_attrs : List String := List.empty in
+	let empty_attrs : List Attribute := List.empty in
 	Decl.inductive_d (Inductive.mk (ModulePath.mp (List.cons name List.empty)) params kind cons empty_attrs vis)
 
 /// Optional `pub `/`priv ` prefix before a declaration keyword (parsed
@@ -2006,7 +2006,7 @@ def class_params_paren_default (r : ParseResult String) (orig : String) (pname :
 			class_params_paren_default_val (expression empty_ctx (skip_docstrings (skip_spaces rem))) pname typ name params vis,
 		fail _ =>
 			let none : Option Term := Option.none in
-			class_params_paren_close (tag ")" (skip_spaces orig)) (Param.mk (Identifier.id pname) typ Multiplicity.many none) name params vis
+			class_params_paren_close (tag ")" (skip_spaces orig)) (Param.mk (Identifier.id pname) typ Multiplicity.many none List.empty) name params vis
 	}
 
 #[partial]
@@ -2014,7 +2014,7 @@ def class_params_paren_default_val (r : ParseResult Term) (pname : String) (typ 
 	match r {
 		success rem defval =>
 			let some_val : Option Term := Option.some defval in
-			class_params_paren_close (tag ")" (skip_spaces rem)) (Param.mk (Identifier.id pname) typ Multiplicity.many some_val) name params vis,
+			class_params_paren_close (tag ")" (skip_spaces rem)) (Param.mk (Identifier.id pname) typ Multiplicity.many some_val List.empty) name params vis,
 		fail e => fail e
 	}
 
@@ -2593,7 +2593,7 @@ def instance_method_untyped_body (r : ParseResult Term) (name : Identifier) (cls
 	match r {
 		success rem body =>
 			let empty_constraints : List TypeConstraint := List.empty in
-			let empty_attrs : List String := List.empty in
+			let empty_attrs : List Attribute := List.empty in
 			let d : Def := Def.mk (ModulePath.mp (List.cons name List.empty)) (Term.hole) body empty_constraints empty_attrs Visibility.package_private in
 			instance_methods rem cls args (List.cons d methods),
 		fail e => fail e
@@ -2649,7 +2649,7 @@ def instance_method_body_expr (r : ParseResult Term) (name : Identifier) (params
 #[partial]
 def instance_method_finish (input : String) (name : Identifier) (params : List Param) (ret_typ : Term) (body : Term) (cls : ModulePath) (args : List Term) (methods : List Def) : ParseResult Decl :=
 	let empty_constraints : List TypeConstraint := List.empty in
-	let empty_attrs : List String := List.empty in
+	let empty_attrs : List Attribute := List.empty in
 	let full_typ := build_param_pi_chain params ret_typ in
 	let d : Def := Def.mk (ModulePath.mp (List.cons name List.empty)) full_typ (lam_params params body) empty_constraints empty_attrs Visibility.package_private in
 	instance_methods input cls args (List.cons d methods)
@@ -2662,7 +2662,7 @@ def build_param_pi_chain (params : List Param) (ret : Term) : Term := match para
 	List.empty => ret,
 	List.cons p rest =>
 		match p {
-			Param.mk pname typ mult default => Term.pi typ (build_param_pi_chain rest ret)
+			Param.mk pname typ mult default _attrs => Term.pi typ (build_param_pi_chain rest ret)
 		},
 }
 
@@ -4706,7 +4706,7 @@ def instance_has_one_param_named_A (i : Instance) : Bool :=
 #[partial]
 def param_named_A (p : Param) : Bool :=
 	match p {
-		Param.mk pname _typ _mult _default => Similar.similar pname (Identifier.id "A")
+		Param.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "A")
 	}
 
 #[partial]
@@ -4748,13 +4748,13 @@ def instance_has_two_params_named_K_V (i : Instance) : Bool :=
 #[partial]
 def param_named_K (p : Param) : Bool :=
 	match p {
-		Param.mk pname _typ _mult _default => Similar.similar pname (Identifier.id "K")
+		Param.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "K")
 	}
 
 #[partial]
 def param_named_V (p : Param) : Bool :=
 	match p {
-		Param.mk pname _typ _mult _default => Similar.similar pname (Identifier.id "V")
+		Param.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "V")
 	}
 
 #[test]
@@ -4786,7 +4786,7 @@ def class_has_one_param_named_F (c : Class) : Bool :=
 #[partial]
 def param_named_F (p : Param) : Bool :=
 	match p {
-		Param.mk pname _typ _mult _default => Similar.similar pname (Identifier.id "F")
+		Param.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "F")
 	}
 
 /// Strengthened beyond a bare `success` check: verifies the `:= List`
@@ -4816,7 +4816,7 @@ def class_has_one_param_L_with_default (c : Class) : Bool :=
 #[partial]
 def param_named_L_with_default (p : Param) : Bool :=
 	match p {
-		Param.mk pname _typ _mult default =>
+		Param.mk pname _typ _mult default _attrs =>
 			Similar.similar pname (Identifier.id "L") && (match default {
 				Option.some _ => true,
 				Option.none => false

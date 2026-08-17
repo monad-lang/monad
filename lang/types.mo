@@ -213,18 +213,29 @@ struct LocatedSpan {
 
 // Canonical Param uses de Bruijn Term. ParamV0 is the legacy V0 variant.
 type Param {
-    mk (name: Identifier) (type_: Term) (mult: Multiplicity) (default: Option Term)
+    mk (name: Identifier) (type_: Term) (mult: Multiplicity) (default: Option Term) (attrs: List Attribute)
 }
 
-/// Create a canonical Param with multiplicity=Many and no default value.
+/// Create a canonical Param with multiplicity=Many, no default value, and
+/// no attributes.
 def param_many (name: Identifier) (type_: Term) : Param :=
     let none : Option Term := Option.none in
-    Param.mk name type_ Multiplicity.many none
+    let no_attrs : List Attribute := List.empty in
+    Param.mk name type_ Multiplicity.many none no_attrs
 
-/// Create a canonical Param with explicit multiplicity and no default value.
+/// Create a canonical Param with explicit multiplicity, no default
+/// value, and no attributes.
 def mk_param (name: Identifier) (type_: Term) (mult: Multiplicity) : Param :=
     let none : Option Term := Option.none in
-    Param.mk name type_ mult none
+    let no_attrs : List Attribute := List.empty in
+    Param.mk name type_ mult none no_attrs
+
+/// Create a canonical Param with multiplicity=Many, no default value,
+/// and explicit attrs — the one constructor/def-param path that
+/// actually needs a non-empty `attrs` list (e.g. `#[arg]`).
+def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute) : Param :=
+    let none : Option Term := Option.none in
+    Param.mk name type_ Multiplicity.many none attrs
 
 // Canonical MatchCase uses de Bruijn Term. MatchCaseV0 is the legacy V0 variant.
 type MatchCase {
@@ -407,7 +418,7 @@ struct Def {
     typ: Term,
     term: Term,
     constraints: List TypeConstraint,
-    attrs: List String,
+    attrs: List Attribute,
     vis: Visibility
 }
 
@@ -423,7 +434,7 @@ type InductConstructor {
 
 // Canonical Inductive uses de Bruijn Term. InductiveV0 is the legacy V0 variant.
 type Inductive {
-    mk (name: ModulePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List String) (vis: Visibility)
+    mk (name: ModulePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List Attribute) (vis: Visibility)
 }
 
 // Canonical ClassDef uses de Bruijn Term. ClassDefV0 is the legacy V0 variant.
@@ -786,8 +797,8 @@ instance Similar Multiplicity {
 instance Similar Param {
     def similar (a : Param) (b : Param) : Bool :=
         match a {
-            mk name1 typ1 mult1 def1 => match b {
-                mk name2 typ2 mult2 def2 =>
+            mk name1 typ1 mult1 def1 _attrs1 => match b {
+                mk name2 typ2 mult2 def2 _attrs2 =>
                     Similar.similar name1 name2 && Similar.similar typ1 typ2
                     && Similar.similar mult1 mult2 && opt_db_term_similar def1 def2
             }

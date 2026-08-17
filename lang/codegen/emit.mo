@@ -1060,7 +1060,7 @@ def cons_global (g : LLVMGlobal) (gs : List LLVMGlobal) : List LLVMGlobal :=
 
 #[partial]
 def param_name_db (p : Param) : Identifier := match p {
-    Param.mk name typ_ mult default => name,
+    Param.mk name typ_ mult default _attrs => name,
 }
 
 #[partial]
@@ -1542,7 +1542,7 @@ def test_compile_db_inductive_decls : Bool :=
 def empty_params_list : List Param := List.empty
 
 #[partial]
-def empty_attrs : List String := List.empty
+def empty_attrs : List Attribute := List.empty
 
 #[partial]
 def check_contains (text : String) (needle : String) : Bool :=

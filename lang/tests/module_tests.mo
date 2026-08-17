@@ -33,7 +33,7 @@ def name_to_path (i : Identifier) : ModulePath :=
 // Typed empty lists to avoid forall inference issues
 def empty_decls_list : List Decl := List.empty
 def empty_constraints : List TypeConstraint := List.empty
-def empty_attrs : List String := List.empty
+def empty_attrs : List Attribute := List.empty
 def empty_params : List Param := List.empty
 def empty_constructors : List InductConstructor := List.empty
 
