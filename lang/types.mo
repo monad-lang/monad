@@ -386,6 +386,18 @@ type Term {
     con (c: Con),
     type_ (universe: I64),
     hole,
+    /// `quote { <term> }` -- syntax as data. Mirrors the Rust reference's
+    /// `Term::Quote { term: Box<Term> }` (core/src/term.rs). Named
+    /// `quote_`, not `quote` -- `quote` is a reserved keyword in the
+    /// self-hosted grammar's own identifier parser too (same reason
+    /// `type_`/`if_`/`match_` above are suffixed, not bare). Parsing/
+    /// representation only in this codebase so far -- no expansion pass
+    /// exists yet to resolve `unquote`/`,(expr)` inside the quoted body
+    /// (see plans/bootstrapping/self-hosted-compiler.md); `unquote`
+    /// itself needs no special grammar at all, since it's just an
+    /// ordinary identifier at parse time (recognized as magic only at
+    /// expansion time, mirroring the reference exactly).
+    quote_ (term: Term),
 }
 
 /// Canonical TypeError uses de Bruijn Term. TypeErrorV0 is the legacy V0 variant.

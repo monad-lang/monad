@@ -3852,6 +3852,57 @@ def atom_term (ctx: List Identifier) (input: String) : ParseResult Term :=
             }
     }
 
+// ─── `quote { <term> }` (syntax as data) ────────────────────────────────
+//
+// Mirrors the Rust reference's `quote_parser` (core/src/parser.rs):
+// `"quote"` keyword, mandatory whitespace, `{`, one full (unrestricted)
+// term, `}`. Parsing/representation only -- see `Term.quote_`'s own doc
+// comment in lang/types.mo for what's deliberately NOT done here yet
+// (no expansion, `unquote` resolution, or hygiene). `quote` is already
+// a reserved word in this parser's own keyword list (`kw_list`,
+// lang/parser/core.mo) -- `identifier` (lang/parser/identifier.mo)
+// already rejects it, so there's no ambiguity between this atom and a
+// bare-`quote`-named variable to worry about; nothing needed here
+// beyond adding the new atom parser itself.
+#[partial]
+def quote_term_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
+    quote_term_kw (tag "quote" input) ctx
+
+#[partial]
+def quote_term_kw (r : ParseResult String) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => quote_term_ws1 (ws1 rem) ctx,
+        fail e => fail e
+    }
+
+#[partial]
+def quote_term_ws1 (r : ParseResult String) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => quote_term_open (tag "{" rem) ctx,
+        fail e => fail e
+    }
+
+#[partial]
+def quote_term_open (r : ParseResult String) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => quote_term_body (expression ctx (skip_spaces rem)),
+        fail e => fail e
+    }
+
+#[partial]
+def quote_term_body (r : ParseResult Term) : ParseResult Term :=
+    match r {
+        success rem t => quote_term_finish (tag "}" (skip_spaces rem)) t rem,
+        fail e => fail e
+    }
+
+#[partial]
+def quote_term_finish (r : ParseResult String) (t : Term) (orig : String) : ParseResult Term :=
+    match r {
+        success rem _ => success rem (Term.quote_ t),
+        fail e => fail (ParseError.custom "expected } to close quote" orig)
+    }
+
 #[partial]
 def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
     // `do_parser` wires do-notation blocks (`do { ... }`) into the generic
@@ -3863,7 +3914,7 @@ def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
     // `plans/bootstrapping/self-hosted-compiler.md` for the corpus impact
     // this had (137 real `do {` usages across lang/main.mo and
     // lang/module.mo, all previously unparseable).
-    [variable ctx, literal_parser, match_parser ctx, if_parser ctx, do_parser ctx, let_term_parser ctx, list_literal_parser ctx, struct_lit_parser ctx]
+    [quote_term_parser ctx, variable ctx, literal_parser, match_parser ctx, if_parser ctx, do_parser ctx, let_term_parser ctx, list_literal_parser ctx, struct_lit_parser ctx]
 
 // ─── Canonical match case parser (Phase 9) ─────────────────────────────
 
@@ -5678,6 +5729,50 @@ def test_type_parser_no_attribute_present : Bool :=
                 _ => false
             },
         fail _ => false
+    }
+
+// --- Tests for quote_term_parser (Term.quote_) ---
+
+#[test]
+def test_quote_term_basic : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "quote { 1 }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out { Term.quote_ _inner => true, _ => false },
+        fail _ => false
+    }
+
+/// The quoted body is a FULL, unrestricted term -- not a restricted
+/// atom subset -- confirmed here with an application inside.
+#[test]
+def test_quote_term_application_body : Bool :=
+    let f_id : Identifier := Identifier.id "f" in
+    let ctx : List Identifier := List.cons f_id List.empty in
+    match expression ctx "quote { f 1 }" {
+        success rem out =>
+            String.beq rem "" &&
+            match out { Term.quote_ inner => match inner { Term.app _ _ => true, _ => false }, _ => false },
+        fail _ => false
+    }
+
+/// Missing closing `}` must fail cleanly, not silently truncate.
+#[test]
+def test_quote_term_missing_close_fails : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "quote { 1" {
+        success _ _ => false,
+        fail _ => true
+    }
+
+/// `quote` used with no following `{` at all (e.g. mistyped/incomplete)
+/// must fail cleanly rather than partially matching.
+#[test]
+def test_quote_term_no_brace_fails : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match expression empty_ctx "quote 1" {
+        success _ _ => false,
+        fail _ => true
     }
 
 #[test]
