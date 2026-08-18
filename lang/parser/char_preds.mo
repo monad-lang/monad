@@ -1,13 +1,22 @@
 /// Character predicate functions for the self-hosted Monad parser.
 
 use lang.parser.core {kw_list, kw_member}
-use std.list {any, length}
+use std.list {length}
 
 // --- Char predicates ---
 
+#[partial]
 def is_digit (c : String) : Bool :=
-	 ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
-        |> List.any (fn a => a == c)
+	if String.beq "0" c then true
+	else if String.beq "1" c then true
+	else if String.beq "2" c then true
+	else if String.beq "3" c then true
+	else if String.beq "4" c then true
+	else if String.beq "5" c then true
+	else if String.beq "6" c then true
+	else if String.beq "7" c then true
+	else if String.beq "8" c then true
+	else String.beq "9" c
 
 
 #[partial]

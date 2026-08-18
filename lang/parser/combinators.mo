@@ -346,26 +346,44 @@ def utf8_char_width_of_byte (byte : U8) : I64 :=
 
 
 // --- take_while combinator ---
+//
+// Tracks the ORIGINAL input alongside the shrinking remainder instead of
+// building the matched text char-by-char via `String.concat` (the old
+// approach: O(L^2) byte-copies for a matched run of length L, on top of
+// `String.slice`/`String.drop` themselves -- see `shared_str.rs`'s doc
+// comment for why those are now O(1)). Once `slice` is O(1), the correct
+// shape is: keep consuming from `input`, and when the predicate first
+// fails (or input is exhausted), take exactly ONE slice of `original`
+// from its start to how far `input` has shrunk -- one O(1) slice instead
+// of L accumulator concats. Benefits every `take_while`-based scan at
+// once (identifiers, numbers, whitespace-skipping, comment-skipping),
+// not just call sites that discard the matched text.
 
 #[partial]
 def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
-	take_while_loop pred "" input
+	take_while_loop pred input input
 
 
 #[partial]
-def take_while_loop (pred : String -> Bool) (acc : String) (input : String) : ParseResult String :=
+def take_while_loop (pred : String -> Bool) (original : String) (input : String) : ParseResult String :=
 	if is_empty input
-	then success input acc
+	then take_while_done original input
 	else
 		let width : I64 := utf8_char_width input in
-		take_while_check pred acc input (String.slice input 0 width) (String.drop width input)
+		take_while_check pred original input (String.slice input 0 width) (String.drop width input)
 
 
 #[partial]
-def take_while_check (pred : String -> Bool) (acc : String) (input : String) (ch : String) (rest : String) : ParseResult String :=
+def take_while_check (pred : String -> Bool) (original : String) (input : String) (ch : String) (rest : String) : ParseResult String :=
 	if pred ch
-	then take_while_loop pred (String.concat acc ch) rest
-	else success input acc
+	then take_while_loop pred original rest
+	else take_while_done original input
+
+
+#[partial]
+def take_while_done (original : String) (remaining : String) : ParseResult String :=
+	let consumed : I64 := I64.sub (String.length original) (String.length remaining) in
+	success remaining (String.slice original 0 consumed)
 
 
 // --- Optional parser ---

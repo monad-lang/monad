@@ -128,12 +128,30 @@ def op_lookup_prec (op_str : String) (table : List OpEntry) : I64 :=
 
 
 #[partial]
-def op_lookup_rassoc (op_str : String) (table : List OpEntry) : Bool := 
+def op_lookup_rassoc (op_str : String) (table : List OpEntry) : Bool :=
 	match table {
 		List.cons entry rest =>
 			if String.beq (op_entry_name entry) op_str then op_entry_rassoc entry
 			else op_lookup_rassoc op_str rest,
 		List.empty => false
+		}
+
+
+/// Single-scan lookup returning the whole matching `OpEntry`, so a
+/// caller that needs BOTH precedence and associativity for the same
+/// operator (`lang/parser.mo`'s `expr_climb_op_prec`/
+/// `expr_climb_op_rhs_ws`, on the same call path for every operator
+/// token in every expression parsed) walks `table` once instead of
+/// calling `op_lookup_prec` and `op_lookup_rassoc` separately.
+/// `op_lookup_prec`/`op_lookup_rassoc` themselves stay as-is for
+/// call sites that only need one or the other (e.g. `op_precedence`).
+#[partial]
+def op_lookup_entry (op_str : String) (table : List OpEntry) : Option OpEntry :=
+	match table {
+		List.cons entry rest =>
+			if String.beq (op_entry_name entry) op_str then Option.some entry
+			else op_lookup_entry op_str rest,
+		List.empty => Option.none
 		}
 
 

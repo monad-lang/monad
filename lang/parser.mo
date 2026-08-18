@@ -4250,20 +4250,27 @@ def expr_climb_op_try (r: ParseResult String) (input: String) (lhs: Term) (ctx: 
         fail _ => success input lhs
     }
 
+// `op_lookup_entry` walks `op_table` ONCE for `op`, yielding both
+// precedence and associativity -- `expr_climb_op_rhs_ws` used to call
+// `op_lookup_rassoc op op_table` separately for the SAME operator on the
+// SAME call path, a second full table scan for no reason. Threading the
+// looked-up `rassoc` through as a parameter instead removes it.
 #[partial]
 def expr_climb_op_prec (input: String) (lhs: Term) (op: String) (rem: String) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
-    let prec : I64 := op_precedence op in
-    if I64.beq prec 0
-    then success input lhs
-    else if I64.lt prec min_prec
-    then success input lhs
-    else expr_climb_op_rhs_ws (take_while is_space rem) lhs op ctx prec min_prec
+    match op_lookup_entry op op_table {
+        Option.none => success input lhs,
+        Option.some entry =>
+            let prec : I64 := op_entry_prec entry in
+            if I64.lt prec min_prec
+            then success input lhs
+            else expr_climb_op_rhs_ws (take_while is_space rem) lhs op ctx prec (op_entry_rassoc entry) min_prec
+    }
 
 #[partial]
-def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: Term) (op: String) (ctx: List Identifier) (prec: I64) (min_prec: I64) : ParseResult Term :=
+def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: Term) (op: String) (ctx: List Identifier) (prec: I64) (rassoc: Bool) (min_prec: I64) : ParseResult Term :=
     match r {
         success rem _ =>
-            let next_min : I64 := if op_lookup_rassoc op op_table then prec else (prec + 1) in
+            let next_min : I64 := if rassoc then prec else (prec + 1) in
             expr_climb_op_rhs_expr (expr_climb ctx rem next_min) lhs op ctx min_prec,
         fail e => fail e
     }
