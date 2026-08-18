@@ -4,7 +4,7 @@ use process {exec_cmd}
 use lang.types {Decl, LoadedModules}
 use lang.codegen.ir {emit_module}
 use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
-use lang.module {FileCheckResult, LoadedModules, PreludeInitBase, build_prelude_init_base, check_file_cached, expand_check_paths, load_file_modules, try_parse_decls, try_parse_decls_strict}
+use lang.module {FileCheckAndCache, LoadedModules, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, expand_check_paths, load_file_modules, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
 use lang.cli {*}
 use std.list {Show}
 
@@ -121,26 +121,41 @@ def print_diagnostics (diags : List String) : IO I64 :=
 /// driver this feeds, which needs a real per-file pass/fail matrix,
 /// not just a final count).
 #[partial]
-def run_check_loop (base : PreludeInitBase) (files : List String) (checked : I64) (errors : I64) (verbose : Bool) : IO I64 :=
+def run_check_loop (base : PreludeInitBase) (cache : ModuleScopeCache) (files : List String) (checked : I64) (errors : I64) (verbose : Bool) : IO I64 :=
     match files {
         List.empty => do {
             println (I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)");
+            // Whole-run module-scope cache visibility (see ModuleScopeCache's
+            // own doc comment, lang/module.mo): `hits` is how many times a
+            // dependency load was served from a PRIOR file's own load in
+            // this same run instead of re-reading/re-parsing/re-scope-
+            // building it from scratch -- the direct measure of the
+            // redundant-reload cost this cache eliminates.
+            if verbose then
+                match cache {
+                    ModuleScopeCache.mk _ hits misses =>
+                        println ("module scope cache: " ++ I64.to_string hits ++ " hit(s), " ++ I64.to_string misses ++ " miss(es)")
+                }
+            else do { return unit };
             return (if I64.gt errors 0 then 1 else 0)
         },
         List.cons f rest => do {
-            let result : FileCheckResult <- check_file_cached base f verbose;
-            match result {
-                FileCheckResult.mk path diags =>
-                    match diags {
-                        List.empty => do {
-                            println ("ok    " ++ path);
-                            run_check_loop base rest (checked + 1) errors verbose
-                        },
-                        List.cons _ _ => do {
-                            println ("FAIL  " ++ path ++ " (" ++ I64.to_string (List.length diags) ++ " error(s))");
-                            print_diagnostics diags;
-                            run_check_loop base rest (checked + 1) (errors + List.length diags) verbose
-                        }
+            let checked_and_cache : FileCheckAndCache <- check_file_cached base cache f verbose;
+            match checked_and_cache {
+                FileCheckAndCache.mk result updated_cache =>
+                    match result {
+                        FileCheckResult.mk path diags =>
+                            match diags {
+                                List.empty => do {
+                                    println ("ok    " ++ path);
+                                    run_check_loop base updated_cache rest (checked + 1) errors verbose
+                                },
+                                List.cons _ _ => do {
+                                    println ("FAIL  " ++ path ++ " (" ++ I64.to_string (List.length diags) ++ " error(s))");
+                                    print_diagnostics diags;
+                                    run_check_loop base updated_cache rest (checked + 1) (errors + List.length diags) verbose
+                                }
+                            }
                     }
             }
         }
@@ -176,7 +191,8 @@ def run_check_loop (base : PreludeInitBase) (files : List String) (checked : I64
 def run_check (files : List String) (verbose : Bool) : IO I64 := do {
     let base : PreludeInitBase <- build_prelude_init_base;
     let expanded : List String <- expand_check_paths files;
-    run_check_loop base expanded 0 0 verbose
+    let cache : ModuleScopeCache := module_scope_cache_empty;
+    run_check_loop base cache expanded 0 0 verbose
 }
 
 // `Command` and its argv parser are hand-written (not `#[derive_cli]`) and

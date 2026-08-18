@@ -546,12 +546,171 @@ def build_prelude_init_base : IO PreludeInitBase := do {
     return { scope_data := merge_scope_data_list loaded_deps, covered := all_deps }
 }
 
+// --- Whole-run module-scope cache: dedupe non-base dependency loads across files ---
+//
+// `PreludeInitBase` (above) caches prelude+init, shared and fixed for a
+// whole `run_check` invocation. It does NOT cover a file's *other*
+// `use` dependencies (within `lang/`/`std/` etc.) -- those are reloaded
+// (re-read, re-parsed, re-scope-built via `build_scope_from_decls`)
+// completely from scratch by `load_dependency_scopes` on EVERY file
+// that needs them, with no memoization across different files' own
+// independent dependency walks in the same corpus-check run. Measured
+// directly: in one multi-file run, `lang/types.mo` alone is
+// independently loaded 54 separate times (54 files `use lang.types`),
+// `lang/scope.mo` 10 times, `lang/parser/core.mo`/`combinators.mo`/
+// `char_preds.mo` 10-16 times each -- self-hosted-compiler-perf.md's
+// explicitly-flagged next target after the prelude/init-only fixes.
+//
+// `ModuleScopeCache` closes this gap: a whole-run, growing cache of
+// already-loaded non-base dependencies' `ScopeData`, threaded forward
+// through `run_check_loop`/`check_file_cached`/`load_module_with_
+// dependencies_and_prelude_cached` the same way `PreludeInitBase` is
+// threaded, except mutable (grows as new dependencies get loaded)
+// rather than fixed.
+//
+// Correctness: safe because this codebase's dependency loading is
+// FLAT, not recursive -- `extract_all_dependencies_go` walks a whole
+// transitive closure into one flat list first; each dependency's own
+// `ScopeData` is built independently from only ITS OWN decls
+// (`build_scope_from_decls`, never merging in that dependency's own
+// further deps); `merge_scope_data_list` flat-unions everything
+// afterward. A cached `ScopeData` is therefore context-free -- a pure
+// function of that module's own decls, bit-identical to what a fresh
+// load would produce regardless of which file asked for it or what
+// that file's own `extra_deps`/`base_covered` looked like. The cache
+// sits strictly AFTER `extract_all_dependencies_go` has already
+// decided a caller's own `extra_deps` set (per-caller cycle detection,
+// via `visiting`/`visited`, is completely untouched by this cache); it
+// only changes HOW an already-decided-necessary entry's value gets
+// produced (I/O+parse+build vs. a lookup) -- never WHICH entries a
+// caller ends up needing. `extract_all_dependencies_go` itself is not
+// modified by this change.
+//
+// Keyed on `ModulePath` (not a resolved file path): grep-verified safe
+// for the current corpus -- only two bare (non-dotted) `use`s exist
+// anywhere (`init/string.mo`'s `use math {}`, `examples/test_mote.mo`'s
+// `use greet {greet}`), each resolved from exactly one `base_dir`, no
+// observed collision. This is a structural, not observed, risk:
+// `resolve_module_file` tries a caller's own `base_dir`-relative path
+// BEFORE the fixed `init`/`std`/`lang`/`examples` fallbacks, so two
+// different callers' `base_dir`s could in principle resolve the same
+// bare `ModulePath` to two different files. If that ever becomes real,
+// switch the key to `resolve_module_file`'s own resolved path string
+// instead (already computed on this call path, just currently
+// discarded) -- not attempted here since it isn't needed today.
+//
+// `Map.lookup`/`Map.insert` below resolve correctly because these are
+// plain monomorphic functions (concrete `ModulePath`/`ScopeData` types,
+// no `[Constraint]` annotation) -- see `lang/scope.mo`'s
+// `scope_data_find_def` for the identical, already-proven-safe pattern
+// and the evaluator limitation it sidesteps.
+struct ModuleScopeCache {
+    entries : HashMap ModulePath ScopeData,
+    hits : I64,
+    misses : I64,
+}
+
+def module_scope_cache_empty : ModuleScopeCache := {
+    entries := Map.empty,
+    hits := 0,
+    misses := 0,
+}
+
+def module_scope_cache_lookup (key : ModulePath) (cache : ModuleScopeCache) : Option ScopeData :=
+    match cache {
+        ModuleScopeCache.mk entries _ _ => Map.lookup key entries
+    }
+
+/// Record a cache hit (bump `hits`, entries unchanged) -- purely for
+/// `--verbose` visibility into how much redundant loading this cache
+/// actually avoids on a real run; no effect on correctness.
+def module_scope_cache_hit (cache : ModuleScopeCache) : ModuleScopeCache :=
+    match cache {
+        ModuleScopeCache.mk entries hits misses => {
+            entries := entries,
+            hits := hits + 1,
+            misses := misses,
+        }
+    }
+
+def module_scope_cache_insert (key : ModulePath) (sd : ScopeData) (cache : ModuleScopeCache) : ModuleScopeCache :=
+    match cache {
+        ModuleScopeCache.mk entries hits misses => {
+            entries := Map.insert key sd entries,
+            hits := hits,
+            misses := misses + 1,
+        }
+    }
+
+struct ScopesAndCache {
+    scopes : List ScopeData,
+    cache : ModuleScopeCache,
+}
+
+/// Cache-aware sibling of `load_dependency_scopes`: for each dep,
+/// serve it from `cache` if already loaded this run (zero I/O), else
+/// load it exactly as `load_dependency_scopes` does today and insert
+/// the result into `cache` before continuing, so a LATER dep in this
+/// same list -- or a later file's own `extra_deps`, since `cache` is
+/// threaded across the whole `run_check_loop` -- can hit it too.
+#[partial]
+def load_dependency_scopes_cached (base_dir : String) (deps : List ModulePath) (acc : List ScopeData) (cache : ModuleScopeCache) : IO ScopesAndCache :=
+    match deps {
+        List.empty => do {
+            return { scopes := acc, cache := cache }
+        },
+        List.cons head tail => do {
+            match module_scope_cache_lookup head cache {
+                Option.some sd => do {
+                    let hit_cache : ModuleScopeCache := module_scope_cache_hit cache;
+                    load_dependency_scopes_cached base_dir tail (List.cons sd acc) hit_cache
+                },
+                Option.none => do {
+                    // Miss: load exactly as `load_dependency_scopes` does
+                    // (base_dir-relative first, global-search fallback),
+                    // then insert into `cache` before continuing.
+                    let sd_opt : Option ScopeData <- load_module_scope base_dir head;
+                    match sd_opt {
+                        Option.some sd => do {
+                            let new_cache : ModuleScopeCache := module_scope_cache_insert head sd cache;
+                            load_dependency_scopes_cached base_dir tail (List.cons sd acc) new_cache
+                        },
+                        Option.none => do {
+                            let sd_opt2 : Option ScopeData <- load_module_scope_default head;
+                            match sd_opt2 {
+                                Option.some sd => do {
+                                    let new_cache : ModuleScopeCache := module_scope_cache_insert head sd cache;
+                                    load_dependency_scopes_cached base_dir tail (List.cons sd acc) new_cache
+                                },
+                                Option.none => load_dependency_scopes_cached base_dir tail acc cache
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+/// `scope` is `Option` (unlike most of this file's other `Scope`
+/// results) specifically so `cache` is ALWAYS available to the caller,
+/// even on the failure path -- `load_module_with_dependencies_and_
+/// prelude_cached` below returns this directly (not `IO (Option
+/// ScopeAndCache)`) so a load failure doesn't strand the cache
+/// `run_check_loop` needs to keep threading to the next file.
+struct ScopeAndCache {
+    scope : Option Scope,
+    cache : ModuleScopeCache,
+}
+
 /// Same shape as `load_module_with_dependencies_and_prelude`, but reuses
 /// an already-built `PreludeInitBase` instead of loading prelude/init
 /// from scratch — only `mp`'s own additional `use` dependencies (beyond
-/// whatever `base` already covers) get freshly walked/loaded.
+/// whatever `base` already covers) get freshly walked/loaded, and even
+/// those are served from `cache` (the whole-run `ModuleScopeCache`, see
+/// its own doc comment above) whenever a PRIOR file in this same
+/// `run_check_loop` already loaded the identical dependency.
 #[partial]
-def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (base_dir : String) (mp : ModulePath) : IO (Option Scope) :=
+def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (base_dir : String) (mp : ModulePath) : IO ScopeAndCache :=
     match base {
         PreludeInitBase.mk base_sd base_covered => do {
             let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
@@ -589,23 +748,27 @@ def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (b
                     // genuinely new, not-yet-loaded dependencies.
                     let no_visited : List ModulePath := List.empty;
                     let extra_deps : List ModulePath <- extract_all_dependencies_go module_base_dir direct_deps base_covered no_visited;
-                    let loaded_extra : List ScopeData <- load_dependency_scopes module_base_dir extra_deps List.empty;
-                    let merged_extra : ScopeData := merge_scope_data_list loaded_extra;
-                    let merged_with_base : ScopeData := merge_scope_data base_sd merged_extra;
-                    let this_scope : ScopeData := build_scope_from_decls mp decls;
-                    let final_scope : ScopeData := merge_scope_data merged_with_base this_scope;
-                    // See `load_module_with_dependencies`'s own identical
-                    // outer-aliasing-pass comment above -- same reasoning.
-                    let aliased_scope : ScopeData := alias_decls_in_scope decls final_scope;
-                    let scope : Scope := {
-                        module_id := mp,
-                        scope := aliased_scope,
-                        parent := Option.none,
-                    };
-                    return Option.some scope
+                    let loaded : ScopesAndCache <- load_dependency_scopes_cached module_base_dir extra_deps List.empty cache;
+                    match loaded {
+                        ScopesAndCache.mk loaded_extra updated_cache => do {
+                            let merged_extra : ScopeData := merge_scope_data_list loaded_extra;
+                            let merged_with_base : ScopeData := merge_scope_data base_sd merged_extra;
+                            let this_scope : ScopeData := build_scope_from_decls mp decls;
+                            let final_scope : ScopeData := merge_scope_data merged_with_base this_scope;
+                            // See `load_module_with_dependencies`'s own identical
+                            // outer-aliasing-pass comment above -- same reasoning.
+                            let aliased_scope : ScopeData := alias_decls_in_scope decls final_scope;
+                            let scope : Scope := {
+                                module_id := mp,
+                                scope := aliased_scope,
+                                parent := Option.none,
+                            };
+                            return { scope := Option.some scope, cache := updated_cache }
+                        }
+                    }
                 },
                 Option.none => do {
-                    return Option.none
+                    return { scope := Option.none, cache := cache }
                 }
             }
         }
@@ -613,10 +776,10 @@ def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (b
 
 /// The `check_file`-flavored twin of `load_module_with_dependencies_and_prelude_cached`.
 #[partial]
-def build_scope_with_deps_and_prelude_cached (base : PreludeInitBase) (file_path : String) (mod_name : String) : IO (Option Scope) :=
+def build_scope_with_deps_and_prelude_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_path : String) (mod_name : String) : IO ScopeAndCache :=
     let base_dir : String := extract_directory file_path in
     let mp : ModulePath := ModulePath.mp [Identifier.id mod_name] in
-    load_module_with_dependencies_and_prelude_cached base base_dir mp
+    load_module_with_dependencies_and_prelude_cached base cache base_dir mp
 
 /// Load all declarations for a module and its transitive dependencies.
 /// Returns Option (List Decl) where the list contains all declarations from
@@ -1209,6 +1372,14 @@ struct FileCheckResult {
     diagnostics : List String,
 }
 
+/// `check_file_cached`'s own result bundled with the (possibly updated)
+/// `ModuleScopeCache`, so `run_check_loop` can thread it forward to the
+/// next file in the same run.
+struct FileCheckAndCache {
+    result : FileCheckResult,
+    cache : ModuleScopeCache,
+}
+
 /// The `check`-flavored twin of `typecheck_file_with_deps` above —
 /// unlike that function (which uses the lenient `decls_parser` and
 /// collapses everything to a bare `Bool`), this uses
@@ -1262,7 +1433,7 @@ def check_file (file_path : String) (verbose : Bool) : IO FileCheckResult {
 /// re-paying that cost — see `PreludeInitBase`'s own doc comment above
 /// for why this matters.
 #[partial]
-def check_file_cached (base : PreludeInitBase) (file_path : String) (verbose : Bool) : IO FileCheckResult {
+def check_file_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
     let exists : Bool <- file_exists file_path;
     if exists then do {
         if verbose then println ("checking " ++ file_path) else do { return unit };
@@ -1276,39 +1447,42 @@ def check_file_cached (base : PreludeInitBase) (file_path : String) (verbose : B
         // wall time" directly, distinct from the Rust-level `--benchmark`
         // flag (which only times the outer per-file load).
         let scope_start : I64 := Bench.now;
-        let scope_opt : Option Scope <- build_scope_with_deps_and_prelude_cached base file_path mod_name;
+        let scope_and_cache : ScopeAndCache <- build_scope_with_deps_and_prelude_cached base cache file_path mod_name;
         let scope_elapsed : I64 := I64.sub Bench.now scope_start;
         let scope_logged : Bool := if verbose then Bench.report ("scope  " ++ file_path) scope_elapsed else true;
-        match scope_opt {
-            Option.some scope =>
-                do {
-                    let parse_start : I64 := Bench.now;
-                    let parse_result : Result String (List Decl) := try_parse_decls_strict content (Option.some file_path);
-                    let parse_elapsed : I64 := I64.sub Bench.now parse_start;
-                    let parse_logged : Bool := if verbose then Bench.report ("parse  " ++ file_path) parse_elapsed else true;
-                    match parse_result {
-                        Result.ok decls => do {
-                            let empty_locs : LocalScope := {
-                                vars := List.empty,
-                                parent := Option.none,
-                            };
-                            let check_start : I64 := Bench.now;
-                            let diags : List String <- check_module_with_scope scope decls empty_locs (Option.some file_path) verbose;
-                            let check_elapsed : I64 := I64.sub Bench.now check_start;
-                            let check_logged : Bool := if verbose then Bench.report ("check  " ++ file_path) check_elapsed else true;
-                            return { path := file_path, diagnostics := diags }
+        match scope_and_cache {
+            ScopeAndCache.mk scope_opt updated_cache =>
+                match scope_opt {
+                    Option.some scope =>
+                        do {
+                            let parse_start : I64 := Bench.now;
+                            let parse_result : Result String (List Decl) := try_parse_decls_strict content (Option.some file_path);
+                            let parse_elapsed : I64 := I64.sub Bench.now parse_start;
+                            let parse_logged : Bool := if verbose then Bench.report ("parse  " ++ file_path) parse_elapsed else true;
+                            match parse_result {
+                                Result.ok decls => do {
+                                    let empty_locs : LocalScope := {
+                                        vars := List.empty,
+                                        parent := Option.none,
+                                    };
+                                    let check_start : I64 := Bench.now;
+                                    let diags : List String <- check_module_with_scope scope decls empty_locs (Option.some file_path) verbose;
+                                    let check_elapsed : I64 := I64.sub Bench.now check_start;
+                                    let check_logged : Bool := if verbose then Bench.report ("check  " ++ file_path) check_elapsed else true;
+                                    return { result := { path := file_path, diagnostics := diags }, cache := updated_cache }
+                                },
+                                Result.err diagnostic => do {
+                                    return { result := { path := file_path, diagnostics := [diagnostic] }, cache := updated_cache }
+                                }
+                            }
                         },
-                        Result.err diagnostic => do {
-                            return { path := file_path, diagnostics := [diagnostic] }
-                        }
+                    Option.none => do {
+                        return { result := { path := file_path, diagnostics := ["error: failed to load dependencies for " ++ file_path ++ " (a `use`d module failed to resolve or parse — re-run with a narrower file list, or check each `use`/`open` target under this file's search path, to isolate which one)"] }, cache := updated_cache }
                     }
-                },
-            Option.none => do {
-                return { path := file_path, diagnostics := ["error: failed to load dependencies for " ++ file_path ++ " (a `use`d module failed to resolve or parse — re-run with a narrower file list, or check each `use`/`open` target under this file's search path, to isolate which one)"] }
-            }
+                }
         }
     } else do {
-        return { path := file_path, diagnostics := ["error: file not found: " ++ file_path] }
+        return { result := { path := file_path, diagnostics := ["error: file not found: " ++ file_path] }, cache := cache }
     }
 }
 
