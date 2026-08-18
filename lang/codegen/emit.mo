@@ -754,7 +754,29 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                                     CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
                             }
                         else
-                            CompileResult.ok c empty_instrs (LLVMValue.var_ llvm_name) empty_blocks empty_funcs empty_globals_list,
+                            // A bare reference to a global (non-local,
+                            // non-constructor) name, in VALUE position --
+                            // i.e. reached here rather than being
+                            // special-cased by `compile_general_db_call`'s
+                            // own bypass for the CALLEE position (see that
+                            // function's own doc comment). A 0-arity
+                            // top-level `def` compiles to a real LLVM
+                            // function taking no arguments -- referencing
+                            // it as a VALUE means "the result of calling
+                            // it", so this must emit an actual 0-arg call,
+                            // not a bare `%llvm_name` SSA reference (no
+                            // such register is ever assigned otherwise --
+                            // confirmed as a real bug via a minimal
+                            // standalone repro, `def five : I64 := 5` /
+                            // `def main : I64 := five`, which previously
+                            // failed `llc` outright with "use of undefined
+                            // value '%five'").
+                            match fresh_temp c {
+                                CtxStrPair.mk ctx_t temp =>
+                                    let call_val := LLVMValue.call llvm_name LLVMType.i64_ empty_vals false in
+                                    let assign_instr := LLVMInstruction.assign temp call_val in
+                                    CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                            },
                 },
             DebugName.unnamed =>
                 CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
@@ -935,11 +957,45 @@ def compile_spine_args (c : CodegenCtx) (terms : List Term) : SpineArgs :=
             },
     }
 
+/// Compiles a call spine's own `head` (the function being applied,
+/// after `flatten_app_spine`) -- deliberately NOT the same as plain
+/// `compile_db_term_ir`, which (as of the fix documented on its own
+/// `Term.var` case above) now emits a real 0-arg CALL for a bare
+/// global-name reference in ordinary VALUE position. `head` is a
+/// CALLEE position: `compile_general_db_call`'s own caller (below)
+/// needs the bare `LLVMValue.var_ <name>` shape back, unevaluated, so
+/// it can build ONE outer call carrying all of `args` — calling `head`
+/// itself first (0 args) and THEN trying to apply the result to
+/// `args` would be wrong. Mirrors the exact bare-name-extraction shape
+/// `try_compile_constructor_app_db`/`try_compile_inline_native_db`
+/// already use for the same reason, generalized to the "plain
+/// function, no constructor/native match" case those two don't cover.
+#[partial]
+def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
+    match head {
+        Term.var idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match ctx_lookup_local c id {
+                        Option.some _ => compile_db_term_ir c head,
+                        Option.none =>
+                            let name := show_identifier id in
+                            if is_constructor_var name
+                            then compile_db_term_ir c head
+                            else
+                                let llvm_name := replace_dots_with_underscores name in
+                                CompileResult.ok c empty_instrs (LLVMValue.var_ llvm_name) empty_blocks empty_funcs empty_globals_list,
+                    },
+                DebugName.unnamed => compile_db_term_ir c head,
+            },
+        _ => compile_db_term_ir c head,
+    }
+
 #[partial]
 def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
     match flatten_app_spine (Term.app fun arg) {
         AppSpine.mk head args =>
-            match compile_db_term_ir c head {
+            match compile_call_head c head {
                 CompileResult.ok ctx_h instrs_h val_h blocks_h funcs_h globals_h =>
                     match compile_spine_args ctx_h args {
                         SpineArgs.mk ctx_a instrs_a blocks_a funcs_a globals_a vals_a =>
