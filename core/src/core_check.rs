@@ -446,6 +446,24 @@ pub enum InferError {
   /// integration the plan's Phase 3/4 (real-file parity testing) already
   /// calls for.
   CannotInfer(CoreTerm),
+  /// `plans/implementations/named-field-construction.md`'s named-call
+  /// resolution (`try_desugar_named_call`) matched `field` against a
+  /// literal field name that isn't among `target`'s own declared param
+  /// names. Per that plan's Rules step 3: once a call's SHAPE resolves to
+  /// a real constructor/def (i.e. this error fires at all), it's surfaced
+  /// directly rather than falling back to the ordinary `App` error the
+  /// caller would otherwise report.
+  NamedCallUnknownField {
+    target: Atom,
+    field: Identifier,
+  },
+  /// Mirrors `NamedCallUnknownField`, for the opposite direction: a param
+  /// `target` declares that the call's braces never covered and that has
+  /// no default to fall back on.
+  NamedCallMissingField {
+    target: Atom,
+    field: Identifier,
+  },
 }
 
 impl From<UnifyError> for InferError {
@@ -725,8 +743,33 @@ pub fn infer(
       let fun_ty = instantiate_foralls(mctx, structs, &fun_ty_raw);
       match expect_pi(mctx, &fun_ty) {
         Ok((arg_ty, ret_ty, _mult)) => {
-          check(mctx, ctx, structs, arg, &arg_ty)?;
-          Ok(open_with(&ret_ty, arg))
+          let ordinary_result = check(mctx, ctx, structs, arg, &arg_ty);
+          match ordinary_result {
+            // See `struct_literal_arg_matches_expected`'s own doc comment
+            // for why an `Ok` isn't trusted outright here.
+            Ok(()) if struct_literal_arg_matches_expected(mctx, structs, arg, &arg_ty) => {
+              Ok(open_with(&ret_ty, arg))
+            }
+            // Named-call fallback (`plans/implementations/
+            // named-field-construction.md`) -- only reached once the
+            // ordinary single-argument interpretation is already a hard
+            // error (or a vacuous, non-matching `Ok`, per the guard just
+            // above), per that plan's Rules. `Ok(None)`: the shape
+            // doesn't apply at all, fall back to the ORIGINAL check's own
+            // verdict (an `Ok` here means the pre-existing laxness case,
+            // preserved exactly as before this plan); `Err`: the shape
+            // applies but resolution itself failed, surface THAT error
+            // directly instead (Rules step 3).
+            ordinary_result => match try_desugar_named_call(mctx, ctx, structs, fun, arg)? {
+              // `desugared_ty` is already fully validated by
+              // `check_named_call_fields` -- used as-is, never re-
+              // inferred (see `try_desugar_named_call`'s own doc comment
+              // for why re-running `infer` on the assembled term here
+              // would fail).
+              Some((_desugared, desugared_ty)) => Ok(desugared_ty),
+              None => ordinary_result.map(|()| open_with(&ret_ty, arg)),
+            },
+          }
         }
         // E7: not an ordinary Pi-application at all — `fun`'s type may be
         // entirely `Forall`-quantified (an indexed constructor like
@@ -954,6 +997,216 @@ fn check_struct_fields(
   Ok(())
 }
 
+/// Constructor-target branch of `try_desugar_named_call`'s field
+/// validation (`plans/implementations/named-field-construction.md`,
+/// Phase 1) -- checks each GIVEN field's value with `check` against its
+/// declared field type (never `infer`), then fills any uncovered param
+/// from `inductive_atom`'s own defaults (only ever present when this
+/// constructor is a single-constructor "struct" -- see `StructFields`'
+/// doc comment; an ordinary multi-constructor `type`'s fields are always
+/// required). Builds the final `args: Vec<Option<CoreTerm>>` in
+/// `info.field_names`' declared order, not the order written in the
+/// call's braces, PLUS the constructed term's own overall result type
+/// (`inductive_atom` applied to a fresh meta per declared type param) --
+/// mirrors `infer`'s own `Con(c)` arm's meta-instantiation/substitution
+/// exactly (same reason: a generic inductive's field types reference its
+/// OWN declared params, e.g. `Box A`'s `value: A`, which must be
+/// unified with a fresh meta per use, not left as a dangling free
+/// reference to the DECLARATION's own param atom).
+///
+/// Deliberately NOT a reuse of `check_struct_fields` just above (that one
+/// is keyed to `structs.structs`, single-constructor-struct only -- this
+/// needs to work for ANY constructor of ANY inductive) and deliberately
+/// NOT relying on `infer`'s own `Con` arm to (re)validate the assembled
+/// term afterward either: that arm only UNIFIES each field's already-
+/// INFERRED type against the declared one, which fails outright for an
+/// unannotated nested struct-literal field value (`infer_lit`'s
+/// `StructLit` arm returns `CannotInfer` with no `expected` to fall back
+/// on) -- `check`ing each field directly against its declared (meta-
+/// substituted) type here avoids that gap; returning the already-known
+/// result type lets callers skip re-inferring/re-checking the assembled
+/// term's TOP level entirely (confirmed necessary by a real `cannot infer
+/// the type of { .. }` failure when a caller instead called plain
+/// `check`/`infer` on the assembled `Con`, which re-hit this exact
+/// infer-vs-check gap one level up).
+fn check_named_call_fields(
+  mctx: &mut MetaContext,
+  ctx: &TyCtx,
+  structs: &StructFields,
+  ctor_atom: Atom,
+  inductive_atom: Atom,
+  info: &ConstructorInfo,
+  fields: &Map<Identifier, CoreTerm>,
+) -> Result<(Vec<Option<CoreTerm>>, CoreTerm), InferError> {
+  for name in fields.keys() {
+    if !info.field_names.contains(name) {
+      return Err(InferError::NamedCallUnknownField {
+        target: ctor_atom,
+        field: name.clone(),
+      });
+    }
+  }
+  let param_metas: Vec<MetaId> = info
+    .param_atoms
+    .iter()
+    .map(|_| mctx.fresh_meta(CoreTerm::Sort { level: 1 }))
+    .collect();
+  let substitute_params = |field_ty: &CoreTerm| -> CoreTerm {
+    let mut substituted = field_ty.clone();
+    for (param_atom, meta_id) in info.param_atoms.iter().zip(param_metas.iter()) {
+      substituted = open_with(&close(&substituted, *param_atom), &CoreTerm::Meta(*meta_id));
+    }
+    substituted
+  };
+  let defaults = structs.structs.get(&inductive_atom).map(|s| &s.defaults);
+  let mut args = Vec::with_capacity(info.field_names.len());
+  for (name, field_ty) in info.field_names.iter().zip(info.fields.iter()) {
+    match fields.get(name) {
+      Some(value) => {
+        let expected_field_ty = substitute_params(field_ty);
+        check(mctx, ctx, structs, value, &expected_field_ty)?;
+        args.push(Some(value.clone()));
+      }
+      None => match defaults.and_then(|d| d.get(name)) {
+        Some(default_value) => args.push(Some(default_value.clone())),
+        None => {
+          return Err(InferError::NamedCallMissingField {
+            target: ctor_atom,
+            field: name.clone(),
+          });
+        }
+      },
+    }
+  }
+  let mut result_ty = CoreTerm::Free(inductive_atom);
+  for meta_id in &param_metas {
+    result_ty = CoreTerm::App {
+      fun: Box::new(result_ty),
+      arg: Box::new(CoreTerm::Meta(*meta_id)),
+    };
+  }
+  Ok((args, result_ty))
+}
+
+/// Whether an ALREADY-successfully-`check`ed `arg` genuinely belongs to
+/// `arg_ty`'s own struct shape, rather than merely surviving
+/// `check_struct_fields`'s existing laxness (present fields checked,
+/// MISSING/EXTRA fields never validated -- see that function's own doc
+/// comment) vacuously. Only matters for the one shape `check_struct_
+/// fields` is lax about: an unannotated struct literal, checked against a
+/// registered single-constructor struct's own atom -- a literal whose
+/// field names don't even overlap `arg_ty`'s OWN declared fields still
+/// spuriously `check`s fine against it (the loop over declared fields
+/// simply never finds any of them present, so nothing is ever compared).
+/// Every other already-`Ok` case (an ordinary value, an EXPLICITLY
+/// annotated struct literal, `arg_ty` not a registered struct at all) is
+/// trusted as-is -- `check`'s own verdict is already precise there.
+///
+/// Used only to decide whether `check`'s `Ok` should PREEMPT a named-call
+/// attempt (Rules step 1): a literal whose fields don't overlap the
+/// target struct's own is exactly the shape a genuine named-call spread
+/// produces (e.g. `Outer.mk { inner := ... }` against `Outer.mk`'s sole
+/// `Inner`-typed param, if `Inner`'s own fields are unrelated to
+/// `inner`/`tag`/whatever this call's OTHER fields are named) -- treating
+/// that as "the ordinary interpretation already succeeded" would silently
+/// steal every such call away from named-call resolution, confirmed by a
+/// real runtime `expected N constructor fields, got 0` failure before
+/// this check was added (the vacuously-"checked" literal desugared into a
+/// struct-literal-as-a-single-argument `Con` with every field `None`,
+/// instead of the real named-call spread).
+fn struct_literal_arg_matches_expected(
+  mctx: &mut MetaContext,
+  structs: &StructFields,
+  arg: &CoreTerm,
+  arg_ty: &CoreTerm,
+) -> bool {
+  let CoreTerm::Lit(CoreLit::StructLit {
+    fields,
+    type_name: None,
+  }) = arg.strip_ctx()
+  else {
+    return true;
+  };
+  let CoreTerm::Free(atom) = force(mctx, arg_ty.clone()).into_stripped_ctx() else {
+    return true;
+  };
+  let Some(info) = structs.structs.get(&atom) else {
+    return true;
+  };
+  fields
+    .keys()
+    .all(|name| info.fields.iter().any(|(n, _)| n == name))
+}
+
+/// Fallback interpretation of `App { fun, arg }`, tried only once the
+/// ordinary single-argument application check has already failed -- see
+/// `plans/implementations/named-field-construction.md`'s Rules:
+/// `NAME { field := value, ... }`, order-independent keyword arguments,
+/// matched against `NAME`'s own declared constructor params (def-target
+/// support is Phase 2, added as a second branch below once this one
+/// doesn't apply). Never fires for a curried chain's LATER argument --
+/// `fun` must be a bare global reference, not itself an `App`.
+///
+/// Returns `Ok(None)` when the SHAPE doesn't even apply (`fun` isn't a
+/// bare global reference, `arg` isn't an unannotated struct literal, or
+/// the bare name isn't a known constructor) -- callers fall back to the
+/// ORIGINAL `App`-checking error in that case, per Rules step 1/3.
+/// Returns `Err` once the shape DOES apply but resolution/field-checking
+/// itself fails (unknown field, missing field, a field value's own type
+/// mismatch) -- callers surface that error DIRECTLY instead, per Rules
+/// step 3's refinement over the original 2026-08-10 doc. On success,
+/// returns BOTH the desugared term and its own already-known result type
+/// -- callers must use the type as-is (never re-`infer`/`check` the
+/// term's own top level) since every field was already checked directly
+/// against its correct declared type inside `check_named_call_fields`
+/// (see that function's own doc comment for why re-checking the
+/// assembled term would fail).
+fn try_desugar_named_call(
+  mctx: &mut MetaContext,
+  ctx: &TyCtx,
+  structs: &StructFields,
+  fun: &CoreTerm,
+  arg: &CoreTerm,
+) -> Result<Option<(CoreTerm, CoreTerm)>, InferError> {
+  let CoreTerm::Free(atom) = fun.strip_ctx() else {
+    return Ok(None);
+  };
+  let CoreTerm::Lit(CoreLit::StructLit {
+    fields,
+    type_name: None,
+  }) = arg.strip_ctx()
+  else {
+    return Ok(None);
+  };
+  let Some((inductive_atom, ctor_name)) = structs.ctor_owner.get(atom).cloned() else {
+    return Ok(None);
+  };
+  let Some(info) = structs
+    .constructors
+    .get(&(inductive_atom, ctor_name.clone()))
+  else {
+    return Ok(None);
+  };
+  // Always present alongside a `ctor_owner`/`constructors` entry -- both
+  // are populated in the SAME `register_inductive` pass (see that
+  // function's non-`Class` branch) -- but looked up defensively rather
+  // than assumed, per this codebase's "stop rather than assume" style: a
+  // missing entry here falls back to the ORIGINAL error instead of
+  // fabricating a plausibly-wrong `ModulePath`.
+  let Some(typ_name) = structs.inductive_paths.get(&inductive_atom).cloned() else {
+    return Ok(None);
+  };
+  let (args, result_ty) =
+    check_named_call_fields(mctx, ctx, structs, *atom, inductive_atom, info, fields)?;
+  let con = CoreTerm::Con(CoreConstructor {
+    name: ctor_name,
+    typ_name,
+    num_args: info.field_names.len(),
+    args,
+  });
+  Ok(Some((con, result_ty)))
+}
+
 /// Check `term` against `expected`. Handles `Hole` (either side) and
 /// polymorphic (`Forall`-wrapped) expected types directly; falls back to
 /// `infer` + `unify` (after auto-instantiating any leading `Forall`s on
@@ -1157,7 +1410,27 @@ pub fn check(
       }
     };
     let _ = unify(mctx, &ret_ty, expected);
-    check(mctx, ctx, structs, arg, &arg_ty)?;
+    // Named-call fallback -- same rationale as `infer`'s own `App` arm
+    // just above (see its comment, and `struct_literal_arg_matches_
+    // expected`'s own, for why an `Ok` from `check` isn't trusted
+    // outright); the only difference here is that a successfully-
+    // desugared call is `check`ed against `expected` rather than
+    // `infer`red, matching this whole block's own check-mode discipline.
+    let ordinary_result = check(mctx, ctx, structs, arg, &arg_ty);
+    let ordinary_applies = matches!(&ordinary_result, Ok(()))
+      && struct_literal_arg_matches_expected(mctx, structs, arg, &arg_ty);
+    if !ordinary_applies {
+      return match try_desugar_named_call(mctx, ctx, structs, fun, arg)? {
+        // `desugared_ty` is already fully validated -- unify it against
+        // `expected` directly rather than re-`check`ing the assembled
+        // term's own top level (see `try_desugar_named_call`'s doc
+        // comment for why that would fail).
+        Some((_desugared, desugared_ty)) => {
+          unify(mctx, &desugared_ty, expected).map_err(InferError::from)
+        }
+        None => ordinary_result,
+      };
+    }
     let final_ty = open_with(&ret_ty, arg);
     unify(mctx, &final_ty, expected)?;
     return Ok(());
@@ -2429,6 +2702,47 @@ pub fn desugar_struct_literals(
         }
         Some(arg_ty)
       });
+      // Named-call fallback (`plans/implementations/
+      // named-field-construction.md`) -- mirrors `check`/`infer`'s own
+      // `try_desugar_named_call` call exactly, same Rules ordering (only
+      // reached once the ordinary single-argument interpretation is
+      // already an error). Needed HERE too, separately from `check`/
+      // `infer`: THOSE only validate that a named call would type-check
+      // (per this function's own doc comment, `check` never mutates the
+      // term it validates) -- without this, the generic recursion just
+      // below would push `arg_ty` (the callee's Pi ARGUMENT type, e.g.
+      // `F64` for `Shape.circle`'s sole param) down into `arg` as ITS
+      // `expected`, hitting the ordinary `StructLit` arm with a bogus
+      // expected type and building a nonsensical zero-field `F64.mk`
+      // constructor instead of the real named call -- confirmed by a real
+      // `UnknownConstructor(F64, mk)` lowering failure before this guard
+      // was added. Re-running `check(arg, arg_ty)` here (already known to
+      // have succeeded once, as part of THIS whole `App` term's own
+      // successful outer check) is cheap and side-effect-free on success;
+      // only its FAILURE is actually load-bearing here.
+      let ordinary_interpretation_failed = match &arg_ty {
+        Some(t) => {
+          check(mctx, ctx, structs, arg, t).is_err()
+            || !struct_literal_arg_matches_expected(mctx, structs, arg, t)
+        }
+        None => true,
+      };
+      if ordinary_interpretation_failed
+        && let Ok(Some((desugared, _desugared_ty))) =
+          try_desugar_named_call(mctx, ctx, structs, fun, arg)
+      {
+        return desugar_struct_literals(
+          mctx,
+          ctx,
+          structs,
+          atom_paths,
+          known_class_methods,
+          known_instances,
+          dict_scope,
+          &desugared,
+          expected,
+        );
+      }
       CoreTerm::App {
         fun: Box::new(desugar_struct_literals(
           mctx,

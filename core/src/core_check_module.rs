@@ -1669,7 +1669,9 @@ fn infer_error_location(e: &InferError) -> Option<SourceRange> {
     InferError::UnboundVariable(_)
     | InferError::UnknownMeta(_)
     | InferError::UnexpectedBound(_)
-    | InferError::CannotInferHole => None,
+    | InferError::CannotInferHole
+    | InferError::NamedCallUnknownField { .. }
+    | InferError::NamedCallMissingField { .. } => None,
   }
 }
 
@@ -1696,6 +1698,16 @@ fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
     InferError::CannotInfer(t) => format!(
       "cannot infer the type of `{}`; add a type annotation",
       render_core_term(t, atoms, &mut Vec::new())
+    ),
+    InferError::NamedCallUnknownField { target, field } => format!(
+      "`{}` has no field named `{}`",
+      render_atom(*target, atoms),
+      field.as_str()
+    ),
+    InferError::NamedCallMissingField { target, field } => format!(
+      "`{}` is missing required field `{}`",
+      render_atom(*target, atoms),
+      field.as_str()
     ),
   };
   TypeError::Generic(message, location.unwrap_or_default())
@@ -2941,6 +2953,145 @@ mod test {
     assert!(
       params.iter().all(|(_, default)| default.is_none()),
       "no def param has a default mechanism before Phase 3"
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Phase 1 of `plans/implementations/named-field-construction.md`:
+  // constructor-target named calls (`NAME { field := value, ... }`).
+  // -------------------------------------------------------------------
+
+  const SHAPE_SOURCE: &str =
+    "type Shape {\n  circle (radius : F64),\n  rectangle (width : F64) (height : F64)\n}\n";
+
+  #[test]
+  fn test_named_call_single_field_constructor() {
+    let env = ModuleCheckEnv::new();
+    // Same-file constructor references need their type-qualified path
+    // (`Shape.circle`) -- confirmed against the real CLI (`monad-rs run`)
+    // that an unqualified `circle` is an `unbound variable` error even for
+    // an ORDINARY positional call, so this is unrelated to named-call
+    // resolution itself; matches how `Point.mk`/`Outer.mk` are addressed
+    // in this same test module's other named-call tests.
+    let source = format!("{SHAPE_SOURCE}def c : Shape := Shape.circle {{ radius := 2.0 }}\n");
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_named_call_multi_field_constructor_reordered() {
+    let env = ModuleCheckEnv::new();
+    // Braces list `height` before `width` -- the opposite of `rectangle`'s
+    // own declared order (`width`, then `height`) -- order-independence
+    // is the whole point of this feature.
+    let source =
+      format!("{SHAPE_SOURCE}def r : Shape := Shape.rectangle {{ height := 3.0, width := 4.0 }}\n");
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_named_call_struct_own_mk_addressed_by_name() {
+    let env = ModuleCheckEnv::new();
+    let source =
+      "struct Point { x : I64, y : I64 }\ndef p : Point := Point.mk { y := 2, x := 1 }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_named_call_unknown_field_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    let source = format!("{SHAPE_SOURCE}def bad : Shape := Shape.circle {{ radis := 2.0 }}\n");
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("NamedCallUnknownField"),
+      "a typo'd field name must be rejected by the NEW named-call check \
+       specifically (not e.g. a stray unbound-variable error), got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_named_call_missing_field_no_default_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    // `rectangle` is an ordinary multi-constructor `type`'s own
+    // constructor -- no default mechanism exists for it at all (only a
+    // single-constructor `struct`'s `mk` has `Inductive.defaults`) --
+    // omitting `height` must always be an error, never silently filled.
+    let source = format!("{SHAPE_SOURCE}def bad : Shape := Shape.rectangle {{ width := 4.0 }}\n");
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("NamedCallMissingField"),
+      "a required field with no default must be rejected by the NEW \
+       named-call check specifically, got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_named_call_missing_field_with_struct_default_is_filled() {
+    let env = ModuleCheckEnv::new();
+    let source = "struct Point { x : I64, y : I64 := 0 }\ndef p : Point := Point.mk { x := 1 }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "a missing field with a struct default should be filled in, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_named_call_nested_unannotated_struct_literal_field_value() {
+    // Regression pin for `check_named_call_fields` checking each present
+    // field's value against its OWN declared type (rather than handing
+    // the assembled term to `infer`'s `Con` arm, which only unifies
+    // already-inferred types and cannot infer a bare, unannotated nested
+    // struct literal at all -- see this plan's Current State).
+    let env = ModuleCheckEnv::new();
+    let source = "struct Inner { n : I64 }\nstruct Outer { inner : Inner }\ndef o : Outer := Outer.mk { inner := { n := 1 } }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_named_call_does_not_change_existing_single_struct_argument_calls() {
+    // Zero-behavior-change regression pin (Rules step 1): a function
+    // taking exactly one struct-typed argument, called with an ordinary
+    // (non-annotated) struct literal, must still resolve via the SAME
+    // pre-existing single-argument interpretation -- not accidentally
+    // reinterpreted as a named call against `consume`'s own params.
+    let env = ModuleCheckEnv::new();
+    let source = "struct Point { x : I64, y : I64 }\ndef consume (p : Point) : I64 := 1\ndef r : I64 := consume { x := 1, y := 2 }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 2);
+    assert!(
+      report.defs.iter().all(|d| d.result.is_ok()),
+      "expected both defs to pass, got {:?}",
+      report.defs
     );
   }
 
