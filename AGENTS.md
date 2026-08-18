@@ -1096,6 +1096,123 @@ Key patterns when writing self-hosted Monad code:
       separate, larger investigation) or acceptance that this is the
       accumulated cost of genuine feature growth. Recorded here so it
       isn't re-investigated blind from the same starting hypothesis.
+12. **`SharedStr` (Arc-backed zero-copy string slicing) + parser/type-
+    checker follow-ups — the parser's own cost model, never previously
+    examined, turned out to hold the largest lever in this whole history.**
+    Full writeup: `plans/implementations/shared-str-and-typecheck-
+    optimization.md`. Three independent tracks, one root-cause Rust
+    change plus two self-hosted-only tracks extending items 9-11's
+    already-proven patterns:
+    - **Track 1 (root cause, Rust)**: `IrLit::Str` (`core/src/core_ir.rs`)
+      was a plain owned `String` — `string_slice`/`string_drop`
+      (`core/src/core_native.rs`) both did `s.get(range).unwrap_or("")
+      .to_string()`, a full byte copy on every call. The self-hosted
+      parser (`lang/parser.mo`, `lang/parser/combinators.mo`) threads
+      "the rest of the source file" through nearly every grammar
+      function this way, consuming it a few bytes at a time — so parsing
+      a file of length N cost `O(N)+O(N-1)+...+O(1) = O(N²)`, independent
+      of grammar complexity. Fixed by a new `SharedStr` type
+      (`core/src/shared_str.rs`): `Arc<str>` backing + a `(start, end)`
+      byte-range view, so `slice`/`drop` become O(1) (bump a refcount,
+      adjust two `usize`s) instead of copying. `Arc`, not `Rc` — the
+      evaluator runs on real OS threads (`run_tests_parallel`,
+      `force_global_with_timeout`'s per-call thread spawn,
+      `std/concurrent`'s real-thread runtime; `Value` is asserted
+      `Send + Sync` at compile time), the same tradeoff `Env`
+      (`core_value.rs`) already made and documented. `read_file` is the
+      key construction site: the whole file's content becomes ONE
+      backing allocation, and every subsequent `slice`/`drop` during
+      parsing shares it. Small, mechanical blast radius despite touching
+      the runtime's value representation: 5 files, ~35 call sites total
+      (`core_ir.rs`, `core_native.rs`, `lower_core_ir.rs`,
+      `eval/meta_reflect.rs`, `lib.rs`) — most natives (`string_eq`,
+      `string_hash`, `string_length`, ...) needed zero changes since they
+      only ever read via a derived `&str`.
+    - **Track 2 (self-hosted parser, `.mo`-only)**: `take_while`/
+      `take_while_loop` (`lang/parser/combinators.mo`) used to build its
+      matched-text accumulator via per-character `String.concat acc ch`
+      — an independent, compounding O(L²) cost (for a token of length L)
+      on top of Track 1's fix. Rewritten to track the original input
+      alongside the shrinking remainder and take exactly ONE
+      `String.slice` when the predicate first fails, instead of L
+      accumulator concats — benefits every `take_while`-based scan
+      (identifiers, numbers, whitespace/comment-skipping) at once, not
+      just call sites that discard the matched text. Also: `is_digit`
+      (`lang/parser/char_preds.mo`) rewritten from a fresh-list-plus-
+      closure-plus-`List.any` scan to a plain `if/else` chain matching
+      every sibling predicate in the file (the already-established,
+      already-proven-faster pattern); `op_lookup_prec`/`op_lookup_rassoc`
+      (`lang/parser/core.mo`) merged into one `op_lookup_entry` scan so
+      `expr_climb_op_prec`/`expr_climb_op_rhs_ws` (`lang/parser.mo`) walk
+      `op_table` once per operator token instead of twice.
+    - **Track 3 (self-hosted type checker/scope/module, `.mo`-only,
+      independent of 1/2)**: `ScopeData.inductives` (`lang/types.mo`)
+      converted from `List Inductive` to `HashMap ModulePath Inductive`
+      — the identical, already-proven move item 4/`def_refs` made
+      (commit `532df61`). `scope_data_find_inductive`
+      (`lang/scope.mo`) was a linear scan over every inductive in the
+      merged scope (~218+ corpus-wide) reached on the PREFERRED,
+      non-fallback path added by the match-case-validation (`0dbc3f2`)
+      and struct-literal (`0303aee`) commits — both landed after item 9's
+      97.07s baseline, and exactly the kind of "diffuse organic growth"
+      item 11's own instrumentation was consistent with but didn't
+      isolate (item 11 counted calls into the OLD fallback function,
+      which this new preferred path bypasses entirely). `.classes`, the
+      sibling field, stayed a `List` — confirmed no by-name lookup
+      anywhere in the corpus, so no read-side benefit from converting
+      it. Track B's `decls_have_aliasable_decls` no-op-skip guard
+      (already landed, see item 11) was applied inside
+      `build_scope_from_decls` but NOT at two sibling call sites in
+      `lang/module.mo` (`load_module_with_dependencies`,
+      `load_module_with_dependencies_and_prelude_cached`) that
+      unconditionally re-ran the identical "outer aliasing" pass — the
+      FIRST of these is exactly `test_typecheck_lang_main`'s own call
+      path (item 10 explicitly noted it couldn't measure that test
+      against the whole-corpus module-scope cache for this reason).
+      Extended the same guard to both. Also added a `ys`-empty
+      short-circuit to `list_append`/`merge_instances` (`lang/module.mo`,
+      mirrored in `lang/scope.mo`) — `merge_scope_data`'s two real call
+      sites always pass the large shared-base side first and the
+      small/often-empty side second, the opposite of the ONLY existing
+      fast path (`xs = List.empty`), so `class_defs`/`instances`/
+      `classes`/`infixes`/`conflicts` were fully walked and reallocated
+      on every file checked for zero benefit — same bug shape item 9's
+      Fix B fixed for `def_refs`, just never extended past that one
+      field.
+    - **Measured** (release build, `--verbose` phase timing +
+      `test_typecheck_lang_main` as the standing end-to-end benchmark,
+      same methodology as items 8-11): parse-phase time roughly HALVED
+      across every file size tried, Track 1+2 combined
+      (`init/id.mo`: 78ms→35ms; `lang/pretty.mo`: 6681ms→2827ms;
+      `lang/json.mo`: 4000ms→1901ms — a consistent ~55% reduction
+      regardless of file size, confirmed via a real git-stash before/
+      after rebuild, not just a single post-fix run). All three tracks
+      combined: `test_typecheck_lang_main` (the item 8-11 regression
+      benchmark) dropped from **262.30s to 105.31s — a 60% reduction,
+      ~2.5x faster** — back down near item 9's original 97.07s baseline
+      despite all the feature growth items 10/11 identified as the
+      regression's cause. Verified: `cargo test` 625/625 (616 baseline +
+      9 new `SharedStr` unit tests); full corpus
+      `cargo run --release -- test init std lang examples slow_tests`
+      1274/1274, identical to baseline; `cargo run --release -- check
+      init std lang examples` unchanged at 2 pre-existing errors/7
+      pre-existing warnings (confirmed via the same check against an
+      unmodified baseline — none of these are new).
+    - **Known remaining gap, not chased further this pass**: parse-phase
+      scaling is still measurably superlinear even after Track 1+2 (e.g.
+      `init/id.mo` 28 lines→35ms vs. `lang/pretty.mo` 885 lines→2827ms is
+      ~80x time for ~32x lines) — Track 1 fixed the O(N²)-in-remaining-
+      file-size cost from `slice`/`drop` themselves, but
+      `lang/parser/string.mo`'s `string_body_loop` (string-literal body
+      scanning) still builds its accumulator via per-character
+      `String.concat` the same way `take_while` used to, and was
+      deliberately left alone (Track 2's own plan doc flags it
+      explicitly) because its escaping variant genuinely changes content
+      byte-for-byte and can't be replaced by a single slice the way
+      `take_while`'s non-escaping scan could. Likely explanation for the
+      remaining superlinearity, not confirmed by direct instrumentation
+      — a natural next target, same "measure before chasing" discipline
+      as item 11's own Track C.
 
 ## Committing Changes
 

@@ -1074,7 +1074,14 @@ struct ScopeData {
     def_refs : HashMap ModulePath ScopeDef,
     class_defs : List ScopeClassDef,
     instances : List ScopeInstance,
-    inductives : List Inductive,
+    // `HashMap`, not `List` -- mirrors `def_refs` (see bench/scope_lookup.mo):
+    // every consumer looks this up by name (`scope_find_inductive`), never
+    // iterates it, so a linear scan over every inductive in the merged
+    // scope (~218+ corpus-wide) on every match-case/struct-literal check
+    // was pure waste. `classes`, the sibling field just below, has no
+    // by-name lookup anywhere in the corpus (confirmed unused for reads)
+    // so it stays a `List` -- only `inductives` is actually queried.
+    inductives : HashMap ModulePath Inductive,
     classes : List Inductive,
     infixes : List Infix,
     conflicts : List ScopeConflict,

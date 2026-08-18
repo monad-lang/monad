@@ -13,8 +13,9 @@ use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
 use lang.scope {
-  alias_decls_in_scope, build_scope_from_decls, list_append, modpath_eq,
-  scope_data_empty, scope_find_inductive, scope_push_local, scope_resolve_name,
+  alias_decls_in_scope, build_scope_from_decls, decls_have_aliasable_decls,
+  list_append, modpath_eq, scope_data_empty, scope_find_inductive,
+  scope_push_local, scope_resolve_name,
 }
 use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
@@ -441,7 +442,17 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
             // Re-walking `decls`' own `use_d`/`open_d`s against the now-
             // fully-merged scope catches exactly that case; same-file
             // opens are already aliased (a no-op re-alias here, cheap).
-            let aliased_scope : ScopeData := alias_decls_in_scope decls final_scope;
+            // Same `decls_have_aliasable_decls` no-op skip as
+            // `build_scope_from_decls` (`lang/scope.mo`, Track B) --
+            // correctness-preserving by construction (nothing to alias
+            // means the skipped pass would have done nothing regardless),
+            // and this is the exact call path `test_typecheck_lang_main`
+            // exercises (a single flat walk from here, per AGENTS.md item
+            // 10's own note).
+            let aliased_scope : ScopeData :=
+                if decls_have_aliasable_decls decls
+                then alias_decls_in_scope decls final_scope
+                else final_scope;
             let scope : Scope := {
                 module_id := mp,
                 scope := aliased_scope,
@@ -756,8 +767,12 @@ def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (c
                             let this_scope : ScopeData := build_scope_from_decls mp decls;
                             let final_scope : ScopeData := merge_scope_data merged_with_base this_scope;
                             // See `load_module_with_dependencies`'s own identical
-                            // outer-aliasing-pass comment above -- same reasoning.
-                            let aliased_scope : ScopeData := alias_decls_in_scope decls final_scope;
+                            // outer-aliasing-pass comment above -- same reasoning,
+                            // including the `decls_have_aliasable_decls` no-op skip.
+                            let aliased_scope : ScopeData :=
+                                if decls_have_aliasable_decls decls
+                                then alias_decls_in_scope decls final_scope
+                                else final_scope;
                             let scope : Scope := {
                                 module_id := mp,
                                 scope := aliased_scope,
@@ -913,7 +928,7 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
                         def_refs := HashMap.merge_buckets dr1 dr2,
                         class_defs := list_append cd1 cd2,
                         instances := merge_instances ins1 ins2,
-                        inductives := list_append ind1 ind2,
+                        inductives := HashMap.merge_buckets ind1 ind2,
                         classes := list_append cls1 cls2,
                         infixes := list_append inf1 inf2,
                         conflicts := list_append conf1 conf2,
@@ -936,22 +951,45 @@ def merge_scope_data_list_go (sds : List ScopeData) (acc : ScopeData) : ScopeDat
             merge_scope_data_list_go rest merged
     }
 
-/// Merge two lists of ScopeInstance
+/// Merge two lists of ScopeInstance. `ys`-empty short-circuit (checked
+/// once, not per recursive step) -- `merge_scope_data`'s two real call
+/// sites (`load_module_with_dependencies_and_prelude_cached`, below)
+/// both pass the LARGE shared-base side as `ins1`/`xs` and the small/
+/// often-empty side as `ins2`/`ys`, so without this every file checked
+/// walked and reallocated the base's whole instance list cons-cell by
+/// cons-cell for zero benefit. Same shape as item 9's `def_refs`
+/// `HashMap.is_empty` fast path, just for the fields that fix didn't
+/// reach (`def_refs` itself moved to `HashMap.merge_buckets` instead).
 #[partial]
 def merge_instances (ins1 : List ScopeInstance) (ins2 : List ScopeInstance) : List ScopeInstance :=
+    match ins2 {
+        List.empty => ins1,
+        List.cons _ _ => merge_instances_go ins1 ins2
+    }
+
+#[partial]
+def merge_instances_go (ins1 : List ScopeInstance) (ins2 : List ScopeInstance) : List ScopeInstance :=
     match ins1 {
         List.empty => ins2,
         List.cons si1 rest1 =>
-            let merged_rest : List ScopeInstance := merge_instances rest1 ins2 in
+            let merged_rest : List ScopeInstance := merge_instances_go rest1 ins2 in
             List.cons si1 merged_rest
     }
 
-/// Helper: append two lists
+/// Helper: append two lists. See `merge_instances`'s own doc comment for
+/// why the `ys`-empty short-circuit matters here specifically.
 #[partial]
 def list_append (xs : List A) (ys : List A) : List A :=
+    match ys {
+        List.empty => xs,
+        List.cons _ _ => list_append_go xs ys
+    }
+
+#[partial]
+def list_append_go (xs : List A) (ys : List A) : List A :=
     match xs {
         List.empty => ys,
-        List.cons x rest => List.cons x (list_append rest ys)
+        List.cons x rest => List.cons x (list_append_go rest ys)
     }
 
 // --- Module resolution for type checking ---

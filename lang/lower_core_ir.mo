@@ -212,9 +212,23 @@ def lower_if (ctx : LowerCtx) (cond : Term) (then_ : Term) (else_ : Term) (acc :
       lower_then (lower_term ctx else_ acc2) (fn eir => fn acc3 =>
         lower_ok (CoreIr.match_ cir [MatchArm.arm 0 tir, MatchArm.arm 0 eir]) acc3)))
 
+// `ScopeData.inductives` is a `HashMap ModulePath Inductive` (see its own
+// doc comment in `lang/types.mo`) -- `find_inductive_by_case_name` below
+// needs to scan by CONSTRUCTOR, not by the map's own by-type-name key,
+// so this still has to flatten to a plain `List Inductive` first via
+// `HashMap.to_list` + dropping each pair's key.
 def scope_all_inductives (s : Scope) : List Inductive :=
   match scope_globals s {
-    ScopeData.mk _ _ _ inds _ _ _ => inds,
+    ScopeData.mk _ _ _ inds _ _ _ => inductive_pairs_values (HashMap.to_list inds),
+  }
+
+def inductive_pairs_values (pairs : List (Pair ModulePath Inductive)) : List Inductive :=
+  match pairs {
+    List.empty => List.empty,
+    List.cons p rest =>
+      match p {
+        Pair.pair _ ind => List.cons ind (inductive_pairs_values rest),
+      },
   }
 
 def constructor_simple_name_eq (c : InductConstructor) (name : Identifier) : Bool :=

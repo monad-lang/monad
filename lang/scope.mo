@@ -22,7 +22,7 @@ def scope_data_empty : ScopeData := {
     def_refs := Map.empty,
     class_defs := List.empty,
     instances := List.empty,
-    inductives := List.empty,
+    inductives := Map.empty,
     classes := List.empty,
     infixes := List.empty,
     conflicts := List.empty,
@@ -55,15 +55,18 @@ def scope_data_add_def (sd : ScopeData) (d : ScopeDef) : ScopeData :=
 
 def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
     match sd {
-        mk dr cd ins inds cls infs conf => {
-            def_refs := dr,
-            class_defs := cd,
-            instances := ins,
-            inductives := List.cons ind inds,
-            classes := cls,
-            infixes := infs,
-            conflicts := conf,
-        }
+        mk dr cd ins inds cls infs conf =>
+            match ind {
+                mk indname _ _ _ _ _ => {
+                    def_refs := dr,
+                    class_defs := cd,
+                    instances := ins,
+                    inductives := Map.insert indname ind inds,
+                    classes := cls,
+                    infixes := infs,
+                    conflicts := conf,
+                }
+            }
     }
 
 // --- build_scope_from_decls: build ScopeData from parsed declarations ---
@@ -441,18 +444,27 @@ def scope_find_inductive_by_constructor (con_name : ModulePath) (s : Scope) : Op
     let g : ScopeData := scope_globals s in
     scope_data_find_inductive_by_constructor g con_name
 
+// `inds` is a `HashMap ModulePath Inductive` (see `ScopeData`'s own doc
+// comment) -- there's no by-CONSTRUCTOR index, only by-type-name, so
+// this still has to scan every entry; `HashMap.to_list` walks the
+// buckets once to get there. Track C (self-hosted-compiler-perf.md)
+// measured this specific path as unreached in the corpus it tested, so
+// it's kept as a scan rather than given its own index preemptively.
 def scope_data_find_inductive_by_constructor (sd : ScopeData) (con_name : ModulePath) : Option Inductive :=
     match sd {
-        mk _ _ _ inds _ _ _ => find_inductive_by_constructor_in_list inds con_name
+        mk _ _ _ inds _ _ _ => find_inductive_by_constructor_in_pairs (HashMap.to_list inds) con_name
     }
 
-def find_inductive_by_constructor_in_list (inds : List Inductive) (con_name : ModulePath) : Option Inductive :=
-    match inds {
+def find_inductive_by_constructor_in_pairs (pairs : List (Pair ModulePath Inductive)) (con_name : ModulePath) : Option Inductive :=
+    match pairs {
         List.empty => Option.none,
-        List.cons ind rest =>
-            if inductive_has_constructor ind con_name
-            then Option.some ind
-            else find_inductive_by_constructor_in_list rest con_name
+        List.cons p rest =>
+            match p {
+                Pair.pair _ ind =>
+                    if inductive_has_constructor ind con_name
+                    then Option.some ind
+                    else find_inductive_by_constructor_in_pairs rest con_name
+            }
     }
 
 def inductive_has_constructor (ind : Inductive) (con_name : ModulePath) : Bool :=
@@ -647,19 +659,7 @@ def scope_data_find_def (sd : ScopeData) (name : ModulePath) : Option ScopeDef :
 
 def scope_data_find_inductive (sd : ScopeData) (name : ModulePath) : Option Inductive :=
     match sd {
-        mk _ _ _ inds _ _ _ => find_inductive_in_list inds name
-    }
-
-def find_inductive_in_list (inds : List Inductive) (name : ModulePath) : Option Inductive :=
-    match inds {
-        List.empty => Option.none,
-        List.cons ind rest =>
-            match ind {
-                mk indname _ _ _ _ _ =>
-                    if modpath_eq indname name
-                    then Option.some ind
-                    else find_inductive_in_list rest name
-            }
+        mk _ _ _ inds _ _ _ => Map.lookup name inds
     }
 
 // --- Instance handling helpers ---
@@ -966,11 +966,21 @@ def term_args_match (ins_args : List Term) (key_args : List Param) : Bool :=
     }
 
 // --- list_append helper (prelude List.append is curried) ---
+//
+// `ys`-empty short-circuit, checked once rather than per recursive step
+// -- see `lang/module.mo`'s own `list_append`/`merge_instances` doc
+// comment for why this matters on `merge_scope_data`'s hot path.
 
 def list_append {A : Type} (xs : List A) (ys : List A) : List A :=
+    match ys {
+        List.empty => xs,
+        List.cons _ _ => list_append_go xs ys
+    }
+
+def list_append_go {A : Type} (xs : List A) (ys : List A) : List A :=
     match xs {
         List.empty => ys,
-        List.cons x rest => List.cons x (list_append rest ys)
+        List.cons x rest => List.cons x (list_append_go rest ys)
     }
 
 // Exports
