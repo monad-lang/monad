@@ -142,3 +142,45 @@ def main : I64 := sum_point { x := 3, y := 4 }
 fn phase1_does_not_change_existing_single_struct_argument_calls() {
   assert_eq!(as_i64(&run(ORDINARY_SINGLE_STRUCT_ARGUMENT_UNCHANGED)), 7);
 }
+
+// ---------------------------------------------------------------------
+// Phase 2: def-function-target named calls.
+// ---------------------------------------------------------------------
+
+/// The design doc's own Goal example, run for real: three params given
+/// out of their declared order, one of them (`arg`) itself a nested,
+/// explicitly-annotated struct literal.
+const CONSFUN_GOAL_EXAMPLE: &str = r#"
+struct StructType { structfield : I64 }
+
+def consfun (arg : StructType) (arg1 : I64) (arg2 : I64) : I64 :=
+    match arg { mk s => s } + arg1 + arg2
+
+def main : I64 :=
+    consfun { arg2 := 10, arg1 := 123, arg := { structfield := 7 : StructType } }
+"#;
+
+#[test]
+fn phase2_named_call_def_target_reorders_correctly() {
+  assert_eq!(as_i64(&run(CONSFUN_GOAL_EXAMPLE)), 140);
+}
+
+/// Same shape, but the nested `arg` value has NO explicit `: StructType`
+/// annotation -- must still resolve via `arg`'s own declared field type,
+/// exercising the def-target branch's own dependent-argument threading
+/// (the assembled curried `App` chain's own per-argument `check`, not a
+/// `Con`-specific path).
+const CONSFUN_UNANNOTATED_NESTED: &str = r#"
+struct StructType { structfield : I64 }
+
+def consfun (arg : StructType) (arg1 : I64) (arg2 : I64) : I64 :=
+    match arg { mk s => s } + arg1 + arg2
+
+def main : I64 :=
+    consfun { arg2 := 10, arg1 := 123, arg := { structfield := 7 } }
+"#;
+
+#[test]
+fn phase2_named_call_def_target_unannotated_nested_struct_literal() {
+  assert_eq!(as_i64(&run(CONSFUN_UNANNOTATED_NESTED)), 140);
+}

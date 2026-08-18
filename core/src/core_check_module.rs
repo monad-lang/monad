@@ -3095,6 +3095,80 @@ mod test {
     );
   }
 
+  // -------------------------------------------------------------------
+  // Phase 2 of `plans/implementations/named-field-construction.md`:
+  // def-function-target named calls.
+  // -------------------------------------------------------------------
+
+  const CONSFUN_SOURCE: &str = "struct StructType { structfield : I64 }\ndef consfun (arg : StructType) (arg1 : I64) (arg2 : String) : I64 := 1\n";
+
+  #[test]
+  fn test_named_call_def_target_goal_example() {
+    // The Goal example from the design doc itself: three params, given
+    // out of order, one of them (`arg`) a nested, EXPLICITLY annotated
+    // struct literal.
+    let env = ModuleCheckEnv::new();
+    let source = format!(
+      "{CONSFUN_SOURCE}def r : I64 := consfun {{ arg2 := \"a\", arg1 := 123, arg := {{ structfield := 7 : StructType }} }}\n"
+    );
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 2);
+    assert!(
+      report.defs.iter().all(|d| d.result.is_ok()),
+      "expected both defs to pass, got {:?}",
+      report.defs
+    );
+  }
+
+  #[test]
+  fn test_named_call_def_target_unannotated_nested_struct_literal() {
+    let env = ModuleCheckEnv::new();
+    let source = format!(
+      "{CONSFUN_SOURCE}def r : I64 := consfun {{ arg2 := \"a\", arg1 := 123, arg := {{ structfield := 7 }} }}\n"
+    );
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 2);
+    assert!(
+      report.defs.iter().all(|d| d.result.is_ok()),
+      "expected both defs to pass, got {:?}",
+      report.defs
+    );
+  }
+
+  #[test]
+  fn test_named_call_def_target_missing_field_no_default_is_an_error() {
+    // No default mechanism exists for ordinary `def` params before
+    // Phase 3 -- every field is always required.
+    let env = ModuleCheckEnv::new();
+    let source = format!(
+      "{CONSFUN_SOURCE}def r : I64 := consfun {{ arg2 := \"a\", arg := {{ structfield := 7 : StructType }} }}\n"
+    );
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 2);
+    let debug = format!("{:?}", report.defs[1].result);
+    assert!(
+      debug.contains("NamedCallMissingField"),
+      "a required def param with no value must be rejected by the NEW \
+       named-call check specifically, got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_named_call_def_target_unknown_field_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    let source = format!(
+      "{CONSFUN_SOURCE}def r : I64 := consfun {{ arg2 := \"a\", arg1 := 123, arg9 := {{ structfield := 7 : StructType }} }}\n"
+    );
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 2);
+    let debug = format!("{:?}", report.defs[1].result);
+    assert!(
+      debug.contains("NamedCallUnknownField"),
+      "a typo'd def-param field name must be rejected by the NEW \
+       named-call check specifically, got {debug}"
+    );
+  }
+
   #[test]
   fn test_harness_resolves_prelude_constructors_by_qualified_path() {
     // `Bool.true`/`Bool.false` are ordinary constructors from

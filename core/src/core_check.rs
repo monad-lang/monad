@@ -1138,14 +1138,54 @@ fn struct_literal_arg_matches_expected(
     .all(|name| info.fields.iter().any(|(n, _)| n == name))
 }
 
+/// Def-target branch of `try_desugar_named_call`'s field validation
+/// (Phase 2) -- mirrors `check_named_call_fields`'s name/default
+/// resolution exactly (unknown field / missing field with no default are
+/// still errors), but does NOT check each value against a declared field
+/// type here: unlike a constructor's `Con`, the assembled curried `App`
+/// chain this builds gets its per-argument types re-derived for free by
+/// `infer`'s own ordinary `App` arm (`expect_pi` + `check(arg, arg_ty)`
+/// at each layer) once `try_desugar_named_call` hands the WHOLE chain to
+/// `infer` -- no analogous check-vs-infer gap exists for a plain `App`
+/// spine the way `infer`'s `Con(c)` arm has (see `check_named_call_
+/// fields`'s own doc comment), so re-deriving is both correct and avoids
+/// duplicating a dependent Pi-chain's own substitution logic here.
+fn named_call_def_args(
+  target: Atom,
+  params: &[(Identifier, Option<CoreTerm>)],
+  fields: &Map<Identifier, CoreTerm>,
+) -> Result<Vec<CoreTerm>, InferError> {
+  for name in fields.keys() {
+    if !params.iter().any(|(n, _)| n == name) {
+      return Err(InferError::NamedCallUnknownField {
+        target,
+        field: name.clone(),
+      });
+    }
+  }
+  let mut args = Vec::with_capacity(params.len());
+  for (name, default) in params {
+    match fields.get(name).or(default.as_ref()) {
+      Some(value) => args.push(value.clone()),
+      None => {
+        return Err(InferError::NamedCallMissingField {
+          target,
+          field: name.clone(),
+        });
+      }
+    }
+  }
+  Ok(args)
+}
+
 /// Fallback interpretation of `App { fun, arg }`, tried only once the
 /// ordinary single-argument application check has already failed -- see
 /// `plans/implementations/named-field-construction.md`'s Rules:
 /// `NAME { field := value, ... }`, order-independent keyword arguments,
-/// matched against `NAME`'s own declared constructor params (def-target
-/// support is Phase 2, added as a second branch below once this one
-/// doesn't apply). Never fires for a curried chain's LATER argument --
-/// `fun` must be a bare global reference, not itself an `App`.
+/// matched against `NAME`'s own declared constructor params, or (Phase 2)
+/// an ordinary `def`'s own declared params when `fun` isn't a known
+/// constructor. Never fires for a curried chain's LATER argument -- `fun`
+/// must be a bare global reference, not itself an `App`.
 ///
 /// Returns `Ok(None)` when the SHAPE doesn't even apply (`fun` isn't a
 /// bare global reference, `arg` isn't an unannotated struct literal, or
@@ -1178,33 +1218,47 @@ fn try_desugar_named_call(
   else {
     return Ok(None);
   };
-  let Some((inductive_atom, ctor_name)) = structs.ctor_owner.get(atom).cloned() else {
-    return Ok(None);
-  };
-  let Some(info) = structs
-    .constructors
-    .get(&(inductive_atom, ctor_name.clone()))
-  else {
-    return Ok(None);
-  };
-  // Always present alongside a `ctor_owner`/`constructors` entry -- both
-  // are populated in the SAME `register_inductive` pass (see that
-  // function's non-`Class` branch) -- but looked up defensively rather
-  // than assumed, per this codebase's "stop rather than assume" style: a
-  // missing entry here falls back to the ORIGINAL error instead of
-  // fabricating a plausibly-wrong `ModulePath`.
-  let Some(typ_name) = structs.inductive_paths.get(&inductive_atom).cloned() else {
-    return Ok(None);
-  };
-  let (args, result_ty) =
-    check_named_call_fields(mctx, ctx, structs, *atom, inductive_atom, info, fields)?;
-  let con = CoreTerm::Con(CoreConstructor {
-    name: ctor_name,
-    typ_name,
-    num_args: info.field_names.len(),
-    args,
-  });
-  Ok(Some((con, result_ty)))
+  if let Some((inductive_atom, ctor_name)) = structs.ctor_owner.get(atom).cloned() {
+    let Some(info) = structs
+      .constructors
+      .get(&(inductive_atom, ctor_name.clone()))
+    else {
+      return Ok(None);
+    };
+    // Always present alongside a `ctor_owner`/`constructors` entry -- both
+    // are populated in the SAME `register_inductive` pass (see that
+    // function's non-`Class` branch) -- but looked up defensively rather
+    // than assumed, per this codebase's "stop rather than assume" style: a
+    // missing entry here falls back to the ORIGINAL error instead of
+    // fabricating a plausibly-wrong `ModulePath`.
+    let Some(typ_name) = structs.inductive_paths.get(&inductive_atom).cloned() else {
+      return Ok(None);
+    };
+    let (args, result_ty) =
+      check_named_call_fields(mctx, ctx, structs, *atom, inductive_atom, info, fields)?;
+    let con = CoreTerm::Con(CoreConstructor {
+      name: ctor_name,
+      typ_name,
+      num_args: info.field_names.len(),
+      args,
+    });
+    return Ok(Some((con, result_ty)));
+  }
+  // Phase 2: `atom` isn't a known constructor -- try an ordinary `def`'s
+  // own declared params instead (`StructFields::def_params`'s doc
+  // comment).
+  if let Some(params) = structs.def_params.get(atom) {
+    let args = named_call_def_args(*atom, params, fields)?;
+    let chain = args
+      .into_iter()
+      .fold(CoreTerm::Free(*atom), |acc, value| CoreTerm::App {
+        fun: Box::new(acc),
+        arg: Box::new(value),
+      });
+    let chain_ty = infer(mctx, ctx, structs, &chain)?;
+    return Ok(Some((chain, chain_ty)));
+  }
+  Ok(None)
 }
 
 /// Check `term` against `expected`. Handles `Hole` (either side) and
