@@ -6,7 +6,7 @@
 /// file's own doc comment for why the two forms need genuinely
 /// different substitution mechanisms).
 ///
-/// A decl-gen template's own top-level decls have no enclosing lambda
+/// A decl-gen template's own top-level decl_list have no enclosing lambda
 /// binder — a macro param referenced inside one (typically inside a
 /// nested `Decl.macro_call_d`'s own `args`, e.g. `std/derive.mo`'s
 /// `reflect_type_info! T derive_lens_meta`) is an ordinary FREE
@@ -245,7 +245,7 @@ def instance_name_subst (target : Identifier) (replacement : Term) (ins : Instan
 /// Substitute `target` for `replacement` throughout one `Decl` — the
 /// per-template-decl step `expand_macro_call`'s own loop (Step 4, not
 /// yet written) folds over every `(param, arg)` pair for every decl in
-/// a `Decl.decl_gen_d`'s own `decls` list. This function handles ONE
+/// a `Decl.decl_gen_d`'s own `decl_list` list. This function handles ONE
 /// `(target, replacement)` pair for ONE decl, mirroring the reference's
 /// own `subst_decl_var`'s equally single-substitution shape.
 #[partial]
@@ -261,14 +261,14 @@ def name_subst_decl (target : Identifier) (replacement : Term) (d : Decl) : Decl
         Decl.open_d path filter => Decl.open_d path filter,
         Decl.scoped_open_d path filter inner => Decl.scoped_open_d path filter (name_subst_decl target replacement inner),
         Decl.def_macro_d d_val => Decl.def_macro_d (def_name_subst target replacement d_val),
-        Decl.decl_gen_d name params decls attrs =>
-            Decl.decl_gen_d name (params_name_subst target replacement params) (name_subst_decls target replacement decls) attrs,
+        Decl.decl_gen_d name params decl_list attrs =>
+            Decl.decl_gen_d name (params_name_subst target replacement params) (name_subst_decls target replacement decl_list) attrs,
         Decl.macro_call_d name args => Decl.macro_call_d name (terms_name_subst target replacement args),
     }
 
 #[partial]
-def name_subst_decls (target : Identifier) (replacement : Term) (decls : List Decl) : List Decl :=
-    match decls {
+def name_subst_decls (target : Identifier) (replacement : Term) (decl_list : List Decl) : List Decl :=
+    match decl_list {
         List.empty => List.empty,
         List.cons d rest => List.cons (name_subst_decl target replacement d) (name_subst_decls target replacement rest),
     }
@@ -368,15 +368,15 @@ def test_name_subst_decl_def_d_substitutes_typ_and_term : Bool :=
 #[test]
 def test_name_subst_decl_decl_gen_d_recurses_into_nested_decls : Bool :=
     // The real `std/derive.mo` shape one level up: a `Decl.decl_gen_d`
-    // template whose own `decls` list holds exactly one
+    // template whose own `decl_list` list holds exactly one
     // `Decl.macro_call_d` referencing the template's own param.
     let replacement : Term := Term.type_ 11 in
     let nested_call : Decl := Decl.macro_call_d (Identifier.id "reflect_type_info") (List.cons (named_ref t_ident) List.empty) in
     let template : Decl :=
         Decl.decl_gen_d (ModulePath.mp (List.cons (Identifier.id "derive_lens") List.empty)) List.empty (List.cons nested_call List.empty) List.empty in
     match name_subst_decl t_ident replacement template {
-        Decl.decl_gen_d _ _ decls _ =>
-            match decls {
+        Decl.decl_gen_d _ _ decl_list _ =>
+            match decl_list {
                 List.cons inner_decl _ =>
                     match inner_decl {
                         Decl.macro_call_d _ args =>
@@ -390,7 +390,7 @@ def test_name_subst_decl_decl_gen_d_recurses_into_nested_decls : Bool :=
 
 #[test]
 def test_name_subst_decl_use_d_passthrough_unchanged : Bool :=
-    // `use`/`open`/`infix` decls carry no `Term` fields at all --
+    // `use`/`open`/`infix` decl_list carry no `Term` fields at all --
     // must pass through completely unchanged (mirrors the reference's
     // own `subst_decl_var` no-op arms for these same decl kinds).
     let replacement : Term := Term.type_ 1 in

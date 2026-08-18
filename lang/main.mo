@@ -46,8 +46,8 @@ def link_ir (ir_text : String) (output_dir : String) (output_name : String) (ver
 
 /// Parse a source file and compile + run it via LLVM.
 #[partial]
-def compile_parsed_decls (decls : List Decl) (output_dir : String) (output_name : String) (verbose: Bool) : IO I64 {
-    let mod_ := compile_db_module decls;
+def compile_parsed_decls (decl_list : List Decl) (output_dir : String) (output_name : String) (verbose: Bool) : IO I64 {
+    let mod_ := compile_db_module decl_list;
     let ir_text := emit_module mod_;
     println <| "Writing LLVM IR to: " ++ output_dir ++ "/" ++ output_name ++ ".ll";
     link_ir ir_text output_dir output_name verbose
@@ -71,7 +71,7 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
             // Fallback to simple parsing without dependencies (for error reporting)
             let source <- IO.read_file file_path;
             match lang.module.try_parse_decls source {
-                Option.some decls => compile_parsed_decls decls output_dir output_name verbose,
+                Option.some decl_list => compile_parsed_decls decl_list output_dir output_name verbose,
                 Option.none => do {
                     // `try_parse_decls` (leniently truncate-and-succeed) just
                     // told us decls_parser bailed outright — genuinely rare

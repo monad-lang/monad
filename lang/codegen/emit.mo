@@ -1191,9 +1191,9 @@ def compile_db_decls_ir (defs : List Def) : LLVMModule :=
 /// Compile a list of Decl to a complete LLVM module.
 /// Extracts def_d and inductive_d entries, compiles constructors and defs.
 #[partial]
-def compile_db_module (decls : List Decl) : LLVMModule :=
-    let defs := extract_defs decls in
-    let inds := extract_inductives decls in
+def compile_db_module (decl_list : List Decl) : LLVMModule :=
+    let defs := extract_defs decl_list in
+    let inds := extract_inductives decl_list in
     let ctor_funcs := compile_db_inductive_decls inds in
     match compile_db_def_list empty_ctx defs {
         DefResult.dr _ compiled_funcs compiled_globals =>
@@ -1206,7 +1206,7 @@ def compile_db_module (decls : List Decl) : LLVMModule :=
 /// Decl.scoped_open_d is intentionally invisible to codegen for now
 /// (deliberate gap — see Decl.scoped_open_d's doc comment).
 #[partial]
-def extract_defs (decls : List Decl) : List Def := match decls {
+def extract_defs (decl_list : List Decl) : List Def := match decl_list {
     List.empty => List.empty,
     List.cons d rest =>
         let rest_defs := extract_defs rest in
@@ -1218,7 +1218,7 @@ def extract_defs (decls : List Decl) : List Def := match decls {
 
 /// Extract inductive_d entries from a list of Decl.
 #[partial]
-def extract_inductives (decls : List Decl) : List Inductive := match decls {
+def extract_inductives (decl_list : List Decl) : List Inductive := match decl_list {
     List.empty => List.empty,
     List.cons d rest =>
         let rest_inds := extract_inductives rest in
@@ -1512,7 +1512,7 @@ def test_module_emit_has_header : Bool :=
 #[test]
 def test_empty_decls_module : Bool :=
     match (compile_db_decls_ir List.empty) {
-        LLVMModule.mk triple globals funcs decls =>
+        LLVMModule.mk triple globals funcs decl_list =>
             String.beq triple "x86_64-unknown-linux-gnu",
     }
 
@@ -1558,8 +1558,8 @@ def check_contains (text : String) (needle : String) : Bool :=
 #[partial]
 def compile_module_to_ir (module_info : ModuleInfo) : LLVMModule :=
     match module_info {
-        ModuleInfo.mk path file_path decls =>
-            let defs := extract_defs decls in
+        ModuleInfo.mk path file_path decl_list =>
+            let defs := extract_defs decl_list in
             compile_db_decls_ir defs
     }
 
@@ -1619,14 +1619,14 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) : IO LLVMModule := do 
     // filter_reachable_decls's own doc comment.
     let reachable_decls := filter_reachable_decls all_decls;
     let reachable_count := List.length reachable_decls;
-    println ("Reachable decls: " ++ I64.to_string reachable_count);
+    println ("Reachable decl_list: " ++ I64.to_string reachable_count);
 
     // Compile the reachable declarations
     let mod_ := compile_db_module reachable_decls;
     return mod_
 }
 
-/// Restricts `decls` to the transitive closure of Defs reachable from a
+/// Restricts `decl_list` to the transitive closure of Defs reachable from a
 /// top-level `main`, plus every Inductive (kept unconditionally --
 /// constructor-wrapper compilation is cheap, uniform, and, after the
 /// qualified-naming fix in compile_db_inductive_constructors, collision
@@ -1639,9 +1639,9 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) : IO LLVMModule := do 
 /// ANY of those 264 defs (even ones with zero callers from the actual
 /// program) blocked compiling ANYTHING.
 #[partial]
-def filter_reachable_decls (decls : List Decl) : List Decl :=
-    let all_defs := extract_defs decls in
-    let all_inds := extract_inductives decls in
+def filter_reachable_decls (decl_list : List Decl) : List Decl :=
+    let all_defs := extract_defs decl_list in
+    let all_inds := extract_inductives decl_list in
     let reachable := reachable_defs_from all_defs (List.cons "main" List.empty) List.empty List.empty in
     List.append (map_inductive_decl all_inds) (map_def_decl reachable)
 
@@ -1782,7 +1782,7 @@ def collect_all_decls_from_modules_with_prefix (modules : List ModuleInfo) (acc 
 }
 
 #[partial]
-def prefix_decl_names (decls : List Decl) (module_path : ModulePath) : List Decl := match decls {
+def prefix_decl_names (decl_list : List Decl) (module_path : ModulePath) : List Decl := match decl_list {
     List.empty => List.empty,
     List.cons d rest =>
         let prefixed_d := prefix_decl_name d module_path in

@@ -67,18 +67,18 @@ def param_name (p : Param) : Identifier :=
 /// rather than crashing) — safe because the real entry point below
 /// never calls this without checking arity first.
 #[partial]
-def fold_decl_gen_subst (params : List Param) (args : List Term) (decls : List Decl) : List Decl :=
+def fold_decl_gen_subst (params : List Param) (args : List Term) (decl_list : List Decl) : List Decl :=
     match params {
-        List.empty => decls,
+        List.empty => decl_list,
         List.cons p prest =>
             match args {
-                List.cons a arest => fold_decl_gen_subst prest arest (name_subst_decls (param_name p) a decls),
-                List.empty => decls,
+                List.cons a arest => fold_decl_gen_subst prest arest (name_subst_decls (param_name p) a decl_list),
+                List.empty => decl_list,
             },
     }
 
 /// The decl-form entry point: given a `Decl.decl_gen_d` template's own
-/// `params`/`decls` (already looked up by name and arity-relevant by
+/// `params`/`decl_list` (already looked up by name and arity-relevant by
 /// the caller — this function does NOT itself look anything up by
 /// name, matching this module's own scope note above) and the concrete
 /// `args` a `Decl.macro_call_d` supplied, produce the expanded decl
@@ -88,9 +88,9 @@ def fold_decl_gen_subst (params : List Param) (args : List Term) (decls : List D
 /// diagnostic-carrying error type is pipeline-wiring's job, not this
 /// primitive's).
 #[partial]
-def expand_decl_gen_call (params : List Param) (decls : List Decl) (args : List Term) : Option (List Decl) :=
+def expand_decl_gen_call (params : List Param) (decl_list : List Decl) (args : List Term) : Option (List Decl) :=
     if I64.beq (List.length params) (List.length args)
-    then Option.some (fold_decl_gen_subst params args decls)
+    then Option.some (fold_decl_gen_subst params args decl_list)
     else Option.none
 
 // ─── Tests ───────────────────────────────────────────────────────────
@@ -149,7 +149,7 @@ def test_apply_term_macro_over_application_falls_back_to_app : Bool :=
 
 #[test]
 def test_expand_decl_gen_call_matches_std_derive_shape : Bool :=
-    // The real `std/derive.mo` shape: `defmacro derive_lens T := decls
+    // The real `std/derive.mo` shape: `defmacro derive_lens T := decl_list
     // { reflect_type_info! T derive_lens_meta }`, invoked as
     // `derive_lens! Point`.
     let t_param : Param := Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty in

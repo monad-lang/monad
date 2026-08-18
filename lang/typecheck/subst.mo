@@ -18,7 +18,7 @@
 ///
 /// NOTE: this module is intentionally NOT used for the DECL-generating
 /// macro form (`defmacro name params := decls { ... }`) — a decl
-/// template's own top-level decls have no enclosing lambda binder, so
+/// template's own top-level decl_list have no enclosing lambda binder, so
 /// a macro param referenced inside one is an ordinary FREE/qualified
 /// `Term.var sentinel (DebugName.named X)` reference, not a bound de
 /// Bruijn index. That form needs a separate, NAME-based substitution

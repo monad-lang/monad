@@ -74,7 +74,7 @@ def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
 // Two-pass: pass 1 (`build_scope_from_decls_go`, unchanged) registers every
 // real `def`/`type`/`class`/`instance`/`infix` declaration exactly as
 // before, `use_d`/`open_d` still no-ops there. Pass 2 (`alias_decls_in_scope`,
-// below) re-walks the SAME decls' `use_d`/`open_d`/`scoped_open_d` against
+// below) re-walks the SAME decl_list' `use_d`/`open_d`/`scoped_open_d` against
 // the now-complete pass-1 result, registering BARE (or renamed) aliases
 // for the real qualified names they bring in -- this has to be a separate
 // pass, not folded into pass 1's single left-to-right walk, because an
@@ -100,9 +100,9 @@ def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
 // non-test `.mo` file in the corpus was found using `scoped_open_d`'s
 // real scoping semantics (only `lang/parser.mo`'s own unit tests and
 // `lang/pretty.mo`'s round-trip fixture construct one directly).
-def build_scope_from_decls (path : ModulePath) (decls : List Decl) : ScopeData :=
+def build_scope_from_decls (path : ModulePath) (decl_list : List Decl) : ScopeData :=
     let empty : ScopeData := scope_data_empty in
-    let with_decls : ScopeData := build_scope_from_decls_go decls path empty in
+    let with_decls : ScopeData := build_scope_from_decls_go decl_list path empty in
     let with_builtins : ScopeData := add_builtins with_decls in
     // Skip pass 2 entirely when this module has no use_d/open_d/
     // scoped_open_d decls at all (~12% of the current corpus, grep-
@@ -116,16 +116,16 @@ def build_scope_from_decls (path : ModulePath) (decls : List Decl) : ScopeData :
     // timings), so this is a modest, not dominant, win -- worth taking
     // since it's free and correctness-preserving, not because it
     // explains the bulk of any single regression.
-    if decls_have_aliasable_decls decls
-    then alias_decls_in_scope decls with_builtins
+    if decls_have_aliasable_decls decl_list
+    then alias_decls_in_scope decl_list with_builtins
     else with_builtins
 
 /// O(decls) but O(1) per decl (a bare tag match, no `ScopeData` work) --
 /// far cheaper than actually running `alias_decls_in_scope`'s own walk
 /// (which does real `Map.lookup`/`Map.insert` work per aliased name)
 /// just to discover there's nothing to do.
-def decls_have_aliasable_decls (decls : List Decl) : Bool :=
-    match decls {
+def decls_have_aliasable_decls (decl_list : List Decl) : Bool :=
+    match decl_list {
         List.empty => false,
         List.cons d ds =>
             match d {
@@ -136,8 +136,8 @@ def decls_have_aliasable_decls (decls : List Decl) : Bool :=
             }
     }
 
-def alias_decls_in_scope (decls : List Decl) (acc : ScopeData) : ScopeData :=
-    match decls {
+def alias_decls_in_scope (decl_list : List Decl) (acc : ScopeData) : ScopeData :=
+    match decl_list {
         List.empty => acc,
         List.cons d ds => alias_decls_in_scope ds (alias_one_decl d acc)
     }
@@ -212,8 +212,8 @@ def apply_use_item (acc : ScopeData) (path : ModulePath) (item : UseItem) : Scop
         UseItem.use_sub_rename n _alias items => apply_use_items acc (path_extend path n) items,
     }
 
-def build_scope_from_decls_go (decls : List Decl) (path : ModulePath) (acc : ScopeData) : ScopeData :=
-    match decls {
+def build_scope_from_decls_go (decl_list : List Decl) (path : ModulePath) (acc : ScopeData) : ScopeData :=
+    match decl_list {
         List.empty => acc,
         List.cons d ds =>
             let new_acc : ScopeData := build_scope_one_decl d path acc in
@@ -235,7 +235,7 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
         // phase additions) are pre-expansion, unexpanded declarations —
         // scope has nothing real to register from them until an
         // expansion pass turns them into ordinary def_d/inductive_d/etc
-        // decls first. No-op, matching use_d/open_d's own existing
+        // decl_list first. No-op, matching use_d/open_d's own existing
         // convention above (this codebase has no static match-
         // exhaustiveness check — Monad's own `NonExhaustiveMatch` is a
         // RUNTIME-only error, core/src/core_eval.rs — so leaving this

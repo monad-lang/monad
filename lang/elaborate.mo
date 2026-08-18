@@ -298,8 +298,8 @@ def names_of_decl (decl : Decl) : List Identifier :=
     }
 
 /// Collect all names from a list of declarations.
-def names_of_decls (decls : List Decl) : List Identifier :=
-    match decls {
+def names_of_decls (decl_list : List Decl) : List Identifier :=
+    match decl_list {
         List.cons hd rest =>
             let hd_names := names_of_decl hd in
             let rest_names := names_of_decls rest in
@@ -344,13 +344,13 @@ def elaborate_decl (decl : Decl) (known_names : List Identifier) : Decl :=
     }
 
 /// Elaborate all declarations in a module.
-/// Builds known_names from the decls' own names plus existing names,
+/// Builds known_names from the decl_list' own names plus existing names,
 /// then maps elaborate_decl over each decl.
 /// Mirrors Rust's elaborate_decls (type.rs:3074).
-def elaborate_decls (decls : List Decl) (existing_names : List Identifier) : List Decl :=
-    let decl_names := names_of_decls decls in
+def elaborate_decls (decl_list : List Decl) (existing_names : List Identifier) : List Decl :=
+    let decl_names := names_of_decls decl_list in
     let known_names := union_ids existing_names decl_names in
-    elaborate_decls_map decls known_names
+    elaborate_decls_map decl_list known_names
 
 // Regression tests for `elaborate_decl`'s wildcard arm covering the 3
 // macro-expansion-phase `Decl` variants (def_macro_d/decl_gen_d/
@@ -407,9 +407,9 @@ def test_elaborate_decl_decl_gen_d_passthrough : Bool :=
 def module_path_head (mp : ModulePath) : Identifier :=
     match mp { ModulePath.mp ids => match ids { List.cons hd _ => hd } }
 
-/// Map elaborate_decl over a list of decls with a fixed known_names set.
-def elaborate_decls_map (decls : List Decl) (known_names : List Identifier) : List Decl :=
-    match decls {
+/// Map elaborate_decl over a list of decl_list with a fixed known_names set.
+def elaborate_decls_map (decl_list : List Decl) (known_names : List Identifier) : List Decl :=
+    match decl_list {
         List.cons hd rest =>
             let elaborated_hd := elaborate_decl hd known_names in
             let elaborated_rest := elaborate_decls_map rest known_names in

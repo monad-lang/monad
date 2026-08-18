@@ -60,7 +60,7 @@ def init_module_path : ModulePath := ModulePath.mp [Identifier.id "init"]
 /// own `remaining` is untouched -- only the parsed payload changes.
 def parse_all_decls (input : String) : ParseResult (List Decl) :=
     match lang.parser.decls_parser input {
-        ParseResult.success rem decls => ParseResult.success rem (expand_decls decls),
+        ParseResult.success rem decl_list => ParseResult.success rem (expand_decls decl_list),
         ParseResult.fail e => ParseResult.fail e,
     }
 
@@ -75,7 +75,7 @@ def parse_all_decls_strict (input : String) : ParseResult (List Decl) :=
 def try_parse_decls (input : String) : Option (List Decl) :=
     let result : ParseResult (List Decl) := parse_all_decls input in
     match result {
-        ParseResult.success _ decls => Option.some decls,
+        ParseResult.success _ decl_list => Option.some decl_list,
         ParseResult.fail _ => Option.none,
     }
 
@@ -94,7 +94,7 @@ def try_parse_decls (input : String) : Option (List Decl) :=
 /// as `parse_all_decls` above.
 def try_parse_decls_strict (input : String) (path : Option String) : Result String (List Decl) :=
     match decls_parser_strict input {
-        ParseResult.success _ decls => Result.ok (expand_decls decls),
+        ParseResult.success _ decl_list => Result.ok (expand_decls decl_list),
         ParseResult.fail e => Result.err (render_parse_error input path e),
     }
 
@@ -105,19 +105,19 @@ def parse_module (path : ModulePath) (text : String) : ScopeData :=
     let empty_decls : List Decl := List.empty in
     let result : ParseResult (List Decl) := parse_all_decls text in
     match result {
-        ParseResult.success _ decls => build_scope_from_decls path decls,
+        ParseResult.success _ decl_list => build_scope_from_decls path decl_list,
         ParseResult.fail _ => build_scope_from_decls path empty_decls
     }
 
 // --- Module dependency loading ---
 
 /// Extract use declarations from a list of declarations
-def extract_use_decls (decls : List Decl) : List ModulePath :=
-    extract_use_decls_go decls List.empty
+def extract_use_decls (decl_list : List Decl) : List ModulePath :=
+    extract_use_decls_go decl_list List.empty
 
 #[partial]
-def extract_use_decls_go (decls : List Decl) (acc : List ModulePath) : List ModulePath :=
-    match decls {
+def extract_use_decls_go (decl_list : List Decl) (acc : List ModulePath) : List ModulePath :=
+    match decl_list {
         List.empty => acc,
         List.cons d rest =>
             match d {
@@ -326,7 +326,7 @@ def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List D
         Option.some content => do {
             let result : ParseResult (List Decl) := parse_all_decls content;
             match result {
-                ParseResult.success _ decls => do { return Option.some decls },
+                ParseResult.success _ decl_list => do { return Option.some decl_list },
                 ParseResult.fail _ => do { return Option.none }
             }
         },
@@ -348,8 +348,8 @@ def load_module_decls_default (mp : ModulePath) : IO (Option (List Decl)) :=
 def load_module_scope (base_dir : String) (mp : ModulePath) : IO (Option ScopeData) {
     let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
     match opt_decls {
-        Option.some decls => do {
-            let sd : ScopeData := build_scope_from_decls mp decls;
+        Option.some decl_list => do {
+            let sd : ScopeData := build_scope_from_decls mp decl_list;
             return Option.some sd
         },
         Option.none => do {
@@ -366,8 +366,8 @@ def load_module_scope_default (mp : ModulePath) : IO (Option ScopeData) :=
 /// Extract all transitive dependencies from a list of declarations
 /// with a base directory for resolving relative imports
 #[partial]
-def extract_all_dependencies (base_dir : String) (decls : List Decl) : IO (List ModulePath) :=
-    let direct_deps : List ModulePath := extract_use_decls decls in
+def extract_all_dependencies (base_dir : String) (decl_list : List Decl) : IO (List ModulePath) :=
+    let direct_deps : List ModulePath := extract_use_decls decl_list in
     let empty_mp_list : List ModulePath := List.empty in
     extract_all_dependencies_go base_dir direct_deps empty_mp_list empty_mp_list
 
@@ -436,7 +436,7 @@ def list_contains (xs : List ModulePath) (x : ModulePath) : Bool :=
 def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Option Scope) {
     let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
     match opt_decls {
-        Option.some decls => do {
+        Option.some decl_list => do {
             // Get the actual file path for this module to determine its directory
             let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
             let module_base_dir : String :=
@@ -444,18 +444,18 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
                     Option.some fp => extract_directory fp,
                     Option.none => base_dir
                 };
-            let all_deps : List ModulePath <- extract_all_dependencies module_base_dir decls;
+            let all_deps : List ModulePath <- extract_all_dependencies module_base_dir decl_list;
             let loaded_deps : List ScopeData <- load_dependency_scopes module_base_dir all_deps List.empty;
             let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
-            let this_scope : ScopeData := build_scope_from_decls mp decls;
+            let this_scope : ScopeData := build_scope_from_decls mp decl_list;
             let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
             // Outer aliasing pass: `build_scope_from_decls`'s own alias pass
-            // (inside `this_scope`) only sees the CURRENT file's own decls,
+            // (inside `this_scope`) only sees the CURRENT file's own decl_list,
             // so it can't alias a name whose REAL entry lives in a
             // dependency (e.g. `open IO {println}` where `IO` is declared
             // in a different file) -- that dependency's entries only
             // become visible once merged into `final_scope`, right here.
-            // Re-walking `decls`' own `use_d`/`open_d`s against the now-
+            // Re-walking `decl_list`' own `use_d`/`open_d`s against the now-
             // fully-merged scope catches exactly that case; same-file
             // opens are already aliased (a no-op re-alias here, cheap).
             // Same `decls_have_aliasable_decls` no-op skip as
@@ -466,8 +466,8 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
             // exercises (a single flat walk from here, per AGENTS.md item
             // 10's own note).
             let aliased_scope : ScopeData :=
-                if decls_have_aliasable_decls decls
-                then alias_decls_in_scope decls final_scope
+                if decls_have_aliasable_decls decl_list
+                then alias_decls_in_scope decl_list final_scope
                 else final_scope;
             let scope : Scope := {
                 module_id := mp,
@@ -505,20 +505,20 @@ def load_module_with_dependencies_default (mp : ModulePath) : IO (Option Scope) 
 def load_module_with_dependencies_and_prelude (base_dir : String) (mp : ModulePath) : IO (Option Scope) {
     let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
     match opt_decls {
-        Option.some decls => do {
+        Option.some decl_list => do {
             let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
             let module_base_dir : String :=
                 match resolved_path_opt {
                     Option.some fp => extract_directory fp,
                     Option.none => base_dir
                 };
-            let direct_deps : List ModulePath := extract_use_decls decls;
+            let direct_deps : List ModulePath := extract_use_decls decl_list;
             let direct_deps_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ direct_deps;
             let no_visited : List ModulePath := List.empty;
             let all_deps : List ModulePath <- extract_all_dependencies_go module_base_dir direct_deps_with_prelude no_visited no_visited;
             let loaded_deps : List ScopeData <- load_dependency_scopes module_base_dir all_deps List.empty;
             let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
-            let this_scope : ScopeData := build_scope_from_decls mp decls;
+            let this_scope : ScopeData := build_scope_from_decls mp decl_list;
             let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
             let scope : Scope := {
                 module_id := mp,
@@ -742,14 +742,14 @@ def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (c
         PreludeInitBase.mk base_sd base_covered => do {
             let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
             match opt_decls {
-                Option.some decls => do {
+                Option.some decl_list => do {
                     let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
                     let module_base_dir : String :=
                         match resolved_path_opt {
                             Option.some fp => extract_directory fp,
                             Option.none => base_dir
                         };
-                    let direct_deps : List ModulePath := extract_use_decls decls;
+                    let direct_deps : List ModulePath := extract_use_decls decl_list;
                     // Seed `visiting` (not `visited`) with `base_covered`: this
                     // function returns `visited` verbatim once `to_visit` is
                     // exhausted (line ~362), so seeding `visited` with
@@ -780,14 +780,14 @@ def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (c
                         ScopesAndCache.mk loaded_extra updated_cache => do {
                             let merged_extra : ScopeData := merge_scope_data_list loaded_extra;
                             let merged_with_base : ScopeData := merge_scope_data base_sd merged_extra;
-                            let this_scope : ScopeData := build_scope_from_decls mp decls;
+                            let this_scope : ScopeData := build_scope_from_decls mp decl_list;
                             let final_scope : ScopeData := merge_scope_data merged_with_base this_scope;
                             // See `load_module_with_dependencies`'s own identical
                             // outer-aliasing-pass comment above -- same reasoning,
                             // including the `decls_have_aliasable_decls` no-op skip.
                             let aliased_scope : ScopeData :=
-                                if decls_have_aliasable_decls decls
-                                then alias_decls_in_scope decls final_scope
+                                if decls_have_aliasable_decls decl_list
+                                then alias_decls_in_scope decl_list final_scope
                                 else final_scope;
                             let scope : Scope := {
                                 module_id := mp,
@@ -855,16 +855,16 @@ def load_dependency_decls (base_dir : String) (deps : List ModulePath) (acc : Li
             // Try to resolve and load each dependency
             let decls_opt : Option (List Decl) <- load_module_decls base_dir head;
             match decls_opt {
-                Option.some decls => do {
-                    let new_acc : List Decl := list_append decls acc;
+                Option.some decl_list => do {
+                    let new_acc : List Decl := list_append decl_list acc;
                     load_dependency_decls base_dir tail new_acc
                 },
                 Option.none => do {
                     // If not found with base_dir, try with empty base_dir (global search)
                     let decls_opt : Option (List Decl) <- load_module_decls_default head;
                     match decls_opt {
-                        Option.some decls => do {
-                            let new_acc : List Decl := list_append decls acc;
+                        Option.some decl_list => do {
+                            let new_acc : List Decl := list_append decl_list acc;
                             load_dependency_decls base_dir tail new_acc
                         },
                         Option.none => load_dependency_decls base_dir tail acc
@@ -1032,12 +1032,12 @@ def typecheck_file_with_deps (file_path : String) (mod_name : String) : IO Bool 
             Option.some scope =>
                 let result : ParseResult (List Decl) := parse_all_decls content in
                 match result {
-                    ParseResult.success _ decls => do {
+                    ParseResult.success _ decl_list => do {
                         let empty_locs : LocalScope := {
                             vars := List.empty,
                             parent := Option.none,
                         };
-                        return typecheck_module_with_scope scope decls empty_locs
+                        return typecheck_module_with_scope scope decl_list empty_locs
                     },
                     ParseResult.fail _ => do {
                         return false
@@ -1055,8 +1055,8 @@ def typecheck_file_with_deps (file_path : String) (mod_name : String) : IO Bool 
 
 /// Type check all declarations in a module with a given scope
 #[partial]
-def typecheck_module_with_scope (scope : Scope) (decls : List Decl) (locals : LocalScope) : Bool :=
-    match decls {
+def typecheck_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : Bool :=
+    match decl_list {
         List.empty => true,
         List.cons d rest =>
             match typecheck_decl_with_scope d scope locals {
@@ -1288,8 +1288,8 @@ def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (lo
 /// purely to allow that `println`; the accumulation logic itself is
 /// unchanged.
 #[partial]
-def check_module_with_scope (scope : Scope) (decls : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
-    match decls {
+def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+    match decl_list {
         List.empty => do { return List.empty },
         List.cons d rest => do {
             let here : List String <- check_decl_with_scope d scope locals path verbose;
@@ -1458,12 +1458,12 @@ def check_file (file_path : String) (verbose : Bool) : IO FileCheckResult {
         match scope_opt {
             Option.some scope =>
                 match try_parse_decls_strict content (Option.some file_path) {
-                    Result.ok decls => do {
+                    Result.ok decl_list => do {
                         let empty_locs : LocalScope := {
                             vars := List.empty,
                             parent := Option.none,
                         };
-                        let diags : List String <- check_module_with_scope scope decls empty_locs (Option.some file_path) verbose;
+                        let diags : List String <- check_module_with_scope scope decl_list empty_locs (Option.some file_path) verbose;
                         return { path := file_path, diagnostics := diags }
                     },
                     Result.err diagnostic => do {
@@ -1514,13 +1514,13 @@ def check_file_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_
                             let parse_elapsed : I64 := I64.sub Bench.now parse_start;
                             let parse_logged : Bool := if verbose then Bench.report ("parse  " ++ file_path) parse_elapsed else true;
                             match parse_result {
-                                Result.ok decls => do {
+                                Result.ok decl_list => do {
                                     let empty_locs : LocalScope := {
                                         vars := List.empty,
                                         parent := Option.none,
                                     };
                                     let check_start : I64 := Bench.now;
-                                    let diags : List String <- check_module_with_scope scope decls empty_locs (Option.some file_path) verbose;
+                                    let diags : List String <- check_module_with_scope scope decl_list empty_locs (Option.some file_path) verbose;
                                     let check_elapsed : I64 := I64.sub Bench.now check_start;
                                     let check_logged : Bool := if verbose then Bench.report ("check  " ++ file_path) check_elapsed else true;
                                     return { result := { path := file_path, diagnostics := diags }, cache := updated_cache }
@@ -1608,8 +1608,8 @@ def test_parse_def_resolve : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def foo : Bool := true" in
     match result {
-        ParseResult.success _ decls =>
-            let sd : ScopeData := build_scope_from_decls path decls in
+        ParseResult.success _ decl_list =>
+            let sd : ScopeData := build_scope_from_decls path decl_list in
             let no_parent : Option Scope := Option.none in
             let scope : Scope := {
                 module_id := path,
@@ -1635,8 +1635,8 @@ def test_parse_type_resolve_inductive : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }" in
     match result {
-        ParseResult.success _ decls =>
-            let sd : ScopeData := build_scope_from_decls path decls in
+        ParseResult.success _ decl_list =>
+            let sd : ScopeData := build_scope_from_decls path decl_list in
             let no_parent : Option Scope := Option.none in
             let scope : Scope := {
                 module_id := path,
@@ -1656,8 +1656,8 @@ def test_parse_type_constructor_resolves : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }" in
     match result {
-        ParseResult.success _ decls =>
-            let sd : ScopeData := build_scope_from_decls path decls in
+        ParseResult.success _ decl_list =>
+            let sd : ScopeData := build_scope_from_decls path decl_list in
             let no_parent : Option Scope := Option.none in
             let scope : Scope := {
                 module_id := path,
@@ -1683,8 +1683,8 @@ def test_parse_if_body_def_resolves : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def test_bool_true : Bool := if true then true else false" in
     match result {
-        ParseResult.success _ decls =>
-            let sd : ScopeData := build_scope_from_decls path decls in
+        ParseResult.success _ decl_list =>
+            let sd : ScopeData := build_scope_from_decls path decl_list in
             let no_parent : Option Scope := Option.none in
             let scope : Scope := {
                 module_id := path,
@@ -1710,8 +1710,8 @@ def test_parse_multiple_decls_resolve : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "def a : Bool := true type T { mk }" in
     match result {
-        ParseResult.success _ decls =>
-            let sd : ScopeData := build_scope_from_decls path decls in
+        ParseResult.success _ decl_list =>
+            let sd : ScopeData := build_scope_from_decls path decl_list in
             let no_parent : Option Scope := Option.none in
             let scope : Scope := {
                 module_id := path,
@@ -1759,8 +1759,8 @@ def test_parse_use_decl_ignored_in_scope : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
     let result : ParseResult (List Decl) := parse_all_decls "use prelude def bar : Bool := true" in
     match result {
-        ParseResult.success _ decls =>
-            let sd : ScopeData := build_scope_from_decls path decls in
+        ParseResult.success _ decl_list =>
+            let sd : ScopeData := build_scope_from_decls path decl_list in
             let no_parent : Option Scope := Option.none in
             let scope : Scope := {
                 module_id := path,
@@ -1786,7 +1786,7 @@ def test_parse_use_decl_ignored_in_scope : Bool :=
 #[test]
 def test_try_parse_decls_strict_ok_on_clean_input : Bool :=
     match try_parse_decls_strict "use prelude open IO" Option.none {
-        Result.ok decls => I64.gt (List.length decls) 0,
+        Result.ok decl_list => I64.gt (List.length decl_list) 0,
         Result.err _ => false
     }
 
@@ -1822,15 +1822,15 @@ def test_try_parse_decls_strict_err_includes_path : Bool :=
 struct ModuleInfo {
     path : ModulePath,
     file_path : String,
-    decls : List Decl,
+    decl_list : List Decl,
 }
 
 def show_module_info (m : ModuleInfo) : String :=
     match m {
-        mk path file decls =>
+        mk path file decl_list =>
             "module: " ++ Show.show path ++
             "\n\tpath: " ++ file ++
-            "\n\tdecls: " ++ Show.show (List.map Decl.to_name decls : List ModulePath)
+            "\n\tdecls: " ++ Show.show (List.map Decl.to_name decl_list : List ModulePath)
     }
 
 instance Show ModuleInfo {
@@ -1869,7 +1869,7 @@ def list_contains_module_info (modules : List ModuleInfo) (mp : ModulePath) : Bo
         List.empty => false,
         List.cons hd rest =>
             match hd {
-                ModuleInfo.mk path file_path decls =>
+                ModuleInfo.mk path file_path decl_list =>
                     if modpath_eq path mp then
                         true
                     else
@@ -1880,17 +1880,17 @@ def list_contains_module_info (modules : List ModuleInfo) (mp : ModulePath) : Bo
 #[partial]
 def get_module_info_path (mi : ModuleInfo) : ModulePath :=
     match mi {
-        ModuleInfo.mk path file_path decls => path
+        ModuleInfo.mk path file_path decl_list => path
     }
 
 def get_module_info_file_path (mi : ModuleInfo) : String :=
     match mi {
-        ModuleInfo.mk path file_path decls => file_path
+        ModuleInfo.mk path file_path decl_list => file_path
     }
 
 def get_module_info_decls (mi : ModuleInfo) : List Decl :=
     match mi {
-        ModuleInfo.mk path file_path decls => decls
+        ModuleInfo.mk path file_path decl_list => decl_list
     }
 
 #[partial]
@@ -1901,15 +1901,15 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option Mod
             Option.some fp => extract_directory fp,
             Option.none => base_dir
         };
-    let decls : Option (List Decl) <- load_module_decls actual_base_dir mp;
-    return match decls {
-        Option.some decls =>
+    let decl_list : Option (List Decl) <- load_module_decls actual_base_dir mp;
+    return match decl_list {
+        Option.some decl_list =>
             let file_path : String :=
                 match resolved_path_opt {
                     Option.some fp => fp,
                     Option.none => String.concat (module_path_to_file mp) ".mo"
                 } in
-            Option.some { path := mp, file_path := file_path, decls := decls },
+            Option.some { path := mp, file_path := file_path, decl_list := decl_list },
         Option.none => Option.none
     }
 }
@@ -1924,15 +1924,15 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
     match module {
         Option.some main_module =>
             match main_module {
-                ModuleInfo.mk mp_path file_path decls => do {
+                ModuleInfo.mk mp_path file_path decl_list => do {
                     let main_base_dir : String := extract_directory file_path;
-                    let all_dep_paths : List ModulePath <- extract_all_dependencies main_base_dir decls;
+                    let all_dep_paths : List ModulePath <- extract_all_dependencies main_base_dir decl_list;
                     let all_dep_paths_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ all_dep_paths;
                     let dep_modules_result : Result String (List ModuleInfo) <- load_dependencies_with_info main_base_dir all_dep_paths_with_prelude List.empty;
                     return match dep_modules_result {
                       Result.ok dep_modules => 
                         let all_modules : List ModuleInfo := List.cons main_module dep_modules in
-                        Result.ok { main_module := ModuleInfo.mk mp_path file_path decls, all_modules := all_modules },
+                        Result.ok { main_module := ModuleInfo.mk mp_path file_path decl_list, all_modules := all_modules },
                       Result.err e => Result.err e
                     }
                 }
@@ -1957,9 +1957,9 @@ def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (ac
                 match mi_opt {
                     Option.some mi =>
                         match mi {
-                            ModuleInfo.mk mp_path file_path decls => do {
+                            ModuleInfo.mk mp_path file_path decl_list => do {
                                 let dep_base_dir : String := extract_directory file_path;
-                                let dep_deps <- extract_all_dependencies dep_base_dir decls;
+                                let dep_deps <- extract_all_dependencies dep_base_dir decl_list;
                                 let new_acc : List ModuleInfo := List.cons mi acc;
                                 let loaded_deps_result <- load_dependencies_with_info dep_base_dir dep_deps new_acc;
                                 match loaded_deps_result {
@@ -1997,11 +1997,11 @@ def test_check_module_with_scope_all_pass : IO Bool := do {
     let path : ModulePath := ModulePath.mp List.empty;
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef c : Color := red";
     match result {
-        ParseResult.success _ decls => do {
-            let sd : ScopeData := build_scope_from_decls path decls;
+        ParseResult.success _ decl_list => do {
+            let sd : ScopeData := build_scope_from_decls path decl_list;
             let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
-            let diags : List String <- check_module_with_scope scope decls locals Option.none false;
+            let diags : List String <- check_module_with_scope scope decl_list locals Option.none false;
             return (match diags {
                 List.empty => true,
                 List.cons _ _ => false
@@ -2019,11 +2019,11 @@ def test_check_module_with_scope_accumulates_failures : IO Bool := do {
     let path : ModulePath := ModulePath.mp List.empty;
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef good : Color := red\ndef bad : Color := nonexistent_name";
     match result {
-        ParseResult.success _ decls => do {
-            let sd : ScopeData := build_scope_from_decls path decls;
+        ParseResult.success _ decl_list => do {
+            let sd : ScopeData := build_scope_from_decls path decl_list;
             let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
-            let diags : List String <- check_module_with_scope scope decls locals Option.none false;
+            let diags : List String <- check_module_with_scope scope decl_list locals Option.none false;
             return (match diags {
                 List.cons msg rest =>
                     string_contains_helper msg "unknown variable" &&

@@ -2920,9 +2920,9 @@ def defmacro_term_body (r : ParseResult Term) (name : Identifier) (params : List
 /// identical to the reference's own `decls_until_end` (a hand-rolled
 /// loop, not nom combinators there either), and confirmed the
 /// reference's `decl_parser_no_macro`/`decl_parser` are byte-for-byte
-/// the same alternation (both allow NESTED `defmacro`/macro-call decls
+/// the same alternation (both allow NESTED `defmacro`/macro-call decl_list
 /// — needed since `std/derive.mo`'s own macros call `reflect_type_info!
-/// T ...meta` inside their own `decls{}` bodies) — so reusing this
+/// T ...meta` inside their own `decl_list{}` bodies) — so reusing this
 /// file's single, unified `decl_parser`/`decls_skip` here (rather than
 /// inventing a separate "no-macro" variant) matches the reference
 /// exactly, and needs no new termination-guarding machinery.
@@ -2936,18 +2936,18 @@ def defmacro_decls_open (r : ParseResult String) (name : Identifier) (params : L
 #[partial]
 def defmacro_decls_result (r : ParseResult (List Decl)) (name : Identifier) (params : List Param) : ParseResult Decl :=
 	match r {
-		success rem decls => defmacro_decls_close (tag "}" (skip_spaces rem)) name params decls,
+		success rem decl_list => defmacro_decls_close (tag "}" (skip_spaces rem)) name params decl_list,
 		fail e => fail e
 	}
 
 #[partial]
-def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : List Param) (decls : List Decl) : ParseResult Decl :=
+def defmacro_decls_close (r : ParseResult String) (name : Identifier) (params : List Param) (decl_list : List Decl) : ParseResult Decl :=
 	match r {
 		success rem _ =>
 			let mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
 			let no_attrs : List Attribute := List.empty in
-			success rem (Decl.decl_gen_d mp params decls no_attrs),
-		fail e => fail (ParseError.custom "expected } to close decls block" "")
+			success rem (Decl.decl_gen_d mp params decl_list no_attrs),
+		fail e => fail (ParseError.custom "expected } to close decl_list block" "")
 	}
 
 // ─── Declaration-position `name! args...` ───────────────────────────────
@@ -3090,9 +3090,9 @@ def decls_try (r : ParseResult Decl) (orig : String) (acc : List Decl) : ParseRe
 		// def) as a spurious extra declaration — confirmed to regress
 		// `slow_tests/typecheck_init_tests.mo` /
 		// `slow_tests/typecheck_std_tests.mo` (12 tests). Reverted until
-		// resync can be scoped to not leak decls from inside a construct
+		// resync can be scoped to not leak decl_list from inside a construct
 		// that failed as a whole (e.g. only resync at genuine top-level
-		// keyword boundaries AND validate recovered decls don't reference
+		// keyword boundaries AND validate recovered decl_list don't reference
 		// names that were never in scope at the top level).
 		fail _ => success orig (list_reverse acc)
 	}
@@ -3813,7 +3813,7 @@ def literal_parser (input: String) : ParseResult Term :=
 // `///`), but a bare `tag "///"` left plain `//` header/inline comments
 // unconsumed — anything from `//` onward would then hit `decl_parser` as
 // if it were a declaration and fail, which (before `decls_try`'s
-// resync fix) silently truncated the rest of the file's decls. Matching
+// resync fix) silently truncated the rest of the file's decl_list. Matching
 // on `"//"` (a prefix of `"///"` too) skips both forms uniformly.
 #[partial]
 def skip_docstrings (input : String) : String :=
@@ -4911,9 +4911,9 @@ def test_string_parse_utf8_em_dash : Bool :=
 #[test]
 def test_decls_with_docstring : Bool :=
 	match decls_parser "/// A test declaration\ndef x : I64 := 42" {
-		success rem decls =>
+		success rem decl_list =>
 			let rem_stripped : String := skip_spaces rem in
-			String.beq rem_stripped "" && I64.beq (debug_decl_count decls) 1,
+			String.beq rem_stripped "" && I64.beq (debug_decl_count decl_list) 1,
 		fail _ => false
 	}
 
@@ -6223,7 +6223,7 @@ def test_defmacro_term_body_no_params : Bool :=
     }
 
 /// Real bug found this round (macro-expansion phase, prerequisite fix
-/// B): `defmacro`/`decls` were missing from `kw_list`
+/// B): `defmacro`/`decl_list` were missing from `kw_list`
 /// (lang/parser/core.mo), so `identifier` happily accepted either as
 /// an ordinary variable name -- meaning a PRECEDING decl's own
 /// expression parsing could silently swallow a following `defmacro`
@@ -6242,10 +6242,10 @@ def test_defmacro_term_body_no_params : Bool :=
 #[test]
 def test_defmacro_not_swallowed_by_preceding_decl : Bool :=
     match decls_parser_strict "def foo : I64 := 1\n\ndefmacro derive_lens T := decls {\n    reflect_type_info! T derive_lens_meta\n}\n" {
-        success rem decls =>
+        success rem decl_list =>
             String.beq rem "" &&
-            I64.beq (List.length decls) 2 &&
-            match decls {
+            I64.beq (List.length decl_list) 2 &&
+            match decl_list {
                 List.cons _ rest =>
                     match rest {
                         List.cons d2 _ => match d2 { Decl.decl_gen_d _ _ _ _ => true, _ => false },
@@ -6257,7 +6257,7 @@ def test_defmacro_not_swallowed_by_preceding_decl : Bool :=
     }
 
 /// Form A: `defmacro name params := decls { ... }` -> `Decl.decl_gen_d`,
-/// storing the literal (unexpanded) list of decls parsed out of the
+/// storing the literal (unexpanded) list of decl_list parsed out of the
 /// body -- the real corpus shape (`std/derive.mo`'s own `defmacro
 /// derive_lens T := decls { ... }`).
 #[test]
@@ -6266,10 +6266,10 @@ def test_defmacro_decls_block_basic : Bool :=
         success rem out =>
             String.beq rem "" &&
             match out {
-                Decl.decl_gen_d name params decls _attrs =>
+                Decl.decl_gen_d name params decl_list _attrs =>
                     id_eq (Identifier.id "make_getter") (module_path_last name) &&
                     I64.beq (List.length params) 1 &&
-                    I64.beq (List.length decls) 1,
+                    I64.beq (List.length decl_list) 1,
                 _ => false
             },
         fail _ => false
@@ -6287,8 +6287,8 @@ def test_defmacro_decls_block_with_nested_macro_call : Bool :=
         success rem out =>
             String.beq rem "" &&
             match out {
-                Decl.decl_gen_d _ _ decls _attrs =>
-                    match decls {
+                Decl.decl_gen_d _ _ decl_list _attrs =>
+                    match decl_list {
                         List.cons d _ => match d { Decl.macro_call_d name _ => id_eq name (Identifier.id "reflect_type_info"), _ => false },
                         List.empty => false,
                     },
@@ -6337,10 +6337,10 @@ def test_macro_call_decl_standalone_with_args : Bool :=
 #[test]
 def test_macro_call_decl_two_consecutive_not_swallowed : Bool :=
     match decls_parser "derive_beq! Point\nderive_bord! Point" {
-        success rem decls =>
+        success rem decl_list =>
             String.beq rem "" &&
-            I64.beq (List.length decls) 2 &&
-            match decls {
+            I64.beq (List.length decl_list) 2 &&
+            match decl_list {
                 List.cons d1 rest =>
                     (match d1 { Decl.macro_call_d n1 a1 => id_eq n1 (Identifier.id "derive_beq") && I64.beq (List.length a1) 1, _ => false }) &&
                     (match rest {
@@ -6929,8 +6929,8 @@ def debug_decl_kind (d : Decl) : String :=
     }
 
 #[partial]
-def debug_decl_count (decls : List Decl) : I64 :=
-    match decls {
+def debug_decl_count (decl_list : List Decl) : I64 :=
+    match decl_list {
         List.empty => 0,
         List.cons d rest => 1 + debug_decl_count rest
     }
@@ -6940,8 +6940,8 @@ def debug_decl_count (decls : List Decl) : I64 :=
 #[test]
 def test_decls_empty : Bool :=
     match decls_parser "" {
-        success rem decls =>
-            String.beq rem "" && match decls {
+        success rem decl_list =>
+            String.beq rem "" && match decl_list {
                 List.empty => true,
                 List.cons _ _ => false
             },
@@ -6951,8 +6951,8 @@ def test_decls_empty : Bool :=
 #[test]
 def test_decls_whitespace_only : Bool :=
     match decls_parser "  " {
-        success rem decls =>
-            String.beq rem "" && match decls {
+        success rem decl_list =>
+            String.beq rem "" && match decl_list {
                 List.empty => true,
                 List.cons _ _ => false
             },
@@ -6962,28 +6962,28 @@ def test_decls_whitespace_only : Bool :=
 #[test]
 def test_decls_one_use : Bool :=
     match decls_parser "use prelude" {
-        success rem decls => String.beq rem "",
+        success rem decl_list => String.beq rem "",
         fail _ => false
     }
 
 #[test]
 def test_decls_two_parsed : Bool :=
     match decls_parser "use prelude open IO" {
-        success rem decls => String.beq rem "",
+        success rem decl_list => String.beq rem "",
         fail _ => false
     }
 
 #[test]
 def test_decls_def : Bool :=
     match decls_parser "def x : I64 := 42" {
-        success rem decls => String.beq rem "",
+        success rem decl_list => String.beq rem "",
         fail _ => false
     }
 
 #[test]
 def test_decls_decl_plus_noise : Bool :=
     match decls_parser "use prelude  garbage" {
-        success rem decls => true,
+        success rem decl_list => true,
         fail _ => false
     }
 
@@ -7003,7 +7003,7 @@ def test_decls_parser_strict_reports_failure_on_garbage : Bool :=
 #[test]
 def test_decls_parser_strict_succeeds_on_clean_input : Bool :=
     match decls_parser_strict "use prelude open IO" {
-        success rem decls => String.beq rem "" && I64.beq (debug_decl_count decls) 2,
+        success rem decl_list => String.beq rem "" && I64.beq (debug_decl_count decl_list) 2,
         fail _ => false
     }
 
@@ -7035,24 +7035,24 @@ def string_contains_helper (haystack : String) (needle : String) : Bool :=
 #[test]
 def test_decls_count_two : Bool :=
     match decls_parser "use prelude open IO" {
-        success rem decls =>
-            String.beq rem "" && I64.beq (debug_decl_count decls) 2,
+        success rem decl_list =>
+            String.beq rem "" && I64.beq (debug_decl_count decl_list) 2,
         fail _ => false
     }
 
 #[test]
 def test_decls_count_one : Bool :=
     match decls_parser "def x : I64 := 1" {
-        success rem decls =>
-            String.beq rem "" && I64.beq (debug_decl_count decls) 1,
+        success rem decl_list =>
+            String.beq rem "" && I64.beq (debug_decl_count decl_list) 1,
         fail _ => false
     }
 
 #[test]
 def test_decls_kind_use : Bool :=
     match decls_parser "use prelude" {
-        success rem decls =>
-            match decls {
+        success rem decl_list =>
+            match decl_list {
                 List.cons d rest =>
                     match rest { List.empty => String.beq rem "", List.cons _ _ => false },
                 List.empty => false
@@ -7063,7 +7063,7 @@ def test_decls_kind_use : Bool :=
 #[test]
 def test_decls_type_decl : Bool :=
     match decls_parser "type Maybe A { some (a : A), none }" {
-        success rem decls => String.beq rem "",
+        success rem decl_list => String.beq rem "",
         fail _ => false
     }
 
@@ -7077,8 +7077,8 @@ def test_decls_type_decl : Bool :=
 #[test]
 def test_decls_mixed : Bool :=
     match decls_parser "use prelude  open IO  def main : I64 := 42" {
-        success rem decls =>
-            String.beq rem "" && I64.beq (debug_decl_count decls) 3,
+        success rem decl_list =>
+            String.beq rem "" && I64.beq (debug_decl_count decl_list) 3,
         fail _ => false
     }
 
@@ -7091,8 +7091,8 @@ def test_decls_mixed : Bool :=
 #[test]
 def test_decls_prelude_features : Bool :=
     match decls_parser "\ntype Any {\n  any {A : Type} (value: A)\n}\n\nclass Functor (F: Type -> Type) {\n  def map (f: A -> B) : (F A) -> F B\n}\n\nclass FromListLiteral (L : Type -> Type := List) {\n  def cons (a : A) : L A -> L A\n  def empty : L A\n}\n\n/// HAdd\nclass [HAdd A A] Add A {\n  def add (a: A) (b: A) : A\n}\n\ninstance [Show A] Show (List A) {\n  def show xs := \"list\"\n}\n" {
-        success rem decls =>
-            I64.beq (debug_decl_count decls) 5,
+        success rem decl_list =>
+            I64.beq (debug_decl_count decl_list) 5,
         fail _ => false
     }
 

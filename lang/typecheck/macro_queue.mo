@@ -1,9 +1,9 @@
 /// The decl-level entry point — `expand_decls`, mirroring the Rust
 /// reference's own `expand_macros` (`core/src/eval/macro_expand.rs`):
-/// one module's own already-parsed decls in, decls with every macro
+/// one module's own already-parsed decl_list in, decl_list with every macro
 /// resolved out.
 ///
-/// Builds a macro registry directly from the decls list itself (bare
+/// Builds a macro registry directly from the decl_list list itself (bare
 /// name -> definition, matching how [[lang/typecheck/macro_expand.mo]]'s
 /// `expand_term`/`resolve_quote` already expect their own `lookup`
 /// argument shaped), then walks the list once: `Decl.def_macro_d`/
@@ -41,15 +41,15 @@ use lang.typecheck.macro_expand {expand_term}
 // ─── Registry ───────────────────────────────────────────────────────
 
 type TermMacroEntry { tm_entry (name: Identifier) (body: Term) }
-type DeclGenEntry { dg_entry (name: Identifier) (params: List Param) (decls: List Decl) }
+type DeclGenEntry { dg_entry (name: Identifier) (params: List Param) (decl_list: List Decl) }
 
 #[partial]
 def module_path_last (mp : ModulePath) : Option Identifier :=
     match mp { ModulePath.mp ids => List.last ids }
 
 #[partial]
-def build_term_macro_registry (decls : List Decl) : List TermMacroEntry :=
-    match decls {
+def build_term_macro_registry (decl_list : List Decl) : List TermMacroEntry :=
+    match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
             match d {
@@ -66,8 +66,8 @@ def build_term_macro_registry (decls : List Decl) : List TermMacroEntry :=
     }
 
 #[partial]
-def build_decl_gen_registry (decls : List Decl) : List DeclGenEntry :=
-    match decls {
+def build_decl_gen_registry (decl_list : List Decl) : List DeclGenEntry :=
+    match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
             match d {
@@ -238,8 +238,8 @@ def expand_decl_terms (lookup : Identifier -> Option Term) (d : Decl) : Decl :=
     }
 
 #[partial]
-def expand_decls_terms_only (lookup : Identifier -> Option Term) (decls : List Decl) : List Decl :=
-    match decls {
+def expand_decls_terms_only (lookup : Identifier -> Option Term) (decl_list : List Decl) : List Decl :=
+    match decl_list {
         List.empty => List.empty,
         List.cons d rest => List.cons (expand_decl_terms lookup d) (expand_decls_terms_only lookup rest),
     }
@@ -247,22 +247,22 @@ def expand_decls_terms_only (lookup : Identifier -> Option Term) (decls : List D
 // ─── The work-queue itself ─────────────────────────────────────────
 
 /// Entry point: expand every macro call (term- and decl-position) in
-/// one module's own decls list. Registry is built from THIS list only
+/// one module's own decl_list list. Registry is built from THIS list only
 /// — cross-module macro imports (a macro `def_macro_d`/`decl_gen_d`
 /// declared in a DIFFERENT, already-loaded module) are out of scope
 /// for this single-pass version, matching the same scope-narrowing
 /// this file's own doc comment already flags for nested decl-position
 /// calls.
 #[partial]
-def expand_decls (decls : List Decl) : List Decl :=
-    let term_registry : List TermMacroEntry := build_term_macro_registry decls in
-    let decl_gen_registry : List DeclGenEntry := build_decl_gen_registry decls in
+def expand_decls (decl_list : List Decl) : List Decl :=
+    let term_registry : List TermMacroEntry := build_term_macro_registry decl_list in
+    let decl_gen_registry : List DeclGenEntry := build_decl_gen_registry decl_list in
     let lookup : Identifier -> Option Term := fn id => lookup_term_macro term_registry id in
-    expand_decls_go lookup decl_gen_registry decls
+    expand_decls_go lookup decl_gen_registry decl_list
 
 #[partial]
-def expand_decls_go (lookup : Identifier -> Option Term) (decl_gen_registry : List DeclGenEntry) (decls : List Decl) : List Decl :=
-    match decls {
+def expand_decls_go (lookup : Identifier -> Option Term) (decl_gen_registry : List DeclGenEntry) (decl_list : List Decl) : List Decl :=
+    match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
             match d {
@@ -312,7 +312,7 @@ def dummy_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "dummy") 
 #[test]
 def test_expand_decls_drops_term_macro_definitions : Bool :=
     // `defmacro double x := x` on its own -- consumed into the
-    // registry, produces zero output decls.
+    // registry, produces zero output decl_list.
     let double_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "double") List.empty) in
     let body : Term := Term.lam DebugName.unnamed Term.hole (Term.var 0 DebugName.unnamed) in
     let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private) in
@@ -344,7 +344,7 @@ def test_expand_decls_expands_term_position_macro_call_inside_a_def : Bool :=
 
 #[test]
 def test_expand_decls_resolves_std_derive_shape_end_to_end : Bool :=
-    // The real `std/derive.mo` shape, both decls together:
+    // The real `std/derive.mo` shape, both decl_list together:
     // `defmacro derive_lens T := decls { reflect_type_info! T
     // derive_lens_meta }` followed by `derive_lens! Point` --
     // expands to the template's own `reflect_type_info!` call with

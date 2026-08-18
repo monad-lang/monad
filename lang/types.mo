@@ -544,9 +544,9 @@ type Decl {
     /// inlined directly here (matching this type's own `infix_d`/
     /// `scoped_open_d` convention of inline fields over a separate
     /// wrapper struct) rather than introduced as its own named type.
-    /// `decls` is the literal, unexpanded list of declarations parsed
+    /// `decl_list` is the literal, unexpanded list of declarations parsed
     /// out of the `decls { ... }` body.
-    decl_gen_d (name: ModulePath) (params: List Param) (decls: List Decl) (attrs: List Attribute),
+    decl_gen_d (name: ModulePath) (params: List Param) (decl_list: List Decl) (attrs: List Attribute),
     /// Declaration-position `name! arg1 arg2 ...` (e.g. `derive_beq!
     /// Point`, `reflect_type_info! T some_meta`). `name` is a bare
     /// `Identifier`, NOT a `ModulePath` — differs from `defmacro`'s own

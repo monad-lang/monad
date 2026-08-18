@@ -29,7 +29,7 @@ use lang.types {DebugName, ModulePath, Term}
 ///
 /// Note: `lang/lower_core_ir.mo`'s `LowerCtx` reads def bodies from its
 /// own flat `List Def` (built by `lower_ctx_from_decls` from these same
-/// `decls`), not from `Scope`/`scope_resolve_name` -- confirmed directly
+/// `decl_list`), not from `Scope`/`scope_resolve_name` -- confirmed directly
 /// that `lang/scope.mo`'s `build_scope_def` always stores `body :=
 /// Term.hole` in scope, never the real `Def.term`. See
 /// `lang/lower_core_ir.mo`'s own doc comment.
@@ -47,8 +47,8 @@ def num (n : I64) : Term := Term.lit (Literal.num n NumSuffix.i64)
 def def_decl (name : String) (term : Term) : Decl :=
   Decl.def_d (Def.mk (mp1 name) Term.hole term List.empty List.empty Visibility.package_private)
 
-def build_ctx (decls : List Decl) : LowerCtx :=
-  lower_ctx_from_decls (mp1 "test") decls
+def build_ctx (decl_list : List Decl) : LowerCtx :=
+  lower_ctx_from_decls (mp1 "test") decl_list
 
 /// Lower `root`'s body against `ctx` and evaluate it to a `Value`,
 /// against the (real, worklist-built) `GlobalTable` `lower_root` returns.

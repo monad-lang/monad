@@ -196,8 +196,8 @@ def test_elaborate_class_method : Bool :=
 
 #[test]
 def test_elaborate_decls_empty : Bool :=
-    let decls : List Decl := List.empty in
-    let result : List Decl := elaborate_decls decls no_ids in
+    let decl_list : List Decl := List.empty in
+    let result : List Decl := elaborate_decls decl_list no_ids in
     match result {
         List.empty => true,
         _ => false,
@@ -250,6 +250,6 @@ def test_names_of_decls_multiple : Bool :=
     let mp_g : ModulePath := ModulePath.mp (List.cons (Identifier.id "g") List.empty) in
     let d1 : Decl := Decl.def_d (Def.mk mp_f (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private) in
     let d2 : Decl := Decl.def_d (Def.mk mp_g (type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private) in
-    let decls : List Decl := List.cons d1 (List.cons d2 List.empty) in
-    let names : List Identifier := names_of_decls decls in
+    let decl_list : List Decl := List.cons d1 (List.cons d2 List.empty) in
+    let names : List Identifier := names_of_decls decl_list in
     id_member (Identifier.id "f") names && id_member (Identifier.id "g") names

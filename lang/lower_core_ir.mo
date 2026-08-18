@@ -611,13 +611,13 @@ def natives : NativeTable := basic_native_table
 
 /// Build a `LowerCtx` from a flat `List Decl` -- pulls `Def`s out
 /// directly (for `find_def_body`) and builds a `Scope` from the same
-/// decls (for `scope_resolve_name`/`scope_find_inductive`).
-def lower_ctx_from_decls (path : ModulePath) (decls : List Decl) : LowerCtx :=
-  LowerCtx.lower_ctx (Scope.mk path (build_scope_from_decls path decls) Option.none) (decls_to_defs decls)
+/// decl_list (for `scope_resolve_name`/`scope_find_inductive`).
+def lower_ctx_from_decls (path : ModulePath) (decl_list : List Decl) : LowerCtx :=
+  LowerCtx.lower_ctx (Scope.mk path (build_scope_from_decls path decl_list) Option.none) (decls_to_defs decl_list)
 
 #[partial]
-def decls_to_defs (decls : List Decl) : List Def :=
-  match decls {
+def decls_to_defs (decl_list : List Decl) : List Def :=
+  match decl_list {
     List.empty => List.empty,
     List.cons d rest =>
       match d {

@@ -16,7 +16,7 @@ open ModulePath {mp}
 open Literal {if_, match_}
 open TypeError {not_a_type, unknown_var}
 
-// --- Test scope setup: empty decls with builtins (Type, Prop) ---
+// --- Test scope setup: empty decl_list with builtins (Type, Prop) ---
 
 def empty_path : ModulePath := ModulePath.mp List.empty
 def empty_decls : List Decl := List.empty
@@ -374,8 +374,8 @@ def maybe_scope : Scope :=
     let empty_attrs : List Attribute := List.empty in
     let ind : Inductive := Inductive.mk
         type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
-    let decls : List Decl := List.cons (Decl.inductive_d ind) List.empty in
-    let sd : ScopeData := build_scope_from_decls mod_path decls in
+    let decl_list : List Decl := List.cons (Decl.inductive_d ind) List.empty in
+    let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     {
         module_id := mod_path,
         scope := sd,

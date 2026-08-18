@@ -27,8 +27,8 @@ def is_hole (t : Term) : Bool :=
         _ => false
     }
 
-def typecheck_module (path : ModulePath) (scope : Scope) (decls : List Decl) : Bool := 
-    match decls {
+def typecheck_module (path : ModulePath) (scope : Scope) (decl_list : List Decl) : Bool := 
+    match decl_list {
         List.empty => true,
         List.cons d rest =>
             let result : Bool := typecheck_decl d path scope in
@@ -88,11 +88,11 @@ def typecheck_file (file_path : String) (mod_name : String) : Bool :=
     match IO.read_file file_path {
         IO.io content => 
             match parse_all_decls content {
-                success _ decls => 
+                success _ decl_list => 
                     let path := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty) in
-                    let sd := build_scope_from_decls path decls in
+                    let sd := build_scope_from_decls path decl_list in
                     let scope := make_scope path sd in
-                    typecheck_module path scope decls,
+                    typecheck_module path scope decl_list,
                 fail _ => false
             },
         _ => false
@@ -112,11 +112,11 @@ def typecheck_file (file_path : String) (mod_name : String) : Bool :=
 /// bare, single-file harness doesn't do.
 def typecheck_source (source : String) : Bool :=
     match parse_all_decls source {
-        success _ decls =>
+        success _ decl_list =>
             let path := ModulePath.mp (List.cons (Identifier.id "synthetic") List.empty) in
-            let sd := build_scope_from_decls path decls in
+            let sd := build_scope_from_decls path decl_list in
             let scope := make_scope path sd in
-            typecheck_module path scope decls,
+            typecheck_module path scope decl_list,
         fail _ => false
     }
 
@@ -142,7 +142,7 @@ def test_typecheck_module_rejects_unbound_variable : Bool :=
 // before `lang/parser/combinators.mo`'s UTF-8 byte-stepping fix
 // (`utf8_char_width`): both files have an em dash in a comment ahead of
 // their real content, which used to truncate `decls_try` to a handful
-// of self-contained leading decls — so these two tests were previously
+// of self-contained leading decl_list — so these two tests were previously
 // "passing" only by accident of the very bug this fix corrects, never
 // because `typecheck_file`'s dependency-free harness could actually
 // resolve `IO`/`Bool`. Confirmed by bisection (parsed decl count went

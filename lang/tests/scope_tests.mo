@@ -13,7 +13,7 @@ use lang.scope {
   scope_push_local, scope_resolve_instance, scope_resolve_name,
 }
 
-// --- Build scope from empty decls ---
+// --- Build scope from empty decl_list ---
 
 #[test]
 def test_build_empty_scope : Bool :=
@@ -33,8 +33,8 @@ def test_build_with_def : Bool :=
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let def_decl : Def := Def.mk name Term.hole Term.hole empty_constraints empty_attrs Visibility.package_private in
-    let decls : List Decl := List.cons (Decl.def_d def_decl) List.empty in
-    let sd : ScopeData := build_scope_from_decls mod_path decls in
+    let decl_list : List Decl := List.cons (Decl.def_d def_decl) List.empty in
+    let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     true
 
 // --- Build scope with an inductive declaration ---
@@ -54,8 +54,8 @@ def test_build_with_inductive : Bool :=
     let cns : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
     let empty_attrs : List Attribute := List.empty in
     let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
-    let decls : List Decl := List.cons (Decl.inductive_d ind) List.empty in
-    let sd : ScopeData := build_scope_from_decls mod_path decls in
+    let decl_list : List Decl := List.cons (Decl.inductive_d ind) List.empty in
+    let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     true
 
 // --- scope_globals extracts ScopeData from Scope ---
@@ -475,8 +475,8 @@ def test_build_scope_then_resolve_def : Bool :=
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
     let def_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "add") List.empty) in
     let def_decl : Def := Def.mk def_name Term.hole Term.hole List.empty List.empty Visibility.package_private in
-    let decls : List Decl := List.cons (Decl.def_d def_decl) List.empty in
-    let sd : ScopeData := build_scope_from_decls mod_path decls in
+    let decl_list : List Decl := List.cons (Decl.def_d def_decl) List.empty in
+    let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
@@ -507,8 +507,8 @@ def test_build_scope_then_resolve_constructor : Bool :=
     let cns : List InductConstructor := List.cons true_cn List.empty in
     let empty_attrs : List Attribute := List.empty in
     let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
-    let decls : List Decl := List.cons (Decl.inductive_d ind) List.empty in
-    let sd : ScopeData := build_scope_from_decls mod_path decls in
+    let decl_list : List Decl := List.cons (Decl.inductive_d ind) List.empty in
+    let sd : ScopeData := build_scope_from_decls mod_path decl_list in
     let s : Scope := {
         module_id := mod_path,
         scope := sd,
