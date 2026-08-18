@@ -230,7 +230,19 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
         Decl.use_d _ _ _ => acc,
         Decl.open_d _ _ => acc,
         Decl.struct_d s => build_scope_struct s path acc,
-        Decl.scoped_open_d _ _ inner => build_scope_one_decl inner path acc
+        Decl.scoped_open_d _ _ inner => build_scope_one_decl inner path acc,
+        // `def_macro_d`/`decl_gen_d`/`macro_call_d` (macro-expansion-
+        // phase additions) are pre-expansion, unexpanded declarations —
+        // scope has nothing real to register from them until an
+        // expansion pass turns them into ordinary def_d/inductive_d/etc
+        // decls first. No-op, matching use_d/open_d's own existing
+        // convention above (this codebase has no static match-
+        // exhaustiveness check — Monad's own `NonExhaustiveMatch` is a
+        // RUNTIME-only error, core/src/core_eval.rs — so leaving this
+        // wildcard off would silently typecheck fine today and only
+        // crash the instant a real decl of one of these 3 variants
+        // reached this function).
+        _ => acc,
     }
 
 def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData :=
@@ -994,6 +1006,65 @@ def list_append_go {A : Type} (xs : List A) (ys : List A) : List A :=
 def test_scope_data_empty_lookup_misses : Bool :=
     let sd := scope_data_empty in
     match scope_data_find_def sd (ModulePath.mp List.empty) {
+        Option.some _ => false,
+        Option.none => true
+    }
+
+// Regression tests for `build_scope_one_decl`'s wildcard arm covering
+// the 3 macro-expansion-phase `Decl` variants (def_macro_d/decl_gen_d/
+// macro_call_d) — this codebase has no static match-exhaustiveness
+// check, so a missing arm here would silently typecheck fine and only
+// crash at RUNTIME the instant a real decl of one of these variants
+// reached this function (which real corpus `.mo` files now do, once
+// they successfully parse). These prove the fix is real: each
+// constructs a real value of the new variant and confirms
+// `build_scope_one_decl` handles it (a no-op — scope stays empty)
+// without crashing.
+
+def dummy_macro_call_decl : Decl :=
+    let name : Identifier := Identifier.id "foo" in
+    let no_args : List Term := List.empty in
+    Decl.macro_call_d name no_args
+
+def dummy_def_macro_decl : Decl :=
+    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "foo") List.empty) in
+    let no_constraints : List TypeConstraint := List.empty in
+    let no_attrs : List Attribute := List.empty in
+    Decl.def_macro_d (Def.mk mp Term.hole Term.hole no_constraints no_attrs Visibility.package_private)
+
+def dummy_decl_gen_decl : Decl :=
+    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "foo") List.empty) in
+    let no_params : List Param := List.empty in
+    let no_decls : List Decl := List.empty in
+    let no_attrs : List Attribute := List.empty in
+    Decl.decl_gen_d mp no_params no_decls no_attrs
+
+#[test]
+def test_build_scope_one_decl_macro_call_d_is_noop : Bool :=
+    let sd := scope_data_empty in
+    let path : ModulePath := ModulePath.mp List.empty in
+    let sd2 := build_scope_one_decl dummy_macro_call_decl path sd in
+    match scope_data_find_def sd2 (ModulePath.mp (List.cons (Identifier.id "foo") List.empty)) {
+        Option.some _ => false,
+        Option.none => true
+    }
+
+#[test]
+def test_build_scope_one_decl_def_macro_d_is_noop : Bool :=
+    let sd := scope_data_empty in
+    let path : ModulePath := ModulePath.mp List.empty in
+    let sd2 := build_scope_one_decl dummy_def_macro_decl path sd in
+    match scope_data_find_def sd2 (ModulePath.mp (List.cons (Identifier.id "foo") List.empty)) {
+        Option.some _ => false,
+        Option.none => true
+    }
+
+#[test]
+def test_build_scope_one_decl_decl_gen_d_is_noop : Bool :=
+    let sd := scope_data_empty in
+    let path : ModulePath := ModulePath.mp List.empty in
+    let sd2 := build_scope_one_decl dummy_decl_gen_decl path sd in
+    match scope_data_find_def sd2 (ModulePath.mp (List.cons (Identifier.id "foo") List.empty)) {
         Option.some _ => false,
         Option.none => true
     }

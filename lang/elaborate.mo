@@ -1,9 +1,9 @@
 use lang.types {
-  Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Instance,
-  MatchCase, ModulePath, Param, Struct, Term, TypeConstraint, app, class_d, con,
-  def_d, forall, hole, id, id_member, if_, inductive_d, infix_d, instance_d, lam,
-  lit, match_, mc, mk, mp, name, named, ntv, num, open_d, pi, scoped_open_d, str,
-  struct_d, type_, union_ids, unnamed, use_d, var,
+  Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive,
+  Instance, MatchCase, ModulePath, Param, Struct, Term, TypeConstraint,
+  app, class_d, con, def_d, forall, hole, id, id_eq, id_member, if_, inductive_d,
+  infix_d, instance_d, lam, lit, match_, mc, mk, mp, name, named, ntv, num, open_d,
+  pi, scoped_open_d, str, struct_d, type_, union_ids, unnamed, use_d, var,
 }
 
 /// Free variable sentinel index from parser (sentinel = -1).
@@ -328,6 +328,19 @@ def elaborate_decl (decl : Decl) (known_names : List Identifier) : Decl :=
         Decl.use_d p filter public => Decl.use_d p filter public,
         Decl.open_d p filter => Decl.open_d p filter,
         Decl.scoped_open_d p filter inner => Decl.scoped_open_d p filter (elaborate_decl inner known_names),
+        // `def_macro_d`/`decl_gen_d`/`macro_call_d` (macro-expansion-
+        // phase additions): passed through unchanged, same as
+        // infix_d/use_d/open_d above — elaboration (forall-wrapping
+        // free type vars) doesn't apply to an unexpanded macro
+        // definition/invocation the same way it does to an ordinary
+        // def/inductive; whatever a macro EXPANDS into gets elaborated
+        // normally once it's a real decl. See `build_scope_one_decl`'s
+        // own identical wildcard (lang/scope.mo) for why this can't be
+        // left as a non-exhaustive match at all (no static
+        // exhaustiveness check in this language — silently typechecks
+        // fine, then crashes at runtime the moment a real decl of one
+        // of these variants is matched).
+        _ => decl,
     }
 
 /// Elaborate all declarations in a module.
@@ -338,6 +351,61 @@ def elaborate_decls (decls : List Decl) (existing_names : List Identifier) : Lis
     let decl_names := names_of_decls decls in
     let known_names := union_ids existing_names decl_names in
     elaborate_decls_map decls known_names
+
+// Regression tests for `elaborate_decl`'s wildcard arm covering the 3
+// macro-expansion-phase `Decl` variants (def_macro_d/decl_gen_d/
+// macro_call_d) -- see `lang/scope.mo`'s own identical-purpose tests
+// for `build_scope_one_decl` for the full rationale (no static
+// exhaustiveness check in this language; a missing arm here would
+// silently typecheck fine and only crash at RUNTIME). Each confirms
+// `elaborate_decl` passes the value through unchanged (identity) --
+// the fixture and the result are structurally the same decl shape.
+
+def elaborate_test_macro_call_decl : Decl :=
+    let name : Identifier := Identifier.id "foo" in
+    let no_args : List Term := List.empty in
+    Decl.macro_call_d name no_args
+
+def elaborate_test_def_macro_decl : Decl :=
+    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "foo") List.empty) in
+    let no_constraints : List TypeConstraint := List.empty in
+    let no_attrs : List Attribute := List.empty in
+    Decl.def_macro_d (Def.mk mp Term.hole Term.hole no_constraints no_attrs Visibility.package_private)
+
+def elaborate_test_decl_gen_decl : Decl :=
+    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "foo") List.empty) in
+    let no_params : List Param := List.empty in
+    let no_decls : List Decl := List.empty in
+    let no_attrs : List Attribute := List.empty in
+    Decl.decl_gen_d mp no_params no_decls no_attrs
+
+#[test]
+def test_elaborate_decl_macro_call_d_passthrough : Bool :=
+    let no_names : List Identifier := List.empty in
+    match elaborate_decl elaborate_test_macro_call_decl no_names {
+        Decl.macro_call_d name _ => id_eq name (Identifier.id "foo"),
+        _ => false,
+    }
+
+#[test]
+def test_elaborate_decl_def_macro_d_passthrough : Bool :=
+    let no_names : List Identifier := List.empty in
+    match elaborate_decl elaborate_test_def_macro_decl no_names {
+        Decl.def_macro_d _ => true,
+        _ => false,
+    }
+
+#[test]
+def test_elaborate_decl_decl_gen_d_passthrough : Bool :=
+    let no_names : List Identifier := List.empty in
+    match elaborate_decl elaborate_test_decl_gen_decl no_names {
+        Decl.decl_gen_d name _ _ _ => id_eq (Identifier.id "foo") (module_path_head name),
+        _ => false,
+    }
+
+#[partial]
+def module_path_head (mp : ModulePath) : Identifier :=
+    match mp { ModulePath.mp ids => match ids { List.cons hd _ => hd } }
 
 /// Map elaborate_decl over a list of decls with a fixed known_names set.
 def elaborate_decls_map (decls : List Decl) (known_names : List Identifier) : List Decl :=
