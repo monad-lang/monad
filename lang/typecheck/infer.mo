@@ -9,10 +9,11 @@ use lang.types {
   unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
 use lang.scope {
-  find_constructor_in_inductive, inductive_has_constructor, list_append,
-  scope_data_add_inductive, scope_data_empty, scope_find_class_def_by_name,
-  scope_find_inductive, scope_find_inductive_by_constructor, scope_push_local,
-  scope_resolve_instance, scope_resolve_name,
+  build_scope_def, find_constructor_in_inductive, inductive_has_constructor,
+  list_append, scope_data_add_inductive, scope_data_empty,
+  scope_find_class_def_by_name, scope_find_def_params, scope_find_inductive,
+  scope_find_inductive_by_constructor, scope_push_local, scope_resolve_instance,
+  scope_resolve_name,
 }
 use lang.typecheck.unify {unify}
 use std.list {length}
@@ -708,7 +709,7 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
             match named_call_fields_of a {
                 Option.none => err e,
                 Option.some fields =>
-                    match type_check_named_call f fields scope local_types locals {
+                    match type_check_named_call f fields expected_type scope local_types locals {
                         err e2 => err e2,
                         ok result => match result {
                             Option.some tt => ok tt,
@@ -1102,7 +1103,8 @@ def named_call_validate_fields (params : List Param) (fields : List StructLitFie
 /// itself fails (unknown/missing field, a field value's own type
 /// mismatch) -- callers surface THAT error directly instead, mirroring
 /// the reference's own Rules step 3 refinement.
-def type_check_named_call (f : Term) (fields : List StructLitField) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (Option TypedTerm) :=
+#[terminating]
+def type_check_named_call (f : Term) (fields : List StructLitField) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (Option TypedTerm) :=
     match f {
         Term.var _idx dbg =>
             match dbg {
@@ -1110,7 +1112,6 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (scope : Sco
                     let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
                     let con_mp : ModulePath := ModulePath.mp (List.cons bare_name List.empty) in
                     match scope_find_inductive_by_constructor con_mp scope {
-                        Option.none => ok Option.none,
                         Option.some ind =>
                             match find_constructor_in_inductive ind con_mp {
                                 Option.none => ok Option.none,
@@ -1131,11 +1132,134 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (scope : Sco
                                                     }
                                             }
                                     }
-                            }
+                            },
+                        // Phase 6: `id` isn't a known constructor -- try an
+                        // ordinary def's own declared params instead
+                        // (`ScopeData.def_params`, populated by
+                        // `build_scope_def`). `scope_resolve_name` (not
+                        // the bare-single-segment `con_mp` lookup above)
+                        // since an ordinary def's own registered NAME can
+                        // be qualified, and `scope_resolve_name` already
+                        // handles `open`/`use`/alias resolution the same
+                        // way any other free-variable reference does.
+                        Option.none =>
+                            let nref : NameRef := NameRef.nid id in
+                            match scope_resolve_name nref scope locals {
+                                err _ => ok Option.none,
+                                ok sd =>
+                                    match sd {
+                                        mk resolved_name _ _ _ =>
+                                            match scope_find_def_params resolved_name scope {
+                                                Option.none => ok Option.none,
+                                                Option.some params =>
+                                                    type_check_named_call_def_target f params fields expected_type scope local_types locals,
+                                            }
+                                    }
+                            },
                     },
                 DebugName.unnamed => ok Option.none,
             },
         _ => ok Option.none,
+    }
+
+/// Def-target branch of `type_check_named_call` (Phase 6). Builds `args`
+/// in `params`' declared order (name+type pairs recovered from the def's
+/// own `Term.lam` chain by `def_params_of_term`, `lang/scope.mo`), checks
+/// each against its own declared type, then folds them into a plain
+/// curried `Term.app` chain against `f` -- mirroring the reference
+/// compiler's own def-target branch (`try_desugar_named_call`,
+/// `core_check.rs`): no per-field type-CORRELATION machinery is needed
+/// beyond `type_check` itself, since an ordinary curried application's
+/// own per-argument checking already does the right thing at each layer.
+def type_check_named_call_def_target (f : Term) (params : List (Pair Identifier Term)) (fields : List StructLitField) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (Option TypedTerm) :=
+    match named_call_def_check_unknown_fields params fields {
+        err e => err e,
+        ok _ =>
+            match named_call_def_pair_args params fields {
+                err e => err e,
+                ok arg_pairs =>
+                    match named_call_def_check_args arg_pairs scope local_types locals {
+                        err e => err e,
+                        ok _ =>
+                            let app_term : Term := named_call_def_fold_app f arg_pairs in
+                            ok (Option.some (mk_typed app_term expected_type)),
+                    }
+            }
+    }
+
+/// Every literal field name must be among `params`' own declared names --
+/// mirrors `named_call_check_unknown_fields`, just over `List (Pair
+/// Identifier Term)` instead of `List Param` (a def's own recovered
+/// params carry no full `Param`, only name+type -- see `ScopeData.
+/// def_params`'s own doc comment).
+#[terminating]
+def named_call_def_check_unknown_fields (params : List (Pair Identifier Term)) (fields : List StructLitField) : Result TypeError Bool :=
+    match fields {
+        List.empty => ok true,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk fname _ =>
+                    if def_param_pair_exists params fname
+                    then named_call_def_check_unknown_fields params rest
+                    else err (TypeError.custom (String.concat "named call: unknown field `" (String.concat (show_identifier fname) "`")))
+            }
+    }
+
+#[terminating]
+def def_param_pair_exists (params : List (Pair Identifier Term)) (name : Identifier) : Bool :=
+    match params {
+        List.empty => false,
+        List.cons p rest =>
+            match p {
+                Pair.pair pname _ =>
+                    if id_eq pname name then true else def_param_pair_exists rest name
+            }
+    }
+
+/// Builds `(value, declared_type)` pairs in `params`' own declared order
+/// -- every param must be covered by a literal field (no default
+/// mechanism exists for an ordinary `lang/` def's own params, matching
+/// this plan's own `lang/` Non-Goal).
+#[terminating]
+def named_call_def_pair_args (params : List (Pair Identifier Term)) (fields : List StructLitField) : Result TypeError (List (Pair Term Term)) :=
+    match params {
+        List.empty => ok List.empty,
+        List.cons p rest =>
+            match p {
+                Pair.pair pname ptyp =>
+                    match struct_lit_find_field fields pname {
+                        Option.none => err (TypeError.custom (String.concat "named call: missing required field `" (String.concat (show_identifier pname) "`"))),
+                        Option.some value =>
+                            match named_call_def_pair_args rest fields {
+                                err e => err e,
+                                ok rest_args => ok (List.cons (Pair.pair value ptyp) rest_args),
+                            }
+                    }
+            }
+    }
+
+#[terminating]
+def named_call_def_check_args (args : List (Pair Term Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Bool :=
+    match args {
+        List.empty => ok true,
+        List.cons a rest =>
+            match a {
+                Pair.pair value ptyp =>
+                    match type_check value ptyp scope local_types locals {
+                        ok _ => named_call_def_check_args rest scope local_types locals,
+                        err e => err e,
+                    }
+            }
+    }
+
+#[terminating]
+def named_call_def_fold_app (f : Term) (args : List (Pair Term Term)) : Term :=
+    match args {
+        List.empty => f,
+        List.cons a rest =>
+            match a {
+                Pair.pair value _ => named_call_def_fold_app (Term.app f value) rest,
+            }
     }
 
 /// Type check a struct-update expression (`{ base with field := value,
@@ -1593,7 +1717,7 @@ def test_type_check_named_call_multi_field_reordered : Bool :=
     let fy : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
     let fx : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
     let fields : List StructLitField := List.cons fy (List.cons fx List.empty) in
-    match type_check_named_call point_mk_var fields point_scope empty_local_types empty_locals {
+    match type_check_named_call point_mk_var fields Term.hole point_scope empty_local_types empty_locals {
         ok result => match result {
             Option.some _ => true,
             Option.none => false,
@@ -1605,7 +1729,7 @@ def test_type_check_named_call_multi_field_reordered : Bool :=
 def test_type_check_named_call_single_field_constructor : Bool :=
     let f1 : StructLitField := StructLitField.mk (Identifier.id "n") (Term.type_ 1) in
     let fields : List StructLitField := List.cons f1 List.empty in
-    match type_check_named_call solo_mk_var fields solo_scope empty_local_types empty_locals {
+    match type_check_named_call solo_mk_var fields Term.hole solo_scope empty_local_types empty_locals {
         ok result => match result {
             Option.some _ => true,
             Option.none => false,
@@ -1619,7 +1743,7 @@ def test_type_check_named_call_unknown_field_is_an_error : Bool :=
     let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
     let bad : StructLitField := StructLitField.mk (Identifier.id "z_not_a_field") (Term.type_ 1) in
     let fields : List StructLitField := List.cons f1 (List.cons f2 (List.cons bad List.empty)) in
-    match type_check_named_call point_mk_var fields point_scope empty_local_types empty_locals {
+    match type_check_named_call point_mk_var fields Term.hole point_scope empty_local_types empty_locals {
         err _ => true,
         ok _ => false,
     }
@@ -1633,7 +1757,7 @@ def test_type_check_named_call_missing_field_is_an_error : Bool :=
     // (see `named_call_validate_fields`'s own doc comment), not a gap.
     let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
     let fields : List StructLitField := List.cons f1 List.empty in
-    match type_check_named_call point_mk_var fields point_scope empty_local_types empty_locals {
+    match type_check_named_call point_mk_var fields Term.hole point_scope empty_local_types empty_locals {
         err _ => true,
         ok _ => false,
     }
@@ -1646,7 +1770,7 @@ def test_type_check_named_call_not_a_constructor_returns_none : Bool :=
     // that resolution infrastructure lands).
     let unknown_var : Term := Term.var sentinel (DebugName.named (Identifier.id "not_a_real_name")) in
     let fields : List StructLitField := List.empty in
-    match type_check_named_call unknown_var fields point_scope empty_local_types empty_locals {
+    match type_check_named_call unknown_var fields Term.hole point_scope empty_local_types empty_locals {
         ok result => match result {
             Option.none => true,
             Option.some _ => false,
@@ -1665,6 +1789,105 @@ def test_type_check_app_resolves_named_call_end_to_end : Bool :=
     let fields : List StructLitField := List.cons fy (List.cons fx List.empty) in
     let arg : Term := Term.lit (Literal.struct_lit fields Option.none) in
     match type_check_app point_mk_var arg Term.hole point_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+// --- Tests for type_check_named_call's def-target branch (Phase 6 of
+// plans/implementations/named-field-construction.md) ---
+//
+// Hand-built `Def` (name "scale", two params "factor"/"p" of type
+// `Term.type_ 2`, body `Term.type_ 1` -- same sort-level convention
+// `box_scope`/`point_scope` use above, and for the same reason: only a
+// `Term.type_ N` argument actually exercises `type_check_sort_full`'s
+// own comparison against a declared param type, unlike a literal/
+// free-var argument which would trivially "pass" any type), registered
+// via the REAL `build_scope_def` (not a hand-assembled `ScopeData`
+// literal) so this exercises the actual `def_params_of_term`/`scope_
+// data_add_def_params` registration path, not just its consumer.
+
+def scale_def_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "scale") List.empty)
+
+def scale_def_body : Term :=
+    Term.lam (DebugName.named (Identifier.id "factor")) (Term.type_ 2)
+        (Term.lam (DebugName.named (Identifier.id "p")) (Term.type_ 2) (Term.type_ 1))
+
+def scale_def : Def := {
+    name := scale_def_name,
+    typ := Term.hole,
+    term := scale_def_body,
+    constraints := List.empty,
+    attrs := List.empty,
+    vis := Visibility.package_private,
+}
+
+def scale_scope : Scope := {
+    module_id := scale_def_name,
+    scope := build_scope_def scale_def scale_def_name scope_data_empty,
+    parent := Option.none,
+}
+
+def scale_var : Term := Term.var sentinel (DebugName.named (Identifier.id "scale"))
+
+#[test]
+def test_type_check_named_call_def_target_reordered : Bool :=
+    // Fields given in the OPPOSITE order from `scale_def_body`'s own
+    // declaration (p then factor).
+    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.type_ 1) in
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons fp (List.cons ff List.empty) in
+    match type_check_named_call scale_var fields Term.hole scale_scope empty_local_types empty_locals {
+        ok result => match result {
+            Option.some _ => true,
+            Option.none => false,
+        },
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_named_call_def_target_wrong_field_type_rejected : Bool :=
+    // `factor`'s declared param type is `Term.type_ 2` -- a sort at level
+    // 5 is not a valid inhabitant, same reasoning as the constructor-
+    // target `wrong_arg_type`/`wrong_field_type` tests above.
+    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.type_ 1) in
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 5) in
+    let fields : List StructLitField := List.cons fp (List.cons ff List.empty) in
+    match type_check_named_call scale_var fields Term.hole scale_scope empty_local_types empty_locals {
+        err _ => true,
+        ok _ => false,
+    }
+
+#[test]
+def test_type_check_named_call_def_target_unknown_field_is_an_error : Bool :=
+    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.type_ 1) in
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 1) in
+    let bad : StructLitField := StructLitField.mk (Identifier.id "not_a_param") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons fp (List.cons ff (List.cons bad List.empty)) in
+    match type_check_named_call scale_var fields Term.hole scale_scope empty_local_types empty_locals {
+        err _ => true,
+        ok _ => false,
+    }
+
+#[test]
+def test_type_check_named_call_def_target_missing_field_is_an_error : Bool :=
+    // No default mechanism exists for ordinary `lang/` def params --
+    // omitting `p` must always be an error.
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons ff List.empty in
+    match type_check_named_call scale_var fields Term.hole scale_scope empty_local_types empty_locals {
+        err _ => true,
+        ok _ => false,
+    }
+
+#[test]
+def test_type_check_app_resolves_def_target_named_call_end_to_end : Bool :=
+    // Full `type_check_app` dispatch: `scale { p := .., factor := .. }`
+    // parses as `App(Var(scale), StructLit)`.
+    let fp : StructLitField := StructLitField.mk (Identifier.id "p") (Term.type_ 1) in
+    let ff : StructLitField := StructLitField.mk (Identifier.id "factor") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons fp (List.cons ff List.empty) in
+    let arg : Term := Term.lit (Literal.struct_lit fields Option.none) in
+    match type_check_app scale_var arg Term.hole scale_scope empty_local_types empty_locals {
         ok _ => true,
         err _ => false,
     }

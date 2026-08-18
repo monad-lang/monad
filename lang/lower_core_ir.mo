@@ -218,7 +218,7 @@ def lower_if (ctx : LowerCtx) (cond : Term) (then_ : Term) (else_ : Term) (acc :
 // `HashMap.to_list` + dropping each pair's key.
 def scope_all_inductives (s : Scope) : List Inductive :=
   match scope_globals s {
-    ScopeData.mk _ _ _ inds _ _ _ => inductive_pairs_values (HashMap.to_list inds),
+    ScopeData.mk _ _ _ inds _ _ _ _ => inductive_pairs_values (HashMap.to_list inds),
   }
 
 def inductive_pairs_values (pairs : List (Pair ModulePath Inductive)) : List Inductive :=

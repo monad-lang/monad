@@ -825,9 +825,9 @@ def dependency_not_found_msg (mp : ModulePath) : String :=
 #[partial]
 def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
     match sd1 {
-        ScopeData.mk dr1 cd1 ins1 ind1 cls1 inf1 conf1 =>
+        ScopeData.mk dr1 cd1 ins1 ind1 cls1 inf1 conf1 dp1 =>
             match sd2 {
-                ScopeData.mk dr2 cd2 ins2 ind2 cls2 inf2 conf2 =>
+                ScopeData.mk dr2 cd2 ins2 ind2 cls2 inf2 conf2 dp2 =>
                     {
                         def_refs := HashMap.merge_buckets dr1 dr2,
                         class_defs := list_append cd1 cd2,
@@ -836,6 +836,11 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
                         classes := list_append cls1 cls2,
                         infixes := list_append inf1 inf2,
                         conflicts := list_append conf1 conf2,
+                        // Same bucket-to-bucket merge as `def_refs` just
+                        // above -- see this function's own doc comment
+                        // for why `merge_buckets` (not `to_list`+refold)
+                        // is the right tool here.
+                        def_params := HashMap.merge_buckets dp1 dp2,
                     }
             }
     }

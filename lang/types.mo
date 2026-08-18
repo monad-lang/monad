@@ -1138,6 +1138,22 @@ struct LocalVar {
 }
 
 // All resolved entries for a single scope level.
+//
+// `def_params`: a def's own declared parameter (name, type) list, in
+// order -- see `plans/implementations/named-field-construction.md`'s
+// Phase 6. Deliberately a SEPARATE side-table from `def_refs`, not a
+// change to `ScopeDef.sig`/`.body`: that field's `Term.hole` sentinel
+// (set unconditionally by `build_scope_def`) is load-bearing for dozens
+// of existing call sites across the checker, which changing would risk
+// wide-reaching regressions -- named-call resolution only ever needs a
+// def's param NAMES (to match a call's own field names) and TYPES (to
+// check each field's value against), never its full body/signature, so
+// this narrower table is both safer and sufficient. Has a `:=` default
+// (`Map.empty`) so every EXISTING `{ def_refs := .., .. }` struct-literal
+// construction site continues to build correctly unchanged (the checker
+// fills a missing field from its own declared default, same as any other
+// struct literal) -- only POSITIONAL `mk`/pattern-match destructuring
+// sites need updating for the new arity.
 struct ScopeData {
     def_refs : HashMap ModulePath ScopeDef,
     class_defs : List ScopeClassDef,
@@ -1153,6 +1169,14 @@ struct ScopeData {
     classes : List Inductive,
     infixes : List Infix,
     conflicts : List ScopeConflict,
+    // `HashMap.map HashMap.empty_buckets` directly, not `Map.empty`: the
+    // latter is a CLASS method (`instance [Hashable K, BOrd K] Map
+    // HashMap`, `std/map.mo`) needing type-directed dispatch that a
+    // struct field's default-value expression doesn't get the same way
+    // an ordinary call site does (confirmed: `Map.empty` here fails at
+    // evaluation with "unresolved global: Map.empty") -- `HashMap.map`/
+    // `.empty_buckets` are ordinary functions, no dispatch needed.
+    def_params : HashMap ModulePath (List (Pair Identifier Term)) := HashMap.map HashMap.empty_buckets,
 }
 
 // A scope node in the linked list.

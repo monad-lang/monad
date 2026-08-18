@@ -214,7 +214,7 @@ def test_scope_data_construct : Bool :=
     // hand-written literal.
     let sd : ScopeData := scope_data_add_inductive (scope_data_add_def scope_data_empty tdef_def) dummy_type in
     match sd {
-        mk dr cd ins ind cls infs conf => true
+        mk dr cd ins ind cls infs conf dp => true
     }
 
 #[test]

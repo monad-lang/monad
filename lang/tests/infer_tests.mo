@@ -585,9 +585,10 @@ def classdef_scope : Scope :=
         sig := Term.type_ 1,
     } in
     let sd_with_cd : ScopeData := match test_sd {
-        mk dr cd insts ind cls infs conf =>
+        mk dr cd insts ind cls infs conf dp =>
             { def_refs := dr, class_defs := List.cons scd cd, instances := insts,
-              inductives := ind, classes := cls, infixes := infs, conflicts := conf }
+              inductives := ind, classes := cls, infixes := infs, conflicts := conf,
+              def_params := dp }
     } in
     { module_id := empty_path, scope := sd_with_cd, parent := Option.none }
 
