@@ -1680,12 +1680,88 @@ def def_implicit_type (r : ParseResult Term) (brace_rem : String) (rem : String)
 /// to *parse* correctly (as documentation/DX, and so the def's remaining
 /// signature/body are found at the right offset) even though its content
 /// doesn't need to survive into the parsed `Param` list.
+/// `plans/implementations/named-field-construction.md`'s Phase 7: on
+/// failure (a `,` where `}` was expected — the one point a comma-
+/// separated def-param brace block, `{x : T, y : T2}`, first diverges
+/// from this implicit-param clause's own grammar, which has no comma
+/// support at all), resume from `brace_rem` — the position right after
+/// the original `{`, threaded unchanged through every step of this whole
+/// chain — as a NEW attempt to parse a def-param brace block instead of
+/// hard-failing. Unlike `core/`'s `nom`-based `alt` (which backtracks
+/// automatically), this hand-written CPS parser needs this explicit
+/// resumption point. `{K V : Type}` (no comma) still parses as an
+/// implicit clause exactly as before — this fallback is only ever
+/// reached once `}` has already failed to match here, a shape a
+/// comma-less clause never produces.
 #[partial]
 def def_implicit_close (r : ParseResult String) (brace_rem : String) (name : String) (typ : Term) (params : List Param) : ParseResult (List Param) :=
 	match r {
 		success rem2 _ =>
 			let empty : List Param := List.empty in
 			def_params_loop (skip_spaces rem2) empty,
+		fail _ => def_params_try_brace_block brace_rem params
+	}
+
+/// A def's whole parameter list as one brace block (`{x : T, y : T2}`),
+/// an alternative spelling of the usual separate `(x : T) (y : T2)`
+/// groups — deliberately WITHOUT `:=` default support (unlike `core/`'s
+/// own Phase 3, which reuses `struct_field_parser`'s existing support):
+/// `Term.lam` (this def's own body-chain representation) has no
+/// default/multiplicity slot at all to carry one to, matching this
+/// plan's own `lang/` Non-Goal. A `:=` encountered where a `,`/`}` is
+/// expected is a genuine parse error here, not silently accepted and
+/// dropped.
+#[partial]
+def def_params_try_brace_block (input : String) (params : List Param) : ParseResult (List Param) :=
+	def_brace_param (identifier (skip_spaces input)) params
+
+#[partial]
+def def_brace_param (r : ParseResult String) (params : List Param) : ParseResult (List Param) :=
+	match r {
+		success rem name => def_brace_colon (tag ":" (skip_spaces rem)) name params,
+		fail e => fail e
+	}
+
+#[partial]
+def def_brace_colon (r : ParseResult String) (name : String) (params : List Param) : ParseResult (List Param) :=
+	match r {
+		success rem _ =>
+			let empty_ctx : List Identifier := List.empty in
+			def_brace_type (type_expression empty_ctx rem) name params,
+		fail e => fail e
+	}
+
+#[partial]
+def def_brace_type (r : ParseResult Term) (name : String) (params : List Param) : ParseResult (List Param) :=
+	match r {
+		success rem typ =>
+			let new_params : List Param := List.cons (param_many (Identifier.id name) typ) params in
+			def_brace_sep (skip_spaces rem) new_params,
+		fail e => fail e
+	}
+
+#[partial]
+def def_brace_sep (input : String) (params : List Param) : ParseResult (List Param) :=
+	def_brace_sep_try (tag "," input) input params
+
+#[partial]
+def def_brace_sep_try (r : ParseResult String) (orig : String) (params : List Param) : ParseResult (List Param) :=
+	match r {
+		success rem _ => def_params_try_brace_block (skip_spaces rem) params,
+		fail _ => def_brace_close (tag "}" (skip_spaces orig)) params
+	}
+
+/// Closes the brace block — a genuine, final stop (unlike `def_explicit_
+/// close`, this does NOT loop back into `def_params_loop`): the whole
+/// parameter list is this ONE block, matching `struct_inner_parser`'s own
+/// (this plan's `core/` Phase 3) all-or-nothing convention — no further
+/// paren/brace groups are attempted after it.
+#[partial]
+def def_brace_close (r : ParseResult String) (params : List Param) : ParseResult (List Param) :=
+	match r {
+		success rem _ =>
+			let rev : List Param := list_reverse params in
+			success rem rev,
 		fail e => fail e
 	}
 
@@ -5055,6 +5131,85 @@ def is_body_non_lambda (t : Term) : Bool := match t {
 	Term.lam _ _ _ => false,
 	_ => true,
 }
+
+// --- Def-param brace-declaration convenience tests (Phase 7 of
+// plans/implementations/named-field-construction.md) ---
+
+#[test]
+def test_def_params_brace_block_matches_paren_form : Bool :=
+	match def_parser "def scale {factor : I64, p : I64} : I64 := factor * p" {
+		success rem out => match out {
+			def_d d => match d {
+				Def.mk _name _typ term _constraints _attrs _vis =>
+					match term {
+						Term.lam dbg1 _ inner =>
+							Similar.similar dbg1 (DebugName.named (Identifier.id "factor"))
+								&& inner_binding_ok_named inner "p",
+						_ => false,
+					}
+			},
+			_ => false,
+		},
+		fail _ => false
+	}
+
+#[partial]
+def inner_binding_ok_named (t : Term) (expected_name : String) : Bool := match t {
+	Term.lam dbg2 _ body =>
+		Similar.similar dbg2 (DebugName.named (Identifier.id expected_name)) && is_body_non_lambda body,
+	_ => false,
+}
+
+#[test]
+def test_def_params_brace_block_single_field_still_implicit : Bool :=
+	// `{ x : T }` (one comma-less field) still means an implicit/forall
+	// param, unaffected by this plan -- `def_params_try_brace_block` is
+	// structurally unreachable here (`def_implicit_close` only falls
+	// through to it on a genuine `}`-expected failure, which a comma-less
+	// clause never produces).
+	match def_parser "def f {x : Type} (y : x) : x := y" {
+		success rem out => match out {
+			def_d d => match d {
+				Def.mk _name _typ term _constraints _attrs _vis =>
+					match term {
+						Term.lam dbg _ body =>
+							Similar.similar dbg (DebugName.named (Identifier.id "y")) && is_body_non_lambda body,
+						_ => false,
+					}
+			},
+			_ => false,
+		},
+		fail _ => false
+	}
+
+#[test]
+def test_def_params_implicit_multi_name_form_still_unaffected : Bool :=
+	// `{K V : Type}` (existing test_def_implicit_multi_name coverage,
+	// re-asserted here specifically as this phase's own regression pin)
+	// must still parse as an implicit clause, not attempt (and fail on,
+	// since it has no commas) the new brace-block form.
+	match def_parser "def create_node {K V : Type} (key : K) (val : V) : K := key" {
+		success rem out => match out {
+			def_d d => match d {
+				Def.mk _name _typ term _constraints _attrs _vis =>
+					match term {
+						Term.lam dbg1 _ inner => outer_binding_ok dbg1 inner,
+						_ => false,
+					}
+			},
+			_ => false,
+		},
+		fail _ => false
+	}
+
+#[test]
+def test_def_params_brace_block_default_is_a_parse_error : Bool :=
+	// No `:=` support in the brace-block form (unlike core/'s own Phase
+	// 3) -- `Term.lam` has no default slot to carry one to.
+	match def_parser "def scale {factor : I64 := 1, p : I64} : I64 := factor * p" {
+		success _ _ => false,
+		fail _ => true
+	}
 
 // --- TypeConstraint parsing tests ---
 
