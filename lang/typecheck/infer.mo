@@ -173,18 +173,27 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
             let sc_typ : Term := tt_typ sc_tt in
             match validate_match_constructors cases sc_typ scope {
                 err e => err e,
-                ok _ => type_check_cases cases sc_term sc_typ expected_type scope local_types locals,
+                ok maybe_ind => type_check_cases cases sc_term sc_typ maybe_ind expected_type scope local_types locals,
             },
         err e => err e,
     }
 
-/// Validate that all non-wildcard case constructors belong to the same inductive.
-/// Returns ok if valid or if no inductive found (skip validation).
-def validate_match_constructors (cases : List MatchCase) (scrutinee_typ : Term) (scope : Scope) : Result TypeError Bool :=
+/// Validate that all non-wildcard case constructors belong to the same
+/// inductive. Returns the resolved `Inductive` on success (threaded
+/// through to `type_check_match_case` below so a case's own bound
+/// pattern variables can be typed from the constructor's OWN declared
+/// field types instead of `Term.hole` -- see `arg_types_for_case`'s own
+/// doc comment for why this matters), or `Option.none` if no inductive
+/// was determinable at all (skip validation, matches this function's
+/// previous behavior exactly).
+def validate_match_constructors (cases : List MatchCase) (scrutinee_typ : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
     match find_inductive_for_cases cases scrutinee_typ scope {
-        Option.none => ok true,
+        Option.none => ok Option.none,
         Option.some ind =>
-            validate_cases_against_inductive cases ind,
+            match validate_cases_against_inductive cases ind {
+                ok _ => ok (Option.some ind),
+                err e => err e,
+            },
     }
 
 /// Unwrap a `Term.app f a` chain down to its head, returning the
@@ -275,8 +284,8 @@ def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) 
     }
 
 /// Type check match cases — process all cases and unify their body types.
-def type_check_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
-    match type_check_cases_accum cases scrutinee_term scrutinee_typ scope local_types locals (Term.hole) List.empty {
+def type_check_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match type_check_cases_accum cases scrutinee_term scrutinee_typ maybe_ind scope local_types locals (Term.hole) List.empty {
         ok acc =>
             match acc {
                 mk body_typ checked_cases =>
@@ -294,21 +303,21 @@ def type_check_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee
 /// progressively unified body type. `acc_cases` is built in reverse order
 /// and reversed at the end.
 #[terminating]
-def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) (acc_typ : Term) (acc_cases : List MatchCase) : Result TypeError CaseAcc :=
+def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (scope : Scope) (local_types : List Term) (locals : LocalScope) (acc_typ : Term) (acc_cases : List MatchCase) : Result TypeError CaseAcc :=
     match cases {
         List.cons hd rest =>
-            match type_check_match_case hd scrutinee_term scrutinee_typ scope local_types locals {
+            match type_check_match_case hd scrutinee_term scrutinee_typ maybe_ind scope local_types locals {
                 ok checked =>
                     match checked {
                         mk checked_case body_typ =>
                             let new_cases : List MatchCase := List.cons checked_case acc_cases in
                             match acc_typ {
                                 Term.hole =>
-                                    type_check_cases_accum rest scrutinee_term scrutinee_typ scope local_types locals body_typ new_cases,
+                                    type_check_cases_accum rest scrutinee_term scrutinee_typ maybe_ind scope local_types locals body_typ new_cases,
                                 _ =>
                                     match unify acc_typ body_typ {
                                         ok unified_typ =>
-                                            type_check_cases_accum rest scrutinee_term scrutinee_typ scope local_types locals unified_typ new_cases,
+                                            type_check_cases_accum rest scrutinee_term scrutinee_typ maybe_ind scope local_types locals unified_typ new_cases,
                                         err e => err e,
                                     },
                             },
@@ -333,7 +342,7 @@ def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
     }
 
 /// Type check a single match case arm.
-def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
+def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match case_ {
         MatchCase.mc name args body =>
             let wildcard_id : Identifier := Identifier.id "_" in
@@ -349,30 +358,92 @@ def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee
                     List.empty =>
                         type_check_case_body_checked name args body scope local_types locals,
                     _ =>
-                        let extended_types : List Term := prepend_holes args local_types in
-                        let extended_locals : LocalScope := prepend_local_vars args locals in
+                        let arg_types : List Term := arg_types_for_case name maybe_ind in
+                        let extended_types : List Term := prepend_typed args arg_types local_types in
+                        let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
                         type_check_case_body_checked name args body scope extended_types extended_locals,
                 },
     }
 
-/// Prepend a Term.hole for each identifier onto the front of local_types.
-def prepend_holes (args : List Identifier) (local_types : List Term) : List Term :=
+/// The matching constructor's OWN declared field types, in declared
+/// order, when `maybe_ind` (the inductive this whole match's cases
+/// were resolved against -- `validate_match_constructors`, above) is
+/// known and actually has a constructor by this case's name.
+/// `List.empty` otherwise (no inductive known at all, or -- shouldn't
+/// happen for an already-validated case, but handled safely regardless
+/// -- no matching constructor found in it): `prepend_typed`/
+/// `rec_prepend_typed_local_vars` below both treat a too-short (here,
+/// empty) type list as "fall back to `Term.hole`", exactly matching
+/// this function's own previous unconditional behavior. Fixes a real
+/// bug: a pattern-bound variable from an OUTER match (e.g. `ctors` in
+/// `match info { type_info _ ctors => match ctors { cons c tail =>
+/// ..., empty => ... } }`) used to always get `Term.hole` regardless
+/// of its real declared type -- so a NESTED match on it could never
+/// use `find_inductive_for_cases`'s preferred exact-type-lookup path,
+/// always falling back to the ambiguous constructor-name-only scan
+/// instead. That scan is only really safe when at most one visible
+/// inductive has a given constructor name -- `List`/`Vec` (both
+/// declare a bare `cons`) already collide on it for real
+/// (`init/prelude.mo`), so the fallback can and does pick the wrong
+/// one whenever it's reached avoidably. Propagating the real type here
+/// removes one whole class of avoidable fallback-scan hits without
+/// touching the scan itself (which a previous, reverted attempt at a
+/// scan-order fix already showed is not safe to change directly -- see
+/// `find_inductive_for_cases`'s own doc comment above).
+def arg_types_for_case (case_name : Identifier) (maybe_ind : Option Inductive) : List Term :=
+    match maybe_ind {
+        Option.some ind =>
+            let con_mp : ModulePath := ModulePath.mp (List.cons case_name List.empty) in
+            match find_constructor_in_inductive ind con_mp {
+                Option.some ctor =>
+                    match ctor { InductConstructor.mk _ params _ => types_from_params params },
+                Option.none => List.empty,
+            },
+        Option.none => List.empty,
+    }
+
+/// Just the `type_` field of each `Param`, in order.
+def types_from_params (params : List Param) : List Term :=
+    match params {
+        List.cons p rest =>
+            match p { Param.mk _ typ _ _ _ => List.cons typ (types_from_params rest) },
+        List.empty => List.empty,
+    }
+
+/// Prepend one type per identifier onto the front of `local_types` --
+/// `arg_types` (matching `args`, in the same order) when available,
+/// falling back to `Term.hole` for any identifier `arg_types` runs out
+/// before reaching (this is what makes an empty/too-short `arg_types`
+/// behave EXACTLY like the old `prepend_holes` it replaces).
+def prepend_typed (args : List Identifier) (arg_types : List Term) (local_types : List Term) : List Term :=
     match args {
-        List.cons x rest => prepend_holes rest (List.cons Term.hole local_types),
+        List.cons x rest =>
+            match arg_types {
+                List.cons t trest => prepend_typed rest trest (List.cons t local_types),
+                List.empty => prepend_typed rest List.empty (List.cons Term.hole local_types),
+            },
         List.empty => local_types,
     }
 
-/// Prepend LocalVar bindings (with Term.hole type, Multiplicity.many) for each identifier onto locals.
-def prepend_local_vars (args : List Identifier) (locals : LocalScope) : LocalScope :=
-    let new_vars : List LocalVar := rec_prepend_local_vars args in
+/// Prepend LocalVar bindings onto `locals` -- same `arg_types`/
+/// `Term.hole`-fallback pairing as `prepend_typed` above.
+def prepend_typed_local_vars (args : List Identifier) (arg_types : List Term) (locals : LocalScope) : LocalScope :=
+    let new_vars : List LocalVar := rec_prepend_typed_local_vars args arg_types in
     { vars := new_vars, parent := Option.some locals }
 
-/// Recursively build a list of LocalVar entries from identifiers.
-def rec_prepend_local_vars (args : List Identifier) : List LocalVar :=
+/// Recursively build a list of LocalVar entries from identifiers, paired
+/// with `arg_types` (falling back to `Term.hole` once it runs out).
+def rec_prepend_typed_local_vars (args : List Identifier) (arg_types : List Term) : List LocalVar :=
     match args {
         List.cons x rest =>
-            let lv : LocalVar := { name := x, typ := Term.hole, multiplicity := Multiplicity.many } in
-            List.cons lv (rec_prepend_local_vars rest),
+            match arg_types {
+                List.cons t trest =>
+                    let lv : LocalVar := { name := x, typ := t, multiplicity := Multiplicity.many } in
+                    List.cons lv (rec_prepend_typed_local_vars rest trest),
+                List.empty =>
+                    let lv : LocalVar := { name := x, typ := Term.hole, multiplicity := Multiplicity.many } in
+                    List.cons lv (rec_prepend_typed_local_vars rest List.empty),
+            },
         List.empty => List.empty,
     }
 
