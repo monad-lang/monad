@@ -1463,7 +1463,32 @@ pub fn check(
         return Ok(());
       }
     };
-    let _ = unify(mctx, &ret_ty, expected);
+    // This speculative, best-effort/silently-ignored unify exists to
+    // recover a still-polymorphic `fun`'s own type-level metas EARLY
+    // (e.g. `ok({term := .., typ := ..})`: `ok`'s `A` is a bare meta
+    // right after `expect_pi`, and `ret_ty = Result Meta(E) Meta(A)`
+    // unified against `expected = Result TypeError TypedTerm` pins `A`
+    // down BEFORE `check`ing the struct-literal argument below needs it
+    // resolved). Only safe when `ret_ty` is genuinely the FINAL result
+    // type, though -- when it's STILL a `Pi`/`Forall` (more curried args
+    // remain after this one), it does NOT represent "the type of this
+    // whole `App`" at all, and named-call resolution (just below) may be
+    // about to reinterpret this SAME single-argument `App` as a spread
+    // across `fun`'s OWN multiple params, whose real result type has
+    // nothing to do with this naive one-Pi-layer peel. Unifying it
+    // against `expected` anyway silently binds `expected`'s own meta to
+    // the WRONG (partially-applied-looking) type, causing an otherwise
+    // sound named-call to fail downstream with a confusing mismatch
+    // against that stale binding -- confirmed by a real repro
+    // (`scale { p := 4, factor := 3 } == 12`, where `expected` here is
+    // `==`'s own still-open class-method meta) before this guard was
+    // added.
+    if !matches!(
+      force(mctx, ret_ty.clone()).into_stripped_ctx(),
+      CoreTerm::Pi { .. } | CoreTerm::Forall { .. }
+    ) {
+      let _ = unify(mctx, &ret_ty, expected);
+    }
     // Named-call fallback -- same rationale as `infer`'s own `App` arm
     // just above (see its comment, and `struct_literal_arg_matches_
     // expected`'s own, for why an `Ok` from `check` isn't trusted
@@ -2751,7 +2776,20 @@ pub fn desugar_struct_literals(
       let arg_ty = infer(mctx, ctx, structs, fun).ok().and_then(|fun_ty| {
         let fun_ty = instantiate_foralls(mctx, structs, &fun_ty);
         let (arg_ty, ret_ty, _mult) = expect_pi(mctx, &fun_ty).ok()?;
-        if let Some(expected) = expected {
+        // Skipped when `ret_ty` is still a `Pi`/`Forall` (more curried
+        // args remain after this one) -- see `check`'s own dedicated
+        // `App` block for the full rationale and the real repro that
+        // motivated this guard; the same wrong-speculative-binding risk
+        // applies here for the identical reason (this single `App` node
+        // may be about to get reinterpreted as a named-call spread across
+        // `fun`'s OWN multiple params just below, whose real result type
+        // has nothing to do with a naive one-Pi-layer peel).
+        if let Some(expected) = expected
+          && !matches!(
+            force(mctx, ret_ty.clone()).into_stripped_ctx(),
+            CoreTerm::Pi { .. } | CoreTerm::Forall { .. }
+          )
+        {
           let _ = unify(mctx, &ret_ty, expected);
         }
         Some(arg_ty)

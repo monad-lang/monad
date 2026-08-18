@@ -185,6 +185,32 @@ fn phase2_named_call_def_target_unannotated_nested_struct_literal() {
   assert_eq!(as_i64(&run(CONSFUN_UNANNOTATED_NESTED)), 140);
 }
 
+/// Regression pin for a real bug found while writing `examples/
+/// structs.mo`: `==` (`BEq.beq`, a still-generic class method) checks
+/// its LHS against its OWN not-yet-resolved class-param meta. `check`'s
+/// dedicated `App` block had a pre-existing speculative "unify `ret_ty`
+/// against `expected` early" step (for cases like `ok({...})`, where a
+/// still-polymorphic `fun`'s return type needs resolving before checking
+/// the argument) that fired BEFORE named-call resolution ran here,
+/// binding that meta to `scale`'s own partially-peeled Pi type (`I64 ->
+/// I64`, from treating the ONE spread block as filling just `scale`'s
+/// FIRST param) -- so the later, CORRECT unify (against the named call's
+/// real `I64` result) failed against that stale, wrong binding. Confirmed
+/// failing with `type mismatch: I64 vs I64 -> I64` before the fix.
+const NAMED_CALL_AS_LHS_OF_CLASS_METHOD_CALL: &str = r#"
+def scale {factor : I64 := 10, p : I64} : I64 := factor * p
+
+def main : I64 :=
+    if scale { p := 4, factor := 3 } == 12
+    then 1
+    else 0
+"#;
+
+#[test]
+fn phase2_named_call_as_lhs_of_class_method_call_does_not_bind_wrong_result_type() {
+  assert_eq!(as_i64(&run(NAMED_CALL_AS_LHS_OF_CLASS_METHOD_CALL)), 1);
+}
+
 // ---------------------------------------------------------------------
 // Phase 3: def-param brace-declaration convenience, combined with
 // Phase 2's own def-target named-call resolution -- the full feature,
