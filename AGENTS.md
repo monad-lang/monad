@@ -1012,6 +1012,90 @@ Key patterns when writing self-hosted Monad code:
      separate, larger architectural change (a whole-corpus, not just
      prelude+init, module-scope cache) and a natural next target for a
      future performance pass.
+10. **Whole-corpus module-scope cache** (`ModuleScopeCache`,
+    `lang/module.mo`) closes item 9's own remaining gap: a growing,
+    whole-`run_check`-invocation cache of already-loaded non-base
+    dependencies' `ScopeData`, threaded through `run_check_loop`/
+    `check_file_cached`/`load_module_with_dependencies_and_prelude_
+    cached` the same way `PreludeInitBase` is, except mutable rather
+    than fixed. Fixes the exact redundancy item 9 measured but didn't
+    address: `lang/types.mo` was independently loaded 54 separate
+    times in one multi-file run (54 files `use lang.types`), now served
+    from cache after the first. Keyed on `ModulePath` (grep-verified
+    safe for the current corpus — only two bare, non-dotted `use`s
+    exist anywhere, each resolved from exactly one `base_dir`, no
+    observed collision; flagged as a structural, not observed, risk in
+    the code, with resolved-path keying noted as a cheap fast-follow if
+    it's ever needed). Correct because this codebase's dependency
+    loading is flat, not recursive: each dependency's `ScopeData` is
+    built from only its own decls, independent of who asked, so a
+    cached value is bit-identical to a fresh load; cycle detection
+    (`extract_all_dependencies_go`'s `visiting`/`visited`) is completely
+    untouched — the cache only changes HOW an already-decided-necessary
+    dependency's value gets produced, never WHICH dependencies a caller
+    needs. Verified: 1274/1274 self-hosted tests passed (baseline
+    unchanged), real speedup on repeated-dependency scenarios (a 4-file
+    sample's scope-phase times dropped 13-47% per file as later files
+    hit the cache for shared deps). Deliberately NOT measured against
+    `slow_tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main` —
+    that test is a single flat dependency-closure walk from one call
+    site (`load_module_with_dependencies`, not the `..._and_prelude_
+    cached` path this cache lives on), so it cannot exhibit cross-file
+    redundancy by construction; its own regression (see item 11) is a
+    separate story.
+11. **`test_typecheck_lang_main` regression (97.07s → 257.61s since
+    item 9): investigated as two candidate causes, one fixed (small,
+    real win), one measured and found to be diffuse organic growth,
+    not a single fixable hotspot.**
+    - **Candidate 1, fixed**: `build_scope_from_decls` (`lang/
+      scope.mo`) does a second full pass over every module's decls
+      (`alias_decls_in_scope`, added by the open/use bare-name-aliasing
+      commit) even when that module has no `use`/`open` declarations
+      at all to alias — pure wasted work for the ~12% of the corpus
+      that's true of (grep-counted). Measured directly (temporary
+      `Bench.now`/`Bench.report` instrumentation, since reverted):
+      `alias_decls_in_scope` is ~29% of `build_scope_from_decls`'s own
+      cost on a representative sample — real, but `build_scope_from_
+      decls`'s own cost is itself a minority of a file's total "scope"
+      phase (most of which is I/O/parsing). Fixed with a cheap
+      `decls_have_aliasable_decls` pre-check (O(decls), O(1) per decl —
+      a bare tag match, no `ScopeData` work) that skips the whole
+      second pass when it would do nothing. Small, safe, and
+      correctness-preserving by construction (nothing to alias means
+      the skipped pass would have been a no-op regardless) — not
+      claimed to explain the bulk of the 97s→257s regression on its
+      own, given it only fires for ~12% of module loads.
+    - **Candidate 2, measured and NOT the cause — the CHECK phase's own
+      per-declaration cost has grown, but not through the mechanism
+      first suspected.** `lang/typecheck/infer.mo`'s `find_inductive_
+      for_cases_by_constructor` (a linear scan over every inductive in
+      the fully-merged scope, ~218+ `type` declarations corpus-wide)
+      looked like a strong candidate by code-reading alone — the CHECK
+      phase is now often 2-4x LARGER than the SCOPE phase for real
+      files (`lang/pretty.mo`: scope≈15-29s, check≈57-83s across
+      several runs), the opposite of this section's own item 9
+      assumption (based on a tiny `init/id.mo` file where scope
+      dominated ~90x over check). Instrumented directly (temporary
+      counters on both the fast path and this fallback, since
+      reverted) and ran against `lang/pretty.mo` (60 `match`
+      expressions, the worst measured `check=` offender): **zero**
+      calls to either path were logged — this function isn't even
+      being reached by the self-hosted checker's current coverage for
+      this file. The hypothesis is disproven, not just unconfirmed.
+      Followed up with per-declaration timing instead (temporary,
+      since reverted): costs are roughly UNIFORM (~600-900ms) across
+      most of `pretty.mo`'s 103 declarations, not concentrated in a
+      handful of outliers — consistent with organic, distributed
+      complexity growth in `type_check`'s own per-declaration work
+      (skolemization now extended to more decl kinds, match-case
+      validation, struct-literal/struct-update checking, Pi-chain
+      handling all landed since item 9's 97.07s measurement) rather
+      than one identifiable, fixable hot path. **Do not chase a single
+      fix here without new evidence** — this needs either a much
+      deeper per-node profiling pass inside `type_check` itself (a
+      separate, larger investigation) or acceptance that this is the
+      accumulated cost of genuine feature growth. Recorded here so it
+      isn't re-investigated blind from the same starting hypothesis.
 
 ## Committing Changes
 

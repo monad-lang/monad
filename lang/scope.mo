@@ -101,7 +101,37 @@ def build_scope_from_decls (path : ModulePath) (decls : List Decl) : ScopeData :
     let empty : ScopeData := scope_data_empty in
     let with_decls : ScopeData := build_scope_from_decls_go decls path empty in
     let with_builtins : ScopeData := add_builtins with_decls in
-    alias_decls_in_scope decls with_builtins
+    // Skip pass 2 entirely when this module has no use_d/open_d/
+    // scoped_open_d decls at all (~12% of the current corpus, grep-
+    // counted) -- there is nothing for it to alias, so re-walking every
+    // decl just to find that out is wasted work. Measured directly
+    // (self-hosted-compiler-perf.md Track B): alias_decls_in_scope
+    // accounts for ~29% of build_scope_from_decls's own cost on a
+    // representative sample -- real, but build_scope_from_decls's own
+    // cost is itself a minority of a file's total "scope" phase (most
+    // of which is I/O/parsing, see check_file_cached's --verbose
+    // timings), so this is a modest, not dominant, win -- worth taking
+    // since it's free and correctness-preserving, not because it
+    // explains the bulk of any single regression.
+    if decls_have_aliasable_decls decls
+    then alias_decls_in_scope decls with_builtins
+    else with_builtins
+
+/// O(decls) but O(1) per decl (a bare tag match, no `ScopeData` work) --
+/// far cheaper than actually running `alias_decls_in_scope`'s own walk
+/// (which does real `Map.lookup`/`Map.insert` work per aliased name)
+/// just to discover there's nothing to do.
+def decls_have_aliasable_decls (decls : List Decl) : Bool :=
+    match decls {
+        List.empty => false,
+        List.cons d ds =>
+            match d {
+                Decl.use_d _ _ _ => true,
+                Decl.open_d _ _ => true,
+                Decl.scoped_open_d _ _ _ => true,
+                _ => decls_have_aliasable_decls ds
+            }
+    }
 
 def alias_decls_in_scope (decls : List Decl) (acc : ScopeData) : ScopeData :=
     match decls {
