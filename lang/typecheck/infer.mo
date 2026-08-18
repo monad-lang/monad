@@ -1,12 +1,12 @@
 use lang.types {
-  Con, DebugName, Identifier, Inductive, Instance, InstanceKey, Literal,
-  LocalScope, LocalVar, MatchCase, ModulePath, NameRef, Native, Param, Scope,
-  ScopeClassDef, ScopeDef, ScopeError, Similar, StructLitField, Term,
-  TypeConstraint, TypeError,
+  Con, DebugName, Identifier, Inductive, InductConstructor, Instance,
+  InstanceKey, Literal, LocalScope, LocalVar, MatchCase, ModulePath, NameRef,
+  Native, Param, Scope, ScopeClassDef, ScopeDef, ScopeError, Similar,
+  StructLitField, Term, TypeConstraint, TypeError,
   app, con, custom, forall, hole, id, id_eq, if_, lam, list_rev_loop,
   list_reverse, lit, many, match_, mc, mk, mp, name, named, nid, not_a_type,
-  ntv, num, pi, show_module_path, str, type_, unknown_constructor,
-  unknown_type, unknown_var, unnamed, var,
+  ntv, num, pi, show_identifier, show_module_path, str, type_,
+  unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
 use lang.scope {
   find_constructor_in_inductive, inductive_has_constructor, list_append,
@@ -669,7 +669,27 @@ def debug_name_to_id (dbg : DebugName) : Identifier :=
         DebugName.unnamed => Identifier.id "_",
     }
 
-/// Type check a function application.
+/// Type check a function application. Named-call fallback (`plans/
+/// implementations/named-field-construction.md`, Phase 5): if checking
+/// `a` against its own expected type fails outright, and `a` is an
+/// UNANNOTATED struct literal, try reinterpreting the whole `App` as a
+/// named call against `f`'s own declared params instead
+/// (`type_check_named_call`) before giving up with the ORIGINAL error.
+/// Note this trigger condition is broader here than the reference
+/// compiler's own (`core_check.rs`'s `try_desugar_named_call`, only tried
+/// on a hard type-check FAILURE): `type_check`ing `a` against `Term.hole`
+/// (this checker's usual "no information" expected type for an ordinary
+/// named callee -- `app_arg_expected_type` only ever returns something
+/// else for an inline `Term.lam`, see its own doc comment) ALREADY fails
+/// for any unannotated struct literal today (`type_check_struct_lit`
+/// requires either a self-annotation or a concrete `expected_type` head
+/// name, and `Term.hole` has neither) -- so in practice this fallback is
+/// reached for every unannotated-struct-literal-argument call to an
+/// ordinary named function/constructor, not just ones that were
+/// previously hard errors. This is a strict improvement, not a behavior
+/// change: no program with this shape type-checked successfully before
+/// (confirmed: this is the exact gap noted in that plan's own Current
+/// State investigation of this file), so there is nothing to preserve.
 def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     let a_expected : Term := app_arg_expected_type f in
     match type_check a a_expected scope local_types locals {
@@ -684,7 +704,18 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
                     extract_pi_ret f_term a_term f_typ a_typ expected_type scope local_types locals,
                 err e => err e,
             },
-        err e => err e,
+        err e =>
+            match named_call_fields_of a {
+                Option.none => err e,
+                Option.some fields =>
+                    match type_check_named_call f fields scope local_types locals {
+                        err e2 => err e2,
+                        ok result => match result {
+                            Option.some tt => ok tt,
+                            Option.none => err e,
+                        },
+                    }
+            },
     }
 
 /// When `f` is an inline lambda with a KNOWN (non-hole) declared param
@@ -945,6 +976,166 @@ def struct_lit_find_field (fields : List StructLitField) (name : Identifier) : O
                 StructLitField.mk fname fvalue =>
                     if id_eq fname name then Option.some fvalue else struct_lit_find_field rest name
             }
+    }
+
+// -----------------------------------------------------------------------
+// Phase 5 of `plans/implementations/named-field-construction.md`:
+// constructor-target named calls (`NAME { field := value, ... }`,
+// order-independent keyword arguments matched against `NAME`'s own
+// declared constructor params). Generalizes `type_check_struct_lit`'s
+// existing machinery (hardcoded to "the struct's SOLE constructor",
+// resolved from a TYPE) to "a specific named constructor of ANY
+// inductive", resolved from a NAME (`f`) instead -- reusing
+// `scope_find_inductive_by_constructor`/`find_constructor_in_inductive`
+// (already general, see `type_check_free_var_con` above) and
+// `check_con_args_against_params` (already checks, not infers, each
+// present field against its declared type -- no analogous check-vs-infer
+// gap to fix here the way the Rust reference's `infer`'s own `Con` arm
+// needed one, see that plan's Phase 1).
+// -----------------------------------------------------------------------
+
+/// If `a` is an UNANNOTATED struct literal (`type_name = Option.none` --
+/// an explicit `: StructName` annotation always means "build this
+/// struct," never "spread across NAME's own params", matching the
+/// reference's identical rule), its fields; `Option.none` otherwise
+/// (including for an ANNOTATED struct literal, or any other term shape).
+def named_call_fields_of (a : Term) : Option (List StructLitField) :=
+    match a {
+        Term.lit lit_val =>
+            match lit_val {
+                Literal.struct_lit fields type_name =>
+                    match type_name {
+                        Option.none => Option.some fields,
+                        Option.some _ => Option.none,
+                    },
+                _ => Option.none,
+            },
+        _ => Option.none,
+    }
+
+/// `Inductive.mk`'s own `name` field, bare-last-segment only -- mirrors
+/// `struct_lit_con_name`'s identical extraction for a CONSTRUCTOR's own
+/// `ModulePath`, just applied to the owning inductive's instead. Used to
+/// build a resolved named call's own result type (`Term.var sentinel
+/// (DebugName.named ...)`), the same shape `type_check_struct_lit`
+/// returns for an explicitly-annotated literal.
+def inductive_bare_name (ind : Inductive) : Identifier :=
+    match ind {
+        Inductive.mk name _ _ _ _ _ =>
+            match name {
+                ModulePath.mp ids =>
+                    match list_last ids {
+                        Option.some id => id,
+                        Option.none => Identifier.id "?",
+                    }
+            }
+    }
+
+def inductive_module_path (ind : Inductive) : ModulePath :=
+    match ind {
+        Inductive.mk name _ _ _ _ _ => name,
+    }
+
+/// Whether `name` is among `params`' own declared names.
+#[terminating]
+def named_call_param_exists (params : List Param) (name : Identifier) : Bool :=
+    match params {
+        List.empty => false,
+        List.cons p rest =>
+            match p {
+                Param.mk pname _ _ _ _ =>
+                    if id_eq pname name then true else named_call_param_exists rest name
+            }
+    }
+
+/// Every literal field name must be among `params`' own declared names --
+/// STRICTER than `struct_lit_build_args`'s existing leniency (which
+/// silently drops an unmatched literal field, since it only ever walks
+/// the STRUCT's own declared fields, never the literal's) -- a genuine
+/// named call should reject a typo'd field name outright rather than
+/// silently ignore it.
+#[terminating]
+def named_call_check_unknown_fields (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
+    match fields {
+        List.empty => ok true,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk fname _ =>
+                    if named_call_param_exists params fname
+                    then named_call_check_unknown_fields params rest
+                    else err (TypeError.custom (String.concat "named call: unknown field `" (String.concat (show_identifier fname) "`")))
+            }
+    }
+
+/// Every declared param must be covered by a literal field -- no default
+/// mechanism exists for a `lang/` constructor of ANY kind (ordinary
+/// `type` or `struct`) today, so this is always required (matches the
+/// reference's own finding: `Inductive.defaults` has no `lang/`
+/// equivalent at all).
+#[terminating]
+def named_call_check_missing_fields (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
+    match params {
+        List.empty => ok true,
+        List.cons p rest =>
+            match p {
+                Param.mk pname _ _ _ _ =>
+                    match struct_lit_find_field fields pname {
+                        Option.some _ => named_call_check_missing_fields rest fields,
+                        Option.none => err (TypeError.custom (String.concat "named call: missing required field `" (String.concat (show_identifier pname) "`"))),
+                    }
+            }
+    }
+
+def named_call_validate_fields (params : List Param) (fields : List StructLitField) : Result TypeError Bool :=
+    match named_call_check_unknown_fields params fields {
+        err e => err e,
+        ok _ => named_call_check_missing_fields params fields,
+    }
+
+/// Resolves `f` (the callee) as a constructor name and, if found, builds
+/// the reordered `Term.con`. Returns `ok Option.none` when the shape
+/// doesn't apply at all (`f` isn't a bare named variable, or it doesn't
+/// resolve to a known constructor -- Phase 6 tries an ordinary `def`'s
+/// own params next, once that infrastructure lands) -- callers fall back
+/// to the ORIGINAL `type_check_app` error in that case. Returns `err`
+/// once `f` DOES resolve to a real constructor but field validation
+/// itself fails (unknown/missing field, a field value's own type
+/// mismatch) -- callers surface THAT error directly instead, mirroring
+/// the reference's own Rules step 3 refinement.
+def type_check_named_call (f : Term) (fields : List StructLitField) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (Option TypedTerm) :=
+    match f {
+        Term.var _idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
+                    let con_mp : ModulePath := ModulePath.mp (List.cons bare_name List.empty) in
+                    match scope_find_inductive_by_constructor con_mp scope {
+                        Option.none => ok Option.none,
+                        Option.some ind =>
+                            match find_constructor_in_inductive ind con_mp {
+                                Option.none => ok Option.none,
+                                Option.some ctor =>
+                                    match ctor {
+                                        InductConstructor.mk con_name params _ =>
+                                            match named_call_validate_fields params fields {
+                                                err e => err e,
+                                                ok _ =>
+                                                    let args : List (Option Term) := struct_lit_build_args params fields in
+                                                    match check_con_args_against_params args params scope local_types locals {
+                                                        err e => err e,
+                                                        ok _ =>
+                                                            let mk_name : Identifier := struct_lit_con_name con_name in
+                                                            let c : Con := Con.mk mk_name (inductive_module_path ind) (List.length params) args in
+                                                            let result_typ : Term := Term.var sentinel (DebugName.named (inductive_bare_name ind)) in
+                                                            ok (Option.some (mk_typed (Term.con c) result_typ)),
+                                                    }
+                                            }
+                                    }
+                            }
+                    },
+                DebugName.unnamed => ok Option.none,
+            },
+        _ => ok Option.none,
     }
 
 /// Type check a struct-update expression (`{ base with field := value,
@@ -1352,6 +1543,128 @@ def test_type_check_struct_lit_extra_unknown_field_ignored : Bool :=
     let fields : List StructLitField := List.cons f1 (List.cons f2 (List.cons extra List.empty)) in
     let type_name : Option Term := Option.some point_type_ref in
     match type_check_struct_lit fields type_name Term.hole point_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+// --- Tests for type_check_named_call (Phase 5 of
+// plans/implementations/named-field-construction.md) ---
+//
+// Reuses `point_scope` (above) unchanged for the multi-field case.
+// `box_scope` is NOT reusable here for a single-field case: its own
+// constructor is registered under a 2-segment path (`box_ctor_full_
+// path = mp [Box, box]`, needed by `type_check_con`'s OWN tests, which
+// resolve via `scope_find_inductive(typ_name)` + the constructor's FULL
+// path within it) -- but `type_check_named_call` resolves `f` the SAME
+// way `type_check_free_var_con` does: `scope_find_inductive_by_
+// constructor`, a flat scope-wide search keyed on a SINGLE-segment
+// bare name only (`last_dotted_segment` always collapses `f`'s own
+// identifier down to one segment before searching) -- matching real
+// scope registration's own "constructors registered under their bare
+// name only" convention (`add_constructors_go`, `lang/scope.mo`, per
+// `type_check_free_var_con`'s own doc comment). A dedicated single-
+// field `Solo { n }` fixture, registered bare (mirroring `point_scope`'s
+// own "mk" path), is what this actually needs.
+
+def point_mk_var : Term := Term.var sentinel (DebugName.named (Identifier.id "mk"))
+
+def solo_type_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Solo") List.empty)
+
+def solo_mk_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty)
+
+def solo_n_param : Param := Param.mk (Identifier.id "n") (Term.type_ 2) Multiplicity.many Option.none List.empty
+
+def solo_constructor : InductConstructor := InductConstructor.mk solo_mk_path (List.cons solo_n_param List.empty) Term.hole
+
+def solo_inductive : Inductive := Inductive.mk solo_type_path List.empty Term.hole (List.cons solo_constructor List.empty) List.empty Visibility.package_private
+
+def solo_scope : Scope := {
+    module_id := solo_type_path,
+    scope := scope_data_add_inductive scope_data_empty solo_inductive,
+    parent := Option.none,
+}
+
+def solo_mk_var : Term := Term.var sentinel (DebugName.named (Identifier.id "mk"))
+
+#[test]
+def test_type_check_named_call_multi_field_reordered : Bool :=
+    // Fields given in the OPPOSITE order from `point_params`' own
+    // declaration (y then x) -- order-independence is the whole point.
+    let fy : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
+    let fx : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons fy (List.cons fx List.empty) in
+    match type_check_named_call point_mk_var fields point_scope empty_local_types empty_locals {
+        ok result => match result {
+            Option.some _ => true,
+            Option.none => false,
+        },
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_named_call_single_field_constructor : Bool :=
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "n") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 List.empty in
+    match type_check_named_call solo_mk_var fields solo_scope empty_local_types empty_locals {
+        ok result => match result {
+            Option.some _ => true,
+            Option.none => false,
+        },
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_named_call_unknown_field_is_an_error : Bool :=
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let f2 : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
+    let bad : StructLitField := StructLitField.mk (Identifier.id "z_not_a_field") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 (List.cons f2 (List.cons bad List.empty)) in
+    match type_check_named_call point_mk_var fields point_scope empty_local_types empty_locals {
+        err _ => true,
+        ok _ => false,
+    }
+
+#[test]
+def test_type_check_named_call_missing_field_is_an_error : Bool :=
+    // No default mechanism exists for `lang/` constructors of any kind --
+    // omitting `y` must always be an error here, UNLIKE `type_check_
+    // struct_lit`'s own leniency (`test_type_check_struct_lit_missing_
+    // field_ok`, above) -- a positive, deliberate strictness difference
+    // (see `named_call_validate_fields`'s own doc comment), not a gap.
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 List.empty in
+    match type_check_named_call point_mk_var fields point_scope empty_local_types empty_locals {
+        err _ => true,
+        ok _ => false,
+    }
+
+#[test]
+def test_type_check_named_call_not_a_constructor_returns_none : Bool :=
+    // `f` doesn't resolve to a known constructor at all -- the SHAPE
+    // doesn't apply, so callers must fall back to the ORIGINAL error
+    // (Phase 6 will try an ordinary def's own params here instead, once
+    // that resolution infrastructure lands).
+    let unknown_var : Term := Term.var sentinel (DebugName.named (Identifier.id "not_a_real_name")) in
+    let fields : List StructLitField := List.empty in
+    match type_check_named_call unknown_var fields point_scope empty_local_types empty_locals {
+        ok result => match result {
+            Option.none => true,
+            Option.some _ => false,
+        },
+        err _ => false,
+    }
+
+#[test]
+def test_type_check_app_resolves_named_call_end_to_end : Bool :=
+    // Full `type_check_app` dispatch (not `type_check_named_call`
+    // directly): `mk { y := .., x := .. }` parses as `App(Var(mk),
+    // StructLit)` -- confirms the fallback actually wires up inside
+    // `type_check_app` itself, not just as a standalone function.
+    let fy : StructLitField := StructLitField.mk (Identifier.id "y") (Term.type_ 1) in
+    let fx : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons fy (List.cons fx List.empty) in
+    let arg : Term := Term.lit (Literal.struct_lit fields Option.none) in
+    match type_check_app point_mk_var arg Term.hole point_scope empty_local_types empty_locals {
         ok _ => true,
         err _ => false,
     }
