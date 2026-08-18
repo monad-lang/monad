@@ -30,6 +30,7 @@
 /// needed by any real corpus file.
 use lang.types {Attribute, Decl, Def, ModulePath, has_attr}
 use lang.codegen.emit {module_path_to_str}
+use lang.module {try_parse_decls}
 
 // ─── Discovery ──────────────────────────────────────────────────────
 
@@ -87,6 +88,69 @@ def test_def_names (defs : List Def) : List String :=
         List.cons d rest => List.cons (module_path_to_str (Def.name d)) (test_def_names rest),
     }
 
+// ─── Driver source synthesis ────────────────────────────────────────
+//
+// Synthesizes `.mo` SOURCE TEXT for a driver `def main : IO I64 { ... }`
+// that calls each named test in turn (v1 scope: each assumed
+// `Bool`-returning), prints "PASS  <name>" / "FAIL  <name>" per test
+// (`println`, inherited-stdio streaming — matches
+// `lang.codegen.link.compile_and_run`'s own existing convention, the
+// only way a compiled/run binary's results reach a human here), a
+// final "<passed>/<total> tests passed" summary line, and returns `0`
+// if every test passed, `1` otherwise (the sole signal the PARENT
+// process — `lang/main.mo`'s own `test_file`, a later step — can
+// observe via `exec_cmd`'s exit code).
+//
+// `def main : IO I64 { ... }` with zero params is deliberate and
+// already handled downstream — `lang/codegen/emit.mo`'s own
+// `ensure_main_params`/`rename_main` auto-add the runtime's `args :
+// List String` param when `main` has none.
+//
+// Each test's own call result is bound to an index-based local
+// (`__t0`, `__t1`, ...) rather than reusing the test's own name, so a
+// test literally named e.g. `__t0` (vanishingly unlikely, but not this
+// function's job to rule out) can't collide with the driver's own
+// internal bookkeeping.
+
+#[partial]
+def test_var_name (idx : I64) : String := "__t" ++ I64.to_string idx
+
+#[partial]
+def synth_let_lines (names : List String) (idx : I64) : String :=
+    match names {
+        List.empty => "",
+        List.cons name rest =>
+            "    let " ++ test_var_name idx ++ " := " ++ name ++ ";\n" ++ synth_let_lines rest (idx + 1),
+    }
+
+#[partial]
+def synth_report_lines (names : List String) (idx : I64) : String :=
+    match names {
+        List.empty => "",
+        List.cons name rest =>
+            "    if " ++ test_var_name idx ++ " then println \"PASS  " ++ name ++ "\" else println \"FAIL  " ++ name ++ "\";\n" ++ synth_report_lines rest (idx + 1),
+    }
+
+#[partial]
+def synth_sum_expr (names : List String) (idx : I64) : String :=
+    match names {
+        List.empty => "0",
+        List.cons _ rest =>
+            "(if " ++ test_var_name idx ++ " then 1 else 0) + " ++ synth_sum_expr rest (idx + 1),
+    }
+
+#[partial]
+def synthesize_test_driver_source (names : List String) : String :=
+    let total : I64 := List.length names in
+    "def main : IO I64 {\n" ++
+    synth_let_lines names 0 ++
+    synth_report_lines names 0 ++
+    "    let __passed := " ++ synth_sum_expr names 0 ++ ";\n" ++
+    "    let __total := " ++ I64.to_string total ++ ";\n" ++
+    "    println (I64.to_string __passed ++ \"/\" ++ I64.to_string __total ++ \" tests passed\");\n" ++
+    "    return (if I64.beq __passed __total then 0 else 1)\n" ++
+    "}\n"
+
 // ─── Tests ───────────────────────────────────────────────────────────
 //
 // Hand-built `Decl.def_d` fixtures (some `#[test]`-attributed, some
@@ -137,6 +201,40 @@ def test_test_def_names_preserves_order : Bool :=
             String.beq n1 "test_a" &&
             match rest { List.cons n2 _ => String.beq n2 "test_b", List.empty => false },
         List.empty => false,
+    }
+
+#[test]
+def test_synthesize_test_driver_source_parses_and_names_main : Bool :=
+    // The whole point of the string-templating architecture decision
+    // (see this file's own top-of-file doc comment): the synthesized
+    // source must round-trip through the REAL parser, producing
+    // exactly one `Decl.def_d` named "main".
+    let source : String := synthesize_test_driver_source (List.cons "test_a" (List.cons "test_b" List.empty)) in
+    match try_parse_decls source {
+        Option.some decl_list =>
+            match decl_list {
+                List.cons only_decl rest =>
+                    (match rest { List.empty => true, List.cons _ _ => false }) &&
+                    match only_decl {
+                        Decl.def_d def_val => String.beq (module_path_to_str (Def.name def_val)) "main",
+                        _ => false,
+                    },
+                List.empty => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
+def test_synthesize_test_driver_source_no_tests_still_parses : Bool :=
+    // Zero discovered tests -- a valid, parseable (if degenerate)
+    // driver, matching the letter of the architecture decision even
+    // in the empty case (`lang/main.mo`'s own caller is expected to
+    // special-case this into a "no tests" report before ever calling
+    // this function, but this function itself shouldn't crash on it).
+    let source : String := synthesize_test_driver_source List.empty in
+    match try_parse_decls source {
+        Option.some _ => true,
+        Option.none => false,
     }
 
 #[test]
