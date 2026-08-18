@@ -362,7 +362,7 @@ pub fn lower_term(ctx: &mut LowerCtx, term: &CoreTerm) -> Result<CoreIr, LowerCo
 
 fn lower_lit(ctx: &mut LowerCtx, lit: &CoreLit) -> Result<CoreIr, LowerCoreIrError> {
   match lit {
-    CoreLit::Str { value } => Ok(core_ir::lit(IrLit::Str(value.clone()))),
+    CoreLit::Str { value } => Ok(core_ir::lit(IrLit::Str(value.clone().into()))),
     CoreLit::Char { value } => Ok(core_ir::lit(IrLit::Char(*value))),
     CoreLit::Num { value, suffix } => Ok(core_ir::lit(IrLit::Num(*value, *suffix))),
     CoreLit::Float { value, suffix } => Ok(core_ir::lit(IrLit::Float(*value, *suffix))),

@@ -49,6 +49,7 @@ pub mod lower_core_ir;
 pub mod parser;
 pub mod raise_core;
 pub mod runtime;
+pub mod shared_str;
 pub mod term;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "repl"))]
@@ -361,7 +362,10 @@ fn strings_to_list_value(
   for s in args.into_iter().rev() {
     result = core_value::Value::Con {
       tag: cons.tag,
-      args: vec![core_value::Value::Lit(core_ir::IrLit::Str(s)), result],
+      args: vec![
+        core_value::Value::Lit(core_ir::IrLit::Str(s.into())),
+        result,
+      ],
     };
   }
   Ok(result)
@@ -615,7 +619,7 @@ fn detect_test_result_value(
         TestResult::Pass
       } else if well_known.result_err.is_some_and(|t| t.tag == *tag) {
         let msg = args.first().and_then(|v| match v {
-          core_value::Value::Lit(core_ir::IrLit::Str(s)) => Some(s.clone()),
+          core_value::Value::Lit(core_ir::IrLit::Str(s)) => Some(s.as_str().to_string()),
           _ => None,
         });
         TestResult::FailWithMessage(msg.unwrap_or_else(|| format!("{value:?}")))
@@ -2192,7 +2196,7 @@ def main : String := show_pair { x := 1, xs := List.cons 2 List.empty }
     let result = eval_core_program(&ModulePath::top("'group2_regression_test"), source)
       .unwrap_or_else(|e| panic!("eval_core_program failed: {e}"));
     match result {
-      core_value::Value::Lit(core_ir::IrLit::Str(s)) => assert_eq!(s, "x=1,xs=2"),
+      core_value::Value::Lit(core_ir::IrLit::Str(s)) => assert_eq!(s.as_str(), "x=1,xs=2"),
       other => panic!("expected a string literal, got {other:?}"),
     }
   }

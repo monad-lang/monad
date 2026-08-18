@@ -26,6 +26,8 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
+use crate::shared_str::SharedStr;
+
 /// Shared handle to a compiled subterm. `Arc` (not `Box`) so a `Global`
 /// slot's body and any closure capturing it can be referenced in O(1)
 /// without deep-cloning — see `plans/implementations/core-term-closure-
@@ -38,7 +40,11 @@ pub type IrRef = Arc<CoreIr>;
 /// by the lowering pass, never reaching this IR as literals).
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrLit {
-  Str(String),
+  /// Backed by `SharedStr` (`Arc<str>` + byte-range), not a plain
+  /// `String` — see `shared_str.rs`'s own doc comment for why: this is
+  /// what makes `String.slice`/`String.drop` (`core_native.rs`) O(1)
+  /// instead of a full-file-copy per call.
+  Str(SharedStr),
   Char(char),
   /// `crate::term::NumSuffix` is reused as-is rather than re-declared
   /// here — it's a plain, already-minimal tag type with no dependency on

@@ -72,12 +72,12 @@ fn ctor_name_for_tag(induct: &Inductive, tag: u32) -> Result<String, MacroError>
 }
 
 fn str_value(s: &str) -> Value {
-  Value::Lit(IrLit::Str(s.to_string()))
+  Value::Lit(IrLit::Str(s.into()))
 }
 
 fn expect_str(v: Value) -> Result<String, MacroError> {
   match v {
-    Value::Lit(IrLit::Str(s)) => Ok(s),
+    Value::Lit(IrLit::Str(s)) => Ok(s.as_str().to_string()),
     other => Err(MacroError::Generic(format!(
       "meta: expected a String value, got: {other:?}"
     ))),

@@ -302,6 +302,19 @@ fn extract_string(v: &Value) -> Result<&str, CoreEvalError> {
   }
 }
 
+/// Like `extract_string`, but returns the underlying `SharedStr` itself
+/// rather than a derived `&str` — needed only by `string_slice`/
+/// `string_drop`, which construct a new O(1) view via `SharedStr::
+/// subslice`/`drop_prefix` rather than a copied `&str`.
+fn extract_shared_str(v: &Value) -> Result<&crate::shared_str::SharedStr, CoreEvalError> {
+  match v {
+    Value::Lit(IrLit::Str(s)) => Ok(s),
+    other => Err(CoreEvalError::NativeArgError(format!(
+      "expected a string literal, got {other:?}"
+    ))),
+  }
+}
+
 fn require_ctor(ctor: Option<CtorTag>, name: &'static str) -> Result<CtorTag, CoreEvalError> {
   ctor.ok_or(CoreEvalError::MissingWellKnownCtor(name))
 }
@@ -466,7 +479,7 @@ fn int_to_string(args: &[Value], fmt: fn(i64) -> String) -> Result<Value, CoreEv
     ));
   }
   let v = extract_int(&args[0])?;
-  Ok(Value::Lit(IrLit::Str(fmt(v))))
+  Ok(Value::Lit(IrLit::Str(fmt(v).into())))
 }
 
 fn int_to_int(args: &[Value], suffix: NumSuffix) -> Result<Value, CoreEvalError> {
@@ -487,7 +500,7 @@ fn float_to_string(args: &[Value]) -> Result<Value, CoreEvalError> {
     ));
   }
   let v = extract_float(&args[0])?;
-  Ok(Value::Lit(IrLit::Str(v.to_string())))
+  Ok(Value::Lit(IrLit::Str(v.to_string().into())))
 }
 
 fn string_eq(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -561,7 +574,7 @@ fn string_concat(args: &[Value]) -> Result<Value, CoreEvalError> {
   }
   let a = extract_string(&args[0])?;
   let b = extract_string(&args[1])?;
-  Ok(Value::Lit(IrLit::Str(a.to_string() + b)))
+  Ok(Value::Lit(IrLit::Str((a.to_string() + b).into())))
 }
 
 fn string_length(args: &[Value]) -> Result<Value, CoreEvalError> {
@@ -581,7 +594,7 @@ fn string_to_lowercase(args: &[Value]) -> Result<Value, CoreEvalError> {
     ));
   }
   let s = extract_string(&args[0])?;
-  Ok(Value::Lit(IrLit::Str(s.to_lowercase())))
+  Ok(Value::Lit(IrLit::Str(s.to_lowercase().into())))
 }
 
 fn string_starts_with(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -601,24 +614,26 @@ fn string_slice(args: &[Value]) -> Result<Value, CoreEvalError> {
       "string_slice needs 3 args".into(),
     ));
   }
-  let s = extract_string(&args[0])?;
+  let s = extract_shared_str(&args[0])?;
   let start = (extract_int(&args[1])?.max(0) as usize).min(s.len());
   let len = extract_int(&args[2])?.max(0) as usize;
   let end = start.saturating_add(len).min(s.len());
-  // Byte-oriented, matching `string_length`/`string_get`'s own byte
-  // semantics -- but unlike those, `&str`'s own `[start..end]` indexing
-  // PANICS if either bound doesn't land on a UTF-8 character boundary
+  // O(1): `SharedStr::subslice` shares `s`'s backing `Arc<str>` rather
+  // than copying bytes -- this used to be `s.get(start..end).unwrap_or(
+  // "").to_string()`, a full copy on every call regardless of how small
+  // the slice was (the dominant cost of self-hosted parsing before
+  // `SharedStr` existed; see `shared_str.rs`'s doc comment). Byte-
+  // oriented, matching `string_length`/`string_get`'s own byte
+  // semantics -- but unlike those, naive `[start..end]` indexing PANICS
+  // if either bound doesn't land on a UTF-8 character boundary
   // (confirmed reachable: any string containing a multi-byte character,
   // sliced at an odd byte offset -- not just a theoretical edge case,
-  // since string-processing code walks byte-by-byte, e.g.
-  // `PARSER_COMBINATOR_SHAPED`'s own `String.drop 1 s` pattern). `get`
-  // returns `None` instead of panicking for a bad boundary; falling back
-  // to empty matches this function's own existing out-of-range
-  // tolerance (an out-of-range `start` already produced `""`, not an
-  // error) rather than crashing the whole evaluator over an in-language
-  // slice call.
-  let result = s.get(start..end).unwrap_or("").to_string();
-  Ok(Value::Lit(IrLit::Str(result)))
+  // since string-processing code walks byte-by-byte, e.g. a parser's
+  // `String.drop 1 s` pattern). `subslice` falls back to empty instead
+  // of panicking for a bad boundary, matching this function's own
+  // pre-existing out-of-range tolerance (an out-of-range `start` already
+  // produced `""`, not an error).
+  Ok(Value::Lit(IrLit::Str(s.subslice(start, end))))
 }
 
 fn string_drop(args: &[Value]) -> Result<Value, CoreEvalError> {
@@ -628,12 +643,10 @@ fn string_drop(args: &[Value]) -> Result<Value, CoreEvalError> {
     ));
   }
   let n = extract_int(&args[0])?.max(0) as usize;
-  let s = extract_string(&args[1])?;
-  // See `string_slice`'s own comment: `get` avoids panicking on a
-  // non-boundary byte offset (a multi-byte character straddling it),
-  // falling back to empty the same way an out-of-range `n` already did.
-  let result = s.get(n..).unwrap_or("").to_string();
-  Ok(Value::Lit(IrLit::Str(result)))
+  let s = extract_shared_str(&args[1])?;
+  // See `string_slice`'s own comment: O(1) via `SharedStr::drop_prefix`,
+  // same non-boundary/out-of-range fallback-to-empty behavior as before.
+  Ok(Value::Lit(IrLit::Str(s.drop_prefix(n))))
 }
 
 // TODO: `IO` is slated to be replaced with an opaque indexed monad whose
@@ -665,7 +678,7 @@ fn print_str(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
   // `Monad.bind` rather than discarding its result outright. `Unit`'s
   // own runtime shape still doesn't matter (never pattern-matched), so
   // any inner value works -- kept as the string for minimal disruption.
-  io_wrap(natives, Value::Lit(IrLit::Str(s.to_string())))
+  io_wrap(natives, Value::Lit(IrLit::Str(s.to_string().into())))
 }
 
 fn string_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -733,7 +746,11 @@ fn read_file(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
   let path = extract_string(&args[0])?;
   let content = std::fs::read_to_string(path)
     .map_err(|e| CoreEvalError::NativeArgError(format!("read_file {path} failed: {e}")))?;
-  io_wrap(natives, Value::Lit(IrLit::Str(content)))
+  // The key `SharedStr` construction site for the self-hosted parser's
+  // perf: the WHOLE file's content becomes one backing `Arc<str>`
+  // allocation here, and every subsequent `String.slice`/`String.drop`
+  // during parsing shares it (O(1) each) instead of re-copying.
+  io_wrap(natives, Value::Lit(IrLit::Str(content.into())))
 }
 
 /// `IO.write_file (path : String) (content : String) : IO Unit` — see
@@ -750,7 +767,7 @@ fn write_file(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
   let content = extract_string(&args[1])?;
   std::fs::write(path, content)
     .map_err(|e| CoreEvalError::NativeArgError(format!("write_file {path} failed: {e}")))?;
-  io_wrap(natives, Value::Lit(IrLit::Str(String::new())))
+  io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())))
 }
 
 /// `IO.file_exists (path : String) : IO Bool` — see `read_file`'s own
@@ -805,7 +822,7 @@ fn list_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   for entry in entries.into_iter().rev() {
     result = Value::Con {
       tag: cons.tag,
-      args: vec![Value::Lit(IrLit::Str(entry)), result],
+      args: vec![Value::Lit(IrLit::Str(entry.into())), result],
     };
   }
   io_wrap(natives, result)
@@ -825,7 +842,7 @@ fn get_env(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
       let some = require_ctor(natives.well_known.option_some, "Option.some")?;
       Value::Con {
         tag: some.tag,
-        args: vec![Value::Lit(IrLit::Str(value))],
+        args: vec![Value::Lit(IrLit::Str(value.into()))],
       }
     }
     Err(_) => {
@@ -888,7 +905,7 @@ fn string_from_list(args: &[Value], natives: &NativeTable) -> Result<Value, Core
   let s = String::from_utf8(bytes).map_err(|e| {
     CoreEvalError::NativeArgError(format!("invalid UTF-8 in string_from_list: {e}"))
   })?;
-  Ok(Value::Lit(IrLit::Str(s)))
+  Ok(Value::Lit(IrLit::Str(s.into())))
 }
 
 /// Reads a `List String` value into an owned `Vec<String>` — the
@@ -1004,7 +1021,7 @@ fn extract_handle_id(v: &Value) -> Result<u64, CoreEvalError> {
 /// as `io_wrap`'s callers elsewhere in this file) — an empty string is as
 /// good a placeholder as any.
 fn unit_value() -> Value {
-  Value::Lit(IrLit::Str(String::new()))
+  Value::Lit(IrLit::Str(String::new().into()))
 }
 
 /// `forkIO (action : Unit -> IO A) : IO (Fiber A)` (`std/concurrent/
@@ -1185,7 +1202,7 @@ mod tests {
   }
 
   fn string(s: &str) -> Value {
-    Value::Lit(IrLit::Str(s.to_string()))
+    Value::Lit(IrLit::Str(s.into()))
   }
 
   #[test]
