@@ -6222,6 +6222,40 @@ def test_defmacro_term_body_no_params : Bool :=
         fail _ => false
     }
 
+/// Real bug found this round (macro-expansion phase, prerequisite fix
+/// B): `defmacro`/`decls` were missing from `kw_list`
+/// (lang/parser/core.mo), so `identifier` happily accepted either as
+/// an ordinary variable name -- meaning a PRECEDING decl's own
+/// expression parsing could silently swallow a following `defmacro`
+/// declaration's whole keyword+name+params as juxtaposed-application
+/// arguments (`def foo : I64 := 1` followed by `defmacro derive_lens T
+/// := decls {...}` parsed `1 defmacro derive_lens T` as one
+/// application chain, leaving the parser stranded right at `:=` with
+/// no valid decl to match — "unknown declaration"). This is exactly
+/// the real corpus shape `std/derive.mo`'s own `defmacro derive_lens T
+/// := decls { reflect_type_info! T derive_lens_meta }` hit (confirmed
+/// via `decls_parser_strict` directly failing on this two-decl shape
+/// before the fix, succeeding after). A single standalone `defmacro`
+/// decl (this file's other defmacro tests, all of which parse it as
+/// the FIRST/only decl) never exercised this, which is why it went
+/// undetected until a real multi-decl file surfaced it.
+#[test]
+def test_defmacro_not_swallowed_by_preceding_decl : Bool :=
+    match decls_parser_strict "def foo : I64 := 1\n\ndefmacro derive_lens T := decls {\n    reflect_type_info! T derive_lens_meta\n}\n" {
+        success rem decls =>
+            String.beq rem "" &&
+            I64.beq (List.length decls) 2 &&
+            match decls {
+                List.cons _ rest =>
+                    match rest {
+                        List.cons d2 _ => match d2 { Decl.decl_gen_d _ _ _ _ => true, _ => false },
+                        List.empty => false,
+                    },
+                List.empty => false,
+            },
+        fail _ => false
+    }
+
 /// Form A: `defmacro name params := decls { ... }` -> `Decl.decl_gen_d`,
 /// storing the literal (unexpanded) list of decls parsed out of the
 /// body -- the real corpus shape (`std/derive.mo`'s own `defmacro

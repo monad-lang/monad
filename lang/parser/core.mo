@@ -155,10 +155,10 @@ def op_lookup_entry (op_str : String) (table : List OpEntry) : Option OpEntry :=
 		}
 
 
-def kw_list : List String := 
+def kw_list : List String :=
 	["def", "let", "in", "use", "open", "class", "struct", "instance",
 	 "type", "fn", "match", "if", "then", "else", "infix",
-	 "do", "return", "for", "quote", "with"]
+	 "do", "return", "for", "quote", "with", "defmacro", "decls"]
 
 
 #[partial]
