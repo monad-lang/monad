@@ -12,6 +12,7 @@ use lang.types {
 use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
+use lang.typecheck.macro_queue {expand_decls}
 use lang.scope {
   alias_decls_in_scope, build_scope_from_decls, decls_have_aliasable_decls,
   list_append, modpath_eq, scope_data_empty, scope_find_inductive,
@@ -49,8 +50,19 @@ def init_module_path : ModulePath := ModulePath.mp [Identifier.id "init"]
 
 /// Parse all declarations from source text.
 /// Uses decls_parser which properly handles docstrings.
+///
+/// Runs the result through `expand_decls` (macro expansion,
+/// `lang.typecheck.macro_queue`) before returning — this is the real
+/// pipeline's own LENIENT parse site (feeds `build_scope_from_decls`
+/// via `load_module_decls`/`parse_module`/`typecheck_file_with_deps`),
+/// one of the two sites the macro-expansion plan calls out by name;
+/// its strict twin is `try_parse_decls_strict` below. `ParseResult`'s
+/// own `remaining` is untouched -- only the parsed payload changes.
 def parse_all_decls (input : String) : ParseResult (List Decl) :=
-    lang.parser.decls_parser input
+    match lang.parser.decls_parser input {
+        ParseResult.success rem decls => ParseResult.success rem (expand_decls decls),
+        ParseResult.fail e => ParseResult.fail e,
+    }
 
 /// `parse_all_decls`'s strict twin: fails (rather than silently
 /// truncating) on any unconsumed input, i.e. genuine test coverage
@@ -76,9 +88,13 @@ def try_parse_decls (input : String) : Option (List Decl) :=
 /// Rust-diag.rs-style diagnostic on a genuine parse failure. `path` is
 /// threaded through only for the `--> path:L:C` line — pass
 /// `Option.none` if unknown.
+/// The macro-expansion plan's own STRICT parse site — feeds the real
+/// per-decl typecheck walk (`check_file`/`check_file_cached` via
+/// `check_module_with_scope`), so `expand_decls` runs here too, same
+/// as `parse_all_decls` above.
 def try_parse_decls_strict (input : String) (path : Option String) : Result String (List Decl) :=
     match decls_parser_strict input {
-        ParseResult.success _ decls => Result.ok decls,
+        ParseResult.success _ decls => Result.ok (expand_decls decls),
         ParseResult.fail e => Result.err (render_parse_error input path e),
     }
 
