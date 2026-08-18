@@ -160,6 +160,17 @@ pub struct StructInfo {
 pub struct ConstructorInfo {
   pub param_atoms: Vec<Atom>,
   pub fields: Vec<CoreTerm>,
+  /// Each field's declared name, in the SAME order as `fields` — added for
+  /// `plans/implementations/named-field-construction.md`'s named-call
+  /// resolution (`try_desugar_named_call`), which needs to match a
+  /// `NAME { field := value, ... }` call's own field names against a
+  /// constructor's declared param names; nothing else in this file reads
+  /// field NAMES today (`fields`' positional types were always enough for
+  /// ordinary positional construction). Kept as a parallel `Vec` rather
+  /// than folded into `fields`' own tuple shape for the same reason
+  /// `StructInfo.defaults` is kept separate (see its own doc comment) —
+  /// so the many existing `fields`-only consumers don't need touching.
+  pub field_names: Vec<Identifier>,
 }
 
 /// Every known struct-like inductive's (or class's, see `StructKind`)
@@ -207,6 +218,35 @@ pub struct StructFields {
   /// `ModulePath` to key `known_instances` with — checked as a fallback
   /// after `atom_paths` proper, never feeding into alias computation.
   pub inductive_paths: Map<Atom, ModulePath>,
+  /// A constructor's OWN atom (e.g. `circle`'s, not `Shape`'s) mapped back
+  /// to `(inductive_atom, constructor_short_name)` — the reverse direction
+  /// of `constructors`' own `(inductive_atom, name)` key. Added for named-
+  /// call resolution (`plans/implementations/named-field-construction.md`):
+  /// `try_desugar_named_call` only has the CALLEE's bare atom in hand (from
+  /// `CoreTerm::Free(atom)`), and needs to find its way back to
+  /// `constructors`' entry to recover field names/types. Populated
+  /// alongside `constructors` itself in `register_inductive`; deliberately
+  /// NOT populated for a class's dictionary "constructor" (see that
+  /// function) — a class's dictionary shape is never a realistic named-call
+  /// target.
+  pub ctor_owner: Map<Atom, (Atom, Identifier)>,
+  /// An ordinary `def`'s own atom mapped to its declared parameter names,
+  /// in order, each paired with its default value (if any — only ever
+  /// `Some` once `plans/implementations/named-field-construction.md`'s own
+  /// Phase 3 def-param brace-declaration convenience gives `core/` def
+  /// params a working `:=` default mechanism; always `None` before that).
+  /// Deliberately carries NO field type here (unlike `ConstructorInfo`):
+  /// once a named call is reordered into an ordinary curried `App` chain
+  /// (`try_desugar_named_call`'s def-target branch), each argument's type
+  /// is re-derived for free by the very same `expect_pi`/`open_with`
+  /// machinery `infer`'s ordinary `App` arm already uses on every other
+  /// call — correctly threading a dependent Pi chain, which a flat,
+  /// pre-lowered copy of each param's type here could not do without
+  /// re-deriving that same de-Bruijn-opening logic a second time. Only the
+  /// NAMES (to match against a call's field names) and the DEFAULTS (to
+  /// fill an uncovered param, which is a genuine VALUE, not something the
+  /// re-check can recover on its own) are needed here.
+  pub def_params: Map<Atom, Vec<(Identifier, Option<CoreTerm>)>>,
 }
 
 impl StructFields {

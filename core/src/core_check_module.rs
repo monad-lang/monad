@@ -119,7 +119,7 @@ use crate::core_unify::{MetaContext, UnifyError, generalize, zonk};
 use crate::eval::macro_expand::expand_macros;
 use crate::eval::termination::check_termination_all;
 use crate::eval::r#type::{TypeError, check_strict_positivity, elaborate_decls};
-use crate::lower_core::{LowerConfig, LowerContext, LowerError, lower_term};
+use crate::lower_core::{LowerConfig, LowerContext, LowerError, def_param_names, lower_term};
 use crate::parser::{ModuleContext, parse_file};
 use crate::raise_core::raise_core;
 use crate::term::module::{LoadedModules, ScopeError, default_modules, load_module_files};
@@ -288,6 +288,7 @@ pub fn ground_truth_from_loaded(loaded: &LoadedModules, atoms: &mut AtomTable) -
       if let Some(ty_c) = &ty_c {
         ctx.insert(atom, ty_c.clone());
       }
+      register_def_params(&mut structs, atom, &def.term, &config, atoms);
       // A def's own name (e.g. `greet`) may be bare, without its enclosing
       // module's path prefix, but external references still qualify it
       // (e.g. `mylib.greet`), which `lower_term` resolves to a *different*
@@ -635,6 +636,7 @@ fn register_inductive(
         (class_atom, ind.name().last().clone()),
         ConstructorInfo {
           param_atoms: vec![class_param_atom],
+          field_names: fields.iter().map(|(name, _)| name.clone()).collect(),
           fields: fields.iter().map(|(_, ty)| ty.clone()).collect(),
         },
       );
@@ -705,11 +707,30 @@ fn register_inductive(
           fields.push(*arg);
           current = open_with(&ret, &CoreTerm::Free(Atom::fresh()));
         }
+        // `ctor.params` (the un-lowered, `Term`-world declared param list)
+        // is in the exact same declaration order `ctor.typ`'s Pi-chain
+        // (just peeled above) was built from (`stru()`/`constructor_parser`
+        // both build one from the other) — so zipping its names onto
+        // `fields`' already-positional types is safe. Named-call
+        // resolution (`plans/implementations/named-field-construction.md`)
+        // is the only reader of `field_names`; ordinary positional
+        // construction never needed field names before.
+        let field_names: Vec<Identifier> = ctor.params.iter().map(|p| p.name.clone()).collect();
+        // The constructor's OWN atom (`circle`, not `Shape`) — same value
+        // `known_globals`/`ctx` were already registered under just above,
+        // in the sibling loop; `intern` is idempotent (see `AtomTable::
+        // intern`'s doc comment), so recomputing it here is just a map
+        // lookup, not a second registration.
+        let ctor_atom = atoms.intern(ctor.name().clone());
+        structs
+          .ctor_owner
+          .insert(ctor_atom, (inductive_atom, ctor.name().last().clone()));
         structs.constructors.insert(
           (inductive_atom, ctor.name().last().clone()),
           ConstructorInfo {
             param_atoms,
             fields,
+            field_names,
           },
         );
       }
@@ -803,6 +824,27 @@ fn register_type_decls(
     if let Decl::Type(ind) = &**decl {
       register_inductive(ctx, known_globals, structs, ind, config, atoms);
     }
+  }
+}
+
+/// Register `def_atom`'s declared parameter names/defaults into `structs.
+/// def_params` (see that field's own doc comment) -- a thin wrapper around
+/// `lower_core::def_param_names` (which does the actual `Term::Lam`-chain
+/// walk) that just decides where the result gets stored. A no-op (nothing
+/// inserted) for a niladic def, mirroring `def_param_names`' own empty-Vec
+/// return for that case -- an empty param list is never a realistic
+/// named-call target.
+fn register_def_params(
+  structs: &mut StructFields,
+  def_atom: Atom,
+  def_term: &Term,
+  config: &LowerConfig,
+  atoms: &mut AtomTable,
+) {
+  let mut lower_ctx = LowerContext::with_config(config.clone(), atoms);
+  let params = def_param_names(&mut lower_ctx, def_term);
+  if !params.is_empty() {
+    structs.def_params.insert(def_atom, params);
   }
 }
 
@@ -1097,6 +1139,16 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
       ) {
         ctx.insert(self_atom, typ_c);
       }
+    }
+  }
+  // Parity with `type_check_module_decls_new_inner`'s own equivalent loop
+  // -- see `register_def_params`'s doc comment. Unconditional (not gated
+  // on `def.typ.is_known()`): param names/defaults come from a def's own
+  // BODY, not its declared type.
+  for decl in &expanded {
+    if let Decl::Def(def) = &**decl {
+      let self_atom = atoms.intern(def.name.clone());
+      register_def_params(&mut structs, self_atom, &def.term, &config, &mut atoms);
     }
   }
 
@@ -2368,6 +2420,16 @@ pub fn type_check_module_decls_new_inner(
       }
     }
   }
+  // Unconditional -- unlike the type-registration loop just above (gated
+  // on `def.typ.is_known()`), a def's param NAMES/defaults come from its
+  // own BODY's `Lam` chain (`def_param_names`), not its declared type, so
+  // an inferred-type def still registers its param names here.
+  for decl in &expanded {
+    if let Decl::Def(def) = &**decl {
+      let self_atom = atoms.intern(def.name.clone());
+      register_def_params(&mut structs, self_atom, &def.term, &config, &mut atoms);
+    }
+  }
 
   let mut mctx = MetaContext::new_with_atoms(atoms);
   if core_out.is_some() {
@@ -2766,6 +2828,119 @@ mod test {
       report.defs[0].result.is_ok(),
       "expected pass, got {:?}",
       report.defs[0].result
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Phase 0 of `plans/implementations/named-field-construction.md`:
+  // regression pins for the new `StructFields.ctor_owner`/`field_names`/
+  // `def_params` registration tables, before Phase 1/2's named-call
+  // resolution comes to depend on them.
+  // -------------------------------------------------------------------
+
+  #[test]
+  fn test_register_type_decls_populates_ctor_owner_and_field_names() {
+    let env = ModuleCheckEnv::new();
+    let source = "type Shape {\n  circle (radius : F64),\n  rectangle (width : F64) (height : F64)\n}\ndef make_r (w : F64) (h : F64) : Shape := rectangle w h\n";
+    let parsed = parse_file(source).expect("parse");
+    let elaborated = elaborate_decls(parsed.decls, &env.loaded);
+    let synthetic_path = ModulePath::top("__test_named_call_registration__");
+    let expanded = expand_macros(elaborated, &env.loaded, &synthetic_path).expect("macro expand");
+
+    let mut ctx = env.ctx.clone();
+    let mut known_globals = env.known_globals.clone();
+    let mut structs = env.structs.clone();
+    let mut atoms = env.atoms.clone();
+    let config = LowerConfig {
+      infix: env.infix.clone(),
+      ..Default::default()
+    };
+
+    register_type_decls(
+      &mut ctx,
+      &mut known_globals,
+      &mut structs,
+      &expanded,
+      &config,
+      &mut atoms,
+    );
+
+    // Find `Shape`'s own atom and `rectangle`'s constructor directly from
+    // the parsed decl, rather than reconstructing a `ModulePath` by hand —
+    // keeps this test honest about what registration actually produced.
+    let mut shape_atom = None;
+    let mut rectangle_atom = None;
+    let mut rectangle_short_name = None;
+    for decl in &expanded {
+      if let Decl::Type(ind) = &**decl {
+        shape_atom = Some(atoms.intern(ind.name().clone()));
+        for ctor in ind.constructors() {
+          if ctor.name().last().as_str() == "rectangle" {
+            rectangle_atom = Some(atoms.intern(ctor.name().clone()));
+            rectangle_short_name = Some(ctor.name().last().clone());
+          }
+        }
+      }
+    }
+    let shape_atom = shape_atom.expect("Shape registered");
+    let rectangle_atom = rectangle_atom.expect("rectangle constructor found");
+    let rectangle_short_name = rectangle_short_name.expect("rectangle constructor found");
+
+    assert_eq!(
+      structs.ctor_owner.get(&rectangle_atom),
+      Some(&(shape_atom, rectangle_short_name.clone())),
+      "rectangle's own atom should map back to (Shape, rectangle)"
+    );
+    let info = structs
+      .constructors
+      .get(&(shape_atom, rectangle_short_name))
+      .expect("rectangle registered under (Shape, rectangle)");
+    assert_eq!(
+      info.field_names,
+      vec![
+        Identifier::new("width".to_string()),
+        Identifier::new("height".to_string())
+      ],
+      "field_names should carry rectangle's declared param names in order"
+    );
+    assert_eq!(info.fields.len(), 2, "positional field types unaffected");
+
+    // A multi-constructor `type`'s constructors have no default mechanism
+    // (see this plan's Current State) — `Shape`'s own atom should NOT be
+    // registered in `structs.structs` (that table is single-constructor-
+    // struct only), confirming `circle`/`rectangle` really do have no
+    // reachable `Inductive.defaults` a named call could fall back on.
+    assert!(
+      !structs.structs.contains_key(&shape_atom),
+      "a multi-constructor `type` must not be registered as a struct"
+    );
+
+    // def_params: `make_r`'s two params, in order, neither with a default
+    // (ordinary `def_param` parsing has no `:=` support yet — Phase 3).
+    for decl in &expanded {
+      if let Decl::Def(def) = &**decl {
+        let atom = atoms.intern(def.name.clone());
+        register_def_params(&mut structs, atom, &def.term, &config, &mut atoms);
+      }
+    }
+    let make_r_atom = atoms.intern(ModulePath::top("make_r"));
+    let params = structs
+      .def_params
+      .get(&make_r_atom)
+      .expect("make_r's params registered");
+    assert_eq!(
+      params
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>(),
+      vec![
+        Identifier::new("w".to_string()),
+        Identifier::new("h".to_string())
+      ]
+    );
+    assert!(
+      params.iter().all(|(_, default)| default.is_none()),
+      "no def param has a default mechanism before Phase 3"
     );
   }
 

@@ -165,6 +165,43 @@ impl<'a> LowerContext<'a> {
   }
 }
 
+/// Recover an ordinary `def`'s declared parameter names (and any default
+/// value each carries) from its own BODY's leading `Term::Lam` chain --
+/// see `core_check::StructFields::def_params`'s doc comment (in
+/// `core_check.rs`, this pass's downstream consumer) for why this is the
+/// only place a def's real param names survive at all (`pi_with_mult`
+/// always erases them from the def's registered `Pi` TYPE, `arg_name:
+/// None`) and why no field TYPE needs recovering here, only names +
+/// defaults. Stops at the first non-`Lam` node (the def's real body) or
+/// the first `Par::I` (implicit) layer -- `def_parser` only ever wraps a
+/// def's own EXPLICIT param list in `Lam`s (`lams(params, term)`); an
+/// implicit param is `Forall`-wrapped on the TYPE side instead and never
+/// produces a `Lam` layer at all, so a `Par::I` here would mean this walk
+/// started somewhere other than a def's own top-level body -- stop
+/// defensively rather than assume. Returns an empty `Vec` for a niladic
+/// def (no `Lam` layers at all). Pushes/pops `ctx`'s own binder stack the
+/// same way `lower_term`'s own `Term::Lam` arm does, restoring it to
+/// exactly where it started before returning -- callers may reuse `ctx`
+/// afterward.
+pub fn def_param_names(
+  ctx: &mut LowerContext,
+  def_term: &Term,
+) -> Vec<(Identifier, Option<CoreTerm>)> {
+  let mut current = def_term;
+  let mut params: Vec<(Identifier, Option<CoreTerm>)> = Vec::new();
+  while let Term::Lam { param, body } = current {
+    let Par::P(p) = param else { break };
+    let default_c = p.default.as_deref().and_then(|d| lower_term(ctx, d).ok());
+    params.push((p.name.clone(), default_c));
+    ctx.push(p.name.clone());
+    current = body.as_ref();
+  }
+  for _ in 0..params.len() {
+    ctx.pop();
+  }
+  params
+}
+
 pub fn lower_term(ctx: &mut LowerContext, term: &Term) -> Result<CoreTerm, LowerError> {
   match term {
     Term::Var { name } => lower_var(ctx, name),
