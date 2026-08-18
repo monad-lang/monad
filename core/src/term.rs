@@ -302,6 +302,29 @@ pub fn stru_field_with_mult(
   }
 }
 
+/// Converts a parsed struct-literal-shaped field into an ordinary
+/// `Param`, keeping its default value -- used by `plans/implementations/
+/// named-field-construction.md`'s Phase 3 `def`-param brace-declaration
+/// convenience (`def name {x : T := default, ...} : RT := body`, parsed
+/// via the same `struct_inner_parser` a `struct` declaration's own body
+/// uses). Deliberately UNLIKE `stru()`'s own struct-field-to-constructor-
+/// param conversion just below (which discards `default_value`, since a
+/// struct's own default mechanism lives separately on `Inductive.
+/// defaults`, not `Param.default`) -- an ordinary `def`'s params have no
+/// such separate mechanism, so `Param.default` is the only place a
+/// brace-declared param's default can live, and this plan's own named-
+/// call resolution (`core_check_module.rs`'s `register_def_params`)
+/// reads it from exactly there.
+pub fn stru_field_to_def_param(f: StructField) -> Param {
+  Param {
+    name: f.name,
+    typ: Box::new(f.typ),
+    mult: f.mult,
+    default: f.default_value.map(Box::new),
+    attrs: Vec::new(),
+  }
+}
+
 fn inductive_term(name: ModulePath, params: Vec<Param>) -> Term {
   let mut term = Var {
     // TODO record values

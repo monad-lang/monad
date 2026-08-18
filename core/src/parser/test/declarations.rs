@@ -115,6 +115,107 @@ fn test_def_param() {
   similar!(r, vec![dpar("a", pi(typ("String"), app2("Option", "Int")))]);
 }
 
+// -------------------------------------------------------------------
+// Phase 3 of `plans/implementations/named-field-construction.md`:
+// def-param brace-declaration convenience (`def name {x : T, y : T2} :
+// RT := body`, an alternative spelling of the existing paren form).
+// -------------------------------------------------------------------
+
+#[test]
+fn test_def_params_brace_form_matches_paren_form() {
+  let def_params = |s: &'static str| def_params::<()>(s.into());
+  let (_, brace) = def_params(r#"{factor : I64, p : I64}"#.into()).unwrap();
+  let (_, paren) = def_params(r#"(factor : I64) (p : I64)"#.into()).unwrap();
+  similar!(brace.clone(), paren);
+  similar!(
+    brace,
+    vec![dpar("factor", typ("I64")), dpar("p", typ("I64"))]
+  );
+}
+
+#[test]
+fn test_def_params_brace_form_default_populates_param_default() {
+  let def_params = |s: &'static str| def_params::<()>(s.into());
+  let (_, r) = def_params(r#"{factor : I64 := 1, p : I64}"#.into()).unwrap();
+  assert_eq!(r.len(), 2);
+  assert_eq!(r[0].name, id("factor"));
+  // brace-declared def param's `:=` must populate Param.default
+  similar!(r[0].default.as_deref().cloned(), Some(num(1)));
+  assert_eq!(
+    r[1].default, None,
+    "a param with no `:=` in the brace form must still have no default"
+  );
+}
+
+/// Walks a `def`'s body `Term::Lam` chain, collecting each EXPLICIT
+/// param's `(name, type)` in order -- the same shape `def_param_names`
+/// (`lower_core.rs`) walks at check time, used here purely to confirm
+/// the PARSER only ever produced explicit `Lam` layers for params
+/// actually written in the ordinary `(x: A)` position, never for an
+/// `implicit_params`-consumed brace clause (which contributes ZERO `Lam`
+/// layers -- see `implicit_params`' own doc comment: implicit params are
+/// `Forall`-wrapped on the TYPE side only).
+fn explicit_lam_params(term: &Term) -> Vec<(Identifier, Term)> {
+  let mut out = Vec::new();
+  let mut current = term;
+  while let Term::Lam {
+    param: Par::P(p),
+    body,
+  } = current
+  {
+    out.push((p.name.clone(), *p.typ.clone()));
+    current = body;
+  }
+  out
+}
+
+#[test]
+fn test_def_params_single_comma_less_field_is_still_an_implicit_param_not_brace_form() {
+  // `implicit_params` runs FIRST and already consumes any comma-less
+  // `{ id+ : Type }` shape -- a single-field brace group is structurally
+  // identical to that, so it's consumed there, never reaching
+  // `def_params`'s own new alternative. `def_params` itself then sees
+  // only this def's other, ordinary `(x: A)` group.
+  let s = r#"def identity {A : Type} (x: A) : A := x"#.into();
+  let (_, res) = def_parser(s).unwrap();
+  assert_eq!(
+    explicit_lam_params(&res.term),
+    vec![(id("x"), typ("A"))],
+    "the `{{A : Type}}` clause must contribute NO Lam layer (consumed as \
+     an implicit param, not this plan's new brace-param form)"
+  );
+}
+
+#[test]
+fn test_def_params_implicit_multi_name_form_unaffected() {
+  // `{K V : Type}` (multiple space-separated names sharing ONE type, no
+  // commas) is pre-existing `implicit_param` syntax -- must keep parsing
+  // as implicit params, not attempt (and fail on, since it has no commas)
+  // this new brace-block form.
+  let s = r#"def f {K V : Type} (x: K) : V := x"#.into();
+  let (_, res) = def_parser(s).unwrap();
+  assert_eq!(
+    explicit_lam_params(&res.term),
+    vec![(id("x"), typ("K"))],
+    "the `{{K V : Type}}` clause must contribute NO Lam layer"
+  );
+}
+
+#[test]
+fn test_def_params_empty_braces_do_not_parse() {
+  // Inherits `struct_inner_parser`'s pre-existing `many1` (>=1 field)
+  // limitation -- a niladic `def` just omits the parameter list entirely,
+  // as today; `{}` is not a valid spelling of "no params". `def_params`
+  // in isolation trivially succeeds with an EMPTY `Vec` here (its own
+  // `fold_many0`-based paren alternative never fails, matching a genuine
+  // niladic def's own "no params written at all" case) WITHOUT consuming
+  // `{}` -- the real failure only surfaces one level up, where the
+  // now-unconsumed `{}` collides with `def_type_annotation`'s mandatory
+  // (whitespace-free-leading) `:`.
+  let s = r#"def f {} : I64 := 1"#.into();
+  assert!(def_parser(s).is_err());
+}
+
 #[test]
 fn test_inductive() {
   let s = r#"type Solo {

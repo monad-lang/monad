@@ -184,3 +184,29 @@ def main : I64 :=
 fn phase2_named_call_def_target_unannotated_nested_struct_literal() {
   assert_eq!(as_i64(&run(CONSFUN_UNANNOTATED_NESTED)), 140);
 }
+
+// ---------------------------------------------------------------------
+// Phase 3: def-param brace-declaration convenience, combined with
+// Phase 2's own def-target named-call resolution -- the full feature,
+// end to end, run for real.
+// ---------------------------------------------------------------------
+
+/// A `def` declared with the NEW brace-param convenience (`:=` default
+/// included), called via a named call that both fills a default AND
+/// overrides another field -- exercises Phase 0's `register_def_params`
+/// (reading the default off the parsed `Param`), Phase 2's resolution,
+/// and Phase 3's parser all together.
+const BRACE_PARAMS_WITH_NAMED_CALL: &str = r#"
+def scale {factor : I64 := 10, p : I64} : I64 := factor * p
+
+def default_used : I64 := scale { p := 4 }
+def default_overridden : I64 := scale { p := 4, factor := 3 }
+
+def main : I64 := default_used + default_overridden
+"#;
+
+#[test]
+fn phase3_brace_declared_def_params_work_with_named_calls() {
+  // default_used = 10 * 4 = 40, default_overridden = 3 * 4 = 12
+  assert_eq!(as_i64(&run(BRACE_PARAMS_WITH_NAMED_CALL)), 52);
+}

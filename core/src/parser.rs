@@ -22,7 +22,8 @@ use crate::{
     inductive, infix, instance, ivar, lam, lams, lets, match_term,
     module::ParsedModule,
     mpvar, num_suffix, opr, param, param_with_attrs, param_with_default, param_with_mult, pi_name,
-    pi_typs, pi_with_mult, pvar, stru, stru_field_with_mult, type_constraint, var_id,
+    pi_typs, pi_with_mult, pvar, stru, stru_field_to_def_param, stru_field_with_mult,
+    type_constraint, var_id,
   },
 };
 use locate::{LocatedSpan, info};
@@ -573,15 +574,54 @@ fn def_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
   )
   .parse(input)
 }
+/// A `def`'s own top-level parameter list, in EITHER of two spellings:
+/// one brace block (`{x : T, y : T2 := default}`, per `plans/
+/// implementations/named-field-construction.md`'s Phase 3 -- tried
+/// FIRST, via the same `struct_inner_parser` a `struct` declaration's own
+/// body uses, so `:=` defaults are supported here the same way), or the
+/// existing space-separated parenthesized groups (`(x : T) (y : T2)`,
+/// unchanged, no `:=` support). `alt` backtracks cleanly to the second
+/// alternative on the first alternative's failure (this position never
+/// starts with `{` for the paren form, and `struct_inner_parser` itself
+/// only commits past its own opening `{` on a genuine parse failure of
+/// its *own* grammar afterward, not a mismatched leading character) --
+/// unlike `lang/`'s own hand-written parser (see that plan's Phase 7),
+/// `nom`'s combinators don't need an explicit resumption-point trick
+/// here. Applies to the WHOLE parameter list at once, matching `struct`/
+/// `type` constructors' own all-or-nothing brace-vs-paren convention --
+/// no mixing the two forms in one `def`.
+///
+/// A single, comma-less field (`{ x : T }`) is NOT reachable here at all:
+/// `implicit_params` (this file, run immediately before `def_params` in
+/// `def_parser`) already consumes that exact shape as an implicit/forall
+/// parameter, and `struct_inner_parser`'s own `many1` requires at least
+/// one field regardless -- so the boundary case needs no extra
+/// disambiguation logic in THIS function, only the (pre-existing,
+/// unchanged) ordering of `implicit_params` before `def_params`.
 fn def_params<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
-  fold_many0(
-    terminated(def_param, ws0),
-    Vec::new,
-    |mut acc: Vec<_>, mut items: Vec<_>| {
-      acc.append(&mut items);
-      acc
-    },
-  )
+  alt((
+    // `terminated(.., ws0)`: mirrors the paren alternative's OWN trailing-
+    // whitespace consumption below (`fold_many0(terminated(def_param,
+    // ws0), ..)` eats the space after each param group as it goes) --
+    // without this, the space between the closing `}` and this def's
+    // `: ReturnType` annotation is left unconsumed, and `def_type_
+    // annotation` (which does NOT skip leading whitespace itself) fails
+    // immediately on it.
+    terminated(
+      map(struct_inner_parser, |fields: Vec<StructField>| {
+        fields.into_iter().map(stru_field_to_def_param).collect()
+      }),
+      ws0,
+    ),
+    fold_many0(
+      terminated(def_param, ws0),
+      Vec::new,
+      |mut acc: Vec<_>, mut items: Vec<_>| {
+        acc.append(&mut items);
+        acc
+      },
+    ),
+  ))
   .parse(input)
 }
 
