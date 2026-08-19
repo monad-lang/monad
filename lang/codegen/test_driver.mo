@@ -32,7 +32,10 @@ use lang.types {Attribute, Decl, Def, LoadedModules, ModulePath, has_attr}
 use lang.codegen.emit {collect_all_decls_from_modules, compile_db_module, filter_reachable_decls, module_path_to_str}
 use lang.codegen.ir {LLVMModule}
 use lang.module {get_loaded_all, get_loaded_main, get_module_info_decls, try_parse_decls}
-use lang.scope {collect_infixes, resolve_infix_decls}
+use lang.scope {
+  add_constraint_dict_params_decls, collect_infixes, promote_instance_defs,
+  resolve_class_calls_decls, resolve_infix_decls,
+}
 use io {IO}
 
 // ─── Discovery ──────────────────────────────────────────────────────
@@ -225,7 +228,17 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     // actually compile at all.
                     let infixes := collect_infixes all_decls;
                     let resolved_spliced := resolve_infix_decls infixes spliced;
-                    let reachable := filter_reachable_decls resolved_spliced;
+                    // Dictionary-passing typeclass dispatch (see
+                    // lang.codegen.emit's own compile_loaded_modules_to_ir
+                    // for the full ordering rationale) -- the synthesized
+                    // driver itself uses `+`/`==`/`++` (all typeclass-
+                    // routed after infix resolution), so this is what
+                    // actually closes the gap `28d98dc`'s own commit
+                    // message left explicitly open for `monad test`.
+                    let promoted_spliced := promote_instance_defs resolved_spliced;
+                    let dict_param_spliced := add_constraint_dict_params_decls promoted_spliced;
+                    let dispatched_spliced := resolve_class_calls_decls dict_param_spliced;
+                    let reachable := filter_reachable_decls dispatched_spliced;
                     return Result.ok (compile_db_module reachable)
                 },
                 Option.none => do {

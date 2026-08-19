@@ -20,7 +20,10 @@ use lang.module {
   LoadedModules, ModuleInfo, get_loaded_all,
   get_module_info_decls, mk,
 }
-use lang.scope {collect_infixes, resolve_infix_decls}
+use lang.scope {
+  add_constraint_dict_params_decls, collect_infixes, promote_instance_defs,
+  resolve_class_calls_decls, resolve_infix_decls,
+}
 
 open IO {println}
 open LLVMType {i32_, i64_}
@@ -2253,12 +2256,30 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) : IO LLVMModule := do 
     let infixes := collect_infixes all_decls;
     let resolved_decls := resolve_infix_decls infixes all_decls;
 
+    // Dictionary-passing typeclass dispatch (see
+    // plans/bootstrapping/self-hosted-compiler.md's Phases 2-4) -- same
+    // "must run before reachability filtering" reasoning as infix
+    // resolution just above: promotion (Phase 2) mints new top-level
+    // defs (per-instance methods + dictionary values) that reachability
+    // needs to see; constrained-def dict params (Phase 3) and call-site
+    // resolution (Phase 4) rewrite `Class.method`-shaped references to
+    // their real concrete/promoted targets, which reachability's own
+    // name-based walk (`collect_referenced_names`) is blind to while
+    // they're still unresolved class-method names. Order matters: Phase
+    // 2 before 3 (Phase 3 reads a promoted method's own constraints,
+    // which Phase 2 threads in from its owning Instance), Phase 3
+    // before 4 (Phase 4 needs the dict PARAMETERS Phase 3 adds already
+    // in place to know which locals are bound dicts).
+    let promoted_decls := promote_instance_defs resolved_decls;
+    let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
+    let dispatched_decls := resolve_class_calls_decls dict_param_decls;
+
     // Only compile Defs actually reachable (transitively) from `main` --
     // compiling the FULL 264-def loaded set unconditionally meant any
     // codegen bug anywhere in the whole standard library, reached or
     // not, blocked compiling any program at all. See
     // filter_reachable_decls's own doc comment.
-    let reachable_decls := filter_reachable_decls resolved_decls;
+    let reachable_decls := filter_reachable_decls dispatched_decls;
     let reachable_count := List.length reachable_decls;
     println ("Reachable decl_list: " ++ I64.to_string reachable_count);
 
