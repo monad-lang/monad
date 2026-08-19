@@ -12,11 +12,11 @@
 //! nodes (nothing class/instance-dispatch-specific needs reinventing
 //! here).
 
-use crate::Map;
 use crate::core_ir::{self, CoreIr, IrLit, IrRef, MatchArm};
 use crate::core_program::CoreProgram;
 use crate::core_term::{Atom, CoreConstructor, CoreLit, CoreNative, CoreTerm};
 use crate::term::{Identifier, ModulePath, mpt};
+use crate::{AtomPathMap, Map};
 
 /// Shift every `Local` reference in `ir` that resolves OUTSIDE `ir`'s own
 /// locally-bound scope (i.e. `>= cutoff`) up by `delta` — the standard de
@@ -182,7 +182,7 @@ pub struct LowerCtx<'a> {
   /// native's arity is a whole-program-constant property of the native
   /// itself, not of any one call site.
   pub native_arities: &'a mut Vec<u32>,
-  pub atom_paths: &'a Map<Atom, ModulePath>,
+  pub atom_paths: &'a AtomPathMap,
   /// This def's own `Match`/`if` resolutions, in the same left-to-right
   /// order `check`/`infer` visited them — consumed front-to-back as
   /// `lower_term` visits `Match`/`StructUpdate` nodes in that same

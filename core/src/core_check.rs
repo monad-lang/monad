@@ -16,13 +16,13 @@
 //! `core_term.rs`'s and `lower_core.rs`'s doc comments), so is deferred to
 //! a follow-up increment rather than attempted prematurely here.
 
-use crate::Map;
 use crate::core_term::{
   Atom, CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, DebugName, MetaId, close,
   close_n, open_with,
 };
 use crate::core_unify::{MetaContext, UnifyError, force, instantiate, open_n, unify};
 use crate::term::{Identifier, ModulePath, Multiplicity, TypeConstraint};
+use crate::{AtomPathMap, Map};
 
 /// Typing context: which type each currently-open `Free` atom has. Bound
 /// variables are never looked up directly — `infer`/`check` always open a
@@ -1288,7 +1288,7 @@ fn try_resolve_class_method(
   mctx: &mut MetaContext,
   ctx: &TyCtx,
   structs: &StructFields,
-  atom_paths: &mut Map<Atom, ModulePath>,
+  atom_paths: &mut AtomPathMap,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
   dict_scope: &DictScope,
@@ -1653,7 +1653,7 @@ fn try_insert_dict_args(
   mctx: &mut MetaContext,
   ctx: &TyCtx,
   structs: &StructFields,
-  atom_paths: &mut Map<Atom, ModulePath>,
+  atom_paths: &mut AtomPathMap,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
   dict_scope: &DictScope,
@@ -1862,7 +1862,7 @@ fn project_dict_field(
 fn resolve_constraint_dict(
   mctx: &mut MetaContext,
   structs: &StructFields,
-  atom_paths: &Map<Atom, ModulePath>,
+  atom_paths: &AtomPathMap,
   known_instances: &KnownInstances,
   dict_scope: &DictScope,
   constraint: &TypeConstraint,
@@ -1936,7 +1936,7 @@ fn resolve_constraint_dict(
 fn resolve_instance_dict_args(
   mctx: &mut MetaContext,
   structs: &StructFields,
-  atom_paths: &Map<Atom, ModulePath>,
+  atom_paths: &AtomPathMap,
   known_instances: &KnownInstances,
   dict_scope: &DictScope,
   constraints: &[TypeConstraint],
@@ -2017,7 +2017,7 @@ pub fn desugar_struct_literals(
   mctx: &mut MetaContext,
   ctx: &TyCtx,
   structs: &StructFields,
-  atom_paths: &mut Map<Atom, ModulePath>,
+  atom_paths: &mut AtomPathMap,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
   dict_scope: &DictScope,

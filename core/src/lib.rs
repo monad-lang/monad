@@ -70,6 +70,29 @@ pub fn set_of<T: Eq + Hash>(vals: impl Iterator<Item = T>) -> Set<T> {
 
 pub type Map<K, V> = BTreeMap<K, V>;
 
+/// Reverse `Atom -> ModulePath` lookup, used by `raise_core` (and its
+/// callers) to turn a checker-internal `Free(Atom)` occurrence back into a
+/// durable global/local name. Deliberately NOT `Map<Atom, ModulePath>`
+/// (plain `BTreeMap`): `core_check_module.rs`'s `global_atom_paths` is
+/// built once per module (covering every global loaded so far, i.e.
+/// growing toward whole-corpus size) and then cloned-and-extended once per
+/// checked `def`/instance method -- thousands of times across the self-
+/// hosted corpus. A `BTreeMap` here made every one of those clones a full
+/// O(corpus size) copy (confirmed via profiling to dominate
+/// `test_typecheck_lang_main`'s ~7-minute cost, the same "gets worse as
+/// the corpus grows" shape as the `LoadedModules` clone-per-file bug fixed
+/// in `core/src/term/module.rs` -- see that type's own doc comment).
+/// `im::OrdMap` is structurally-shared (ref-counted internally), so
+/// `.clone()` is O(1) and the subsequent `.insert`/`.extend` calls are
+/// O(log n) persistent updates instead of full copies, with an API
+/// (`.get`/`.contains_key`/`.insert`/`.extend`/iteration-by-key-order)
+/// close enough to `BTreeMap`'s to be a drop-in replacement at every
+/// existing call site. Scoped to exactly this one type family rather than
+/// changing the general-purpose `Map<K, V>` alias above, which is used
+/// pervasively for unrelated tables that are never cloned per-def and
+/// have no equivalent hot-path pressure.
+pub type AtomPathMap = im::OrdMap<crate::core_term::Atom, ModulePath>;
+
 /// A `Value`, formatted for REPL display. `core_value::Value` has no
 /// `Display` of its own (see its own doc comment: it's deliberately kept
 /// separate from `CoreTerm`, and a *reduced* value's constructors/

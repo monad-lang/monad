@@ -1398,6 +1398,63 @@ Key patterns when writing self-hosted Monad code:
       regardless of `LoadedModules`'s own clone cost — a DIFFERENT
       structure this fix didn't touch. Flagged as a possible next target,
       not chased further this pass.
+14. **Follow-up to item 13's flagged remainder: found and fixed —
+    `global_atom_paths` (`core_check_module.rs`), a `BTreeMap<Atom,
+    ModulePath>` holding every known global across the whole corpus
+    loaded so far, was fully cloned once per checked top-level `def`
+    (`check_one_def_new`, twice — once for the per-def working copy,
+    again when storing into `CoreProgram`'s `CheckedCoreDef.atom_paths`)
+    and once per instance method (`check_one_instance_new` calls
+    `check_one_def_new` once per method). With ~3,800+ defs across the
+    corpus and a map that grows toward corpus size as checking proceeds,
+    this is an O(defs × corpus-size) cost — the same "gets worse as the
+    corpus grows" shape as item 13's `LoadedModules` bug, just at
+    per-*def* rather than per-*file* granularity. Unlike `LoadedModules`
+    (cloned-then-never-mutated, where `Arc`+copy-on-write sufficed),
+    `global_atom_paths` is cloned-then-immediately-extended with new
+    entries every time, so `Arc::make_mut` would trigger a full copy on
+    the first insert anyway — no free win available from the same tool.
+    **Fix**: added the `im` crate and introduced `AtomPathMap =
+    im::OrdMap<Atom, ModulePath>` (`core/src/lib.rs`), scoped to exactly
+    this one type family (NOT the general-purpose `Map<K, V>` alias,
+    which covers many unrelated tables with no equivalent hot-path
+    pressure — `StructFields.inductive_paths`, textually the same type
+    but a separate, once-per-module, never-cloned table, was deliberately
+    left as plain `BTreeMap`). `im::OrdMap`'s `.clone()` is O(1)
+    (ref-counted structural sharing) and its `.insert`/`.extend` are
+    O(log n) persistent updates instead of full copies, with an API
+    (`.get`/`.contains_key`/`.insert`/`.extend`/`FromIterator`) close
+    enough to `BTreeMap`'s to be a drop-in replacement at every existing
+    call site (`core_check_module.rs`, `core_program.rs`,
+    `raise_core.rs`, 5 signatures in `core_check.rs`,
+    `lower_core_ir.rs`) — no logic changes anywhere, ~15 type-annotation
+    edits total. **Measured**: `cargo run --release -- test init std lang
+    examples slow_tests` (the full corpus, 1387/1387 passing unchanged
+    before/after — corpus has grown since item 13's 1274/1274 count)
+    dropped from **307.62s to 244.14s wall (-20.6%)**, and — a cleaner
+    signal since wall time is subject to scheduling noise — **772.36s to
+    511.47s in summed CPU-seconds (-33.8%)**. `cargo test` (627/627 core
+    tests, unchanged) and `cargo run --release -- check init std lang
+    examples` (2 errors/7 warnings, unchanged) both confirm no behavior
+    change. **Not confirmed on the isolated benchmark**: unlike item 13,
+    this fix's win doesn't show up on `test_typecheck_lang_main` run
+    alone (`git stash` before/after, same session: self-reported test
+    time 133.16s → 130.69s, within run-to-run noise) — the opposite
+    pattern from item 13, where the per-*file* `LoadedModules` fix helped
+    the single-file benchmark barely at all but the per-*def*
+    `global_atom_paths` cost apparently doesn't dominate that one
+    benchmark's own cost either, even though its dependency closure
+    (`lang/main.mo` pulling in essentially all of `lang/`) is large.
+    Separately: this session's baseline isolated run measured 133.16s,
+    not the ~7-minute figure commit `7350f96`'s message cited for the
+    same test — a large, unexplained discrepancy, not reproduced or
+    chased further here (plausibly machine-load variance between
+    sessions, given item 13's own note of ~20s run-to-run noise on this
+    same benchmark — though a 5x gap is far outside that band and
+    deserves its own look before being written off). The full-corpus
+    number is the one that matters for the original complaint ("bootstrap
+    compile takes many minutes" — i.e. checking/testing many files in one
+    session, not one giant file in isolation), and it moved for real.
 
 ## Committing Changes
 

@@ -28,8 +28,9 @@
 //! lowering the def's BODY (so e.g. an inline `(a : A)` parameter
 //! annotation resolves to the same atom as the declared type's
 //! `Forall A`, not an unrelated global "A"). Every `Free(atom)` this
-//! module raises is resolved uniformly through one `atom_paths: &Map<Atom,
-//! ModulePath>` — for a def-local override, the caller mints a
+//! module raises is resolved uniformly through one `atom_paths:
+//! &AtomPathMap` (`Atom -> ModulePath`) — for a def-local override, the
+//! caller mints a
 //! single-segment `ModulePath` (`name.to_path()`) rather than a bare
 //! `Identifier`, matching how a resolved `Var` reference is represented
 //! everywhere else in this codebase (`NameRef::P` with a one-segment path
@@ -55,12 +56,10 @@
 //! can't overflow the native call stack. The same reasoning applies to the
 //! checker/evaluator generally, not just this module.
 
-use crate::Map;
-use crate::core_term::{
-  Atom, CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, DebugName,
-};
+use crate::AtomPathMap;
+use crate::core_term::{CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, DebugName};
 use crate::term::{
-  self, Identifier, Literal, MatchCase, ModulePath, Multiplicity, NameRef, Native, Par, Param, Term,
+  self, Identifier, Literal, MatchCase, Multiplicity, NameRef, Native, Par, Param, Term,
 };
 
 /// Raise a checked `CoreTerm` back into a named `Term`. `atom_paths` must
@@ -74,7 +73,7 @@ use crate::term::{
 /// view, or a `Free` atom missing from `atom_paths` (a locally-opened atom
 /// that shouldn't have survived, or an incomplete `atom_paths` table) —
 /// all three indicate a bug upstream, not a user-facing error.
-pub fn raise_core(term: &CoreTerm, atom_paths: &Map<Atom, ModulePath>) -> Term {
+pub fn raise_core(term: &CoreTerm, atom_paths: &AtomPathMap) -> Term {
   Raiser::new(atom_paths).run(term).into_term()
 }
 
@@ -135,11 +134,11 @@ struct Raiser<'p> {
   /// Caller-supplied `Atom` → `ModulePath` reverse lookup for global
   /// references — see this module's doc comment for why it's threaded in
   /// explicitly rather than read from a global table.
-  atom_paths: &'p Map<Atom, ModulePath>,
+  atom_paths: &'p AtomPathMap,
 }
 
 impl<'p> Raiser<'p> {
-  fn new(atom_paths: &'p Map<Atom, ModulePath>) -> Self {
+  fn new(atom_paths: &'p AtomPathMap) -> Self {
     Raiser {
       names: Vec::new(),
       atom_paths,
@@ -661,7 +660,7 @@ mod test {
   /// uses internally) and records the reverse mapping explicitly, exactly
   /// as a real caller (`core_check_module.rs`) would from its own
   /// `known_globals` tracking.
-  fn atom_paths(names: &[&str], atoms: &mut AtomTable) -> Map<Atom, ModulePath> {
+  fn atom_paths(names: &[&str], atoms: &mut AtomTable) -> AtomPathMap {
     names
       .iter()
       .map(|n| {
@@ -818,7 +817,7 @@ mod test {
     let depth = 20_000;
     let fn_path = ModulePath::top("raise_core_test_stack_fn");
     let fn_atom = AtomTable::new().intern(fn_path.clone());
-    let paths: Map<Atom, ModulePath> = [(fn_atom, fn_path)].into_iter().collect();
+    let paths: AtomPathMap = [(fn_atom, fn_path)].into_iter().collect();
     let mut term = CoreTerm::Free(fn_atom);
     let arg = CoreTerm::Sort { level: 0 };
     for _ in 0..depth {
@@ -860,7 +859,7 @@ mod test {
         body: Box::new(term),
       };
     }
-    let raised = raise_core(&term, &Map::new());
+    let raised = raise_core(&term, &AtomPathMap::new());
     match &raised {
       Term::Lam { .. } => {}
       other => panic!("expected Lam at the top, got {other:?}"),

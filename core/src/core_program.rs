@@ -16,9 +16,9 @@
 //! Nothing in this file changes checker behavior — every existing call
 //! site keeps passing `None` and pays zero extra cost.
 
-use crate::Map;
 use crate::core_term::{Atom, CoreTerm};
 use crate::term::{Identifier, ModulePath};
+use crate::{AtomPathMap, Map};
 
 /// One checked def's pre-`raise_core` `CoreTerm` body, plus what's needed
 /// to resolve its `Free(Atom)` occurrences to durable global paths.
@@ -31,7 +31,7 @@ use crate::term::{Identifier, ModulePath};
 pub struct CheckedCoreDef {
   pub term: CoreTerm,
   pub typ: CoreTerm,
-  pub atom_paths: Map<Atom, ModulePath>,
+  pub atom_paths: AtomPathMap,
 }
 
 /// One constructor's name and field count (arity) — enough to build a

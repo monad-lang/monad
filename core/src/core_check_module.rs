@@ -106,7 +106,6 @@
 //! lazy static — the cost and the dependency are both visible at every
 //! call site that needs them.
 
-use crate::Map;
 use crate::core_check::{
   ClassMethodInfo, ConstructorInfo, DictScope, InferError, KnownClassMethods, KnownInstanceInfo,
   KnownInstances, StructFields, StructInfo, StructKind, TyCtx, check, desugar_struct_literals,
@@ -129,6 +128,7 @@ use crate::term::{
   NameRef, Named, Open, Operator, SearchPaths, SourceContext, SourceRange, Term, TypeConstraint,
   Typed, constructor, def, forall,
 };
+use crate::{AtomPathMap, Map};
 
 /// `init/prelude.mo`'s own module path — `'prelude` (with the leading
 /// apostrophe) is the exact internal path `term::module::init_module`
@@ -1726,7 +1726,7 @@ fn check_one_def_new(
   structs: &StructFields,
   def: &Def,
   config: &LowerConfig,
-  global_atom_paths: &Map<Atom, ModulePath>,
+  global_atom_paths: &AtomPathMap,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
   // Phase 0 of `plans/implementations/core-term-closure-evaluator.md`:
@@ -1768,7 +1768,7 @@ fn check_one_def_new(
     // single-segment `ModulePath` per peeled var (`name.to_path()`, the
     // same "resolved bare name" shape `NameRef::P` already uses elsewhere
     // in this codebase — see `raise_core.rs`'s module doc) so one uniform
-    // `Map<Atom, ModulePath>` covers both cases. Also fold in every atom
+    // `AtomPathMap` covers both cases. Also fold in every atom
     // THIS lowering call resolved via the global fallback — `type_c` can
     // reference a name (e.g. an inductive's own bare name used as a type,
     // not just its constructors) that was never explicitly registered in
@@ -2053,7 +2053,7 @@ fn check_one_instance_new(
   structs: &StructFields,
   instance: &Instance,
   config: &LowerConfig,
-  global_atom_paths: &Map<Atom, ModulePath>,
+  global_atom_paths: &AtomPathMap,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
   class_method_order: &Map<ModulePath, Vec<Identifier>>,
@@ -2381,7 +2381,7 @@ pub fn type_check_module_decls_new_inner(
   // default/loaded-module name plus this file's own), reused for every
   // def (each def additionally extends its OWN copy with its peeled
   // Forall params — see `check_one_def_new`).
-  let mut global_atom_paths: Map<Atom, ModulePath> = known_globals
+  let mut global_atom_paths: AtomPathMap = known_globals
     .iter()
     .map(|(path, atom)| (*atom, path.clone()))
     .collect();
