@@ -30,6 +30,21 @@ type LLVMValue {
     var_ (name : String),
     parm_ (idx : I64),
     global_ (name : String),
+    /// A direct reference to a top-level def's own compiled LLVM
+    /// function, by its literal `@name` -- distinct from `var_` (an SSA
+    /// local register, e.g. a `fresh_temp` result or a match-bound
+    /// local, which may happen to hold a RUNTIME closure VALUE but is
+    /// never itself a callable symbol) and from `global_` (a compiled
+    /// string-literal constant, an unrelated concept that happens to
+    /// also render as `@name`). Produced only by `compile_call_head`'s
+    /// bare-global-name-in-callee-position bypass -- the ONLY place
+    /// this backend knows for certain, from the term shape alone (not a
+    /// runtime value), that a call's callee is a specific named global
+    /// function, so `compile_general_db_call`'s dispatch can pick a
+    /// real direct call over `apply_closureN`'s indirect-call fallback.
+    /// See Phase 0 of plans/bootstrapping/self-hosted-compiler.md's
+    /// dictionary-passing plan.
+    fn_ref (name : String),
     call (fn_name : String) (ret_ty : LLVMType) (args : List LLVMValue) (tail : Bool),
     add (lhs : LLVMValue) (rhs : LLVMValue),
     sub (lhs : LLVMValue) (rhs : LLVMValue),
@@ -87,7 +102,7 @@ type LLVMModule {
 
 open LLVMType {fn_, i1_, i32_, i64_, i8_, ptr, struct_, void}
 open LLVMValue {
-  add, alloc_closure, alloc_constructor, bitcast, bool_, call, gep, global_,
+  add, alloc_closure, alloc_constructor, bitcast, bool_, call, fn_ref, gep, global_,
   icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, load, mul, native_op, parm_,
   phi, sdiv, sub, trunc, var_, void_val, zext,
 }
@@ -155,6 +170,7 @@ def show_llvm_value (val : LLVMValue) : String := match val {
     var_ name => String.concat "%" name,
     parm_ idx => String.concat "%p" (I64.to_string idx),
     global_ name => String.concat "@" name,
+    fn_ref name => String.concat "@" name,
     call fn_name ret_ty args tail => show_call fn_name ret_ty args tail,
     add lhs rhs => show_arith "add" lhs rhs,
     sub lhs rhs => show_arith "sub" lhs rhs,

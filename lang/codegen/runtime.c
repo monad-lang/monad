@@ -68,6 +68,59 @@ void* alloc_closure(void* entry, int64_t arity, int64_t env_size) {
     return c;
 }
 
+/* Fixed-arity indirect-call trampolines for a boxed, zero-capture
+   Closure value (see alloc_closure above) -- used whenever a function
+   value is stored/passed/extracted rather than called immediately at
+   its own reference site (lang/codegen/emit.mo's Term.var value-position
+   case boxes such a reference via alloc_closure instead of eager-calling
+   it; compile_general_db_call's callee dispatch calls back through here
+   once the callee is a computed value rather than a statically-known
+   global name). Every entry function this backend ever boxes is a
+   top-level Monad def compiled with the uniform (i64, i64, ..., i64) ->
+   i64 signature (see build_llvm_params_db/LLVMFunction.mk in emit.mo),
+   so a small fixed table of these, keyed by arity, covers every real
+   call shape without needing a general variadic/libffi-style dispatcher.
+   `env`/env_size are unused here (always 0 for a zero-capture closure --
+   this is deliberately NOT full closure conversion, see Phase 0 of
+   plans/bootstrapping/self-hosted-compiler.md's dictionary-passing plan).
+   Capped at 8 args -- comfortably above the arities of the function
+   VALUES (not ordinary direct calls, which never go through here) this
+   backend needs to box today; extend by adding more typedef+function
+   pairs if that ever changes. */
+typedef int64_t (*Fn1)(int64_t);
+typedef int64_t (*Fn2)(int64_t, int64_t);
+typedef int64_t (*Fn3)(int64_t, int64_t, int64_t);
+typedef int64_t (*Fn4)(int64_t, int64_t, int64_t, int64_t);
+typedef int64_t (*Fn5)(int64_t, int64_t, int64_t, int64_t, int64_t);
+typedef int64_t (*Fn6)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+typedef int64_t (*Fn7)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+typedef int64_t (*Fn8)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+
+int64_t apply_closure1(void* clos, int64_t a0) {
+    return ((Fn1)((Closure*)clos)->entry)(a0);
+}
+int64_t apply_closure2(void* clos, int64_t a0, int64_t a1) {
+    return ((Fn2)((Closure*)clos)->entry)(a0, a1);
+}
+int64_t apply_closure3(void* clos, int64_t a0, int64_t a1, int64_t a2) {
+    return ((Fn3)((Closure*)clos)->entry)(a0, a1, a2);
+}
+int64_t apply_closure4(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {
+    return ((Fn4)((Closure*)clos)->entry)(a0, a1, a2, a3);
+}
+int64_t apply_closure5(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {
+    return ((Fn5)((Closure*)clos)->entry)(a0, a1, a2, a3, a4);
+}
+int64_t apply_closure6(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5) {
+    return ((Fn6)((Closure*)clos)->entry)(a0, a1, a2, a3, a4, a5);
+}
+int64_t apply_closure7(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    return ((Fn7)((Closure*)clos)->entry)(a0, a1, a2, a3, a4, a5, a6);
+}
+int64_t apply_closure8(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6, int64_t a7) {
+    return ((Fn8)((Closure*)clos)->entry)(a0, a1, a2, a3, a4, a5, a6, a7);
+}
+
 void* alloc_constructor(int64_t tag, int64_t field_count) {
     size_t size = sizeof(Constructor) + field_count * sizeof(void*);
     Constructor* c = (Constructor*)monad_alloc(size);

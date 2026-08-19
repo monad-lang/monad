@@ -178,3 +178,83 @@ def test_compile_match_dispatch_none : IO Bool := do {
     let main_def := build_option_match_main scrutinee;
     compile_link_run_expect [main_def] "test_match_none" 99
 }
+
+/// Builds `def add5 (a b : I64) : I64 := a + b` as a hand-constructed
+/// Def -- shared by the two Phase 0 (closure-boxing/indirect-call)
+/// regression tests below.
+#[partial]
+def build_add5_def : Def :=
+    let a_id := Identifier.id "a" in
+    let b_id := Identifier.id "b" in
+    let a_var := Term.var 0 (DebugName.named a_id) in
+    let b_var := Term.var 1 (DebugName.named b_id) in
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
+    let add5_body := Term.app (Term.app add_var a_var) b_var in
+    let add5_term := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) add5_body) in
+    Def.mk (ModulePath.mp (List.cons (Identifier.id "add5") List.empty)) (Term.type_ 1) add5_term
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private
+
+/// Phase 0 regression test (see
+/// plans/bootstrapping/self-hosted-compiler.md's dictionary-passing
+/// plan): a bare reference to an arity>0 top-level def, used as a
+/// VALUE (not immediately applied), used to compile as an invalid
+/// eager 0-arg call -- `Term.var`'s value-position case now boxes it
+/// via `alloc_closure` instead. Passing that boxed value as an ordinary
+/// PARAMETER and calling it back through the parameter
+/// (`compile_general_db_call`'s indirect-call dispatch via
+/// `apply_closureN`) proves both halves round-trip correctly:
+/// `apply_binary add5 2 3` must produce 5.
+#[test]
+def test_compile_function_value_as_parameter : IO Bool := do {
+    let add5_def := build_add5_def;
+
+    let f_id := Identifier.id "f";
+    let x_id := Identifier.id "x";
+    let y_id := Identifier.id "y";
+    let f_var := Term.var 0 (DebugName.named f_id);
+    let x_var := Term.var 1 (DebugName.named x_id);
+    let y_var := Term.var 2 (DebugName.named y_id);
+    let apply_body := Term.app (Term.app f_var x_var) y_var;
+    let apply_term := Term.lam (DebugName.named f_id) (Term.type_ 1)
+        (Term.lam (DebugName.named x_id) (Term.type_ 1)
+            (Term.lam (DebugName.named y_id) (Term.type_ 1) apply_body));
+    let apply_def := Def.mk (ModulePath.mp (List.cons (Identifier.id "apply_binary") List.empty)) (Term.type_ 1) apply_term
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+
+    let add5_ref := Term.var 0 (DebugName.named (Identifier.id "add5"));
+    let apply_ref := Term.var 0 (DebugName.named (Identifier.id "apply_binary"));
+    let main_body := Term.app (Term.app (Term.app apply_ref add5_ref) (mk_i64 2)) (mk_i64 3);
+    let main_def := mk_def "main" main_body;
+    compile_link_run_expect [add5_def, apply_def, main_def] "test_fn_value_param" 5
+}
+
+/// Phase 0 regression test, the OTHER half of the same fix: a function
+/// value extracted from a constructor field via `match` is bound as a
+/// `var_`-shaped local (an SSA temp holding the field's runtime value,
+/// NOT a `parm_`) -- before this fix, `compile_general_db_call`'s
+/// dispatch could not tell such a local apart from a literal callable
+/// global NAME (both were `LLVMValue.var_`), so calling it either
+/// mis-called a nonexistent `@tempN` symbol or (via the old `parm_`-only
+/// path) silently produced `void_val`. `ir.mo`'s new `fn_ref` variant
+/// (produced ONLY by a genuine bare-global-name callee) fixes the
+/// ambiguity. `match (some add5) { some f => f 2 3, none => 0 }` must
+/// produce 5.
+#[test]
+def test_compile_function_value_from_struct_field : IO Bool := do {
+    let add5_def := build_add5_def;
+
+    let option_typ := ModulePath.mp (List.cons (Identifier.id "Option") List.empty);
+    let add5_ref := Term.var 0 (DebugName.named (Identifier.id "add5"));
+    let some_con := Con.mk (Identifier.id "some") option_typ 1 (List.cons (Option.some add5_ref) List.empty);
+    let scrutinee := Term.con some_con;
+
+    let f_id := Identifier.id "f";
+    let f_var := Term.var 0 (DebugName.named f_id);
+    let call_f := Term.app (Term.app f_var (mk_i64 2)) (mk_i64 3);
+    let some_case := MatchCase.mc (Identifier.id "some") (List.cons f_id List.empty) call_f;
+    let none_case := MatchCase.mc (Identifier.id "none") List.empty (mk_i64 0);
+    let cases := List.cons some_case (List.cons none_case List.empty);
+    let main_body := Term.lit (Literal.match_ scrutinee cases);
+    let main_def := mk_def "main" main_body;
+    compile_link_run_expect [add5_def, main_def] "test_fn_value_field" 5
+}

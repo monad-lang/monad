@@ -9,12 +9,12 @@ use lang.types {
 }
 use lang.codegen.ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMInstruction,
-  LLVMModule, LLVMValue, NativeOp, ParamPair, PhiPair, add, alloc_closure,
+  LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair, PhiPair, add, alloc_closure,
   alloc_constructor, assign, bitcast, bool_, branch, call, comment, emit_module,
-  gep, global_, i32_, i64_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_,
+  fn_, gep, global_, i32_, i64_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_,
   jump, load, mk, mul, native_op, op_add, op_eq, op_file_exists, op_gt, op_lt,
   op_mul, op_ne, op_print_str, op_read_file, op_sdiv, op_sub, op_write_file,
-  parm_, phi, ret, sdiv, sub, trunc, var_, void_val, zext,
+  parm_, phi, ret, sdiv, show_llvm_type, sub, trunc, var_, void_val, zext,
 }
 use lang.module {
   LoadedModules, ModuleInfo, get_loaded_all,
@@ -34,8 +34,22 @@ type LocalBinding {
     mk (lname : Identifier) (lval : LLVMValue),
 }
 
+/// One top-level def's own known arity (its param count, i.e. the number
+/// of leading `Term.lam`s in its body) keyed by the SAME `llvm_name` a
+/// bare `Term.var` reference to it would compute (`replace_dots_with_
+/// underscores` of its module path) -- built once per module compile
+/// (`build_arity_table`) and threaded through `CodegenCtx` so `Term.var`'s
+/// value-position case (Phase 0 of the dictionary-passing plan, see
+/// plans/bootstrapping/self-hosted-compiler.md) can tell an arity-0 def
+/// (still an eager 0-arg call, unchanged) from an arity>0 def (now boxed
+/// via `alloc_closure` instead of miscompiling as a 0-arg call to a
+/// function that isn't one).
+type ArityEntry {
+    mk (aname : String) (aarity : I64),
+}
+
 type CodegenCtx {
-    ctx (locals : List LocalBinding) (next_temp : I64) (next_label : I64),
+    ctx (locals : List LocalBinding) (next_temp : I64) (next_label : I64) (arities : List ArityEntry),
 }
 
 type CompileResult {
@@ -50,31 +64,102 @@ type CtxStrPair {
 def empty_bindings : List LocalBinding := List.empty
 
 #[partial]
-def empty_ctx : CodegenCtx := CodegenCtx.ctx empty_bindings 0 0
+def empty_arities : List ArityEntry := List.empty
+
+/// `arities` -- see `ArityEntry`'s own doc comment. Callers with a real
+/// `List Def` in scope should build one via `build_arity_table` instead
+/// of passing `empty_arities` (an empty table just means every bare
+/// global reference falls back to today's eager-0-arg-call behavior --
+/// correct only for genuinely 0-arity defs).
+#[partial]
+def empty_ctx (arities : List ArityEntry) : CodegenCtx := CodegenCtx.ctx empty_bindings 0 0 arities
 
 #[partial]
 def fresh_temp (c : CodegenCtx) : CtxStrPair := match c {
-    CodegenCtx.ctx locals nt nl =>
+    CodegenCtx.ctx locals nt nl arities =>
         let name := String.concat "t" (I64.to_string nt) in
-        CtxStrPair.mk (CodegenCtx.ctx locals (nt + 1) nl) name,
+        CtxStrPair.mk (CodegenCtx.ctx locals (nt + 1) nl arities) name,
 }
 
 #[partial]
 def fresh_label (c : CodegenCtx) (prefix : String) : CtxStrPair := match c {
-    CodegenCtx.ctx locals nt nl =>
+    CodegenCtx.ctx locals nt nl arities =>
         let name := String.concat prefix (String.concat "_" (I64.to_string nl)) in
-        CtxStrPair.mk (CodegenCtx.ctx locals nt (nl + 1)) name,
+        CtxStrPair.mk (CodegenCtx.ctx locals nt (nl + 1) arities) name,
 }
 
 #[partial]
 def ctx_bind_local (c : CodegenCtx) (name : Identifier) (val : LLVMValue) : CodegenCtx := match c {
-    CodegenCtx.ctx locals nt nl => CodegenCtx.ctx (List.cons (LocalBinding.mk name val) locals) nt nl,
+    CodegenCtx.ctx locals nt nl arities => CodegenCtx.ctx (List.cons (LocalBinding.mk name val) locals) nt nl arities,
 }
 
 #[partial]
 def ctx_lookup_local (c : CodegenCtx) (name : Identifier) : Option LLVMValue := match c {
-    CodegenCtx.ctx locals nt nl => lookup_binding locals name,
+    CodegenCtx.ctx locals nt nl arities => lookup_binding locals name,
 }
+
+/// Looks up a global's own known arity by its already-mangled
+/// `llvm_name` (see `ArityEntry`'s doc comment). `Option.none` for any
+/// name not in the table -- a name genuinely absent from the compiled
+/// module's own def list (shouldn't happen for a real reachable
+/// reference) as well as for a module compiled via `empty_ctx
+/// empty_arities` (no table built) both fall back safely to the
+/// pre-Phase-0 eager-0-arg-call behavior at the one call site that reads
+/// this (`compile_db_term_ir`'s `Term.var` value-position case) --
+/// correct for 0-arity defs, and no worse than before Phase 0 for
+/// anything else.
+#[partial]
+def ctx_lookup_arity (c : CodegenCtx) (llvm_name : String) : Option I64 := match c {
+    CodegenCtx.ctx locals nt nl arities => lookup_arity arities llvm_name,
+}
+
+#[partial]
+def lookup_arity (arities : List ArityEntry) (llvm_name : String) : Option I64 := match arities {
+    List.empty => Option.none,
+    List.cons a rest =>
+        match a {
+            ArityEntry.mk aname aarity =>
+                if String.beq aname llvm_name
+                then Option.some aarity
+                else lookup_arity rest llvm_name,
+        },
+}
+
+/// Builds the arity table `empty_ctx` needs from a module's own `List
+/// Def`, keyed by the exact same `llvm_name` `compile_db_def_ir` gives
+/// each def's own compiled LLVM function (`replace_dots_with_underscores`
+/// of its module path) -- callers (`compile_db_decls_ir`/
+/// `compile_db_module`) always have the full `List Def` in scope before
+/// compiling any of them, so this runs once per module compile, not per
+/// reference.
+#[partial]
+def build_arity_table (defs : List Def) : List ArityEntry := match defs {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Def.mk name typ term_ constraints attrs _vis =>
+                let llvm_name := replace_dots_with_underscores (module_path_to_str name) in
+                let arity := List.length (collect_db_params term_) in
+                List.cons (ArityEntry.mk llvm_name arity) (build_arity_table rest),
+        },
+}
+
+/// The `entry` text `alloc_closure` needs (see `LLVMValue.alloc_closure`'s
+/// own IR emission, `lang/codegen/ir.mo`) to box a bare reference to
+/// `llvm_name` as a callable value: every top-level def in this backend
+/// is compiled with the uniform `(i64, i64, ..., i64) -> i64` signature
+/// (`build_llvm_params_db`/`LLVMFunction.mk`), so this is always a
+/// `bitcast` of that function's own address down to `i8*` -- e.g. for
+/// `arity=2`: `"bitcast (i64 (i64, i64)* @foo to i8*)"`.
+#[partial]
+def global_fn_ptr_text (llvm_name : String) (arity : I64) : String :=
+    let fn_ty := LLVMType.fn_ (repeat_type LLVMType.i64_ arity) LLVMType.i64_ in
+    String.concat "bitcast (" (String.concat (show_llvm_type fn_ty)
+        (String.concat "* @" (String.concat llvm_name " to i8*)")))
+
+#[partial]
+def repeat_type (ty : LLVMType) (n : I64) : List LLVMType :=
+    if I64.beq n 0 then List.empty else List.cons ty (repeat_type ty (n - 1))
 
 #[partial]
 def lookup_binding (bindings : List LocalBinding) (name : Identifier) : Option LLVMValue := match bindings {
@@ -271,6 +356,7 @@ def is_llvm_constant (val : LLVMValue) : Bool := match val {
     LLVMValue.bool_ b => true,
     LLVMValue.void_val => true,
     LLVMValue.global_ name => true,
+    LLVMValue.fn_ref name => true,
     LLVMValue.var_ name => true,
     LLVMValue.parm_ idx => true,
     LLVMValue.call fn_name ret_ty args tail => false,
@@ -1002,11 +1088,52 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                             // `def main : I64 := five`, which previously
                             // failed `llc` outright with "use of undefined
                             // value '%five'").
-                            match fresh_temp c {
-                                CtxStrPair.mk ctx_t temp =>
-                                    let call_val := LLVMValue.call llvm_name LLVMType.i64_ empty_vals false in
-                                    let assign_instr := LLVMInstruction.assign temp call_val in
-                                    CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                            //
+                            // An arity>0 def referenced this way means
+                            // something different: "the function itself,
+                            // as a first-class value" (stored, passed,
+                            // boxed into a struct field -- e.g. a Phase 2
+                            // dictionary's own method fields, see
+                            // plans/bootstrapping/self-hosted-compiler.md).
+                            // Eager-0-arg-calling it here would be
+                            // invalid LLVM (an arg-count mismatch against
+                            // its real declared signature) -- box it via
+                            // `alloc_closure` instead (Phase 0 of that
+                            // same plan), producing a genuine callable
+                            // value `compile_general_db_call`'s callee
+                            // dispatch (below) can later call through
+                            // indirectly via `apply_closureN`.
+                            match ctx_lookup_arity c llvm_name {
+                                Option.some arity =>
+                                    if I64.beq arity 0 then
+                                        match fresh_temp c {
+                                            CtxStrPair.mk ctx_t temp =>
+                                                let call_val := LLVMValue.call llvm_name LLVMType.i64_ empty_vals false in
+                                                let assign_instr := LLVMInstruction.assign temp call_val in
+                                                CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                                        }
+                                    else
+                                        match fresh_temp c {
+                                            CtxStrPair.mk ctx_t temp =>
+                                                let entry_text := global_fn_ptr_text llvm_name arity in
+                                                let box_val := LLVMValue.alloc_closure entry_text arity List.empty in
+                                                let assign_instr := LLVMInstruction.assign temp box_val in
+                                                CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                                        },
+                                // No arity known for this name (module
+                                // compiled via `empty_ctx empty_arities`,
+                                // or a genuinely unreachable/unresolved
+                                // reference) -- fall back to the original,
+                                // pre-Phase-0 eager-0-arg-call behavior.
+                                // Correct for 0-arity defs; no worse than
+                                // before Phase 0 for anything else.
+                                Option.none =>
+                                    match fresh_temp c {
+                                        CtxStrPair.mk ctx_t temp =>
+                                            let call_val := LLVMValue.call llvm_name LLVMType.i64_ empty_vals false in
+                                            let assign_instr := LLVMInstruction.assign temp call_val in
+                                            CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                                    },
                             },
                 },
             DebugName.unnamed =>
@@ -1255,8 +1382,14 @@ def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
                             if is_constructor_var name
                             then compile_db_term_ir c head
                             else
+                                // `fn_ref`, not `var_` -- this IS a
+                                // statically-known callable global
+                                // function name (not a local SSA
+                                // register that merely happens to hold
+                                // a runtime value) -- see `fn_ref`'s own
+                                // doc comment, `lang/codegen/ir.mo`.
                                 let llvm_name := replace_dots_with_underscores name in
-                                CompileResult.ok c empty_instrs (LLVMValue.var_ llvm_name) empty_blocks empty_funcs empty_globals_list,
+                                CompileResult.ok c empty_instrs (LLVMValue.fn_ref llvm_name) empty_blocks empty_funcs empty_globals_list,
                     },
                 DebugName.unnamed => compile_db_term_ir c head,
             },
@@ -1281,12 +1414,32 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
                                     // "last known value", used only for
                                     // splicing purposes below).
                                     match val_h {
-                                        LLVMValue.var_ name =>
+                                        // Only `fn_ref` -- produced
+                                        // exclusively by `compile_call_head`'s
+                                        // own bare-global-name-in-callee-
+                                        // position bypass -- means the
+                                        // callee is a statically-known
+                                        // global function; see its own
+                                        // doc comment (`lang/codegen/ir.mo`)
+                                        // for why `var_` (an SSA local
+                                        // register that may itself hold a
+                                        // runtime closure value) must NOT
+                                        // be treated the same way.
+                                        LLVMValue.fn_ref name =>
                                             combine_direct_call ctx_a name vals_a combined all_blocks all_funcs all_globals combined_val,
-                                        LLVMValue.parm_ idx =>
-                                            combine_indirect_call ctx_a vals_a combined all_blocks all_funcs all_globals combined_val,
+                                        // Any other shape (`var_`, `parm_`,
+                                        // or a computed value -- a struct/
+                                        // dictionary field extraction, a
+                                        // local holding a boxed function
+                                        // value, ...) means the callee
+                                        // isn't a statically-known global
+                                        // name -- go through a real
+                                        // indirect call (Phase 0 of
+                                        // plans/bootstrapping/self-hosted-compiler.md's
+                                        // dictionary-passing plan) instead
+                                        // of silently producing `void_val`.
                                         _ =>
-                                            CompileResult.ok ctx_a combined LLVMValue.void_val all_blocks all_funcs all_globals,
+                                            combine_indirect_call ctx_a val_h vals_a combined all_blocks all_funcs all_globals combined_val,
                                     },
                             },
                     },
@@ -1312,32 +1465,38 @@ def combine_direct_call (ctx_a : CodegenCtx) (name : String) (arg_vals : List LL
             },
     }
 
-/// Indirect calls (through a `parm_`-shaped value, e.g. a function
-/// passed in as an argument) go through a single-argument `apply_fun`
-/// runtime trampoline -- unaffected by the multi-arg direct-call fix
-/// above (not reachable from examples/hello.mo's call graph; a fuller
-/// closure-application scheme, if `apply_fun` ever needs multiple
-/// arguments, is a separate, unstarted piece of work). Uses the first
-/// argument in the spine, matching this path's prior single-argument
-/// behavior. `last_val` -- see `combine_direct_call`'s own doc comment.
+/// Indirect calls -- through a `parm_`-shaped value (a function passed
+/// in as an argument) or any other computed callee value (a struct/
+/// dictionary field extraction, a local bound to a boxed function value,
+/// ...) that isn't a statically-known global name -- go through a
+/// fixed-arity `apply_closureN` runtime trampoline (`runtime.c`, N =
+/// this call's own real arg count), keyed off the SAME boxed-closure
+/// representation `Term.var`'s value-position case now produces for an
+/// arity>0 global reference (`compile_db_term_ir`, `alloc_closure`) --
+/// Phase 0 of plans/bootstrapping/self-hosted-compiler.md's
+/// dictionary-passing plan. This is the "fuller closure-application
+/// scheme" a previous version of this function's own doc comment called
+/// for and deferred (it used to call a single-argument `apply_fun`
+/// trampoline that was never actually defined in `runtime.c` -- always
+/// broken, never reachable from any real call graph until now).
+/// `callee_val` is `val_h` from `compile_general_db_call` -- the
+/// compiled callee itself, passed as `apply_closureN`'s own first
+/// argument (a previous version of this function ignored `val_h`
+/// entirely and mis-called `apply_fun` with only the first ordinary
+/// arg, never the callee -- confirmed broken by inspection, never
+/// exercised). `last_val` -- see `combine_direct_call`'s own doc comment.
 #[partial]
-def combine_indirect_call (ctx_a : CodegenCtx) (arg_vals : List LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
-    let val_a := first_val_or_void arg_vals in
+def combine_indirect_call (ctx_a : CodegenCtx) (callee_val : LLVMValue) (arg_vals : List LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
+    let trampoline_name := String.concat "apply_closure" (I64.to_string (List.length arg_vals)) in
     match fresh_temp ctx_a {
         CtxStrPair.mk ctx_t temp =>
             let call_instr := LLVMInstruction.assign temp
-                (LLVMValue.call "apply_fun" LLVMType.i64_ (cons_val val_a empty_vals) false) in
+                (LLVMValue.call trampoline_name LLVMType.i64_ (cons_val callee_val arg_vals) false) in
             match compose_seq (Triple.tr combined blocks last_val) (Triple.tr (cons_instr call_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
                 Triple.tr new_instrs new_blocks _ =>
                     CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
             },
     }
-
-#[partial]
-def first_val_or_void (vals : List LLVMValue) : LLVMValue := match vals {
-    List.cons v _ => v,
-    List.empty => LLVMValue.void_val,
-}
 
 #[partial]
 /// `blocks`/`funcs`/`globals`/`last_val` -- see `compile_native_app_db`'s
@@ -1366,6 +1525,7 @@ def extract_lit_from_val (val : LLVMValue) : Option I64 := match val {
     LLVMValue.var_ name => Option.none,
     LLVMValue.parm_ idx => Option.none,
     LLVMValue.global_ name => Option.none,
+    LLVMValue.fn_ref name => Option.none,
     LLVMValue.call fn_name ret_ty args tail => Option.none,
     LLVMValue.add lhs rhs => Option.none,
     LLVMValue.sub lhs rhs => Option.none,
@@ -1633,7 +1793,8 @@ def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match 
 /// Compile a list of canonical Defs to a complete LLVM module.
 #[partial]
 def compile_db_decls_ir (defs : List Def) : LLVMModule :=
-    match compile_db_def_list empty_ctx defs {
+    let arities := build_arity_table defs in
+    match compile_db_def_list (empty_ctx arities) defs {
         DefResult.dr _ compiled_funcs compiled_globals =>
             let funcs := ren_main_and_wrap compiled_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
@@ -1646,7 +1807,8 @@ def compile_db_module (decl_list : List Decl) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
     let ctor_funcs := compile_db_inductive_decls inds in
-    match compile_db_def_list empty_ctx defs {
+    let arities := build_arity_table defs in
+    match compile_db_def_list (empty_ctx arities) defs {
         DefResult.dr _ compiled_funcs compiled_globals =>
             let all_funcs := append_funcs ctor_funcs compiled_funcs in
             let funcs := ren_main_and_wrap all_funcs in
@@ -1855,7 +2017,33 @@ def runtime_declarations : List LLVMDeclaration :=
     // alloc_constructor only ever allocates space, it has no way to
     // accept field values itself.
     let d13 := mk_decl "monad_set_field" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "void" in
-    cons_decl d1 (cons_decl d2 (cons_decl d3 (cons_decl d4 (cons_decl d5 (cons_decl d6 (cons_decl d7 (cons_decl d8 (cons_decl d9 (cons_decl d10 (cons_decl d11 (cons_decl d12 (cons_decl d13 empty_decls))))))))))))
+    // Fixed-arity indirect-call trampolines for a boxed, zero-capture
+    // closure value (runtime.c's apply_closureN family) -- see that
+    // file's own doc comment on the family. Used by
+    // compile_general_db_call's callee dispatch whenever the callee is a
+    // computed value rather than a statically-known global name.
+    let d14 := mk_decl "apply_closure1" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d15 := mk_decl "apply_closure2" (apply_closure_arg_types 2) "i64" in
+    let d16 := mk_decl "apply_closure3" (apply_closure_arg_types 3) "i64" in
+    let d17 := mk_decl "apply_closure4" (apply_closure_arg_types 4) "i64" in
+    let d18 := mk_decl "apply_closure5" (apply_closure_arg_types 5) "i64" in
+    let d19 := mk_decl "apply_closure6" (apply_closure_arg_types 6) "i64" in
+    let d20 := mk_decl "apply_closure7" (apply_closure_arg_types 7) "i64" in
+    let d21 := mk_decl "apply_closure8" (apply_closure_arg_types 8) "i64" in
+    [d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13,
+     d14, d15, d16, d17, d18, d19, d20, d21]
+
+/// `apply_closureN`'s own declared param list: the closure value itself
+/// plus `n` ordinary args, all i64 (matches every def's own uniform
+/// boxed-i64 calling convention). `n` is the applied arity, so this
+/// always produces `n + 1` total "i64" strings.
+#[partial]
+def apply_closure_arg_types (n : I64) : List String :=
+    cons_str "i64" (repeat_str "i64" n)
+
+#[partial]
+def repeat_str (s : String) (n : I64) : List String :=
+    if I64.beq n 0 then empty_strs else cons_str s (repeat_str s (n - 1))
 
 #[partial]
 def empty_funcs : List LLVMFunction := List.empty
