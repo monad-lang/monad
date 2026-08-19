@@ -4737,16 +4737,27 @@ def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: Term) (op: String) (ctx: 
 
 /// `|>`/`<|` are pure syntactic sugar for application (`x |> f` = `f x`,
 /// `f <| x` = `f x`) -- desugar them DIRECTLY to `Term.app`, not through
-/// the generic operator desugaring below. That generic path
-/// (`Term.var sentinel DebugName.unnamed`) throws away `op` entirely —
-/// `DebugName` has no operator-carrying variant to preserve it in — so
-/// nothing downstream (self-hosted typecheck, codegen) can ever recover
-/// which operator an application like this meant; every custom infix
-/// operator's `infix (...) := realFn` declaration (init/prelude.mo) is
-/// consequently unreachable from a parsed operator application. The
-/// Rust reference parser resolves this correctly elsewhere; this
-/// self-hosted parser doesn't yet, for ANY operator -- this is a real,
-/// separate, broader gap, not attempted here.
+/// the generic operator desugaring below.
+///
+/// The generic path used to build `Term.var sentinel DebugName.unnamed`,
+/// throwing `op` away entirely — `DebugName` has no operator-carrying
+/// variant (unlike the Rust reference's own `NameRef::Op`, core/src/
+/// term.rs) to preserve it in, so nothing downstream could ever recover
+/// which operator an application like this meant; every `infix (op) :=
+/// target` declaration (init/init.mo, init/prelude.mo) was consequently
+/// unreachable from a parsed operator application, and even built-in
+/// arithmetic (`n + 1`) silently compiled to a `Unit` placeholder.
+///
+/// Fixed by preserving the operator SYMBOL as the var's own name
+/// (`DebugName.named (Identifier.id op)`) — a deliberate "fake
+/// identifier" (operator symbols can never appear as a bare identifier
+/// from ordinary parsing, so this can't collide with a real one) that's
+/// never re-parsed as source text, only ever looked up by
+/// `lang.scope`'s new `resolve_infix_decls` pass (`ScopeData.infixes`,
+/// itself already populated from every loaded module's `infix`
+/// declarations, was sitting unused until this fix) once a real Scope
+/// is available -- parsing alone doesn't know what `+`/`==`/a custom
+/// operator ultimately resolves to, only scope-building does.
 #[partial]
 def expr_climb_op_rhs_expr (r: ParseResult Term) (lhs: Term) (op: String) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
     match r {
@@ -4758,7 +4769,7 @@ def expr_climb_op_rhs_expr (r: ParseResult Term) (lhs: Term) (op: String) (ctx: 
                 then Term.app lhs rhs
                 else
                     // Operator desugars to: op lhs rhs → app (app (var SENTINEL op) lhs) rhs
-                    let op_var : Term := Term.var sentinel DebugName.unnamed in
+                    let op_var : Term := Term.var sentinel (DebugName.named (Identifier.id op)) in
                     Term.app (Term.app op_var lhs) rhs
             in
             expr_climb_rest rem combined ctx min_prec,
@@ -5440,6 +5451,36 @@ def test_t_operator : Bool :=
 	let empty_ctx : List Identifier := List.empty in
 	match expression empty_ctx "a ++ b" {
 		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+/// Regression test for the operator-resolution fix: the parsed term's
+/// own head must now NAME the operator symbol itself
+/// (`DebugName.named (Identifier.id "++")`), not `DebugName.unnamed` --
+/// see `expr_climb_op_rhs_expr`'s own doc comment for why this is what
+/// makes `lang.scope`'s `resolve_infix_decls` able to resolve it later.
+#[test]
+def test_t_operator_preserves_op_name : Bool :=
+	let empty_ctx : List Identifier := List.empty in
+	match expression empty_ctx "a ++ b" {
+		success rem out =>
+			String.beq rem "" &&
+			match out {
+				Term.app fun_outer _arg_outer =>
+					match fun_outer {
+						Term.app op_var _lhs =>
+							match op_var {
+								Term.var _ dbg =>
+									match dbg {
+										DebugName.named id => String.beq (show_identifier id) "++",
+										DebugName.unnamed => false,
+									},
+								_ => false,
+							},
+						_ => false,
+					},
+				_ => false,
+			},
 		fail _ => false
 	}
 

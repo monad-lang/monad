@@ -20,6 +20,7 @@ use lang.module {
   LoadedModules, ModuleInfo, get_loaded_all,
   get_module_info_decls, mk,
 }
+use lang.scope {collect_infixes, resolve_infix_decls}
 
 open IO {println}
 open LLVMType {i32_, i64_}
@@ -2048,16 +2049,32 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) : IO LLVMModule := do 
     let def_count := List.length all_decls;
     println ("Total defs collected: " ++ I64.to_string def_count);
 
+    // Resolve every infix-operator reference (`+`, `==`, ...) to its
+    // real registered target BEFORE reachability filtering -- see
+    // lang.scope's own extended doc comment above `lookup_infix`/
+    // `resolve_infix_decls` for why this can't happen at parse time.
+    // Must run first, not after `filter_reachable_decls`: reachability
+    // is computed by walking each Def's own body for names it calls
+    // (`collect_referenced_names`) -- an UNRESOLVED operator var (named
+    // "&&", not "Bool.and") makes that walk blind to the fact that
+    // `Bool.and` is actually called at all, so `Bool.and` itself gets
+    // filtered out as "unreachable" and codegen later emits a call to
+    // a function that was never compiled into the module ("undefined
+    // value '@Bool_and'" at link time) -- confirmed as a real bug via
+    // a direct repro (`helper (true && false)`) while wiring this in.
+    let infixes := collect_infixes all_decls;
+    let resolved_decls := resolve_infix_decls infixes all_decls;
+
     // Only compile Defs actually reachable (transitively) from `main` --
     // compiling the FULL 264-def loaded set unconditionally meant any
     // codegen bug anywhere in the whole standard library, reached or
     // not, blocked compiling any program at all. See
     // filter_reachable_decls's own doc comment.
-    let reachable_decls := filter_reachable_decls all_decls;
+    let reachable_decls := filter_reachable_decls resolved_decls;
     let reachable_count := List.length reachable_decls;
     println ("Reachable decl_list: " ++ I64.to_string reachable_count);
 
-    // Compile the reachable declarations
+    // Compile the reachable, infix-resolved declarations
     let mod_ := compile_db_module reachable_decls;
     return mod_
 }

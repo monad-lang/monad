@@ -7,6 +7,7 @@ use lang.types {
   instance_not_found, mk, mp, name, name_not_found, nid, nmp, nop, open_d,
   scoped_open_d, struct_d, type_, use_d,
 }
+use lang.typecheck.macro_expand {term_map_children}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
 // `bench/scope_lookup.mo`. Empty import: naming any of `std.map`'s
 // `Map`-class-instance exports explicitly hits a pre-existing latent
@@ -911,6 +912,219 @@ def add_module_infixes (acc : ScopeData) (infxs : List Infix) : ScopeData :=
             }
     }
 
+// ─── Infix operator resolution ─────────────────────────────────────
+//
+// `expr_climb_op_rhs_expr` (lang/parser.mo) preserves an operator
+// symbol like `+`/`==`/a custom one as a `Term.var`'s own name
+// (`DebugName.named (Identifier.id "+")`, a "fake identifier" that
+// never arises from ordinary identifier parsing) instead of resolving
+// it at parse time — parsing alone doesn't know what an operator maps
+// to, only a built scope does (`infixes` above, populated from every
+// loaded module's own `infix (op) := target` declarations). This is
+// the resolution step: walk a decl_list's own Terms, and for every var
+// whose name matches a registered operator symbol, replace it with a
+// real reference to that operator's resolved target `ModulePath` —
+// mirrors `lang.typecheck.macro_expand`'s `expand_term`/
+// `lang.typecheck.macro_queue`'s `expand_decl_terms` shape exactly
+// (same per-Decl-kind field coverage), reusing `term_map_children` as
+// the shared generic structural-recursion primitive both use.
+//
+// Must run AFTER `infixes` is actually populated — wired into
+// `lang.codegen.emit`'s `compile_loaded_modules_to_ir` and
+// `lang.codegen.test_driver`'s `compile_loaded_modules_to_test_ir`,
+// both of which already have a flat decl_list with every loaded
+// module's own `infix` declarations in it by the time codegen runs
+// (see `collect_infixes` below — no separately-built `Scope` needed
+// there, just a scan of the same decl_list already in hand).
+//
+// Deliberately does NOT resolve a typeclass-routed operator (e.g. `==`
+// -> `BEq.beq`) any further than producing a reference to that class
+// method — actually DISPATCHING to a concrete instance's own
+// implementation is `lang.typecheck.infer`'s `resolve_class_method`'s
+// job, itself a separate, still-incomplete piece of work (see that
+// function's own doc comment). An operator whose registered target
+// IS a plain, direct function (e.g. `init/init.mo`'s `infix (+) :=
+// I64.add`) resolves and compiles all the way through; one whose only
+// registered target is typeclass-routed surfaces as a normal
+// unresolved-method situation downstream instead of a silent `void`.
+
+#[partial]
+def lookup_infix (infixes : List Infix) (op_str : String) : Option ModulePath :=
+    match infixes {
+        List.empty => Option.none,
+        List.cons inf rest =>
+            match inf {
+                Infix.mk op target =>
+                    if String.beq (show_operator op) op_str
+                    then Option.some target
+                    else lookup_infix rest op_str,
+            },
+    }
+
+#[partial]
+def resolve_infix_term (infixes : List Infix) (t : Term) : Term :=
+    match t {
+        Term.var idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match lookup_infix infixes (show_identifier id) {
+                        Option.some target => Term.var idx (DebugName.named (Identifier.id (show_module_path target))),
+                        Option.none => t,
+                    },
+                DebugName.unnamed => t,
+            },
+        _ => term_map_children (resolve_infix_term infixes) t,
+    }
+
+#[partial]
+def resolve_infix_opt_term (infixes : List Infix) (t : Option Term) : Option Term :=
+    match t {
+        Option.some x => Option.some (resolve_infix_term infixes x),
+        Option.none => Option.none,
+    }
+
+#[partial]
+def resolve_infix_terms (infixes : List Infix) (ts : List Term) : List Term :=
+    match ts {
+        List.empty => List.empty,
+        List.cons x rest => List.cons (resolve_infix_term infixes x) (resolve_infix_terms infixes rest),
+    }
+
+#[partial]
+def resolve_infix_param (infixes : List Infix) (p : Param) : Param :=
+    match p {
+        Param.mk pname typ mult default attrs =>
+            Param.mk pname (resolve_infix_term infixes typ) mult (resolve_infix_opt_term infixes default) attrs,
+    }
+
+#[partial]
+def resolve_infix_params (infixes : List Infix) (params : List Param) : List Param :=
+    match params {
+        List.empty => List.empty,
+        List.cons p rest => List.cons (resolve_infix_param infixes p) (resolve_infix_params infixes rest),
+    }
+
+#[partial]
+def resolve_infix_induct_constructor (infixes : List Infix) (ctor : InductConstructor) : InductConstructor :=
+    match ctor {
+        InductConstructor.mk cname params typ =>
+            InductConstructor.mk cname (resolve_infix_params infixes params) (resolve_infix_term infixes typ),
+    }
+
+#[partial]
+def resolve_infix_induct_constructors (infixes : List Infix) (ctors : List InductConstructor) : List InductConstructor :=
+    match ctors {
+        List.empty => List.empty,
+        List.cons c rest => List.cons (resolve_infix_induct_constructor infixes c) (resolve_infix_induct_constructors infixes rest),
+    }
+
+#[partial]
+def resolve_infix_struct_field (infixes : List Infix) (f : StructField) : StructField :=
+    match f {
+        StructField.mk fname typ default mult =>
+            StructField.mk fname (resolve_infix_term infixes typ) (resolve_infix_opt_term infixes default) mult,
+    }
+
+#[partial]
+def resolve_infix_struct_fields (infixes : List Infix) (fields : List StructField) : List StructField :=
+    match fields {
+        List.empty => List.empty,
+        List.cons f rest => List.cons (resolve_infix_struct_field infixes f) (resolve_infix_struct_fields infixes rest),
+    }
+
+#[partial]
+def resolve_infix_class_def (infixes : List Infix) (cd : ClassDef) : ClassDef :=
+    match cd {
+        ClassDef.mk cname typ default => ClassDef.mk cname (resolve_infix_term infixes typ) (resolve_infix_opt_term infixes default),
+    }
+
+#[partial]
+def resolve_infix_class_defs (infixes : List Infix) (cds : List ClassDef) : List ClassDef :=
+    match cds {
+        List.empty => List.empty,
+        List.cons cd rest => List.cons (resolve_infix_class_def infixes cd) (resolve_infix_class_defs infixes rest),
+    }
+
+#[partial]
+def resolve_infix_def (infixes : List Infix) (d : Def) : Def :=
+    match d {
+        Def.mk dname typ term constraints attrs vis =>
+            Def.mk dname (resolve_infix_term infixes typ) (resolve_infix_term infixes term) constraints attrs vis,
+    }
+
+#[partial]
+def resolve_infix_inductive (infixes : List Infix) (ind : Inductive) : Inductive :=
+    match ind {
+        Inductive.mk iname params typ constructors attrs vis =>
+            Inductive.mk iname (resolve_infix_params infixes params) (resolve_infix_term infixes typ)
+                (resolve_infix_induct_constructors infixes constructors) attrs vis,
+    }
+
+#[partial]
+def resolve_infix_struct (infixes : List Infix) (s : Struct) : Struct :=
+    match s { Struct.mk sname fields vis => Struct.mk sname (resolve_infix_struct_fields infixes fields) vis }
+
+#[partial]
+def resolve_infix_class (infixes : List Infix) (cls : Class) : Class :=
+    match cls {
+        Class.mk clsname params constraints methods vis =>
+            Class.mk clsname (resolve_infix_params infixes params) constraints (resolve_infix_class_defs infixes methods) vis,
+    }
+
+#[partial]
+def resolve_infix_instance (infixes : List Infix) (ins : Instance) : Instance :=
+    match ins {
+        Instance.mk insname cls constraints args vis implicit_params =>
+            Instance.mk insname cls constraints (resolve_infix_terms infixes args) vis (resolve_infix_params infixes implicit_params),
+    }
+
+/// Applies infix-operator resolution to every `Term` field embedded in
+/// one decl. `use_d`/`open_d`/`infix_d`/macro-related decls pass
+/// through unchanged — none of them embed a `Term` that could contain
+/// an unresolved operator reference. `scoped_open_d` recurses into its
+/// own wrapped inner decl (mirrors `build_scope_one_decl`'s own
+/// treatment of it).
+#[partial]
+def resolve_infix_decl (infixes : List Infix) (d : Decl) : Decl :=
+    match d {
+        Decl.def_d d_val => Decl.def_d (resolve_infix_def infixes d_val),
+        Decl.inductive_d ind => Decl.inductive_d (resolve_infix_inductive infixes ind),
+        Decl.struct_d s => Decl.struct_d (resolve_infix_struct infixes s),
+        Decl.class_d cls => Decl.class_d (resolve_infix_class infixes cls),
+        Decl.instance_d ins => Decl.instance_d (resolve_infix_instance infixes ins),
+        Decl.scoped_open_d path filter inner => Decl.scoped_open_d path filter (resolve_infix_decl infixes inner),
+        _ => d,
+    }
+
+/// Collects every `infix (op) := target` declaration already present
+/// in `decl_list` — used by codegen's own entry points, which have a
+/// flat, already-fully-loaded decl_list (every dependency module's own
+/// decls included) but no separately-built `Scope` to read `.infixes`
+/// from directly (unlike `lang.module`'s check/typecheck pipeline,
+/// which already threads a real `Scope` through and should read its
+/// own `ScopeData.infixes` instead of calling this).
+#[partial]
+def collect_infixes (decl_list : List Decl) : List Infix :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.infix_d op target _vis =>
+                    let inf : Infix := { operator := op, name := target } in
+                    List.cons inf (collect_infixes rest),
+                _ => collect_infixes rest,
+            },
+    }
+
+/// Resolves infix operators across a whole decl_list at once —
+/// `resolve_infix_decl` applied to every entry.
+#[partial]
+def resolve_infix_decls (infixes : List Infix) (decl_list : List Decl) : List Decl :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest => List.cons (resolve_infix_decl infixes d) (resolve_infix_decls infixes rest),
+    }
+
 // --- scope_resolve_instance: find concrete instance by class name ---
 
 def scope_resolve_instance (class_name : ModulePath) (instance_key : InstanceKey) (s : Scope) : Result ScopeError Instance :=
@@ -1067,4 +1281,147 @@ def test_build_scope_one_decl_decl_gen_d_is_noop : Bool :=
     match scope_data_find_def sd2 (ModulePath.mp (List.cons (Identifier.id "foo") List.empty)) {
         Option.some _ => false,
         Option.none => true
+    }
+
+// --- Infix operator resolution tests ---
+
+def dummy_infixes : List Infix :=
+    let plus : Infix := { operator := Operator.operator "+", name := ModulePath.mp (List.cons (Identifier.id "I64") (List.cons (Identifier.id "add") List.empty)) } in
+    List.cons plus List.empty
+
+#[test]
+def test_lookup_infix_found : Bool :=
+    match lookup_infix dummy_infixes "+" {
+        Option.some target => String.beq (show_module_path target) "I64.add",
+        Option.none => false,
+    }
+
+#[test]
+def test_lookup_infix_not_found : Bool :=
+    match lookup_infix dummy_infixes "==" {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_resolve_infix_term_bare_op_var : Bool :=
+    let op_var : Term := Term.var 0 (DebugName.named (Identifier.id "+")) in
+    match resolve_infix_term dummy_infixes op_var {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => String.beq (show_identifier id) "I64.add",
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
+/// The actual shape `expr_climb_op_rhs_expr` produces for `n + 1`:
+/// `app (app (var "+") n) one`. Only the operator var's own name
+/// should change; `n`/`one` pass through untouched (structural
+/// recursion via `term_map_children`).
+#[test]
+def test_resolve_infix_term_full_application : Bool :=
+    let op_var : Term := Term.var 0 (DebugName.named (Identifier.id "+")) in
+    let n_var : Term := Term.var 0 (DebugName.named (Identifier.id "n")) in
+    let one_lit : Term := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let combined : Term := Term.app (Term.app op_var n_var) one_lit in
+    match resolve_infix_term dummy_infixes combined {
+        Term.app fun_outer arg_outer =>
+            match arg_outer {
+                Term.lit _ =>
+                    match fun_outer {
+                        Term.app fun_inner arg_inner =>
+                            (match fun_inner {
+                                Term.var _ dbg =>
+                                    match dbg {
+                                        DebugName.named id => String.beq (show_identifier id) "I64.add",
+                                        DebugName.unnamed => false,
+                                    },
+                                _ => false,
+                            }) &&
+                            (match arg_inner {
+                                Term.var _ dbg2 =>
+                                    match dbg2 {
+                                        DebugName.named id2 => String.beq (show_identifier id2) "n",
+                                        DebugName.unnamed => false,
+                                    },
+                                _ => false,
+                            }),
+                        _ => false,
+                    },
+                _ => false,
+            },
+        _ => false,
+    }
+
+/// An ordinary named var that just happens NOT to be a registered
+/// operator (e.g. a real function called "n") passes through
+/// unchanged, not rewritten.
+#[test]
+def test_resolve_infix_term_non_operator_var_unchanged : Bool :=
+    let n_var : Term := Term.var 0 (DebugName.named (Identifier.id "n")) in
+    match resolve_infix_term dummy_infixes n_var {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => String.beq (show_identifier id) "n",
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
+#[test]
+def test_collect_infixes_finds_declared_operator : Bool :=
+    let op := Operator.operator "+" in
+    let target := ModulePath.mp (List.cons (Identifier.id "I64") (List.cons (Identifier.id "add") List.empty)) in
+    let decl_list : List Decl := List.cons (Decl.infix_d op target Visibility.package_private) List.empty in
+    match collect_infixes decl_list {
+        List.cons inf rest =>
+            (match inf { Infix.mk o _ => String.beq (show_operator o) "+" }) &&
+            (match rest { List.empty => true, List.cons _ _ => false }),
+        List.empty => false,
+    }
+
+#[test]
+def test_collect_infixes_ignores_other_decls : Bool :=
+    let decl_list : List Decl := List.cons dummy_macro_call_decl List.empty in
+    match collect_infixes decl_list {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
+#[test]
+def test_resolve_infix_decls_rewrites_def_body : Bool :=
+    let op_var : Term := Term.var 0 (DebugName.named (Identifier.id "+")) in
+    let n_var : Term := Term.var 0 (DebugName.named (Identifier.id "n")) in
+    let one_lit : Term := Term.lit (Literal.num 1 NumSuffix.i64) in
+    let body : Term := Term.app (Term.app op_var n_var) one_lit in
+    let name : ModulePath := ModulePath.mp (List.cons (Identifier.id "helper") List.empty) in
+    let d := Def.mk name Term.hole body List.empty List.empty Visibility.package_private in
+    let decl_list : List Decl := List.cons (Decl.def_d d) List.empty in
+    match resolve_infix_decls dummy_infixes decl_list {
+        List.cons resolved_decl _ =>
+            match resolved_decl {
+                Decl.def_d resolved_def =>
+                    match resolved_def {
+                        Def.mk _ _ resolved_body _ _ _ =>
+                            match resolved_body {
+                                Term.app fun_outer _ =>
+                                    match fun_outer {
+                                        Term.app fun_inner _ =>
+                                            match fun_inner {
+                                                Term.var _ dbg =>
+                                                    match dbg {
+                                                        DebugName.named id => String.beq (show_identifier id) "I64.add",
+                                                        DebugName.unnamed => false,
+                                                    },
+                                                _ => false,
+                                            },
+                                        _ => false,
+                                    },
+                                _ => false,
+                            },
+                    },
+                _ => false,
+            },
+        List.empty => false,
     }

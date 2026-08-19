@@ -32,6 +32,7 @@ use lang.types {Attribute, Decl, Def, LoadedModules, ModulePath, has_attr}
 use lang.codegen.emit {collect_all_decls_from_modules, compile_db_module, filter_reachable_decls, module_path_to_str}
 use lang.codegen.ir {LLVMModule}
 use lang.module {get_loaded_all, get_loaded_main, get_module_info_decls, try_parse_decls}
+use lang.scope {collect_infixes, resolve_infix_decls}
 use io {IO}
 
 // ─── Discovery ──────────────────────────────────────────────────────
@@ -213,7 +214,18 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                 Option.some driver_decls => do {
                     let all_decls := collect_all_decls_from_modules (get_loaded_all loaded) List.empty;
                     let spliced := List.append driver_decls all_decls;
-                    let reachable := filter_reachable_decls spliced;
+                    // See lang.codegen.emit's own `compile_loaded_modules_to_ir`
+                    // for why this must resolve infixes BEFORE reachability
+                    // filtering, not after (an unresolved operator var
+                    // hides its real target from reachability analysis,
+                    // so that target gets filtered out and never compiled
+                    // at all) -- the synthesized driver's own
+                    // `synth_sum_expr` uses `+` (this file's own doc
+                    // comment above), so this is what makes `monad test`
+                    // actually compile at all.
+                    let infixes := collect_infixes all_decls;
+                    let resolved_spliced := resolve_infix_decls infixes spliced;
+                    let reachable := filter_reachable_decls resolved_spliced;
                     return Result.ok (compile_db_module reachable)
                 },
                 Option.none => do {
