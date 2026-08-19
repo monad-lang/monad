@@ -629,18 +629,70 @@ fn detect_test_result_value(
 ) -> TestResult {
   match value {
     core_value::Value::Con { tag, args } => {
-      if well_known.bool_true.is_some_and(|t| t.tag == *tag) {
-        TestResult::Pass
-      } else if well_known.bool_false.is_some_and(|t| t.tag == *tag) {
-        TestResult::Fail
-      } else if well_known.io_io.is_some_and(|t| t.tag == *tag) {
+      // `CtorTag.tag` (`lower_core_ir.rs`'s `find_ctor`) is a PER-
+      // INDUCTIVE-LOCAL constructor index (0 for a type's first
+      // constructor, 1 for its second, ...), not a globally unique
+      // discriminator — so comparing a bare `tag` alone across
+      // DIFFERENT well-known types is genuinely ambiguous: `IO A`'s
+      // sole constructor (`io_io`) and `Bool`'s `true` (`bool_true`)
+      // are BOTH each their own type's first constructor, so both have
+      // `tag == 0`. This function used to check `bool_true`/
+      // `bool_false` BEFORE `io_io`, so an `IO Bool` test's own OUTER
+      // `IO.io` wrapper (tag 0) matched `bool_true` immediately and was
+      // reported Pass unconditionally — CONFIRMED via a direct repro:
+      // `#[test] def t : IO Bool := IO.io false` (no exec_cmd/native
+      // calls involved at all) reported PASS. This silently made every
+      // `IO`-typed compile-and-run e2e test in this codebase (any test
+      // asserting `exec_result == expected` via `return (exec_result ==
+      // expected)`) pass regardless of the actual assertion — a real,
+      // separate, and serious gap, found while validating the
+      // dictionary-passing plan's own e2e tests
+      // (lang/codegen/test/compile_tests.mo).
+      //
+      // Fixed by checking `io_io` FIRST (an `IO`-wrapped value must
+      // always be unwrapped before its own payload's pass/fail meaning
+      // can be judged, regardless of what tag its wrapper happens to
+      // share with some other type's own leaf constructor) and by
+      // comparing `arity` alongside `tag` everywhere (`args.len()` vs
+      // `t.arity`) as a second discriminator — cheaply rules out most
+      // OTHER same-tag cross-type pairs (e.g. `bool_true`'s arity 0
+      // vs `io_io`'s arity 1) without needing `Value::Con` to carry its
+      // own owning-type identity, a larger change out of scope here.
+      // Does NOT fully resolve every possible collision on its own
+      // (`io_io` and `result_ok` are both their type's first
+      // constructor AND both carry exactly one payload arg — tag 0,
+      // arity 1, identical on both axes — only the ordering below saves
+      // that specific pair, by construction: `io_io` is checked, and
+      // therefore unwrapped, before `result_ok` is ever considered) —
+      // a fully robust fix needs `Value::Con` to carry real type
+      // identity, a separate, larger change.
+      if well_known
+        .io_io
+        .is_some_and(|t| t.tag == *tag && t.arity == args.len() as u32)
+      {
         match args.first() {
           Some(inner) => detect_test_result_value(inner, well_known),
           None => TestResult::FailWithMessage(format!("unexpected result: {value:?}")),
         }
-      } else if well_known.result_ok.is_some_and(|t| t.tag == *tag) {
+      } else if well_known
+        .bool_true
+        .is_some_and(|t| t.tag == *tag && t.arity == args.len() as u32)
+      {
         TestResult::Pass
-      } else if well_known.result_err.is_some_and(|t| t.tag == *tag) {
+      } else if well_known
+        .bool_false
+        .is_some_and(|t| t.tag == *tag && t.arity == args.len() as u32)
+      {
+        TestResult::Fail
+      } else if well_known
+        .result_ok
+        .is_some_and(|t| t.tag == *tag && t.arity == args.len() as u32)
+      {
+        TestResult::Pass
+      } else if well_known
+        .result_err
+        .is_some_and(|t| t.tag == *tag && t.arity == args.len() as u32)
+      {
         let msg = args.first().and_then(|v| match v {
           core_value::Value::Lit(core_ir::IrLit::Str(s)) => Some(s.as_str().to_string()),
           _ => None,
@@ -1976,6 +2028,54 @@ def test_direct_generic_call : Bool :=
     };
     assert!(matches!(outcome_of("test_a"), TestOutcome::Pass));
     assert!(matches!(outcome_of("test_b"), TestOutcome::Fail));
+  }
+
+  /// Regression test for `detect_test_result_value`'s own tag-collision
+  /// bug: `IO A`'s sole constructor and `Bool`'s `true` are each their
+  /// own type's first constructor, so both have the same PER-TYPE-
+  /// LOCAL `CtorTag.tag` (0) — before this test was added,
+  /// `detect_test_result_value` checked `bool_true` before ever
+  /// unwrapping `io_io`, so ANY `IO`-wrapped test result (regardless of
+  /// its actual payload) matched `bool_true` immediately and reported
+  /// Pass unconditionally. Found while validating the dictionary-
+  /// passing plan's own end-to-end compile-and-run tests
+  /// (lang/codegen/test/compile_tests.mo), which are exactly this
+  /// shape (`IO Bool`, asserting a compiled program's real exit code).
+  #[test]
+  fn test_run_tests_for_files_io_wrapped_bool_reports_correctly() {
+    let dir = temp_test_dir("run-tests-io-bool");
+    let file = dir.join("t.mo");
+    fs::write(
+      &file,
+      "#[test]\ndef test_io_true : IO Bool := IO.io true\n\n#[test]\ndef test_io_false : IO Bool := IO.io false\n",
+    )
+    .unwrap();
+
+    let results = run_tests_for_files(
+      vec![file],
+      EvalOptions::default(),
+      1,
+      None,
+      vec![workspace_root()],
+      None,
+    )
+    .unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(results.len(), 1);
+    let file_result = &results[0];
+    assert!(file_result.error_message.is_none());
+    assert_eq!(file_result.tests.len(), 2);
+    let outcome_of = |name: &str| {
+      &file_result
+        .tests
+        .iter()
+        .find(|t| t.name == name)
+        .unwrap()
+        .outcome
+    };
+    assert!(matches!(outcome_of("test_io_true"), TestOutcome::Pass));
+    assert!(matches!(outcome_of("test_io_false"), TestOutcome::Fail));
   }
 
   #[test]
