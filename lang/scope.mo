@@ -1139,6 +1139,310 @@ def resolve_infix_decls (infixes : List Infix) (decl_list : List Decl) : List De
         List.cons d rest => List.cons (resolve_infix_decl infixes d) (resolve_infix_decls infixes rest),
     }
 
+// --- Phase 2 (dictionary-passing plan, see
+// plans/bootstrapping/self-hosted-compiler.md): promote instance
+// methods to real top-level defs, and synthesize one dictionary VALUE
+// def per instance. Mirrors `collect_infixes`'s own "flat decl_list
+// scan, no Scope needed" style (this runs at the same pre-Scope
+// codegen-entry-point stage, and has the same acknowledged limitation:
+// a Class/Instance buried inside a `scoped_open_d` wrapper isn't found
+// either, matching `collect_infixes`'s own existing gap).
+//
+// No real `Decl.struct_d`/`Decl.inductive_d` declaration is synthesized
+// for a "dictionary type" -- confirmed unnecessary: `compile_con_ir`/
+// `compile_match_ir` (lang/codegen/emit.mo) work structurally off a
+// `Con`'s own name/typ_name/num_args/args and a `MatchCase`'s own
+// constructor name, neither needing a registered Inductive/Struct. A
+// dictionary value is built directly as `Term.con`; its tag
+// (`dict_tag_placeholder` below) is never actually compared at
+// runtime, since every dictionary is destructured via exactly one
+// match arm (`compile_match_ir` skips tag comparison entirely for a
+// single-case match) -- confirmed by direct reading, not assumed.
+
+/// Flat scan for every top-level Class declaration.
+#[partial]
+def collect_classes (decl_list : List Decl) : List Class :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.class_d cls => List.cons cls (collect_classes rest),
+                _ => collect_classes rest,
+            },
+    }
+
+/// Flat scan for every top-level Instance declaration.
+#[partial]
+def collect_instances (decl_list : List Decl) : List Instance :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.instance_d ins => List.cons ins (collect_instances rest),
+                _ => collect_instances rest,
+            },
+    }
+
+/// The ordered list of method names a class declares -- load-bearing:
+/// this exact order is the dictionary's own field order, used both when
+/// BUILDING a dict value here (Phase 2) and when PROJECTING a field
+/// back out of one (Phase 4) -- the two must agree, and both derive it
+/// from this same function so they can't drift apart.
+#[partial]
+def class_method_names (cls : Class) : List Identifier :=
+    match cls {
+        Class.mk _ _ _ methods _ => class_defs_names methods,
+    }
+
+#[partial]
+def class_defs_names (cds : List ClassDef) : List Identifier :=
+    match cds {
+        List.empty => List.empty,
+        List.cons cd rest =>
+            match cd {
+                ClassDef.mk name _ _ => List.cons name (class_defs_names rest),
+            },
+    }
+
+/// Finds the `Class` an instance's own `cls : ModulePath` field names,
+/// among a flat `List Class` (`collect_classes`'s output). Every real
+/// class in the corpus is a single-segment name (`BEq`, `Append`, ...,
+/// confirmed by direct reading) -- comparing `ModulePath.mp [cls.name]`
+/// against the instance's own `cls` field this way is exactly the same
+/// single-segment assumption `scope_resolve_instance`'s own class-name
+/// matching already makes elsewhere.
+#[partial]
+def find_class_by_name (classes : List Class) (cls_name : ModulePath) : Option Class :=
+    match classes {
+        List.empty => Option.none,
+        List.cons cls rest =>
+            match cls {
+                Class.mk cname _ _ _ _ =>
+                    if modpath_eq (ModulePath.mp (List.cons cname List.empty)) cls_name
+                    then Option.some cls
+                    else find_class_by_name rest cls_name,
+            },
+    }
+
+/// Finds a method Def in an instance's own body (`Instance.defs`) by
+/// bare name (the last segment of the Def's own, possibly-mangled-by-
+/// the-parser `ModulePath` name -- instance methods are parsed with
+/// their own bare name, e.g. "beq", not yet qualified, confirmed via
+/// `instance_method_single`/`instance_method_name`, lang/parser.mo).
+#[partial]
+def find_instance_method (defs : List Def) (method_name : Identifier) : Option Def :=
+    match defs {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                Def.mk dname _ _ _ _ _ =>
+                    if instance_method_name_matches dname method_name
+                    then Option.some d
+                    else find_instance_method rest method_name,
+            },
+    }
+
+#[partial]
+def instance_method_name_matches (dname : ModulePath) (method_name : Identifier) : Bool :=
+    match dname {
+        ModulePath.mp ids =>
+            match ids {
+                List.cons only_id rest =>
+                    match rest {
+                        List.empty => Similar.similar only_id method_name,
+                        List.cons _ _ => false,
+                    },
+                List.empty => false,
+            },
+    }
+
+/// A short, readable (not formally unique-guaranteed for pathological
+/// input, but sufficient for this corpus's actual instance args --
+/// concrete `Var`s or `App` chains of them, per the corpus-reality-check
+/// in plans/bootstrapping/self-hosted-compiler.md) slug for one instance
+/// type argument, used by `mangle_instance_method_name` below.
+#[partial]
+def term_to_slug (t : Term) : String :=
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => show_identifier id,
+                DebugName.unnamed => "T",
+            },
+        Term.app f a => term_to_slug f ++ "_" ++ term_to_slug a,
+        _ => "T",
+    }
+
+#[partial]
+def terms_to_slug (args : List Term) : String :=
+    match args {
+        List.empty => "",
+        List.cons t rest =>
+            match rest {
+                List.empty => term_to_slug t,
+                _ => term_to_slug t ++ "_" ++ terms_to_slug rest,
+            },
+    }
+
+/// The mangled top-level name a promoted instance method gets. A
+/// single-segment `ModulePath` (not dotted) -- `filter_reachable_decls`/
+/// reachability matching is a string-based walk over already-flat
+/// names, so single-segment sidesteps any dot-vs-underscore ambiguity
+/// there, the same reasoning `28d98dc`'s infix-resolution pass already
+/// established for its own resolved names.
+#[partial]
+def mangle_instance_method_name (cls_name : ModulePath) (ins_args : List Term) (method_name : Identifier) : ModulePath :=
+    let cls_str := show_module_path cls_name in
+    let args_str := terms_to_slug ins_args in
+    let sep_args := if String.is_empty args_str then "" else "_" ++ args_str in
+    let full := cls_str ++ sep_args ++ "_" ++ show_identifier method_name in
+    ModulePath.mp (List.cons (Identifier.id full) List.empty)
+
+/// The mangled top-level name an instance's own dictionary VALUE def
+/// gets (distinct from any of its promoted methods' own names above).
+#[partial]
+def mangle_instance_dict_name (cls_name : ModulePath) (ins_args : List Term) : ModulePath :=
+    let cls_str := show_module_path cls_name in
+    let args_str := terms_to_slug ins_args in
+    let sep_args := if String.is_empty args_str then "" else "_" ++ args_str in
+    let full := "__Dict_" ++ cls_str ++ sep_args in
+    ModulePath.mp (List.cons (Identifier.id full) List.empty)
+
+/// Never actually compared at runtime -- see this section's own top
+/// doc comment (`compile_match_ir` skips tag comparison for a
+/// single-case match, and every dictionary is destructured that way).
+/// A fixed, clearly-labeled sentinel purely for readability of emitted
+/// IR/debugging, not a real tag-uniqueness guarantee.
+#[partial]
+def dict_tag_placeholder : I64 := 999
+
+/// Builds one instance's promoted method Decls (real top-level defs,
+/// renamed via `mangle_instance_method_name`) plus its own dictionary
+/// VALUE Decl (a `Term.con` whose fields are `Term.var` references to
+/// those just-minted methods, in `cls`'s own declared method order --
+/// boxed correctly as callable closures by Phase 0's `Term.var`
+/// value-position fix, not eager-called). `Option.none` if `defs` is
+/// missing a method the class declares (a hard, clean failure -- see
+/// this instance's own doc comment on `Instance.defs`, no default-
+/// method fallback exists in this corpus today).
+#[partial]
+def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
+    match ins {
+        Instance.mk _ cls_name _ ins_args _ _ defs =>
+            let method_names := class_method_names cls in
+            match build_dict_fields cls_name ins_args defs method_names {
+                Option.some field_terms =>
+                    let method_decls := promote_methods cls_name ins_args defs method_names in
+                    let dict_name := mangle_instance_dict_name cls_name ins_args in
+                    let dict_con := Con.mk (Identifier.id "mk") dict_name (List.length field_terms) (options_of field_terms) in
+                    let dict_def := Def.mk dict_name (Term.type_ 1) (Term.con dict_con)
+                        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private in
+                    Option.some (List.cons (Decl.def_d dict_def) method_decls),
+                Option.none => Option.none,
+            },
+    }
+
+/// One `Decl.def_d` per method in `method_names`, each a renamed copy
+/// of the matching entry in `defs` (found by bare name via
+/// `find_instance_method`) -- everything but the name is copied
+/// unchanged, mirroring how `28d98dc`'s infix-resolution pass and
+/// Phase 0's own boxing both leave a Def's own shape otherwise alone.
+#[partial]
+def promote_methods (cls_name : ModulePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : List Decl :=
+    match method_names {
+        List.empty => List.empty,
+        List.cons mname rest =>
+            match find_instance_method defs mname {
+                Option.some d =>
+                    match d {
+                        Def.mk _ typ term_ constraints attrs vis =>
+                            let new_name := mangle_instance_method_name cls_name ins_args mname in
+                            let renamed := Def.mk new_name typ term_ constraints attrs vis in
+                            List.cons (Decl.def_d renamed) (promote_methods cls_name ins_args defs rest),
+                    },
+                Option.none => promote_methods cls_name ins_args defs rest,
+            },
+    }
+
+/// Builds the dict value's own field terms, in `method_names` order --
+/// each field is a bare `Term.var` reference (in VALUE position, so
+/// Phase 0's `alloc_closure` boxing applies) to that method's own
+/// mangled name. `Option.none` (propagated by the caller as a hard
+/// failure) the moment any declared method is missing from `defs`.
+#[partial]
+def build_dict_fields (cls_name : ModulePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : Option (List Term) :=
+    match method_names {
+        List.empty => Option.some List.empty,
+        List.cons mname rest =>
+            match find_instance_method defs mname {
+                Option.none => Option.none,
+                Option.some _ =>
+                    match build_dict_fields cls_name ins_args defs rest {
+                        Option.none => Option.none,
+                        Option.some rest_terms =>
+                            let mangled := mangle_instance_method_name cls_name ins_args mname in
+                            let method_ref := Term.var 0 (DebugName.named (mangled_to_identifier mangled)) in
+                            Option.some (List.cons method_ref rest_terms),
+                    },
+            },
+    }
+
+/// A single-segment `ModulePath` (as every `mangle_instance_*_name`
+/// above always produces) back down to the bare `Identifier` a
+/// `Term.var`'s `DebugName.named` needs.
+#[partial]
+def mangled_to_identifier (mp : ModulePath) : Identifier :=
+    match mp {
+        ModulePath.mp ids =>
+            match ids {
+                List.cons only_id rest =>
+                    match rest {
+                        List.empty => only_id,
+                        List.cons _ _ => Identifier.id "__mangle_error",
+                    },
+                List.empty => Identifier.id "__mangle_error",
+            },
+    }
+
+#[partial]
+def options_of (ts : List Term) : List (Option Term) :=
+    match ts {
+        List.empty => List.empty,
+        List.cons t rest => List.cons (Option.some t) (options_of rest),
+    }
+
+/// Top-level Phase 2 driver: scans `decl_list` for every `Decl.instance_d`,
+/// looks up its own class (skipping it, silently, if not found -- a
+/// dangling instance with no registered class is out of scope for this
+/// pass, same "leave unresolved rather than guess" fallback style used
+/// throughout this codebase), and APPENDS its promoted decls
+/// (non-destructive -- the original `instance_d` stays in place,
+/// ignored by reachability filtering exactly like an infix declaration
+/// already is).
+#[partial]
+def promote_instance_defs (decl_list : List Decl) : List Decl :=
+    let classes := collect_classes decl_list in
+    let instances := collect_instances decl_list in
+    List.append decl_list (promote_all_instances classes instances)
+
+#[partial]
+def promote_all_instances (classes : List Class) (instances : List Instance) : List Decl :=
+    match instances {
+        List.empty => List.empty,
+        List.cons ins rest =>
+            match ins {
+                Instance.mk _ cls_name _ _ _ _ _ =>
+                    match find_class_by_name classes cls_name {
+                        Option.some cls =>
+                            match promote_instance cls ins {
+                                Option.some new_decls => List.append new_decls (promote_all_instances classes rest),
+                                Option.none => promote_all_instances classes rest,
+                            },
+                        Option.none => promote_all_instances classes rest,
+                    },
+            },
+    }
+
 // --- scope_resolve_instance: find concrete instance by class name ---
 
 def scope_resolve_instance (class_name : ModulePath) (instance_key : InstanceKey) (s : Scope) : Result ScopeError Instance :=
@@ -1439,3 +1743,109 @@ def test_resolve_infix_decls_rewrites_def_body : Bool :=
             },
         List.empty => false,
     }
+
+// --- Phase 2 (dictionary-passing plan) tests ---
+
+/// Fixture: `class BEq A { def beq : A -> A -> Bool }`.
+#[partial]
+def dummy_beq_class : Class :=
+    let a_param := param_many (Identifier.id "A") (Term.type_ 1) in
+    let beq_method := ClassDef.mk (Identifier.id "beq") Term.hole Option.none in
+    Class.mk (Identifier.id "BEq") (List.cons a_param List.empty) List.empty
+        (List.cons beq_method List.empty) Visibility.package_private
+
+/// Fixture: `instance BEq Bool { def beq := <true_body> }`.
+#[partial]
+def dummy_beq_bool_instance : Instance :=
+    let cls_name := ModulePath.mp (List.cons (Identifier.id "BEq") List.empty) in
+    let bool_arg := Term.var 0 (DebugName.named (Identifier.id "Bool")) in
+    let beq_name := ModulePath.mp (List.cons (Identifier.id "beq") List.empty) in
+    let true_body := Term.var 0 (DebugName.named (Identifier.id "true")) in
+    let beq_def := Def.mk beq_name Term.hole true_body List.empty List.empty Visibility.package_private in
+    Instance.mk (Identifier.id "_") cls_name List.empty (List.cons bool_arg List.empty)
+        Visibility.package_private List.empty (List.cons beq_def List.empty)
+
+#[test]
+def test_promote_instance_defs_mangled_method_name : Bool :=
+    let decl_list := List.cons (Decl.class_d dummy_beq_class) (List.cons (Decl.instance_d dummy_beq_bool_instance) List.empty) in
+    let promoted := promote_instance_defs decl_list in
+    decl_list_has_def_named promoted "BEq_Bool_beq"
+
+#[test]
+def test_promote_instance_defs_dict_value_name : Bool :=
+    let decl_list := List.cons (Decl.class_d dummy_beq_class) (List.cons (Decl.instance_d dummy_beq_bool_instance) List.empty) in
+    let promoted := promote_instance_defs decl_list in
+    decl_list_has_def_named promoted "__Dict_BEq_Bool"
+
+#[test]
+def test_promote_instance_defs_is_additive : Bool :=
+    let decl_list := List.cons (Decl.class_d dummy_beq_class) (List.cons (Decl.instance_d dummy_beq_bool_instance) List.empty) in
+    let promoted := promote_instance_defs decl_list in
+    // The original instance_d decl stays in place -- promotion is
+    // additive, not a rewrite.
+    decl_list_has_instance_named promoted "BEq"
+
+#[test]
+def test_promote_instance_defs_missing_method_skips_instance : Bool :=
+    // A class declaring TWO methods, an instance only implementing one
+    // -- promote_instance's own Option.none path (build_dict_fields
+    // finds a missing method) should skip this instance entirely
+    // (neither its dict value nor its one real method gets promoted),
+    // not half-emit a broken dictionary.
+    let show_method := ClassDef.mk (Identifier.id "show") Term.hole Option.none in
+    let extra_method := ClassDef.mk (Identifier.id "extra") Term.hole Option.none in
+    let cls := Class.mk (Identifier.id "Show") List.empty List.empty
+        (List.cons show_method (List.cons extra_method List.empty)) Visibility.package_private in
+    let cls_name := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
+    let show_name := ModulePath.mp (List.cons (Identifier.id "show") List.empty) in
+    let show_def := Def.mk show_name Term.hole (mk_i64_dummy 1) List.empty List.empty Visibility.package_private in
+    let ins := Instance.mk (Identifier.id "_") cls_name List.empty List.empty
+        Visibility.package_private List.empty (List.cons show_def List.empty) in
+    let decl_list := List.cons (Decl.class_d cls) (List.cons (Decl.instance_d ins) List.empty) in
+    let promoted := promote_instance_defs decl_list in
+    not (decl_list_has_def_named promoted "Show_show") && not (decl_list_has_def_named promoted "__Dict_Show")
+
+#[partial]
+def mk_i64_dummy (n : I64) : Term := Term.lit (Literal.num n NumSuffix.i64)
+
+#[partial]
+def decl_list_has_def_named (decl_list : List Decl) (name : String) : Bool :=
+    match decl_list {
+        List.empty => false,
+        List.cons d rest =>
+            match d {
+                Decl.def_d def_ =>
+                    match def_ {
+                        Def.mk dname _ _ _ _ _ =>
+                            if String.beq (module_path_to_str_scope dname) name
+                            then true
+                            else decl_list_has_def_named rest name,
+                    },
+                _ => decl_list_has_def_named rest name,
+            },
+    }
+
+#[partial]
+def decl_list_has_instance_named (decl_list : List Decl) (cls_str : String) : Bool :=
+    match decl_list {
+        List.empty => false,
+        List.cons d rest =>
+            match d {
+                Decl.instance_d ins =>
+                    match ins {
+                        Instance.mk _ cls_name _ _ _ _ _ =>
+                            if String.beq (show_module_path cls_name) cls_str
+                            then true
+                            else decl_list_has_instance_named rest cls_str,
+                    },
+                _ => decl_list_has_instance_named rest cls_str,
+            },
+    }
+
+/// A bare `module_path_to_str`-equivalent local to scope.mo (that
+/// function lives in lang/codegen/emit.mo, not imported here) --
+/// single-segment only, matching every name `mangle_instance_*_name`
+/// ever produces.
+#[partial]
+def module_path_to_str_scope (mp : ModulePath) : String :=
+    show_module_path mp

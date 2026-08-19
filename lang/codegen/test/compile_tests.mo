@@ -1,9 +1,10 @@
 use process {exec_cmd}
 use lang.types {
-  Def, Term, TypeConstraint, i64, id, lit, mk, mp, name, num, type_,
+  Decl, Def, Term, TypeConstraint, i64, id, lit, mk, mp, name, num, type_,
 }
 use lang.codegen.ir {emit_module, mk}
-use lang.codegen.emit {compile_db_decls_ir, mk}
+use lang.codegen.emit {compile_db_decls_ir, compile_db_module, mk}
+use lang.scope {promote_instance_defs}
 
 open Term {lit, type_}
 open Literal {num}
@@ -257,4 +258,93 @@ def test_compile_function_value_from_struct_field : IO Bool := do {
     let main_body := Term.lit (Literal.match_ scrutinee cases);
     let main_def := mk_def "main" main_body;
     compile_link_run_expect [add5_def, main_def] "test_fn_value_field" 5
+}
+
+/// Shared compile+link+execute helper, for a `List Decl` (as
+/// `promote_instance_defs` produces) rather than a `List Def` --
+/// `compile_db_module` (unlike `compile_db_decls_ir`) extracts every
+/// `def_d` from a flat decl list itself, with no reachability
+/// filtering (unlike the real `compile` CLI pipeline) -- exactly what a
+/// direct, low-level test of `promote_instance_defs`'s own output
+/// needs, no dependency on the wider check/scope pipeline.
+#[partial]
+def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (expected : I64) : IO Bool := do {
+    let output_dir := "/tmp/monad_e2e";
+    let ir_path := output_dir ++ "/" ++ basename ++ ".ll";
+    let obj_path := output_dir ++ "/" ++ basename ++ ".o";
+    let runtime_obj := output_dir ++ "/" ++ basename ++ "_runtime.o";
+    let output_path := output_dir ++ "/" ++ basename;
+
+    let _ <- exec_cmd "mkdir" ["-p", output_dir];
+
+    let mod_ := lang.codegen.emit.compile_db_module decl_list;
+    let ir_text := lang.codegen.ir.emit_module mod_;
+    IO.write_file ir_path ir_text;
+
+    let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
+    if not (llc_result == 0) then do {
+        println <| basename ++ ": llc failed";
+        return false
+    } else do {
+        let rt_result <- exec_cmd "clang" ["-c", "lang/codegen/runtime.c", "-o", runtime_obj];
+        if not (rt_result == 0) then do {
+            println <| basename ++ ": compiling runtime failed";
+            return false
+        } else do {
+            let link_args := [obj_path, runtime_obj];
+            let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
+            if not (link_result == 0) then do {
+                println <| basename ++ ": clang linker failed";
+                return false
+            } else do {
+                let exec_result <- exec_cmd output_path [];
+                let _ <- exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
+                println <| basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result;
+                return (exec_result == expected)
+            }
+        }
+    }
+}
+
+/// Phase 2 (dictionary-passing plan) end-to-end regression test:
+/// `promote_instance_defs` (lang/scope.mo) turns `class MyAdd A { def
+/// add : A -> A -> A }` + `instance MyAdd I64 { def add := my_add }`
+/// into a real top-level method def PLUS a real dictionary VALUE def (a
+/// `Term.con` whose one field boxes that method as a callable value,
+/// per Phase 0). Destructuring the dict value via `match` and calling
+/// the extracted field proves the whole promotion pipeline is genuinely
+/// compilable end-to-end (not just shape-correct at the AST level, per
+/// the unit tests in lang/scope.mo) -- `match __Dict_MyAdd_I64 { mk f =>
+/// f 2 3 }` must produce 5.
+#[test]
+def test_promote_instance_defs_compiles_and_runs : IO Bool := do {
+    let a_id := Identifier.id "a";
+    let b_id := Identifier.id "b";
+    let a_var := Term.var 0 (DebugName.named a_id);
+    let b_var := Term.var 1 (DebugName.named b_id);
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add"));
+    let my_add_body := Term.app (Term.app add_var a_var) b_var;
+    let my_add_term := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) my_add_body);
+    let my_add_name := ModulePath.mp (List.cons (Identifier.id "add") List.empty);
+    let my_add_def := Def.mk my_add_name (Term.type_ 1) my_add_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+
+    let a_param := param_many (Identifier.id "A") (Term.type_ 1);
+    let add_method := ClassDef.mk (Identifier.id "add") Term.hole (Option.none : Option Term);
+    let cls := Class.mk (Identifier.id "MyAdd") [a_param] ([] : List TypeConstraint) [add_method] Visibility.package_private;
+
+    let cls_name := ModulePath.mp (List.cons (Identifier.id "MyAdd") List.empty);
+    let i64_arg := Term.var 0 (DebugName.named (Identifier.id "I64"));
+    let ins := Instance.mk (Identifier.id "_") cls_name ([] : List TypeConstraint) [i64_arg] Visibility.package_private ([] : List Param) [my_add_def];
+
+    let f_id := Identifier.id "f";
+    let f_var := Term.var 0 (DebugName.named f_id);
+    let dict_ref := Term.var 0 (DebugName.named (Identifier.id "__Dict_MyAdd_I64"));
+    let call_f := Term.app (Term.app f_var (mk_i64 2)) (mk_i64 3);
+    let mk_case := MatchCase.mc (Identifier.id "mk") [f_id] call_f;
+    let main_body := Term.lit (Literal.match_ dict_ref [mk_case]);
+    let main_def := mk_def "main" main_body;
+
+    let base_decls := [Decl.class_d cls, Decl.instance_d ins, Decl.def_d main_def];
+    let promoted_decls := promote_instance_defs base_decls;
+    compile_decls_link_run_expect promoted_decls "test_dict_promote" 5
 }
