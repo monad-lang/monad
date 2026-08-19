@@ -31,18 +31,6 @@ use std.bench {now, report}
 open IO {file_exists, is_dir, list_dir, println, read_file}
 open ParseResult {fail, success}
 
-/// Module path for the init directory
-def init_module_file_path (name : String) : String := "init/" ++ name ++ ".mo"
-
-/// Module path for the std directory
-def std_module_path (name : String) : String := "std/" ++ name ++ ".mo"
-
-/// Module path for the examples directory
-def examples_module_path (name : String) : String := "examples/" ++ name ++ ".mo"
-
-/// Module path for the lang directory
-def lang_module_path (name : String) : String := "lang/" ++ name ++ ".mo"
-
 /// Module path for the prelude
 def prelude_module_path : ModulePath := ModulePath.mp [Identifier.id "prelude"]
 
@@ -63,13 +51,6 @@ def parse_all_decls (input : String) : ParseResult (List Decl) :=
         ParseResult.success rem decl_list => ParseResult.success rem (expand_decls decl_list),
         ParseResult.fail e => ParseResult.fail e,
     }
-
-/// `parse_all_decls`'s strict twin: fails (rather than silently
-/// truncating) on any unconsumed input, i.e. genuine test coverage
-/// that a file parses ENTIRELY, not just that its prefix does. See
-/// `decls_parser_strict`'s own doc comment (lang/parser.mo).
-def parse_all_decls_strict (input : String) : ParseResult (List Decl) :=
-    lang.parser.decls_parser_strict input
 
 /// Parse source text, returning the parsed declarations or none on parse error.
 def try_parse_decls (input : String) : Option (List Decl) :=
@@ -312,11 +293,6 @@ def try_read_module_file (base_dir : String) (mp : ModulePath) : IO (Option Stri
     }
 }
 
-/// Try to read a module file from disk (default base directory is empty)
-#[partial]
-def try_read_module_file_default (mp : ModulePath) : IO (Option String) :=
-    try_read_module_file "" mp
-
 /// Load a module by its ModulePath, returning parsed declarations or none
 /// base_dir is the directory to resolve relative imports from
 #[partial]
@@ -481,11 +457,6 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
         }
     }
 }
-
-/// Load all dependencies for a module with default base directory
-#[partial]
-def load_module_with_dependencies_default (mp : ModulePath) : IO (Option Scope) :=
-    load_module_with_dependencies "" mp
 
 /// Same as `load_module_with_dependencies`, but always includes
 /// `prelude`/`init` as implicit dependencies — matching
@@ -873,10 +844,6 @@ def load_dependency_decls (base_dir : String) (deps : List ModulePath) (acc : Li
             }
         }
     }
-
-/// Load all declarations for a module and its dependencies with default base directory
-def load_module_decls_with_dependencies_default (mp : ModulePath) : IO (Option (List Decl)) :=
-    load_module_decls_with_dependencies "" mp
 
 /// Load scope data for a list of module paths, with base directory for resolution
 /// Each module is loaded once, and we try to resolve it from the base_dir
@@ -1895,11 +1862,6 @@ def get_module_info_path (mi : ModuleInfo) : ModulePath :=
         ModuleInfo.mk path file_path decl_list => path
     }
 
-def get_module_info_file_path (mi : ModuleInfo) : String :=
-    match mi {
-        ModuleInfo.mk path file_path decl_list => file_path
-    }
-
 def get_module_info_decls (mi : ModuleInfo) : List Decl :=
     match mi {
         ModuleInfo.mk path file_path decl_list => decl_list
@@ -1955,6 +1917,25 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
     }
 }
 
+// `deps` is already the COMPLETE, deduplicated transitive closure by the
+// time this is called (`load_file_modules` computes it once via a single
+// `extract_all_dependencies` walk before handing it here -- see that
+// function's own doc comment). This is a flat fold over that list, one
+// `load_module_with_info` per entry, deliberately mirroring the
+// already-correct `load_dependency_scopes` above (same "outer caller
+// already flattened the closure, don't re-derive it here" shape). An
+// earlier version of this function re-called `extract_all_dependencies`
+// on each node's own decls here and recursed into ITS dependency list
+// before continuing `tail` -- redundant with (and ignorant of) the
+// closure `deps` already contains, so every module got re-parsed once
+// per ancestor that reached it in the recursion (confirmed: `lang/types.mo`,
+// imported by 47/57 `lang/*.mo` files, was being `load_module_decls`'d
+// on the order of dozens of times for one `compile`/`pretty`/`test`
+// invocation). `list_contains_module_info` is still needed here (not a
+// leftover from the old shape): `load_file_modules` manually prepends
+// `[prelude_module_path, init_module_path]` ahead of the already-flattened
+// `all_dep_paths`, which can genuinely duplicate an entry the extracted
+// closure already contains.
 #[partial]
 def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (acc : List ModuleInfo) : IO (Result String (List ModuleInfo)) :=
     match deps {
@@ -1967,22 +1948,10 @@ def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (ac
             else do {
                 let mi_opt : Option ModuleInfo <- load_module_with_info base_dir head;
                 match mi_opt {
-                    Option.some mi =>
-                        match mi {
-                            ModuleInfo.mk mp_path file_path decl_list => do {
-                                let dep_base_dir : String := extract_directory file_path;
-                                let dep_deps <- extract_all_dependencies dep_base_dir decl_list;
-                                let new_acc : List ModuleInfo := List.cons mi acc;
-                                let loaded_deps_result <- load_dependencies_with_info dep_base_dir dep_deps new_acc;
-                                match loaded_deps_result {
-                                    Result.ok loaded_deps =>
-                                        load_dependencies_with_info base_dir tail loaded_deps,
-                                    Result.err e => do {
-                                        return Result.err e
-                                    }
-                                }
-                            }
-                        },
+                    Option.some mi => do {
+                        let new_acc : List ModuleInfo := List.cons mi acc;
+                        load_dependencies_with_info base_dir tail new_acc
+                    },
                     Option.none => do {
                         let module_path_str := module_path_to_string head;
                         let err_msg := "Failed to load module: " ++ module_path_str;

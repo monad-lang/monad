@@ -1455,6 +1455,89 @@ Key patterns when writing self-hosted Monad code:
     number is the one that matters for the original complaint ("bootstrap
     compile takes many minutes" — i.e. checking/testing many files in one
     session, not one giant file in isolation), and it moved for real.
+15. **Follow-up: the literal `bootstrap compile <file>` command has its OWN,
+    much bigger, entirely separate bug — a diamond-dependency re-parse
+    blowup in the self-hosted loader, not touched by items 13/14.**
+    Prompted by a direct question ("does the self-hosted checker load
+    modules once or several times?"). Found **two structurally different
+    module-graph traversals** in `lang/module.mo`:
+    - `extract_all_dependencies`/`extract_all_dependencies_go` (lines
+      366-419) — a correct, single-flat-list, cycle-safe walk with a
+      `visited` set checked BEFORE the expensive work (disk read + parse)
+      at line 393/399. Backs `load_module_with_dependencies`, which backs
+      `check` and `test_typecheck_lang_main`'s `typecheck_file` — i.e.
+      everything items 13/14 measured. A module reachable via N import
+      paths is loaded exactly once here; traced directly against
+      `lang/types.mo` (47/57 `lang/*.mo` files import it) to confirm.
+    - `load_dependencies_with_info` (lines 1958-1993) — backs
+      `load_file_modules`, which is what `compile`, `pretty`, and `test`
+      (the three self-hosted CLI subcommands OTHER than `check`) actually
+      run on — confirmed by grep, `lang/main.mo` lines 63/243/374. Despite
+      `load_file_modules` already computing the complete, deduplicated
+      closure ONCE up front (line 1941), `load_dependencies_with_info`
+      re-called `extract_all_dependencies` AGAIN (old line 1974, from a
+      FRESH empty `visited` set) for every node the first time it's
+      visited, to re-derive that node's own dependency list, then
+      recursed into it — completely ignorant that the outer list already
+      contains everything that re-walk would rediscover. Every module in
+      the closure paid its own full parse-and-walk of its downward subtree
+      once per ancestor that reached it in the recursion — a superlinear
+      (Σ over the closure of each node's own subtree size) blowup, same
+      shape as the already-fixed "54× `lang/types.mo` reload" cross-FILE
+      bug (items 9-10's `ModuleScopeCache`), just a fresh instance of the
+      same pattern inside an unrelated function, and entirely un-touched
+      by anything in items 13/14 (which only improved `check`/
+      `test_typecheck_lang_main`, both on the OTHER, already-correct
+      traversal). This is the literal path `bootstrap compile <file>`
+      (`devenv.nix`'s `bootstrap` script → `lang/main.mo compile` →
+      `compile_file` → `load_file_modules`) runs on — the exact command
+      named in the original "bootstrap compile takes many minutes"
+      complaint, and item 14's own closing note ("the full-corpus number
+      is what matters... not one giant file in isolation") turned out to
+      be only half the story: the ONE-file `compile`/`pretty`/`test`
+      commands had their own, much larger, independent bug the whole time.
+    **Fix**: simplified `load_dependencies_with_info` to a flat fold over
+    the already-complete `deps` list — one `load_module_with_info` per
+    entry, no re-derivation, no per-node subtree re-walk — mirroring the
+    already-correct `load_dependency_scopes` (line 884) shape exactly.
+    Kept the existing `list_contains_module_info` dedup guard (line 1965):
+    not a leftover, since `load_file_modules` manually prepends
+    `[prelude_module_path, init_module_path]` ahead of the already-flattened
+    list, which can genuinely duplicate an entry. Pure `.mo`-source change,
+    `lang/module.mo` only — no Rust touched. **Also removed, while in the
+    area**: 9 dead top-level defs in the same file, each verified (via
+    whole-repo grep, `.mo`/`.rs`/`.md`) to have zero references anywhere
+    outside their own definition — `init_module_file_path`,
+    `std_module_path`, `examples_module_path`, `lang_module_path` (a set
+    of directory-path-string builders, superseded by
+    `resolve_module_file`'s search-path resolution and never called),
+    `parse_all_decls_strict` (superseded by `try_parse_decls_strict`
+    calling `decls_parser_strict` directly, never through this wrapper),
+    `try_read_module_file_default`, `load_module_with_dependencies_default`,
+    `load_module_decls_with_dependencies_default` (three unused `""`-base-dir
+    convenience wrappers), and `get_module_info_file_path` (an unused
+    `ModuleInfo` accessor — its sibling `get_module_info_decls` IS used and
+    was left alone). **Measured** (`git stash` before/after, same session):
+    `bootstrap pretty lang/main.mo` (chosen because `pretty` only calls
+    `load_file_modules` then prints decls — no type-checking, no codegen —
+    so it isolates this fix's effect from everything else) dropped from
+    **746.01s to 130.21s wall (-82.5%)**, **647.47s to 127.40s CPU-seconds
+    (-80.4%)** — a ~5.7x speedup. Output verified byte-identical before/after
+    (the only diffs: a build timestamp and one internal gensym counter,
+    `_anon#NNNN`, which naturally shifts since fewer atoms get minted along
+    the way — not user-visible). Smoke-tested the real commands:
+    `bootstrap compile examples/hello.mo` succeeds end-to-end
+    ("Compilation finished"); `bootstrap test examples/structs.mo` correctly
+    loads and SKIPs (no codegen needed, so it exercises the fixed loader
+    without hitting unrelated bugs). `bootstrap test` on files that DO need
+    codegen (`examples/tests.mo`, `pattern_matching.mo`, `iteration.mo`)
+    hits pre-existing, unrelated `llc` codegen failures (void-typed
+    values in generated LLVM IR) — confirmed via `git stash` that these
+    fail identically without this fix, so they're not a regression, just
+    a separate, already-broken area this pass didn't touch. `cargo test`
+    (627/627) and `check init std lang examples` (2 errors/7 warnings)
+    both unchanged, confirming no effect on the unrelated,
+    already-correct `check` traversal.
 
 ## Committing Changes
 
