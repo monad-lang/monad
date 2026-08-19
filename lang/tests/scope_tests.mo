@@ -366,7 +366,7 @@ def test_scope_resolve_instance_found : Bool :=
     let inst_name : Identifier := Identifier.id "maybeMonad" in
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_args : List Term := List.empty in
-    let ins : Instance := Instance.mk inst_name cls_name empty_constraints empty_args Visibility.package_private List.empty in
+    let ins : Instance := Instance.mk inst_name cls_name empty_constraints empty_args Visibility.package_private List.empty List.empty in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_instance` on
     // top of `scope_data_empty` rather than a hand-written literal.
@@ -439,8 +439,8 @@ def test_list_append_non_empty : Bool :=
 def test_scope_resolve_instance_matches_class : Bool :=
     let cls_name1 : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let cls_name2 : ModulePath := ModulePath.mp (List.cons (Identifier.id "Monad") List.empty) in
-    let inst_show : Instance := Instance.mk (Identifier.id "showBool") cls_name1 List.empty List.empty Visibility.package_private List.empty in
-    let inst_monad : Instance := Instance.mk (Identifier.id "maybeMonad") cls_name2 List.empty List.empty Visibility.package_private List.empty in
+    let inst_show : Instance := Instance.mk (Identifier.id "showBool") cls_name1 List.empty List.empty Visibility.package_private List.empty List.empty in
+    let inst_monad : Instance := Instance.mk (Identifier.id "maybeMonad") cls_name2 List.empty List.empty Visibility.package_private List.empty List.empty in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_instance` on
     // top of `scope_data_empty` rather than a hand-written literal.
@@ -462,7 +462,7 @@ def test_scope_resolve_instance_matches_class : Bool :=
     match result {
         ok ins =>
             match ins {
-                mk name cls _ _ _ _ => Similar.similar name (Identifier.id "maybeMonad")
+                mk name cls _ _ _ _ _ => Similar.similar name (Identifier.id "maybeMonad")
             },
         err _ => false
     }
@@ -541,13 +541,13 @@ def test_instance_key_matches_type_args : Bool :=
         cls_name
         List.empty
         (List.cons i64_typ List.empty)
-        Visibility.package_private List.empty in
+        Visibility.package_private List.empty List.empty in
     let show_bool : Instance := Instance.mk
         (Identifier.id "showBool")
         cls_name
         List.empty
         (List.cons bool_typ List.empty)
-        Visibility.package_private List.empty in
+        Visibility.package_private List.empty List.empty in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_instance` on
     // top of `scope_data_empty` rather than a hand-written literal.
@@ -574,7 +574,7 @@ def test_instance_key_matches_type_args : Bool :=
     match scope_resolve_instance cls_name key_i64 s {
         ok found =>
             match found {
-                mk name _ _ _ _ _ => Similar.similar name (Identifier.id "showI64"),
+                mk name _ _ _ _ _ _ => Similar.similar name (Identifier.id "showI64"),
             },
         err _ => false,
     }
@@ -589,7 +589,7 @@ def test_instance_key_matches_wrong_type_args : Bool :=
         cls_name
         List.empty
         (List.cons i64_typ List.empty)
-        Visibility.package_private List.empty in
+        Visibility.package_private List.empty List.empty in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_instance` on
     // top of `scope_data_empty` rather than a hand-written literal.

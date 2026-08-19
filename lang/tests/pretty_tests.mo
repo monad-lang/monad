@@ -351,7 +351,7 @@ def test_show_decl_open : Bool :=
 def test_show_instance : Bool :=
     let cls_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
     let args : List Term := List.cons (Term.type_ 1) List.empty in
-    let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args Visibility.package_private List.empty in
+    let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args Visibility.package_private List.empty List.empty in
     let result : String := show_instance ins in
     String.beq result "instance Show"
 

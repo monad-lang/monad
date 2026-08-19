@@ -484,7 +484,7 @@ def show_class_def (m : ClassDef) : String := match m {
 }
 
 def show_instance (ins : Instance) : String := match ins {
-    Instance.mk name cls constraints args vis implicit_params =>
+    Instance.mk name cls constraints args vis implicit_params defs =>
         let cls_str := show_module_path cls in
         String.concat (show_vis_prefix vis) (String.concat "instance " cls_str),
 }

@@ -571,7 +571,22 @@ type Instance {
     /// instance resolution there (substitution-based matching against a
     /// lookup key's args), not just documentation. Empty for the common
     /// case of a fully-concrete instance like `instance Show Bool { ... }`.
-    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term) (vis: Visibility) (implicit_params: List Param)
+    ///
+    /// `defs` holds the instance's own concrete method `Def`s (`def m :=
+    /// ...` entries inside the `instance ... { }` body) — mirrors the
+    /// Rust reference's `Instance.impls_map: Map<Identifier, Def>`
+    /// (core/src/term.rs), and mirrors this very module's own `Class`
+    /// type, which already retains its method defs the same way
+    /// (`Class.mk`'s `methods` field). Until this field existed,
+    /// `instance_parser`/`instance_close` (lang/parser.mo) fully parsed
+    /// an instance's own methods and then discarded them outright —
+    /// `resolve_class_method`/`derive_instance_key`
+    /// (lang/typecheck/infer.mo) could find a matching `Instance` but
+    /// never its concrete implementation, always falling back to the
+    /// class method's own abstract signature. See
+    /// plans/bootstrapping/self-hosted-compiler.md's dictionary-passing
+    /// plan (Phase 1) for the full context.
+    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term) (vis: Visibility) (implicit_params: List Param) (defs: List Def)
 }
 
 // --- Do-notation desugaring ---

@@ -2378,8 +2378,8 @@ def instance_apply_vis (dr : ParseResult Decl) (vis : Visibility) : ParseResult 
 			match decl {
 				instance_d inst =>
 					match inst {
-						Instance.mk name cls constraints args _ implicit_params =>
-							success rem (Decl.instance_d (Instance.mk name cls constraints args vis implicit_params))
+						Instance.mk name cls constraints args _ implicit_params defs =>
+							success rem (Decl.instance_d (Instance.mk name cls constraints args vis implicit_params defs))
 					},
 				_ => success rem decl
 			},
@@ -2480,8 +2480,8 @@ def instance_apply_params (dr : ParseResult Decl) (params : List Param) : ParseR
 			match decl {
 				instance_d inst =>
 					match inst {
-						Instance.mk name cls constraints args vis _ =>
-							success rem (Decl.instance_d (Instance.mk name cls constraints args vis params))
+						Instance.mk name cls constraints args vis _ defs =>
+							success rem (Decl.instance_d (Instance.mk name cls constraints args vis params defs))
 					},
 				_ => success rem decl
 			},
@@ -2532,8 +2532,8 @@ def instance_set_constraints (dr : ParseResult Decl) (constraints : List TypeCon
 			match decl {
 				instance_d inst =>
 					match inst {
-						Instance.mk name cls _ args vis implicit_params =>
-							success rem (Decl.instance_d (Instance.mk name cls constraints args vis implicit_params))
+						Instance.mk name cls _ args vis implicit_params defs =>
+							success rem (Decl.instance_d (Instance.mk name cls constraints args vis implicit_params defs))
 					},
 				_ => success rem decl
 			},
@@ -2759,7 +2759,13 @@ def instance_close (r : ParseResult String) (cls : ModulePath) (args : List Term
 			let empty_params : List Param := List.empty in
 			// Placeholder — instance_parser's instance_apply_vis and
 			// instance_apply_params patch the real values in afterward.
-			success rem (Decl.instance_d (Instance.mk (Identifier.id "_") cls empty_constraints rev_args Visibility.package_private empty_params)),
+			// `rev_methods` (this instance's own parsed method defs) is
+			// NOT a placeholder — it's the real, final value, threaded
+			// through the whole instance_methods/instance_try_close_or_def
+			// loop above and kept from here on (previously built
+			// correctly, then discarded outright — see Instance.defs's
+			// own doc comment, lang/types.mo).
+			success rem (Decl.instance_d (Instance.mk (Identifier.id "_") cls empty_constraints rev_args Visibility.package_private empty_params rev_methods)),
 		fail e => fail e
 	}
 
@@ -5174,7 +5180,7 @@ def test_instance_implicit_params : Bool :=
 #[partial]
 def instance_has_one_param_named_A (i : Instance) : Bool :=
 	match i {
-		Instance.mk _name _cls _constraints _args _vis implicit_params =>
+		Instance.mk _name _cls _constraints _args _vis implicit_params _defs =>
 			match implicit_params {
 				List.cons p rest => param_named_A p && list_is_empty rest,
 				List.empty => false
@@ -5211,7 +5217,7 @@ def test_instance_implicit_params_multi_name : Bool :=
 #[partial]
 def instance_has_two_params_named_K_V (i : Instance) : Bool :=
 	match i {
-		Instance.mk _name _cls _constraints _args _vis implicit_params =>
+		Instance.mk _name _cls _constraints _args _vis implicit_params _defs =>
 			match implicit_params {
 				List.cons p1 rest1 =>
 					match rest1 {
@@ -6924,6 +6930,70 @@ def test_instance_parser : Bool :=
         success rem out =>
             match out {
                 instance_d i => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// Regression test for `Instance.defs` (lang/types.mo): `instance_close`
+/// used to fully parse an instance's own method defs (via
+/// `instance_methods`'s accumulator) and then discard them outright —
+/// `.defs` should now hold exactly the one parsed method, named `map`.
+#[test]
+def test_instance_parser_captures_method_defs : Bool :=
+    match instance_parser "instance Functor Maybe { def map f m := match m { some a => a, none => none } }" {
+        success _ out =>
+            match out {
+                instance_d i =>
+                    match i {
+                        Instance.mk _ _ _ _ _ _ defs =>
+                            match defs {
+                                List.cons d rest =>
+                                    match rest {
+                                        List.empty =>
+                                            match d {
+                                                Def.mk name _ _ _ _ _ =>
+                                                    String.beq (module_path_to_string name) "map",
+                                            },
+                                        List.cons _ _ => false,
+                                    },
+                                List.empty => false,
+                            },
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// Companion test: a fully-typed instance method signature (`def beq (a
+/// b : Bool) : Bool := ...`) is captured with a real Pi-typed signature,
+/// not just a name — mirrors `class_method_ret_type_val`'s own doc
+/// comment concern about this exact bug class for `Class.methods`.
+#[test]
+def test_instance_parser_typed_method_signature : Bool :=
+    match instance_parser "instance BEq Bool { def beq (a b : Bool) : Bool := true }" {
+        success _ out =>
+            match out {
+                instance_d i =>
+                    match i {
+                        Instance.mk _ _ _ _ _ _ defs =>
+                            match defs {
+                                List.cons d rest =>
+                                    match rest {
+                                        List.empty =>
+                                            match d {
+                                                Def.mk name typ _ _ _ _ =>
+                                                    String.beq (module_path_to_string name) "beq" &&
+                                                    match typ {
+                                                        Term.pi _ _ => true,
+                                                        _ => false,
+                                                    },
+                                            },
+                                        List.cons _ _ => false,
+                                    },
+                                List.empty => false,
+                            },
+                    },
                 _ => false
             },
         fail _ => false

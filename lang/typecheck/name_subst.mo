@@ -238,8 +238,19 @@ def class_name_subst (target : Identifier) (replacement : Term) (cls : Class) : 
 #[partial]
 def instance_name_subst (target : Identifier) (replacement : Term) (ins : Instance) : Instance :=
     match ins {
-        Instance.mk name cls constraints args vis implicit_params =>
-            Instance.mk name cls constraints (terms_name_subst target replacement args) vis (params_name_subst target replacement implicit_params),
+        Instance.mk name cls constraints args vis implicit_params defs =>
+            Instance.mk name cls constraints (terms_name_subst target replacement args) vis (params_name_subst target replacement implicit_params) (defs_name_subst target replacement defs),
+    }
+
+/// Substitutes through every method Def in an instance's own body
+/// (`Instance.defs`) -- mirrors `class_defs_name_subst`'s identical role
+/// for `Class.methods`, reusing the already-existing per-Def
+/// `def_name_subst`.
+#[partial]
+def defs_name_subst (target : Identifier) (replacement : Term) (defs : List Def) : List Def :=
+    match defs {
+        List.empty => List.empty,
+        List.cons d rest => List.cons (def_name_subst target replacement d) (defs_name_subst target replacement rest),
     }
 
 /// Substitute `target` for `replacement` throughout one `Decl` — the

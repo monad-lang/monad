@@ -679,7 +679,7 @@ def scope_data_find_inductive (sd : ScopeData) (name : ModulePath) : Option Indu
 
 def scope_data_add_instance (sd : ScopeData) (ins : Instance) : ScopeData :=
     match ins {
-        mk _ cname _ _ _ _ =>
+        mk _ cname _ _ _ _ _ =>
             match sd {
                 mk dr cd insts ind cls infs conf =>
                     let updated_insts : List ScopeInstance := scope_add_to_instances insts cname ins in
@@ -1074,8 +1074,22 @@ def resolve_infix_class (infixes : List Infix) (cls : Class) : Class :=
 #[partial]
 def resolve_infix_instance (infixes : List Infix) (ins : Instance) : Instance :=
     match ins {
-        Instance.mk insname cls constraints args vis implicit_params =>
-            Instance.mk insname cls constraints (resolve_infix_terms infixes args) vis (resolve_infix_params infixes implicit_params),
+        Instance.mk insname cls constraints args vis implicit_params defs =>
+            Instance.mk insname cls constraints (resolve_infix_terms infixes args) vis (resolve_infix_params infixes implicit_params) (resolve_infix_defs_list infixes defs),
+    }
+
+/// Applies infix-operator resolution to every method `Def` in an
+/// instance's own body (`Instance.defs`) -- mirrors
+/// `resolve_infix_class_defs`'s identical role for `Class.methods`. An
+/// instance method can itself use `+`/`==`/any user `infix` operator
+/// (e.g. `Append (List A)`'s own `List.append` recursing via `++`), so
+/// this must run the same as any other def body, not just the
+/// instance's own `args`/`implicit_params`.
+#[partial]
+def resolve_infix_defs_list (infixes : List Infix) (defs : List Def) : List Def :=
+    match defs {
+        List.empty => List.empty,
+        List.cons d rest => List.cons (resolve_infix_def infixes d) (resolve_infix_defs_list infixes rest),
     }
 
 /// Applies infix-operator resolution to every `Term` field embedded in
@@ -1160,7 +1174,7 @@ def first_matching_instance (candidates : List Instance) (key : InstanceKey) : R
 
 def instance_key_matches (ins : Instance) (key : InstanceKey) : Bool :=
     match ins {
-        mk _ cls_name constraints ins_args _ _ =>
+        mk _ cls_name constraints ins_args _ _ _ =>
             match key {
                 mk key_cls _ key_args =>
                     if Similar.similar cls_name key_cls

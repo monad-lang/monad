@@ -211,8 +211,19 @@ def class_terms_expand (lookup : Identifier -> Option Term) (cls : Class) : Clas
 #[partial]
 def instance_terms_expand (lookup : Identifier -> Option Term) (ins : Instance) : Instance :=
     match ins {
-        Instance.mk name cls constraints args vis implicit_params =>
-            Instance.mk name cls constraints (terms_expand lookup args) vis (params_terms_expand lookup implicit_params),
+        Instance.mk name cls constraints args vis implicit_params defs =>
+            Instance.mk name cls constraints (terms_expand lookup args) vis (params_terms_expand lookup implicit_params) (defs_terms_expand lookup defs),
+    }
+
+/// Expands every method Def in an instance's own body (`Instance.defs`)
+/// -- mirrors `class_defs_terms_expand`'s identical role for
+/// `Class.methods`, reusing the already-existing per-Def
+/// `def_terms_expand`.
+#[partial]
+def defs_terms_expand (lookup : Identifier -> Option Term) (defs : List Def) : List Def :=
+    match defs {
+        List.empty => List.empty,
+        List.cons d rest => List.cons (def_terms_expand lookup d) (defs_terms_expand lookup rest),
     }
 
 /// Expand every `Term` field embedded in one ordinary (non-macro)
