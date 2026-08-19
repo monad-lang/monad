@@ -1198,21 +1198,51 @@ Key patterns when writing self-hosted Monad code:
       init std lang examples` unchanged at 2 pre-existing errors/7
       pre-existing warnings (confirmed via the same check against an
       unmodified baseline — none of these are new).
-    - **Known remaining gap, not chased further this pass**: parse-phase
-      scaling is still measurably superlinear even after Track 1+2 (e.g.
-      `init/id.mo` 28 lines→35ms vs. `lang/pretty.mo` 885 lines→2827ms is
-      ~80x time for ~32x lines) — Track 1 fixed the O(N²)-in-remaining-
-      file-size cost from `slice`/`drop` themselves, but
-      `lang/parser/string.mo`'s `string_body_loop` (string-literal body
-      scanning) still builds its accumulator via per-character
-      `String.concat` the same way `take_while` used to, and was
-      deliberately left alone (Track 2's own plan doc flags it
-      explicitly) because its escaping variant genuinely changes content
-      byte-for-byte and can't be replaced by a single slice the way
-      `take_while`'s non-escaping scan could. Likely explanation for the
-      remaining superlinearity, not confirmed by direct instrumentation
-      — a natural next target, same "measure before chasing" discipline
-      as item 11's own Track C.
+    - **Follow-up (Track 4): `string_body_loop`'s O(L²) accumulator,
+      confirmed and fixed — gap partially closed, not fully.** The gap
+      flagged above (parse-phase superlinearity: `init/id.mo` 28
+      lines→35ms vs. `lang/pretty.mo` 885 lines→2827ms, ~80x time for
+      ~32x lines) was traced to `lang/parser/string.mo`'s
+      `string_body_loop` (string-literal body scanning), which built its
+      accumulator via one `String.concat acc ch` per character — the
+      exact pre-Track-2 `take_while` shape, deliberately left alone at
+      the time because `\`-escapes genuinely change content
+      byte-for-byte and can't collapse to a single final slice the way
+      `take_while`'s non-escaping scan could. Fixed by tracking where the
+      current *unescaped run* started (`run_start`) alongside the
+      shrinking `input`, paying for one `String.slice` + `String.concat`
+      per run boundary (a `\` or the closing `"`) instead of per
+      character — a typical un-escaped string literal is now ONE slice,
+      zero concats; a string with E escapes is O(E) concats instead of
+      O(L). Measured: parse-phase time dropped further on top of Track
+      1+2 (`lang/pretty.mo` 2827ms→2045ms, `lang/json.mo`
+      1901ms→1706ms), and the scaling ratio improved (`id.mo` 28
+      lines→33ms vs. `json.mo` 1213 lines→1706ms is now ~52x time for
+      ~43x lines, close to linear — vs. `pretty.mo`'s remaining ~62x
+      time for ~32x lines, still mildly superlinear, likely other
+      per-character accumulation this pass didn't chase further). This
+      did **not** move `test_typecheck_lang_main`'s end-to-end number
+      (105.71s, within noise of the 105.31s Track 1-3 baseline) —
+      confirms item 11's own conclusion still holds: for this benchmark
+      the `check` phase dominates total cost by ~50-100x over `parse`
+      (e.g. `lang/pretty.mo`: scope=21866ms, parse=2045ms,
+      check=97276ms), so a parse-only fix, however real, is invisible at
+      the end-to-end level. Verified: full corpus
+      `cargo run --release -- test init std lang examples slow_tests`
+      1274/1274 unchanged; `cargo run --release -- check init std lang
+      examples` unchanged at 2 pre-existing errors/7 pre-existing
+      warnings.
+    - **Track 3d (from the original plan doc), measured and skipped**:
+      `check_file_cached`'s duplicate file read (strict parse re-reads
+      what `build_scope_with_deps_and_prelude_cached` already read once
+      for the lenient parse, plus a handful of `file_exists` stats) is,
+      per this pass's own `--verbose` numbers, on the order of a few
+      syscalls against a `check`/`scope` cost measured in **tens of
+      seconds per file** — orders of magnitude too small to register.
+      Recorded as a deliberate no-op rather than re-investigated blind
+      later; the actual lever, if this history continues, is item 11's
+      already-identified one: a per-node profiling pass inside
+      `type_check` itself.
 
 ## Committing Changes
 

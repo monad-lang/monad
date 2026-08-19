@@ -38,7 +38,7 @@ def escape_replacement (c : String) : Option String :=
 /// pairs), matching the Rust reference's `Literal::Str` content.
 #[partial]
 def string_body (input : String) : ParseResult String :=
-	string_body_loop input ""
+	string_body_loop input input ""
 
 /// Steps by `utf8_char_width` rather than a hardcoded 1 byte — a plain
 /// (non-escaped) multi-byte UTF-8 character in a string literal's
@@ -46,21 +46,38 @@ def string_body (input : String) : ParseResult String :=
 /// `String.slice`/`String.drop` mid-character and silently truncate the
 /// rest of the string (see `utf8_char_width`'s own doc comment,
 /// lang/parser/combinators.mo).
+///
+/// `run_start` tracks where the current *unescaped* run of characters
+/// began (the same "original vs. shrinking remainder" trick
+/// `take_while`, lang/parser/combinators.mo, uses) — the per-character
+/// branch in `string_body_char` just advances `input` and recurses, it
+/// does NOT touch `acc`. `acc` only grows at a run boundary (a `\` or
+/// the closing `"`), via a single `String.slice` covering the whole
+/// run instead of one `String.concat` per character. Escapes still
+/// change content byte-for-byte, so they can't be folded into a slice
+/// — but they're the exception, not the rule, so this turns the
+/// dominant per-character cost from O(L^2) (one growing-copy concat
+/// per char) into O(L) + O(escape count).
 #[partial]
-def string_body_loop (input : String) (acc : String) : ParseResult String :=
+def string_body_loop (run_start : String) (input : String) (acc : String) : ParseResult String :=
 	if is_empty input
 	then fail (ParseError.custom "unterminated string literal" input)
 	else
 		let width : I64 := utf8_char_width input in
-		string_body_char (String.slice input 0 width) (String.drop width input) acc
+		string_body_char run_start input (String.slice input 0 width) (String.drop width input) acc
 
 #[partial]
-def string_body_char (ch : String) (rest : String) (acc : String) : ParseResult String :=
+def string_body_char (run_start : String) (input : String) (ch : String) (rest : String) (acc : String) : ParseResult String :=
 	if String.beq "\"" ch
-	then success rest acc
+	then success rest (String.concat acc (string_body_run_text run_start input))
 	else if String.beq "\\" ch
-	then string_body_escape rest acc
-	else string_body_loop rest (String.concat acc ch)
+	then string_body_escape run_start input rest acc
+	else string_body_loop run_start rest acc
+
+/// The unescaped run from `run_start` up to (not including) `input`.
+def string_body_run_text (run_start : String) (input : String) : String :=
+	let consumed : I64 := I64.sub (String.length run_start) (String.length input) in
+	String.slice run_start 0 consumed
 
 /// A `\` was just consumed — the next character selects the escape.
 /// Correctly distinguishes `\\"` (escaped backslash, string continues,
@@ -68,18 +85,24 @@ def string_body_char (ch : String) (rest : String) (acc : String) : ParseResult 
 /// continues past it) purely by always consuming exactly one character
 /// here as "the thing being escaped" before returning to the normal
 /// loop, rather than scanning for the next raw `"` first.
+///
+/// `before_backslash` is the loop's `input` from just before the `\`
+/// was consumed — needed to close out the run ending at the `\` (see
+/// `string_body_run_text`) once the escape resolves.
 #[partial]
-def string_body_escape (input : String) (acc : String) : ParseResult String :=
+def string_body_escape (run_start : String) (before_backslash : String) (input : String) (acc : String) : ParseResult String :=
 	if is_empty input
 	then fail (ParseError.custom "unterminated escape sequence" input)
 	else
 		let width : I64 := utf8_char_width input in
-		string_body_escape_char (String.slice input 0 width) (String.drop width input) acc
+		string_body_escape_char run_start before_backslash (String.slice input 0 width) (String.drop width input) acc
 
 #[partial]
-def string_body_escape_char (ch : String) (rest : String) (acc : String) : ParseResult String :=
+def string_body_escape_char (run_start : String) (before_backslash : String) (ch : String) (rest : String) (acc : String) : ParseResult String :=
 	match escape_replacement ch {
-		Option.some replacement => string_body_loop rest (String.concat acc replacement),
+		Option.some replacement =>
+			let acc2 : String := String.concat (String.concat acc (string_body_run_text run_start before_backslash)) replacement in
+			string_body_loop rest rest acc2,
 		Option.none => fail (ParseError.custom "unknown escape sequence" rest)
 	}
 
