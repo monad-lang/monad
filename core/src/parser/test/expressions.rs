@@ -80,6 +80,101 @@ fn test_match_with_dot_paths() {
   );
 }
 
+// -------------------------------------------------------------------
+// Phase 1 of `plans/implementations/struct-field-destructuring.md`:
+// `FieldPattern` + match-case parsing (no elaboration yet -- `field_pattern`
+// stays `Some(..)` on the parsed `MatchCase`, unresolved).
+// -------------------------------------------------------------------
+
+#[test]
+fn test_match_case_bare_field_pattern() {
+  let match_case_parser = |s: &'static str| match_case_parser::<()>(s.into());
+  let (_, r) = match_case_parser("{ a, b } => a".into()).unwrap();
+  assert_eq!(r.name, id(""));
+  assert_eq!(r.args, Vec::<Identifier>::new());
+  assert_eq!(
+    r.field_pattern,
+    Some(FieldPattern {
+      fields: vec![(id("a"), id("a")), (id("b"), id("b"))],
+      rest: false,
+    })
+  );
+  similar!((*r.value).clone(), var("a"));
+}
+
+#[test]
+fn test_match_case_bare_field_pattern_rename_and_rest() {
+  let match_case_parser = |s: &'static str| match_case_parser::<()>(s.into());
+  let (_, r) = match_case_parser("{ a := b, .. } => a".into()).unwrap();
+  assert_eq!(
+    r.field_pattern,
+    Some(FieldPattern {
+      fields: vec![(id("a"), id("b"))],
+      rest: true,
+    })
+  );
+}
+
+#[test]
+fn test_match_case_bare_field_pattern_empty() {
+  let match_case_parser = |s: &'static str| match_case_parser::<()>(s.into());
+  let (_, r) = match_case_parser("{ } => 0".into()).unwrap();
+  assert_eq!(
+    r.field_pattern,
+    Some(FieldPattern {
+      fields: vec![],
+      rest: false,
+    })
+  );
+}
+
+#[test]
+fn test_match_case_named_field_pattern() {
+  let match_parser = |s: &'static str| match_parser::<()>(s.into());
+  let (_, r) = match_parser(
+    "match s {
+      circle { radius } => radius,
+      rectangle { width, height } => width
+    }"
+    .into(),
+  )
+  .unwrap();
+  let cases = match r {
+    Term::Lit {
+      value: Literal::Match { cases, .. },
+    } => cases,
+    _ => panic!("expected a Lit::Match term"),
+  };
+  assert_eq!(cases.len(), 2);
+  assert_eq!(cases[0].name, id("circle"));
+  assert_eq!(
+    cases[0].field_pattern,
+    Some(FieldPattern {
+      fields: vec![(id("radius"), id("radius"))],
+      rest: false,
+    })
+  );
+  assert_eq!(cases[1].name, id("rectangle"));
+  assert_eq!(
+    cases[1].field_pattern,
+    Some(FieldPattern {
+      fields: vec![(id("width"), id("width")), (id("height"), id("height"))],
+      rest: false,
+    })
+  );
+}
+
+#[test]
+fn test_match_case_positional_still_parses_unchanged() {
+  // Existing positional cases must still parse via the unchanged third
+  // alternative -- `field_pattern` stays `None`.
+  let match_case_parser = |s: &'static str| match_case_parser::<()>(s.into());
+  let (_, r) = match_case_parser("some a => a".into()).unwrap();
+  assert_eq!(r.name, id("some"));
+  assert_eq!(r.args, vec![id("a")]);
+  assert_eq!(r.field_pattern, None);
+}
+
 #[test]
 fn test_if() {
   let if_parser = |s: &'static str| if_parser::<()>(s.into());

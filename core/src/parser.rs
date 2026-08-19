@@ -12,14 +12,15 @@ use crate::{
     string::parse_char_literal,
   },
   term::{
-    AttrArg, Attribute, ClassDef, Decl, DeclGenDef, Def, Documentation, Identifier,
+    AttrArg, Attribute, ClassDef, Decl, DeclGenDef, Def, Documentation, FieldPattern, Identifier,
     InductConstructor, Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath,
     Multiplicity, NameRef, NumSuffix, Open, OpenFilter, Operator, Param, SourceContext,
     SourceRange, StructField,
     Term::{self, Hole, Var},
-    TypeConstraint, Use, UseFilter, UseItem, Visibility, app, apps, case, class, class_def, ctx,
-    def, def_with_native, float_suffix, forall, foralls, id, if_term, induct_constructor,
-    inductive, infix, instance, ivar, lam, lams, lets, match_term,
+    TypeConstraint, Use, UseFilter, UseItem, Visibility, app, apps, case, case_with_field_pattern,
+    class, class_def, ctx, def, def_with_native, fields_to_cons_params, float_suffix, forall,
+    foralls, id, if_term, induct_constructor, inductive, infix, instance, ivar, lam, lams, lets,
+    match_term,
     module::ParsedModule,
     mpvar, num_suffix, opr, param, param_with_attrs, param_with_default, param_with_mult, pi_name,
     pi_typs, pi_with_mult, pvar, stru, stru_field_to_def_param, stru_field_with_mult,
@@ -738,7 +739,79 @@ fn constructor_name<X: Clone>(input: Span<X>) -> Res<Identifier, X> {
   }
 }
 
-fn match_case_parser<X: Clone>(input: Span<X>) -> Res<MatchCase, X> {
+/// One `field` / `field := binder` item inside a `{ ... }` match-case
+/// pattern (`struct_pattern_parser`), mirroring `struct_val_field_parser`
+/// but with an identifier binder instead of an arbitrary term. Punning
+/// (`field` alone) yields `(field, field)`.
+fn field_pattern_item<X: Clone>(input: Span<X>) -> Res<(Identifier, Identifier), X> {
+  map(
+    pair(
+      identifier,
+      opt(preceded((ws0, assignment_operator, ws0), identifier)),
+    ),
+    |(name, rename)| match rename {
+      Some(binder) => (name, binder),
+      None => (name.clone(), name),
+    },
+  )
+  .parse(input)
+}
+
+/// `{ field, other := binder, .. }` -- a field-pattern destructuring
+/// clause, shared by bare (`{ ... }`) and named-constructor
+/// (`ConsName { ... }`) match-case forms and by parameter-position
+/// destructuring (Phase 3/4). Mirrors `struct_or_update_parser`'s
+/// brace-content style. `many0` (not `many1`, unlike `struct_inner_parser`)
+/// -- `{ }` alone (destructuring a zero-field constructor) is legal here.
+fn struct_pattern_parser<X: Clone>(input: Span<X>) -> Res<FieldPattern, X> {
+  delimited(
+    (char('{'), ws0),
+    map(
+      pair(
+        many0(terminated(field_pattern_item, (ws0, opt(char(',')), ws0))),
+        opt(terminated(tag(".."), ws0)),
+      ),
+      |(fields, rest)| FieldPattern {
+        fields,
+        rest: rest.is_some(),
+      },
+    ),
+    (ws0, context("closing brace for field pattern", char('}'))),
+  )
+  .parse(input)
+}
+
+/// Bare `{ ... }` match-case pattern -- no constructor name. Parses to
+/// `case_with_field_pattern(id(""), ..)`, reusing the codebase's existing
+/// "anonymous"/"no name" convention (see `cons_param`'s own unnamed-field
+/// case) as the placeholder resolved at elaboration time against the
+/// scrutinee's sole constructor.
+fn match_case_bare_field_pattern<X: Clone>(input: Span<X>) -> Res<MatchCase, X> {
+  map(
+    separated_pair(struct_pattern_parser, (ws0, tag("=>"), ws0), term),
+    |(fp, value)| case_with_field_pattern(id(""), fp, value),
+  )
+  .parse(input)
+}
+
+/// `ConsName { ... }` match-case pattern -- the Rust-enum-struct-variant
+/// case, legal against any constructor (of any inductive) whose params
+/// are all named.
+fn match_case_named_field_pattern<X: Clone>(input: Span<X>) -> Res<MatchCase, X> {
+  map(
+    separated_pair(
+      separated_pair(constructor_name, ws0, struct_pattern_parser),
+      (ws0, tag("=>"), ws0),
+      term,
+    ),
+    |((name, fp), value)| case_with_field_pattern(name, fp, value),
+  )
+  .parse(input)
+}
+
+/// The pre-existing, purely positional match-case pattern (`mk x y =>
+/// ...`), unchanged.
+fn match_case_positional<X: Clone>(input: Span<X>) -> Res<MatchCase, X> {
   map(
     separated_pair(
       separated_pair(constructor_name, ws0, many0(terminated(identifier, ws0))),
@@ -747,6 +820,21 @@ fn match_case_parser<X: Clone>(input: Span<X>) -> Res<MatchCase, X> {
     ),
     |((name, args), value)| case(name, args, value),
   )
+  .parse(input)
+}
+
+/// Three alternatives, tried in order, no ambiguity: bare-`{`-first
+/// (starts on `{`, distinct from the other two which both start on
+/// `identifier`); then named+brace vs. named+positional, which diverge
+/// right after `constructor_name` (`{` vs. an identifier or `=>`) --
+/// `constructor_name` itself is cheap to re-parse on backtrack (a plain
+/// identifier chain, no nested `alt`).
+fn match_case_parser<X: Clone>(input: Span<X>) -> Res<MatchCase, X> {
+  alt((
+    match_case_bare_field_pattern,
+    match_case_named_field_pattern,
+    match_case_positional,
+  ))
   .parse(input)
 }
 
@@ -1691,6 +1779,37 @@ struct InductiveExtra {
   induct_type: Term,
   induct_name: ModulePath,
 }
+/// A constructor's field list, in EITHER of two spellings: a brace block
+/// (`{ radius : F64, border : Bool }`, per `plans/implementations/
+/// struct-field-destructuring.md`'s Phase 0 -- tried FIRST, via the same
+/// `struct_inner_parser` a `struct` declaration's own body uses, mirroring
+/// `def_params`'s own already-landed brace alternative just above), or
+/// the existing space-separated parenthesized groups (`(radius : F64)
+/// (border : Bool)`, unchanged). No ambiguity: a bare `{` right after a
+/// constructor name (plus its optional implicit params) is a hard parse
+/// error today (`cons_params` matches zero groups and leaves the `{`
+/// unconsumed), so this alternative is purely additive. `:=` defaults are
+/// rejected in the brace form (`fields_to_cons_params`, `core/src/
+/// term.rs`) -- an ordinary constructor has no construction path that
+/// would ever apply one.
+fn cons_params_braces<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
+  let (input, fields) = struct_inner_parser(input)?;
+  match fields_to_cons_params(fields) {
+    Ok(params) => Ok((input, params)),
+    Err(name) => Err(nom::Err::Failure(ParseError::new(
+      input,
+      error::ParseErrorKind::Native(format!(
+        "constructor field '{}' has a default value, which is not supported on a bare `type` constructor (only `struct` bodies support field defaults)",
+        name.as_str()
+      )),
+    ))),
+  }
+}
+
+fn cons_params_or_braces<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
+  alt((cons_params_braces, cons_params)).parse(input)
+}
+
 fn constructor_parser<'a>(
   input: Span<'a, InductiveExtra>,
 ) -> Res<'a, InductConstructor, InductiveExtra> {
@@ -1698,7 +1817,10 @@ fn constructor_parser<'a>(
   let (input, name) = identifier(input)?;
   let (input, _) = ws0(input)?;
   let (input, implicit_params) = implicit_params(input)?;
-  let (input, params) = set_res_extra(cons_params(input.map_extra(|_| ())), extra.clone())?;
+  let (input, params) = set_res_extra(
+    cons_params_or_braces(input.map_extra(|_| ())),
+    extra.clone(),
+  )?;
   let (input, return_typ) = opt_type_annotation(input)?;
   let (input, _) = ws0(input)?;
 

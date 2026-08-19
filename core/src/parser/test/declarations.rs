@@ -275,6 +275,110 @@ fn test_inductive() {
   );
 }
 
+// -------------------------------------------------------------------
+// Phase 0 of `plans/implementations/struct-field-destructuring.md`:
+// brace-field declaration convenience on `type` constructors
+// (`circle { radius : F64 }`, an alternative spelling of the existing
+// paren form `circle (radius : F64)`).
+// -------------------------------------------------------------------
+
+#[test]
+fn test_constructor_brace_form_matches_paren_form() {
+  // Both constructors here need >= 2 fields: a single-field, comma-less
+  // brace group is structurally identical to an implicit-param clause and
+  // is consumed there FIRST (see
+  // `test_constructor_brace_form_single_field_is_implicit_param_not_brace_form`
+  // below) -- same boundary case `def_params`'s own brace form has.
+  let brace = r#"type Shape {
+        circle { radius : F64, border : Bool },
+        rectangle { width : F64, height : F64 }
+    }
+    "#
+  .into();
+  let (_, brace_res) = inductive_parser(brace).unwrap();
+
+  let paren = r#"type Shape {
+        circle (radius : F64) (border : Bool),
+        rectangle (width : F64) (height : F64)
+    }
+    "#
+  .into();
+  let (_, paren_res) = inductive_parser(paren).unwrap();
+
+  similar!(brace_res, paren_res);
+}
+
+#[test]
+fn test_constructor_brace_form_single_field_is_implicit_param_not_brace_form() {
+  // `implicit_params` runs FIRST in `constructor_parser` and already
+  // consumes any comma-less `{ id+ : Type }` shape -- a single-field
+  // brace group is structurally identical, so it's consumed there,
+  // never reaching this plan's new alternative. The constructor ends up
+  // with zero explicit params and one implicit (universally-quantified)
+  // one instead -- mirrors `def_params`'s own documented boundary case
+  // (`test_def_params_single_comma_less_field_is_still_an_implicit_param_not_brace_form`).
+  let s = r#"type Wrapper {
+        wrap { val : String }
+    }
+    "#
+  .into();
+  let (_, res) = inductive_parser(s).unwrap();
+  assert_eq!(res.constructors.len(), 1);
+  assert_eq!(
+    res.constructors[0].params.len(),
+    0,
+    "a single-field brace group must be consumed as an implicit param, not this plan's brace form"
+  );
+}
+
+#[test]
+fn test_constructor_brace_form_multiplicity_prefix() {
+  // Single-field, comma-less brace groups (`{ !val : String }`) are
+  // structurally identical to an ordinary implicit-param clause and are
+  // consumed there FIRST (`implicit_params` runs before this alternative
+  // in `constructor_parser`, same boundary case `def_params`'s own brace
+  // form documents) -- use two fields to unambiguously reach the new
+  // alternative, matching how the `def_params` tests do it.
+  let s = r#"type Wrapper {
+        wrap { !val : String, tag : String }
+    }
+    "#
+  .into();
+  let (_, res) = inductive_parser(s).unwrap();
+  assert_eq!(res.constructors.len(), 1);
+  assert_eq!(res.constructors[0].params.len(), 2);
+  assert_eq!(res.constructors[0].params[0].mult, Multiplicity::Linear);
+  assert_eq!(res.constructors[0].params[1].mult, Multiplicity::Many);
+}
+
+#[test]
+fn test_constructor_brace_form_rejects_default_value() {
+  let s = r#"type Shape {
+        circle { radius : F64 := 1.0 }
+    }
+    "#
+  .into();
+  assert!(
+    inductive_parser(s).is_err(),
+    "a `:=` default on a brace-declared ordinary constructor field must be a parse error \
+     (it would be silently dead -- an ordinary constructor is only ever invoked positionally)"
+  );
+}
+
+#[test]
+fn test_constructor_paren_form_still_parses_unchanged() {
+  // Existing multi-group parenthesized constructors (from `init/prelude.mo`
+  // shapes) must be unaffected by the new brace alternative.
+  let s = r#"type Pair A B {
+        pair (first : A) (second : B)
+    }
+    "#
+  .into();
+  let (_, res) = inductive_parser(s).unwrap();
+  assert_eq!(res.constructors.len(), 1);
+  assert_eq!(res.constructors[0].params.len(), 2);
+}
+
 #[test]
 fn test_instance() {
   let s = r#"instance Functor F {

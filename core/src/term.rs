@@ -325,6 +325,34 @@ pub fn stru_field_to_def_param(f: StructField) -> Param {
   }
 }
 
+/// Converts a brace-declared `type` constructor's field list
+/// (`circle { radius : F64 }`, parsed via the same `struct_inner_parser`
+/// a `struct` declaration's own body uses) into an ordinary constructor
+/// `Param` list -- `plans/implementations/struct-field-destructuring.md`'s
+/// Phase 0. Same field-name/type/multiplicity mapping as `stru()`'s own
+/// struct-field-to-constructor-param conversion just above (`stru()`,
+/// this file), but UNLIKE `stru_field_to_def_param` (immediately above,
+/// which keeps a field's default for `def`-brace-params), a `:= default`
+/// here is rejected outright: an ordinary `type` constructor is only
+/// ever invoked through plain application (`circle 5.0`), never
+/// struct-literal syntax, so a default value in this position would be
+/// silently dead code -- better to error than accept something that does
+/// nothing. Returns the offending field's name in `Err` on the first
+/// `default_value` found; the caller (`constructor_parser`,
+/// `core/src/parser.rs`) wraps this into a `nom::Err::Failure`.
+pub fn fields_to_cons_params(fields: Vec<StructField>) -> Result<Vec<Param>, Identifier> {
+  fields
+    .into_iter()
+    .map(|f| {
+      if f.default_value.is_some() {
+        Err(f.name.clone())
+      } else {
+        Ok(param_with_mult(f.name, f.typ, f.mult))
+      }
+    })
+    .collect()
+}
+
 fn inductive_term(name: ModulePath, params: Vec<Param>) -> Term {
   let mut term = Var {
     // TODO record values
@@ -1092,28 +1120,87 @@ pub fn pi_name(arg_name: Option<Identifier>, arg: Term, ret: Term) -> Term {
 pub fn app2(s: &str, s2: &str) -> Term {
   app(var(s), var(s2))
 }
+/// One `{ field, other := binder, .. }` pattern -- `plans/implementations/
+/// struct-field-destructuring.md`. `fields` is `(field_name, binder)` in
+/// the order written; `binder == field_name` when punned (`{ x }`).
+/// `rest` is `true` when a trailing `..` is present (unlisted fields are
+/// discarded, not brought into scope) -- without it, every named field of
+/// the resolved constructor must be listed (checked at elaboration time,
+/// once the constructor's real field list is known; the parser has no
+/// such list to validate against, same reason struct-literal field order
+/// is resolved at type-check time, not parse time).
+#[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
+pub struct FieldPattern {
+  pub fields: Vec<(Identifier, Identifier)>,
+  pub rest: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct MatchCase {
   pub(crate) name: Identifier,
   pub(crate) args: Vec<Identifier>,
+  /// `Some` only pre-elaboration: a `{ ... }`/`ConsName { ... }` pattern
+  /// written by the user, not yet resolved against a real constructor's
+  /// field order. Elaboration (`core_check.rs`) resolves this into
+  /// ordinary `args`, in declared-field order, and clears it back to
+  /// `None` -- so every OTHER consumer of `MatchCase` (`eval.rs`,
+  /// `lower.rs`, `eval/termination.rs`) only ever sees `None` here and
+  /// needs no changes.
+  pub(crate) field_pattern: Option<FieldPattern>,
   pub(crate) value: Box<Term>,
 }
 
 impl Display for MatchCase {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let args = self
-      .args
-      .iter()
-      .map(|i| i.as_str())
-      .collect::<Vec<&str>>()
-      .join(" ");
-    write!(f, "{} {} => {}", self.name, args, self.value)
+    if let Some(fp) = &self.field_pattern {
+      let fields = fp
+        .fields
+        .iter()
+        .map(|(name, binder)| {
+          if name == binder {
+            name.as_str().to_string()
+          } else {
+            format!("{} := {}", name, binder)
+          }
+        })
+        .chain(fp.rest.then(|| "..".to_string()))
+        .collect::<Vec<String>>()
+        .join(", ");
+      let name = if self.name.as_str().is_empty() {
+        String::new()
+      } else {
+        format!("{} ", self.name)
+      };
+      write!(f, "{}{{ {} }} => {}", name, fields, self.value)
+    } else {
+      let args = self
+        .args
+        .iter()
+        .map(|i| i.as_str())
+        .collect::<Vec<&str>>()
+        .join(" ");
+      write!(f, "{} {} => {}", self.name, args, self.value)
+    }
   }
 }
 pub fn case(name: Identifier, args: Vec<Identifier>, value: Term) -> MatchCase {
   MatchCase {
     name,
     args,
+    field_pattern: None,
+    value: Box::new(value),
+  }
+}
+
+pub fn case_with_field_pattern(
+  name: Identifier,
+  field_pattern: FieldPattern,
+  value: Term,
+) -> MatchCase {
+  MatchCase {
+    name,
+    args: Vec::new(),
+    field_pattern: Some(field_pattern),
     value: Box::new(value),
   }
 }
