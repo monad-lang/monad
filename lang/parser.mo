@@ -404,11 +404,11 @@ def skip_one_attr_content (r : ParseResult String) (orig : String) : String :=
 // Mirrors the Rust reference's `attribute_parser`/`attr_arg_parser`/
 // `opt_attributes` (core/src/parser.rs) — builds real `Attribute`/
 // `AttrArg` data instead of `skip_one_attr`/`def_try_attrs`'s own
-// skip-and-discard. NOT YET WIRED into `def_parser`/`type_parser`/
-// `Def`/`Inductive` construction — this is deliberately staged as its
-// own standalone piece (see plans/bootstrapping/self-hosted-compiler.md
-// for the staging rationale), verified here only via direct calls to
-// `attribute_parser` from this file's own tests.
+// skip-and-discard. IS wired into `def_parser`/`type_parser`/`Def`/
+// `Inductive` construction (`opt_attributes` is called from
+// `def_parser`, `type_parser`, and `def_explicit_attrs` below) — this
+// comment used to say "NOT YET WIRED", staged as its own standalone
+// piece; that staging is done, the comment just never got updated.
 
 /// One `#[...]` attribute argument. Only bare `ident`/`str`/`num` args
 /// are exercised by any real corpus attribute (confirmed: no `.mo` file
@@ -4025,9 +4025,13 @@ def build_list_literal (elems : List Term) : Term :=
 // distinct from `struct`'s own DECLARATION syntax (`field : Type`, no
 // `:=`) and from `do { ... }` (which requires the literal keyword `do`
 // before its own `{`, so there's no grammar collision with a bare `{`
-// atom here). `StructUpdate` (`x with { field := v, ... }`) is
-// deliberately not implemented — see `Literal.struct_lit`'s own doc
-// comment in lang/types.mo.
+// atom here). `StructUpdate` (`{ base with field := v, ... }`, tried
+// FIRST — see `struct_update_try` just below) IS implemented, parsing
+// into a real `Literal.struct_update` — this comment used to say
+// "deliberately not implemented", which was true when it was written
+// but has since landed; `lang/typecheck/infer.mo`'s
+// `type_check_struct_update` desugars it into an ordinary `Term.con`
+// (mirroring plain struct literals, just below), so it compiles too.
 #[partial]
 def struct_lit_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
     struct_lit_open (tag "{" input) ctx
@@ -5912,8 +5916,10 @@ def test_struct_update_backtrack_to_plain_literal : Bool :=
     }
 
 // --- Tests for attribute_parser/attr_arg_parser/opt_attributes ---
-// (NOT yet wired into def_parser/type_parser -- see this file's own
-// doc comment above `attribute_parser` -- exercised only directly here.)
+// (IS wired into def_parser/type_parser -- see this file's own doc
+// comment above `attribute_parser` -- these tests exercise the parser
+// functions directly for finer-grained coverage than going through a
+// full `def_parser`/`type_parser` call each time would give.)
 
 #[test]
 def test_attribute_parser_bare_name : Bool :=

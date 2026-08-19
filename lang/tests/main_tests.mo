@@ -1,10 +1,13 @@
 /// Smoke tests for `lang/main.mo`'s `Command.from_args` argv parser.
 ///
-/// `cargo run -- run lang/main.mo ...` (actually executing `main`) hits a
-/// separate, pre-existing `instance-Monad-IO not found` failure on this
-/// branch, unrelated to this change — reproduces on a clean checkout with a
-/// trivial `def main : IO I64 { ... }` too — so exercising the argv-parsing
-/// logic directly here is the available signal.
+/// This used to say `cargo run -- run lang/main.mo ...` (actually
+/// executing `main`) hit a separate, pre-existing `instance-Monad-IO
+/// not found` failure — no longer reproduces (confirmed via many real
+/// `compile`/`check`/`pretty`/`test` invocations, 2026-08-19); whatever
+/// that was has since been fixed elsewhere, or this repro was itself
+/// stale. Kept testing `Command.from_args` directly anyway (isolating
+/// argv-parsing from everything downstream is still the more precise
+/// unit of test coverage, real end-to-end runs notwithstanding).
 use lang.main {*}
 
 #[test]
@@ -43,6 +46,29 @@ def test_from_args_compile_short_flags : Bool :=
 def test_from_args_pretty : Bool :=
     match Command.from_args ["pretty", "b.mo"] {
         Command.pretty path => path == "b.mo",
+        _ => false,
+    }
+
+#[test]
+def test_from_args_check : Bool :=
+    match Command.from_args ["check", "a.mo", "b.mo", "-v"] {
+        Command.check files verbose =>
+            files == ["a.mo", "b.mo"] && verbose == true,
+        _ => false,
+    }
+
+#[test]
+def test_from_args_test : Bool :=
+    match Command.from_args ["test", "a.mo", "b.mo", "-v"] {
+        Command.test files verbose =>
+            files == ["a.mo", "b.mo"] && verbose == true,
+        _ => false,
+    }
+
+#[test]
+def test_from_args_test_help_on_no_files : Bool :=
+    match Command.from_args ["test"] {
+        Command.help => true,
         _ => false,
     }
 

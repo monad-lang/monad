@@ -948,15 +948,34 @@ def struct_lit_find_field (fields : List StructLitField) (name : Identifier) : O
     }
 
 /// Type check a struct-update expression (`{ base with field := value,
-/// ... }`). Mirrors the reference's own acknowledged simplification for
-/// this construct (`infer_lit`'s `CoreLit::StructUpdate` arm,
-/// core/src/core_check.rs): `base`'s type IS knowable (it's an ordinary
-/// term), so the overall result type is `base`'s own type unchanged;
-/// each replacement field VALUE is still individually checked (to catch
-/// an outright ill-typed update), but not correlated with that
-/// specific field's own declared type -- the reference doesn't either
-/// (same missing-registry limitation plain `StructLit` without a
-/// self-annotation has).
+/// ... }`) by DESUGARING it into a real `Term.con` — mirrors the Rust
+/// reference's own `desugar_struct_literals`'s `CoreLit::StructUpdate`
+/// arm (`core/src/core_check.rs`): read `base`'s own inferred type to
+/// find its registered struct fields, then for each declared field
+/// (in the struct's own declaration order) either use the update's own
+/// override value if present, or PROJECT it straight out of `base` via
+/// a single-case `match` (`struct_update_project_field` below) — the
+/// same field-access technique the reference uses (there, an inlined
+/// `Match`; here, `Literal.match_`).
+///
+/// This used to leave a bare `Term.lit (Literal.struct_update base
+/// fields)` in place unconditionally — a term `lang/codegen/emit.mo`'s
+/// `compile_lit_ir` has no case for at all, so ANY struct-update
+/// expression reaching codegen crashed with a non-exhaustive-match
+/// error (confirmed: `#[partial]`, only `num`/`flt`/`str`/`if_`/
+/// `match_` are handled). Plain struct LITERALS never hit this same
+/// crash because `type_check_struct_lit` above already desugars them
+/// into `Term.con` — this brings struct UPDATES to the same, already
+/// codegen-proven representation instead of teaching codegen a second,
+/// parallel way to build a constructor value.
+///
+/// Falls back to leaving the un-desugared `Literal.struct_update` in
+/// place (unchanged from before, so still a crash if actually reached)
+/// only when `base`'s type genuinely can't be resolved to a registered
+/// struct — matching the reference's own documented fallback for that
+/// case (`core_check.rs`'s own comment: "Falls back to leaving a
+/// `StructUpdate` literal in place... if `base`'s type can't be
+/// determined").
 def type_check_struct_update (base : Term) (fields : List StructLitField) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match type_check base Term.hole scope local_types locals {
         err e => err e,
@@ -966,10 +985,90 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                 ok _ =>
                     let base_term : Term := tt_term base_tt in
                     let base_typ : Term := tt_typ base_tt in
-                    let updated : Term := Term.lit (Literal.struct_update base_term fields) in
-                    ok (mk_typed updated base_typ),
+                    match type_head_name base_typ {
+                        Option.none => struct_update_fallback base_term fields base_typ,
+                        Option.some sname =>
+                            let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
+                            match scope_find_inductive typ_mp scope {
+                                err _ => struct_update_fallback base_term fields base_typ,
+                                ok ind =>
+                                    match ind {
+                                        Inductive.mk _ _ _ ctors _ _ =>
+                                            match ctors {
+                                                List.empty => struct_update_fallback base_term fields base_typ,
+                                                List.cons ctor _ =>
+                                                    match ctor {
+                                                        InductConstructor.mk con_name params _ =>
+                                                            let n : I64 := List.length params in
+                                                            let names : List Identifier := struct_param_names params in
+                                                            let args : List (Option Term) :=
+                                                                struct_update_build_args params fields base_term con_name names n 0 in
+                                                            let mk_name : Identifier := struct_lit_con_name con_name in
+                                                            let c : Con := Con.mk mk_name typ_mp n args in
+                                                            ok (mk_typed (Term.con c) base_typ),
+                                                    }
+                                            }
+                                    },
+                            },
+                    }
             }
     }
+
+/// Un-resolvable-struct-type fallback: same term this function used to
+/// build unconditionally before this fix. Still a crash if it ever
+/// actually reaches codegen, but that was already true before this fix
+/// and only happens when `base`'s type can't be determined at all
+/// (matches the reference's own documented behavior for that case).
+def struct_update_fallback (base : Term) (fields : List StructLitField) (base_typ : Term) : Result TypeError TypedTerm :=
+    ok (mk_typed (Term.lit (Literal.struct_update base fields)) base_typ)
+
+/// Bare field names of `params`, in declared order — used both as the
+/// projection `match`'s own bound-arg names and to walk the struct's
+/// declared field order when building `struct_update_build_args`.
+#[terminating]
+def struct_param_names (params : List Param) : List Identifier :=
+    match params {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p { Param.mk pname _ _ _ _ => List.cons pname (struct_param_names rest) }
+    }
+
+/// One arg per declared field, in order: the update's own override
+/// value if `fields` has one for that field name, otherwise a
+/// `struct_update_project_field` term that reads the unchanged value
+/// straight out of `base`.
+#[terminating]
+def struct_update_build_args (params : List Param) (fields : List StructLitField) (base : Term) (con_name : ModulePath) (all_names : List Identifier) (total : I64) (idx : I64) : List (Option Term) :=
+    match params {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p {
+                Param.mk pname _ _ _ _ =>
+                    let value : Term :=
+                        match struct_lit_find_field fields pname {
+                            Option.some override_term => override_term,
+                            Option.none => struct_update_project_field base con_name all_names total idx pname,
+                        } in
+                    List.cons (Option.some value) (struct_update_build_args rest fields base con_name all_names total (I64.add idx 1))
+            }
+    }
+
+/// Build a single-case projection `match base { mk f1 f2 ... => f_idx }`
+/// term for a struct-update field that ISN'T being overridden — reads
+/// the unchanged value straight out of `base` via pattern match, the
+/// same technique the Rust reference's own struct-update desugaring
+/// uses (`core_check.rs`'s `desugar_struct_literals`, the `StructUpdate`
+/// arm, `CoreTerm::Bound((n - 1 - idx) as u32)`). `idx` is 0-based from
+/// the FRONT of the struct's declared field order; the de Bruijn index
+/// of that same field once all `total` fields are bound as this match
+/// arm's own args is `total - 1 - idx` (last-declared = innermost =
+/// index 0, this codebase's standard convention — see e.g.
+/// `lang/scope.mo`'s `add_constructors_go`).
+def struct_update_project_field (base : Term) (con_name : ModulePath) (all_names : List Identifier) (total : I64) (idx : I64) (pname : Identifier) : Term :=
+    let bare_name : Identifier := struct_lit_con_name con_name in
+    let db_idx : I64 := I64.sub (I64.sub total 1) idx in
+    let case_ : MatchCase := MatchCase.mc bare_name all_names (Term.var db_idx (DebugName.named pname)) in
+    Term.lit (Literal.match_ base (List.cons case_ List.empty))
 
 #[terminating]
 def struct_update_check_fields (fields : List StructLitField) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Bool :=
@@ -1294,4 +1393,83 @@ def test_type_check_struct_update_bad_base_rejected : Bool :=
     match type_check_struct_update bad_base fields Term.hole point_scope point_local_types empty_locals {
         ok _ => false,
         err _ => true,
+    }
+
+/// Regression test for the struct-update codegen crash fix: the checked
+/// term must be a real `Term.con` (the SAME representation
+/// `type_check_struct_lit` already produces, which
+/// `lang/codegen/emit.mo`'s `compile_db_term_ir`/`compile_con_ir`
+/// already compile correctly) — NOT a bare `Term.lit
+/// (Literal.struct_update ...)`, which `compile_lit_ir` has no real
+/// codegen for. Before this fix, `type_check_struct_update` ALWAYS
+/// produced the latter.
+#[test]
+def test_type_check_struct_update_desugars_to_con : Bool :=
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 List.empty in
+    match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
+        ok tt => match tt_term tt {
+            Term.con _ => true,
+            _ => false,
+        },
+        err _ => false,
+    }
+
+/// The overridden field (`x`) becomes the override's own value
+/// (arg 0, matching `point_params`' declared order `x`, `y`); the
+/// UNCHANGED field (`y`) becomes a projection `match` reading it back
+/// out of `base`, not the override value and not left blank.
+#[test]
+def test_type_check_struct_update_unchanged_field_is_projection : Bool :=
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 List.empty in
+    match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
+        ok tt => match tt_term tt {
+            Term.con c => match c {
+                Con.mk _name _typ_name _arity args => match args {
+                    List.cons x_arg rest => match rest {
+                        List.cons y_arg _ =>
+                            is_type_arg x_arg && is_match_arg y_arg,
+                        List.empty => false,
+                    },
+                    List.empty => false,
+                },
+            },
+            _ => false,
+        },
+        err _ => false,
+    }
+
+#[partial]
+def is_type_arg (arg : Option Term) : Bool :=
+    match arg {
+        Option.some t => match t { Term.type_ _ => true, _ => false },
+        Option.none => false,
+    }
+
+#[partial]
+def is_match_arg (arg : Option Term) : Bool :=
+    match arg {
+        Option.some t => match t {
+            Term.lit l => match l { Literal.match_ _ _ => true, _ => false },
+            _ => false,
+        },
+        Option.none => false,
+    }
+
+/// The un-resolvable-struct-type fallback (`base`'s type isn't a
+/// registered struct at all) still produces the pre-fix representation
+/// — matches the Rust reference's own documented fallback behavior for
+/// this case. `Term.hole` is not a struct type, so `type_head_name`
+/// returns `Option.none` and the fallback path is taken.
+#[test]
+def test_type_check_struct_update_unresolvable_base_falls_back : Bool :=
+    let unresolvable_base : Term := Term.hole in
+    let fields : List StructLitField := List.empty in
+    match type_check_struct_update unresolvable_base fields Term.hole point_scope empty_local_types empty_locals {
+        ok tt => match tt_term tt {
+            Term.lit l => match l { Literal.struct_update _ _ => true, _ => false },
+            _ => false,
+        },
+        err _ => false,
     }

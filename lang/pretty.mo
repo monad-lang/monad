@@ -521,6 +521,22 @@ def show_decl (d : Decl) : String := match d {
         String.concat (String.concat header " in ") (show_decl inner),
 }
 
+/// Pretty-print a whole decl_list, one `show_decl` per declaration
+/// separated by a blank line — the shape `monad pretty`'s CLI command
+/// wants (a readable source-text dump of a file's own declarations, not
+/// a `Show.show`-derived debug dump of the internal `LoadedModules`
+/// structure).
+#[partial]
+def show_decls (decl_list : List Decl) : String :=
+    match decl_list {
+        List.empty => "",
+        List.cons d rest =>
+            match rest {
+                List.empty => show_decl d,
+                List.cons _ _ => String.concat (show_decl d) (String.concat "\n\n" (show_decls rest)),
+            }
+    }
+
 /// A single item inside a `use Module { ... }` brace filter. Mirrors
 /// Rust's `Display for UseItem` (core/src/term.rs).
 #[partial]
@@ -881,5 +897,29 @@ def test_show_decl_inductive : Bool :=
     let ct2 := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "false") List.empty)) List.empty (Term.type_ 1) in
     let decl := Decl.inductive_d (Inductive.mk name List.empty (Term.type_ 1) (List.cons ct1 (List.cons ct2 List.empty)) List.empty Visibility.package_private) in
     show_decl decl == "type Bool {\n  true,\n  false\n}"
+
+/// Simple fixture decl reused by the `show_decls` tests below (a single
+/// self-contained `def`, same shape `test_show_decl_def` above uses).
+#[partial]
+def simple_def_decl (name_str : String) : Decl :=
+    let name := ModulePath.mp (List.cons (Identifier.id name_str) List.empty) in
+    let d := Def.mk name (Term.type_ 1) (Term.type_ 1) List.empty List.empty Visibility.package_private in
+    Decl.def_d d
+
+#[test]
+def test_show_decls_empty : Bool :=
+    show_decls List.empty == ""
+
+#[test]
+def test_show_decls_single : Bool :=
+    show_decls (List.cons (simple_def_decl "a") List.empty) == show_decl (simple_def_decl "a")
+
+/// Multiple decls are separated by a blank line (`\n\n`), matching
+/// ordinary `.mo` source-file style — not run together, and not just a
+/// single `\n` (which would read as one continuation line).
+#[test]
+def test_show_decls_multiple_separated_by_blank_line : Bool :=
+    let decls := List.cons (simple_def_decl "a") (List.cons (simple_def_decl "b") List.empty) in
+    show_decls decls == String.concat (show_decl (simple_def_decl "a")) (String.concat "\n\n" (show_decl (simple_def_decl "b")))
 
 

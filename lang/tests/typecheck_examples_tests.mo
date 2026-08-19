@@ -174,17 +174,18 @@ def test_typecheck_module_rejects_unbound_variable : Bool :=
 // body, so `mk x y => x` no longer resolves `x` as an unbound free
 // variable; previously this file's later declarations, including its own
 // struct-pattern match, weren't reached at all). Bisection also surfaced a
-// SECOND, independent gap while chasing this: `lang/scope.mo`'s
-// `build_scope_one_decl` has `Decl.struct_d _ => acc` — struct
-// declarations are never added to scope at all, so matching on a struct's
+// SECOND, independent gap while chasing this at the time: `lang/scope.mo`'s
+// `build_scope_one_decl` had `Decl.struct_d _ => acc` — struct
+// declarations were never added to scope at all, so matching on a struct's
 // implicit `mk` constructor (`examples/structs.mo`'s own pattern, and
 // `optics.mo`'s `get_name (p : Person) : String := match p { mk name _ _
-// => name }`) can't validate against a registered constructor regardless
-// of module loading. `test_typecheck_examples_structs` below still
-// passes only because ITS match-on-struct content isn't reached by this
-// same dependency-free harness either — not because struct matching
-// actually self-hosted-typechecks. Neither gap is a parser bug; both are
-// pre-existing, separate self-hosted-typechecker completeness gaps.
+// => name }`) couldn't validate against a registered constructor regardless
+// of module loading. **That second gap has since been fixed**
+// (`lang/scope.mo`'s `build_scope_struct`, registers a struct's name and a
+// synthetic single-constructor `Inductive` the same way `build_scope_inductive`
+// does) — struct matching genuinely self-hosted-typechecks now. This test
+// stays disabled purely for the ORIGINAL, still-real reason: no module
+// loading in this dependency-free harness.
 // #[test]
 // def test_typecheck_examples_optics : Bool := typecheck_file "examples/optics.mo" "optics"
 

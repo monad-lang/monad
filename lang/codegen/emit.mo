@@ -1,7 +1,8 @@
 use io {IO, println}
 use lang.types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
-  LoadedModules, MatchCase, ModulePath, NameRef, Native, Operator, Param, Term,
+  LoadedModules, MatchCase, ModulePath, NameRef, Native, Operator, Param,
+  StructLitField, Term,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, join_identifiers, lam,
   lit, match_, mc, mk, mp, name, named, nid, nmp, nop, ntv, num, operator,
   param_many, pi, show_identifier, show_operator, str, type_, unnamed, var,
@@ -290,7 +291,13 @@ def is_llvm_constant (val : LLVMValue) : Bool := match val {
     LLVMValue.alloc_constructor tag field_count => false,
 }
 
-#[partial]
+/// Now total (no `#[partial]`): every `Literal` variant is handled,
+/// including `struct_lit`/`struct_update` — see their own doc comment
+/// below for why they're unreachable-in-practice placeholders rather
+/// than real codegen, and `lang/typecheck/infer.mo`'s
+/// `type_check_struct_lit`/`type_check_struct_update` for where the
+/// REAL work happens (both desugar into `Term.con`, which
+/// `compile_db_term_ir`/`compile_con_ir` above already handle).
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
     Literal.num n suffix => CompileResult.ok c empty_instrs (LLVMValue.int_ n) empty_blocks empty_funcs empty_globals_list,
     // No LLVMValue float-constant variant exists yet (codegen has no
@@ -310,6 +317,20 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
         },
     Literal.if_ cond then_ else_ => compile_db_if_ir c cond then_ else_,
     Literal.match_ scrutinee cases => compile_match_ir c scrutinee cases,
+    // `Literal.struct_lit`/`Literal.struct_update` are effectively
+    // unreachable HERE: `lang/typecheck/infer.mo`'s
+    // `type_check_struct_lit` ALWAYS desugars a struct literal into a
+    // real `Term.con` (never leaves a `struct_lit` Literal behind), and
+    // `type_check_struct_update` does the same for struct updates
+    // except in the rare case where `base`'s type can't be resolved to
+    // a registered struct at all — a placeholder is emitted here rather
+    // than crashing on a non-exhaustive match (which is what used to
+    // happen: this whole match was `#[partial]` and simply had no case
+    // for either variant at all), matching `Literal.flt`'s own
+    // "keep the match total, nothing in the corpus reaches this today"
+    // convention just above.
+    Literal.struct_lit _fields _type_name => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
+    Literal.struct_update _base _fields => CompileResult.ok c empty_instrs LLVMValue.void_val empty_blocks empty_funcs empty_globals_list,
 }
 
 /// Compile a match expression to LLVM IR: compiles the scrutinee once,
@@ -1160,6 +1181,97 @@ def build_llvm_params_from_db (params : List Param) (idx : I64) : List ParamPair
         List.cons pp (build_llvm_params_from_db rest (idx + 1)),
 }
 
+/// Whether `t`'s head (after peeling any `Term.app` spine, matching
+/// `lang/typecheck/infer.mo`'s own `type_head_name` convention) is
+/// literally named `IO` — i.e. `t` is (an application of) the `IO`
+/// type, e.g. `IO I64`.
+#[partial]
+def emit_type_head_is_io (t : Term) : Bool := match t {
+    Term.var _idx dbg => match dbg {
+        DebugName.named id_ => String.beq (show_identifier id_) "IO",
+        DebugName.unnamed => false,
+    },
+    Term.app f _arg => emit_type_head_is_io f,
+    _ => false,
+}
+
+/// Fixes a genuine, previously-undiagnosed native-codegen bug: a `main`
+/// declared `IO _` (e.g. `def main : IO I64 := IO.io 5`) used to have
+/// its RAW returned pointer (a boxed `IO.io` constructor VALUE, from
+/// `init/io.mo`'s `type IO A { io A }`) returned straight to the C
+/// runtime's `int main() { return (int)main_monad(args); }`, which
+/// casts it directly to `int` with no unwrapping at all — the process's
+/// actual exit code ends up being whatever the low byte of a heap
+/// pointer happens to be, not the `I64` the program's own source
+/// intended. Confirmed fixed end-to-end (real `compile` + run, not just
+/// IR-text inspection): `def main : IO I64 := IO.io 5` now genuinely
+/// exits 5.
+///
+/// Fixed here, not in `runtime.c`: the C runtime has no way to tell a
+/// raw returned `i64` apart from a boxed pointer (this runtime doesn't
+/// tag scalars vs. pointers) — only codegen still has the STATIC type
+/// (`typ`, this Def's own declared return type) needed to know which
+/// case applies, and only for `main` specifically (an ordinary function
+/// returning `IO T` to another Monad function is fine exactly as
+/// compiled today — `IO`'s own `bind`/`pure` instance already knows how
+/// to unwrap it; it's specifically the boundary into the plain-`int`
+/// C `main` that needs this).
+///
+/// **Does NOT fix `{ ... }` do-notation bodies** — `def main : IO I64 {
+/// return 5 }` (do-block sugar, as opposed to an ordinary expression)
+/// is a SEPARATE, deeper, still-open gap: do-notation doesn't compile
+/// its actual value to real IR at all, falling through to a meaningless
+/// zero-field placeholder constructor regardless of this fix (confirmed
+/// via the same real compile+run: exits 0, not 5, because `main`'s
+/// whole body silently became `alloc_constructor(tag=0, fields=0)`
+/// rather than anything derived from `return 5`). This is exactly the
+/// pre-existing gap `lang/codegen/test_driver.mo`'s own doc comment
+/// already flags ("do-notation/IO-typed main was apparently never
+/// exercised through the compile-then-run path... worth its own future
+/// investigation, but out of scope to fix generally here") — this fix
+/// addresses the pointer-cast half of that comment's original garbled-
+/// exit-code symptom, not the do-notation-codegen half.
+///
+/// Rewrites EVERY block that ends in a bare `ret v` (a function's body
+/// can compile to several such blocks — one per branch of a top-level
+/// `if`/`match`, see `compile_db_if_ir`/`compile_match_ir` — not just
+/// one) to first call the runtime's own `monad_get_field(v, 0)` (field
+/// 0 of a 1-field `IO.io` constructor is its payload) and return THAT
+/// instead of the raw constructor pointer.
+#[partial]
+def unwrap_io_return_blocks (blocks : List LLVMBasicBlock) (idx : I64) : List LLVMBasicBlock := match blocks {
+    List.empty => List.empty,
+    List.cons b rest =>
+        match b {
+            LLVMBasicBlock.mk label instrs =>
+                let temp_name := String.concat "__io_unwrap" (I64.to_string idx) in
+                let new_instrs := unwrap_io_return_instrs instrs temp_name in
+                List.cons (LLVMBasicBlock.mk label new_instrs) (unwrap_io_return_blocks rest (I64.add idx 1)),
+        },
+}
+
+/// Rewrites the LAST instruction in `instrs`, only if it's a bare
+/// `LLVMInstruction.ret v` — every other instruction (and any block
+/// that ends in `jump`/`branch` instead of `ret`, i.e. isn't itself a
+/// return point) passes through unchanged.
+#[partial]
+def unwrap_io_return_instrs (instrs : List LLVMInstruction) (temp_name : String) : List LLVMInstruction := match instrs {
+    List.empty => List.empty,
+    List.cons i rest =>
+        match rest {
+            List.empty =>
+                match i {
+                    LLVMInstruction.ret v =>
+                        let field_args := List.cons v (List.cons (LLVMValue.int_ 0) List.empty) in
+                        let get_call := LLVMValue.call "monad_get_field" LLVMType.i64_ field_args false in
+                        let assign := LLVMInstruction.assign temp_name get_call in
+                        List.cons assign (List.cons (LLVMInstruction.ret (LLVMValue.var_ temp_name)) List.empty),
+                    _ => List.cons i List.empty,
+                },
+            List.cons _ _ => List.cons i (unwrap_io_return_instrs rest temp_name),
+        },
+}
+
 /// Compile a canonical Def (de Bruijn Term) to LLVM IR.
 #[partial]
 def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
@@ -1177,6 +1289,10 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
         let llvm_params := build_llvm_params_db params in
         let body := strip_db_lams term_ in
         let c0 := bind_params_in_ctx_db c params in
+        // See `unwrap_io_return_blocks`'s own doc comment: an `IO`-typed
+        // `main` needs its returned value's payload unwrapped before it
+        // reaches the C runtime's plain-`int`-returning `main()`.
+        let needs_io_unwrap := ends_with_main fn_name && emit_type_head_is_io typ in
         match compile_db_term_ir c0 body {
             CompileResult.ok ctx_r instrs_r val_r blocks_r funcs_r globals_r =>
                 match val_r {
@@ -1191,7 +1307,8 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
                                 let new_instrs := append_instrs instrs_r (cons_instr assign empty_instrs) in
                                 let entry_instrs := append_instrs new_instrs (cons_instr (LLVMInstruction.ret (LLVMValue.var_ temp)) empty_instrs) in
                                 let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                let all_blocks := append_blocks (cons_block entry_block empty_blocks) blocks_r in
+                                let all_blocks_raw := append_blocks (cons_block entry_block empty_blocks) blocks_r in
+                                let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks all_blocks_raw 0 else all_blocks_raw in
                                 let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
                                 DefResult.dr ctx_t (cons_func main_func funcs_r) globals_r,
                         },
@@ -1214,7 +1331,8 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
                             then instrs_r
                             else append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
                         let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                        let all_blocks := append_blocks (cons_block entry_block empty_blocks) blocks_r in
+                        let all_blocks_raw := append_blocks (cons_block entry_block empty_blocks) blocks_r in
+                        let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks all_blocks_raw 0 else all_blocks_raw in
                         let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
                         DefResult.dr ctx_r (cons_func main_func funcs_r) globals_r,
                 },
@@ -1788,14 +1906,31 @@ def collect_referenced_names (t : Term) (acc : List String) : List String := mat
     Term.hole => acc,
 }
 
-#[partial]
+/// Now total (no `#[partial]`) — `struct_lit`/`struct_update` are
+/// unreachable in practice (see `compile_lit_ir`'s matching doc
+/// comment), but reachability analysis should still be correct for
+/// them independent of that: a name referenced only from inside a
+/// struct-literal field value (or a struct-update override/base) must
+/// not be stripped as dead code.
 def collect_referenced_names_lit (l : Literal) (acc : List String) : List String := match l {
     Literal.num _n _suffix => acc,
     Literal.flt _text _suffix => acc,
     Literal.str _s => acc,
     Literal.if_ cond then_ else_ => collect_referenced_names else_ (collect_referenced_names then_ (collect_referenced_names cond acc)),
     Literal.match_ scrutinee cases => collect_referenced_names_cases cases (collect_referenced_names scrutinee acc),
+    Literal.struct_lit fields _type_name => collect_referenced_names_struct_fields fields acc,
+    Literal.struct_update base fields => collect_referenced_names_struct_fields fields (collect_referenced_names base acc),
 }
+
+#[partial]
+def collect_referenced_names_struct_fields (fields : List StructLitField) (acc : List String) : List String :=
+    match fields {
+        List.empty => acc,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk _name value => collect_referenced_names_struct_fields rest (collect_referenced_names value acc),
+            }
+    }
 
 #[partial]
 def collect_referenced_names_cases (cases : List MatchCase) (acc : List String) : List String := match cases {

@@ -2,9 +2,11 @@ use io {IO, println, read_file, write_file}
 open IO {println, read_file, write_file}
 use process {exec_cmd}
 use lang.types {Decl, LoadedModules}
-use lang.codegen.ir {emit_module}
+use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
-use lang.module {FileCheckAndCache, LoadedModules, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, expand_check_paths, load_file_modules, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.module {FileCheckAndCache, FileCheckResult, LoadedModules, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, expand_check_paths, get_loaded_main, get_module_info_decls, load_file_modules, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.pretty {show_decls}
+use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
 use std.list {Show}
 
@@ -195,6 +197,87 @@ def run_check (files : List String) (verbose : Bool) : IO I64 := do {
     run_check_loop base cache expanded 0 0 verbose
 }
 
+/// A `monad test <path>...` subcommand mirroring `monad-rs test`: for
+/// each resolved file, discover its own `#[test]` defs, compile a
+/// native driver binary (`lang.codegen.test_driver`'s
+/// `compile_loaded_modules_to_test_ir` — the same discover → synthesize
+/// → compile pipeline `compile_file`'s own `compile` command's
+/// `link_ir` already links and runs single programs with, reused here
+/// per test file), and RUN it — the driver binary's own `println`
+/// PASS/FAIL-per-test + summary line streams straight to inherited
+/// stdout (`exec_cmd`'s own `std::process::Command::status()` inherits
+/// stdio by default, `core/src/core_native.rs`), the same way
+/// `lang.codegen.test_driver`'s own doc comment describes.
+///
+/// Any argument that's a directory is expanded to every `.mo` file
+/// under it first (`expand_check_paths`, the same helper `check` uses)
+/// — this is what makes `monad test lang/` (a directory) actually work,
+/// unlike calling `compile_loaded_modules_to_test_ir` directly, which
+/// is scoped to a single already-loaded file.
+///
+/// A file with no `#[test]`s, or one that already defines its own
+/// top-level `main` (can't have a synthesized driver `main` spliced in
+/// — `compile_loaded_modules_to_test_ir`'s own `has_top_level_main`
+/// check), is reported as `SKIP`, not `FAIL` — neither is a real
+/// problem with that file.
+#[partial]
+def run_test (files : List String) (out_dir : String) (verbose : Bool) : IO I64 := do {
+    let expanded : List String <- expand_check_paths files;
+    run_test_loop expanded out_dir 0 0 0 0 verbose
+}
+
+/// `tested`/`passed`/`failed`/`skipped` accumulate across all files.
+/// `bin_idx` names each compiled test binary uniquely
+/// (`monad_test_bin_<N>`, `out_dir`) so running `test` against several
+/// files in one invocation doesn't have each file's driver binary
+/// overwrite the last one's before it's even run.
+#[partial]
+def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (passed : I64) (failed : I64) (skipped : I64) (verbose : Bool) : IO I64 :=
+    match files {
+        List.empty => do {
+            let tested := passed + failed;
+            println (I64.to_string tested ++ " file(s) tested, " ++ I64.to_string passed ++ " passed, " ++ I64.to_string failed ++ " failed, " ++ I64.to_string skipped ++ " skipped");
+            return (if I64.gt failed 0 then 1 else 0)
+        },
+        List.cons f rest => do {
+            let res : Result String LoadedModules <- load_file_modules f;
+            match res {
+                err e => do {
+                    println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
+                    run_test_loop rest out_dir bin_idx passed failed (skipped + 1) verbose
+                },
+                ok loaded => do {
+                    let ir_res : Result String LLVMModule <- compile_loaded_modules_to_test_ir loaded;
+                    match ir_res {
+                        err e => do {
+                            println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
+                            run_test_loop rest out_dir bin_idx passed failed (skipped + 1) verbose
+                        },
+                        ok llvm_mod => do {
+                            let ir_text := emit_module llvm_mod;
+                            let bin_name := "monad_test_bin_" ++ I64.to_string bin_idx;
+                            let link_result <- link_ir ir_text out_dir bin_name verbose;
+                            if not (link_result == 0) then do {
+                                println ("FAIL  " ++ f ++ " (compilation failed)");
+                                run_test_loop rest out_dir (bin_idx + 1) passed (failed + 1) skipped verbose
+                            } else do {
+                                let bin_path := out_dir ++ "/" ++ bin_name;
+                                let exit_code <- exec_cmd bin_path [];
+                                if exit_code == 0 then do {
+                                    println ("ok    " ++ f);
+                                    run_test_loop rest out_dir (bin_idx + 1) (passed + 1) failed skipped verbose
+                                } else do {
+                                    println ("FAIL  " ++ f);
+                                    run_test_loop rest out_dir (bin_idx + 1) passed (failed + 1) skipped verbose
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 // `Command` and its argv parser are hand-written (not `#[derive_cli]`) and
 // this file stays free of any macro/attribute-derive syntax on purpose: the
 // self-hosted compiler's own parser/typechecker (lang/parser.mo,
@@ -209,6 +292,7 @@ type Command {
     compile (file: String) (out_name: String) (verbose: Bool),
     pretty (file: String),
     check (files: List String) (verbose: Bool),
+    test (files: List String) (verbose: Bool),
     help
 }
 
@@ -257,6 +341,11 @@ def Command.from_args (args : List String) : Command :=
                     Cli.FlagResult.flag_result verbose rest1 =>
                         if List.is_empty rest1 then Command.help else Command.check rest1 verbose,
                 }
+            else if cmd == "test" then
+                match Cli.take_flag "verbose" "v" rest {
+                    Cli.FlagResult.flag_result verbose rest1 =>
+                        if List.is_empty rest1 then Command.help else Command.test rest1 verbose,
+                }
             else
                 Command.help,
         List.empty => Command.help,
@@ -271,12 +360,22 @@ def main (args : List String) : IO I64 {
             compile_file file_path out_dir out_name verbose
         },
         pretty file_path => do {
-            println <| "loading " ++ file_path;
-            // TODO fix type checking bug on res
+            // Prints the TARGET FILE's own declarations, pretty-printed
+            // back to source text via `lang.pretty.show_decls` — this
+            // used to just load the file's module-dependency graph and
+            // dump `Show.show loaded` (a debug repr of the internal
+            // `LoadedModules` structure, never anything resembling
+            // pretty-printed source, despite the command's own name).
+            // Only `file_path`'s own decls are shown (not its
+            // transitive `use` dependencies), matching `get_loaded_main`/
+            // `get_module_info_decls`'s existing "this module's own
+            // decls only" convention (see `lang/codegen/test_driver.mo`'s
+            // `discover_test_defs` for the same convention elsewhere).
             let res : Result String LoadedModules <- load_file_modules file_path;
             match res {
                 ok loaded => do {
-                    println <| "modules loaded:\n" ++ Show.show loaded;
+                    let decls := get_module_info_decls (get_loaded_main loaded);
+                    println (show_decls decls);
                     return 0
                 },
                 err e => do {
@@ -287,6 +386,9 @@ def main (args : List String) : IO I64 {
         },
         check files verbose => do {
             run_check files verbose
+        },
+        test files verbose => do {
+            run_test files out_dir verbose
         },
         help => do {
             print_help
@@ -302,5 +404,8 @@ def print_help : IO I64 {
     println "       monad check <path>... [--verbose/-v]  Parse and typecheck .mo source files (no execution)";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";
     println "         --verbose/-v prints a per-declaration progress trace while checking";
+    println "       monad test <path>... [--verbose/-v]  Compile and run each file's own #[test] defs as a native binary";
+    println "         Any <path> that's a directory is recursively expanded to its *.mo files";
+    println "         A file with no #[test]s (or that already defines its own main) is skipped, not failed";
     return 0
 }

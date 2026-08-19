@@ -28,9 +28,11 @@
 /// `detect_test_result_value`, `core/src/lib.rs`) are explicitly out
 /// of scope for this file — not silently unsupported, just not yet
 /// needed by any real corpus file.
-use lang.types {Attribute, Decl, Def, ModulePath, has_attr}
-use lang.codegen.emit {module_path_to_str}
-use lang.module {try_parse_decls}
+use lang.types {Attribute, Decl, Def, LoadedModules, ModulePath, has_attr}
+use lang.codegen.emit {collect_all_decls_from_modules, compile_db_module, filter_reachable_decls, module_path_to_str}
+use lang.codegen.ir {LLVMModule}
+use lang.module {get_loaded_all, get_loaded_main, get_module_info_decls, try_parse_decls}
+use io {IO}
 
 // ─── Discovery ──────────────────────────────────────────────────────
 
@@ -90,21 +92,50 @@ def test_def_names (defs : List Def) : List String :=
 
 // ─── Driver source synthesis ────────────────────────────────────────
 //
-// Synthesizes `.mo` SOURCE TEXT for a driver `def main : IO I64 { ... }`
+// Synthesizes `.mo` SOURCE TEXT for a driver `def main : I64 := ...`
 // that calls each named test in turn (v1 scope: each assumed
 // `Bool`-returning), prints "PASS  <name>" / "FAIL  <name>" per test
 // (`println`, inherited-stdio streaming — matches
 // `lang.codegen.link.compile_and_run`'s own existing convention, the
 // only way a compiled/run binary's results reach a human here), a
-// final "<passed>/<total> tests passed" summary line, and returns `0`
-// if every test passed, `1` otherwise (the sole signal the PARENT
+// final "<passed>/<total> tests passed" summary line, and evaluates to
+// `0` if every test passed, `1` otherwise (the sole signal the PARENT
 // process — `lang/main.mo`'s own `test_file`, a later step — can
 // observe via `exec_cmd`'s exit code).
 //
-// `def main : IO I64 { ... }` with zero params is deliberate and
-// already handled downstream — `lang/codegen/emit.mo`'s own
-// `ensure_main_params`/`rename_main` auto-add the runtime's `args :
-// List String` param when `main` has none.
+// **`main`'s type is bare `I64`, NOT `IO I64`, and the body is a plain
+// `let ... in ...` expression chain, NOT a `{ ... }` do-block.** This
+// was NOT the original design (an `IO I64`-typed `{ ... }` do-block,
+// mirroring `lang/main.mo`'s own established style, was tried first)
+// -- confirmed via direct standalone repro during this feature's own
+// implementation that the native-compile pipeline's `runtime.c` own
+// `int main(...) { return (int)main_monad(args); }` casts whatever
+// `main_monad` returns STRAIGHT to `int` with no unwrapping at all, so
+// an `IO`-wrapped return value (a heap-allocated constructor, not the
+// raw integer) produces a garbage exit code -- reproduced with
+// `def main : IO I64 { return 5 }` (exit 64, not 5) down to the
+// simplest possible case, and confirmed as the correct fix by
+// `lang/codegen/test/test_e2e.mo`'s own pre-existing, actually-proven
+// compile-and-run precedent, which already uses exactly this shape
+// (`def main : I64 := 42`) rather than an `IO`-wrapped one. `println`
+// (a native call) still executes immediately for its side effect
+// regardless of the surrounding expression's own static type — a
+// `let _ := println "..." in ...` chain prints correctly AND the
+// chain's own final bare-`I64` value becomes a correct, meaningful
+// exit code (confirmed via the same repro, `def main : I64 := let _
+// := println "..." in 5`, exit 5, output printed). This is a genuine,
+// separate, pre-existing native-codegen gap (do-notation/`IO`-typed
+// `main` was apparently never exercised through the compile-then-run
+// path before this feature) — not something this file caused, worth
+// its own future investigation, but out of scope to fix generally
+// here; sidestepping it for the driver's own synthesized shape is
+// enough for this command to work correctly today.
+//
+// `main` with zero params is otherwise unaffected by any of this —
+// `lang/codegen/emit.mo`'s own `ensure_main_params`/`rename_main`
+// auto-add the runtime's `args : List String` param when `main` has
+// none, confirmed independently still working with a bare-`I64`
+// return type too.
 //
 // Each test's own call result is bound to an index-based local
 // (`__t0`, `__t1`, ...) rather than reusing the test's own name, so a
@@ -120,7 +151,7 @@ def synth_let_lines (names : List String) (idx : I64) : String :=
     match names {
         List.empty => "",
         List.cons name rest =>
-            "    let " ++ test_var_name idx ++ " := " ++ name ++ ";\n" ++ synth_let_lines rest (idx + 1),
+            "let " ++ test_var_name idx ++ " := " ++ name ++ " in\n" ++ synth_let_lines rest (idx + 1),
     }
 
 #[partial]
@@ -128,7 +159,7 @@ def synth_report_lines (names : List String) (idx : I64) : String :=
     match names {
         List.empty => "",
         List.cons name rest =>
-            "    if " ++ test_var_name idx ++ " then println \"PASS  " ++ name ++ "\" else println \"FAIL  " ++ name ++ "\";\n" ++ synth_report_lines rest (idx + 1),
+            "let _ := (if " ++ test_var_name idx ++ " then println \"PASS  " ++ name ++ "\" else println \"FAIL  " ++ name ++ "\") in\n" ++ synth_report_lines rest (idx + 1),
     }
 
 #[partial]
@@ -142,14 +173,56 @@ def synth_sum_expr (names : List String) (idx : I64) : String :=
 #[partial]
 def synthesize_test_driver_source (names : List String) : String :=
     let total : I64 := List.length names in
-    "def main : IO I64 {\n" ++
+    "def main : I64 :=\n" ++
     synth_let_lines names 0 ++
     synth_report_lines names 0 ++
-    "    let __passed := " ++ synth_sum_expr names 0 ++ ";\n" ++
-    "    let __total := " ++ I64.to_string total ++ ";\n" ++
-    "    println (I64.to_string __passed ++ \"/\" ++ I64.to_string __total ++ \" tests passed\");\n" ++
-    "    return (if I64.beq __passed __total then 0 else 1)\n" ++
-    "}\n"
+    "let __passed := " ++ synth_sum_expr names 0 ++ " in\n" ++
+    "let __total := " ++ I64.to_string total ++ " in\n" ++
+    "let _ := println (I64.to_string __passed ++ \"/\" ++ I64.to_string __total ++ \" tests passed\") in\n" ++
+    "if I64.beq __passed __total then 0 else 1\n"
+
+// ─── Full pipeline ──────────────────────────────────────────────────
+
+/// Discover -> synthesize -> parse -> collision-check -> splice into
+/// the decl list -> reachability-filter -> compile. Mirrors
+/// `lang.codegen.emit.compile_loaded_modules_to_ir`'s own body, but
+/// with the extra splice step -- a plain `#[test]`-bearing file has no
+/// pre-existing `main` for that function's own reachability rooting to
+/// find, so this builds one first.
+///
+/// Test discovery runs over the TARGET FILE's own decls only
+/// (`get_module_info_decls (get_loaded_main loaded)`) -- matches the
+/// Rust reference's own precedent (`core/src/lib.rs`,
+/// `module.defs().filter(has_test_attr)`, that module's own defs only,
+/// not transitive `use` deps) -- while compilation still uses the FULL
+/// loaded set (`get_loaded_all`), so the driver's calls into the
+/// target file's own tests still resolve everything those tests
+/// themselves call, transitively, the normal way.
+#[partial]
+def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result String LLVMModule) := do {
+    let target_decls := get_module_info_decls (get_loaded_main loaded);
+    if has_top_level_main target_decls then do {
+        return Result.err "cannot run tests -- file already defines a top-level `main`"
+    } else do {
+        let test_defs := discover_test_defs target_decls;
+        if List.is_empty test_defs then do {
+            return Result.err "no #[test] defs found"
+        } else do {
+            let driver_source := synthesize_test_driver_source (test_def_names test_defs);
+            match try_parse_decls driver_source {
+                Option.some driver_decls => do {
+                    let all_decls := collect_all_decls_from_modules (get_loaded_all loaded) List.empty;
+                    let spliced := List.append driver_decls all_decls;
+                    let reachable := filter_reachable_decls spliced;
+                    return Result.ok (compile_db_module reachable)
+                },
+                Option.none => do {
+                    return Result.err "internal error: failed to parse synthesized test driver (this is a monad-test bug, not a problem with the target file)"
+                }
+            }
+        }
+    }
+}
 
 // ─── Tests ───────────────────────────────────────────────────────────
 //

@@ -1298,6 +1298,12 @@ def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : Lo
         }
     }
 
+/// `use_d`/`open_d`/`infix_d` genuinely have nothing to type-check (no
+/// term/type of their own) — the `_ => List.empty` catch-all is correct
+/// for those. `instance_d` is the real remaining gap here: instance
+/// method BODIES aren't checked at all (tracked separately — see
+/// `lang/typecheck/infer.mo`'s `resolve_class_method`, which doesn't
+/// even resolve a concrete method body to check in the first place).
 #[partial]
 def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match d {
@@ -1305,6 +1311,12 @@ def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path
         Decl.inductive_d ind => check_inductive_with_scope ind scope locals path verbose,
         Decl.struct_d s => check_struct_with_scope s scope locals path verbose,
         Decl.class_d cls => check_class_with_scope cls scope locals path verbose,
+        // `build_scope_one_decl` (lang/scope.mo) recurses into a
+        // `scoped_open_d`'s own inner decl the same way -- this used to
+        // NOT, silently skipping type-checking the inner decl entirely
+        // (`open X {...} in def f := ...` would register `f` in scope
+        // via scope-building but never actually check `f`'s own body).
+        Decl.scoped_open_d _ _ inner => check_decl_with_scope inner scope locals path verbose,
         _ => do { return List.empty }
     }
 
