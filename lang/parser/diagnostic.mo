@@ -118,20 +118,24 @@ def line_end_after_go (s : String) (pos : I64) (len : I64) : I64 :=
 		Option.none => len
 	}
 
-/// Right-justify a line number to width 3 (mirrors `diag.rs`'s
-/// `{:>3}`) — approximate for line numbers over 999 (no truncation, the
-/// field just grows, same as Rust's own formatter).
+/// Right-justify a line number to `width` (mirrors `diag.rs`'s
+/// `{:>width$}`) — `width` is computed once per diagnostic from the
+/// widest line number actually shown (see `render_source_context`), with
+/// a minimum of 3, so every displayed line (the error line and its
+/// context neighbors alike) lines up its `|` in the same column. If `n`
+/// itself needs more digits than `width`, the field just grows (no
+/// truncation), same as Rust's own formatter.
 #[partial]
-def pad_line_num (n : I64) : String :=
+def pad_line_num (width : I64) (n : I64) : String :=
 	let s : String := I64.to_string n in
-	if I64.lt (String.length s) 3
-	then pad_line_num_loop s
+	if I64.lt (String.length s) width
+	then pad_line_num_loop width s
 	else s
 
 #[partial]
-def pad_line_num_loop (s : String) : String :=
-	if I64.lt (String.length s) 3
-	then pad_line_num_loop (String.concat " " s)
+def pad_line_num_loop (width : I64) (s : String) : String :=
+	if I64.lt (String.length s) width
+	then pad_line_num_loop width (String.concat " " s)
 	else s
 
 /// Bounded by `n` (a column number — line length, not file size).
@@ -141,17 +145,32 @@ def spaces (n : I64) : String :=
 	then String.concat " " (spaces (I64.sub n 1))
 	else ""
 
+/// Every displayed line — error line and context neighbors alike — uses
+/// the SAME `width`-padded number field followed by `" | "`, with no
+/// extra literal prefix on either branch, so the gutters all align.
 #[partial]
-def render_context_line (line_num : I64) (content : String) (is_error_line : Bool) (col : I64) : String :=
+def render_context_line (width : I64) (line_num : I64) (content : String) (is_error_line : Bool) (col : I64) : String :=
+	let prefix : String := String.concat (pad_line_num width line_num) (String.concat " | " content) in
 	if is_error_line
-	then String.concat (pad_line_num line_num) (String.concat " | " (String.concat content (String.concat "\n" (render_caret col))))
-	else String.concat "   " (String.concat (pad_line_num line_num) (String.concat " | " (String.concat content "\n")))
+	then String.concat prefix (String.concat "\n" (render_caret width col))
+	else String.concat prefix "\n"
 
+/// Caret indent is `width + 3` spaces (the number field plus the literal
+/// `" | "`) so it lands under the first character of the error line's
+/// own content, then `col - 1` more spaces to reach the actual column.
 #[partial]
-def render_caret (col : I64) : String :=
+def render_caret (width : I64) (col : I64) : String :=
 	if I64.gt col 0
-	then String.concat "    " (String.concat (spaces (I64.sub col 1)) "^---\n")
+	then String.concat (spaces (I64.add width 3)) (String.concat (spaces (I64.sub col 1)) "^---\n")
 	else ""
+
+/// Number of decimal digits in a non-negative line number.
+#[partial]
+def digit_count (n : I64) : I64 :=
+	String.length (I64.to_string n)
+
+def i64_max (a : I64) (b : I64) : I64 :=
+	if I64.gt a b then a else b
 
 /// Renders up to 3 lines centered on `line` (the failing line, plus one
 /// before and after, clamped to the file's real extent) plus a `^---`
@@ -167,23 +186,29 @@ def render_source_context (source : String) (line : I64) (col : I64) (offset : I
 		let cur_start : I64 := line_start_before source offset in
 		let cur_end : I64 := line_end_after source offset in
 		let cur_content : String := String.slice source cur_start (I64.sub cur_end cur_start) in
+		let has_next : Bool := I64.lt cur_end (String.length source) in
+		// The gutter width is shared across the whole 3-line window, based
+		// on the widest line number actually shown (mirrors `diag.rs`'s
+		// `end_line`) — a next line, if there is one, is always the widest.
+		let end_line : I64 := if has_next then I64.add line 1 else line in
+		let width : I64 := i64_max 3 (digit_count end_line) in
 		let prev_str : String :=
 			if I64.gt line 1
 			then
 				let prev_end : I64 := I64.sub cur_start 1 in
 				let prev_start : I64 := line_start_before source prev_end in
 				let prev_content : String := String.slice source prev_start (I64.sub prev_end prev_start) in
-				render_context_line (I64.sub line 1) prev_content false 0
+				render_context_line width (I64.sub line 1) prev_content false 0
 			else ""
 		in
-		let cur_str : String := render_context_line line cur_content true col in
+		let cur_str : String := render_context_line width line cur_content true col in
 		let next_str : String :=
-			if I64.lt cur_end (String.length source)
+			if has_next
 			then
 				let next_start : I64 := I64.add cur_end 1 in
 				let next_end : I64 := line_end_after source next_start in
 				let next_content : String := String.slice source next_start (I64.sub next_end next_start) in
-				render_context_line (I64.add line 1) next_content false 0
+				render_context_line width (I64.add line 1) next_content false 0
 			else ""
 		in
 		String.concat prev_str (String.concat cur_str next_str)
@@ -203,7 +228,7 @@ def test_render_parse_error_simple : Bool :=
 	let source : String := "def f := x" in
 	let err : ParseError := ParseError.custom "unknown declaration" "x" in
 	let rendered : String := render_parse_error source Option.none err in
-	// "error: unknown declaration at 1:10\n  --> :1:10\n  1 | def f := x\n    ...^---\n"
+	// "error: unknown declaration at 1:10\n  --> :1:10\n  1 | def f := x\n               ^---\n"
 	String_contains rendered "error: unknown declaration at 1:10"
 		&& String_contains rendered "--> :1:10"
 		&& String_contains rendered "def f := x"
@@ -268,6 +293,45 @@ def test_render_source_context_last_line_no_next : Bool :=
 	String_contains rendered "at 3:1"
 		&& String_contains rendered "2 | def b := 2"
 		&& String_contains rendered "3 | bad_here"
+
+/// Regression test for the gutter/caret indentation bug (matching
+/// `core/src/diag.rs`'s own `gutter_aligns_error_line_with_context_lines`
+/// test): the error line and a context neighbor must share the exact
+/// same "N | " gutter width — this line-1/line-2 fixture used to render
+/// with the context line ("2 | ...") indented 3 extra stray spaces past
+/// the error line ("1 | ..."), and the caret 2 columns short of the
+/// content it was supposed to point at. `String_contains` checks a
+/// LITERAL substring (see `String_contains_go` above), so matching these
+/// exact strings (exact leading-space counts included) really does pin
+/// down the alignment, not just presence of the text.
+#[test]
+def test_render_source_context_gutter_alignment_exact : Bool :=
+	let source : String := "abcdefghij\nklmnop" in
+	// remaining is the genuine unconsumed suffix starting at column 5 ('e').
+	let err : ParseError := ParseError.custom "unknown declaration" "efghij\nklmnop" in
+	let rendered : String := render_parse_error source Option.none err in
+	// width = 3 (only 1- and 2-digit line numbers shown): error line's
+	// "  1 | " gutter and the context line's "  2 | " gutter must match
+	// exactly, and the caret (6-char prefix + 4 more for column 5) must
+	// land under the content, not 2 columns short.
+	String_contains rendered "  1 | abcdefghij\n          ^---\n  2 | klmnop\n"
+
+/// Regression test for the latent width bug alongside the gutter fix:
+/// once the window's widest line number needs 4 digits (999/1000/1001),
+/// EVERY displayed line — including the 3-digit "999" one — must pad out
+/// to that same shared width, not just the 4-digit ones. Mirrors
+/// `core/src/diag.rs`'s own
+/// `gutter_width_grows_for_four_digit_line_numbers` test.
+#[test]
+def test_render_source_context_gutter_width_grows_for_wide_line_numbers : Bool :=
+	let padding : String := repeat_line "// padding line to bulk up the source\n" 999 in
+	let source : String := String.concat padding "bad_here\nfinal_line" in
+	let err : ParseError := ParseError.custom "unknown declaration" "bad_here\nfinal_line" in
+	let rendered : String := render_parse_error source Option.none err in
+	String_contains rendered "at 1000:1"
+		&& String_contains rendered " 999 | // padding line to bulk up the source\n"
+		&& String_contains rendered "1000 | bad_here\n       ^---\n"
+		&& String_contains rendered "1001 | final_line\n"
 
 /// Regression test for the specific bug this whole rewrite fixes: a
 /// linear (even tail-recursive) scan over the *entire* source to find

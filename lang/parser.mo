@@ -3105,12 +3105,18 @@ def decls_try (r : ParseResult Decl) (orig : String) (acc : List Decl) : ParseRe
 /// spurious top-level decl). This is a SEPARATE function, not a
 /// replacement, specifically so nothing that already depends on the
 /// lenient behavior (`lang.module`'s scope-building, and by extension
-/// most of this corpus's own test suite — several real files still
-/// don't fully parse, e.g. `lang/json.mo`/`lang/toml.mo`/`std/map.mo`,
-/// see `slow_tests/parser_file_tests.mo`'s own conservative decl-count
-/// floor tests) breaks. Used only where a real diagnostic is actually
-/// wanted: `lang.module`'s `try_parse_decls_strict`, wired into
-/// `lang/main.mo`'s CLI compile-failure path.
+/// most of this corpus's own test suite) breaks. `lang/json.mo`/
+/// `lang/toml.mo`/`std/map.mo` were the real files motivating this split
+/// in the first place — confirmed (2026-08-19) to now fully self-parse
+/// with `decls_parser` too (see `slow_tests/parser_file_tests.mo`'s
+/// `test_json_fully_parses`/`test_toml_fully_parses`/
+/// `test_map_fully_parses`), but the strict twin stays regardless since
+/// the lenient parser can still silently truncate on OTHER not-yet-
+/// encountered constructs, and a real diagnostic on failure is worth
+/// having independent of any specific file's current status. Used only
+/// where a real diagnostic is actually wanted: `lang.module`'s
+/// `try_parse_decls_strict`, wired into `lang/main.mo`'s CLI
+/// compile-failure path.
 #[partial]
 def decls_parser_strict (input : String) : ParseResult (List Decl) :=
 	decls_skip_strict (skip_docstrings (skip_spaces input)) List.empty

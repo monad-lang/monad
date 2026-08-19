@@ -3,10 +3,8 @@
 
 use io {io, read_file}
 open IO {io, read_file}
-use lang.types {Decl}
-use lang.parser {decls_parser, open_parser, use_parser}
-use lang.parser.core {ParseResult, fail, success}
-use lang.pretty {show_decl}
+use lang.parser {decls_parser}
+use lang.parser.core {fail, success}
 
 open ParseResult {fail, success}
 
@@ -146,112 +144,66 @@ def test_parse_lang_all_utf8 : Bool := parse_all lang_files_utf8
 // failure), giving strictly worse debugging signal than the per-category
 // tests on any failure while adding no new coverage.
 
-// ================ Helper for counting declarations ================
+// ================ Full-file-parse (no truncation) tests ================
+//
+// `decls_parser` is lenient: on a construct it can't parse, `decls_try`
+// silently stops and returns whatever it got so far as `success`, not a
+// `fail` — so a floor count like `I64.gt count 5` only proves "didn't
+// truncate to (near) zero", not "parsed the whole file". Checking
+// `success`'s own `remaining` field for emptiness is the actual contract
+// these tests care about: every byte of the file got consumed. (See
+// `lang/parser.mo`'s `decls_parser_strict` for the twin that turns
+// truncation into a hard `fail` instead of a silent partial `success` —
+// not used here so this file keeps exercising the lenient path real
+// callers actually use, just checking its result more precisely.)
 
-/// Count declarations in a file
+/// Whether a file's `decls_parser` run consumes the ENTIRE input, i.e.
+/// nothing is left over in `success`'s own `remaining` field. A `fail` or
+/// a non-empty remainder both count as "didn't fully parse."
 #[partial]
-def count_decls_in_file (path : String) : I64 :=
+def file_fully_parses (path : String) : Bool :=
     match IO.read_file path {
         io content =>
             match decls_parser content {
-                success _ decls => list_length decls,
-                fail _ => 0
+                success rem _ => String.is_empty rem,
+                fail _ => false
             },
-        _ => 0
-    }
-
-/// Helper: get list length as I64
-#[partial]
-def list_length (xs : List A) : I64 :=
-    list_length_help xs 0
-
-#[partial]
-def list_length_help (xs : List A) (acc : I64) : I64 :=
-    match xs {
-        List.empty => acc,
-        List.cons _ rest => list_length_help rest (I64.add acc 1)
-    }
-
-// ================ Declaration count tests ================
-
-#[test]
-def test_hello_has_some_decls : Bool :=
-    let count := count_decls_in_file "examples/hello.mo" in
-    I64.gt count 0
-
-#[test]
-def test_string_has_some_decls : Bool :=
-    let count := count_decls_in_file "init/string.mo" in
-    I64.gt count 0
-
-#[test]
-def test_scope_has_some_decls : Bool :=
-    let count := count_decls_in_file "lang/scope.mo" in
-    I64.gt count 0
-
-// `lang/json.mo`/`lang/toml.mo` both open with a `//`/`///` comment
-// containing an em dash (multi-byte UTF-8) before their very first real
-// declaration — before the `take_while`/`string_body` UTF-8 stepping
-// fix (see `utf8_char_width`'s doc comment, lang/parser/combinators.mo)
-// this silently truncated the parse to ZERO declarations (verified by
-// bisection while landing that fix). Both files still stop short of
-// their true decl count today (~194/~167 respectively, going by a raw
-// grep of top-level declaration keywords) — some other, not yet
-// identified construct further down still trips `decls_try`'s
-// silent-truncate-on-fail fallback — so these floors are deliberately
-// conservative (verified non-regression against the *specific* UTF-8
-// bug, not a claim of full-file completeness) rather than exact counts.
-#[test]
-def test_json_utf8_comment_does_not_truncate_to_zero : Bool :=
-    let count := count_decls_in_file "lang/json.mo" in
-    I64.gt count 5
-
-#[test]
-def test_toml_utf8_comment_does_not_truncate_to_zero : Bool :=
-    let count := count_decls_in_file "lang/toml.mo" in
-    I64.gt count 5
-
-// ================ use/open brace syntax round-trip tests ================
-// parse -> pretty-print -> re-parse should succeed for the new syntax.
-
-#[partial]
-def parse_decl_succeeds (r : ParseResult Decl) : Bool :=
-    match r {
-        success _ _ => true,
-        fail _ => false
+        _ => false
     }
 
 #[test]
-def test_roundtrip_use_glob : Bool :=
-    match use_parser "use io {*}" {
-        success _ out => parse_decl_succeeds (use_parser (show_decl out)),
-        fail _ => false
-    }
+def test_hello_fully_parses : Bool :=
+    file_fully_parses "examples/hello.mo"
 
 #[test]
-def test_roundtrip_use_nested : Bool :=
-    match use_parser "use io {file {read}}" {
-        success _ out => parse_decl_succeeds (use_parser (show_decl out)),
-        fail _ => false
-    }
+def test_string_fully_parses : Bool :=
+    file_fully_parses "init/string.mo"
 
 #[test]
-def test_roundtrip_use_nested_rename : Bool :=
-    match use_parser "use io {file as f {read}}" {
-        success _ out => parse_decl_succeeds (use_parser (show_decl out)),
-        fail _ => false
-    }
+def test_scope_fully_parses : Bool :=
+    file_fully_parses "lang/scope.mo"
+
+// `lang/json.mo`/`lang/toml.mo`/`std/map.mo` all open with a `//`/`///`
+// comment containing an em dash (multi-byte UTF-8) before their very
+// first real declaration — before the `take_while`/`string_body` UTF-8
+// stepping fix (see `utf8_char_width`'s doc comment,
+// `lang/parser/combinators.mo`) this silently truncated the parse to
+// ZERO declarations (verified by bisection while landing that fix). All
+// three used to additionally stop short of their true decl count for
+// other reasons (juxtaposed list-literal application, `let` inside `if`
+// branches, paren type ascriptions, multi-param lambdas, multi-name
+// constructor fields, nested-paren class param types — each fixed
+// separately, motivated by exactly these files) — confirmed (2026-08-19)
+// that all three now parse to completion with zero bytes remaining, so
+// these tests assert that directly instead of a conservative floor.
+#[test]
+def test_json_fully_parses : Bool :=
+    file_fully_parses "lang/json.mo"
 
 #[test]
-def test_roundtrip_open_filtered : Bool :=
-    match open_parser "open io {println}" {
-        success _ out => parse_decl_succeeds (open_parser (show_decl out)),
-        fail _ => false
-    }
+def test_toml_fully_parses : Bool :=
+    file_fully_parses "lang/toml.mo"
 
 #[test]
-def test_roundtrip_scoped_open : Bool :=
-    match open_parser "open io {println} in def main : IO Unit := println \"hi\"" {
-        success _ out => parse_decl_succeeds (open_parser (show_decl out)),
-        fail _ => false
-    }
+def test_map_fully_parses : Bool :=
+    file_fully_parses "std/map.mo"

@@ -55,5 +55,33 @@ def test_typecheck_std_concurrent_fiber : IO Bool := typecheck_file "std/concurr
 #[test]
 def test_typecheck_std_concurrent_combine : IO Bool := typecheck_file "std/concurrent/combine.mo" "concurrent_combine"
 
-// Note: Test files (list_tests*, map_tests*, etc.) require module loading
-// and are skipped for now.
+// --- std/ test files ---
+//
+// Previously skipped as "require module loading... for now" — dependency
+// resolution IS implemented (`typecheck_file` above already uses it, same
+// as every other test in this file), so that reasoning was stale.
+// Re-enabled and confirmed passing (2026-08-19).
+
+#[test]
+def test_typecheck_std_list_tests1 : IO Bool := typecheck_file "std/list_tests1.mo" "list_tests1"
+
+#[test]
+def test_typecheck_std_list_tests2 : IO Bool := typecheck_file "std/list_tests2.mo" "list_tests2"
+
+#[test]
+def test_typecheck_std_list_tests3a : IO Bool := typecheck_file "std/list_tests3a.mo" "list_tests3a"
+
+#[test]
+def test_typecheck_std_list_tests3b : IO Bool := typecheck_file "std/list_tests3b.mo" "list_tests3b"
+
+#[test]
+def test_typecheck_std_map_tests : IO Bool := typecheck_file "std/map_tests.mo" "map_tests"
+
+#[test]
+def test_typecheck_std_derive_tests : IO Bool := typecheck_file "std/derive_tests.mo" "derive_tests"
+
+#[test]
+def test_typecheck_std_sha256_tests : IO Bool := typecheck_file "std/sha256_tests.mo" "sha256_tests"
+
+#[test]
+def test_typecheck_std_test_map_full : IO Bool := typecheck_file "std/test_map_full.mo" "test_map_full"

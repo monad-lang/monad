@@ -206,6 +206,15 @@ fn write_source_context(
     total_lines
   };
 
+  // Gutter width is the width of the widest line number actually shown,
+  // with a minimum of 3 (matches rustc-style alignment and keeps small
+  // files looking the same as before). Every displayed line -- the error
+  // line and its context neighbors alike -- uses this same width, so the
+  // `|` separators all line up in one column. The caret line then indents
+  // by `width + 3` spaces (the number field plus the literal `" | "`) to
+  // land under the first character of the source line's content.
+  let width = end_line.to_string().len().max(3);
+
   for i in start_line..=end_line {
     if i > total_lines {
       break;
@@ -213,12 +222,20 @@ fn write_source_context(
     let line_content = source_lines.get(i - 1).unwrap_or(&"");
 
     if i == line_num {
-      writeln!(f, "{}{:>3} | {}{}", c.bold(), i, line_content, c.reset())?;
+      writeln!(
+        f,
+        "{}{:>width$} | {}{}",
+        c.bold(),
+        i,
+        line_content,
+        c.reset()
+      )?;
       if column > 0 {
         let indent = " ".repeat(column.saturating_sub(1));
         writeln!(
           f,
-          "    {}{}{}^---{}",
+          "{}{}{}{}^---{}",
+          " ".repeat(width + 3),
           indent,
           c.error(),
           c.bold(),
@@ -226,9 +243,49 @@ fn write_source_context(
         )?;
       }
     } else {
-      writeln!(f, "   {:>3} | {}", i, line_content)?;
+      writeln!(f, "{:>width$} | {}", i, line_content)?;
     }
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn render(source: &str, line_num: usize, column: usize) -> String {
+    let mut out = String::new();
+    write_source_context(source, line_num, column, false, &mut out).unwrap();
+    out
+  }
+
+  #[test]
+  fn gutter_aligns_error_line_with_context_lines() {
+    let out = render("def add (a : I64 (b : I64) : I64 :=\n    a + b\n", 1, 28);
+    let lines: Vec<&str> = out.lines().collect();
+    // Error line and its "N | " gutter.
+    assert_eq!(lines[0], "  1 | def add (a : I64 (b : I64) : I64 :=");
+    // Caret aligned under column 28 of the content above (6-char prefix:
+    // 3-wide number field + " | ", then 27 spaces before the caret).
+    assert_eq!(lines[1], format!("{}{}^---", " ".repeat(6), " ".repeat(27)));
+    // Context line below uses the exact same gutter width as the error
+    // line -- no stray extra indent.
+    assert_eq!(lines[2], "  2 |     a + b");
+  }
+
+  #[test]
+  fn gutter_width_grows_for_four_digit_line_numbers() {
+    let mut source = String::new();
+    for i in 1..=1001 {
+      source.push_str(&format!("line{}\n", i));
+    }
+    let out = render(&source, 1000, 1);
+    let lines: Vec<&str> = out.lines().collect();
+    // end_line is 1001 (4 digits), so every gutter -- including the
+    // 3-digit-wide "999" context line -- pads out to width 4.
+    assert_eq!(lines[0], " 999 | line999");
+    assert_eq!(lines[1], "1000 | line1000");
+    assert_eq!(lines[3], "1001 | line1001");
+  }
 }
