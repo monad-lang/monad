@@ -1328,11 +1328,25 @@ def dict_tag_placeholder : I64 := 999
 #[partial]
 def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
     match ins {
-        Instance.mk _ cls_name _ ins_args _ _ defs =>
+        Instance.mk _ cls_name ins_constraints ins_args _ _ defs =>
             let method_names := class_method_names cls in
             match build_dict_fields cls_name ins_args defs method_names {
                 Option.some field_terms =>
-                    let method_decls := promote_methods cls_name ins_args defs method_names in
+                    // `ins_constraints` (the instance's own `[Add A]` in
+                    // e.g. `instance [Add A] HAdd A A A { ... }`) is
+                    // threaded onto EVERY promoted method's own
+                    // `Def.constraints` -- a method's `def add := ...`
+                    // clause inside the instance body has no `[...]`
+                    // clause of its own; the constraint genuinely lives
+                    // on the instance, but Phase 3's own
+                    // `add_constraint_dict_params` only ever looks at a
+                    // Def's own `.constraints` (it can't see the
+                    // enclosing Instance at all once promoted to a
+                    // flat top-level Def) -- without this, the generic-
+                    // instance-forwarding case (this exact HAdd/Add
+                    // shape) would never gain the dict param its own
+                    // body (`Add.add a b`) needs.
+                    let method_decls := promote_methods cls_name ins_args ins_constraints defs method_names in
                     let dict_name := mangle_instance_dict_name cls_name ins_args in
                     let dict_con := Con.mk (Identifier.id "mk") dict_name (List.length field_terms) (options_of field_terms) in
                     let dict_def := Def.mk dict_name (Term.type_ 1) (Term.con dict_con)
@@ -1348,19 +1362,24 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
 /// unchanged, mirroring how `28d98dc`'s infix-resolution pass and
 /// Phase 0's own boxing both leave a Def's own shape otherwise alone.
 #[partial]
-def promote_methods (cls_name : ModulePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : List Decl :=
+def promote_methods (cls_name : ModulePath) (ins_args : List Term) (ins_constraints : List TypeConstraint) (defs : List Def) (method_names : List Identifier) : List Decl :=
     match method_names {
         List.empty => List.empty,
         List.cons mname rest =>
             match find_instance_method defs mname {
                 Option.some d =>
                     match d {
-                        Def.mk _ typ term_ constraints attrs vis =>
+                        Def.mk _ typ term_ own_constraints attrs vis =>
                             let new_name := mangle_instance_method_name cls_name ins_args mname in
-                            let renamed := Def.mk new_name typ term_ constraints attrs vis in
-                            List.cons (Decl.def_d renamed) (promote_methods cls_name ins_args defs rest),
+                            // `ins_constraints` prepended ahead of the
+                            // method's own (usually empty) constraints --
+                            // see promote_instance's own doc comment on
+                            // why this is here.
+                            let all_constraints := List.append ins_constraints own_constraints in
+                            let renamed := Def.mk new_name typ term_ all_constraints attrs vis in
+                            List.cons (Decl.def_d renamed) (promote_methods cls_name ins_args ins_constraints defs rest),
                     },
-                Option.none => promote_methods cls_name ins_args defs rest,
+                Option.none => promote_methods cls_name ins_args ins_constraints defs rest,
             },
     }
 
@@ -1440,6 +1459,198 @@ def promote_all_instances (classes : List Class) (instances : List Instance) : L
                             },
                         Option.none => promote_all_instances classes rest,
                     },
+            },
+    }
+
+// --- Phase 3 (dictionary-passing plan, see
+// plans/bootstrapping/self-hosted-compiler.md): a constrained def whose
+// body actually references a single-var class constraint gains one
+// leading dictionary parameter for it (a new outer Term.pi on .typ and
+// a matching outer Term.lam on .term). Mirrors the Rust reference's
+// `elaborate_constrained_type` (core_check_module.rs), done here as a
+// plain structural AST rewrite (not through the real bidirectional type
+// checker, which the `compile` pipeline never runs at all -- confirmed
+// while investigating this plan's own Phase 0/1). A def's `.typ`/
+// `.term` don't encode a `[Constraint]` as a real Pi/Lam the way the
+// Rust reference's elaborated term does (`TypeConstraint` is separate
+// metadata on `Def.constraints`) -- this pass is what closes that gap,
+// specifically for codegen's own purposes.
+//
+// The new dict parameter's own `typ` annotation is never actually
+// consulted by codegen (confirmed: every param is compiled as a plain
+// boxed i64 regardless of its declared type, `build_llvm_params_db`) --
+// it's a documentation-only placeholder (`dict_param_type_placeholder`),
+// not load-bearing.
+
+/// Only constraints with exactly one bound var (`[Show A]`, not
+/// `[Convert A B]`-shaped multi-var constraints, which have no real
+/// corpus need today -- see this plan's own corpus-reality-check) AND
+/// whose class is genuinely referenced in the def's own body qualify --
+/// skips a phantom/unused constraint rather than adding a dead
+/// parameter every caller would still need to supply.
+#[partial]
+def qualifying_dict_constraints (constraints : List TypeConstraint) (body : Term) : List TypeConstraint :=
+    match constraints {
+        List.empty => List.empty,
+        List.cons c rest =>
+            match c {
+                TypeConstraint.mk cls vars =>
+                    let single_var := match vars { List.cons _ v_rest => match v_rest { List.empty => true, List.cons _ _ => false, }, List.empty => false, } in
+                    if single_var && def_references_class (show_module_path cls) body
+                    then List.cons c (qualifying_dict_constraints rest body)
+                    else qualifying_dict_constraints rest body,
+            },
+    }
+
+/// Syntactic scan for any `Term.var` whose own name is a dotted
+/// reference into `cls_str` (e.g. `"Show.show"` for `cls_str = "Show"`)
+/// anywhere inside `t` -- deliberately conservative/best-effort, not a
+/// fully exhaustive walk of every `Term`/`Literal` shape (e.g. a class
+/// reference buried inside a `quote_`'d term's own nested structure
+/// beyond one level, or an exotic native-arg shape, could in principle
+/// be missed) -- matching this codebase's "approximate, don't guess"
+/// fallback style elsewhere: missing a real reference here means a
+/// constrained def doesn't get a dict param it needed, which surfaces
+/// as a clean link-time "undefined symbol" failure later (the class
+/// method reference stays unresolved), not a silent miscompile.
+#[partial]
+def def_references_class (cls_str : String) (t : Term) : Bool :=
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => String.starts_with (cls_str ++ ".") (show_identifier id),
+                DebugName.unnamed => false,
+            },
+        Term.lam _ typ body => def_references_class cls_str typ || def_references_class cls_str body,
+        Term.forall _ kind body => def_references_class cls_str kind || def_references_class cls_str body,
+        Term.pi arg ret => def_references_class cls_str arg || def_references_class cls_str ret,
+        Term.app f a => def_references_class cls_str f || def_references_class cls_str a,
+        Term.lit v => literal_references_class cls_str v,
+        Term.con c =>
+            match c { Con.mk _ _ _ args => opt_terms_reference_class cls_str args },
+        Term.ntv n =>
+            match n { Native.mk _ _ args => opt_terms_reference_class cls_str args },
+        Term.type_ _ => false,
+        Term.hole => false,
+        Term.quote_ inner => def_references_class cls_str inner,
+    }
+
+#[partial]
+def literal_references_class (cls_str : String) (l : Literal) : Bool :=
+    match l {
+        Literal.str _ => false,
+        Literal.num _ _ => false,
+        Literal.flt _ _ => false,
+        Literal.if_ a b c => def_references_class cls_str a || def_references_class cls_str b || def_references_class cls_str c,
+        Literal.match_ scrut cases => def_references_class cls_str scrut || match_cases_reference_class cls_str cases,
+        Literal.struct_lit fields _ => struct_fields_reference_class cls_str fields,
+        Literal.struct_update base fields => def_references_class cls_str base || struct_fields_reference_class cls_str fields,
+    }
+
+#[partial]
+def match_cases_reference_class (cls_str : String) (cases : List MatchCase) : Bool :=
+    match cases {
+        List.empty => false,
+        List.cons c rest =>
+            match c { MatchCase.mc _ _ body => def_references_class cls_str body || match_cases_reference_class cls_str rest },
+    }
+
+#[partial]
+def struct_fields_reference_class (cls_str : String) (fields : List StructLitField) : Bool :=
+    match fields {
+        List.empty => false,
+        List.cons f rest =>
+            match f { StructLitField.mk _ value => def_references_class cls_str value || struct_fields_reference_class cls_str rest },
+    }
+
+#[partial]
+def opt_terms_reference_class (cls_str : String) (args : List (Option Term)) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons a rest =>
+            match a {
+                Option.some t => def_references_class cls_str t || opt_terms_reference_class cls_str rest,
+                Option.none => opt_terms_reference_class cls_str rest,
+            },
+    }
+
+/// Documentation-only -- see this section's own top doc comment.
+#[partial]
+def dict_param_type_placeholder (c : TypeConstraint) : Term :=
+    match c {
+        TypeConstraint.mk cls _ =>
+            Term.var 0 (DebugName.named (Identifier.id ("__Dict_" ++ show_module_path cls))),
+    }
+
+/// One dict param per qualifying constraint, prepended in constraint-
+/// list order (the first constraint becomes the first/outermost new
+/// parameter) -- both `.typ` (a new leading Pi) and `.term` (a matching
+/// new leading Lam) grow together, keeping the def's own arity/param-
+/// count agreement intact.
+#[partial]
+def prepend_dict_pis (constraints : List TypeConstraint) (typ : Term) : Term :=
+    match constraints {
+        List.empty => typ,
+        List.cons c rest => Term.pi (dict_param_type_placeholder c) (prepend_dict_pis rest typ),
+    }
+
+#[partial]
+def prepend_dict_lams (constraints : List TypeConstraint) (term_ : Term) : Term :=
+    match constraints {
+        List.empty => term_,
+        List.cons c rest =>
+            match c {
+                TypeConstraint.mk cls _ =>
+                    let dbg := DebugName.named (Identifier.id (dict_param_name cls)) in
+                    Term.lam dbg (dict_param_type_placeholder c) (prepend_dict_lams rest term_),
+            },
+    }
+
+/// The bound NAME a dict parameter gets in the term (distinct from its
+/// TYPE placeholder above, though built from the same class name) --
+/// Phase 4's own D5 (genuine-polymorphism) resolution reads this same
+/// name back out of its threaded environment to forward an already-
+/// bound dict to a nested call, so the naming scheme here is load-
+/// bearing for that phase, not just cosmetic.
+#[partial]
+def dict_param_name (cls : ModulePath) : String :=
+    "__dict_" ++ show_module_path cls
+
+/// Adds one leading dictionary parameter per qualifying constraint (see
+/// `qualifying_dict_constraints`) to a single Def. A no-op (returns `d`
+/// unchanged) when no constraint qualifies -- the overwhelmingly common
+/// case (an ordinary, unconstrained def).
+#[partial]
+def add_constraint_dict_params (d : Def) : Def :=
+    match d {
+        Def.mk name typ term_ constraints attrs vis =>
+            let qualifying := qualifying_dict_constraints constraints term_ in
+            match qualifying {
+                List.empty => d,
+                List.cons _ _ =>
+                    let new_typ := prepend_dict_pis qualifying typ in
+                    let new_term := prepend_dict_lams qualifying term_ in
+                    Def.mk name new_typ new_term constraints attrs vis,
+            },
+    }
+
+/// Applies `add_constraint_dict_params` to every `Decl.def_d` in a flat
+/// decl list -- other decl kinds pass through unchanged (an instance's
+/// own promoted methods, from Phase 2, are ordinary concrete defs with
+/// no constraints of their own to add a param for -- except the one
+/// real corpus case, `instance [Add A] HAdd A A A`'s own `add` method,
+/// which DOES carry the instance's own `[Add A]` constraint through to
+/// its promoted Def -- `promote_methods`, Phase 2, copies `constraints`
+/// from the original method Def unchanged, so this pass reaches it the
+/// same as any other constrained def).
+#[partial]
+def add_constraint_dict_params_decls (decl_list : List Decl) : List Decl :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.def_d def_ => List.cons (Decl.def_d (add_constraint_dict_params def_)) (add_constraint_dict_params_decls rest),
+                _ => List.cons d (add_constraint_dict_params_decls rest),
             },
     }
 
@@ -1849,3 +2060,51 @@ def decl_list_has_instance_named (decl_list : List Decl) (cls_str : String) : Bo
 #[partial]
 def module_path_to_str_scope (mp : ModulePath) : String :=
     show_module_path mp
+
+// --- Phase 3 (dictionary-passing plan) tests ---
+
+#[test]
+def test_add_constraint_dict_params_adds_pi_and_lam : Bool :=
+    // def show_twice [Show A] (x : A) : String := Show.show x
+    let show_call := Term.app (Term.var 1 (DebugName.named (Identifier.id "Show.show"))) (Term.var 0 (DebugName.named (Identifier.id "x"))) in
+    let orig_term := Term.lam (DebugName.named (Identifier.id "x")) Term.hole show_call in
+    let orig_typ := Term.pi Term.hole (Term.type_ 1) in
+    let constraint := TypeConstraint.mk (ModulePath.mp (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
+    let d := Def.mk (ModulePath.mp (List.cons (Identifier.id "show_twice") List.empty)) orig_typ orig_term
+        (List.cons constraint List.empty) List.empty Visibility.package_private in
+    let d2 := add_constraint_dict_params d in
+    match d2 {
+        Def.mk _ new_typ new_term _ _ _ =>
+            match new_typ {
+                Term.pi _ rest_typ => Similar.similar rest_typ orig_typ,
+                _ => false,
+            } &&
+            match new_term {
+                Term.lam _ _ rest_term => Similar.similar rest_term orig_term,
+                _ => false,
+            },
+    }
+
+#[test]
+def test_add_constraint_dict_params_skips_unreferenced_constraint : Bool :=
+    // A [Show A] constraint whose body never actually calls Show.show
+    // -- no dict param should be added (a phantom/unused constraint).
+    let unrelated_body := Term.lit (Literal.num 42 NumSuffix.i64) in
+    let constraint := TypeConstraint.mk (ModulePath.mp (List.cons (Identifier.id "Show") List.empty)) (List.cons (Identifier.id "A") List.empty) in
+    let d := Def.mk (ModulePath.mp (List.cons (Identifier.id "unrelated") List.empty)) (Term.type_ 1) unrelated_body
+        (List.cons constraint List.empty) List.empty Visibility.package_private in
+    let d2 := add_constraint_dict_params d in
+    match d2 {
+        Def.mk _ new_typ new_term _ _ _ =>
+            Similar.similar new_typ (Term.type_ 1) && Similar.similar new_term unrelated_body,
+    }
+
+#[test]
+def test_def_references_class_true_for_dotted_var : Bool :=
+    let t := Term.app (Term.var 0 (DebugName.named (Identifier.id "Show.show"))) (Term.var 1 (DebugName.named (Identifier.id "x"))) in
+    def_references_class "Show" t
+
+#[test]
+def test_def_references_class_false_for_unrelated_var : Bool :=
+    let t := Term.var 0 (DebugName.named (Identifier.id "I64.add")) in
+    not (def_references_class "Show" t)
