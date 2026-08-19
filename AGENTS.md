@@ -1243,6 +1243,118 @@ Key patterns when writing self-hosted Monad code:
       later; the actual lever, if this history continues, is item 11's
       already-identified one: a per-node profiling pass inside
       `type_check` itself.
+13. **The "per-node profiling pass" item 11/12 called for, actually done —
+    and it found something nobody was looking for.** No `perf`/
+    `flamegraph`/`samply` exist in this sandbox (confirmed); `valgrind`
+    does, and needs no special privileges (binary translation, not
+    `perf_events`). Two independent investigations, one Rust-level (via
+    `valgrind --tool=callgrind`) and one self-hosted-level (via targeted
+    ablation), against `test_typecheck_lang_main` (the standing item
+    8-12 benchmark, ~86-106s depending on machine load run-to-run — the
+    variance itself turned out to matter, see below).
+    - **Getting the target right matters**: `monad-rs check <file>` (bare
+      CLI) goes through `core/src/lib.rs`'s `check_files` →
+      `term::module::load_module_from_text_typed` — a *separate*, legacy
+      Rust-native tree-walking checker kept for parity, **not** the
+      self-hosted `lang/*.mo` checker. `monad-rs test <path>` is the
+      correct profiling target — it runs a self-hosted `#[test]` def
+      through the real `CoreIr` evaluator.
+    - **Rust-level, via callgrind (headline finding)**: profiled a small
+      scratch `#[test]` (`typecheck_file "std/map.mo"`, mirroring
+      `typecheck_lang_tests.mo`'s own helper) two ways — once fully
+      instrumented from process start, once with `--instr-atstart=no`
+      plus a live `callgrind_control -i on <pid>` toggle fired exactly
+      when self-hosted test execution begins (after Rust-native bootstrap
+      compilation of the ~32 loaded modules completes), to cleanly
+      separate "checking+lowering the self-hosted compiler's own source"
+      from "the self-hosted checker actually running." The isolated,
+      bootstrap-free profile is **83-99% `malloc_consolidate`/
+      `_int_free_chunk`/`free`/`unlink_chunk`/`BTreeMap::drop`** — i.e.
+      the whole counted window is dominated by tearing down ONE large
+      heap structure, not by `core_eval`/`exec_native`/actual checking
+      logic (which combined don't even clear the 99%-cumulative
+      threshold). Root cause: `LoadedModules` (`core/src/term/module.rs`)
+      is `#[derive(Clone)]` over `modules: Map<ModulePath, Module>`
+      where `Module` itself holds SIX more `Map`(`=BTreeMap`) fields
+      (`defs`, `inductives`, `macro_defs`, `decl_gens`, `infix`, plus an
+      `instances: Vec`) — i.e. every loaded module's ENTIRE checked AST.
+      `evaluate_one_test_file`/`check_files` (`core/src/lib.rs`) each
+      **deep-clone this whole registry once per checked/tested FILE**
+      (`base_loaded.clone()`/`master_loaded.clone()`), and drop it again
+      at file-scope exit. This is a *deliberate* correctness fix, not an
+      oversight — the doc comment at `evaluate_one_test_file` explains it
+      prevents cross-test-file bare-name collisions (confirmed against a
+      real corpus case: `init`'s `foldable_tests.mo`/
+      `foldable_tests_fold.mo` both declare `test_foldr_sum`) — but its
+      performance cost was never measured until now, and a plain
+      `#[derive(Clone)]` over nested `BTreeMap`s of full AST trees is the
+      most expensive way to buy that guarantee. A cheaper fix preserving
+      the same isolation (each file's own additions stay local, the
+      shared base is never mutated in place) would replace `Map`/
+      `BTreeMap` here with something structurally-shared (e.g. `im::
+      OrdMap`, or wrap each field in `Arc` for copy-on-write), making the
+      per-file clone O(1) instead of O(total loaded-corpus AST size) —
+      **not implemented this pass** (investigation only), but the
+      highest-confidence, best-understood lead this whole history has
+      produced. Cost scales with `files tested × total corpus size`, the
+      same "gets worse as the corpus grows, never fixed" shape as several
+      other items here — for a single huge file (`test_typecheck_lang_main`
+      itself, one file with one `#[test]`) it's a bounded one-time tax
+      (small relative to that benchmark's ~86-106s total); for the FULL
+      multi-hundred-file test/check suite it is paid once per file and
+      was not separately quantified at that scale this pass.
+    - **Rust-level, ruled out**: the two hypotheses this investigation
+      started from — `Value::clone()` on `Con`/`PartialNtv` being an
+      uncontrolled deep recursive copy (`Con`/`PartialNtv` hold
+      `args: Vec<Value>`, not `Arc<[Value]>`, so every self-hosted
+      `List`/`HashMap`/record clone is structural, not O(1)), and
+      `Env::get` (`core/src/core_value.rs`) being an O(lexical-depth)
+      pointer-chain walk — are both real but **negligible** here:
+      `Env::drop_slow` (the closest attributable symbol) totals 0.19% of
+      instructions combined across both variants in the full
+      (non-isolated) profile; no `<Value as Clone>::clone` symbol clears
+      even the smallest visible line (~0.01%) in either profile. Ruled
+      out as significant factors for this benchmark, dwarfed by the
+      `LoadedModules` clone/drop cost by 3-4 orders of magnitude.
+    - **Self-hosted-level, via ablation — all ruled out**: `CoreIr` nodes
+      carry no spans/names, and `force_global` only fires once per
+      memoized global (not once per call), so callgrind can't attribute
+      cost to a *self-hosted* function name — a pure-functional language
+      also has no cheap way to add call counters without threading state
+      through every signature. Used ablation instead (temporarily stub
+      the candidate to a trivial O(1) wrong-but-non-crashing
+      implementation, measure the wall-time delta on
+      `test_typecheck_lang_main`, revert): stubbed
+      `find_class_def_in_list`, `find_instances_by_class`,
+      `scope_data_find_inductive_by_constructor` (`lang/scope.mo`),
+      `unify`'s `Similar.similar` structural-walk fallback
+      (`lang/typecheck/unify.mo`), and `struct_lit_find_field`
+      (`lang/typecheck/infer.mo`) all at once — every one of these was a
+      linear-scan sibling of an already-`HashMap`-converted field
+      (`class_defs`/`instances` never got the `def_refs`/`inductives`
+      treatment) or an unmemoized nested scan, exactly the bug shapes
+      items 4/9/12 already fixed elsewhere. Result: **85.93s vs. an
+      86.72s clean baseline — no measurable effect**, well inside this
+      benchmark's own ~20s run-to-run machine-load noise band (observed
+      86.72s and 105.71s for the *same* unmodified binary across
+      different points in this session). All five ruled out as
+      contributors to this benchmark's cost. `scope_find_local`/
+      `nth_type`'s O(nesting-depth) walk (candidate 6) was NOT ablated —
+      unlike the other five, it fires on every free/bound variable
+      reference including ordinary global references, and stubbing it
+      would break most of the corpus rather than just degrade gracefully
+      — left unmeasured rather than guessed at; by analogy to the other
+      five siblings all measuring null, and item 6's own prior finding
+      that flattening loses to per-call overhead at this interpreter's
+      typical scope depths, it's judged low-priority but is explicitly
+      **not confirmed either way**.
+    - **Bottom line**: the item 11/12 hypothesis that `type_check`'s own
+      per-node logic hides a diffuse-but-real cost was not confirmed by
+      this pass — everything self-hosted-level that could safely be
+      measured came back null. The real, confirmed, actionable lead this
+      investigation produced is Rust-level and outside `lang/*.mo`
+      entirely: `LoadedModules`'s clone-per-file cost. If this history
+      continues, start there, not with another self-hosted sweep.
 
 ## Committing Changes
 
