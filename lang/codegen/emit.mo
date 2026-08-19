@@ -362,18 +362,26 @@ def compile_match_ir (c : CodegenCtx) (scrutinee : Term) (cases : List MatchCase
                                 CtxStrPair.mk ctx_check first_check_label =>
                                     match fresh_label ctx_check "merge" {
                                         CtxStrPair.mk ctx_merge merge_label =>
-                                            let entry_instrs := append_instrs instrs_s (cons_instr tag_instr (cons_instr (LLVMInstruction.jump first_check_label) empty_instrs)) in
-                                            match build_match_chain ctx_merge tag_val val_s cases merge_label first_check_label {
-                                                MatchChainResult.mk ctx_chain chain_blocks chain_funcs chain_globals phi_pairs =>
-                                                    match fresh_temp ctx_chain {
-                                                        CtxStrPair.mk ctx_final phi_temp =>
-                                                            let phi_instr := LLVMInstruction.assign phi_temp (LLVMValue.phi phi_pairs) in
-                                                            let ret_instr := LLVMInstruction.ret (LLVMValue.var_ phi_temp) in
-                                                            let merge_block := LLVMBasicBlock.mk merge_label (cons_instr phi_instr (cons_instr ret_instr empty_instrs)) in
-                                                            let all_blocks := append_blocks blocks_s (cons_block merge_block chain_blocks) in
-                                                            let all_funcs := append_funcs funcs_s chain_funcs in
-                                                            let all_globals := append_globals globals_s chain_globals in
-                                                            CompileResult.ok ctx_final entry_instrs (LLVMValue.var_ phi_temp) all_blocks all_funcs all_globals,
+                                            // `match (if p then a else b) { ... }`-shaped code: the
+                                            // SCRUTINEE itself branching means `instrs_s` already ends
+                                            // in a terminator -- splice via `compose_seq` instead of
+                                            // blindly appending (see its own doc comment above
+                                            // `ends_with_terminator`).
+                                            let tag_and_jump := cons_instr tag_instr (cons_instr (LLVMInstruction.jump first_check_label) empty_instrs) in
+                                            match compose_seq (Triple.tr instrs_s blocks_s val_s) (Triple.tr tag_and_jump empty_blocks tag_val) {
+                                                Triple.tr entry_instrs blocks_s_spliced _ =>
+                                                    match build_match_chain ctx_merge tag_val val_s cases merge_label first_check_label {
+                                                        MatchChainResult.mk ctx_chain chain_blocks chain_funcs chain_globals phi_pairs =>
+                                                            match fresh_temp ctx_chain {
+                                                                CtxStrPair.mk ctx_final phi_temp =>
+                                                                    let phi_instr := LLVMInstruction.assign phi_temp (LLVMValue.phi phi_pairs) in
+                                                                    let ret_instr := LLVMInstruction.ret (LLVMValue.var_ phi_temp) in
+                                                                    let merge_block := LLVMBasicBlock.mk merge_label (cons_instr phi_instr (cons_instr ret_instr empty_instrs)) in
+                                                                    let all_blocks := append_blocks blocks_s_spliced (cons_block merge_block chain_blocks) in
+                                                                    let all_funcs := append_funcs funcs_s chain_funcs in
+                                                                    let all_globals := append_globals globals_s chain_globals in
+                                                                    CompileResult.ok ctx_final entry_instrs (LLVMValue.var_ phi_temp) all_blocks all_funcs all_globals,
+                                                            },
                                                     },
                                             },
                                     },
@@ -486,28 +494,59 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
             },
     }
 
+/// `blocks`/`funcs`/`globals` used to be silently DISCARDED entirely
+/// by `compile_ntv_args` (every caller received only `ctx`/`instrs`/
+/// `vals`) -- meaning any native-call or constructor argument that
+/// itself compiled to extra blocks (an `if`/`match`) lost them
+/// completely: whatever `br`/`jump` targets its own entry `instrs`
+/// referenced would be undefined in the final module. Now threaded
+/// through properly, same as every other multi-arg accumulator in this
+/// file.
 type NtvArgs {
-    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (vals : List LLVMValue),
+    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (vals : List LLVMValue) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal),
 }
 
+/// Sequences each arg's own compiled fragment via `compose_seq` (see
+/// its own extended doc comment above `ends_with_terminator`) instead
+/// of blindly concatenating `instrs` -- a branching argument (an
+/// `if`/`match` passed to a native call or constructor) used to have
+/// every FOLLOWING arg's instructions silently become unreachable dead
+/// code after its own branch, the exact same class of bug this whole
+/// fix addresses everywhere else.
+/// `acc_val` is the running "last-known value" `compose_seq` needs to
+/// find the right terminal block to splice into on the NEXT arg, if
+/// `acc_instrs` ends in a terminator because THIS arg turned out to be
+/// branching -- irrelevant (never consulted) whenever `acc_instrs`
+/// doesn't end in a terminator, i.e. `LLVMValue.void_val` is a safe
+/// placeholder for the first call.
 #[partial]
-def compile_ntv_args (c : CodegenCtx) (args : List (Option Term)) (acc_instrs : List LLVMInstruction) (acc_vals : List LLVMValue) : NtvArgs :=
+def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs : List LLVMInstruction) (acc_blocks : List LLVMBasicBlock) (acc_funcs : List LLVMFunction) (acc_globals : List LLVMGlobal) (acc_vals : List LLVMValue) (acc_val : LLVMValue) : NtvArgs :=
     match args {
         List.cons opt_ rest =>
             match opt_ {
                 Option.some term_ =>
                     match compile_db_term_ir c term_ {
-                        CompileResult.ok ctx_t instrs val _ _ _ =>
-                            compile_ntv_args ctx_t rest
-                                (append_instrs acc_instrs instrs)
-                                (cons_val val acc_vals),
+                        CompileResult.ok ctx_t instrs val blocks_t funcs_t globals_t =>
+                            match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs blocks_t val) {
+                                Triple.tr new_instrs new_blocks new_val =>
+                                    compile_ntv_args_go ctx_t rest
+                                        new_instrs new_blocks
+                                        (append_funcs acc_funcs funcs_t)
+                                        (append_globals acc_globals globals_t)
+                                        (cons_val val acc_vals)
+                                        new_val,
+                            },
                     },
                 Option.none =>
-                    compile_ntv_args c rest acc_instrs acc_vals,
+                    compile_ntv_args_go c rest acc_instrs acc_blocks acc_funcs acc_globals acc_vals acc_val,
             },
         List.empty =>
-            NtvArgs.mk c acc_instrs (rev_vals acc_vals empty_vals),
+            NtvArgs.mk c acc_instrs (rev_vals acc_vals empty_vals) acc_blocks acc_funcs acc_globals,
     }
+
+#[partial]
+def compile_ntv_args (c : CodegenCtx) (args : List (Option Term)) (acc_instrs : List LLVMInstruction) (acc_vals : List LLVMValue) : NtvArgs :=
+    compile_ntv_args_go c args acc_instrs empty_blocks empty_funcs empty_globals_list acc_vals LLVMValue.void_val
 
 #[partial]
 def rev_vals (xs : List LLVMValue) (acc : List LLVMValue) : List LLVMValue := match xs {
@@ -523,12 +562,25 @@ def compile_ntv_ir (c : CodegenCtx) (native : Native) : CompileResult :=
             let llvm_name := extract_base_name name_str in
             let fn_name := String.concat "monad_" llvm_name in
             match compile_ntv_args c args empty_instrs empty_vals {
-                NtvArgs.mk ctx_args all_instrs all_vals =>
+                NtvArgs.mk ctx_args all_instrs all_vals all_blocks all_funcs all_globals =>
                     match fresh_temp ctx_args {
                         CtxStrPair.mk ctx_t temp =>
                             let call_val := LLVMValue.call fn_name LLVMType.i64_ all_vals false in
                             let assign_instr := LLVMInstruction.assign temp call_val in
-                            CompileResult.ok ctx_t (cons_instr assign_instr all_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                            // Args' own instrs must run BEFORE the call
+                            // that consumes their values, not after --
+                            // `cons_instr assign_instr all_instrs`
+                            // (prepending) used to put the call FIRST,
+                            // silently using not-yet-computed argument
+                            // registers whenever an arg actually needed
+                            // real instructions to compute (anything
+                            // beyond a bare literal/local-var reference
+                            // -- confirmed as the source of the
+                            // `call i64 @monad_print_str(void void)`
+                            // corruption seen while chasing the
+                            // separate let/if-argument bug this file's
+                            // `compose_seq` now also fixes).
+                            CompileResult.ok ctx_t (append_instrs all_instrs (cons_instr assign_instr empty_instrs)) (LLVMValue.var_ temp) all_blocks all_funcs all_globals,
                     },
             },
     }
@@ -538,7 +590,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
     match con {
         Con.mk name typ_name num_args args =>
             match compile_ntv_args c args empty_instrs empty_vals {
-                NtvArgs.mk ctx_args all_instrs all_vals =>
+                NtvArgs.mk ctx_args all_instrs all_vals all_blocks all_funcs all_globals =>
                     match fresh_temp ctx_args {
                         CtxStrPair.mk ctx_t temp =>
                             // Call the @alloc_constructor runtime function
@@ -558,7 +610,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
                             match build_set_field_instrs (LLVMValue.var_ temp) all_vals 0 ctx_t {
                                 SetFieldResult.mk ctx_set set_instrs =>
                                     let all_con_instrs := append_instrs all_instrs (cons_instr assign_instr set_instrs) in
-                                    CompileResult.ok ctx_set all_con_instrs (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                                    CompileResult.ok ctx_set all_con_instrs (LLVMValue.var_ temp) all_blocks all_funcs all_globals,
                             },
                     },
             },
@@ -628,6 +680,147 @@ def is_terminator_instr (instr : LLVMInstruction) : Bool := match instr {
     LLVMInstruction.comment a => false,
 }
 
+// ─── Safe sequential composition (fixes a real "dropped continuation"
+// codegen bug) ──────────────────────────────────────────────────────
+//
+// Every "combine a sub-expression's compiled result into a bigger
+// context" call site in this file used to just concatenate the two
+// instruction lists directly (`append_instrs a_instrs b_instrs`),
+// assuming `a_instrs` was always safe to keep appending to. That's
+// true for an ordinary computation (arithmetic, a call, a constructor
+// alloc) but WRONG whenever `a` is itself an `if`/`match`: its own
+// returned `instrs` field ends in a real branch (the condition-check
+// `br`), and its actual VALUE lives in a `merge`/case block sitting in
+// `blocks`, closed with its own `ret <val>` — a convention that's only
+// correct when that `if`/`match` IS the enclosing function's own final
+// answer (compile_db_def_ir's own doc comment already documents relying
+// on exactly this). Appending `b_instrs` straight after `a_instrs` puts
+// it AFTER that branch — unreachable, dead code — while the merge
+// block's own `ret <val>` becomes the function's REAL, wrong, early
+// answer, silently skipping `b_instrs` entirely.
+//
+// Confirmed via a minimal repro (not specific to any one call site
+// above): `let x := (if true then 1 else 2) in helper x` used to
+// compile AND RUN successfully, but returned 1, not `helper(1) = 2` —
+// `helper` was never actually called. (`let x := v in body` desugars
+// to `(fn x => body) v`, so this hits exactly the "argument is a
+// branching sub-expression" combine sites below.)
+//
+// `compose_seq a b` is the fix: sequences `b` after `a`, correctly
+// splicing `b` into `a`'s own merge/case block (identified by searching
+// `a`'s own `blocks` for the one ending in `ret <a's val>`) instead of
+// blindly appending, whenever `a`'s own `instrs` already ends in a
+// terminator. Recursively correct even for a "branching sub-expression
+// feeding into ANOTHER branching sub-expression" chain (`b` itself
+// ending in a terminator too) — see `splice_into_terminal_block`'s own
+// doc comment for how. Degrades to the original plain-concatenation
+// behavior whenever `a` isn't itself branching, i.e. the overwhelming
+// majority of real code — this changes nothing about ordinary,
+// non-branching compilation.
+type Triple {
+    tr (t_instrs : List LLVMInstruction) (t_blocks : List LLVMBasicBlock) (t_val : LLVMValue),
+}
+
+#[partial]
+def compose_seq (a : Triple) (b : Triple) : Triple := match a {
+    Triple.tr a_instrs a_blocks a_val => match b {
+        Triple.tr b_instrs b_blocks b_val =>
+            if ends_with_terminator a_instrs then
+                match splice_into_terminal_block a_blocks a_val b_instrs b_val {
+                    Option.some rewritten =>
+                        Triple.tr a_instrs (append_blocks rewritten b_blocks) b_val,
+                    // Couldn't find a's own terminal block (shouldn't
+                    // happen given compile_db_if_ir/compile_match_ir's
+                    // own invariant that a branching term's LAST
+                    // appended block is always closed with `ret <its
+                    // own reported val>` — but stay total/safe rather
+                    // than crash if that invariant is ever violated by
+                    // something not yet accounted for here).
+                    Option.none =>
+                        Triple.tr (append_instrs a_instrs b_instrs) (append_blocks a_blocks b_blocks) b_val,
+                }
+            else
+                Triple.tr (append_instrs a_instrs b_instrs) (append_blocks a_blocks b_blocks) b_val,
+    },
+}
+
+/// Finds the block among `blocks` that ends in `ret <target_val>`
+/// (structurally — same SSA temp/global name, `llvm_value_eq`) and
+/// rewrites it in place (preserving its own label, so every existing
+/// `br`/`jump` INTO that block from elsewhere still resolves): drops
+/// its own trailing `ret`, appends `extra_instrs`, then re-closes with
+/// a fresh `ret <extra_val>` — UNLESS `extra_instrs` itself already
+/// ends in a terminator (it's itself a branching sub-expression), in
+/// which case nothing more is appended: `extra_instrs`'s own nested
+/// structure already closes correctly with `ret <extra_val>` somewhere
+/// inside its own blocks (which `compose_seq` appends alongside), and
+/// adding another `ret` here would just make THAT unreachable too —
+/// this is what makes chained/nested branching sub-expressions compose
+/// correctly, not just a single level.
+#[partial]
+def splice_into_terminal_block (blocks : List LLVMBasicBlock) (target_val : LLVMValue) (extra_instrs : List LLVMInstruction) (extra_val : LLVMValue) : Option (List LLVMBasicBlock) := match blocks {
+    List.empty => Option.none,
+    List.cons b rest =>
+        match b {
+            LLVMBasicBlock.mk label instrs =>
+                if block_ends_with_ret_of instrs target_val then
+                    let without_ret := drop_last_instr instrs in
+                    let merged := append_instrs without_ret extra_instrs in
+                    let new_instrs :=
+                        if ends_with_terminator extra_instrs
+                        then merged
+                        else append_instrs merged (cons_instr (LLVMInstruction.ret extra_val) empty_instrs) in
+                    Option.some (List.cons (LLVMBasicBlock.mk label new_instrs) rest)
+                else
+                    match splice_into_terminal_block rest target_val extra_instrs extra_val {
+                        Option.some rewritten => Option.some (List.cons b rewritten),
+                        Option.none => Option.none,
+                    },
+        },
+}
+
+#[partial]
+def block_ends_with_ret_of (instrs : List LLVMInstruction) (target_val : LLVMValue) : Bool := match instrs {
+    List.empty => false,
+    List.cons i rest => match rest {
+        List.empty => instr_is_ret_of i target_val,
+        List.cons _ _ => block_ends_with_ret_of rest target_val,
+    },
+}
+
+#[partial]
+def instr_is_ret_of (i : LLVMInstruction) (target_val : LLVMValue) : Bool := match i {
+    LLVMInstruction.ret v => llvm_value_eq v target_val,
+    LLVMInstruction.branch a b c => false,
+    LLVMInstruction.jump a => false,
+    LLVMInstruction.assign a b => false,
+    LLVMInstruction.comment a => false,
+}
+
+/// Structural equality on the one shape that actually arises here: a
+/// branching sub-expression's own reported value is always a fresh SSA
+/// temp (`LLVMValue.var_`, `compile_db_if_ir`/`build_merge_result`'s own
+/// `fresh_temp`-allocated phi result) — every other `LLVMValue` variant
+/// falls through to `false`, since none of them are ever what a merge
+/// block's own `ret` returns.
+#[partial]
+def llvm_value_eq (a : LLVMValue) (b : LLVMValue) : Bool := match a {
+    LLVMValue.var_ na => match b {
+        LLVMValue.var_ nb => String.beq na nb,
+        _ => false,
+    },
+    _ => false,
+}
+
+#[partial]
+def drop_last_instr (instrs : List LLVMInstruction) : List LLVMInstruction := match instrs {
+    List.empty => List.empty,
+    List.cons i rest => match rest {
+        List.empty => List.empty,
+        List.cons _ _ => List.cons i (drop_last_instr rest),
+    },
+}
+
 #[partial]
 def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Term) : CompileResult :=
     match fresh_label c "lambda" {
@@ -652,19 +845,27 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
 def compile_db_if_ir (c : CodegenCtx) (cond : Term) (then_ : Term) (else_ : Term) : CompileResult :=
     match compile_db_term_ir c cond {
         CompileResult.ok ctx_cond cond_instrs cond_val blocks_cond funcs_cond globals_cond =>
-            match ensure_i1_cond ctx_cond cond_instrs cond_val cond {
-                BoolCondResult.mk ctx_bool instrs_bool bool_val =>
+            match ensure_i1_cond ctx_cond cond_instrs blocks_cond cond_val cond {
+                BoolCondResult.mk ctx_bool instrs_bool blocks_bool bool_val =>
                     match build_if_labels ctx_bool {
                         IfLabels.mk ctx_branches then_label else_label merge_label =>
                             let branch_instr := LLVMInstruction.branch bool_val then_label else_label in
-                            let entry_instrs := append_instrs instrs_bool (cons_instr branch_instr empty_instrs) in
-                            build_db_if_blocks ctx_branches then_label else_label merge_label then_ else_ entry_instrs blocks_cond funcs_cond globals_cond,
+                            // `if (if p then true else false) then ...`
+                            // -- a branching COND itself -- means
+                            // `instrs_bool` might already end in a
+                            // terminator; splice via `compose_seq`
+                            // instead of blindly appending (see its own
+                            // doc comment above `ends_with_terminator`).
+                            match compose_seq (Triple.tr instrs_bool blocks_bool bool_val) (Triple.tr (cons_instr branch_instr empty_instrs) empty_blocks bool_val) {
+                                Triple.tr entry_instrs blocks_bool_spliced _ =>
+                                    build_db_if_blocks ctx_branches then_label else_label merge_label then_ else_ entry_instrs blocks_bool_spliced funcs_cond globals_cond,
+                            },
                     },
             },
     }
 
 type BoolCondResult {
-    mk (bcr_ctx : CodegenCtx) (bcr_instrs : List LLVMInstruction) (bcr_val : LLVMValue),
+    mk (bcr_ctx : CodegenCtx) (bcr_instrs : List LLVMInstruction) (bcr_blocks : List LLVMBasicBlock) (bcr_val : LLVMValue),
 }
 
 /// LLVM's `br i1 <cond>` requires a genuine i1 value. Native comparison
@@ -681,10 +882,15 @@ type BoolCondResult {
 /// `List.last`'s `if List.is_empty tail then ... else ...`
 /// (init/prelude.mo). Needs unboxing instead: read its runtime tag and
 /// compare against Bool.true's tag to get a genuine i1.
+/// `blocks`/`cond_val` -- threaded through (`blocks` used to be dropped
+/// entirely by this function's own caller, `compile_db_if_ir`, before
+/// this fix) so a branching `cond_term` splices correctly via
+/// `compose_seq` instead of blindly appending the tag-check
+/// instructions after an already-terminated `instrs`.
 #[partial]
-def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (cond_val : LLVMValue) (cond_term : Term) : BoolCondResult :=
+def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (cond_val : LLVMValue) (cond_term : Term) : BoolCondResult :=
     if term_is_native_bool_op cond_term
-    then BoolCondResult.mk c instrs cond_val
+    then BoolCondResult.mk c instrs blocks cond_val
     else
         match fresh_temp c {
             CtxStrPair.mk ctx1 tag_temp =>
@@ -694,8 +900,11 @@ def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (cond_val : 
                     CtxStrPair.mk ctx2 bool_temp =>
                         let bool_true_tag := constructor_tag "true" in
                         let cmp_instr := LLVMInstruction.assign bool_temp (LLVMValue.icmp_eq (LLVMValue.var_ tag_temp) (LLVMValue.int_ bool_true_tag)) in
-                        let new_instrs := append_instrs instrs (cons_instr tag_instr (cons_instr cmp_instr empty_instrs)) in
-                        BoolCondResult.mk ctx2 new_instrs (LLVMValue.var_ bool_temp),
+                        let extra := cons_instr tag_instr (cons_instr cmp_instr empty_instrs) in
+                        match compose_seq (Triple.tr instrs blocks cond_val) (Triple.tr extra empty_blocks (LLVMValue.var_ bool_temp)) {
+                            Triple.tr new_instrs new_blocks new_val =>
+                                BoolCondResult.mk ctx2 new_instrs new_blocks new_val,
+                        },
                 },
         }
 
@@ -888,7 +1097,15 @@ def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : 
                     let fn_name := native_op_to_fn_name op in
                     let call_val := LLVMValue.call fn_name LLVMType.i64_ (cons_val val1 empty_vals) false in
                     let assign_instr := LLVMInstruction.assign temp call_val in
-                    CompileResult.ok ctx_t (append_instrs instrs1 (cons_instr assign_instr empty_instrs)) (LLVMValue.var_ temp) blocks1 funcs1 globals1,
+                    // `println (if p then "a" else "b")`-shaped code:
+                    // `arg` itself branching means `instrs1` already
+                    // ends in a terminator -- splice via `compose_seq`
+                    // instead of blindly appending (see its own doc
+                    // comment above `ends_with_terminator`).
+                    match compose_seq (Triple.tr instrs1 blocks1 val1) (Triple.tr (cons_instr assign_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
+                        Triple.tr new_instrs new_blocks _ =>
+                            CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs1 globals1,
+                    },
             },
     }
 
@@ -908,23 +1125,37 @@ def native_op_to_fn_name (op : NativeOp) : String := match op {
     NativeOp.op_file_exists => "monad_file_exists",
 }
 
+/// `arg2`'s own compiled fragment (`instrs2`/`blocks2`/...) used to be
+/// combined with `arg`'s via blind `append_instrs instrs2 instrs1`,
+/// with `blocks`/`funcs`/`globals` from BOTH operands silently
+/// DISCARDED entirely (`_ _ _` on both matches) -- i.e. this had the
+/// same "dropped continuation" bug as every other combine site in this
+/// file (see `compose_seq`'s own doc comment) AND an even more basic
+/// one: any branching operand's own `then`/`else`/`merge` blocks were
+/// thrown away outright, not merely misplaced. `a + (if p then 1 else
+/// 2)`-shaped code -- and, since `==`/`<`/`>` are native ops too,
+/// ordinary boolean comparisons wrapping a conditional -- hit this.
 #[partial]
 def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : Term) : CompileResult :=
     match compile_db_term_ir c arg2 {
-        CompileResult.ok ctx2 instrs2 val2 _ _ _ =>
+        CompileResult.ok ctx2 instrs2 val2 blocks2 funcs2 globals2 =>
             match compile_db_term_ir ctx2 arg {
-                CompileResult.ok ctx1 instrs1 val1 _ _ _ =>
-                    let combined := append_instrs instrs2 instrs1 in
-                    match extract_lit_from_val val2 {
-                        Option.some n1 =>
-                            match extract_lit_from_val val1 {
-                                Option.some n2 =>
-                                    CompileResult.ok ctx1 combined (fold_native_const op n1 n2) empty_blocks empty_funcs empty_globals_list,
+                CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
+                    match compose_seq (Triple.tr instrs2 blocks2 val2) (Triple.tr instrs1 blocks1 val1) {
+                        Triple.tr combined all_blocks last_val =>
+                            let all_funcs := append_funcs funcs2 funcs1 in
+                            let all_globals := append_globals globals2 globals1 in
+                            match extract_lit_from_val val2 {
+                                Option.some n1 =>
+                                    match extract_lit_from_val val1 {
+                                        Option.some n2 =>
+                                            CompileResult.ok ctx1 combined (fold_native_const op n1 n2) all_blocks all_funcs all_globals,
+                                        Option.none =>
+                                            emit_arith_instr ctx1 op val2 val1 combined all_blocks all_funcs all_globals last_val,
+                                    },
                                 Option.none =>
-                                    emit_arith_instr ctx1 op val2 val1 combined,
+                                    emit_arith_instr ctx1 op val2 val1 combined all_blocks all_funcs all_globals last_val,
                             },
-                        Option.none =>
-                            emit_arith_instr ctx1 op val2 val1 combined,
                     },
             },
     }
@@ -951,29 +1182,48 @@ def flatten_app_spine_go (t : Term) (acc : List Term) : AppSpine :=
         _ => AppSpine.mk t acc,
     }
 
+/// `sa_last_val` is the running "last-known value" from `compose_seq`'s
+/// own accumulation (see `compile_spine_args_go`) -- exposed so THIS
+/// spine's own caller (`compile_general_db_call`) can keep correctly
+/// splicing after it too, instead of losing track once the args are
+/// fully combined.
 type SpineArgs {
-    mk (sa_ctx : CodegenCtx) (sa_instrs : List LLVMInstruction) (sa_blocks : List LLVMBasicBlock) (sa_funcs : List LLVMFunction) (sa_globals : List LLVMGlobal) (sa_vals : List LLVMValue),
+    mk (sa_ctx : CodegenCtx) (sa_instrs : List LLVMInstruction) (sa_blocks : List LLVMBasicBlock) (sa_funcs : List LLVMFunction) (sa_globals : List LLVMGlobal) (sa_vals : List LLVMValue) (sa_last_val : LLVMValue),
 }
+
+#[partial]
+def compile_spine_args (c : CodegenCtx) (terms : List Term) : SpineArgs :=
+    compile_spine_args_go c terms empty_instrs empty_blocks empty_funcs empty_globals_list empty_vals LLVMValue.void_val
 
 /// Compile every argument term in a flattened spine, in order,
 /// threading the ctx/instrs/blocks/funcs/globals accumulation through
-/// each one -- same pattern `compile_ntv_args` already uses for native
-/// calls, just over a plain `List Term` (no `Option` wrapping needed).
+/// each one -- same pattern `compile_ntv_args_go` uses for native calls,
+/// just over a plain `List Term` (no `Option` wrapping needed).
+///
+/// Accumulator-style, sequencing each arg via `compose_seq` (see its
+/// own doc comment above `ends_with_terminator`) instead of blindly
+/// concatenating instrs -- this USED to combine the first arg's own
+/// instrs with the WHOLE recursively-combined rest of the spine as one
+/// flat step, which had no single value to splice against whenever the
+/// REST covered more than one arg (a multi-arg spine has no one
+/// "value"), so a branching arg followed by more arguments silently
+/// dropped everything after it -- the exact bug `let x := (if/match) in
+/// f x y z` hits (`let`s desugar to an application spine).
 #[partial]
-def compile_spine_args (c : CodegenCtx) (terms : List Term) : SpineArgs :=
+def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : List LLVMInstruction) (acc_blocks : List LLVMBasicBlock) (acc_funcs : List LLVMFunction) (acc_globals : List LLVMGlobal) (acc_vals : List LLVMValue) (acc_val : LLVMValue) : SpineArgs :=
     match terms {
-        List.empty => SpineArgs.mk c empty_instrs empty_blocks empty_funcs empty_globals_list empty_vals,
+        List.empty => SpineArgs.mk c acc_instrs acc_blocks acc_funcs acc_globals (rev_vals acc_vals empty_vals) acc_val,
         List.cons t rest =>
             match compile_db_term_ir c t {
                 CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
-                    match compile_spine_args ctx1 rest {
-                        SpineArgs.mk ctx2 instrs2 blocks2 funcs2 globals2 vals2 =>
-                            SpineArgs.mk ctx2
-                                (append_instrs instrs1 instrs2)
-                                (append_blocks blocks1 blocks2)
-                                (append_funcs funcs1 funcs2)
-                                (append_globals globals1 globals2)
-                                (List.cons val1 vals2),
+                    match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs1 blocks1 val1) {
+                        Triple.tr new_instrs new_blocks new_val =>
+                            compile_spine_args_go ctx1 rest
+                                new_instrs new_blocks
+                                (append_funcs acc_funcs funcs1)
+                                (append_globals acc_globals globals1)
+                                (cons_val val1 acc_vals)
+                                new_val,
                     },
             },
     }
@@ -1019,18 +1269,24 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
             match compile_call_head c head {
                 CompileResult.ok ctx_h instrs_h val_h blocks_h funcs_h globals_h =>
                     match compile_spine_args ctx_h args {
-                        SpineArgs.mk ctx_a instrs_a blocks_a funcs_a globals_a vals_a =>
-                            let combined := append_instrs instrs_h instrs_a in
-                            let all_blocks := append_blocks blocks_h blocks_a in
-                            let all_funcs := append_funcs funcs_h funcs_a in
-                            let all_globals := append_globals globals_h globals_a in
-                            match val_h {
-                                LLVMValue.var_ name =>
-                                    combine_direct_call ctx_a name vals_a combined all_blocks all_funcs all_globals,
-                                LLVMValue.parm_ idx =>
-                                    combine_indirect_call ctx_a vals_a combined all_blocks all_funcs all_globals,
-                                _ =>
-                                    CompileResult.ok ctx_a combined LLVMValue.void_val all_blocks all_funcs all_globals,
+                        SpineArgs.mk ctx_a instrs_a blocks_a funcs_a globals_a vals_a last_val_a =>
+                            match compose_seq (Triple.tr instrs_h blocks_h val_h) (Triple.tr instrs_a blocks_a last_val_a) {
+                                Triple.tr combined all_blocks combined_val =>
+                                    let all_funcs := append_funcs funcs_h funcs_a in
+                                    let all_globals := append_globals globals_h globals_a in
+                                    // Dispatch on `val_h` itself (WHICH
+                                    // function to call), not
+                                    // `combined_val` (compose_seq's own
+                                    // "last known value", used only for
+                                    // splicing purposes below).
+                                    match val_h {
+                                        LLVMValue.var_ name =>
+                                            combine_direct_call ctx_a name vals_a combined all_blocks all_funcs all_globals combined_val,
+                                        LLVMValue.parm_ idx =>
+                                            combine_indirect_call ctx_a vals_a combined all_blocks all_funcs all_globals combined_val,
+                                        _ =>
+                                            CompileResult.ok ctx_a combined LLVMValue.void_val all_blocks all_funcs all_globals,
+                                    },
                             },
                     },
             },
@@ -1038,13 +1294,21 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
 
 /// `arg_vals` holds every argument in the flattened call spine, in
 /// order -- emits ONE call carrying all of them (see `flatten_app_spine`).
+/// `last_val` is `compose_seq`'s own running "last-known value" from
+/// combining the callee + every argument (`compile_general_db_call`) --
+/// needed so the CALL instruction itself gets correctly spliced into a
+/// branching callee/argument's own terminal block too, instead of just
+/// everything BEFORE it.
 #[partial]
-def combine_direct_call (ctx_a : CodegenCtx) (name : String) (arg_vals : List LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) : CompileResult :=
+def combine_direct_call (ctx_a : CodegenCtx) (name : String) (arg_vals : List LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
     match fresh_temp ctx_a {
         CtxStrPair.mk ctx_t temp =>
             let call_instr := LLVMInstruction.assign temp
                 (LLVMValue.call name LLVMType.i64_ arg_vals false) in
-            CompileResult.ok ctx_t (append_instrs combined (cons_instr call_instr empty_instrs)) (LLVMValue.var_ temp) blocks funcs globals,
+            match compose_seq (Triple.tr combined blocks last_val) (Triple.tr (cons_instr call_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
+                Triple.tr new_instrs new_blocks _ =>
+                    CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
+            },
     }
 
 /// Indirect calls (through a `parm_`-shaped value, e.g. a function
@@ -1054,15 +1318,18 @@ def combine_direct_call (ctx_a : CodegenCtx) (name : String) (arg_vals : List LL
 /// closure-application scheme, if `apply_fun` ever needs multiple
 /// arguments, is a separate, unstarted piece of work). Uses the first
 /// argument in the spine, matching this path's prior single-argument
-/// behavior.
+/// behavior. `last_val` -- see `combine_direct_call`'s own doc comment.
 #[partial]
-def combine_indirect_call (ctx_a : CodegenCtx) (arg_vals : List LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) : CompileResult :=
+def combine_indirect_call (ctx_a : CodegenCtx) (arg_vals : List LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
     let val_a := first_val_or_void arg_vals in
     match fresh_temp ctx_a {
         CtxStrPair.mk ctx_t temp =>
             let call_instr := LLVMInstruction.assign temp
                 (LLVMValue.call "apply_fun" LLVMType.i64_ (cons_val val_a empty_vals) false) in
-            CompileResult.ok ctx_t (append_instrs combined (cons_instr call_instr empty_instrs)) (LLVMValue.var_ temp) blocks funcs globals,
+            match compose_seq (Triple.tr combined blocks last_val) (Triple.tr (cons_instr call_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
+                Triple.tr new_instrs new_blocks _ =>
+                    CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
+            },
     }
 
 #[partial]
@@ -1072,12 +1339,21 @@ def first_val_or_void (vals : List LLVMValue) : LLVMValue := match vals {
 }
 
 #[partial]
-def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) (instrs : List LLVMInstruction) : CompileResult :=
+/// `blocks`/`funcs`/`globals`/`last_val` -- see `compile_native_app_db`'s
+/// own doc comment: threaded through (no longer discarded), and
+/// `last_val` lets the arithmetic instruction itself be correctly
+/// spliced into a branching operand's own terminal block via
+/// `compose_seq`, instead of blindly appended after it.
+#[partial]
+def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
     match fresh_temp c {
         CtxStrPair.mk new_ctx temp =>
             let arith_val := compile_native_val op lhs rhs in
             let arith_instr := LLVMInstruction.assign temp arith_val in
-            CompileResult.ok new_ctx (append_instrs instrs (cons_instr arith_instr empty_instrs)) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+            match compose_seq (Triple.tr instrs blocks last_val) (Triple.tr (cons_instr arith_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
+                Triple.tr new_instrs new_blocks _ =>
+                    CompileResult.ok new_ctx new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
+            },
     }
 
 #[partial]

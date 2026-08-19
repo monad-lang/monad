@@ -4,7 +4,7 @@ use process {exec_cmd}
 use lang.types {Decl, LoadedModules}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
-use lang.module {FileCheckAndCache, FileCheckResult, LoadedModules, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, expand_check_paths, get_loaded_main, get_module_info_decls, load_file_modules, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.module {FileCheckAndCache, LoadedModules, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, expand_check_paths, get_loaded_main, get_module_info_decls, load_file_modules, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
