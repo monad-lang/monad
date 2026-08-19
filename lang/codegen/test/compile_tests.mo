@@ -4,7 +4,7 @@ use lang.types {
 }
 use lang.codegen.ir {emit_module, mk}
 use lang.codegen.emit {compile_db_decls_ir, compile_db_module, mk}
-use lang.scope {promote_instance_defs}
+use lang.scope {add_constraint_dict_params_decls, promote_instance_defs, resolve_class_calls_decls}
 
 open Term {lit, type_}
 open Literal {num}
@@ -347,4 +347,173 @@ def test_promote_instance_defs_compiles_and_runs : IO Bool := do {
     let base_decls := [Decl.class_d cls, Decl.instance_d ins, Decl.def_d main_def];
     let promoted_decls := promote_instance_defs base_decls;
     compile_decls_link_run_expect promoted_decls "test_dict_promote" 5
+}
+
+/// Runs the full dictionary-passing pipeline in Phase 5's own intended
+/// order (see lang/codegen/emit.mo's compile_loaded_modules_to_ir /
+/// lang/codegen/test_driver.mo's compile_loaded_modules_to_test_ir,
+/// once wired there) -- promotion (Phase 2) must run before dict-param
+/// insertion (Phase 3), which must run before call-site resolution
+/// (Phase 4), since each phase's output is the next phase's own input
+/// (a promoted method's constraints, from Phase 2's threading of
+/// Instance.constraints, are exactly what Phase 3 reads next).
+#[partial]
+def full_dict_pipeline (decl_list : List Decl) : List Decl :=
+    resolve_class_calls_decls (add_constraint_dict_params_decls (promote_instance_defs decl_list))
+
+/// Phase 4 (D4) end-to-end regression test: a plain concrete class-
+/// method call (`MyEq.eq2 2 3`, no wildcard/constrained instance
+/// involved) resolves to a real direct call on the promoted method.
+#[test]
+def test_resolve_class_calls_concrete_d4 : IO Bool := do {
+    let a_id := Identifier.id "a";
+    let b_id := Identifier.id "b";
+    let a_var := Term.var 0 (DebugName.named a_id);
+    let b_var := Term.var 1 (DebugName.named b_id);
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add"));
+    let eq2_body := Term.app (Term.app add_var a_var) b_var;
+    let eq2_term := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) eq2_body);
+    let eq2_name := ModulePath.mp (List.cons (Identifier.id "eq2") List.empty);
+    let eq2_def := Def.mk eq2_name (Term.type_ 1) eq2_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+
+    let a_param := param_many (Identifier.id "A") (Term.type_ 1);
+    let eq2_method := ClassDef.mk (Identifier.id "eq2") Term.hole (Option.none : Option Term);
+    let cls := Class.mk (Identifier.id "MyEq") [a_param] ([] : List TypeConstraint) [eq2_method] Visibility.package_private;
+
+    let cls_name := ModulePath.mp (List.cons (Identifier.id "MyEq") List.empty);
+    let i64_arg := Term.var 0 (DebugName.named (Identifier.id "I64"));
+    let ins := Instance.mk (Identifier.id "_") cls_name ([] : List TypeConstraint) [i64_arg] Visibility.package_private ([] : List Param) [eq2_def];
+
+    let call := Term.app (Term.app (Term.var 0 (DebugName.named (Identifier.id "MyEq.eq2"))) (mk_i64 2)) (mk_i64 3);
+    let main_def := mk_def "main" call;
+
+    let base_decls := [Decl.class_d cls, Decl.instance_d ins, Decl.def_d main_def];
+    compile_decls_link_run_expect (full_dict_pipeline base_decls) "test_d4_concrete" 5
+}
+
+/// Phase 4 (D4 with a recursive inner dict arg) end-to-end regression
+/// test -- mirrors the real corpus's own `[Add A] HAdd A A A` shape
+/// (`instance [Add2 A] Wrapped2 A { def wadd2 := Add2.add2 a b }`)
+/// that motivated choosing genuine dictionary-passing over the earlier-
+/// rejected eager-monomorphic shortcut: `Wrapped2.wadd2 2 3` must
+/// resolve through the wildcard instance's own promoted method, which
+/// itself needs `Add2 I64`'s dict spliced in as ITS OWN leading arg to
+/// resolve `Add2.add2 a b` inside its own body -- a genuinely two-level
+/// resolution, not just one direct lookup.
+#[test]
+def test_resolve_class_calls_recursive_dict_arg : IO Bool := do {
+    let a_id := Identifier.id "a";
+    let b_id := Identifier.id "b";
+    let a_var := Term.var 0 (DebugName.named a_id);
+    let b_var := Term.var 1 (DebugName.named b_id);
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add"));
+
+    // instance Add2 I64 { def add2 := i64_add2 }
+    let add2_body := Term.app (Term.app add_var a_var) b_var;
+    let add2_term := Term.lam (DebugName.named a_id) (Term.type_ 1) (Term.lam (DebugName.named b_id) (Term.type_ 1) add2_body);
+    let add2_name := ModulePath.mp (List.cons (Identifier.id "add2") List.empty);
+    let add2_def := Def.mk add2_name (Term.type_ 1) add2_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+
+    let a_param := param_many (Identifier.id "A") (Term.type_ 1);
+    let add2_method := ClassDef.mk (Identifier.id "add2") Term.hole (Option.none : Option Term);
+    let add2_cls := Class.mk (Identifier.id "Add2") [a_param] ([] : List TypeConstraint) [add2_method] Visibility.package_private;
+
+    let add2_cls_name := ModulePath.mp (List.cons (Identifier.id "Add2") List.empty);
+    let i64_arg := Term.var 0 (DebugName.named (Identifier.id "I64"));
+    let add2_ins := Instance.mk (Identifier.id "_") add2_cls_name ([] : List TypeConstraint) [i64_arg] Visibility.package_private ([] : List Param) [add2_def];
+
+    // instance [Add2 A] Wrapped2 A { def wadd2 (a b : A) : A := Add2.add2 a b }
+    let wadd2_body := Term.app (Term.app (Term.var 0 (DebugName.named (Identifier.id "Add2.add2"))) a_var) b_var;
+    let wadd2_term := Term.lam (DebugName.named a_id) Term.hole (Term.lam (DebugName.named b_id) Term.hole wadd2_body);
+    let wadd2_name := ModulePath.mp (List.cons (Identifier.id "wadd2") List.empty);
+    let wadd2_def := Def.mk wadd2_name Term.hole wadd2_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+
+    let wadd2_method := ClassDef.mk (Identifier.id "wadd2") Term.hole (Option.none : Option Term);
+    let wrapped2_cls := Class.mk (Identifier.id "Wrapped2") [a_param] ([] : List TypeConstraint) [wadd2_method] Visibility.package_private;
+
+    let wrapped2_cls_name := ModulePath.mp (List.cons (Identifier.id "Wrapped2") List.empty);
+    let add2_constraint := TypeConstraint.mk add2_cls_name [Identifier.id "A"];
+    let a_wildcard_arg := Term.var 0 (DebugName.named (Identifier.id "A"));
+    let wrapped2_ins := Instance.mk (Identifier.id "_") wrapped2_cls_name [add2_constraint] [a_wildcard_arg]
+        Visibility.package_private ([] : List Param) [wadd2_def];
+
+    let call := Term.app (Term.app (Term.var 0 (DebugName.named (Identifier.id "Wrapped2.wadd2"))) (mk_i64 2)) (mk_i64 3);
+    let main_def := mk_def "main" call;
+
+    let base_decls := [
+        Decl.class_d add2_cls, Decl.instance_d add2_ins,
+        Decl.class_d wrapped2_cls, Decl.instance_d wrapped2_ins,
+        Decl.def_d main_def,
+    ];
+    compile_decls_link_run_expect (full_dict_pipeline base_decls) "test_d4_recursive" 5
+}
+
+/// Phase 4 capstone (D5, genuine polymorphism): a `[MyShow3 A]`-
+/// constrained function is called at TWO different concrete types in
+/// the SAME compiled program -- one compiled body, genuinely dictionary-
+/// parameterized (not resolved-per-call-site at compile time), proving
+/// the actual payoff of choosing dictionary-passing over the earlier-
+/// rejected eager-monomorphic shortcut. `show_twice 5` (I64 instance,
+/// `x + 100` doubled = 210) plus `show_twice mytrue` (MyBool instance,
+/// a fixed 200 doubled = 400) must total 610.
+#[test]
+def test_resolve_class_calls_genuine_polymorphism : IO Bool := do {
+    let x_id := Identifier.id "x";
+    let x_var := Term.var 0 (DebugName.named x_id);
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add"));
+
+    // type MyBool { mytrue, myfalse }
+    let mytrue_ctor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "mytrue") List.empty)) [] (Term.type_ 1);
+    let myfalse_ctor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "myfalse") List.empty)) [] (Term.type_ 1);
+    let mybool_ind := Inductive.mk (ModulePath.mp (List.cons (Identifier.id "MyBool") List.empty)) [] (Term.type_ 1)
+        [mytrue_ctor, myfalse_ctor] ([] : List Attribute) Visibility.package_private;
+
+    // instance MyShow3 I64 { def show3 (x : I64) : I64 := x + 100 }
+    let show3_i64_body := Term.app (Term.app add_var x_var) (mk_i64 100);
+    let show3_i64_term := Term.lam (DebugName.named x_id) Term.hole show3_i64_body;
+    let show3_i64_name := ModulePath.mp (List.cons (Identifier.id "show3") List.empty);
+    let show3_i64_def := Def.mk show3_i64_name Term.hole show3_i64_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+
+    let a_param := param_many (Identifier.id "A") (Term.type_ 1);
+    let show3_method := ClassDef.mk (Identifier.id "show3") Term.hole (Option.none : Option Term);
+    let myshow3_cls := Class.mk (Identifier.id "MyShow3") [a_param] ([] : List TypeConstraint) [show3_method] Visibility.package_private;
+
+    let myshow3_cls_name := ModulePath.mp (List.cons (Identifier.id "MyShow3") List.empty);
+    let i64_arg := Term.var 0 (DebugName.named (Identifier.id "I64"));
+    let show3_i64_ins := Instance.mk (Identifier.id "_") myshow3_cls_name ([] : List TypeConstraint) [i64_arg]
+        Visibility.package_private ([] : List Param) [show3_i64_def];
+
+    // instance MyShow3 MyBool { def show3 (x : MyBool) : I64 := 200 }
+    let show3_bool_term := Term.lam (DebugName.named x_id) Term.hole (mk_i64 200);
+    let show3_bool_def := Def.mk show3_i64_name Term.hole show3_bool_term ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private;
+    let mybool_arg := Term.var 0 (DebugName.named (Identifier.id "MyBool"));
+    let show3_bool_ins := Instance.mk (Identifier.id "_") myshow3_cls_name ([] : List TypeConstraint) [mybool_arg]
+        Visibility.package_private ([] : List Param) [show3_bool_def];
+
+    // def show_twice [MyShow3 A] (x : A) : I64 := MyShow3.show3 x + MyShow3.show3 x
+    let show3_call := Term.app (Term.var 0 (DebugName.named (Identifier.id "MyShow3.show3"))) x_var;
+    let show_twice_body := Term.app (Term.app add_var show3_call) show3_call;
+    let show_twice_term := Term.lam (DebugName.named x_id) Term.hole show_twice_body;
+    let show_twice_name := ModulePath.mp (List.cons (Identifier.id "show_twice") List.empty);
+    let myshow3_constraint := TypeConstraint.mk myshow3_cls_name [Identifier.id "A"];
+    let show_twice_def := Def.mk show_twice_name Term.hole show_twice_term [myshow3_constraint] ([] : List Attribute) Visibility.package_private;
+
+    // main := show_twice 5 + show_twice mytrue
+    let mytrue_val := Term.con (Con.mk (Identifier.id "mytrue") (ModulePath.mp (List.cons (Identifier.id "MyBool") List.empty)) 0 []);
+    let call_i64 := Term.app (Term.var 0 (DebugName.named (Identifier.id "show_twice"))) (mk_i64 5);
+    let call_bool := Term.app (Term.var 0 (DebugName.named (Identifier.id "show_twice"))) mytrue_val;
+    let main_body := Term.app (Term.app add_var call_i64) call_bool;
+    let main_def := mk_def "main" main_body;
+
+    let base_decls := [
+        Decl.inductive_d mybool_ind,
+        Decl.class_d myshow3_cls, Decl.instance_d show3_i64_ins, Decl.instance_d show3_bool_ins,
+        Decl.def_d show_twice_def, Decl.def_d main_def,
+    ];
+    // 98, not 610 -- process exit codes are POSIX 8-bit values (0-255);
+    // 610 mod 256 = 98 is the real observable exit code even though
+    // the underlying I64 computation inside the compiled program
+    // itself is genuinely 610 throughout (confirmed separately by
+    // temporarily printing the raw I64 before truncation).
+    compile_decls_link_run_expect (full_dict_pipeline base_decls) "test_d5_polymorphism" 98
 }
