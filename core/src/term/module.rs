@@ -20,6 +20,7 @@ use crate::{
 };
 use std::collections::HashSet;
 use std::fs::read_to_string;
+use std::sync::Arc;
 use std::time::Instant;
 use std::{fmt::Display, hash::Hash};
 
@@ -169,9 +170,23 @@ impl Default for LoadedModulesConfig {
   }
 }
 
+// `modules` is `Arc`-wrapped -- `LoadedModules` is deep-cloned once per
+// checked/tested FILE (`core/src/lib.rs`'s `evaluate_one_test_file`/
+// `check_files`, deliberately, to keep each file's capturing check
+// isolated from every other file's -- see those call sites' own doc
+// comments), and a plain `#[derive(Clone)]` over a `BTreeMap` of every
+// loaded module's entire checked AST measured (via `valgrind
+// --tool=callgrind`, AGENTS.md item 13) as 83-99% of an isolated
+// profile window -- the single largest cost anywhere in this whole
+// pipeline. `Module`'s own large fields are `Arc`-wrapped too (below),
+// so this makes the outer map's clone itself close to free as well
+// (bump one refcount) rather than merely cheaper (one B-tree-node touch
+// per loaded module). The one live mutator (`add_module`) uses
+// `Arc::make_mut` (copy-on-write); every read path is unaffected since
+// `&Arc<Map<K,V>>` derefs to `&Map<K,V>` at every existing call site.
 #[derive(Debug, Clone)]
 pub struct LoadedModules {
-  modules: Map<ModulePath, Module>,
+  modules: Arc<Map<ModulePath, Module>>,
   builtins: Builtins,
   pub config: LoadedModulesConfig,
   search_paths: SearchPaths,
@@ -195,7 +210,7 @@ impl LoadedModules {
     let modules = modules.into_iter().map(|m| (m.path().clone(), m)).collect();
     let builtins = Builtins::new();
     LoadedModules {
-      modules,
+      modules: Arc::new(modules),
       builtins,
       config: Default::default(),
       search_paths: SearchPaths::empty(),
@@ -214,18 +229,19 @@ impl LoadedModules {
     self.search_paths = paths;
   }
   pub fn get_module_mut(&mut self, path: &ModulePath) -> Option<&mut Module> {
-    self.modules.get_mut(path)
+    Arc::make_mut(&mut self.modules).get_mut(path)
   }
   pub fn get_module(&self, path: &ModulePath) -> Option<&Module> {
     self.modules.get(path)
   }
 
   pub fn extend(&mut self, ms: LoadedModules) {
-    self.modules.extend(ms.modules);
+    let other = Arc::unwrap_or_clone(ms.modules);
+    Arc::make_mut(&mut self.modules).extend(other);
   }
   /// Use type_check_module to add modules
   pub fn add_module(&mut self, module: Module) {
-    self.modules.insert(module.path().clone(), module);
+    Arc::make_mut(&mut self.modules).insert(module.path().clone(), module);
   }
   pub fn global<'a>(&'a self, for_module: &'a ModulePath) -> Option<GlobalScope<'a>> {
     GlobalScope::for_module(for_module, self)
@@ -233,7 +249,7 @@ impl LoadedModules {
 
   pub fn empty() -> LoadedModules {
     LoadedModules {
-      modules: Map::new(),
+      modules: Arc::new(Map::new()),
       builtins: Builtins::new(),
       config: Default::default(),
       search_paths: SearchPaths::empty(),
@@ -241,7 +257,7 @@ impl LoadedModules {
   }
 
   pub fn add_modules(&mut self, loaded_modules: Map<ModulePath, Module>) {
-    self.modules.extend(loaded_modules);
+    Arc::make_mut(&mut self.modules).extend(loaded_modules);
   }
 
   pub fn builtins(&self) -> &Builtins {
@@ -2193,14 +2209,31 @@ pub struct ParsedModule {
   pub module_doc: Option<Documentation>,
 }
 
+// `inductives`/`defs`/`macro_defs`/`decl_gens`/`infix`/`instances` are all
+// `Arc`-wrapped -- these are the fields that actually hold real AST
+// (every checked `Def`/`Inductive`/`Instance`/`DeclGenDef`/`Infix`'s full
+// `Term` tree), so a plain `#[derive(Clone)]` on this struct used to be a
+// genuine deep clone of a module's entire checked body. `Module` gets
+// cloned as a side effect of `LoadedModules` being cloned once per
+// checked/tested file (see `LoadedModules`'s own doc comment) -- wrapping
+// these in `Arc` makes `Module::clone()` itself O(1) (a handful of
+// refcount bumps) instead of O(this module's own AST size). `uses`/
+// `opens`/`scoped_opens`/`doc`/`path` stay plain -- they hold lightweight
+// decl metadata (paths/filters), not full ASTs, and there's no evidence
+// (from the `valgrind` profiling that motivated this) that they
+// contribute measurably, so they're left alone rather than churned on
+// spec. The one live mutator (`add_decl`, REPL-only) uses
+// `Arc::make_mut` (copy-on-write); every read path is unaffected since
+// `&Arc<Map<K,V>>`/`&Arc<Vec<T>>` deref to `&Map<K,V>`/`&[T]` at every
+// existing call site.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
   path: ModulePath,
-  inductives: Map<ModulePath, SourceContext<Inductive>>,
+  inductives: Arc<Map<ModulePath, SourceContext<Inductive>>>,
   uses: Vec<SourceContext<Use>>,
   opens: Vec<SourceContext<Open>>,
-  defs: Map<ModulePath, SourceContext<Def>>,
-  macro_defs: Map<ModulePath, SourceContext<Def>>,
+  defs: Arc<Map<ModulePath, SourceContext<Def>>>,
+  macro_defs: Arc<Map<ModulePath, SourceContext<Def>>>,
   /// Decl-gen macros (`defmacro name params := decls { ... }`) — kept
   /// alongside `macro_defs` (rather than folded into it, since
   /// `DeclGenDef` isn't a `Def`) so `use`-ing a module makes its decl-gen
@@ -2208,9 +2241,9 @@ pub struct Module {
   /// `Decl::DeclGen` was dropped entirely at module-storage time (see the
   /// historical comment in `add_decl`), which meant decl-gen macros only
   /// ever worked within the single file that declared them.
-  decl_gens: Map<ModulePath, SourceContext<DeclGenDef>>,
-  infix: Map<Operator, SourceContext<Infix>>,
-  instances: Vec<SourceContext<Instance>>,
+  decl_gens: Arc<Map<ModulePath, SourceContext<DeclGenDef>>>,
+  infix: Arc<Map<Operator, SourceContext<Infix>>>,
+  instances: Arc<Vec<SourceContext<Instance>>>,
   doc: Option<Documentation>,
   /// `open Module [{filter}] in <decl>` scopes recorded for defs/types/
   /// instances that are otherwise stored normally in the maps above. The
@@ -2702,8 +2735,7 @@ impl Module {
       .map(|ctx| ctx.with(Decl::Infix(ctx.value().clone())));
     let uses = self.uses.into_iter().map(|ctx| ctx.map(Decl::Use));
     let opens = self.opens.into_iter().map(|ctx| ctx.map(Decl::Open));
-    let decl_gens = self
-      .decl_gens
+    let decl_gens = Arc::unwrap_or_clone(self.decl_gens)
       .into_values()
       .map(|ctx| ctx.map(Decl::DeclGen));
     self
@@ -2790,24 +2822,16 @@ impl Module {
       Decl::Use(u) => self.uses.push(SourceContext::no_ctx(u)),
       Decl::Open(o) => self.opens.push(SourceContext::no_ctx(o)),
       Decl::Infix(inf) => {
-        self
-          .infix
-          .insert(inf.operator.clone(), SourceContext::no_ctx(inf));
+        Arc::make_mut(&mut self.infix).insert(inf.operator.clone(), SourceContext::no_ctx(inf));
       }
       Decl::Def(def) => {
-        self
-          .defs
-          .insert(def.name.clone(), SourceContext::no_ctx(def));
+        Arc::make_mut(&mut self.defs).insert(def.name.clone(), SourceContext::no_ctx(def));
       }
       Decl::DefMacro(def) => {
-        self
-          .macro_defs
-          .insert(def.name.clone(), SourceContext::no_ctx(def));
+        Arc::make_mut(&mut self.macro_defs).insert(def.name.clone(), SourceContext::no_ctx(def));
       }
       Decl::DeclGen(gd) => {
-        self
-          .decl_gens
-          .insert(gd.name.clone(), SourceContext::no_ctx(gd));
+        Arc::make_mut(&mut self.decl_gens).insert(gd.name.clone(), SourceContext::no_ctx(gd));
       }
       Decl::MacroCall { .. } => {
         panic!("MacroCall should be expanded before add_decl");
@@ -2818,9 +2842,7 @@ impl Module {
         }
       }
       Decl::Type(ind) => {
-        self
-          .inductives
-          .insert(ind.name.clone(), SourceContext::no_ctx(ind));
+        Arc::make_mut(&mut self.inductives).insert(ind.name.clone(), SourceContext::no_ctx(ind));
       }
       Decl::Ins(_ins) => {
         todo!()
@@ -3118,15 +3140,15 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
     .collect();
 
   Module {
-    instances,
+    instances: Arc::new(instances),
     path,
-    defs,
-    macro_defs,
-    decl_gens,
-    inductives,
+    defs: Arc::new(defs),
+    macro_defs: Arc::new(macro_defs),
+    decl_gens: Arc::new(decl_gens),
+    inductives: Arc::new(inductives),
     uses,
     opens,
-    infix,
+    infix: Arc::new(infix),
     doc: parsed.module_doc,
     scoped_opens,
   }

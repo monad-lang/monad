@@ -1353,8 +1353,51 @@ Key patterns when writing self-hosted Monad code:
       this pass — everything self-hosted-level that could safely be
       measured came back null. The real, confirmed, actionable lead this
       investigation produced is Rust-level and outside `lang/*.mo`
-      entirely: `LoadedModules`'s clone-per-file cost. If this history
-      continues, start there, not with another self-hosted sweep.
+      entirely: `LoadedModules`'s clone-per-file cost.
+    - **Follow-up: fixed.** `Module`'s six AST-bearing fields (`defs`,
+      `inductives`, `macro_defs`, `decl_gens`, `infix`, `instances`) and
+      `LoadedModules`'s own `modules: Map<ModulePath, Module>` were
+      `Arc`-wrapped (`core/src/term/module.rs`) — the same tool already
+      used repeatedly on this branch (`SharedStr`'s `Arc<str>`, `Env`'s
+      `Arc<Env>` chain), no new dependency. All six fields are private to
+      `module.rs`, so the blast radius was fully contained: one
+      constructor (`fn module(...)`) wraps each freshly-built map/vec in
+      `Arc::new(..)`; the one live outer-map mutator (`add_module`) and
+      the REPL-only `add_decl`/`get_module_mut` paths switched to
+      `Arc::make_mut` (copy-on-write, free in practice since those values
+      are always uniquely-owned at the point of mutation); every
+      read-only accessor (`.defs()`, `.get_def()`, `LoadedModules::
+      modules()`, ...) needed **no changes** — `&Arc<Map<K,V>>` derefs to
+      `&Map<K,V>` at existing call sites. `Module::clone()` went from
+      O(that module's own checked-AST size) to O(1) (a handful of `Arc`
+      bumps); `LoadedModules::clone()`'s outer `BTreeMap` clone is now
+      O(number of loaded modules) values that are themselves O(1) to
+      clone, rather than O(total loaded-corpus AST size). Two more
+      whole-registry clone sites inside the recursive module loader
+      (`module.rs`, threading `loaded` by value through
+      `load_decl_uses_modules`) and REPL/test-support clones (`lib.rs`,
+      `core_check_module.rs`) all became cheap for free, no call-site
+      changes needed. **Measured**: `cargo run --release -- test init
+      std lang examples slow_tests` (the full corpus, ~100+ files, each
+      paying the per-file clone this fix targets) dropped from
+      **215.55s to 173.51s — a ~19.5% wall-time reduction** (`git stash`
+      before/after, both 1274/1274 passing, unchanged). As predicted,
+      `test_typecheck_lang_main` alone (one file, one clone) barely
+      moved (86.72s→87.68s, within noise) — confirms the fix targets the
+      per-FILE-tested cost specifically, not per-node checking cost.
+      `cargo test` (all crates) and `cargo run --release -- check init
+      std lang examples` both unchanged (625/625 core tests, 1 ignored;
+      2 pre-existing errors/7 warnings). **Not fully explained**: the
+      ~19.5% win, while real and worth keeping, is smaller than the
+      83-99%-of-one-profile-window headline number might suggest —
+      plausible explanation, not independently confirmed: some of that
+      isolated-window `malloc`/`BTreeMap`-drop cost may belong to
+      `core_check_module.rs`'s own per-file capture-key registries (the
+      `BTreeMap<Atom, ModulePath>` machinery also visible in the
+      original profile), built fresh once per file by `build_core_program`
+      regardless of `LoadedModules`'s own clone cost — a DIFFERENT
+      structure this fix didn't touch. Flagged as a possible next target,
+      not chased further this pass.
 
 ## Committing Changes
 
