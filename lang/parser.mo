@@ -1253,12 +1253,150 @@ def type_cons_paren_or_nil (r : ParseResult String) (orig : String) (name : Iden
 		fail _ => type_cons_bare_or_implicit orig name ctx
 	}
 
-/// No `(` at all right after the constructor name — try a single bare
-/// unnamed type (`io A`), then fall back to the existing `{implicit}`
-/// handling, then (via that chain's own fallback) a zero-arg constructor.
+/// No `(` at all right after the constructor name — `plans/
+/// implementations/struct-field-destructuring.md`'s Phase 5 adds a FIRST
+/// attempt here: a brace-declared field list (`circle { radius : F64,
+/// border : Bool }`), the same convenience `core/`'s own Phase 0 adds to
+/// `constructor_parser`. Reuses `struct_one_field` (this file's own
+/// struct-body field grammar) verbatim. Only committed to once a comma is
+/// confirmed after the first field (`type_cons_brace_confirm`) — a
+/// single, comma-less brace clause (`{A : Type}`) is structurally
+/// identical to this constructor's own PER-CONSTRUCTOR IMPLICIT type
+/// param clause (`type_cons_implicit`, tried unconditionally FIRST in
+/// `core/`'s own `implicit_params`/`constructor_parser`, so this mirrors
+/// that same boundary case exactly, not a new one) -- falls through to
+/// the pre-existing bare-type-then-implicit-clause chain, COMPLETELY
+/// UNCHANGED, for anything that isn't a confirmed multi-field brace
+/// declaration, preserving today's per-constructor implicit-type-param
+/// support exactly.
 #[partial]
 def type_cons_bare_or_implicit (orig : String) (name : Identifier) (ctx : List Identifier) : ParseResult InductConstructor :=
-	type_cons_try_bare (type_expression ctx orig) orig name ctx
+	type_cons_try_brace_fields (tag "{" (skip_spaces orig)) orig name ctx
+
+#[partial]
+def type_cons_try_brace_fields (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) : ParseResult InductConstructor :=
+	match r {
+		success rem _ =>
+			let empty_ctx : List Identifier := List.empty in
+			type_cons_brace_probe (struct_one_field empty_ctx (skip_spaces rem)) orig name ctx (skip_spaces rem),
+		fail _ => type_cons_try_bare (type_expression ctx orig) orig name ctx
+	}
+
+/// `fields_start` is the position right after the opening `{` (before the
+/// first field) — kept around so a CONFIRMED multi-field brace
+/// declaration can be re-parsed from scratch via `separated_by` (a
+/// separate, self-contained field-list parser, simpler to reuse whole
+/// than to thread this probe's own partial state into) once a comma
+/// after the first field proves this really is one, rather than trying
+/// to splice this probe's own already-parsed first field onto whatever
+/// `separated_by` parses next.
+///
+/// A single field is ALSO confirmed (not just a multi-field, comma-
+/// separated list) when it carries its own `:=` default: the pre-
+/// existing implicit-clause grammar (`type_cons_implicit`) has no `:=`
+/// support at all, so a default already disambiguates away from it —
+/// exactly mirroring `core/`'s own boundary case (`implicit_param`'s
+/// grammar likewise has no `:=` clause, so `{ x : T := v }` never
+/// matches it either, falling through to the REAL, rejecting field
+/// parser there too) — without this, a single-field default would
+/// silently vanish into the old skip-based implicit-clause path instead
+/// of being rejected by `type_cons_brace_to_constructor` below.
+#[partial]
+def type_cons_brace_probe (r : ParseResult StructField) (orig : String) (name : Identifier) (ctx : List Identifier) (fields_start : String) : ParseResult InductConstructor :=
+	match r {
+		success rem field => type_cons_brace_probe_field field rem orig name ctx fields_start,
+		// Not even one field parses (e.g. `{}`, or genuinely malformed) —
+		// not a brace-field declaration at all — fall back to the
+		// pre-existing chain, unchanged, from the ORIGINAL pre-`{` position.
+		fail _ => type_cons_try_bare (type_expression ctx orig) orig name ctx
+	}
+
+#[partial]
+def type_cons_brace_probe_field (field : StructField) (rem : String) (orig : String) (name : Identifier) (ctx : List Identifier) (fields_start : String) : ParseResult InductConstructor :=
+	match field {
+		StructField.mk _ _ fdefault _ =>
+			match fdefault {
+				Option.some _ =>
+					let confirmed : ParseResult String := success rem "" in
+					type_cons_brace_confirm confirmed orig name ctx fields_start,
+				Option.none => type_cons_brace_confirm (tag "," (skip_spaces rem)) orig name ctx fields_start,
+			}
+	}
+
+#[partial]
+def type_cons_brace_confirm (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) (fields_start : String) : ParseResult InductConstructor :=
+	match r {
+		success _ _ =>
+			let empty_ctx : List Identifier := List.empty in
+			match separated_by (tag ",") (preceded_by ws0_and_comments (struct_one_field empty_ctx)) fields_start {
+				success rem fields => type_cons_brace_close (tag "}" (skip_spaces rem)) name fields,
+				fail e => fail e
+			},
+		fail _ => type_cons_try_bare (type_expression ctx orig) orig name ctx
+	}
+
+#[partial]
+def type_cons_brace_close (r : ParseResult String) (name : Identifier) (fields : List StructField) : ParseResult InductConstructor :=
+	match r {
+		success rem _ => type_cons_brace_to_constructor rem name fields,
+		fail e => fail e
+	}
+
+/// `StructField -> Param`, REJECTING any field with a default value —
+/// mirrors `core/`'s own `fields_to_cons_params` (`core/src/term.rs`,
+/// this plan's Phase 0): an ordinary `type` constructor is only ever
+/// invoked through plain positional application, never struct-literal
+/// syntax, so a `:=` default here would be silently dead code — better
+/// to error than accept something that does nothing. Unlike
+/// `struct_fields_to_params` (`lang/scope.mo`, a STRUCT's own implicit
+/// constructor, which keeps defaults), this is the rejecting sibling
+/// `named-field-construction.md`'s own `stru_field_to_def_param` vs. this
+/// plan's `fields_to_cons_params` split already established on the
+/// `core/` side.
+#[partial]
+def type_cons_brace_to_constructor (rem : String) (name : Identifier) (fields : List StructField) : ParseResult InductConstructor :=
+	match cons_fields_to_params fields {
+		Option.some params =>
+			success rem (InductConstructor.mk (ModulePath.mp (List.cons name List.empty)) params (Term.hole)),
+		Option.none =>
+			fail (ParseError.custom "a brace-declared constructor field has a default value, which is not supported on a bare `type` constructor (only `struct` bodies support field defaults)" rem)
+	}
+
+/// `StructField -> Param`, REJECTING any field with a default value (by
+/// returning `Option.none` for the WHOLE list rather than the offending
+/// field alone) — mirrors `core/`'s own `fields_to_cons_params`
+/// (`core/src/term.rs`, this plan's Phase 0): an ordinary `type`
+/// constructor is only ever invoked through plain positional
+/// application, never struct-literal syntax, so a `:=` default here
+/// would be silently dead code — better to error than accept something
+/// that does nothing. Unlike `struct_fields_to_params` (`lang/scope.mo`,
+/// a STRUCT's own implicit constructor, which keeps defaults), this is
+/// the rejecting sibling `named-field-construction.md`'s own
+/// `stru_field_to_def_param` vs. this plan's `fields_to_cons_params`
+/// split already established on the `core/` side.
+#[partial]
+def cons_fields_to_params (fields : List StructField) : Option (List Param) :=
+	match fields {
+		List.empty =>
+			let empty_params : List Param := List.empty in
+			Option.some empty_params,
+		List.cons f rest =>
+			match f {
+				StructField.mk fname ftyp fdefault fmult =>
+					match fdefault {
+						Option.some _ => Option.none,
+						Option.none =>
+							match cons_fields_to_params rest {
+								Option.some ps =>
+									let no_attrs : List Attribute := List.empty in
+									let none : Option Term := Option.none in
+									let p : Param := Param.mk fname ftyp fmult none no_attrs in
+									Option.some (List.cons p ps),
+								Option.none => Option.none
+							}
+					}
+			}
+	}
 
 #[partial]
 def type_cons_try_bare (r : ParseResult Term) (orig : String) (name : Identifier) (ctx : List Identifier) : ParseResult InductConstructor :=
@@ -5209,6 +5347,152 @@ def test_def_params_brace_block_default_is_a_parse_error : Bool :=
 	match def_parser "def scale {factor : I64 := 1, p : I64} : I64 := factor * p" {
 		success _ _ => false,
 		fail _ => true
+	}
+
+// -------------------------------------------------------------------
+// Phase 5 of `plans/implementations/struct-field-destructuring.md`:
+// brace-field declaration convenience on `type` constructors
+// (`circle { radius : F64, border : Bool }`, alongside the existing
+// `circle (radius : F64) (border : Bool)`).
+// -------------------------------------------------------------------
+
+#[partial]
+def params_similar (a : List Param) (b : List Param) : Bool :=
+	match a {
+		List.empty => match b { List.empty => true, List.cons _ _ => false },
+		List.cons pa ra =>
+			match b {
+				List.empty => false,
+				List.cons pb rb => Similar.similar pa pb && params_similar ra rb,
+			}
+	}
+
+#[partial]
+def cons_list_params_similar (a : List InductConstructor) (b : List InductConstructor) : Bool :=
+	match a {
+		List.empty => match b { List.empty => true, List.cons _ _ => false },
+		List.cons ca ra =>
+			match b {
+				List.empty => false,
+				List.cons cb rb =>
+					match ca {
+						InductConstructor.mk _ pa _ =>
+							match cb { InductConstructor.mk _ pb _ => params_similar pa pb }
+					} && cons_list_params_similar ra rb,
+			}
+	}
+
+#[partial]
+def decl_cons_params_similar (a : Decl) (b : Decl) : Bool :=
+	match a {
+		Decl.inductive_d inda =>
+			match inda {
+				Inductive.mk _ _ _ consa _ _ =>
+					match b {
+						Decl.inductive_d indb =>
+							match indb { Inductive.mk _ _ _ consb _ _ => cons_list_params_similar consa consb },
+						_ => false,
+					}
+			},
+		_ => false,
+	}
+
+#[test]
+def test_type_cons_brace_form_matches_paren_form : Bool :=
+	// Both constructors need >= 2 fields: a single-field, comma-less
+	// brace group is structurally identical to this constructor's own
+	// per-constructor implicit type-param clause and is consumed there
+	// FIRST -- see `test_type_cons_brace_form_single_field_still_implicit`
+	// below (same boundary case `core/`'s own Phase 0 has).
+	match type_parser "type Shape { circle { radius : F64, border : Bool }, rectangle { width : F64, height : F64 }, }" {
+		success _ brace_out =>
+			match type_parser "type Shape { circle (radius : F64) (border : Bool), rectangle (width : F64) (height : F64), }" {
+				success _ paren_out => decl_cons_params_similar brace_out paren_out,
+				fail _ => false,
+			},
+		fail _ => false,
+	}
+
+#[test]
+def test_type_cons_brace_form_multiplicity_prefix : Bool :=
+	match type_parser "type Wrapper { wrap { !val : String, tag : String }, }" {
+		success _ out =>
+			match out {
+				Decl.inductive_d ind =>
+					match ind {
+						Inductive.mk _ _ _ cons _ _ =>
+							match cons {
+								List.cons c _ =>
+									match c {
+										InductConstructor.mk _ params _ =>
+											match params {
+												List.cons p _ =>
+													match p { Param.mk _ _ mult _ _ => match mult { Multiplicity.linear => true, _ => false } },
+												List.empty => false,
+											}
+									},
+								List.empty => false,
+							}
+					},
+				_ => false,
+			},
+		fail _ => false,
+	}
+
+#[test]
+def test_type_cons_brace_form_rejects_default_value : Bool :=
+	// Single field but WITH a default -- disambiguates away from the
+	// implicit-clause grammar (no `:=` support there either), so this
+	// must be rejected by `type_cons_brace_to_constructor`, not silently
+	// swallowed as a discarded implicit clause.
+	match type_parser "type Shape { circle { radius : F64 := 1.0 }, }" {
+		success _ _ => false,
+		fail _ => true,
+	}
+
+#[test]
+def test_type_cons_brace_form_single_field_still_implicit : Bool :=
+	// A single, comma-less, default-less field is consumed as this
+	// constructor's own per-constructor implicit type-param clause, same
+	// boundary case `core/`'s own Phase 0 has for `constructor_parser`'s
+	// `implicit_params` -- the constructor ends up with ZERO real params
+	// from this clause (matching `type_cons_implicit`'s existing
+	// behavior), not one, since this plan's brace-field form is never
+	// reached for it.
+	match type_parser "type Wrapper { wrap { val : String }, }" {
+		success _ out =>
+			match out {
+				Decl.inductive_d ind =>
+					match ind {
+						Inductive.mk _ _ _ cons _ _ =>
+							match cons {
+								List.cons c _ =>
+									match c { InductConstructor.mk _ params _ => I64.beq (List.length params) 0 },
+								List.empty => false,
+							}
+					},
+				_ => false,
+			},
+		fail _ => false,
+	}
+
+#[test]
+def test_type_cons_paren_form_still_parses_unchanged : Bool :=
+	match type_parser "type Pair A B { pair (first : A) (second : B), }" {
+		success _ out =>
+			match out {
+				Decl.inductive_d ind =>
+					match ind {
+						Inductive.mk _ _ _ cons _ _ =>
+							match cons {
+								List.cons c _ =>
+									match c { InductConstructor.mk _ params _ => I64.beq (List.length params) 2 },
+								List.empty => false,
+							}
+					},
+				_ => false,
+			},
+		fail _ => false,
 	}
 
 // --- TypeConstraint parsing tests ---
