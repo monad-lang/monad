@@ -1205,6 +1205,29 @@ pub fn case_with_field_pattern(
   }
 }
 
+/// Like `case`, but preserves an existing `field_pattern` through a
+/// tree-rewrite that otherwise reconstructs a `MatchCase` unchanged
+/// (macro expansion's `expand_term`/`resolve_quote`/`rename_macro_var`/
+/// `alpha_rename_body`/`subst_macro`, `core/src/eval/macro_expand.rs` --
+/// every one of these previously rebuilt each case via `case(c.name,
+/// c.args, value)`, which silently dropped `c.field_pattern` back to
+/// `None`, corrupting an unresolved `{ x, y } => ...` case into a
+/// zero-arg positional one before this plan's own elaboration pass ever
+/// got to see it).
+pub fn case_with_optional_field_pattern(
+  name: Identifier,
+  args: Vec<Identifier>,
+  field_pattern: Option<FieldPattern>,
+  value: Term,
+) -> MatchCase {
+  MatchCase {
+    name,
+    args,
+    field_pattern,
+    value: Box::new(value),
+  }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum NumSuffix {
   I8,

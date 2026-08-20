@@ -104,9 +104,23 @@ fn test_class() {
   );
 }
 
+/// Test-only: unwraps every `ParsedParam::Plain` entry down to its inner
+/// `Param` -- panics on a `Destructured` one, since these are the tests
+/// exercising the pre-existing PLAIN param forms only (destructured-param
+/// parsing has its own dedicated tests, see Phase 3 of `plans/
+/// implementations/struct-field-destructuring.md` below).
+fn plain_params(pp: Vec<ParsedParam>) -> Vec<Param> {
+  pp.into_iter()
+    .map(|p| match p {
+      ParsedParam::Plain(p) => p,
+      ParsedParam::Destructured(..) => panic!("expected a Plain param, got a Destructured one"),
+    })
+    .collect()
+}
+
 #[test]
 fn test_def_param() {
-  let def_param = |s: &'static str| def_param::<()>(s.into());
+  let def_param = |s: &'static str| def_param::<()>(s.into()).map(|(i, r)| (i, plain_params(r)));
   let (_, r) = def_param(r#"(a : String)"#.into()).unwrap();
   similar!(r, vec![dpar("a", typ("String"))]);
   let (_, r) = def_param(r#"(a b : String)"#.into()).unwrap();
@@ -123,7 +137,7 @@ fn test_def_param() {
 
 #[test]
 fn test_def_params_brace_form_matches_paren_form() {
-  let def_params = |s: &'static str| def_params::<()>(s.into());
+  let def_params = |s: &'static str| def_params::<()>(s.into()).map(|(i, r)| (i, plain_params(r)));
   let (_, brace) = def_params(r#"{factor : I64, p : I64}"#.into()).unwrap();
   let (_, paren) = def_params(r#"(factor : I64) (p : I64)"#.into()).unwrap();
   similar!(brace.clone(), paren);
@@ -135,7 +149,7 @@ fn test_def_params_brace_form_matches_paren_form() {
 
 #[test]
 fn test_def_params_brace_form_default_populates_param_default() {
-  let def_params = |s: &'static str| def_params::<()>(s.into());
+  let def_params = |s: &'static str| def_params::<()>(s.into()).map(|(i, r)| (i, plain_params(r)));
   let (_, r) = def_params(r#"{factor : I64 := 1, p : I64}"#.into()).unwrap();
   assert_eq!(r.len(), 2);
   assert_eq!(r[0].name, id("factor"));
@@ -198,6 +212,166 @@ fn test_def_params_implicit_multi_name_form_unaffected() {
     explicit_lam_params(&res.term),
     vec![(id("x"), typ("K"))],
     "the `{{K V : Type}}` clause must contribute NO Lam layer"
+  );
+}
+
+// -------------------------------------------------------------------
+// Phase 3 of `plans/implementations/struct-field-destructuring.md`:
+// `def` parameter destructuring (`def area ({ x, y } : Point) : I64 :=
+// x + y`, desugared to a gensym'd param + a wrapping bare-form match).
+// -------------------------------------------------------------------
+
+#[test]
+fn test_def_destructured_param_desugars_to_wrapping_match() {
+  let s = r#"def area ({ x, y } : Point) : I64 := x + y"#.into();
+  let (_, res) = def_parser(s).unwrap();
+  // `def area (__struct_param#N : Point) : I64 := match __struct_param#N { { x, y } => x + y }`
+  let Term::Lam { param, body } = &res.term else {
+    panic!("expected a Lam, got {:?}", res.term);
+  };
+  let Par::P(p) = param else {
+    panic!("expected an explicit Par::P param, got {param:?}");
+  };
+  assert!(
+    p.name.as_str().starts_with("__struct_param"),
+    "destructured param must bind a gensym'd name, got `{}`",
+    p.name.as_str()
+  );
+  similar!((*p.typ).clone(), typ("Point"));
+  let Term::Lit {
+    value: Literal::Match { value, cases },
+  } = body.as_ref()
+  else {
+    panic!("expected the body to be a Lit::Match, got {body:?}");
+  };
+  match value.as_ref() {
+    Term::Var {
+      name: NameRef::Id(scrutinee_name),
+    } => assert_eq!(
+      scrutinee_name, &p.name,
+      "the wrapping match's scrutinee must be the SAME gensym'd param"
+    ),
+    other => panic!("expected the scrutinee to be a bare Var, got {other:?}"),
+  }
+  assert_eq!(cases.len(), 1);
+  assert_eq!(cases[0].name, id(""), "bare-form match case");
+  assert_eq!(
+    cases[0].field_pattern,
+    Some(FieldPattern {
+      fields: vec![(id("x"), id("x")), (id("y"), id("y"))],
+      rest: false,
+    })
+  );
+  similar!((*cases[0].value).clone(), oper(var("x"), "+", var("y")));
+}
+
+#[test]
+fn test_def_destructured_and_plain_param_mixed() {
+  let s = r#"def scale ({ x, y } : Point) (factor : I64) : Point := { x := x * factor, y := y * factor }"#.into();
+  let (_, res) = def_parser(s).unwrap();
+  // The wrapping match is built ONCE, around the ORIGINAL body, before
+  // `lams` wraps the (now match-augmented) term in EVERY param's own
+  // `Lam` -- both the destructured param's and the plain `factor`'s --
+  // in written order (`lams`' own convention: first param outermost). So
+  // the match itself ends up innermost, sitting UNDER both lambdas
+  // (`factor` must still be in scope inside it, which it is): `Lam
+  // {__struct_param, Lam {factor, Match {...}}}`, not immediately inside
+  // the destructured param's own Lam alone.
+  let Term::Lam { param, body } = &res.term else {
+    panic!(
+      "expected outer Lam (destructured param), got {:?}",
+      res.term
+    );
+  };
+  let Par::P(p0) = param else {
+    panic!("expected explicit Par::P");
+  };
+  assert!(p0.name.as_str().starts_with("__struct_param"));
+  let Term::Lam {
+    param: factor_param,
+    body: inner_body,
+  } = body.as_ref()
+  else {
+    panic!("expected an inner Lam (`factor`), got {body:?}");
+  };
+  let Par::P(p1) = factor_param else {
+    panic!("expected explicit Par::P");
+  };
+  assert_eq!(p1.name, id("factor"));
+  let Term::Lit {
+    value: Literal::Match { value, cases },
+  } = inner_body.as_ref()
+  else {
+    panic!("expected the innermost body to be a wrapping Lit::Match, got {inner_body:?}");
+  };
+  match value.as_ref() {
+    Term::Var {
+      name: NameRef::Id(scrutinee_name),
+    } => assert_eq!(scrutinee_name, &p0.name),
+    other => panic!("expected the scrutinee to be a bare Var, got {other:?}"),
+  }
+  assert_eq!(
+    cases[0].field_pattern,
+    Some(FieldPattern {
+      fields: vec![(id("x"), id("x")), (id("y"), id("y"))],
+      rest: false,
+    })
+  );
+}
+
+#[test]
+fn test_def_destructured_param_partial_rest() {
+  let s = r#"def left_edge ({ x, .. } : Rect) : I64 := x"#.into();
+  let (_, res) = def_parser(s).unwrap();
+  let Term::Lam { body, .. } = &res.term else {
+    panic!("expected a Lam, got {:?}", res.term);
+  };
+  let Term::Lit {
+    value: Literal::Match { cases, .. },
+  } = body.as_ref()
+  else {
+    panic!("expected a Lit::Match, got {body:?}");
+  };
+  assert_eq!(
+    cases[0].field_pattern,
+    Some(FieldPattern {
+      fields: vec![(id("x"), id("x"))],
+      rest: true,
+    })
+  );
+}
+
+#[test]
+fn test_def_destructured_param_rename() {
+  let s = r#"def scale ({ x := px, y := py } : Point) (factor : I64) : Point :=
+    { x := px * factor, y := py * factor }"#
+    .into();
+  let (_, res) = def_parser(s).unwrap();
+  // Two params here (destructured + plain `factor`) -- see
+  // `test_def_destructured_and_plain_param_mixed`'s own comment for why
+  // the match ends up under BOTH lambdas, not immediately inside the
+  // destructured param's own one.
+  let Term::Lam {
+    body: outer_body, ..
+  } = &res.term
+  else {
+    panic!("expected an outer Lam, got {:?}", res.term);
+  };
+  let Term::Lam { body, .. } = outer_body.as_ref() else {
+    panic!("expected an inner Lam (`factor`), got {outer_body:?}");
+  };
+  let Term::Lit {
+    value: Literal::Match { cases, .. },
+  } = body.as_ref()
+  else {
+    panic!("expected a Lit::Match, got {body:?}");
+  };
+  assert_eq!(
+    cases[0].field_pattern,
+    Some(FieldPattern {
+      fields: vec![(id("x"), id("px")), (id("y"), id("py"))],
+      rest: false,
+    })
   );
 }
 

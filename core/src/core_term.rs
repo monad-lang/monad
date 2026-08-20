@@ -23,7 +23,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Map;
-use crate::term::{F64Wrap, Identifier, ModulePath, Multiplicity, NumSuffix};
+use crate::term::{F64Wrap, FieldPattern, Identifier, ModulePath, Multiplicity, NumSuffix};
 
 // ---------------------------------------------------------------------------
 // DebugName — display-only, never used for identity
@@ -189,6 +189,23 @@ impl AtomTable {
 pub struct CoreMatchCase {
   pub name: Identifier,
   pub dbgs: Vec<DebugName>,
+  /// `Some` only pre-elaboration — mirrors `crate::term::MatchCase`'s own
+  /// field (`plans/implementations/struct-field-destructuring.md`).
+  /// `lower_core.rs` carries a parsed `{ x, y } => ...`/`ConsName { x, y }
+  /// => ...` pattern through unresolved (it has no constructor-
+  /// registration data to resolve field names against); `dbgs`/`value` at
+  /// that point are pushed/indexed in the pattern's WRITTEN field order
+  /// (the only order available pre-type-checking), NOT the target
+  /// constructor's declared order. `core_check.rs`'s `desugar_struct_
+  /// literals` (the pass whose OUTPUT actually gets lowered/evaluated --
+  /// `infer`/`check` never mutate, see `raise_core.rs`'s module doc)
+  /// resolves this once the scrutinee's real type is known, rewriting
+  /// `dbgs`/`value` into the constructor's true declared order (via
+  /// `permute_binders`, below) and clearing this back to `None` — so
+  /// every OTHER consumer (`eval.rs`, `lower_core_ir.rs`) only ever sees
+  /// `None` here, exactly as `crate::term::MatchCase::field_pattern`'s own
+  /// doc comment describes for the parser-level type.
+  pub field_pattern: Option<FieldPattern>,
   pub value: Box<CoreTerm>,
 }
 
@@ -666,6 +683,7 @@ fn open_at_lit(lit: &CoreLit, depth: u32, replacement: &CoreTerm) -> CoreLit {
         .map(|c| CoreMatchCase {
           name: c.name.clone(),
           dbgs: c.dbgs.clone(),
+          field_pattern: c.field_pattern.clone(),
           value: Box::new(open_at(&c.value, depth + c.dbgs.len() as u32, replacement)),
         })
         .collect(),
@@ -790,6 +808,7 @@ fn close_at_lit(lit: &CoreLit, depth: u32, atom: Atom) -> CoreLit {
         .map(|c| CoreMatchCase {
           name: c.name.clone(),
           dbgs: c.dbgs.clone(),
+          field_pattern: c.field_pattern.clone(),
           value: Box::new(close_at(&c.value, depth + c.dbgs.len() as u32, atom)),
         })
         .collect(),
@@ -835,6 +854,189 @@ pub(crate) fn close_n(term: &CoreTerm, depth: u32, atoms: &[Atom]) -> CoreTerm {
     current = close_at(&current, depth + i as u32, *atom);
   }
   current
+}
+
+// ---------------------------------------------------------------------------
+// Binder permutation — the one piece of *general* index arithmetic this
+// representation otherwise avoids (see this section's own header comment
+// above `open_at`). Needed by `plans/implementations/
+// struct-field-destructuring.md`'s field-pattern elaboration specifically:
+// a match arm's body is de-Bruijn-indexed once, at `lower_core.rs`'s
+// syntactic first pass, against whatever field order is available THEN --
+// for `{ x, y } => ...`, that's the pattern's WRITTEN order (the only one
+// knowable before any constructor is resolved). The runtime, however,
+// always binds a matched constructor's fields POSITIONALLY in its
+// DECLARED order (`core_eval.rs`'s `CoreLit::Match` handling: "fields are
+// pushed in their natural (declaration) order"), which is only knowable
+// once the scrutinee's type is inferred -- at `core_check.rs`'s `Match`
+// handling, by which point the body's indices are already fixed relative
+// to written order. `permute_binders` bridges the two: once elaboration
+// knows the declared order, it retargets the ALREADY-INDEXED body from
+// written order onto declared order directly, rather than needing to
+// re-lower from scratch.
+// ---------------------------------------------------------------------------
+
+/// Permute (and, when `new_n > old_n`, widen with fresh discard slots) the
+/// innermost `old_n` `Bound` indices of `term`, mapping old absolute depth
+/// `d` (`d < old_n`, relative to `cutoff`) to `depth_map[d as usize]` (a
+/// new absolute depth `< new_n`, also relative to `cutoff`) --
+/// `depth_map` must be injective (no two old depths mapping to the same
+/// new one); any new depth in `0..new_n` absent from `depth_map`'s image
+/// is a fresh, necessarily-unreferenced slot (the caller's own
+/// `CoreMatchCase.dbgs` gets a matching discard entry for it -- a
+/// declared field elided from the pattern via `..`, which the body could
+/// never have mentioned in the first place, since the parser has no name
+/// for it).
+///
+/// A `Bound` referring to a binder introduced BELOW this frame (index `<
+/// cutoff`, i.e. more local than what's being permuted) is left
+/// completely untouched. A `Bound` referring to a binder OUTSIDE this
+/// frame (index `>= cutoff + old_n`) shifts by `new_n - old_n`, to keep
+/// reaching the same outer binder now that this frame holds `new_n` slots
+/// instead of `old_n`. Call with `cutoff: 0` at the match arm's own body;
+/// the recursion grows `cutoff` by however many further binders each node
+/// introduces while descending, exactly mirroring `open_at`'s own `depth`
+/// threading (including its `Lit::Match` arm, which grows by a NESTED
+/// case's own `dbgs.len()` -- a case fully inside the body being permuted
+/// here, unrelated to the `old_n`/`new_n` frame this call is retargeting).
+pub(crate) fn permute_binders(
+  term: &CoreTerm,
+  cutoff: u32,
+  old_n: u32,
+  new_n: u32,
+  depth_map: &[u32],
+) -> CoreTerm {
+  match term {
+    CoreTerm::Bound(i) if *i < cutoff => term.clone(),
+    CoreTerm::Bound(i) if *i < cutoff + old_n => {
+      let local = *i - cutoff;
+      CoreTerm::Bound(cutoff + depth_map[local as usize])
+    }
+    CoreTerm::Bound(i) => CoreTerm::Bound(i + (new_n - old_n)),
+    CoreTerm::Free(_) | CoreTerm::Meta(_) | CoreTerm::Sort { .. } | CoreTerm::Hole => term.clone(),
+    CoreTerm::Forall { dbg, typ, body } => CoreTerm::Forall {
+      dbg: dbg.clone(),
+      typ: Box::new(permute_binders(typ, cutoff, old_n, new_n, depth_map)),
+      body: Box::new(permute_binders(body, cutoff + 1, old_n, new_n, depth_map)),
+    },
+    CoreTerm::Pi {
+      dbg,
+      arg,
+      ret,
+      mult,
+    } => CoreTerm::Pi {
+      dbg: dbg.clone(),
+      arg: Box::new(permute_binders(arg, cutoff, old_n, new_n, depth_map)),
+      ret: Box::new(permute_binders(ret, cutoff + 1, old_n, new_n, depth_map)),
+      mult: mult.clone(),
+    },
+    CoreTerm::Lam {
+      dbg,
+      param_typ,
+      body,
+    } => CoreTerm::Lam {
+      dbg: dbg.clone(),
+      param_typ: Box::new(permute_binders(param_typ, cutoff, old_n, new_n, depth_map)),
+      body: Box::new(permute_binders(body, cutoff + 1, old_n, new_n, depth_map)),
+    },
+    CoreTerm::App { fun, arg } => CoreTerm::App {
+      fun: Box::new(permute_binders(fun, cutoff, old_n, new_n, depth_map)),
+      arg: Box::new(permute_binders(arg, cutoff, old_n, new_n, depth_map)),
+    },
+    CoreTerm::Lit(lit) => CoreTerm::Lit(permute_binders_lit(lit, cutoff, old_n, new_n, depth_map)),
+    CoreTerm::Con(c) => CoreTerm::Con(CoreConstructor {
+      name: c.name.clone(),
+      typ_name: c.typ_name.clone(),
+      num_args: c.num_args,
+      args: permute_binders_args(&c.args, cutoff, old_n, new_n, depth_map),
+    }),
+    CoreTerm::Ntv(n) => CoreTerm::Ntv(CoreNative {
+      native_name: n.native_name.clone(),
+      num_args: n.num_args,
+      args: permute_binders_args(&n.args, cutoff, old_n, new_n, depth_map),
+    }),
+    CoreTerm::Ctx { loc, term } => CoreTerm::Ctx {
+      loc: loc.clone(),
+      term: Box::new(permute_binders(term, cutoff, old_n, new_n, depth_map)),
+    },
+  }
+}
+
+fn permute_binders_args(
+  args: &[Option<CoreTerm>],
+  cutoff: u32,
+  old_n: u32,
+  new_n: u32,
+  depth_map: &[u32],
+) -> Vec<Option<CoreTerm>> {
+  args
+    .iter()
+    .map(|a| {
+      a.as_ref()
+        .map(|t| permute_binders(t, cutoff, old_n, new_n, depth_map))
+    })
+    .collect()
+}
+
+fn permute_binders_lit(
+  lit: &CoreLit,
+  cutoff: u32,
+  old_n: u32,
+  new_n: u32,
+  depth_map: &[u32],
+) -> CoreLit {
+  match lit {
+    CoreLit::Str { .. } | CoreLit::Char { .. } | CoreLit::Num { .. } | CoreLit::Float { .. } => {
+      lit.clone()
+    }
+    CoreLit::Match { scrutinee, cases } => CoreLit::Match {
+      scrutinee: Box::new(permute_binders(scrutinee, cutoff, old_n, new_n, depth_map)),
+      cases: cases
+        .iter()
+        .map(|c| CoreMatchCase {
+          name: c.name.clone(),
+          dbgs: c.dbgs.clone(),
+          field_pattern: c.field_pattern.clone(),
+          value: Box::new(permute_binders(
+            &c.value,
+            cutoff + c.dbgs.len() as u32,
+            old_n,
+            new_n,
+            depth_map,
+          )),
+        })
+        .collect(),
+    },
+    CoreLit::If { cond, then, els } => CoreLit::If {
+      cond: Box::new(permute_binders(cond, cutoff, old_n, new_n, depth_map)),
+      then: Box::new(permute_binders(then, cutoff, old_n, new_n, depth_map)),
+      els: Box::new(permute_binders(els, cutoff, old_n, new_n, depth_map)),
+    },
+    CoreLit::StructLit { fields, type_name } => CoreLit::StructLit {
+      fields: fields
+        .iter()
+        .map(|(k, v)| {
+          (
+            k.clone(),
+            permute_binders(v, cutoff, old_n, new_n, depth_map),
+          )
+        })
+        .collect(),
+      type_name: *type_name,
+    },
+    CoreLit::StructUpdate { base, fields } => CoreLit::StructUpdate {
+      base: Box::new(permute_binders(base, cutoff, old_n, new_n, depth_map)),
+      fields: fields
+        .iter()
+        .map(|(k, v)| {
+          (
+            k.clone(),
+            permute_binders(v, cutoff, old_n, new_n, depth_map),
+          )
+        })
+        .collect(),
+    },
+  }
 }
 
 /// Replace every occurrence of `Meta(target)` with `replacement`
@@ -923,6 +1125,7 @@ fn subst_meta_lit(lit: &CoreLit, target: MetaId, replacement: &CoreTerm) -> Core
         .map(|c| CoreMatchCase {
           name: c.name.clone(),
           dbgs: c.dbgs.clone(),
+          field_pattern: c.field_pattern.clone(),
           value: Box::new(subst_meta(&c.value, target, replacement)),
         })
         .collect(),
@@ -1447,6 +1650,7 @@ mod test {
         cases: vec![CoreMatchCase {
           name: Identifier::new("cons".to_string()),
           dbgs: vec![named(a), named(t)],
+          field_pattern: None,
           value: Box::new(CoreTerm::Bound(1)), // refs the first pattern arg
         }],
       })
@@ -1465,6 +1669,7 @@ mod test {
       cases: vec![CoreMatchCase {
         name: Identifier::new("cons".to_string()),
         dbgs: vec![DebugName::Anonymous, DebugName::Anonymous],
+        field_pattern: None,
         value: Box::new(CoreTerm::Bound(2)),
       }],
     });
@@ -1497,6 +1702,7 @@ mod test {
       cases: vec![CoreMatchCase {
         name: Identifier::new("x".to_string()),
         dbgs: vec![],
+        field_pattern: None,
         value: Box::new(CoreTerm::Meta(m)),
       }],
     });

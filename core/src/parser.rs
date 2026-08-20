@@ -460,6 +460,41 @@ fn lam_param<X: Clone>(input: Span<X>) -> Res<Param, X> {
   .parse(input)
 }
 
+/// `lam_param`, but ALSO accepting a destructured form (`({ x, y } :
+/// Type)`, requires an explicit type annotation -- same restriction
+/// `def_param`'s own destructured alternative has, and for the same
+/// reason: nothing else could resolve the pattern's target constructor
+/// otherwise). `plans/implementations/struct-field-destructuring.md`'s
+/// Phase 4 -- unlike Phase 3's `def_param`, this is NOT wired into
+/// `lam_param` itself: `lam_param` has two OTHER call sites
+/// (`class_parser`/`inductive_parser`) parsing a `class`/`type`
+/// declaration's own GENERIC TYPE params, not value-level function
+/// parameters -- destructuring a type variable is meaningless, so only
+/// `lambda` (the actual `\x => ...` anonymous-function literal) gets
+/// this alternative. Reuses `ParsedParam` (`def_param`'s own wrapper
+/// type) rather than a duplicate lambda-specific one -- same shape,
+/// same meaning.
+fn lam_param_destructurable<X: Clone>(input: Span<X>) -> Res<ParsedParam, X> {
+  alt((
+    map(
+      delimited(
+        (char('('), ws0),
+        separated_pair(struct_pattern_parser, ws0, type_annotation),
+        (
+          ws0,
+          context("closing parenthesis for function parameter", char(')')),
+        ),
+      ),
+      |(fp, typ)| {
+        let name = Identifier::gensym("__struct_param");
+        ParsedParam::Destructured(param(name, typ), fp)
+      },
+    ),
+    map(lam_param, ParsedParam::Plain),
+  ))
+  .parse(input)
+}
+
 /// `#[arg]`-style attributes on a single named constructor parameter, e.g.
 /// `compile (#[arg] verbose : Bool)` — consumed by `#[derive_cli]`
 /// generation (`lang/cli.mo`'s `derive_cli_meta`). Only meaningful ahead of the
@@ -553,26 +588,70 @@ fn implicit_params<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
   .parse(input)
 }
 
-fn def_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
-  delimited(
-    (char('('), ws0),
+/// A single `def`/`lam` parameter as parsed: either an ordinary explicit
+/// param (`(x : T)`, unchanged), or a destructured one (`({ x, y } : T)`,
+/// `plans/implementations/struct-field-destructuring.md`'s Phase 3) --
+/// paired with the `FieldPattern` a wrapping `match` needs to actually
+/// bind `x`/`y` from the gensym'd `Param` this variant also carries. Kept
+/// as a thin wrapper (rather than adding a pattern slot to `Param` itself)
+/// so every OTHER `Param` consumer (`Pi`/`Lam` construction, `eval.rs`
+/// substitution, ...) needs no changes at all — a `Destructured` entry's
+/// own `Param` is an ordinary, real binder by the time it reaches any of
+/// them; only `def_parser` (see below) ever inspects the `FieldPattern`
+/// half, to wrap the body in one extra `match` per `Destructured` param
+/// before building the final `Lam` chain.
+#[derive(Debug, Clone, PartialEq)]
+enum ParsedParam {
+  Plain(Param),
+  Destructured(Param, FieldPattern),
+}
+
+fn def_param<X: Clone>(input: Span<X>) -> Res<Vec<ParsedParam>, X> {
+  alt((
+    // Destructured: `({ x, y } : Type)` -- exactly one gensym'd `Param`
+    // (`Identifier::gensym`, same convention `raise_core.rs` uses for
+    // synthetic binder names) paired with the parsed `FieldPattern`.
+    // Reuses `struct_pattern_parser` (Phase 1's own match-case pattern
+    // grammar) verbatim -- same `{ field, other := binder, .. }` syntax,
+    // same reason to share the parser rather than duplicate it. Tried
+    // FIRST: `{` can never start `multiplicity_prefix`/`identifier`, so
+    // this never backtracks into (or is shadowed by) the plain
+    // alternative below.
     map(
-      pair(
-        multiplicity_prefix,
-        separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
+      delimited(
+        (char('('), ws0),
+        separated_pair(struct_pattern_parser, ws0, type_annotation),
+        (
+          ws0,
+          context("closing parenthesis for function parameters", char(')')),
+        ),
       ),
-      |(mult, (ids, typ))| {
-        ids
-          .into_iter()
-          .map(|i| param_with_mult(i, typ.clone(), mult.clone()))
-          .collect()
+      |(fp, typ)| {
+        let name = Identifier::gensym("__struct_param");
+        vec![ParsedParam::Destructured(param(name, typ), fp)]
       },
     ),
-    (
-      ws0,
-      context("closing parenthesis for function parameters", char(')')),
+    // Existing: `(mult id+ : Type)`, unchanged.
+    delimited(
+      (char('('), ws0),
+      map(
+        pair(
+          multiplicity_prefix,
+          separated_pair(many1(terminated(identifier, ws0)), ws0, type_annotation),
+        ),
+        |(mult, (ids, typ))| {
+          ids
+            .into_iter()
+            .map(|i| ParsedParam::Plain(param_with_mult(i, typ.clone(), mult.clone())))
+            .collect()
+        },
+      ),
+      (
+        ws0,
+        context("closing parenthesis for function parameters", char(')')),
+      ),
     ),
-  )
+  ))
   .parse(input)
 }
 /// A `def`'s own top-level parameter list, in EITHER of two spellings:
@@ -599,7 +678,7 @@ fn def_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
 /// one field regardless -- so the boundary case needs no extra
 /// disambiguation logic in THIS function, only the (pre-existing,
 /// unchanged) ordering of `implicit_params` before `def_params`.
-fn def_params<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
+fn def_params<X: Clone>(input: Span<X>) -> Res<Vec<ParsedParam>, X> {
   alt((
     // `terminated(.., ws0)`: mirrors the paren alternative's OWN trailing-
     // whitespace consumption below (`fold_many0(terminated(def_param,
@@ -607,10 +686,21 @@ fn def_params<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {
     // without this, the space between the closing `}` and this def's
     // `: ReturnType` annotation is left unconsumed, and `def_type_
     // annotation` (which does NOT skip leading whitespace itself) fails
-    // immediately on it.
+    // immediately on it. This is the WHOLE-param-list brace-declaration
+    // convenience (`named-field-construction.md`'s own Phase 3) -- an
+    // entirely different feature from `def_param`'s OWN destructured
+    // alternative just above (that one destructures ONE parenthesized
+    // param's BINDER; this one spells the ENTIRE param list as one brace
+    // block, no parens, no destructuring) -- never ambiguous with it: this
+    // alternative only ever matches at the position `def_params` itself
+    // starts (never inside an already-open `(`), so a `({ x, y } : T)`
+    // destructured param can never be mistaken for it.
     terminated(
       map(struct_inner_parser, |fields: Vec<StructField>| {
-        fields.into_iter().map(stru_field_to_def_param).collect()
+        fields
+          .into_iter()
+          .map(|f| ParsedParam::Plain(stru_field_to_def_param(f)))
+          .collect()
       }),
       ws0,
     ),
@@ -678,11 +768,25 @@ fn application<X: Clone>(input: Span<X>) -> Res<Term, X> {
 fn lambda<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, _) = alt((tag("\\"), terminated(tag("fn"), ws1), tag("ꟛ"))).parse(input)?;
   let (input, _) = ws0(input)?;
-  let (input, params) = many1(terminated(lam_param, ws0)).parse(input)?;
+  let (input, parsed_params) = many1(terminated(lam_param_destructurable, ws0)).parse(input)?;
   let (input, _) = ws0(input)?;
   let (input, _) = tag("=>")(input)?;
   let (input, _) = ws0(input)?;
   let (input, body) = term(input)?;
+
+  // Same "wrap `body` once per destructured param, then `lams` the
+  // whole thing" shape as `def_parser`'s own Phase 3 handling -- see its
+  // own comment for why wrap order doesn't matter for correctness here.
+  let mut body = body;
+  for pp in parsed_params.iter().rev() {
+    if let ParsedParam::Destructured(param, fp) = pp {
+      body = match_term(
+        var_id(param.name.clone()),
+        vec![case_with_field_pattern(id(""), fp.clone(), body)],
+      );
+    }
+  }
+  let params: Vec<Param> = parsed_params.iter().map(parsed_param_as_param).collect();
 
   Ok((input, lams(params, body)))
 }
@@ -1413,7 +1517,14 @@ fn def_parser(input: Span) -> Res<Def> {
         ))
       })?;
 
-    let mut def = def_with_native(native_name, name.clone(), params.clone(), return_typ, attrs)
+    // A native def has no Monad-level body to wrap in a `match` -- a
+    // destructured param here degrades to an ordinary (un-destructured)
+    // param under its own gensym'd name, which is harmless: a native's
+    // params are dispatched by builtin ID, never referenced by name in
+    // the (nonexistent) body, so there's nothing for the destructuring to
+    // actually do here regardless.
+    let plain_params: Vec<Param> = params.iter().map(parsed_param_as_param).collect();
+    let mut def = def_with_native(native_name, name.clone(), plain_params, return_typ, attrs)
       .map_err(|e| {
         nom::Err::Failure(ParseError::new(
           input.clone(),
@@ -1437,7 +1548,33 @@ fn def_parser(input: Span) -> Res<Def> {
     (input, term)
   };
 
-  if params.is_empty() {
+  // Wrap `term` in one `match` per destructured param -- `plans/
+  // implementations/struct-field-destructuring.md`'s Phase 3 -- BEFORE
+  // `lams` wraps it in the final `Lam` chain below. Uses the bare form
+  // (`case_with_field_pattern(id(""), fp, ..)`) verbatim, reusing Phase
+  // 1/2's own match-case machinery: works for structs and, for free, any
+  // other sole-constructor `type`, resolved dynamically at elaboration
+  // time. Order among multiple destructured params doesn't matter for
+  // correctness here: `term` at this point is still a NAMED `Term`
+  // (`var(param.name)`/free identifier references resolve by name, not
+  // yet by de-Bruijn position -- that only happens much later, in
+  // `lower_core.rs`), so a destructured param's own gensym'd scrutinee
+  // variable resolves correctly by ordinary lexical scoping regardless of
+  // which wrap ends up physically innermost/outermost; they bind disjoint
+  // names unless the user reuses a field name across two params, which
+  // shadows exactly as normal scoping would.
+  let mut term = term;
+  for pp in params.iter().rev() {
+    if let ParsedParam::Destructured(param, fp) = pp {
+      term = match_term(
+        var_id(param.name.clone()),
+        vec![case_with_field_pattern(id(""), fp.clone(), term)],
+      );
+    }
+  }
+
+  let plain_params: Vec<Param> = params.iter().map(parsed_param_as_param).collect();
+  if plain_params.is_empty() {
     let mut typ = return_typ;
     if !implicit_params.is_empty() {
       typ = foralls(implicit_params, typ);
@@ -1447,16 +1584,29 @@ fn def_parser(input: Span) -> Res<Def> {
     Ok((input, d))
   } else {
     let mut full_typ = return_typ;
-    for param in params.iter().rev() {
+    for param in plain_params.iter().rev() {
       full_typ = pi_with_mult((*param.typ).clone(), full_typ, param.mult.clone());
     }
     if !implicit_params.is_empty() {
       full_typ = foralls(implicit_params, full_typ);
     }
-    let body = lams(params, term);
+    let body = lams(plain_params, term);
     let mut d = def(name, type_cons, full_typ, body, attrs);
     d.vis = vis;
     Ok((input, d))
+  }
+}
+
+/// Project a `ParsedParam` down to the plain `Param` it wraps either way
+/// -- used wherever a def's param LIST shape (`Pi`-type-building,
+/// `lams`, a native's own param list) is being assembled, which only
+/// ever needs each param's name/type/multiplicity, never its
+/// `FieldPattern` half (that's consumed separately, by the
+/// destructuring-`match`-wrapping loop above).
+fn parsed_param_as_param(pp: &ParsedParam) -> Param {
+  match pp {
+    ParsedParam::Plain(p) => p.clone(),
+    ParsedParam::Destructured(p, _) => p.clone(),
   }
 }
 

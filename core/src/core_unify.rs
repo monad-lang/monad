@@ -819,6 +819,7 @@ fn zonk_lit(mctx: &MetaContext, lit: &CoreLit) -> CoreLit {
         .map(|c| CoreMatchCase {
           name: c.name.clone(),
           dbgs: c.dbgs.clone(),
+          field_pattern: c.field_pattern.clone(),
           value: Box::new(zonk(mctx, &c.value)),
         })
         .collect(),
@@ -936,6 +937,7 @@ fn close_meta_at_lit(lit: &CoreLit, depth: u32, target: MetaId) -> CoreLit {
         .map(|c| CoreMatchCase {
           name: c.name.clone(),
           dbgs: c.dbgs.clone(),
+          field_pattern: c.field_pattern.clone(),
           value: Box::new(close_meta_at(&c.value, depth + c.dbgs.len() as u32, target)),
         })
         .collect(),
@@ -1530,6 +1532,7 @@ mod test {
     CoreMatchCase {
       name: Identifier::new(name.to_string()),
       dbgs: (0..arity).map(|_| DebugName::Anonymous).collect(),
+      field_pattern: None,
       value: Box::new(value),
     }
   }

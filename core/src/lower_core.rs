@@ -441,20 +441,40 @@ fn lower_lit(ctx: &mut LowerContext, lit: &Literal) -> Result<CoreLit, LowerErro
       let scrutinee = Box::new(lower_term(ctx, value)?);
       let mut out_cases = Vec::with_capacity(cases.len());
       for case in cases {
-        for a in &case.args {
+        // A field-pattern case (`{ x, y } => ...`/`ConsName { x, y } =>
+        // ...`, `case.field_pattern: Some(fp)`, `plans/implementations/
+        // struct-field-destructuring.md`) has an EMPTY `case.args` (see
+        // `term::case_with_field_pattern`) -- its real binders are
+        // `fp.fields`' own (possibly renamed/punned) binder names
+        // instead. Push those, in WRITTEN order (the only order
+        // available here -- this pass has no constructor-registration
+        // data to resolve the pattern's real declared field order
+        // against; see `CoreMatchCase.field_pattern`'s own doc comment).
+        // `core_check.rs`'s `desugar_struct_literals` retargets `dbgs`/
+        // `value` onto the constructor's true declared order later, via
+        // `core_term::permute_binders` -- this pass only needs to get the
+        // body's OWN free-standing names bound to SOME consistent set of
+        // fresh local slots, or they'd wrongly resolve as free/global
+        // references instead (a field-pattern case's `args` being empty
+        // otherwise means this loop would push nothing at all).
+        let pattern_binders: Vec<Identifier> = match &case.field_pattern {
+          Some(fp) => fp.fields.iter().map(|(_, binder)| binder.clone()).collect(),
+          None => case.args.clone(),
+        };
+        for a in &pattern_binders {
           ctx.push(a.clone());
         }
         let value_c = lower_term(ctx, &case.value);
-        for _ in &case.args {
+        for _ in &pattern_binders {
           ctx.pop();
         }
         out_cases.push(CoreMatchCase {
           name: case.name.clone(),
-          dbgs: case
-            .args
+          dbgs: pattern_binders
             .iter()
             .map(|a| DebugName::Named(a.clone()))
             .collect(),
+          field_pattern: case.field_pattern.clone(),
           value: Box::new(value_c?),
         });
       }

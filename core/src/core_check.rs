@@ -18,7 +18,7 @@
 
 use crate::core_term::{
   Atom, CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, DebugName, MetaId, close,
-  close_n, open_with,
+  close_n, open_with, permute_binders,
 };
 use crate::core_unify::{MetaContext, UnifyError, force, instantiate, open_n, unify};
 use crate::term::{Identifier, ModulePath, Multiplicity, TypeConstraint};
@@ -342,6 +342,138 @@ fn match_case_field_types(
   )
 }
 
+/// Resolved shape of a field-pattern match case (`plans/implementations/
+/// struct-field-destructuring.md`), computed once per case and reused by
+/// both `infer`/`check` (read-only — just need each WRITTEN-order
+/// pattern binder's real field TYPE, to type-check the case body
+/// correctly) and `desugar_struct_literals` (which additionally rebuilds
+/// the case itself onto declared order, via `core_term::permute_binders`
+/// — see that function's own doc comment for why the body's binder order
+/// needs retargeting at all, not just its types).
+struct ResolvedFieldPattern {
+  /// The real constructor name — for a bare (`{ .. }`) case this is NEVER
+  /// `case.name` (the parser's `id("")` placeholder): `lower_core_ir.rs`'s
+  /// tag dispatch and `MetaContext::record_match_resolution`'s own name
+  /// list both need the real name to route/find this case correctly.
+  resolved_name: Identifier,
+  /// Declared-order field names, parallel to `declared_field_tys`.
+  declared_field_names: Vec<Identifier>,
+  /// Declared-order field types, already substituted for the scrutinee's
+  /// own concrete type args (same shape `match_case_field_types` itself
+  /// returns) — `None` under the same rare condition that function
+  /// returns `None` for (the inductive's own type-param arity doesn't
+  /// match what's on hand); callers fall back to `Hole` per field, same
+  /// as the pre-existing positional-case path already does.
+  declared_field_tys: Option<Vec<CoreTerm>>,
+  /// `written_to_declared[w]` = the declared-order position that WRITTEN
+  /// pattern position `w` (`case.field_pattern.unwrap().fields[w]`) fills.
+  written_to_declared: Vec<usize>,
+}
+
+/// Resolve `case` (`case.field_pattern` must be `Some`) against
+/// `scrutinee_ty`: pick the target constructor (the scrutinee's sole
+/// constructor for a bare pattern, `case.name` directly for a named one),
+/// require every one of its params to be named, and match the pattern's
+/// written fields against the constructor's declared ones — unknown
+/// field, duplicate field, and (without a trailing `..`) uncovered field
+/// are all real errors here, not soft failures, matching every other
+/// `InferError` this checker already raises for a malformed program.
+fn resolve_field_pattern_case(
+  mctx: &mut MetaContext,
+  structs: &StructFields,
+  scrutinee_ty: &CoreTerm,
+  case: &CoreMatchCase,
+) -> Result<ResolvedFieldPattern, InferError> {
+  let fp = case
+    .field_pattern
+    .as_ref()
+    .expect("resolve_field_pattern_case: caller must check field_pattern.is_some() first");
+  let forced = instantiate_foralls(mctx, structs, scrutinee_ty);
+  let inductive_atom =
+    head_atom_of(mctx, &forced).ok_or(InferError::FieldPatternUnresolvedScrutinee)?;
+  let (resolved_name, info): (Identifier, &ConstructorInfo) = if case.name.as_str().is_empty() {
+    let mut candidates = structs
+      .constructors
+      .iter()
+      .filter(|((atom, _), _)| *atom == inductive_atom);
+    let first = candidates.next();
+    let second = candidates.next();
+    match (first, second) {
+      (Some(((_, name), info)), None) => (name.clone(), info),
+      _ => {
+        let mut names: Vec<Identifier> = structs
+          .constructors
+          .iter()
+          .filter(|((atom, _), _)| *atom == inductive_atom)
+          .map(|((_, name), _)| name.clone())
+          .collect();
+        names.sort();
+        return Err(InferError::FieldPatternAmbiguousConstructor {
+          inductive: inductive_atom,
+          candidates: names,
+        });
+      }
+    }
+  } else {
+    let info = structs
+      .constructors
+      .get(&(inductive_atom, case.name.clone()))
+      .ok_or_else(|| InferError::FieldPatternUnknownConstructor {
+        inductive: inductive_atom,
+        name: case.name.clone(),
+      })?;
+    (case.name.clone(), info)
+  };
+  if info.field_names.iter().any(|n| n.as_str().is_empty()) {
+    return Err(InferError::FieldPatternConstructorNotAllNamed {
+      constructor: resolved_name,
+    });
+  }
+  let arity = info.field_names.len();
+  let mut written_to_declared: Vec<usize> = Vec::with_capacity(fp.fields.len());
+  let mut covered = vec![false; arity];
+  for (field_name, _binder) in &fp.fields {
+    let d = info
+      .field_names
+      .iter()
+      .position(|n| n == field_name)
+      .ok_or_else(|| InferError::FieldPatternUnknownField {
+        constructor: resolved_name.clone(),
+        field: field_name.clone(),
+      })?;
+    if covered[d] {
+      return Err(InferError::FieldPatternDuplicateField {
+        constructor: resolved_name.clone(),
+        field: field_name.clone(),
+      });
+    }
+    covered[d] = true;
+    written_to_declared.push(d);
+  }
+  if !fp.rest {
+    let missing: Vec<Identifier> = info
+      .field_names
+      .iter()
+      .zip(covered.iter())
+      .filter(|(_, c)| !**c)
+      .map(|(n, _)| n.clone())
+      .collect();
+    if !missing.is_empty() {
+      return Err(InferError::FieldPatternMissingFields {
+        constructor: resolved_name,
+        fields: missing,
+      });
+    }
+  }
+  let declared_field_tys = match_case_field_types(mctx, structs, scrutinee_ty, &resolved_name);
+  Ok(ResolvedFieldPattern {
+    resolved_name,
+    declared_field_names: info.field_names.clone(),
+    declared_field_tys,
+    written_to_declared,
+  })
+}
+
 /// What a class method's own atom needs, to resolve a call site to a
 /// concrete instance: which class it belongs to, the (single, for now —
 /// see `desugar_struct_literals`'s class-method arm) class-level type
@@ -463,6 +595,49 @@ pub enum InferError {
   NamedCallMissingField {
     target: Atom,
     field: Identifier,
+  },
+  /// `plans/implementations/struct-field-destructuring.md`: a bare `{
+  /// .. }` match-case/parameter pattern's scrutinee type doesn't resolve
+  /// to a registered inductive at all (an ordinary type-error case would
+  /// normally already have been caught elsewhere; this is the fallback
+  /// when resolution genuinely can't identify ANY candidate).
+  FieldPatternUnresolvedScrutinee,
+  /// A bare `{ .. }` pattern's scrutinee inductive has zero or more than
+  /// one constructor — `candidates` lists every constructor found (empty
+  /// only if the inductive itself has none, which shouldn't happen for a
+  /// well-formed registration).
+  FieldPatternAmbiguousConstructor {
+    inductive: Atom,
+    candidates: Vec<Identifier>,
+  },
+  /// A named `ConsName { .. }` pattern's `ConsName` isn't a real
+  /// constructor of the scrutinee's resolved inductive.
+  FieldPatternUnknownConstructor {
+    inductive: Atom,
+    name: Identifier,
+  },
+  /// The resolved constructor has at least one anonymous (unnamed) param
+  /// — `{ .. }` patterns require every param to be named; use the
+  /// existing positional pattern instead.
+  FieldPatternConstructorNotAllNamed {
+    constructor: Identifier,
+  },
+  /// A `{ field, .. }` pattern named a field that isn't among the
+  /// resolved constructor's declared params.
+  FieldPatternUnknownField {
+    constructor: Identifier,
+    field: Identifier,
+  },
+  /// The same field name appeared more than once in one pattern.
+  FieldPatternDuplicateField {
+    constructor: Identifier,
+    field: Identifier,
+  },
+  /// Without a trailing `..`, every declared field of the resolved
+  /// constructor must be listed — `fields` names the ones that weren't.
+  FieldPatternMissingFields {
+    constructor: Identifier,
+    fields: Vec<Identifier>,
   },
 }
 
@@ -946,7 +1121,26 @@ fn infer_lit(
       for case in cases {
         let arity = case.dbgs.len() as u32;
         let (atoms, opened_value) = crate::core_unify::open_n(&case.value, 0, arity);
-        let field_tys = match_case_field_types(mctx, structs, &scrutinee_ty, &case.name);
+        // A field-pattern case's `dbgs`/`atoms` are still in WRITTEN
+        // order at this point (`desugar_struct_literals` is what
+        // retargets them onto declared order — see
+        // `CoreMatchCase.field_pattern`'s own doc comment) — reindex
+        // `resolved.declared_field_tys` (declared order) into that same
+        // written order before the per-atom lookup below, which assumes
+        // `field_tys[i]` lines up with `atoms[i]`/`case.dbgs[i]`.
+        let field_tys: Option<Vec<CoreTerm>> = match &case.field_pattern {
+          Some(_) => {
+            let resolved = resolve_field_pattern_case(mctx, structs, &scrutinee_ty, case)?;
+            resolved.declared_field_tys.map(|declared| {
+              resolved
+                .written_to_declared
+                .iter()
+                .map(|&d| declared[d].clone())
+                .collect()
+            })
+          }
+          None => match_case_field_types(mctx, structs, &scrutinee_ty, &case.name),
+        };
         let mut ctx2 = ctx.clone();
         for (i, atom) in atoms.iter().enumerate() {
           let field_ty = field_tys
@@ -1386,8 +1580,22 @@ pub fn check(
       let arity = case.dbgs.len() as u32;
       let (atoms, opened_value) = crate::core_unify::open_n(&case.value, 0, arity);
       // E2: see `infer`'s own `Match` arm for the full rationale — same
-      // real-field-types-instead-of-`Hole` substitution here too.
-      let field_tys = match_case_field_types(mctx, structs, &scrutinee_ty, &case.name);
+      // real-field-types-instead-of-`Hole` substitution here too. Same
+      // written-order reindexing for a field-pattern case too — see
+      // `infer`'s own `Match` arm for why.
+      let field_tys: Option<Vec<CoreTerm>> = match &case.field_pattern {
+        Some(_) => {
+          let resolved = resolve_field_pattern_case(mctx, structs, &scrutinee_ty, case)?;
+          resolved.declared_field_tys.map(|declared| {
+            resolved
+              .written_to_declared
+              .iter()
+              .map(|&d| declared[d].clone())
+              .collect()
+          })
+        }
+        None => match_case_field_types(mctx, structs, &scrutinee_ty, &case.name),
+      };
       let mut ctx2 = ctx.clone();
       for (i, atom) in atoms.iter().enumerate() {
         let field_ty = field_tys
@@ -2238,6 +2446,7 @@ fn project_dict_field(
     cases: vec![CoreMatchCase {
       name: case_name,
       dbgs: vec![DebugName::Anonymous; fields.len()],
+      field_pattern: None,
       value: Box::new(CoreTerm::Bound(bound_index)),
     }],
   }))
@@ -2971,8 +3180,32 @@ pub fn desugar_struct_literals(
       let scrutinee_atom = scrutinee_ty
         .as_ref()
         .and_then(|ty| resolve_match_inductive_atom(mctx, structs, ty));
+      // A field-pattern case's `c.name` is the parser's `id("")`
+      // placeholder for the bare form — `record_match_resolution`'s own
+      // name list (below) and `lower_core_ir.rs`'s later by-name tag
+      // dispatch both need the REAL resolved constructor name instead,
+      // or a resolved bare-form case becomes unreachable at that later
+      // stage (matches neither a real constructor tag nor the `"_"`
+      // wildcard sentinel). Resolved here, once, ahead of the per-case
+      // rebuild below (which re-resolves independently — this function
+      // never persists cross-call state, matching its own "never
+      // mutates/re-derives independently" style elsewhere).
+      let case_names_for_resolution: Vec<Identifier> = cases
+        .iter()
+        .map(|c| {
+          if c.field_pattern.is_some() {
+            scrutinee_ty
+              .as_ref()
+              .and_then(|ty| resolve_field_pattern_case(mctx, structs, ty, c).ok())
+              .map(|r| r.resolved_name)
+              .unwrap_or_else(|| c.name.clone())
+          } else {
+            c.name.clone()
+          }
+        })
+        .collect();
       if let Some(atom) = scrutinee_atom {
-        mctx.record_match_resolution(cases.iter().map(|c| c.name.clone()).collect(), atom);
+        mctx.record_match_resolution(case_names_for_resolution, atom);
         // The resolved inductive atom is captured into `match_resolutions`
         // above, but nothing guarantees it also appears as a literal
         // `Free(atom)` node anywhere else in this def's own body — a
@@ -2999,6 +3232,70 @@ pub fn desugar_struct_literals(
         cases: cases
           .iter()
           .map(|case| {
+            // A field-pattern case (`plans/implementations/
+            // struct-field-destructuring.md`) needs its own dedicated
+            // path: its `dbgs`/`value` are still indexed in WRITTEN field
+            // order at this point (`lower_core.rs`'s first pass has no
+            // constructor-registration data to resolve declared order
+            // against — see `CoreMatchCase.field_pattern`'s own doc
+            // comment), so before the ordinary per-arg E2 machinery below
+            // can apply at all, this retargets the case onto the resolved
+            // constructor's true declared order via `permute_binders`
+            // (see ITS doc comment for why a straight reindex, not a
+            // re-lower, is what's needed here).
+            if case.field_pattern.is_some()
+              && let Some(resolved) = scrutinee_ty
+                .as_ref()
+                .and_then(|ty| resolve_field_pattern_case(mctx, structs, ty, case).ok())
+            {
+              let old_n = case.dbgs.len() as u32;
+              let new_n = resolved.declared_field_names.len() as u32;
+              let mut depth_map = vec![0u32; old_n as usize];
+              for (w, &d) in resolved.written_to_declared.iter().enumerate() {
+                let old_depth = old_n - 1 - w as u32;
+                let new_depth = new_n - 1 - d as u32;
+                depth_map[old_depth as usize] = new_depth;
+              }
+              let mut declared_dbgs = vec![DebugName::Anonymous; new_n as usize];
+              for (w, &d) in resolved.written_to_declared.iter().enumerate() {
+                declared_dbgs[d] = case.dbgs[w].clone();
+              }
+              let permuted_value = permute_binders(&case.value, 0, old_n, new_n, &depth_map);
+              let (atoms, opened_value) = open_n(&permuted_value, 0, new_n);
+              let field_tys = resolved.declared_field_tys;
+              let mut ctx2 = ctx.clone();
+              for (i, atom) in atoms.iter().enumerate() {
+                let field_ty = field_tys
+                  .as_ref()
+                  .and_then(|f| f.get(atoms.len() - 1 - i))
+                  .cloned()
+                  .unwrap_or(CoreTerm::Hole);
+                ctx2 = ctx2.extend(*atom, field_ty);
+              }
+              let d = desugar_struct_literals(
+                mctx,
+                &ctx2,
+                structs,
+                atom_paths,
+                known_class_methods,
+                known_instances,
+                dict_scope,
+                &opened_value,
+                expected,
+              );
+              return CoreMatchCase {
+                name: resolved.resolved_name,
+                dbgs: declared_dbgs,
+                field_pattern: None,
+                value: Box::new(close_n(&d, 0, &atoms)),
+              };
+            }
+            // Ordinary positional case (or — should be unreachable, since
+            // `check` already validated this exact case successfully
+            // before this function ever runs — a field-pattern case whose
+            // resolution unexpectedly failed here; `field_pattern` stays
+            // populated below so that stays visible/inspectable rather
+            // than silently masquerading as a resolved case).
             let arity = case.dbgs.len() as u32;
             let (atoms, opened_value) = open_n(&case.value, 0, arity);
             // E2: same real-field-types-instead-of-`Hole` substitution as
@@ -3045,6 +3342,7 @@ pub fn desugar_struct_literals(
             CoreMatchCase {
               name: case.name.clone(),
               dbgs: case.dbgs.clone(),
+              field_pattern: case.field_pattern.clone(),
               value: Box::new(close_n(&d, 0, &atoms)),
             }
           })
@@ -3233,6 +3531,7 @@ pub fn desugar_struct_literals(
                 cases: vec![CoreMatchCase {
                   name: Identifier::new("mk".to_string()),
                   dbgs: vec![DebugName::Anonymous; n],
+                  field_pattern: None,
                   value: Box::new(CoreTerm::Bound((n - 1 - idx) as u32)),
                 }],
               })

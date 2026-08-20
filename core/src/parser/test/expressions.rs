@@ -10,6 +10,84 @@ fn test_lambda() {
   similar!(r, lams(vec![par("a"), par("b")], var("a")));
 }
 
+// -------------------------------------------------------------------
+// Phase 4 of `plans/implementations/struct-field-destructuring.md`:
+// lambda-literal parameter destructuring (`\({ x, y } : Point) => x +
+// y`), mirroring `def`'s own Phase 3 -- only `lambda` itself gets this
+// (not `class_parser`/`inductive_parser`'s OWN `lam_param` call sites,
+// which parse a declaration's generic TYPE params, not value params).
+// -------------------------------------------------------------------
+
+#[test]
+fn test_lambda_destructured_param_desugars_to_wrapping_match() {
+  let lambda = |s: &'static str| lambda::<()>(s.into());
+  let (_, r) = lambda(r#"\({ x, y } : Point) => x + y"#.into()).unwrap();
+  let Term::Lam { param, body } = &r else {
+    panic!("expected a Lam, got {r:?}");
+  };
+  let Par::P(p) = param else {
+    panic!("expected an explicit Par::P param, got {param:?}");
+  };
+  assert!(
+    p.name.as_str().starts_with("__struct_param"),
+    "destructured param must bind a gensym'd name, got `{}`",
+    p.name.as_str()
+  );
+  similar!((*p.typ).clone(), typ("Point"));
+  let Term::Lit {
+    value: Literal::Match { value, cases },
+  } = body.as_ref()
+  else {
+    panic!("expected the body to be a Lit::Match, got {body:?}");
+  };
+  match value.as_ref() {
+    Term::Var {
+      name: NameRef::Id(scrutinee_name),
+    } => assert_eq!(scrutinee_name, &p.name),
+    other => panic!("expected the scrutinee to be a bare Var, got {other:?}"),
+  }
+  assert_eq!(cases.len(), 1);
+  assert_eq!(cases[0].name, id(""));
+  assert_eq!(
+    cases[0].field_pattern,
+    Some(FieldPattern {
+      fields: vec![(id("x"), id("x")), (id("y"), id("y"))],
+      rest: false,
+    })
+  );
+  similar!((*cases[0].value).clone(), oper(var("x"), "+", var("y")));
+}
+
+#[test]
+fn test_lambda_destructured_and_plain_param_mixed() {
+  let lambda = |s: &'static str| lambda::<()>(s.into());
+  let (_, r) = lambda(r#"\({ x, y } : Point) factor => x * factor"#.into()).unwrap();
+  let Term::Lam { param, body } = &r else {
+    panic!("expected outer Lam, got {r:?}");
+  };
+  let Par::P(p0) = param else {
+    panic!("expected explicit Par::P");
+  };
+  assert!(p0.name.as_str().starts_with("__struct_param"));
+  let Term::Lam {
+    param: factor_param,
+    body: inner_body,
+  } = body.as_ref()
+  else {
+    panic!("expected an inner Lam (`factor`), got {body:?}");
+  };
+  let Par::P(p1) = factor_param else {
+    panic!("expected explicit Par::P");
+  };
+  assert_eq!(p1.name, id("factor"));
+  let Term::Lit {
+    value: Literal::Match { .. },
+  } = inner_body.as_ref()
+  else {
+    panic!("expected the innermost body to be a wrapping Lit::Match, got {inner_body:?}");
+  };
+}
+
 #[test]
 fn test_application() {
   let application = |s: &'static str| application::<()>(s.into());

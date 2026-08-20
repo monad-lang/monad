@@ -1671,7 +1671,14 @@ fn infer_error_location(e: &InferError) -> Option<SourceRange> {
     | InferError::UnexpectedBound(_)
     | InferError::CannotInferHole
     | InferError::NamedCallUnknownField { .. }
-    | InferError::NamedCallMissingField { .. } => None,
+    | InferError::NamedCallMissingField { .. }
+    | InferError::FieldPatternUnresolvedScrutinee
+    | InferError::FieldPatternAmbiguousConstructor { .. }
+    | InferError::FieldPatternUnknownConstructor { .. }
+    | InferError::FieldPatternConstructorNotAllNamed { .. }
+    | InferError::FieldPatternUnknownField { .. }
+    | InferError::FieldPatternDuplicateField { .. }
+    | InferError::FieldPatternMissingFields { .. } => None,
   }
 }
 
@@ -1708,6 +1715,62 @@ fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
       "`{}` is missing required field `{}`",
       render_atom(*target, atoms),
       field.as_str()
+    ),
+    InferError::FieldPatternUnresolvedScrutinee => {
+      "cannot resolve `{ .. }`: the matched value's type isn't known here".to_string()
+    }
+    InferError::FieldPatternAmbiguousConstructor {
+      inductive,
+      candidates,
+    } => {
+      if candidates.is_empty() {
+        format!(
+          "`{}` has no constructors to destructure with `{{ .. }}`",
+          render_atom(*inductive, atoms)
+        )
+      } else {
+        let names = candidates
+          .iter()
+          .map(|n| n.as_str())
+          .collect::<Vec<_>>()
+          .join(", ");
+        format!(
+          "`{{ .. }}` requires exactly one constructor, but `{}` has several ({}); use `ConsName {{ .. }}` instead",
+          render_atom(*inductive, atoms),
+          names
+        )
+      }
+    }
+    InferError::FieldPatternUnknownConstructor { inductive, name } => format!(
+      "`{}` is not a constructor of `{}`",
+      name.as_str(),
+      render_atom(*inductive, atoms)
+    ),
+    InferError::FieldPatternConstructorNotAllNamed { constructor } => format!(
+      "constructor `{}` has an unnamed field; use the positional pattern instead of `{{ .. }}`",
+      constructor.as_str()
+    ),
+    InferError::FieldPatternUnknownField { constructor, field } => format!(
+      "constructor `{}` has no field named `{}`",
+      constructor.as_str(),
+      field.as_str()
+    ),
+    InferError::FieldPatternDuplicateField { constructor, field } => format!(
+      "field `{}` listed more than once in this `{}` pattern",
+      field.as_str(),
+      constructor.as_str()
+    ),
+    InferError::FieldPatternMissingFields {
+      constructor,
+      fields,
+    } => format!(
+      "`{}` pattern is missing field(s) {} (add `..` to discard them)",
+      constructor.as_str(),
+      fields
+        .iter()
+        .map(|f| format!("`{}`", f.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
     ),
   };
   TypeError::Generic(message, location.unwrap_or_default())
@@ -3092,6 +3155,154 @@ mod test {
       report.defs.iter().all(|d| d.result.is_ok()),
       "expected both defs to pass, got {:?}",
       report.defs
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Phase 2 of `plans/implementations/struct-field-destructuring.md`:
+  // type-checker elaboration for match-case field patterns. Runtime
+  // correctness (binder ORDER actually landing on the right values, not
+  // just type-checking) is covered separately by
+  // `core/tests/field_pattern_integration_test.rs`, which runs the full
+  // check -> lower -> evaluate pipeline -- these tests only exercise
+  // `check_module_source`, same scope as this file's other type-check
+  // unit tests.
+  // -------------------------------------------------------------------
+
+  const FP_SHAPE_SOURCE: &str =
+    "type Shape {\n  circle (radius : F64),\n  rectangle (width : F64) (height : F64)\n}\n";
+
+  #[test]
+  fn test_field_pattern_bare_struct_destructure_all() {
+    let env = ModuleCheckEnv::new();
+    let source = "struct Point { x : I64, y : I64 }\ndef sum (p : Point) : I64 := match p { { x, y } => x + y }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_field_pattern_bare_rename_and_rest() {
+    let env = ModuleCheckEnv::new();
+    let source = "struct Rect { width : I64, height : I64 }\ndef left (r : Rect) : I64 := match r { { width := w, .. } => w }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_field_pattern_named_multi_constructor() {
+    let env = ModuleCheckEnv::new();
+    let source = format!(
+      "{FP_SHAPE_SOURCE}def area (s : Shape) : F64 := match s {{ circle {{ radius }} => radius, rectangle {{ width, height }} => width }}\n"
+    );
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_field_pattern_bare_form_on_multi_constructor_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    // Bare `{ .. }` requires exactly one constructor -- `Shape` has two.
+    let source = format!(
+      "{FP_SHAPE_SOURCE}def bad (s : Shape) : F64 := match s {{ {{ radius }} => radius }}\n"
+    );
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("FieldPatternAmbiguousConstructor"),
+      "a bare pattern against a multi-constructor type must be rejected \
+       by the NEW field-pattern check specifically, got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_field_pattern_unknown_field_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    let source =
+      "struct Point { x : I64, y : I64 }\ndef bad (p : Point) : I64 := match p { { x, z } => x }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("FieldPatternUnknownField"),
+      "a typo'd field name must be rejected by the NEW field-pattern \
+       check specifically, got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_field_pattern_duplicate_field_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    let source =
+      "struct Point { x : I64, y : I64 }\ndef bad (p : Point) : I64 := match p { { x, x } => x }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("FieldPatternDuplicateField"),
+      "a field listed twice must be rejected, got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_field_pattern_missing_field_without_rest_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    // `y` is neither listed nor discarded via `..`.
+    let source =
+      "struct Point { x : I64, y : I64 }\ndef bad (p : Point) : I64 := match p { { x } => x }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("FieldPatternMissingFields"),
+      "an uncovered field without `..` must be rejected, got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_field_pattern_on_anonymous_param_constructor_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    // `write`'s sole param is anonymous (tuple-like) -- `{ .. }` isn't
+    // legal against it at all; use the positional pattern instead.
+    let source = "type Cmd {\n  write (String)\n}\ndef bad (c : Cmd) : String := match c { write { .. } => \"\" }\n";
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("FieldPatternConstructorNotAllNamed"),
+      "a field pattern against a constructor with an anonymous param must \
+       be rejected, got {debug}"
+    );
+  }
+
+  #[test]
+  fn test_field_pattern_unknown_constructor_is_an_error() {
+    let env = ModuleCheckEnv::new();
+    let source = format!(
+      "{FP_SHAPE_SOURCE}def bad (s : Shape) : F64 := match s {{ triangle {{ radius }} => radius, rectangle {{ width, height }} => width, circle {{ radius }} => radius }}\n"
+    );
+    let report = check_module_source(&env, &source);
+    assert_eq!(report.defs.len(), 1);
+    let debug = format!("{:?}", report.defs[0].result);
+    assert!(
+      debug.contains("FieldPatternUnknownConstructor"),
+      "a named field pattern against a nonexistent constructor must be \
+       rejected, got {debug}"
     );
   }
 

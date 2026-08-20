@@ -4,7 +4,7 @@ use crate::term::{
   AttrArg, Constructor, Decl, DeclGenDef, Def, Identifier, Inductive, Literal, ModulePath, NameRef,
   Named, Par, Param, SourceContext,
   Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Pi, Quote, Var},
-  case, id, instance, match_term, mpvar,
+  case_with_optional_field_pattern, id, instance, match_term, mpvar,
 };
 
 /// Names of the built-in macro-expansion reflection intrinsics — recognized
@@ -850,7 +850,12 @@ fn expand_term(
         .into_iter()
         .map(|c| {
           let value = expand_term(*c.value, macro_defs, inductives, depth)?;
-          Ok(case(c.name, c.args, value))
+          Ok(case_with_optional_field_pattern(
+            c.name,
+            c.args,
+            c.field_pattern,
+            value,
+          ))
         })
         .collect::<Result<Vec<_>, MacroError>>()?;
       Ok(match_term(value, cases))
@@ -1003,7 +1008,12 @@ fn resolve_quote(
         .into_iter()
         .map(|c| {
           let value = resolve_quote(*c.value, macro_defs, inductives, depth)?;
-          Ok(case(c.name, c.args, value))
+          Ok(case_with_optional_field_pattern(
+            c.name,
+            c.args,
+            c.field_pattern,
+            value,
+          ))
         })
         .collect::<Result<Vec<_>, MacroError>>()?;
       Ok(match_term(value, cases))
@@ -1214,7 +1224,14 @@ fn rename_macro_var(term: Term, old: &Identifier, new: &Identifier) -> Term {
       let value = rename_macro_var(*value, old, new);
       let cases = cases
         .into_iter()
-        .map(|c| case(c.name, c.args, rename_macro_var(*c.value, old, new)))
+        .map(|c| {
+          case_with_optional_field_pattern(
+            c.name,
+            c.args,
+            c.field_pattern,
+            rename_macro_var(*c.value, old, new),
+          )
+        })
         .collect();
       match_term(value, cases)
     }
@@ -1339,7 +1356,14 @@ fn alpha_rename_body(term: Term) -> Term {
       let value = alpha_rename_body(*value);
       let cases = cases
         .into_iter()
-        .map(|c| case(c.name, c.args, alpha_rename_body(*c.value)))
+        .map(|c| {
+          case_with_optional_field_pattern(
+            c.name,
+            c.args,
+            c.field_pattern,
+            alpha_rename_body(*c.value),
+          )
+        })
         .collect();
       match_term(value, cases)
     }
@@ -1468,7 +1492,14 @@ fn subst_macro(term: Term, name: &NameRef, replacement: &Term) -> Term {
       let value = subst_macro(*value, name, replacement);
       let cases = cases
         .into_iter()
-        .map(|c| case(c.name, c.args, subst_macro(*c.value, name, replacement)))
+        .map(|c| {
+          case_with_optional_field_pattern(
+            c.name,
+            c.args,
+            c.field_pattern,
+            subst_macro(*c.value, name, replacement),
+          )
+        })
         .collect();
       match_term(value, cases)
     }
