@@ -42,7 +42,7 @@ def init_module_path : ModulePath := ModulePath.mp [Identifier.id "init"]
 /// Runs the result through `expand_decls` (macro expansion,
 /// `lang.typecheck.macro_queue`) before returning — this is the real
 /// pipeline's own LENIENT parse site (feeds `build_scope_from_decls`
-/// via `load_module_decls`/`parse_module`/`typecheck_file_with_deps`),
+/// via `load_module_decls`/`parse_module`),
 /// one of the two sites the macro-expansion plan calls out by name;
 /// its strict twin is `try_parse_decls_strict` below. `ParseResult`'s
 /// own `remaining` is untouched -- only the parsed payload changes.
@@ -466,9 +466,9 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
 /// `load_file_modules`'s own convention (its
 /// `all_dep_paths_with_prelude`, used by `compile`/`pretty`) — instead
 /// of relying purely on the file's own explicit `use` statements.
-/// `load_module_with_dependencies` itself (and `typecheck_file_with_deps`,
-/// which is built on it) deliberately keep their existing, narrower
-/// behavior — this is a separate function, not a replacement, so
+/// `load_module_with_dependencies` itself deliberately keeps its
+/// existing, narrower behavior — this is a separate function, not a
+/// replacement, so
 /// nothing that already depends on that behavior changes. Needed for
 /// `check_file`: almost every real `.mo` file relies on prelude/init
 /// implicitly (`String`, `Bool`, `List`, `FromListLiteral`, ...)
@@ -512,7 +512,7 @@ def load_module_with_dependencies_and_prelude (base_dir : String) (mp : ModulePa
     }
 }
 
-/// The `check`-flavored twin of `build_scope_with_deps` — see
+/// The `check`-flavored twin of `load_module_with_dependencies` — see
 /// `load_module_with_dependencies_and_prelude`'s doc comment for why.
 #[partial]
 def build_scope_with_deps_and_prelude (file_path : String) (mod_name : String) : IO (Option Scope) :=
@@ -968,48 +968,6 @@ def list_append_go (xs : List A) (ys : List A) : List A :=
 
 // --- Module resolution for type checking ---
 
-/// Build a scope with all dependencies loaded for type checking a file
-/// The file_path is used to determine the directory for resolving relative imports
-#[partial]
-def build_scope_with_deps (file_path : String) (mod_name : String) : IO (Option Scope) :=
-    let base_dir : String := extract_directory file_path in
-    let mp : ModulePath := ModulePath.mp [Identifier.id mod_name] in
-    load_module_with_dependencies base_dir mp
-
-/// Build scope and type check a file with its dependencies loaded
-#[partial]
-def typecheck_file_with_deps (file_path : String) (mod_name : String) : IO Bool {
-    let exists : Bool <- file_exists file_path;
-    if exists then do {
-        // TODO load file once
-        let content : String <- IO.read_file file_path;
-        let base_dir : String := extract_directory file_path;
-        let mp : ModulePath := ModulePath.mp [Identifier.id mod_name];
-        let scope_opt : Option Scope <- load_module_with_dependencies base_dir mp;
-        match scope_opt {
-            Option.some scope =>
-                let result : ParseResult (List Decl) := parse_all_decls content in
-                match result {
-                    ParseResult.success _ decl_list => do {
-                        let empty_locs : LocalScope := {
-                            vars := List.empty,
-                            parent := Option.none,
-                        };
-                        return typecheck_module_with_scope scope decl_list empty_locs
-                    },
-                    ParseResult.fail _ => do {
-                        return false
-                    }
-                },
-            Option.none => do {
-                return false
-            }
-        }
-    } else do {
-        return false
-    }
-}
-
 
 /// Type check all declarations in a module with a given scope
 #[partial]
@@ -1404,18 +1362,17 @@ struct FileCheckAndCache {
     cache : ModuleScopeCache,
 }
 
-/// The `check`-flavored twin of `typecheck_file_with_deps` above —
-/// unlike that function (which uses the lenient `decls_parser` and
-/// collapses everything to a bare `Bool`), this uses
+/// The `check`-flavored file checker — unlike a plain Bool typecheck
+/// (which uses the lenient `decls_parser` and collapses everything to
+/// a bare `Bool`), this uses
 /// `try_parse_decls_strict` on the target file's own content, so a
 /// genuine parse failure produces a real, rendered diagnostic instead
 /// of `false`, and it accumulates every failing declaration's rendered
 /// type-error message instead of stopping at the first one.
 /// Dependency resolution goes through `build_scope_with_deps_and_prelude`
 /// (prelude/init always implicitly included, matching `compile`'s own
-/// `load_file_modules` convention) rather than the narrower, existing
-/// `build_scope_with_deps` — only the file being checked itself gets
-/// strict *parse* treatment, keeping this change's blast radius
+/// `load_file_modules` convention) — only the file being checked itself
+/// gets strict *parse* treatment, keeping this change's blast radius
 /// contained to what `check` needs.
 #[partial]
 def check_file (file_path : String) (verbose : Bool) : IO FileCheckResult {
