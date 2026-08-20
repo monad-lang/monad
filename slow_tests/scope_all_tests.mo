@@ -187,18 +187,6 @@ def test_scope_lang_types : Bool := build_scope_for_file "lang/types.mo" "types"
 def test_scope_lang_parser : Bool := build_scope_for_file "lang/parser.mo" "parser"
 
 #[test]
-def test_scope_lang_eval : Bool := build_scope_for_file "lang/eval.mo" "eval"
-
-#[test]
-def test_scope_lang_eval_t2 : Bool := build_scope_for_file "lang/eval_t2.mo" "eval_t2"
-
-#[test]
-def test_scope_lang_eval_term : Bool := build_scope_for_file "lang/eval_term.mo" "eval_term"
-
-#[test]
-def test_scope_lang_lower : Bool := build_scope_for_file "lang/lower.mo" "lower"
-
-#[test]
 def test_scope_lang_elaborate : Bool := build_scope_for_file "lang/elaborate.mo" "elaborate"
 
 #[test]

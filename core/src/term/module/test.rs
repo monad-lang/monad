@@ -357,7 +357,7 @@ fn test_organize_imports_open_and_use_together() {
 fn test_organize_imports_open_local_inductive() {
   // `open TypeName {...}` targeting a type defined in the SAME file (no
   // paired `use` needed or possible) — the common real-world shape, e.g.
-  // `lang/eval_term.mo` opening `EvalTerm`/`Region`/etc. it just declared.
+  // `lang/core_ir.mo` opening `CoreIr` it just declared.
   let loaded = default_modules().unwrap();
 
   let path = ModulePath::top("test_organize_local_open");

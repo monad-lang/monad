@@ -80,10 +80,6 @@ def example_files_utf8 : List String :=
 def lang_files_utf8 : List String :=
     ["lang/parser.mo",
      "lang/types.mo",
-     "lang/eval.mo",
-     "lang/eval_t2.mo",
-     "lang/eval_term.mo",
-     "lang/lower.mo",
      "lang/codegen/emit.mo"]
 
 /// Parse a single file and return success status

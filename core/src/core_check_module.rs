@@ -3058,43 +3058,11 @@ mod test {
   }
 
   #[test]
-  fn test_real_file_lang_eval_term() {
-    let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/eval_term.mo");
-    let report = check_module_source(&env, source);
-    print_report("lang/eval_term.mo", &report);
-  }
-
-  #[test]
-  fn test_real_file_lang_eval() {
-    let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/eval.mo");
-    let report = check_module_source(&env, source);
-    print_report("lang/eval.mo", &report);
-  }
-
-  #[test]
-  fn test_real_file_lang_eval_t2() {
-    let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/eval_t2.mo");
-    let report = check_module_source(&env, source);
-    print_report("lang/eval_t2.mo", &report);
-  }
-
-  #[test]
   fn test_real_file_lang_elaborate() {
     let env = ModuleCheckEnv::new();
     let source = include_str!("../../lang/elaborate.mo");
     let report = check_module_source(&env, source);
     print_report("lang/elaborate.mo", &report);
-  }
-
-  #[test]
-  fn test_real_file_lang_lower() {
-    let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/lower.mo");
-    let report = check_module_source(&env, source);
-    print_report("lang/lower.mo", &report);
   }
 
   #[test]

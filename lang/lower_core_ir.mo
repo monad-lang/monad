@@ -13,12 +13,11 @@ use lang.typecheck.infer {empty_locals}
 
 /// Lowers Monad's checked, de-Bruijn `Term` (`lang/types.mo`) to
 /// `CoreIr` (`lang/core_ir.mo`), mirroring `core/src/lower_core_ir.rs`
-/// (Rust). This is the missing piece the old self-hosted evaluator
-/// (`lang/lower.mo`'s `lower_v0`) never had: real global resolution
-/// (`lower_v0` sends every unresolved name to a constant placeholder,
-/// `EvalTerm.econst 0`) and real `if`/`match` compilation (`lower_v0`
-/// hard-stubs `if` to the literal `true` and `match` to an empty
-/// recursor, unconditionally).
+/// (Rust). This is the missing piece the former self-hosted evaluator
+/// never had: real global resolution (the former `lower_v0` sent every
+/// unresolved name to a constant placeholder, `EvalTerm.econst 0`) and
+/// real `if`/`match` compilation (`lower_v0` hard-stubbed `if` to the
+/// literal `true` and `match` to an empty recursor, unconditionally).
 ///
 /// **Whole-program flattening without mutable state.** Rust's
 /// `lower_core_ir::lower_program` builds `GlobalTable` by mutating an

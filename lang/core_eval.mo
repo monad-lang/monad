@@ -18,9 +18,9 @@ use std.list {length}
 /// closure's captured environment by one binding and evaluates the body
 /// there. Each argument is evaluated exactly once; every subsequent
 /// `local` reference to it is a shared `Value` off the environment, not a
-/// re-evaluation -- the concrete fix for the old `EvalTerm` evaluator's
-/// (`lang/eval.mo`) call-site-environment bug documented in this
-/// project's evaluator plan.
+/// re-evaluation -- the concrete fix for the former `EvalTerm`
+/// evaluator's call-site-environment bug documented in this project's
+/// evaluator plan.
 ///
 /// **Cache threading, not mutation.** Rust threads `cache: &mut
 /// GlobalCache` through `eval`/`apply`/`force_global`. Monad has no

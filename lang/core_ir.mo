@@ -5,12 +5,12 @@ use lang.types {Identifier, ModulePath, NumSuffix, id_eq, show_module_path}
 /// doc comment for the full design rationale; the short version: this is
 /// the IR the closure-based `lang/core_eval.mo` evaluates, produced by
 /// `lang/lower_core_ir.mo` lowering the checked, de-Bruijn `Term`
-/// (`lang/types.mo`). It deliberately does NOT carry forward the old
-/// `EvalTerm`'s (`lang/eval_term.mo`) substitution-based design, nor its
-/// dead `Region`/`BorrowKind`/`eproj`/`eproj_field`/`Multiplicity`
+/// (`lang/types.mo`). It deliberately does NOT carry forward the former
+/// `EvalTerm`'s substitution-based design, nor its dead
+/// `Region`/`BorrowKind`/`eproj`/`eproj_field`/`Multiplicity`
 /// machinery (confirmed unused/pass-through by the evaluator that used to
-/// interpret it, `lang/eval.mo`) — same exclusions `core_ir.rs`'s own doc
-/// comment documents. `if` is not a separate variant: it compiles through
+/// interpret it) — same exclusions `core_ir.rs`'s own doc comment
+/// documents. `if` is not a separate variant: it compiles through
 /// `match_` against `Bool`'s two constructor tags, one dispatch mechanism
 /// for both, exactly like the Rust design.
 

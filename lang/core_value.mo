@@ -7,7 +7,7 @@ use std.list {length}
 /// `core/src/core_value.rs` (Rust). See that file's own doc comment for
 /// the full design rationale.
 ///
-/// This is the direct fix for `EvalTerm`'s (`lang/eval_term.mo`)
+/// This is the direct fix for the former `EvalTerm`'s
 /// substitution-based design: a `lam` evaluates to a `v_closure` that
 /// *captures* its environment, and applying it *extends* that
 /// environment with one new binding instead of rewriting the body — there
