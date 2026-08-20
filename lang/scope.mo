@@ -1631,7 +1631,7 @@ def match_cases_reference_class (cls_str : String) (cases : List MatchCase) : Bo
     match cases {
         List.empty => false,
         List.cons c rest =>
-            match c { MatchCase.mc _ _ body => def_references_class cls_str body || match_cases_reference_class cls_str rest },
+            match c { MatchCase.mc _ _ body _ => def_references_class cls_str body || match_cases_reference_class cls_str rest },
     }
 
 #[partial]
@@ -2234,7 +2234,7 @@ def build_dict_field_projection (cls : Class) (dict_id : Identifier) (method_nam
     let method_names := class_method_names cls in
     let pattern_vars := dict_match_pattern_vars method_names method_name in
     let call := rebuild_call (Term.var 0 (DebugName.named method_name)) real_args in
-    let case_ := MatchCase.mc (Identifier.id "mk") pattern_vars call in
+    let case_ := MatchCase.mc (Identifier.id "mk") pattern_vars call Option.none in
     Term.lit (Literal.match_ (Term.var 0 (DebugName.named dict_id)) (List.cons case_ List.empty))
 
 /// The main per-term rewrite -- `term_map_children`-driven fallback for
