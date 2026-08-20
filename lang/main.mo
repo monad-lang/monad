@@ -1,10 +1,10 @@
 use io {IO, println, read_file, write_file}
 open IO {println, read_file, write_file}
 use process {exec_cmd}
-use lang.types {Decl, LoadedModules}
+use lang.types {Decl, LoadedModules, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
-use lang.module {FileCheckAndCache, LoadedModules, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, expand_check_paths, get_loaded_main, get_module_info_decls, load_file_modules, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.module {FileCheckAndCache, LoadedModules, ModuleInfo, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, expand_check_paths, extract_directory, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
@@ -361,25 +361,29 @@ def main (args : List String) : IO I64 {
         },
         pretty file_path => do {
             // Prints the TARGET FILE's own declarations, pretty-printed
-            // back to source text via `lang.pretty.show_decls` — this
-            // used to just load the file's module-dependency graph and
-            // dump `Show.show loaded` (a debug repr of the internal
-            // `LoadedModules` structure, never anything resembling
-            // pretty-printed source, despite the command's own name).
-            // Only `file_path`'s own decls are shown (not its
-            // transitive `use` dependencies), matching `get_loaded_main`/
-            // `get_module_info_decls`'s existing "this module's own
-            // decls only" convention (see `lang/codegen/test_driver.mo`'s
-            // `discover_test_defs` for the same convention elsewhere).
-            let res : Result String LoadedModules <- load_file_modules file_path;
-            match res {
-                ok loaded => do {
-                    let decls := get_module_info_decls (get_loaded_main loaded);
+            // back to source text via `lang.pretty.show_decls`. Only
+            // `file_path`'s own decls are shown (not its transitive `use`
+            // dependencies), matching `get_module_info_decls`'s existing
+            // "this module's own decls only" convention (see
+            // `lang/codegen/test_driver.mo`'s `discover_test_defs` for the
+            // same convention elsewhere) — so this loads just the ONE
+            // target module (`load_module_with_info`, no dependency walk
+            // at all) rather than `load_file_modules`'s full transitive
+            // closure (prelude/init/everything), which this command used
+            // to pay for in full only to discard all of it but the
+            // target's own decls.
+            let base_dir : String := extract_directory file_path;
+            let module_name : String := module_name_from_path file_path;
+            let mp : ModulePath := ModulePath.mp [Identifier.id module_name];
+            let module_opt : Option ModuleInfo <- load_module_with_info base_dir mp;
+            match module_opt {
+                Option.some mi => do {
+                    let decls := get_module_info_decls mi;
                     println (show_decls decls);
                     return 0
                 },
-                err e => do {
-                    println ("Failed to parse dependencies: " ++ e);
+                Option.none => do {
+                    println ("Failed to parse " ++ file_path);
                     return 1
                 }
             }

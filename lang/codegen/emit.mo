@@ -17,8 +17,8 @@ use lang.codegen.ir {
   parm_, phi, ret, sdiv, sub, trunc, var_, void_val, zext,
 }
 use lang.module {
-  LoadedModules, ModuleInfo, get_loaded_all, get_loaded_main,
-  get_module_info_decls, get_module_info_path, mk,
+  LoadedModules, ModuleInfo, get_loaded_all,
+  get_module_info_decls, mk,
 }
 
 open IO {println}
@@ -2002,19 +2002,6 @@ def check_contains (text : String) (needle : String) : Bool :=
 
 // === Multi-module compilation ===
 
-/// Compile a single module's declarations to LLVM IR
-/// This takes a ModuleInfo (which preserves module boundaries) and compiles
-/// only the declarations from that specific module.
-#[partial]
-def compile_module_to_ir (module_info : ModuleInfo) : LLVMModule :=
-    match module_info {
-        ModuleInfo.mk path file_path decl_list =>
-            let defs := extract_defs decl_list in
-            compile_db_decls_ir defs
-    }
-
-// === Multi-module compilation ===
-
 /// Replace dots with underscores in a string for use as LLVM identifier
 #[partial]
 def replace_dots_with_underscores (s : String) : String := 
@@ -2048,7 +2035,6 @@ def ends_with_main (name : String) : Bool :=
 /// All declarations from all modules are compiled together with fully qualified names.
 #[partial]
 def compile_loaded_modules_to_ir (loaded : LoadedModules) : IO LLVMModule := do {
-    let main_mod := get_loaded_main loaded;
     let all_mods := get_loaded_all loaded;
     
     // Debug: log loaded modules count
@@ -2236,77 +2222,6 @@ def collect_referenced_names_opt_list (args : List (Option Term)) (acc : List St
             Option.some t => collect_referenced_names_opt_list rest (collect_referenced_names t acc),
             Option.none => collect_referenced_names_opt_list rest acc,
         },
-}
-
-#[partial]
-def collect_all_decls_from_modules_with_prefix (modules : List ModuleInfo) (acc : List Decl) : List Decl := match modules {
-    List.empty => acc,
-    List.cons mod_ rest => 
-        let mod_decls := get_module_info_decls mod_ in
-        let mod_path := get_module_info_path mod_ in
-        let prefixed_decls := prefix_decl_names mod_decls mod_path in
-        collect_all_decls_from_modules_with_prefix rest (append_decls_list prefixed_decls acc),
-}
-
-#[partial]
-def prefix_decl_names (decl_list : List Decl) (module_path : ModulePath) : List Decl := match decl_list {
-    List.empty => List.empty,
-    List.cons d rest =>
-        let prefixed_d := prefix_decl_name d module_path in
-        List.cons prefixed_d (prefix_decl_names rest module_path),
-}
-
-#[partial]
-def prefix_decl_name (d : Decl) (module_path : ModulePath) : Decl := match d {
-    Decl.def_d def_ => Decl.def_d (prefix_def_name def_ module_path),
-    Decl.inductive_d ind => Decl.inductive_d (prefix_inductive_name ind module_path),
-    _ => d,
-}
-
-#[partial]
-def prefix_def_name (def_ : Def) (module_path : ModulePath) : Def := match def_ {
-    Def.mk name typ term constraints attrs vis =>
-        let prefixed_name := prefix_module_path module_path name in
-        Def.mk prefixed_name typ term constraints attrs vis,
-}
-
-#[partial]
-def prefix_inductive_name (ind : Inductive) (module_path : ModulePath) : Inductive := match ind {
-    Inductive.mk name params typ constructors attrs vis =>
-        let prefixed_name := prefix_module_path module_path name in
-        Inductive.mk prefixed_name params typ (prefix_constructor_names constructors module_path) attrs vis,
-}
-
-#[partial]
-def prefix_constructor_names (cons : List InductConstructor) (module_path : ModulePath) : List InductConstructor := match cons {
-    List.empty => List.empty,
-    List.cons c rest =>
-        let prefixed_c := prefix_constructor_name c module_path in
-        List.cons prefixed_c (prefix_constructor_names rest module_path),
-}
-
-#[partial]
-def prefix_constructor_name (c : InductConstructor) (module_path : ModulePath) : InductConstructor := match c {
-    InductConstructor.mk name params typ =>
-        let prefixed_name := prefix_module_path module_path name in
-        InductConstructor.mk prefixed_name params typ,
-}
-
-#[partial]
-def prefix_module_path (module_path : ModulePath) (name : ModulePath) : ModulePath := 
-    // Concatenate module_path and name to create a fully qualified path
-    match module_path {
-        ModulePath.mp mp_ids =>
-            match name {
-                ModulePath.mp name_ids =>
-                    ModulePath.mp (append_identifiers mp_ids name_ids),
-            },
-    }
-
-#[partial]
-def append_identifiers (a : List Identifier) (b : List Identifier) : List Identifier := match a {
-    List.empty => b,
-    List.cons hd tl => List.cons hd (append_identifiers tl b),
 }
 
 #[partial]

@@ -313,11 +313,6 @@ def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List D
 }
 
 
-/// Load a module by its ModulePath with default base directory
-#[partial]
-def load_module_decls_default (mp : ModulePath) : IO (Option (List Decl)) :=
-    load_module_decls "" mp
-
 /// Build a Scope from a ModulePath by loading and parsing the file
 /// base_dir is the directory to resolve relative imports from
 #[partial]
@@ -421,36 +416,44 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
                     Option.none => base_dir
                 };
             let all_deps : List ModulePath <- extract_all_dependencies module_base_dir decl_list;
-            let loaded_deps : List ScopeData <- load_dependency_scopes module_base_dir all_deps List.empty;
-            let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
-            let this_scope : ScopeData := build_scope_from_decls mp decl_list;
-            let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
-            // Outer aliasing pass: `build_scope_from_decls`'s own alias pass
-            // (inside `this_scope`) only sees the CURRENT file's own decl_list,
-            // so it can't alias a name whose REAL entry lives in a
-            // dependency (e.g. `open IO {println}` where `IO` is declared
-            // in a different file) -- that dependency's entries only
-            // become visible once merged into `final_scope`, right here.
-            // Re-walking `decl_list`' own `use_d`/`open_d`s against the now-
-            // fully-merged scope catches exactly that case; same-file
-            // opens are already aliased (a no-op re-alias here, cheap).
-            // Same `decls_have_aliasable_decls` no-op skip as
-            // `build_scope_from_decls` (`lang/scope.mo`, Track B) --
-            // correctness-preserving by construction (nothing to alias
-            // means the skipped pass would have done nothing regardless),
-            // and this is the exact call path `test_typecheck_lang_main`
-            // exercises (a single flat walk from here, per AGENTS.md item
-            // 10's own note).
-            let aliased_scope : ScopeData :=
-                if decls_have_aliasable_decls decl_list
-                then alias_decls_in_scope decl_list final_scope
-                else final_scope;
-            let scope : Scope := {
-                module_id := mp,
-                scope := aliased_scope,
-                parent := Option.none,
-            };
-            return Option.some scope
+            let loaded_deps_result : Result String (List ScopeData) <- load_dependency_entries (load_scope_entry module_base_dir) dependency_not_found_msg all_deps List.empty;
+            match loaded_deps_result {
+                // An unresolvable dependency is a real error -- see
+                // `load_dependency_entries`'s own doc comment for why this
+                // no longer silently skips it the way this function used to.
+                Result.err e => do { return Option.none },
+                Result.ok loaded_deps => do {
+                    let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
+                    let this_scope : ScopeData := build_scope_from_decls mp decl_list;
+                    let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
+                    // Outer aliasing pass: `build_scope_from_decls`'s own alias pass
+                    // (inside `this_scope`) only sees the CURRENT file's own decl_list,
+                    // so it can't alias a name whose REAL entry lives in a
+                    // dependency (e.g. `open IO {println}` where `IO` is declared
+                    // in a different file) -- that dependency's entries only
+                    // become visible once merged into `final_scope`, right here.
+                    // Re-walking `decl_list`' own `use_d`/`open_d`s against the now-
+                    // fully-merged scope catches exactly that case; same-file
+                    // opens are already aliased (a no-op re-alias here, cheap).
+                    // Same `decls_have_aliasable_decls` no-op skip as
+                    // `build_scope_from_decls` (`lang/scope.mo`, Track B) --
+                    // correctness-preserving by construction (nothing to alias
+                    // means the skipped pass would have done nothing regardless),
+                    // and this is the exact call path `test_typecheck_lang_main`
+                    // exercises (a single flat walk from here, per AGENTS.md item
+                    // 10's own note).
+                    let aliased_scope : ScopeData :=
+                        if decls_have_aliasable_decls decl_list
+                        then alias_decls_in_scope decl_list final_scope
+                        else final_scope;
+                    let scope : Scope := {
+                        module_id := mp,
+                        scope := aliased_scope,
+                        parent := Option.none,
+                    };
+                    return Option.some scope
+                }
+            }
         },
         Option.none => do {
             return Option.none
@@ -487,16 +490,21 @@ def load_module_with_dependencies_and_prelude (base_dir : String) (mp : ModulePa
             let direct_deps_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ direct_deps;
             let no_visited : List ModulePath := List.empty;
             let all_deps : List ModulePath <- extract_all_dependencies_go module_base_dir direct_deps_with_prelude no_visited no_visited;
-            let loaded_deps : List ScopeData <- load_dependency_scopes module_base_dir all_deps List.empty;
-            let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
-            let this_scope : ScopeData := build_scope_from_decls mp decl_list;
-            let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
-            let scope : Scope := {
-                module_id := mp,
-                scope := final_scope,
-                parent := Option.none,
-            };
-            return Option.some scope
+            let loaded_deps_result : Result String (List ScopeData) <- load_dependency_entries (load_scope_entry module_base_dir) dependency_not_found_msg all_deps List.empty;
+            match loaded_deps_result {
+                Result.err e => do { return Option.none },
+                Result.ok loaded_deps => do {
+                    let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
+                    let this_scope : ScopeData := build_scope_from_decls mp decl_list;
+                    let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
+                    let scope : Scope := {
+                        module_id := mp,
+                        scope := final_scope,
+                        parent := Option.none,
+                    };
+                    return Option.some scope
+                }
+            }
         },
         Option.none => do {
             return Option.none
@@ -540,8 +548,22 @@ def build_prelude_init_base : IO PreludeInitBase := do {
     let no_visited : List ModulePath := List.empty;
     let roots : List ModulePath := [prelude_module_path, init_module_path];
     let all_deps : List ModulePath <- extract_all_dependencies_go "" roots no_visiting no_visited;
-    let loaded_deps : List ScopeData <- load_dependency_scopes "" all_deps List.empty;
-    return { scope_data := merge_scope_data_list loaded_deps, covered := all_deps }
+    let loaded_deps_result : Result String (List ScopeData) <- load_dependency_entries (load_scope_entry "") dependency_not_found_msg all_deps List.empty;
+    match loaded_deps_result {
+        Result.ok loaded_deps => do {
+            return { scope_data := merge_scope_data_list loaded_deps, covered := all_deps }
+        },
+        // Prelude/init are bundled with the compiler itself, not
+        // user-supplied -- this should never happen in practice. Rather
+        // than crash the whole `check` command outright, surface it and
+        // proceed with an empty base: every subsequent file's own check
+        // will then independently re-attempt (and re-report) the same
+        // missing dependency, which is at least visible, not silent.
+        Result.err e => do {
+            println ("fatal: failed to load prelude/init: " ++ e);
+            return { scope_data := scope_data_empty, covered := List.empty }
+        }
+    }
 }
 
 // --- Whole-run module-scope cache: dedupe non-base dependency loads across files ---
@@ -783,98 +805,67 @@ def build_scope_with_deps_and_prelude_cached (base : PreludeInitBase) (cache : M
     let mp : ModulePath := ModulePath.mp [Identifier.id mod_name] in
     load_module_with_dependencies_and_prelude_cached base cache base_dir mp
 
-/// Load all declarations for a module and its transitive dependencies.
-/// Returns Option (List Decl) where the list contains all declarations from
-/// the module and all its dependencies, suitable for compilation.
+/// The one shared "already-deduplicated dependency list -> one thing per
+/// entry" fold, used by every UNCACHED dependency-loading path in this
+/// file: the `Scope`-merging path (`load_module_with_dependencies`/
+/// `load_module_with_dependencies_and_prelude`, loader = `load_scope_entry`
+/// below) and the `ModuleInfo`-list path (`load_file_modules`, loader =
+/// `load_module_with_info`). `deps` is already the complete, deduplicated
+/// transitive closure by the time this is called (see
+/// `extract_all_dependencies`'s own doc comment), so this is a flat
+/// one-pass walk: call `loader` once per entry, cons the result onto
+/// `acc`, continue -- no re-derivation, no per-node subtree re-walk.
+/// Hard-fails (`Result.err`, via `not_found`) on the first entry `loader`
+/// can't resolve at all -- matches `check`/`compile`'s own "a bad
+/// dependency is a real error" behavior elsewhere. This is a deliberate
+/// behavior change for the `Scope` path, which used to silently skip an
+/// unresolvable dependency rather than fail; the `ModuleInfo` path
+/// already hard-failed, so this unifies on ITS policy.
+/// Does NOT replace `load_dependency_scopes_cached` below: that one
+/// additionally consults/updates a whole-run `ModuleScopeCache` across
+/// MANY files in one `run_check_loop` (measured as ~75% of the whole
+/// "scope" phase's cost before that cache existed -- see
+/// `load_module_with_dependencies_and_prelude_cached`'s own doc comment),
+/// a genuinely different, performance-critical concern this simple fold
+/// doesn't need to generalize into.
 #[partial]
-def load_module_decls_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Option (List Decl)) {
-    // First load the main module's declarations
-    let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
-    match opt_decls {
-        Option.some main_decls => do {
-            // Get the actual file path for this module to determine its directory
-            let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
-            let module_base_dir : String :=
-                match resolved_path_opt {
-                    Option.some fp => extract_directory fp,
-                    Option.none => base_dir
-                };
-            // Extract all transitive dependencies
-            let all_deps : List ModulePath <- extract_all_dependencies module_base_dir main_decls;
-            // Always include prelude as a default dependency
-            let all_deps_with_prelude : List ModulePath := List.cons prelude_module_path all_deps;
-            // Load all dependency declarations
-            let dep_decls : List Decl <- load_dependency_decls module_base_dir all_deps_with_prelude List.empty;
-            // Combine: dependencies first, then main module
-            let all_decls : List Decl := list_append dep_decls main_decls;
-            return Option.some all_decls
+def load_dependency_entries {A : Type} (loader : ModulePath -> IO (Option A)) (not_found : ModulePath -> String) (deps : List ModulePath) (acc : List A) : IO (Result String (List A)) :=
+    match deps {
+        List.empty => do {
+            return (Result.ok acc)
         },
-        Option.none => do {
-            return Option.none
+        List.cons head tail => do {
+            let entry_opt : Option A <- loader head;
+            match entry_opt {
+                Option.some entry => do {
+                    let new_acc : List A := List.cons entry acc;
+                    load_dependency_entries loader not_found tail new_acc
+                },
+                Option.none => do {
+                    return (Result.err (not_found head))
+                }
+            }
         }
+    }
+
+/// `load_dependency_entries`'s loader for the `Scope` path: `load_module_scope`'s
+/// own two-tier resolution (try `base_dir`-relative first, then fall back
+/// to an unrestricted global search) that `load_dependency_scopes` used
+/// to inline directly -- extracted here so it can be partially applied
+/// (`load_scope_entry base_dir`) into `load_dependency_entries`'s
+/// `loader` parameter.
+def load_scope_entry (base_dir : String) (mp : ModulePath) : IO (Option ScopeData) := do {
+    let sd_opt : Option ScopeData <- load_module_scope base_dir mp;
+    match sd_opt {
+        Option.some sd => do { return (Option.some sd) },
+        Option.none => load_module_scope_default mp
     }
 }
 
-/// Load declarations for a list of module paths
-#[partial]
-def load_dependency_decls (base_dir : String) (deps : List ModulePath) (acc : List Decl) : IO (List Decl) :=
-    match deps {
-        List.empty => do {
-            return acc
-        },
-        List.cons head tail => do {
-            // Try to resolve and load each dependency
-            let decls_opt : Option (List Decl) <- load_module_decls base_dir head;
-            match decls_opt {
-                Option.some decl_list => do {
-                    let new_acc : List Decl := list_append decl_list acc;
-                    load_dependency_decls base_dir tail new_acc
-                },
-                Option.none => do {
-                    // If not found with base_dir, try with empty base_dir (global search)
-                    let decls_opt : Option (List Decl) <- load_module_decls_default head;
-                    match decls_opt {
-                        Option.some decl_list => do {
-                            let new_acc : List Decl := list_append decl_list acc;
-                            load_dependency_decls base_dir tail new_acc
-                        },
-                        Option.none => load_dependency_decls base_dir tail acc
-                    }
-                }
-            }
-        }
-    }
-
-/// Load scope data for a list of module paths, with base directory for resolution
-/// Each module is loaded once, and we try to resolve it from the base_dir
-#[partial]
-def load_dependency_scopes (base_dir : String) (deps : List ModulePath) (acc : List ScopeData) : IO (List ScopeData) :=
-    match deps {
-        List.empty => do {
-            return acc
-        },
-        List.cons head tail => do {
-            // Try to resolve and load each dependency
-            let sd_opt : Option ScopeData <- load_module_scope base_dir head;
-            match sd_opt {
-                Option.some sd => do {
-                    let new_acc : List ScopeData := List.cons sd acc;
-                    load_dependency_scopes base_dir tail new_acc
-                },
-                Option.none => do {
-                    // If not found with base_dir, try with empty base_dir (global search)
-                    let sd_opt2 : Option ScopeData <- load_module_scope_default head;
-                    match sd_opt2 {
-                        Option.some sd => do {
-                            let new_acc : List ScopeData := List.cons sd acc;
-                            load_dependency_scopes base_dir tail new_acc
-                        },
-                        Option.none => load_dependency_scopes base_dir tail acc
-                    }
-                }
-            }
-        }
-    }
+/// Shared "couldn't resolve this dependency at all" message for
+/// `load_dependency_entries`'s `not_found` parameter.
+def dependency_not_found_msg (mp : ModulePath) : String :=
+    "Failed to load module: " ++ module_path_to_string mp
 
 /// Merge two ScopeData structures. `def_refs` merges via
 /// `HashMap.merge_buckets` (`std/map.mo`) — a direct bucket-to-bucket
@@ -1842,26 +1833,6 @@ def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
         LoadedModules.mk main_module all_modules => all_modules
     }
 
-#[partial]
-def list_contains_module_info (modules : List ModuleInfo) (mp : ModulePath) : Bool :=
-    match modules {
-        List.empty => false,
-        List.cons hd rest =>
-            match hd {
-                ModuleInfo.mk path file_path decl_list =>
-                    if modpath_eq path mp then
-                        true
-                    else
-                        list_contains_module_info rest mp
-            }
-    }
-
-#[partial]
-def get_module_info_path (mi : ModuleInfo) : ModulePath :=
-    match mi {
-        ModuleInfo.mk path file_path decl_list => path
-    }
-
 def get_module_info_decls (mi : ModuleInfo) : List Decl :=
     match mi {
         ModuleInfo.mk path file_path decl_list => decl_list
@@ -1900,9 +1871,20 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
             match main_module {
                 ModuleInfo.mk mp_path file_path decl_list => do {
                     let main_base_dir : String := extract_directory file_path;
-                    let all_dep_paths : List ModulePath <- extract_all_dependencies main_base_dir decl_list;
-                    let all_dep_paths_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ all_dep_paths;
-                    let dep_modules_result : Result String (List ModuleInfo) <- load_dependencies_with_info main_base_dir all_dep_paths_with_prelude List.empty;
+                    // Seed prelude/init into the WALK itself (mirroring
+                    // `load_module_with_dependencies_and_prelude`'s own
+                    // `direct_deps_with_prelude` pattern) rather than
+                    // prepending them to the walk's already-deduplicated
+                    // result -- prepending after the fact can reintroduce
+                    // a duplicate (prelude/init reached again via an
+                    // explicit `use`), which used to be the sole reason
+                    // `load_dependencies_with_info`/`list_contains_module_info`
+                    // needed their own dedup guard.
+                    let direct_deps : List ModulePath := extract_use_decls decl_list;
+                    let direct_deps_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ direct_deps;
+                    let no_visited : List ModulePath := List.empty;
+                    let all_dep_paths_with_prelude : List ModulePath <- extract_all_dependencies_go main_base_dir direct_deps_with_prelude no_visited no_visited;
+                    let dep_modules_result : Result String (List ModuleInfo) <- load_dependency_entries (load_module_with_info main_base_dir) dependency_not_found_msg all_dep_paths_with_prelude List.empty;
                     return match dep_modules_result {
                       Result.ok dep_modules => 
                         let all_modules : List ModuleInfo := List.cons main_module dep_modules in
@@ -1916,50 +1898,6 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
         }
     }
 }
-
-// `deps` is already the COMPLETE, deduplicated transitive closure by the
-// time this is called (`load_file_modules` computes it once via a single
-// `extract_all_dependencies` walk before handing it here -- see that
-// function's own doc comment). This is a flat fold over that list, one
-// `load_module_with_info` per entry, deliberately mirroring the
-// already-correct `load_dependency_scopes` above (same "outer caller
-// already flattened the closure, don't re-derive it here" shape). An
-// earlier version of this function re-called `extract_all_dependencies`
-// on each node's own decls here and recursed into ITS dependency list
-// before continuing `tail` -- redundant with (and ignorant of) the
-// closure `deps` already contains, so every module got re-parsed once
-// per ancestor that reached it in the recursion (confirmed: `lang/types.mo`,
-// imported by 47/57 `lang/*.mo` files, was being `load_module_decls`'d
-// on the order of dozens of times for one `compile`/`pretty`/`test`
-// invocation). `list_contains_module_info` is still needed here (not a
-// leftover from the old shape): `load_file_modules` manually prepends
-// `[prelude_module_path, init_module_path]` ahead of the already-flattened
-// `all_dep_paths`, which can genuinely duplicate an entry the extracted
-// closure already contains.
-#[partial]
-def load_dependencies_with_info (base_dir : String) (deps : List ModulePath) (acc : List ModuleInfo) : IO (Result String (List ModuleInfo)) :=
-    match deps {
-        List.empty => do {
-            return (Result.ok acc)
-        },
-        List.cons head tail =>
-            if list_contains_module_info acc head then
-                load_dependencies_with_info base_dir tail acc
-            else do {
-                let mi_opt : Option ModuleInfo <- load_module_with_info base_dir head;
-                match mi_opt {
-                    Option.some mi => do {
-                        let new_acc : List ModuleInfo := List.cons mi acc;
-                        load_dependencies_with_info base_dir tail new_acc
-                    },
-                    Option.none => do {
-                        let module_path_str := module_path_to_string head;
-                        let err_msg := "Failed to load module: " ++ module_path_str;
-                        return Result.err err_msg
-                    }
-                }
-            },
-    }
 
 // --- Tests: check_module_with_scope / check_file ---
 
