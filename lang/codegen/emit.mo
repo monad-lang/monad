@@ -316,7 +316,38 @@ def lookup_native (name : String) : Option NativeOp :=
     else if String.beq name "write_file" then Option.some NativeOp.op_write_file
     else if String.beq name "monad_file_exists" then Option.some NativeOp.op_file_exists
     else if String.beq name "file_exists" then Option.some NativeOp.op_file_exists
+    else if String.beq name "I64_to_string" then Option.some NativeOp.op_i64_to_string
     else Option.none
+
+/// `lookup_native` needs its match arms in two different forms depending
+/// on caller: dotted arithmetic ops (`I64.add`) are only registered
+/// under their fully-qualified, underscore-mangled form ("I64_add", to
+/// agree with `compile_db_def_ir`'s own `replace_dots_with_underscores`
+/// naming for the real global -- not that this global is ever actually
+/// called when this fast path fires, but the table's naming convention
+/// still has to agree with it), while the IO natives are registered
+/// under their bare unqualified form ("println", not "IO_println") since
+/// they're called both qualified (`IO.println`) and via an `open`ed bare
+/// name. `try_compile_inline_native_db` used to look up ONLY the
+/// bare-extracted form (`extract_base_name "I64.add"` => "add"), which
+/// can never match "I64_add" -- so this fast path silently never fired
+/// for any dotted arithmetic call, falling through to a real call to the
+/// named global. That's normally invisible (the global just does the
+/// same arithmetic) EXCEPT `I64.add`/`I64.sub`/etc. are native-signature
+/// defs with no `:=` body at all (`init/number.mo`) -- their "body" is
+/// `Term.hole`, which `compile_db_def_ir` compiles as a bogus `Unit`
+/// constructor stub. Confirmed via a direct repro
+/// (`let a := 2 in let b := 3 in I64.add a b`, non-literal so constant
+/// folding doesn't hide it): every dotted arithmetic call silently
+/// returned a garbage heap pointer instead of computing anything. Try
+/// the underscore-mangled form first (covers arithmetic), then the
+/// bare-extracted form (covers IO), so both naming conventions work.
+#[partial]
+def lookup_native_any (name : String) : Option NativeOp :=
+    match lookup_native (replace_dots_with_underscores name) {
+        Option.some op => Option.some op,
+        Option.none => lookup_native (extract_base_name name),
+    }
 
 #[partial]
 def compile_native_val (op : NativeOp) (lhs : LLVMValue) (rhs : LLVMValue) : LLVMValue :=
@@ -927,7 +958,7 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
                     let lam_pair := ParamPair.mk "p0" LLVMType.i64_ in
                     let lam_params := cons_pair lam_pair empty_pairs in
                     let lam_func := LLVMFunction.mk lam_name lam_params LLVMType.i64_ (cons_block entry_block blocks_r) false in
-                    CompileResult.ok ctx2 empty_instrs (LLVMValue.var_ lam_name) empty_blocks (cons_func lam_func funcs_r) globals_r,
+                    CompileResult.ok ctx2 empty_instrs (LLVMValue.fn_ref lam_name) empty_blocks (cons_func lam_func funcs_r) globals_r,
             },
     }
 
@@ -1154,14 +1185,82 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
 
 #[partial]
 def compile_db_app_ir (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
-    // Check if this is a constructor application
-    match try_compile_constructor_app_db c fun arg {
+    // Check `let`-shaped beta-redexes FIRST -- `fun` here is a bare
+    // `Term.lam`, a shape none of the other three cases below ever
+    // match (they all key off `fun`/its own head being `Term.var`), so
+    // ordering relative to them doesn't matter for correctness. It's
+    // checked first purely because it's the single most common call
+    // shape in real code (see its own doc comment).
+    match try_compile_let_beta_db c fun arg {
         Option.some result => result,
         Option.none =>
-            match try_compile_inline_native_db c fun arg {
+            // Check if this is a constructor application
+            match try_compile_constructor_app_db c fun arg {
                 Option.some result => result,
-                Option.none => compile_general_db_call c fun arg,
+                Option.none =>
+                    match try_compile_inline_native_db c fun arg {
+                        Option.some result => result,
+                        Option.none => compile_general_db_call c fun arg,
+                    },
             },
+    }
+
+/// `let x := arg in body` (`lang/parser.mo`'s `let_term_body`) desugars
+/// to literally `Term.app (Term.lam x _ body) arg` -- NOT a distinct
+/// `Term.let_` AST node, so every `let` in the entire corpus is,
+/// structurally, an immediately-applied lambda. Before this case
+/// existed, `compile_db_app_ir` had no way to tell "immediately-applied"
+/// apart from "stored/passed/returned as a first-class value" and
+/// treated BOTH the same way: compiling `fun` via `compile_db_term_ir`
+/// (`Term.lam`'s case) always LIFTS it to a brand-new independent
+/// top-level LLVM function (`compile_db_lam_ir`, a single-parameter
+/// function whose only local binding is that one parameter).
+///
+/// For a genuinely first-class lambda (stored in a variable, passed to
+/// `List.map`, ...) that's the right (if still capture-incomplete --
+/// see `compile_db_lam_ir`'s own doc comment) shape. But for a `let`,
+/// it's actively wrong: lifting throws away every binding already in
+/// scope in the CURRENT function, so a chain of lets --
+/// `let a := 2 in let b := 3 in I64.add a b` -- lifts `b`'s continuation
+/// into its OWN fresh function whose only parameter is named `p0`, and
+/// since `ctx_bind_local` merely PREPENDS the new binding onto whatever
+/// bindings the surrounding context (wrongly) carried forward, `a`
+/// (bound to the OUTER lifted function's own `p0`) and `b` (bound to
+/// the INNER one's `p0`) both end up resolving to the exact same LLVM
+/// value `%p0` inside `b`'s function body -- `I64.add a b` silently
+/// compiles as `add i64 %p0, %p0`. Confirmed via a real compile-and-run
+/// repro (returned 6, not 5) before this fix, and via the classic
+/// `llc: use of undefined value '%lambda_N'` failure for chains that
+/// reference a still-outer-outer local no longer in scope at all once
+/// lifted.
+///
+/// The fix: recognize this exact shape and DON'T lift at all -- this is
+/// a plain beta-reduction, not a real closure. Compile `arg`, bind the
+/// lambda's own parameter name directly to `arg`'s resulting value in
+/// the CURRENT context (exactly what an ordinary `let` should do), and
+/// keep compiling `body` inline in the SAME function. No new function,
+/// no lost bindings, no capture problem -- because nothing is captured
+/// across a function boundary at all.
+#[partial]
+def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
+    match fun {
+        Term.lam dbg _typ body =>
+            let name : Identifier := match dbg {
+                named id => id,
+                unnamed => Identifier.id "_",
+            } in
+            match compile_db_term_ir c arg {
+                CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
+                    let ctx_bound := ctx_bind_local ctx1 name val1 in
+                    match compile_db_term_ir ctx_bound body {
+                        CompileResult.ok ctx2 instrs2 val2 blocks2 funcs2 globals2 =>
+                            match compose_seq (Triple.tr instrs1 blocks1 val1) (Triple.tr instrs2 blocks2 val2) {
+                                Triple.tr combined all_blocks last_val =>
+                                    Option.some (CompileResult.ok ctx2 combined last_val all_blocks (append_funcs funcs1 funcs2) (append_globals globals1 globals2)),
+                            },
+                    },
+            },
+        _ => Option.none,
     }
 
 #[partial]
@@ -1193,8 +1292,7 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
                     match dbg {
                         DebugName.named id =>
                             let name := show_identifier id in
-                            let base_name := extract_base_name name in
-                            match lookup_native base_name {
+                            match lookup_native_any name {
                                 Option.some op =>
                                     Option.some (compile_native_app_db c op arg2 arg),
                                 Option.none => Option.none,
@@ -1207,8 +1305,7 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
             match dbg {
                 DebugName.named id =>
                     let name := show_identifier id in
-                    let base_name := extract_base_name name in
-                    match lookup_native base_name {
+                    match lookup_native_any name {
                         Option.some op =>
                             Option.some (compile_native_app_unary_db c op arg),
                         Option.none => Option.none,
@@ -1254,6 +1351,7 @@ def native_op_to_fn_name (op : NativeOp) : String := match op {
     NativeOp.op_read_file => "monad_read_file",
     NativeOp.op_write_file => "monad_write_file",
     NativeOp.op_file_exists => "monad_file_exists",
+    NativeOp.op_i64_to_string => "monad_i64_to_string",
 }
 
 /// `arg2`'s own compiled fragment (`instrs2`/`blocks2`/...) used to be
@@ -2033,8 +2131,33 @@ def runtime_declarations : List LLVMDeclaration :=
     let d19 := mk_decl "apply_closure6" (apply_closure_arg_types 6) "i64" in
     let d20 := mk_decl "apply_closure7" (apply_closure_arg_types 7) "i64" in
     let d21 := mk_decl "apply_closure8" (apply_closure_arg_types 8) "i64" in
+    // `I64.to_string` (init/number.mo) is, like `I64.add`, a
+    // native-signature-only def with no `:=` body at all -- unlike
+    // `I64.add`, it had no runtime backing whatsoever (no C function,
+    // no NativeOp variant), so every call to it -- reached only once
+    // `lookup_native_any`'s I64_add-style fast path was fixed to
+    // actually fire, see that fix's own doc comment -- fell through to
+    // the same "Term.hole compiles as a bogus Unit stub" bug: `println
+    // (I64.to_string n)` printed nothing at all (a real, hand-compiled
+    // repro). `monad_i64_to_string` (runtime.c) is the actual
+    // implementation; `test_compile_i64_to_string_native`
+    // (lang/codegen/test/compile_tests.mo) is its regression test.
+    let d22 := mk_decl "monad_i64_to_string" (cons_str "i64" empty_strs) "i8*" in
+    // `Term.ntv`/`compile_ntv_ir`'s generic native-call mechanism (used
+    // for every `#[native ...]`-attributed def, e.g. `String.length`)
+    // emits a bare `call i64 @monad_<name>(...)` with no accompanying
+    // `declare` of its own -- unlike a genuinely first-referenced-by-call
+    // symbol in ordinary C, LLVM's textual IR does NOT implicitly
+    // synthesize a declaration for it (confirmed via a direct repro: omitting
+    // this line reproduced the exact same "use of undefined value
+    // '@monad_string_length'" `llc` failure `monad_i64_to_string` (just
+    // above) needed its own explicit declare entry to avoid) -- every
+    // native this module ever calls needs its own entry here regardless
+    // of which of the two parallel native-dispatch mechanisms
+    // (`lookup_native_any` vs. `Term.ntv`) it goes through.
+    let d23 := mk_decl "monad_string_length" (cons_str "i64" empty_strs) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13,
-     d14, d15, d16, d17, d18, d19, d20, d21]
+     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

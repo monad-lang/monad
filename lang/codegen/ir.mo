@@ -20,6 +20,7 @@ type PhiPair {
 type NativeOp {
     op_add, op_sub, op_mul, op_sdiv, op_eq, op_lt, op_gt, op_ne,
     op_print_str, op_read_file, op_write_file, op_file_exists,
+    op_i64_to_string,
 }
 
 type LLVMValue {
@@ -221,6 +222,7 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     var_ x => i64_,
     parm_ x => i64_,
     global_ x => ptr i8_,
+    fn_ref x => ptr i8_,
     call x ret_ty y z => ret_ty,
     add x y => i64_,
     sub x y => i64_,
@@ -331,12 +333,27 @@ def show_ret_instr (val : LLVMValue) : String := match val {
     var_ x => "  ret " ++ show_llvm_value_typed val,
     parm_ x => "  ret " ++ show_llvm_value_typed val,
     global_ x => "  ret " ++ show_llvm_value_typed val,
+    // A curried multi-param escaping lambda's OWN body (compile_db_lam_ir,
+    // lang/codegen/emit.mo) can itself be another Term.lam -- compiling
+    // THAT nested lambda returns a `fn_ref` (a direct reference to ITS
+    // own freshly-lifted function), which then becomes the OUTER
+    // lambda's own `ret` value: `(\x y z => x+y+z) 5 3 2`-shaped code
+    // hits this. Missing arm here crashed the self-hosted interpreter
+    // itself ("non-exhaustive match: LLVMValue.fn_ref was constructed
+    // but not covered by this match") the moment `fn_ref` started being
+    // constructed by compile_db_lam_ir (see that def's own doc comment)
+    // -- confirmed via a real repro
+    // (test_compile_lambda_multi_arg, lang/codegen/test/e2e_typecheck_tests.mo).
+    fn_ref x => "  ret " ++ show_llvm_value_typed val,
     call x y z w => "  ret " ++ show_llvm_value_typed val,
     add x y => "  ret " ++ show_llvm_value_typed val,
     sub x y => "  ret " ++ show_llvm_value_typed val,
     mul x y => "  ret " ++ show_llvm_value_typed val,
     sdiv x y => "  ret " ++ show_llvm_value_typed val,
     icmp_eq x y => "  ret " ++ show_llvm_value_typed val,
+    icmp_ne x y => "  ret " ++ show_llvm_value_typed val,
+    icmp_slt x y => "  ret " ++ show_llvm_value_typed val,
+    icmp_sgt x y => "  ret " ++ show_llvm_value_typed val,
     zext x y z => "  ret " ++ show_llvm_value_typed val,
     trunc x y z => "  ret " ++ show_llvm_value_typed val,
     phi x => "  ret " ++ show_llvm_value_typed val,

@@ -260,6 +260,61 @@ def test_compile_function_value_from_struct_field : IO Bool := do {
     compile_link_run_expect [add5_def, main_def] "test_fn_value_field" 5
 }
 
+/// Regression test for the `let`-chain beta-reduction fix
+/// (`try_compile_let_beta_db`, lang/codegen/emit.mo): `let a := 2 in let
+/// b := 3 in I64.add a b` desugars (lang/parser.mo's `let_term_body`) to
+/// `Term.app (Term.lam a _ (Term.app (Term.lam b _ (I64.add a b)) 3)) 2`
+/// -- BEFORE this fix, each `Term.lam` here compiled via
+/// `compile_db_lam_ir`'s "lift to a brand-new top-level function" path
+/// (correct for an escaping first-class lambda, wrong for a `let`): the
+/// inner lifted function's only real parameter is its own `%p0`, but the
+/// stale binding for `a` (itself only meaningful as the OUTER lifted
+/// function's own `%p0`) was still carried into the inner function's
+/// context, so BOTH `a` and `b` resolved to the exact same `%p0` --
+/// `I64.add a b` silently compiled as `add i64 %p0, %p0`, returning 6
+/// (3+3) instead of 5 (2+3). Also exercises the DOTTED name
+/// ("I64.add", exactly as real parsed source produces, not the
+/// pre-mangled "I64_add" `build_add5_def`/`test_compile_multiarg_call`
+/// use above) through `lookup_native_any`'s own fix.
+#[test]
+def test_compile_nested_let_chain : IO Bool := do {
+    let a_id := Identifier.id "a";
+    let b_id := Identifier.id "b";
+    let a_var := Term.var 0 (DebugName.named a_id);
+    let b_var := Term.var 1 (DebugName.named b_id);
+    let add_var := Term.var 0 (DebugName.named (Identifier.id "I64.add"));
+    let add_call := Term.app (Term.app add_var a_var) b_var;
+    let inner_let := Term.app (Term.lam (DebugName.named b_id) (Term.type_ 1) add_call) (mk_i64 3);
+    let outer_let := Term.app (Term.lam (DebugName.named a_id) (Term.type_ 1) inner_let) (mk_i64 2);
+    let main_def := mk_def "main" outer_let;
+    compile_link_run_expect [main_def] "test_nested_let" 5
+}
+
+/// Regression test for `I64.to_string`'s missing runtime backing
+/// (`monad_i64_to_string`, runtime.c + the `op_i64_to_string` NativeOp,
+/// lang/codegen/emit.mo/ir.mo): like `I64.add`, `I64.to_string`
+/// (init/number.mo) has no `:=` body at all -- before this fix it had
+/// NO runtime implementation whatsoever (not even a broken one), so any
+/// call compiled through the generic per-decl path (`compile_db_def_ir`
+/// on `I64.to_string`'s own `Term.hole` body) produced a bogus `Unit`
+/// constructor stub. Confirmed via a real repro (`println (I64.to_string
+/// 6)` printed nothing at all). `String.length (I64.to_string 12345)`
+/// must be 5 --
+/// exercises both the new runtime primitive AND that its result is a
+/// real, correctly-NUL-terminated string another native (`String.length`,
+/// itself dispatched via the separate `Term.ntv`/`compile_ntv_ir`
+/// mechanism) can consume.
+#[test]
+def test_compile_i64_to_string_native : IO Bool := do {
+    let to_string_var := Term.var 0 (DebugName.named (Identifier.id "I64.to_string"));
+    let str_val := Term.app to_string_var (mk_i64 12345);
+    let native_args := List.cons (Option.some str_val) List.empty;
+    let length_ntv := Native.mk (Identifier.id "string_length") 1 native_args;
+    let main_body := Term.ntv length_ntv;
+    let main_def := mk_def "main" main_body;
+    compile_link_run_expect [main_def] "test_i64_to_string" 5
+}
+
 /// Shared compile+link+execute helper, for a `List Decl` (as
 /// `promote_instance_defs` produces) rather than a `List Def` --
 /// `compile_db_module` (unlike `compile_db_decls_ir`) extracts every

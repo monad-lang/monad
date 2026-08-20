@@ -175,6 +175,35 @@ void monad_print_str(char* s) {
     if (s) printf("%s\n", s);
 }
 
+/* `#[native string_length]` (init/string.mo's `String.length`) dispatches
+   generically through `Term.ntv`/`compile_ntv_ir` (lang/codegen/emit.mo)
+   to `monad_string_length` -- that generic mechanism was already fully
+   wired end-to-end, just missing every actual String primitive's C
+   implementation (a real, separate, much bigger gap than this one
+   function closes -- `String.beq`/`concat`/`slice`/`drop`/... are still
+   unimplemented). Added here specifically so `I64.to_string`'s own
+   result (added just above) has a way to be verified by a real
+   compile-and-run test without depending on unrelated, still-missing
+   String natives. */
+int64_t monad_string_length(char* s) {
+    return s ? (int64_t)strlen(s) : 0;
+}
+
+/* `I64.to_string` (init/number.mo) had no backing implementation at
+   all -- neither a Monad-level `:=` body nor a runtime primitive.
+   Returns a plain malloc'd NUL-terminated buffer, matching this
+   runtime's uniform raw-`char*` String convention (see
+   monad_build_args's own doc comment: strings are never
+   alloc_string's boxed StringObj in practice, every native that
+   consumes/produces a String uses a bare char*). */
+char* monad_i64_to_string(int64_t n) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%lld", (long long)n);
+    char* out = (char*)malloc((size_t)len + 1);
+    if (out) memcpy(out, buf, (size_t)len + 1);
+    return out;
+}
+
 char* monad_read_file(char* path) {
     if (!path) return NULL;
     FILE* f = fopen(path, "rb");
