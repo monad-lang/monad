@@ -952,3 +952,59 @@ fn test_use_nested_submodule_makes_bare_name_and_qualified_access_available() {
   // `write` was not selected by the nested filter -> not bare-accessible.
   assert!(global.find_any_ref(&mpt("write"), &sort1()).is_err());
 }
+
+fn module_at(path: ModulePath, source: &str) -> Module {
+  let parsed = parse_file(source.into()).unwrap();
+  module(
+    path,
+    ParsedModule {
+      decls: parsed.decls,
+      module_doc: None,
+    },
+  )
+}
+
+/// Covers the five exemption/detection cases `unused_def_warnings`'s own
+/// doc comment lists — mirrors the manual multi-file fixture this was
+/// verified against directly (`examples/unused_def_fixture_a.mo`/`_b.mo`,
+/// not checked in): a `pub` def, a def used only by a sibling module, a
+/// genuinely-unused private def, a `#[test]` def, and `main`.
+#[test]
+fn test_unused_def_warnings_five_cases() {
+  let mut loaded = LoadedModules::empty();
+  loaded.add_module(module_at(
+    ModulePath::top("fixture_a"),
+    r#"
+    pub def shared_helper (x : I64) : I64 := x + 1
+
+    def only_used_by_sibling (x : I64) : I64 := x * 2
+
+    def genuinely_dead_private_def (x : I64) : I64 := x - 1
+
+    #[test]
+    def fixture_a_test_never_called_directly : I64 := 1
+
+    def main (args : List String) : I64 := 0
+    "#,
+  ));
+  loaded.add_module(module_at(
+    ModulePath::top("fixture_b"),
+    r#"
+    use fixture_a {only_used_by_sibling}
+
+    def call_it (x : I64) : I64 := only_used_by_sibling x
+    "#,
+  ));
+
+  let warnings = unused_def_warnings(&loaded);
+  let unused_names: std::collections::HashSet<String> =
+    warnings.iter().map(|(_, d)| d.message.clone()).collect();
+
+  // `shared_helper` (pub), `only_used_by_sibling` (used cross-module),
+  // `fixture_a_test_never_called_directly` (#[test]), and `main` must all
+  // be exempt/detected-as-used -- only the two genuinely-dead private defs
+  // should warn.
+  assert_eq!(warnings.len(), 2, "unexpected warnings: {unused_names:?}");
+  assert!(unused_names.contains("unused def `genuinely_dead_private_def`"));
+  assert!(unused_names.contains("unused def `call_it`"));
+}

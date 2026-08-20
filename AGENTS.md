@@ -1538,6 +1538,80 @@ Key patterns when writing self-hosted Monad code:
     (627/627) and `check init std lang examples` (2 errors/7 warnings)
     both unchanged, confirming no effect on the unrelated,
     already-correct `check` traversal.
+16. **New "unused def" warning — Rust-native checker only, `monad-rs
+    check`.** `module_warnings`/`collect_referenced_names`
+    (`core/src/term/module.rs`) already existed for unused-*import*
+    detection, per-file. Added a sibling, `unused_def_warnings`, but it
+    genuinely needs the WHOLE loaded corpus (`LoadedModules`), not one
+    file: a def used only by a sibling file would be a false "unused"
+    positive checked one file at a time. Wired into `check_files`
+    (`core/src/lib.rs`) as a pass run once after the per-file loop
+    finishes (once `master_loaded` holds every checked file), matched
+    back onto each warning's own originating `FileCheckResult` via a
+    `ModulePath -> PathBuf` map built during that same loop (`Diagnostic`/
+    `SourceRange` never carry a real file path at parse time in this
+    codebase — that's threaded explicitly by callers — so a `ModulePath`,
+    via `Module::path`, is the only reliable key to match a warning back
+    to its file).
+    Deliberately **not** wired into the test runner
+    (`run_tests`/`run_tests_for_files`): that path loads each file
+    independently, in parallel, from a shared read-only starting
+    snapshot (`base_loaded.clone()`, O(1) thanks to item 13's Arc-wrap),
+    never merging back into one final whole-corpus `LoadedModules` the
+    way `check_files`'s sequential loop does — there is no single
+    "everything loaded" structure to run a whole-program pass against
+    without a real architectural change, out of scope here.
+    Exemptions: `pub` (may be used by another mote, invisible to this
+    checker), `#[test]`-attributed (called by the harness, not
+    referenced by name), named `main` (the entry point). A third
+    exemption was added after direct measurement, not anticipated up
+    front: a synthesized typeclass-instance dictionary def
+    (`instance-{class}-{args}`, `core/src/term.rs`'s `instance()`
+    constructor) is found by the type system's own dictionary-resolution
+    machinery (dispatched by TYPE, at typecheck/eval time), never
+    through a named `Term::Var` reference — exempted the same way `main`
+    is, a root the ordinary reachability model doesn't apply to.
+    Matching a def's own name against the whole-corpus reference set
+    deliberately does NOT reuse `referenced_contains_name`'s own
+    broadest fallback (any referenced path anywhere ending in this
+    identifier) — confirmed empirically that doing so suppressed nearly
+    every real warning across this project's own ~100-file corpus (that
+    fallback is calibrated for one file's small reference set, not
+    a multi-hundred-file union). Only the two precise checks survive:
+    exact full-path match, and bare-last-segment match (a same-module or
+    post-`open` reference resolved to just the local name).
+    **Known, accepted precision gap, found by direct testing, not
+    theoretical**: a def that shares its bare name with something else
+    also in scope (e.g. `lang/module.mo`'s own `file_exists`, which
+    wraps an `open`ed `IO.file_exists` of the identical bare name) can
+    read as unused even when genuinely called, if the checker's own
+    elaboration resolves same-file bare references to a DIFFERENT
+    same-named target than the literal local def — narrow (one
+    confirmed instance in the real corpus), not chased further this
+    pass; flagged here rather than silently shipped.
+    **Verified** via a 5-case fixture (`pub` def, def used only by a
+    sibling file, genuinely-unused private def, `#[test]` def, `main`) —
+    all 5 behaved correctly, both as a manual end-to-end `monad-rs
+    check` run (`examples/unused_def_fixture_a.mo`/`_b.mo`, not checked
+    in) and as a new permanent unit test
+    (`term::module::test::test_unused_def_warnings_five_cases`,
+    `core/src/term/module/test.rs`). On the real corpus (`check init std
+    lang examples`): 52 warnings, spot-checked several by hand (real
+    dead utility functions, unused derive-generated constructors) after
+    the instance-dictionary exemption cut an initial ~80 down by ~28
+    false positives. `cargo test` 628/628 (627 + the new test); `check
+    init std lang examples`'s 2 errors/7 pre-existing import warnings
+    unchanged, confirming this is purely additive.
+    **Self-hosted checker's own "unused def" warning is a separate,
+    larger, not-yet-done piece of this same request** — no warning/
+    severity concept exists in the self-hosted pipeline at all today,
+    and `check`'s self-hosted command has no whole-corpus flat `Def`
+    list the way `compile`/`test` already do via `load_file_modules` —
+    see the module-loading investigation (this same session) for the
+    concrete design (generalize `lang/codegen/emit.mo`'s existing
+    `reachable_defs_from`/`collect_referenced_names` reachability pass,
+    already rooted at `main`, to also root at every `pub`/`#[test]` def;
+    "unused" is the complement of the final `visited` set).
 
 ## Committing Changes
 

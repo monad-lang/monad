@@ -1490,8 +1490,13 @@ pub fn check_files(
     .collect();
 
   let mut results = Vec::with_capacity(files.len());
+  // Threaded alongside `results` so the whole-program pass below (which
+  // only ever sees `ModulePath`s, via `Module::path`) can find each
+  // warning's own originating `FileCheckResult` to merge into.
+  let mut path_by_module: Map<ModulePath, PathBuf> = Map::new();
   for file in &files {
     let path: ModulePath = file.clone().into();
+    path_by_module.insert(path.clone(), file.clone());
     let diagnostics = match fs::read_to_string(file) {
       Err(e) => vec![crate::diag::Diagnostic {
         message: format!("{e}"),
@@ -1508,6 +1513,27 @@ pub fn check_files(
       path: file.clone(),
       diagnostics,
     });
+  }
+
+  // Whole-program pass, run once the corpus loop above has finished (so
+  // `master_loaded` holds every checked file, not just one at a time) — a
+  // def used only by a sibling file needs the full accumulated corpus to
+  // avoid a false "unused" positive; see `unused_def_warnings`'s own doc
+  // comment. Merged into each warning's own originating file's
+  // `FileCheckResult` (matched by `ModulePath`, via `path_by_module`, not
+  // appended as one lump at the end) — a module outside `files` (an
+  // embedded default, or a dependency never explicitly checked) has no
+  // `FileCheckResult` to merge into and its warnings are dropped, same as
+  // `module_warnings`'s own existing per-file scope never surfacing
+  // anything for a file that was never checked.
+  for (module_path, mut warning) in crate::term::module::unused_def_warnings(&master_loaded) {
+    if let Some(result) = path_by_module
+      .get(&module_path)
+      .and_then(|file| results.iter_mut().find(|r| &r.path == file))
+    {
+      warning.path = Some(result.path.clone());
+      result.diagnostics.push(warning);
+    }
   }
 
   Ok(results)

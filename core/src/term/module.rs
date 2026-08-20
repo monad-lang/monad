@@ -2644,12 +2644,104 @@ pub fn unused_use_name_warnings(
     .collect()
 }
 
+/// Whole-*program* "unused def" warning: a `def` that's `Priv`/
+/// `PackagePrivate` (not `Pub` — a `pub` def may be consumed by another
+/// mote entirely, invisible to this checker), not `#[test]`-attributed
+/// (called by the test harness, never referenced by name from any def
+/// body), and not named `main` (the entry point, never self-referential),
+/// whose own `ModulePath` never shows up as a reference anywhere across
+/// EVERY module currently loaded. Unlike `module_warnings`/
+/// `collect_referenced_names` (deliberately per-file, since an unused
+/// *import* is a property of the one file that wrote it), this genuinely
+/// needs the whole corpus: a def used only by a sibling module would be a
+/// false "unused" positive if checked one file at a time.
+///
+/// Matching deliberately does NOT reuse `referenced_contains_name`'s own
+/// third, broadest fallback (any referenced path anywhere ending in this
+/// identifier) — that one is calibrated for ONE file's typically-small
+/// reference set (checking one specific already-known imported name), and
+/// applying the same "matches literally anywhere in the whole loaded
+/// program" rule across a large multi-hundred-file corpus made it match
+/// almost every def by coincidence (confirmed empirically: it suppressed
+/// every real warning in this project's own ~100-file corpus). Only two
+/// checks survive here: the def's own exact qualified path (a reference
+/// written/resolved fully-qualified), and its bare last segment as a
+/// single-segment path (a reference resolved to just the local name,
+/// e.g. after `open`) — the same two precise forms
+/// `referenced_contains_name` itself checks before falling back to its
+/// broad third rule.
+/// Returns each warning paired with the `ModulePath` of the module it
+/// belongs to — `SourceRange`/`Diagnostic::path` is never populated at
+/// parse time in this codebase (the file path is threaded explicitly by
+/// callers instead, e.g. `module_warnings`'s own `path` parameter), so a
+/// caller that wants a real `PathBuf` on each `Diagnostic` (`check_files`
+/// does, to fold these into its own per-file `FileCheckResult`s) needs
+/// its own `ModulePath -> PathBuf` mapping to attach one — `Module::path`
+/// is what identifies WHICH loaded module each returned warning came
+/// from.
+pub fn unused_def_warnings(loaded: &LoadedModules) -> Vec<(ModulePath, Diagnostic)> {
+  let all_modules = loaded.modules();
+  let mut referenced: Set<ModulePath> = Set::default();
+  for module in &all_modules {
+    referenced.extend(collect_referenced_names(module));
+  }
+  let main_name = id("main");
+  all_modules
+    .iter()
+    .flat_map(|module| {
+      module
+        .defs()
+        .into_iter()
+        .filter_map(|ctx| {
+          let def = ctx.value();
+          // Synthesized typeclass-instance dictionary def (`instance()`,
+          // `core/src/term.rs`'s `instance-{class}-{args}` naming
+          // convention) — confirmed a real, non-hypothetical false-positive
+          // source: an instance is found and applied by the type system's
+          // own dictionary-resolution machinery (matching on TYPE, at
+          // typecheck/eval time), never through a named `Term::Var`
+          // reference a programmer wrote, so `collect_referenced_names`
+          // structurally can never see it as "used" even when it's the
+          // sole implementation backing every `==`/`show`/etc. call on
+          // that type — exempted the same way `main` is (a root the
+          // ordinary reachability model doesn't apply to).
+          let is_instance_dict = def.name.last().as_str().starts_with("instance-");
+          if def.vis == Visibility::Pub
+            || def.has_test_attr()
+            || def.name.last() == &main_name
+            || is_instance_dict
+          {
+            return None;
+          }
+          let bare = ModulePath::single(def.name.last().clone());
+          let used = referenced.contains(&def.name) || referenced.contains(&bare);
+          if used {
+            return None;
+          }
+          Some((
+            module.path().clone(),
+            Diagnostic {
+              severity: Severity::Warning,
+              message: format!("unused def `{}`", def.name),
+              location: Some(ctx.loc.clone()),
+              ..Default::default()
+            },
+          ))
+        })
+        .collect::<Vec<_>>()
+    })
+    .collect()
+}
+
 /// All non-fatal, style/deprecation-level warnings for a successfully
 /// loaded module, combined: bare `use`, bare `open`, and unused
 /// `use`-filter names (`unused_use_name_warnings`). This is the single
 /// entry point every warning-surfacing call site (`run`, the test runner,
 /// `check_files`/`check_source`, the LSP) should call, so new warning
-/// kinds only need wiring in once.
+/// kinds only need wiring in once. Does NOT include `unused_def_warnings`
+/// — that one is whole-*program*, not per-module, so it's called
+/// separately, once per whole loaded corpus, not once per file — see its
+/// own doc comment.
 pub fn module_warnings(module: &Module, path: Option<&std::path::PathBuf>) -> Vec<Diagnostic> {
   let mut warnings = bare_use_warnings(module.get_uses(), path);
   warnings.extend(bare_open_warnings(module.get_opens(), path));
