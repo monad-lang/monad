@@ -101,7 +101,7 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
     }
 }
 
-/// Print one diagnostic per line — `check_file`'s per-file diagnostics
+/// Print one diagnostic per line — `check_file_cached`'s per-file diagnostics
 /// are already fully rendered (parse diagnostics via
 /// `render_parse_error`, type errors via `render_type_error`), so this
 /// is just a sequenced println loop.
@@ -163,8 +163,8 @@ def run_check_loop (base : PreludeInitBase) (cache : ModuleScopeCache) (files : 
         }
     }
 
-/// Parse + typecheck each file with `lang.module.check_file` — no
-/// execution, no compilation. See lang/module.mo's `check_file`/
+/// Parse + typecheck each file with `lang.module.check_file_cached` — no
+/// execution, no compilation. See lang/module.mo's `check_file_cached`/
 /// `check_module_with_scope` for what "does this file compile" means
 /// today: real parse diagnostics (strict, not the lenient
 /// truncate-and-succeed parser), plus every failing `def`/`type`

@@ -79,17 +79,6 @@ def try_parse_decls_strict (input : String) (path : Option String) : Result Stri
         ParseResult.fail e => Result.err (render_parse_error input path e),
     }
 
-/// Parse source text and build scope data for a module.
-/// Does not resolve `use` dependencies — only parses and builds
-/// scope for the declarations in the given text.
-def parse_module (path : ModulePath) (text : String) : ScopeData :=
-    let empty_decls : List Decl := List.empty in
-    let result : ParseResult (List Decl) := parse_all_decls text in
-    match result {
-        ParseResult.success _ decl_list => build_scope_from_decls path decl_list,
-        ParseResult.fail _ => build_scope_from_decls path empty_decls
-    }
-
 // --- Module dependency loading ---
 
 /// Extract use declarations from a list of declarations
@@ -461,71 +450,12 @@ def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Op
     }
 }
 
-/// Same as `load_module_with_dependencies`, but always includes
-/// `prelude`/`init` as implicit dependencies — matching
-/// `load_file_modules`'s own convention (its
-/// `all_dep_paths_with_prelude`, used by `compile`/`pretty`) — instead
-/// of relying purely on the file's own explicit `use` statements.
-/// `load_module_with_dependencies` itself deliberately keeps its
-/// existing, narrower behavior — this is a separate function, not a
-/// replacement, so
-/// nothing that already depends on that behavior changes. Needed for
-/// `check_file`: almost every real `.mo` file relies on prelude/init
-/// implicitly (`String`, `Bool`, `List`, `FromListLiteral`, ...)
-/// without an explicit `use prelude`/`use init` line, and without
-/// this, `check` would report a wall of false-positive "unknown
-/// variable"/"unknown type" errors for nearly every file.
-#[partial]
-def load_module_with_dependencies_and_prelude (base_dir : String) (mp : ModulePath) : IO (Option Scope) {
-    let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
-    match opt_decls {
-        Option.some decl_list => do {
-            let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
-            let module_base_dir : String :=
-                match resolved_path_opt {
-                    Option.some fp => extract_directory fp,
-                    Option.none => base_dir
-                };
-            let direct_deps : List ModulePath := extract_use_decls decl_list;
-            let direct_deps_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ direct_deps;
-            let no_visited : List ModulePath := List.empty;
-            let all_deps : List ModulePath <- extract_all_dependencies_go module_base_dir direct_deps_with_prelude no_visited no_visited;
-            let loaded_deps_result : Result String (List ScopeData) <- load_dependency_entries (load_scope_entry module_base_dir) dependency_not_found_msg all_deps List.empty;
-            match loaded_deps_result {
-                Result.err e => do { return Option.none },
-                Result.ok loaded_deps => do {
-                    let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
-                    let this_scope : ScopeData := build_scope_from_decls mp decl_list;
-                    let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
-                    let scope : Scope := {
-                        module_id := mp,
-                        scope := final_scope,
-                        parent := Option.none,
-                    };
-                    return Option.some scope
-                }
-            }
-        },
-        Option.none => do {
-            return Option.none
-        }
-    }
-}
-
-/// The `check`-flavored twin of `load_module_with_dependencies` — see
-/// `load_module_with_dependencies_and_prelude`'s doc comment for why.
-#[partial]
-def build_scope_with_deps_and_prelude (file_path : String) (mod_name : String) : IO (Option Scope) :=
-    let base_dir : String := extract_directory file_path in
-    let mp : ModulePath := ModulePath.mp [Identifier.id mod_name] in
-    load_module_with_dependencies_and_prelude base_dir mp
-
 // --- Corpus-check caching: build prelude+init once, reuse across files ---
 //
-// `check_file`/`load_module_with_dependencies_and_prelude` above always
-// walk, parse, and rebuild `ScopeData` for `prelude`+`init`'s full
-// transitive closure from scratch — correct for a single file, but
-// `lang/main.mo`'s `run_check_loop` calls `check_file` independently
+// `check_file_cached`/`load_module_with_dependencies_and_prelude_cached`
+// below always walk, parse, and rebuild `ScopeData` for `prelude`+`init`'s
+// full transitive closure from scratch — correct for a single file, but
+// `lang/main.mo`'s `run_check_loop` calls `check_file_cached` independently
 // once per file in a corpus run, so a 47-file `check init std examples`
 // redundantly repeats that same prelude/init load 47 times over (an
 // O(N·D) cost, N files times D shared-dependency size, instead of
@@ -1362,57 +1292,18 @@ struct FileCheckAndCache {
     cache : ModuleScopeCache,
 }
 
-/// The `check`-flavored file checker — unlike a plain Bool typecheck
-/// (which uses the lenient `decls_parser` and collapses everything to
-/// a bare `Bool`), this uses
-/// `try_parse_decls_strict` on the target file's own content, so a
-/// genuine parse failure produces a real, rendered diagnostic instead
-/// of `false`, and it accumulates every failing declaration's rendered
-/// type-error message instead of stopping at the first one.
-/// Dependency resolution goes through `build_scope_with_deps_and_prelude`
-/// (prelude/init always implicitly included, matching `compile`'s own
-/// `load_file_modules` convention) — only the file being checked itself
-/// gets strict *parse* treatment, keeping this change's blast radius
-/// contained to what `check` needs.
-#[partial]
-def check_file (file_path : String) (verbose : Bool) : IO FileCheckResult {
-    let exists : Bool <- file_exists file_path;
-    if exists then do {
-        if verbose then println ("checking " ++ file_path) else do { return unit };
-        let content : String <- IO.read_file file_path;
-        let mod_name : String := module_name_from_path file_path;
-        let scope_opt : Option Scope <- build_scope_with_deps_and_prelude file_path mod_name;
-        match scope_opt {
-            Option.some scope =>
-                match try_parse_decls_strict content (Option.some file_path) {
-                    Result.ok decl_list => do {
-                        let empty_locs : LocalScope := {
-                            vars := List.empty,
-                            parent := Option.none,
-                        };
-                        let diags : List String <- check_module_with_scope scope decl_list empty_locs (Option.some file_path) verbose;
-                        return { path := file_path, diagnostics := diags }
-                    },
-                    Result.err diagnostic => do {
-                        return { path := file_path, diagnostics := [diagnostic] }
-                    }
-                },
-            Option.none => do {
-                return { path := file_path, diagnostics := ["error: failed to load dependencies for " ++ file_path ++ " (a `use`d module failed to resolve or parse — re-run with a narrower file list, or check each `use`/`open` target under this file's search path, to isolate which one)"] }
-            }
-        }
-    } else do {
-        return { path := file_path, diagnostics := ["error: file not found: " ++ file_path] }
-    }
-}
-
-/// The `PreludeInitBase`-reusing twin of `check_file` — identical
-/// behavior, just avoids reloading prelude/init from scratch. This is
-/// what `lang/main.mo`'s `run_check_loop` actually calls now, building
-/// one `PreludeInitBase` up front and threading it through every file
-/// in a corpus run instead of each `check_file` call independently
-/// re-paying that cost — see `PreludeInitBase`'s own doc comment above
-/// for why this matters.
+/// The file checker — uses `try_parse_decls_strict` on the target
+/// file's own content so a genuine parse failure produces a real,
+/// rendered diagnostic instead of `false`, and accumulates every
+/// failing declaration's rendered type-error message instead of
+/// stopping at the first one. Dependency resolution goes through
+/// `build_scope_with_deps_and_prelude_cached` (prelude/init always
+/// implicitly included, matching `compile`'s own `load_file_modules`
+/// convention) — only the file being checked itself gets strict
+/// *parse* treatment. `lang/main.mo`'s `run_check_loop` builds one
+/// `PreludeInitBase` up front and threads it through every file in a
+/// corpus run instead of each call independently re-paying that cost
+/// — see `PreludeInitBase`'s own doc comment above for why this matters.
 #[partial]
 def check_file_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
     let exists : Bool <- file_exists file_path;
@@ -1662,23 +1553,28 @@ def test_parse_multiple_decls_resolve : Bool :=
 #[test]
 def test_parse_module_builds_scope : Bool :=
     let path : ModulePath := ModulePath.mp List.empty in
-    let sd : ScopeData := parse_module path "def hello : Bool := true" in
-    let no_parent : Option Scope := Option.none in
-    let scope : Scope := {
-        module_id := path,
-        scope := sd,
-        parent := no_parent,
-    } in
-    let hello_ref : NameRef := NameRef.nid (Identifier.id "hello") in
-    let no_vars : List LocalVar := List.empty in
-    let no_loc_parent : Option LocalScope := Option.none in
-    let empty_locals : LocalScope := {
-        vars := no_vars,
-        parent := no_loc_parent,
-    } in
-    match scope_resolve_name hello_ref scope empty_locals {
-        Result.ok _ => true,
-        Result.err _ => false
+    let result : ParseResult (List Decl) := parse_all_decls "def hello : Bool := true" in
+    match result {
+        ParseResult.success _ decl_list =>
+            let sd : ScopeData := build_scope_from_decls path decl_list in
+            let no_parent : Option Scope := Option.none in
+            let scope : Scope := {
+                module_id := path,
+                scope := sd,
+                parent := no_parent,
+            } in
+            let hello_ref : NameRef := NameRef.nid (Identifier.id "hello") in
+            let no_vars : List LocalVar := List.empty in
+            let no_loc_parent : Option LocalScope := Option.none in
+            let empty_locals : LocalScope := {
+                vars := no_vars,
+                parent := no_loc_parent,
+            } in
+            match scope_resolve_name hello_ref scope empty_locals {
+                Result.ok _ => true,
+                Result.err _ => false
+            },
+        ParseResult.fail _ => false
     }
 
 #[test]
@@ -1916,18 +1812,23 @@ def test_check_module_with_scope_accumulates_failures : IO Bool := do {
 
 #[test]
 def test_check_file_reports_missing_file : Bool :=
-    match check_file "definitely/does/not/exist.mo" false {
+    let empty_base : PreludeInitBase := { scope_data := scope_data_empty, covered := List.empty } in
+    let empty_cache : ModuleScopeCache := module_scope_cache_empty in
+    match check_file_cached empty_base empty_cache "definitely/does/not/exist.mo" false {
         IO.io result =>
             match result {
-                FileCheckResult.mk _path diags =>
-                    match diags {
-                        List.cons msg rest =>
-                            string_contains_helper msg "file not found" &&
-                            match rest {
-                                List.empty => true,
-                                List.cons _ _ => false
-                            },
-                        List.empty => false
+                FileCheckAndCache.mk fc_result _cache =>
+                    match fc_result {
+                        FileCheckResult.mk _path diags =>
+                            match diags {
+                                List.cons msg rest =>
+                                    string_contains_helper msg "file not found" &&
+                                    match rest {
+                                        List.empty => true,
+                                        List.cons _ _ => false
+                                    },
+                                List.empty => false
+                            }
                     }
             }
     }
