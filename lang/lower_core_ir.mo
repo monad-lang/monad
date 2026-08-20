@@ -270,13 +270,13 @@ def find_case_inductive (scope : Scope) (cases : List MatchCase) : Option Induct
     List.empty => Option.none,
     List.cons c _ =>
       match c {
-        MatchCase.mc name _ _ => find_inductive_by_case_name (scope_all_inductives scope) name,
+        MatchCase.mc name _ _ _ => find_inductive_by_case_name (scope_all_inductives scope) name,
       },
   }
 
 def is_wildcard_case (c : MatchCase) : Bool :=
   match c {
-    MatchCase.mc name _ _ =>
+    MatchCase.mc name _ _ _ =>
       match name {
         Identifier.id s => String.beq s "_",
       },
@@ -288,7 +288,7 @@ def find_case_for_ctor (ctor : InductConstructor) (cases : List MatchCase) : Opt
     List.empty => Option.none,
     List.cons c rest =>
       match c {
-        MatchCase.mc name _ _ =>
+        MatchCase.mc name _ _ _ =>
           if constructor_simple_name_eq ctor name
           then Option.some c
           else find_case_for_ctor ctor rest,
@@ -347,7 +347,7 @@ def lower_explicit_match_case
     (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
   match found_case {
-    MatchCase.mc _ case_args case_body =>
+    MatchCase.mc _ case_args case_body _ =>
       lower_then (lower_term ctx case_body acc) (fn bir => fn acc1 =>
         k (MatchArm.arm (List.length case_args) bir) acc1),
   }
@@ -358,7 +358,7 @@ def lower_wildcard_match_case
     (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
   match wc {
-    MatchCase.mc _ _ wc_body =>
+    MatchCase.mc _ _ wc_body _ =>
       lower_then (lower_term ctx wc_body acc) (fn bir => fn acc1 =>
         k (MatchArm.arm 0 bir) acc1),
   }

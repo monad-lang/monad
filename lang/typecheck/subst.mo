@@ -90,8 +90,8 @@ def match_cases_shift (d : I64) (cutoff : I64) (cases : List MatchCase) : List M
 #[partial]
 def match_case_shift (d : I64) (cutoff : I64) (c : MatchCase) : MatchCase :=
     match c {
-        MatchCase.mc name args body =>
-            MatchCase.mc name args (term_shift_go d (cutoff + List.length args) body),
+        MatchCase.mc name args body fp =>
+            MatchCase.mc name args (term_shift_go d (cutoff + List.length args) body) fp,
     }
 
 #[partial]
@@ -199,8 +199,8 @@ def match_cases_subst (j : I64) (s : Term) (depth : I64) (cases : List MatchCase
 #[partial]
 def match_case_subst (j : I64) (s : Term) (depth : I64) (c : MatchCase) : MatchCase :=
     match c {
-        MatchCase.mc name args body =>
-            MatchCase.mc name args (term_subst_go j s (depth + List.length args) body),
+        MatchCase.mc name args body fp =>
+            MatchCase.mc name args (term_subst_go j s (depth + List.length args) body) fp,
     }
 
 #[partial]
@@ -339,12 +339,13 @@ def test_match_case_binder_depth_shift : Bool :=
     // match arm entirely (past both pattern bindings) and must shift;
     // an occurrence of index 1 (one of the pattern's own bindings)
     // must not.
+    let no_fp : Option FieldPattern := Option.none in
     let outer_ref : MatchCase :=
-        MatchCase.mc (Identifier.id "some") (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) (Term.var 2 DebugName.unnamed) in
+        MatchCase.mc (Identifier.id "some") (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) (Term.var 2 DebugName.unnamed) no_fp in
     let bound_ref : MatchCase :=
-        MatchCase.mc (Identifier.id "some") (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) (Term.var 1 DebugName.unnamed) in
-    match match_case_shift 3 0 outer_ref { MatchCase.mc _ _ body => I64.beq (term_var_idx body) 5 } &&
-    match match_case_shift 3 0 bound_ref { MatchCase.mc _ _ body => I64.beq (term_var_idx body) 1 }
+        MatchCase.mc (Identifier.id "some") (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) (Term.var 1 DebugName.unnamed) no_fp in
+    match match_case_shift 3 0 outer_ref { MatchCase.mc _ _ body _ => I64.beq (term_var_idx body) 5 } &&
+    match match_case_shift 3 0 bound_ref { MatchCase.mc _ _ body _ => I64.beq (term_var_idx body) 1 }
 
 #[test]
 def test_beta_reduce_replaces_bound_occurrence : Bool :=

@@ -129,7 +129,7 @@ def match_cases_map_children (f : Term -> Term) (cases : List MatchCase) : List 
 
 #[partial]
 def match_case_map_children (f : Term -> Term) (c : MatchCase) : MatchCase :=
-    match c { MatchCase.mc name args body => MatchCase.mc name args (f body) }
+    match c { MatchCase.mc name args body fp => MatchCase.mc name args (f body) fp }
 
 #[partial]
 def struct_fields_map_children (f : Term -> Term) (fields : List StructLitField) : List StructLitField :=

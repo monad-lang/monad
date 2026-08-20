@@ -538,7 +538,7 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
                                     match fresh_temp ctx2 {
                                         CtxStrPair.mk ctx3 cmp_temp =>
                                             match this_case {
-                                                MatchCase.mc name _args _body =>
+                                                MatchCase.mc name _args _body _fp =>
                                                     let tag_of_case := constructor_tag (show_identifier name) in
                                                     let cmp_instr := LLVMInstruction.assign cmp_temp (LLVMValue.icmp_eq tag_val (LLVMValue.int_ tag_of_case)) in
                                                     let branch_instr := LLVMInstruction.branch (LLVMValue.var_ cmp_temp) case_label next_check_label in
@@ -598,7 +598,7 @@ def bind_match_fields (c : CodegenCtx) (scrutinee_val : LLVMValue) (args : List 
 #[partial]
 def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ : MatchCase) (case_label : String) (merge_label : String) : MatchChainResult :=
     match case_ {
-        MatchCase.mc _name args body =>
+        MatchCase.mc _name args body _fp =>
             match bind_match_fields c scrutinee_val args 0 {
                 FieldBindResult.mk c1 field_instrs =>
                     match compile_db_term_ir c1 body {
@@ -2548,7 +2548,7 @@ def collect_referenced_names_cases (cases : List MatchCase) (acc : List String) 
     List.empty => acc,
     List.cons c rest =>
         match c {
-            MatchCase.mc name _args body =>
+            MatchCase.mc name _args body _fp =>
                 collect_referenced_names_cases rest (List.cons (show_identifier name) (collect_referenced_names body acc)),
         },
 }

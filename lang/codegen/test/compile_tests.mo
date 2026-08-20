@@ -156,8 +156,8 @@ def test_compile_multiarg_call : IO Bool := do {
 def build_option_match_main (scrutinee : Term) : Def :=
     let option_typ := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
     let a_id := Identifier.id "a" in
-    let some_case := MatchCase.mc (Identifier.id "some") (List.cons a_id List.empty) (Term.var 0 (DebugName.named a_id)) in
-    let none_case := MatchCase.mc (Identifier.id "none") List.empty (mk_i64 99) in
+    let some_case := MatchCase.mc (Identifier.id "some") (List.cons a_id List.empty) (Term.var 0 (DebugName.named a_id)) Option.none in
+    let none_case := MatchCase.mc (Identifier.id "none") List.empty (mk_i64 99) Option.none in
     let cases := List.cons some_case (List.cons none_case List.empty) in
     let main_body := Term.lit (Literal.match_ scrutinee cases) in
     mk_def "main" main_body

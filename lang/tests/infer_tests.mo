@@ -289,7 +289,7 @@ def test_match_empty_cases : Bool :=
 def test_match_single_case : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body : Term := Term.type_ 1 in
-    let case_ : MatchCase := MatchCase.mc (Identifier.id "x") List.empty body in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "x") List.empty body Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -306,8 +306,8 @@ def test_match_multi_case_bodies_ok : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body1 : Term := Term.type_ 1 in
     let body2 : Term := Term.type_ 1 in
-    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 in
-    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty body2 in
+    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 Option.none in
+    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty body2 Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -323,8 +323,8 @@ def test_match_multi_case_second_fails : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body1 : Term := Term.type_ 1 in
     let bad_var : Term := Term.var sentinel (DebugName.named (Identifier.id "no_such")) in
-    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 in
-    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty bad_var in
+    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 Option.none in
+    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty bad_var Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -345,7 +345,8 @@ def test_match_case_args_bound : Bool :=
     let case_ : MatchCase := MatchCase.mc
         (Identifier.id "some")
         (List.cons arg_id List.empty)
-        body in
+        body
+        Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -398,7 +399,8 @@ def test_match_valid_constructor : Bool :=
     let case_ : MatchCase := MatchCase.mc
         (Identifier.id "some")
         List.empty
-        body in
+        body
+        Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
@@ -422,11 +424,13 @@ def test_match_invalid_constructor : Bool :=
     let case_some : MatchCase := MatchCase.mc
         (Identifier.id "some")
         List.empty
-        body in
+        body
+        Option.none in
     let case_bogus : MatchCase := MatchCase.mc
         (Identifier.id "bogus")
         List.empty
-        body in
+        body
+        Option.none in
     let cases : List MatchCase := List.cons case_some (List.cons case_bogus List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match type_check t Term.hole maybe_scope empty_local_types empty_locals {
@@ -445,7 +449,8 @@ def test_match_wildcard : Bool :=
     let case_ : MatchCase := MatchCase.mc
         (Identifier.id "_")
         List.empty
-        body in
+        body
+        Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -463,7 +468,8 @@ def test_match_wildcard_rejects_args : Bool :=
     let case_ : MatchCase := MatchCase.mc
         (Identifier.id "_")
         (List.cons (Identifier.id "x") List.empty)
-        body in
+        body
+        Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {
@@ -483,7 +489,8 @@ def test_match_bound_scrutinee : Bool :=
     let case_ : MatchCase := MatchCase.mc
         (Identifier.id "x")
         List.empty
-        body in
+        body
+        Option.none in
     let cases : List MatchCase := List.cons case_ List.empty in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     let types : List Term := List.cons (Term.type_ 1) List.empty in
@@ -503,8 +510,8 @@ def test_match_branch_type_conflict : Bool :=
     let scrutinee : Term := Term.type_ 1 in
     let body1 : Term := Term.type_ 1 in
     let body2 : Term := Term.type_ 0 in
-    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 in
-    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty body2 in
+    let case1 : MatchCase := MatchCase.mc (Identifier.id "a") List.empty body1 Option.none in
+    let case2 : MatchCase := MatchCase.mc (Identifier.id "b") List.empty body2 Option.none in
     let cases : List MatchCase := List.cons case1 (List.cons case2 List.empty) in
     let t : Term := Term.lit (Literal.match_ scrutinee cases) in
     match run_check t Term.hole {

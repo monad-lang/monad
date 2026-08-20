@@ -137,9 +137,9 @@ def my_add_term : Term :=
       (Term.lit (Literal.match_
         (Term.var 1 (named "a"))
         [
-          MatchCase.mc (Identifier.id "z") List.empty (Term.var 0 (named "b")),
+          MatchCase.mc (Identifier.id "z") List.empty (Term.var 0 (named "b")) Option.none,
           MatchCase.mc (Identifier.id "s") [Identifier.id "n"]
-            (mynat_s (Term.app (Term.app (free_var "my_add") (Term.var 0 (named "n"))) (Term.var 1 (named "b")))),
+            (mynat_s (Term.app (Term.app (free_var "my_add") (Term.var 0 (named "n"))) (Term.var 1 (named "b")))) Option.none,
         ])))
 
 def two_term : Term := mynat_s (mynat_s mynat_z)

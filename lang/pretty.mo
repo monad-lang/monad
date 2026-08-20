@@ -159,7 +159,7 @@ def show_match_cases_rest (first : MatchCase) (rest : List MatchCase) : String :
 
 #[partial]
 def show_match_case (c : MatchCase) : String := match c {
-    MatchCase.mc name args body =>
+    MatchCase.mc name args body _fp =>
         let name_str := show_identifier name in
         let body_str := show_term body in
         match args {
@@ -733,7 +733,8 @@ def test_show_literal_match : Bool :=
     let case_arg := Identifier.id "v" in
     let case_args := List.cons case_arg List.empty in
     let case_body := Term.var 0 (DebugName.named (Identifier.id "v")) in
-    let mc := MatchCase.mc case_name case_args case_body in
+    let no_fp : Option FieldPattern := Option.none in
+    let mc := MatchCase.mc case_name case_args case_body no_fp in
     let cases := List.cons mc List.empty in
     let t := Term.lit (Literal.match_ scrutinee cases) in
     show_term t == "match x {\n some v => v\n}"

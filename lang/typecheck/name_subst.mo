@@ -107,7 +107,7 @@ def match_cases_name_subst (target : Identifier) (replacement : Term) (cases : L
 
 #[partial]
 def match_case_name_subst (target : Identifier) (replacement : Term) (c : MatchCase) : MatchCase :=
-    match c { MatchCase.mc name args body => MatchCase.mc name args (name_subst_term target replacement body) }
+    match c { MatchCase.mc name args body fp => MatchCase.mc name args (name_subst_term target replacement body) fp }
 
 #[partial]
 def struct_fields_name_subst (target : Identifier) (replacement : Term) (fields : List StructLitField) : List StructLitField :=

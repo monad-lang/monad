@@ -4498,11 +4498,141 @@ def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
     // lang/module.mo, all previously unparseable).
     [quote_term_parser ctx, macro_call_term, variable ctx, literal_parser, match_parser ctx, if_parser ctx, do_parser ctx, let_term_parser ctx, list_literal_parser ctx, struct_lit_parser ctx]
 
+// ─── Field-pattern match-case grammar (`plans/implementations/
+// struct-field-destructuring.md`'s Phase 6) ─────────────────────────────
+//
+// `{ field, other := binder, .. }` -- shared by the bare (`{ ... } =>
+// ...`) and named-constructor (`ConsName { ... } => ...`) match-case
+// forms below. Mirrors the Rust reference's `struct_pattern_parser`
+// (`core/src/parser.rs`).
+
+#[partial]
+def field_pattern_item (input : String) : ParseResult FieldPatternEntry :=
+    field_pattern_item_name (identifier input)
+
+#[partial]
+def field_pattern_item_name (r : ParseResult String) : ParseResult FieldPatternEntry :=
+    match r {
+        success rem name => field_pattern_item_rename (tag ":=" (skip_spaces rem)) (Identifier.id name) rem,
+        fail e => fail e
+    }
+
+/// Punned (`x`, no `:=`) vs. renamed (`x := px`) -- mirrors
+/// `field_pattern_item`'s own Rust reference twin exactly: on no `:=`,
+/// resume from `orig` (right after the field name) with `binder ==
+/// name`.
+#[partial]
+def field_pattern_item_rename (r : ParseResult String) (name : Identifier) (orig : String) : ParseResult FieldPatternEntry :=
+    match r {
+        success rem _ => field_pattern_item_binder (identifier (skip_spaces rem)) name,
+        fail _ => success orig (FieldPatternEntry.mk name name)
+    }
+
+#[partial]
+def field_pattern_item_binder (r : ParseResult String) (name : Identifier) : ParseResult FieldPatternEntry :=
+    match r {
+        success rem binder => success rem (FieldPatternEntry.mk name (Identifier.id binder)),
+        fail e => fail e
+    }
+
+/// `{` field_pattern_item,* (`,`? `..`)? `}` -- `separated_by` alone
+/// (not `many1`) since `{ }` (destructuring a zero-field constructor) is
+/// legal, matching a zero-param constructor's existing `mk =>` pattern.
+#[partial]
+def field_pattern_parser (input : String) : ParseResult FieldPattern :=
+    field_pattern_open (tag "{" (skip_spaces input))
+
+#[partial]
+def field_pattern_open (r : ParseResult String) : ParseResult FieldPattern :=
+    match r {
+        success rem _ => field_pattern_fields (skip_spaces rem),
+        fail e => fail e
+    }
+
+#[partial]
+def field_pattern_fields (input : String) : ParseResult FieldPattern :=
+    match separated_by (tag ",") (preceded_by ws0 field_pattern_item) input {
+        success rem fields => field_pattern_close rem fields,
+        fail e => fail e
+    }
+
+/// After the field list (`separated_by`'s own trailing-comma-tolerant
+/// stop point, see its doc comment), try a trailing `..` before the
+/// closing `}`.
+#[partial]
+def field_pattern_close (input : String) (fields : List FieldPatternEntry) : ParseResult FieldPattern :=
+    field_pattern_try_rest (tag ".." (skip_spaces input)) input fields
+
+#[partial]
+def field_pattern_try_rest (r : ParseResult String) (orig : String) (fields : List FieldPatternEntry) : ParseResult FieldPattern :=
+    match r {
+        success rem _ => field_pattern_final_close (tag "}" (skip_spaces rem)) fields true,
+        fail _ => field_pattern_final_close (tag "}" (skip_spaces orig)) fields false
+    }
+
+#[partial]
+def field_pattern_final_close (r : ParseResult String) (fields : List FieldPatternEntry) (rest : Bool) : ParseResult FieldPattern :=
+    match r {
+        success rem _ => success rem (FieldPattern.mk fields rest),
+        fail e => fail e
+    }
+
+/// Each entry's `binder`, in written order -- the names a field-pattern
+/// case's own `MatchCase.args`/`ctx`-extension use (mirrors
+/// `id_list_of`'s own role for the ordinary positional form).
+#[partial]
+def field_pattern_binder_names (fp : FieldPattern) : List Identifier :=
+    match fp { FieldPattern.mk fields _ => field_pattern_entries_binders fields }
+
+#[partial]
+def field_pattern_entries_binders (entries : List FieldPatternEntry) : List Identifier :=
+    match entries {
+        List.empty => List.empty,
+        List.cons e rest =>
+            match e { FieldPatternEntry.mk _ binder => List.cons binder (field_pattern_entries_binders rest) },
+    }
+
 // ─── Canonical match case parser (Phase 9) ─────────────────────────────
+//
+// Three alternatives, tried in order, no ambiguity: bare-`{`-first
+// (starts on `{`, distinct from the other two which both start on an
+// identifier); then named+brace vs. named+positional, which diverge
+// right after the constructor name (`{` vs. an identifier or `=>`).
+// Mirrors the Rust reference's own three-alternative `match_case_parser`
+// (`core/src/parser.rs`) exactly, adapted to this file's hand-written
+// CPS style (an explicit try-then-fall-through step per alternative,
+// rather than `nom`'s automatic `alt` backtracking).
 
 #[partial]
 def match_case_parser (ctx: List Identifier) (input: String) : ParseResult MatchCase :=
-    match_case_name (dotted_identifier (skip_docstrings (skip_spaces input))) ctx
+    match_case_try_bare_field_pattern (field_pattern_parser (skip_docstrings (skip_spaces input))) (skip_docstrings (skip_spaces input)) ctx
+
+#[partial]
+def match_case_try_bare_field_pattern (r : ParseResult FieldPattern) (orig : String) (ctx : List Identifier) : ParseResult MatchCase :=
+    match r {
+        success rem fp =>
+            let bare_name : Identifier := Identifier.id "" in
+            match_case_field_pattern_arrow (tag "=>" (skip_docstrings (skip_spaces rem))) bare_name fp ctx,
+        fail _ => match_case_name (dotted_identifier (skip_docstrings (skip_spaces orig))) ctx
+    }
+
+#[partial]
+def match_case_field_pattern_arrow (r : ParseResult String) (name : Identifier) (fp : FieldPattern) (ctx : List Identifier) : ParseResult MatchCase :=
+    match r {
+        success rem _ =>
+            let binders : List Identifier := field_pattern_binder_names fp in
+            match_case_field_pattern_body (expression (lambda_extend_ctx binders ctx) (skip_docstrings (skip_spaces rem))) name binders fp,
+        fail e => fail e
+    }
+
+#[partial]
+def match_case_field_pattern_body (r : ParseResult Term) (name : Identifier) (binders : List Identifier) (fp : FieldPattern) : ParseResult MatchCase :=
+    match r {
+        success rem body =>
+            let some_fp : Option FieldPattern := Option.some fp in
+            success (match_case_tail rem) (MatchCase.mc name binders body some_fp),
+        fail e => fail e
+    }
 
 /// A match case's constructor may be written qualified with its type name
 /// (`Identifier.id as => ...`) or bare (`id as => ...`) — both are common
@@ -4517,8 +4647,22 @@ def match_case_parser (ctx: List Identifier) (input: String) : ParseResult Match
 def match_case_name (r: ParseResult (List String)) (ctx: List Identifier) : ParseResult MatchCase :=
     match r {
         success rem names =>
-            match_case_args (match_case_arg_names rem) (Identifier.id (list_last_or "" names)) ctx,
+            let name : Identifier := Identifier.id (list_last_or "" names) in
+            match_case_try_named_field_pattern (field_pattern_parser rem) rem name ctx,
         fail e => fail e
+    }
+
+/// `ConsName { ... }` -- tried before the pre-existing positional form
+/// (`match_case_args`/`match_case_arg_names`), which starts on the same
+/// position (right after the constructor name) but never on a `{` --
+/// `field_pattern_parser` itself fails cleanly and immediately on
+/// anything else, so falling through to the unchanged positional path is
+/// always safe.
+#[partial]
+def match_case_try_named_field_pattern (r : ParseResult FieldPattern) (orig : String) (name : Identifier) (ctx : List Identifier) : ParseResult MatchCase :=
+    match r {
+        success rem fp => match_case_field_pattern_arrow (tag "=>" (skip_docstrings (skip_spaces rem))) name fp ctx,
+        fail _ => match_case_args (match_case_arg_names orig) name ctx
     }
 
 /// Last element of a non-empty `List String`, or `default` if empty.
@@ -4605,7 +4749,8 @@ def match_case_arrow (r: ParseResult String) (name: Identifier) (args : List Ide
 def match_case_body (r: ParseResult Term) (name: Identifier) (args : List Identifier) : ParseResult MatchCase :=
     match r {
         success rem body =>
-            success (match_case_tail rem) (MatchCase.mc name args body),
+            let no_fp : Option FieldPattern := Option.none in
+            success (match_case_tail rem) (MatchCase.mc name args body no_fp),
         fail e => fail e
     }
 
@@ -6102,7 +6247,7 @@ def test_match_case_arg_names_captured : Bool :=
 #[partial]
 def match_case_has_two_args (mc : MatchCase) : Bool :=
     match mc {
-        MatchCase.mc _name args _body =>
+        MatchCase.mc _name args _body _fp =>
             match args {
                 List.cons a1 rest1 =>
                     match rest1 {
@@ -6133,11 +6278,142 @@ def test_match_case_body_resolves_bound_name : Bool :=
 #[partial]
 def match_case_body_var_is_bound (mc : MatchCase) : Bool :=
     match mc {
-        MatchCase.mc _name _args body =>
+        MatchCase.mc _name _args body _fp =>
             match body {
                 Term.var idx _dbg => Bool.not (I64.beq idx sentinel),
                 _ => false
             }
+    }
+
+// -------------------------------------------------------------------
+// Phase 6 of `plans/implementations/struct-field-destructuring.md`:
+// `FieldPattern` + match-case parsing (no elaboration yet -- a parsed
+// field-pattern case's `field_pattern` stays `Option.some`, unresolved,
+// and `args`/`body` are indexed in WRITTEN field order, not the target
+// constructor's declared order yet).
+// -------------------------------------------------------------------
+
+#[test]
+def test_match_case_bare_field_pattern : Bool :=
+    match match_case_parser List.empty "{ a, b } => a" {
+        success rem out => String.beq rem "" && match_case_is_bare_with_two_fields out,
+        fail _ => false
+    }
+
+#[partial]
+def match_case_is_bare_with_two_fields (mc : MatchCase) : Bool :=
+    match mc {
+        MatchCase.mc name args _body fp =>
+            Similar.similar name (Identifier.id "")
+                && match args {
+                    List.cons a1 rest1 =>
+                        match rest1 {
+                            List.cons a2 rest2 =>
+                                Similar.similar a1 (Identifier.id "a")
+                                    && Similar.similar a2 (Identifier.id "b")
+                                    && (match rest2 { List.empty => true, _ => false }),
+                            List.empty => false,
+                        },
+                    List.empty => false,
+                }
+                && match fp {
+                    Option.some field_pattern =>
+                        match field_pattern {
+                            FieldPattern.mk fields rest =>
+                                Bool.not rest
+                                    && match fields {
+                                        List.cons e1 rest1 =>
+                                            match rest1 {
+                                                List.cons e2 rest2 =>
+                                                    field_pattern_entry_eq e1 (Identifier.id "a") (Identifier.id "a")
+                                                        && field_pattern_entry_eq e2 (Identifier.id "b") (Identifier.id "b")
+                                                        && (match rest2 { List.empty => true, _ => false }),
+                                                List.empty => false,
+                                            },
+                                        List.empty => false,
+                                    },
+                        },
+                    Option.none => false,
+                }
+    }
+
+#[partial]
+def field_pattern_entry_eq (e : FieldPatternEntry) (field : Identifier) (binder : Identifier) : Bool :=
+    match e {
+        FieldPatternEntry.mk f b => Similar.similar f field && Similar.similar b binder,
+    }
+
+#[test]
+def test_match_case_bare_field_pattern_rename_and_rest : Bool :=
+    match match_case_parser List.empty "{ a := b, .. } => a" {
+        success rem out => String.beq rem "" && match_case_field_pattern_rename_and_rest out,
+        fail _ => false
+    }
+
+#[partial]
+def match_case_field_pattern_rename_and_rest (mc : MatchCase) : Bool :=
+    match mc {
+        MatchCase.mc _name _args _body fp =>
+            match fp {
+                Option.some field_pattern =>
+                    match field_pattern {
+                        FieldPattern.mk fields rest =>
+                            rest
+                                && match fields {
+                                    List.cons e1 rest1 =>
+                                        field_pattern_entry_eq e1 (Identifier.id "a") (Identifier.id "b")
+                                            && (match rest1 { List.empty => true, _ => false }),
+                                    List.empty => false,
+                                },
+                    },
+                Option.none => false,
+            }
+    }
+
+#[test]
+def test_match_case_bare_field_pattern_empty : Bool :=
+    match match_case_parser List.empty "{ } => 0" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                MatchCase.mc _name args _body fp =>
+                    (match args { List.empty => true, _ => false })
+                        && match fp {
+                            Option.some field_pattern =>
+                                match field_pattern {
+                                    FieldPattern.mk fields rest =>
+                                        Bool.not rest && (match fields { List.empty => true, _ => false }),
+                                },
+                            Option.none => false,
+                        },
+            },
+        fail _ => false
+    }
+
+#[test]
+def test_match_case_named_field_pattern : Bool :=
+    let empty_ctx : List Identifier := List.empty in
+    match match_parser empty_ctx "match s { circle { radius } => radius, rectangle { width, height } => width }" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+/// Existing positional cases must still parse via the unchanged third
+/// alternative -- `field_pattern` stays `Option.none`.
+#[test]
+def test_match_case_positional_still_unaffected_by_field_pattern_grammar : Bool :=
+    match match_case_parser List.empty "some a => a" {
+        success rem out => String.beq rem "" && match_case_positional_has_no_field_pattern out,
+        fail _ => false
+    }
+
+#[partial]
+def match_case_positional_has_no_field_pattern (mc : MatchCase) : Bool :=
+    match mc {
+        MatchCase.mc name args _body fp =>
+            Similar.similar name (Identifier.id "some")
+                && (match args { List.cons a1 rest => Similar.similar a1 (Identifier.id "a") && (match rest { List.empty => true, _ => false }), List.empty => false })
+                && (match fp { Option.none => true, Option.some _ => false })
     }
 
 #[test]

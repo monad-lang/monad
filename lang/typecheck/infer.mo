@@ -256,7 +256,7 @@ def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Sc
         List.empty => Option.none,
         List.cons hd rest =>
             match hd {
-                MatchCase.mc name _ _ =>
+                MatchCase.mc name _ _ _ =>
                     let wildcard_id : Identifier := Identifier.id "_" in
                     if Similar.similar name wildcard_id
                     then find_inductive_for_cases_by_constructor rest scope
@@ -272,7 +272,7 @@ def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) 
         List.empty => ok true,
         List.cons hd rest =>
             match hd {
-                MatchCase.mc name _ _ =>
+                MatchCase.mc name _ _ _ =>
                     let wildcard_id : Identifier := Identifier.id "_" in
                     if Similar.similar name wildcard_id
                     then validate_cases_against_inductive rest ind
@@ -345,7 +345,7 @@ def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
 /// Type check a single match case arm.
 def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match case_ {
-        MatchCase.mc name args body =>
+        MatchCase.mc name args body _fp =>
             let wildcard_id : Identifier := Identifier.id "_" in
             if Similar.similar name wildcard_id then
                 match args {
@@ -454,7 +454,8 @@ def type_check_case_body_checked (name : Identifier) (args : List Identifier) (b
         ok body_tt =>
             let body_term : Term := tt_term body_tt in
             let body_typ : Term := tt_typ body_tt in
-            let new_case : MatchCase := MatchCase.mc name args body_term in
+            let no_fp : Option FieldPattern := Option.none in
+            let new_case : MatchCase := MatchCase.mc name args body_term no_fp in
             ok ({ case_ := new_case, body_typ_ := body_typ }),
         err e => err e,
     }
@@ -1382,7 +1383,8 @@ def struct_update_build_args (params : List Param) (fields : List StructLitField
 def struct_update_project_field (base : Term) (con_name : ModulePath) (all_names : List Identifier) (total : I64) (idx : I64) (pname : Identifier) : Term :=
     let bare_name : Identifier := struct_lit_con_name con_name in
     let db_idx : I64 := I64.sub (I64.sub total 1) idx in
-    let case_ : MatchCase := MatchCase.mc bare_name all_names (Term.var db_idx (DebugName.named pname)) in
+    let no_fp : Option FieldPattern := Option.none in
+    let case_ : MatchCase := MatchCase.mc bare_name all_names (Term.var db_idx (DebugName.named pname)) no_fp in
     Term.lit (Literal.match_ base (List.cons case_ List.empty))
 
 #[terminating]

@@ -238,8 +238,47 @@ def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute) : 
     Param.mk name type_ Multiplicity.many none attrs
 
 // Canonical MatchCase uses de Bruijn Term. MatchCaseV0 is the legacy V0 variant.
+//
+// `field_pattern` mirrors the Rust reference's `MatchCase.field_pattern`
+// (core/src/term.rs, `plans/implementations/struct-field-destructuring.md`):
+// `Option.some` only pre-elaboration, when this case was parsed as a
+// `{ x, y } => ...`/`ConsName { x, y } => ...` field-pattern rather than
+// the ordinary positional form (`ConsName x y => ...`). `args`/`body` for
+// a field-pattern case are indexed in the pattern's WRITTEN field order
+// at PARSE time (`match_case_arrow`'s own `lambda_extend_ctx` call,
+// `lang/parser.mo` -- this file's canonical `Term` is de Bruijn from the
+// parser onward, unlike the Rust reference's separate parse-then-lower
+// split, so there is no later "lowering" pass to defer this to the way
+// the reference's own `CoreMatchCase.field_pattern` doc comment
+// describes). `lang/typecheck/infer.mo`'s `type_check_match_case`
+// resolves this once the scrutinee's real constructor is known,
+// retargeting `args`/`body` onto the constructor's true declared order
+// (`lang/typecheck/subst.mo`'s `term_permute`, mirroring the reference's
+// own `core_term::permute_binders`) and clearing this back to
+// `Option.none` -- every OTHER consumer (`lang/lower_core_ir.mo`,
+// `lang/codegen/emit.mo`, `lang/pretty.mo`'s runtime-facing paths) only
+// ever sees `Option.none` here.
 type MatchCase {
-    mc (name: Identifier) (args: List Identifier) (body: Term)
+    mc (name: Identifier) (args: List Identifier) (body: Term) (field_pattern: Option FieldPattern)
+}
+
+/// One `{ field, other := binder, .. }` pattern -- mirrors the Rust
+/// reference's `FieldPattern` (core/src/term.rs). `fields` is
+/// `(field_name, binder)` in the order written; `binder` equals
+/// `field_name` when punned (`{ x }`). `rest` is `true` when a trailing
+/// `..` is present (unlisted fields are discarded, not brought into
+/// scope).
+type FieldPattern {
+    mk (fields: List FieldPatternEntry) (rest: Bool)
+}
+
+/// One `field` or `field := binder` entry inside a `FieldPattern` --
+/// a dedicated named-pair type (mirroring `StructLitField`'s own
+/// `name`/`value` shape) rather than a generic `Pair`, so this file
+/// doesn't need a cross-module dependency on `init/prelude.mo`'s `Pair`
+/// for its own canonical AST.
+type FieldPatternEntry {
+    mk (field: Identifier) (binder: Identifier)
 }
 
 type NumSuffix {
