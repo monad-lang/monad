@@ -281,6 +281,28 @@ type FieldPatternEntry {
     mk (field: Identifier) (binder: Identifier)
 }
 
+/// A single `def` parameter as parsed: either an ordinary explicit param
+/// (unchanged), or a destructured one (`({ x, y } : T)`,
+/// `plans/implementations/struct-field-destructuring.md`'s Phase 8) --
+/// paired with the `FieldPattern` a wrapping `match` needs to actually
+/// bind `x`/`y` from the fixed-name `Param` this variant also carries.
+/// Mirrors the Rust reference's own `ParsedParam` (`core/src/parser.rs`)
+/// exactly, adapted to a fixed binder name (`__struct_param`) instead of
+/// a gensym -- `lang/` has no gensym facility (see `lang/cli.mo`'s own
+/// header comment for the established precedent of a fixed, prefixed
+/// name standing in for one here). Kept as a thin wrapper (rather than
+/// adding a pattern slot to `Param` itself) so every OTHER `Param`
+/// consumer needs no changes at all -- a `destructured` entry's own
+/// `Param` is an ordinary, real binder by the time it reaches any of
+/// them; only the `def` parameter chain in `lang/parser.mo` ever
+/// inspects the `FieldPattern` half, to wrap the body in one extra
+/// `match` per `destructured` param before building the final `Term.lam`
+/// chain.
+type ParsedParam {
+    plain (param: Param),
+    destructured (param: Param) (fp: FieldPattern),
+}
+
 type NumSuffix {
     i8, i16, i32, i64, u8, u16, u32, u64, f32, f64,
 }
