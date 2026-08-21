@@ -752,7 +752,13 @@ fn term_inner<X: Clone>(input: Span<X>) -> Res<Term, X> {
 /// where `type_expression` was before `variable`, ensuring type expressions like `A -> B`
 /// are parsed correctly inside parens.
 fn non_app_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
-  alt((type_expression, term_inner, operator_var)).parse(input)
+  alt((
+    type_expression,
+    term_inner,
+    return_shorthand_parser,
+    operator_var,
+  ))
+  .parse(input)
 }
 
 fn application<X: Clone>(input: Span<X>) -> Res<Term, X> {
@@ -1060,6 +1066,42 @@ fn do_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
 
   let body = desugar_do_statements(stmts);
   Ok((input, body))
+}
+
+/// `return expr` as a standalone term, meaning exactly what
+/// `do { return expr }` already means there — a one-statement `do`
+/// block reduced through the SAME `desugar_do_statements` `do_parser`
+/// itself calls, so this is a new grammar ENTRY POINT into existing
+/// semantics, not a new semantic path.
+///
+/// Registered in `non_app_term`'s `alt` (below), NOT in `term_inner`
+/// itself, even though `non_app_term` is *built from* `term_inner` —
+/// deliberately: `application`'s own bare-argument continuation
+/// (`many1(alt((preceded(ws1, term_inner), parens)))`) reaches
+/// `term_inner` directly, and registering this alternative THERE broke
+/// a real, pre-existing do-block shape (confirmed by a real test
+/// failure, `test_def_do_block_bind`): `let x <- get_value` followed on
+/// the next line by `return x` desugars `get_value` through plain
+/// `term`, which threads through `application` — with `return ...`
+/// registered as a bare `term_inner` alternative, `application`'s arg
+/// loop no longer stops at `return` the way it used to (nothing there
+/// could previously start a valid bare argument), so it silently
+/// swallowed the FOLLOWING `return x` as an extra unparenthesized
+/// argument to `get_value` instead of leaving it for the do-block's own
+/// next-statement parsing. Putting it in `non_app_term` instead keeps
+/// it reachable everywhere `term`/`base_term` is (a def's body, an
+/// `if`/`match` branch, a lambda body, ...) — matching every position
+/// the full `do { ... }` form is already legal in — WITHOUT also making
+/// it a valid bare application argument; `f (return x)`, fully
+/// parenthesized, still works fine regardless (parens route through
+/// `term` in full, independent of `application`'s own bare-arg
+/// restriction).
+fn return_shorthand_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let (input, value) = preceded((tag("return"), ws1), term).parse(input)?;
+  Ok((
+    input,
+    desugar_do_statements(vec![DoStatement::Return { value }]),
+  ))
 }
 
 fn desugar_do_statements(stmts: Vec<DoStatement>) -> Term {

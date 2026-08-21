@@ -7,6 +7,62 @@ fn test_do_parser_simple_return() {
   similar!(r, app(pvar(vec!["Monad", "pure"]), num(1)));
 }
 
+// -------------------------------------------------------------------
+// `return expr` as a standalone term -- shorthand for `do { return
+// expr }`, legal at every term position, not just inside an
+// already-open `do` block.
+// -------------------------------------------------------------------
+
+#[test]
+fn test_return_shorthand_matches_do_block_form() {
+  // AST equality between the two spellings is what proves this is real
+  // sugar (same desugar function, same output), not a parallel/
+  // divergent implementation.
+  let (_, shorthand) = term::<()>(r#"return 1"#.into()).unwrap();
+  let (_, do_block) = term::<()>(r#"do { return 1 }"#.into()).unwrap();
+  similar!(shorthand.clone(), do_block);
+  similar!(shorthand, app(pvar(vec!["Monad", "pure"]), num(1)));
+}
+
+#[test]
+fn test_return_shorthand_as_def_body() {
+  let (_, res) = def_parser(r#"def f : I64 := return 1"#.into()).unwrap();
+  similar!(res.term, app(pvar(vec!["Monad", "pure"]), num(1)));
+}
+
+#[test]
+fn test_return_shorthand_as_if_branch() {
+  let (_, r) = term::<()>(r#"if true then return 1 else return 2"#.into()).unwrap();
+  similar!(
+    r,
+    if_term(
+      var("true"),
+      app(pvar(vec!["Monad", "pure"]), num(1)),
+      app(pvar(vec!["Monad", "pure"]), num(2))
+    )
+  );
+}
+
+#[test]
+fn test_return_shorthand_as_match_case_body() {
+  let (_, r) =
+    match_parser::<()>(r#"match x { some v => return v, none => return 0 }"#.into()).unwrap();
+  similar!(
+    r,
+    match_term(
+      var("x"),
+      vec![
+        case(
+          id("some"),
+          vec![id("v")],
+          app(pvar(vec!["Monad", "pure"]), var("v"))
+        ),
+        case(id("none"), vec![], app(pvar(vec!["Monad", "pure"]), num(0))),
+      ]
+    )
+  );
+}
+
 #[test]
 fn test_do_parser_simple_bind() {
   let do_block = |s: &'static str| do_parser::<()>(s.into());

@@ -332,8 +332,11 @@ fn test_parse_lang_types() {
 // Tests for return and let..in in do notation issues
 // ============================================================================
 
-/// Test that return inside if without do block produces a parse error
-/// This is illegal: return is only valid as a top-level do_statement
+/// Test that a bare `return` (no enclosing `do`) inside an if-branch is now
+/// legal: `return expr` is shorthand for `do { return expr }`, valid at any
+/// term position. AST-equality between the two spellings is covered by
+/// `do_notation::test_return_shorthand_as_if_branch`; this test just
+/// confirms the whole-file parse succeeds.
 #[test]
 fn test_return_inside_if_without_do() {
   let input = r#"def test : IO I64 {
@@ -345,24 +348,10 @@ fn test_return_inside_if_without_do() {
   let result = parse_file(input);
 
   assert!(
-    result.is_err(),
-    "Should fail to parse return inside if without do"
+    result.is_ok(),
+    "Return inside if without do should now be legal (return shorthand): {:?}",
+    result.err()
   );
-
-  if let Err(ref err) = result {
-    let (line, col) = error::get_error_line_column(&err.source, &err.error);
-    // Error should be at or near the 'return' keyword on line 3
-    assert_eq!(
-      line, 3,
-      "Error should be on line 3 (the 'return' line), got line {}",
-      line
-    );
-    assert!(
-      col >= 9 && col <= 15,
-      "Error column should be near 'return' (position 9-15), got col {}",
-      col
-    );
-  }
 }
 
 /// Test that return inside if with do block is legal
@@ -380,11 +369,13 @@ fn test_return_inside_if_with_do() {
   assert!(result.is_ok(), "Return inside if with do should be legal");
 }
 
-/// Test that a bare `return` as a match arm body (no enclosing `do`) produces
-/// a parse error, matching the same restriction as `if` branches above.
-/// This is the exact pattern that broke lang/module.mo's `load_module_decls`:
-/// `match result { Foo _ x => return Bar.baz x, ... }` without wrapping the
-/// arm body in `do { }`.
+/// Test that a bare `return` as a match arm body (no enclosing `do`) is now
+/// legal, matching the same `return expr` shorthand as `if` branches above.
+/// This is the exact pattern that used to break lang/module.mo's
+/// `load_module_decls`: `match result { Foo _ x => return Bar.baz x, ... }`
+/// without wrapping the arm body in `do { }` -- now legal directly. AST
+/// equality with the `do { return ... }` form is covered by
+/// `do_notation::test_return_shorthand_as_match_case_body`.
 #[test]
 fn test_return_inside_match_without_do() {
   let input = r#"def test : IO I64 {
@@ -396,8 +387,9 @@ fn test_return_inside_match_without_do() {
   let result = parse_file(input);
 
   assert!(
-    result.is_err(),
-    "Should fail to parse return inside match arm without do"
+    result.is_ok(),
+    "Return inside match arm without do should now be legal (return shorthand): {:?}",
+    result.err()
   );
 }
 
@@ -451,6 +443,13 @@ fn test_let_in_inside_do_block() {
 
 /// Test error position in module with many declarations
 /// This ensures that error positions are correct even after parsing many valid declarations
+///
+/// This used to embed a bare `return` inside an `if` without `do` as the
+/// deliberately-invalid construct, but that is now legal (`return expr` is
+/// shorthand for `do { return expr }`, see `test_return_inside_if_without_do`).
+/// It now uses `let..in` inside a `do` block instead (still illegal, see
+/// `test_let_in_inside_do_block`) so this test keeps testing what it's for:
+/// error-position tracking staying correct after many valid declarations.
 #[test]
 fn test_error_position_many_decls() {
   let input = r#"use io
@@ -477,10 +476,8 @@ open ParseResult
 def valid_decl : I64 := 42
 def another_valid : I64 := 100
 def test : IO I64 {
-    if true then
-        return 42
-    else
-        return 0
+    let x := 42 in
+    return x
 }
 def more_decls : I64 := 50"#;
 
@@ -488,21 +485,21 @@ def more_decls : I64 := 50"#;
 
   assert!(
     result.is_err(),
-    "Should fail to parse return inside if without do"
+    "Should fail to parse let..in inside do block"
   );
 
   if let Err(ref err) = result {
     let (line, col) = error::get_error_line_column(&err.source, &err.error);
-    // Error should be on the line with the return statement (line 26)
+    // Error should be on the line with the 'let..in' statement (line 25)
     assert_eq!(
-      line, 26,
-      "Error should be on line 26 (the 'return' line), got line {}",
+      line, 25,
+      "Error should be on line 25 (the 'let..in' line), got line {}",
       line
     );
-    // 'return' starts at column 9 (8 spaces + 1)
+    // 'in' is near columns 14-17 (4-space indent, matching test_let_in_inside_do_block)
     assert!(
-      col >= 9 && col <= 15,
-      "Error column should be near 'return' (position 9-15), got col {}",
+      col >= 14 && col <= 17,
+      "Error column should be near 'in' (position 14-17), got col {}",
       col
     );
   }
