@@ -8468,18 +8468,8 @@ def test_decls_parser_strict_error_renders_with_position : Bool :=
         success _ _ => false,
         fail e =>
             let rendered : String := render_parse_error source Option.none e in
-            string_contains_helper rendered "at 3:1" && string_contains_helper rendered "garbage here"
+            String.contains rendered "at 3:1" && String.contains rendered "garbage here"
     }
-
-#[partial]
-def string_contains_helper (haystack : String) (needle : String) : Bool :=
-    if I64.gt (String.length needle) (String.length haystack)
-    then false
-    else if String.beq (String.slice haystack 0 (String.length needle)) needle
-    then true
-    else if String.is_empty haystack
-    then false
-    else string_contains_helper (String.drop 1 haystack) needle
 
 #[test]
 def test_decls_count_two : Bool :=

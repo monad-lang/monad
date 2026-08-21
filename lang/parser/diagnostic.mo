@@ -229,36 +229,16 @@ def test_render_parse_error_simple : Bool :=
 	let err : ParseError := ParseError.custom "unknown declaration" "x" in
 	let rendered : String := render_parse_error source Option.none err in
 	// "error: unknown declaration at 1:10\n  --> :1:10\n  1 | def f := x\n               ^---\n"
-	String_contains rendered "error: unknown declaration at 1:10"
-		&& String_contains rendered "--> :1:10"
-		&& String_contains rendered "def f := x"
-
-#[partial]
-def String_contains (haystack : String) (needle : String) : Bool :=
-	String_contains_go haystack needle
-
-#[partial]
-def String_contains_go (haystack : String) (needle : String) : Bool :=
-	if String.is_empty needle
-	then true
-	else if I64.gt (String.length needle) (String.length haystack)
-	then false
-	else if String_starts_with haystack needle
-	then true
-	else if String.is_empty haystack
-	then false
-	else String_contains_go (String.drop 1 haystack) needle
-
-#[partial]
-def String_starts_with (haystack : String) (needle : String) : Bool :=
-	String.beq (String.slice haystack 0 (String.length needle)) needle
+	String.contains rendered "error: unknown declaration at 1:10"
+		&& String.contains rendered "--> :1:10"
+		&& String.contains rendered "def f := x"
 
 #[test]
 def test_render_parse_error_with_path : Bool :=
 	let source : String := "def f := x" in
 	let err : ParseError := ParseError.custom "unknown declaration" "x" in
 	let rendered : String := render_parse_error source (Option.some "examples/foo.mo") err in
-	String_contains rendered "--> examples/foo.mo:1:10"
+	String.contains rendered "--> examples/foo.mo:1:10"
 
 #[test]
 def test_render_parse_error_multi_line : Bool :=
@@ -270,29 +250,29 @@ def test_render_parse_error_multi_line : Bool :=
 	let err : ParseError := ParseError.custom "unknown declaration" "bad_here\ndef c := 3" in
 	let rendered : String := render_parse_error source Option.none err in
 	// error is on line 2, column 10 ("def b := " is 9 chars before "bad_here")
-	String_contains rendered "at 2:10"
-		&& String_contains rendered "def a := 1"
-		&& String_contains rendered "def b := bad_here"
-		&& String_contains rendered "def c := 3"
+	String.contains rendered "at 2:10"
+		&& String.contains rendered "def a := 1"
+		&& String.contains rendered "def b := bad_here"
+		&& String.contains rendered "def c := 3"
 
 #[test]
 def test_render_source_context_first_line_no_prev : Bool :=
 	let source : String := "bad_here\ndef b := 1\ndef c := 3" in
 	let err : ParseError := ParseError.custom "unknown declaration" source in
 	let rendered : String := render_parse_error source Option.none err in
-	String_contains rendered "at 1:1"
-		&& String_contains rendered "1 | bad_here"
-		&& String_contains rendered "2 | def b := 1"
-		&& Bool.not (String_contains rendered "0 |")
+	String.contains rendered "at 1:1"
+		&& String.contains rendered "1 | bad_here"
+		&& String.contains rendered "2 | def b := 1"
+		&& Bool.not (String.contains rendered "0 |")
 
 #[test]
 def test_render_source_context_last_line_no_next : Bool :=
 	let source : String := "def a := 1\ndef b := 2\nbad_here" in
 	let err : ParseError := ParseError.custom "unknown declaration" "bad_here" in
 	let rendered : String := render_parse_error source Option.none err in
-	String_contains rendered "at 3:1"
-		&& String_contains rendered "2 | def b := 2"
-		&& String_contains rendered "3 | bad_here"
+	String.contains rendered "at 3:1"
+		&& String.contains rendered "2 | def b := 2"
+		&& String.contains rendered "3 | bad_here"
 
 /// Regression test for the gutter/caret indentation bug (matching
 /// `core/src/diag.rs`'s own `gutter_aligns_error_line_with_context_lines`
@@ -300,10 +280,10 @@ def test_render_source_context_last_line_no_next : Bool :=
 /// same "N | " gutter width — this line-1/line-2 fixture used to render
 /// with the context line ("2 | ...") indented 3 extra stray spaces past
 /// the error line ("1 | ..."), and the caret 2 columns short of the
-/// content it was supposed to point at. `String_contains` checks a
-/// LITERAL substring (see `String_contains_go` above), so matching these
-/// exact strings (exact leading-space counts included) really does pin
-/// down the alignment, not just presence of the text.
+/// content it was supposed to point at. `String.contains`
+/// (init/string.mo) checks a LITERAL substring, so matching these exact
+/// strings (exact leading-space counts included) really does pin down
+/// the alignment, not just presence of the text.
 #[test]
 def test_render_source_context_gutter_alignment_exact : Bool :=
 	let source : String := "abcdefghij\nklmnop" in
@@ -314,7 +294,7 @@ def test_render_source_context_gutter_alignment_exact : Bool :=
 	// "  1 | " gutter and the context line's "  2 | " gutter must match
 	// exactly, and the caret (6-char prefix + 4 more for column 5) must
 	// land under the content, not 2 columns short.
-	String_contains rendered "  1 | abcdefghij\n          ^---\n  2 | klmnop\n"
+	String.contains rendered "  1 | abcdefghij\n          ^---\n  2 | klmnop\n"
 
 /// Regression test for the latent width bug alongside the gutter fix:
 /// once the window's widest line number needs 4 digits (999/1000/1001),
@@ -328,10 +308,10 @@ def test_render_source_context_gutter_width_grows_for_wide_line_numbers : Bool :
 	let source : String := String.concat padding "bad_here\nfinal_line" in
 	let err : ParseError := ParseError.custom "unknown declaration" "bad_here\nfinal_line" in
 	let rendered : String := render_parse_error source Option.none err in
-	String_contains rendered "at 1000:1"
-		&& String_contains rendered " 999 | // padding line to bulk up the source\n"
-		&& String_contains rendered "1000 | bad_here\n       ^---\n"
-		&& String_contains rendered "1001 | final_line\n"
+	String.contains rendered "at 1000:1"
+		&& String.contains rendered " 999 | // padding line to bulk up the source\n"
+		&& String.contains rendered "1000 | bad_here\n       ^---\n"
+		&& String.contains rendered "1001 | final_line\n"
 
 /// Regression test for the specific bug this whole rewrite fixes: a
 /// linear (even tail-recursive) scan over the *entire* source to find
@@ -347,7 +327,7 @@ def test_render_parse_error_large_source_does_not_overflow : Bool :=
 	let source : String := String.concat padding "bad_here" in
 	let err : ParseError := ParseError.custom "unknown declaration" "bad_here" in
 	let rendered : String := render_parse_error source Option.none err in
-	String_contains rendered "at 2001:1" && String_contains rendered "bad_here"
+	String.contains rendered "at 2001:1" && String.contains rendered "bad_here"
 
 /// Divide-and-conquer for the same reason as `LineColScan`
 /// (lang/parser/position.mo) — this test helper needs to build a source

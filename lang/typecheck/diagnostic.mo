@@ -88,21 +88,11 @@ def test_type_error_message_custom : Bool :=
 #[test]
 def test_render_type_error_includes_context_and_path : Bool :=
 	let rendered : String := render_type_error "my_def" (Option.some "examples/foo.mo") (TypeError.custom "bad thing") in
-	string_contains_helper rendered "error: bad thing in my_def"
-		&& string_contains_helper rendered "--> examples/foo.mo"
+	String.contains rendered "error: bad thing in my_def"
+		&& String.contains rendered "--> examples/foo.mo"
 
 #[test]
 def test_render_type_error_no_path : Bool :=
 	let rendered : String := render_type_error "my_def" Option.none (TypeError.custom "bad thing") in
-	string_contains_helper rendered "error: bad thing in my_def"
-		&& string_contains_helper rendered "-->"
-
-#[partial]
-def string_contains_helper (haystack : String) (needle : String) : Bool :=
-	if I64.gt (String.length needle) (String.length haystack)
-	then false
-	else if String.beq (String.slice haystack 0 (String.length needle)) needle
-	then true
-	else if String.is_empty haystack
-	then false
-	else string_contains_helper (String.drop 1 haystack) needle
+	String.contains rendered "error: bad thing in my_def"
+		&& String.contains rendered "-->"

@@ -120,25 +120,6 @@ def module_path_to_file (mp : ModulePath) : String :=
             }
     }
 
-/// Check if a file exists using native IO
-def file_exists (path : String) : IO Bool := IO.file_exists path
-
-/// Convert a ModulePath to a string representation
-#[partial]
-def module_path_to_string (mp : ModulePath) : String :=
-    match mp {
-        ModulePath.mp ids =>
-            match ids {
-                List.empty => "",
-                List.cons hd rest =>
-                    let hd_str : String := identifier_to_string hd in
-                    let rest_str : String := module_path_to_string (ModulePath.mp rest) in
-                    if String.beq rest_str ""
-                    then hd_str
-                    else String.concat (String.concat hd_str ".") rest_str
-            }
-    }
-
 /// Convert a file path to a ModulePath
 #[partial]
 def file_path_to_module_path (path : String) : ModulePath :=
@@ -213,6 +194,25 @@ def path_join (a : String) (b : String) : String :=
     else
         String.concat (String.concat a "/") b
 
+/// Return the first path in `candidates` that exists on disk (checked in
+/// order via `file_exists`), or `Option.none` if none do. Factored out of
+/// `resolve_module_file` below, which used to check its 7 candidate paths
+/// via a cascade of nested `if/else` `do` blocks, one level per candidate
+/// -- functionally a linear "first match wins" scan the whole time, just
+/// expressed as 7 levels of nesting instead of a flat walk over a list.
+#[partial]
+def first_existing (candidates : List String) : IO (Option String) := do {
+    match candidates {
+        List.empty => do { return Option.none },
+        List.cons path rest => do {
+            let exists : Bool <- file_exists path;
+            if exists
+            then do { return Option.some path }
+            else first_existing rest
+        }
+    }
+}
+
 /// Resolve a module path to a file path, trying different directories
 /// First tries relative to base_dir, then falls back to standard locations
 #[partial]
@@ -227,46 +227,11 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
     let lang_path := String.concat "lang/" with_extension;
     let examples_path := String.concat "examples/" with_extension;
 
-    if String.beq mp_str "prelude" then do {
-        let exists : Bool <- file_exists prelude_path;
-        if exists then do {
-            return Option.some prelude_path
-        } else do {
-            return Option.none
-        }
-    } else do {
-        let exists : Bool <- file_exists relative_path;
-        if exists then do {
-            return Option.some relative_path
-        } else do {
-            let exists : Bool <- file_exists direct_path;
-            if exists then do {
-                return Option.some direct_path
-            } else do {
-                let exists <- file_exists init_path;
-                if exists then do {
-                    return Option.some init_path
-                } else do {
-                    let exists <- file_exists std_path;
-                    if exists then do {
-                        return Option.some std_path
-                    } else do {
-                        let exists <- file_exists lang_path;
-                        if exists then do {
-                            return Option.some lang_path
-                        } else do {
-                            let exists <- file_exists examples_path;
-                            if exists then do {
-                                return Option.some examples_path
-                            } else do {
-                                return Option.none
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    if String.beq mp_str "prelude"
+    then first_existing [prelude_path]
+    else first_existing [
+        relative_path, direct_path, init_path, std_path, lang_path, examples_path,
+    ]
 }
 
 /// Try to read a module file from disk, relative to a base directory
@@ -1833,24 +1798,14 @@ def test_try_parse_decls_strict_ok_on_clean_input : Bool :=
 def test_try_parse_decls_strict_err_has_rendered_diagnostic : Bool :=
     match try_parse_decls_strict "use prelude\n\ngarbage here" Option.none {
         Result.ok _ => false,
-        Result.err msg => string_contains msg "at 3:1"
+        Result.err msg => String.contains msg "at 3:1"
     }
-
-#[partial]
-def string_contains (haystack : String) (needle : String) : Bool :=
-    if I64.gt (String.length needle) (String.length haystack)
-    then false
-    else if String.beq (String.slice haystack 0 (String.length needle)) needle
-    then true
-    else if String.is_empty haystack
-    then false
-    else string_contains (String.drop 1 haystack) needle
 
 #[test]
 def test_try_parse_decls_strict_err_includes_path : Bool :=
     match try_parse_decls_strict "garbage" (Option.some "examples/broken.mo") {
         Result.ok _ => false,
-        Result.err msg => string_contains msg "--> examples/broken.mo:1:1"
+        Result.err msg => String.contains msg "--> examples/broken.mo:1:1"
     }
 
 // === Multi-module loading with boundary preservation ===
@@ -2081,16 +2036,6 @@ def elaborate_loaded_modules (file_path : String) : IO (Result String Elaborated
 
 // --- Tests: check_module_with_scope / check_file ---
 
-#[partial]
-def string_contains_helper (haystack : String) (needle : String) : Bool :=
-    if I64.gt (String.length needle) (String.length haystack)
-    then false
-    else if String.beq (String.slice haystack 0 (String.length needle)) needle
-    then true
-    else if String.is_empty haystack
-    then false
-    else string_contains_helper (String.drop 1 haystack) needle
-
 #[test]
 def test_check_module_with_scope_all_pass : IO Bool := do {
     let path : ModulePath := ModulePath.mp List.empty;
@@ -2151,7 +2096,7 @@ def test_check_module_with_scope_accumulates_failures : IO Bool := do {
             let diags : List String <- check_module_with_scope scope decl_list locals Option.none false;
             return (match diags {
                 List.cons msg rest =>
-                    string_contains_helper msg "unknown variable" &&
+                    String.contains msg "unknown variable" &&
                     match rest {
                         List.empty => true,
                         List.cons _ _ => false
@@ -2247,7 +2192,7 @@ def test_check_file_reports_missing_file : Bool :=
                         FileCheckResult.mk _path diags =>
                             match diags {
                                 List.cons msg rest =>
-                                    string_contains_helper msg "file not found" &&
+                                    String.contains msg "file not found" &&
                                     match rest {
                                         List.empty => true,
                                         List.cons _ _ => false
@@ -2342,7 +2287,7 @@ def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
             (match d {
                 Decl.def_d df =>
                     String.beq (module_path_to_string df.name) "greet" &&
-                        string_contains_helper (show_term df.term) "Speak_Dog_say",
+                        String.contains (show_term df.term) "Speak_Dog_say",
                 _ => false,
             }) || decl_list_has_greet_calling_speak_dog_say rest,
     }
