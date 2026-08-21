@@ -127,6 +127,159 @@ def con_shift (d : I64) (cutoff : I64) (c : Con) : Con :=
 def native_shift (d : I64) (cutoff : I64) (n : Native) : Native :=
     match n { Native.mk name num_args args => Native.mk name num_args (opt_terms_shift d cutoff args) }
 
+// ─── Permutation ─────────────────────────────────────────────────────
+//
+// `term_permute` -- `plans/implementations/struct-field-destructuring.md`'s
+// Phase 7, needed for the SAME reason the Rust reference's own
+// `core_term::permute_binders` is: a field-pattern match case's body
+// (`{ x, y } => ...`) is de-Bruijn-indexed once, at PARSE time
+// (`match_case_field_pattern_arrow`, `lang/parser.mo`, Phase 6), against
+// the pattern's own WRITTEN field order -- the only order knowable that
+// early, since this file's canonical `Term` is de Bruijn from the parser
+// itself (unlike the reference's separate parse-then-lower split). The
+// runtime, however, always binds a matched constructor's fields
+// POSITIONALLY in its DECLARED order (`lang/lower_core_ir.mo`'s
+// `lower_one_match_arm`, mirroring `core_eval.rs`'s own documented
+// convention) -- which is only knowable once `type_check_match_case`
+// resolves the real target constructor, by which point the body's
+// indices are already fixed relative to written order.
+// `term_permute` bridges the two: given the resolved written-order ->
+// declared-order mapping, it retargets the ALREADY-INDEXED body from
+// written order onto declared order directly.
+//
+// `old_depths`/`new_depths` are two PARALLEL lists (not a `Pair`-keyed
+// assoc list, avoiding a cross-module dependency for this file's own
+// canonical machinery, same reason `lang/types.mo`'s own
+// `FieldPatternEntry` avoids a generic `Pair`) -- `old_depths[i]` maps to
+// `new_depths[i]` for each `i`; a `Bound` matching neither (its absolute
+// index minus `cutoff` isn't in `old_depths` at all) falls through to the
+// generic "outer reference" shift case unconditionally, since every
+// permuted frame's OWN written-order slot is always present in
+// `old_depths` by construction (the caller builds both lists from the
+// SAME already-validated `written_to_declared` resolution).
+
+def term_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (t : Term) : Term :=
+    term_permute_go old_n new_n old_depths new_depths 0 t
+
+#[partial]
+def term_permute_go (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (t : Term) : Term :=
+    match t {
+        Term.var idx dbg =>
+            if I64.lt idx cutoff then Term.var idx dbg
+            else if I64.lt idx (cutoff + old_n) then
+                let local : I64 := idx - cutoff in
+                Term.var (cutoff + (permute_lookup local old_depths new_depths)) dbg
+            else
+                Term.var (idx + (new_n - old_n)) dbg,
+        Term.var_macro idx dbg =>
+            if I64.lt idx cutoff then Term.var_macro idx dbg
+            else if I64.lt idx (cutoff + old_n) then
+                let local : I64 := idx - cutoff in
+                Term.var_macro (cutoff + (permute_lookup local old_depths new_depths)) dbg
+            else
+                Term.var_macro (idx + (new_n - old_n)) dbg,
+        Term.lam dbg typ body =>
+            Term.lam dbg (term_permute_go old_n new_n old_depths new_depths cutoff typ) (term_permute_go old_n new_n old_depths new_depths (cutoff + 1) body),
+        Term.forall dbg kind body =>
+            Term.forall dbg (term_permute_go old_n new_n old_depths new_depths cutoff kind) (term_permute_go old_n new_n old_depths new_depths (cutoff + 1) body),
+        Term.pi arg ret =>
+            Term.pi (term_permute_go old_n new_n old_depths new_depths cutoff arg) (term_permute_go old_n new_n old_depths new_depths (cutoff + 1) ret),
+        Term.app callee arg =>
+            Term.app (term_permute_go old_n new_n old_depths new_depths cutoff callee) (term_permute_go old_n new_n old_depths new_depths cutoff arg),
+        Term.lit value => Term.lit (literal_permute old_n new_n old_depths new_depths cutoff value),
+        Term.ntv n => Term.ntv (native_permute old_n new_n old_depths new_depths cutoff n),
+        Term.con c => Term.con (con_permute old_n new_n old_depths new_depths cutoff c),
+        Term.type_ u => Term.type_ u,
+        Term.hole => Term.hole,
+        Term.quote_ inner => Term.quote_ (term_permute_go old_n new_n old_depths new_depths cutoff inner),
+    }
+
+/// `local`'s remapped position, or `local` unchanged if not found in
+/// `old_depths` (see this section's own doc comment for why that
+/// shouldn't happen for a well-formed call, but a safe identity
+/// fallback is cheap insurance regardless).
+#[partial]
+def permute_lookup (local : I64) (old_depths : List I64) (new_depths : List I64) : I64 :=
+    match old_depths {
+        List.cons od rest_old =>
+            match new_depths {
+                List.cons nd rest_new =>
+                    if I64.beq od local then nd else permute_lookup local rest_old rest_new,
+                List.empty => local,
+            },
+        List.empty => local,
+    }
+
+#[partial]
+def literal_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (l : Literal) : Literal :=
+    match l {
+        Literal.str v => Literal.str v,
+        Literal.num n suf => Literal.num n suf,
+        Literal.flt t suf => Literal.flt t suf,
+        Literal.if_ a b c =>
+            Literal.if_ (term_permute_go old_n new_n old_depths new_depths cutoff a) (term_permute_go old_n new_n old_depths new_depths cutoff b) (term_permute_go old_n new_n old_depths new_depths cutoff c),
+        Literal.match_ scrut cases =>
+            Literal.match_ (term_permute_go old_n new_n old_depths new_depths cutoff scrut) (match_cases_permute old_n new_n old_depths new_depths cutoff cases),
+        Literal.struct_lit fields type_name =>
+            Literal.struct_lit (struct_fields_permute old_n new_n old_depths new_depths cutoff fields) (opt_term_permute old_n new_n old_depths new_depths cutoff type_name),
+        Literal.struct_update base fields =>
+            Literal.struct_update (term_permute_go old_n new_n old_depths new_depths cutoff base) (struct_fields_permute old_n new_n old_depths new_depths cutoff fields),
+    }
+
+#[partial]
+def match_cases_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (cases : List MatchCase) : List MatchCase :=
+    match cases {
+        List.empty => List.empty,
+        List.cons c rest => List.cons (match_case_permute old_n new_n old_depths new_depths cutoff c) (match_cases_permute old_n new_n old_depths new_depths cutoff rest),
+    }
+
+/// A NESTED match case's own `args.length`-many binders are always
+/// treated as "below" (more local than) the frame being permuted here --
+/// this matches `match_case_shift`'s own `cutoff + List.length args`
+/// convention exactly, and is correct regardless of whether the nested
+/// case is itself still an unresolved field-pattern one (its own
+/// `field_pattern` is carried through untouched either way, resolved
+/// independently on its own later `type_check_match_case` call).
+#[partial]
+def match_case_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (c : MatchCase) : MatchCase :=
+    match c {
+        MatchCase.mc name args body fp =>
+            MatchCase.mc name args (term_permute_go old_n new_n old_depths new_depths (cutoff + List.length args) body) fp,
+    }
+
+#[partial]
+def struct_fields_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (fields : List StructLitField) : List StructLitField :=
+    match fields {
+        List.empty => List.empty,
+        List.cons f rest => List.cons (struct_field_permute old_n new_n old_depths new_depths cutoff f) (struct_fields_permute old_n new_n old_depths new_depths cutoff rest),
+    }
+
+#[partial]
+def struct_field_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (f : StructLitField) : StructLitField :=
+    match f { StructLitField.mk name value => StructLitField.mk name (term_permute_go old_n new_n old_depths new_depths cutoff value) }
+
+#[partial]
+def opt_term_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (t : Option Term) : Option Term :=
+    match t {
+        Option.some x => Option.some (term_permute_go old_n new_n old_depths new_depths cutoff x),
+        Option.none => Option.none,
+    }
+
+#[partial]
+def opt_terms_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (ts : List (Option Term)) : List (Option Term) :=
+    match ts {
+        List.empty => List.empty,
+        List.cons x rest => List.cons (opt_term_permute old_n new_n old_depths new_depths cutoff x) (opt_terms_permute old_n new_n old_depths new_depths cutoff rest),
+    }
+
+#[partial]
+def con_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (c : Con) : Con :=
+    match c { Con.mk name typ_name num_args args => Con.mk name typ_name num_args (opt_terms_permute old_n new_n old_depths new_depths cutoff args) }
+
+#[partial]
+def native_permute (old_n : I64) (new_n : I64) (old_depths : List I64) (new_depths : List I64) (cutoff : I64) (n : Native) : Native :=
+    match n { Native.mk name num_args args => Native.mk name num_args (opt_terms_permute old_n new_n old_depths new_depths cutoff args) }
+
 // ─── Substitution ────────────────────────────────────────────────────
 //
 // `term_subst j s t` replaces the de Bruijn index `j` in `t` with `s`
@@ -346,6 +499,55 @@ def test_match_case_binder_depth_shift : Bool :=
         MatchCase.mc (Identifier.id "some") (List.cons (Identifier.id "a") (List.cons (Identifier.id "b") List.empty)) (Term.var 1 DebugName.unnamed) no_fp in
     match match_case_shift 3 0 outer_ref { MatchCase.mc _ _ body _ => I64.beq (term_var_idx body) 5 } &&
     match match_case_shift 3 0 bound_ref { MatchCase.mc _ _ body _ => I64.beq (term_var_idx body) 1 }
+
+// -------------------------------------------------------------------
+// `term_permute` (`plans/implementations/struct-field-destructuring.md`'s
+// Phase 7).
+// -------------------------------------------------------------------
+
+#[test]
+def test_term_permute_swaps_two_written_order_bindings : Bool :=
+    // Written `{ a, b }` (a first, b second -- b ends up innermost,
+    // depth 0, per this file's own "last-written innermost" push
+    // convention, same as `test_match_case_binder_depth_shift` above).
+    // Declared order is the OPPOSITE (b first, a second):
+    // `written_to_declared = [1, 0]` (written slot 0 = "a" -> declared
+    // position 1; written slot 1 = "b" -> declared position 0).
+    let old_depths : List I64 := [1, 0] in
+    let new_depths : List I64 := [0, 1] in
+    // "b" (old depth 0, innermost) must move OUT to new depth 1 (b is
+    // now declared FIRST, i.e. outermost of the two).
+    let b_ref : Term := Term.var 0 DebugName.unnamed in
+    // "a" (old depth 1) must move IN to new depth 0 (a is now declared
+    // SECOND, innermost).
+    let a_ref : Term := Term.var 1 DebugName.unnamed in
+    I64.beq (term_var_idx (term_permute 2 2 old_depths new_depths b_ref)) 1
+        && I64.beq (term_var_idx (term_permute 2 2 old_depths new_depths a_ref)) 0
+
+#[test]
+def test_term_permute_shifts_outer_reference_unchanged_when_arity_matches : Bool :=
+    // An occurrence OUTSIDE this frame entirely (old_n = new_n = 2, so
+    // no width change) must be left completely untouched.
+    let old_depths : List I64 := [1, 0] in
+    let new_depths : List I64 := [0, 1] in
+    let outer_ref : Term := Term.var 2 DebugName.unnamed in
+    I64.beq (term_var_idx (term_permute 2 2 old_depths new_depths outer_ref)) 2
+
+#[test]
+def test_term_permute_widens_frame_for_rest_and_shifts_outer_refs : Bool :=
+    // Only "a" was written (`{ a, .. }`), old_n = 1; the real
+    // constructor has 2 declared fields, new_n = 2, "a" resolved to
+    // declared position 1 (the discarded field is declared position 0).
+    // "a" itself (old depth 0) maps to new depth 0 (still innermost,
+    // since it's the LAST declared field here) -- an OUTER reference
+    // (old depth >= old_n = 1) must shift by (new_n - old_n) = 1 to
+    // still reach the same outer binder now that the frame is wider.
+    let old_depths : List I64 := [0] in
+    let new_depths : List I64 := [0] in
+    let a_ref : Term := Term.var 0 DebugName.unnamed in
+    let outer_ref : Term := Term.var 1 DebugName.unnamed in
+    I64.beq (term_var_idx (term_permute 1 2 old_depths new_depths a_ref)) 0
+        && I64.beq (term_var_idx (term_permute 1 2 old_depths new_depths outer_ref)) 2
 
 #[test]
 def test_beta_reduce_replaces_bound_occurrence : Bool :=

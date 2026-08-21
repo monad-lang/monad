@@ -1,12 +1,14 @@
 use lang.types {
-  DebugName, Decl, Identifier, InductConstructor, Inductive, MatchCase,
-  ModulePath, Param, Scope, ScopeClassDef, ScopeData, Similar, Term, TypeError,
+  Attribute, DebugName, Decl, FieldPattern, FieldPatternEntry, Identifier,
+  InductConstructor, Inductive, MatchCase, ModulePath, Param,
+  Scope, ScopeClassDef, ScopeData, Similar, Term, TypeError,
   app, forall, hole, id, if_, inductive_d, lam, lit, match_, mc, mk, mp, named,
   not_a_type, pi, type_, unknown_var, unnamed, var,
 }
 use lang.scope {build_scope_from_decls, scope_find_inductive}
 use lang.typecheck.infer {
   TypedTerm, empty_local_types, empty_locals, mk, sentinel, type_check,
+  type_check_match_case,
 }
 
 open Term {app, forall, hole, lam, lit, pi, type_, var}
@@ -517,6 +519,149 @@ def test_match_branch_type_conflict : Bool :=
     match run_check t Term.hole {
         ok _ => false,  // Should fail due to type conflict
         err _ => true,  // Correctly detects the conflict
+    }
+
+// -------------------------------------------------------------------
+// Phase 7 of `plans/implementations/struct-field-destructuring.md`:
+// elaboration for match-case field patterns.
+// -------------------------------------------------------------------
+
+/// A named single-constructor inductive with NAMED fields (`Maybe`
+/// above has none) -- needed to exercise real field-pattern resolution.
+def point_ind : Inductive :=
+    let type_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Point") List.empty) in
+    let x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 1) Multiplicity.many Option.none List.empty in
+    let y_param : Param := Param.mk (Identifier.id "y") (Term.type_ 1) Multiplicity.many Option.none List.empty in
+    let mk_cn : InductConstructor := InductConstructor.mk
+        (ModulePath.mp (List.cons (Identifier.id "mk") List.empty))
+        (List.cons x_param (List.cons y_param List.empty))
+        (Term.type_ 1) in
+    let cns : List InductConstructor := List.cons mk_cn List.empty in
+    let empty_params : List Param := List.empty in
+    let empty_attrs : List Attribute := List.empty in
+    Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private
+
+def point_scope : Scope :=
+    let mod_id : Identifier := Identifier.id "Test" in
+    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let decl_list : List Decl := List.cons (Decl.inductive_d point_ind) List.empty in
+    let sd : ScopeData := build_scope_from_decls mod_path decl_list in
+    {
+        module_id := mod_path,
+        scope := sd,
+        parent := Option.none,
+    }
+
+/// A scrutinee whose OWN type is genuinely known to be `Point`
+/// (`type_head_name`'s preferred exact-lookup path, not the
+/// constructor-name-scan fallback the OTHER tests in this file lean on
+/// -- required here since a BARE `{ .. }` pattern has no name for the
+/// fallback scan to use at all).
+def point_typed_scrutinee : Term := Term.var 0 DebugName.unnamed
+def point_typed_local_types : List Term :=
+    List.cons (Term.var sentinel (DebugName.named (Identifier.id "Point"))) List.empty
+
+#[test]
+def test_field_pattern_bare_reordered_fields_permutes_body_correctly : Bool :=
+    // Written `{ y, x }` (opposite of the constructor's own declared
+    // `x, y` order) -- the body references "x" (written SECOND, so at
+    // PARSE time it would have been pushed innermost, Term.var 0).
+    // After resolution or `term_permute`, the checked case's body must
+    // reference "x" at its DECLARED-order position instead (x is
+    // declared FIRST, so pushed first/outermost -- Term.var 1, since y
+    // is declared last/innermost) -- this is the exact thing a missing
+    // or buggy permute would get wrong while still "succeeding".
+    let x_entry : FieldPatternEntry := FieldPatternEntry.mk (Identifier.id "x") (Identifier.id "x") in
+    let y_entry : FieldPatternEntry := FieldPatternEntry.mk (Identifier.id "y") (Identifier.id "y") in
+    let fp : FieldPattern := FieldPattern.mk (List.cons y_entry (List.cons x_entry List.empty)) false in
+    let args : List Identifier := List.cons (Identifier.id "y") (List.cons (Identifier.id "x") List.empty) in
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "") args body (Option.some fp) in
+    match type_check_match_case case_ point_typed_scrutinee (Term.var sentinel (DebugName.named (Identifier.id "Point"))) (Option.some point_ind) point_scope point_typed_local_types empty_locals {
+        err _ => false,
+        ok checked =>
+            match checked {
+                mk resolved_case _typ =>
+                    match resolved_case {
+                        MatchCase.mc resolved_name resolved_args resolved_body resolved_fp =>
+                            Similar.similar resolved_name (Identifier.id "mk")
+                                && I64.beq (List.length resolved_args) 2
+                                && (match resolved_body { Term.var idx _ => I64.beq idx 1, _ => false })
+                                && (match resolved_fp { Option.none => true, Option.some _ => false }),
+                    },
+            },
+    }
+
+#[test]
+def test_field_pattern_named_multi_constructor_via_named_form : Bool :=
+    // The NAMED form resolves via the same constructor-name-scan
+    // fallback the OTHER (positional) tests in this file already rely
+    // on -- no need for a typed scrutinee here.
+    let x_entry : FieldPatternEntry := FieldPatternEntry.mk (Identifier.id "x") (Identifier.id "px") in
+    let fp : FieldPattern := FieldPattern.mk (List.cons x_entry List.empty) true in
+    let args : List Identifier := List.cons (Identifier.id "x") List.empty in
+    let body : Term := Term.var 0 DebugName.unnamed in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") args body (Option.some fp) in
+    let cases : List MatchCase := List.cons case_ List.empty in
+    let t : Term := Term.lit (Literal.match_ (Term.type_ 1) cases) in
+    match type_check t Term.hole point_scope empty_local_types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+#[test]
+def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
+    // A bare `{ .. }` pattern needs a genuinely single-constructor
+    // inductive to resolve at all -- construct a two-constructor scope
+    // and confirm resolution is rejected (via the SAME typed-scrutinee
+    // setup the reordering test above uses, so `maybe_ind` really does
+    // resolve to a real (multi-constructor) inductive rather than
+    // `Option.none` short-circuiting with an unrelated error message).
+    let mod_id : Identifier := Identifier.id "Test" in
+    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let type_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Shape") List.empty) in
+    let r_param : Param := Param.mk (Identifier.id "r") (Term.type_ 1) Multiplicity.many Option.none List.empty in
+    let circle_cn : InductConstructor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "circle") List.empty)) (List.cons r_param List.empty) (Term.type_ 1) in
+    let square_cn : InductConstructor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "square") List.empty)) (List.cons r_param List.empty) (Term.type_ 1) in
+    let cns : List InductConstructor := List.cons circle_cn (List.cons square_cn List.empty) in
+    let empty_params : List Param := List.empty in
+    let empty_attrs : List Attribute := List.empty in
+    let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private in
+    let decl_list : List Decl := List.cons (Decl.inductive_d ind) List.empty in
+    let sd : ScopeData := build_scope_from_decls mod_path decl_list in
+    let shape_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none } in
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Shape"))) List.empty in
+    let fp : FieldPattern := FieldPattern.mk List.empty true in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "") List.empty (Term.type_ 1) (Option.some fp) in
+    let cases : List MatchCase := List.cons case_ List.empty in
+    let t : Term := Term.lit (Literal.match_ scrutinee cases) in
+    match type_check t Term.hole shape_scope types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_field_pattern_unknown_field_is_an_error : Bool :=
+    let fp : FieldPattern := FieldPattern.mk (List.cons (FieldPatternEntry.mk (Identifier.id "z") (Identifier.id "z")) List.empty) true in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") (List.cons (Identifier.id "z") List.empty) (Term.type_ 1) (Option.some fp) in
+    let cases : List MatchCase := List.cons case_ List.empty in
+    let t : Term := Term.lit (Literal.match_ (Term.type_ 1) cases) in
+    match type_check t Term.hole point_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+
+#[test]
+def test_field_pattern_missing_field_without_rest_is_an_error : Bool :=
+    // Only "x" is listed, no `..` -- "y" is uncovered.
+    let fp : FieldPattern := FieldPattern.mk (List.cons (FieldPatternEntry.mk (Identifier.id "x") (Identifier.id "x")) List.empty) false in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "mk") (List.cons (Identifier.id "x") List.empty) (Term.type_ 1) (Option.some fp) in
+    let cases : List MatchCase := List.cons case_ List.empty in
+    let t : Term := Term.lit (Literal.match_ (Term.type_ 1) cases) in
+    match type_check t Term.hole point_scope empty_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
     }
 
 // --- Error tests: type mismatch in if ---

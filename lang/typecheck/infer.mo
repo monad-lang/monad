@@ -258,7 +258,17 @@ def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Sc
             match hd {
                 MatchCase.mc name _ _ _ =>
                     let wildcard_id : Identifier := Identifier.id "_" in
-                    if Similar.similar name wildcard_id
+                    // A bare field-pattern case's own name is the parser's
+                    // empty-string placeholder (`{ .. }`, `plans/
+                    // implementations/struct-field-destructuring.md`'s Phase
+                    // 6) -- it can never itself name a real constructor to
+                    // scan by, so it's skipped here exactly like a wildcard,
+                    // deferring entirely to a NAMED sibling case (or, if
+                    // none exists in this match at all, to
+                    // `resolve_field_pattern_case`'s own hard error once
+                    // `type_check_field_pattern_case` runs with `maybe_ind
+                    // = Option.none`).
+                    if Similar.similar name wildcard_id || String.beq (show_identifier name) ""
                     then find_inductive_for_cases_by_constructor rest scope
                     else
                         let con_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
@@ -266,21 +276,30 @@ def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Sc
             },
     }
 
-/// Check that every non-wildcard case constructor exists in the inductive.
+/// Check that every non-wildcard case constructor exists in the
+/// inductive. A field-pattern case (bare OR named) is skipped here --
+/// deferred entirely to `resolve_field_pattern_case`'s own resolution in
+/// `type_check_field_pattern_case`, which raises the same "unknown
+/// constructor"-shaped error with a message specific to field patterns
+/// (and, for the bare form, can't even be checked by name at all here).
 def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) : Result TypeError Bool :=
     match cases {
         List.empty => ok true,
         List.cons hd rest =>
             match hd {
-                MatchCase.mc name _ _ _ =>
+                MatchCase.mc name _ _ fp =>
                     let wildcard_id : Identifier := Identifier.id "_" in
-                    if Similar.similar name wildcard_id
-                    then validate_cases_against_inductive rest ind
-                    else
-                        let con_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
-                        if inductive_has_constructor ind con_mp
-                        then validate_cases_against_inductive rest ind
-                        else err (TypeError.custom "constructor not found in inductive"),
+                    match fp {
+                        Option.some _ => validate_cases_against_inductive rest ind,
+                        Option.none =>
+                            if Similar.similar name wildcard_id
+                            then validate_cases_against_inductive rest ind
+                            else
+                                let con_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
+                                if inductive_has_constructor ind con_mp
+                                then validate_cases_against_inductive rest ind
+                                else err (TypeError.custom "constructor not found in inductive"),
+                    },
             },
     }
 
@@ -342,28 +361,280 @@ def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
         List.empty => acc,
     }
 
-/// Type check a single match case arm.
+/// Type check a single match case arm. A `field_pattern: Option.some`
+/// case (`{ x, y } => ...`/`ConsName { x, y } => ...`,
+/// `plans/implementations/struct-field-destructuring.md`'s Phase 6)
+/// gets its own dedicated path (`type_check_field_pattern_case`) --
+/// unlike the ordinary positional cases below, everything about it
+/// (which constructor, which declared field order) still needs
+/// resolving here; nothing about it can be trusted as already correct
+/// the way a written positional case's `args` order is.
 def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match case_ {
-        MatchCase.mc name args body _fp =>
-            let wildcard_id : Identifier := Identifier.id "_" in
-            if Similar.similar name wildcard_id then
-                match args {
-                    List.empty =>
-                        type_check_case_body_checked name args body scope local_types locals,
-                    _ =>
-                        err (TypeError.custom "wildcard pattern cannot bind arguments"),
+        MatchCase.mc name args body fp =>
+            match fp {
+                Option.some field_pattern =>
+                    type_check_field_pattern_case name args body field_pattern maybe_ind scope local_types locals,
+                Option.none =>
+                    let wildcard_id : Identifier := Identifier.id "_" in
+                    if Similar.similar name wildcard_id then
+                        match args {
+                            List.empty =>
+                                type_check_case_body_checked name args body scope local_types locals,
+                            _ =>
+                                err (TypeError.custom "wildcard pattern cannot bind arguments"),
+                        }
+                    else
+                        match args {
+                            List.empty =>
+                                type_check_case_body_checked name args body scope local_types locals,
+                            _ =>
+                                let arg_types : List Term := arg_types_for_case name maybe_ind in
+                                let extended_types : List Term := prepend_typed args arg_types local_types in
+                                let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
+                                type_check_case_body_checked name args body scope extended_types extended_locals,
+                        },
+            },
+    }
+
+// ─── Field-pattern match-case elaboration (`plans/implementations/
+// struct-field-destructuring.md`'s Phase 7) ────────────────────────────
+//
+// Unlike the Rust reference (`core/src/core_check.rs`), this checker
+// builds the checked term directly, in one pass, as it goes -- there is
+// no `check`/`infer`-vs-`desugar_struct_literals` split here needing a
+// SECOND independent hook (see `type_check_match_case`'s own doc
+// comment); this one hook is where a field-pattern case's target
+// constructor, field order, AND the body's own de-Bruijn retargeting
+// (`term_permute`, `lang/typecheck/subst.mo`) all get resolved together.
+
+/// Resolved shape of a field-pattern match case: the real constructor
+/// name (never `case_`'s own possibly-empty bare-form name), its
+/// declared field names/types (in DECLARED order -- what
+/// `prepend_typed`/`prepend_typed_local_vars` need to build the correct
+/// local scope for the case body), and `written_to_declared` (parallel
+/// to the pattern's own written fields: `written_to_declared[w]` is the
+/// declared-order position written slot `w` fills) -- what
+/// `term_permute` needs to retarget the ALREADY-PARSED body.
+struct ResolvedFieldPattern {
+    resolved_name : Identifier,
+    declared_names : List Identifier,
+    declared_types : List Term,
+    written_to_declared : List I64,
+}
+
+// `body` gets replaced with `permuted_body` (a TRANSFORMED term, not a
+// structural subterm) before the final call into
+// `type_check_case_body_checked` -- which, like this function's own
+// sibling `type_check_match_case`'s positional path, is part of this
+// checker's ordinary mutual recursion through `type_check`/nested
+// matches, just no longer structurally obvious to the termination
+// checker once the body is rebuilt in between. Well-founded regardless:
+// `type_check_case_body_checked` only ever recurses on `body`'s own
+// (unchanged-in-size) subterms from there, same as any other case.
+#[terminating]
+def type_check_field_pattern_case (name : Identifier) (args : List Identifier) (body : Term) (fp : FieldPattern) (maybe_ind : Option Inductive) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
+    match resolve_field_pattern_case name fp maybe_ind {
+        err e => err e,
+        ok resolved =>
+            match resolved {
+                mk resolved_name declared_names declared_types written_to_declared =>
+                    let old_n : I64 := List.length args in
+                    let new_n : I64 := List.length declared_names in
+                    let old_depths : List I64 := old_depths_of written_to_declared old_n 0 in
+                    let new_depths : List I64 := List.map (fn d => new_n - 1 - d) written_to_declared in
+                    let permuted_body : Term := term_permute old_n new_n old_depths new_depths body in
+                    let extended_types : List Term := prepend_typed declared_names declared_types local_types in
+                    let extended_locals : LocalScope := prepend_typed_local_vars declared_names declared_types locals in
+                    type_check_case_body_checked resolved_name declared_names permuted_body scope extended_types extended_locals,
+            },
+    }
+
+/// `old_depths_of`'s OWN elements never come from `written_to_declared`'s
+/// VALUES, only its LENGTH+position (`old_n - 1 - w`, mirroring
+/// `core_term::permute_binders`' own depth arithmetic: the LAST-written
+/// field ends up innermost/depth-0, matching `lang/lower_core_ir.mo`'s
+/// "fields pushed in declaration order" runtime convention) -- a plain
+/// `List.map` can't express this (the mapper only sees each element's
+/// VALUE, never its position), so this is genuine positional recursion,
+/// not an ad hoc stand-in for an existing generic op.
+#[partial]
+def old_depths_of (written_to_declared : List I64) (old_n : I64) (w : I64) : List I64 :=
+    match written_to_declared {
+        List.empty => List.empty,
+        List.cons _ rest => List.cons (old_n - 1 - w) (old_depths_of rest old_n (w + 1)),
+    }
+
+/// Resolve `case_name`/`fp` against `maybe_ind`: pick the target
+/// constructor (the scrutinee inductive's SOLE constructor for a bare
+/// pattern -- `case_name`'s own string is empty, the parser's
+/// placeholder, see `lang/parser.mo`'s `match_case_try_bare_field_pattern`
+/// -- or `case_name` directly for a named one), require every one of
+/// its params to be named, and match the pattern's written fields
+/// against the constructor's declared ones -- unknown field, duplicate
+/// field, and (without a trailing `..`) an uncovered field are all real
+/// errors here, not soft failures, matching every other `TypeError` this
+/// checker already raises for a malformed program. `maybe_ind` being
+/// `Option.none` (the scrutinee's type genuinely isn't known at all) is
+/// also a hard error here -- unlike an ordinary positional case (which
+/// tolerates it by falling back to `Term.hole` field types), a
+/// field-pattern case has no way to resolve field order at all without
+/// a real inductive to resolve against.
+def resolve_field_pattern_case (case_name : Identifier) (fp : FieldPattern) (maybe_ind : Option Inductive) : Result TypeError ResolvedFieldPattern :=
+    match maybe_ind {
+        Option.none => err (TypeError.custom "cannot resolve `{ .. }`: the matched value's type isn't known here"),
+        Option.some ind =>
+            if String.beq (show_identifier case_name) "" then
+                resolve_bare_field_pattern fp ind
+            else
+                match find_constructor_in_inductive ind (ModulePath.mp (List.cons case_name List.empty)) {
+                    Option.none => err (TypeError.custom "unknown constructor in field pattern"),
+                    Option.some ctor => resolve_field_pattern_against_constructor case_name ctor fp,
+                },
+    }
+
+/// `{ .. }` (no constructor name) requires the scrutinee's inductive to
+/// have EXACTLY one constructor -- mirrors the Rust reference's own
+/// `resolve_field_pattern_case` (`core/src/core_check.rs`) bare-form
+/// handling exactly.
+def resolve_bare_field_pattern (fp : FieldPattern) (ind : Inductive) : Result TypeError ResolvedFieldPattern :=
+    match ind {
+        mk _ _ _ ctors _ _ =>
+            match ctors {
+                List.empty => err (TypeError.custom "`{ .. }` requires exactly one constructor; this type has none"),
+                List.cons only rest =>
+                    match rest {
+                        List.empty =>
+                            match only { InductConstructor.mk con_mp _ _ => resolve_field_pattern_against_constructor (constructor_bare_name con_mp) only fp },
+                        List.cons _ _ =>
+                            err (TypeError.custom "`{ .. }` requires exactly one constructor, but this type has several; use `ConsName { .. }` instead"),
+                    },
+            },
+    }
+
+/// The bare (last-segment) `Identifier` of a constructor's own
+/// `ModulePath` -- `InductConstructor.mk`'s `name` is never
+/// type-prefixed (see e.g. `arg_types_for_case`'s own doc comment).
+/// `List.last` (`init/prelude.mo`) already covers "get the last
+/// element"; `Option.none` (an empty `ModulePath`) shouldn't happen for
+/// a real constructor, handled defensively with an empty-string
+/// placeholder rather than assumed impossible.
+#[partial]
+def constructor_bare_name (mp : ModulePath) : Identifier :=
+    match mp {
+        ModulePath.mp ids =>
+            match List.last ids {
+                Option.some last_id => last_id,
+                Option.none => Identifier.id "",
+            },
+    }
+
+def resolve_field_pattern_against_constructor (resolved_name : Identifier) (ctor : InductConstructor) (fp : FieldPattern) : Result TypeError ResolvedFieldPattern :=
+    match ctor {
+        InductConstructor.mk _ params _ =>
+            if params_all_named params then
+                match fp {
+                    FieldPattern.mk entries rest =>
+                        let declared_names : List Identifier := param_names params in
+                        match resolve_entries_against_params entries declared_names {
+                            err e => err e,
+                            ok written_to_declared =>
+                                if Bool.not rest && Bool.not (I64.beq (List.length written_to_declared) (List.length declared_names))
+                                then err (TypeError.custom "field pattern is missing field(s) (add `..` to discard them)")
+                                else ok ({
+                                    resolved_name := resolved_name,
+                                    declared_names := declared_names,
+                                    declared_types := types_from_params params,
+                                    written_to_declared := written_to_declared,
+                                }),
+                        },
                 }
             else
-                match args {
-                    List.empty =>
-                        type_check_case_body_checked name args body scope local_types locals,
-                    _ =>
-                        let arg_types : List Term := arg_types_for_case name maybe_ind in
-                        let extended_types : List Term := prepend_typed args arg_types local_types in
-                        let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
-                        type_check_case_body_checked name args body scope extended_types extended_locals,
-                },
+                err (TypeError.custom "constructor has an unnamed field; use the positional pattern instead of a field pattern"),
+    }
+
+// `params_all_named`/`param_names`/`i64_list_contains` below are hand-
+// rolled recursion, NOT `List.all`/`List.map`/`List.contains` -- tried
+// the generic versions first, but confirmed (via a minimal reproduction:
+// a trivial NEW cross-module function whose only body is `List.map (fn
+// n => n + 1) xs` fails the exact same way) that a brand-new top-level
+// function DEFINED IN THIS MODULE that calls a generic `{A : Type}`
+// `List.*` op internally fails at RUNTIME with `unresolved global`, even
+// though the identical `List.map`/`List.all` call written INLINE at a
+// call site works fine -- the same class of pre-existing self-hosted
+// evaluator limitation `lang/types.mo`'s own `use std.map {}` comment
+// already documents for a nullary class method (`Map.empty`), just
+// manifesting for an ordinary generic list op instead of a class method
+// this time. The `Map.empty` bug's own documented workaround (adding an
+// empty `use` of the defining module) does NOT fix this one -- tried it
+// here first; it left `params_all_named` still unresolved AND broke
+// unrelated arithmetic (`unresolved global: HAdd.add`) elsewhere in this
+// file's own test suite. Hand-rolled recursion sidesteps the bug
+// entirely and is what the rest of this file already does for the same
+// shape of operation (e.g. `types_from_params`, just above
+// `arg_types_for_case`) -- not a style regression, just consistent with
+// existing precedent once the generic path is confirmed broken.
+def params_all_named (params : List Param) : Bool :=
+    match params {
+        List.empty => true,
+        List.cons p rest =>
+            match p { Param.mk pname _ _ _ _ => Bool.not (String.beq (show_identifier pname) "") && params_all_named rest },
+    }
+
+def param_names (params : List Param) : List Identifier :=
+    match params {
+        List.empty => List.empty,
+        List.cons p rest => match p { Param.mk pname _ _ _ _ => List.cons pname (param_names rest) },
+    }
+
+/// For each written entry (in order), find its declared position --
+/// unknown-field and duplicate-field are both real errors here.
+def resolve_entries_against_params (entries : List FieldPatternEntry) (declared_names : List Identifier) : Result TypeError (List I64) :=
+    resolve_entries_against_params_go entries declared_names List.empty
+
+#[partial]
+def resolve_entries_against_params_go (entries : List FieldPatternEntry) (declared_names : List Identifier) (used : List I64) : Result TypeError (List I64) :=
+    match entries {
+        List.empty => ok List.empty,
+        List.cons e rest =>
+            match e {
+                FieldPatternEntry.mk field _binder =>
+                    match index_of_identifier field declared_names 0 {
+                        Option.none => err (TypeError.custom "field pattern names a field the constructor doesn't have"),
+                        Option.some idx =>
+                            if i64_list_contains idx used
+                            then err (TypeError.custom "field listed more than once in field pattern")
+                            else
+                                match resolve_entries_against_params_go rest declared_names (List.cons idx used) {
+                                    err e2 => err e2,
+                                    ok rest_idxs => ok (List.cons idx rest_idxs),
+                                },
+                    },
+            },
+    }
+
+/// See `params_all_named`'s own doc comment above for why this is
+/// hand-rolled recursion rather than `List.contains` -- `std/list.mo`'s
+/// own `List.contains` is ALSO commented out there, independently,
+/// pending a separate documented instance-resolution bug -- so it was
+/// never a real option here regardless.
+#[partial]
+def i64_list_contains (target : I64) (xs : List I64) : Bool :=
+    match xs {
+        List.empty => false,
+        List.cons hd rest => if I64.beq target hd then true else i64_list_contains target rest,
+    }
+
+/// No generic "find index" op exists in this codebase's `List` module
+/// (`std/list.mo`'s own `List.contains` is commented out pending a
+/// separate, pre-existing instance-resolution bug -- see that file) --
+/// this is genuine custom recursion, not a stand-in for one.
+#[partial]
+def index_of_identifier (target : Identifier) (names : List Identifier) (i : I64) : Option I64 :=
+    match names {
+        List.empty => Option.none,
+        List.cons hd rest =>
+            if id_eq target hd then Option.some i else index_of_identifier target rest (i + 1),
     }
 
 /// The matching constructor's OWN declared field types, in declared
