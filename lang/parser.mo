@@ -302,6 +302,53 @@ def do_parser_stmts (r: ParseResult (List DoStmt)) (ctx: List Identifier) : Pars
 def do_parser_desugar (rem: String) (stmts: List DoStmt) : ParseResult Term :=
     success rem (desugar_do stmts)
 
+// ─── `return term` -- shorthand for `do { return term }` ───────────────
+//
+// Legal directly at any term position, not just as a do-statement inside
+// an already-open `do { }` block. Desugars via the exact same
+// `desugar_do`/`DoStmt.ret_s` path a one-statement `do { return term }`
+// block already goes through (`do_parser_desugar` above) -- this is a
+// new *entry point* into that existing desugaring, not a parallel
+// semantic path.
+//
+// MUST be tried from `expr_climb`'s own entry point below, NOT wired
+// into `atom_parsers`/`atom_term`. `atom_term` is also what
+// `expr_climb_rest_ws` calls to try to parse "one more bare application
+// argument" after an already-parsed `lhs` -- e.g. inside a `do` block,
+// a `let x <- get_value` statement's own value is parsed via plain
+// `expression`, which threads through this same bare-argument loop. If
+// this grammar were registered in `atom_parsers`, `get_value` on one
+// line followed by an unrelated `return x` do-statement on the next
+// would greedily swallow `return x` as an extra application argument.
+// See core/src/parser.rs's `return_shorthand_parser` (registered in
+// `non_app_term`, not `term_inner`, for the identical reason) and its
+// own doc comment for the concrete regression this caused there
+// (`test_def_do_block_bind`).
+//
+// The inner value is parsed via a full `expression` climb (not just
+// `atom_term`), matching the Rust reference's own `term` (not
+// `term_inner`) for the value -- so `return 1 + 2` parses as
+// `return (1 + 2)`, with the whole `return expr` then returned directly
+// (no further outer climbing) since the inner `expression` call already
+// consumed everything climbable.
+#[partial]
+def return_shorthand_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
+    return_shorthand_kw (tag "return" input) ctx
+
+#[partial]
+def return_shorthand_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => return_shorthand_value (expression ctx (skip_docstrings (skip_spaces rem))),
+        fail e => fail e
+    }
+
+#[partial]
+def return_shorthand_value (r: ParseResult Term) : ParseResult Term :=
+    match r {
+        success rem value => success rem (desugar_do (List.cons (DoStmt.ret_s value) List.empty)),
+        fail e => fail e
+    }
+
 #[partial]
 def is_newline (c : String) : Bool :=
 	String.beq c "\n"
@@ -5037,7 +5084,19 @@ def expression (ctx: List Identifier) (input: String) : ParseResult Term :=
 
 #[partial]
 def expr_climb (ctx: List Identifier) (input: String) (min_prec: I64) : ParseResult Term :=
-    expr_climb_first (atom_term ctx (skip_spaces input)) ctx min_prec
+    expr_climb_try_return (return_shorthand_parser ctx (skip_spaces input)) ctx input min_prec
+
+// Tried before `atom_term` -- see `return_shorthand_parser`'s own doc
+// comment above for why this must be `expr_climb`'s own entry point and
+// not `atom_parsers`. On success, returned directly with no further
+// climbing (the inner `expression` call inside `return_shorthand_parser`
+// already consumed everything climbable for the return's value).
+#[partial]
+def expr_climb_try_return (r: ParseResult Term) (ctx: List Identifier) (input: String) (min_prec: I64) : ParseResult Term :=
+    match r {
+        success rem out => success rem out,
+        fail _ => expr_climb_first (atom_term ctx (skip_spaces input)) ctx min_prec
+    }
 
 #[partial]
 def expr_climb_first (r: ParseResult Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
@@ -7625,6 +7684,71 @@ def test_def_do_block : Bool :=
                 def_d d => String.beq rem "",
                 _ => false
             },
+        fail _ => false
+    }
+
+// ─── `return term` shorthand for `do { return term }` ──────────────────
+
+/// `Term.app monad_pure_term (Term.lit (Literal.num n _))` -- the exact
+/// shape both `do { return n }` and its `return n` shorthand desugar to
+/// (see `desugar_do_inner`'s `ret_s` case, lang/types.mo).
+#[partial]
+def return_shorthand_is_pure_of_num (t : Term) (n : I64) : Bool :=
+    match t {
+        Term.app head arg =>
+            match head {
+                Term.var idx _ => I64.beq idx (-1) &&
+                    match arg {
+                        Term.lit lit_val => match lit_val {
+                            Literal.num m _suffix => I64.beq m n,
+                            _ => false
+                        },
+                        _ => false
+                    },
+                _ => false
+            },
+        _ => false
+    }
+
+/// AST equality between the two spellings is what proves this is real
+/// sugar (same desugar function, same output), not a parallel/divergent
+/// implementation.
+#[test]
+def test_return_shorthand_matches_do_block_form : Bool :=
+    match expression List.empty "return 1" {
+        success rem1 t1 =>
+            match expression List.empty "do { return 1 }" {
+                success rem2 t2 =>
+                    String.beq rem1 "" && String.beq rem2 "" &&
+                        return_shorthand_is_pure_of_num t1 1 &&
+                        return_shorthand_is_pure_of_num t2 1,
+                fail _ => false
+            },
+        fail _ => false
+    }
+
+#[test]
+def test_return_shorthand_as_def_body : Bool :=
+    match def_parser "def f : I64 := return 1" {
+        success rem out =>
+            match out {
+                def_d d => String.beq rem "",
+                _ => false
+            },
+        fail _ => false
+    }
+
+#[test]
+def test_return_shorthand_as_if_branch : Bool :=
+    match expression List.empty "if true then return 1 else return 2" {
+        success rem _ => String.beq rem "",
+        fail _ => false
+    }
+
+#[test]
+def test_return_shorthand_as_match_case_body : Bool :=
+    match expression List.empty "match x { some v => return v, none => return 0 }" {
+        success rem _ => String.beq rem "",
         fail _ => false
     }
 
