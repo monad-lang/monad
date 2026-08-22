@@ -779,25 +779,21 @@ map_parse (fn s => s) (tag "x") "xy"               // works
 bind_parse (tag "x") (fn (s : String) => tag "y") "xy"  // works
 ```
 
-### Struct Field Access via Dot Syntax Is Not Valid Monad
+### Struct Field Access via Dot Syntax
 
-**Problem**: Writing `loc.offset` or `span.fragment` to access struct fields appears natural but does NOT work. Dot syntax in Monad is method-call syntax (`x.fun` desugars to `Type.fun x`), NOT field access. Using dot syntax on a struct produces "unexpected token" or "not a function" errors.
-
-**Root cause**: Monad has no dedicated field access syntax for structs. Dot syntax is exclusively for method calls and module paths.
-
-**Correct pattern**: Access struct fields via pattern matching on the `mk` constructor:
+Writing `loc.offset` (or a chain, `line.span.offset`) on a *locally bound* value works and is sugar for a bare `{ }` match: `loc.offset` desugars to `match loc { {offset} => offset }`, resolved against `loc`'s type at type-check time — so it works for any single-constructor type (not just `struct`-declared ones), not a fixed "method call" scheme. This only applies when the left of the first `.` is a local binding (a `def`/lambda parameter, a `let`); a bare `Module.name`-shaped path (no local binding by that name in scope) still resolves as an ordinary qualified reference, exactly as before:
 ```monad
-// Struct definition:
 struct Location { offset : I64, line : I64, column : I64 }
 
-// BROKEN — dot syntax:
-let off : I64 := loc.offset in   // interpreted as method call!
+def get_offset (loc : Location) : I64 := loc.offset   // works
 
-// CORRECT — pattern matching:
-match loc {
-    mk off line col => ...
-}
+// Equivalent, if you'd rather write it out:
+def get_offset (loc : Location) : I64 :=
+    match loc {
+        { offset, .. } => offset
+    }
 ```
+Dot access on an arbitrary non-identifier expression (e.g. `(mk_point 1 2).x`) isn't supported yet — only a chain of bare identifiers starting from a local binding.
 
 ### Debug `println!` in Type Checker Masks Real Errors
 

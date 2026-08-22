@@ -4232,23 +4232,89 @@ def variable (ctx: List Identifier) (input: String) : ParseResult Term :=
 #[partial]
 def variable_try_path (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
-        success rem out =>
-            // Dotted path → sentinel index (resolved later by module resolver)
-            // Extract the last component of the qualified name for constructor detection
-            match out {
-                TermV0.var nref =>
-                    match name_ref_to_string nref {
-                        Option.some qualified_name =>
-                            // Preserve the full qualified name for proper resolution
-                            // is_constructor_var will extract the base name if needed
-                            success rem (Term.var sentinel (DebugName.named (Identifier.id qualified_name))),
-                        Option.none =>
-                            success rem (Term.var sentinel DebugName.unnamed),
-                    },
-                _ =>
-                    success rem (Term.var sentinel DebugName.unnamed),
-            },
+        success rem out => variable_try_path_got out ctx rem,
         fail _ => variable_got (identifier input) ctx
+    }
+
+#[partial]
+def variable_try_path_got (out : TermV0) (ctx : List Identifier) (rem : String) : ParseResult Term :=
+    match out {
+        TermV0.var nref => variable_try_path_nref nref ctx rem,
+        _ => success rem (Term.var sentinel DebugName.unnamed),
+    }
+
+/// A dotted path (`NameRef.nmp`) is ambiguous at parse time between a
+/// module-qualified global and local struct-field access -- `path_variable`
+/// always builds it as a path, since the parser has no scope information to
+/// tell a bound name apart from a module name. Resolve that ambiguity here,
+/// where `ctx` is in scope: if the path's first segment is a local binding
+/// (mirrors the Rust reference's own `lower_core.rs::lower_var`'s
+/// `NameRef::P` arm), the REST of the path is a chain of field accesses
+/// (`plans/implementations/struct-field-destructuring.md`'s `{ fi }`
+/// pattern, one nested `match` per remaining segment,
+/// `field_access_chain` below) instead of a global reference. Otherwise
+/// (first segment isn't a local binding, or the path is somehow empty),
+/// fall back to today's behavior: a sentinel-indexed, flattened-string
+/// global reference, resolved later by the module resolver.
+#[partial]
+def variable_try_path_nref (nref : NameRef) (ctx : List Identifier) (rem : String) : ParseResult Term :=
+    match nref {
+        NameRef.nmp mp => variable_try_path_mp mp ctx rem nref,
+        _ => variable_try_path_global nref rem,
+    }
+
+#[partial]
+def variable_try_path_mp (mp : ModulePath) (ctx : List Identifier) (rem : String) (nref : NameRef) : ParseResult Term :=
+    match mp {
+        ModulePath.mp ids => variable_try_path_ids ids ctx rem nref,
+    }
+
+#[partial]
+def variable_try_path_ids (ids : List Identifier) (ctx : List Identifier) (rem : String) (nref : NameRef) : ParseResult Term :=
+    match ids {
+        List.cons first fields =>
+            match find_index first ctx 0 {
+                Option.some idx =>
+                    let scrutinee : Term := Term.var idx (DebugName.named first) in
+                    success rem (field_access_chain scrutinee fields),
+                Option.none => variable_try_path_global nref rem,
+            },
+        List.empty => variable_try_path_global nref rem,
+    }
+
+#[partial]
+def variable_try_path_global (nref : NameRef) (rem : String) : ParseResult Term :=
+    // Preserve the full qualified name for proper resolution --
+    // is_constructor_var will extract the base name if needed.
+    match name_ref_to_string nref {
+        Option.some qualified_name =>
+            success rem (Term.var sentinel (DebugName.named (Identifier.id qualified_name))),
+        Option.none =>
+            success rem (Term.var sentinel DebugName.unnamed),
+    }
+
+/// Builds the nested bare-form field-pattern `Match` chain that desugars a
+/// dotted-path field access into ordinary struct-field destructuring --
+/// mirrors the Rust reference's `lower_core.rs::lower_field_access_chain`
+/// and reuses the exact same `MatchCase`/`FieldPattern` shape
+/// `lam_parsed_params_loop` above already builds for destructured `def`
+/// params, so `Phase 7`'s type-checker elaboration
+/// (`type_check_field_pattern_case`/`term_permute`) handles it with no new
+/// logic needed here.
+#[partial]
+def field_access_chain (scrutinee : Term) (fields : List Identifier) : Term :=
+    match fields {
+        List.empty => scrutinee,
+        List.cons field rest =>
+            let value : Term := field_access_chain (Term.var 0 (DebugName.named field)) rest in
+            let bare_name : Identifier := Identifier.id "" in
+            let entry : FieldPatternEntry := FieldPatternEntry.mk field field in
+            let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
+            let binders : List Identifier := field_pattern_binder_names fp in
+            let some_fp : Option FieldPattern := Option.some fp in
+            let case_ : MatchCase := MatchCase.mc bare_name binders value some_fp in
+            let cases : List MatchCase := List.cons case_ List.empty in
+            Term.lit (Literal.match_ scrutinee cases),
     }
 
 #[partial]

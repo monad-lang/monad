@@ -1815,6 +1815,78 @@ def test_check_module_with_scope_accumulates_failures : IO Bool := do {
     }
 }
 
+/// End-to-end proof that `lang/parser.mo`'s `variable_try_path`/
+/// `field_access_chain` (the self-hosted mirror of the Rust reference's
+/// `lower_core.rs::lower_var`'s `NameRef::P` hook) resolves `p.x`/`p.y`
+/// dot field access on a locally-bound struct parameter through the full
+/// parse -> resolve -> type-check pipeline, same shape as
+/// `test_check_module_with_scope_all_pass` above.
+#[test]
+def test_check_module_with_scope_dot_field_access_resolves : IO Bool := do {
+    let path : ModulePath := ModulePath.mp List.empty;
+    let src : String := "type Color { red, green }\nstruct Point { x : Color, y : Color }\ndef getx (p : Point) : Color := p.x";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    match result {
+        ParseResult.success _ decl_list => do {
+            let sd : ScopeData := build_scope_from_decls path decl_list;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            let diags : List String <- check_module_with_scope scope decl_list locals Option.none false;
+            return (match diags {
+                List.empty => true,
+                List.cons _ _ => false
+            })
+        },
+        ParseResult.fail _ => do { return false }
+    }
+}
+
+/// Same as above, chained two levels deep (`l.to.x`) -- proves
+/// `field_access_chain`'s recursive nesting resolves correctly through the
+/// self-hosted pipeline, not just a single field.
+#[test]
+def test_check_module_with_scope_chained_dot_field_access_resolves : IO Bool := do {
+    let path : ModulePath := ModulePath.mp List.empty;
+    let src : String := "type Color { red, green }\nstruct Point { x : Color, y : Color }\nstruct Line { from : Point, to : Point }\ndef getx (l : Line) : Color := l.to.x";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    match result {
+        ParseResult.success _ decl_list => do {
+            let sd : ScopeData := build_scope_from_decls path decl_list;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            let diags : List String <- check_module_with_scope scope decl_list locals Option.none false;
+            return (match diags {
+                List.empty => true,
+                List.cons _ _ => false
+            })
+        },
+        ParseResult.fail _ => do { return false }
+    }
+}
+
+/// A dotted path whose first segment is NOT a local binding still
+/// resolves as an ordinary qualified reference (regression guard on
+/// `variable_try_path_global`'s fallback branch).
+#[test]
+def test_check_module_with_scope_dotted_module_path_still_resolves : IO Bool := do {
+    let path : ModulePath := ModulePath.mp List.empty;
+    let src : String := "type Color { red, green }\ndef c : Color := Color.red";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    match result {
+        ParseResult.success _ decl_list => do {
+            let sd : ScopeData := build_scope_from_decls path decl_list;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            let diags : List String <- check_module_with_scope scope decl_list locals Option.none false;
+            return (match diags {
+                List.empty => true,
+                List.cons _ _ => false
+            })
+        },
+        ParseResult.fail _ => do { return false }
+    }
+}
+
 #[test]
 def test_check_file_reports_missing_file : Bool :=
     let empty_base : PreludeInitBase := { scope_data := scope_data_empty, covered := List.empty } in

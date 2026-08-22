@@ -27,7 +27,9 @@ use crate::Map;
 use crate::core_term::{
   Atom, AtomTable, CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, DebugName,
 };
-use crate::term::{Identifier, Literal, ModulePath, NameRef, Operator, Par, Term};
+use crate::term::{
+  FieldPattern, Identifier, Literal, ModulePath, NameRef, Operator, Par, Term, id,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LowerError {
@@ -497,7 +499,30 @@ fn lower_var(ctx: &mut LowerContext, name: &NameRef) -> Result<CoreTerm, LowerEr
       Some(idx) => Ok(CoreTerm::Bound(idx)),
       None => Ok(CoreTerm::Free(resolve_free_name(ctx, id))),
     },
-    NameRef::P(path) => Ok(CoreTerm::Free(ctx.global_atom(path.clone()))),
+    // A bare-identifier dotted path (`a.fi`, `a.fi.fi2`, ...) is
+    // ambiguous at parse time between a module-qualified global and local
+    // struct-field access -- `path_expression` (parser.rs) always builds
+    // it as a path, since the parser has no scope information to tell
+    // `a` apart from a module name. Resolve that ambiguity here, where
+    // `ctx`'s binder stack is available: if the path's first segment is a
+    // local binding, treat the rest of the path as a chain of field
+    // accesses (`plans/implementations/struct-field-destructuring.md`'s
+    // `{ fi }` pattern, one nested `match` per remaining segment) instead
+    // of a global reference. This reuses `core_check.rs`'s existing
+    // `resolve_field_pattern_case`/`desugar_struct_literals` pipeline
+    // unchanged -- it already resolves a bare `{ fi }` pattern against
+    // any single-constructor type. Otherwise (first segment isn't
+    // locally bound), keep today's behavior: a global reference.
+    NameRef::P(path) => {
+      let segments = path.clone().to_vec();
+      match segments.first().and_then(|first| ctx.find_bound(first)) {
+        Some(idx) => Ok(lower_field_access_chain(
+          CoreTerm::Bound(idx),
+          &segments[1..],
+        )),
+        None => Ok(CoreTerm::Free(ctx.global_atom(path.clone()))),
+      }
+    }
     NameRef::Index(i) => Err(LowerError::UnexpectedIndex(*i)),
     NameRef::Op(op) => match ctx.config.infix.get(op).cloned() {
       Some(path) => Ok(CoreTerm::Free(ctx.global_atom(path))),
@@ -508,6 +533,37 @@ fn lower_var(ctx: &mut LowerContext, name: &NameRef) -> Result<CoreTerm, LowerEr
     },
     NameRef::Macro(_) => Err(LowerError::Unsupported(format!("{name}"))),
   }
+}
+
+/// Builds the nested bare-form field-pattern `Match` chain that desugars a
+/// dotted-path field access into ordinary struct-field destructuring:
+/// `fields = [fi]` yields `match <scrutinee> { {fi} => fi }`, and
+/// `fields = [fi, fi2]` yields
+/// `match <scrutinee> { {fi} => match fi { {fi2} => fi2 } }`, and so on.
+/// Mirrors the shape `parser.rs`'s `lambda` already builds for destructured
+/// params via `term::case_with_field_pattern` (`rest: true`, so only the
+/// field being accessed needs to be present -- not an exhaustive field
+/// list), so downstream (`core_check.rs`'s `resolve_field_pattern_case`/
+/// `desugar_struct_literals`, `core_eval.rs`) needs no changes to handle
+/// it.
+fn lower_field_access_chain(scrutinee: CoreTerm, fields: &[Identifier]) -> CoreTerm {
+  let (field, rest) = match fields.split_first() {
+    Some(pair) => pair,
+    None => return scrutinee,
+  };
+  let value = lower_field_access_chain(CoreTerm::Bound(0), rest);
+  CoreTerm::Lit(CoreLit::Match {
+    scrutinee: Box::new(scrutinee),
+    cases: vec![CoreMatchCase {
+      name: id(""),
+      dbgs: vec![DebugName::Named(field.clone())],
+      field_pattern: Some(FieldPattern {
+        fields: vec![(field.clone(), field.clone())],
+        rest: true,
+      }),
+      value: Box::new(value),
+    }],
+  })
 }
 
 #[cfg(test)]
@@ -930,6 +986,77 @@ mod test {
         other => panic!("expected Lit::StructUpdate, got {other:?}"),
       },
       other => panic!("expected Lam, got {other:?}"),
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Dot field access (`a.fi`, `a.fi.fi2`, ...) — see `lower_var`'s
+  // `NameRef::P` arm and `lower_field_access_chain`.
+  // -------------------------------------------------------------------
+
+  #[test]
+  fn test_lower_dotted_path_on_bound_var_becomes_field_access_match() {
+    use crate::term::pvar;
+    // fn a => a.fi  — `a` is a bound Lam parameter, so `a.fi` must become
+    // a bare-form field-pattern match on it, not a global reference.
+    let term = lam(param(id("a"), sort1()), pvar(vec!["a", "fi"]));
+    match lower(&term) {
+      CoreTerm::Lam { body, .. } => match *body {
+        CoreTerm::Lit(CoreLit::Match { scrutinee, cases }) => {
+          assert_eq!(*scrutinee, CoreTerm::Bound(0));
+          assert_eq!(cases.len(), 1);
+          let case = &cases[0];
+          assert_eq!(case.name, id(""));
+          let fp = case.field_pattern.as_ref().expect("field_pattern");
+          assert_eq!(fp.fields, vec![(id("fi"), id("fi"))]);
+          assert!(fp.rest);
+          assert_eq!(*case.value, CoreTerm::Bound(0));
+        }
+        other => panic!("expected Lit::Match, got {other:?}"),
+      },
+      other => panic!("expected Lam, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn test_lower_dotted_path_chain_nests_one_match_per_segment() {
+    use crate::term::pvar;
+    // fn a => a.fi.fi2  — one nested match per remaining path segment.
+    let term = lam(param(id("a"), sort1()), pvar(vec!["a", "fi", "fi2"]));
+    match lower(&term) {
+      CoreTerm::Lam { body, .. } => match *body {
+        CoreTerm::Lit(CoreLit::Match { scrutinee, cases }) => {
+          assert_eq!(*scrutinee, CoreTerm::Bound(0));
+          let outer = &cases[0];
+          let fp = outer.field_pattern.as_ref().expect("field_pattern");
+          assert_eq!(fp.fields, vec![(id("fi"), id("fi"))]);
+          match &*outer.value {
+            CoreTerm::Lit(CoreLit::Match { scrutinee, cases }) => {
+              assert_eq!(**scrutinee, CoreTerm::Bound(0));
+              let inner = &cases[0];
+              let fp = inner.field_pattern.as_ref().expect("field_pattern");
+              assert_eq!(fp.fields, vec![(id("fi2"), id("fi2"))]);
+              assert_eq!(*inner.value, CoreTerm::Bound(0));
+            }
+            other => panic!("expected nested Lit::Match, got {other:?}"),
+          }
+        }
+        other => panic!("expected Lit::Match, got {other:?}"),
+      },
+      other => panic!("expected Lam, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn test_lower_dotted_path_with_unbound_first_segment_stays_a_global_reference() {
+    use crate::term::pvar;
+    // `Mod.name` at top level — `Mod` is never locally bound, so this must
+    // still resolve as an ordinary qualified global reference, exactly as
+    // before this change.
+    let term = pvar(vec!["Mod", "name"]);
+    match lower(&term) {
+      CoreTerm::Free(_) => {}
+      other => panic!("expected Free, got {other:?}"),
     }
   }
 }
