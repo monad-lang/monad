@@ -51,11 +51,9 @@
   # runner this devenv's git-hooks.nix installs) so there's a single source
   # of truth, then adds slow_tests/ -- deliberately excluded from the hooks'
   # own sweep since it's ~91% of total test runtime, but something CI should
-  # still cover on every push. The self-hosted self-compile smoke test (see
-  # `tasks."monad:bootstrap-compile"` below) runs automatically as part of
-  # `devenv test` too, right after this script, via devenv's own
-  # task-scheduling (`after = ["devenv:enterTest"]`), rather than being
-  # inlined into this script.
+  # still cover on every push. `tasks."monad:bootstrap-compile"` below is a
+  # separate, currently-opt-in self-hosted self-compile smoke test -- see
+  # its own comment for why it isn't wired to run automatically here yet.
   #
   # slow_tests/ is run non-blocking (failure reported, doesn't fail the job):
   # it's currently known-broken with a fix in progress on a separate branch.
@@ -74,13 +72,16 @@
   # self-hosted compiler) compiling its own source via itself. Extremely
   # slow (measured: doesn't finish inside 590s even with --release -- see
   # AGENTS.md's notes on self-hosted-checker performance) and currently
-  # known-broken, with a fix in progress on a separate branch, so this is
-  # timeout-bounded and non-blocking: any failure (real error or timeout)
-  # is reported via ::warning:: rather than failing `devenv test`/CI. Runs
-  # after (not before) enterTest's fast checks, so a plain failure/timeout
-  # here never delays the fast feedback those give.
-  # TODO: once the fix lands (and/or this gets fast enough to rely on),
-  # drop the `timeout`/`|| { ...; true; }` wrapping so it blocks like
+  # known-broken, with a fix in progress on a separate branch, so any
+  # failure/timeout is non-blocking (reported via ::warning::) rather than
+  # failing `devenv test`/CI.
+  #
+  # NOT wired into `devenv test` yet (the `after` dependency below is
+  # commented out): too slow to run on every invocation as-is. Run manually
+  # via `devenv tasks run monad:bootstrap-compile` in the meantime.
+  # TODO: enable `after = [ "devenv:enterTest" ]` once this is fast enough
+  # (or the known-broken fix lands) to be worth running automatically, then
+  # also drop the `timeout`/`|| { ...; true; }` wrapping so it blocks like
   # everything else.
   tasks."monad:bootstrap-compile" = {
     exec = ''
@@ -89,7 +90,8 @@
         true
       }
     '';
-    after = [ "devenv:enterTest" ];
+    # TODO: enable when more optimized
+    # after = [ "devenv:enterTest" ];
   };
 
   # https://devenv.sh/git-hooks/

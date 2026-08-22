@@ -604,6 +604,16 @@ cargo run -- test init/ && cargo run -- test examples/
 
 The test runner supports both files and directories. When given a directory, it recursively scans for `.mo` files and runs any definitions annotated with `#[test]`, reporting pass/fail.
 
+### No Personal-Machine Details or Hardcoded Paths
+
+Never hardcode a contributor's local machine details into code — absolute
+paths under a personal home directory, machine-specific usernames, or
+anything else that only exists on one person's checkout. This includes test
+fixtures: resolve repo files relative to `CARGO_MANIFEST_DIR` (see
+`core_check_module.rs`'s `repo_search_paths`), never via an absolute path.
+A real instance of this broke CI while passing locally, since the hardcoded
+path only existed on its author's machine.
+
 ### Pre-commit
 
 The pre-commit config (`.pre-commit-config.yaml`) is managed by Nix via `git-hooks.nix`. Do NOT edit it directly. Instead, modify the Nix configuration that generates it. The `monad-tests` hook currently runs `cargo run --release -- test init std lang examples` (see `devenv.nix`) — recursing into every `.mo` file under those four directories, `lang/tests/` included. If this hook fails, run the same command directly (or narrow to one directory, e.g. `cargo run -- test lang/`) to see all test failures.
