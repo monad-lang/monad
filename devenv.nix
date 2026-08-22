@@ -51,11 +51,15 @@
   # runner this devenv's git-hooks.nix installs) so there's a single source
   # of truth, then adds slow_tests/ -- deliberately excluded from the hooks'
   # own sweep since it's ~91% of total test runtime, but something CI should
-  # still cover on every push.
+  # still cover on every push. The self-hosted self-compile smoke test (see
+  # `tasks."monad:bootstrap-compile"` below) runs automatically as part of
+  # `devenv test` too, right after this script, via devenv's own
+  # task-scheduling (`after = ["devenv:enterTest"]`), rather than being
+  # inlined into this script.
   #
   # slow_tests/ is run non-blocking (failure reported, doesn't fail the job):
   # it's currently known-broken with a fix in progress on a separate branch.
-  # TODO: once that fix lands, drop the `|| { ...; true; }` fallback below so
+  # TODO: once that fix lands, drop the `|| { ...; true; }` fallback so
   # slow_tests/ failures block CI like everything else.
   enterTest = ''
     prek run --all-files
@@ -64,6 +68,29 @@
       true
     }
   '';
+
+  # https://devenv.sh/tasks/
+  # Self-hosted compiler self-compile smoke test: `lang/main.mo` (the
+  # self-hosted compiler) compiling its own source via itself. Extremely
+  # slow (measured: doesn't finish inside 590s even with --release -- see
+  # AGENTS.md's notes on self-hosted-checker performance) and currently
+  # known-broken, with a fix in progress on a separate branch, so this is
+  # timeout-bounded and non-blocking: any failure (real error or timeout)
+  # is reported via ::warning:: rather than failing `devenv test`/CI. Runs
+  # after (not before) enterTest's fast checks, so a plain failure/timeout
+  # here never delays the fast feedback those give.
+  # TODO: once the fix lands (and/or this gets fast enough to rely on),
+  # drop the `timeout`/`|| { ...; true; }` wrapping so it blocks like
+  # everything else.
+  tasks."monad:bootstrap-compile" = {
+    exec = ''
+      timeout 900 cargo run --release -- run lang/main.mo compile lang/main.mo monad || {
+        echo "::warning::self-hosted self-compile failed or timed out (known-broken, fix in progress on a separate branch) -- not blocking CI" >&2
+        true
+      }
+    '';
+    after = [ "devenv:enterTest" ];
+  };
 
   # https://devenv.sh/git-hooks/
   git-hooks.hooks = {
