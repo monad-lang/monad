@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+
+      - name: Install devenv
+        run: nix profile add nixpkgs#devenv
+
+      - name: Cache cargo/target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # Runs enterTest (devenv.nix): git hooks via prek (rustfmt, clippy,
+      # `cargo test --release`, and the fast .mo sweep) plus slow_tests/,
+      # so this is the full test suite, not just the local fast subset.
+      # TODO: slow_tests/ is currently non-blocking in enterTest (known-broken,
+      # fix in progress on a separate branch) -- see devenv.nix's own TODO.
+      - name: Run tests
+        run: devenv test
