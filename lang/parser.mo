@@ -4343,7 +4343,7 @@ def literal_parser (input: String) : ParseResult Term :=
 // on `"//"` (a prefix of `"///"` too) skips both forms uniformly.
 #[partial]
 def skip_docstrings (input : String) : String :=
-	skip_docstrings_try (tag "//" input) input
+	skip_docstrings_block_try (skip_docstrings_try (tag "//" input) input) input
 
 #[partial]
 def skip_docstrings_try (r : ParseResult String) (orig : String) : String :=
@@ -4363,6 +4363,56 @@ def skip_docstrings_try_newline (r : ParseResult String) (orig : String) : Strin
 		success rem _ => skip_docstrings (skip_spaces rem),
 		fail _ => orig
 	}
+
+// --- `/* ... */` block comments ---
+//
+// `skip_docstrings` originally only handled `//`/`///` line comments. A
+// `/* ... */` block comment sitting anywhere `skip_docstrings` is used
+// (between decls, in match arms, in def bodies, and -- via the
+// list-literal comment-skip fix -- between list-literal elements) would
+// leak through and break the following parse. Block comments are non-
+// nesting (matching the Rust reference, `core/src/parser.rs`); a missing
+// closing `*/` consumes the rest of the input rather than emitting a
+// confusing error deep in an unrelated decl, the same way an unterminated
+// `//` line comment simply runs to EOF.
+
+/// If the `//` line-comment branch consumed a comment (returned something
+/// other than `orig`), keep its already-recursive result; otherwise fall
+/// back to a `/* ... */` block comment. `String.beq after_line orig`
+/// distinguishes "matched a `//` comment" from "no match" because
+/// `skip_docstrings_try` returns `orig` unchanged on no match.
+#[partial]
+def skip_docstrings_block_try (after_line : String) (orig : String) : String :=
+	if String.beq after_line orig then skip_docstrings_block orig else after_line
+
+/// Skip a `/* ... */` block comment and then continue skipping any
+/// following whitespace + comments. Returns `orig` unchanged when it does
+/// not start with `/*` (mirroring `skip_docstrings_try`'s no-match
+/// contract). `is_prefix` (rather than `tag`) is used so this stays a
+/// plain `String -> String` skipper matching `skip_spaces`/`skip_docstrings`.
+#[partial]
+def skip_docstrings_block (input : String) : String :=
+	skip_docstrings_block_body (is_prefix "/*" input) input
+
+#[partial]
+def skip_docstrings_block_body (starts_block : Bool) (orig : String) : String :=
+	match starts_block {
+		Bool.true => skip_docstrings (skip_spaces (skip_block_comment_end (String.drop 2 orig))),
+		Bool.false => orig
+	}
+
+/// Scan forward for the closing `*/` of a block comment, returning the
+/// remainder after it. The leading `/*` has already been consumed by
+/// `skip_docstrings_block_body`. `String.drop 1` advances one byte at a
+/// time; this is safe for locating the ASCII `*/` even through multibyte
+/// UTF-8 content (a continuation byte never equals `*` or `/`), and the
+/// alternative (`String.to_list`/`String.get_char`) would be slower. On an
+/// unterminated block comment, returns the empty string.
+#[partial]
+def skip_block_comment_end (input : String) : String :=
+	if String.length input == 0 then input
+	else if is_prefix "*/" input then String.drop 2 input
+	else skip_block_comment_end (String.drop 1 input)
 
 // ─── Term atom ──────────────────────────────────────────────────────────
 
