@@ -165,6 +165,36 @@ def test_elaborate_def_free_var : Bool :=
             },
     }
 
+/// A constraint-only type var -- one that appears ONLY in a `[Class V]`
+/// constraint, never in the def's declared type -- must still be Forall-
+/// wrapped by `elaborate_def`. This is the gap-2 fix: `def foo [Show A] :
+/// SomeTypeNotMentioningA` has `A` nowhere in the type body, but
+/// `elaborate_type` unions `free_vars typ` with
+/// `collect_constraint_vars constraints`, so `A` survives into the
+/// leading `Forall A. ...` binder that `locals_with_def_typevars`'s
+/// `forall_chain_binder_names` walk then skolemizes for the body check.
+#[test]
+def test_elaborate_def_constraint_only_var : Bool :=
+    let typ : Term := type_ 1 in
+    let body : Term := Term.hole in
+    let show_cls : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
+    let constraint : TypeConstraint := TypeConstraint.mk show_cls (List.cons id_A List.empty) in
+    let constraints : List TypeConstraint := List.cons constraint List.empty in
+    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "foo") List.empty) in
+    let d : Def := Def.mk mp typ body constraints empty_attrs Visibility.package_private in
+    let elaborated : Def := elaborate_def d no_ids in
+    match elaborated {
+        Def.mk _ elab_typ _ _ _ _ =>
+            match elab_typ {
+                forall dbg _kind _body =>
+                    match dbg {
+                        named n => id_eq n id_A,
+                        unnamed => false,
+                    },
+                _ => false,
+            },
+    }
+
 // --- elaborate_class tests ---
 
 #[test]

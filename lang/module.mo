@@ -2,9 +2,9 @@
 /// Parses source text and builds scope data from declarations.
 
 use io {IO, file_exists, is_dir, list_dir, println, read_file}
-use lang.elaborate {free_vars}
+use lang.elaborate {free_vars, names_of_decls, elaborate_def}
 use lang.types {
-  Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
+  Class, ClassDef, Decl, Def, DebugName, Identifier, InductConstructor, Inductive, Infix,
   LoadedModules, LocalScope, LocalVar, ModulePath, Multiplicity, NameRef, Scope,
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id,
   inductive_d, list_reverse, mk, mp, name, nid, to_name, union_ids, use_d,
@@ -1013,12 +1013,50 @@ def bind_unresolved_as_local_typevars (names : List Identifier) (scope : Scope) 
             }
     }
 
-/// Skolemize `df`'s implicit type parameters (from both its declared
-/// `typ` and its parameters' own annotations) into `locals`, ready for
-/// `type_check`ing `df`'s body against.
+/// Walk a type's leading `Term.forall`-binder chain, collecting each
+/// binder's NAMED debug-name identifier (unnamed binders are skipped).
+/// This is how `locals_with_def_typevars` recovers the implicit type
+/// parameters `elaborate.mo`'s `wrap_forall` introduced: a def like
+/// `def Lens [Functor F] {F : Type -> Type} (...) : Type := ...` has its
+/// `{F}` clause deliberately dropped by the parser
+/// (`def_implicit_close`, lang/parser.mo) on the understanding that
+/// `elaborate_def` re-introduces `F` as a leading `Forall F. ...` binder
+/// -- once that elaboration is wired into the pipeline, the binder name
+/// only survives HERE (in `typ`'s Forall chain), so this walk is what
+/// skolemizes `F` into `locals` for the body check. Mirrors the Rust
+/// reference's own Forall-chain walk. Does NOT descend past the leading
+/// Foralls: nested inner Foralls (under a Pi) belong to a different
+/// scope and are not this def's own implicit params.
+#[partial]
+def forall_chain_binder_names (typ : Term) : List Identifier :=
+    match typ {
+        Term.forall dbg _kind body =>
+            match dbg {
+                DebugName.named id =>
+                    let rest : List Identifier := forall_chain_binder_names body in
+                    union_ids (List.cons id List.empty) rest,
+                DebugName.unnamed => forall_chain_binder_names body,
+            },
+        _ => List.empty
+    }
+
+/// Skolemize `df`'s implicit type parameters into `locals`, ready for
+/// `type_check`ing `df`'s body against. Three sources, unioned: the
+/// Forall-chain binder names of the (elaborated) declared type
+/// (`forall_chain_binder_names` -- the constraint-only vars
+/// `elaborate_def`'s `wrap_forall` wraps but that never appear in the
+/// type body, e.g. `F` in `[Functor F]`); the free vars of the declared
+/// type (`free_vars`); and the def's own parameter annotations
+/// (`collect_param_annotation_names`). `bind_unresolved_as_local_typevars`
+/// then skolemizes only those candidates that don't already resolve as a
+/// real global, so this is a strict superset of the pre-elaboration
+/// behaviour -- nothing that checked before stops checking.
 #[partial]
 def locals_with_def_typevars (df_typ : Term) (body : Term) (scope : Scope) (locals : LocalScope) : LocalScope :=
-    let candidates : List Identifier := union_ids (free_vars df_typ List.empty) (collect_param_annotation_names body) in
+    let fv := free_vars df_typ List.empty in
+    let qv := forall_chain_binder_names df_typ in
+    let pv := collect_param_annotation_names body in
+    let candidates : List Identifier := union_ids (union_ids fv qv) pv in
     bind_unresolved_as_local_typevars candidates scope locals
 
 /// Skolemize `cls`'s own declared type parameters (`A` in `class
@@ -1878,6 +1916,31 @@ def flatten_module_decls (modules : List ModuleInfo) (acc : List Decl) : List De
             flatten_module_decls rest (list_append (get_module_info_decls mod_) acc),
     }
 
+/// Forall-wrap each `def_d`'s declared type via `elaborate_def`
+/// (`lang.elaborate`), using the WHOLE-GRAPH name set as `known_names` so
+/// genuine globals (`String`, `I64`, `List`, ...) are filtered out and
+/// NOT Forall-wrapped, while a def's own free/constraint-only type vars
+/// (e.g. `F` in `def Lens [Functor F] {F : Type -> Type} ...`, whose
+/// `{F}` clause the parser deliberately drops -- see `def_implicit_close`,
+/// lang/parser.mo) get re-introduced as leading `Forall F. ...` binders.
+/// Only `def_d` is touched here -- inductive/class/struct elaboration is
+/// tracked separately (inductive-constructor and class-method param
+/// skolemization). Non-`def_d` decls pass through unchanged. This is the
+/// "wire `elaborate.mo` in" half of the constraint-vars-as-implicit fix;
+/// `locals_with_def_typevars`'s `forall_chain_binder_names` walk is the
+/// consume-the-Forall-chain half that actually skolemizes those binders.
+#[partial]
+def elaborate_def_typs (decls : List Decl) (known_names : List Identifier) : List Decl :=
+    match decls {
+        List.empty => List.empty,
+        List.cons d rest =>
+            let d_ : Decl := match d {
+                Decl.def_d df => Decl.def_d (elaborate_def df known_names),
+                _ => d
+            } in
+            List.cons d_ (elaborate_def_typs rest known_names)
+    }
+
 /// THE canonical front-end pipeline: parse -> load the full transitive
 /// dependency graph (prelude/init always seeded, via `load_file_modules`)
 /// -> flatten -> resolve infixes -> promote instance methods to concrete
@@ -1915,8 +1978,19 @@ def elaborate_loaded_modules (file_path : String) : IO (Result String Elaborated
             // checking the raw decls against the resolved scope produced
             // a bogus `unknown variable '+'` before this fix.
             let target_decls_raw : List Decl := get_module_info_decls main_module in
-            let target_decls : List Decl :=
+            let target_decls_pre : List Decl :=
                 add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw)) in
+            // Forall-wrap each target def's type with its free + constraint-
+            // only type vars (`elaborate_def_typs`), using the whole-graph
+            // name set so globals aren't wrapped. `known_names` comes from
+            // `dict_paramed` (the fully-prepared whole-graph list) -- a
+            // target-only `names_of_decls` would miss dependency globals and
+            // wrongly Forall-wrap them. This re-introduces the implicit
+            // type vars the parser deliberately dropped (e.g. `F` in
+            // `def Lens [Functor F] {F : ...} ...`); `locals_with_def_typevars`
+            // then skolemizes them from the resulting `Forall` chain.
+            let known_names : List Identifier := names_of_decls dict_paramed in
+            let target_decls : List Decl := elaborate_def_typs target_decls_pre known_names in
             Result.ok { scope := scope, target_decls := target_decls, elaborated_decls := dict_paramed }
     }
 }
