@@ -1667,13 +1667,27 @@ def opt_terms_reference_class (cls_str : String) (args : List (Option Term)) : B
             },
     }
 
-/// Documentation-only -- see this section's own top doc comment.
-#[partial]
-def dict_param_type_placeholder (c : TypeConstraint) : Term :=
-    match c {
-        TypeConstraint.mk cls _ =>
-            Term.var 0 (DebugName.named (Identifier.id ("__Dict_" ++ show_module_path cls))),
-    }
+/// The dictionary parameter's own `typ` annotation -- genuinely non-load-
+/// bearing: codegen never consults it (every param compiles as a plain
+/// boxed i64 regardless of its declared type, `build_llvm_params_db`),
+/// and the checker treats it as an unknown type. This MUST be `Term.hole`
+/// (which `type_check` always succeeds on, returning `expected_type`)
+/// rather than a bound `Term.var 0`: `check_def_with_scope` checks a def's
+/// body against `Term.hole`, so `type_check_lam`'s non-`pi` branch
+/// (`lang.typecheck.infer`) re-checks each lambda's OWN written param
+/// type against the current `local_types` stack -- and the outermost
+/// dict lambda is checked with that stack EMPTY, so a `Term.var 0`
+/// placeholder reported a spurious out-of-range `bound_var` for the one
+/// real corpus case: a promoted instance method that both carries a
+/// constraint and forwards to that constraint's own class method
+/// (`instance [Add A] HAdd A A A`'s own `add` -> `Add.add a b`, the
+/// `HAdd_A_A_A_add` self-hosted-check gap). The dict parameter's binding
+/// NAME -- load-bearing for Phase 4's D5 forwarding -- is separate
+/// (`dict_param_name` below); this annotation never participates in
+/// resolution. `Term.hole` mirrors the Rust reference's own dictionary /
+/// projected-method placeholder (`CoreTerm::Hole`, `core_check_module`).
+def dict_param_type_placeholder (_c : TypeConstraint) : Term :=
+    Term.hole
 
 /// One dict param per qualifying constraint, prepended in constraint-
 /// list order (the first constraint becomes the first/outermost new

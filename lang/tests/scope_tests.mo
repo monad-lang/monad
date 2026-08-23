@@ -1,16 +1,16 @@
 use lang.types {
-  Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
+  Decl, DebugName, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
   InstanceKey, LoadedModules, LocalScope, LocalVar, Module, ModulePath, NameRef,
   Param, Scope, ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, Term,
   TypeConstraint, def_d, hole, id, inductive_d, many, mk, mp, name, nmp,
   param_many, type_,
 }
 use lang.scope {
-  build_scope_from_decls, build_scope_from_modules, list_append, modpath_eq,
-  resolve_def_in_scope_by_name, scope_data_add_def, scope_data_add_inductive,
-  scope_data_add_instance, scope_data_empty, scope_find_inductive,
-  scope_find_inductive_by_constructor, scope_find_local, scope_globals,
-  scope_push_local, scope_resolve_instance, scope_resolve_name,
+  add_constraint_dict_params, build_scope_from_decls, build_scope_from_modules,
+  list_append, modpath_eq, resolve_def_in_scope_by_name, scope_data_add_def,
+  scope_data_add_inductive, scope_data_add_instance, scope_data_empty,
+  scope_find_inductive, scope_find_inductive_by_constructor, scope_find_local,
+  scope_globals, scope_push_local, scope_resolve_instance, scope_resolve_name,
 }
 
 // --- Build scope from empty decl_list ---
@@ -662,4 +662,41 @@ def test_find_inductive_by_constructor_not_found : Bool :=
     match scope_find_inductive_by_constructor nope_mp s {
         Option.some _ => false,
         Option.none => true,
+    }
+
+// --- dict-param placeholder regression (gap 7) ---
+
+/// A constrained def whose body calls its own constraint's class method
+/// (`Add.add a b` -- the `instance [Add A] HAdd A A A` -> `HAdd_A_A_A_add`
+/// shape) qualifies for a leading dictionary parameter. That parameter's
+/// own `typ` annotation MUST be `Term.hole` (which `type_check` always
+/// succeeds on, returning `expected_type`), never a bound `Term.var 0`:
+/// `check_def_with_scope` checks a def's body against `Term.hole`, so
+/// `type_check_lam`'s non-`pi` branch re-checks each lambda's own written
+/// param type against the current `local_types` stack -- and the
+/// outermost dict lambda is checked with that stack EMPTY, so a
+/// `Term.var 0` placeholder reported a spurious out-of-range `bound_var`
+/// (the `HAdd_A_A_A_add` self-hosted-check gap). Mirrors the Rust
+/// reference's own dictionary/projected-method placeholder
+/// (`CoreTerm::Hole`, `core_check_module`).
+#[test]
+def test_dict_param_type_is_hole : Bool :=
+    let add_cls : ModulePath := ModulePath.mp (List.cons (Identifier.id "Add") List.empty) in
+    let constraint : TypeConstraint := TypeConstraint.mk add_cls (List.cons (Identifier.id "A") List.empty) in
+    let constraints : List TypeConstraint := List.cons constraint List.empty in
+    // The body's `Add.add` reference is what `qualifying_dict_constraints`
+    // needs (`def_references_class` scans for a `var` whose name starts
+    // with `"Add."`) to qualify the constraint for a leading dict param.
+    let add_add_ref : Term := Term.var (-1) (DebugName.named (Identifier.id "Add.add")) in
+    let body : Term := Term.app add_add_ref (Term.var (-1) (DebugName.named (Identifier.id "a"))) in
+    let def_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "HAdd_A_A_A_add") List.empty) in
+    let empty_attrs : List Attribute := List.empty in
+    let df : Def := Def.mk def_name Term.hole body constraints empty_attrs Visibility.package_private in
+    match add_constraint_dict_params df {
+        Def.mk _ _new_typ new_term _ _ _ =>
+            match new_term {
+                Term.lam _dbg param_typ _body =>
+                    match param_typ { Term.hole => true, _ => false, },
+                _ => false,
+            },
     }
