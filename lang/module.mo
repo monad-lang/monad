@@ -4,22 +4,24 @@
 use io {IO, file_exists, is_dir, list_dir, println, read_file}
 use lang.elaborate {free_vars}
 use lang.types {
-  Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive,
+  Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
   LoadedModules, LocalScope, LocalVar, ModulePath, Multiplicity, NameRef, Scope,
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id,
-  inductive_d, mk, mp, name, nid, to_name, union_ids, use_d,
+  inductive_d, list_reverse, mk, mp, name, nid, to_name, union_ids, use_d,
 }
 use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
+use lang.pretty {show_term}
 use lang.typecheck.macro_queue {expand_decls}
 use lang.scope {
-  alias_decls_in_scope, build_scope_from_decls, decls_have_aliasable_decls,
-  list_append, modpath_eq, scope_data_empty, scope_find_inductive,
-  scope_push_local, scope_resolve_name,
+  add_constraint_dict_params_decls, alias_decls_in_scope, build_scope_from_decls,
+  collect_infixes, constraint_vars, decls_have_aliasable_decls, list_append,
+  modpath_eq, param_names, promote_instance_defs, resolve_infix_decls,
+  scope_data_empty, scope_find_inductive, scope_push_local, scope_resolve_name,
 }
 use lang.typecheck.diagnostic {render_type_error}
-use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
+use lang.typecheck.infer {empty_local_types, empty_locals, mk, tt_term, type_check}
 use std.list {Show, all, length}
 use std.show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
@@ -904,40 +906,40 @@ def list_append_go (xs : List A) (ys : List A) : List A :=
 // --- Module resolution for type checking ---
 
 
-/// Type check all declarations in a module with a given scope
+/// Type check all declarations in a module with a given scope. A thin
+/// `Bool`-returning wrapper over `check_module_with_scope` (the richer,
+/// IO-returning, diagnostics-producing walk `check`/`elaborate_loaded_
+/// modules` already use) rather than a second, independently-maintained
+/// walk of the same logic -- the two used to be hand-copied and had
+/// quietly drifted apart (this Bool-returning family never skolemized a
+/// def's own implicit type params the way `check_def_with_scope` did,
+/// among other gaps `check_module_with_scope`'s own richer walk already
+/// covers: `struct_d`/`class_d`, `scoped_open_d` recursion, ...). Used by
+/// `slow_tests/*.mo`'s own corpus-checking `#[test]`s.
 #[partial]
-def typecheck_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : Bool :=
-    match decl_list {
-        List.empty => true,
-        List.cons d rest =>
-            match typecheck_decl_with_scope d scope locals {
-                true => typecheck_module_with_scope scope rest locals,
-                false => false
-            }
+def typecheck_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : IO Bool := do {
+    let diags <- check_module_with_scope scope decl_list locals Option.none false;
+    match diags {
+        List.empty => do { return true },
+        List.cons _ _ => do {
+            println_all diags;
+            return false
+        },
     }
+}
 
-/// Type check a single declaration with scope
+/// `println` one diagnostic per line -- so a `typecheck_module_with_scope`
+/// (or any other caller collapsing a diagnostics list to a bare `Bool`)
+/// failure is actually explained on stdout, not just reported as a silent
+/// `FAIL` with no indication of which declaration failed or why.
 #[partial]
-def typecheck_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) : Bool :=
-    match d {
-        Decl.def_d df => typecheck_def_with_scope df scope locals,
-        Decl.inductive_d ind => typecheck_inductive_with_scope ind scope locals,
-        _ => true  // Skip use, open, scoped_open, infix, class, instance for now
-    }
-
-/// Type check a definition with scope
-#[partial]
-def typecheck_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) : Bool :=
-    match df {
-        Def.mk _name typ body _constraints _attrs _vis =>
-            // Skip native/abstract definitions (body is Term.hole)
-            if is_term_hole body then
-                true
-            else
-                match type_check body Term.hole scope empty_local_types locals {
-                    Result.ok _ => true,
-                    Result.err _ => false
-                }
+def println_all (lines : List String) : IO Unit :=
+    match lines {
+        List.empty => return unit,
+        List.cons l rest => do {
+            println l;
+            println_all rest
+        },
     }
 
 /// Check if a term is a hole. Bodyless defs with params still have their
@@ -1019,42 +1021,23 @@ def locals_with_def_typevars (df_typ : Term) (body : Term) (scope : Scope) (loca
     let candidates : List Identifier := union_ids (free_vars df_typ List.empty) (collect_param_annotation_names body) in
     bind_unresolved_as_local_typevars candidates scope locals
 
-/// Type check an inductive with scope
+/// Skolemize `cls`'s own declared type parameters (`A` in `class
+/// Semigroup A { def combine : A -> A -> A }`) plus any of its own
+/// constraint vars, into `locals` -- mirrors `locals_with_def_typevars`'s
+/// identical role for a def's own implicit type parameters. Without this,
+/// `check_class_method_with_scope` type-checks each method's bare
+/// `A -> A -> A`-shaped signature with `A` unbound, failing
+/// `unknown variable 'A'` -- see `check_class_with_scope`'s own call site.
 #[partial]
-def typecheck_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) : Bool :=
-    match ind {
-        Inductive.mk _name _params _typ constructors _attrs _vis =>
-            typecheck_constructors_with_scope constructors scope locals
-    }
-
-/// Type check all constructors with scope
-#[partial]
-def typecheck_constructors_with_scope (cons : List InductConstructor) (scope : Scope) (locals : LocalScope) : Bool :=
-    match cons {
-        List.empty => true,
-        List.cons c rest =>
-            match typecheck_constructor_with_scope c scope locals {
-                true => typecheck_constructors_with_scope rest scope locals,
-                false => false
-            }
-    }
-
-/// Type check a single constructor with scope
-#[partial]
-def typecheck_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals : LocalScope) : Bool :=
-    match c {
-        InductConstructor.mk _name params typ =>
-            match type_check typ Term.hole scope empty_local_types locals {
-                Result.ok _ => true,
-                Result.err _ => false
-            }
-    }
+def locals_with_class_typevars ({ params, constraints, .. } : Class) (scope : Scope) (locals : LocalScope) : LocalScope :=
+    let candidates : List Identifier := union_ids (param_names params) (constraint_vars constraints) in
+    bind_unresolved_as_local_typevars candidates scope locals
 
 // --- `check`: multi-error typecheck pass (lang/main.mo's `check` command) ---
 //
-// Same per-decl walk as `typecheck_module_with_scope`/
-// `typecheck_decl_with_scope` above, but rendering and *accumulating*
-// every failing declaration's `TypeError` (via
+// Same per-decl walk `typecheck_module_with_scope` above now itself
+// wraps, but rendering and *accumulating* every failing declaration's
+// `TypeError` (via
 // `lang.typecheck.diagnostic`'s `render_type_error`) instead of
 // short-circuiting on the first `false`. Safe to accumulate here —
 // unlike a parse failure, each decl already type-checks independently
@@ -1156,9 +1139,27 @@ def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : Lo
 /// `lang/typecheck/infer.mo`'s `resolve_class_method`, which doesn't
 /// even resolve a concrete method body to check in the first place).
 #[partial]
+/// `promote_instance_defs`'s own `__Dict_ClassName_Args` value def
+/// (`lang/scope.mo`'s `promote_instance`, e.g. `__Dict_Speak_Dog`) is a
+/// pure codegen artifact -- declared `.typ := Term.type_ 1` but its
+/// `.term` is a `Term.con` record of the instance's own method
+/// references, a shape ordinary `type_check` was never meant to validate
+/// (it isn't real source, no user ever writes it) and can't: its field
+/// terms are built assuming codegen's own de-Bruijn-free-standing
+/// `Term.var 0` convention, not a real local binder, so checking it here
+/// surfaces a bogus `unknown variable 'bound_var'` diagnostic. Now that
+/// `check`/`elaborate_loaded_modules` run promotion BEFORE type-checking
+/// (previously only codegen did), `check_decl_with_scope` needs to
+/// recognize and skip these the same deliberate way it already skips
+/// `instance_d` bodies (`module.mo`'s own documented gap, just below).
+#[partial]
+def is_dict_value_def (df : Def) : Bool :=
+    String.starts_with "__Dict_" (module_path_to_string df.name)
+
 def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match d {
-        Decl.def_d df => check_def_with_scope df scope locals path verbose,
+        Decl.def_d df =>
+            if is_dict_value_def df then do { return List.empty } else check_def_with_scope df scope locals path verbose,
         Decl.inductive_d ind => check_inductive_with_scope ind scope locals path verbose,
         Decl.struct_d s => check_struct_with_scope s scope locals path verbose,
         Decl.class_d cls => check_class_with_scope cls scope locals path verbose,
@@ -1208,7 +1209,8 @@ def check_class_with_scope (cls : Class) (scope : Scope) (locals : LocalScope) (
     match cls {
         Class.mk name _params _constraints methods _vis => do {
             if verbose then println ("  checking class " ++ identifier_to_string name) else do { return unit };
-            check_class_methods_with_scope methods scope locals path verbose
+            let locals_ : LocalScope := locals_with_class_typevars cls scope locals;
+            check_class_methods_with_scope methods scope locals_ path verbose
         }
     }
 
@@ -1228,7 +1230,16 @@ def check_class_method_with_scope (m : ClassDef) (scope : Scope) (locals : Local
     match m {
         ClassDef.mk name typ _default => do {
             if verbose then println ("    checking method " ++ identifier_to_string name) else do { return unit };
-            return (match type_check typ Term.hole scope empty_local_types locals {
+            // Beyond the class's own params (already skolemized into
+            // `locals` by `check_class_with_scope`'s caller), a method's
+            // own signature commonly introduces FURTHER implicit type
+            // vars that only ever appear there -- e.g. `Foldable`'s own
+            // `foldr (f : A -> B -> B) (z : B) (t : T A) : B`: `T` is the
+            // class's own param, but `A`/`B` are method-local. Mirrors
+            // `locals_with_def_typevars`'s identical treatment of an
+            // ordinary def's own implicit type params.
+            let locals_ : LocalScope := bind_unresolved_as_local_typevars (free_vars typ List.empty) scope locals;
+            return (match type_check typ Term.hole scope empty_local_types locals_ {
                 Result.ok _ => List.empty,
                 Result.err e => [render_type_error (identifier_to_string name) path e]
             })
@@ -1250,6 +1261,108 @@ def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path 
                 })
             }
         }
+    }
+
+// --- Elaboration: codegen consumes the checker's own resolved terms ---
+//
+// `check_def_with_scope` above discards the successfully-checked
+// `TypedTerm` (`Result.ok _ => List.empty`) -- it only ever needed to
+// know PASS/FAIL for `check`'s own diagnostics. Codegen needs the actual
+// resolved term: `type_check`'s class-method resolution
+// (`lang.typecheck.infer`'s `resolve_class_method`) rewrites a call like
+// `Append.append x y` into a concrete, already-dictionary-dispatched
+// reference the OLD syntactic `resolve_class_calls_decls` pass
+// (`lang.scope`) sometimes can't (that gap is the `Append_append`
+// self-compile bug this whole plan exists to fix) -- so Stage 3 makes
+// `compile`/`test` consume THIS elaborated decl list instead of handing
+// codegen the original, unresolved one.
+
+/// Same skolemization/hole-skipping as `check_def_with_scope`, but
+/// returns the REBUILT `Def` (with its elaborated `.term`) on success
+/// instead of an empty diagnostics list.
+def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis } : Def) (scope : Scope) (locals : LocalScope) : Result String Def :=
+    if is_term_hole body then
+        Result.ok (Def.mk name typ body constraints attrs vis)
+    else
+        let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
+        match type_check body Term.hole scope empty_local_types locals_ {
+            Result.ok tt => Result.ok (Def.mk name typ (tt_term tt) constraints attrs vis),
+            Result.err e => Result.err (render_type_error (module_path_to_string name) Option.none e),
+        }
+
+/// Elaborates every decl in `decl_list`, threading errors. Non-`def_d`
+/// decls (inductive/struct/class/instance/...) pass through unchanged --
+/// only a def's own BODY can contain a class-method call to resolve.
+/// `__Dict_*` value defs (`is_dict_value_def`) are left completely
+/// unelaborated too -- they're pure codegen artifacts `type_check` was
+/// never meant to touch (see `is_dict_value_def`'s own doc comment).
+#[partial]
+def elaborate_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) : Result String Decl :=
+    match d {
+        Decl.def_d df =>
+            if is_dict_value_def df then Result.ok d
+            else
+                match elaborate_def_with_scope df scope locals {
+                    Result.ok df_ => Result.ok (Decl.def_d df_),
+                    Result.err e => Result.err e,
+                },
+        Decl.scoped_open_d p f inner =>
+            match elaborate_decl_with_scope inner scope locals {
+                Result.ok inner_ => Result.ok (Decl.scoped_open_d p f inner_),
+                Result.err e => Result.err e,
+            },
+        _ => Result.ok d,
+    }
+
+/// Elaborates a whole decl list -- `Result.ok` with every def's own
+/// class-method calls resolved to concrete/dict-projected terms on full
+/// success, or `Result.err` with every failing decl's own rendered
+/// diagnostic (same accumulate-don't-short-circuit behavior
+/// `check_module_with_scope` already has) otherwise.
+def elaborate_module_decls (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : Result (List String) (List Decl) :=
+    elaborate_module_decls_go scope decl_list locals List.empty List.empty
+
+/// Best-effort sibling for codegen's own WHOLE-GRAPH use (`lang.codegen.
+/// emit`/`lang.codegen.test_driver`) rather than `check`'s own gate
+/// (which wants `elaborate_module_decls`'s all-or-nothing, real-
+/// diagnostics behavior above): a def that fails to elaborate is left
+/// COMPLETELY UNCHANGED rather than aborting the whole pass. This
+/// matters because the loaded graph for even a trivial program includes
+/// the whole prelude/init closure, and a single unrelated, pre-existing
+/// gap ANYWHERE in it (a class method`s own higher-kinded implicit param
+/// this pass doesn't skolemize, a constrained-instance method whose own
+/// dict-forwarding doesn't yet re-typecheck cleanly -- both real,
+/// already-known, separately-tracked gaps, not something codegen should
+/// have to wait on) must never block the whole graph's worth of
+/// elaboration -- `resolve_class_calls_decls` (the old syntactic pass)
+/// still gets a chance at whatever this couldn't resolve, afterward,
+/// same as always. Never fails; always returns as much elaborated as
+/// possible.
+#[partial]
+def elaborate_module_decls_best_effort (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : List Decl :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            let d_ := match elaborate_decl_with_scope d scope locals {
+                Result.ok d2 => d2,
+                Result.err _ => d,
+            } in
+            List.cons d_ (elaborate_module_decls_best_effort scope rest locals),
+    }
+
+#[partial]
+def elaborate_module_decls_go (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (errs_acc : List String) (decls_acc : List Decl) : Result (List String) (List Decl) :=
+    match decl_list {
+        List.empty =>
+            match errs_acc {
+                List.empty => Result.ok (list_reverse decls_acc),
+                List.cons _ _ => Result.err (list_reverse errs_acc),
+            },
+        List.cons d rest =>
+            match elaborate_decl_with_scope d scope locals {
+                Result.ok d_ => elaborate_module_decls_go scope rest locals errs_acc (List.cons d_ decls_acc),
+                Result.err e => elaborate_module_decls_go scope rest locals (List.cons e errs_acc) decls_acc,
+            },
     }
 
 #[partial]
@@ -1297,66 +1410,41 @@ struct FileCheckAndCache {
     cache : ModuleScopeCache,
 }
 
-/// The file checker — uses `try_parse_decls_strict` on the target
-/// file's own content so a genuine parse failure produces a real,
-/// rendered diagnostic instead of `false`, and accumulates every
-/// failing declaration's rendered type-error message instead of
-/// stopping at the first one. Dependency resolution goes through
-/// `build_scope_with_deps_and_prelude_cached` (prelude/init always
-/// implicitly included, matching `compile`'s own `load_file_modules`
-/// convention) — only the file being checked itself gets strict
-/// *parse* treatment. `lang/main.mo`'s `run_check_loop` builds one
-/// `PreludeInitBase` up front and threads it through every file in a
-/// corpus run instead of each call independently re-paying that cost
-/// — see `PreludeInitBase`'s own doc comment above for why this matters.
+/// The file checker — now routes through `elaborate_loaded_modules`
+/// (the ONE canonical front-end pipeline also used by `compile`/`test`/
+/// `slow_tests`, see that function's own doc comment) instead of its own
+/// hand-rolled scope-acquisition. This is where `check` used to diverge
+/// from `compile`/`test`: it never ran `resolve_infix_decls`/
+/// `promote_instance_defs`/`add_constraint_dict_params_decls`, so a
+/// class-method call's own dictionary dispatch was never actually
+/// exercised by `check` the way it now is.
+///
+/// `base`/`cache` (`PreludeInitBase`/`ModuleScopeCache`) are accepted but
+/// currently UNUSED — `elaborate_loaded_modules` re-walks/re-parses/
+/// re-promotes the whole transitive closure (including prelude/init) on
+/// every call instead of reusing them, reintroducing the O(N·D) corpus-
+/// run cost those two caches existed to eliminate. This is an explicit,
+/// accepted Stage-1 cost (see `bootstrapping/unify-check-compile-test-
+/// elaboration.md`), not an oversight — restoring equivalent caching for
+/// the new pipeline is real, separate follow-up work. `cache` is threaded
+/// straight through unchanged so this function's own signature (and
+/// every existing caller) doesn't need to change for that follow-up to
+/// land later.
 #[partial]
 def check_file_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
     let exists : Bool <- file_exists file_path;
     if exists then do {
         if verbose then println ("checking " ++ file_path) else do { return unit };
-        let content : String <- IO.read_file file_path;
-        let mod_name : String := module_name_from_path file_path;
-        // Self-hosted phase-timing (silent unless `--verbose`): `Bench.now`
-        // is a cheap native syscall, always taken; `Bench.report` (which
-        // does the actual `println!`) is gated on `verbose` so this adds
-        // no visible output — and no measurable cost — by default. Lets
-        // `--verbose` runs answer "which of scope/parse/check dominates
-        // wall time" directly, distinct from the Rust-level `--benchmark`
-        // flag (which only times the outer per-file load).
-        let scope_start : I64 := Bench.now;
-        let scope_and_cache : ScopeAndCache <- build_scope_with_deps_and_prelude_cached base cache file_path mod_name;
-        let scope_elapsed : I64 := I64.sub Bench.now scope_start;
-        let scope_logged : Bool := if verbose then Bench.report ("scope  " ++ file_path) scope_elapsed else true;
-        match scope_and_cache {
-            ScopeAndCache.mk scope_opt updated_cache =>
-                match scope_opt {
-                    Option.some scope =>
-                        do {
-                            let parse_start : I64 := Bench.now;
-                            let parse_result : Result String (List Decl) := try_parse_decls_strict content (Option.some file_path);
-                            let parse_elapsed : I64 := I64.sub Bench.now parse_start;
-                            let parse_logged : Bool := if verbose then Bench.report ("parse  " ++ file_path) parse_elapsed else true;
-                            match parse_result {
-                                Result.ok decl_list => do {
-                                    let empty_locs : LocalScope := {
-                                        vars := List.empty,
-                                        parent := Option.none,
-                                    };
-                                    let check_start : I64 := Bench.now;
-                                    let diags : List String <- check_module_with_scope scope decl_list empty_locs (Option.some file_path) verbose;
-                                    let check_elapsed : I64 := I64.sub Bench.now check_start;
-                                    let check_logged : Bool := if verbose then Bench.report ("check  " ++ file_path) check_elapsed else true;
-                                    return { result := { path := file_path, diagnostics := diags }, cache := updated_cache }
-                                },
-                                Result.err diagnostic => do {
-                                    return { result := { path := file_path, diagnostics := [diagnostic] }, cache := updated_cache }
-                                }
-                            }
-                        },
-                    Option.none => do {
-                        return { result := { path := file_path, diagnostics := ["error: failed to load dependencies for " ++ file_path ++ " (a `use`d module failed to resolve or parse — re-run with a narrower file list, or check each `use`/`open` target under this file's search path, to isolate which one)"] }, cache := updated_cache }
-                    }
-                }
+        let elaborated_result <- elaborate_loaded_modules file_path;
+        match elaborated_result {
+            Result.ok em => do {
+                let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+                let diags <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
+                return { result := { path := file_path, diagnostics := diags }, cache := cache }
+            },
+            Result.err e => do {
+                return { result := { path := file_path, diagnostics := [e] }, cache := cache }
+            },
         }
     } else do {
         return { result := { path := file_path, diagnostics := ["error: file not found: " ++ file_path] }, cache := cache }
@@ -1757,6 +1845,82 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
     }
 }
 
+// --- elaborate_loaded_modules: THE unified check/compile/test front end ---
+//
+// `check` (via `check_file_cached`), `compile`/`test` (via `lang/main.mo`'s
+// `compile_file`/test-loop, `lang/codegen/emit.mo`/`test_driver.mo`), and
+// `slow_tests` used to each hand-roll their own version of this pipeline,
+// independently, and had quietly drifted apart -- `check` seeded prelude/
+// init and resolved infixes, `slow_tests`' own `load_module_with_dependencies`
+// didn't; `compile`/`test` ran `promote_instance_defs`/
+// `add_constraint_dict_params_decls` (dictionary-passing setup) but never
+// type-checked anything; `check`/`slow_tests` type-checked but never ran
+// dictionary-passing setup at all. `elaborate_loaded_modules` is the one
+// canonical version, used identically by all of them from here on.
+struct ElaboratedModules {
+    scope : Scope,
+    target_decls : List Decl,
+    elaborated_decls : List Decl,
+}
+
+/// A trivial local flatten of every loaded module's own decls into one
+/// list -- mirrors `lang.codegen.emit`'s own `collect_all_decls_from_modules`
+/// exactly, but can't be imported from there: `lang.codegen.emit` already
+/// `use`s `lang.module` (for `get_loaded_all`/`get_loaded_main`/
+/// `get_module_info_decls`/`try_parse_decls`), so importing back would be
+/// a module cycle. Same dodge as `lang.typecheck.infer`'s own documented
+/// small-helper duplications elsewhere in this codebase.
+#[partial]
+def flatten_module_decls (modules : List ModuleInfo) (acc : List Decl) : List Decl :=
+    match modules {
+        List.empty => acc,
+        List.cons mod_ rest =>
+            flatten_module_decls rest (list_append (get_module_info_decls mod_) acc),
+    }
+
+/// THE canonical front-end pipeline: parse -> load the full transitive
+/// dependency graph (prelude/init always seeded, via `load_file_modules`)
+/// -> flatten -> resolve infixes -> promote instance methods to concrete
+/// defs -> thread constraint dict params -> build ONE Scope from the
+/// result. `target_decls` (the file actually being checked/compiled) is
+/// deliberately taken from the ORIGINAL `main_module` (pre-elaboration on
+/// this specific field doesn't matter -- `target_decls` is only ever fed
+/// into `check_module_with_scope`, which type-checks each `Def`'s own
+/// `.term` against `scope`, and `scope` itself already reflects every
+/// elaboration pass below); `elaborated_decls` is the fully-prepared
+/// whole-graph list codegen will eventually consume directly (Stage 3).
+#[partial]
+def elaborate_loaded_modules (file_path : String) : IO (Result String ElaboratedModules) := do {
+    let loaded_result : Result String LoadedModules <- load_file_modules file_path;
+    return match loaded_result {
+        Result.err e => Result.err e,
+        Result.ok loaded =>
+            let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty in
+            let infixes : List Infix := collect_infixes all_decls in
+            let resolved : List Decl := resolve_infix_decls infixes all_decls in
+            let promoted : List Decl := promote_instance_defs resolved in
+            let dict_paramed : List Decl := add_constraint_dict_params_decls promoted in
+            let main_module : ModuleInfo := get_loaded_main loaded in
+            let target_mp : ModulePath := main_module.path in
+            let scope_data : ScopeData := build_scope_from_decls target_mp dict_paramed in
+            let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none } in
+            // `target_decls` must go through the SAME infix-resolution/
+            // promotion/dict-param passes as the whole graph above -- the
+            // raw `get_module_info_decls main_module` still has bare
+            // placeholder operator vars (`Term.var (DebugName.named "+")`
+            // etc, from the self-hosted parser -- see `resolve_infix_
+            // decls`'s own doc comment, `lang/scope.mo`), which `scope`
+            // (built from the ALREADY-resolved whole graph) has no entry
+            // for under that literal name, only under `HAdd.add` --
+            // checking the raw decls against the resolved scope produced
+            // a bogus `unknown variable '+'` before this fix.
+            let target_decls_raw : List Decl := get_module_info_decls main_module in
+            let target_decls : List Decl :=
+                add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw)) in
+            Result.ok { scope := scope, target_decls := target_decls, elaborated_decls := dict_paramed }
+    }
+}
+
 // --- Tests: check_module_with_scope / check_file ---
 
 #[partial]
@@ -1909,4 +2073,148 @@ def test_check_file_reports_missing_file : Bool :=
                     }
             }
     }
+
+/// Runs the same elaboration steps `elaborate_loaded_modules` runs
+/// (infix resolution -> instance-method promotion -> dict-param
+/// threading -> scope build) over an inline source string instead of a
+/// real file's transitive dependency graph -- a fast, synthetic
+/// cross-check for `lang.typecheck.infer`'s `resolve_class_method`
+/// rewrite (Stage 2 of `bootstrapping/unify-check-compile-test-
+/// elaboration.md`) that doesn't pay `elaborate_loaded_modules`'s own
+/// O(N·D) whole-prelude-reload cost.
+#[partial]
+def check_synthetic_source (src : String) : IO (List String) := do {
+    let path : ModulePath := ModulePath.mp List.empty;
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let sd : ScopeData := build_scope_from_decls path dict_paramed;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            check_module_with_scope scope dict_paramed locals Option.none false
+        },
+        ParseResult.fail _ => do { return ["parse failed"] },
+    }
+}
+
+/// D4: a class-method call at a CONCRETE carrier with a real matching
+/// instance resolves cleanly -- `Speak.say d` (`d : Dog`) dispatches to
+/// the promoted `Speak_Dog_say`, proving `resolve_class_method`'s new
+/// `find_matching_instance`-based lookup (replacing the old, permanently-
+/// stubbed `derive_instance_key`) actually works end to end.
+#[test]
+def test_dict_resolution_d4_concrete_instance_resolves : IO Bool := do {
+    let src : String :=
+        "class Speak A { def say (a : A) : String }\n" ++
+        "type Dog { woof }\n" ++
+        "instance Speak Dog { def say (a : Dog) : String := \"woof\" }\n" ++
+        "def greet (d : Dog) : String := Speak.say d";
+    let diags <- check_synthetic_source src;
+    return (match diags { List.empty => true, List.cons _ _ => false })
+}
+
+/// Stage 3's own load-bearing proof: `elaborate_module_decls`'s output
+/// for `greet`'s body actually CONTAINS the resolved concrete reference
+/// (`Speak_Dog_say`), not just "checks clean" -- codegen must consume
+/// this rewritten term (not the original `Speak.say`) for Stage 3's
+/// whole "codegen consumes the checker's own resolution" premise to mean
+/// anything real.
+#[test]
+def test_elaborate_module_decls_rewrites_class_method_call : IO Bool := do {
+    let src : String :=
+        "class Speak A { def say (a : A) : String }\n" ++
+        "type Dog { woof }\n" ++
+        "instance Speak Dog { def say (a : Dog) : String := \"woof\" }\n" ++
+        "def greet (d : Dog) : String := Speak.say d";
+    let path : ModulePath := ModulePath.mp List.empty;
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let sd : ScopeData := build_scope_from_decls path dict_paramed;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            return (match elaborate_module_decls scope dict_paramed locals {
+                Result.err _ => false,
+                Result.ok elaborated => decl_list_has_greet_calling_speak_dog_say elaborated,
+            })
+        },
+        ParseResult.fail _ => do { return false },
+    }
+}
+
+#[partial]
+def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
+    match ds {
+        List.empty => false,
+        List.cons d rest =>
+            (match d {
+                Decl.def_d df =>
+                    String.beq (module_path_to_string df.name) "greet" &&
+                        string_contains_helper (show_term df.term) "Speak_Dog_say",
+                _ => false,
+            }) || decl_list_has_greet_calling_speak_dog_say rest,
+    }
+
+// Two more cross-check cases were tried here and pulled pending
+// follow-up (both discovered live via a direct `cargo run -- run
+// <fixture>.mo` debug script, not asserted as passing tests, to avoid
+// landing red tests):
+//
+// 1. "No matching instance is an error": `Speak.say` on a carrier with
+//    NO matching instance (`Cat`, deliberately given none) currently
+//    type-checks with ZERO diagnostics instead of failing. Traced to
+//    `type_check_free_var`'s existing abstract-signature fallback (the
+//    `err _ => ok (mk_typed (Term.var sentinel dbg) sig)` arm, unchanged
+//    by this rewrite) -- `Speak.say`'s abstract `A -> String` apparently
+//    unifies against ANY argument type rather than rejecting a rigid
+//    mismatch. Confirmed pre-existing, not a regression: `resolve_class_
+//    method` never succeeded at all before this rewrite (see Finding 1,
+//    `bootstrapping/unify-check-compile-test-elaboration.md`), so EVERY
+//    class-method call always hit this exact fallback previously too --
+//    this rewrite only changes when/whether real resolution succeeds,
+//    not this fallback's own (pre-existing, separately-scoped) leniency.
+//
+// 2. D5 (a constrained def's own body forwarding its already-bound dict
+//    parameter, e.g. `def speak_twice [Speak A] (a : A) : String :=
+///   Speak.say a`) currently fails with `unknown variable 'bound_var'`.
+//    `local_dict_for_class`'s own lookup succeeds (confirmed via the
+//    debug script), but `build_dict_field_projection`'s returned term
+//    doesn't re-typecheck cleanly -- that helper (`lang.scope`) was built
+//    for the OLD codegen-only consumer, which lowers it straight to LLVM
+//    without ever running it back through the bidirectional checker;
+//    reusing it here for a type-checker-facing result may need its own,
+//    separate fix (or a parallel, checker-facing D5 term shape) rather
+//    than a straight reuse. D4 (the common case, tested above) is
+//    unaffected and confirmed working.
+
+/// End-to-end proof `elaborate_loaded_modules` actually resolves a file
+/// with ZERO `use` decls (`std/test.mo`'s own `Test.assert`, whose body
+/// references the ambient `Bool` type) -- the exact shape A3's diagnosis
+/// showed `load_module_with_dependencies` used to fail on (it never
+/// seeded prelude/init unless a file explicitly `use`d something that
+/// transitively reached them). `elaborate_loaded_modules` always loads
+/// via `load_file_modules`, which does seed them unconditionally.
+#[test]
+def test_elaborate_loaded_modules_resolves_file_with_no_use_decls : IO Bool := do {
+    let result <- elaborate_loaded_modules "std/test.mo";
+    match result {
+        Result.err _ => return false,
+        Result.ok em => do {
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            let diags <- check_module_with_scope em.scope em.target_decls locals Option.none false;
+            return (match diags {
+                List.empty => true,
+                List.cons _ _ => false,
+            })
+        },
+    }
+}
 

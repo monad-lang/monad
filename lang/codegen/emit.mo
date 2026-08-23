@@ -1,8 +1,8 @@
 use io {IO, println}
 use lang.types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
-  LoadedModules, MatchCase, ModulePath, NameRef, Native, Operator, Param,
-  StructLitField, Term,
+  LoadedModules, LocalScope, MatchCase, ModulePath, NameRef, Native, Operator,
+  Param, Scope, ScopeData, StructLitField, Term,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, join_identifiers, lam,
   lit, match_, mc, mk, mp, name, named, nid, nmp, nop, ntv, num, operator,
   param_many, pi, show_identifier, show_operator, str, type_, unnamed, var,
@@ -17,12 +17,12 @@ use lang.codegen.ir {
   parm_, phi, ret, sdiv, show_llvm_type, sub, trunc, var_, void_val, zext,
 }
 use lang.module {
-  LoadedModules, ModuleInfo, get_loaded_all,
-  get_module_info_decls, mk,
+  LoadedModules, ModuleInfo, elaborate_module_decls_best_effort, get_loaded_all,
+  get_loaded_main, get_module_info_decls, mk,
 }
 use lang.scope {
-  add_constraint_dict_params_decls, collect_infixes, promote_instance_defs,
-  resolve_class_calls_decls, resolve_infix_decls,
+  add_constraint_dict_params_decls, build_scope_from_decls, collect_infixes,
+  promote_instance_defs, resolve_class_calls_decls, resolve_infix_decls,
 }
 
 open IO {println}
@@ -2395,7 +2395,30 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) : IO LLVMModule := do 
     // in place to know which locals are bound dicts).
     let promoted_decls := promote_instance_defs resolved_decls;
     let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
-    let dispatched_decls := resolve_class_calls_decls dict_param_decls;
+
+    // Stage 3 of `bootstrapping/unify-check-compile-test-elaboration.md`:
+    // try real dictionary-dispatch resolution via the type checker first
+    // (`lang.typecheck.infer`'s `resolve_class_method`, using REAL
+    // inferred types -- fixes the class of gap the syntactic
+    // `resolve_class_calls_decls` pass below can't cover on its own; the
+    // `Append_append` self-compile bug this whole plan exists to fix is
+    // exactly that gap). `resolve_class_calls_decls` still always runs
+    // afterward -- it's naturally idempotent on already-resolved calls
+    // (`class_method_ref` no longer recognizes a rewritten reference as
+    // `Class.method`-shaped) and covers what elaboration deliberately
+    // doesn't (heterogeneous/multi-param classes, `instance_d` bodies
+    // the checker's own per-decl walk never visits). If elaboration
+    // fails ANYWHERE in the whole loaded graph (e.g. an unrelated,
+    // pre-existing gap in a dependency having nothing to do with the
+    // program actually being compiled), fall back to the original,
+    // unelaborated decls -- this must never newly break a compile that
+    // worked before this pass existed.
+    let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
+    let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_decls;
+    let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
+    let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+    let elaborated := elaborate_module_decls_best_effort scope dict_param_decls empty_locs;
+    let dispatched_decls := resolve_class_calls_decls elaborated;
 
     // Only compile Defs actually reachable (transitively) from `main` --
     // compiling the FULL 264-def loaded set unconditionally meant any

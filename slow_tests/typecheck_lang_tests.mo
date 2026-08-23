@@ -4,13 +4,13 @@ use lang.types {
   Scope, ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
 }
 use lang.module {
-  file_path_to_module_path, load_module_with_dependencies, mk, parse_all_decls,
+  elaborate_loaded_modules, file_path_to_module_path, mk, parse_all_decls,
   string_find_last_slash, typecheck_module_with_scope,
 }
 use lang.parser.core {fail, mk, success}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
-open IO {read_file}
+open IO {println, read_file}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -108,22 +108,18 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
             }
     }
 
-/// Type check a file by loading it with all dependencies and type checking the result
+/// Type check a file by loading it with all dependencies and type checking
+/// the result — routes through `elaborate_loaded_modules`, the one
+/// canonical front-end pipeline `check`/`compile`/`test`/`slow_tests` all
+/// now share (see `bootstrapping/unify-check-compile-test-elaboration.md`).
 def typecheck_file (file_path : String) : IO Bool := do {
-    let content <- IO.read_file file_path;
-    // Convert file path to ModulePath (e.g., "lang/module.mo" -> [id "lang", id "module"])
-    let mp := file_path_to_module_path file_path;
-    // Load module with all dependencies
-    let mb_scope <- load_module_with_dependencies "" mp;
-    return match mb_scope {
-        Option.some scope =>
-            // Parse the file and typecheck with the loaded scope
-            match parse_all_decls content {
-                ParseResult.success _ decls =>
-                    typecheck_module_with_scope scope decls empty_local_scope,
-                ParseResult.fail _ => false
-            },
-        Option.none => false
+    let result <- elaborate_loaded_modules file_path;
+    match result {
+        Result.ok em => typecheck_module_with_scope em.scope em.target_decls empty_local_scope,
+        Result.err e => do {
+            println ("error loading " ++ file_path ++ ": " ++ e);
+            return false
+        },
     }
 }
 

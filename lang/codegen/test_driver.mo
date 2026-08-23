@@ -28,13 +28,19 @@
 /// `detect_test_result_value`, `core/src/lib.rs`) are explicitly out
 /// of scope for this file — not silently unsupported, just not yet
 /// needed by any real corpus file.
-use lang.types {Attribute, Decl, Def, LoadedModules, ModulePath, has_attr}
+use lang.types {
+  Attribute, Decl, Def, LoadedModules, LocalScope, ModulePath, Scope, ScopeData,
+  has_attr,
+}
 use lang.codegen.emit {collect_all_decls_from_modules, compile_db_module, filter_reachable_decls, module_path_to_str}
 use lang.codegen.ir {LLVMModule}
-use lang.module {get_loaded_all, get_loaded_main, get_module_info_decls, try_parse_decls}
+use lang.module {
+  ModuleInfo, elaborate_module_decls_best_effort,
+  get_loaded_all, get_loaded_main, get_module_info_decls, try_parse_decls,
+}
 use lang.scope {
-  add_constraint_dict_params_decls, collect_infixes, promote_instance_defs,
-  resolve_class_calls_decls, resolve_infix_decls,
+  add_constraint_dict_params_decls, build_scope_from_decls, collect_infixes,
+  promote_instance_defs, resolve_class_calls_decls, resolve_infix_decls,
 }
 use io {IO}
 
@@ -177,6 +183,18 @@ def synth_sum_expr (names : List String) (idx : I64) : String :=
 #[partial]
 def synthesize_test_driver_source (names : List String) : String :=
     let total : I64 := List.length names in
+    // `use io {IO}\nopen IO {println}\n` -- without this, the driver's
+    // own bare `println` calls below are perfectly fine for CODEGEN
+    // (which resolves natives independently of the type checker's own
+    // `Scope`) but unresolvable for Stage 3's own elaboration pass
+    // (`lang.module`'s `elaborate_module_decls`/`elaborate_module_decls_
+    // best_effort`, which builds a real `Scope` via `build_scope_from_
+    // decls` and requires every name to actually resolve against it) --
+    // confirmed via a direct repro: omitting this made the WHOLE `main`
+    // def fail to elaborate on `unknown variable 'println'`, silently
+    // discarding the elaboration this driver most needs (its own `++`
+    // chain just below, the original `Append_append` bug).
+    "use io {IO}\nopen IO {println}\n" ++
     "def main : I64 :=\n" ++
     synth_let_lines names 0 ++
     synth_report_lines names 0 ++
@@ -237,7 +255,27 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     // message left explicitly open for `monad test`.
                     let promoted_spliced := promote_instance_defs resolved_spliced;
                     let dict_param_spliced := add_constraint_dict_params_decls promoted_spliced;
-                    let dispatched_spliced := resolve_class_calls_decls dict_param_spliced;
+
+                    // Stage 3 of `bootstrapping/unify-check-compile-test-
+                    // elaboration.md`: try real dictionary-dispatch
+                    // resolution via the type checker BEFORE the
+                    // syntactic `resolve_class_calls_decls` fallback --
+                    // see `lang.codegen.emit`'s own `compile_loaded_
+                    // modules_to_ir` for the full rationale. This is
+                    // exactly what fixes the driver's OWN synthesized
+                    // summary line (`I64.to_string __passed ++ "/" ++
+                    // ...`, `synthesize_test_driver_source` above): the
+                    // outer `++`'s carrier was never resolvable by the
+                    // syntactic pass alone (both operands are computed,
+                    // not literal/bare-var), which is the original
+                    // `Append_append` self-compile failure this plan
+                    // exists to fix.
+                    let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
+                    let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_spliced;
+                    let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
+                    let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+                    let elaborated := elaborate_module_decls_best_effort scope dict_param_spliced empty_locs;
+                    let dispatched_spliced := resolve_class_calls_decls elaborated;
                     let reachable := filter_reachable_decls dispatched_spliced;
                     return Result.ok (compile_db_module reachable)
                 },
@@ -305,21 +343,32 @@ def test_test_def_names_preserves_order : Bool :=
 def test_synthesize_test_driver_source_parses_and_names_main : Bool :=
     // The whole point of the string-templating architecture decision
     // (see this file's own top-of-file doc comment): the synthesized
-    // source must round-trip through the REAL parser, producing
-    // exactly one `Decl.def_d` named "main".
+    // source must round-trip through the REAL parser, producing exactly
+    // one `Decl.def_d` named "main" (plus the leading `use io {IO}`/
+    // `open IO {println}` decls the driver source now also declares --
+    // see `synthesize_test_driver_source`'s own doc comment on why
+    // those are needed for Stage 3's elaboration pass to resolve the
+    // driver's own bare `println` calls).
     let source : String := synthesize_test_driver_source (List.cons "test_a" (List.cons "test_b" List.empty)) in
     match try_parse_decls source {
-        Option.some decl_list =>
-            match decl_list {
-                List.cons only_decl rest =>
-                    (match rest { List.empty => true, List.cons _ _ => false }) &&
-                    match only_decl {
-                        Decl.def_d def_val => String.beq (module_path_to_str (Def.name def_val)) "main",
-                        _ => false,
-                    },
-                List.empty => false,
-            },
+        Option.some decl_list => decl_list_has_exactly_one_main decl_list,
         Option.none => false,
+    }
+
+#[partial]
+def decl_list_has_exactly_one_main (decl_list : List Decl) : Bool :=
+    I64.beq (count_main_defs decl_list) 1
+
+#[partial]
+def count_main_defs (decl_list : List Decl) : I64 :=
+    match decl_list {
+        List.empty => 0,
+        List.cons d rest =>
+            let here : I64 := match d {
+                Decl.def_d def_val => if String.beq (module_path_to_str (Def.name def_val)) "main" then 1 else 0,
+                _ => 0,
+            } in
+            here + count_main_defs rest,
     }
 
 #[test]

@@ -1223,11 +1223,18 @@ struct ScopeData {
     // every consumer looks this up by name (`scope_find_inductive`), never
     // iterates it, so a linear scan over every inductive in the merged
     // scope (~218+ corpus-wide) on every match-case/struct-literal check
-    // was pure waste. `classes`, the sibling field just below, has no
-    // by-name lookup anywhere in the corpus (confirmed unused for reads)
-    // so it stays a `List` -- only `inductives` is actually queried.
+    // was pure waste. `classes`, the sibling field just below, stays a
+    // `List` (by-name lookup is now `scope_find_class`, lower corpus
+    // cardinality than inductives, no measured need for a HashMap yet).
     inductives : HashMap ModulePath Inductive,
-    classes : List Inductive,
+    // Full `Class` values (params/constraints/ordered methods), not a
+    // synthetic zero-method `Inductive` stand-in -- `build_scope_class`
+    // used to throw the real `Class` away and register a `dummy_ind`
+    // instead, which is why `resolve_class_method`'s own class lookup
+    // (`lang/typecheck/infer.mo`) could never actually resolve a class's
+    // own declared params/methods. `scope_find_class`/`scope_data_classes`
+    // (below) are the real by-name reader this field never had before.
+    classes : List Class,
     infixes : List Infix,
     conflicts : List ScopeConflict,
     // `HashMap.map HashMap.empty_buckets` directly, not `Map.empty`: the

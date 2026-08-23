@@ -1,32 +1,26 @@
 use io {IO}
 use lang.types {LocalScope}
-use lang.module {
-  extract_directory, load_module_with_dependencies, parse_all_decls,
-  typecheck_module_with_scope,
-}
+use lang.module {elaborate_loaded_modules, typecheck_module_with_scope}
+
+open IO {println}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
     parent := Option.none,
 }
 
-/// See lang/tests/typecheck_init_tests.mo's `typecheck_file` doc comment —
-/// same fix, same reason (ambient prelude/init dependency loading via
-/// lang.module's own proven pipeline, instead of building scope from only
-/// the target file's own decls).
+/// See slow_tests/typecheck_init_tests.mo's `typecheck_file` doc comment
+/// — same fix, same reason (routes through `elaborate_loaded_modules`,
+/// the one canonical front-end pipeline `check`/`compile`/`test`/
+/// `slow_tests` all now share).
 def typecheck_file (file_path : String) (mod_name : String) : IO Bool := do {
-    let content <- IO.read_file file_path;
-    let mp := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty);
-    let base_dir := extract_directory file_path;
-    let mb_scope <- load_module_with_dependencies base_dir mp;
-    return match mb_scope {
-        Option.some scope =>
-            match parse_all_decls content {
-                ParseResult.success _ decls =>
-                    typecheck_module_with_scope scope decls empty_local_scope,
-                ParseResult.fail _ => false
-            },
-        Option.none => false
+    let result <- elaborate_loaded_modules file_path;
+    match result {
+        Result.ok em => typecheck_module_with_scope em.scope em.target_decls empty_local_scope,
+        Result.err e => do {
+            println ("error loading " ++ file_path ++ ": " ++ e);
+            return false
+        },
     }
 }
 
@@ -50,10 +44,10 @@ def test_typecheck_std_map : IO Bool := typecheck_file "std/map.mo" "map"
 // --- std/concurrent/ files ---
 
 #[test]
-def test_typecheck_std_concurrent_fiber : IO Bool := typecheck_file "std/concurrent/fiber.mo" "concurrent_fiber"
+def test_typecheck_std_concurrent_fiber : IO Bool := typecheck_file "std/concurrent/fiber.mo" "fiber"
 
 #[test]
-def test_typecheck_std_concurrent_combine : IO Bool := typecheck_file "std/concurrent/combine.mo" "concurrent_combine"
+def test_typecheck_std_concurrent_combine : IO Bool := typecheck_file "std/concurrent/combine.mo" "combine"
 
 // --- std/ test files ---
 //

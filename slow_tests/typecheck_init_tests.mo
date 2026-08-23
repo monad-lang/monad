@@ -1,9 +1,8 @@
 use io {IO}
 use lang.types {LocalScope}
-use lang.module {
-  extract_directory, load_module_with_dependencies, parse_all_decls,
-  typecheck_module_with_scope,
-}
+use lang.module {elaborate_loaded_modules, typecheck_module_with_scope}
+
+open IO {println}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -11,33 +10,25 @@ def empty_local_scope : LocalScope := {
 }
 
 /// Type check a file with its full dependency scope (ambient prelude/init
-/// included) — reuses the same `lang.module` pipeline
-/// `slow_tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main`
-/// already proves correct, instead of this file's own previous
-/// from-scratch reimplementation that only ever built scope from the
-/// target file's own decls. That meant any def relying on a name defined
-/// elsewhere in the ambient prelude/init chain (nearly everything, since
-/// prelude/init are auto-opened for every file) genuinely couldn't
-/// resolve — not a parser bug, but this test harness never exercising
-/// the same dependency-loading real compilation goes through. `mod_name`
-/// is used as the module's own path (matching `resolve_module_file`'s
-/// "look up bare module names under init/std/lang/examples" convention);
-/// `extract_directory file_path` is passed as the search base_dir so
-/// files outside those top-level dirs (e.g. `lang/parser/combinators.mo`)
-/// still resolve relative to their own directory.
+/// included) — routes through `elaborate_loaded_modules`, the ONE
+/// canonical front-end pipeline `check`/`compile`/`test` all now share
+/// (see `bootstrapping/unify-check-compile-test-elaboration.md`), instead
+/// of this file's own previously-independent `load_module_with_
+/// dependencies` call (which, among other gaps, never seeded prelude/init
+/// unless a file explicitly `use`d something that transitively reached
+/// them, and never ran infix resolution/dictionary-passing setup at all).
+/// `mod_name` is now unused — `elaborate_loaded_modules` derives the
+/// module's own name from `file_path` directly (`module_name_from_path`,
+/// inside `load_file_modules`) — kept as a parameter purely so every call
+/// site below still documents which module it's exercising.
 def typecheck_file (file_path : String) (mod_name : String) : IO Bool := do {
-    let content <- IO.read_file file_path;
-    let mp := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty);
-    let base_dir := extract_directory file_path;
-    let mb_scope <- load_module_with_dependencies base_dir mp;
-    return match mb_scope {
-        Option.some scope =>
-            match parse_all_decls content {
-                ParseResult.success _ decls =>
-                    typecheck_module_with_scope scope decls empty_local_scope,
-                ParseResult.fail _ => false
-            },
-        Option.none => false
+    let result <- elaborate_loaded_modules file_path;
+    match result {
+        Result.ok em => typecheck_module_with_scope em.scope em.target_decls empty_local_scope,
+        Result.err e => do {
+            println ("error loading " ++ file_path ++ ": " ++ e);
+            return false
+        },
     }
 }
 

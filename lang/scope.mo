@@ -426,11 +426,7 @@ def build_scope_class (cls : Class) (path : ModulePath) (acc : ScopeData) : Scop
         mk clsname _ _ methods _vis =>
             let name_list : List Identifier := List.cons clsname List.empty in
             let cls_mp : ModulePath := ModulePath.mp name_list in
-            let empty_params : List Param := List.empty in
-            let empty_constructors : List InductConstructor := List.empty in
-            let empty_attrs : List Attribute := List.empty in
-            let dummy_ind : Inductive := Inductive.mk cls_mp empty_params (Term.type_ 1) empty_constructors empty_attrs Visibility.package_private in
-            let with_cls : ScopeData := scope_data_add_class acc dummy_ind in
+            let with_cls : ScopeData := scope_data_add_class acc cls in
             add_class_methods with_cls methods cls_mp
     }
 
@@ -496,6 +492,24 @@ def scope_find_inductive (name : ModulePath) (s : Scope) : Result ScopeError Ind
         Option.some ind => ok ind,
         Option.none => err (ScopeError.inductive_not_found name)
     }
+
+// --- scope_find_class: the real `Class` (params/constraints/ordered
+// methods), by name -- distinct from `scope_find_class_def` just below,
+// which finds one already-flattened `ScopeClassDef` (a single method's
+// own signature), not the class as a whole. Needed by
+// `lang/typecheck/infer.mo`'s `resolve_class_method` to recover a
+// class's own declared params (for skolemization, `module.mo`'s
+// `locals_with_class_typevars`) and ordered method-name list (for D5
+// dict-field-projection, `build_dict_field_projection`) -- neither is
+// recoverable from a `ScopeClassDef` alone. ---
+
+def scope_data_classes (sd : ScopeData) : List Class :=
+    match sd {
+        mk _ _ _ _ cls _ _ _ => cls
+    }
+
+def scope_find_class (name : ModulePath) (s : Scope) : Option Class :=
+    find_class_by_name (scope_data_classes (scope_globals s)) name
 
 // --- scope_find_class_def ---
 
@@ -809,7 +823,7 @@ def scope_data_add_infix (sd : ScopeData) (op : Operator) (name : ModulePath) : 
         }
     }
 
-def scope_data_add_class (sd : ScopeData) (cls : Inductive) : ScopeData :=
+def scope_data_add_class (sd : ScopeData) (cls : Class) : ScopeData :=
     match sd {
         mk dr cd ins ind clss infs conf dp => {
             def_refs := dr,
@@ -1778,6 +1792,90 @@ type CtorOwner {
     mk (ctor_name : Identifier) (owner : ModulePath),
 }
 
+/// One top-level `def`'s own declared `.typ`, verbatim -- lets
+/// `infer_carrier_type`'s `Term.app` arm (below) recover a carrier from
+/// the DECLARED return type of a called function, when the operand is
+/// itself a computed call (`I64.to_string x`) rather than a literal/
+/// bare-var/constructor -- exactly the shape the self-hosted test
+/// driver's own synthesized summary line produces
+/// (`lang/codegen/test_driver.mo`'s `synthesize_test_driver_source`),
+/// and the root cause of the `Append_append` self-compile bug this
+/// table exists to close. Deliberately reads `Def.typ` directly from the
+/// decl list rather than going through `scope_resolve_name`: `ScopeData`
+/// registers every def's own `ScopeDef.sig` as `Term.hole`
+/// unconditionally (`build_scope_def`'s own doc comment -- a load-
+/// bearing sentinel for dozens of other call sites, not something to
+/// change) -- confirmed via direct debugging that this is genuinely why
+/// `lang.typecheck.infer`'s own type-checker-based dictionary resolution
+/// (Stage 2 of `bootstrapping/unify-check-compile-test-elaboration.md`)
+/// can't recover a real return type for an ordinary function call in
+/// pure-infer mode. This syntactic pass, unlike the type checker, reads
+/// straight from the parsed decl list and isn't affected by that gap.
+type DefTypeEntry {
+    mk (name : ModulePath) (typ : Term),
+}
+
+#[partial]
+def collect_def_types (decl_list : List Decl) : List DefTypeEntry :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.def_d def_ =>
+                    match def_ {
+                        Def.mk dname dtyp _ _ _ _ =>
+                            List.cons (DefTypeEntry.mk dname dtyp) (collect_def_types rest),
+                    },
+                _ => collect_def_types rest,
+            },
+    }
+
+#[partial]
+def lookup_def_type (entries : List DefTypeEntry) (name : Identifier) : Option Term :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest =>
+            match e {
+                DefTypeEntry.mk ename etyp =>
+                    if Similar.similar (last_segment ename) name
+                    then Option.some etyp
+                    else lookup_def_type rest name,
+            },
+    }
+
+/// Strip `n` leading `Term.pi` binders (skipping any leading `Term.forall`
+/// binders at each step -- they don't correspond to an applied value
+/// argument), returning the final codomain. A promoted, constrained
+/// instance method's own declared type can interleave Phase 3's
+/// prepended dict-parameter Pis with surviving Foralls, hence re-
+/// checking for a leading Forall before every single Pi strip, not just
+/// once up front.
+#[partial]
+def return_type_after_n_args (typ : Term) (n : I64) : Term :=
+    if I64.lt n 1 then typ
+    else
+        match typ {
+            Term.forall _ _ body => return_type_after_n_args body n,
+            Term.pi _ ret => return_type_after_n_args ret (n - 1),
+            _ => typ,
+        }
+
+/// Local copy of `lang.typecheck.infer`'s own `type_head_name` -- can't
+/// import it: `infer.mo` already `use`s `lang.scope`, so importing back
+/// would be a module cycle. Same dodge as this module's other small,
+/// deliberately-duplicated helpers.
+#[partial]
+def type_head_name_local (t : Term) : Option Identifier :=
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => Option.some id,
+                DebugName.unnamed => Option.none,
+            },
+        Term.app f _ => type_head_name_local f,
+        _ => Option.none,
+    }
+
 #[partial]
 def collect_ctor_owners (decl_list : List Decl) : List CtorOwner :=
     match decl_list {
@@ -1889,7 +1987,7 @@ def carrier_var (name : String) : Term :=
 /// that the same as "no matching instance", failing clean at link time
 /// rather than guessing.
 #[partial]
-def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (t : Term) : Option Term :=
+def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : List DefTypeEntry) (t : Term) : Option Term :=
     match t {
         Term.lit v => literal_carrier_type v,
         Term.var _ dbg =>
@@ -1917,6 +2015,37 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
         // producing a real arity-mismatched call and a runtime segfault).
         Term.con c =>
             match c { Con.mk _ typ_name _ _ => Option.some (carrier_var (show_module_path typ_name)) },
+        // A COMPUTED operand (a call, not a literal/bare-var/constructor)
+        // -- e.g. `I64.to_string x` inside `I64.to_string x ++ y` -- look
+        // up the called function's own DECLARED return type. This is the
+        // exact shape the self-hosted test driver's own synthesized
+        // summary line produces (`lang/codegen/test_driver.mo`), and the
+        // root cause of the `Append_append` self-compile bug: previously
+        // this fell through to the wildcard below and failed clean
+        // rather than resolving. See `DefTypeEntry`'s own doc comment for
+        // why this reads the declared type directly rather than relying
+        // on `lang.typecheck.infer`'s own (structurally unable, for this
+        // shape) type-checker-based resolution.
+        Term.app _ _ =>
+            match flatten_call_spine t {
+                CallSpine.mk head args =>
+                    match head {
+                        Term.var _ dbg =>
+                            match dbg {
+                                DebugName.named id =>
+                                    match lookup_def_type def_types id {
+                                        Option.some typ =>
+                                            match type_head_name_local (return_type_after_n_args typ (List.length args)) {
+                                                Option.some carrier_name => Option.some (carrier_var (show_identifier carrier_name)),
+                                                Option.none => Option.none,
+                                            },
+                                        Option.none => Option.none,
+                                    },
+                                DebugName.unnamed => Option.none,
+                            },
+                        _ => Option.none,
+                    },
+            },
         _ => Option.none,
     }
 
@@ -2242,7 +2371,7 @@ def build_dict_field_projection (cls : Class) (dict_id : Identifier) (method_nam
 /// `resolve_infix_term`'s own recursion pattern, extended with the
 /// `env`/`dict_env` threading D4/D5 both need.
 #[partial]
-def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (t : Term) : Term :=
+def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (t : Term) : Term :=
     match t {
         Term.lam dbg typ body =>
             match dbg {
@@ -2253,16 +2382,16 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                         Option.some cls_name => List.cons (DictBinding.mk cls_name id) dict_env,
                         Option.none => dict_env,
                     } in
-                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints env dict_env typ)
-                        (resolve_class_call_term classes instances ctor_owners def_constraints new_env new_dict_env body),
+                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env typ)
+                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types new_env new_dict_env body),
                 DebugName.unnamed =>
-                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints env dict_env typ)
-                        (resolve_class_call_term classes instances ctor_owners def_constraints env dict_env body),
+                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env typ)
+                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env body),
             },
         Term.app _ _ =>
             match flatten_call_spine t {
                 CallSpine.mk head args =>
-                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints env dict_env args in
+                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types env dict_env args in
                     match head {
                         Term.var _ dbg =>
                             match dbg {
@@ -2271,24 +2400,24 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                                         Option.some ref =>
                                             match ref {
                                                 ClassMethodRef.mk cls method_name =>
-                                                    resolve_class_method_call classes instances dict_env cls method_name resolved_args head args,
+                                                    resolve_class_method_call classes instances dict_env def_types cls method_name resolved_args head args,
                                             },
-                                        Option.none => resolve_ordinary_constrained_call classes instances dict_env def_constraints id head resolved_args,
+                                        Option.none => resolve_ordinary_constrained_call classes instances dict_env def_constraints def_types id head resolved_args,
                                     },
                                 DebugName.unnamed => rebuild_call head resolved_args,
                             },
-                        _ => rebuild_call (resolve_class_call_term classes instances ctor_owners def_constraints env dict_env head) resolved_args,
+                        _ => rebuild_call (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env head) resolved_args,
                     },
             },
-        _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints env dict_env) t,
+        _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env) t,
     }
 
 #[partial]
-def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (args : List Term) : List Term :=
+def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (args : List Term) : List Term :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
-            List.cons (resolve_class_call_term classes instances ctor_owners def_constraints env dict_env a) (resolve_class_call_terms classes instances ctor_owners def_constraints env dict_env rest),
+            List.cons (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types env dict_env rest),
     }
 
 /// D5-first, D4-fallback resolution for one class-method call, given
@@ -2298,18 +2427,18 @@ def resolve_class_call_terms (classes : List Class) (instances : List Instance) 
 /// resolved via ordinary recursion, per this pass's own "leave
 /// unresolved rather than guess" style, matching `resolve_infix_term`).
 #[partial]
-def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) : Term :=
+def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) : Term :=
     let cls_name := class_own_name cls in
     match lookup_dict_binding dict_env cls_name {
         Option.some dict_id => build_dict_field_projection cls dict_id method_name resolved_args,
-        Option.none => resolve_class_method_call_d4 classes instances dict_env cls_name method_name resolved_args orig_head orig_args,
+        Option.none => resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args,
     }
 
 /// D4: no bound dict for this class in scope -- try a fresh concrete
 /// lookup from the call's own args.
 #[partial]
-def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) : Term :=
-    match infer_carrier_from_args resolved_args {
+def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) : Term :=
+    match infer_carrier_from_args def_types resolved_args {
         Option.none => rebuild_call orig_head resolved_args,
         Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
     }
@@ -2342,8 +2471,8 @@ def resolve_class_method_call_with_dict_args (classes : List Class) (instances :
 /// one that resolves (see this section's own top doc comment on why
 /// this doesn't require every arg to agree).
 #[partial]
-def infer_carrier_from_args (args : List Term) : Option Term :=
-    infer_carrier_from_args_go empty_local_types empty_ctor_owners_placeholder args
+def infer_carrier_from_args (def_types : List DefTypeEntry) (args : List Term) : Option Term :=
+    infer_carrier_from_args_go empty_local_types empty_ctor_owners_placeholder def_types args
 
 /// `infer_carrier_from_args` deliberately does NOT thread the real
 /// `env`/`ctor_owners` down to here -- by the time this runs, every arg
@@ -2362,13 +2491,13 @@ def empty_local_types : List LocalTypeBinding := List.empty
 def empty_ctor_owners_placeholder : List CtorOwner := List.empty
 
 #[partial]
-def infer_carrier_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (args : List Term) : Option Term :=
+def infer_carrier_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : List DefTypeEntry) (args : List Term) : Option Term :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
-            match infer_carrier_type env ctor_owners a {
+            match infer_carrier_type env ctor_owners def_types a {
                 Option.some t => Option.some t,
-                Option.none => infer_carrier_from_args_go env ctor_owners rest,
+                Option.none => infer_carrier_from_args_go env ctor_owners def_types rest,
             },
     }
 
@@ -2393,7 +2522,8 @@ def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
     let instances := collect_instances decl_list in
     let ctor_owners := collect_ctor_owners decl_list in
     let def_constraints := collect_def_constraints decl_list in
-    resolve_class_calls_decls_go classes instances ctor_owners def_constraints decl_list
+    let def_types := collect_def_types decl_list in
+    resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types decl_list
 
 /// One ordinary (non-class-method) def's own constraints -- needed so a
 /// CALL SITE to a constrained def (e.g. `show_twice 5`, where
@@ -2449,11 +2579,11 @@ def lookup_def_constraints (entries : List DefConstraintEntry) (name : ModulePat
 /// passes through completely unchanged -- this must never touch an
 /// ordinary, unconstrained call.
 #[partial]
-def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_constraints : List DefConstraintEntry) (id : Identifier) (head : Term) (resolved_args : List Term) : Term :=
+def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (id : Identifier) (head : Term) (resolved_args : List Term) : Term :=
     match lookup_def_constraints def_constraints (ModulePath.mp (List.cons id List.empty)) {
         Option.none => rebuild_call head resolved_args,
         Option.some constraints =>
-            match infer_carrier_from_args resolved_args {
+            match infer_carrier_from_args def_types resolved_args {
                 Option.none => rebuild_call head resolved_args,
                 Option.some carrier =>
                     match resolve_dict_args classes instances dict_env carrier constraints {
@@ -2464,7 +2594,7 @@ def resolve_ordinary_constrained_call (classes : List Class) (instances : List I
     }
 
 #[partial]
-def resolve_class_calls_decls_go (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (decl_list : List Decl) : List Decl :=
+def resolve_class_calls_decls_go (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
@@ -2472,10 +2602,10 @@ def resolve_class_calls_decls_go (classes : List Class) (instances : List Instan
                 Decl.def_d def_ =>
                     match def_ {
                         Def.mk name typ term_ constraints attrs vis =>
-                            let new_term := resolve_class_call_term classes instances ctor_owners def_constraints List.empty List.empty term_ in
-                            List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis)) (resolve_class_calls_decls_go classes instances ctor_owners def_constraints rest),
+                            let new_term := resolve_class_call_term classes instances ctor_owners def_constraints def_types List.empty List.empty term_ in
+                            List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis)) (resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types rest),
                     },
-                _ => List.cons d (resolve_class_calls_decls_go classes instances ctor_owners def_constraints rest),
+                _ => List.cons d (resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types rest),
             },
     }
 

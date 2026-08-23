@@ -1,6 +1,6 @@
 use lang.types {
   Con, DebugName, Identifier, Inductive, InductConstructor, Instance,
-  InstanceKey, Literal, LocalScope, LocalVar, MatchCase, ModulePath, NameRef,
+  Literal, LocalScope, LocalVar, MatchCase, ModulePath, NameRef,
   Native, Param, Scope, ScopeClassDef, ScopeDef, ScopeError, Similar,
   StructLitField, Term, TypeConstraint, TypeError,
   app, con, custom, forall, hole, id, id_eq, if_, lam, list_rev_loop,
@@ -9,10 +9,14 @@ use lang.types {
   unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
 use lang.scope {
-  build_scope_def, find_constructor_in_inductive, inductive_has_constructor,
-  list_append, scope_data_add_inductive, scope_data_empty,
-  scope_find_class_def_by_name, scope_find_def_params, scope_find_inductive,
-  scope_find_inductive_by_constructor, scope_push_local, scope_resolve_instance,
+  DictBinding, build_dict_field_projection, build_scope_def,
+  dict_binding_class_of, dict_param_name, find_constructor_in_inductive,
+  find_matching_instance, inductive_has_constructor, list_append,
+  mangle_instance_method_name, mangled_to_identifier, rebuild_call,
+  resolve_dict_args, scope_data_add_inductive, scope_data_classes,
+  scope_data_empty, scope_find_class, scope_find_class_def_by_name,
+  scope_find_def_params, scope_find_inductive, scope_find_inductive_by_constructor,
+  scope_find_local, scope_globals, scope_instance_candidates, scope_push_local,
   scope_resolve_name,
 }
 use lang.typecheck.unify {unify}
@@ -77,51 +81,192 @@ def tt_typ (tt : TypedTerm) : Term :=
     match tt { mk _ typ => typ }
 
 // --- Instance resolution helpers ---
+//
+// `derive_instance_key` (a `class_def`/`expected_type` -> `InstanceKey`
+// stub that always returned an empty-`args` key, matching nothing real —
+// every corpus instance declares at least one concrete/wildcard arg) and
+// the old `resolve_class_method` (whose own class lookup via
+// `scope_find_inductive` could never succeed either -- classes are
+// registered into `ScopeData.classes`, a field that reader never looked
+// at) have both been retired in favor of the resolution below, which
+// reuses `lang.scope`'s already corpus-proven, wildcard-aware
+// `find_matching_instance` instead of a second, from-scratch stub. See
+// `bootstrapping/unify-check-compile-test-elaboration.md`.
 
-/// Derive an instance key from a class class_def and an expected type.
-/// The expected type should be the type at which the class method is being used.
-def derive_instance_key (class_def : Inductive) (class_method : ScopeClassDef) (expected_type : Term) : Result TypeError InstanceKey :=
-    // For now, this is a stub. The full implementation would:
-    // 1. Match expected_type against the class parameters
-    // 2. Extract the type arguments
-    // 3. Build an InstanceKey with those args
-    // For simplicity, we'll just return a basic key with empty args
-    // This needs to be implemented properly for full instance resolution
-    match class_method {
-        mk class_name _full_name _name _sig =>
-            let empty_args : List Param := List.empty in
-            let empty_constraints : List TypeConstraint := List.empty in
-            ok ({ cls := class_name, constraints := empty_constraints, args := empty_args })
+/// Derive a class-method call's carrier type from the ALREADY-ELABORATED
+/// `expected_type` a class-method leaf sees. `type_check_app` (below)
+/// checks each argument before the function it's applied to, so by the
+/// time a bare class-method var is resolved, `expected_type` is already
+/// a real Pi-chain built from the call's actual (already bidirectionally
+/// checked) argument types -- not a syntactic guess. Prefers the first
+/// non-hole Pi domain (the carrier position for every single-param class
+/// in this corpus); falls back to the type itself for a nullary method
+/// checked directly against its own call site's expected return type
+/// (e.g. `Default.default`). Deliberately scoped to single-carrier
+/// resolution -- heterogeneous/multi-param classes (`Map`, `From`,
+/// `IndexedMonad`) fall through to the abstract-signature fallback below,
+/// same as they do today.
+def carrier_from_expected_type (t : Term) : Option Term :=
+    match t {
+        Term.pi arg_typ ret_typ =>
+            if is_uninformative_carrier arg_typ then carrier_from_expected_type ret_typ else Option.some arg_typ,
+        Term.hole => Option.none,
+        _ => Option.some t,
     }
 
-/// Resolve a class method reference to a concrete instance method.
-/// Looks up the instance in the scope and returns the concrete method definition.
-def resolve_class_method (class_method : ScopeClassDef) (expected_type : Term) (scope : Scope) : Result TypeError ScopeDef :=
-    // Extract class_name via pattern matching (struct field access via dot syntax not supported)
-    match class_method {
-        mk class_name full_name method_name sig =>
-            // Derive the instance key from the expected type
-            let class_find : Result ScopeError Inductive := scope_find_inductive class_name scope in
-            match class_find {
-                ok class_def =>
-                    let key_result : Result TypeError InstanceKey := derive_instance_key class_def class_method expected_type in
-                    match key_result {
-                        ok key =>
-                            let inst_result : Result ScopeError Instance := scope_resolve_instance class_name key scope in
-                            match inst_result {
-                                ok inst =>
-                                    // For now, instance methods are not stored in the self-hosted version
-                                    // Fall back to the class method signature
-                                    // TODO: When Instance has impls_map, look up the concrete method
-                                    // Return the class method signature as a fallback
-                                    let empty_mp : ModulePath := ModulePath.mp List.empty in
-                                    ok ({ name := full_name, module := empty_mp, sig := sig, body := Term.hole }),
-                                err _ => err (TypeError.custom "Instance not found"),
-                            },
-                        err e => err e,
+/// `is_hole` alone isn't enough: a bare literal checked in pure-infer
+/// mode (`type_check_lit`'s `Literal.str`/`Literal.num`/... arms) reports
+/// its OWN type as `Term.type_ 1` (a universe placeholder, not the
+/// literal's real type -- `String`/`I64`/...), confirmed via a direct
+/// repro: `"/" ++ rest`'s OUTER `++` carrier came back as literally
+/// `Type` instead of `String`, because `"/"`'s sibling operand `rest`'s
+/// own Pi-domain position was checked first and happened to be a nested
+/// `++` chain whose OWN innermost literal polluted an intermediate Pi
+/// arg with `Term.type_ 1`. Treating it the same as `Term.hole` here --
+/// skip to the next Pi domain rather than accepting it as a carrier --
+/// mirrors why the OLD syntactic pass (`lang.scope`'s `infer_carrier_
+/// type`) never trusted a type-checker-reported literal type either,
+/// matching on the literal VALUE directly instead (`literal_carrier_
+/// type`).
+def is_uninformative_carrier (t : Term) : Bool :=
+    match t {
+        Term.hole => true,
+        Term.type_ _ => true,
+        _ => false,
+    }
+
+/// Is there already a bound local dict param for `cls_name` in scope
+/// (Phase 3's own `__dict_ClassName` naming, `lang.scope`'s
+/// `dict_param_name`)? D5 forwarding -- inside a still-generic
+/// constrained def's own body, the concrete instance isn't known yet,
+/// only a dict VALUE already bound as a parameter.
+def local_dict_for_class (cls_name : ModulePath) (locals : LocalScope) : Option Identifier :=
+    match scope_find_local (Identifier.id (dict_param_name cls_name)) locals {
+        Option.some lv => Option.some lv.name,
+        Option.none => Option.none,
+    }
+
+#[partial]
+def local_vars_flat (locals : LocalScope) : List LocalVar :=
+    match locals {
+        mk vars parent =>
+            match parent {
+                Option.some p => list_append vars (local_vars_flat p),
+                Option.none => vars,
+            },
+    }
+
+#[partial]
+def dict_bindings_of_vars (vars : List LocalVar) : List DictBinding :=
+    match vars {
+        List.empty => List.empty,
+        List.cons lv rest =>
+            match dict_binding_class_of lv.name {
+                Option.some cls => List.cons (DictBinding.mk cls lv.name) (dict_bindings_of_vars rest),
+                Option.none => dict_bindings_of_vars rest,
+            },
+    }
+
+/// Every currently-bound local matching Phase 3's dict-param naming, as
+/// the `DictBinding` list `resolve_dict_args` (reused as-is below)
+/// expects for its own D5-forwarding check on a NESTED constraint (the
+/// `HAdd`-forwards-to-`Add` shape: the matched D4 instance is itself
+/// constrained, and that inner constraint might ALSO already be
+/// satisfied by a dict this call is nested inside).
+def dict_env_from_locals (locals : LocalScope) : List DictBinding :=
+    dict_bindings_of_vars (local_vars_flat locals)
+
+/// D4: fresh concrete lookup, once no local dict forwards this class.
+/// Mangles the concrete method's own name EXACTLY as `promote_instance_
+/// defs` itself names it (so this resolves to a real, already-registered
+/// def -- `elaborate_loaded_modules`, `lang/module.mo`, always runs
+/// promotion before building the `Scope` this checks against), confirms
+/// it's actually in scope (a clean diagnostic instead of a dangling
+/// reference, if promotion silently skipped this instance for a missing
+/// method), and -- only when the MATCHED INSTANCE ITSELF still carries
+/// constraints (`HAdd`-forwards-to-`Add`) -- resolves and pre-applies its
+/// own dict argument(s) via the existing, reused `resolve_dict_args`.
+/// Strip `n` leading `Term.pi` binders (skipping over any `Term.forall`
+/// binders first at each step -- they don't correspond to an applied
+/// value argument), returning the final codomain. Needed because
+/// `resolve_class_method_d4`'s reported type must be the RESOLVED
+/// concrete def's own real signature (peeled by however many dict args
+/// got pre-applied), not `expected_type` verbatim -- `expected_type`
+/// itself can be partially uninformative (a literal operand elsewhere
+/// in the SAME `++` chain reports `Term.type_ 1` in pure-infer mode, not
+/// its real type -- see `is_uninformative_carrier`'s own doc comment),
+/// and reusing it verbatim as this call's reported type would cascade
+/// that uninformativeness upward into the NEXT enclosing `type_check_
+/// app`'s own carrier derivation -- confirmed as the actual root cause
+/// of a real repro (the self-hosted test driver's own synthesized
+/// summary line) via direct debugging.
+#[partial]
+def strip_n_pis (typ : Term) (n : I64) : Term :=
+    if I64.lt n 1 then typ
+    else
+        match typ {
+            Term.forall _ _ body => strip_n_pis body n,
+            Term.pi _ ret => strip_n_pis ret (n - 1),
+            _ => typ,
+        }
+
+def resolve_class_method_d4
+    (ins_cls_name : ModulePath) (method_name : Identifier)
+    (ins_constraints : List TypeConstraint) (ins_args : List Term) (carrier : Term)
+    (expected_type : Term) (scope : Scope) (locals : LocalScope)
+    : Result TypeError TypedTerm :=
+    let mangled := mangle_instance_method_name ins_cls_name ins_args method_name in
+    let mangled_id := mangled_to_identifier mangled in
+    match scope_resolve_name (NameRef.nid mangled_id) scope locals {
+        err _ => err (TypeError.custom "instance is missing its promoted method"),
+        ok resolved_sd =>
+            let real_sig : Term := match resolved_sd { mk _ _ sig_ _ => sig_ } in
+            let mangled_ref : Term := Term.var sentinel (DebugName.named mangled_id) in
+            match ins_constraints {
+                List.empty => ok (mk_typed mangled_ref real_sig),
+                List.cons _ _ =>
+                    let classes := scope_data_classes (scope_globals scope) in
+                    let instances := scope_instance_candidates (scope_globals scope) ins_cls_name in
+                    let dict_env := dict_env_from_locals locals in
+                    match resolve_dict_args classes instances dict_env carrier ins_constraints {
+                        Option.none => err (TypeError.custom "cannot resolve inner instance dictionary"),
+                        Option.some dict_args =>
+                            let applied_typ : Term := strip_n_pis real_sig (List.length dict_args) in
+                            ok (mk_typed (rebuild_call mangled_ref dict_args) applied_typ),
                     },
-                err _ => err (TypeError.custom "Class not found"),
-            }
+            },
+    }
+
+/// Resolve a class-method reference (`Show.show`, `Append.append`, ...)
+/// to a concrete, elaborated `Term` -- D5 (an already-bound dict local
+/// for this class) checked first, D4 (fresh concrete-instance lookup
+/// from the carrier) as fallback, mirroring `lang.scope`'s own proven
+/// Phase 4 dispatch ordering exactly. REQUIRES `promote_instance_defs`
+/// (Phase 2) and `add_constraint_dict_params_decls` (Phase 3) to already
+/// have run over the whole loaded module graph before this is called
+/// (`elaborate_loaded_modules`, `lang/module.mo`) -- the mangled concrete
+/// defs and dict-binding lambda params this depends on must already
+/// exist in scope.
+def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDef) (expected_type : Term) (scope : Scope) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match scope_find_class class_name scope {
+        Option.none => err (TypeError.custom "class not found in scope"),
+        Option.some cls =>
+            match local_dict_for_class class_name locals {
+                Option.some dict_id =>
+                    let term := build_dict_field_projection cls dict_id method_name List.empty in
+                    ok (mk_typed term expected_type),
+                Option.none =>
+                    match carrier_from_expected_type expected_type {
+                        Option.none => err (TypeError.custom "cannot infer carrier type for class method"),
+                        Option.some carrier =>
+                            let candidates := scope_instance_candidates (scope_globals scope) class_name in
+                            match find_matching_instance candidates class_name carrier {
+                                Option.none => err (TypeError.custom "no matching instance found"),
+                                Option.some ins =>
+                                    resolve_class_method_d4 ins.cls method_name ins.constraints ins.args carrier expected_type scope locals,
+                            },
+                    },
+            },
     }
 
 /// Type check a literal value.
@@ -819,18 +964,40 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                         ok (mk_typed (Term.var sentinel dbg) sig),
                 },
                 err _ =>
-                    let clsd_result : Result ScopeError ScopeClassDef := scope_find_class_def_by_name id scope in
+                    // A qualified class-method reference (`Foldable.foldr`)
+                    // is stored under its bare method name only
+                    // (`add_methods_go`) -- strip to the last dotted
+                    // segment before looking it up, mirroring
+                    // `type_check_free_var_con`'s identical existing fix
+                    // just below for qualified constructor references.
+                    let bare_id : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
+                    let clsd_result : Result ScopeError ScopeClassDef := scope_find_class_def_by_name bare_id scope in
                     match clsd_result {
                         ok cd =>
-                            // Try to resolve class method to concrete instance
-                            match resolve_class_method cd expected_type scope {
-                                ok instance_def =>
-                                    match instance_def {
-                                        mk _ _ inst_sig _ =>
-                                            ok (mk_typed (Term.var sentinel dbg) inst_sig),
-                                    },
+                            match resolve_class_method cd expected_type scope locals {
+                                ok tt => ok tt,
                                 err _ =>
-                                    // Fall back to class method signature (not resolved)
+                                    // Fall back to the class method's own
+                                    // abstract signature (not resolved) --
+                                    // e.g. a heterogeneous/multi-param
+                                    // class `carrier_from_expected_type`
+                                    // deliberately doesn't cover, or an
+                                    // operand whose real type this pure-
+                                    // infer-mode checker can't recover
+                                    // (`ScopeDef.sig` is always `Term.hole`
+                                    // for an ordinary global, by existing,
+                                    // documented design -- `lang.scope`'s
+                                    // `build_scope_def` -- so a class-
+                                    // method carrier derived purely from
+                                    // bidirectional propagation can't see
+                                    // through an ordinary function call in
+                                    // an otherwise-uninformative context;
+                                    // `lang.scope`'s own syntactic
+                                    // `resolve_class_calls_decls` pass,
+                                    // which every codegen path still runs
+                                    // after this, covers that case
+                                    // instead via `infer_carrier_type`'s
+                                    // own declared-return-type lookup).
                                     match cd {
                                         mk _class_name _full_name _ sig =>
                                             ok (mk_typed (Term.var sentinel dbg) sig),
