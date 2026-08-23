@@ -4538,6 +4538,28 @@ def build_list_literal (elems : List Term) : Term :=
             Term.app (Term.app cons_var e) (build_list_literal rest),
     }
 
+/// Desugar a tuple literal's element list into right-nested `Pair.pair`
+/// applications: `[a, b, c]` -> `Pair.pair a (Pair.pair b c)`. A single
+/// element `[a]` yields just `a` (so `(a,)` and `(a)` both parse to `a`),
+/// matching the Rust reference's `desugar_tuple_literal`
+/// (core/src/parser.rs:831-840). `Pair.pair` is the `Pair` inductive's
+/// sole constructor (`init/prelude.mo:204`); the sentinel-var-with-dotted-
+/// debug-name representation mirrors `build_list_literal`'s own
+/// `FromListLiteral.cons` convention (and `variable_try_path`'s dotted-path
+/// representation, see the comment on `build_list_literal` above).
+#[partial]
+def build_tuple_literal (elems : List Term) : Term :=
+    match elems {
+        List.empty => Term.hole,
+        List.cons e rest =>
+            match rest {
+                List.empty => e,
+                List.cons _ _ =>
+                    let pair_var : Term := Term.var sentinel (DebugName.named (Identifier.id "Pair.pair")) in
+                    Term.app (Term.app pair_var e) (build_tuple_literal rest),
+            },
+    }
+
 // ─── Struct-literal parser (`{ field := value, ... [: TypeExpr] }`) ────
 //
 // Mirrors the Rust reference's `struct_or_update_parser`/
@@ -5185,7 +5207,53 @@ def paren_expr (ctx: List Identifier) (input: String) : ParseResult Term :=
 #[partial]
 def paren_inner (r: ParseResult Term) (ctx : List Identifier) : ParseResult Term :=
     match r {
-        success rem out => paren_try_ann (skip_spaces rem) out ctx,
+        success rem out => paren_try_tuple (skip_spaces rem) out ctx,
+        fail e => fail e
+    }
+
+/// Tuple-literal probe — after the first parenthesized expression, look for
+/// a `,`. On comma, this is a tuple literal `(a, b, c)` desugared to nested
+/// `Pair.pair` applications (mirrors the Rust reference's
+/// `tuple_or_parens`/`desugar_tuple_literal`, core/src/parser.rs:813-840,
+/// and this file's own `build_list_literal` for `[...]`); on no comma, fall
+/// through to the existing single-element `(e)` / `(e : T)` path
+/// (`paren_try_ann`). A single-element `(x,)` desugars to just `x`, matching
+/// the reference's own `desugar_tuple_literal([x])`.
+#[partial]
+def paren_try_tuple (input : String) (out : Term) (ctx : List Identifier) : ParseResult Term :=
+    match tag "," input {
+        success rem _ => paren_tuple_rest (skip_spaces rem) ctx (List.cons out List.empty),
+        fail _ => paren_try_ann input out ctx
+    }
+
+/// Collect remaining comma-separated tuple elements (trailing comma
+/// optional: `(a, b,)` is legal), mirroring `list_literal_elements`/
+/// `list_literal_sep`/`list_literal_close`'s own `]`-terminated shape.
+#[partial]
+def paren_tuple_rest (input : String) (ctx : List Identifier) (acc : List Term) : ParseResult Term :=
+    match tag ")" input {
+        success rem _ => success rem (build_tuple_literal (list_reverse acc)),
+        fail _ => paren_tuple_element (type_expression ctx input) ctx acc
+    }
+
+#[partial]
+def paren_tuple_element (r : ParseResult Term) (ctx : List Identifier) (acc : List Term) : ParseResult Term :=
+    match r {
+        success rem elem => paren_tuple_sep (skip_spaces rem) ctx (List.cons elem acc),
+        fail e => fail e
+    }
+
+#[partial]
+def paren_tuple_sep (input : String) (ctx : List Identifier) (acc : List Term) : ParseResult Term :=
+    match tag "," input {
+        success rem _ => paren_tuple_rest (skip_spaces rem) ctx acc,
+        fail _ => paren_tuple_end (tag ")" input) acc
+    }
+
+#[partial]
+def paren_tuple_end (r : ParseResult String) (acc : List Term) : ParseResult Term :=
+    match r {
+        success rem _ => success rem (build_tuple_literal (list_reverse acc)),
         fail e => fail e
     }
 
