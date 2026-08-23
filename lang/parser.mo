@@ -4494,7 +4494,12 @@ def list_literal_open (r : ParseResult String) (ctx : List Identifier) : ParseRe
     match r {
         success rem _ =>
             let empty_acc : List Term := List.empty in
-            list_literal_elements (skip_spaces rem) ctx empty_acc,
+            // `skip_docstrings (skip_spaces rem)`, not bare `skip_spaces rem`
+            // -- a `//`/`///` comment can sit right after `[` (before the first
+            // element) just as it can between elements; this matches the
+            // comment-aware whitespace skip used in match arms
+            // (`match_case_args`/`match_case_arrow`) and `def` bodies.
+            list_literal_elements (skip_docstrings (skip_spaces rem)) ctx empty_acc,
         fail e => fail e
     }
 
@@ -4508,7 +4513,10 @@ def list_literal_elements (input : String) (ctx : List Identifier) (acc : List T
 #[partial]
 def list_literal_element (r : ParseResult Term) (ctx : List Identifier) (acc : List Term) : ParseResult Term :=
     match r {
-        success rem elem => list_literal_sep (skip_spaces rem) ctx (List.cons elem acc),
+        // `skip_docstrings (skip_spaces rem)` -- a `//`/`///` comment can sit
+        // right after an element (before the comma/`]`), not only between
+        // top-level decls; same convention as `match_case_arrow`.
+        success rem elem => list_literal_sep (skip_docstrings (skip_spaces rem)) ctx (List.cons elem acc),
         fail e => fail e
     }
 
@@ -4518,7 +4526,15 @@ def list_literal_element (r : ParseResult Term) (ctx : List Identifier) (acc : L
 #[partial]
 def list_literal_sep (input : String) (ctx : List Identifier) (acc : List Term) : ParseResult Term :=
     match tag "," input {
-        success rem _ => list_literal_elements (skip_spaces rem) ctx acc,
+        // `skip_docstrings (skip_spaces rem)` -- a `//`/`///` comment can sit
+        // right after `,` (before the next element). This is the fix for
+        // `lang/parser/core.mo`'s `op_table`, whose inline `//` comments
+        // between list elements (lines 65-74, 80-81) left bare `skip_spaces`
+        // unable to skip them, so `op_table` failed to parse and `decls_try`
+        // truncated `core.mo` at that point, dropping every def after
+        // `op_chars` (notably `is_empty`, the last def). Same convention as
+        // `match_case_arrow`/`def`-body comment skipping.
+        success rem _ => list_literal_elements (skip_docstrings (skip_spaces rem)) ctx acc,
         fail _ => list_literal_close (tag "]" input) acc
     }
 

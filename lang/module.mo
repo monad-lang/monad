@@ -392,6 +392,73 @@ def list_contains (xs : List ModulePath) (x : ModulePath) : Bool :=
                 list_contains rest x
     }
 
+/// `list_contains` for a `List ModuleInfo`, keying on each entry's own
+/// `.path` -- used by `collect_dep_module_infos`'s dedup guard below.
+#[partial]
+def list_contains_module_info (xs : List ModuleInfo) (x : ModulePath) : Bool :=
+    match xs {
+        List.empty => false,
+        List.cons mi rest =>
+            match mi {
+                ModuleInfo.mk p _fp _decls =>
+                    if modpath_eq p x then true else list_contains_module_info rest x
+            }
+    }
+
+/// Walk a module's transitive `use`-dependency closure AND load each
+/// reached module with its OWN resolved directory as the base, returning
+/// the loaded `ModuleInfo`s directly. This replaces the old two-step
+/// `extract_all_dependencies_go` (which returns only `ModulePath`s) +
+/// `load_dependency_entries (load_module_with_info main_base_dir)` pattern
+/// in `load_file_modules`: that second step re-loaded every dependency
+/// from the TARGET's own directory, so a dependency that shares a
+/// single-segment name with a file in the target's directory got
+/// mis-resolved. The real case: checking `lang/parser/combinators.mo`,
+/// whose target dir `lang/parser/` contains a `string.mo` (the
+/// self-hosted string-LITERAL parser), shadowed `init/string.mo` (the
+/// `String.length`/`String.get`/... stdlib) when `init`'s `pub use string`
+/// dep was re-resolved from `lang/parser/` -- so combinators saw the
+/// parser's `string` module instead of the stdlib, and every
+/// `String.length`/`String.get`/`String.drop` reference went
+/// `unknown variable`. By loading each module exactly once during the
+/// walk -- where `base_dir` is already the PARENT module's resolved
+/// directory, not the target's -- `init/string.mo` is what gets loaded
+/// for the `string` dep, matching the Rust reference's own per-module
+/// resolution. Modules that fail to load are skipped (matching
+/// `extract_all_dependencies_go`'s own existing lenient skip), not
+/// fatal -- the canonical pipeline surfaces genuine "module not found"
+/// failures via `elaborate_loaded_modules`'s own `Result` path.
+#[partial]
+def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (visiting : List ModulePath) (visited : List ModuleInfo) : IO (List ModuleInfo) :=
+    match to_visit {
+        List.empty => do {
+            return visited
+        },
+        List.cons head tail =>
+            if list_contains visiting head then
+                // Circular dependency - skip to avoid infinite loop
+                collect_dep_module_infos base_dir tail visiting visited
+            else if list_contains_module_info visited head then
+                // Already loaded - skip
+                collect_dep_module_infos base_dir tail visiting visited
+            else do {
+                let new_visiting : List ModulePath := List.cons head visiting;
+                let info_opt : Option ModuleInfo <- load_module_with_info base_dir head;
+                match info_opt {
+                    Option.some info => do {
+                        let new_base_dir : String := extract_directory info.file_path;
+                        let dep_decls : List Decl := get_module_info_decls info;
+                        let dep_deps : List ModulePath := extract_use_decls dep_decls;
+                        let new_to_visit : List ModulePath := List.append dep_deps tail;
+                        collect_dep_module_infos new_base_dir new_to_visit new_visiting (List.cons info visited)
+                    },
+                    Option.none =>
+                        // Module not found, skip but continue with tail
+                        collect_dep_module_infos base_dir tail new_visiting visited
+                }
+            }
+    }
+
 
 /// Load all dependencies for a module and merge their scopes
 /// base_dir is the directory to resolve the initial module from
@@ -1876,20 +1943,22 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
                     // prepending them to the walk's already-deduplicated
                     // result -- prepending after the fact can reintroduce
                     // a duplicate (prelude/init reached again via an
-                    // explicit `use`), which used to be the sole reason
-                    // `load_dependencies_with_info`/`list_contains_module_info`
-                    // needed their own dedup guard.
+                    // explicit `use`).
+                    //
+                    // The walk now both resolves AND loads each dependency
+                    // in one pass (`collect_dep_module_infos`), so each
+                    // module is loaded from its OWN parent's resolved
+                    // directory instead of being re-resolved from the
+                    // target's directory afterwards -- see
+                    // `collect_dep_module_infos`'s own doc comment for the
+                    // `lang/parser/string.mo` shadowing bug this fixes.
                     let direct_deps : List ModulePath := extract_use_decls decl_list;
                     let direct_deps_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ direct_deps;
-                    let no_visited : List ModulePath := List.empty;
-                    let all_dep_paths_with_prelude : List ModulePath <- extract_all_dependencies_go main_base_dir direct_deps_with_prelude no_visited no_visited;
-                    let dep_modules_result : Result String (List ModuleInfo) <- load_dependency_entries (load_module_with_info main_base_dir) dependency_not_found_msg all_dep_paths_with_prelude List.empty;
-                    return match dep_modules_result {
-                      Result.ok dep_modules => 
-                        let all_modules : List ModuleInfo := List.cons main_module dep_modules in
-                        Result.ok { main_module := ModuleInfo.mk mp_path file_path decl_list, all_modules := all_modules },
-                      Result.err e => Result.err e
-                    }
+                    let no_visited : List ModuleInfo := List.empty;
+                    let no_visiting : List ModulePath := List.empty;
+                    let dep_modules : List ModuleInfo <- collect_dep_module_infos main_base_dir direct_deps_with_prelude no_visiting no_visited;
+                    let all_modules : List ModuleInfo := List.cons main_module dep_modules;
+                    return (Result.ok { main_module := ModuleInfo.mk mp_path file_path decl_list, all_modules := all_modules })
                 }
             },
         Option.none => do {
