@@ -1071,6 +1071,20 @@ def locals_with_class_typevars ({ params, constraints, .. } : Class) (scope : Sc
     let candidates : List Identifier := union_ids (param_names params) (constraint_vars constraints) in
     bind_unresolved_as_local_typevars candidates scope locals
 
+/// Skolemize an inductive's own declared type parameters (`A` in
+/// `type List A { empty, cons (a : A) (List A) : List A }`) into `locals`,
+/// ready for `check_constructor_with_scope` to type-check each
+/// constructor's signature against -- mirrors `locals_with_class_typevars`'s
+/// identical role for a class's own params. Inductives carry no constraints
+/// of their own (a `type` declaration has no `[Class V]` clause), so this
+/// is just `param_names params`. Without this, `cons`'s `Pi (a : A) ->
+/// Pi (List A) -> List A` checks with `A` unbound, failing
+/// `unknown variable 'A' in cons` (and likewise `nil`).
+#[partial]
+def locals_with_inductive_params ({ params, .. } : Inductive) (scope : Scope) (locals : LocalScope) : LocalScope :=
+    let candidates : List Identifier := param_names params in
+    bind_unresolved_as_local_typevars candidates scope locals
+
 // --- `check`: multi-error typecheck pass (lang/main.mo's `check` command) ---
 //
 // Same per-decl walk `typecheck_module_with_scope` above now itself
@@ -1408,7 +1422,8 @@ def check_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : Local
     match ind {
         Inductive.mk name _params _typ constructors _attrs _vis => do {
             if verbose then println ("  checking type " ++ module_path_to_string name) else do { return unit };
-            check_constructors_with_scope constructors scope locals path verbose
+            let locals_ : LocalScope := locals_with_inductive_params ind scope locals;
+            check_constructors_with_scope constructors scope locals_ path verbose
         }
     }
 
@@ -2011,6 +2026,32 @@ def string_contains_helper (haystack : String) (needle : String) : Bool :=
 def test_check_module_with_scope_all_pass : IO Bool := do {
     let path : ModulePath := ModulePath.mp List.empty;
     let result : ParseResult (List Decl) := parse_all_decls "type Color { red, green }\ndef c : Color := red";
+    match result {
+        ParseResult.success _ decl_list => do {
+            let sd : ScopeData := build_scope_from_decls path decl_list;
+            let scope : Scope := { module_id := path, scope := sd, parent := Option.none };
+            let locals : LocalScope := { vars := List.empty, parent := Option.none };
+            let diags : List String <- check_module_with_scope scope decl_list locals Option.none false;
+            return (match diags {
+                List.empty => true,
+                List.cons _ _ => false
+            })
+        },
+        ParseResult.fail _ => do { return false }
+    }
+}
+
+/// Gap-5 regression test: a parameterized inductive's constructors
+/// reference the inductive's own type parameter (`A` in `type Box A
+/// { mk (a : A) : Box A }`) -- before `check_inductive_with_scope`
+/// skolemized the inductive's params into `locals`, `mk`'s signature
+/// checked with `A` unbound and failed `unknown variable 'A' in mk`.
+/// Mirrors `test_check_module_with_scope_all_pass`'s own single-
+/// declaration shape, just with a parametrized inductive instead.
+#[test]
+def test_check_module_with_scope_paramed_inductive : IO Bool := do {
+    let path : ModulePath := ModulePath.mp List.empty;
+    let result : ParseResult (List Decl) := parse_all_decls "type Box A { mk (a : A) : Box A }";
     match result {
         ParseResult.success _ decl_list => do {
             let sd : ScopeData := build_scope_from_decls path decl_list;
