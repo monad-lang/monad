@@ -678,8 +678,23 @@ def monad_bind_term : Term :=
 def monad_pure_term : Term :=
     Term.var (-1) (DebugName.unnamed)
 
+// Fold in SOURCE order (first statement outermost), mirroring the
+// Rust reference's `desugar_do_statements` (`core/parser.rs`): each
+// statement wraps the desugaring of the statements that FOLLOW it, so
+// the first `let x <- e1` becomes the outermost `bind`, the last
+// statement sits innermost (its continuation is the trailing
+// `pure hole`). `desugar_do_inner`'s head is the outermost wrap, so the
+// list MUST be passed in source order -- reversing it (an earlier bug)
+// put the LAST statement outermost, which both inverted monadic
+// evaluation order AND, because de Bruijn indices are assigned at parse
+// time relative to the do-block's binder context (innermost/last-bound
+// = lowest index), placed a later statement's reference to an earlier
+// `bind_s` variable OUTSIDE that variable's binder -- a spurious
+// out-of-range `bound_var` (the `test_do_bind_with_match` self-hosted-
+// check gap). `ret_s` discards `ss`/`rest`, matching the reference's
+// `Return` (which replaces the accumulated continuation).
 def desugar_do (stmts : List DoStmt) : Term :=
-    desugar_do_inner (list_reverse stmts) (Term.app monad_pure_term Term.hole)
+    desugar_do_inner stmts (Term.app monad_pure_term Term.hole)
 
 def desugar_do_inner (stmts : List DoStmt) (rest : Term) : Term :=
     match stmts {
