@@ -2,6 +2,7 @@ mod lsp;
 mod mcp;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use monad_core::{
@@ -405,7 +406,7 @@ pub(crate) fn to_json_test_case(t: &monad_core::TestCaseResult) -> JsonTestCase 
     TestOutcome::FailWithMessage(m) => ("fail", Some(m.clone())),
   };
   JsonTestCase {
-    name: t.name.clone(),
+    name: t.name.as_ref().to_string(),
     outcome: outcome.to_string(),
     message,
     duration_ms: t.duration.as_secs_f64() * 1000.0,
@@ -1112,7 +1113,7 @@ mod test {
   #[test]
   fn test_to_json_test_case_pass() {
     let t = monad_core::TestCaseResult {
-      name: "test_a".to_string(),
+      name: Arc::from("test_a"),
       outcome: TestOutcome::Pass,
       duration: std::time::Duration::from_micros(80),
       location: None,
@@ -1127,7 +1128,7 @@ mod test {
   #[test]
   fn test_to_json_test_case_fail_with_message() {
     let t = monad_core::TestCaseResult {
-      name: "test_b".to_string(),
+      name: Arc::from("test_b"),
       outcome: TestOutcome::FailWithMessage("expected 1 got 2".to_string()),
       duration: std::time::Duration::from_millis(1),
       location: None,
@@ -1144,13 +1145,13 @@ mod test {
         path: PathBuf::from("/tmp/a.mo"),
         tests: vec![
           monad_core::TestCaseResult {
-            name: "test_a".to_string(),
+            name: Arc::from("test_a"),
             outcome: TestOutcome::Pass,
             duration: std::time::Duration::ZERO,
             location: None,
           },
           monad_core::TestCaseResult {
-            name: "test_b".to_string(),
+            name: Arc::from("test_b"),
             outcome: TestOutcome::Fail,
             duration: std::time::Duration::ZERO,
             location: None,

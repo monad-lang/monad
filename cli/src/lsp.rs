@@ -54,6 +54,7 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use monad_core::{
   SymbolInfo, TestOutcome, check_files, check_source, diag::Severity, organize_imports_for_source,
@@ -807,7 +808,7 @@ fn test_case_to_json(t: &monad_core::TestCaseResult) -> serde_json::Value {
     TestOutcome::FailWithMessage(m) => ("fail", Some(m.clone())),
   };
   serde_json::json!({
-    "name": t.name,
+    "name": &*t.name,
     "outcome": outcome,
     "message": message,
     "durationMs": t.duration.as_secs_f64() * 1000.0,
@@ -1324,13 +1325,13 @@ mod test {
     }];
     let tests = vec![
       monad_core::TestCaseResult {
-        name: "test_ok".to_string(),
+        name: Arc::from("test_ok"),
         outcome: TestOutcome::Pass,
         duration: std::time::Duration::ZERO,
         location: None,
       },
       monad_core::TestCaseResult {
-        name: "test_bad".to_string(),
+        name: Arc::from("test_bad"),
         outcome: TestOutcome::FailWithMessage("expected 1 got 2".to_string()),
         duration: std::time::Duration::ZERO,
         location: None,

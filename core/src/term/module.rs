@@ -489,7 +489,7 @@ impl GlobalScopeData {
         }
 
         if !is_current && is_used {
-          let prefixed_name = modu.path().clone().extend(bare_name.clone());
+          let prefixed_name = modu.path().extend_borrowed(&bare_name);
           def_refs.insert(
             prefixed_name,
             (d.typ.clone(), d.term.clone(), d.module.clone()),
@@ -886,7 +886,7 @@ impl<'a> GlobalScope<'a> {
           continue;
         }
         if is_used {
-          let prefixed_name = module.path().clone().extend(d.name.clone());
+          let prefixed_name = module.path().extend_borrowed(&d.name);
           let prefixed_def = DefRef {
             name: prefixed_name,
             full_path: d.full_path.clone(),
@@ -1177,7 +1177,7 @@ impl<'a> GlobalScope<'a> {
     let instance = self
       .find_instance(&key)
       .ok_or_else(|| ScopeError::InstanceNotFound(key.clone()))?;
-    let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
+    let ins_def_name = instance.name.extend_borrowed(&def.name.clone().to_path());
     let ins_def: &'s DefRef<'s> = self
       .find_ref(&ins_def_name)
       .ok_or(ScopeError::PathNotFound(ins_def_name))?;
@@ -1333,7 +1333,7 @@ impl<'a> GlobalScope<'a> {
             )],
           );
           if let Some(instance) = self.find_instance(&constrained_key) {
-            let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
+            let ins_def_name = instance.name.extend_borrowed(&def.name.clone().to_path());
             let ins_def = self
               .find_ref(&ins_def_name)
               .ok_or(ScopeError::PathNotFound(ins_def_name))?;
@@ -1356,7 +1356,7 @@ impl<'a> GlobalScope<'a> {
     // No matching constraint found, try the concrete key (if it was derived)
     if let Ok(key) = maybe_key {
       if let Some(instance) = self.find_instance(&key) {
-        let ins_def_name = instance.name.clone().extend(def.name.clone().to_path());
+        let ins_def_name = instance.name.extend_borrowed(&def.name.clone().to_path());
         let ins_def = self
           .find_ref(&ins_def_name)
           .ok_or(ScopeError::PathNotFound(ins_def_name))?;
@@ -1472,7 +1472,7 @@ impl<'a> GlobalScope<'a> {
                 .params
                 .iter()
                 .flat_map(|class_def| {
-                  let def_name = ind.name.clone().extend(class_def.name.clone().to_path());
+                  let def_name = ind.name.extend_borrowed(&class_def.name.clone().to_path());
                   let names = def_name.open(opens);
                   names
                     .into_iter()
@@ -3078,7 +3078,9 @@ impl Module {
           .params
           .iter()
           .flat_map(|class_def| {
-            let def_name = class.name.clone().extend(class_def.name.clone().to_path());
+            let def_name = class
+              .name
+              .extend_borrowed(&class_def.name.clone().to_path());
             let names = def_name.open(opens);
             names
               .into_iter()

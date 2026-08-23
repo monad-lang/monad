@@ -139,7 +139,7 @@ fn eval_repl_term(
   let mut extra_decls = repl_decls.to_vec();
   extra_decls.push(tmp_decl);
 
-  let full_path = module_path.clone().extend(tmp_name);
+  let full_path = module_path.extend_borrowed(&mpt("__repl_result"));
   let program = build_core_program(loaded, &[(module_path.clone(), extra_decls)])
     .map_err(|e| format!("Type error: {e}"))?;
   let Some(checked) = program.defs.get(&full_path) else {
@@ -418,11 +418,11 @@ fn find_main_def<'a>(
   program: &'a core_program::CoreProgram,
   path: &ModulePath,
 ) -> Option<&'a core_program::CheckedCoreDef> {
-  program.defs.get(&path.clone().extend(mpt("main")))
+  program.defs.get(&path.extend_borrowed(&mpt("main")))
 }
 
 fn main_index(lowered: &lower_core_ir::LoweredProgram, path: &ModulePath) -> Option<u32> {
-  lowered.index_of(&path.clone().extend(mpt("main")))
+  lowered.index_of(&path.extend_borrowed(&mpt("main")))
 }
 
 pub fn eval_core_program(path: &ModulePath, source: &str) -> Result<core_value::Value, String> {
@@ -744,7 +744,7 @@ pub enum TestOutcome {
 /// the right spot without re-deriving it from a separate symbol scan.
 #[derive(Debug, Clone)]
 pub struct TestCaseResult {
-  pub name: String,
+  pub name: Arc<str>,
   pub outcome: TestOutcome,
   pub duration: std::time::Duration,
   pub location: Option<SourceRange>,
@@ -964,7 +964,7 @@ fn evaluate_one_test_file(
     );
   }
 
-  let entries: Vec<(ModulePath, String, Option<SourceRange>)> = module
+  let entries: Vec<(ModulePath, Arc<str>, Option<SourceRange>)> = module
     .defs()
     .into_iter()
     .filter(|ctx| ctx.value().has_test_attr())
@@ -984,7 +984,7 @@ fn evaluate_one_test_file(
       // own declaration-level span, for `TestCaseResult::location`.
       (
         def.name.clone(),
-        def.name.to_string(),
+        Arc::from(def.name.to_string()),
         Some(ctx.loc.clone()),
       )
     })
@@ -1033,7 +1033,7 @@ fn evaluate_one_test_file(
     // slot could belong to some OTHER loaded module's same-named def
     // instead, if one exists (see `insert_checked_def`'s own doc
     // comment); the qualified one is always THIS file's own.
-    let idx = lowered.index_of(&path.clone().extend(test_path.clone()));
+    let idx = lowered.index_of(&path.extend_borrowed(test_path));
     let result = match idx {
       None => Err("not present in the lowered program (skipped)".to_string()),
       Some(idx) => match test_timeout {
@@ -1053,9 +1053,9 @@ fn evaluate_one_test_file(
       Err(e) => {
         failed += 1;
         let msg = format!("eval error: {e}");
-        failures.push((name.clone(), msg.clone()));
+        failures.push((name.to_string(), msg.clone()));
         tests.push(TestCaseResult {
-          name: name.clone(),
+          name: Arc::clone(name),
           outcome: TestOutcome::FailWithMessage(msg),
           duration,
           location: location.clone(),
@@ -1073,7 +1073,7 @@ fn evaluate_one_test_file(
         passed += 1;
         output_lines.push(format!("{GREEN}PASS{RESET} {name} ({duration_str})"));
         tests.push(TestCaseResult {
-          name: name.clone(),
+          name: Arc::clone(name),
           outcome: TestOutcome::Pass,
           duration,
           location: location.clone(),
@@ -1083,7 +1083,7 @@ fn evaluate_one_test_file(
         failed += 1;
         output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str})"));
         tests.push(TestCaseResult {
-          name: name.clone(),
+          name: Arc::clone(name),
           outcome: TestOutcome::Fail,
           duration,
           location: location.clone(),
@@ -1092,9 +1092,9 @@ fn evaluate_one_test_file(
       TestResult::FailWithMessage(msg) => {
         failed += 1;
         output_lines.push(format!("{RED}FAIL{RESET} {name} ({duration_str}): {msg}"));
-        failures.push((name.clone(), msg.clone()));
+        failures.push((name.to_string(), msg.clone()));
         tests.push(TestCaseResult {
-          name: name.clone(),
+          name: Arc::clone(name),
           outcome: TestOutcome::FailWithMessage(msg),
           duration,
           location: location.clone(),
@@ -2022,7 +2022,7 @@ def test_direct_generic_call : Bool :=
       &file_result
         .tests
         .iter()
-        .find(|t| t.name == name)
+        .find(|t| t.name.as_ref() == name)
         .unwrap()
         .outcome
     };
@@ -2070,7 +2070,7 @@ def test_direct_generic_call : Bool :=
       &file_result
         .tests
         .iter()
-        .find(|t| t.name == name)
+        .find(|t| t.name.as_ref() == name)
         .unwrap()
         .outcome
     };
@@ -2123,7 +2123,7 @@ def test_direct_generic_call : Bool :=
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].tests.len(), 1);
-    assert_eq!(results[0].tests[0].name, "test_a");
+    assert_eq!(results[0].tests[0].name.as_ref(), "test_a");
   }
 
   #[test]

@@ -294,7 +294,7 @@ pub fn ground_truth_from_loaded(loaded: &LoadedModules, atoms: &mut AtomTable) -
       // (e.g. `mylib.greet`), which `lower_term` resolves to a *different*
       // atom (atoms are keyed by the full `ModulePath`). Register that
       // qualified atom too so both forms type-check to the same type.
-      let qualified = module.path().clone().extend(def.name.clone());
+      let qualified = module.path().extend_borrowed(&def.name);
       if qualified != def.name {
         let qualified_atom = atoms.intern(qualified.clone());
         known_globals.insert(qualified, qualified_atom);
@@ -350,7 +350,7 @@ fn collect_known_class_methods(
     };
     let default_type = param.default.as_deref().and_then(term_head_path);
     for method in &cons.params {
-      let method_path = ind.name().clone().extend(method.name.clone().to_path());
+      let method_path = ind.name().extend_borrowed(&method.name.clone().to_path());
       let atom = atoms.intern(method_path);
       out.insert(
         atom,
@@ -532,7 +532,7 @@ fn register_inductive(
       return;
     };
     for method in &cons.params {
-      let method_path = ind.name().clone().extend(method.name.clone().to_path());
+      let method_path = ind.name().extend_borrowed(&method.name.clone().to_path());
       let atom = atoms.intern(method_path.clone());
       known_globals.insert(method_path.clone(), atom);
       if let Ok(ty_c) = lower_term(
@@ -2584,7 +2584,7 @@ pub fn type_check_module_decls_new_inner(
       match &**decl {
         Decl::Def(def) => {
           let bare_atom = mctx.atoms_mut().intern(def.name.clone());
-          global_atom_paths.insert(bare_atom, path.clone().extend(def.name.clone()));
+          global_atom_paths.insert(bare_atom, path.extend_borrowed(&def.name));
         }
         _ => {}
       }
@@ -2607,7 +2607,7 @@ pub fn type_check_module_decls_new_inner(
         // Module-qualified -- `insert_checked_def` (called from
         // `check_one_def_new`) additionally stores this under `def.name`
         // bare too, so either form finds it.
-        let capture_path = path.clone().extend(def.name.clone());
+        let capture_path = path.extend_borrowed(&def.name);
         check_one_def_new(
           &mut mctx,
           &mut ctx,
@@ -2693,7 +2693,7 @@ pub fn type_check_module_decls_new_inner(
           Decl::Def(def) => {
             // Module-qualified -- see the identical comment at the
             // ordinary `Decl::Def` arm above.
-            let capture_path = path.clone().extend(def.name.clone());
+            let capture_path = path.extend_borrowed(&def.name);
             check_one_def_new(
               &mut mctx,
               &mut ctx,
@@ -2722,7 +2722,7 @@ pub fn type_check_module_decls_new_inner(
             Decl::Def(def) => {
               // Module-qualified -- see the identical comment at the
               // ordinary `Decl::Def` arm above.
-              let capture_path = path.clone().extend(def.name.clone());
+              let capture_path = path.extend_borrowed(&def.name);
               match check_one_def_new(
                 &mut mctx,
                 &mut ctx,

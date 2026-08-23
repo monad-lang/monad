@@ -379,12 +379,18 @@ fn find_callees(term: &Term, known_names: &crate::Set<&ModulePath>) -> crate::Se
 pub fn find_mutual_groups(
   graph: &crate::Map<ModulePath, crate::Set<ModulePath>>,
 ) -> Vec<Vec<ModulePath>> {
-  // Use Tarjan's algorithm for SCC detection
+  // Use Tarjan's algorithm for SCC detection.
+  // The four maps/sets below are keyed by `&ModulePath` so they can
+  // borrow straight out of `graph`/`all_nodes` rather than cloning each
+  // node on every insert and every look-up. `all_nodes` itself is the
+  // one `Set<ModulePath>` that still owns its keys -- it must outlive
+  // every map that borrows from it, which it does here (it's built
+  // before any Tarjan call starts and only dropped at function exit).
   let mut index_counter = 0u64;
-  let mut indices: crate::Map<ModulePath, u64> = crate::Map::new();
-  let mut lowlink: crate::Map<ModulePath, u64> = crate::Map::new();
-  let mut on_stack: crate::Set<ModulePath> = empty_set();
-  let mut stack: Vec<ModulePath> = Vec::new();
+  let mut indices: std::collections::BTreeMap<&ModulePath, u64> = std::collections::BTreeMap::new();
+  let mut lowlink: std::collections::BTreeMap<&ModulePath, u64> = std::collections::BTreeMap::new();
+  let mut on_stack: crate::Set<&ModulePath> = empty_set();
+  let mut stack: Vec<&ModulePath> = Vec::new();
   let mut sccs: Vec<Vec<ModulePath>> = Vec::new();
 
   // Collect all nodes (some may have no outgoing edges)
@@ -398,21 +404,21 @@ pub fn find_mutual_groups(
     }
   }
 
-  fn strongconnect(
-    v: &ModulePath,
-    graph: &crate::Map<ModulePath, crate::Set<ModulePath>>,
+  fn strongconnect<'a>(
+    v: &'a ModulePath,
+    graph: &'a crate::Map<ModulePath, crate::Set<ModulePath>>,
     index_counter: &mut u64,
-    indices: &mut crate::Map<ModulePath, u64>,
-    lowlink: &mut crate::Map<ModulePath, u64>,
-    on_stack: &mut crate::Set<ModulePath>,
-    stack: &mut Vec<ModulePath>,
+    indices: &mut std::collections::BTreeMap<&'a ModulePath, u64>,
+    lowlink: &mut std::collections::BTreeMap<&'a ModulePath, u64>,
+    on_stack: &mut crate::Set<&'a ModulePath>,
+    stack: &mut Vec<&'a ModulePath>,
     sccs: &mut Vec<Vec<ModulePath>>,
   ) {
-    indices.insert(v.clone(), *index_counter);
-    lowlink.insert(v.clone(), *index_counter);
+    indices.insert(v, *index_counter);
+    lowlink.insert(v, *index_counter);
     *index_counter += 1;
-    stack.push(v.clone());
-    on_stack.insert(v.clone());
+    stack.push(v);
+    on_stack.insert(v);
 
     if let Some(neighbors) = graph.get(v) {
       for w in neighbors {
@@ -442,9 +448,9 @@ pub fn find_mutual_groups(
       let mut scc = Vec::new();
       loop {
         let w = stack.pop().unwrap();
-        on_stack.remove(&w);
+        on_stack.remove(w);
         scc.push(w.clone());
-        if &w == v {
+        if w == v {
           break;
         }
       }

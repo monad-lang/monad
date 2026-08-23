@@ -18,6 +18,7 @@ use crate::core_term::{
   open_with,
 };
 use crate::term::{Identifier, ModulePath};
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // MetaContext — the unifier's mutable state, keyed by MetaId, never a name
@@ -251,25 +252,22 @@ impl MetaContext {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnifyError {
   Mismatch {
-    left: CoreTerm,
-    right: CoreTerm,
+    left: Arc<CoreTerm>,
+    right: Arc<CoreTerm>,
   },
   /// A metavariable would need to be solved with a term that contains
   /// itself — rejected rather than silently producing an infinite type.
   /// `match_resolve_type_inner`/`check_free_vars` in the old checker had
   /// no equivalent check at all.
-  OccursCheck {
-    meta: MetaId,
-    term: CoreTerm,
-  },
+  OccursCheck { meta: MetaId, term: Arc<CoreTerm> },
   /// Placeholder for the Miller-pattern higher-order case (a `Meta`
   /// application spine unified against a non-pattern term) — flagged as a
   /// future extension point in the plan, not implemented now. Reported
   /// explicitly rather than silently guessing, which is strictly better
   /// than the old checker's total lack of detection for this case.
   UnsupportedPattern {
-    left: CoreTerm,
-    right: CoreTerm,
+    left: Arc<CoreTerm>,
+    right: Arc<CoreTerm>,
   },
 }
 
@@ -349,7 +347,10 @@ fn occurs_lit(mctx: &MetaContext, target: MetaId, lit: &CoreLit) -> bool {
 
 fn bind(mctx: &mut MetaContext, m: MetaId, term: CoreTerm) -> Result<(), UnifyError> {
   if occurs(mctx, m, &term) {
-    return Err(UnifyError::OccursCheck { meta: m, term });
+    return Err(UnifyError::OccursCheck {
+      meta: m,
+      term: Arc::new(term),
+    });
   }
   mctx.solve(m, term);
   Ok(())
@@ -504,7 +505,10 @@ pub fn unify(mctx: &mut MetaContext, a: &CoreTerm, b: &CoreTerm) -> Result<(), U
 }
 
 fn mismatch(left: CoreTerm, right: CoreTerm) -> UnifyError {
-  UnifyError::Mismatch { left, right }
+  UnifyError::Mismatch {
+    left: Arc::new(left),
+    right: Arc::new(right),
+  }
 }
 
 fn unify_args(

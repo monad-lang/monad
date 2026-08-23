@@ -23,6 +23,7 @@ use crate::core_term::{
 use crate::core_unify::{MetaContext, UnifyError, force, instantiate, open_n, unify};
 use crate::term::{Identifier, ModulePath, Multiplicity, TypeConstraint};
 use crate::{AtomPathMap, Map};
+use std::sync::Arc;
 
 /// Typing context: which type each currently-open `Free` atom has. Bound
 /// variables are never looked up directly — `infer`/`check` always open a
@@ -1743,14 +1744,14 @@ fn attach_location(e: InferError, term: &CoreTerm) -> InferError {
   let Some(loc) = term.strip_ctx_loc().1 else {
     return e;
   };
-  let wrap = |t: CoreTerm| -> CoreTerm {
+  let wrap = |t: Arc<CoreTerm>| -> Arc<CoreTerm> {
     if t.strip_ctx_loc().1.is_some() {
       t
     } else {
-      CoreTerm::Ctx {
+      Arc::new(CoreTerm::Ctx {
         loc: loc.clone(),
-        term: Box::new(t),
-      }
+        term: Box::new(Arc::unwrap_or_clone(t)),
+      })
     }
   };
   match e {

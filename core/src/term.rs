@@ -2307,6 +2307,16 @@ impl ModulePath {
     self.0.append(&mut path.0);
     ModulePath(self.0)
   }
+  /// Borrow-friendly variant of [`extend`](Self::extend) for call sites that
+  /// only hold `&ModulePath` references. Avoids the two clones that
+  /// `path.clone().extend(other.clone())` would otherwise pay; only the
+  /// final `Vec` is allocated.
+  pub fn extend_borrowed(&self, path: &ModulePath) -> ModulePath {
+    let mut out = Vec::with_capacity(self.0.len() + path.0.len());
+    out.extend(self.0.iter().cloned());
+    out.extend(path.0.iter().cloned());
+    ModulePath(out)
+  }
   pub fn append(&self, mut ids: Vec<Identifier>) -> ModulePath {
     let mut path = self.0.clone();
     path.append(&mut ids);
