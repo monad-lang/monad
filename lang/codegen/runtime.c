@@ -204,6 +204,44 @@ char* monad_i64_to_string(int64_t n) {
     return out;
 }
 
+/* `#[native string_concat]` (init/string.mo's `String.concat`, also the
+   `++`/`Append.append` infix's own real backing for two Strings) --
+   previously entirely unwired in codegen: `compile_native_app_db`/
+   `compile_native_ir` have no NativeOp entry for it, so every call fell
+   through to the generic "native def with no known implementation"
+   fallback, which compiles to a meaningless `alloc_constructor(0, 0)` --
+   confirmed as a real gap via direct repro (a do-block printing a
+   `String.concat` result printed nothing meaningful). Same bare-`char*`
+   convention as `monad_i64_to_string` just above (this backend's Strings
+   are never `alloc_string`'s boxed `StringObj` in practice). NULL-safe:
+   a NULL operand is treated as empty, matching `monad_print_str`'s own
+   NULL tolerance elsewhere in this file, since a still-missing/upstream
+   String native could plausibly hand this a NULL rather than a real
+   empty string. */
+char* monad_string_concat(char* a, char* b) {
+    size_t la = a ? strlen(a) : 0;
+    size_t lb = b ? strlen(b) : 0;
+    char* out = (char*)malloc(la + lb + 1);
+    if (!out) return NULL;
+    if (la) memcpy(out, a, la);
+    if (lb) memcpy(out + la, b, lb);
+    out[la + lb] = '\0';
+    return out;
+}
+
+/* `#[native string_eq]` (init/string.mo's `String.beq`) -- same
+   previously-unwired gap as `monad_string_concat` above. Returns a
+   plain `int64_t` 0/1 (this backend's uniform boolean-as-i64
+   convention, matching `I64_eq`'s own `icmp`-then-widen codegen), not a
+   real tagged `Bool` constructor -- correct for this native's use as an
+   `icmp`-style comparison operand (see NativeOp.op_eq's own codegen),
+   not as a first-class `Bool` value passed around opaquely. */
+int64_t monad_string_eq(char* a, char* b) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    return strcmp(a, b) == 0 ? 1 : 0;
+}
+
 char* monad_read_file(char* path) {
     if (!path) return NULL;
     FILE* f = fopen(path, "rb");

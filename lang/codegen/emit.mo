@@ -1904,6 +1904,131 @@ def unwrap_io_return_instrs (instrs : List LLVMInstruction) (temp_name : String)
         },
 }
 
+/// Which shape a native runtime function's raw `i64` result needs
+/// wrapped into before it's a legitimate Monad-level value.
+/// `passthrough` covers a native whose result IS ALREADY this
+/// backend's uniform value representation for its type (a `String` is
+/// always a bare `char*`/i64, per `monad_i64_to_string`'s own doc
+/// comment -- `monad_string_concat` needs nothing further).
+/// `bool_result` covers a native that's semantically `Bool`-returning
+/// but implemented as a plain C `int64_t` 0/1 (`monad_string_eq`,
+/// matching `NativeOp.op_eq`'s own raw-i1 comparison convention) -- a
+/// raw 0/1 is NOT a valid `Bool` value on its own here: this backend's
+/// `Bool` is always a tagged `Constructor` (`monad_ctor_Bool_true`/
+/// `_false`, tags 1/2 -- see `constructor_tag`), and anything that
+/// receives this result as an ordinary `Bool` VALUE rather than an
+/// immediate `if`-condition (`ensure_i1_cond`'s own special-cased
+/// native-comparison recognition only applies to a `Term` it can see
+/// is a direct native-op call, not a value already reduced to a bare
+/// local/parameter) will call `monad_get_tag` on it, segfaulting on a
+/// small integer address -- confirmed as a real gap via direct repro
+/// (`String.beq` passed into an ordinary `Bool`-parameter function).
+type NativeWrapKind {
+    passthrough (rt_fn_name : String),
+    bool_result (rt_fn_name : String),
+}
+
+/// A `#[native <name>]`-attributed def has no real body (`Term.hole`,
+/// per `is_term_hole`) -- absent a special case, `compile_db_def_ir`
+/// falls all the way through to its own `LLVMValue.void_val` arm below,
+/// silently compiling EVERY native def to the exact same "return Unit"
+/// stub regardless of what it's actually supposed to do (confirmed as a
+/// real gap: `String.concat`'s own compiled body was this stub,
+/// producing a do-block that printed nothing meaningful). Whitelisted
+/// to the natives this backend actually has a real C implementation
+/// for (`lang/codegen/runtime.c`) -- anything else still falls through
+/// to the unchanged stub behavior below, so this can never newly break
+/// a native this backend doesn't implement yet.
+#[partial]
+def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
+    match native_attr_target_name attrs {
+        Option.none => Option.none,
+        Option.some target =>
+            if String.beq target "string_concat" then Option.some (NativeWrapKind.passthrough "monad_string_concat")
+            else if String.beq target "string_eq" then Option.some (NativeWrapKind.bool_result "monad_string_eq")
+            else Option.none,
+    }
+
+#[partial]
+def native_attr_target_name (attrs : List Attribute) : Option String :=
+    match attrs {
+        List.empty => Option.none,
+        List.cons a rest =>
+            match a {
+                Attribute.mk aname args =>
+                    if id_eq aname (Identifier.id "native")
+                    then attr_arg_as_string_first args
+                    else native_attr_target_name rest,
+            },
+    }
+
+#[partial]
+def attr_arg_as_string_first (args : List AttrArg) : Option String :=
+    match args {
+        List.empty => Option.none,
+        List.cons a _ =>
+            match a {
+                AttrArg.ident aid => Option.some (show_identifier aid),
+                AttrArg.str s => Option.some s,
+                _ => Option.none,
+            },
+    }
+
+/// A thin wrapper def: calls the native's own runtime function with
+/// every one of `params` (positionally, `%p0`/`%p1`/... -- same naming
+/// `build_llvm_params_db` already gives the function's own parameters),
+/// then wraps its raw result per `kind` (see `NativeWrapKind`'s own doc
+/// comment) before returning it.
+#[partial]
+def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_params : List ParamPair) (kind : NativeWrapKind) (params : List Param) : DefResult :=
+    match kind {
+        NativeWrapKind.passthrough rt_fn_name =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx_t temp =>
+                    let call_val := LLVMValue.call rt_fn_name LLVMType.i64_ (parm_values_for params) false in
+                    let assign_instr := LLVMInstruction.assign temp call_val in
+                    let entry_instrs := cons_instr assign_instr (cons_instr (LLVMInstruction.ret (LLVMValue.var_ temp)) empty_instrs) in
+                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true in
+                    DefResult.dr ctx_t (cons_func native_func empty_funcs) empty_globals_list,
+            },
+        NativeWrapKind.bool_result rt_fn_name =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 raw_temp =>
+                    match fresh_temp ctx1 {
+                        CtxStrPair.mk ctx2 tag_temp =>
+                            match fresh_temp ctx2 {
+                                CtxStrPair.mk ctx3 con_temp =>
+                                    let call_val := LLVMValue.call rt_fn_name LLVMType.i64_ (parm_values_for params) false in
+                                    let raw_instr := LLVMInstruction.assign raw_temp call_val in
+                                    // Bool.true/Bool.false are tags 1/2
+                                    // (`constructor_tag`); raw_result is
+                                    // 0 (false) or 1 (true) -- `2 -
+                                    // raw_result` maps 1->1 (true),
+                                    // 0->2 (false), avoiding a branch.
+                                    let tag_val := LLVMValue.sub (LLVMValue.int_ 2) (LLVMValue.var_ raw_temp) in
+                                    let tag_instr := LLVMInstruction.assign tag_temp tag_val in
+                                    let con_val := LLVMValue.call "alloc_constructor" LLVMType.i64_ (cons_val (LLVMValue.var_ tag_temp) (cons_val (LLVMValue.int_ 0) empty_vals)) false in
+                                    let con_instr := LLVMInstruction.assign con_temp con_val in
+                                    let entry_instrs := cons_instr raw_instr (cons_instr tag_instr (cons_instr con_instr (cons_instr (LLVMInstruction.ret (LLVMValue.var_ con_temp)) empty_instrs))) in
+                                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true in
+                                    DefResult.dr ctx3 (cons_func native_func empty_funcs) empty_globals_list,
+                            },
+                    },
+            },
+    }
+
+#[partial]
+def parm_values_for (params : List Param) : List LLVMValue := parm_values_for_go params 0
+
+#[partial]
+def parm_values_for_go (params : List Param) (idx : I64) : List LLVMValue :=
+    match params {
+        List.empty => List.empty,
+        List.cons _ rest => List.cons (LLVMValue.parm_ idx) (parm_values_for_go rest (idx + 1)),
+    }
+
 /// Compile a canonical Def (de Bruijn Term) to LLVM IR.
 #[partial]
 def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
@@ -1919,6 +2044,14 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
         let fn_name := replace_dots_with_underscores (module_path_to_str name) in
         let params := collect_db_params term_ in
         let llvm_params := build_llvm_params_db params in
+        match native_runtime_fn_name attrs {
+            Option.some wrap_kind => compile_native_def_wrapper_ir c fn_name llvm_params wrap_kind params,
+            Option.none => compile_db_def_ir_body c fn_name typ term_ params llvm_params,
+        },
+}
+
+#[partial]
+def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (term_ : Term) (params : List Param) (llvm_params : List ParamPair) : DefResult :=
         let body := strip_db_lams term_ in
         let c0 := bind_params_in_ctx_db c params in
         // See `unwrap_io_return_blocks`'s own doc comment: an `IO`-typed
@@ -1968,8 +2101,7 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
                         let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
                         DefResult.dr ctx_r (cons_func main_func funcs_r) globals_r,
                 },
-        },
-}
+        }
 
 /// Compile a list of canonical Defs to LLVM functions.
 #[partial]
@@ -2250,8 +2382,14 @@ def runtime_declarations : List LLVMDeclaration :=
     // of which of the two parallel native-dispatch mechanisms
     // (`lookup_native_any` vs. `Term.ntv`) it goes through.
     let d23 := mk_decl "monad_string_length" (cons_str "i64" empty_strs) "i64" in
+    // Same requirement as `monad_string_length` just above --
+    // `compile_native_def_wrapper_ir`'s own `call` (the "native def
+    // compiles to a real wrapper" fix) hits the identical "no implicit
+    // declare" gap.
+    let d24 := mk_decl "monad_string_concat" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d25 := mk_decl "monad_string_eq" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13,
-     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23]
+     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform
@@ -2395,6 +2533,66 @@ def test_compile_db_inductive_decls : Bool :=
     // (see compile_db_inductive_constructors's doc comment).
     if check_contains text "monad_ctor_Option_Some"
     then check_contains text "monad_ctor_Option_None"
+    else false
+
+/// Regression tests for `native_runtime_fn_name`/`compile_native_def_wrapper_ir`:
+/// a `#[native string_concat]`/`#[native string_eq]`-attributed def
+/// (`String.concat`/`String.beq`'s own shape, init/string.mo) must
+/// compile to a real call into its whitelisted runtime function, not
+/// the generic hole-bodied-native fallback's `alloc_constructor(0, 0)`
+/// "return Unit" stub (confirmed as a real gap: that stub was
+/// `String.concat`'s own actual compiled body, silently discarding both
+/// arguments and producing an empty/meaningless result at runtime).
+#[partial]
+def native_attr (target : String) : List Attribute :=
+    List.cons (Attribute.mk (Identifier.id "native") (List.cons (AttrArg.ident (Identifier.id target)) List.empty)) List.empty
+
+/// A 2-param, hole-bodied `#[native <target>]` def -- `lam_params`
+/// (lang/parser.mo) always wraps even a hole body in one lambda per
+/// param, so a REAL parsed native def's own body looks exactly like
+/// this, not a bare `Term.hole`.
+#[partial]
+def native_def_fixture (name : String) (target : String) : Def :=
+    let body := Term.lam (DebugName.named (Identifier.id "a")) Term.hole
+        (Term.lam (DebugName.named (Identifier.id "b")) Term.hole Term.hole) in
+    Def.mk (ModulePath.mp (List.cons (Identifier.id name) List.empty)) Term.hole body
+        List.empty (native_attr target) Visibility.package_private
+
+#[partial]
+def compile_native_def_fixture_text (name : String) (target : String) : String :=
+    match compile_db_def_ir (empty_ctx empty_arities) (native_def_fixture name target) {
+        DefResult.dr _ funcs _ =>
+            emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls),
+    }
+
+#[test]
+def test_native_string_concat_calls_runtime_fn_not_unit_stub : Bool :=
+    let text := compile_native_def_fixture_text "String.concat" "string_concat" in
+    if check_contains text "call i64 @monad_string_concat"
+    then not (check_contains text "call i64 @alloc_constructor(i64 0, i64 0)")
+    else false
+
+#[test]
+def test_native_string_eq_wraps_raw_result_as_tagged_bool : Bool :=
+    let text := compile_native_def_fixture_text "String.beq" "string_eq" in
+    // Must call the real comparison AND allocate a genuine tagged
+    // Constructor from its (dynamically computed) result -- NOT return
+    // the raw 0/1 i64 directly, which crashes (monad_get_tag on a small
+    // integer) the moment it's used as an ordinary Bool value rather
+    // than an immediate if-condition.
+    if check_contains text "call i64 @monad_string_eq"
+    then check_contains text "call i64 @alloc_constructor"
+    else false
+
+#[test]
+def test_native_unwhitelisted_native_still_gets_unit_stub : Bool :=
+    // A native this backend doesn't implement yet (e.g. string_slice)
+    // must be completely unaffected by the whitelist -- still the
+    // pre-existing stub behavior, not a call to a nonexistent runtime
+    // function.
+    let text := compile_native_def_fixture_text "String.slice" "string_slice" in
+    if check_contains text "call i64 @alloc_constructor(i64 0, i64 0)"
+    then not (check_contains text "@monad_string_slice")
     else false
 
 #[partial]
