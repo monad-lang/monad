@@ -1517,7 +1517,7 @@ struct FileCheckAndCache {
 /// function's own doc comment for the two-mode rationale. `check_deps=true`
 /// (checking the whole dependency closure a file pulls in, not just its
 /// own top-level decls) is NOT yet safe to default to here: turning it on
-/// for `lang/main.mo` (whose closure reaches ~4000 decls, including this
+/// for `lang/main.mo` (whose closure reaches ≈2200 decls, including this
 /// self-hosted compiler's own richly-recursive AST types) caused unbounded
 /// memory growth (28GB+ RSS and still climbing after ~9 minutes, had to be
 /// killed) — root cause under investigation, see

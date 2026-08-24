@@ -113,15 +113,15 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
 /// canonical front-end pipeline `check`/`compile`/`test`/`slow_tests` all
 /// now share (see `bootstrapping/unify-check-compile-test-elaboration.md`).
 ///
-/// Passes `check_deps=false` for now. `check_deps=true` (genuinely
-/// body-type-checking the WHOLE `init`/`std`/`lang` dependency closure
-/// `lang/main.mo` pulls in, not just `lang/main.mo`'s own top-level decls)
-/// is the eventual goal for this test — it's the natural place for that
-/// full-closure safety-net check to live — but is not yet safe to turn on:
-/// it caused unbounded memory growth (28GB+ RSS and climbing) checking
-/// this exact closure (~4000 decls, including this self-hosted compiler's
-/// own richly-recursive AST types). Root cause under investigation, see
-/// `bootstrapping/check-deps-memory-blowup.md`.
+/// Passes `check_deps=false` for now, same as
+/// `slow_tests/typecheck_init_tests.mo`'s `typecheck_file` (see its own
+/// doc comment for the general rationale). `check_deps=true` is the
+/// eventual goal specifically for THIS test, though — it's the natural
+/// place for a genuine full-closure safety-net check to live — but isn't
+/// safe to turn on yet: see `elaborate_loaded_modules`'s own doc comment
+/// (`lang/module.mo`) for what `check_deps=true` does, and
+/// `bootstrapping/check-deps-memory-blowup.md` for why it's still off
+/// everywhere.
 def typecheck_file (file_path : String) : IO Bool := do {
     let result <- elaborate_loaded_modules file_path false;
     match result {

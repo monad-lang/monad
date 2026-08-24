@@ -62,7 +62,7 @@ a different branch and cause confusion.
 │                     #     comment) but is NOT currently used anywhere,
 │                     #     including here or by the real `check`/`compile`/
 │                     #     `test` CLI commands -- turning it on for
-│                     #     `lang/main.mo`'s own full closure (~4000 decls,
+│                     #     `lang/main.mo`'s own full closure (≈2200 decls,
 │                     #     including this self-hosted compiler's own
 │                     #     richly-recursive AST types) caused unbounded
 │                     #     memory growth (28GB+ RSS and still climbing);
