@@ -672,11 +672,23 @@ type DoStmt {
     expr_s (expr: Term),
 }
 
+// Named (not `DebugName.unnamed`) so this flows through the SAME
+// class-method-call resolution `lang/scope.mo`'s `resolve_class_call_term`
+// already gives every other class method (`Show.show`, `I64.add`, ...) --
+// that function's own `DebugName.unnamed` arm deliberately leaves an
+// unnamed call head untouched (it has no name to resolve a class/instance
+// from), so an unnamed bind/pure sentinel reached codegen unresolved,
+// producing a bogus `void`-typed call argument (`compile_db_term_ir`'s
+// `Term.var`/`DebugName.unnamed` case has nothing better to emit).
+// Mirrors the Rust reference's own `desugar_do_statements`
+// (core/parser.rs), which desugars to `pvar(vec!["Monad", "bind"])`/
+// `pvar(vec!["Monad", "pure"])` -- a real, dotted, class-qualified
+// identifier -- rather than a free/unnamed variable.
 def monad_bind_term : Term :=
-    Term.var (-1) (DebugName.unnamed)
+    Term.var (-1) (DebugName.named (Identifier.id "Monad.bind"))
 
 def monad_pure_term : Term :=
-    Term.var (-1) (DebugName.unnamed)
+    Term.var (-1) (DebugName.named (Identifier.id "Monad.pure"))
 
 // Fold in SOURCE order (first statement outermost), mirroring the
 // Rust reference's `desugar_do_statements` (`core/parser.rs`): each

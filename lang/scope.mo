@@ -1932,7 +1932,27 @@ def last_segment_of (ids : List Identifier) : Identifier :=
         List.empty => Identifier.id "",
         List.cons only_id rest =>
             match rest {
-                List.empty => only_id,
+                // A single remaining segment can itself be a DOTTED name:
+                // `def IO.println (...)` parses its own declared name as
+                // ONE joined Identifier "IO.println" (`def_to_decl`,
+                // `lang/parser.mo`, wraps it as a single-element
+                // ModulePath), not two separate ModulePath segments -- so
+                // "last list element" alone isn't the same as "last
+                // dotted component". Split on the segment's own trailing
+                // '.' too (mirroring `class_method_ref`'s identical
+                // string-level `method_suffix_of` split for a call-site
+                // reference) before returning it. Confirmed as a real
+                // gap: `lookup_def_type`'s carrier-inference caller
+                // silently failed to find `IO.println`'s declared return
+                // type this way (matching bare query "println" against
+                // the UNSPLIT "IO.println" and never equal), leaving a
+                // do-notation `Monad.bind` call over it unresolved at
+                // codegen time (undefined `@Monad_bind` at link time).
+                List.empty =>
+                    match method_suffix_of (show_identifier only_id) {
+                        Option.some suffix => Identifier.id suffix,
+                        Option.none => only_id,
+                    },
                 List.cons _ _ => last_segment_of rest,
             },
     }
@@ -2384,8 +2404,28 @@ def build_dict_field_projection (cls : Class) (dict_id : Identifier) (method_nam
 /// every shape that isn't a class-method-shaped call spine, mirroring
 /// `resolve_infix_term`'s own recursion pattern, extended with the
 /// `env`/`dict_env` threading D4/D5 both need.
+///
+/// `def_carrier` is the ENCLOSING def's own declared-return-type carrier
+/// (`full_return_carrier`, computed once per top-level def by
+/// `resolve_class_calls_decls_go` and threaded down unchanged through
+/// every recursive call here -- it never varies within one def's body,
+/// same reasoning as `classes`/`instances`/etc. above). It's the D4
+/// fallback of last resort for a class-method call whose OWN args carry
+/// no carrier-revealing type at all -- the do-notation case this exists
+/// for: `Monad.pure x`'s only argument is the MONAD'S ELEMENT type, not
+/// the monad itself, so `infer_carrier_from_args` can never recover "IO"
+/// from it no matter how good the arg-shape coverage gets; the one
+/// carrier ALWAYS available for a bare `pure`/final `bind` at the tail
+/// of a do-block is the enclosing function's own declared return type
+/// (every do-block's `pure`/`bind` chain shares that same monad).
+/// Confirmed as a real gap via direct repro: `Monad.bind`'s own carrier
+/// (inferable from its first, real, `M A`-shaped argument) started
+/// resolving once `last_segment_of`'s dotted-single-segment fix landed,
+/// but its continuation's trailing `Monad.pure unit`/`Monad.pure 0`
+/// still failed (`undefined @Monad_pure` at link time) -- exactly this
+/// gap.
 #[partial]
-def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (t : Term) : Term :=
+def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
     match t {
         Term.lam dbg typ body =>
             match dbg {
@@ -2396,16 +2436,16 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                         Option.some cls_name => List.cons (DictBinding.mk cls_name id) dict_env,
                         Option.none => dict_env,
                     } in
-                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env typ)
-                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types new_env new_dict_env body),
+                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier typ)
+                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types new_env new_dict_env def_carrier body),
                 DebugName.unnamed =>
-                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env typ)
-                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env body),
+                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier typ)
+                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier body),
             },
         Term.app _ _ =>
             match flatten_call_spine t {
                 CallSpine.mk head args =>
-                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types env dict_env args in
+                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types env dict_env def_carrier args in
                     match head {
                         Term.var _ dbg =>
                             match dbg {
@@ -2414,24 +2454,24 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                                         Option.some ref =>
                                             match ref {
                                                 ClassMethodRef.mk cls method_name =>
-                                                    resolve_class_method_call classes instances dict_env def_types cls method_name resolved_args head args,
+                                                    resolve_class_method_call classes instances dict_env def_types cls method_name resolved_args head args def_carrier,
                                             },
                                         Option.none => resolve_ordinary_constrained_call classes instances dict_env def_constraints def_types id head resolved_args,
                                     },
                                 DebugName.unnamed => rebuild_call head resolved_args,
                             },
-                        _ => rebuild_call (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env head) resolved_args,
+                        _ => rebuild_call (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier head) resolved_args,
                     },
             },
-        _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env) t,
+        _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier) t,
     }
 
 #[partial]
-def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (args : List Term) : List Term :=
+def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (args : List Term) : List Term :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
-            List.cons (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types env dict_env rest),
+            List.cons (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types env dict_env def_carrier rest),
     }
 
 /// D5-first, D4-fallback resolution for one class-method call, given
@@ -2441,21 +2481,67 @@ def resolve_class_call_terms (classes : List Class) (instances : List Instance) 
 /// resolved via ordinary recursion, per this pass's own "leave
 /// unresolved rather than guess" style, matching `resolve_infix_term`).
 #[partial]
-def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) : Term :=
+def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) : Term :=
     let cls_name := class_own_name cls in
     match lookup_dict_binding dict_env cls_name {
         Option.some dict_id => build_dict_field_projection cls dict_id method_name resolved_args,
-        Option.none => resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args,
+        Option.none => resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier,
     }
 
 /// D4: no bound dict for this class in scope -- try a fresh concrete
-/// lookup from the call's own args.
+/// lookup from the call's own args, falling back to the enclosing def's
+/// own declared-return-type carrier (`def_carrier`) if the args alone
+/// don't reveal one (see `resolve_class_call_term`'s own doc comment for
+/// why that fallback is needed at all). The fallback is deliberately
+/// restricted to the `Monad` class itself (`monad_class_name`) -- "this
+/// call's carrier equals the enclosing function's own declared return
+/// type" is only a sound assumption for a do-notation `bind`/`pure`
+/// (every statement in one do-block shares the same monad, and that
+/// monad IS the function's own declared return type by construction);
+/// it is NOT sound in general for an arbitrary class method with no
+/// carrier-revealing arg (e.g. `Show.show`), where guessing the
+/// enclosing function's unrelated return type as a carrier could
+/// silently dispatch to the WRONG instance instead of correctly leaving
+/// the call unresolved.
+///
+/// `Monad.pure : A -> M A` needs its OWN special case within that:
+/// `def_carrier` must be tried FIRST, before `infer_carrier_from_args`,
+/// not merely as its fallback -- `pure`'s only argument is the MONAD'S
+/// ELEMENT type (`A`), never the monad itself (`M`), so
+/// `infer_carrier_from_args` inferring a carrier from it at all (e.g.
+/// `Some I64` from a bare `pure 0`, via `literal_carrier_type`) is
+/// already the WRONG answer, not merely a less-good one -- and because
+/// it's `Option.some`, the ordinary "args first, def_carrier only on
+/// None" order never even reaches the (correct) `def_carrier` fallback.
+/// Confirmed as a real gap via direct repro: `pure 0` resolved to a
+/// bogus "I64" carrier (no `Monad I64` instance exists, so lookup failed
+/// and the call was left unresolved) even after `def_carrier` landed for
+/// `bind`.
 #[partial]
-def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) : Term :=
+def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) : Term :=
+    if modpath_eq cls_name monad_class_name && String.beq (show_identifier method_name) "pure" then
+        match def_carrier {
+            Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
+            Option.none => resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier,
+        }
+    else resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier
+
+#[partial]
+def resolve_class_method_call_d4_from_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) : Term :=
     match infer_carrier_from_args def_types resolved_args {
-        Option.none => rebuild_call orig_head resolved_args,
         Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
+        Option.none =>
+            if modpath_eq cls_name monad_class_name then
+                match def_carrier {
+                    Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
+                    Option.none => rebuild_call orig_head resolved_args,
+                }
+            else rebuild_call orig_head resolved_args,
     }
+
+#[partial]
+def monad_class_name : ModulePath :=
+    ModulePath.mp (List.cons (Identifier.id "Monad") List.empty)
 
 #[partial]
 def resolve_class_method_call_with_carrier (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (carrier : Term) : Term :=
@@ -2616,11 +2702,37 @@ def resolve_class_calls_decls_go (classes : List Class) (instances : List Instan
                 Decl.def_d def_ =>
                     match def_ {
                         Def.mk name typ term_ constraints attrs vis =>
-                            let new_term := resolve_class_call_term classes instances ctor_owners def_constraints def_types List.empty List.empty term_ in
+                            let def_carrier := full_return_carrier typ in
+                            let new_term := resolve_class_call_term classes instances ctor_owners def_constraints def_types List.empty List.empty def_carrier term_ in
                             List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis)) (resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types rest),
                     },
                 _ => List.cons d (resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types rest),
             },
+    }
+
+/// Strip EVERY leading `Term.pi`/`Term.forall` binder (unlike
+/// `return_type_after_n_args`, which strips a fixed `n`) -- used to find
+/// a top-level def's own ULTIMATE codomain regardless of arity, for
+/// `full_return_carrier`'s do-notation fallback (see
+/// `resolve_class_call_term`'s doc comment).
+#[partial]
+def strip_all_leading_binders (typ : Term) : Term :=
+    match typ {
+        Term.forall _ _ body => strip_all_leading_binders body,
+        Term.pi _ ret => strip_all_leading_binders ret,
+        _ => typ,
+    }
+
+/// A top-level def's own declared return-type carrier, e.g. `IO` for a
+/// def declared `: IO Unit` -- see `resolve_class_call_term`'s doc
+/// comment for why this is the right (and only sound, restricted to the
+/// `Monad` class) D4 fallback for a do-notation `bind`/`pure` call
+/// whose own args don't reveal a carrier.
+#[partial]
+def full_return_carrier (typ : Term) : Option Term :=
+    match type_head_name_local (strip_all_leading_binders typ) {
+        Option.some carrier_name => Option.some (carrier_var (show_identifier carrier_name)),
+        Option.none => Option.none,
     }
 
 // --- scope_resolve_instance: find concrete instance by class name ---
@@ -3077,3 +3189,33 @@ def test_def_references_class_true_for_dotted_var : Bool :=
 def test_def_references_class_false_for_unrelated_var : Bool :=
     let t := Term.var 0 (DebugName.named (Identifier.id "I64.add")) in
     not (def_references_class "Show" t)
+
+// Regression test for `last_segment_of`'s dotted-single-segment gap: a
+// def declared with an already-qualified own name (`def IO.println (...)`)
+// parses to a ONE-element ModulePath whose sole Identifier's TEXT is
+// "IO.println" (`def_to_decl`, lang/parser.mo), not two separate
+// ModulePath segments -- `last_segment_of` must split on the trailing
+// '.' inside that single segment too, or `lookup_def_type`'s carrier-
+// inference caller silently fails to match a bare "println" query
+// against it, exactly the bug that left do-notation's `Monad.bind`
+// unresolved over a call to a native/qualified-name def like
+// `IO.println` (undefined `@Monad_bind` at link time).
+#[test]
+def test_last_segment_splits_dotted_single_segment_name : Bool :=
+    let mp := ModulePath.mp (List.cons (Identifier.id "IO.println") List.empty) in
+    Similar.similar (last_segment mp) (Identifier.id "println")
+
+#[test]
+def test_last_segment_leaves_undotted_single_segment_name_unchanged : Bool :=
+    let mp := ModulePath.mp (List.cons (Identifier.id "greet") List.empty) in
+    Similar.similar (last_segment mp) (Identifier.id "greet")
+
+#[test]
+def test_lookup_def_type_finds_dotted_own_name_def_by_bare_query : Bool :=
+    let println_typ := Term.pi (Term.var 0 (DebugName.named (Identifier.id "String")))
+        (Term.app (Term.var 0 (DebugName.named (Identifier.id "IO"))) (Term.var 0 (DebugName.named (Identifier.id "Unit")))) in
+    let entry := DefTypeEntry.mk (ModulePath.mp (List.cons (Identifier.id "IO.println") List.empty)) println_typ in
+    match lookup_def_type (List.cons entry List.empty) (Identifier.id "println") {
+        Option.some _ => true,
+        Option.none => false,
+    }

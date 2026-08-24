@@ -942,6 +942,28 @@ def drop_last_instr (instrs : List LLVMInstruction) : List LLVMInstruction := ma
     },
 }
 
+// This is reached ONLY for a genuinely NESTED `Term.lam` appearing in
+// VALUE position -- a top-level def's own OUTER, param-introducing
+// lambdas never reach here (`compile_db_def_ir` peels those off first
+// via `strip_db_lams`/`collect_db_params`, building the LLVMFunction's
+// params directly), and a lambda immediately APPLIED as a beta-redex
+// (`(\x -> body) arg`, i.e. a `let`) is special-cased earlier by
+// `compile_db_app_ir`, before its head ever reaches the general
+// `Term.lam` dispatch here. So every lambda this function lifts is one
+// some OTHER call's argument (or a stored/returned value) will apply
+// dynamically via `apply_closureN` -- e.g. every do-notation
+// continuation passed as `Monad.bind`'s own second argument, whose
+// compiled instance body (`match a { io a => f a }`) applies its `f`
+// parameter exactly that way. Returning a bare `LLVMValue.fn_ref` (a
+// raw code pointer, not a `Closure*`) used to leave that call reading
+// `((Closure*)fn_ptr)->entry` off the LIFTED FUNCTION'S OWN machine
+// code as if it were a heap-allocated `Closure` struct -- confirmed as
+// a real gap via direct repro (a do-block whose bind continuation
+// segfaulted inside `apply_closure1`, called with the raw lambda
+// symbol instead of a boxed closure). Box it via `alloc_closure`
+// instead, mirroring the identical, already-correct fix for a NAMED
+// global def referenced as a first-class value (`compile_db_term_ir`'s
+// own `Term.var`/arity>0 case, just above).
 #[partial]
 def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Term) : CompileResult :=
     match fresh_label c "lambda" {
@@ -958,7 +980,13 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
                     let lam_pair := ParamPair.mk "p0" LLVMType.i64_ in
                     let lam_params := cons_pair lam_pair empty_pairs in
                     let lam_func := LLVMFunction.mk lam_name lam_params LLVMType.i64_ (cons_block entry_block blocks_r) false in
-                    CompileResult.ok ctx2 empty_instrs (LLVMValue.fn_ref lam_name) empty_blocks (cons_func lam_func funcs_r) globals_r,
+                    match fresh_temp ctx2 {
+                        CtxStrPair.mk ctx_box temp =>
+                            let entry_text := global_fn_ptr_text lam_name 1 in
+                            let box_val := LLVMValue.alloc_closure entry_text 1 List.empty in
+                            let box_instr := LLVMInstruction.assign temp box_val in
+                            CompileResult.ok ctx_box (cons_instr box_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks (cons_func lam_func funcs_r) globals_r,
+                    },
             },
     }
 
@@ -1315,6 +1343,45 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
         _ => Option.none,
     }
 
+// `print_str`/`write_file` are declared `void` on the C side
+// (`lang/codegen/runtime.c`) -- their LLVM `declare` says so (`mk_decl
+// "monad_print_str" ... "void"`), but every native CALL here is always
+// emitted `i64`-typed (`LLVMType.i64_`) regardless, so the call itself
+// produces an i64 "result" that's really just whatever garbage the C
+// ABI happened to leave in the return register, not a real value.
+// Harmless as long as nothing reads it -- but a native call used as a
+// do-notation statement's own VALUE (e.g. `println x; return unit`
+// desugars to `Monad.bind (println x) (\_ -> Monad.pure unit)`) feeds
+// that garbage straight into `bind`'s own first argument, which
+// `Monad_IO_bind` then treats as a real tagged pointer
+// (`monad_get_tag`/`monad_get_field`) -- confirmed as a real gap via a
+// direct repro (a do-block whose first statement is a bare `println`
+// call): compiled clean, segfaulted on the very first line, before
+// printing anything.
+//
+// Fixed narrowly, without touching the (apparently llc-tolerated)
+// call-type mismatch itself: `println`/`write_file`'s REAL declared
+// type is `IO Unit`, i.e. a properly tagged `IO.io Unit` constructor
+// value (one field, holding the `Unit` value) -- exactly the shape
+// `Monad_IO_pure`'s own generated body builds (`alloc_constructor` at
+// `constructor_tag "IO.io"` + one `monad_set_field`). A first attempt
+// at this fix used a BARE `Unit` value instead (via the already-
+// generated `monad_ctor_Unit_unit`) -- that alone doesn't crash
+// (`monad_get_tag` on it "works", it just reads the WRONG tag), but
+// `Monad_IO_bind`'s `monad_get_field(%p0, 0)` then reads past a
+// 0-field `Unit` object's empty `[0 x i8*]` fields array, a real
+// out-of-bounds read -- exactly the observed segfault. Reusing
+// `compile_con_ir`'s own `alloc_constructor`/`build_set_field_instrs`
+// helpers here (rather than hand-rolling the wrap) keeps this in sync
+// with however a real `IO.io _` constructor literal compiles elsewhere.
+#[partial]
+def is_void_native (op : NativeOp) : Bool :=
+    match op {
+        NativeOp.op_print_str => true,
+        NativeOp.op_write_file => true,
+        _ => false,
+    }
+
 #[partial]
 def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : CompileResult :=
     match compile_db_term_ir c arg {
@@ -1332,7 +1399,34 @@ def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : 
                     // comment above `ends_with_terminator`).
                     match compose_seq (Triple.tr instrs1 blocks1 val1) (Triple.tr (cons_instr assign_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
                         Triple.tr new_instrs new_blocks _ =>
-                            CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs1 globals1,
+                            if is_void_native op then
+                                wrap_void_native_result ctx_t new_instrs new_blocks funcs1 globals1
+                            else
+                                CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs1 globals1,
+                    },
+            },
+    }
+
+/// Builds the tail every void native's result needs: an inner `Unit`
+/// value (`monad_ctor_Unit_unit`), then wrapped as `IO.io Unit` --
+/// mirrors `compile_con_ir`'s own `alloc_constructor` +
+/// `build_set_field_instrs` pair, just with an already-computed field
+/// value instead of one still needing its own `compile_db_term_ir` call.
+#[partial]
+def wrap_void_native_result (ctx : CodegenCtx) (prior_instrs : List LLVMInstruction) (prior_blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) : CompileResult :=
+    match fresh_temp ctx {
+        CtxStrPair.mk ctx_unit temp_unit =>
+            let unit_call := LLVMValue.call "monad_ctor_Unit_unit" LLVMType.i64_ empty_vals false in
+            let unit_instr := LLVMInstruction.assign temp_unit unit_call in
+            let unit_val := LLVMValue.var_ temp_unit in
+            match fresh_temp ctx_unit {
+                CtxStrPair.mk ctx_io temp_io =>
+                    let alloc_val := LLVMValue.alloc_constructor (constructor_tag "IO.io") (List.cons unit_val List.empty) in
+                    let alloc_instr := LLVMInstruction.assign temp_io alloc_val in
+                    match build_set_field_instrs (LLVMValue.var_ temp_io) (List.cons unit_val List.empty) 0 ctx_io {
+                        SetFieldResult.mk ctx_set set_instrs =>
+                            let all_instrs := append_instrs prior_instrs (cons_instr unit_instr (cons_instr alloc_instr set_instrs)) in
+                            CompileResult.ok ctx_set all_instrs (LLVMValue.var_ temp_io) prior_blocks funcs globals,
                     },
             },
     }
