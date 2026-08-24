@@ -64,17 +64,21 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : String) (output_n
 /// so a real type error in the program being compiled either silently
 /// produced wrong LLVM IR or surfaced as an obscure link-time failure
 /// instead of a real diagnostic. Scoped to the TARGET file only (not the
-/// whole loaded dependency graph) to match `check`'s own existing
-/// semantics and avoid blocking every compile on an unrelated,
-/// pre-existing gap somewhere in prelude/init -- `compile_loaded_
-/// modules_to_ir` (`lang.codegen.emit`) separately attempts whole-graph
-/// elaboration on its own, with its own graceful fallback, purely to
-/// improve codegen's own dictionary-dispatch resolution (see its own doc
-/// comment) -- that is NOT a second copy of this gate.
+/// whole loaded dependency graph, `check_deps=false`) to match `check`'s
+/// own existing semantics and avoid blocking every compile on an
+/// unrelated, pre-existing gap somewhere in prelude/init — `check_deps=true`
+/// exists (see `elaborate_loaded_modules`'s own doc comment) but is not
+/// yet safe to default to anywhere: it caused unbounded memory growth
+/// checking `lang/main.mo`'s own full closure, root cause under
+/// investigation (`bootstrapping/check-deps-memory-blowup.md`).
+/// `compile_loaded_modules_to_ir` (`lang.codegen.emit`) separately attempts
+/// whole-graph elaboration on its own, with its own graceful fallback,
+/// purely to improve codegen's own dictionary-dispatch resolution (see its
+/// own doc comment) -- that is NOT a second copy of this gate.
 #[partial]
 def compile_file (file_path : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
     println <| "compiling: " ++ file_path ++ " to " ++ output_dir ++ "/" ++ output_name;
-    let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules file_path;
+    let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules file_path false;
     match elaborated_result {
         Result.ok em =>
             match em {
@@ -284,13 +288,13 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
         },
         List.cons f rest => do {
             // Stage 3 gate (see `compile_file`'s own identical doc
-            // comment for the full rationale): a file whose own decls
-            // don't type-check cleanly is reported `SKIP`, not `FAIL` --
-            // matching the existing "no #[test]s"/"already defines its
-            // own main" SKIP convention just below (a pre-existing
-            // problem with the file, not a new test failure this run
-            // introduced).
-            let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules f;
+            // comment for the full rationale, including `check_deps`):
+            // a file whose own decls don't type-check cleanly is reported
+            // `SKIP`, not `FAIL` -- matching the existing "no #[test]s"/
+            // "already defines its own main" SKIP convention just below
+            // (a pre-existing problem with the file, not a new test
+            // failure this run introduced).
+            let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules f false;
             match elaborated_result {
                 Result.err e => do {
                     println ("SKIP  " ++ f ++ " (" ++ e ++ ")");

@@ -112,8 +112,18 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
 /// the result — routes through `elaborate_loaded_modules`, the one
 /// canonical front-end pipeline `check`/`compile`/`test`/`slow_tests` all
 /// now share (see `bootstrapping/unify-check-compile-test-elaboration.md`).
+///
+/// Passes `check_deps=false` for now. `check_deps=true` (genuinely
+/// body-type-checking the WHOLE `init`/`std`/`lang` dependency closure
+/// `lang/main.mo` pulls in, not just `lang/main.mo`'s own top-level decls)
+/// is the eventual goal for this test — it's the natural place for that
+/// full-closure safety-net check to live — but is not yet safe to turn on:
+/// it caused unbounded memory growth (28GB+ RSS and climbing) checking
+/// this exact closure (~4000 decls, including this self-hosted compiler's
+/// own richly-recursive AST types). Root cause under investigation, see
+/// `bootstrapping/check-deps-memory-blowup.md`.
 def typecheck_file (file_path : String) : IO Bool := do {
-    let result <- elaborate_loaded_modules file_path;
+    let result <- elaborate_loaded_modules file_path false;
     match result {
         Result.ok em => typecheck_module_with_scope em.scope em.target_decls empty_local_scope,
         Result.err e => do {

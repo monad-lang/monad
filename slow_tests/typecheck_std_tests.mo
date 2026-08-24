@@ -12,9 +12,9 @@ def empty_local_scope : LocalScope := {
 /// See slow_tests/typecheck_init_tests.mo's `typecheck_file` doc comment
 /// — same fix, same reason (routes through `elaborate_loaded_modules`,
 /// the one canonical front-end pipeline `check`/`compile`/`test`/
-/// `slow_tests` all now share).
+/// `slow_tests` all now share), and same `check_deps=false` rationale.
 def typecheck_file (file_path : String) (mod_name : String) : IO Bool := do {
-    let result <- elaborate_loaded_modules file_path;
+    let result <- elaborate_loaded_modules file_path false;
     match result {
         Result.ok em => typecheck_module_with_scope em.scope em.target_decls empty_local_scope,
         Result.err e => do {

@@ -21,8 +21,17 @@ def empty_local_scope : LocalScope := {
 /// module's own name from `file_path` directly (`module_name_from_path`,
 /// inside `load_file_modules`) — kept as a parameter purely so every call
 /// site below still documents which module it's exercising.
+///
+/// Passes `check_deps=false` (target-only) — matches the current default
+/// everywhere else too (`check_deps=true` is not yet safe to turn on
+/// anywhere, see `elaborate_loaded_modules`'s own doc comment). Kept
+/// target-only/fast regardless: a per-file failure here is far more
+/// useful for pinpointing which individual `init/` file broke than one
+/// aggregate pass/fail would be, and staying target-only avoids paying
+/// the full-closure cost 18 times over (once per test in this file) once
+/// `check_deps=true` does become safe to use.
 def typecheck_file (file_path : String) (mod_name : String) : IO Bool := do {
-    let result <- elaborate_loaded_modules file_path;
+    let result <- elaborate_loaded_modules file_path false;
     match result {
         Result.ok em => typecheck_module_with_scope em.scope em.target_decls empty_local_scope,
         Result.err e => do {

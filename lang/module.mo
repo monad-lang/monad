@@ -1511,16 +1511,23 @@ struct FileCheckAndCache {
 /// run cost those two caches existed to eliminate. This is an explicit,
 /// accepted Stage-1 cost (see `bootstrapping/unify-check-compile-test-
 /// elaboration.md`), not an oversight — restoring equivalent caching for
-/// the new pipeline is real, separate follow-up work. `cache` is threaded
-/// straight through unchanged so this function's own signature (and
-/// every existing caller) doesn't need to change for that follow-up to
-/// land later.
+/// the new pipeline is real, separate follow-up work.
+///
+/// Passes `check_deps=false` to `elaborate_loaded_modules` — see that
+/// function's own doc comment for the two-mode rationale. `check_deps=true`
+/// (checking the whole dependency closure a file pulls in, not just its
+/// own top-level decls) is NOT yet safe to default to here: turning it on
+/// for `lang/main.mo` (whose closure reaches ~4000 decls, including this
+/// self-hosted compiler's own richly-recursive AST types) caused unbounded
+/// memory growth (28GB+ RSS and still climbing after ~9 minutes, had to be
+/// killed) — root cause under investigation, see
+/// `bootstrapping/check-deps-memory-blowup.md`.
 #[partial]
 def check_file_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
     let exists : Bool <- file_exists file_path;
     if exists then do {
         if verbose then println ("checking " ++ file_path) else do { return unit };
-        let elaborated_result <- elaborate_loaded_modules file_path;
+        let elaborated_result <- elaborate_loaded_modules file_path false;
         match elaborated_result {
             Result.ok em => do {
                 let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
@@ -1984,15 +1991,27 @@ def elaborate_def_typs (decls : List Decl) (known_names : List Identifier) : Lis
 /// dependency graph (prelude/init always seeded, via `load_file_modules`)
 /// -> flatten -> resolve infixes -> promote instance methods to concrete
 /// defs -> thread constraint dict params -> build ONE Scope from the
-/// result. `target_decls` (the file actually being checked/compiled) is
-/// deliberately taken from the ORIGINAL `main_module` (pre-elaboration on
-/// this specific field doesn't matter -- `target_decls` is only ever fed
-/// into `check_module_with_scope`, which type-checks each `Def`'s own
-/// `.term` against `scope`, and `scope` itself already reflects every
-/// elaboration pass below); `elaborated_decls` is the fully-prepared
-/// whole-graph list codegen will eventually consume directly (Stage 3).
+/// result. `elaborated_decls` is the fully-prepared whole-graph list
+/// codegen will eventually consume directly (Stage 3).
+///
+/// `check_deps` controls what `target_decls` (what actually gets body-
+/// type-checked, via `check_module_with_scope`) is built from:
+///   - `false`: only the requested file's OWN decls (pre-elaboration on
+///     this specific field doesn't matter -- `target_decls` is only ever
+///     fed into `check_module_with_scope`, which type-checks each `Def`'s
+///     own `.term` against `scope`, and `scope` itself already reflects
+///     every elaboration pass below) -- dependencies contribute only
+///     signatures to `scope`, their own bodies are never verified. Fast,
+///     and what to use for isolating "did THIS file break".
+///   - `true`: the fully-prepared WHOLE-GRAPH decl list (`dict_paramed`,
+///     already computed below for `scope`/`elaborated_decls` -- reused
+///     directly here, no second pass needed) -- every dependency's own
+///     declarations get body-checked too, not just scoped. Slower
+///     (checks everything reachable, once per call), but the check
+///     actually named "check"/"compile"/"test" should mean: verifying a
+///     file also verifies what it depends on.
 #[partial]
-def elaborate_loaded_modules (file_path : String) : IO (Result String ElaboratedModules) := do {
+def elaborate_loaded_modules (file_path : String) (check_deps : Bool) : IO (Result String ElaboratedModules) := do {
     let loaded_result : Result String LoadedModules <- load_file_modules file_path;
     return match loaded_result {
         Result.err e => Result.err e,
@@ -2015,10 +2034,19 @@ def elaborate_loaded_modules (file_path : String) : IO (Result String Elaborated
             // (built from the ALREADY-resolved whole graph) has no entry
             // for under that literal name, only under `HAdd.add` --
             // checking the raw decls against the resolved scope produced
-            // a bogus `unknown variable '+'` before this fix.
+            // a bogus `unknown variable '+'` before this fix. When
+            // `check_deps` is true, `dict_paramed` already IS that fully-
+            // resolved list, for the whole graph (main module's own decls
+            // included -- `all_decls`/`flatten_module_decls` folds in
+            // `main_module` too, see `load_file_modules`), so reuse it
+            // directly instead of redundantly re-running the same three
+            // passes on just the main module's own raw decls again.
             let target_decls_raw : List Decl := get_module_info_decls main_module in
             let target_decls_pre : List Decl :=
-                add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw)) in
+                if check_deps then
+                    dict_paramed
+                else
+                    add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw)) in
             // Forall-wrap each target def's type with its free + constraint-
             // only type vars (`elaborate_def_typs`), using the whole-graph
             // name set so globals aren't wrapped. `known_names` comes from
@@ -2331,9 +2359,14 @@ def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
 /// seeded prelude/init unless a file explicitly `use`d something that
 /// transitively reached them). `elaborate_loaded_modules` always loads
 /// via `load_file_modules`, which does seed them unconditionally.
+/// `check_deps=false` here — this proves structural resolution of a
+/// no-`use`-decls file, unrelated to dependency-body-checking; `true`
+/// would just add prelude+init's full body-check cost to every run of
+/// this fast, pre-commit-swept unit test for no benefit to what it's
+/// actually testing.
 #[test]
 def test_elaborate_loaded_modules_resolves_file_with_no_use_decls : IO Bool := do {
-    let result <- elaborate_loaded_modules "std/test.mo";
+    let result <- elaborate_loaded_modules "std/test.mo" false;
     match result {
         Result.err _ => return false,
         Result.ok em => do {

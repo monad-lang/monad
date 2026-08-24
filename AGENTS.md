@@ -45,32 +45,46 @@ a different branch and cause confusion.
 ├── slow_tests/       # Real #[test]s, deliberately NOT swept by the pre-commit
 │                     # hook (same exclusion mechanism as bench/ -- outside its
 │                     # fixed `init std lang examples` directory list). Five
-│                     # files, two different reasons to be here:
-│                     #   - typecheck_init_tests.mo/typecheck_std_tests.mo:
-│                     #     redundant with typecheck_lang_tests.mo's own
-│                     #     test_typecheck_lang_main (checking lang/main.mo
-│                     #     already type-checks against a scope built from its
-│                     #     FULL transitive dependency closure via
-│                     #     `load_module_with_dependencies`, so re-running the
-│                     #     same dependency-loading typecheck per individual
-│                     #     init/std file adds nothing unique).
-│                     #   - typecheck_lang_tests.mo/parser_file_tests.mo/
-│                     #     scope_all_tests.mo: NOT redundant, but measured
-│                     #     directly (`cargo run --release -- test init std
-│                     #     lang examples slow_tests --json`) to be 684s of
-│                     #     the corpus's 747.5s total (91.5%) -- one single
-│                     #     test (test_typecheck_lang_main) alone was 544.5s,
-│                     #     72.9% of everything. Moved here specifically so a
-│                     #     future CI (not yet built, see self-hosted-
-│                     #     compiler-perf.md's own AGENTS.md item 9 follow-up
-│                     #     note) can be the safety net for this coverage,
-│                     #     since local pre-commit no longer affords it.
-│                     # Still real, runnable tests (`cargo run -- test
-│                     # slow_tests`) -- just for manual/CI use, not the fast
-│                     # local commit path; a per-file failure here is more
-│                     # useful for pinpointing WHICH file broke than
-│                     # test_typecheck_lang_main's own single pass/fail
-│                     # covering everything at once.
+│                     # files, moved here purely for cost (measured directly,
+│                     # `cargo run --release -- test init std lang examples
+│                     # slow_tests --json`, to be 684s of the corpus's 747.5s
+│                     # total, 91.5% -- one single test (test_typecheck_lang_
+│                     # main) alone was 544.5s, 72.9% of everything):
+│                     #   - typecheck_init_tests.mo/typecheck_std_tests.mo/
+│                     #     typecheck_lang_tests.mo all pass `check_deps=false`
+│                     #     (target-only) to `elaborate_loaded_modules`
+│                     #     (`lang/module.mo`) -- so checking `lang/main.mo`
+│                     #     in test_typecheck_lang_main body-type-checks only
+│                     #     `lang/main.mo`'s own top-level decls, NOT its
+│                     #     dependencies' bodies (dependencies only
+│                     #     contribute signatures to scope). `check_deps=true`
+│                     #     exists (see `elaborate_loaded_modules`'s own doc
+│                     #     comment) but is NOT currently used anywhere,
+│                     #     including here or by the real `check`/`compile`/
+│                     #     `test` CLI commands -- turning it on for
+│                     #     `lang/main.mo`'s own full closure (~4000 decls,
+│                     #     including this self-hosted compiler's own
+│                     #     richly-recursive AST types) caused unbounded
+│                     #     memory growth (28GB+ RSS and still climbing);
+│                     #     root cause under investigation, see
+│                     #     `bootstrapping/check-deps-memory-blowup.md`.
+│                     #     typecheck_init_tests.mo/typecheck_std_tests.mo
+│                     #     are kept as separate per-file tests regardless
+│                     #     of whether `check_deps=true` ever becomes safe to
+│                     #     default on: a per-file failure here is far more
+│                     #     useful for pinpointing WHICH file broke than one
+│                     #     aggregate pass/fail.
+│                     #   - parser_file_tests.mo/scope_all_tests.mo: not
+│                     #     redundant with anything -- they exercise the
+│                     #     parser/scope-builder directly, a different code
+│                     #     path from type-checking.
+│                     # Moved here specifically so a future CI (not yet
+│                     # built, see self-hosted-compiler-perf.md's own
+│                     # AGENTS.md item 9 follow-up note) can be the safety
+│                     # net for this coverage, since local pre-commit no
+│                     # longer affords it. Still real, runnable tests
+│                     # (`cargo run -- test slow_tests`) -- just for
+│                     # manual/CI use, not the fast local commit path.
 └── plans/            # Symlink to external repo with design plans
 ```
 
