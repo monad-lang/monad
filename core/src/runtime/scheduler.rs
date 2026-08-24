@@ -149,8 +149,7 @@ impl Scheduler {
     let fiber_clone = fiber.clone();
 
     let task = Box::new(move || {
-      fiber_clone.set_state(FiberState::Running);
-      if fiber_clone.is_cancelled() {
+      if !fiber_clone.try_start() {
         return;
       }
       let result = f();
@@ -240,9 +239,19 @@ mod tests {
   #[test]
   fn test_scheduler_cancel_fiber() {
     let sched = Scheduler::with_workers(1);
+    // Saturate the sole worker with a blocking task first, so the second
+    // fiber below is guaranteed to still be Pending when cancel() runs --
+    // with the worker already free, spawn+cancel racing a trivial `|| 42`
+    // closure had no reliable "still pending" window at all.
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let blocker = sched.spawn(move || {
+      rx.recv().unwrap();
+    });
     let fiber = sched.spawn(|| 42);
     fiber.cancel();
     assert!(fiber.is_cancelled());
+    tx.send(()).unwrap();
+    blocker.wait();
   }
 
   #[test]

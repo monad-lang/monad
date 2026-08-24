@@ -51,6 +51,22 @@ impl<T: Send> Fiber<T> {
     }
   }
 
+  /// Atomically transition `Pending -> Running`, but only if the fiber is
+  /// still `Pending`. Returns `false` (leaving state untouched) if `cancel`
+  /// already won the race and moved it to `Cancelled` — unlike `set_state`,
+  /// which overwrites unconditionally and would otherwise clobber a
+  /// `Cancelled` fiber back to `Running`.
+  pub fn try_start(&self) -> bool {
+    let mut state = self.inner.state.lock().unwrap();
+    if *state == FiberState::Pending {
+      *state = FiberState::Running;
+      self.inner.done.notify_all();
+      true
+    } else {
+      false
+    }
+  }
+
   pub fn is_cancelled(&self) -> bool {
     *self.inner.state.lock().unwrap() == FiberState::Cancelled
   }
