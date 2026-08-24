@@ -2023,7 +2023,30 @@ def carrier_var (name : String) : Term :=
 #[partial]
 def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : List DefTypeEntry) (t : Term) : Option Term :=
     match t {
-        Term.lit v => literal_carrier_type v,
+        // `Literal.if_`'s own two branches are the operand shape the
+        // self-hosted test driver's own synthesized summary line
+        // ACTUALLY produces (`synth_sum_expr`, lang/codegen/test_driver.mo:
+        // `(if test_one then 1 else 0) + (if test_two then 1 else 0)`) --
+        // `literal_carrier_type` below only covers bare `num`/`str`
+        // literals, so an if-expression operand fell through to `None`
+        // (the same "no carrier found" outcome as a genuinely
+        // uninformative shape), leaving THIS `HAdd.add` call unresolved
+        // and, at codegen, naively dot-to-underscore-renamed into an
+        // undefined `@HAdd_add` symbol -- confirmed as a real gap via
+        // direct repro (`monad test` on a file with 2+ `#[test]` defs).
+        // Recurse into both branches -- a well-typed if's THEN and ELSE
+        // share the same type, so either one revealing a carrier is
+        // sound and sufficient (mirrors `lang.elaborate`'s own `free_vars`
+        // walking all three of an if's subterms).
+        Term.lit v =>
+            match v {
+                Literal.if_ _cond then_ else_ =>
+                    match infer_carrier_type env ctor_owners def_types then_ {
+                        Option.some c => Option.some c,
+                        Option.none => infer_carrier_type env ctor_owners def_types else_,
+                    },
+                _ => literal_carrier_type v,
+            },
         Term.var _ dbg =>
             match dbg {
                 DebugName.named id =>
@@ -3216,6 +3239,36 @@ def test_lookup_def_type_finds_dotted_own_name_def_by_bare_query : Bool :=
         (Term.app (Term.var 0 (DebugName.named (Identifier.id "IO"))) (Term.var 0 (DebugName.named (Identifier.id "Unit")))) in
     let entry := DefTypeEntry.mk (ModulePath.mp (List.cons (Identifier.id "IO.println") List.empty)) println_typ in
     match lookup_def_type (List.cons entry List.empty) (Identifier.id "println") {
+        Option.some _ => true,
+        Option.none => false,
+    }
+
+// Regression test for `infer_carrier_type`'s `Literal.if_` gap: the
+// self-hosted test driver's own synthesized summary line chains
+// `+`/`HAdd.add` over TWO if-expression operands
+// (`synth_sum_expr`, lang/codegen/test_driver.mo:
+// `(if test_one then 1 else 0) + (if test_two then 1 else 0)`) --
+// `literal_carrier_type` only covers bare `num`/`str` literals, so
+// this fell through to `None`, leaving `HAdd.add` unresolved and
+// naively dot-to-underscore-renamed at codegen into an undefined
+// `@HAdd_add` symbol (confirmed via direct repro, `monad test` on a
+// file with 2+ `#[test]` defs).
+#[test]
+def test_infer_carrier_type_recurses_into_if_branches : Bool :=
+    let if_term := Term.lit (Literal.if_ (Term.var 0 (DebugName.named (Identifier.id "cond")))
+        (Term.lit (Literal.num 1 NumSuffix.i64)) (Term.lit (Literal.num 0 NumSuffix.i64))) in
+    match infer_carrier_type List.empty List.empty List.empty if_term {
+        Option.some _ => true,
+        Option.none => false,
+    }
+
+#[test]
+def test_infer_carrier_type_if_branch_none_falls_through_to_else : Bool :=
+    // THEN branch is a bare bound var with no local type (uninformative);
+    // carrier must still be found from the ELSE branch.
+    let if_term := Term.lit (Literal.if_ (Term.var 0 (DebugName.named (Identifier.id "cond")))
+        (Term.var 1 (DebugName.named (Identifier.id "uninformative"))) (Term.lit (Literal.str "x"))) in
+    match infer_carrier_type List.empty List.empty List.empty if_term {
         Option.some _ => true,
         Option.none => false,
     }
