@@ -178,8 +178,13 @@ impl Scheduler {
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
   {
+    // The fiber never leaves this function, so nothing else can cancel it
+    // -- wait() returning None here would mean the scheduler itself is
+    // broken, not a real outcome callers need to handle.
     let fiber = self.spawn(f);
-    fiber.wait()
+    fiber
+      .wait()
+      .expect("spawn_and_await's own fiber was cancelled by something other than its caller")
   }
 
   pub fn shutdown(mut self) {
@@ -232,8 +237,8 @@ mod tests {
     let sched = Scheduler::with_workers(2);
     let fiber1 = sched.spawn(|| 10);
     let fiber2 = sched.spawn(|| 20);
-    assert_eq!(fiber1.wait(), 10);
-    assert_eq!(fiber2.wait(), 20);
+    assert_eq!(fiber1.wait(), Some(10));
+    assert_eq!(fiber2.wait(), Some(20));
   }
 
   #[test]
@@ -261,7 +266,7 @@ mod tests {
     for i in 0..100 {
       fibers.push(sched.spawn(move || i * 2));
     }
-    let mut results: Vec<i32> = fibers.into_iter().map(|f| f.wait()).collect();
+    let mut results: Vec<i32> = fibers.into_iter().map(|f| f.wait().unwrap()).collect();
     results.sort();
     let expected: Vec<i32> = (0..100).map(|i| i * 2).collect();
     assert_eq!(results, expected);
@@ -318,7 +323,7 @@ mod tests {
   fn test_scheduler_shutdown() {
     let sched = Scheduler::with_workers(2);
     let fiber = sched.spawn(|| 7);
-    assert_eq!(fiber.wait(), 7);
+    assert_eq!(fiber.wait(), Some(7));
     sched.shutdown();
   }
 
@@ -326,7 +331,7 @@ mod tests {
   fn test_scheduler_drop_shutdown() {
     let sched = Scheduler::with_workers(2);
     let fiber = sched.spawn(|| 7);
-    assert_eq!(fiber.wait(), 7);
+    assert_eq!(fiber.wait(), Some(7));
     drop(sched);
   }
 

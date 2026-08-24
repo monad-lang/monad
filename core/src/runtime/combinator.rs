@@ -4,7 +4,11 @@ use std::time::{Duration, Instant};
 use super::fiber::{Fiber, FiberState};
 use super::runtime::Runtime;
 
-pub fn all<T: Send + 'static>(fibers: Vec<Fiber<T>>) -> Vec<T> {
+/// `None` if any fiber in `fibers` was cancelled (`Fiber::wait`'s own
+/// `None` case) -- `collect::<Option<Vec<T>>>()` short-circuits on the
+/// first `None` it sees, same as `all` short-circuiting on a `Result::Err`
+/// would.
+pub fn all<T: Send + 'static>(fibers: Vec<Fiber<T>>) -> Option<Vec<T>> {
   fibers.into_iter().map(|f| f.wait()).collect()
 }
 
@@ -15,7 +19,7 @@ pub fn race<T: Send + 'static>(_rt: &Runtime, fibers: Vec<Fiber<T>>) -> Option<T
   loop {
     for f in &fibers {
       if f.state() == FiberState::Completed {
-        return Some(f.clone().wait());
+        return f.clone().wait();
       }
     }
     thread::yield_now();
@@ -26,7 +30,7 @@ pub fn timeout<T: Send + 'static>(_rt: &Runtime, fiber: Fiber<T>, dur: Duration)
   let deadline = Instant::now() + dur;
   loop {
     if fiber.state() == FiberState::Completed {
-      return Some(fiber.wait());
+      return fiber.wait();
     }
     if Instant::now() >= deadline {
       return None;
@@ -46,15 +50,15 @@ mod tests {
     let f2 = rt.spawn(|| 2);
     let f3 = rt.spawn(|| 3);
     let results = all(vec![f1, f2, f3]);
-    assert_eq!(results, vec![1, 2, 3]);
+    assert_eq!(results, Some(vec![1, 2, 3]));
     rt.shutdown();
   }
 
   #[test]
   fn test_all_empty() {
     let rt = Runtime::new(2);
-    let results: Vec<i32> = all(vec![]);
-    assert!(results.is_empty());
+    let results: Option<Vec<i32>> = all(vec![]);
+    assert_eq!(results, Some(vec![]));
     rt.shutdown();
   }
 
@@ -65,7 +69,25 @@ mod tests {
     let f2 = rt.spawn(|| 20);
     let f3 = rt.spawn(|| 30);
     let results = all(vec![f1, f2, f3]);
-    assert_eq!(results, vec![10, 20, 30]);
+    assert_eq!(results, Some(vec![10, 20, 30]));
+    rt.shutdown();
+  }
+
+  #[test]
+  fn test_all_none_if_any_cancelled() {
+    let rt = Runtime::new(1);
+    // Saturate the sole worker so the second fiber stays Pending long
+    // enough to cancel (same technique as scheduler::tests::
+    // test_scheduler_cancel_fiber).
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let blocker = rt.spawn(move || {
+      rx.recv().unwrap();
+    });
+    let f1 = rt.spawn(|| 1);
+    f1.cancel();
+    tx.send(()).unwrap();
+    blocker.wait();
+    assert_eq!(all(vec![f1]), None);
     rt.shutdown();
   }
 

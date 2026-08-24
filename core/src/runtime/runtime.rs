@@ -121,8 +121,8 @@ mod tests {
     let rt = Runtime::new(2);
     let f1 = rt.spawn(|| 10);
     let f2 = rt.spawn(|| 20);
-    assert_eq!(f1.wait(), 10);
-    assert_eq!(f2.wait(), 20);
+    assert_eq!(f1.wait(), Some(10));
+    assert_eq!(f2.wait(), Some(20));
     rt.shutdown();
   }
 
@@ -150,7 +150,7 @@ mod tests {
     for i in 0..50 {
       fibers.push(rt.spawn(move || i * 2));
     }
-    let mut results: Vec<i32> = fibers.into_iter().map(|f| f.wait()).collect();
+    let mut results: Vec<i32> = fibers.into_iter().map(|f| f.wait().unwrap()).collect();
     results.sort();
     let expected: Vec<i32> = (0..50).map(|i| i * 2).collect();
     assert_eq!(results, expected);
@@ -161,7 +161,7 @@ mod tests {
   fn test_runtime_shutdown() {
     let rt = Runtime::new(2);
     let fiber = rt.spawn(|| 7);
-    assert_eq!(fiber.wait(), 7);
+    assert_eq!(fiber.wait(), Some(7));
     rt.shutdown();
   }
 
@@ -169,7 +169,7 @@ mod tests {
   fn test_runtime_drop_shutdown() {
     let rt = Runtime::new(2);
     let fiber = rt.spawn(|| 7);
-    assert_eq!(fiber.wait(), 7);
+    assert_eq!(fiber.wait(), Some(7));
     drop(rt);
   }
 

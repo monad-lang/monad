@@ -78,7 +78,13 @@ impl<T: Send> Fiber<T> {
     )
   }
 
-  pub fn wait(self) -> T {
+  /// Blocks until the fiber reaches a terminal state, returning its result
+  /// -- or `None` if it was `Cancelled` (a cancelled fiber's task body
+  /// never runs, so `set_result` is never called for it; `take().unwrap()`
+  /// here used to panic on a cancelled fiber, which `try_start()`'s fix to
+  /// `Scheduler::spawn` made a reliably-hit case rather than a racy one --
+  /// see `test_fiber_wait_after_cancel_returns_none`).
+  pub fn wait(self) -> Option<T> {
     let mut state = self.inner.state.lock().unwrap();
     loop {
       match *state {
@@ -90,7 +96,7 @@ impl<T: Send> Fiber<T> {
         }
       }
     }
-    self.inner.result.lock().unwrap().take().unwrap()
+    self.inner.result.lock().unwrap().take()
   }
 }
 
@@ -128,7 +134,17 @@ mod tests {
     fiber.set_result(42);
     fiber.set_state(FiberState::Completed);
     assert_eq!(fiber.state(), FiberState::Completed);
-    assert_eq!(fiber.wait(), 42);
+    assert_eq!(fiber.wait(), Some(42));
+  }
+
+  #[test]
+  fn test_fiber_wait_after_cancel_returns_none() {
+    // A cancelled fiber never has set_result() called for it (its task
+    // body never runs) -- wait() must report that as None, not panic.
+    let fiber = Fiber::<i32>::new();
+    fiber.cancel();
+    assert_eq!(fiber.state(), FiberState::Cancelled);
+    assert_eq!(fiber.wait(), None);
   }
 
   #[test]
