@@ -26,7 +26,9 @@ use std::sync::Arc;
 
 use crate::core_ir::{CoreIr, IrRef};
 use crate::core_native::exec_native;
-use crate::core_value::{CoreEvalCycle, Env, EnvRef, GlobalCache, GlobalTable, NativeTable, Value};
+use crate::core_value::{
+  ConArgs, CoreEvalCycle, Env, EnvRef, GlobalCache, GlobalTable, NativeTable, Value,
+};
 use crate::lower_core_ir::GlobalDef;
 use crate::term::{Identifier, ModulePath};
 
@@ -278,7 +280,7 @@ pub fn eval(
         }
         return Ok(Value::Con {
           tag: *tag,
-          args: Arc::new(evaluated),
+          args: Arc::new(evaluated.into()),
         });
       }
       CoreIr::Ntv { native_id, args } => {
@@ -286,7 +288,13 @@ pub fn eval(
         for a in args {
           evaluated.push(eval(a, &cur_env, globals, natives, cache)?);
         }
-        return fire_or_accumulate(*native_id, Arc::new(evaluated), globals, natives, cache);
+        return fire_or_accumulate(
+          *native_id,
+          Arc::new(evaluated.into()),
+          globals,
+          natives,
+          cache,
+        );
       }
     }
   }
@@ -308,7 +316,7 @@ pub fn eval(
 /// needs this.
 fn fire_or_accumulate(
   native_id: u32,
-  args: Arc<Vec<Value>>,
+  args: Arc<ConArgs>,
   globals: &GlobalTable,
   natives: &NativeTable,
   cache: &mut GlobalCache,
@@ -407,7 +415,13 @@ pub fn force_global(
     arity: 0,
   }) = globals.get(idx)
   {
-    return fire_or_accumulate(*native_id, Arc::new(Vec::new()), globals, natives, cache);
+    return fire_or_accumulate(
+      *native_id,
+      Arc::new(Vec::new().into()),
+      globals,
+      natives,
+      cache,
+    );
   }
   if let Some(v) = cache.get(idx) {
     return Ok(v.clone());
@@ -434,7 +448,7 @@ pub fn force_global(
         // left-to-right from there, same as any partially-applied Con.
         GlobalDef::Constructor { tag, arity: _ } => Value::Con {
           tag: *tag,
-          args: Arc::new(Vec::new()),
+          args: Arc::new(Vec::new().into()),
         },
         // A native-attributed def with no explicit body (no useful `CoreIr`
         // body exists for it either — see `GlobalDef::Native`'s doc comment)
@@ -444,9 +458,13 @@ pub fn force_global(
         // unused in practice, but not assumed away) `arity == 0` case by
         // firing immediately instead of leaving a permanently-`PartialNtv`
         // value nothing would ever apply an argument to.
-        GlobalDef::Native { native_id, .. } => {
-          fire_or_accumulate(*native_id, Arc::new(Vec::new()), globals, natives, cache)?
-        }
+        GlobalDef::Native { native_id, .. } => fire_or_accumulate(
+          *native_id,
+          Arc::new(Vec::new().into()),
+          globals,
+          natives,
+          cache,
+        )?,
         GlobalDef::Unresolved(path) => return Err(CoreEvalError::UnresolvedGlobal(path.clone())),
       },
     )

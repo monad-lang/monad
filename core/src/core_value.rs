@@ -204,14 +204,101 @@ pub enum Value {
   /// essentially never aliased at that exact moment.
   Con {
     tag: u32,
-    args: std::sync::Arc<Vec<Value>>,
+    args: std::sync::Arc<ConArgs>,
   },
   /// A native/builtin call with some but not all of its arguments
   /// supplied yet. Same `Arc`-wrapped `args` rationale as `Con` above.
   PartialNtv {
     native_id: u32,
-    args: std::sync::Arc<Vec<Value>>,
+    args: std::sync::Arc<ConArgs>,
   },
+}
+
+/// `Con`/`PartialNtv`'s own `args`, wrapped in a dedicated newtype
+/// instead of a bare `Vec<Value>` purely so IT (not `Value` itself) can
+/// implement `Drop` — `Value` is pattern-matched BY VALUE pervasively
+/// throughout the evaluator (`core_eval.rs`, `core_native.rs`,
+/// `eval/meta_reflect.rs`, ...; e.g. `match f { Value::Con { tag, args }
+/// => ... }`), and Rust's E0509 ("cannot move out of a type which
+/// implements Drop") would break every one of those sites the moment
+/// `Value` itself implements `Drop` — confirmed directly, the same way
+/// `Env`'s own analogous fix (`impl Drop for Env`, above) confirmed the
+/// opposite holds for `Env` (nothing outside this module pattern-matches
+/// an `Env` by value, so `Env` COULD implement `Drop` directly). Since
+/// `ConArgs` is a plain single-field tuple struct (not an enum with
+/// multiple variants to distinguish), ordinary field-accessor METHOD
+/// calls (`.drain(..)`, via `DerefMut`) work throughout — unlike `Env`'s
+/// own fix, no `&mut`-through-reference trick is needed here, since a
+/// method call borrowing `self.0` mutably was never the kind of "move a
+/// field out via pattern match" operation E0509 restricts in the first
+/// place.
+///
+/// `Deref`/`DerefMut`-transparent to `Vec<Value>` so every existing
+/// `.len()`/indexing/`.iter()`/`Arc::make_mut(&mut args).push(...)`
+/// call site (`core_eval.rs`, `core_native.rs`, `eval/meta_reflect.rs`)
+/// needed zero changes beyond the field's own type.
+#[derive(Debug, Clone, Default)]
+pub struct ConArgs(Vec<Value>);
+
+impl ConArgs {
+  pub fn new(v: Vec<Value>) -> Self {
+    ConArgs(v)
+  }
+}
+
+impl std::ops::Deref for ConArgs {
+  type Target = Vec<Value>;
+  fn deref(&self) -> &Vec<Value> {
+    &self.0
+  }
+}
+
+impl std::ops::DerefMut for ConArgs {
+  fn deref_mut(&mut self) -> &mut Vec<Value> {
+    &mut self.0
+  }
+}
+
+impl From<Vec<Value>> for ConArgs {
+  fn from(v: Vec<Value>) -> Self {
+    ConArgs(v)
+  }
+}
+
+impl Drop for ConArgs {
+  /// Iteratively unwind a long `Con`/`PartialNtv` chain (a large list/
+  /// tree/map/record `Value`, per `Con`'s own doc comment) instead of
+  /// letting derived drop-glue recurse once per element — the `args`
+  /// half of the same `Drop`-recursion gap `Env`'s own `impl Drop` (this
+  /// module) closes for environment chains. `self.0.drain(..)` moves
+  /// each element OUT of the (still Drop-free) `Vec<Value>` one at a
+  /// time — fine, since `Value` never implements `Drop` — collecting any
+  /// nested `Con`/`PartialNtv`'s own `args` onto an explicit worklist
+  /// instead of letting it drop right there and recurse. Each popped
+  /// `Arc<ConArgs>`, if uniquely owned, gets the same treatment; if
+  /// shared elsewhere, an ordinary `Arc` drop (a refcount decrement) is
+  /// enough — its eventual last-owner drop unwinds it the same way.
+  fn drop(&mut self) {
+    let mut worklist: Vec<std::sync::Arc<ConArgs>> = Vec::new();
+    for v in self.0.drain(..) {
+      if let Value::Con { args, .. } | Value::PartialNtv { args, .. } = v {
+        worklist.push(args);
+      }
+    }
+    while let Some(arc) = worklist.pop() {
+      if let Ok(mut inner) = std::sync::Arc::try_unwrap(arc) {
+        for v in inner.0.drain(..) {
+          if let Value::Con { args, .. } | Value::PartialNtv { args, .. } = v {
+            worklist.push(args);
+          }
+        }
+        // `inner` (now empty) drops here — trivial, not recursive: its
+        // own `drop()` call (this same function, one bounded level
+        // deep) sees an already-drained `Vec`, so its own `drain(..)`
+        // loop runs zero iterations.
+      }
+    }
+  }
 }
 
 /// A read-only view over a lowered program's global slots — exactly
@@ -494,6 +581,37 @@ mod tests {
           env = Env::extend(&env, lit(i));
         }
         drop(env);
+      })
+      .unwrap();
+    handle.join().expect("must not crash");
+  }
+
+  #[test]
+  fn test_dropping_a_million_deep_con_chain_survives_a_small_stack() {
+    // The direct proof of `ConArgs`'s own `impl Drop` fix
+    // (`plans/implementations/evaluator-recursion-and-eq-rec-followup.md`,
+    // Part 2 item 2 — the `Value` half, closing the other side of the gap
+    // `Env`'s own fix, above, closed for environment chains). A large
+    // `List`/tree/map `Value` is nested `Con`s (`Value::Con`'s own doc
+    // comment) — built here directly (not via `eval`/`Con.cons`, which
+    // aren't in scope in this module's own unit tests) via a plain loop,
+    // mirroring how `core_native.rs`'s `string_to_list`/`list_dir`
+    // construct one. Deliberately a SMALL explicit stack, the same
+    // methodology as `Env`'s own sibling test above.
+    let handle = std::thread::Builder::new()
+      .stack_size(2 * 1024 * 1024)
+      .spawn(|| {
+        let mut list = Value::Con {
+          tag: 0,
+          args: Arc::new(ConArgs::new(vec![])),
+        };
+        for i in 0..1_000_000 {
+          list = Value::Con {
+            tag: 1,
+            args: Arc::new(ConArgs::new(vec![lit(i), list])),
+          };
+        }
+        drop(list);
       })
       .unwrap();
     handle.join().expect("must not crash");
