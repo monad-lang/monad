@@ -638,6 +638,18 @@ fn register_inductive(
           param_atoms: vec![class_param_atom],
           field_names: fields.iter().map(|(name, _)| name.clone()).collect(),
           fields: fields.iter().map(|(_, ty)| ty.clone()).collect(),
+          // A class's own dictionary "constructor" is never index-
+          // dependent the way a real GADT constructor can be (a class
+          // like `BEq K` has no per-instance return-type INDEX to
+          // refine) — `App(Free(class_atom), Free(class_param_atom))`
+          // mirrors the class applied to its own declared param, so
+          // Fix B's unification-based refinement (see
+          // `ConstructorInfo::return_index_expr`'s own doc comment)
+          // still succeeds trivially here without refining anything.
+          return_index_expr: CoreTerm::App {
+            fun: Box::new(CoreTerm::Free(class_atom)),
+            arg: Box::new(CoreTerm::Free(class_param_atom)),
+          },
         },
       );
       structs.structs.insert(
@@ -754,6 +766,7 @@ fn register_inductive(
             param_atoms,
             fields,
             field_names,
+            return_index_expr: current,
           },
         );
       }
@@ -2976,6 +2989,33 @@ mod test {
       &env,
       "def dep (n : Nat) (v : Vec n I64) : I64 := 0\n\
        def applied : I64 := dep Nat.zero Vec.nil\n",
+    );
+    assert_eq!(report.passed(), 2, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_match_on_gadt_refines_field_type_to_constructors_own_index() {
+    // `plans/implementations/evaluator-recursion-and-eq-rec-followup.md`,
+    // Part 3 Fix B: `match_case_field_types`'s previous naive approach
+    // (zip the constructor's own `param_atoms` positionally against the
+    // scrutinee's own top-level type args) gave `Vec.cons`'s `tail`
+    // field the WRONG refined type — silently leaving it at the
+    // scrutinee's own (unrefined) length index (`Nat.succ Nat.zero`)
+    // instead of the correct, one-shorter index (`Nat.zero`). Only
+    // surfaces as a real type error once something actually needs the
+    // PRECISE refined type (an ordinary re-match on `tail` tolerates
+    // either, since matching a Vec doesn't require an exact length) —
+    // this passes `tail` to a function whose param type is EXACTLY
+    // `Vec Nat.zero I64`, which only type-checks if the refinement was
+    // done correctly. Confirmed to fail (`type mismatch: (Nat.succ
+    // Nat.zero) vs. Nat.zero`) on the pre-fix code via a partial git
+    // stash revert.
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "def needs_empty_vec (v : Vec Nat.zero I64) : I64 := 0\n\
+       def test_precise (v : Vec (Nat.succ Nat.zero) I64) : I64 :=\n  \
+       match v { Vec.cons h t => needs_empty_vec t, Vec.nil => 0 }\n",
     );
     assert_eq!(report.passed(), 2, "report: {report:?}");
   }

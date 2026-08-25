@@ -20,7 +20,7 @@ use crate::core_term::{
   Atom, CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, DebugName, MetaId, close,
   close_n, open_with, permute_binders,
 };
-use crate::core_unify::{MetaContext, UnifyError, force, instantiate, open_n, unify};
+use crate::core_unify::{MetaContext, UnifyError, force, instantiate, open_n, unify, zonk};
 use crate::term::{Identifier, ModulePath, Multiplicity, TypeConstraint};
 use crate::{AtomPathMap, Map};
 use std::sync::Arc;
@@ -172,6 +172,20 @@ pub struct ConstructorInfo {
   /// `StructInfo.defaults` is kept separate (see its own doc comment) —
   /// so the many existing `fields`-only consumers don't need touching.
   pub field_names: Vec<Identifier>,
+  /// This constructor's own declared RETURN type expression — e.g.
+  /// `Vec (Nat.succ len) A` for `Vec.cons`, `Eq A a a` for `Eq.refl` —
+  /// still expressed over `param_atoms` (the constructor's own
+  /// `Forall`-peeled vars, NOT yet substituted with anything). Added for
+  /// `plans/implementations/evaluator-recursion-and-eq-rec-followup.md`'s
+  /// Fix B: real dependent-index refinement in `Match` checking needs
+  /// this to unify against a scrutinee's own concrete type (recovering
+  /// each `param_atom`'s correct value by solving, not by naively zipping
+  /// `param_atoms` positionally against the scrutinee's own top-level
+  /// type args — see `match_case_field_types`'s own doc comment for why
+  /// that naive approach is wrong for a genuine GADT constructor, where a
+  /// constructor's own params and the inductive's own declared params
+  /// aren't the same list in the same order).
+  pub return_index_expr: CoreTerm,
 }
 
 /// Every known struct-like inductive's (or class's, see `StructKind`)
@@ -324,20 +338,47 @@ fn match_case_field_types(
   let info = structs
     .constructors
     .get(&(inductive_atom, case_name.clone()))?;
-  let (_, concrete_args) = spine_of(&forced);
-  if concrete_args.len() != info.param_atoms.len() {
-    return None;
-  }
+  // Solve each of the constructor's own param_atoms by unifying its
+  // declared RETURN type (`return_index_expr`, still expressed over
+  // those atoms, with fresh metas standing in for each) against the
+  // scrutinee's own concrete type — correct even for a genuine GADT
+  // constructor, where the constructor's own params and the scrutinee's
+  // own top-level type args aren't the same list in the same order/count
+  // (see `ConstructorInfo::return_index_expr`'s doc comment). Replaces
+  // the previous naive "zip param_atoms positionally against the
+  // scrutinee's own spine args" approach, which was wrong for exactly
+  // that case — a real, previously-uncaught bug: `Vec.cons`'s own `tail`
+  // field got the WRONG refined type, since `Vec.cons`'s own params
+  // (`[A, len]`) and `Vec`'s declared params (`[A]`) aren't the same
+  // list, so the naive zip substituted the scrutinee's length INDEX for
+  // `A` and vice versa.
+  let mut return_expr = info.return_index_expr.clone();
+  let metas: Vec<MetaId> = info
+    .param_atoms
+    .iter()
+    .map(|&param_atom| {
+      let meta = mctx.fresh_meta(CoreTerm::Hole);
+      return_expr = open_with(&close(&return_expr, param_atom), &CoreTerm::Meta(meta));
+      meta
+    })
+    .collect();
+  // A genuine GADT mismatch (an arm this scrutinee's own type can never
+  // actually take) fails to unify here — treated the same permissive way
+  // an arg-count mismatch was treated before (fall back to the caller's
+  // own `Hole` typing) rather than a hard error, since deciding a case is
+  // PROVABLY impossible is a separate, harder problem this function was
+  // never responsible for.
+  unify(mctx, &return_expr, &forced).ok()?;
   Some(
     info
       .fields
       .iter()
       .map(|field_ty| {
         let mut substituted = field_ty.clone();
-        for (param_atom, &concrete_arg) in info.param_atoms.iter().zip(concrete_args.iter()) {
-          substituted = open_with(&close(&substituted, *param_atom), concrete_arg);
+        for (&param_atom, &meta) in info.param_atoms.iter().zip(metas.iter()) {
+          substituted = open_with(&close(&substituted, param_atom), &CoreTerm::Meta(meta));
         }
-        substituted
+        zonk(mctx, &substituted)
       })
       .collect(),
   )
