@@ -165,7 +165,7 @@ pub fn eval(
       CoreIr::Local(i) => {
         return Env::get(&cur_env, *i)
           .cloned()
-          .ok_or(CoreEvalError::UnboundLocal(*i));
+          .ok_or_else(|| CoreEvalError::UnboundLocal(*i));
       }
       CoreIr::Global(idx) => {
         return force_global(*idx, globals, natives, cache);
@@ -237,7 +237,7 @@ pub fn eval(
         };
         let arm = arms
           .get(tag as usize)
-          .ok_or(CoreEvalError::CaseIndexOutOfBounds(tag))?;
+          .ok_or_else(|| CoreEvalError::CaseIndexOutOfBounds(tag))?;
         if args.len() != arm.bind_count as usize {
           return Err(CoreEvalError::ArityMismatch {
             expected: arm.bind_count,
@@ -308,7 +308,7 @@ fn fire_or_accumulate(
   if args.len() >= arity {
     let name = natives
       .name(native_id)
-      .ok_or(CoreEvalError::UnknownNative(native_id))?;
+      .ok_or_else(|| CoreEvalError::UnknownNative(native_id))?;
     // `await_fiber` is handled outside `exec_native`'s own allowlisted
     // match (see this function's doc comment), so it needs its own
     // purity check here rather than falling under `is_pure_native`.
@@ -414,7 +414,7 @@ pub fn force_global(
   // spurious `Cycle` instead of retrying and surfacing the real error.
   let result = (|| -> Result<Value, CoreEvalError> {
     Ok(
-      match globals.get(idx).ok_or(CoreEvalError::UnknownGlobal(idx))? {
+      match globals.get(idx).ok_or_else(|| CoreEvalError::UnknownGlobal(idx))? {
         GlobalDef::Def(ir) => eval(ir, &Env::nil(), globals, natives, cache)?,
         // A constructor referenced point-free (no CoreIr body -- see
         // GlobalDef::Constructor's doc comment) resolves straight to an

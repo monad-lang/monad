@@ -69,7 +69,7 @@ fn bench_core_eval(c: &mut Criterion, name: &str, source: &str) {
 const ARITHMETIC_RECURSION: &str = r#"
 use init
 
-@[terminating]
+#[terminating]
 def fib (n : I64) : I64 :=
     if n == 0
     then 0
@@ -83,13 +83,13 @@ def main : I64 := fib 22
 const CLASS_DISPATCH: &str = r#"
 use init
 
-@[terminating]
+#[terminating]
 def build_list (n : I64) : List I64 :=
     if n == 0
     then List.empty
     else List.cons n (build_list (n - 1))
 
-@[terminating]
+#[terminating]
 def count_eq (target : I64) (xs : List I64) : I64 :=
     match xs {
         List.cons hd tl =>
@@ -113,19 +113,19 @@ type Step {
     stop (rest : String)
 }
 
-@[partial]
+#[partial]
 def skip_one (s : String) : String :=
     if String.beq s ""
     then s
     else String.drop 1 s
 
-@[partial]
+#[partial]
 def step (label : I64) (s : String) : Step :=
     if String.beq s ""
     then Step.stop s
     else Step.ok (skip_one s) label
 
-@[terminating]
+#[terminating]
 def chain (n : I64) (s : String) : I64 :=
     match step n s {
         Step.ok rest label => label + (chain (label + 1) rest),

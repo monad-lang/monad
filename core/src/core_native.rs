@@ -316,7 +316,7 @@ fn extract_shared_str(v: &Value) -> Result<&crate::shared_str::SharedStr, CoreEv
 }
 
 fn require_ctor(ctor: Option<CtorTag>, name: &'static str) -> Result<CtorTag, CoreEvalError> {
-  ctor.ok_or(CoreEvalError::MissingWellKnownCtor(name))
+  ctor.ok_or_else(|| CoreEvalError::MissingWellKnownCtor(name))
 }
 
 fn make_bool(natives: &NativeTable, v: bool) -> Result<Value, CoreEvalError> {
