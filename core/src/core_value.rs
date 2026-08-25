@@ -98,6 +98,65 @@ impl Env {
   }
 }
 
+impl Drop for Env {
+  /// Iteratively unwind a long `Env` chain instead of letting derived
+  /// drop-glue recurse once per frame. `Env` is a PERSISTENT (immutable,
+  /// shared-tail) structure (this type's own doc comment) — a long
+  /// tail-recursive `.mo` loop's every iteration extends the environment
+  /// (`Env::extend`, O(1)) while keeping the PREVIOUS frame alive as the
+  /// new one's own tail, so the chain can grow arbitrarily deep (one
+  /// frame per iteration) across a loop that never explicitly drops
+  /// anything mid-flight — the whole chain then gets dropped all at
+  /// once, at whatever point the LAST `Arc` reference to the deepest
+  /// frame finally goes away (typically when `eval`'s own `cur_env`
+  /// local goes out of scope at the end of a top-level `eval` call).
+  /// Safe to `impl Drop` directly here (unlike `Value`, see its own
+  /// `Con`/`PartialNtv` doc comment) — nothing outside this module
+  /// pattern-matches an `Env` BY VALUE (only by reference, via
+  /// `Env::get`'s own `cur.as_ref()`), so this doesn't hit the
+  /// "cannot move out of a `Drop` type" restriction moving `Value`
+  /// the same way would.
+  fn drop(&mut self) {
+    // `self`/`tail` are matched BY REFERENCE throughout (`&mut Env`, via
+    // match ergonomics), never by value — `Env` implementing `Drop`
+    // means the compiler refuses to move a whole `Env` out of a pattern
+    // (E0509, "cannot move out of a type which implements Drop"), even
+    // for a value obtained via `mem::replace`/`Arc::try_unwrap` from
+    // *inside* this very `drop` impl. Each frame's own bound `Value`
+    // (the pattern's `_`) is deliberately left untouched in place — it
+    // drops normally, once, whenever the `Env::Cons` node holding it
+    // does (either right here when `drop` returns, for `self`, or via
+    // exactly one bounded nested `drop` call per frame below — see next
+    // paragraph — never accumulating extra depth of its own).
+    let mut tail: EnvRef = match self {
+      Env::Nil => return,
+      Env::Cons(_, tail_field) => std::mem::replace(tail_field, Env::nil()),
+    };
+    loop {
+      // Only worth unwinding further if we hold the sole reference to
+      // this frame — if it's shared elsewhere, its own eventual
+      // last-owner drop unwinds it the same way. `Arc::get_mut` doubles
+      // as that check and the mutable-reference access needed to swap
+      // the field out below, without ever moving an owned `Env` value.
+      let Some(env_mut) = Arc::get_mut(&mut tail) else {
+        return;
+      };
+      let next = match env_mut {
+        Env::Nil => return,
+        Env::Cons(_, next_tail_field) => std::mem::replace(next_tail_field, Env::nil()),
+      };
+      // Reassigning drops the OLD `tail` here — since we just replaced
+      // ITS OWN tail field with a trivial `Env::Nil`, that drop recurses
+      // exactly one (bounded, O(1)) level deep, not one level per
+      // original frame: the nested `drop` call it triggers sees an
+      // already-`Nil`-tailed node, extracts a trivial `Env::nil()`, and
+      // returns immediately — the real, unbounded-length unwinding all
+      // happens in THIS loop, iteratively, not on the Rust call stack.
+      tail = next;
+    }
+  }
+}
+
 /// A runtime value. Distinct from `CoreIr` (the compiled syntax it's
 /// reduced from) on purpose — conflating "compiled code" and "runtime
 /// value" in one type (as `EvalTerm` does) is part of what enabled the
@@ -409,6 +468,35 @@ mod tests {
       Env::get(&base, 0),
       Some(Value::Lit(IrLit::Num(0, _)))
     ));
+  }
+
+  #[test]
+  fn test_dropping_a_million_deep_env_chain_survives_a_small_stack() {
+    // The direct proof of `impl Drop for Env`'s own fix
+    // (`plans/implementations/evaluator-recursion-and-eq-rec-followup.md`,
+    // Part 2 item 2): a long tail-recursive `.mo` loop's every iteration
+    // extends the environment while keeping the previous frame alive as
+    // its own tail (`Env::extend`'s own doc comment), so the chain can
+    // grow arbitrarily deep — confirmed to genuinely stack-overflow
+    // (SIGABRT, not a catchable panic) under a small 2MB thread stack
+    // with the derived (recursive) `Drop` this fix replaces. Deliberately
+    // a SMALL explicit stack, unlike
+    // `test_tail_recursive_countdown_survives_a_million_iterations_on_
+    // default_stack` (`core_eval.rs`)'s default one — `Env`'s own derived
+    // drop-glue is heavier per frame than eval's own tail-call loop, so a
+    // default stack alone doesn't reliably reproduce the failure this
+    // test exists to catch a regression of.
+    let handle = std::thread::Builder::new()
+      .stack_size(2 * 1024 * 1024)
+      .spawn(|| {
+        let mut env = Env::nil();
+        for i in 0..1_000_000 {
+          env = Env::extend(&env, lit(i));
+        }
+        drop(env);
+      })
+      .unwrap();
+    handle.join().expect("must not crash");
   }
 
   #[test]
