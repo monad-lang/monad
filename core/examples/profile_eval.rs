@@ -38,8 +38,7 @@ const ITERATIONS: usize = 20;
 fn main() {
   let path = ModulePath::top("'bench");
   let loaded = default_modules().expect("default_modules");
-  let decls =
-    load_decls_from_text_with_path(WORKLOAD, &Default::default()).expect("parse");
+  let decls = load_decls_from_text_with_path(WORKLOAD, &Default::default()).expect("parse");
   let mut modules: Vec<_> = init_package_sources()
     .expect("init_package_sources")
     .into_iter()
@@ -51,8 +50,7 @@ fn main() {
     .collect();
   modules.push((path.clone(), decls));
 
-  let program =
-    check_all_modules_capturing_core(&modules, &loaded).expect("check");
+  let program = check_all_modules_capturing_core(&modules, &loaded).expect("check");
   let lowered: LoweredProgram = lower_program(&program).expect("lower");
   let main_idx = lowered.index_of(&mpt("main")).expect("main not found");
 
@@ -61,8 +59,7 @@ fn main() {
     let natives = NativeTable::from_lowered(&lowered);
     let globals = GlobalTable::new(lowered.globals.clone());
     let mut cache = GlobalCache::new(globals.len());
-    let v = force_global(main_idx, &globals, &natives, &mut cache)
-      .expect("core eval error");
+    let v = force_global(main_idx, &globals, &natives, &mut cache).expect("core eval error");
     // Touch the result so the loop isn't optimized away.
     if let monad_core::core_value::Value::Lit(monad_core::core_ir::IrLit::Num(n, _)) = v {
       acc = acc.wrapping_add(n);

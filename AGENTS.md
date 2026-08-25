@@ -1618,6 +1618,63 @@ Key patterns when writing self-hosted Monad code:
     `reachable_defs_from`/`collect_referenced_names` reachability pass,
     already rooted at `main`, to also root at every `pub`/`#[test]` def;
     "unused" is the complement of the final `visited` set).
+17. **`Value::Con`/`Value::PartialNtv` args Arc-wrap — closes the last big
+    deep-clone gap item 13 flagged but ruled out for the wrong benchmark.**
+    Full writeup: `plans/implementations/value-con-arc-wrap-optimization.md`.
+    Item 13's callgrind profile found `Value::clone()` on `Con`/
+    `PartialNtv` "real but negligible" — but that was measured against
+    `test_typecheck_lang_main`, dominated by the (then-unfixed)
+    `LoadedModules` clone cost, not a workload that exercises list/ADT
+    churn. A parallel session's own callgrind profile on a genuinely
+    List/`Con`-heavy workload (`count_eq`/`build_list`, the self-hosted
+    checker's own `Map`/`Scope`/`Option`/`List` shape) found the opposite:
+    ~90% of eval cost (`Value::to_vec` clone ~32%, drop_glue ~16.5%,
+    allocator churn ~42%) was exactly this. Root cause: `Value::Con { tag,
+    args: Vec<Value> }` derived `Clone` structurally, so cloning one
+    deep-copied its entire nested-`Con` structure (a list's `cons head
+    tail`, `tail` itself a `Con`) — every ordinary variable read
+    (`Env::get(...).cloned()`, `GlobalCache::get`'s `v.clone()`, both
+    `core_eval.rs`) paid a full O(current-size) clone, reproducing
+    `SharedStr`'s (item 12) exact O(N²) shape for arbitrary structured
+    values, never just strings. **Fix**: `args: Vec<Value> ->
+    Arc<Vec<Value>>` on both variants (not the whole `Value` enum, so
+    every existing match arm stays unchanged) — same idiom as `SharedStr`/
+    `Module`'s Arc-wrap. Mutating sites (`core_eval.rs`'s incremental
+    application and `Match`-arm field-binding; `eval/meta_reflect.rs`'s
+    macro-reflection reify helpers) use `Arc::make_mut` (copy-on-write).
+    `eval/meta_reflect.rs`'s ~19 candidate sites collapsed to ~6 real
+    edits in practice — nearly all of them already funneled through one
+    shared `pop_front` helper, so changing its signature
+    (`&mut Vec<Value> -> &mut Arc<Vec<Value>>`) fixed every call site with
+    zero call-site changes. Added
+    `test_partial_con_application_from_shared_value_does_not_leak_across_branches`
+    (`core_eval.rs`) for the COW correctness hazard (two aliases of one
+    memoized constructor global, via `GlobalCache`, each applying a
+    different extra argument — neither may leak into the other or into
+    the cache's own stored copy). **Measured** (same `count_eq`/
+    `build_list` shape as `core_eval_bench.rs`'s `class_dispatch`, `git
+    stash` before/after): n=500/2000/8000 went from 16ms/246ms/4076ms
+    (quadratic — 4x n gives ~16x time) to 0ms/2ms/8ms (linear — 4x n gives
+    ~4x time) — a 123x-509x speedup that GROWS with N, the actual
+    signature of an algorithmic fix, not a constant-factor one. Added a
+    permanent `class_dispatch_large` criterion benchmark
+    (`core/benches/core_eval_bench.rs`, 5x `CLASS_DISPATCH`'s size) as
+    standing infrastructure. Verified: `cargo test`/`cargo test --release`
+    all green (676+ core tests + 6 integration suites); `cargo clippy --`
+    exits 0, no new warnings; `cargo run --release -- test init std lang
+    examples` 1287/1287 unchanged; `cargo run --release -- check init std
+    lang examples` byte-identical (101 files, 2 errors, 62 warnings,
+    confirmed via direct `git stash` comparison); `cargo run --release --
+    test slow_tests` — same 29 pre-existing `test_typecheck_*` failures
+    (a known, unrelated self-hosted-checker gap — see this file's
+    Troubleshooting section on `Map`/`BOrd` dispatch inside
+    `load_module_with_dependencies`), not a new regression. **Not yet
+    re-measured**: the `check_deps=true` 28GB-RSS repro from
+    `check-deps-memory-blowup.md` — not reachable from this branch (that
+    flag lives on `checker/fix-coverage`, not merged here). This fix
+    targets that investigation's leading hypothesis #1 directly; re-run
+    that repro once `check_deps` is available here to confirm how much of
+    it this closes.
 
 ## Committing Changes
 

@@ -23,6 +23,8 @@
 //! empirically — there is no per-module qualification in `Inductive.name()`),
 //! so every lookup here uses `mpt(...)`.
 
+use std::sync::Arc;
+
 use crate::Map;
 use crate::core_ir::IrLit;
 use crate::core_value::Value;
@@ -121,12 +123,12 @@ fn list_value(
   let cons_tag = ctor_tag(induct, "cons")?;
   let mut acc = Value::Con {
     tag: empty_tag,
-    args: vec![],
+    args: Arc::new(vec![]),
   };
   for item in items.into_iter().rev() {
     acc = Value::Con {
       tag: cons_tag,
-      args: vec![item, acc],
+      args: Arc::new(vec![item, acc]),
     };
   }
   Ok(acc)
@@ -144,8 +146,12 @@ fn value_to_list(
   loop {
     match cur {
       Value::Con { tag, mut args } if tag == cons_tag && args.len() == 2 => {
-        let tail = args.pop().unwrap();
-        let head = args.pop().unwrap();
+        // `Arc::make_mut`, not a bare `.pop()` — `args` is `Arc<Vec<Value>>`
+        // now (see `Value::Con`'s doc comment); copy-on-write, O(1) in the
+        // common (uniquely-owned) case.
+        let inner = Arc::make_mut(&mut args);
+        let tail = inner.pop().unwrap();
+        let head = inner.pop().unwrap();
         items.push(head);
         cur = tail;
       }
@@ -221,7 +227,7 @@ pub fn term_to_expr_value(
       let tag = ctor_tag(expr_induct, "e_var")?;
       Ok(Value::Con {
         tag,
-        args: vec![str_value(&name_to_string(&name))],
+        args: Arc::new(vec![str_value(&name_to_string(&name))]),
       })
     }
     Term::App { fun, arg } => {
@@ -230,7 +236,7 @@ pub fn term_to_expr_value(
       let a = term_to_expr_value(&arg, inductives)?;
       Ok(Value::Con {
         tag,
-        args: vec![f, a],
+        args: Arc::new(vec![f, a]),
       })
     }
     Term::Lit {
@@ -239,7 +245,7 @@ pub fn term_to_expr_value(
       let tag = ctor_tag(expr_induct, "e_str")?;
       Ok(Value::Con {
         tag,
-        args: vec![str_value(&value)],
+        args: Arc::new(vec![str_value(&value)]),
       })
     }
     Term::Lit {
@@ -248,7 +254,7 @@ pub fn term_to_expr_value(
       let tag = ctor_tag(expr_induct, "e_int")?;
       Ok(Value::Con {
         tag,
-        args: vec![Value::Lit(IrLit::Num(value, NumSuffix::I64))],
+        args: Arc::new(vec![Value::Lit(IrLit::Num(value, NumSuffix::I64))]),
       })
     }
     other => Err(MacroError::Generic(format!(
@@ -282,21 +288,21 @@ pub fn build_type_info_value(
       let attrs_v = list_value(inductives, attr_values)?;
       field_values.push(Value::Con {
         tag: field_info_tag,
-        args: vec![name_v, typ_v, attrs_v],
+        args: Arc::new(vec![name_v, typ_v, attrs_v]),
       });
     }
     let fields_list = list_value(inductives, field_values)?;
     let ctor_name_v = str_value(ctor.name().last().as_str());
     ctor_values.push(Value::Con {
       tag: ctor_info_tag,
-      args: vec![ctor_name_v, fields_list],
+      args: Arc::new(vec![ctor_name_v, fields_list]),
     });
   }
   let ctors_list = list_value(inductives, ctor_values)?;
   let name_v = str_value(induct.name().last().as_str());
   Ok(Value::Con {
     tag: type_info_tag,
-    args: vec![name_v, ctors_list],
+    args: Arc::new(vec![name_v, ctors_list]),
   })
 }
 
@@ -386,13 +392,19 @@ pub fn reify_value_to_term(
   }
 }
 
-fn pop_front(args: &mut Vec<Value>) -> Result<Value, MacroError> {
+/// `Arc::make_mut`, not a bare `Vec::remove` — `args` is `Arc<Vec<Value>>`
+/// now (see `Value::Con`'s doc comment). Called once per field by every
+/// `reify_*` function below; copy-on-write, O(1) in the common
+/// (uniquely-owned) case, so threading a single pre-`make_mut`'d `&mut
+/// Vec<Value>` through each function's several calls isn't worth the extra
+/// plumbing here.
+fn pop_front(args: &mut Arc<Vec<Value>>) -> Result<Value, MacroError> {
   if args.is_empty() {
     return Err(MacroError::Generic(
       "meta: constructor value has fewer fields than expected".into(),
     ));
   }
-  Ok(args.remove(0))
+  Ok(Arc::make_mut(args).remove(0))
 }
 
 fn reify_match_arm(

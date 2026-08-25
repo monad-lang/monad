@@ -125,10 +125,34 @@ pub enum Value {
   /// left-to-right de-Bruijn application, so no out-of-order slot
   /// addressing is ever needed — see `lower_core_ir.rs`'s `lower_con`
   /// doc comment).
-  Con { tag: u32, args: Vec<Value> },
+  ///
+  /// `args` is `Arc`-wrapped, not a bare `Vec`, so `Value::clone()` is
+  /// O(1) (a refcount bump) rather than a deep recursive copy of the
+  /// whole structure — a list/tree/map/record value is nested `Con`s
+  /// (e.g. `cons head tail`, `tail` itself a `Con`), and every ordinary
+  /// variable read (`Env::get(...).cloned()`, `GlobalCache::get`'s
+  /// `v.clone()`, both `core_eval.rs`) used to pay a full
+  /// O(current-structure-size) clone — `O(N)+O(N-1)+...+O(1) = O(N²)`
+  /// across a linear recursive walk of an N-element structure, the same
+  /// shape `shared_str.rs`'s `SharedStr` already fixed for strings
+  /// specifically. Confirmed the dominant cost (~90% of eval time, via
+  /// `to_vec`/drop_glue/allocator churn under callgrind) for ADT-heavy
+  /// workloads — see `plans/implementations/value-con-arc-wrap-
+  /// optimization.md`. Mutating sites (`core_eval.rs`'s incremental
+  /// application, `eval/meta_reflect.rs`'s reification helpers) use
+  /// `Arc::make_mut` (copy-on-write) — cheap in the common case since a
+  /// `Value` about to receive another argument or be destructured is
+  /// essentially never aliased at that exact moment.
+  Con {
+    tag: u32,
+    args: std::sync::Arc<Vec<Value>>,
+  },
   /// A native/builtin call with some but not all of its arguments
-  /// supplied yet.
-  PartialNtv { native_id: u32, args: Vec<Value> },
+  /// supplied yet. Same `Arc`-wrapped `args` rationale as `Con` above.
+  PartialNtv {
+    native_id: u32,
+    args: std::sync::Arc<Vec<Value>>,
+  },
 }
 
 /// A read-only view over a lowered program's global slots — exactly
@@ -267,7 +291,7 @@ impl GlobalCache {
   /// Already-forced value for `idx`, if any — an O(1) clone (never a
   /// re-evaluation), since every `Value` variant is cheap to clone
   /// (`Closure` clones an `Arc`/`Arc` pair; `Con`/`PartialNtv` clone their
-  /// `args` shallowly).
+  /// `args` as a single `Arc` refcount bump, not the structure itself).
   pub fn get(&self, idx: u32) -> Option<&Value> {
     match self.slots.get(idx as usize) {
       Some(Slot::Done(v)) => Some(v),

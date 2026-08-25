@@ -327,7 +327,7 @@ fn make_bool(natives: &NativeTable, v: bool) -> Result<Value, CoreEvalError> {
   };
   Ok(Value::Con {
     tag: ctor.tag,
-    args: Vec::new(),
+    args: std::sync::Arc::new(Vec::new()),
   })
 }
 
@@ -658,7 +658,7 @@ fn io_wrap(natives: &NativeTable, inner: Value) -> Result<Value, CoreEvalError> 
   let io = require_ctor(natives.well_known.io_io, "IO.io")?;
   Ok(Value::Con {
     tag: io.tag,
-    args: vec![inner],
+    args: std::sync::Arc::new(vec![inner]),
   })
 }
 
@@ -694,14 +694,14 @@ fn string_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalEr
     let none = require_ctor(natives.well_known.option_none, "Option.none")?;
     return Ok(Value::Con {
       tag: none.tag,
-      args: Vec::new(),
+      args: std::sync::Arc::new(Vec::new()),
     });
   }
   let some = require_ctor(natives.well_known.option_some, "Option.some")?;
   let byte = bytes[idx as usize] as i64;
   Ok(Value::Con {
     tag: some.tag,
-    args: vec![Value::Lit(IrLit::Num(byte, NumSuffix::U8))],
+    args: std::sync::Arc::new(vec![Value::Lit(IrLit::Num(byte, NumSuffix::U8))]),
   })
 }
 
@@ -721,13 +721,13 @@ fn string_get_char(args: &[Value], natives: &NativeTable) -> Result<Value, CoreE
     let none = require_ctor(natives.well_known.option_none, "Option.none")?;
     return Ok(Value::Con {
       tag: none.tag,
-      args: Vec::new(),
+      args: std::sync::Arc::new(Vec::new()),
     });
   }
   let some = require_ctor(natives.well_known.option_some, "Option.some")?;
   Ok(Value::Con {
     tag: some.tag,
-    args: vec![Value::Lit(IrLit::Char(chars[idx as usize]))],
+    args: std::sync::Arc::new(vec![Value::Lit(IrLit::Char(chars[idx as usize]))]),
   })
 }
 
@@ -817,12 +817,12 @@ fn list_dir(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   let empty = require_ctor(natives.well_known.list_empty, "List.empty")?;
   let mut result = Value::Con {
     tag: empty.tag,
-    args: Vec::new(),
+    args: std::sync::Arc::new(Vec::new()),
   };
   for entry in entries.into_iter().rev() {
     result = Value::Con {
       tag: cons.tag,
-      args: vec![Value::Lit(IrLit::Str(entry.into())), result],
+      args: std::sync::Arc::new(vec![Value::Lit(IrLit::Str(entry.into())), result]),
     };
   }
   io_wrap(natives, result)
@@ -842,14 +842,14 @@ fn get_env(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError
       let some = require_ctor(natives.well_known.option_some, "Option.some")?;
       Value::Con {
         tag: some.tag,
-        args: vec![Value::Lit(IrLit::Str(value.into()))],
+        args: std::sync::Arc::new(vec![Value::Lit(IrLit::Str(value.into()))]),
       }
     }
     Err(_) => {
       let none = require_ctor(natives.well_known.option_none, "Option.none")?;
       Value::Con {
         tag: none.tag,
-        args: Vec::new(),
+        args: std::sync::Arc::new(Vec::new()),
       }
     }
   };
@@ -867,12 +867,15 @@ fn string_to_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEv
   let empty = require_ctor(natives.well_known.list_empty, "List.empty")?;
   let mut result = Value::Con {
     tag: empty.tag,
-    args: Vec::new(),
+    args: std::sync::Arc::new(Vec::new()),
   };
   for &byte in s.as_bytes().iter().rev() {
     result = Value::Con {
       tag: cons.tag,
-      args: vec![Value::Lit(IrLit::Num(byte as i64, NumSuffix::U8)), result],
+      args: std::sync::Arc::new(vec![
+        Value::Lit(IrLit::Num(byte as i64, NumSuffix::U8)),
+        result,
+      ]),
     };
   }
   Ok(result)

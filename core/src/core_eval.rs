@@ -22,6 +22,8 @@
 //! count it stays a `Value::PartialNtv`, exactly like an
 //! under-saturated `Value::Con`.
 
+use std::sync::Arc;
+
 use crate::core_ir::{CoreIr, IrRef};
 use crate::core_native::exec_native;
 use crate::core_value::{CoreEvalCycle, Env, EnvRef, GlobalCache, GlobalTable, NativeTable, Value};
@@ -194,14 +196,14 @@ pub fn eval(
             continue;
           }
           Value::Con { tag, mut args } => {
-            args.push(a);
+            Arc::make_mut(&mut args).push(a);
             return Ok(Value::Con { tag, args });
           }
           Value::PartialNtv {
             native_id,
             mut args,
           } => {
-            args.push(a);
+            Arc::make_mut(&mut args).push(a);
             return fire_or_accumulate(native_id, args, globals, natives, cache);
           }
           Value::Lit(lit) => {
@@ -232,7 +234,7 @@ pub fn eval(
         // (declaration) order, which leaves the *last*-declared field
         // innermost (`Local(0)`), matching `project_dict_field`'s
         // documented `fields.len()-1-idx` convention.
-        let Value::Con { tag, args } = v else {
+        let Value::Con { tag, mut args } = v else {
           return Err(CoreEvalError::NotAConstructor(v));
         };
         let arm = arms
@@ -245,7 +247,14 @@ pub fn eval(
           });
         }
         let mut extended = cur_env.clone();
-        for field in args {
+        // `Arc::make_mut` + `drain` (copy-on-write, not a raw `Vec`
+        // `IntoIterator`): `args` is an `Arc<Vec<Value>>` now (see
+        // `Value::Con`'s doc comment) — this is the single most-executed
+        // `Con`-consumption point in the evaluator (every pattern match
+        // against a constructor), so it matters that this stays O(1) in
+        // the common (uniquely-owned) case rather than falling back to a
+        // per-field clone.
+        for field in Arc::make_mut(&mut args).drain(..) {
           extended = Env::extend(&extended, field);
         }
         cur_env = extended;
@@ -269,7 +278,7 @@ pub fn eval(
         }
         return Ok(Value::Con {
           tag: *tag,
-          args: evaluated,
+          args: Arc::new(evaluated),
         });
       }
       CoreIr::Ntv { native_id, args } => {
@@ -277,7 +286,7 @@ pub fn eval(
         for a in args {
           evaluated.push(eval(a, &cur_env, globals, natives, cache)?);
         }
-        return fire_or_accumulate(*native_id, evaluated, globals, natives, cache);
+        return fire_or_accumulate(*native_id, Arc::new(evaluated), globals, natives, cache);
       }
     }
   }
@@ -299,7 +308,7 @@ pub fn eval(
 /// needs this.
 fn fire_or_accumulate(
   native_id: u32,
-  args: Vec<Value>,
+  args: Arc<Vec<Value>>,
   globals: &GlobalTable,
   natives: &NativeTable,
   cache: &mut GlobalCache,
@@ -351,14 +360,14 @@ pub fn apply(
       eval(&body, &extended, globals, natives, cache)
     }
     Value::Con { tag, mut args } => {
-      args.push(a);
+      Arc::make_mut(&mut args).push(a);
       Ok(Value::Con { tag, args })
     }
     Value::PartialNtv {
       native_id,
       mut args,
     } => {
-      args.push(a);
+      Arc::make_mut(&mut args).push(a);
       fire_or_accumulate(native_id, args, globals, natives, cache)
     }
     Value::Lit(lit) => Err(CoreEvalError::NotAFunction(Value::Lit(lit))),
@@ -398,7 +407,7 @@ pub fn force_global(
     arity: 0,
   }) = globals.get(idx)
   {
-    return fire_or_accumulate(*native_id, Vec::new(), globals, natives, cache);
+    return fire_or_accumulate(*native_id, Arc::new(Vec::new()), globals, natives, cache);
   }
   if let Some(v) = cache.get(idx) {
     return Ok(v.clone());
@@ -414,7 +423,10 @@ pub fn force_global(
   // spurious `Cycle` instead of retrying and surfacing the real error.
   let result = (|| -> Result<Value, CoreEvalError> {
     Ok(
-      match globals.get(idx).ok_or_else(|| CoreEvalError::UnknownGlobal(idx))? {
+      match globals
+        .get(idx)
+        .ok_or_else(|| CoreEvalError::UnknownGlobal(idx))?
+      {
         GlobalDef::Def(ir) => eval(ir, &Env::nil(), globals, natives, cache)?,
         // A constructor referenced point-free (no CoreIr body -- see
         // GlobalDef::Constructor's doc comment) resolves straight to an
@@ -422,7 +434,7 @@ pub fn force_global(
         // left-to-right from there, same as any partially-applied Con.
         GlobalDef::Constructor { tag, arity: _ } => Value::Con {
           tag: *tag,
-          args: Vec::new(),
+          args: Arc::new(Vec::new()),
         },
         // A native-attributed def with no explicit body (no useful `CoreIr`
         // body exists for it either — see `GlobalDef::Native`'s doc comment)
@@ -433,7 +445,7 @@ pub fn force_global(
         // firing immediately instead of leaving a permanently-`PartialNtv`
         // value nothing would ever apply an argument to.
         GlobalDef::Native { native_id, .. } => {
-          fire_or_accumulate(*native_id, Vec::new(), globals, natives, cache)?
+          fire_or_accumulate(*native_id, Arc::new(Vec::new()), globals, natives, cache)?
         }
         GlobalDef::Unresolved(path) => return Err(CoreEvalError::UnresolvedGlobal(path.clone())),
       },
@@ -559,6 +571,60 @@ mod tests {
       panic!("expected Con")
     };
     assert_eq!(args.len(), 2);
+  }
+
+  #[test]
+  fn test_partial_con_application_from_shared_value_does_not_leak_across_branches() {
+    // The copy-on-write hazard `Value::Con`'s `Arc<Vec<Value>>` args
+    // introduces (see its doc comment, `core_value.rs`): a memoized
+    // global constructor is forced twice, so both `base_a`/`base_b` (and
+    // the still-`cache`-stored copy) share ONE underlying `Arc`. Each
+    // branch then applies a DIFFERENT extra argument to its own copy —
+    // `Arc::make_mut`'s copy-on-write must kick in so neither branch's
+    // argument leaks into the other, or into the cache's own stored
+    // value.
+    let globals = GlobalTable::new(vec![GlobalDef::Constructor { tag: 0, arity: 2 }]);
+    let natives = empty_natives();
+    let mut cache = GlobalCache::new(1);
+
+    let base_a = force_global(0, &globals, &natives, &mut cache).unwrap();
+    let base_b = force_global(0, &globals, &natives, &mut cache).unwrap();
+
+    let branch_a = apply(
+      base_a,
+      Value::Lit(IrLit::Num(1, NumSuffix::I64)),
+      &globals,
+      &natives,
+      &mut cache,
+    )
+    .unwrap();
+    let branch_b = apply(
+      base_b,
+      Value::Lit(IrLit::Num(2, NumSuffix::I64)),
+      &globals,
+      &natives,
+      &mut cache,
+    )
+    .unwrap();
+
+    let Value::Con { args: args_a, .. } = branch_a else {
+      panic!("expected Con")
+    };
+    let Value::Con { args: args_b, .. } = branch_b else {
+      panic!("expected Con")
+    };
+    assert!(matches!(args_a.as_slice(), [Value::Lit(IrLit::Num(1, _))]));
+    assert!(matches!(args_b.as_slice(), [Value::Lit(IrLit::Num(2, _))]));
+
+    // The cache's own stored copy (a third alias of the same base value)
+    // must be unaffected by either branch's mutation.
+    let Value::Con {
+      args: cached_args, ..
+    } = cache.get(0).unwrap()
+    else {
+      panic!("expected Con")
+    };
+    assert!(cached_args.is_empty());
   }
 
   #[test]

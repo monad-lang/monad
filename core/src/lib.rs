@@ -380,15 +380,15 @@ fn strings_to_list_value(
     .ok_or_else(|| "List.cons not found (was the init package loaded?)".to_string())?;
   let mut result = core_value::Value::Con {
     tag: empty.tag,
-    args: Vec::new(),
+    args: std::sync::Arc::new(Vec::new()),
   };
   for s in args.into_iter().rev() {
     result = core_value::Value::Con {
       tag: cons.tag,
-      args: vec![
+      args: std::sync::Arc::new(vec![
         core_value::Value::Lit(core_ir::IrLit::Str(s.into())),
         result,
-      ],
+      ]),
     };
   }
   Ok(result)

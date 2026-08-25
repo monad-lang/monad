@@ -102,6 +102,39 @@ def count_eq (target : I64) (xs : List I64) : I64 :=
 def main : I64 := count_eq 100 (build_list 300)
 "#;
 
+// Same shape as `CLASS_DISPATCH`, at 5x its list size — isolates
+// `Value::Con`'s `args` clone cost specifically (see `core_value.rs`'s
+// `Value::Con` doc comment and `plans/implementations/value-con-arc-wrap-
+// optimization.md`). `count_eq`'s recursive call reads the shrinking
+// "rest of the list" from its own parameter on every call — before that
+// fix, each read was a full `Env::get(...).cloned()` deep clone of the
+// remaining structure, so wall time scaled O(N²) with list length; after
+// it, `Value::clone()` on a `Con` is an O(1) `Arc` bump, so wall time
+// should scale ~linearly. Comparing this benchmark's time against
+// `CLASS_DISPATCH`'s at a 5x size ratio is the actual signal — a
+// O(N²)-scaling fix should show roughly 5x time here, not 25x.
+const CLASS_DISPATCH_LARGE: &str = r#"
+use init
+
+#[terminating]
+def build_list (n : I64) : List I64 :=
+    if n == 0
+    then List.empty
+    else List.cons n (build_list (n - 1))
+
+#[terminating]
+def count_eq (target : I64) (xs : List I64) : I64 :=
+    match xs {
+        List.cons hd tl =>
+            if hd == target
+            then 1 + (count_eq target tl)
+            else count_eq target tl,
+        List.empty => 0
+    }
+
+def main : I64 := count_eq 100 (build_list 1500)
+"#;
+
 const PARSER_COMBINATOR_SHAPED: &str = r#"
 use init
 
@@ -146,6 +179,10 @@ fn class_dispatch(c: &mut Criterion) {
   bench_core_eval(c, "core_class_dispatch", CLASS_DISPATCH);
 }
 
+fn class_dispatch_large(c: &mut Criterion) {
+  bench_core_eval(c, "core_class_dispatch_large", CLASS_DISPATCH_LARGE);
+}
+
 fn parser_combinator_shaped(c: &mut Criterion) {
   bench_core_eval(c, "core_parser_combinator_shaped", PARSER_COMBINATOR_SHAPED);
 }
@@ -154,6 +191,7 @@ criterion_group!(
   benches,
   arithmetic_recursion,
   class_dispatch,
+  class_dispatch_large,
   parser_combinator_shaped
 );
 criterion_main!(benches);
