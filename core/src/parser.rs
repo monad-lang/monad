@@ -41,7 +41,7 @@ use nom::{
   multi::{fold_many0, many0, many1},
   sequence::{delimited, pair, preceded, separated_pair, terminated},
 };
-use string::parse_string_literal;
+use string::{parse_raw_string_literal, parse_string_literal};
 
 pub use error::{OwnedError, ParseFileError, ParseTermError, display_source_context};
 pub type Span<'a, X = ()> = LocatedSpan<&'a str, X>;
@@ -298,6 +298,27 @@ fn string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let original = input.clone();
   let (input, value) = set_res_extra(
     parse_string_literal(input.into_fragment())
+      .map_err(|e| e.map(|f: nom::error::Error<&str>| f.into()))
+      .map(|(i, v)| {
+        let consumed = original.input_len() - i.len();
+        (original.take_from(consumed), v)
+      }),
+    extra,
+  )?;
+  Ok((
+    input,
+    Term::Lit {
+      value: Literal::Str { value },
+    },
+  ))
+}
+
+fn raw_string_literal<X: Clone>(input: Span<X>) -> Res<Term, X> {
+  let extra = input.extra().clone();
+  let input = input.map_extra(|_| ());
+  let original = input.clone();
+  let (input, value) = set_res_extra(
+    parse_raw_string_literal(input.into_fragment())
       .map_err(|e| e.map(|f: nom::error::Error<&str>| f.into()))
       .map(|(i, v)| {
         let consumed = original.input_len() - i.len();
@@ -732,6 +753,12 @@ fn macro_call<X: Clone>(input: Span<X>) -> Res<Term, X> {
 /// Used for application function and args.
 fn term_inner<X: Clone>(input: Span<X>) -> Res<Term, X> {
   alt((
+    // Raw strings must be tried before `variable`: `r` is a valid identifier,
+    // so `r"..."` / `r#"..."#` would otherwise have `r` consumed as a bare
+    // identifier and the opening `"...` left dangling. `raw_string_literal`
+    // fails fast (one byte) for anything not starting with `r"` / `r#"`, so
+    // a real identifier named `r` or `regex` falls through unchanged.
+    raw_string_literal,
     quote_parser,
     do_parser,
     let_parser,
@@ -753,6 +780,12 @@ fn term_inner<X: Clone>(input: Span<X>) -> Res<Term, X> {
 /// are parsed correctly inside parens.
 fn non_app_term<X: Clone>(input: Span<X>) -> Res<Term, X> {
   alt((
+    // Raw strings are tried before `type_expression` (which would otherwise
+    // parse the leading `r` as a type variable) and before `term_inner` (whose
+    // `variable` arm would do the same as a term variable). `raw_string_literal`
+    // fails fast for anything not starting with `r"` / `r#"`, so ordinary type
+    // expressions and terms are unaffected.
+    raw_string_literal,
     type_expression,
     term_inner,
     return_shorthand_parser,
@@ -765,6 +798,14 @@ fn application<X: Clone>(input: Span<X>) -> Res<Term, X> {
   // The function position must be a name/path, macro call, or parenthesized expression.
   // Literals, lambdas, etc. cannot be function heads — without this restriction,
   // `12 x` would parse as `App(12, x)` instead of just `12` followed by `x`.
+  //
+  // Raw strings `r"..."` / `r#"..."#` are NOT application heads either: `r` is a
+  // valid identifier, but the opening `"`/`#"` immediately follows it with no
+  // whitespace, so `many1`'s `preceded(ws1, term_inner)` / `parens` cannot match
+  // and `application` fails — `base_term` then falls through to `non_app_term`,
+  // where `raw_string_literal` (placed ahead of `type_expression` and
+  // `term_inner`) handles it. A bare `r` used as a real function variable
+  // (e.g. `r x`, followed by whitespace) still parses as an application.
   let (input, fun) = alt((macro_call, variable, parens)).parse(input)?;
   let (input, args) = many1(alt((preceded(ws1, term_inner), parens))).parse(input)?;
 

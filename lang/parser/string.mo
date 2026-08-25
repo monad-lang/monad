@@ -3,7 +3,7 @@
 
 use lang.types {Term, lit, str}
 use lang.parser.core {ParseResult, custom, fail, is_empty, success, tag}
-use lang.parser.combinators {tag, utf8_char_width}
+use lang.parser.combinators {tag, take_while, utf8_char_width}
 
 open ParseResult {fail, success}
 
@@ -117,3 +117,83 @@ def string_parse (input: String) : ParseResult Term :=
 			},
 		fail e => fail e
 	}
+
+/// Parse a Rust-style raw string literal `r"..."`, `r#"..."#`, `r##"..."##`, ...
+///
+/// The opener is `r`, then `n` (>= 0) `#` characters, then `"`. The body is
+/// taken verbatim (no `\`-escape processing at all). The closer is the first
+/// `"` in the body followed by at least `n` `#` characters: exactly `n` of
+/// them are consumed as the closing delimiter and any extra `#` beyond `n`
+/// are left in the remaining input (matching `rustc`'s lexer, which caps the
+/// closing hash count at the opening count). A `"` followed by fewer than `n`
+/// `#` is not a closer and the body continues past it.
+///
+/// Produces the same `Term.lit (Literal.str ...)` node an ordinary string
+/// literal does, so the type checker / evaluator need no changes. Fails fast
+/// (so a bare identifier `r`, `regex`, or `r#` not followed by `"` falls
+/// through to the identifier parser) when the input does not begin with
+/// `r"` or `r#"`.
+#[partial]
+def raw_string_parse (input : String) : ParseResult Term :=
+	match tag "r" input {
+		success after_r _ => raw_string_after_r after_r,
+		fail e => fail e
+	}
+
+/// Count the leading `#` characters (the opening hash count `n`) via
+/// `take_while`, then expect the opening `"`. If the remainder after the
+/// hashes does not start with `"`, this is not a raw-string opener (e.g.
+/// `r#x`) and we fail so the identifier parser handles the leading `r`.
+#[partial]
+def raw_string_after_r (input : String) : ParseResult Term :=
+	match take_while (fn c => String.beq c "#") input {
+		success after_hashes hashes =>
+			match tag "\"" after_hashes {
+				success body_start _ =>
+					raw_string_body (String.length hashes) body_start body_start,
+				fail e => fail e
+			},
+		fail e => fail e
+	}
+
+/// Scan the raw-string body (verbatim) for the closer. `orig` is the body
+/// starting right after the opening `"` (kept so the final body is one
+/// `String.slice` of it, avoiding any per-character accumulation — the body
+/// is verbatim, so no escape resolution is needed); `input` is the shrinking
+/// remainder being scanned. Steps by `utf8_char_width` so a multi-byte
+/// character in the body advances correctly instead of landing mid-codepoint.
+#[partial]
+def raw_string_body (n : I64) (orig : String) (input : String) : ParseResult Term :=
+	if is_empty input
+	then fail (ParseError.custom "unterminated raw string literal" input)
+	else
+		let width : I64 := utf8_char_width input in
+		let ch : String := String.slice input 0 width in
+		if String.beq ch "\""
+		then raw_string_count_hashes n 0 orig input (String.drop width input)
+		else raw_string_body n orig (String.drop width input)
+
+/// A `"` was just found at `at_quote` (a suffix of `orig`). Count the trailing
+/// `#` characters, capping at `n`: as soon as `cnt` reaches `n` this is the
+/// closer (the body is `orig` up to `at_quote`, the remainder is `input` after
+/// the `n` consumed `#`, with any extra `#` beyond `n` left in `input`). If a
+/// non-`#` (or EOF) is hit before `cnt == n`, this `"` was not a closer —
+/// resume the body scan from `input` (the `"` and any `#` already counted
+/// stay in the body via `orig`'s final slice).
+///
+/// For `n = 0`, `cnt` starts at `0 == n` so the very first call returns the
+/// closer immediately — any `"` closes a zero-hash raw string.
+#[partial]
+def raw_string_count_hashes (n : I64) (cnt : I64) (orig : String) (at_quote : String) (input : String) : ParseResult Term :=
+	if I64.beq cnt n
+	then
+		let consumed : I64 := I64.sub (String.length orig) (String.length at_quote) in
+		success input (Term.lit (Literal.str (String.slice orig 0 consumed)))
+	else
+		if is_empty input
+		then fail (ParseError.custom "unterminated raw string literal" input)
+		else
+			let ch : String := String.slice input 0 1 in
+			if String.beq ch "#"
+			then raw_string_count_hashes n (I64.add cnt 1) orig at_quote (String.drop 1 input)
+			else raw_string_body n orig input

@@ -469,6 +469,37 @@ def example : I64 :=
 0xFFu32   // U32, hex notation
 ```
 
+### Raw String Literals
+
+Rust-style raw strings take their body verbatim — no `\`-escape processing
+— so backslash-heavy text (regex, JSON, Windows paths, embedded source) can
+be written exactly as it should appear:
+
+```monad
+r"no escapes here: \n \" works literally"
+r#"can contain " freely, even """ inside"#
+r##"embed a "# that a one-hash closer would catch"##
+r###"embed a "## too"###
+```
+
+The opener is `r`, then `n` (>= 0) `#` characters, then `"`. The closer is
+the first `"` in the body followed by at least `n` `#` (exactly `n` are
+consumed; extra `#` beyond `n` are left in the remainder, matching `rustc`).
+So to embed the literal text `"##`, use `n = 3` (`r###"..."###`) since
+`"##` (two hashes) is not a closer for `n = 3`. A raw string parses to the
+same `Literal::Str` value an ordinary `"..."` string produces:
+
+```monad
+def regex : String := r#"\w+\s*"\s*\w+"#   // body: \w+\s*"\s*\w+
+def path : String := r"C:\Users\monad\src\main.mo"   // backslashes literal
+// r"\n" == "\\n"   // true — raw backslash-n == escaped backslash + n
+```
+
+`r` is a valid identifier, so the raw-string parser is tried ahead of the
+identifier parser in both `core/src/parser.rs` (`term_inner`/`non_app_term`)
+and `lang/parser.mo` (`atom_parsers`); a bare `r`, `regex`, or `r#` not
+followed by `"` still parses as the identifier `r` / `regex`.
+
 ### Match Expressions
 
 ```monad

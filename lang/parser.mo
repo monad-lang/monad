@@ -25,7 +25,7 @@ use lang.parser.number {number, numeric_literal}
 use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
 use lang.parser.position {consume_span, location_of_remaining, new_span, span_fragment, span_location}
 use lang.parser.identifier {identifier}
-use lang.parser.string {string_parse}
+use lang.parser.string {raw_string_parse, string_parse}
 use lang.parser.diagnostic {render_parse_error}
 open lang.parser.core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
@@ -4874,7 +4874,16 @@ def macro_call_term_bang (r : ParseResult String) (name : String) : ParseResult 
     }
 
 #[partial]
-def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
+def atom_parsers (ctx : List Identifier) : List (String -> ParseResult Term) :=
+    // `raw_string_parse` MUST be tried before `variable ctx`: `r` is a valid
+    // identifier, so without this `r"..."` / `r#"..."#` would have `r`
+    // consumed as a bare variable and the juxtaposition-application loop
+    // (`expr_climb_rest` -> `atom_term`) would then parse the opening `"...`
+    // as an ordinary string literal applied to `r` (`App(r, "...")`).
+    // `raw_string_parse` fails fast for anything not starting with `r"` /
+    // `r#"`, so a real identifier named `r` or `regex` falls through to
+    // `variable ctx` unchanged.
+    //
     // `do_parser` wires do-notation blocks (`do { ... }`) into the generic
     // expression grammar -- without it, `do { ... }` is only reachable via
     // a *keyword-less* bare `{ ... }` special case in a def/instance-method
@@ -4884,7 +4893,7 @@ def atom_parsers (ctx: List Identifier) : List (String -> ParseResult Term) :=
     // `plans/bootstrapping/self-hosted-compiler.md` for the corpus impact
     // this had (137 real `do {` usages across lang/main.mo and
     // lang/module.mo, all previously unparseable).
-    [quote_term_parser ctx, macro_call_term, variable ctx, literal_parser, match_parser ctx, if_parser ctx, do_parser ctx, let_term_parser ctx, list_literal_parser ctx, struct_lit_parser ctx]
+    [raw_string_parse, quote_term_parser ctx, macro_call_term, variable ctx, literal_parser, match_parser ctx, if_parser ctx, do_parser ctx, let_term_parser ctx, list_literal_parser ctx, struct_lit_parser ctx]
 
 // ─── Field-pattern match-case grammar (`plans/implementations/
 // struct-field-destructuring.md`'s Phase 6) ─────────────────────────────
@@ -8151,6 +8160,101 @@ def test_string_parse_unknown_escape_fails : Bool :=
 	match string_parse "\"a\\qb\"" {
 		success _ _ => false,
 		fail _ => true
+	}
+
+// --- raw_string_parse tests ---
+//
+// Mirror the Rust reference's `parse_raw_string_literal` semantics (see
+// `core/src/parser/string.rs`): the closer is the first `"` followed by at
+// least `n` `#`, consuming exactly `n` (extra `#` left in the remainder),
+// matching `rustc`'s lexer which caps the closing hash count at the opening
+// count. The body is verbatim -- no `\`-escape processing.
+
+#[test]
+def test_raw_string_parse_plain : Bool :=
+	match raw_string_parse "r\"hello\"" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "hello",
+		fail _ => false
+	}
+
+/// Backslashes are verbatim -- no escape processing.
+#[test]
+def test_raw_string_parse_backslash_literal : Bool :=
+	match raw_string_parse "r\"\\n\\t\"" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "\\n\\t",
+		fail _ => false
+	}
+
+/// n = 1: the user's example `r#" blab\"\"\" "#`.
+#[test]
+def test_raw_string_parse_n1 : Bool :=
+	match raw_string_parse "r#\" blab\"\"\" \"#" {
+		success rem out => String.beq rem "" && term_lit_str_eq out " blab\"\"\" ",
+		fail _ => false
+	}
+
+/// n = 1: a `"` followed by fewer than 1 `#` is not a closer. `r#"a\"b\"#`
+/// -> body `a\"b`, closer is the final `\"#`.
+#[test]
+def test_raw_string_parse_n1_embed_quote : Bool :=
+	match raw_string_parse "r#\"a\"b\"#" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "a\"b",
+		fail _ => false
+	}
+
+/// n = 2: embeds `"#` (one hash, fewer than n) in the body.
+#[test]
+def test_raw_string_parse_n2_embed_hash : Bool :=
+	match raw_string_parse "r##\"a\"#b\"##" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "a\"#b",
+		fail _ => false
+	}
+
+/// n = 3: embeds `"##` and `"#` in the body.
+#[test]
+def test_raw_string_parse_n3 : Bool :=
+	match raw_string_parse "r###\"x\"##\"y\"#z\"###" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "x\"##\"y\"#z",
+		fail _ => false
+	}
+
+/// Extra `#` beyond n are left in the remainder (rustc caps closing hashes
+/// at n). `r##\"a\"###b\"##` -> body `a`, rest `#b\"##`.
+#[test]
+def test_raw_string_parse_extra_hashes : Bool :=
+	match raw_string_parse "r##\"a\"###b\"##" {
+		success rem out => term_lit_str_eq out "a" && String.beq rem "#b\"##",
+		fail _ => false
+	}
+
+/// Multi-line body: newlines are literal content.
+#[test]
+def test_raw_string_parse_multiline : Bool :=
+	match raw_string_parse "r\"line1\nline2\"" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "line1\nline2",
+		fail _ => false
+	}
+
+/// Failures -- must backtrack cleanly so `variable ctx` handles a bare `r` /
+/// `regex` / `r#`-not-followed-by-`\"` as an identifier.
+#[test]
+def test_raw_string_parse_failures : Bool :=
+	let f1 : Bool := match raw_string_parse "hello" { success _ _ => false, fail _ => true } in
+	let f2 : Bool := match raw_string_parse "r" { success _ _ => false, fail _ => true } in
+	let f3 : Bool := match raw_string_parse "r#" { success _ _ => false, fail _ => true } in
+	let f4 : Bool := match raw_string_parse "rx" { success _ _ => false, fail _ => true } in
+	let f5 : Bool := match raw_string_parse "r\"unterminated" { success _ _ => false, fail _ => true } in
+	let f6 : Bool := match raw_string_parse "r#\"unterminated" { success _ _ => false, fail _ => true } in
+	f1 && f2 && f3 && f4 && f5 && f6
+
+/// Disambiguation at the atom level: `r"..."` parses via `raw_string_parse`
+/// (ahead of `variable ctx` in `atom_parsers`), so `atom_term` yields a Lit,
+/// not `App(r, "...")`.
+#[test]
+def test_raw_string_atom_disambiguation : Bool :=
+	match atom_term List.empty "r\"hello\"" {
+		success rem out => String.beq rem "" && term_lit_str_eq out "hello",
+		fail _ => false
 	}
 
 #[partial]
