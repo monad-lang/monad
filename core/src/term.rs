@@ -54,8 +54,14 @@ impl SourceRange {
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
-pub struct Identifier(String);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Identifier(std::sync::Arc<str>);
+
+impl serde::Serialize for Identifier {
+  fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(self.as_str())
+  }
+}
 
 /// Documentation for a declaration (function, type, class, etc.)
 /// Wraps a markdown string that documents the declaration.
@@ -72,13 +78,13 @@ impl Documentation {
 
 impl Identifier {
   pub fn new(s: String) -> Self {
-    Identifier(s)
+    Identifier(std::sync::Arc::from(s))
   }
   pub fn as_str(&self) -> &str {
     &self.0
   }
   pub fn rename(&self) -> Identifier {
-    Identifier(self.0.clone() + "~")
+    Identifier(std::sync::Arc::from(format!("{}~", self.0)))
   }
   pub fn to_path(self) -> ModulePath {
     ModulePath::single(self)
@@ -89,7 +95,19 @@ impl Identifier {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_GENSYM: AtomicU64 = AtomicU64::new(1);
     let id = NEXT_GENSYM.fetch_add(1, Ordering::SeqCst);
-    Identifier(format!("{prefix}#{id}"))
+    Identifier(std::sync::Arc::from(format!("{prefix}#{id}")))
+  }
+}
+
+impl From<&str> for Identifier {
+  fn from(value: &str) -> Self {
+    Identifier(std::sync::Arc::from(value))
+  }
+}
+
+impl From<String> for Identifier {
+  fn from(value: String) -> Self {
+    Identifier(std::sync::Arc::from(value))
   }
 }
 
@@ -198,7 +216,7 @@ impl Display for NameRef {
 }
 
 pub fn id(s: &str) -> Identifier {
-  Identifier(s.to_string())
+  Identifier::from(s)
 }
 pub fn mpt(s: &str) -> ModulePath {
   ModulePath::top(s)
@@ -2272,7 +2290,7 @@ impl From<PathBuf> for ModulePath {
       .and_then(|os| os.to_str().to_owned())
       .unwrap_or(last)
       .to_owned();
-    let p = p.into_iter().map(Identifier).collect();
+    let p = p.into_iter().map(Identifier::new).collect();
     ModulePath::new(p)
   }
 }
