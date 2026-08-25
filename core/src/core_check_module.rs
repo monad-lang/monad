@@ -674,9 +674,32 @@ fn register_inductive(
     // `StructFields::inductive_paths`'s doc comment for why inserting it
     // into `known_globals` (which also feeds `open`-based unqualified-name
     // aliasing) is the wrong place for this.
+    let inductive_atom = atoms.intern(ind.name().clone());
     structs
       .inductive_paths
-      .insert(atoms.intern(ind.name().clone()), ind.name().clone());
+      .insert(inductive_atom, ind.name().clone());
+    // An ordinary inductive's own bare name (`I64`, `Bool`, `List`) was
+    // never given a `ctx` (kind) entry either, for the same "never
+    // needed before" reason as the `known_globals` gap just above — but
+    // unlike that one, this DOES matter for genuinely dependent explicit
+    // Pi telescopes (`def f (A : Type) (a : A) : ...`), where a concrete
+    // type like `I64`/`Bool` is passed as an ordinary VALUE argument for
+    // `A` and needs its own kind (`Type`/`Sort n`) inferred to check that
+    // argument — without this, `infer`ring `Free(inductive_atom)` here
+    // always failed with `UnboundVariable`, the second half of the
+    // `Eq.rec`/dependent-Pi bug (see `plans/implementations/evaluator-
+    // recursion-and-eq-rec-followup.md`, Part 3 Fix A — this fix and the
+    // `pi_named_with_mult` one are both needed together). `ind.typ()` is
+    // the inductive's own declared kind (its own param `Pi`-chain ending
+    // in `Sort n`/`Prop`/`Type`, e.g. `Sort 1 -> A -> A -> Prop` for
+    // `Eq`) — lowered the same way a constructor's own type is, just
+    // above.
+    if let Ok(kind_c) = lower_term(
+      &mut LowerContext::with_config(config.clone(), atoms),
+      ind.typ(),
+    ) {
+      ctx.insert(inductive_atom, kind_c);
+    }
     // E2: every ordinary constructor's own field types, in declaration
     // order, still referencing the inductive's own declared params freely
     // (NOT yet substituted with any specific use site's concrete type
@@ -2889,6 +2912,72 @@ mod test {
     let report = check_module_source(&env, "type Foo { bar }\ndef ok : I64 := 1\n");
     assert_eq!(report.skipped, vec!["type"]);
     assert_eq!(report.passed(), 1);
+  }
+
+  // -------------------------------------------------------------------
+  // Dependent explicit Pi telescopes — `plans/implementations/
+  // evaluator-recursion-and-eq-rec-followup.md`, Part 3 Fix A. Before
+  // this fix, a LATER explicit param's declared type referencing an
+  // EARLIER explicit param's name (e.g. `(a : A)` after `(A : Type)`)
+  // failed with `type mismatch: <unknown> vs. <unknown>` at the DEF
+  // site — root cause: `parser.rs`'s `def`-param-list desugaring built
+  // each param's `Pi` via `pi_with_mult`, which always set
+  // `arg_name: None`, so `lower_core.rs`'s `Term::Pi` lowering had no
+  // name to push into scope for a later domain to reference via
+  // `Bound` (unlike `Term::Forall`, which always carries a real name).
+  // A SEPARATE, second fix was needed for the APPLICATION side: an
+  // ordinary inductive's own bare name (`Bool`, `I64`) used as a VALUE
+  // argument (not just a type annotation) had no `ctx` kind entry
+  // (`core_check_module.rs`'s ordinary-inductive registration) and no
+  // runtime `GlobalDef` (`lower_core_ir.rs`), plus `unify` needed a
+  // narrow special case treating the "Type" keyword's `Free` reference
+  // as interchangeable with a raw `Sort` literal (bare "Type" surface
+  // syntax, unlike explicit "Sort N", resolves to `Free(atom)` via
+  // ordinary name lookup, not directly to `CoreTerm::Sort`).
+  // -------------------------------------------------------------------
+
+  #[test]
+  fn test_dependent_explicit_pi_telescope_definition_checks() {
+    // A later explicit param's type referencing an earlier one, even
+    // when the body never uses that later param at all (isolates the
+    // signature-checking bug from any body-checking concern).
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(&env, "def id_ty (A : Type) (a : A) : A := a\n");
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_ok(),
+      "expected pass, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_dependent_explicit_pi_telescope_application_checks() {
+    // Applying such a function to a concrete type VALUE (`I64`), not
+    // just declaring it — exercises the application-side fix
+    // (`core_check_module.rs`'s inductive kind registration,
+    // `core_unify.rs`'s Sort-keyword special case) on top of the
+    // definition-side one above.
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "def id_ty (A : Type) (a : A) : A := a\ndef applied : I64 := id_ty I64 5\n",
+    );
+    assert_eq!(report.passed(), 2, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_dependent_explicit_pi_telescope_over_gadt_index_checks() {
+    // The harder case from the same investigation: a `Vec (len : Nat) A`
+    // GADT-indexed argument, where the dependency is carried through an
+    // inductive's own declared index rather than a bare type variable.
+    let env = ModuleCheckEnv::new();
+    let report = check_module_source(
+      &env,
+      "def dep (n : Nat) (v : Vec n I64) : I64 := 0\n\
+       def applied : I64 := dep Nat.zero Vec.nil\n",
+    );
+    assert_eq!(report.passed(), 2, "report: {report:?}");
   }
 
   #[test]

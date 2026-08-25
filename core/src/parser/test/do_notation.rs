@@ -208,7 +208,7 @@ fn test_def_do_block_with_params() {
     def(
       mpt("greet"),
       vec![],
-      pi(typ("String"), app2("IO", "Unit")),
+      pi_var(id("name"), typ("String"), app2("IO", "Unit")),
       lams(
         vec![dpar("name", typ("String"))],
         apps(var("println"), vec![var("name")])
@@ -356,7 +356,7 @@ fn test_def_do_block_with_constraints() {
       vec![type_constraint(mpt("Monad"), vec![id("M")])],
       forall(
         dpar("M", pi(typ("Type"), typ("Type"))),
-        pi(app2("M", "String"), app2("M", "Unit"))
+        pi_var(id("arg"), app2("M", "String"), app2("M", "Unit"))
       ),
       lams(
         vec![dpar("arg", app2("M", "String"))],

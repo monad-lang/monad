@@ -13,7 +13,7 @@ def add (a b: I64) : I64 := a + b
     def(
       mpt("add"),
       vec![],
-      pi(typ("I64"), pi(typ("I64"), typ("I64"))),
+      pi_var(id("a"), typ("I64"), pi_var(id("b"), typ("I64"), typ("I64"))),
       lams(
         vec![dpar("a", typ("I64")), dpar("b", typ("I64"))],
         expected_body
@@ -131,9 +131,10 @@ instance Functor List {
       vec![def(
         mpt("map"),
         vec![],
-        pi(
+        pi_var(
+          id("f"),
           pi(typ("A"), typ("B")),
-          pi(app2("List", "A"), app2("List", "B"))
+          pi_var(id("v"), app2("List", "A"), app2("List", "B"))
         ),
         lams(
           vec![

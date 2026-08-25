@@ -1044,6 +1044,27 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
       globals.push(GlobalDef::Def(std::sync::Arc::new(CoreIr::Lit(
         IrLit::Sort(level),
       ))));
+    } else if program.inductives.contains_key(path) {
+      // The identical gap as `builtin_sort_level` just above, for an
+      // ORDINARY inductive's own bare name (`Bool`, `I64`, `List`) used
+      // as a VALUE — needed once a genuinely dependent explicit Pi
+      // telescope (`def f (A : Type) (a : A) : ...`) is actually CALLED
+      // with a concrete type argument (`f Bool true`), not just declared
+      // — `core_check_module.rs`'s own inductive registration now gives
+      // these a `ctx` (kind) entry for type-checking (see its own doc
+      // comment there), but nothing gave them a RUNTIME representation
+      // until now, so evaluating one hit `UnresolvedGlobal` even once
+      // checking passed. Defaults to `Sort(1)` (`Type`) — correct for
+      // every ordinary data inductive; a `: Prop` (`Sort 0`) inductive's
+      // own BARE name (e.g. plain `Eq`, not an applied `Eq A a b`) used
+      // as a value would get the wrong level here, a narrow, accepted
+      // gap (this program's own `CoreInductiveInfo` doesn't carry the
+      // inductive's declared level to recover it precisely, and nothing
+      // in the `Eq.rec`/dependent-Pi work this fixes ever references a
+      // bare, unapplied `Eq` as a value).
+      globals.push(GlobalDef::Def(std::sync::Arc::new(CoreIr::Lit(
+        IrLit::Sort(1),
+      ))));
     } else {
       // A bare reference with no def, instance, or constructor behind
       // it at all — in practice this is a class method's own abstract

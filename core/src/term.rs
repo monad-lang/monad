@@ -1126,6 +1126,27 @@ pub fn pi_with_mult(arg: Term, ret: Term, mult: Multiplicity) -> Term {
     mult,
   }
 }
+/// Same as `pi_with_mult`, but also threads the parameter's real name
+/// through as `arg_name` — needed so a LATER parameter's type can refer
+/// to an EARLIER one by name (e.g. `def f (A : Type) (a : A) : ...`).
+/// `lower_core.rs`'s `Term::Pi` lowering arm pushes `arg_name` into scope
+/// before lowering `ret`, exactly like `Term::Forall`'s `name` already
+/// does for implicit parameters — `pi_with_mult`'s `arg_name: None`
+/// leaves nothing to push, so a later param's type-level reference to an
+/// earlier one falls through to free-name resolution instead of a
+/// `Bound` reference, independently (and inconsistently) on the type
+/// side vs. the body's own `Term::Lam` chain (which DOES carry real
+/// names) — see `def_param_names`'s doc comment for the historical
+/// context, and `plans/implementations/evaluator-recursion-and-eq-rec-
+/// followup.md` (Part 3, Fix A) for the bug this fixes.
+pub fn pi_named_with_mult(name: Identifier, arg: Term, ret: Term, mult: Multiplicity) -> Term {
+  Term::Pi {
+    arg_name: Some(name),
+    arg: Box::new(arg),
+    ret: Box::new(ret),
+    mult,
+  }
+}
 pub fn pi_name(arg_name: Option<Identifier>, arg: Term, ret: Term) -> Term {
   Term::Pi {
     arg_name,

@@ -23,7 +23,7 @@ use crate::{
     match_term,
     module::ParsedModule,
     mpvar, num_suffix, opr, param, param_with_attrs, param_with_default, param_with_mult, pi_name,
-    pi_typs, pi_with_mult, pvar, stru, stru_field_to_def_param, stru_field_with_mult,
+    pi_named_with_mult, pi_typs, pvar, stru, stru_field_to_def_param, stru_field_with_mult,
     type_constraint, var_id,
   },
 };
@@ -1627,7 +1627,12 @@ fn def_parser(input: Span) -> Res<Def> {
   } else {
     let mut full_typ = return_typ;
     for param in plain_params.iter().rev() {
-      full_typ = pi_with_mult((*param.typ).clone(), full_typ, param.mult.clone());
+      full_typ = pi_named_with_mult(
+        param.name.clone(),
+        (*param.typ).clone(),
+        full_typ,
+        param.mult.clone(),
+      );
     }
     if !implicit_params.is_empty() {
       full_typ = foralls(implicit_params, full_typ);

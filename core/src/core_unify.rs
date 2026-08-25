@@ -423,6 +423,36 @@ pub fn unify(mctx: &mut MetaContext, a: &CoreTerm, b: &CoreTerm) -> Result<(), U
       }
     }
 
+    // Bare "Type"/"Prop"/"Pred" surface syntax (unlike explicit "Sort N")
+    // doesn't lower to a raw `Sort` literal — it falls through ordinary
+    // name resolution to `Free(atom)`, since `core_check_module.rs`'s own
+    // registration loop (see its "E7" comment) deliberately also gives
+    // these three atoms an ordinary `ctx` entry so they're usable as
+    // plain VALUES too (`get_sort Type`), not just as type annotations.
+    // That split means a dependent explicit Pi telescope (`def f (A :
+    // Type) (a : A) : ...`) has `A`'s declared param type as
+    // `Free(type_atom)`, while a concrete type's OWN inferred kind
+    // (`I64`/`Bool`'s registered `ctx` entry, `core_check_module.rs`'s
+    // ordinary-inductive registration) is a raw `Sort { level: 1 }` — two
+    // different representations of the identical concept, which plain
+    // structural unification (the `Free`-vs-`Free`/`Sort`-vs-`Sort` cases
+    // above) can't see through. Recognize the three well-known keyword
+    // atoms here and apply the SAME cumulativity rule (E7 above) as if
+    // they'd been the raw `Sort` they stand for — narrowly scoped to
+    // exactly these three atoms, not a general "unfold any global" rule.
+    (CoreTerm::Sort { level: l1 }, CoreTerm::Free(atom)) => {
+      match known_sort_keyword_level(mctx, *atom) {
+        Some(l2) if *l1 <= l2 => Ok(()),
+        _ => Err(mismatch(a, b)),
+      }
+    }
+    (CoreTerm::Free(atom), CoreTerm::Sort { level: l2 }) => {
+      match known_sort_keyword_level(mctx, *atom) {
+        Some(l1) if l1 <= *l2 => Ok(()),
+        _ => Err(mismatch(a, b)),
+      }
+    }
+
     (
       CoreTerm::Forall {
         typ: t1, body: b1, ..
@@ -501,6 +531,22 @@ pub fn unify(mctx: &mut MetaContext, a: &CoreTerm, b: &CoreTerm) -> Result<(), U
     }
 
     _ => Err(mismatch(a, b)),
+  }
+}
+
+/// If `atom` is one of the three well-known "Type"/"Prop"/"Pred" keyword
+/// atoms (`core_check_module.rs`'s "E7" registration loop), the `Sort`
+/// level it stands for — `Type` -> 1, `Prop`/`Pred` -> 0 (`Pred` is a
+/// plain alias for `Prop`), matching `sort_parser`'s own "Sort N" ->
+/// `Sort { level: N }` convention exactly, just reached through a name
+/// lookup instead of a literal. `None` for any other atom — this is
+/// deliberately narrow (three specific, well-known global names), not a
+/// general "does this atom's value happen to be a Sort" unfolding.
+fn known_sort_keyword_level(mctx: &MetaContext, atom: Atom) -> Option<u64> {
+  match mctx.atoms().path_of(atom)?.to_string().as_str() {
+    "Type" => Some(1),
+    "Prop" | "Pred" => Some(0),
+    _ => None,
   }
 }
 

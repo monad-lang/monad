@@ -574,7 +574,11 @@ fn test_instance() {
       vec![def(
         mpt("map"),
         vec![],
-        pi(pi(typ("A"), typ("B")), pi(app2("F", "A"), app2("F", "B"))),
+        pi_var(
+          id("f"),
+          pi(typ("A"), typ("B")),
+          pi_var(id("v"), app2("F", "A"), app2("F", "B"))
+        ),
         lams(
           vec![dpar("f", pi(typ("A"), typ("B"))), dpar("v", app2("F", "A"))],
           oper(var("f"), "|>", var("v"))
@@ -695,7 +699,7 @@ fn test_def() {
       vec![type_constraint(mpt("Monad"), vec![id("M")])],
       forall(
         dpar("M", pi(typ("Type"), typ("Type"))),
-        pi(app2("M", "String"), app2("M", "Unit"))
+        pi_var(id("arg"), app2("M", "String"), app2("M", "Unit"))
       ),
       lams(
         vec![dpar("arg", app2("M", "String"))],
@@ -719,7 +723,7 @@ fn test_def() {
     def(
       mpt("main"),
       vec![],
-      pi(app2("List", "String"), app2("IO", "Unit")),
+      pi_var(id("args"), app2("List", "String"), app2("IO", "Unit")),
       lams(
         vec![dpar("args", app2("List", "String"))],
         apps(var("println"), vec![str("Hello, world!")])
@@ -755,9 +759,18 @@ fn test_def() {
     def(
       mpt("Lens"),
       vec![type_constraint(mpt("Functor"), vec![id("F")])],
-      pi_typs(
-        vec![typ("Type"), typ("Type"), typ("Type"), typ("Type")],
-        typ("Type")
+      pi_var(
+        id("S"),
+        typ("Type"),
+        pi_var(
+          id("T"),
+          typ("Type"),
+          pi_var(
+            id("A"),
+            typ("Type"),
+            pi_var(id("B"), typ("Type"), typ("Type"))
+          )
+        )
       ),
       lams(
         vec![
@@ -824,7 +837,11 @@ fn module_test() {
       decl_def(
         mpt("append"),
         vec![],
-        pi(app2("List", "A"), pi(app2("List", "A"), app2("List", "A"))),
+        pi_var(
+          id("a"),
+          app2("List", "A"),
+          pi_var(id("b"), app2("List", "A"), app2("List", "A"))
+        ),
         lams(
           vec![dpar("a", app2("List", "A")), dpar("b", app2("List", "A"))],
           var("todo"),
