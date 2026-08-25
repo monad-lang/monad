@@ -1010,15 +1010,23 @@ fn evaluate_one_test_file(
     Ok(p) => p,
     Err(e) => fail_file!(format!("{e}")),
   };
-  let lowered = match lower_core_ir::lower_program(&program) {
+  let mut lowered = match lower_core_ir::lower_program(&program) {
     Ok(l) => l,
     Err(e) => fail_file!(format!("lower {}: {e:?}", file_path.display())),
   };
 
   // `NativeTable::from_lowered` only borrows `lowered` -- computed before
-  // `lowered.globals` is moved out below.
+  // `lowered.globals` is moved out below. The comment used to describe
+  // a `.clone()` two lines down as a move, which it wasn't -- fixed to
+  // an actual `mem::take` (the only other later use of `lowered` is
+  // `.index_of(...)` below, which reads `lowered.paths`, a different
+  // field, so this is safe). Matters because this clones the ENTIRE
+  // loaded program's global count (init+std+lang+file), once per file,
+  // in both the single- and multi-threaded test/check runners.
   let natives = Arc::new(core_value::NativeTable::from_lowered(&lowered));
-  let globals = Arc::new(core_value::GlobalTable::new(lowered.globals.clone()));
+  let globals = Arc::new(core_value::GlobalTable::new(std::mem::take(
+    &mut lowered.globals,
+  )));
   let mut cache = core_value::GlobalCache::new(globals.len());
 
   let mut output_lines: Vec<String> = Vec::new();
