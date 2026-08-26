@@ -2,7 +2,6 @@ mod lsp;
 mod mcp;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use monad_core::{
@@ -1109,6 +1108,7 @@ fn execute(command: Commands) -> Result<(), String> {
 #[cfg(test)]
 mod test {
   use super::*;
+  use std::sync::Arc;
 
   #[test]
   fn test_to_json_test_case_pass() {

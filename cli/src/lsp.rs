@@ -54,7 +54,6 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use monad_core::{
   SymbolInfo, TestOutcome, check_files, check_source, diag::Severity, organize_imports_for_source,
@@ -979,6 +978,7 @@ fn execute_command(
 #[cfg(test)]
 mod test {
   use super::*;
+  use std::sync::Arc;
 
   #[test]
   fn test_initialize_advertises_organize_imports_and_test_commands() {

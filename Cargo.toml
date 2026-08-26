@@ -18,3 +18,17 @@ toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 im = "15.1"
+
+# Cargo requires profile sections to live in the workspace root, not a
+# member crate's own Cargo.toml (a member-level `[profile.release]` is
+# silently ignored with a warning) — and `lto` specifically isn't a
+# valid per-package override even at the root, so it can't just move to
+# `profile.release.package.monad-wasm`. `wasm-pack build` auto-detects
+# and prefers a `[profile.wasm-release]` profile over `[profile.release]`
+# when one is present (inheriting from `release` for anything unset),
+# so defining it here keeps the wasm crate's size tuning without
+# changing release-profile behavior for `monad-rs`/`monad-core`.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = true
