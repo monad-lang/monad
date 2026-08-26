@@ -180,10 +180,24 @@ def run_check_loop (base : PreludeInitBase) (cache : ModuleScopeCache) (files : 
             // this same run instead of re-reading/re-parsing/re-scope-
             // building it from scratch -- the direct measure of the
             // redundant-reload cost this cache eliminates.
+            //
+            // CURRENTLY ALWAYS 0/0 (confirmed 2026-08-25): `check_file_
+            // cached` (lang/module.mo) accepts `base : PreludeInitBase` /
+            // `cache : ModuleScopeCache` but routes through `elaborate_
+            // loaded_modules` instead, which has no `base`/`cache`
+            // parameters at all -- it re-walks/re-parses/re-promotes the
+            // full dependency graph from scratch on every call (a real
+            // O(N*D) perf regression for a multi-file `check`, since the
+            // caching architecture this counter was built to report on
+            // is no longer actually consulted by the real pipeline; see
+            // `bootstrapping/self-hosted-compiler-review.md`'s 2026-08-25
+            // refresh). Kept printing (rather than silently removed) so
+            // the moment caching is restored, this starts reporting real
+            // numbers again with no further wiring needed.
             if verbose then
                 match cache {
                     ModuleScopeCache.mk _ hits misses =>
-                        println ("module scope cache: " ++ I64.to_string hits ++ " hit(s), " ++ I64.to_string misses ++ " miss(es)")
+                        println ("module scope cache: " ++ I64.to_string hits ++ " hit(s), " ++ I64.to_string misses ++ " miss(es) (NOTE: cache is not currently threaded through elaborate_loaded_modules -- always 0/0 today, see doc comment above)")
                 }
             else do { return unit };
             return (if I64.gt errors 0 then 1 else 0)

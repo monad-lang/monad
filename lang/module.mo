@@ -1160,24 +1160,19 @@ def locals_with_inductive_params ({ params, .. } : Inductive) (scope : Scope) (l
 // confirmed via a scratch file matching a struct's `mk` pattern without
 // any literal syntax, which resolves and checks cleanly now.
 //
-// STILL OPEN: bare Forall-bound type-PARAMETER names (`A`/`B`/`C` —
-// implicit/universal type variables, e.g. `init/id.mo`'s `def Id.run (a
-// : Id A) : A := ...`, confirmed still failing with `unknown variable
-// 'A'`) are a separate, harder gap — `A` is never a global scope name
-// OR an inductive; it only exists as a `Forall`-bound name in the def's
-// own (separately elaborated) `typ` field, and nothing in this
-// `type_check body Term.hole scope empty_local_types locals` call ever
-// walks `df`'s `typ` to skolemize its Forall binders into `locals`
-// before checking `body`. Needs real design work (walk the elaborated
-// `typ`'s `Forall` chain and push each bound name into `locals` as a
-// `Term.type_ 0`-typed `LocalVar` before checking the body — or thread
-// the declared `typ` through as `expected_type` instead of `Term.hole`
-// and let `type_check_lam`'s Pi-branch handle it), not a small patch
-// like the fix above — tracked as a follow-up, not fixed here.
-// `check`'s *parse* phase (strict, via `try_parse_decls_strict`) is
-// unaffected either way and is where most everyday syntax-error bugs
-// actually get caught; the type-check phase is only as complete as
-// `lang.typecheck.infer` currently is.
+// FIXED (2026-08-25 review refresh, was "STILL OPEN" above): bare
+// Forall-bound type-PARAMETER names (`A`/`B`/`C` — implicit/universal
+// type variables, e.g. `init/id.mo`'s `def Id.run (a : Id A) : A :=
+// ...`, which used to fail with `unknown variable 'A'`) are now
+// resolved. `locals_with_def_typevars` (above, mirroring `locals_with_
+// class_typevars`/`locals_with_inductive_params`'s identical role for
+// class/inductive params) walks the def's own elaborated `typ`'s
+// `Forall` chain via `forall_chain_binder_names` and pushes each bound
+// name into `locals` as a skolem local before `body` is checked — wired
+// into `check_def_with_scope`/`elaborate_def_with_scope` below. The
+// literal `Id.run` example from this comment's own prior text now
+// type-checks. `check`'s *parse* phase (strict, via `try_parse_decls_
+// strict`) was and remains unaffected either way.
 
 /// Wider coverage than `typecheck_decl_with_scope`'s `def_d`/
 /// `inductive_d`-only: also checks `struct_d` (each field's type
@@ -1193,11 +1188,10 @@ def locals_with_inductive_params ({ params, .. } : Inductive) (scope : Scope) (l
 ///
 /// Note: class method signatures routinely reference the class's own
 /// implicit type parameter (e.g. `class Show A { def show (a : A) :
-/// String }`'s `A`) — the same still-open Forall-bound-type-parameter
-/// gap documented above (`check_def_with_scope`'s `unknown_var 'A'`
-/// case) applies here too, so most classes are expected to report an
-/// error for that same, already-tracked reason until that gap closes,
-/// not a new one introduced by checking classes at all.
+/// String }`'s `A`) — `check_class_with_scope` below skolemizes it via
+/// `locals_with_class_typevars` (mirroring `check_def_with_scope`'s own
+/// `locals_with_def_typevars` fix for the equivalent def-level gap, both
+/// documented above), so this no longer reports `unknown_var 'A'`.
 ///
 /// `verbose` threads a per-declaration progress trace (which def/type/
 /// constructor is currently being checked) down through every level —
