@@ -2274,6 +2274,27 @@ def test_dict_resolution_d4_concrete_instance_resolves : IO Bool := do {
     return (match diags { List.empty => true, List.cons _ _ => false })
 }
 
+/// D5: a class-method call FORWARDED through an already-bound dict
+/// parameter (a constrained def's own body, `def speak_twice [Speak A]
+/// (a : A) : String := Speak.say a`) resolves cleanly, rather than the
+/// `unknown variable 'bound_var'` this used to report -- proves
+/// `resolve_class_method`'s `local_dict_for_class` branch now calls
+/// `build_dict_field_projection_checked` (the checker-facing sibling),
+/// not the raw codegen-only `build_dict_field_projection`. This is the
+/// exact shape a bridging instance's own promoted method body has
+/// (`instance [HAdd A A A] Add A { def add a b := HAdd.add a b }`),
+/// which was the concrete self-compile blocker this fix targets.
+#[test]
+def test_dict_resolution_d5_forwarding_resolves : IO Bool := do {
+    let src : String :=
+        "class Speak A { def say (a : A) : String }\n" ++
+        "type Dog { woof }\n" ++
+        "instance Speak Dog { def say (a : Dog) : String := \"woof\" }\n" ++
+        "def speak_twice [Speak A] (a : A) : String := Speak.say a";
+    let diags <- check_synthetic_source src;
+    return (match diags { List.empty => true, List.cons _ _ => false })
+}
+
 /// Stage 3's own load-bearing proof: `elaborate_module_decls`'s output
 /// for `greet`'s body actually CONTAINS the resolved concrete reference
 /// (`Speak_Dog_say`), not just "checks clean" -- codegen must consume
@@ -2320,37 +2341,38 @@ def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
             }) || decl_list_has_greet_calling_speak_dog_say rest,
     }
 
-// Two more cross-check cases were tried here and pulled pending
-// follow-up (both discovered live via a direct `cargo run -- run
-// <fixture>.mo` debug script, not asserted as passing tests, to avoid
-// landing red tests):
+// One more cross-check case was tried here and pulled pending follow-up
+// (discovered live via a direct `cargo run -- run <fixture>.mo` debug
+// script, not asserted as a passing test, to avoid landing a red test):
 //
-// 1. "No matching instance is an error": `Speak.say` on a carrier with
-//    NO matching instance (`Cat`, deliberately given none) currently
-//    type-checks with ZERO diagnostics instead of failing. Traced to
-//    `type_check_free_var`'s existing abstract-signature fallback (the
-//    `err _ => ok (mk_typed (Term.var sentinel dbg) sig)` arm, unchanged
-//    by this rewrite) -- `Speak.say`'s abstract `A -> String` apparently
-//    unifies against ANY argument type rather than rejecting a rigid
-//    mismatch. Confirmed pre-existing, not a regression: `resolve_class_
-//    method` never succeeded at all before this rewrite (see Finding 1,
-//    `bootstrapping/unify-check-compile-test-elaboration.md`), so EVERY
-//    class-method call always hit this exact fallback previously too --
-//    this rewrite only changes when/whether real resolution succeeds,
-//    not this fallback's own (pre-existing, separately-scoped) leniency.
+// "No matching instance is an error": `Speak.say` on a carrier with
+// NO matching instance (`Cat`, deliberately given none) currently
+// type-checks with ZERO diagnostics instead of failing. Traced to
+// `type_check_free_var`'s existing abstract-signature fallback (the
+// `err _ => ok (mk_typed (Term.var sentinel dbg) sig)` arm, unchanged
+// by this rewrite) -- `Speak.say`'s abstract `A -> String` apparently
+// unifies against ANY argument type rather than rejecting a rigid
+// mismatch. Confirmed pre-existing, not a regression: `resolve_class_
+// method` never succeeded at all before this rewrite (see Finding 1,
+// `bootstrapping/unify-check-compile-test-elaboration.md`), so EVERY
+// class-method call always hit this exact fallback previously too --
+// this rewrite only changes when/whether real resolution succeeds,
+// not this fallback's own (pre-existing, separately-scoped) leniency.
 //
-// 2. D5 (a constrained def's own body forwarding its already-bound dict
-//    parameter, e.g. `def speak_twice [Speak A] (a : A) : String :=
-///   Speak.say a`) currently fails with `unknown variable 'bound_var'`.
-//    `local_dict_for_class`'s own lookup succeeds (confirmed via the
-//    debug script), but `build_dict_field_projection`'s returned term
-//    doesn't re-typecheck cleanly -- that helper (`lang.scope`) was built
-//    for the OLD codegen-only consumer, which lowers it straight to LLVM
-//    without ever running it back through the bidirectional checker;
-//    reusing it here for a type-checker-facing result may need its own,
-//    separate fix (or a parallel, checker-facing D5 term shape) rather
-//    than a straight reuse. D4 (the common case, tested above) is
-//    unaffected and confirmed working.
+// D5 (a constrained def's own body forwarding its already-bound dict
+// parameter, e.g. `def speak_twice [Speak A] (a : A) : String :=
+// Speak.say a`) used to fail with `unknown variable 'bound_var'` --
+// `local_dict_for_class`'s own lookup succeeded, but `build_dict_field_
+// projection`'s returned term didn't re-typecheck cleanly, since that
+// helper was built for the OLD codegen-only consumer (raw de-Bruijn
+// index `0`, never meant to be re-run through the bidirectional
+// checker). FIXED (2026-08-25): `lang.scope`'s `build_dict_field_
+// projection_checked` sibling produces the same shape using the
+// checker's real by-name free-variable convention instead, wired into
+// `resolve_class_method`'s D5 branch ONLY -- the original codegen-facing
+// `build_dict_field_projection` is untouched, since codegen's own
+// consumer of it depends on the index-`0` shape and is confirmed
+// working. See `test_dict_resolution_d5_forwarding_resolves` below.
 
 /// End-to-end proof `elaborate_loaded_modules` actually resolves a file
 /// with ZERO `use` decls (`std/test.mo`'s own `Test.assert`, whose body

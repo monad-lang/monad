@@ -9,7 +9,7 @@ use lang.types {
   unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
 use lang.scope {
-  DictBinding, build_dict_field_projection, build_scope_def,
+  DictBinding, build_dict_field_projection_checked, build_scope_def,
   dict_binding_class_of, dict_param_name, find_constructor_in_inductive,
   find_matching_instance, inductive_has_constructor, list_append,
   mangle_instance_method_name, mangled_to_identifier, rebuild_call,
@@ -265,7 +265,15 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
         Option.some cls =>
             match local_dict_for_class class_name locals {
                 Option.some dict_id =>
-                    let term := build_dict_field_projection cls dict_id method_name List.empty in
+                    // `_checked` sibling, not `build_dict_field_projection`
+                    // itself -- this result gets re-typechecked (this
+                    // resolution happens while `elaborate_loaded_modules`'
+                    // rewritten decls are later re-checked by `check_
+                    // module_with_scope`), so it needs the checker's
+                    // by-name free-var convention, not codegen's raw
+                    // de-Bruijn-index-0 one. See both functions' own doc
+                    // comments (`lang/scope.mo`) for the full D5 story.
+                    let term := build_dict_field_projection_checked cls dict_id method_name List.empty in
                     ok (mk_typed term expected_type),
                 Option.none =>
                     match carrier_from_expected_type expected_type {
