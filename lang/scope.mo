@@ -1569,7 +1569,25 @@ def build_dict_fields (cls_name : ModulePath) (ins_args : List Term) (defs : Lis
                         Option.none => Option.none,
                         Option.some rest_terms =>
                             let mangled := mangle_instance_method_name cls_name ins_args mname in
-                            let method_ref := Term.var 0 (DebugName.named (mangled_to_identifier mangled)) in
+                            // Sentinel (`-1`), not `Term.var 0` -- `mangled`
+                            // is always a globally-unique mangled name,
+                            // NEVER a real local binding at whatever depth
+                            // this dict VALUE's own field ends up embedded
+                            // at, so this must use the checker/evaluator's
+                            // real free-variable convention (see
+                            // `build_dict_field_projection_checked`'s own
+                            // doc comment for the general rule this
+                            // follows) -- confirmed load-bearing via direct
+                            // repro: `lang/lower_core_ir.mo`'s own de-Bruijn-
+                            // index-driven lowering (unlike codegen's NAME-
+                            // driven `compile_db_term_ir`, which tolerates
+                            // any index for a `DebugName.named` var) reads
+                            // `Term.var 0` here as "the innermost real
+                            // local," not a global reference, whenever this
+                            // dict value's own body is lowered by
+                            // `reflect_type_info!`'s meta-eval
+                            // (`lang/typecheck/meta_eval.mo`).
+                            let method_ref := Term.var (0 - 1) (DebugName.named (mangled_to_identifier mangled)) in
                             Option.some (List.cons method_ref rest_terms),
                     },
             },
@@ -2464,7 +2482,12 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                         Option.some ins =>
                             match ins {
                                 Instance.mk _ _ _ ins_args _ _ _ =>
-                                    Option.some (Term.var 0 (DebugName.named (mangled_to_identifier (mangle_instance_dict_name cls_name ins_args)))),
+                                    // Sentinel, not `Term.var 0` -- a
+                                    // mangled dict-VALUE name is never a
+                                    // real local either; see
+                                    // `build_dict_fields`'s own doc comment
+                                    // just above for the full rationale.
+                                    Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name cls_name ins_args)))),
                             },
                         Option.none => Option.none,
                     },
@@ -2618,6 +2641,30 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                         _ => rebuild_call (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier head) resolved_args,
                     },
             },
+        // A NULLARY class method reference (e.g. `FromListLiteral.empty`,
+        // `MakeEmpty.empty`) is a bare `Term.var`, never wrapped in a
+        // `Term.app` -- the `Term.app` arm above is the ONLY place this
+        // function otherwise ever recognizes a class-method call, so
+        // without this arm a zero-arg method call is silently never even
+        // CONSIDERED for resolution (falls straight into the generic
+        // `term_map_children` no-op below, which has no children to
+        // recurse into for a `Term.var` anyway). Confirmed load-bearing
+        // via direct repro: `std/derive.mo`'s `lens_getter`'s own list-
+        // literal-desugared `FromListLiteral.empty` (`lang/parser.mo`'s
+        // list-literal grammar) hits exactly this gap.
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match class_method_ref classes id {
+                        Option.some ref =>
+                            match ref {
+                                ClassMethodRef.mk cls method_name =>
+                                    resolve_class_method_call classes instances dict_env def_types cls method_name List.empty t List.empty def_carrier,
+                            },
+                        Option.none => t,
+                    },
+                DebugName.unnamed => t,
+            },
         _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier) t,
     }
 
@@ -2689,9 +2736,54 @@ def resolve_class_method_call_d4_from_args (classes : List Class) (instances : L
             if modpath_eq cls_name monad_class_name then
                 match def_carrier {
                     Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
-                    Option.none => rebuild_call orig_head resolved_args,
+                    Option.none => resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args,
                 }
-            else rebuild_call orig_head resolved_args,
+            else resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args,
+    }
+
+/// Last-resort fallback once neither the call's own args nor (for
+/// `Monad`) the enclosing def's declared return type reveal a carrier:
+/// the class's own DECLARED DEFAULT type param, if it has one (e.g.
+/// `class FromListLiteral (L : Type -> Type := List)` -- `[x, y]`'s
+/// desugared `FromListLiteral.cons`/`.empty`, `lang/parser.mo`, has NO
+/// carrier-revealing arg of its own: `.empty` has no args at all, and
+/// `.cons`'s own element arg says nothing about which COLLECTION type
+/// it's being built into). Unlike the `Monad`+`def_carrier` fallback
+/// above (an explicit "guessing the enclosing function's own return
+/// type is NOT sound in general" tradeoff, restricted to `Monad`
+/// specifically), a class's OWN declared default is author-specified,
+/// sound BY CONSTRUCTION for every class that declares one -- not a
+/// guess. Confirmed load-bearing via direct repro: `std/derive.mo`'s
+/// `lens_getter`'s own `[match_arm ...]` (a list literal passed
+/// straight as a CONSTRUCTOR argument, `Expr.e_match`'s own `arms`
+/// param -- no local var/let-binding's declared type to lean on)
+/// otherwise left `FromListLiteral.cons`/`.empty` permanently
+/// unresolved, unlike every list literal that DOES sit in a directly
+/// type-annotated position.
+#[partial]
+def resolve_class_method_call_d4_default_carrier (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) : Term :=
+    match find_class_by_name classes cls_name {
+        Option.none => rebuild_call orig_head resolved_args,
+        Option.some cls =>
+            match class_default_carrier cls {
+                Option.none => rebuild_call orig_head resolved_args,
+                Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
+            },
+    }
+
+/// A class's own first declared type param's default value, if any
+/// (e.g. `L` in `class FromListLiteral (L : Type -> Type := List)`,
+/// `Param.default`). Only ever consulted as the LAST-resort fallback
+/// above.
+def class_default_carrier (cls : Class) : Option Term :=
+    match cls {
+        Class.mk _name params _constraints _methods _vis => first_param_default params,
+    }
+
+def first_param_default (params : List Param) : Option Term :=
+    match params {
+        List.empty => Option.none,
+        List.cons p _rest => match p { Param.mk _name _typ _mult default_ _attrs => default_ },
     }
 
 #[partial]
@@ -2718,7 +2810,12 @@ def resolve_class_method_call_with_dict_args (classes : List Class) (instances :
         Option.none => rebuild_call orig_head resolved_args,
         Option.some dict_args =>
             let mangled := mangle_instance_method_name cls_name ins_args method_name in
-            let method_fn_ref := Term.var 0 (DebugName.named (mangled_to_identifier mangled)) in
+            // Sentinel, not `Term.var 0` -- same rationale as
+            // `build_dict_fields`'s own mangled-method reference just
+            // above: a mangled instance-method name is never a real
+            // local, at any depth this D4-resolved call ends up embedded
+            // at.
+            let method_fn_ref := Term.var (0 - 1) (DebugName.named (mangled_to_identifier mangled)) in
             rebuild_call method_fn_ref (List.append dict_args resolved_args),
     }
 

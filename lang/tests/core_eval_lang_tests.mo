@@ -2,7 +2,7 @@ use lang.core_eval {basic_native_table, eval}
 use lang.core_ir {CoreIr, IrLit}
 use lang.core_value {GlobalTable, Value, global_cache_new, global_table_len}
 use lang.lower_core_ir {LowerCtx, lower_ctx_from_decls, lower_root}
-use lang.types {DebugName, ModulePath, Term}
+use lang.types {AttrArg, Attribute, DebugName, ModulePath, Term}
 
 /// End-to-end tests: real checked `Term` -> `LowerCtx` (built via
 /// `lang.lower_core_ir.lower_ctx_from_decls`, which itself calls
@@ -214,3 +214,131 @@ def if_test_decls : List Decl := [bool_decl, def_decl "main" if_main_term]
 #[test]
 def test_if_end_to_end : Bool :=
   opt_value_num_is (lower_and_run (build_ctx if_test_decls) "main") 100
+
+// ─── Test 4: a point-free (unapplied) constructor reference ────────────
+// `lang/lower_core_ir.mo`'s `lower_free_var_fallback` -- a nullary
+// constructor referenced as a bare VALUE (never applied at this
+// occurrence, e.g. `List.empty` used directly as a function's own
+// return value) has no `scope_resolve_name` def-name entry, only a
+// `scope_find_inductive` constructor-table one. Mirrors the exact shape
+// `reflect_type_info!`'s meta-eval hits constantly (every real
+// `List`-processing stdlib function's own empty-case body).
+
+def mylist_path : ModulePath := mp1 "MyList"
+def mynil_ctor : InductConstructor := InductConstructor.mk (mp1 "mynil") List.empty Term.hole
+def hd_param : Param := Param.mk (Identifier.id "hd") Term.hole Multiplicity.many Option.none List.empty
+def tl_param : Param := Param.mk (Identifier.id "tl") Term.hole Multiplicity.many Option.none List.empty
+
+def mycons_ctor : InductConstructor :=
+  InductConstructor.mk (mp1 "mycons") [hd_param, tl_param] Term.hole
+
+def mylist_decl : Decl :=
+  Decl.inductive_d (Inductive.mk mylist_path List.empty Term.hole [mynil_ctor, mycons_ctor] List.empty Visibility.package_private)
+
+/// `def empty_case (n : I64) : MyList := MyList.mynil` -- ignores its
+/// own arg entirely and returns the bare, unapplied nullary
+/// constructor -- exactly the shape a `List.map`/`List.filter`-style
+/// function's own empty-input case takes.
+def empty_case_term : Term :=
+  Term.lam (named "n") Term.hole (free_var "MyList.mynil")
+
+def point_free_ctor_test_decls : List Decl :=
+  [mylist_decl, def_decl "empty_case" empty_case_term, def_decl "main" (Term.app (free_var "empty_case") (num 0))]
+
+#[test]
+def test_point_free_nullary_constructor_reference_end_to_end : Bool :=
+  match lower_and_run (build_ctx point_free_ctor_test_decls) "main" {
+    Option.some v => is_con_with_tag_and_arity v 0 0,
+    Option.none => false,
+  }
+
+def is_con_with_tag_and_arity (v : Value) (expected_tag : I64) (expected_arity : I64) : Bool :=
+  match v {
+    Value.v_con tag args => I64.beq tag expected_tag && I64.beq (List.length args) expected_arity,
+    _ => false,
+  }
+
+// ─── Test 5: a native-attributed stub def referenced as a free var ────
+// `lang/lower_core_ir.mo`'s `lower_one_global` -- `#[native i64_add]
+// def add_native (a b : I64) : I64` (no `:=` body at all -- mirrors
+// EVERY real native stdlib def, e.g. `init/string.mo`'s own
+// `#[native string_concat] def String.concat (a b : String) : String`)
+// parses to `.term = lam a (lam b Term.hole)`; calling it must resolve
+// via `GlobalDef.gd_native`, not try (and fail) to lower that
+// placeholder `Term.hole` as an ordinary body.
+
+def native_attr : List Attribute := [Attribute.mk (Identifier.id "native") [AttrArg.ident (Identifier.id "i64_add")]]
+
+def add_native_term : Term := Term.lam (named "a") Term.hole (Term.lam (named "b") Term.hole Term.hole)
+def add_native_decl : Decl := Decl.def_d (Def.mk (mp1 "add_native") Term.hole add_native_term List.empty native_attr Visibility.package_private)
+
+def native_stub_main_term : Term :=
+  // add_native 3 4 -- should reduce to 7 via the SAME i64_add native
+  // `add_one_term`'s own hand-lowered `Term.ntv` uses directly.
+  Term.app (Term.app (free_var "add_native") (num 3)) (num 4)
+
+def native_stub_test_decls : List Decl :=
+  [add_native_decl, def_decl "main" native_stub_main_term]
+
+#[test]
+def test_native_attributed_stub_def_referenced_as_free_var_end_to_end : Bool :=
+  opt_value_num_is (lower_and_run (build_ctx native_stub_test_decls) "main") 7
+
+// ─── Test 6: a BARE (`open`-aliased) constructor reference used as a ───
+// global -- `lang/lower_core_ir.mo`'s `lower_one_global` own new
+// fallback. Different from Test 4: `open MyList {mynil}` makes bare
+// "mynil" (no "MyList." qualifier at all) resolve SUCCESSFULLY via
+// `scope_resolve_name` (unlike Test 4's "MyList.mynil", which fails
+// outright and goes through `lower_free_var`'s OWN fallback instead) --
+// but the resolved path still has no ordinary `Def`, so it's
+// `lower_one_global` (reached once `process_pending`'s worklist tries
+// to lower the INTERNED global's own body), not `lower_free_var`, that
+// has to fall back to constructor-owner lookup. Mirrors the exact
+// shape `std/derive.mo`'s `open Decl {d_def, d_instance}` hits.
+
+def open_mynil_decl : Decl := Decl.open_d mylist_path (OpenFilter.open_only [Identifier.id "mynil"])
+
+def bare_ctor_global_test_decls : List Decl :=
+  [mylist_decl, open_mynil_decl, def_decl "empty_case" (Term.lam (named "n") Term.hole (free_var "mynil")), def_decl "main" (Term.app (free_var "empty_case") (num 0))]
+
+#[test]
+def test_bare_open_aliased_constructor_reference_as_global_end_to_end : Bool :=
+  match lower_and_run (build_ctx bare_ctor_global_test_decls) "main" {
+    Option.some v => is_con_with_tag_and_arity v 0 0,
+    Option.none => false,
+  }
+
+// ─── Test 7: a 3-field constructor match, extracting the MIDDLE field ──
+// Every existing fixture above only matches 0-2-field constructors --
+// `init/meta.mo`'s `field_info (name) (typ) (attrs)` (3 fields) is the
+// first real 3+-field constructor match this evaluator has been
+// exercised against. Isolates whether multi-field binder-index
+// assignment is correct in general (independent of
+// `reflect_type_info!`'s own much larger call graph).
+
+def triple_path : ModulePath := mp1 "Triple"
+def a_param : Param := Param.mk (Identifier.id "a") Term.hole Multiplicity.many Option.none List.empty
+def b_param : Param := Param.mk (Identifier.id "b") Term.hole Multiplicity.many Option.none List.empty
+def c_param : Param := Param.mk (Identifier.id "c") Term.hole Multiplicity.many Option.none List.empty
+def triple_ctor : InductConstructor := InductConstructor.mk (mp1 "triple_mk") [a_param, b_param, c_param] Term.hole
+def triple_decl : Decl := Decl.inductive_d (Inductive.mk triple_path List.empty Term.hole [triple_ctor] List.empty Visibility.package_private)
+
+def triple_con (x y z : Term) : Term :=
+  Term.con (Con.mk (Identifier.id "triple_mk") triple_path 3 [Option.some x, Option.some y, Option.some z])
+
+/// `def get_b (t : Triple) : I64 := match t { triple_mk a b c => b }`
+def get_b_term : Term :=
+  Term.lam (named "t") Term.hole
+    (Term.lit (Literal.match_
+      (Term.var 0 (named "t"))
+      [MatchCase.mc (Identifier.id "triple_mk") [Identifier.id "a", Identifier.id "b", Identifier.id "c"] (Term.var 1 (named "b")) Option.none]))
+
+def get_b_main_term : Term :=
+  Term.app (free_var "get_b") (triple_con (num 10) (num 20) (num 30))
+
+def three_field_test_decls : List Decl :=
+  [triple_decl, def_decl "get_b" get_b_term, def_decl "main" get_b_main_term]
+
+#[test]
+def test_three_field_constructor_match_extracts_middle_field : Bool :=
+  opt_value_num_is (lower_and_run (build_ctx three_field_test_decls) "main") 20

@@ -3,13 +3,14 @@ use lang.core_ir {CoreIr, IrLit, MatchArm}
 use lang.core_value {GlobalDef, GlobalTable, NativeTable}
 use lang.scope {
   build_scope_from_decls, modpath_eq, scope_data_empty, scope_find_inductive,
-  scope_globals, scope_resolve_name,
+  scope_find_inductive_by_constructor, scope_globals, scope_resolve_name,
 }
 use lang.types {
-  Con, Decl, Def, DebugName, Identifier, Inductive, InductConstructor, Literal,
-  MatchCase, ModulePath, Native, Scope, ScopeDef, Term,
+  AttrArg, Attribute, Con, Decl, Def, DebugName, Identifier, Inductive,
+  InductConstructor, Literal, MatchCase, ModulePath, Native, Scope, ScopeDef,
+  Term, id_eq,
 }
-use lang.typecheck.infer {empty_locals}
+use lang.typecheck.infer {empty_locals, last_dotted_segment}
 
 /// Lowers Monad's checked, de-Bruijn `Term` (`lang/types.mo`) to
 /// `CoreIr` (`lang/core_ir.mo`), mirroring `core/src/lower_core_ir.rs`
@@ -104,6 +105,22 @@ def find_def_body (defs : List Def) (path : ModulePath) : Option Term :=
       },
   }
 
+/// The whole `Def` (not just its `.term`) -- `lower_one_global` needs
+/// `.attrs` too, to detect a `#[native ...]` stub (see its own doc
+/// comment).
+#[partial]
+def find_def (defs : List Def) (path : ModulePath) : Option Def :=
+  match defs {
+    List.empty => Option.none,
+    List.cons d rest =>
+      match d {
+        Def.mk name _typ _term _constraints _attrs _vis =>
+          if modpath_eq name path
+          then Option.some d
+          else find_def rest path,
+      },
+  }
+
 type LowerError {
   le_unresolved_name (name: Identifier),
   le_unresolved_module_path (path: ModulePath),
@@ -117,6 +134,13 @@ type LowerError {
   /// A constructor's `args : List (Option Term)` had a hole before a
   /// filled slot -- see this module's own doc comment.
   le_con_hole_before_filled_arg,
+  /// `inner` occurred while lowering `path`'s own body -- wrapped by
+  /// `lower_one_global`/`lower_root` so a failure deep in a large
+  /// whole-graph worklist (e.g. `reflect_type_info!`'s meta-eval,
+  /// `lang/typecheck/meta_eval.mo`, reaching hundreds of transitively
+  /// referenced stdlib defs) still names which specific def it was in,
+  /// not just the underlying error kind.
+  le_in_def (path: ModulePath) (inner: LowerError),
 }
 
 /// Accumulates whole-program global discovery + lowering. See this
@@ -192,10 +216,102 @@ def lower_free_var (ctx : LowerCtx) (dbg : DebugName) (acc : LowerAcc) : Pair (R
     DebugName.named id =>
       match scope_resolve_name (NameRef.nid id) (ctx_scope ctx) empty_locals {
         Result.ok sdef => lower_resolved_name sdef acc,
-        Result.err _ => lower_err (LowerError.le_unresolved_name id) acc,
+        Result.err _ => lower_free_var_fallback ctx id acc,
       },
     DebugName.unnamed => lower_err (LowerError.le_unresolved_name (Identifier.id "<unnamed>")) acc,
   }
+
+/// `scope_resolve_name`'s ordinary def-name lookup only ever finds
+/// `ScopeData.def_refs` entries -- a constructor referenced POINT-FREE
+/// (as a bare value, never applied at this occurrence -- e.g.
+/// `List.empty` used directly as a function's own return value, the
+/// base case of countless real `List`-processing functions this
+/// module's own reflect_type_info!-evaluation callers transitively
+/// reach, or a `Decl`-constructor name like `d_def` brought into scope
+/// bare via `open Decl {d_def, d_instance}`, `std/derive.mo`) has no
+/// such entry; only a constructor-table lookup knows about it. This is
+/// the documented gap this file's own doc comment flags ("point-free
+/// constructor/native references... not specially resolved") -- the
+/// checker's own `type_check_free_var_con` (`lang/typecheck/infer.mo`)
+/// already has an equivalent fallback (via the same `last_dotted_segment`
+/// + whole-scope constructor-owner search, `scope_find_inductive_by_
+/// constructor`, reused here) for exactly this reason -- confirmed
+/// directly: it's the SAME mechanism for both a DOTTED qualified name
+/// ("List.empty" -> bare "empty") and a BARE alias-opened one ("d_def"
+/// unchanged, `last_dotted_segment` is a no-op with no "." present) --
+/// which is why ordinary type-checking already accepts either shape
+/// even though the CHECKED `Term` itself stays a plain `Term.var`,
+/// never rewritten to `Term.con` -- this lowering pass has to
+/// replicate that same fallback, not just rely on the checker having
+/// approved it. Native point-free references are NOT handled here (no
+/// concrete corpus need found; every native this evaluator's natives
+/// table covers is always called fully applied) -- falls through to
+/// the ordinary `le_unresolved_name` error, unchanged, if the
+/// constructor-owner search doesn't find a match either.
+def lower_free_var_fallback (ctx : LowerCtx) (id : Identifier) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
+  match lower_point_free_ctor ctx (identifier_bare_ctor_name id) {
+    Option.some ir => lower_ok ir acc,
+    Option.none => lower_err (LowerError.le_unresolved_name id) acc,
+  }
+
+def identifier_bare_ctor_name (id : Identifier) : String :=
+  match id { Identifier.id s => last_dotted_segment s }
+
+def module_path_last_segment (path : ModulePath) : String :=
+  identifier_bare_ctor_name (single_segment_path_head path)
+
+/// The named constructor's own (tag, arity), searched by BARE name
+/// alone across every inductive in scope (same "if ambiguous, first
+/// match wins" tradeoff this file's own `find_case_inductive`/
+/// `find_inductive_by_case_name` already makes for ordinary match-arm
+/// resolution) -- shared by both `lower_point_free_ctor` (a free-
+/// variable OCCURRENCE, needs a `CoreIr`) and `lower_one_global` (a
+/// GLOBAL SLOT with no ordinary `Def`, needs a `GlobalDef`).
+def find_ctor_tag_arity (ctx : LowerCtx) (bare_name : String) : Option (Pair I64 I64) :=
+  let con_mp : ModulePath := single_segment_path (Identifier.id bare_name) in
+  match scope_find_inductive_by_constructor con_mp (ctx_scope ctx) {
+    Option.none => Option.none,
+    Option.some ind =>
+      match ind {
+        Inductive.mk _ _ _ constructors _ _ =>
+          match find_ctor_tag constructors (Identifier.id bare_name) {
+            Option.none => Option.none,
+            Option.some tag =>
+              match find_ctor_arity constructors (Identifier.id bare_name) {
+                Option.none => Option.none,
+                Option.some arity => Option.some (Pair.pair tag arity),
+              },
+          },
+      },
+  }
+
+/// A bare (unapplied) `CoreIr.con tag arity []` for the named
+/// constructor -- `apply` (`lang/core_eval.mo`) already fills further
+/// args left-to-right onto a `v_con` regardless of how many were
+/// supplied at the `con` site itself, so an empty `args` list here is
+/// exactly the correct "constructor value, ready to be (partially)
+/// applied later" shape, matching `CoreIr.con`'s own doc comment.
+def lower_point_free_ctor (ctx : LowerCtx) (bare_name : String) : Option CoreIr :=
+  match find_ctor_tag_arity ctx bare_name {
+    Option.none => Option.none,
+    Option.some pr => match pr { Pair.pair tag arity => Option.some (CoreIr.con tag arity List.empty) },
+  }
+
+#[partial]
+def find_ctor_arity_from (i : I64) (ctors : List InductConstructor) (name : Identifier) : Option I64 :=
+  match ctors {
+    List.empty => Option.none,
+    List.cons ctor rest =>
+      if constructor_simple_name_eq ctor name
+      then Option.some (ctor_field_count ctor)
+      else find_ctor_arity_from (i + 1) rest name,
+  }
+
+def find_ctor_arity (ctors : List InductConstructor) (name : Identifier) : Option I64 :=
+  find_ctor_arity_from 0 ctors name
+
+def ctor_field_count (ctor : InductConstructor) : I64 :=
+  match ctor { InductConstructor.mk _ params _ => List.length params }
 
 // ─── if / match -> match_ ────────────────────────────────────────────
 
@@ -490,6 +606,9 @@ def native_id_for_name (name : Identifier) : Option I64 :=
       else if String.beq s "i64_mul" then Option.some 2
       else if String.beq s "i64_eq" then Option.some 3
       else if String.beq s "i64_lt" then Option.some 4
+      else if String.beq s "string_concat" then Option.some 5
+      else if String.beq s "string_eq" then Option.some 6
+      else if String.beq s "string_to_lowercase" then Option.some 7
       else Option.none,
   }
 
@@ -541,15 +660,94 @@ def push_done (acc : LowerAcc) (gd : GlobalDef) : LowerAcc :=
 /// matching Rust's `GlobalDef::Unresolved` fallback (see this module's
 /// doc comment on what's not attempted).
 #[partial]
+/// Whether `attrs` carries `#[native some_name]` and, if so, the bare
+/// native name -- mirrors real corpus source exactly (`init/string.mo`
+/// etc: `#[native string_concat]`, a single bare-identifier `AttrArg`,
+/// never a quoted string).
+#[partial]
+def find_native_attr_name (attrs : List Attribute) : Option String :=
+  match attrs {
+    List.empty => Option.none,
+    List.cons a rest =>
+      match a {
+        Attribute.mk name args =>
+          if id_eq name (Identifier.id "native")
+          then native_attr_arg_name args
+          else find_native_attr_name rest,
+      },
+  }
+
+def native_attr_arg_name (args : List AttrArg) : Option String :=
+  match args {
+    List.cons a _ =>
+      match a {
+        AttrArg.ident id => Option.some (identifier_text id),
+        _ => Option.none,
+      },
+    List.empty => Option.none,
+  }
+
+def identifier_text (id : Identifier) : String := match id { Identifier.id s => s }
+
+/// Number of leading `Term.lam` layers -- for a `#[native ...]` stub
+/// def, `.term` is always `lam p1 (lam p2 (... Term.hole))` (the
+/// parser's own `def_body_block_or_none` fallback, `lang/parser.mo`:
+/// still wraps every declared param in a real lambda even with no real
+/// body underneath), so this recovers the native's own arity from the
+/// term shape alone -- no separate param-count bookkeeping needed.
+#[partial]
+def lam_chain_arity (t : Term) : I64 :=
+  match t {
+    Term.lam _ _ body => 1 + lam_chain_arity body,
+    _ => 0,
+  }
+
+/// `path`'s own `Def` -- an ordinary body (`lower_term`), or, for a
+/// `#[native ...]` stub (a lambda chain wrapping a placeholder
+/// `Term.hole` innermost, never a real value-level body -- see this
+/// module's own doc comment on why `lower_term` alone can't handle
+/// this), `GlobalDef.gd_native` directly, exactly mirroring `GlobalDef`
+/// itself's own doc comment ("A native-attributed def with no explicit
+/// body -- resolves straight to a synthesized, empty `v_partial_ntv`").
+/// Without this, every native-attributed stdlib def (`String.concat`,
+/// `I64.add`, ...) referenced as an ordinary free variable -- not just
+/// hand-lowered via `Term.ntv` -- would always fail lowering with
+/// `le_type_level_term` the moment its own innermost `Term.hole` is
+/// reached.
 def lower_one_global (ctx : LowerCtx) (path : ModulePath) (acc : LowerAcc) : Result LowerError LowerAcc :=
-  match find_def_body (ctx_defs ctx) path {
-    Option.none => Result.ok (push_done acc (GlobalDef.gd_unresolved path)),
-    Option.some body =>
-      match lower_term ctx body acc {
-        Pair.pair r acc1 =>
-          match r {
-            Result.ok ir => Result.ok (push_done acc1 (GlobalDef.gd_def ir)),
-            Result.err e => Result.err e,
+  match find_def (ctx_defs ctx) path {
+    // Not an ordinary `Def` -- but `scope_resolve_name` already
+    // resolved SOME `ScopeDef` for this path to intern it as a global
+    // in the first place (see `lower_resolved_name`), which for a
+    // constructor referenced bare via an `open Decl {d_def, ...}`
+    // alias (`std/derive.mo`) succeeds even though no matching `Def`
+    // exists -- confirmed load-bearing via direct repro: forcing this
+    // slot at runtime previously hit `ce_unresolved_global` for
+    // exactly this shape. Try the SAME constructor-owner fallback
+    // `lower_free_var_fallback` uses before finally giving up.
+    Option.none =>
+      match find_ctor_tag_arity ctx (module_path_last_segment path) {
+        Option.some pr =>
+          match pr { Pair.pair tag arity => Result.ok (push_done acc (GlobalDef.gd_constructor tag arity)) },
+        Option.none => Result.ok (push_done acc (GlobalDef.gd_unresolved path)),
+      },
+    Option.some def_ =>
+      match def_ {
+        Def.mk _name _typ term _constraints attrs _vis =>
+          match find_native_attr_name attrs {
+            Option.some native_name =>
+              match native_id_for_name (Identifier.id native_name) {
+                Option.some nid => Result.ok (push_done acc (GlobalDef.gd_native nid (lam_chain_arity term))),
+                Option.none => Result.err (LowerError.le_in_def path (LowerError.le_unknown_native (Identifier.id native_name))),
+              },
+            Option.none =>
+              match lower_term ctx term acc {
+                Pair.pair r acc1 =>
+                  match r {
+                    Result.ok ir => Result.ok (push_done acc1 (GlobalDef.gd_def ir)),
+                    Result.err e => Result.err (LowerError.le_in_def path e),
+                  },
+              },
           },
       },
   }
@@ -693,6 +891,9 @@ def test_find_ctor_tag_unknown_is_none : Bool :=
 def test_native_id_for_name_known_and_unknown : Bool :=
   I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "i64_add"))) 0
     && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "i64_lt"))) 4
+    && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "string_concat"))) 5
+    && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "string_eq"))) 6
+    && I64.beq (Option.get_or_default (-1) (native_id_for_name (Identifier.id "string_to_lowercase"))) 7
     && match native_id_for_name (Identifier.id "not_a_native") {
       Option.none => true,
       Option.some _ => false,

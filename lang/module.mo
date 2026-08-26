@@ -6,19 +6,26 @@ use lang.elaborate {free_vars, names_of_decls, elaborate_def}
 use lang.types {
   Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
   LoadedModules, LocalScope, LocalVar, ModulePath, NameRef, Scope,
-  ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id,
+  ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id, id_eq,
   inductive_d, list_reverse, mk, mp, name, nid, to_name, union_ids, use_d,
 }
 use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
 use lang.pretty {show_term}
-use lang.typecheck.macro_queue {expand_decls}
+use lang.typecheck.macro_apply {expand_decl_gen_call}
+use lang.typecheck.macro_queue {DeclGenEntry, build_decl_gen_registry, expand_decls, lookup_decl_gen}
+use lang.typecheck.meta_eval {meta_eval_invoke}
+use lang.typecheck.meta_reflect {
+  build_type_info_value, collect_inductives, find_inductive_by_bare_name,
+  reify_decls_value_to_decls, term_free_var_name,
+}
 use lang.scope {
   add_constraint_dict_params_decls, alias_decls_in_scope, build_scope_from_decls,
   collect_infixes, constraint_vars, decls_have_aliasable_decls, list_append,
-  modpath_eq, param_names, promote_instance_defs, resolve_infix_decls,
-  scope_data_empty, scope_find_inductive, scope_push_local, scope_resolve_name,
+  modpath_eq, param_names, promote_instance_defs, resolve_class_calls_decls,
+  resolve_infix_decls, scope_data_empty, scope_find_inductive, scope_push_local,
+  scope_resolve_name,
 }
 use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, tt_term, type_check}
@@ -1990,6 +1997,155 @@ def elaborate_def_typs (decls : List Decl) (known_names : List Identifier) : Lis
             List.cons d_ (elaborate_def_typs rest known_names)
     }
 
+// --- Whole-graph macro/intrinsic expansion (`reflect_type_info!`) -----
+//
+// `lang/typecheck/macro_queue.mo`'s own per-file `expand_decls` (run at
+// parse time, `parse_all_decls`/`try_parse_decls_strict` below) has two
+// deliberate scope-narrowings that only a WHOLE-GRAPH pass can close:
+// a decl-gen template (`defmacro derive_lens T := decls {
+// reflect_type_info! T derive_lens_meta }`) invoked from a DIFFERENT,
+// later-loaded file (the norm for every real `std/derive.mo` derive)
+// has no registry entry in that OTHER file's own single-file pass; and
+// `reflect_type_info!` itself -- a genuine compiler INTRINSIC, not a
+// template substitution -- needs to actually EVALUATE the named
+// meta-`def` (`lang/typecheck/meta_eval.mo`), not just splice text.
+//
+// Two-step, both against a registry built from the WHOLE loaded graph:
+//   1. Cheap structural decl-gen substitution (`derive_lens! Point` ->
+//      `reflect_type_info! Point derive_lens_meta`) -- same
+//      `expand_decl_gen_call` template-substitution `expand_decls_go`
+//      itself already uses, just against a bigger registry.
+//   2. Only if step 1 leaves at least one `reflect_type_info!` call
+//      anywhere: build a "ready for real execution" decl list once
+//      (`elaborate_module_decls_best_effort` + `resolve_class_calls_decls`
+//      -- the SAME two-pass "resolve every class-method call to a
+//      concrete, directly-callable function" preparation
+//      `lang/codegen/test_driver.mo` already runs before compiling a
+//      test driver, needed here because `lang/lower_core_ir.mo`'s
+//      free-variable resolution has no concept of typeclass
+//      dictionaries) and actually evaluate + reify each call.
+// A no-op for the overwhelming majority of files (nothing to
+// substitute, no `reflect_type_info!` present) -- safe to run
+// unconditionally; the expensive step-2 preparation is skipped
+// entirely unless step 1 actually surfaces a `reflect_type_info!` call.
+//
+// Returns `Result.err` only for a genuine `reflect_type_info!` failure
+// (unknown `T`, a meta-def that itself errors, a `d_error` result) --
+// an unresolved/unknown macro name still passes through unchanged, the
+// same "not an error" rule `expand_decls_go` itself already follows.
+def is_reflect_type_info_call (d : Decl) : Bool :=
+    match d {
+        Decl.macro_call_d name _ => id_eq name (Identifier.id "reflect_type_info"),
+        _ => false,
+    }
+
+#[partial]
+def has_reflect_type_info_call (decls : List Decl) : Bool :=
+    match decls {
+        List.empty => false,
+        List.cons d rest => if is_reflect_type_info_call d then true else has_reflect_type_info_call rest,
+    }
+
+def decl_gen_subst_one (registry : List DeclGenEntry) (d : Decl) : List Decl :=
+    match d {
+        Decl.macro_call_d name args =>
+            match lookup_decl_gen registry name {
+                Option.some entry =>
+                    match entry {
+                        DeclGenEntry.dg_entry _ params gen_decls =>
+                            match expand_decl_gen_call params gen_decls args {
+                                Option.some expanded => expanded,
+                                Option.none => List.cons d List.empty,
+                            },
+                    },
+                Option.none => List.cons d List.empty,
+            },
+        _ => List.cons d List.empty,
+    }
+
+#[partial]
+def decl_gen_subst_decls (registry : List DeclGenEntry) (decls : List Decl) : List Decl :=
+    match decls {
+        List.empty => List.empty,
+        List.cons d rest => list_append (decl_gen_subst_one registry d) (decl_gen_subst_decls registry rest),
+    }
+
+/// One `reflect_type_info! T meta_def` call -> the meta-def's own
+/// reified output decls, via `lang.typecheck.meta_reflect`/
+/// `lang.typecheck.meta_eval`.
+def resolve_one_reflect_call (inds : List Inductive) (dispatched : List Decl) (d : Decl) : Result String (List Decl) :=
+    match d {
+        Decl.macro_call_d _name args =>
+            match args {
+                List.cons t_arg rest1 =>
+                    match rest1 {
+                        List.cons meta_ref _ =>
+                            match term_free_var_name t_arg {
+                                Option.none => Result.err "reflect_type_info!: T argument must be a plain type name",
+                                Option.some t_name =>
+                                    match find_inductive_by_bare_name inds t_name {
+                                        Option.none => Result.err ("reflect_type_info!: unknown type " ++ t_name),
+                                        Option.some ind =>
+                                            match term_free_var_name meta_ref {
+                                                Option.none => Result.err "reflect_type_info!: meta-def argument must be a plain name",
+                                                Option.some meta_name =>
+                                                    match build_type_info_value ind {
+                                                        Result.err e => Result.err e,
+                                                        Result.ok type_info_v =>
+                                                            match meta_eval_invoke dispatched (ModulePath.mp (List.cons (Identifier.id meta_name) List.empty)) type_info_v {
+                                                                Result.err e => Result.err e,
+                                                                Result.ok result_v => reify_decls_value_to_decls result_v,
+                                                            },
+                                                    },
+                                            },
+                                    },
+                            },
+                        List.empty => Result.err "reflect_type_info!: expected 2 arguments (T, meta_def)",
+                    },
+                List.empty => Result.err "reflect_type_info!: expected 2 arguments (T, meta_def)",
+            },
+        _ => Result.err "resolve_one_reflect_call: expected a reflect_type_info! macro_call_d",
+    }
+
+#[partial]
+def resolve_reflect_calls (inds : List Inductive) (dispatched : List Decl) (decls : List Decl) : Result String (List Decl) :=
+    match decls {
+        List.empty => Result.ok List.empty,
+        List.cons d rest =>
+            if is_reflect_type_info_call d then
+                match resolve_one_reflect_call inds dispatched d {
+                    Result.err e => Result.err e,
+                    Result.ok new_decls =>
+                        match resolve_reflect_calls inds dispatched rest {
+                            Result.err e => Result.err e,
+                            Result.ok rest_decls => Result.ok (list_append new_decls rest_decls),
+                        },
+                }
+            else
+                match resolve_reflect_calls inds dispatched rest {
+                    Result.err e => Result.err e,
+                    Result.ok rest_decls => Result.ok (List.cons d rest_decls),
+                },
+    }
+
+def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) : Result String (Pair (List Decl) (List Decl)) :=
+    let registry : List DeclGenEntry := build_decl_gen_registry whole_graph_decls in
+    let graph_subst : List Decl := decl_gen_subst_decls registry whole_graph_decls in
+    let target_subst : List Decl := decl_gen_subst_decls registry target in
+    if has_reflect_type_info_call graph_subst || has_reflect_type_info_call target_subst then
+        let inds : List Inductive := collect_inductives whole_graph_decls in
+        let empty_locs : LocalScope := { vars := List.empty, parent := Option.none } in
+        let dispatched : List Decl := resolve_class_calls_decls (elaborate_module_decls_best_effort scope whole_graph_decls empty_locs) in
+        match resolve_reflect_calls inds dispatched graph_subst {
+            Result.err e => Result.err e,
+            Result.ok graph_final =>
+                match resolve_reflect_calls inds dispatched target_subst {
+                    Result.err e => Result.err e,
+                    Result.ok target_final => Result.ok (Pair.pair graph_final target_final),
+                },
+        }
+    else Result.ok (Pair.pair graph_subst target_subst)
+
 /// THE canonical front-end pipeline: parse -> load the full transitive
 /// dependency graph (prelude/init always seeded, via `load_file_modules`)
 /// -> flatten -> resolve infixes -> promote instance methods to concrete
@@ -2059,9 +2215,22 @@ def elaborate_loaded_modules (file_path : String) (check_deps : Bool) : IO (Resu
             // type vars the parser deliberately dropped (e.g. `F` in
             // `def Lens [Functor F] {F : ...} ...`); `locals_with_def_typevars`
             // then skolemizes them from the resulting `Forall` chain.
-            let known_names : List Identifier := names_of_decls dict_paramed in
-            let target_decls : List Decl := elaborate_def_typs target_decls_pre known_names in
-            Result.ok { scope := scope, target_decls := target_decls, elaborated_decls := dict_paramed }
+            // Whole-graph macro/intrinsic expansion (`reflect_type_info!`)
+            // -- see `expand_decls_graph`'s own doc comment. A no-op for
+            // any file that never (transitively) invokes
+            // `reflect_type_info!`, so safe to run unconditionally.
+            match expand_decls_graph scope dict_paramed target_decls_pre {
+                Result.err e => Result.err e,
+                Result.ok expanded_pair =>
+                    match expanded_pair {
+                        Pair.pair dict_paramed2 target_decls_pre2 =>
+                            let scope_data2 : ScopeData := build_scope_from_decls target_mp dict_paramed2 in
+                            let scope2 : Scope := { module_id := target_mp, scope := scope_data2, parent := Option.none } in
+                            let known_names : List Identifier := names_of_decls dict_paramed2 in
+                            let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names in
+                            Result.ok { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2 }
+                    },
+            }
     }
 }
 
@@ -2330,6 +2499,52 @@ def test_elaborate_module_decls_rewrites_class_method_call : IO Bool := do {
         ParseResult.fail _ => do { return false },
     }
 }
+
+/// `resolve_class_calls_decls`'s own syntactic (Phase 4) resolution --
+/// unlike the test above (which goes through the real type-checker-
+/// driven `elaborate_module_decls`), this exercises the SYNTACTIC
+/// fallback directly, and specifically a class method call with NO
+/// carrier-revealing arg at all (`MakeEmpty.empty`, zero args -- the
+/// exact shape `std/derive.mo`'s `lens_getter`'s own list-literal-
+/// desugared `FromListLiteral.empty` call hits, confirmed via direct
+/// repro). Without a class-declared-default fallback
+/// (`resolve_class_method_call_d4_default_carrier`), this call is left
+/// permanently unresolved (`rebuild_call orig_head resolved_args`) --
+/// `MakeEmpty.empty` staying literally `MakeEmpty.empty` in the output,
+/// never becoming a real, directly-callable reference.
+#[test]
+def test_resolve_class_calls_decls_uses_class_declared_default_carrier : IO Bool := do {
+    let src : String :=
+        "class MakeEmpty (C : Type -> Type := MyBox) { def empty : C I64 }\n" ++
+        "type MyBox A { mk (a : A) }\n" ++
+        "instance MakeEmpty MyBox { def empty : MyBox I64 := MyBox.mk 0 }\n" ++
+        "def use_it : MyBox I64 := MakeEmpty.empty";
+    let result : ParseResult (List Decl) := parse_all_decls src;
+    return (match result {
+        ParseResult.success _ decl_list => do {
+            let infixes := collect_infixes decl_list;
+            let resolved := resolve_infix_decls infixes decl_list;
+            let promoted := promote_instance_defs resolved;
+            let dict_paramed := add_constraint_dict_params_decls promoted;
+            let dispatched := resolve_class_calls_decls dict_paramed;
+            decl_list_has_use_it_calling_makeempty_mybox_empty dispatched
+        },
+        ParseResult.fail _ => false,
+    })
+}
+
+#[partial]
+def decl_list_has_use_it_calling_makeempty_mybox_empty (ds : List Decl) : Bool :=
+    match ds {
+        List.empty => false,
+        List.cons d rest =>
+            (match d {
+                Decl.def_d df =>
+                    String.beq (module_path_to_string df.name) "use_it" &&
+                        String.contains (show_term df.term) "MakeEmpty_MyBox_empty",
+                _ => false,
+            }) || decl_list_has_use_it_calling_makeempty_mybox_empty rest,
+    }
 
 #[partial]
 def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=

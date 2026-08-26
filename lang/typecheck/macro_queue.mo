@@ -281,7 +281,18 @@ def expand_decls_go (lookup : Identifier -> Option Term) (decl_gen_registry : Li
                 // registry built once at `expand_decls`'s own entry;
                 // consumed, not part of the expanded output.
                 Decl.def_macro_d _ => expand_decls_go lookup decl_gen_registry rest,
-                Decl.decl_gen_d _ _ _ _ => expand_decls_go lookup decl_gen_registry rest,
+                // Retained in the output (unlike `def_macro_d` above) --
+                // a decl-gen template may never be invoked within its
+                // OWN file (e.g. every `defmacro derive_lens T := ...`
+                // in `std/derive.mo` is only ever invoked from a
+                // DIFFERENT, later-loaded file). Dropping it here would
+                // make it permanently unresolvable once this file's own
+                // per-file `expand_decls` pass has run -- a later,
+                // whole-graph pass (`expand_decls_graph`) needs to still
+                // see it. Still folded into `decl_gen_registry` for
+                // same-file resolution, exactly as before.
+                Decl.decl_gen_d name params gen_decls attrs =>
+                    List.cons d (expand_decls_go lookup decl_gen_registry rest),
                 Decl.macro_call_d name args =>
                     match lookup_decl_gen decl_gen_registry name {
                         Option.some entry =>
@@ -358,10 +369,16 @@ def test_expand_decls_resolves_std_derive_shape_end_to_end : Bool :=
     // The real `std/derive.mo` shape, both decl_list together:
     // `defmacro derive_lens T := decls { reflect_type_info! T
     // derive_lens_meta }` followed by `derive_lens! Point` --
-    // expands to the template's own `reflect_type_info!` call with
-    // `T` substituted by `Point`, and neither the `decl_gen_d`
-    // definition nor the original `macro_call_d` invocation survives
-    // in the output.
+    // expands `derive_lens! Point` to the template's own
+    // `reflect_type_info!` call with `T` substituted by `Point`. Unlike
+    // before the cross-module decl-gen fix, the `decl_gen_d` DEFINITION
+    // itself now SURVIVES this per-file pass (it may be invoked only
+    // from a different, later-loaded file -- see `expand_decls_go`'s
+    // own doc comment on the `decl_gen_d` arm) -- so the output is TWO
+    // decls: the still-present template, then the resolved
+    // `reflect_type_info!` call. Only the original `macro_call_d
+    // "derive_lens"` invocation itself is gone, consumed into its
+    // expansion.
     let lens_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "derive_lens") List.empty) in
     let t_param : Param := Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty in
     let named_t : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "T")) in
@@ -372,22 +389,34 @@ def test_expand_decls_resolves_std_derive_shape_end_to_end : Bool :=
     let point_ref : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "Point")) in
     let invocation : Decl := Decl.macro_call_d (Identifier.id "derive_lens") (List.cons point_ref List.empty) in
     match expand_decls (List.cons gen_def (List.cons invocation List.empty)) {
-        List.cons only_decl rest =>
-            (match rest { List.empty => true, List.cons _ _ => false }) &&
-            match only_decl {
-                Decl.macro_call_d call_name args =>
-                    id_eq call_name (Identifier.id "reflect_type_info") &&
-                    match args {
-                        List.cons a1 rest_args =>
-                            (match a1 { Term.var _ dbg => match dbg { DebugName.named id => id_eq id (Identifier.id "Point"), DebugName.unnamed => false }, _ => false }) &&
-                            match rest_args {
-                                List.cons a2 _ =>
-                                    match a2 { Term.var _ dbg => match dbg { DebugName.named id => id_eq id (Identifier.id "derive_lens_meta"), DebugName.unnamed => false }, _ => false },
-                                List.empty => false,
-                            },
-                        List.empty => false,
+        List.cons first_decl rest =>
+            (match first_decl {
+                Decl.decl_gen_d name _ _ _ =>
+                    match module_path_last name {
+                        Option.some id => id_eq id (Identifier.id "derive_lens"),
+                        Option.none => false,
                     },
                 _ => false,
+            }) &&
+            match rest {
+                List.cons only_decl rest2 =>
+                    (match rest2 { List.empty => true, List.cons _ _ => false }) &&
+                    match only_decl {
+                        Decl.macro_call_d call_name args =>
+                            id_eq call_name (Identifier.id "reflect_type_info") &&
+                            match args {
+                                List.cons a1 rest_args =>
+                                    (match a1 { Term.var _ dbg => match dbg { DebugName.named id => id_eq id (Identifier.id "Point"), DebugName.unnamed => false }, _ => false }) &&
+                                    match rest_args {
+                                        List.cons a2 _ =>
+                                            match a2 { Term.var _ dbg => match dbg { DebugName.named id => id_eq id (Identifier.id "derive_lens_meta"), DebugName.unnamed => false }, _ => false },
+                                        List.empty => false,
+                                    },
+                                List.empty => false,
+                            },
+                        _ => false,
+                    },
+                List.empty => false,
             },
         List.empty => false,
     }
@@ -406,15 +435,24 @@ def test_expand_decls_leaves_unregistered_macro_call_unresolved : Bool :=
 
 #[test]
 def test_expand_decls_arity_mismatch_leaves_call_unresolved : Bool :=
+    // `decl_gen_d` now survives its own file's `expand_decls` pass
+    // (see the `decl_gen_d` arm's own doc comment) -- so the output is
+    // TWO decls: the still-present template, then the still-unresolved
+    // (arity-mismatched) `macro_call_d`.
     let gen_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "needs_one") List.empty) in
     let one_param : Param := Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty in
     let gen_def : Decl := Decl.decl_gen_d gen_name (List.cons one_param List.empty) List.empty List.empty in
     let no_args : List Term := List.empty in
     let invocation : Decl := Decl.macro_call_d (Identifier.id "needs_one") no_args in
     match expand_decls (List.cons gen_def (List.cons invocation List.empty)) {
-        List.cons only_decl rest =>
-            (match rest { List.empty => true, List.cons _ _ => false }) &&
-            match only_decl { Decl.macro_call_d name _ => id_eq name (Identifier.id "needs_one"), _ => false },
+        List.cons first_decl rest =>
+            (match first_decl { Decl.decl_gen_d _ _ _ _ => true, _ => false }) &&
+            match rest {
+                List.cons only_decl rest2 =>
+                    (match rest2 { List.empty => true, List.cons _ _ => false }) &&
+                    match only_decl { Decl.macro_call_d name _ => id_eq name (Identifier.id "needs_one"), _ => false },
+                List.empty => false,
+            },
         List.empty => false,
     }
 

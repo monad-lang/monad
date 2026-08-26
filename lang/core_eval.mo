@@ -51,7 +51,7 @@ type CoreEvalError {
   ce_unresolved_global (path: ModulePath),
   /// Applied a `Value` that isn't a function, constructor, or native --
   /// only `v_lit` can reach this.
-  ce_not_a_function (v: Value),
+  ce_not_a_function (v: Value) (arg: Value),
   /// A `match_` scrutinee reduced to something other than `v_con`.
   ce_not_a_constructor (v: Value),
   /// A `match_`'s scrutinee tag has no corresponding arm -- an internal
@@ -174,7 +174,7 @@ def apply
     Value.v_partial_ntv native_id args =>
       fire_or_accumulate native_id (List.append args [a]) natives cache,
     Value.v_lit l =>
-      eval_err (CoreEvalError.ce_not_a_function (Value.v_lit l)) cache,
+      eval_err (CoreEvalError.ce_not_a_function (Value.v_lit l) a) cache,
   }
 
 /// Constructor-tag dispatch: index straight into `arms` by the
@@ -320,6 +320,25 @@ def irlit_as_i64 (l : IrLit) : Option I64 :=
 
 def i64_value (n : I64) : Value := Value.v_lit (IrLit.ir_num n NumSuffix.i64)
 
+def str_value (s : String) : Value := Value.v_lit (IrLit.ir_str s)
+
+def value_as_str (v : Value) : Option String :=
+  match v {
+    Value.v_lit l => irlit_as_str l,
+    Value.v_closure _ _ => Option.none,
+    Value.v_con _ _ => Option.none,
+    Value.v_partial_ntv _ _ => Option.none,
+  }
+
+def irlit_as_str (l : IrLit) : Option String :=
+  match l {
+    IrLit.ir_str s => Option.some s,
+    IrLit.ir_num _ _ => Option.none,
+    IrLit.ir_char _ => Option.none,
+    IrLit.ir_float _ _ => Option.none,
+    IrLit.ir_sort _ => Option.none,
+  }
+
 /// `Bool { true, false }` (`init/prelude.mo`) -- `true` is declared
 /// first, so tag 0; `false` is tag 1.
 def bool_value (b : Bool) : Value :=
@@ -369,6 +388,60 @@ def native_i64_bool_binop_run (f : I64 -> I64 -> Bool) (a : Value) (b : Value) :
     Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected I64 arg"),
   }
 
+def native_string_binop_str_result (f : String -> String -> String) (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+    List.cons a rest1 => native_string_binop_str_result_arg2 f a rest1,
+  }
+
+def native_string_binop_str_result_arg2 (f : String -> String -> String) (a : Value) (rest1 : List Value) : Result CoreEvalError Value :=
+  match rest1 {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+    List.cons b _ => native_string_binop_str_result_run f a b,
+  }
+
+def native_string_binop_str_result_run (f : String -> String -> String) (a : Value) (b : Value) : Result CoreEvalError Value :=
+  match value_as_str a {
+    Option.some x =>
+      match value_as_str b {
+        Option.some y => Result.ok (str_value (f x y)),
+        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+      },
+    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+  }
+
+def native_string_binop_bool_result (f : String -> String -> Bool) (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 0"),
+    List.cons a rest1 => native_string_binop_bool_result_arg2 f a rest1,
+  }
+
+def native_string_binop_bool_result_arg2 (f : String -> String -> Bool) (a : Value) (rest1 : List Value) : Result CoreEvalError Value :=
+  match rest1 {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 2 args, got 1"),
+    List.cons b _ => native_string_binop_bool_result_run f a b,
+  }
+
+def native_string_binop_bool_result_run (f : String -> String -> Bool) (a : Value) (b : Value) : Result CoreEvalError Value :=
+  match value_as_str a {
+    Option.some x =>
+      match value_as_str b {
+        Option.some y => Result.ok (bool_value (f x y)),
+        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+      },
+    Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+  }
+
+def native_string_unop_str_result (f : String -> String) (args : List Value) : Result CoreEvalError Value :=
+  match args {
+    List.empty => Result.err (CoreEvalError.ce_native_arg_error "expected 1 arg, got 0"),
+    List.cons a _ =>
+      match value_as_str a {
+        Option.some x => Result.ok (str_value (f x)),
+        Option.none => Result.err (CoreEvalError.ce_native_arg_error "expected String arg"),
+      },
+  }
+
 def exec_native (name : Identifier) (args : List Value) : Result CoreEvalError Value :=
   match name {
     Identifier.id s => exec_native_by_name s args,
@@ -380,16 +453,26 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
   else if String.beq s "i64_mul" then native_i64_binop I64.mul args
   else if String.beq s "i64_eq" then native_i64_bool_binop I64.beq args
   else if String.beq s "i64_lt" then native_i64_bool_binop I64.lt args
+  else if String.beq s "string_concat" then native_string_binop_str_result String.concat args
+  else if String.beq s "string_eq" then native_string_binop_bool_result String.beq args
+  else if String.beq s "string_to_lowercase" then native_string_unop_str_result String.to_lowercase args
   else Result.err (CoreEvalError.ce_native_arg_error (String.concat "unknown native: " s))
 
-/// A fixed 5-entry native table matching `exec_native_by_name` above --
+/// A fixed 8-entry native table matching `exec_native_by_name` above --
 /// what `lang/lower_core_ir.mo` and this module's own tests build
-/// `NativeTable`s from.
+/// `NativeTable`s from. The 3 string natives (ids 5/6/7) exist to
+/// support self-hosted `reflect_type_info!` evaluation
+/// (`lang/typecheck/meta_eval.mo`) -- `std/derive.mo`'s
+/// `derive_lens_meta`/`derive_beq_meta`/etc and `lang/cli.mo`'s
+/// `derive_cli_meta` transitively call exactly `String.concat`/
+/// `String.beq`/`String.to_lowercase` among natives (everything else
+/// they use is ordinary Monad-defined code, no native involved).
 def basic_native_table : NativeTable :=
   NativeTable.native_table
     [Identifier.id "i64_add", Identifier.id "i64_sub", Identifier.id "i64_mul",
-     Identifier.id "i64_eq", Identifier.id "i64_lt"]
-    [2, 2, 2, 2, 2]
+     Identifier.id "i64_eq", Identifier.id "i64_lt",
+     Identifier.id "string_concat", Identifier.id "string_eq", Identifier.id "string_to_lowercase"]
+    [2, 2, 2, 2, 2, 2, 2, 1]
 
 // ─── Tests (mirror core_eval.rs's #[cfg(test)] module) ─────────────────
 
@@ -421,6 +504,21 @@ def is_err (outcome : Pair (Result CoreEvalError Value) GlobalCache) : Bool :=
   }
 
 def num_lit (n : I64) : CoreIr := CoreIr.lit (IrLit.ir_num n NumSuffix.i64)
+
+def str_lit (s : String) : CoreIr := CoreIr.lit (IrLit.ir_str s)
+
+def is_str (outcome : Pair (Result CoreEvalError Value) GlobalCache) (expected : String) : Bool :=
+  match outcome {
+    Pair.pair r _ =>
+      match r {
+        Result.ok v =>
+          match value_as_str v {
+            Option.some s => String.beq s expected,
+            Option.none => false,
+          },
+        Result.err _ => false,
+      },
+  }
 
 def is_con_with_tag_and_arity (v : Value) (expected_tag : I64) (expected_arity : I64) : Bool :=
   match v {
@@ -531,6 +629,28 @@ def test_ntv_i64_lt_true_branch_via_match : Bool :=
   let cond : CoreIr := CoreIr.ntv 4 [num_lit 3, num_lit 4] in // i64_lt
   let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 100), MatchArm.arm 0 (num_lit 200)] in
   is_num (run iff) 100
+
+#[test]
+def test_ntv_string_concat : Bool :=
+  is_str (run (CoreIr.ntv 5 [str_lit "foo", str_lit "bar"])) "foobar"
+
+#[test]
+def test_ntv_string_eq_true : Bool :=
+  // string_eq -> Bool, dispatched through match_ against Bool's two
+  // tags exactly like i64_lt's own test above.
+  let cond : CoreIr := CoreIr.ntv 6 [str_lit "abc", str_lit "abc"] in
+  let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 1), MatchArm.arm 0 (num_lit 0)] in
+  is_num (run iff) 1
+
+#[test]
+def test_ntv_string_eq_false : Bool :=
+  let cond : CoreIr := CoreIr.ntv 6 [str_lit "abc", str_lit "xyz"] in
+  let iff : CoreIr := CoreIr.match_ cond [MatchArm.arm 0 (num_lit 1), MatchArm.arm 0 (num_lit 0)] in
+  is_num (run iff) 0
+
+#[test]
+def test_ntv_string_to_lowercase : Bool :=
+  is_str (run (CoreIr.ntv 7 [str_lit "MixedCase"])) "mixedcase"
 
 #[test]
 def test_not_a_function_error : Bool :=
