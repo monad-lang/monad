@@ -315,6 +315,27 @@ def test_compile_i64_to_string_native : IO Bool := do {
     compile_link_run_expect [main_def] "test_i64_to_string" 5
 }
 
+/// Regression test for the LLVM string-constant escaping bug
+/// (`lang/codegen/ir.mo`'s `show_llvm_global`/`llvm_escape_string`,
+/// fixed 2026-08-25): a string literal containing an embedded `"` and
+/// `\` used to splice those raw bytes straight into the LLVM `c"..."`
+/// constant with no escaping, producing textually-invalid IR (`llc`
+/// rejected it: LLVM's parser treats the first unescaped `"` as the
+/// string's end, so the declared `[N x i8]` length mismatched what
+/// actually parsed). `String.length` of the raw literal (7 bytes: `a`
+/// `"` `b` `\` `c` `"` `d`) must survive round-trip through emitted IR
+/// unchanged -- this is exactly the shape `lang/json.mo`'s own string
+/// literals hit (confirmed via a live repro compiling that file).
+#[test]
+def test_compile_string_literal_with_embedded_quote_and_backslash : IO Bool := do {
+    let str_val := Term.lit (Literal.str "a\"b\\c\"d");
+    let native_args := List.cons (Option.some str_val) List.empty;
+    let length_ntv := Native.mk (Identifier.id "string_length") 1 native_args;
+    let main_body := Term.ntv length_ntv;
+    let main_def := mk_def "main" main_body;
+    compile_link_run_expect [main_def] "test_string_escape" 7
+}
+
 /// Shared compile+link+execute helper, for a `List Decl` (as
 /// `promote_instance_defs` produces) rather than a `List Def` --
 /// `compile_db_module` (unlike `compile_db_decls_ir`) extracts every

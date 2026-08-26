@@ -423,13 +423,89 @@ def emit_globals (gs : List LLVMGlobal) : String := match gs {
     List.cons g rest => String.concat (show_llvm_global g) (String.concat "\n" (emit_globals rest)),
 }
 
+/// One hex digit (uppercase, matching LLVM's own convention) for a
+/// nibble value 0-15. A plain if/else chain rather than a lookup-table
+/// index, since there's no `U8`->`I64` cast native to index a String
+/// with (the codebase's own established "if/else beats a fresh-list-
+/// plus-closure scan" convention, `char_preds.mo`'s `is_digit`).
+#[partial]
+def llvm_hex_digit (n : U8) : String :=
+    if U8.beq n 0u8 then "0"
+    else if U8.beq n 1u8 then "1"
+    else if U8.beq n 2u8 then "2"
+    else if U8.beq n 3u8 then "3"
+    else if U8.beq n 4u8 then "4"
+    else if U8.beq n 5u8 then "5"
+    else if U8.beq n 6u8 then "6"
+    else if U8.beq n 7u8 then "7"
+    else if U8.beq n 8u8 then "8"
+    else if U8.beq n 9u8 then "9"
+    else if U8.beq n 10u8 then "A"
+    else if U8.beq n 11u8 then "B"
+    else if U8.beq n 12u8 then "C"
+    else if U8.beq n 13u8 then "D"
+    else if U8.beq n 14u8 then "E"
+    else "F"
+
+/// LLVM's `\XX` constant-string escape needs `"`/`\` (the delimiter and
+/// escape-introducer themselves) plus anything outside printable ASCII
+/// escaped -- non-ASCII/control bytes pass through raw-but-unescaped
+/// today, which is always syntactically valid LLVM IR (if less
+/// readable) regardless of what UTF-8 text a String literal holds.
+#[partial]
+def llvm_byte_needs_escape (b : U8) : Bool :=
+    U8.beq b 34u8 || U8.beq b 92u8 || U8.lt b 32u8 || U8.gt b 126u8
+
+#[partial]
+def llvm_escape_byte (b : U8) : String :=
+    let hi := U8.div b 16u8 in
+    let lo := U8.sub b (U8.mul hi 16u8) in
+    String.concat "\\" (String.concat (llvm_hex_digit hi) (llvm_hex_digit lo))
+
+/// Escape `s`'s raw bytes for embedding in an LLVM `c"..."` constant --
+/// previously spliced in unescaped (`show_llvm_global` below), so any
+/// string literal containing an embedded `"` or `\` produced
+/// textually-invalid IR: LLVM's parser treats the first unescaped `"`
+/// as the string's end, so the declared `[N x i8]` length (correctly
+/// computed elsewhere as byte-count + 1) mismatched what actually got
+/// parsed and `llc` rejected it outright. Confirmed via a live repro:
+/// `lang/json.mo`'s own `{"name":"Alice"}` string literal produced
+/// `@str_14 = constant [17 x i8] c"{"name":"Alice"}\00"`, which LLVM
+/// parses as a 1-byte string, not 17.
+///
+/// Runs of bytes that don't need escaping are copied via a single
+/// `String.slice` per run (mirroring the run-accumulation idiom used
+/// elsewhere in this codebase for O(1)-amortized string building,
+/// `AGENTS.md` item 12 Track 4) rather than paying for one
+/// `String.concat` per byte -- only bytes that actually need escaping
+/// cost an extra concat.
+#[partial]
+def llvm_escape_string_go (s : String) (idx : I64) (run_start : I64) (len : I64) (acc : String) : String :=
+    if I64.beq idx len then
+        String.concat acc (String.slice s run_start (len - run_start))
+    else
+        match (String.get s idx : Option U8) {
+            Option.some b =>
+                if llvm_byte_needs_escape b
+                then
+                    let with_run := String.concat acc (String.slice s run_start (idx - run_start)) in
+                    let with_escape := String.concat with_run (llvm_escape_byte b) in
+                    llvm_escape_string_go s (idx + 1) (idx + 1) len with_escape
+                else llvm_escape_string_go s (idx + 1) run_start len acc,
+            Option.none => acc,
+        }
+
+#[partial]
+def llvm_escape_string (s : String) : String :=
+    llvm_escape_string_go s 0 0 (String.length s) ""
+
 #[partial]
 def show_llvm_global (g : LLVMGlobal) : String := match g {
     LLVMGlobal.mk name value byte_len constant =>
         if constant
         then String.concat "@" (String.concat name
             (String.concat " = constant [" (String.concat (I64.to_string byte_len)
-            (String.concat " x i8] c\"" (String.concat value "\\00\"")))))
+            (String.concat " x i8] c\"" (String.concat (llvm_escape_string value) "\\00\"")))))
         else String.concat "@" (String.concat name (String.concat " = global " value)),
 }
 
