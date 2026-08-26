@@ -234,13 +234,33 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     icmp_sgt x y => i1_,
     zext x y to_ty => to_ty,
     trunc x y to_ty => to_ty,
-    phi x => i64_,
+    // Previously hardcoded `i64_` regardless of what's actually merged
+    // -- correct for an int-typed if/match merge, wrong for anything
+    // pointer-typed (e.g. two different `String` literals: `if b then
+    // "a" else "b"`). LLVM's verifier rejects a `phi i64 [ @str_0, ...
+    // ]` outright ("global variable reference must have pointer type"),
+    // since `@str_0` is `ptr`-typed, not `i64`. A well-formed phi's
+    // incoming values always share one type, so the first pair's own
+    // type (via the same `llvm_value_type` this arm belongs to) is
+    // authoritative for all of them.
+    phi pairs => phi_pairs_type pairs,
     gep x y => ptr i8_,
     load x => i64_,
     bitcast x to_ty => to_ty,
     alloc_closure x y z => ptr i8_,
     alloc_constructor x y => ptr i8_,
     native_op x y => i64_,
+}
+
+/// The real merge type of a phi node -- the first incoming pair's own
+/// type (well-formed phis have all pairs agree; an empty pair list
+/// can't arise from real codegen -- `compose_seq`/`splice_into_terminal_
+/// block` only ever build a phi from at least two branches -- `i64_` is
+/// just a harmless total-function fallback, never actually reached).
+#[partial]
+def phi_pairs_type (pairs : List PhiPair) : LLVMType := match pairs {
+    List.empty => i64_,
+    List.cons p _ => match p { PhiPair.mk val _ => llvm_value_type val },
 }
 
 #[partial]
@@ -267,10 +287,13 @@ def show_ext (op : String) (v : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMTyp
         (String.concat " " (String.concat (show_llvm_value v)
         (String.concat " to " (show_llvm_type to_ty)))))
 
+// Real merge type (`phi_pairs_type`), not hardcoded `i64` -- see
+// `llvm_value_type`'s own `phi` arm doc comment for why (pointer-typed
+// merges, e.g. `if b then "a" else "b"`, need `phi ptr` not `phi i64`).
 #[partial]
 def show_phi (pairs : List PhiPair) : String :=
     let inner := join_phi_pairs pairs in
-    String.concat "phi i64 " inner
+    String.concat "phi " (String.concat (show_llvm_type (phi_pairs_type pairs)) (String.concat " " inner))
 
 #[partial]
 def join_phi_pairs (pairs : List PhiPair) : String := match pairs {
