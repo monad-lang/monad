@@ -1,5 +1,5 @@
 use lang.types {
-  Decl, DebugName, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
+  Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
   InstanceKey, LoadedModules, LocalScope, LocalVar, Module, ModulePath, NameRef,
   Param, Scope, ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, Term,
   TypeConstraint, def_d, hole, id, inductive_d, many, mk, mp, name, nmp,

@@ -1,6 +1,6 @@
 /// Number parsing functions for the self-hosted Monad parser.
 
-use lang.types {Literal, NumSuffix, Term}
+use lang.types {NumSuffix, Term}
 use lang.parser.core {ParseResult, custom, fail, is_empty, success}
 use lang.parser.char_preds {is_digit, is_hex_digit}
 use lang.parser.combinators {tag, take_while}

@@ -17,9 +17,7 @@
 /// since been deleted outright — see `core/src/eval/macro_expand.rs`'s
 /// `BUILTIN_INTRINSICS` doc comment for the current (`reflect_type_info!`-
 /// only) design.
-use init.optics {Lens, lens}
-use init.meta {TypeInfo, CtorInfo, FieldInfo, Expr, MatchArm, Param, Decl}
-use std.debug {Debug}
+use init.meta {TypeInfo, CtorInfo, FieldInfo, Expr, MatchArm, Decl}
 
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}

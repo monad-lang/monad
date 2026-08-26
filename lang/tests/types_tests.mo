@@ -1,5 +1,5 @@
 use lang.types {
-  DebugName, DoStmt, Identifier, InductConstructor, Inductive, Infix, InstanceKey,
+  DoStmt, Identifier, InductConstructor, Inductive, Infix, InstanceKey,
   LoadedModules, LocalVar, Module, ModulePath, Multiplicity, Operator, Param,
   Scope, ScopeClassDef, ScopeConflict, ScopeData, ScopeDef, ScopeError,
   ScopeInstance, Similar, Term, desugar_do, hole, id, many, mk, mp,

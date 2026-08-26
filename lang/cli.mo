@@ -20,7 +20,7 @@
 /// note on `derive_cli_meta` below.
 
 use std.list {length, filter, any}
-use init.meta {TypeInfo, CtorInfo, FieldInfo, Expr, MatchArm, Param, Decl}
+use init.meta {TypeInfo, CtorInfo, FieldInfo, Expr, Decl}
 open List {length}
 open TypeInfo {type_info}
 open CtorInfo {ctor_info}

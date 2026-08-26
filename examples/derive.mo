@@ -7,6 +7,12 @@
 /// `std/derive.mo`, built on a handful of reflection intrinsics in the
 /// compiler itself — see that file's doc comments for the full design.
 
+// `derive_beq`/`derive_bord`/`derive_debug`/`derive_lens` are only ever
+// invoked via the `#[derive BEq BOrd Debug Lens]` attribute below (macro
+// dispatch by name string, not an ordinary term reference), so the
+// checker's "unused import" analysis flags this line as a false
+// positive — confirmed by removing it: `#[derive BEq]` then fails with
+// "macro `derive_beq` not found". Keep this import despite the warning.
 use std.derive {derive_beq, derive_bord, derive_debug, derive_lens}
 use init.optics {Lens, set, view}
 use std.debug {Debug}
