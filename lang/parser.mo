@@ -350,26 +350,13 @@ def return_shorthand_value (r: ParseResult Term) : ParseResult Term :=
     }
 
 #[partial]
-def is_newline (c : String) : Bool :=
-	String.beq c "\n"
-
-#[partial]
 def is_not_newline (c : String) : Bool :=
 	if String.beq c "\n" then false
 	else true
 
 #[partial]
-def is_close_curly (c : String) : Bool :=
-	String.beq c "}"
-
-#[partial]
 def is_not_close_curly (c : String) : Bool :=
 	if String.beq c "}" then false
-	else true
-
-#[partial]
-def is_not_close_paren (c : String) : Bool :=
-	if String.beq c ")" then false
 	else true
 
 #[partial]
@@ -2667,15 +2654,6 @@ def class_method_unnamed_param (input : String) (mname : Identifier) (name : Ide
 	class_method_param_type (type_expression empty_ctx input) mname name methods param_types 1 vis
 
 #[partial]
-def class_method_param_colon (r : ParseResult String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (param_types : List Term) (count : I64) (vis : Visibility) : ParseResult Decl :=
-	match r {
-		success rem _ =>
-			let empty_ctx : List Identifier := List.empty in
-			class_method_param_type (type_expression empty_ctx rem) mname name methods param_types count vis,
-		fail e => fail e
-	}
-
-#[partial]
 def class_method_param_type (r : ParseResult Term) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (param_types : List Term) (count : I64) (vis : Visibility) : ParseResult Decl :=
 	match r {
 		success rem typ => class_method_close_or_next rem mname name methods (push_n_terms typ count param_types) vis,
@@ -4212,10 +4190,6 @@ def find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64
             else find_index id rest (depth + 1),
         List.empty => Option.none
     }
-
-#[partial]
-def debug_name_of_id (id: Identifier) : DebugName :=
-    DebugName.named id
 
 #[partial]
 def var_term (ctx: List Identifier) (s: String) : Term :=
@@ -8466,20 +8440,6 @@ def test_decl_parser_preserves_deep_failure_position : Bool :=
     }
 
 // ─── AST debug helpers ───────────────────────────────────────────────────
-
-#[partial]
-def debug_decl_kind (d : Decl) : String :=
-    match d {
-        use_d _ _ => "use_d",
-        open_d _ _ => "open_d",
-        scoped_open_d _ _ _ => "scoped_open_d",
-        def_d _ => "def_d",
-        inductive_d _ => "inductive_d",
-        infix_d _ _ => "infix_d",
-        struct_d _ => "struct_d",
-        class_d _ => "class_d",
-        instance_d _ => "instance_d"
-    }
 
 #[partial]
 def debug_decl_count (decl_list : List Decl) : I64 :=
