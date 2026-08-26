@@ -1186,10 +1186,14 @@ def struct_field_default_val (r : ParseResult Term) (name : Identifier) (typ : T
 def type_parser (input : String) : ParseResult Decl :=
 	type_try_attrs (opt_attributes input) input
 
+// Same fix, same reason as `def_try_attrs` just above: `skip_docstrings
+// (skip_spaces rem)`, not `rem` bare -- a `#[attr] // comment` line
+// right before `type ...`/`struct ...`/`class ...` had no skip AT ALL
+// (not even bare whitespace) between the attribute and `type_vis_entry`.
 #[partial]
 def type_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult Decl :=
 	match r {
-		success rem attrs => type_apply_attrs (type_vis_entry rem) attrs,
+		success rem attrs => type_apply_attrs (type_vis_entry (skip_docstrings (skip_spaces rem))) attrs,
 		fail _ => type_vis_entry orig
 	}
 
@@ -1771,10 +1775,24 @@ def vis_require_ws (rem : String) (v : Visibility) (orig : String) : ParseResult
 def def_parser (input : String) : ParseResult Decl :=
 	def_try_attrs (opt_attributes input) input
 
+// `skip_docstrings` (not just `skip_spaces`) between the closing `]` and
+// whatever comes next -- `#[attr] // trailing comment\ndef ...` (a real
+// corpus shape, `std/sha256.mo`) used to only `skip_spaces`, leaving the
+// `//`-comment text in front of `vis_parser`, which doesn't recognize it
+// as a valid visibility/def token and fails the WHOLE declaration. Fixed
+// 2026-08-25 -- this was silently truncating `lang.module`'s LENIENT
+// dependency-walk parse (`decls_try`'s own documented "on a real parse
+// failure ... silently stops" gap) partway through any file with this
+// shape, dropping every declaration from there to EOF with no
+// diagnostic at all -- confirmed as the root cause of several
+// `slow_tests/typecheck_*_tests.mo` failures (`Sha256.zero_bytes`
+// onward silently missing from scope whenever `std/sha256.mo` was
+// loaded as a dependency, despite checking `std/sha256.mo` directly,
+// via the STRICT parser, working fine all along).
 #[partial]
 def def_try_attrs (r : ParseResult (List Attribute)) (orig : String) : ParseResult Decl :=
 	match r {
-		success rem attrs => def_apply_attrs (def_vis_done (vis_parser (skip_spaces rem))) attrs,
+		success rem attrs => def_apply_attrs (def_vis_done (vis_parser (skip_docstrings (skip_spaces rem)))) attrs,
 		fail _ => def_vis_done (vis_parser (skip_spaces orig))
 	}
 
@@ -7325,6 +7343,49 @@ def test_def_parser_captures_terminating_attribute : Bool :=
                 },
                 _ => false
             },
+        fail _ => false
+    }
+
+/// Regression test for the `#[attr] // trailing comment` parse-
+/// truncation bug (fixed 2026-08-25): `def_try_attrs` used to only
+/// `skip_spaces` (not `skip_docstrings`) between an attribute's closing
+/// `]` and the following declaration, so a `//`-comment on the SAME
+/// line as `#[terminating]` (the real corpus shape, `std/sha256.mo`'s
+/// `Sha256.zero_bytes`) left the comment text in front of `vis_parser`,
+/// which doesn't recognize it and fails the whole `def`. Silent AND
+/// far-reaching in the real pipeline: `lang.module`'s LENIENT
+/// dependency-walk parse (`decls_try`) treats any mid-file parse
+/// failure as "done, return what's been accumulated so far" with no
+/// diagnostic at all -- every declaration from `zero_bytes` onward
+/// (19 of `Sha256`'s 26 defs) silently vanished from scope whenever
+/// `std/sha256.mo` was loaded as a DEPENDENCY (not the target file, and
+/// not visible via `bootstrap check std/sha256.mo` directly, since that
+/// goes through the STRICT parser instead) -- confirmed as the root
+/// cause of `slow_tests/typecheck_std_tests.mo`'s
+/// `test_typecheck_std_sha256_tests` failure.
+#[test]
+def test_def_parser_terminating_attribute_with_trailing_comment : Bool :=
+    match def_parser "#[terminating] // decreasing counter\ndef loop (x : I64) : I64 := loop x" {
+        success rem out =>
+            String.beq rem "" &&
+            match out {
+                Decl.def_d d => match d {
+                    Def.mk _ _ _ _ attrs _ => has_attr (Identifier.id "terminating") attrs,
+                },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// Same fix, `decls_parser` (not just the single-decl `def_parser`) --
+/// proves a SECOND declaration after the attributed one is no longer
+/// silently dropped (the actual shape that broke `lang.module`'s
+/// dependency-walk parse: not just "this one decl fails to parse" but
+/// "everything after it vanishes too").
+#[test]
+def test_decls_parser_does_not_truncate_after_attribute_with_trailing_comment : Bool :=
+    match decls_parser "def bar : I64 := 1\n\n#[terminating] // decreasing counter\ndef loop (x : I64) : I64 := loop x\n" {
+        success rem decls => String.beq rem "" && I64.beq (List.length decls) 2,
         fail _ => false
     }
 
