@@ -337,7 +337,7 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
         ok sc_tt =>
             let sc_term : Term := tt_term sc_tt in
             let sc_typ : Term := tt_typ sc_tt in
-            match validate_match_constructors cases sc_typ scope {
+            match validate_match_constructors cases sc_term sc_typ scope {
                 err e => err e,
                 ok maybe_ind => type_check_cases cases sc_term sc_typ maybe_ind expected_type scope local_types locals,
             },
@@ -352,8 +352,8 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
 /// doc comment for why this matters), or `Option.none` if no inductive
 /// was determinable at all (skip validation, matches this function's
 /// previous behavior exactly).
-def validate_match_constructors (cases : List MatchCase) (scrutinee_typ : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
-    match find_inductive_for_cases cases scrutinee_typ scope {
+def validate_match_constructors (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
+    match find_inductive_for_cases cases scrutinee_term scrutinee_typ scope {
         Option.none => ok Option.none,
         Option.some ind =>
             match validate_cases_against_inductive cases ind {
@@ -402,7 +402,36 @@ def type_head_name (t : Term) : Option Identifier :=
 /// version instead only ever ADDS a strictly-better preferred path and
 /// never changes the shared fallback's behavior, so it can't regress
 /// any case that previously worked.
-def find_inductive_for_cases (cases : List MatchCase) (scrutinee_typ : Term) (scope : Scope) : Option Inductive :=
+def find_inductive_for_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) : Option Inductive :=
+    match con_owner_name scrutinee_term {
+        Option.some typ_name =>
+            match scope_find_inductive typ_name scope {
+                ok ind =>
+                    // `con_owner_name` fires for ANY qualified application
+                    // head (e.g. `Id.run (Id.id true)`'s head is `Id.run`,
+                    // an ordinary function, not a constructor) -- so the
+                    // resolved `ind` may be entirely unrelated to the
+                    // match's actual cases (`Id.run`'s cases are `true`/
+                    // `false`, i.e. `Bool`, not `Id`). Cross-check against
+                    // the cases themselves (same check `validate_match_
+                    // constructors` re-runs for real just above this
+                    // function's own caller) before committing to this
+                    // preferred path; fall back to the pre-existing chain
+                    // exactly as if `con_owner_name` had found nothing.
+                    match validate_cases_against_inductive cases ind {
+                        ok _ => Option.some ind,
+                        err _ => find_inductive_by_type_head_or_scan cases scrutinee_typ scope,
+                    },
+                err _ => find_inductive_by_type_head_or_scan cases scrutinee_typ scope,
+            },
+        Option.none => find_inductive_by_type_head_or_scan cases scrutinee_typ scope,
+    }
+
+/// `find_inductive_for_cases`'s SECOND preference, after the new
+/// `con_owner_name` check just above: the pre-existing `type_head_name`-
+/// on-the-INFERRED-TYPE path, falling back to the ambiguous constructor-
+/// name scan. Unchanged from before `con_owner_name` was added.
+def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_typ : Term) (scope : Scope) : Option Inductive :=
     match type_head_name scrutinee_typ {
         Option.some id =>
             match scope_find_inductive (ModulePath.mp (List.cons id List.empty)) scope {
@@ -410,6 +439,82 @@ def find_inductive_for_cases (cases : List MatchCase) (scrutinee_typ : Term) (sc
                 err _ => find_inductive_for_cases_by_constructor cases scope,
             },
         Option.none => find_inductive_for_cases_by_constructor cases scope,
+    }
+
+/// Extract the qualifier prefix of a dotted name string (e.g.
+/// `"Vec.cons" -> Option.some "Vec"`, `"cons" -> Option.none`) --
+/// companion to `last_dotted_segment_go` above (same backward `.`-scan
+/// idiom), returning the OTHER half of the split. `String.slice s 0 idx`
+/// takes a LENGTH as its third argument (not an end index), so `idx`
+/// (the '.' byte's own position) is exactly the right length to grab
+/// everything strictly before it.
+#[terminating]
+def dotted_qualifier_go (s : String) (idx : I64) : Option String :=
+    if I64.lt idx 0 then Option.none
+    else
+        match (String.get s idx : Option U8) {
+            Option.some byte_val =>
+                if U8.beq byte_val 46u8 then // '.' is ASCII 46
+                    Option.some (String.slice s 0 idx)
+                else
+                    dotted_qualifier_go s (idx - 1),
+            Option.none => Option.none
+        }
+
+def dotted_qualifier (s : String) : Option String :=
+    dotted_qualifier_go s (String.length s - 1)
+
+/// Find the `ModulePath` naming a scrutinee term's owning inductive,
+/// directly from the term itself rather than its (often uninformative,
+/// `Term.hole`-when-unannotated) inferred TYPE. Two cases:
+///
+/// - `Term.con c`: `c`'s own `typ_name` field names the owning inductive
+///   DIRECTLY and unambiguously (`Con.mk cname typ_name num_args args`),
+///   same field `type_check_con` itself already trusts for its own
+///   preferred lookup (`scope_find_inductive typ_name scope`, `infer.mo`
+///   ~1318). Kept for completeness / future-proofing, but **the parser
+///   never actually constructs a `Term.con`** for ordinary
+///   constructor-call syntax (confirmed: `grep -n "Term.con\|Con.mk"
+///   lang/parser.mo` finds zero construction sites, only pattern-match
+///   references) -- so in practice this arm doesn't fire yet.
+/// - `Term.var _ (DebugName.named id)`: what a qualified constructor
+///   reference like `Vec.cons` actually type-checks to
+///   (`type_check_free_var_con` returns `Term.var sentinel dbg` with the
+///   ORIGINAL, still-dotted `dbg` preserved) -- extract the dotted
+///   qualifier ("Vec") from `id`'s own text via `dotted_qualifier` above
+///   and treat it as a one-segment `ModulePath`. This is the arm that
+///   actually fires for real qualified-constructor scrutinees.
+///
+/// Either way, a scrutinee's own TERM still names its constructor's
+/// owner directly even when its inferred TYPE doesn't (a bare
+/// constructor-application scrutinee with no outer annotation infers as
+/// `Term.hole`, useless to `type_head_name`) -- so this is a strictly
+/// NEW, more-preferred check, added ahead of the pre-existing
+/// `type_head_name`/constructor-name-scan chain, which is otherwise
+/// completely unchanged (per that chain's own established "only ever
+/// ADD a strictly-better preferred path" design, see `find_inductive_
+/// for_cases`'s prior doc comment) -- confirmed as the fix for a real
+/// collision: `match Vec.cons 42 Vec.nil { cons h t => match t { nil =>
+/// true } }` (no outer annotation) used to resolve the shared `cons`
+/// name to `List` (declared first in `init/prelude.mo`) instead of
+/// `Vec`, via the ambiguous scan this check now gets a chance to bypass.
+def con_owner_name (t : Term) : Option ModulePath :=
+    match t {
+        Term.con c => match c { Con.mk _ typ_name _ _ => Option.some typ_name },
+        Term.app f _ => con_owner_name f,
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match id {
+                        Identifier.id s =>
+                            match dotted_qualifier s {
+                                Option.some qual => Option.some (ModulePath.mp (List.cons (Identifier.id qual) List.empty)),
+                                Option.none => Option.none,
+                            }
+                    },
+                DebugName.unnamed => Option.none,
+            },
+        _ => Option.none,
     }
 
 /// The original constructor-name-scan lookup, unchanged -- ambiguous
