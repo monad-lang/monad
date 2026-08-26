@@ -464,25 +464,6 @@ def scope_globals (s : Scope) : ScopeData :=
         _ => scope_data_empty
     }
 
-// --- ScopeData: find a class def (method) by ModulePath ---
-
-def scope_data_find_class_def (sd : ScopeData) (name : ModulePath) : Option ScopeClassDef :=
-    match sd {
-        mk _ cds _ _ _ _ _ _ => find_class_def_in_list cds name
-    }
-
-def find_class_def_in_list (cds : List ScopeClassDef) (name : ModulePath) : Option ScopeClassDef :=
-    match cds {
-        List.empty => Option.none,
-        List.cons cd rest =>
-            match cd {
-                mk _class_name full_name _ _ =>
-                    if modpath_eq full_name name
-                    then Option.some cd
-                    else find_class_def_in_list rest name
-            }
-    }
-
 // ---- scope_find_inductive ---
 
 def scope_find_inductive (name : ModulePath) (s : Scope) : Result ScopeError Inductive :=
@@ -494,9 +475,9 @@ def scope_find_inductive (name : ModulePath) (s : Scope) : Result ScopeError Ind
     }
 
 // --- scope_find_class: the real `Class` (params/constraints/ordered
-// methods), by name -- distinct from `scope_find_class_def` just below,
-// which finds one already-flattened `ScopeClassDef` (a single method's
-// own signature), not the class as a whole. Needed by
+// methods), by name -- distinct from `scope_find_class_def_by_name`
+// below, which finds one already-flattened `ScopeClassDef` (a single
+// method's own signature), not the class as a whole. Needed by
 // `lang/typecheck/infer.mo`'s `resolve_class_method` to recover a
 // class's own declared params (for skolemization, `module.mo`'s
 // `locals_with_class_typevars`) and ordered method-name list (for D5
@@ -510,16 +491,6 @@ def scope_data_classes (sd : ScopeData) : List Class :=
 
 def scope_find_class (name : ModulePath) (s : Scope) : Option Class :=
     find_class_by_name (scope_data_classes (scope_globals s)) name
-
-// --- scope_find_class_def ---
-
-def scope_find_class_def (name : ModulePath) (s : Scope) : Result ScopeError ScopeClassDef :=
-    let g : ScopeData := scope_globals s in
-    let result : Option ScopeClassDef := scope_data_find_class_def g name in
-    match result {
-        Option.some cd => ok cd,
-        Option.none => err (ScopeError.class_not_found name)
-    }
 
 // --- scope_find_inductive_by_constructor ---
 
@@ -596,14 +567,6 @@ def find_constructor_in_list (cns : List InductConstructor) (con_name : ModulePa
                     then Option.some cn
                     else find_constructor_in_list rest con_name
             }
-    }
-
-// --- scope_find_constructor: find a constructor by name in the scope ---
-
-def scope_find_constructor (con_name : ModulePath) (s : Scope) : Option InductConstructor :=
-    match scope_find_inductive_by_constructor con_name s {
-        Option.some ind => find_constructor_in_inductive ind con_name,
-        Option.none => Option.none,
     }
 
 // --- scope_find_class_def_by_name: search by simple method name (last segment) ---
@@ -1246,11 +1209,13 @@ def resolve_infix_decls (infixes : List Infix) (decl_list : List Decl) : List De
 // `compile_match_ir` (lang/codegen/emit.mo) work structurally off a
 // `Con`'s own name/typ_name/num_args/args and a `MatchCase`'s own
 // constructor name, neither needing a registered Inductive/Struct. A
-// dictionary value is built directly as `Term.con`; its tag
-// (`dict_tag_placeholder` below) is never actually compared at
-// runtime, since every dictionary is destructured via exactly one
-// match arm (`compile_match_ir` skips tag comparison entirely for a
-// single-case match) -- confirmed by direct reading, not assumed.
+// dictionary value is built directly as `Term.con`; `Con.mk` carries no
+// numeric tag field at all -- every dictionary is destructured via
+// exactly one match arm (`compile_match_ir` skips tag comparison
+// entirely for a single-case match) -- confirmed by direct reading, not
+// assumed. (A `dict_tag_placeholder` sentinel constant existed here for
+// this doc comment to point at, but was never actually wired to
+// anything -- removed as dead code 2026-08-25.)
 
 /// Flat scan for every top-level Class declaration.
 #[partial]
@@ -1400,14 +1365,6 @@ def mangle_instance_dict_name (cls_name : ModulePath) (ins_args : List Term) : M
     let sep_args := if String.is_empty args_str then "" else "_" ++ args_str in
     let full := "__Dict_" ++ cls_str ++ sep_args in
     ModulePath.mp (List.cons (Identifier.id full) List.empty)
-
-/// Never actually compared at runtime -- see this section's own top
-/// doc comment (`compile_match_ir` skips tag comparison for a
-/// single-case match, and every dictionary is destructured that way).
-/// A fixed, clearly-labeled sentinel purely for readability of emitted
-/// IR/debugging, not a real tag-uniqueness guarantee.
-#[partial]
-def dict_tag_placeholder : I64 := 999
 
 /// Builds one instance's promoted method Decls (real top-level defs,
 /// renamed via `mangle_instance_method_name`) plus its own dictionary
