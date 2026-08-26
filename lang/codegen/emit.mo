@@ -1655,7 +1655,6 @@ def combine_indirect_call (ctx_a : CodegenCtx) (callee_val : LLVMValue) (arg_val
             },
     }
 
-#[partial]
 /// `blocks`/`funcs`/`globals`/`last_val` -- see `compile_native_app_db`'s
 /// own doc comment: threaded through (no longer discarded), and
 /// `last_val` lets the arithmetic instruction itself be correctly

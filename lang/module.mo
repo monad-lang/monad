@@ -1209,13 +1209,6 @@ def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : Lo
         }
     }
 
-/// `use_d`/`open_d`/`infix_d` genuinely have nothing to type-check (no
-/// term/type of their own) — the `_ => List.empty` catch-all is correct
-/// for those. `instance_d` is the real remaining gap here: instance
-/// method BODIES aren't checked at all (tracked separately — see
-/// `lang/typecheck/infer.mo`'s `resolve_class_method`, which doesn't
-/// even resolve a concrete method body to check in the first place).
-#[partial]
 /// `promote_instance_defs`'s own `__Dict_ClassName_Args` value def
 /// (`lang/scope.mo`'s `promote_instance`, e.g. `__Dict_Speak_Dog`) is a
 /// pure codegen artifact -- declared `.typ := Term.type_ 1` but its
@@ -1233,6 +1226,12 @@ def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : Lo
 def is_dict_value_def (df : Def) : Bool :=
     String.starts_with "__Dict_" (module_path_to_string df.name)
 
+/// `use_d`/`open_d`/`infix_d` genuinely have nothing to type-check (no
+/// term/type of their own) — the `_ => List.empty` catch-all is correct
+/// for those. `instance_d` is the real remaining gap here: instance
+/// method BODIES aren't checked at all (tracked separately — see
+/// `lang/typecheck/infer.mo`'s `resolve_class_method`, which doesn't
+/// even resolve a concrete method body to check in the first place).
 def check_decl_with_scope (d : Decl) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match d {
         Decl.def_d df =>
