@@ -54,6 +54,16 @@ def empty_locals : LocalScope := {
 def empty_local_types : List Term := List.empty
 
 /// Type check a term bidirectionally.
+///
+/// `Term.quote_`/`Term.var_macro` are macro-expansion-only shapes --
+/// `quote_` is resolved away by `macro_expand.mo`'s `resolve_quote`
+/// before type-checking ever runs, and `var_macro` only ever appears
+/// inside an unexpanded macro template. Neither should reach here in
+/// the real pipeline (`expand_decls` always runs first), but this match
+/// previously had no arm for either -- a genuine non-exhaustive-match
+/// crash risk (no `#[partial]` on this def) if a macro ever expanded to
+/// another macro call without fully resolving it. A clean `TypeError`
+/// is safer than a raw interpreter crash either way.
 def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match term {
         Term.lit value => type_check_lit value expected_type scope local_types locals,
@@ -66,6 +76,8 @@ def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types
         Term.ntv ntv => type_check_ntv ntv expected_type scope local_types locals,
         Term.type_ level => type_check_sort_full level expected_type,
         Term.hole => ok ({ term := expected_type, typ := expected_type }),
+        Term.quote_ _ => err (TypeError.custom "unresolved quote reached the type checker (macro expansion should have resolved it first)"),
+        Term.var_macro _ _ => err (TypeError.custom "unresolved macro-template variable reached the type checker (macro expansion should have resolved it first)"),
     }
 
 /// Build a TypedTerm from term and type.
