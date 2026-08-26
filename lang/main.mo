@@ -119,7 +119,7 @@ def compile_file_codegen (file_path : String) (output_dir : String) (output_name
             println ("Failed to parse dependencies: " ++ e);
             // Fallback to simple parsing without dependencies (for error reporting)
             let source <- IO.read_file file_path;
-            match lang.module.try_parse_decls source {
+            match try_parse_decls source {
                 Option.some decl_list => compile_parsed_decls decl_list output_dir output_name verbose,
                 Option.none => do {
                     // `try_parse_decls` (leniently truncate-and-succeed) just
