@@ -1734,37 +1734,48 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
     match type_check base Term.hole scope local_types locals {
         err e => err e,
         ok base_tt =>
-            match struct_update_check_fields fields scope local_types locals {
-                err e => err e,
-                ok _ =>
-                    let base_term : Term := tt_term base_tt in
-                    let base_typ : Term := tt_typ base_tt in
-                    match type_head_name base_typ {
-                        Option.none => struct_update_fallback base_term fields base_typ,
-                        Option.some sname =>
-                            let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
-                            match scope_find_inductive typ_mp scope {
-                                err _ => struct_update_fallback base_term fields base_typ,
-                                ok ind =>
-                                    match ind {
-                                        Inductive.mk _ _ _ ctors _ _ =>
-                                            match ctors {
-                                                List.empty => struct_update_fallback base_term fields base_typ,
-                                                List.cons ctor _ =>
-                                                    match ctor {
-                                                        InductConstructor.mk con_name params _ =>
-                                                            let n : I64 := List.length params in
-                                                            let names : List Identifier := struct_param_names params in
-                                                            let args : List (Option Term) :=
-                                                                struct_update_build_args params fields base_term con_name names n 0 in
+            let base_term : Term := tt_term base_tt in
+            let base_typ : Term := tt_typ base_tt in
+            match type_head_name base_typ {
+                Option.none => struct_update_fallback base_term fields base_typ,
+                Option.some sname =>
+                    let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
+                    match scope_find_inductive typ_mp scope {
+                        err _ => struct_update_fallback base_term fields base_typ,
+                        ok ind =>
+                            match ind {
+                                Inductive.mk _ _ _ ctors _ _ =>
+                                    match ctors {
+                                        List.empty => struct_update_fallback base_term fields base_typ,
+                                        List.cons ctor _ =>
+                                            match ctor {
+                                                InductConstructor.mk con_name params _ =>
+                                                    let n : I64 := List.length params in
+                                                    let names : List Identifier := struct_param_names params in
+                                                    let args : List (Option Term) :=
+                                                        struct_update_build_args params fields base_term con_name names n 0 in
+                                                    // Each override's value against the struct's own
+                                                    // DECLARED field type (`params`), not the blind
+                                                    // `Term.hole` pure-infer check this used to run
+                                                    // BEFORE the struct was even resolved -- `{ p with
+                                                    // x := 5 }` where `p.x : String` now actually
+                                                    // rejects the mismatch, mirroring
+                                                    // `type_check_struct_lit`'s own `check_con_args_
+                                                    // against_params` reuse for ordinary struct
+                                                    // literals (`args` already has the same `List
+                                                    // (Option Term)`-in-declared-order shape that
+                                                    // helper expects).
+                                                    match check_con_args_against_params args params scope local_types locals {
+                                                        err e => err e,
+                                                        ok _ =>
                                                             let mk_name : Identifier := struct_lit_con_name con_name in
                                                             let c : Con := Con.mk mk_name typ_mp n args in
                                                             ok (mk_typed (Term.con c) base_typ),
-                                                    }
+                                                    },
                                             }
-                                    },
+                                    }
                             },
-                    }
+                    },
             }
     }
 
@@ -1824,20 +1835,6 @@ def struct_update_project_field (base : Term) (con_name : ModulePath) (all_names
     let no_fp : Option FieldPattern := Option.none in
     let case_ : MatchCase := MatchCase.mc bare_name all_names (Term.var db_idx (DebugName.named pname)) no_fp in
     Term.lit (Literal.match_ base (List.cons case_ List.empty))
-
-#[terminating]
-def struct_update_check_fields (fields : List StructLitField) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Bool :=
-    match fields {
-        List.empty => ok true,
-        List.cons f rest =>
-            match f {
-                StructLitField.mk _ value =>
-                    match type_check value Term.hole scope local_types locals {
-                        ok _ => struct_update_check_fields rest scope local_types locals,
-                        err e => err e,
-                    }
-            }
-    }
 
 /// Individually type-check each present argument with no expected type
 /// (`Term.hole` — same "no information available" meaning `type_check`
@@ -2449,3 +2446,55 @@ def test_type_check_struct_update_unresolvable_base_falls_back : Bool :=
         },
         err _ => false,
     }
+
+// --- Regression: struct-update overrides are checked against the
+// struct's own DECLARED field type, not blindly accepted (`Term.hole`)
+// ---
+//
+// `point_scope`'s own `x`/`y` fields are typed `Term.type_ 2` (a bare
+// sort, deliberately permissive so the OTHER struct-update tests above
+// can freely use `Term.type_ 1` as a stand-in override value) -- too
+// permissive to demonstrate a real rejection via cumulativity. This
+// fixture instead gives `Wrap`'s one field a CONCRETE, non-sort type
+// (`Point`, reusing `point_type_ref`), so an override of a different,
+// structurally-unrelated shape (`Term.type_ 1`) has somewhere real to
+// conflict with.
+
+def wrap_type_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Wrap") List.empty)
+
+def wrap_mk_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty)
+
+def wrap_v_param : Param := Param.mk (Identifier.id "v") point_type_ref Multiplicity.many Option.none List.empty
+
+def wrap_constructor : InductConstructor := InductConstructor.mk wrap_mk_path (List.cons wrap_v_param List.empty) Term.hole
+
+def wrap_inductive : Inductive := Inductive.mk wrap_type_path List.empty Term.hole (List.cons wrap_constructor List.empty) List.empty Visibility.package_private
+
+def wrap_scope : Scope := {
+    module_id := wrap_type_path,
+    scope := scope_data_add_inductive scope_data_empty wrap_inductive,
+    parent := Option.none,
+}
+
+def wrap_local_types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Wrap"))) empty_local_types
+
+def wrap_var : Term := Term.var 0 (DebugName.named (Identifier.id "w"))
+
+#[test]
+def test_type_check_struct_update_rejects_mismatched_field_type : Bool :=
+    // `v : Point`, overridden with `Term.type_ 1` (a bare sort) --
+    // structurally unrelated to a concrete `Point` reference, so this
+    // must be REJECTED. Before this fix (`struct_update_check_fields`
+    // checking every override against `Term.hole`, i.e. "anything
+    // goes"), this incorrectly returned `ok`.
+    let f1 : StructLitField := StructLitField.mk (Identifier.id "v") (Term.type_ 1) in
+    let fields : List StructLitField := List.cons f1 List.empty in
+    match type_check_struct_update wrap_var fields Term.hole wrap_scope wrap_local_types empty_locals {
+        ok _ => false,
+        err _ => true,
+    }
+// The "a genuine override still succeeds" positive path is already
+// covered by `test_type_check_struct_update_ok`/`_result_type_is_base_
+// type`/`_desugars_to_con` above (all against `point_scope`, whose
+// fields are deliberately abstract-sort-typed) -- no separate positive
+// companion needed here.
