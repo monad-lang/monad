@@ -33,8 +33,6 @@ def test_id_A : Identifier := Identifier.id "A"
 
 def empty_id_list : List Identifier := List.empty
 
-def empty_match_cases : List MatchCase := List.empty
-
 def empty_params : List Param := List.empty
 
 def empty_constraints : List TypeConstraint := List.empty
@@ -42,10 +40,6 @@ def empty_constraints : List TypeConstraint := List.empty
 def empty_attrs : List Attribute := List.empty
 
 def empty_opt_terms : List (Option Term) := List.empty
-
-def empty_ctors : List InductConstructor := List.empty
-
-def empty_fields : List StructField := List.empty
 
 def empty_class_defs : List ClassDef := List.empty
 
