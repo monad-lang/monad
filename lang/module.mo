@@ -1332,7 +1332,18 @@ def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path 
                 return List.empty
             } else do {
                 let locals_ : LocalScope := locals_with_def_typevars typ body scope locals;
-                return (match type_check body Term.hole scope empty_local_types locals_ {
+                // `typ`, not `Term.hole`: a def's declared `typ` is
+                // ALREADY the full Pi-chain matching its body's
+                // `Term.lam` chain (`lang/parser.mo`'s `build_param_pi_
+                // chain`), so checking the body against it (rather than
+                // pure infer mode) lets expected-type information flow
+                // into the body -- e.g. into a match arm whose result is
+                // an unannotated struct literal, which otherwise can't
+                // infer its own struct type at all. This is what the
+                // `expected_type` threading through match-arm checking
+                // (`type_check_cases`/`type_check_case_body_checked`)
+                // was added for; it had nothing real to carry until now.
+                return (match type_check body typ scope empty_local_types locals_ {
                     Result.ok _ => List.empty,
                     Result.err e => [render_type_error (module_path_to_string name) path e]
                 })

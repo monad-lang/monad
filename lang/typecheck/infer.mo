@@ -1,6 +1,6 @@
 use lang.types {
   Con, DebugName, Identifier, Inductive, InductConstructor,
-  Literal, LocalScope, LocalVar, MatchCase, ModulePath, NameRef,
+  Literal, LocalScope, LocalVar, MatchCase, ModulePath, NameRef, NumSuffix,
   Native, Param, Scope, ScopeClassDef, ScopeDef, ScopeError, Similar,
   StructLitField, Term, TypeConstraint, TypeError,
   app, con, custom, forall, hole, id, id_eq, if_, lam, list_rev_loop,
@@ -11,7 +11,7 @@ use lang.types {
 use lang.scope {
   DictBinding, build_dict_field_projection_checked, build_scope_def,
   dict_binding_class_of, dict_param_name, find_constructor_in_inductive,
-  find_matching_instance, inductive_has_constructor, list_append,
+  find_matching_instance, flatten_call_spine, inductive_has_constructor, list_append,
   mangle_instance_method_name, mangled_to_identifier, rebuild_call,
   resolve_dict_args, scope_data_add_inductive, scope_data_classes,
   scope_data_empty, scope_find_class, scope_find_class_def_by_name,
@@ -19,6 +19,7 @@ use lang.scope {
   scope_find_local, scope_globals, scope_instance_candidates, scope_push_local,
   scope_resolve_name,
 }
+use lang.typecheck.name_subst {name_subst_term}
 use lang.typecheck.unify {unify}
 use std.list {length}
 
@@ -290,14 +291,47 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
     }
 
 /// Type check a literal value.
+/// A `NumSuffix`'s own real named type (`Term.var sentinel (DebugName.
+/// named "I64")`, the same shape any other free type reference resolves
+/// to) -- `lang/parser/number.mo`'s parser always attaches a suffix,
+/// defaulting a bare unsuffixed literal (`0`) to `NumSuffix.i64` (see
+/// its own `fail _ => success orig NumSuffix.i64`), so this covers every
+/// `Literal.num`/`Literal.flt` unconditionally.
+def num_suffix_type_name (suffix : NumSuffix) : String :=
+    match suffix {
+        NumSuffix.i8 => "I8", NumSuffix.i16 => "I16", NumSuffix.i32 => "I32", NumSuffix.i64 => "I64",
+        NumSuffix.u8 => "U8", NumSuffix.u16 => "U16", NumSuffix.u32 => "U32", NumSuffix.u64 => "U64",
+        NumSuffix.f32 => "F32", NumSuffix.f64 => "F64",
+    }
+
+def named_type_ref (s : String) : Term :=
+    Term.var sentinel (DebugName.named (Identifier.id s))
+
 def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match value {
+        // `Term.type_ 1` (a KIND, not a real type) used to be returned
+        // here unconditionally regardless of what kind of literal this
+        // actually is -- harmless as long as the caller's `expected_
+        // type` was always `Term.hole` (`unify` accepts anything against
+        // a hole), which was true for every match-arm body reached from
+        // an ordinary top-level def until `check_def_with_scope` started
+        // passing the def's own real declared type through. Once a real
+        // expected type reaches here (e.g. an `I64`-returning def whose
+        // body is a match with an `n => 0` arm), `unify (Term.type_ 1)
+        // I64` correctly failed with "type mismatch: expected Type,
+        // found I64" -- confirmed via a minimal repro (`def f (n : Nat)
+        // : I64 := match n { zero => 0, succ m => 1 }`). Returning the
+        // literal's own REAL type (from its `NumSuffix`, or `String` for
+        // a string literal) fixes this at the source rather than
+        // special-casing `unify` to treat `Term.type_ 1` as a wildcard
+        // (which would also weaken genuine Sort/Type-as-value checks
+        // elsewhere, e.g. the Sort/Pred tests).
         Literal.str s =>
-            ok (mk_typed (Term.lit value) (Term.type_ 1)),
+            ok (mk_typed (Term.lit value) (named_type_ref "String")),
         Literal.num n suffix =>
-            ok (mk_typed (Term.lit value) (Term.type_ 1)),
+            ok (mk_typed (Term.lit value) (named_type_ref (num_suffix_type_name suffix))),
         Literal.flt text suffix =>
-            ok (mk_typed (Term.lit value) (Term.type_ 1)),
+            ok (mk_typed (Term.lit value) (named_type_ref (num_suffix_type_name suffix))),
         Literal.if_ one two three =>
             type_check_if one two three expected_type scope local_types locals,
         Literal.match_ value_ cases =>
@@ -659,7 +693,7 @@ def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee
                             List.empty =>
                                 type_check_case_body_checked name args body expected_type scope local_types locals,
                             _ =>
-                                let arg_types : List Term := arg_types_for_case name maybe_ind in
+                                let arg_types : List Term := arg_types_for_case name maybe_ind scrutinee_typ in
                                 let extended_types : List Term := prepend_typed args arg_types local_types in
                                 let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
                                 type_check_case_body_checked name args body expected_type scope extended_types extended_locals,
@@ -799,6 +833,19 @@ def constructor_bare_name (mp : ModulePath) : Identifier :=
             },
     }
 
+// NOTE: unlike `arg_types_for_case`'s positional-pattern sibling (see its
+// own doc comment, `substitute_inductive_type_params`), `declared_types`
+// below is NOT substituted against the scrutinee's actual type
+// arguments -- a field-pattern case (`{ x, y } => ...`) over a GENERIC
+// inductive would bind its field vars to the raw, uninstantiated
+// declared param types, same latent bug `arg_types_for_case` had before
+// its fix. Not touched here: no confirmed failure in the corpus exercises
+// this path with a generic scrutinee (fast sweep + full `slow_tests/
+// typecheck_init_tests.mo` both green without it), and wiring `scrutinee_
+// typ` through here would also need threading it through `resolve_field_
+// pattern_case`/`resolve_bare_field_pattern`. Flagged as a known,
+// unconfirmed gap rather than spending the extra signature-threading on
+// a path with no observed break.
 def resolve_field_pattern_against_constructor (resolved_name : Identifier) (ctor : InductConstructor) (fp : FieldPattern) : Result TypeError ResolvedFieldPattern :=
     match ctor {
         InductConstructor.mk _ params _ =>
@@ -932,16 +979,82 @@ def index_of_identifier (target : Identifier) (names : List Identifier) (i : I64
 /// touching the scan itself (which a previous, reverted attempt at a
 /// scan-order fix already showed is not safe to change directly -- see
 /// `find_inductive_for_cases`'s own doc comment above).
-def arg_types_for_case (case_name : Identifier) (maybe_ind : Option Inductive) : List Term :=
+def arg_types_for_case (case_name : Identifier) (maybe_ind : Option Inductive) (scrutinee_typ : Term) : List Term :=
     match maybe_ind {
         Option.some ind =>
             let con_mp : ModulePath := ModulePath.mp (List.cons case_name List.empty) in
             match find_constructor_in_inductive ind con_mp {
                 Option.some ctor =>
-                    match ctor { InductConstructor.mk _ params _ => types_from_params params },
+                    match ctor { InductConstructor.mk _ params _ =>
+                        substitute_inductive_type_params ind scrutinee_typ (types_from_params params)
+                    },
                 Option.none => List.empty,
             },
         Option.none => List.empty,
+    }
+
+/// Substitute an inductive's own declared type PARAMETERS (`A` in `type
+/// Option A { some (a: A), none }`) throughout a list of constructor
+/// field types with the scrutinee's ACTUAL type arguments (`ParseError`,
+/// from a concrete scrutinee of type `Option ParseError`) -- without
+/// this, a generic constructor's field binder (`e` in `some e => e`)
+/// gets bound to the raw, uninstantiated parameter name (`A`, a bare
+/// free-name `Term.var`) instead of its real instantiated type. That
+/// only ever unified successfully by accident before -- against `unify`'s
+/// universal `Term.hole` wildcard -- since every match-arm body reached
+/// from an ordinary top-level def's own outer `expected_type` was always
+/// `Term.hole` until `check_def_with_scope` (`lang/module.mo`) started
+/// threading a def's real declared return type through; confirmed via a
+/// minimal repro (`Option ParseError`'s `some e => e` arm regressing
+/// `lang/parser/combinators.mo`'s `alt_fold_best_or_default`, "type
+/// mismatch: expected A, found ParseError", once that threading landed).
+///
+/// `ind`'s own `params` are positionally zipped against `scrutinee_typ`'s
+/// application spine (`flatten_call_spine`, `lang.scope`) -- e.g.
+/// `Option ParseError` flattens to head `Option`, args `[ParseError]`,
+/// zipped 1:1 against `Option`'s own single declared param `A`. Reuses
+/// `name_subst_term` (`lang.typecheck.name_subst`) wholesale rather than
+/// writing a new substitution walker: that module's own "ordinary free
+/// `Term.var sentinel (DebugName.named X)` reference" target shape is
+/// exactly what an inductive's own param appears as inside its
+/// constructors' field types (skolemized during the inductive's own
+/// check, never de-Bruijn-bound there). A too-short (or absent, `maybe_
+/// ind = Option.none` upstream) argument spine just substitutes fewer
+/// params, matching every other partial-information fallback in this
+/// file rather than erroring.
+def substitute_inductive_type_params (ind : Inductive) (scrutinee_typ : Term) (field_types : List Term) : List Term :=
+    match ind {
+        Inductive.mk _ params _ _ _ _ =>
+            match flatten_call_spine scrutinee_typ {
+                CallSpine.mk _head actual_args =>
+                    substitute_inductive_type_params_go params actual_args field_types
+            },
+    }
+
+// Hand-rolled recursion, not `List.map`/`List.zip` -- mirrors `types_
+// from_params`/`param_names`'s own established precedent in this file
+// (see the doc comment just above `arg_types_for_case`) for a
+// brand-new top-level function calling a generic `List.*` op.
+#[terminating]
+def substitute_inductive_type_params_go (params : List Param) (actual_args : List Term) (field_types : List Term) : List Term :=
+    match params {
+        List.cons p prest =>
+            match actual_args {
+                List.cons a arest =>
+                    match p {
+                        Param.mk pname _ _ _ _ =>
+                            substitute_inductive_type_params_go prest arest (name_subst_over_list pname a field_types)
+                    },
+                List.empty => field_types,
+            },
+        List.empty => field_types,
+    }
+
+#[terminating]
+def name_subst_over_list (target : Identifier) (replacement : Term) (types : List Term) : List Term :=
+    match types {
+        List.cons t rest => List.cons (name_subst_term target replacement t) (name_subst_over_list target replacement rest),
+        List.empty => List.empty,
     }
 
 /// Just the `type_` field of each `Param`, in order.
