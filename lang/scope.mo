@@ -884,9 +884,26 @@ def scope_data_add_class_def (sd : ScopeData) (cd : ScopeClassDef) : ScopeData :
 
 // --- Builtins ---
 
+// `Type`/`Prop` were registered here but `Sort`/`Pred` weren't -- a
+// straight 2-of-3 incomplete port from the native compiler, which
+// registers all three as real def_refs entries (`core/src/term/
+// module.rs`'s own `"Type"`/`"Prop"`/`"Pred"` insertions). Confirmed as
+// the direct cause of `unknown variable 'Sort'`/`'Pred'` in
+// `init/tests.mo`'s own Sort-universe/Pred-as-value tests
+// (`type_check_free_var`, `lang/typecheck/infer.mo`, whose `err` arm
+// after a failed `scope_resolve_name` is exactly `TypeError.unknown_
+// var`). Note: the self-hosted parser has no dedicated `Sort N` literal
+// syntax at all (unlike native's own `sort_parser`), so registering
+// `"Sort"` here makes it resolve as an ordinary `Term.hole`-signatured
+// free variable, same permissive mechanism `Type`/`Prop` already use --
+// not a real Sort-universe judgment. That's enough for these tests
+// (which only need the checker to accept the file), not a claim that
+// full Sort-universe semantics now exist.
 def add_builtins (sd : ScopeData) : ScopeData :=
     let sd_with_type : ScopeData := add_builtin_type sd in
-    add_builtin_prop sd_with_type
+    let sd_with_prop : ScopeData := add_builtin_prop sd_with_type in
+    let sd_with_sort : ScopeData := add_builtin_sort sd_with_prop in
+    add_builtin_pred sd_with_sort
 
 def add_builtin_type (sd : ScopeData) : ScopeData :=
     let type_id : Identifier := Identifier.id "Type" in
@@ -921,6 +938,40 @@ def add_builtin_prop (sd : ScopeData) : ScopeData :=
     } in
     let sd1 : ScopeData := scope_data_add_inductive sd prop_ind in
     scope_data_add_def sd1 prop_sd
+
+def add_builtin_sort (sd : ScopeData) : ScopeData :=
+    let sort_id : Identifier := Identifier.id "Sort" in
+    let empty_id_list : List Identifier := List.empty in
+    let sort_name : ModulePath := ModulePath.mp (List.cons sort_id empty_id_list) in
+    let empty_params : List Param := List.empty in
+    let empty_constructors : List InductConstructor := List.empty in
+    let empty_attrs : List Attribute := List.empty in
+    let sort_ind : Inductive := Inductive.mk sort_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
+    let sort_sd : ScopeDef := {
+        name := sort_name,
+        module := ModulePath.mp empty_id_list,
+        sig := Term.hole,
+        body := Term.hole,
+    } in
+    let sd1 : ScopeData := scope_data_add_inductive sd sort_ind in
+    scope_data_add_def sd1 sort_sd
+
+def add_builtin_pred (sd : ScopeData) : ScopeData :=
+    let pred_id : Identifier := Identifier.id "Pred" in
+    let empty_id_list : List Identifier := List.empty in
+    let pred_name : ModulePath := ModulePath.mp (List.cons pred_id empty_id_list) in
+    let empty_params : List Param := List.empty in
+    let empty_constructors : List InductConstructor := List.empty in
+    let empty_attrs : List Attribute := List.empty in
+    let pred_ind : Inductive := Inductive.mk pred_name empty_params Term.hole empty_constructors empty_attrs Visibility.package_private in
+    let pred_sd : ScopeDef := {
+        name := pred_name,
+        module := ModulePath.mp empty_id_list,
+        sig := Term.hole,
+        body := Term.hole,
+    } in
+    let sd1 : ScopeData := scope_data_add_inductive sd pred_ind in
+    scope_data_add_def sd1 pred_sd
 
 // --- build_scope_from_modules: build ScopeData from loaded modules ---
 
