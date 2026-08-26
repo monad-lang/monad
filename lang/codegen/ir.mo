@@ -324,45 +324,30 @@ def show_instruction (instr : LLVMInstruction) : String := match instr {
         String.concat "  ; " text,
 }
 
+// Every non-`void_val` `LLVMValue` renders the same way here (`"  ret "
+// ++ show_llvm_value_typed val`) -- previously spelled out as 23
+// identical match arms (one per variant), which made adding a new
+// `LLVMValue` variant a maintenance trap (silently missing this list
+// would be a non-exhaustive-match crash risk, per the real `fn_ref`
+// repro noted below). Collapsed to the 2 cases that actually differ.
+//
+// A curried multi-param escaping lambda's OWN body (compile_db_lam_ir,
+// lang/codegen/emit.mo) can itself be another Term.lam -- compiling
+// THAT nested lambda returns a `fn_ref` (a direct reference to ITS
+// own freshly-lifted function), which then becomes the OUTER
+// lambda's own `ret` value: `(\x y z => x+y+z) 5 3 2`-shaped code
+// hits this. A missing arm here once crashed the self-hosted
+// interpreter itself ("non-exhaustive match: LLVMValue.fn_ref was
+// constructed but not covered by this match") the moment `fn_ref`
+// started being constructed by compile_db_lam_ir (see that def's own
+// doc comment) -- confirmed via a real repro
+// (test_compile_lambda_multi_arg, lang/codegen/test/e2e_typecheck_tests.mo).
+// The wildcard fallback below covers every current and future variant
+// the same way, so this can't recur.
 #[partial]
 def show_ret_instr (val : LLVMValue) : String := match val {
     void_val => "  ret void",
-    int_ x => "  ret " ++ show_llvm_value_typed val,
-    int32_ x => "  ret " ++ show_llvm_value_typed val,
-    bool_ x => "  ret " ++ show_llvm_value_typed val,
-    var_ x => "  ret " ++ show_llvm_value_typed val,
-    parm_ x => "  ret " ++ show_llvm_value_typed val,
-    global_ x => "  ret " ++ show_llvm_value_typed val,
-    // A curried multi-param escaping lambda's OWN body (compile_db_lam_ir,
-    // lang/codegen/emit.mo) can itself be another Term.lam -- compiling
-    // THAT nested lambda returns a `fn_ref` (a direct reference to ITS
-    // own freshly-lifted function), which then becomes the OUTER
-    // lambda's own `ret` value: `(\x y z => x+y+z) 5 3 2`-shaped code
-    // hits this. Missing arm here crashed the self-hosted interpreter
-    // itself ("non-exhaustive match: LLVMValue.fn_ref was constructed
-    // but not covered by this match") the moment `fn_ref` started being
-    // constructed by compile_db_lam_ir (see that def's own doc comment)
-    // -- confirmed via a real repro
-    // (test_compile_lambda_multi_arg, lang/codegen/test/e2e_typecheck_tests.mo).
-    fn_ref x => "  ret " ++ show_llvm_value_typed val,
-    call x y z w => "  ret " ++ show_llvm_value_typed val,
-    add x y => "  ret " ++ show_llvm_value_typed val,
-    sub x y => "  ret " ++ show_llvm_value_typed val,
-    mul x y => "  ret " ++ show_llvm_value_typed val,
-    sdiv x y => "  ret " ++ show_llvm_value_typed val,
-    icmp_eq x y => "  ret " ++ show_llvm_value_typed val,
-    icmp_ne x y => "  ret " ++ show_llvm_value_typed val,
-    icmp_slt x y => "  ret " ++ show_llvm_value_typed val,
-    icmp_sgt x y => "  ret " ++ show_llvm_value_typed val,
-    zext x y z => "  ret " ++ show_llvm_value_typed val,
-    trunc x y z => "  ret " ++ show_llvm_value_typed val,
-    phi x => "  ret " ++ show_llvm_value_typed val,
-    gep x y => "  ret " ++ show_llvm_value_typed val,
-    load x => "  ret " ++ show_llvm_value_typed val,
-    bitcast x y => "  ret " ++ show_llvm_value_typed val,
-    alloc_closure x y z => "  ret " ++ show_llvm_value_typed val,
-    alloc_constructor x y => "  ret " ++ show_llvm_value_typed val,
-    native_op x y => "  ret " ++ show_llvm_value_typed val,
+    _ => "  ret " ++ show_llvm_value_typed val,
 }
 
 #[partial]
