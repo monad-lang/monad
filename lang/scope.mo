@@ -2292,14 +2292,25 @@ type CallSpine {
     mk (head : Term) (args : List Term),
 }
 
+// Was `List.append args [a]` per level -- O(arity) per step, O(n^2)
+// total for an n-arg call spine (a real, if usually small-in-practice,
+// algorithmic smell flagged in the 2026-08-25 review refresh). Fixed by
+// prepending onto an accumulator as the recursion unwinds instead:
+// since `Term.app f a` peels off its OUTERMOST (last-applied) arg first
+// and recurses into `f` (the remaining, earlier applications) before
+// this level's own `a` gets consed on, the accumulator naturally ends
+// up in left-to-right declared-argument order with no final reverse
+// needed -- `f a b c` visits `c` innermost-recursion-first, consing
+// `[c]` -> `[b,c]` -> `[a,b,c]`, each step O(1).
 #[partial]
 def flatten_call_spine (t : Term) : CallSpine :=
+    flatten_call_spine_go t List.empty
+
+#[partial]
+def flatten_call_spine_go (t : Term) (acc : List Term) : CallSpine :=
     match t {
-        Term.app f a =>
-            match flatten_call_spine f {
-                CallSpine.mk head args => CallSpine.mk head (List.append args (List.cons a List.empty)),
-            },
-        _ => CallSpine.mk t List.empty,
+        Term.app f a => flatten_call_spine_go f (List.cons a acc),
+        _ => CallSpine.mk t acc,
     }
 
 #[partial]
@@ -2415,6 +2426,26 @@ def dict_match_pattern_vars (method_names : List Identifier) (target : Identifie
 /// D5: rewrites a class-method call into a field projection on an
 /// already-bound dict local -- `match __dict_Show { mk show _... =>
 /// show real_args }`.
+///
+/// The `Term.var 0 (...)` index here is CODEGEN's own free-standing
+/// convention (`lang/codegen/emit.mo` lowers this straight to LLVM
+/// without ever running it back through the bidirectional checker --
+/// same convention `promote_instance_defs`' own `__Dict_ClassName`
+/// value defs use, `module.mo`'s `is_dict_value_def` skips checking
+/// those for exactly this reason). It is NOT a real de Bruijn index
+/// into whatever `local_types`/`LocalScope` happen to be in scope
+/// wherever this term gets embedded -- reusing it as-is for a checker-
+/// facing result resolves the WRONG binder (or none at all) the moment
+/// this projection sits inside a real, already-non-empty local
+/// environment (a constrained def's own params, an enclosing match's
+/// own pattern vars, ...), surfacing a bogus `unknown variable
+/// 'bound_var'` diagnostic -- confirmed as the exact D5 dict-forwarding
+/// bug (`module.mo`'s own D4/D5 test area). See `build_dict_field_
+/// projection_checked` below for the checker-facing sibling that fixes
+/// this WITHOUT touching this function -- codegen's own consumer
+/// (`resolve_class_calls`, `lang/scope.mo`) depends on this exact
+/// index-`0` shape and is confirmed working; changing it here would
+/// regress that.
 #[partial]
 def build_dict_field_projection (cls : Class) (dict_id : Identifier) (method_name : Identifier) (real_args : List Term) : Term :=
     let method_names := class_method_names cls in
@@ -2422,6 +2453,31 @@ def build_dict_field_projection (cls : Class) (dict_id : Identifier) (method_nam
     let call := rebuild_call (Term.var 0 (DebugName.named method_name)) real_args in
     let case_ := MatchCase.mc (Identifier.id "mk") pattern_vars call Option.none in
     Term.lit (Literal.match_ (Term.var 0 (DebugName.named dict_id)) (List.cons case_ List.empty))
+
+/// Checker-facing sibling of `build_dict_field_projection` (D5 dict-
+/// forwarding, see that function's own doc comment for the full
+/// story). Structurally identical EXCEPT both `Term.var` references use
+/// the checker's real free-variable convention (`Term.var sentinel
+/// (DebugName.named _)`, `sentinel = -1` -- `lang.typecheck.infer`'s own
+/// `type_check_var` dispatches on this exact sentinel to resolve by
+/// NAME via `scope_resolve_name`/`LocalScope`, the same path D4 and
+/// every ordinary bound-var lookup already use successfully) instead of
+/// a raw de Bruijn index -- so the produced term re-typechecks
+/// correctly no matter what's already bound in the surrounding
+/// `LocalScope` (`dict_id` resolves to the already-bound dict
+/// parameter; the match arm's own `method_name` pattern var resolves
+/// via `prepend_typed_local_vars`, exactly like any other match-bound
+/// local). `-1` is inlined directly (not imported from `infer.mo`'s own
+/// `sentinel` constant) to avoid a circular module dependency --
+/// `infer.mo` already imports FROM `lang.scope`, not the reverse.
+#[partial]
+def build_dict_field_projection_checked (cls : Class) (dict_id : Identifier) (method_name : Identifier) (real_args : List Term) : Term :=
+    let free_var_sentinel : I64 := 0 - 1 in
+    let method_names := class_method_names cls in
+    let pattern_vars := dict_match_pattern_vars method_names method_name in
+    let call := rebuild_call (Term.var free_var_sentinel (DebugName.named method_name)) real_args in
+    let case_ := MatchCase.mc (Identifier.id "mk") pattern_vars call Option.none in
+    Term.lit (Literal.match_ (Term.var free_var_sentinel (DebugName.named dict_id)) (List.cons case_ List.empty))
 
 /// The main per-term rewrite -- `term_map_children`-driven fallback for
 /// every shape that isn't a class-method-shaped call spine, mirroring
