@@ -131,13 +131,4 @@ def empty_ids : List Identifier := List.empty
 #[partial]
 def empty_cons : List TypeConstraint := List.empty
 
-#[partial]
-def empty_attrs : List Attribute := List.empty
-
-#[partial]
-def check_contains (text : String) (needle : String) : Bool :=
-    if String.beq text "" then false
-    else if String.beq (String.slice text 0 (String.length needle)) needle then true
-    else check_contains (String.slice text 1 (String.length text)) needle
-
 def main : I64 := 42

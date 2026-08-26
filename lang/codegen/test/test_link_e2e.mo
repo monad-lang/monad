@@ -4,6 +4,7 @@ use process {exec_cmd}
 use lang.types {Def, i64, id, lit, mk, mp, num, type_}
 use lang.codegen.ir {emit_module, mk}
 use lang.codegen.emit {compile_db_decls_ir, mk}
+use lang.codegen.link {args4}
 
 open Term {lit, type_}
 open Literal {num}
@@ -12,10 +13,6 @@ open NumSuffix {i64}
 open Param {mk}
 open Def {mk}
 open ModulePath {mp}
-
-/// Build a List String from four strings.
-def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
-    List.cons a (List.cons b (List.cons c (List.cons d List.empty)))
 
 /// Build a minimal program: def main : I64 := 42
 def build_main42 : List Def :=

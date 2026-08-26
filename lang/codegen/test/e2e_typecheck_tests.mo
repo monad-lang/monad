@@ -2013,10 +2013,4 @@ def test_compile_io_bind : Bool :=
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "io_bind_test"
 
-#[partial]
-def check_contains (text : String) (needle : String) : Bool :=
-    if String.beq text "" then false
-    else if String.beq (String.slice text 0 (String.length needle)) needle then true
-    else check_contains (String.slice text 1 (String.length text)) needle
-
 def main : I64 := 42

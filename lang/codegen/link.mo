@@ -60,12 +60,6 @@ def test_link_compile_defs_to_ir : Bool :=
     let text := compile_defs_to_ir (List.cons def_ List.empty) in
     check_contains text "add i64"
 
-#[partial]
-def check_contains (text : String) (needle : String) : Bool :=
-    if String.beq text "" then false
-    else if String.beq (String.slice text 0 (String.length needle)) needle then true
-    else check_contains (String.slice text 1 (String.length text)) needle
-
 def main : IO I64 {
     IO.println "LLVM codegen linker module loaded. Use compile_and_run for e2e compilation.";
     return 0
