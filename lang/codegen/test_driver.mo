@@ -35,7 +35,7 @@ use lang.types {
 use lang.codegen.emit {collect_all_decls_from_modules, compile_db_module, filter_reachable_decls, module_path_to_str}
 use lang.codegen.ir {LLVMModule}
 use lang.module {
-  ModuleInfo, elaborate_module_decls_best_effort,
+  elaborate_module_decls_best_effort,
   get_loaded_all, get_loaded_main, get_module_info_decls, try_parse_decls,
 }
 use lang.scope {
