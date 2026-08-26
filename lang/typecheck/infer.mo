@@ -1,5 +1,5 @@
 use lang.types {
-  Con, DebugName, Identifier, Inductive, InductConstructor, Instance,
+  Con, DebugName, Identifier, Inductive, InductConstructor,
   Literal, LocalScope, LocalVar, MatchCase, ModulePath, NameRef,
   Native, Param, Scope, ScopeClassDef, ScopeDef, ScopeError, Similar,
   StructLitField, Term, TypeConstraint, TypeError,

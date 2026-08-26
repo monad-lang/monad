@@ -4,8 +4,8 @@
 use io {IO, file_exists, is_dir, list_dir, println, read_file}
 use lang.elaborate {free_vars, names_of_decls, elaborate_def}
 use lang.types {
-  Class, ClassDef, Decl, Def, DebugName, Identifier, InductConstructor, Inductive, Infix,
-  LoadedModules, LocalScope, LocalVar, ModulePath, Multiplicity, NameRef, Scope,
+  Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
+  LoadedModules, LocalScope, LocalVar, ModulePath, NameRef, Scope,
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id,
   inductive_d, list_reverse, mk, mp, name, nid, to_name, union_ids, use_d,
 }
@@ -28,7 +28,6 @@ use std.show {Show}
 // `lang/scope.mo`'s own `use std.map {}` doc comment for why the import
 // is empty).
 use std.map {}
-use std.bench {now, report}
 
 open IO {file_exists, is_dir, list_dir, println, read_file}
 open ParseResult {fail, success}
