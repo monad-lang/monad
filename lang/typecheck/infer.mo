@@ -450,7 +450,7 @@ def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) 
 
 /// Type check match cases — process all cases and unify their body types.
 def type_check_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
-    match type_check_cases_accum cases scrutinee_term scrutinee_typ maybe_ind scope local_types locals (Term.hole) List.empty {
+    match type_check_cases_accum cases scrutinee_term scrutinee_typ maybe_ind expected_type scope local_types locals (Term.hole) List.empty {
         ok acc =>
             match acc {
                 mk body_typ checked_cases =>
@@ -468,21 +468,21 @@ def type_check_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee
 /// progressively unified body type. `acc_cases` is built in reverse order
 /// and reversed at the end.
 #[terminating]
-def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (scope : Scope) (local_types : List Term) (locals : LocalScope) (acc_typ : Term) (acc_cases : List MatchCase) : Result TypeError CaseAcc :=
+def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) (acc_typ : Term) (acc_cases : List MatchCase) : Result TypeError CaseAcc :=
     match cases {
         List.cons hd rest =>
-            match type_check_match_case hd scrutinee_term scrutinee_typ maybe_ind scope local_types locals {
+            match type_check_match_case hd scrutinee_term scrutinee_typ maybe_ind expected_type scope local_types locals {
                 ok checked =>
                     match checked {
                         mk checked_case body_typ =>
                             let new_cases : List MatchCase := List.cons checked_case acc_cases in
                             match acc_typ {
                                 Term.hole =>
-                                    type_check_cases_accum rest scrutinee_term scrutinee_typ maybe_ind scope local_types locals body_typ new_cases,
+                                    type_check_cases_accum rest scrutinee_term scrutinee_typ maybe_ind expected_type scope local_types locals body_typ new_cases,
                                 _ =>
                                     match unify acc_typ body_typ {
                                         ok unified_typ =>
-                                            type_check_cases_accum rest scrutinee_term scrutinee_typ maybe_ind scope local_types locals unified_typ new_cases,
+                                            type_check_cases_accum rest scrutinee_term scrutinee_typ maybe_ind expected_type scope local_types locals unified_typ new_cases,
                                         err e => err e,
                                     },
                             },
@@ -514,30 +514,30 @@ def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
 /// (which constructor, which declared field order) still needs
 /// resolving here; nothing about it can be trusted as already correct
 /// the way a written positional case's `args` order is.
-def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
+def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match case_ {
         MatchCase.mc name args body fp =>
             match fp {
                 Option.some field_pattern =>
-                    type_check_field_pattern_case name args body field_pattern maybe_ind scope local_types locals,
+                    type_check_field_pattern_case name args body field_pattern maybe_ind expected_type scope local_types locals,
                 Option.none =>
                     let wildcard_id : Identifier := Identifier.id "_" in
                     if Similar.similar name wildcard_id then
                         match args {
                             List.empty =>
-                                type_check_case_body_checked name args body scope local_types locals,
+                                type_check_case_body_checked name args body expected_type scope local_types locals,
                             _ =>
                                 err (TypeError.custom "wildcard pattern cannot bind arguments"),
                         }
                     else
                         match args {
                             List.empty =>
-                                type_check_case_body_checked name args body scope local_types locals,
+                                type_check_case_body_checked name args body expected_type scope local_types locals,
                             _ =>
                                 let arg_types : List Term := arg_types_for_case name maybe_ind in
                                 let extended_types : List Term := prepend_typed args arg_types local_types in
                                 let extended_locals : LocalScope := prepend_typed_local_vars args arg_types locals in
-                                type_check_case_body_checked name args body scope extended_types extended_locals,
+                                type_check_case_body_checked name args body expected_type scope extended_types extended_locals,
                         },
             },
     }
@@ -578,7 +578,7 @@ struct ResolvedFieldPattern {
 // `type_check_case_body_checked` only ever recurses on `body`'s own
 // (unchanged-in-size) subterms from there, same as any other case.
 #[terminating]
-def type_check_field_pattern_case (name : Identifier) (args : List Identifier) (body : Term) (fp : FieldPattern) (maybe_ind : Option Inductive) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
+def type_check_field_pattern_case (name : Identifier) (args : List Identifier) (body : Term) (fp : FieldPattern) (maybe_ind : Option Inductive) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match resolve_field_pattern_case name fp maybe_ind {
         err e => err e,
         ok resolved =>
@@ -591,7 +591,7 @@ def type_check_field_pattern_case (name : Identifier) (args : List Identifier) (
                     let permuted_body : Term := term_permute old_n new_n old_depths new_depths body in
                     let extended_types : List Term := prepend_typed declared_names declared_types local_types in
                     let extended_locals : LocalScope := prepend_typed_local_vars declared_names declared_types locals in
-                    type_check_case_body_checked resolved_name declared_names permuted_body scope extended_types extended_locals,
+                    type_check_case_body_checked resolved_name declared_names permuted_body expected_type scope extended_types extended_locals,
             },
     }
 
@@ -865,8 +865,24 @@ def rec_prepend_typed_local_vars (args : List Identifier) (arg_types : List Term
     }
 
 /// Type-check the body of a match case arm, returning the checked result.
-def type_check_case_body_checked (name : Identifier) (args : List Identifier) (body : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
-    match type_check body Term.hole scope local_types locals {
+// `expected_type`: the ENCLOSING match's own expected type (from
+// `type_check_match`'s caller), not the per-case cross-consistency
+// `acc_typ` `type_check_cases_accum` unifies separately below -- those
+// are two different mechanisms. Threaded through so a case body that
+// genuinely NEEDS outside type information to check at all (a struct
+// literal with no `: StructName` self-annotation, e.g. `match pt { mk _
+// y => { x := new_x, y := y } }` where only the enclosing `def`'s own
+// declared return type says which struct) has somewhere to get it from,
+// instead of unconditionally checking every case body in pure-infer
+// mode (`Term.hole`) regardless of context -- confirmed as the root
+// cause of `init/optics_tests.mo`'s `set_x`/`set_y` failing with
+// "cannot infer struct type... no expected type from context" (fixed
+// 2026-08-25). Still `Term.hole` in the overwhelming common case (a
+// match with no informative outer expected type at all), so this is a
+// strict widening, not a behavior change, for every case that doesn't
+// need it.
+def type_check_case_body_checked (name : Identifier) (args : List Identifier) (body : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
+    match type_check body expected_type scope local_types locals {
         ok body_tt =>
             let body_term : Term := tt_term body_tt in
             let body_typ : Term := tt_typ body_tt in
@@ -930,9 +946,13 @@ def last_dotted_segment (s : String) : String :=
 /// already-correctly-shaped type produced a type one level too deep,
 /// surfacing as `type mismatch: expected (List X), found (_ -> (_ ->
 /// _))` on any 2+-arg constructor value used inside a context whose own
-/// expected type starts as `Term.hole` (any match-arm body -- see
-/// `type_check_case_body_checked` above, which always checks a case
-/// body against `Term.hole`). Trusting `expected_type` directly matches
+/// expected type starts as `Term.hole` (any match-arm body reached from
+/// a call site that itself has no informative expected type -- as of
+/// 2026-08-25 `type_check_case_body_checked` CAN thread a real outer
+/// expected type through when one is available, but `check_def_with_
+/// scope`'s own top-level call still always passes `Term.hole` for a
+/// def's body, so this remains the overwhelmingly common case in
+/// practice today). Trusting `expected_type` directly matches
 /// `type_check_con`'s own established pattern exactly (`ok (mk_typed
 /// (Term.con c) expected_type)`) and `scope_resolve_name`'s success arm
 /// just above (which returns the def's own STORED signature,

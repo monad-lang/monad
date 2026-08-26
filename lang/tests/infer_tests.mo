@@ -577,7 +577,7 @@ def test_field_pattern_bare_reordered_fields_permutes_body_correctly : Bool :=
     let args : List Identifier := List.cons (Identifier.id "y") (List.cons (Identifier.id "x") List.empty) in
     let body : Term := Term.var 0 DebugName.unnamed in
     let case_ : MatchCase := MatchCase.mc (Identifier.id "") args body (Option.some fp) in
-    match type_check_match_case case_ point_typed_scrutinee (Term.var sentinel (DebugName.named (Identifier.id "Point"))) (Option.some point_ind) point_scope point_typed_local_types empty_locals {
+    match type_check_match_case case_ point_typed_scrutinee (Term.var sentinel (DebugName.named (Identifier.id "Point"))) (Option.some point_ind) Term.hole point_scope point_typed_local_types empty_locals {
         err _ => false,
         ok checked =>
             match checked {
