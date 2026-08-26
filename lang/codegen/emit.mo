@@ -284,13 +284,6 @@ def string_find_last_loop (haystack : String) (needle : String) (start_idx : I64
     else string_find_last_loop haystack needle (start_idx - 1)
 
 #[partial]
-def show_name_ref (name : NameRef) : String := match name {
-    NameRef.nid id => show_identifier id,
-    NameRef.nmp mp => module_path_to_str mp,
-    NameRef.nop op => show_operator op,
-}
-
-#[partial]
 def show_operator (op : Operator) : String := match op {
     Operator.operator s => s,
 }
@@ -380,37 +373,6 @@ def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : LLVMValue :=
 
 #[partial]
 def empty_instrs : List LLVMInstruction := List.empty
-
-/// Check if an LLVMValue is a constant that can be used directly
-/// in an instruction (no need for assignment).
-#[partial]
-def is_llvm_constant (val : LLVMValue) : Bool := match val {
-    LLVMValue.int_ n => true,
-    LLVMValue.int32_ n => true,
-    LLVMValue.bool_ b => true,
-    LLVMValue.void_val => true,
-    LLVMValue.global_ name => true,
-    LLVMValue.fn_ref name => true,
-    LLVMValue.var_ name => true,
-    LLVMValue.parm_ idx => true,
-    LLVMValue.call fn_name ret_ty args tail => false,
-    LLVMValue.add lhs rhs => false,
-    LLVMValue.sub lhs rhs => false,
-    LLVMValue.mul lhs rhs => false,
-    LLVMValue.sdiv lhs rhs => false,
-    LLVMValue.icmp_eq lhs rhs => false,
-    LLVMValue.icmp_ne lhs rhs => false,
-    LLVMValue.icmp_slt lhs rhs => false,
-    LLVMValue.icmp_sgt lhs rhs => false,
-    LLVMValue.zext val from_ty to_ty => false,
-    LLVMValue.trunc val from_ty to_ty => false,
-    LLVMValue.phi pairs => false,
-    LLVMValue.gep base indices => false,
-    LLVMValue.load ptr => false,
-    LLVMValue.bitcast val ty => false,
-    LLVMValue.alloc_closure entry arity env_size => false,
-    LLVMValue.alloc_constructor tag field_count => false,
-}
 
 /// Now total (no `#[partial]`): every `Literal` variant is handled,
 /// including `struct_lit`/`struct_update` — see their own doc comment
@@ -2280,25 +2242,6 @@ def append_phis (a : List PhiPair) (b : List PhiPair) : List PhiPair := match a 
 def cons_instr (i : LLVMInstruction) (is : List LLVMInstruction) : List LLVMInstruction :=
     List.cons i is
 
-/// LLVM wrapper from C main->main_monad. Unused in the current pipeline
-/// (the C runtime's main() calls main_monad directly). Kept as reference
-/// for future pipeline integration.
-#[partial]
-def compile_main_wrapper_ir : LLVMFunction :=
-    let argc_pair := ParamPair.mk "argc" LLVMType.i32_ in
-    let argv_pair := ParamPair.mk "argv" LLVMType.i64_ in
-    let wrapper_params := cons_pair argc_pair (cons_pair argv_pair (empty_pairs)) in
-    let argv_val := LLVMValue.parm_ 1 in
-    let args_singleton := List.cons argv_val List.empty in
-    let call_instr := LLVMInstruction.assign "t0"
-        (LLVMValue.call "main_monad" LLVMType.i64_ args_singleton false) in
-    let trunc_instr := LLVMInstruction.assign "t1"
-        (LLVMValue.trunc (LLVMValue.var_ "t0") LLVMType.i64_ LLVMType.i32_) in
-    let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "t1") in
-    let entry_instrs := cons_instr call_instr (cons_instr trunc_instr (cons_instr ret_instr List.empty)) in
-    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-    LLVMFunction.mk "main" wrapper_params LLVMType.i32_ (cons_block entry_block empty_blocks) false
-
 #[partial]
 def empty_pairs : List ParamPair := List.empty
 
@@ -2318,10 +2261,6 @@ def mk_decl (name : String) (params : List String) (ret_ty : String) : LLVMDecla
 
 #[partial]
 def empty_decls : List LLVMDeclaration := List.empty
-
-#[partial]
-def cons_decl (d : LLVMDeclaration) (ds : List LLVMDeclaration) : List LLVMDeclaration :=
-    List.cons d ds
 
 #[partial]
 def runtime_declarations : List LLVMDeclaration :=
