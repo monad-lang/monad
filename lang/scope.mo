@@ -17,13 +17,79 @@ use lang.typecheck.macro_expand {term_map_children}
 // type/def resolve without being explicitly `use`d.
 use std.map {}
 
+// --- ModulePath-keyed HashMap ops, bypassing `Map`'s typeclass dispatch ---
+//
+// `Map.insert`/`Map.lookup` (the `[Hashable K, BOrd K] Map HashMap`
+// instance, `std/map.mo`) resolve `Hashable.hash key`/`BOrd.lt`/`BOrd.gt`
+// as abstract class-method references INSIDE `HashMap`'s own generic
+// `[K, V]`-parameterized body. AGENTS.md's own documented evaluator
+// limitation ("`resolve_class_method_instance` picks the FIRST
+// REGISTERED instance", not a type-directed lookup) means these can
+// silently resolve to the WRONG instance's implementation whenever
+// they're invoked from deep within an already-polymorphic call chain
+// where `K` is still abstract at the call site -- exactly the shape
+// `lang.module`'s dynamic dependency-loading path has (AGENTS.md item 3
+// already documents this exact class of bug for `BTreeMap`/self-hosted-
+// compiler code paths, with the same prescribed fix: bypass the class
+// methods, call the concrete map's own bucket operations directly with
+// PLAIN function values).
+//
+// Confirmed as a real, live bug for `ScopeData.def_refs`/`inductives`
+// specifically (not just a theoretical risk this comment is guarding
+// against): a minimal 2-file repro -- a dependency module defining a
+// couple of plain dotted defs, a caller `use`-ing it with an empty
+// filter and referencing them by qualified name -- fails with `unknown
+// variable` when checked through `lang/main.mo`'s own `check` command
+// (exercising the real dynamic dependency-walk), even though the exact
+// same insert-then-lookup round-trip works fine in a shallow, directly-
+// run `#[test]`. `scope_data_find_def`'s own PRIOR doc comment claimed
+// "`Map.lookup`/`Map.insert` resolve correctly here... monomorphic over
+// the concrete `ModulePath`/`ScopeDef` types" -- that reasoning doesn't
+// actually hold (the fragility lives inside `HashMap`'s own generic
+// body, not the call site's own polymorphism), and is superseded by this
+// fix.
+//
+// `modpath_lt`/`modpath_gt`/`modpath_hash` delegate to the SAME
+// dotted-string-based logic `BOrd ModulePath`/`Hashable ModulePath`
+// (`lang/types.mo`) already use, just calling the underlying native
+// `String.lt`/`String.gt`/`String.hash` directly instead of through
+// `BOrd.lt`/`BOrd.gt`/`Hashable.hash`'s own abstract dispatch.
+def modpath_lt (a : ModulePath) (b : ModulePath) : Bool :=
+    String.lt (show_module_path a) (show_module_path b)
+
+def modpath_gt (a : ModulePath) (b : ModulePath) : Bool :=
+    String.gt (show_module_path a) (show_module_path b)
+
+def modpath_hash (mp : ModulePath) : U64 :=
+    String.hash (show_module_path mp)
+
+def modpath_map_empty {V : Type} : HashMap ModulePath V :=
+    HashMap.map HashMap.empty_buckets
+
+def modpath_map_insert {V : Type} (key : ModulePath) (val : V) (m : HashMap ModulePath V) : HashMap ModulePath V :=
+    match m {
+        HashMap.map buckets =>
+            let idx := HashMap.bucket_of (modpath_hash key) in
+            let bucket := HashMap.get_bucket buckets idx in
+            let new_bucket := HashMap.bucket_insert modpath_lt modpath_gt key val bucket in
+            HashMap.map (HashMap.set_bucket buckets idx new_bucket)
+    }
+
+def modpath_map_lookup {V : Type} (key : ModulePath) (m : HashMap ModulePath V) : Option V :=
+    match m {
+        HashMap.map buckets =>
+            let idx := HashMap.bucket_of (modpath_hash key) in
+            let bucket := HashMap.get_bucket buckets idx in
+            HashMap.bucket_lookup modpath_lt modpath_gt key bucket
+    }
+
 // --- Helper: empty ScopeData ---
 
 def scope_data_empty : ScopeData := {
-    def_refs := Map.empty,
+    def_refs := modpath_map_empty,
     class_defs := List.empty,
     instances := List.empty,
-    inductives := Map.empty,
+    inductives := modpath_map_empty,
     classes := List.empty,
     infixes := List.empty,
     conflicts := List.empty,
@@ -41,7 +107,7 @@ def scope_data_add_def (sd : ScopeData) (d : ScopeDef) : ScopeData :=
         mk dr cd ins ind cls infs conf dp =>
             match d {
                 mk dname _ _ _ => {
-                    def_refs := Map.insert dname d dr,
+                    def_refs := modpath_map_insert dname d dr,
                     class_defs := cd,
                     instances := ins,
                     inductives := ind,
@@ -63,7 +129,7 @@ def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
                     def_refs := dr,
                     class_defs := cd,
                     instances := ins,
-                    inductives := Map.insert indname ind inds,
+                    inductives := modpath_map_insert indname ind inds,
                     classes := cls,
                     infixes := infs,
                     conflicts := conf,
@@ -310,7 +376,7 @@ def scope_data_add_def_params (sd : ScopeData) (name : ModulePath) (params : Lis
             classes := cls,
             infixes := infs,
             conflicts := conf,
-            def_params := Map.insert name params dp,
+            def_params := modpath_map_insert name params dp,
         }
     }
 
@@ -690,15 +756,17 @@ def resolve_def_in_scope_by_name (name : ModulePath) (s : Scope) : Result ScopeE
 // `def_refs` is a `HashMap ModulePath ScopeDef` (see `bench/scope_lookup.mo`
 // for why: at realistic scope sizes, `HashMap` clearly outperforms both
 // `List`+linear-scan and `BTreeMap` for this lookup-heavy access pattern) —
-// `Map.lookup`/`Map.insert` resolve correctly here because this function
-// (like the rest of `scope.mo`) is monomorphic over the concrete
-// `ModulePath`/`ScopeDef` types, not a generic `[Constraint]`-annotated
-// helper; see `std/map.mo`'s `HashMap.to_list` doc comment for the
-// evaluator limitation this sidesteps.
+// uses `modpath_map_lookup` (this file's own bypass of `Map.lookup`'s
+// typeclass dispatch, see that function's own doc comment above for why:
+// this function being monomorphic over the call SITE's own types doesn't
+// make `Map.lookup`/`HashMap`'s own generic body immune to the
+// evaluator's documented "first-registered-instance-wins" limitation --
+// confirmed as a real, live bug via a direct repro, not just a
+// theoretical risk).
 
 def scope_data_find_def (sd : ScopeData) (name : ModulePath) : Option ScopeDef :=
     match sd {
-        mk dr _ _ _ _ _ _ _ => Map.lookup name dr
+        mk dr _ _ _ _ _ _ _ => modpath_map_lookup name dr
     }
 
 // --- ScopeData: find a def's own declared param (name, type) list ---
@@ -706,7 +774,7 @@ def scope_data_find_def (sd : ScopeData) (name : ModulePath) : Option ScopeDef :
 
 def scope_data_find_def_params (sd : ScopeData) (name : ModulePath) : Option (List (Pair Identifier Term)) :=
     match sd {
-        mk _ _ _ _ _ _ _ dp => Map.lookup name dp
+        mk _ _ _ _ _ _ _ dp => modpath_map_lookup name dp
     }
 
 /// Top-level `Scope`-based wrapper, mirroring `scope_find_inductive_by_
@@ -722,7 +790,7 @@ def scope_find_def_params (name : ModulePath) (s : Scope) : Option (List (Pair I
 
 def scope_data_find_inductive (sd : ScopeData) (name : ModulePath) : Option Inductive :=
     match sd {
-        mk _ _ _ inds _ _ _ _ => Map.lookup name inds
+        mk _ _ _ inds _ _ _ _ => modpath_map_lookup name inds
     }
 
 // --- Instance handling helpers ---
