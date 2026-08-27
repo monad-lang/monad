@@ -37,9 +37,8 @@ jobs:
             ${{ runner.os }}-cargo-
 
       # Runs enterTest (devenv.nix): git hooks via prek (rustfmt, clippy,
-      # `cargo test --release`, and the fast .mo sweep), plus slow_tests/ --
-      # non-blocking (known-broken, fix in progress on a separate branch,
-      # see devenv.nix's own TODO).
+      # `cargo test --release`, and the fast .mo sweep), plus slow_tests/
+      # (now passing -- 107/107 -- and blocking CI like every other check).
       #
       # `tasks."monad:bootstrap-compile"` (devenv.nix) is NOT run here yet --
       # too slow to run on every push as-is; see its own TODO for when to

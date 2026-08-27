@@ -237,6 +237,22 @@ def do_stmts_extend_ctx (stmt: DoStmt) (ctx: List Identifier) : List Identifier 
     match stmt {
         bind_s name _ _ => List.cons name ctx,
         let_s name _ _ => List.cons name ctx,
+        // `expr_s` desugars to `bind expr (lam unnamed hole rest)`
+        // (lang/types.mo's `desugar_do_inner`), so the continuation `rest`
+        // sits under one real `Term.lam` binder -- every variable reference
+        // in subsequent statements is de Bruijn-shifted by 1. Add a
+        // non-referenceable placeholder (empty identifier -- never produced
+        // by `identifier`, so `find_index`'s `String.beq` never matches it)
+        // so the ctx's depth matches the desugared term's binder count.
+        // Without this, a do-block that references an OUTER variable after
+        // one or more bare-expression statements (e.g.
+        // `do { println ..; match outer_param { .. } }`) resolves the outer
+        // var to the WRONG de Bruijn slot -- off by the count of preceding
+        // `expr_s`s. Confirmed via lang/main.mo's `run_check_loop`, where
+        // `cache` resolved to `files`'s slot (`List`) instead of its own
+        // (`ModuleScopeCache`) because a preceding `println` `expr_s`
+        // shifted it by one.
+        expr_s _ => List.cons (Identifier.id "") ctx,
         _ => ctx
     }
 
@@ -1088,9 +1104,9 @@ def struct_brace (r : ParseResult String) (name : Identifier) (vis : Visibility)
 #[partial]
 def struct_fields (input : String) (name : Identifier) (vis : Visibility) : ParseResult Decl :=
 	let empty_ctx : List Identifier := List.empty in
-	match separated_by (tag ",") (preceded_by ws0 (struct_one_field empty_ctx)) input {
+	match separated_by (tag ",") (preceded_by ws0_and_comments (struct_one_field empty_ctx)) input {
 		success rem fields =>
-			match tag "}" (skip_spaces rem) {
+			match tag "}" (skip_docstrings (skip_spaces rem)) {
 				success rem2 _ => success rem2 (Decl.struct_d (Struct.mk name fields vis)),
 				fail e => fail (ParseError.custom "expected }" rem)
 			},

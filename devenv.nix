@@ -55,16 +55,12 @@
   # separate, currently-opt-in self-hosted self-compile smoke test -- see
   # its own comment for why it isn't wired to run automatically here yet.
   #
-  # slow_tests/ is run non-blocking (failure reported, doesn't fail the job):
-  # it's currently known-broken with a fix in progress on a separate branch.
-  # TODO: once that fix lands, drop the `|| { ...; true; }` fallback so
-  # slow_tests/ failures block CI like everything else.
+  # slow_tests/ now passes (107/107 as of the self-hosted parser fixes that
+  # unblocked `test_typecheck_lang_main`), so it runs unwrapped here and a
+  # slow_tests/ failure fails `devenv test`/CI like every other check.
   enterTest = ''
     prek run --all-files
-    cargo run --release -- test init std lang examples slow_tests --json || {
-      echo "::warning::slow_tests failed (known-broken, fix in progress on a separate branch) -- not blocking CI" >&2
-      true
-    }
+    cargo run --release -- test init std lang examples slow_tests --json
   '';
 
   # https://devenv.sh/tasks/
@@ -120,9 +116,7 @@
     };
     monad-tests = {
       enable = true;
-      entry = ''
-        cargo run --release -- test init std lang examples
-      '';
+      entry = "${config.devenv.root}/scripts/check-monad-tests.sh";
       pass_filenames = false;
       files = "\\.(rs|mo)$";
     };
