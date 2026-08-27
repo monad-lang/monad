@@ -2,7 +2,7 @@ use lang.core_eval {basic_native_table, eval}
 use lang.core_ir {CoreIr, IrLit}
 use lang.core_value {GlobalTable, Value, global_cache_new, global_table_len}
 use lang.lower_core_ir {LowerCtx, lower_ctx_from_decls, lower_root}
-use lang.types {AttrArg, Attribute, DebugName, ModulePath, Term}
+use lang.types {Attribute, DebugName, ModulePath, Term}
 
 /// End-to-end tests: real checked `Term` -> `LowerCtx` (built via
 /// `lang.lower_core_ir.lower_ctx_from_decls`, which itself calls

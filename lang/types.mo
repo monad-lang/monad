@@ -225,7 +225,7 @@ def param_many (name: Identifier) (type_: Term) : Param :=
 
 /// Create a canonical Param with explicit multiplicity, no default
 /// value, and no attributes.
-def mk_param (name: Identifier) (type_: Term) (mult: Multiplicity) : Param :=
+pub def mk_param (name: Identifier) (type_: Term) (mult: Multiplicity) : Param :=
     let none : Option Term := Option.none in
     let no_attrs : List Attribute := List.empty in
     Param.mk name type_ mult none no_attrs
@@ -233,7 +233,7 @@ def mk_param (name: Identifier) (type_: Term) (mult: Multiplicity) : Param :=
 /// Create a canonical Param with multiplicity=Many, no default value,
 /// and explicit attrs — the one constructor/def-param path that
 /// actually needs a non-empty `attrs` list (e.g. `#[arg]`).
-def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute) : Param :=
+pub def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute) : Param :=
     let none : Option Term := Option.none in
     Param.mk name type_ Multiplicity.many none attrs
 
@@ -392,16 +392,6 @@ type Visibility {
 type ParamV0 {
     mk (name: Identifier) (type_: TermV0) (mult: Multiplicity) (default: Option TermV0)
 }
-
-/// Create a ParamV0 with multiplicity=Many and no default value.
-def param_many_v0 (name: Identifier) (type_: TermV0) : ParamV0 :=
-    let none : Option TermV0 := Option.none in
-    ParamV0.mk name type_ Multiplicity.many none
-
-/// Create a ParamV0 with explicit multiplicity and no default value.
-def mk_param_v0 (name: Identifier) (type_: TermV0) (mult: Multiplicity) : ParamV0 :=
-    let none : Option TermV0 := Option.none in
-    ParamV0.mk name type_ mult none
 
 
 type MatchCaseV0 {

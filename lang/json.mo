@@ -591,10 +591,10 @@ instance Show Json {
 
 // ─── Construction helpers ───
 
-def Json.make_null : Json := null
+pub def Json.make_null : Json := null
 def Json.make_bool (b : Bool) : Json := bool b
 def Json.make_num_int (n : I64) : Json := num (int n)
-def Json.make_num_float (n : F64) : Json := num (float n)
+pub def Json.make_num_float (n : F64) : Json := num (float n)
 def Json.make_str (s : String) : Json := str s
 def Json.make_array (a : List Json) : Json := array a
 def Json.make_object (o : BTreeMap String Json) : Json := object o

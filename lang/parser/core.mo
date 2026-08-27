@@ -47,11 +47,11 @@ type OpEntry {
 	}
 
 
-def op_chars : List String :=
+pub def op_chars : List String :=
 	["+", "&", "=", "|", "<", ">", "*", "/", "-", "!", ".", "@"]
 
 
-def op_table : List OpEntry :=
+pub def op_table : List OpEntry :=
 	[OpEntry.mk "|>" 5 false,
 	 OpEntry.mk "<|" 5 true,
 	 OpEntry.mk ">>=" 10 true,

@@ -72,7 +72,7 @@ def get_city (a : Address) : String :=
 def set_city (c : String) (a : Address) : Address :=
     match a { mk street _ => { street := street, city := c } }
 
-def city_lens : Lens Address String :=
+pub def city_lens : Lens Address String :=
     lens get_city set_city
 
 // --- Prism for Shape ---

@@ -1,17 +1,17 @@
 use io {IO, println}
 use lang.types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
-  LoadedModules, LocalScope, MatchCase, ModulePath, NameRef, Native, Operator,
+  LoadedModules, LocalScope, MatchCase, ModulePath, Native, Operator,
   Param, Scope, ScopeData, StructLitField, Term,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, join_identifiers, lam,
-  lit, match_, mc, mk, mp, name, named, nid, nmp, nop, ntv, num, operator,
-  param_many, pi, show_identifier, show_operator, str, type_, unnamed, var,
+  lit, match_, mc, mk, mp, name, named, ntv, num, operator,
+  param_many, pi, show_identifier, str, type_, unnamed, var,
 }
 use lang.codegen.ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMInstruction,
   LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair, PhiPair, add, alloc_closure,
   alloc_constructor, assign, bitcast, bool_, branch, call, comment, emit_module,
-  fn_, gep, global_, i32_, i64_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_,
+  fn_, gep, global_, i64_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_,
   jump, load, mk, mul, native_op, op_add, op_eq, op_file_exists, op_gt, op_lt,
   op_mul, op_ne, op_print_str, op_read_file, op_sdiv, op_sub, op_write_file,
   parm_, phi, ret, sdiv, show_llvm_type, sub, trunc, var_, void_val, zext,

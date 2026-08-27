@@ -54,7 +54,7 @@ def test_hashmap_empty_insert : Bool :=
   true
 
 /// Verify HashMap.lookup returns correct value after insert.
-def _disabled_test_hashmap_insert_lookup : Bool :=
+pub def _disabled_test_hashmap_insert_lookup : Bool :=
   let m : HashMap I64 String := Map.empty in
   let m : HashMap I64 String := Map.insert 1 "one" m in
   match Map.lookup 1 m {
@@ -73,7 +73,7 @@ def test_hashmap_lookup_missing : Bool :=
   }
 
 /// Verify HashMap.delete removes a key.
-def _disabled_test_hashmap_delete : Bool :=
+pub def _disabled_test_hashmap_delete : Bool :=
   let m : HashMap I64 String := Map.empty in
   let m : HashMap I64 String := Map.insert 1 "one" m in
   let m : HashMap I64 String := Map.insert 2 "two" m in

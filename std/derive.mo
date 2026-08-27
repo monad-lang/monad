@@ -84,7 +84,7 @@ def lens_decls_for_ctor (type_name : String) (ctor : CtorInfo) : List Decl :=
 /// exactly one shape; a multi-constructor type generates nothing (silent,
 /// matching this port's scope — see `init.optics`'s `Prism` for sum-type
 /// variant access instead).
-def derive_lens_meta (info : TypeInfo) : List Decl :=
+pub def derive_lens_meta (info : TypeInfo) : List Decl :=
     match info {
         type_info type_name ctors =>
             match ctors {
@@ -175,7 +175,7 @@ def is_single_ctor_list (ctors : List CtorInfo) : Bool :=
 /// Every field's own type must have a `Debug` instance in scope (`Debug`
 /// is applied recursively, field by field) — `std/debug.mo` ships base
 /// instances for `String`/`I64`/`Bool`.
-def derive_debug_meta (info : TypeInfo) : List Decl :=
+pub def derive_debug_meta (info : TypeInfo) : List Decl :=
     match info {
         type_info type_name ctors =>
             let is_single := is_single_ctor_list ctors in
@@ -253,7 +253,7 @@ def beq_outer_arm (all_ctors : List CtorInfo) (i : I64) (ctor_a : CtorInfo) : Ma
 /// applied recursively, field by field) — `init/prelude.mo` and
 /// `init/number.mo`/`init/string.mo` ship base instances for the numeric
 /// types, `Bool`, `String`, and `Nat`.
-def derive_beq_meta (info : TypeInfo) : List Decl :=
+pub def derive_beq_meta (info : TypeInfo) : List Decl :=
     match info {
         type_info type_name ctors =>
             let arms := map_indexed_ctor_arms 0 (beq_outer_arm ctors) ctors in
@@ -339,7 +339,7 @@ def bord_method (name : String) (chain_fn : List String -> Expr) (diff_lt_is_tru
 ///
 /// Every field's own type must have a `BOrd` instance in scope, same
 /// requirement as `derive_beq`'s `BEq` above.
-def derive_bord_meta (info : TypeInfo) : List Decl :=
+pub def derive_bord_meta (info : TypeInfo) : List Decl :=
     match info {
         type_info type_name ctors =>
             [d_instance "BOrd" (e_var type_name)

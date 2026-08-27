@@ -67,6 +67,14 @@ pub fn set_res_extra<X: Clone, Y: Clone, T>(res: Res<T, X>, extra: Y) -> Res<T, 
 const RESERVED_KEYWORDS: &[&str] = &[
   "def", "defmacro", "let", "in", "use", "open", "class", "struct", "instance", "type", "fn", "ꟛ",
   "match", "if", "then", "else", "infix", "return", "for", "do", "quote", "with",
+  // Visibility prefixes are reserved so a term parser mid-expression doesn't
+  // absorb a following declaration's `pub`/`priv` as an ordinary identifier
+  // (e.g. `def f := s\npub def g := ...` would otherwise parse `f`'s body as
+  // `s pub`, stealing `g`'s visibility). `vis_parser` matches these via raw
+  // `tag("pub")`/`tag("priv")`, not via `identifier`, so reserving them here
+  // doesn't affect visibility parsing — it only stops `identifier`/`name`
+  // from ever accepting them as a variable/field/path segment.
+  "pub", "priv",
 ];
 const RESERVED_NAMES: &[&str] = &["Type", "Pred", "Sort"];
 

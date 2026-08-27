@@ -83,7 +83,7 @@ fn term_as_identifier(term: &Term) -> Option<Identifier> {
 /// already parse today via `attr_arg_parser`, no reason to accept only
 /// one. Returns an empty list (not an error) when there's no `derive`
 /// attribute at all — the common case, an ordinary undecorated type.
-fn derive_attribute_targets(induct: &Inductive) -> Result<Vec<String>, MacroError> {
+pub(crate) fn derive_attribute_targets(induct: &Inductive) -> Result<Vec<String>, MacroError> {
   let Some(attr) = induct
     .attributes
     .iter()
@@ -117,7 +117,7 @@ fn derive_attribute_targets(induct: &Inductive) -> Result<Vec<String>, MacroErro
 
 /// Map a `#[derive ...]` target name to the `std/derive.mo` decl-gen macro
 /// that implements it.
-fn derive_macro_name(target: &str) -> Option<&'static str> {
+pub(crate) fn derive_macro_name(target: &str) -> Option<&'static str> {
   match target {
     "BEq" => Some("derive_beq"),
     "BOrd" => Some("derive_bord"),

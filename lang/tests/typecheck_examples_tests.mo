@@ -1,4 +1,3 @@
-use io {io, read_file}
 use lang.types {
   Decl, Def, InductConstructor, Inductive, LocalScope, ModulePath, Scope,
   ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
@@ -7,8 +6,6 @@ use lang.module {mk, parse_all_decls}
 use lang.parser.core {fail, mk, success}
 use lang.scope {build_scope_from_decls}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
-
-open IO {io, read_file}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -82,20 +79,6 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
                 ok _ => true,
                 err _ => false
             }
-    }
-
-def typecheck_file (file_path : String) (mod_name : String) : Bool := 
-    match IO.read_file file_path {
-        IO.io content => 
-            match parse_all_decls content {
-                success _ decl_list => 
-                    let path := ModulePath.mp (List.cons (Identifier.id mod_name) List.empty) in
-                    let sd := build_scope_from_decls path decl_list in
-                    let scope := make_scope path sd in
-                    typecheck_module path scope decl_list,
-                fail _ => false
-            },
-        _ => false
     }
 
 /// A dependency-free, self-contained source snippet -- unlike every

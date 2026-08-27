@@ -257,7 +257,7 @@ def cli_dispatch_chain (type_name : String) (ctors : List CtorInfo) : Expr :=
 /// Command`) generates `parse_<lowercased name> : List String -> Result
 /// String Command`. Fails at meta-expansion time (`Decl.d_error`) if the
 /// type has no constructors, or if `#[arg]` annotates a non-`Bool` field.
-def derive_cli_meta (info : TypeInfo) : List Decl :=
+pub def derive_cli_meta (info : TypeInfo) : List Decl :=
     match info {
         type_info type_name ctors =>
             match ctors {

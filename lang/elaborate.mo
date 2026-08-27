@@ -307,15 +307,6 @@ def names_of_decls (decl_list : List Decl) : List Identifier :=
         List.empty => List.empty,
     }
 
-/// Elaborate a module name from ModulePath (single-segment → Identifier, else keep in known as module path)
-def name_of_module (mp : ModulePath) : List Identifier :=
-    match mp_to_maybe_id mp {
-        Option.some id =>
-            let empty : List Identifier := List.empty in
-            List.cons id empty,
-        Option.none => List.empty,
-    }
-
 /// Elaborate a single declaration.
 def elaborate_decl (decl : Decl) (known_names : List Identifier) : Decl :=
     match decl {

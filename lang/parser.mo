@@ -2325,29 +2325,6 @@ def def_body_expr (r : ParseResult Term) (name : Identifier) (params : List Pars
 		fail e => fail e
 	}
 
-/// Unlike every other step in this chain, kept as `List Param` and never
-/// wired to a caller: unused (see `monad-rs check`'s own `unused def`
-/// warning) since well before this plan's Phase 8 -- `def_body_block_or_
-/// none` is the real entry point for a brace-block `def` body, not this.
-/// Left untouched rather than folded into the `ParsedParam` chain for no
-/// live caller's benefit.
-#[partial]
-def def_body_block (r : ParseResult String) (name : Identifier) (params : List Param) (typ : Term) (vis : Visibility) : ParseResult Decl :=
-	match r {
-		success rem _ => def_body_do_plain (do_stmts (ctx_of_params params) rem) name params typ vis,
-		fail e => fail e
-	}
-
-/// `def_body_do`'s own pre-`ParsedParam` shape, kept only for `def_body_
-/// block` (see its own doc comment) -- NOT the `List DoStmt -> Decl`
-/// step every real `def`-body parse goes through now.
-#[partial]
-def def_body_do_plain (r : ParseResult (List DoStmt)) (name : Identifier) (params : List Param) (typ : Term) (vis : Visibility) : ParseResult Decl :=
-	match r {
-		success rem stmts => success rem (def_to_decl (lam_params params (desugar_do stmts)) name (build_param_pi_chain params typ) vis),
-		fail e => fail e
-	}
-
 #[partial]
 def def_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params : List ParsedParam) (typ : Term) (vis : Visibility) : ParseResult Decl :=
 	match r {

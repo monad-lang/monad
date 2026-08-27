@@ -30,7 +30,7 @@ def compile_defs_to_ir (defs : List Def) : String :=
 /// Full pipeline: compile Defs to IR, write to file, run llc,
 /// compile runtime, link, run the binary, return exit code.
 #[partial]
-def compile_and_run (defs : List Def) (output_dir : String) (output_name : String) : IO I64 {
+pub def compile_and_run (defs : List Def) (output_dir : String) (output_name : String) : IO I64 {
     let ir_path := String.concat output_dir (String.concat "/" (String.concat output_name ".ll"));
     let obj_path := String.concat output_dir (String.concat "/" (String.concat output_name ".o"));
     let runtime_obj := String.concat output_dir "/monad_runtime.o";

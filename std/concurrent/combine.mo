@@ -47,7 +47,7 @@ def cancel_all (fibers : List (Fiber A)) : IO Unit :=
 
 // Race: cancel all but the first fiber, await the first.
 #[partial]
-def race (fibers : List (Fiber A)) : IO A :=
+pub def race (fibers : List (Fiber A)) : IO A :=
   match fibers {
     List.cons f rest => do {
       let _ <- cancel_all rest;

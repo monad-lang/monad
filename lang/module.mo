@@ -128,7 +128,7 @@ def module_path_to_file (mp : ModulePath) : String :=
 
 /// Convert a file path to a ModulePath
 #[partial]
-def file_path_to_module_path (path : String) : ModulePath :=
+pub def file_path_to_module_path (path : String) : ModulePath :=
     let last_slash : I64 := string_find_last_slash path in
     let file_name : String :=
         if I64.lt 0 last_slash then
@@ -433,7 +433,7 @@ def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (v
 
 /// Load all dependencies for a module and merge their scopes
 /// base_dir is the directory to resolve the initial module from
-def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Option Scope) {
+pub def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Option Scope) {
     let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
     match opt_decls {
         Option.some decl_list => do {
@@ -770,7 +770,7 @@ def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (c
 
 /// The `check_file`-flavored twin of `load_module_with_dependencies_and_prelude_cached`.
 #[partial]
-def build_scope_with_deps_and_prelude_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_path : String) (mod_name : String) : IO ScopeAndCache :=
+pub def build_scope_with_deps_and_prelude_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_path : String) (mod_name : String) : IO ScopeAndCache :=
     let base_dir : String := extract_directory file_path in
     let mp : ModulePath := ModulePath.mp [Identifier.id mod_name] in
     load_module_with_dependencies_and_prelude_cached base cache base_dir mp
@@ -955,7 +955,7 @@ def list_append_go (xs : List A) (ys : List A) : List A :=
 /// covers: `struct_d`/`class_d`, `scoped_open_d` recursion, ...). Used by
 /// `slow_tests/*.mo`'s own corpus-checking `#[test]`s.
 #[partial]
-def typecheck_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : IO Bool := do {
+pub def typecheck_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : IO Bool := do {
     let diags <- check_module_with_scope scope decl_list locals Option.none false;
     match diags {
         List.empty => do { return true },

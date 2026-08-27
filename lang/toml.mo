@@ -647,11 +647,11 @@ instance Show Toml.Value {
 
 // ─── Construction helpers ───
 
-def Toml.make_string (s : String) : Toml.Value := string s
-def Toml.make_integer (n : I64) : Toml.Value := integer n
-def Toml.make_boolean (b : Bool) : Toml.Value := boolean b
-def Toml.make_array (a : List Toml.Value) : Toml.Value := array a
-def Toml.make_table (t : BTreeMap String Toml.Value) : Toml.Value := table t
+pub def Toml.make_string (s : String) : Toml.Value := string s
+pub def Toml.make_integer (n : I64) : Toml.Value := integer n
+pub def Toml.make_boolean (b : Bool) : Toml.Value := boolean b
+pub def Toml.make_array (a : List Toml.Value) : Toml.Value := array a
+pub def Toml.make_table (t : BTreeMap String Toml.Value) : Toml.Value := table t
 
 // ─── Type checkers ───
 
@@ -674,16 +674,16 @@ def Toml.is_array (v : Toml.Value) : Bool :=
 def Toml.get_string (v : Toml.Value) : Result String String :=
   match v { string s => ok s, _ => err "expected string" }
 
-def Toml.get_integer (v : Toml.Value) : Result String I64 :=
+pub def Toml.get_integer (v : Toml.Value) : Result String I64 :=
   match v { integer n => ok n, _ => err "expected integer" }
 
-def Toml.get_boolean (v : Toml.Value) : Result String Bool :=
+pub def Toml.get_boolean (v : Toml.Value) : Result String Bool :=
   match v { boolean b => ok b, _ => err "expected boolean" }
 
-def Toml.get_array (v : Toml.Value) : Result String (List Toml.Value) :=
+pub def Toml.get_array (v : Toml.Value) : Result String (List Toml.Value) :=
   match v { array a => ok a, _ => err "expected array" }
 
-def Toml.get_table (v : Toml.Value) : Result String (BTreeMap String Toml.Value) :=
+pub def Toml.get_table (v : Toml.Value) : Result String (BTreeMap String Toml.Value) :=
   match v { table t => ok t, _ => err "expected table" }
 
 // ─── Table manipulation ───

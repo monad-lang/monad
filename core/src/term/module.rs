@@ -2059,16 +2059,23 @@ pub fn load_module_from_text_typed(
   *loaded = load_decl_uses_modules(&init_decls, loaded.clone(), &mut in_progress)?;
   let init_decls = filter_cfg_test_decls(init_decls, loaded.config.test_mode);
   validate_open_filters(&init_decls)?;
+  // Capture macro-call / `#[derive]` references from the pre-expansion
+  // decls (macro calls are expanded away by `type_check_module_decls_new`
+  // below, so this is the last chance to record them for
+  // `collect_referenced_names`'s unused-import analysis).
+  let macro_call_names = collect_macro_call_names(&init_decls);
   let init_decls_result =
     crate::core_check_module::type_check_module_decls_new(&path, init_decls, loaded);
   let init_decls = init_decls_result.map_err(LoadingError::Type)?;
-  loaded.add_module(module(
+  let mut built = module(
     path.clone(),
     ParsedModule {
       decls: init_decls,
       module_doc: None,
     },
-  ));
+  );
+  built.set_macro_call_names(macro_call_names);
+  loaded.add_module(built);
   Ok(())
 }
 
@@ -2244,6 +2251,17 @@ pub struct Module {
   decl_gens: Arc<Map<ModulePath, SourceContext<DeclGenDef>>>,
   infix: Arc<Map<Operator, SourceContext<Infix>>>,
   instances: Arc<Vec<SourceContext<Instance>>>,
+  /// Names invoked via `derive_lens! Point`-style macro calls
+  /// (`Decl::MacroCall`) or `#[derive BEq]` attribute dispatch (mapped to
+  /// `derive_beq` via `derive_macro_name`), captured from the
+  /// **pre-expansion** decls in `load_module_from_text_typed`. Macro calls
+  /// are expanded away before the `Module` is stored, so this set is the
+  /// only record `collect_referenced_names` has that they were used —
+  /// without it, `use std.derive {derive_beq, ...}` imports that are
+  /// *required* for `#[derive]`/`derive!` macro resolution get a spurious
+  /// "unused import" warning (and `organize_imports` would wrongly strip
+  /// them). Empty for modules not built through the full load pipeline.
+  macro_call_names: Set<ModulePath>,
   doc: Option<Documentation>,
   /// `open Module [{filter}] in <decl>` scopes recorded for defs/types/
   /// instances that are otherwise stored normally in the maps above. The
@@ -2469,6 +2487,40 @@ fn collect_term_names(term: &Term, names: &mut Set<ModulePath>) {
   }
 }
 
+/// Collect the macro names a module *invokes* — `derive_lens! Point`-style
+/// `Decl::MacroCall`s and `#[derive BEq]` attribute dispatch (mapped to
+/// `derive_beq` via `derive_macro_name`) — from **pre-expansion** decls.
+/// `collect_referenced_names` can't see these any other way: macro calls
+/// are expanded away before the `Module` is stored, and `#[derive]`
+/// attribute args aren't ordinary `Term::Var`s. Run this on the parsed
+/// decls in `load_module_from_text_typed` (before
+/// `type_check_module_decls_new` expands them) and store the result on the
+/// `Module` via `set_macro_call_names`. Errors from
+/// `derive_attribute_targets` (malformed `#[derive]` args) are ignored
+/// here — they'll be reported as real errors during expansion; this pass
+/// only needs the well-formed names for unused-import analysis.
+pub fn collect_macro_call_names(decls: &[SourceContext<Decl>]) -> Set<ModulePath> {
+  let mut names = Set::default();
+  for ctx in decls {
+    match ctx.value() {
+      Decl::MacroCall { name, .. } => {
+        names.insert(ModulePath::single(name.clone()));
+      }
+      Decl::Type(ind) => {
+        if let Ok(targets) = crate::eval::macro_expand::derive_attribute_targets(ind) {
+          for target in targets {
+            if let Some(macro_name) = crate::eval::macro_expand::derive_macro_name(&target) {
+              names.insert(ModulePath::single(Identifier::new(macro_name.to_string())));
+            }
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+  names
+}
+
 /// Collect every name referenced anywhere in a module's own declarations —
 /// as a free variable (`Term::Var`), a match-pattern constructor
 /// (`MatchCase::name`), a type-constraint class, or an infix target.
@@ -2497,7 +2549,7 @@ fn collect_term_names(term: &Term, names: &mut Set<ModulePath>) {
 /// actually-used name is unreferenced. A fully scope-aware, pre-
 /// elaboration-only version is future work — deliberately not done here.
 pub fn collect_referenced_names(module: &Module) -> Set<ModulePath> {
-  let mut names = Set::default();
+  let mut names = module.macro_call_names().clone();
   for ctx in module.defs() {
     let def = ctx.value();
     collect_term_names(&def.term, &mut names);
@@ -3101,6 +3153,18 @@ impl Module {
   pub fn instances(&self) -> &Vec<SourceContext<Instance>> {
     &self.instances
   }
+
+  /// Macro names this module invokes via `derive!` calls / `#[derive]`
+  /// attributes (captured pre-expansion — see the `macro_call_names` field
+  /// doc). Used by `collect_referenced_names` so required derive imports
+  /// aren't flagged as unused.
+  pub fn macro_call_names(&self) -> &Set<ModulePath> {
+    &self.macro_call_names
+  }
+
+  pub(crate) fn set_macro_call_names(&mut self, names: Set<ModulePath>) {
+    self.macro_call_names = names;
+  }
 }
 
 pub fn extract_constructors(
@@ -3243,6 +3307,7 @@ pub fn module(path: ModulePath, parsed: ParsedModule) -> Module {
     uses,
     opens,
     infix: Arc::new(infix),
+    macro_call_names: Set::default(),
     doc: parsed.module_doc,
     scoped_opens,
   }

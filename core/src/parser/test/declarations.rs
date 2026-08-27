@@ -1315,3 +1315,48 @@ fn test_visibility_use_unaffected() {
     _ => panic!("Expected Use"),
   }
 }
+
+#[test]
+fn test_pub_def_not_absorbed_by_preceding_def_body() {
+  // Regression: `pub`/`priv` were not reserved keywords, so a def whose
+  // body is a bare identifier (`:= s`) immediately followed by `pub def`
+  // on the next line had the `pub` token absorbed as an application
+  // argument — parsing `pass`'s body as `s pub` (App) and stealing `warn`'s
+  // visibility (parsed as `def warn`, vis = PackagePrivate). Reserving
+  // `pub`/`priv` makes the term parser stop at the keyword, leaving it for
+  // the next declaration's `vis_parser`.
+  let s = "def pass (s : I64) : I64 := s\npub def warn (s : I64) : I64 := s\n";
+  let (rem_after_first, first) = decl_parser(s.into()).unwrap();
+  let first_def = match first.value() {
+    Decl::Def(d) => d.clone(),
+    other => panic!("expected first decl to be Def, got {other:?}"),
+  };
+  assert_eq!(first_def.vis, Visibility::PackagePrivate);
+  // `pass`'s body is `Lam(s, <body>)`; `<body>` must be just `Var s`, NOT
+  // `App(Var s, Var pub)` (the bug: `pub` absorbed as an application arg).
+  let Term::Lam { body, .. } = &first_def.term else {
+    panic!("expected Lam body, got {}", first_def.term);
+  };
+  // The parser wraps the body in `Term::Ctx` (source-location metadata);
+  // peel it to inspect the real term. The bug would parse `s pub` — an
+  // `App` — rather than the lone `Var s`.
+  let mut inner = body.as_ref();
+  while let Term::Ctx { term, .. } = inner {
+    inner = term;
+  }
+  assert!(
+    matches!(inner, Term::Var { .. }),
+    "first def's body absorbed the following `pub` as an application: {}",
+    body
+  );
+
+  // The `pub` must still be unconsumed in the leftover input — the second
+  // decl parses with visibility Pub (the bug stole it → PackagePrivate).
+  let (_, second) = decl_parser(rem_after_first).unwrap();
+  let second_def = match second.value() {
+    Decl::Def(d) => d.clone(),
+    other => panic!("expected second decl to be Def, got {other:?}"),
+  };
+  assert_eq!(second_def.vis, Visibility::Pub);
+  assert_eq!(second_def.name.to_string(), "warn");
+}

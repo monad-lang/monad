@@ -86,7 +86,7 @@ def pass (s : String) : String :=
     bold (green s)
 
 /// Yellow — for warning output.
-def warn (s : String) : String :=
+pub def warn (s : String) : String :=
     escape (Modifier.fg Color.yellow) ++ s ++ escape Modifier.reset
 
 def env_flag_set (v : Option String) : Bool :=
@@ -115,7 +115,7 @@ def colors_enabled : IO Bool :=
             Monad.pure (Bool.not (term_is_dumb term))
 
 /// Wraps `s` in `color` if colors are enabled, otherwise returns `s` unchanged.
-def colored (s : String) (color : Color) : IO String :=
+pub def colored (s : String) (color : Color) : IO String :=
     colors_enabled >>= fn (enabled : Bool) =>
     if enabled then Monad.pure (escape (Modifier.fg color) ++ s ++ escape Modifier.reset)
     else Monad.pure s

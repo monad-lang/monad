@@ -2,7 +2,7 @@ use lang.types {
   Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor,
   Inductive, Instance, Literal, MatchCase, ModulePath, Multiplicity, Native,
   NumSuffix, OpenFilter, Operator, Param, Struct, StructField, Term,
-  TypeConstraint, UseFilter, UseItem, affine, app, class_d, con, def_d, f32, f64,
+  UseFilter, UseItem, affine, app, class_d, con, def_d, f32, f64,
   forall, hole, i16, i32, i64, i8, id, if_, inductive_d, infix_d, instance_d, lam,
   linear, lit, many, match_, mc, mk, mp, name, named, ntv, num, open_all, open_d,
   open_only, operator, pi, scoped_open_d, show_identifier, show_module_path,
@@ -232,17 +232,6 @@ def show_opt_term_rest (hd : Option Term) (rest : List (Option Term)) : String :
             let sp := String.concat head_str " " in
             String.concat sp rest_str,
     }
-
-#[partial]
-def show_type_constraint (tc : TypeConstraint) : String := match tc {
-    TypeConstraint.mk cls vars =>
-        let cls_str := show_module_path cls in
-        let vars_str := show_id_list vars in
-        let lb := String.concat "[" cls_str in
-        let sp := String.concat " " vars_str in
-        let inner := String.concat lb sp in
-        String.concat inner "]",
-}
 
 /// `pub `/`priv `, or "" for the default `package_private` (never written
 /// back out explicitly — round-trips as the same absence of a prefix).
