@@ -21,7 +21,7 @@ use crate::core_eval;
 use crate::core_program::CoreProgram;
 use crate::core_value::{GlobalCache, GlobalTable, NativeTable, Value};
 use crate::lower_core_ir::{LoweredProgram, lower_program};
-use crate::term::module::LoadedModules;
+use crate::term::module::{LoadedModules, Module};
 use crate::term::{Decl, ModulePath, SourceContext};
 
 use super::macro_expand::MacroError;
@@ -90,11 +90,31 @@ impl MetaEvalContext {
       .cloned()
       .collect();
     let extra_modules = vec![(current_path.clone(), filtered_decls)];
-    let program: CoreProgram = crate::build_core_program(loaded, &extra_modules).map_err(|e| {
-      MacroError::Generic(format!(
-        "meta: failed to check + capture the loaded program: {e}"
-      ))
-    })?;
+    // Trim `loaded` to just the modules this meta invocation could reach
+    // — the `init` package plus the transitive `use`-closure of the file
+    // being expanded — before re-capturing. The whole-program capture
+    // this replaced fed the ENTIRE `loaded` set (for `check lang`, every
+    // `lang/*.mo`) into one flat bare-key `program.inductives` map
+    // (`lower_core_ir::lower_program`), so two independent modules
+    // declaring the same bare type name collided: `init/meta.mo`'s
+    // meta-language `MatchArm`/`Decl`/`Param` vs `lang/core_ir.mo`'s
+    // `MatchArm` and `lang/types.mo`'s `Decl`/`Param`. Last insert won,
+    // and `derive_cli_meta`'s `open`-aliased `match_arm`/`d_def`/
+    // `meta_param` references lowered to `GlobalDef::Unresolved`, failing
+    // `check lang` (the self-hosted `test` path resolves the same names
+    // through its own scope mechanism and was unaffected). `derive_cli`
+    // is the only macro actually invoked in `lang/`, and its
+    // `derive_cli_meta` only depends on `lang.cli` (→ `std.list`,
+    // `init.meta`), so the closure excludes the colliding compiler
+    // modules and the meta-eval ends up seeing exactly the `loaded` set
+    // the Rust `derive_cli_test` harness already builds — which passes.
+    let trimmed_loaded = dep_closure_loaded(loaded, current_decls)?;
+    let program: CoreProgram =
+      crate::build_core_program(&trimmed_loaded, &extra_modules).map_err(|e| {
+        MacroError::Generic(format!(
+          "meta: failed to check + capture the loaded program: {e}"
+        ))
+      })?;
     let lowered: LoweredProgram = lower_program(&program).map_err(|e| {
       MacroError::Generic(format!("meta: failed to lower the captured program: {e:?}"))
     })?;
@@ -139,4 +159,75 @@ impl MetaEvalContext {
     }
     Ok(value)
   }
+}
+
+/// Trim `loaded` down to just the modules a meta invocation rooted at
+/// `current_decls` could actually reach: the `init` package (always —
+/// `check_all_modules_capturing_core` → `type_check_module_decls_new_inner`
+/// looks up the prelude in `loaded` and interns every loaded module's
+/// defs as ground truth for cross-module resolution) plus the transitive
+/// `use`-closure of the file being expanded. See `MetaEvalContext::build`
+/// for why the whole-program capture this replaces caused a bare-key
+/// collision in `program.inductives`.
+///
+/// The closure is seeded from `current_decls`' own `Decl::Use` entries
+/// rather than `current_path` because the file being expanded is not
+/// necessarily registered in `loaded` yet — the Rust `derive_cli_test`
+/// harness, for instance, adds it only AFTER type-checking — so looking
+/// it up by path would find nothing. Its own `use`s are in `current_decls`
+/// regardless, and that's the seed the closure needs.
+pub(crate) fn dep_closure_loaded(
+  loaded: &LoadedModules,
+  current_decls: &[SourceContext<Decl>],
+) -> Result<LoadedModules, MacroError> {
+  use std::collections::HashSet;
+
+  // Init package is always kept — `build_core_program` captures it
+  // separately, but the capturing checker still reads it back out of
+  // `loaded` (prelude lookup + ground-truth interning), so a trimmed
+  // `loaded` that dropped it would lose builtins. Use the exact same
+  // path set `build_core_program` itself treats as init.
+  let init_paths: crate::Set<ModulePath> = crate::term::module::init_package_sources()
+    .map_err(|e| MacroError::Generic(format!("meta: loading init package: {e}")))?
+    .into_iter()
+    .map(|(p, _)| p)
+    .collect();
+
+  // BFS the transitive `use`-closure of the file being expanded.
+  let mut visited: HashSet<ModulePath> = HashSet::new();
+  let mut stack: Vec<ModulePath> = Vec::new();
+  for ctx in current_decls {
+    if let Decl::Use(u) = ctx.value() {
+      stack.push(u.module_path().clone());
+    }
+  }
+  let mut closure: HashSet<ModulePath> = HashSet::new();
+  while let Some(path) = stack.pop() {
+    if !visited.insert(path.clone()) {
+      continue;
+    }
+    let Some(module) = loaded.get_module(&path) else {
+      // A `use`d module not in `loaded` (e.g. resolved through a
+      // different path, or not yet demand-loaded here) just isn't
+      // captured — `build_core_program` re-reads captured modules from
+      // disk via search paths, so the only cost is not traversing its
+      // further `use`s; skip it rather than failing.
+      continue;
+    };
+    closure.insert(path);
+    for use_ctx in module.get_uses() {
+      stack.push(use_ctx.value().module_path().clone());
+    }
+  }
+
+  let kept: Vec<Module> = loaded
+    .modules()
+    .into_iter()
+    .filter(|m| init_paths.contains(m.path()) || closure.contains(m.path()))
+    .cloned()
+    .collect();
+  let mut trimmed = LoadedModules::from(kept);
+  trimmed.set_search_paths(loaded.search_paths().clone());
+  trimmed.set_test_mode(loaded.test_mode());
+  Ok(trimmed)
 }

@@ -7,17 +7,15 @@
 # not invoke a shell, so a hook entry can't use `&&`/newlines to chain
 # two commands -- hence this wrapper script.
 #
-# `check lang` currently exits non-zero with a PRE-EXISTING failure on
-# main (unrelated to the parser fixes that landed alongside this script):
-# `macro expansion failed: meta: applying `derive_cli_meta` failed:
-# unresolved global: MatchArm.match_arm` (x2). That failure is tracked by
-# a plan to fix the derive_cli_meta/MatchArm resolution; until it lands,
-# `check lang` is run but NOT allowed to fail the hook (the `|| true`
-# below). Remove the `|| true` once the plan lands and `check lang`
-# passes cleanly.
+# `check lang` runs the Rust host's checker over the whole lang/ tree.
+# It used to fail on a bare-key collision in the meta-eval's whole-program
+# capture (`init/meta.mo`'s `MatchArm`/`Decl`/`Param` overwritten by
+# `lang/core_ir.mo`'s `MatchArm` and `lang/types.mo`'s `Decl`/`Param` in
+# the flat bare-key `program.inductives` map), surfacing as
+# `unresolved global: MatchArm.match_arm`; fixed by scoping
+# `MetaEvalContext::build` and `collect_loaded_inductives` to the
+# dep-closure of the file being expanded. It now passes (0 errors) and
+# gates the hook like the `test init std examples` line above.
 set -euo pipefail
 cargo run --release --quiet -- test init std examples
-cargo run --release --quiet -- check lang || {
-  echo "::warning::check lang failed (pre-existing MatchArm.match_arm / derive_cli_meta issue, tracked separately -- not blocking this commit)" >&2
-  true
-}
+cargo run --release --quiet -- check lang

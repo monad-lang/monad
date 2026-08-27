@@ -27,7 +27,18 @@ type IrLit {
 
 /// One arm of a `match_`. `bind_count` is how many fields the matched
 /// constructor carries (and thus how many entries the evaluator must push
-/// onto its `Env` before evaluating `body`) — mirrors `core_ir::MatchArm`.
+/// onto its `Env` before evaluating `body`) — mirrors `core_ir::MatchArm`
+/// (Rust). Shares its bare name with `init/meta.mo`'s meta-language
+/// `MatchArm` (ctor `match_arm`); that collision was invisible to the
+/// self-hosted checker but broke the Rust host's `check lang`, whose
+/// meta-eval captured the whole `lang/` tree into one flat bare-key
+/// `program.inductives` map (`core/src/lower_core_ir.rs`) — both keyed
+/// bare `MatchArm`, the later insert silently overwrote `init.meta`'s,
+/// so `derive_cli_meta`'s `MatchArm.match_arm` reference lowered to
+/// `GlobalDef::Unresolved`. Fixed not by renaming this type but by
+/// scoping the meta-eval's capture to the dep-closure of the file being
+/// expanded (`MetaEvalContext::build`), so the colliding compiler
+/// modules are never loaded for a `derive_cli` expansion.
 type MatchArm {
   arm (bind_count: I64) (body: CoreIr),
 }

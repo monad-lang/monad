@@ -390,7 +390,22 @@ pub fn expand_macros(
       _ => None,
     })
     .collect();
-  for (path, induct) in collect_loaded_inductives(loaded) {
+  // Trim the loaded inductives to the same dep-closure the meta-eval
+  // captures (`meta_compile::dep_closure_loaded`), not the whole
+  // `loaded` set. `collect_loaded_inductives` keys each inductive by its
+  // bare single-segment name (`induct.name()`) with last-wins, so feeding
+  // it the entire `loaded` (for `check lang`, every `lang/*.mo`) makes
+  // `lang/types.mo`'s `Decl`/`Param` and `lang/core_ir.mo`'s `MatchArm`
+  // silently overwrite `init/meta.mo`'s same-named meta-language types —
+  // and this `inductives` map is what `reify_decls_value_to_decls` uses to
+  // map a result value's constructor tag back to a name, so the reify
+  // would see `lang.types`'s `def_d` where `derive_cli_meta` built
+  // `init.meta`'s `d_def`, failing `check lang` even after the eval-side
+  // capture was scoped. Scoping here too makes the reify see exactly
+  // `init.meta`'s `Decl`/`Param`/`MatchArm`/`Expr`. The current module's
+  // own types (above) still take priority via `or_insert`.
+  let closure_loaded = super::meta_compile::dep_closure_loaded(loaded, &current_decls)?;
+  for (path, induct) in collect_loaded_inductives(&closure_loaded) {
     inductives.entry(path).or_insert(induct);
   }
 
