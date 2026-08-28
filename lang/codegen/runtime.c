@@ -68,26 +68,67 @@ void* alloc_closure(void* entry, int64_t arity, int64_t env_size) {
     return c;
 }
 
-/* Fixed-arity indirect-call trampolines for a boxed, zero-capture
-   Closure value (see alloc_closure above) -- used whenever a function
-   value is stored/passed/extracted rather than called immediately at
-   its own reference site (lang/codegen/emit.mo's Term.var value-position
-   case boxes such a reference via alloc_closure instead of eager-calling
-   it; compile_general_db_call's callee dispatch calls back through here
+/* alloc_closure only ALLOCATES space for env_size captured slots -- it
+   has no way to accept capture VALUES itself (its signature is just
+   (entry, arity, env_size)). These two are the write/read halves of
+   actually populating/reading that env array, mirroring
+   monad_set_field/monad_get_field's identical role for Constructor
+   (see those functions' own doc comments) -- except Closure's env[]
+   sits after THREE leading fields (entry, arity, env_size), not
+   Constructor's TWO (tag, field_count), so monad_set_field/
+   monad_get_field's own offset arithmetic does not apply here; hence
+   these dedicated functions rather than reuse.
+   monad_closure_set_env is called once per captured value, right after
+   alloc_closure, from the ENCLOSING function that's allocating a lifted
+   lambda's closure (lang/codegen/emit.mo's compile_db_lam_ir).
+   monad_closure_get_env is called from INSIDE a lifted lambda's own
+   compiled body, via its own `self` parameter (see apply_closureN's own
+   doc comment below for how `self` gets there), to read back a
+   captured value at the point it's actually referenced. */
+void monad_closure_set_env(void* clos, int64_t idx, int64_t value) {
+    if (!clos) return;
+    ((Closure*)clos)->env[idx] = (void*)(intptr_t)value;
+}
+
+int64_t monad_closure_get_env(void* clos, int64_t idx) {
+    if (!clos) return 0;
+    return (int64_t)(intptr_t)((Closure*)clos)->env[idx];
+}
+
+/* Fixed-arity indirect-call trampolines for a boxed Closure value (see
+   alloc_closure above) -- used whenever a function value is stored/
+   passed/extracted rather than called immediately at its own reference
+   site (lang/codegen/emit.mo's Term.var value-position case boxes such
+   a reference via alloc_closure instead of eager-calling it;
+   compile_general_db_call's callee dispatch calls back through here
    once the callee is a computed value rather than a statically-known
-   global name). Every entry function this backend ever boxes is a
-   top-level Monad def compiled with the uniform (i64, i64, ..., i64) ->
-   i64 signature (see build_llvm_params_db/LLVMFunction.mk in emit.mo),
-   so a small fixed table of these, keyed by arity, covers every real
-   call shape without needing a general variadic/libffi-style dispatcher.
-   `env`/env_size are unused here (always 0 for a zero-capture closure --
-   this is deliberately NOT full closure conversion, see Phase 0 of
-   plans/bootstrapping/self-hosted-compiler.md's dictionary-passing plan).
+   global name). Every entry function this backend ever boxes is
+   compiled with a UNIFORM (self, i64, i64, ..., i64) -> i64 signature,
+   `self` being the closure pointer itself, passed here as this
+   trampoline's own leading argument to `entry` -- this is what lets a
+   genuinely CAPTURING lifted lambda (lang/codegen/emit.mo's
+   compile_db_lam_ir) read its own closure instance's captured values
+   back out via monad_closure_get_env(self, idx) at the point they're
+   referenced inside its body: there can be many separate closure
+   instances of the same lambda template with different captured
+   values (e.g. one per loop iteration or recursive call), so `self`
+   is the only way the lambda's own compiled code can tell which
+   instance it's running as.
+   This convention is applied UNIFORMLY to every entry ever boxed here,
+   including a top-level Monad def referenced as a first-class value
+   (e.g. passed to List.map) -- such a def's own DIRECT-call signature
+   elsewhere in the program has no leading self param and must stay
+   that way, so codegen boxes a small forwarding SHIM instead of the
+   def's own entry point in that case (build_closure_shim_func,
+   lang/codegen/emit.mo) -- the shim itself conforms to this uniform
+   convention (ignoring its own unused self param) and forwards through
+   to the real def unchanged. Either way, this file's own trampolines
+   need no knowledge of which case they're dispatching to -- entry is
+   ALWAYS (self, a0, ..., a{N-1}) -> i64 by the time it gets here.
    Capped at 8 args -- comfortably above the arities of the function
    VALUES (not ordinary direct calls, which never go through here) this
    backend needs to box today; extend by adding more typedef+function
    pairs if that ever changes. */
-typedef int64_t (*Fn1)(int64_t);
 typedef int64_t (*Fn2)(int64_t, int64_t);
 typedef int64_t (*Fn3)(int64_t, int64_t, int64_t);
 typedef int64_t (*Fn4)(int64_t, int64_t, int64_t, int64_t);
@@ -95,30 +136,31 @@ typedef int64_t (*Fn5)(int64_t, int64_t, int64_t, int64_t, int64_t);
 typedef int64_t (*Fn6)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
 typedef int64_t (*Fn7)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
 typedef int64_t (*Fn8)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
+typedef int64_t (*Fn9)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
 
 int64_t apply_closure1(void* clos, int64_t a0) {
-    return ((Fn1)((Closure*)clos)->entry)(a0);
+    return ((Fn2)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0);
 }
 int64_t apply_closure2(void* clos, int64_t a0, int64_t a1) {
-    return ((Fn2)((Closure*)clos)->entry)(a0, a1);
+    return ((Fn3)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1);
 }
 int64_t apply_closure3(void* clos, int64_t a0, int64_t a1, int64_t a2) {
-    return ((Fn3)((Closure*)clos)->entry)(a0, a1, a2);
+    return ((Fn4)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2);
 }
 int64_t apply_closure4(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {
-    return ((Fn4)((Closure*)clos)->entry)(a0, a1, a2, a3);
+    return ((Fn5)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3);
 }
 int64_t apply_closure5(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {
-    return ((Fn5)((Closure*)clos)->entry)(a0, a1, a2, a3, a4);
+    return ((Fn6)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3, a4);
 }
 int64_t apply_closure6(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5) {
-    return ((Fn6)((Closure*)clos)->entry)(a0, a1, a2, a3, a4, a5);
+    return ((Fn7)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3, a4, a5);
 }
 int64_t apply_closure7(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
-    return ((Fn7)((Closure*)clos)->entry)(a0, a1, a2, a3, a4, a5, a6);
+    return ((Fn8)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3, a4, a5, a6);
 }
 int64_t apply_closure8(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6, int64_t a7) {
-    return ((Fn8)((Closure*)clos)->entry)(a0, a1, a2, a3, a4, a5, a6, a7);
+    return ((Fn9)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3, a4, a5, a6, a7);
 }
 
 void* alloc_constructor(int64_t tag, int64_t field_count) {

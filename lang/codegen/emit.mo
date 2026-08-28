@@ -103,6 +103,56 @@ def ctx_lookup_local (c : CodegenCtx) (name : Identifier) : Option LLVMValue := 
     CodegenCtx.ctx locals nt nl arities => lookup_binding locals name,
 }
 
+/// Rebuilds `c` with an EMPTY `locals` list, preserving `next_temp`/
+/// `next_label`/`arities`. Used when entering a freshly-lifted
+/// function's own body (`compile_db_lam_ir`) -- the OUTER function's
+/// locals must not leak through as stale cross-function SSA references
+/// (this is the closure-free-variable-capture fix's actual correctness
+/// backbone, not just an optimization: `ctx_bind_local` alone only
+/// PREPENDS to whatever locals list it's handed, it never resets one --
+/// so without this, a lifted function's ctx still carries every binding
+/// visible in its ENCLOSING function, and a free-variable reference
+/// inside the lifted body would silently "succeed" via `ctx_lookup_local`
+/// against a register — `parm_`/`var_` — that belongs to the outer
+/// function and doesn't exist in the lifted one at all, which is
+/// exactly the `llc: use of undefined value` bug this whole fix exists
+/// for). Only the lambda's own param and its explicitly rebuilt
+/// captures (`build_get_env_instrs`) should be visible inside.
+#[partial]
+def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := match c {
+    CodegenCtx.ctx _locals nt nl arities => CodegenCtx.ctx empty_bindings nt nl arities,
+}
+
+/// The other half of `ctx_reset_locals`: after compiling a lifted
+/// function's own body (`compile_db_lam_ir`) with a reset-and-rebuilt
+/// `locals` list (the lambda's own param + its captures ONLY), the ctx
+/// handed back to the ENCLOSING function's own ongoing compilation must
+/// have its ORIGINAL locals restored -- `outer`'s own `locals`, i.e.
+/// whatever was visible right before this lambda was compiled -- while
+/// still carrying forward `inner`'s updated `next_temp`/`next_label`
+/// counters (so the enclosing function's own subsequent fresh names
+/// don't collide with names already used inside the lifted function).
+/// Confirmed as a real, distinct bug via a direct repro: without this,
+/// a SECOND lifted lambda compiled later in the SAME enclosing
+/// function's body (e.g. a do-block's own trailing `pure hole`
+/// continuation, itself its own `compile_db_lam_ir` call, compiled
+/// right after an EARLIER nested do-block's own lambda already reset
+/// the ctx) silently loses every local bound BEFORE that first lambda
+/// (a `let n := 5` two statements up) -- its own free-variable capture
+/// then finds `n` nowhere in `ctx_lookup_local` at all (not even as a
+/// missed-capture bug; the outer LOCAL BINDING itself is gone from the
+/// ctx by this point), so `n` gets treated as an unknown GLOBAL name
+/// instead and silently miscompiles into a bogus 0-arg call
+/// (`call i64 @n()`, `llc: use of undefined value '@n'`).
+#[partial]
+def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx :=
+    match outer {
+        CodegenCtx.ctx outer_locals _ont _onl _oarities =>
+            match inner {
+                CodegenCtx.ctx _ilocals int_ inl iarities => CodegenCtx.ctx outer_locals int_ inl iarities,
+            },
+    }
+
 /// Looks up a global's own known arity by its already-mangled
 /// `llvm_name` (see `ArityEntry`'s doc comment). `Option.none` for any
 /// name not in the table -- a name genuinely absent from the compiled
@@ -165,6 +215,51 @@ def global_fn_ptr_text (llvm_name : String) (arity : I64) : String :=
 #[partial]
 def repeat_type (ty : LLVMType) (n : I64) : List LLVMType :=
     if I64.beq n 0 then List.empty else List.cons ty (repeat_type ty (n - 1))
+
+/// A tiny forwarding function boxed INSTEAD of `real_name`'s own entry
+/// point, whenever a top-level def (arity>0) is referenced as a
+/// first-class VALUE (`Term.var`'s arity>0 branch, `compile_db_term_ir`,
+/// above). `apply_closureN` (`runtime.c`) now uniformly passes its own
+/// closure pointer as `entry`'s first arg to every closure it invokes
+/// (needed for a REAL lifted lambda to read its own captures, see
+/// `compile_db_lam_ir`) -- but `real_name`'s own compiled signature
+/// (`(p0..p{arity-1}) -> i64`, no leading self param) is ALSO the exact
+/// signature every ordinary DIRECT call to it elsewhere in the program
+/// uses, so it cannot itself grow a leading self param without breaking
+/// those calls. This shim absorbs the mismatch: same uniform (self,
+/// p1..p_arity) signature `apply_closureN` expects, ignores self,
+/// forwards its real params through to `real_name` unchanged. `real_name`
+/// itself is completely untouched.
+///
+/// A shim is a pure, deterministic function of `(real_name, arity)`, so
+/// every boxing call site for the same def produces a byte-identical
+/// shim -- `dedup_funcs_by_name` (below) collapses the duplicates once
+/// the whole module's functions are assembled, rather than tracking
+/// "have I already emitted a shim for X" through `CodegenCtx` (which
+/// would touch every one of the dozens of call sites that construct/
+/// pattern-match it).
+#[partial]
+def build_closure_shim_func (shim_name : String) (real_name : String) (arity : I64) : LLVMFunction :=
+    let self_pair := ParamPair.mk "p0" LLVMType.i64_ in
+    let real_params := build_llvm_params_from_db_shifted arity 1 in
+    let params := cons_pair self_pair real_params in
+    let fwd_args := shim_fwd_args arity 1 in
+    let call_val := LLVMValue.call real_name LLVMType.i64_ fwd_args false in
+    let call_instr := LLVMInstruction.assign "r" call_val in
+    let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "r") in
+    let entry_block := LLVMBasicBlock.mk "entry" (cons_instr call_instr (cons_instr ret_instr empty_instrs)) in
+    LLVMFunction.mk shim_name params LLVMType.i64_ (cons_block entry_block empty_blocks) false
+
+#[partial]
+def build_llvm_params_from_db_shifted (n : I64) (start_idx : I64) : List ParamPair :=
+    if I64.beq n 0 then empty_pairs
+    else cons_pair (ParamPair.mk (String.concat "p" (I64.to_string start_idx)) LLVMType.i64_)
+        (build_llvm_params_from_db_shifted (n - 1) (start_idx + 1))
+
+#[partial]
+def shim_fwd_args (n : I64) (start_idx : I64) : List LLVMValue :=
+    if I64.beq n 0 then empty_vals
+    else cons_val (LLVMValue.parm_ start_idx) (shim_fwd_args (n - 1) (start_idx + 1))
 
 #[partial]
 def lookup_binding (bindings : List LocalBinding) (name : Identifier) : Option LLVMValue := match bindings {
@@ -611,15 +706,22 @@ def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs
             match opt_ {
                 Option.some term_ =>
                     match compile_db_term_ir c term_ {
-                        CompileResult.ok ctx_t instrs val blocks_t funcs_t globals_t =>
-                            match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs blocks_t val) {
-                                Triple.tr new_instrs new_blocks new_val =>
-                                    compile_ntv_args_go ctx_t rest
-                                        new_instrs new_blocks
-                                        (append_funcs acc_funcs funcs_t)
-                                        (append_globals acc_globals globals_t)
-                                        (cons_val val acc_vals)
-                                        new_val,
+                        CompileResult.ok ctx_t instrs val_raw blocks_t funcs_t globals_t =>
+                            // See `materialize_void`'s own doc comment
+                            // -- a native-call argument can't legally
+                            // be `void` either.
+                            match materialize_void ctx_t val_raw {
+                                MaterializedVal.mk ctx_tm void_instrs val =>
+                                    let instrs_m := append_instrs instrs void_instrs in
+                                    match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs_m blocks_t val) {
+                                        Triple.tr new_instrs new_blocks new_val =>
+                                            compile_ntv_args_go ctx_tm rest
+                                                new_instrs new_blocks
+                                                (append_funcs acc_funcs funcs_t)
+                                                (append_globals acc_globals globals_t)
+                                                (cons_val val acc_vals)
+                                                new_val,
+                                    },
                             },
                     },
                 Option.none =>
@@ -637,6 +739,48 @@ def compile_ntv_args (c : CodegenCtx) (args : List (Option Term)) (acc_instrs : 
 def rev_vals (xs : List LLVMValue) (acc : List LLVMValue) : List LLVMValue := match xs {
     List.cons x rest => rev_vals rest (cons_val x acc),
     List.empty => acc,
+}
+
+type MaterializedVal {
+    mk (mv_ctx : CodegenCtx) (mv_instrs : List LLVMInstruction) (mv_val : LLVMValue),
+}
+
+/// Substitutes a genuine heap-allocated Unit value for `LLVMValue.void_val`
+/// wherever one is about to be used as a function-call ARGUMENT -- a real
+/// call-argument position never accepts LLVM's own `void` type (only a
+/// function's own RETURN type may be `void`). Mirrors the identical
+/// `void_val -> alloc_constructor 0 empty_vals` substitution
+/// `compile_db_def_ir_body` already does for the analogous return-value
+/// case (below) -- `Term.hole` (do-notation's own implicit trailing
+/// `Monad.pure hole`, `desugar_do`, `lang/types.mo`) is the most common
+/// source: it compiles to a bare `void_val` placeholder (there's no real
+/// value to construct), and that placeholder used to flow straight into
+/// `Monad.pure`'s own call argument list unchanged
+/// (`compile_spine_args_go`/`compile_ntv_args_go`), producing invalid
+/// LLVM (`call i64 @Monad_IO_pure(void void)`, confirmed via a real
+/// `bootstrap compile lang/main.mo monad` failure) whenever a do-block's
+/// LAST statement was a bare expression (not `return`/`let`) -- e.g.
+/// `if verbose then do { ...; println (...) } else return unit` as its
+/// own do-block's final statement, exactly the shape
+/// `compile_loaded_modules_to_ir` (above) uses pervasively.
+///
+/// Safe to unconditionally append `mv_instrs` straight after whatever
+/// instructions produced `v` (no `compose_seq`-style terminator-splicing
+/// needed): every real call site that produces `LLVMValue.void_val`
+/// (`Literal.struct_lit`/`struct_update`, `DebugName.unnamed`,
+/// `Term.forall`/`Term.pi`/`Term.type_`/`Term.hole`) pairs it with
+/// `empty_instrs` -- there's never a pending terminator to splice around
+/// when `v` is actually `void_val`.
+#[partial]
+def materialize_void (c : CodegenCtx) (v : LLVMValue) : MaterializedVal := match v {
+    LLVMValue.void_val =>
+        match fresh_temp c {
+            CtxStrPair.mk ctx1 temp =>
+                let unit_val := LLVMValue.alloc_constructor 0 empty_vals in
+                let assign := LLVMInstruction.assign temp unit_val in
+                MaterializedVal.mk ctx1 (cons_instr assign empty_instrs) (LLVMValue.var_ temp),
+        },
+    _ => MaterializedVal.mk c empty_instrs v,
 }
 
 #[partial]
@@ -906,6 +1050,243 @@ def drop_last_instr (instrs : List LLVMInstruction) : List LLVMInstruction := ma
     },
 }
 
+// ─── Free-variable computation for closure capture ─────────────────────
+//
+// A lifted lambda (`compile_db_lam_ir`, below) is compiled into a
+// brand-new, independent top-level LLVM function -- so any name its
+// body references that isn't its own parameter must be explicitly
+// CAPTURED (read out of its own closure instance's env array at
+// runtime, see `monad_closure_get_env`/`monad_closure_set_env`,
+// `lang/codegen/runtime.c`) rather than referenced directly, which
+// would produce a dangling cross-function SSA reference (`llc: use of
+// undefined value`) the moment it referred to anything bound in the
+// ENCLOSING function. `free_names_of_term` computes exactly the set of
+// names a `Term` references that are NOT bound somewhere inside that
+// same `Term` (i.e. its free variables), given the names already bound
+// by the ENCLOSING scope at the point this `Term` appears (`bound`,
+// threaded through and grown at each binder). Name-based throughout
+// (matches `ctx_lookup_local`'s own name-based, not de-Bruijn-index-
+// based, scoping convention -- `compile_db_term_ir`'s `Term.var` case
+// never consults `idx` at all).
+//
+// Deliberately a separate, shadow-AWARE family from
+// `collect_referenced_names` (below, in the reachability-analysis
+// section) -- that one collects EVERY name a `Term` references,
+// including ones that are actually locally bound (e.g. a lambda's own
+// parameter, or an inner match arm's own binder), which is exactly
+// right for its own purpose (a conservative reachability
+// over-approximation) but wrong here: capturing a name that's actually
+// bound INSIDE the lambda's own body, not free at all, would shadow the
+// real (inner) binding with a stale captured value.
+#[partial]
+def free_names_of_term (bound : List Identifier) (t : Term) : List Identifier := match t {
+    Term.var _idx dbg => free_names_of_dbg bound dbg,
+    Term.var_macro _idx dbg => free_names_of_dbg bound dbg,
+    Term.lam dbg typ_ body_ =>
+        List.append (free_names_of_term bound typ_)
+            (free_names_of_term (add_bound_name bound dbg) body_),
+    Term.forall dbg kind body_ =>
+        List.append (free_names_of_term bound kind)
+            (free_names_of_term (add_bound_name bound dbg) body_),
+    Term.pi arg ret => List.append (free_names_of_term bound arg) (free_names_of_term bound ret),
+    Term.app fun_ arg_ => List.append (free_names_of_term bound fun_) (free_names_of_term bound arg_),
+    Term.lit lit_ => free_names_of_lit bound lit_,
+    Term.ntv native => free_names_of_native bound native,
+    Term.con c => free_names_of_con bound c,
+    Term.type_ _universe => List.empty,
+    Term.hole => List.empty,
+    Term.quote_ inner => free_names_of_term bound inner,
+}
+
+#[partial]
+def add_bound_name (bound : List Identifier) (dbg : DebugName) : List Identifier := match dbg {
+    DebugName.named id_ => List.cons id_ bound,
+    DebugName.unnamed => bound,
+}
+
+#[partial]
+def free_names_of_dbg (bound : List Identifier) (dbg : DebugName) : List Identifier := match dbg {
+    DebugName.named id_ => if ident_in_list bound id_ then List.empty else List.cons id_ List.empty,
+    DebugName.unnamed => List.empty,
+}
+
+#[partial]
+def free_names_of_lit (bound : List Identifier) (lit_ : Literal) : List Identifier := match lit_ {
+    Literal.num _n _s => List.empty,
+    Literal.flt _t _s => List.empty,
+    Literal.str _s => List.empty,
+    Literal.if_ cond then_ else_ =>
+        List.append (free_names_of_term bound cond)
+            (List.append (free_names_of_term bound then_) (free_names_of_term bound else_)),
+    Literal.match_ scrutinee cases =>
+        List.append (free_names_of_term bound scrutinee) (free_names_of_cases bound cases),
+    Literal.struct_lit fields type_name =>
+        List.append (free_names_of_struct_fields bound fields) (free_names_of_opt_term bound type_name),
+    Literal.struct_update base fields =>
+        List.append (free_names_of_term bound base) (free_names_of_struct_fields bound fields),
+}
+
+#[partial]
+def free_names_of_opt_term (bound : List Identifier) (ot : Option Term) : List Identifier := match ot {
+    Option.some t => free_names_of_term bound t,
+    Option.none => List.empty,
+}
+
+#[partial]
+def free_names_of_struct_fields (bound : List Identifier) (fields : List StructLitField) : List Identifier := match fields {
+    List.empty => List.empty,
+    List.cons f rest =>
+        match f {
+            StructLitField.mk _name value =>
+                List.append (free_names_of_term bound value) (free_names_of_struct_fields bound rest),
+        },
+}
+
+/// Each case's own `args` (and, defensively, its `field_pattern`
+/// binders -- even though `field_pattern` isn't wired into codegen's
+/// own match-arm binding yet, a separate pre-existing gap) shadow
+/// `bound` inside that case's `body` ONLY, not its siblings.
+#[partial]
+def free_names_of_cases (bound : List Identifier) (cases : List MatchCase) : List Identifier := match cases {
+    List.empty => List.empty,
+    List.cons case_ rest =>
+        match case_ {
+            MatchCase.mc _name args body_ field_pattern =>
+                let bound2 := add_field_pattern_bound (List.append args bound) field_pattern in
+                List.append (free_names_of_term bound2 body_) (free_names_of_cases bound rest),
+        },
+}
+
+#[partial]
+def add_field_pattern_bound (bound : List Identifier) (fp : Option FieldPattern) : List Identifier := match fp {
+    Option.some pat => match pat { FieldPattern.mk entries _rest => add_field_pattern_entries bound entries },
+    Option.none => bound,
+}
+
+#[partial]
+def add_field_pattern_entries (bound : List Identifier) (entries : List FieldPatternEntry) : List Identifier := match entries {
+    List.empty => bound,
+    List.cons e rest =>
+        match e { FieldPatternEntry.mk _field binder => add_field_pattern_entries (List.cons binder bound) rest },
+}
+
+#[partial]
+def free_names_of_native (bound : List Identifier) (n : Native) : List Identifier := match n {
+    Native.mk _name _num_args args => free_names_of_opt_list bound args,
+}
+
+/// `c`'s own `name` is the constructor TAG, not a variable reference --
+/// deliberately excluded (unlike `collect_referenced_names_con`, whose
+/// reachability purpose needs it; free-var capture doesn't).
+#[partial]
+def free_names_of_con (bound : List Identifier) (c : Con) : List Identifier := match c {
+    Con.mk _name _typ_name _num_args args => free_names_of_opt_list bound args,
+}
+
+#[partial]
+def free_names_of_opt_list (bound : List Identifier) (args : List (Option Term)) : List Identifier := match args {
+    List.empty => List.empty,
+    List.cons opt_ rest =>
+        match opt_ {
+            Option.some t => List.append (free_names_of_term bound t) (free_names_of_opt_list bound rest),
+            Option.none => free_names_of_opt_list bound rest,
+        },
+}
+
+#[partial]
+def ident_in_list (xs : List Identifier) (x : Identifier) : Bool := match xs {
+    List.empty => false,
+    List.cons y rest => if identifier_eq y x then true else ident_in_list rest x,
+}
+
+#[partial]
+def dedup_idents (names : List Identifier) : List Identifier := dedup_idents_go names List.empty
+
+#[partial]
+def dedup_idents_go (names : List Identifier) (seen : List Identifier) : List Identifier := match names {
+    List.empty => List.empty,
+    List.cons n rest =>
+        if ident_in_list seen n
+        then dedup_idents_go rest seen
+        else List.cons n (dedup_idents_go rest (List.cons n seen)),
+}
+
+/// Intersects a raw free-name list against the CURRENT `CodegenCtx`'s
+/// actual locals -- only names that resolve to a real LOCAL binding
+/// here are genuine capture candidates. A name that's free in the body
+/// but resolves to `Option.none` here is a global/constructor/def
+/// reference, correctly excluded (left to the existing global-lookup
+/// path inside the lifted function, unchanged).
+#[partial]
+def build_capture_list (c : CodegenCtx) (names : List Identifier) : List LocalBinding := match names {
+    List.empty => List.empty,
+    List.cons n rest =>
+        match ctx_lookup_local c n {
+            Option.some val => List.cons (LocalBinding.mk n val) (build_capture_list c rest),
+            Option.none => build_capture_list c rest,
+        },
+}
+
+#[partial]
+def captures_to_vals (captures : List LocalBinding) : List LLVMValue := match captures {
+    List.empty => List.empty,
+    List.cons cap rest => match cap { LocalBinding.mk _n v => List.cons v (captures_to_vals rest) },
+}
+
+type GetEnvResult {
+    mk (ger_ctx : CodegenCtx) (ger_instrs : List LLVMInstruction),
+}
+
+/// Binds each captured name, in order, to a fresh
+/// `@monad_closure_get_env` call reading from THIS closure instance's
+/// own env array (`self = parm_ 0`, the lifted function's own new
+/// leading param -- see `compile_db_lam_ir`'s own doc comment) -- the
+/// read half mirroring `build_set_env_instrs` below. Order MUST match
+/// `build_set_env_instrs`'s/`captures_to_vals`'s own iteration order --
+/// both are driven by the SAME `captures` list, built once, so this
+/// holds by construction.
+#[partial]
+def build_get_env_instrs (c : CodegenCtx) (captures : List LocalBinding) (idx : I64) : GetEnvResult := match captures {
+    List.empty => GetEnvResult.mk c empty_instrs,
+    List.cons cap rest =>
+        match cap {
+            LocalBinding.mk cname _cval =>
+                match fresh_temp c {
+                    CtxStrPair.mk ctx1 temp =>
+                        let get_call := LLVMValue.call "monad_closure_get_env" LLVMType.i64_
+                            (cons_val (LLVMValue.parm_ 0) (cons_val (LLVMValue.int_ idx) empty_vals)) false in
+                        let get_instr := LLVMInstruction.assign temp get_call in
+                        let ctx2 := ctx_bind_local ctx1 cname (LLVMValue.var_ temp) in
+                        match build_get_env_instrs ctx2 rest (idx + 1) {
+                            GetEnvResult.mk ctx3 rest_instrs => GetEnvResult.mk ctx3 (cons_instr get_instr rest_instrs),
+                        },
+                },
+        },
+}
+
+type SetEnvResult {
+    mk (ser_ctx : CodegenCtx) (ser_instrs : List LLVMInstruction),
+}
+
+/// One `@monad_closure_set_env` call per captured value, in order --
+/// mirrors `build_set_field_instrs` (above) exactly, just against the
+/// closure's own distinct env-array layout (`monad_closure_set_env`,
+/// `lang/codegen/runtime.c`).
+#[partial]
+def build_set_env_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : I64) (c : CodegenCtx) : SetEnvResult := match vals {
+    List.empty => SetEnvResult.mk c empty_instrs,
+    List.cons v rest =>
+        match fresh_temp c {
+            CtxStrPair.mk ctx1 temp =>
+                let set_call := LLVMValue.call "monad_closure_set_env" LLVMType.i64_
+                    (cons_val obj_val (cons_val (LLVMValue.int_ idx) (cons_val v empty_vals))) false in
+                let set_instr := LLVMInstruction.assign temp set_call in
+                match build_set_env_instrs obj_val rest (idx + 1) ctx1 {
+                    SetEnvResult.mk ctx2 rest_instrs => SetEnvResult.mk ctx2 (cons_instr set_instr rest_instrs),
+                },
+        },
+}
+
 // This is reached ONLY for a genuinely NESTED `Term.lam` appearing in
 // VALUE position -- a top-level def's own OUTER, param-introducing
 // lambdas never reach here (`compile_db_def_ir` peels those off first
@@ -928,6 +1309,24 @@ def drop_last_instr (instrs : List LLVMInstruction) : List LLVMInstruction := ma
 // instead, mirroring the identical, already-correct fix for a NAMED
 // global def referenced as a first-class value (`compile_db_term_ir`'s
 // own `Term.var`/arity>0 case, just above).
+///
+/// **Free-variable capture** (see the `free_names_of_term`/
+/// `build_capture_list`/`build_get_env_instrs`/`build_set_env_instrs`
+/// family, just above): this lambda's body may reference names bound
+/// in its ENCLOSING function's own scope (e.g. an earlier do-notation
+/// statement's bound name) -- since the lambda is lifted into a
+/// genuinely separate top-level LLVM function, those references can't
+/// resolve to the outer function's own registers (`llc` correctly
+/// rejects that as `use of undefined value`). Instead: compute the
+/// body's free names, capture their CURRENT values into the closure's
+/// own env array at allocation time (`monad_closure_set_env`), and
+/// prepend `monad_closure_get_env` reads at the top of the lifted
+/// function's own body to rebind them locally before compiling `body`
+/// for real. The lifted function gains a new leading `self` parameter
+/// (`p0`, the closure pointer itself) so it can identify which closure
+/// INSTANCE it's running as (`apply_closureN`, `runtime.c`, now
+/// uniformly passes it) -- the lambda's own real parameter shifts to
+/// `p1`.
 #[partial]
 def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Term) : CompileResult :=
     match fresh_label c "lambda" {
@@ -936,20 +1335,75 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
                 named id => id,
                 unnamed => Identifier.id "x",
             } in
-            let c1 := ctx_bind_local ctx1 name (LLVMValue.parm_ 0) in
-            match compile_db_term_ir c1 body {
-                CompileResult.ok ctx2 instrs_r val_r blocks_r funcs_r globals_r =>
-                    let entry_instrs := append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
-                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                    let lam_pair := ParamPair.mk "p0" LLVMType.i64_ in
-                    let lam_params := cons_pair lam_pair empty_pairs in
-                    let lam_func := LLVMFunction.mk lam_name lam_params LLVMType.i64_ (cons_block entry_block blocks_r) false in
-                    match fresh_temp ctx2 {
-                        CtxStrPair.mk ctx_box temp =>
-                            let entry_text := global_fn_ptr_text lam_name 1 in
-                            let box_val := LLVMValue.alloc_closure entry_text 1 List.empty in
-                            let box_instr := LLVMInstruction.assign temp box_val in
-                            CompileResult.ok ctx_box (cons_instr box_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks (cons_func lam_func funcs_r) globals_r,
+            // Free vars of body, excluding the lambda's own param;
+            // intersected against what's a REAL local at THIS call
+            // site (the ENCLOSING function's own ctx, `ctx1`) -- see
+            // `free_names_of_term`/`build_capture_list`'s own doc
+            // comments.
+            let raw_free := dedup_idents (free_names_of_term (List.cons name List.empty) body) in
+            let captures := build_capture_list ctx1 raw_free in
+            let capture_vals := captures_to_vals captures in
+
+            // Fresh, EMPTY-locals ctx for the lifted function's own
+            // body -- must NOT carry the outer function's locals
+            // forward (see `ctx_reset_locals`'s own doc comment, the
+            // actual fix). `p0` = self (the closure pointer), `p1` =
+            // the lambda's own real formal param -- shifted by one
+            // from before.
+            let ctx_inner0 := ctx_reset_locals ctx1 in
+            let ctx_inner1 := ctx_bind_local ctx_inner0 name (LLVMValue.parm_ 1) in
+            match build_get_env_instrs ctx_inner1 captures 0 {
+                GetEnvResult.mk ctx_inner2 get_env_instrs =>
+                    match compile_db_term_ir ctx_inner2 body {
+                        CompileResult.ok ctx2_raw instrs_r val_r blocks_r funcs_r globals_r =>
+                            // `ctx2_raw`'s own `locals` is still the
+                            // lifted function's reset-and-rebuilt list
+                            // (only its own param + captures) -- restore
+                            // the ENCLOSING function's original locals
+                            // (`c`, this call's own starting ctx) before
+                            // handing control back to it, carrying
+                            // forward only `ctx2_raw`'s updated
+                            // `next_temp`/`next_label` counters. See
+                            // `ctx_restore_locals`'s own doc comment --
+                            // this is a real, distinct bug from the one
+                            // `ctx_reset_locals` fixes: without this, a
+                            // SECOND lifted lambda compiled later in the
+                            // SAME enclosing function's body silently
+                            // loses every local the first one's own
+                            // reset ctx never had.
+                            let ctx2 := ctx_restore_locals c ctx2_raw in
+                            let body_instrs := append_instrs get_env_instrs instrs_r in
+                            let entry_instrs := append_instrs body_instrs (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
+                            let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                            let self_pair := ParamPair.mk "p0" LLVMType.i64_ in
+                            let lam_pair := ParamPair.mk "p1" LLVMType.i64_ in
+                            let lam_params := cons_pair self_pair (cons_pair lam_pair empty_pairs) in
+                            let lam_func := LLVMFunction.mk lam_name lam_params LLVMType.i64_ (cons_block entry_block blocks_r) false in
+                            match fresh_temp ctx2 {
+                                CtxStrPair.mk ctx_box temp =>
+                                    // `2` here is `lam_func`'s own real
+                                    // LLVM param count (self + 1 real
+                                    // param) -- controls the bitcast's
+                                    // function-TYPE text
+                                    // (`global_fn_ptr_text`'s own
+                                    // `arity` param feeds
+                                    // `repeat_type`). NOT the same
+                                    // number as `alloc_closure`'s own
+                                    // `1` just below (the LOGICAL/
+                                    // apply-arity `apply_closureN`'s
+                                    // own dispatch is keyed on) -- the
+                                    // two genuinely diverge now that
+                                    // every lifted function gains a
+                                    // leading `self` param.
+                                    let entry_text := global_fn_ptr_text lam_name 2 in
+                                    let box_val := LLVMValue.alloc_closure entry_text 1 capture_vals in
+                                    let box_instr := LLVMInstruction.assign temp box_val in
+                                    match build_set_env_instrs (LLVMValue.var_ temp) capture_vals 0 ctx_box {
+                                        SetEnvResult.mk ctx_set set_env_instrs =>
+                                            let all_instrs := cons_instr box_instr set_env_instrs in
+                                            CompileResult.ok ctx_set all_instrs (LLVMValue.var_ temp) empty_blocks (cons_func lam_func funcs_r) globals_r,
+                                    },
+                            },
                     },
             },
     }
@@ -1021,6 +1475,26 @@ def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (blocks : Li
                 },
         }
 
+/// Dispatches through `lookup_native_any` (above), NOT a private,
+/// narrower name-matching copy -- `is_native_bool_op_name`'s own prior
+/// body compared `extract_base_name (show_identifier id)` (bare-only,
+/// e.g. `"lt"` for `I64.lt`) against underscore-mangled strings
+/// (`"I64_lt"`), which can never match: the exact same dotted-vs-
+/// mangled-name mismatch class of bug `lookup_native_any`'s own doc
+/// comment documents fixing for `try_compile_inline_native_db` (never
+/// applied here). Confirmed as a real, previously-undiagnosed bug via a
+/// direct repro (`if I64.lt a b then ... else ...`, non-constant so
+/// constant-folding doesn't hide it): `term_is_native_bool_op` always
+/// returned `false` for a DOTTED comparison (the only form real parsed
+/// source ever produces), so `ensure_i1_cond` always took its "needs
+/// unboxing" path even for a condition that already compiled to a
+/// genuine `icmp`-produced `i1` -- `llc: '%tN' defined with type 'i1'
+/// but expected 'i64'` the moment `monad_get_tag` tried to treat that
+/// `i1` as a boxed pointer. This is exactly the shape the self-hosted
+/// PARSER's own `furthest_error` (`lang/parser/combinators.mo`) uses
+/// (`if I64.lt (String.length ...) (String.length ...) then ...`),
+/// which blocked `bootstrap compile lang/main.mo monad`'s own
+/// self-compile (`lang/main.mo` depends on the parser).
 #[partial]
 def term_is_native_bool_op (t : Term) : Bool := match t {
     Term.app fun_ _arg =>
@@ -1029,7 +1503,7 @@ def term_is_native_bool_op (t : Term) : Bool := match t {
                 match fun2 {
                     Term.var _idx dbg =>
                         match dbg {
-                            DebugName.named id => is_native_bool_op_name (extract_base_name (show_identifier id)),
+                            DebugName.named id => is_native_bool_op_name (show_identifier id),
                             DebugName.unnamed => false,
                         },
                     _ => false,
@@ -1039,9 +1513,27 @@ def term_is_native_bool_op (t : Term) : Bool := match t {
     _ => false,
 }
 
+/// `name` is a raw (possibly dotted, e.g. `"I64.lt"`) identifier
+/// string -- routes through `lookup_native_any` (above), which already
+/// tries both the underscore-mangled and bare-extracted forms, rather
+/// than re-deriving that normalization here. Only `op_eq`/`op_lt`/
+/// `op_gt`/`op_ne` produce a genuine `icmp`-shaped `i1` (`op_add`/
+/// `op_sub`/`op_mul`/`op_sdiv` are I64-valued, not Bool-valued, and
+/// never appear as an `if`'s own condition; the IO/string ops
+/// `lookup_native_any` also resolves are irrelevant here too) -- see
+/// `term_is_native_bool_op`'s own doc comment for the bug this fixes.
 #[partial]
-def is_native_bool_op_name (name : String) : Bool :=
-    String.beq name "I64_eq" || String.beq name "I64_lt" || String.beq name "I64_gt" || String.beq name "I64_ne"
+def is_native_bool_op_name (name : String) : Bool := match lookup_native_any name {
+    Option.some op =>
+        match op {
+            NativeOp.op_eq => true,
+            NativeOp.op_lt => true,
+            NativeOp.op_gt => true,
+            NativeOp.op_ne => true,
+            _ => false,
+        },
+    Option.none => false,
+}
 
 #[partial]
 def build_db_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : String) (merge_label : String) (then_ : Term) (else_ : Term) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) (entry_funcs : List LLVMFunction) (entry_globals : List LLVMGlobal) : CompileResult :=
@@ -1139,12 +1631,44 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                                                 CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
                                         }
                                     else
+                                        // `apply_closureN` (runtime.c)
+                                        // now uniformly passes ITS OWN
+                                        // closure pointer as `entry`'s
+                                        // leading arg to every closure
+                                        // it invokes (needed for a REAL
+                                        // lifted lambda,
+                                        // `compile_db_lam_ir`, to read
+                                        // its own captures) -- but
+                                        // `llvm_name`'s own compiled
+                                        // signature (`(p0..p{arity-1})
+                                        // -> i64`, no leading self
+                                        // param) is ALSO the exact
+                                        // signature every ordinary
+                                        // DIRECT call to it elsewhere in
+                                        // the program uses, so it can't
+                                        // itself grow a leading self
+                                        // param without breaking those.
+                                        // Box a tiny forwarding SHIM
+                                        // instead of `llvm_name`'s own
+                                        // entry point -- conforms to the
+                                        // uniform (self, p1..p_arity)
+                                        // convention `apply_closureN`
+                                        // expects, ignores self,
+                                        // forwards through unchanged
+                                        // (`build_closure_shim_func`,
+                                        // below). `llvm_name` itself is
+                                        // completely untouched. `env`
+                                        // stays empty -- this case
+                                        // genuinely has zero captures,
+                                        // it's a reference to a global.
                                         match fresh_temp c {
                                             CtxStrPair.mk ctx_t temp =>
-                                                let entry_text := global_fn_ptr_text llvm_name arity in
+                                                let shim_name := String.concat llvm_name "_closure_shim" in
+                                                let shim_func := build_closure_shim_func shim_name llvm_name arity in
+                                                let entry_text := global_fn_ptr_text shim_name (arity + 1) in
                                                 let box_val := LLVMValue.alloc_closure entry_text arity List.empty in
                                                 let assign_instr := LLVMInstruction.assign temp box_val in
-                                                CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                                                CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks (cons_func shim_func empty_funcs) empty_globals_list,
                                         },
                                 // No arity known for this name (module
                                 // compiled via `empty_ctx empty_arities`,
@@ -1502,15 +2026,26 @@ def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : Lis
         List.empty => SpineArgs.mk c acc_instrs acc_blocks acc_funcs acc_globals (rev_vals acc_vals empty_vals) acc_val,
         List.cons t rest =>
             match compile_db_term_ir c t {
-                CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
-                    match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs1 blocks1 val1) {
-                        Triple.tr new_instrs new_blocks new_val =>
-                            compile_spine_args_go ctx1 rest
-                                new_instrs new_blocks
-                                (append_funcs acc_funcs funcs1)
-                                (append_globals acc_globals globals1)
-                                (cons_val val1 acc_vals)
-                                new_val,
+                CompileResult.ok ctx1 instrs1 val1_raw blocks1 funcs1 globals1 =>
+                    // `val1_raw` may be `LLVMValue.void_val` (e.g. `t`
+                    // is `Term.hole`, do-notation's own implicit
+                    // trailing `Monad.pure hole`) -- an ARGUMENT
+                    // position can never legally be LLVM's own `void`
+                    // (only a function's own return type may be
+                    // `void`), so materialize a real Unit value first
+                    // (see `materialize_void`'s own doc comment).
+                    match materialize_void ctx1 val1_raw {
+                        MaterializedVal.mk ctx1m void_instrs val1 =>
+                            let instrs1m := append_instrs instrs1 void_instrs in
+                            match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs1m blocks1 val1) {
+                                Triple.tr new_instrs new_blocks new_val =>
+                                    compile_spine_args_go ctx1m rest
+                                        new_instrs new_blocks
+                                        (append_funcs acc_funcs funcs1)
+                                        (append_globals acc_globals globals1)
+                                        (cons_val val1 acc_vals)
+                                        new_val,
+                            },
                     },
             },
     }
@@ -2350,8 +2885,13 @@ def runtime_declarations : List LLVMDeclaration :=
     // declare" gap.
     let d24 := mk_decl "monad_string_concat" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
     let d25 := mk_decl "monad_string_eq" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    // Closure free-variable capture (see `monad_closure_get_env`/
+    // `monad_closure_set_env`, `runtime.c`, and `compile_db_lam_ir`'s
+    // own doc comment above).
+    let d26 := mk_decl "monad_closure_get_env" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d27 := mk_decl "monad_closure_set_env" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "void" in
     [d1, d2, d3, d4, d5, d6, d7, d8, d9, d10, d11, d12, d13,
-     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25]
+     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform
@@ -2382,12 +2922,40 @@ def count_db_params (params : List Param) (n : I64) : I64 := match params {
     List.cons p rest => count_db_params rest (n + 1),
 }
 
+/// Collapses functions with a duplicate NAME to their first occurrence
+/// -- needed because `build_closure_shim_func` (above) is a pure,
+/// deterministic function of `(real_name, arity)`, so every call site
+/// that boxes the SAME top-level def as a first-class value emits a
+/// byte-identical shim, which would otherwise be a duplicate LLVM
+/// symbol definition (`llc`/`clang` link error). Run once, over the
+/// WHOLE module's assembled function list, rather than tracking "have I
+/// already emitted a shim for X" through `CodegenCtx` (which would
+/// touch every one of the dozens of call sites that construct/pattern-
+/// match it) -- the cost is a negligible amount of duplicate (never-
+/// emitted-to-`.ll`) shim generation during compilation; shims are
+/// single-block, 2-instruction functions, cheap to regenerate.
+#[partial]
+def dedup_funcs_by_name (funcs : List LLVMFunction) : List LLVMFunction :=
+    dedup_funcs_by_name_go funcs List.empty
+
+#[partial]
+def dedup_funcs_by_name_go (funcs : List LLVMFunction) (seen : List String) : List LLVMFunction := match funcs {
+    List.empty => List.empty,
+    List.cons f rest =>
+        match f {
+            LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+                if list_contains_str seen name
+                then dedup_funcs_by_name_go rest seen
+                else List.cons f (dedup_funcs_by_name_go rest (List.cons name seen)),
+        },
+}
+
 /// When the user's main has no params, add an `args` param so the C runtime
 /// can pass the command-line argument list. If main already has params (e.g.,
 /// `def main (args : List String) : I64`), keep them as-is.
 #[partial]
 def ren_main_and_wrap (funcs : List LLVMFunction) : List LLVMFunction :=
-    rename_main funcs
+    rename_main (dedup_funcs_by_name funcs)
 
 #[partial]
 def has_main (funcs : List LLVMFunction) : Bool := match funcs {
