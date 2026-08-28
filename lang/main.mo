@@ -4,11 +4,10 @@ use process {exec_cmd}
 use lang.types {Decl, LoadedModules, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
-use lang.module {ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, expand_check_paths, extract_directory, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.module {ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
-use std.list {Show}
 
 
 /// Write LLVM IR to disk and link it into a native binary via llc + clang.
@@ -110,10 +109,26 @@ def compile_file_codegen (file_path : String) (output_dir : String) (output_name
     let res : Result String LoadedModules <- load_file_modules file_path;
     match res {
         Result.ok loaded => do {
-            println <| "modules loaded:\n" ++ Show.show loaded;
-            let mod_ <- compile_loaded_modules_to_ir loaded;
-            let ir_text := emit_module mod_;
-            link_ir ir_text output_dir output_name verbose
+            // `verbose` thread-through: previously this branch dumped the
+            // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
+            // walking every loaded module's full content) on every
+            // successful compile -- pure noise on a working build AND a
+            // real perf hit. Now we forward `verbose` to
+            // `compile_loaded_modules_to_ir` (which has its own
+            // `--verbose`-gated per-stage printlns -- see its own doc
+            // comment in `lang/codegen/emit.mo`) and emit only a single
+            // one-line module-count summary, also gated on `verbose`.
+            if verbose then do {
+                let loaded_count : I64 := List.length (get_loaded_all loaded);
+                println <| "loaded " ++ I64.to_string loaded_count ++ " modules";
+                let mod_ <- compile_loaded_modules_to_ir loaded verbose;
+                let ir_text := emit_module mod_;
+                link_ir ir_text output_dir output_name verbose
+            } else do {
+                let mod_ <- compile_loaded_modules_to_ir loaded verbose;
+                let ir_text := emit_module mod_;
+                link_ir ir_text output_dir output_name verbose
+            }
         },
         Result.err e => do {
             println ("Failed to parse dependencies: " ++ e);

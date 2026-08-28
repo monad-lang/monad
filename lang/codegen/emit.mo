@@ -2578,20 +2578,27 @@ def ends_with_main (name : String) : Bool :=
 
 /// Compile all loaded modules to a single LLVM module.
 /// All declarations from all modules are compiled together with fully qualified names.
+///
+/// `verbose` (passed through from `compile_file`'s own `--verbose`/`-v`
+/// flag) gates the per-stage progress printlns inside this function —
+/// the module-count / def-count / reachable-count numbers were
+/// unconditionally printed on every compile before, drowning real output
+/// (`lang/main.mo`'s own compile-file progress markers, link failures,
+/// the user's program output) in low-value noise.
 #[partial]
-def compile_loaded_modules_to_ir (loaded : LoadedModules) : IO LLVMModule := do {
+def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO LLVMModule := do {
     let all_mods := get_loaded_all loaded;
-    
+
     // Debug: log loaded modules count
     let module_count := List.length all_mods;
-    println ("Loaded " ++ I64.to_string module_count ++ " modules");
-    
+    if verbose then println ("Loaded " ++ I64.to_string module_count ++ " modules") else return unit;
+
     // Collect all declarations without module prefixes
     let all_decls := collect_all_decls_from_modules all_mods List.empty;
 
     // Debug: log def count
     let def_count := List.length all_decls;
-    println ("Total defs collected: " ++ I64.to_string def_count);
+    if verbose then println ("Total defs collected: " ++ I64.to_string def_count) else return unit;
 
     // Resolve every infix-operator reference (`+`, `==`, ...) to its
     // real registered target BEFORE reachability filtering -- see
@@ -2657,7 +2664,7 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) : IO LLVMModule := do 
     // filter_reachable_decls's own doc comment.
     let reachable_decls := filter_reachable_decls dispatched_decls;
     let reachable_count := List.length reachable_decls;
-    println ("Reachable decl_list: " ++ I64.to_string reachable_count);
+    if verbose then println ("Reachable decl_list: " ++ I64.to_string reachable_count) else return unit;
 
     // Compile the reachable, infix-resolved declarations
     let mod_ := compile_db_module reachable_decls;
