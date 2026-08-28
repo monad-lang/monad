@@ -1,6 +1,7 @@
 use io {IO, println, read_file, write_file}
 open IO {println, read_file, write_file}
 use process {exec_cmd}
+use std.bench {now, report}
 use lang.types {Decl, LoadedModules, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
@@ -76,24 +77,55 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : String) (output_n
 /// own doc comment) -- that is NOT a second copy of this gate.
 #[partial]
 def compile_file (file_path : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
+    let total_start := Bench.now;
     println <| "compiling: " ++ file_path ++ " to " ++ output_dir ++ "/" ++ output_name;
+    let t_elaborate := Bench.now;
     let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules file_path false;
+    if verbose then do {
+        let _ := Bench.report "elaborate_loaded_modules" (I64.sub Bench.now t_elaborate);
+        return unit
+    } else return unit;
     match elaborated_result {
         Result.ok em =>
             match em {
                 ElaboratedModules.mk scope_ target_decls_ _elaborated => do {
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+                    let t_check := Bench.now;
                     let diags <- check_module_with_scope scope_ target_decls_ empty_locs (Option.some file_path) verbose;
+                    if verbose then do {
+                        let _ := Bench.report "check_module_with_scope" (I64.sub Bench.now t_check);
+                        return unit
+                    } else return unit;
                     match diags {
                         List.cons _ _ => do {
+                            println "FAILED at stage: typecheck (target file did not typecheck cleanly)";
                             print_diagnostics diags;
+                            if verbose then do {
+                                let _ := Bench.report "compile_file total (failed at typecheck)" (I64.sub Bench.now total_start);
+                                return unit
+                            } else return unit;
                             return 1
                         },
-                        List.empty => compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose },
+                        List.empty => do {
+                            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose };
+                            if verbose then do {
+                                let _ := Bench.report "compile_file total" (I64.sub Bench.now total_start);
+                                return unit
+                            } else return unit;
+                            return link_result
+                        },
                     }
                 }
             },
-        Result.err e => compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose },
+        Result.err e => do {
+            println ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
+            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose };
+            if verbose then do {
+                let _ := Bench.report "compile_file total" (I64.sub Bench.now total_start);
+                return unit
+            } else return unit;
+            return link_result
+        },
     }
 }
 

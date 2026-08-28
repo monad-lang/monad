@@ -1,4 +1,5 @@
 use io {IO, println}
+use std.bench {now, report}
 use lang.types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
   LoadedModules, LocalScope, MatchCase, ModulePath, Native, Operator,
@@ -2587,20 +2588,24 @@ def ends_with_main (name : String) : Bool :=
 /// the user's program output) in low-value noise.
 #[partial]
 def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO LLVMModule := do {
+    let total_start := Bench.now;
+
     let all_mods := get_loaded_all loaded;
 
     // Debug: log loaded modules count
     let module_count := List.length all_mods;
     if verbose then println ("Loaded " ++ I64.to_string module_count ++ " modules") else return unit;
 
-    // Collect all declarations without module prefixes
+    // Stage 1: collect all declarations without module prefixes
+    let t_collect := Bench.now;
     let all_decls := collect_all_decls_from_modules all_mods List.empty;
+    if verbose then do {
+        let def_count := List.length all_decls;
+        let _ := Bench.report "collect_decls" (I64.sub Bench.now t_collect);
+        println ("Total defs collected: " ++ I64.to_string def_count)
+    } else return unit;
 
-    // Debug: log def count
-    let def_count := List.length all_decls;
-    if verbose then println ("Total defs collected: " ++ I64.to_string def_count) else return unit;
-
-    // Resolve every infix-operator reference (`+`, `==`, ...) to its
+    // Stage 2: resolve every infix-operator reference (`+`, `==`, ...) to its
     // real registered target BEFORE reachability filtering -- see
     // lang.scope's own extended doc comment above `lookup_infix`/
     // `resolve_infix_decls` for why this can't happen at parse time.
@@ -2613,10 +2618,15 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
     // a function that was never compiled into the module ("undefined
     // value '@Bool_and'" at link time) -- confirmed as a real bug via
     // a direct repro (`helper (true && false)`) while wiring this in.
+    let t_infix := Bench.now;
     let infixes := collect_infixes all_decls;
     let resolved_decls := resolve_infix_decls infixes all_decls;
+    if verbose then do {
+        let _ := Bench.report "infix_resolve" (I64.sub Bench.now t_infix);
+        return unit
+    } else return unit;
 
-    // Dictionary-passing typeclass dispatch (see
+    // Stage 3: dictionary-passing typeclass dispatch (see
     // plans/bootstrapping/self-hosted-compiler.md's Phases 2-4) -- same
     // "must run before reachability filtering" reasoning as infix
     // resolution just above: promotion (Phase 2) mints new top-level
@@ -2630,11 +2640,15 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
     // which Phase 2 threads in from its owning Instance), Phase 3
     // before 4 (Phase 4 needs the dict PARAMETERS Phase 3 adds already
     // in place to know which locals are bound dicts).
+    let t_dict := Bench.now;
     let promoted_decls := promote_instance_defs resolved_decls;
     let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
+    if verbose then do {
+        let _ := Bench.report "dict_dispatch" (I64.sub Bench.now t_dict);
+        return unit
+    } else return unit;
 
-    // Stage 3 of `bootstrapping/unify-check-compile-test-elaboration.md`:
-    // try real dictionary-dispatch resolution via the type checker first
+    // Stage 4: try real dictionary-dispatch resolution via the type checker first
     // (`lang.typecheck.infer`'s `resolve_class_method`, using REAL
     // inferred types -- fixes the class of gap the syntactic
     // `resolve_class_calls_decls` pass below can't cover on its own; the
@@ -2650,24 +2664,40 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
     // program actually being compiled), fall back to the original,
     // unelaborated decls -- this must never newly break a compile that
     // worked before this pass existed.
+    let t_elab := Bench.now;
     let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
     let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_decls;
     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
     let elaborated := elaborate_module_decls_best_effort scope dict_param_decls empty_locs;
     let dispatched_decls := resolve_class_calls_decls elaborated;
+    if verbose then do {
+        let _ := Bench.report "elaborate_class" (I64.sub Bench.now t_elab);
+        return unit
+    } else return unit;
 
-    // Only compile Defs actually reachable (transitively) from `main` --
+    // Stage 5: only compile Defs actually reachable (transitively) from `main` --
     // compiling the FULL 264-def loaded set unconditionally meant any
     // codegen bug anywhere in the whole standard library, reached or
     // not, blocked compiling any program at all. See
     // filter_reachable_decls's own doc comment.
+    let t_reach := Bench.now;
     let reachable_decls := filter_reachable_decls dispatched_decls;
-    let reachable_count := List.length reachable_decls;
-    if verbose then println ("Reachable decl_list: " ++ I64.to_string reachable_count) else return unit;
+    if verbose then do {
+        let reachable_count := List.length reachable_decls;
+        let _ := Bench.report "filter_reachable" (I64.sub Bench.now t_reach);
+        println ("Reachable decl_list: " ++ I64.to_string reachable_count)
+    } else return unit;
 
-    // Compile the reachable, infix-resolved declarations
+    // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
+    let t_llvm := Bench.now;
     let mod_ := compile_db_module reachable_decls;
+    if verbose then do {
+        let _ := Bench.report "compile_db_module" (I64.sub Bench.now t_llvm);
+        let _ := Bench.report "compile_loaded_modules_to_ir total" (I64.sub Bench.now total_start);
+        return unit
+    } else return unit;
+
     return mod_
 }
 
