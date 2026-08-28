@@ -572,8 +572,6 @@ def emit_module (module_ : LLVMModule) : String := match module_ {
         h5
 }
 
-def main : I64 := 42
-
 #[test]
 def test_type_i64_display : Bool :=
     String.beq (show_llvm_type i64_) "i64"

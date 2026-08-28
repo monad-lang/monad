@@ -24,6 +24,7 @@ use lang.module {
 use lang.scope {
   add_constraint_dict_params_decls, build_scope_from_decls, collect_infixes,
   promote_instance_defs, resolve_class_calls_decls, resolve_infix_decls,
+  strip_all_leading_binders,
 }
 
 open IO {println}
@@ -1779,13 +1780,35 @@ def build_llvm_params_from_db (params : List Param) (idx : I64) : List ParamPair
 /// `lang/typecheck/infer.mo`'s own `type_head_name` convention) is
 /// literally named `IO` — i.e. `t` is (an application of) the `IO`
 /// type, e.g. `IO I64`.
+///
+/// `t` here is a `Def`'s FULL `typ` field, not just the bare
+/// return-type expression after `:` — `lang/parser.mo`'s
+/// `build_param_pi_chain` (its own doc comment explains why) folds
+/// every param's type into `typ` as a `Term.pi` chain, so
+/// `def main (args : List String) : IO I64 := ...` has `typ` shaped
+/// `Term.pi <List String> (IO I64 application)`, `Term.pi`-headed, not
+/// `Term.app`/`Term.var`-headed. Strip those leading binders first
+/// (`strip_all_leading_binders`, `lang.scope` — the same helper
+/// `full_return_carrier`/`resolve_class_calls_decls_go` already use for
+/// this exact "get a def's return-type carrier out of a full
+/// param-including typ" problem) or this silently returns `false` for
+/// any `main` with an explicit parameter, i.e. every realistic Monad
+/// `main` — confirmed as a real, previously-undiagnosed bug: with this
+/// check wrongly `false`, `main`'s returned `IO.io` pointer never gets
+/// unwrapped (see `unwrap_io_return_blocks` below), so the raw boxed
+/// pointer reaches the C runtime's plain-`int` `main()` and the process
+/// exits a garbage code with no output at all.
 #[partial]
-def emit_type_head_is_io (t : Term) : Bool := match t {
+def emit_type_head_is_io (t : Term) : Bool :=
+    emit_type_head_is_io_go (strip_all_leading_binders t)
+
+#[partial]
+def emit_type_head_is_io_go (t : Term) : Bool := match t {
     Term.var _idx dbg => match dbg {
         DebugName.named id_ => String.beq (show_identifier id_) "IO",
         DebugName.unnamed => false,
     },
-    Term.app f _arg => emit_type_head_is_io f,
+    Term.app f _arg => emit_type_head_is_io_go f,
     _ => false,
 }
 
