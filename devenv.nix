@@ -66,27 +66,57 @@
   # https://devenv.sh/tasks/
   # Self-hosted compiler self-compile smoke test: `lang/main.mo` (the
   # self-hosted compiler) compiling its own source via itself. Extremely
-  # slow (measured: doesn't finish inside 590s even with --release -- see
-  # AGENTS.md's notes on self-hosted-checker performance) and currently
-  # known-broken, with a fix in progress on a separate branch, so any
-  # failure/timeout is non-blocking (reported via ::warning::) rather than
-  # failing `devenv test`/CI.
+  # slow -- a real, complete (not timed-out) run measured 2026-08-28 takes
+  # ~950-965s (~16 min; see `plans/implementations/2026-08-28-codegen-
+  # closure-free-var-capture.md`'s own timing notes -- dominated by
+  # `elaborate_class`/`elaborate_loaded_modules`, ~150-165s each, and
+  # `filter_reachable`, ~450s, a separate known perf issue in
+  # `find_def_by_name`'s O(reachable×total) linear scan). Bumped the
+  # timeout below from 900s (which was cutting a real run off BEFORE it
+  # reached its own actual error, making failures look like timeouts) to
+  # 1200s so a genuine failure is distinguishable from "just needed more
+  # time".
+  #
+  # Still known-broken as of 2026-08-28, but the failure has moved: the
+  # closure-free-variable-capture bug that WAS the blocker
+  # (`implementations/2026-08-28-codegen-closure-free-var-capture.md`) is
+  # now fixed (`f197a52`) -- the self-compile now runs the ENTIRE
+  # elaborate/reachability/IR-emission pipeline (it used to fail almost
+  # immediately) and reaches a FURTHER, different, unrelated bug: a
+  # phi-merge type mismatch between string-literal globals and computed
+  # String values (`llc: global variable reference must have pointer
+  # type`), filed as `implementations/2026-08-28-string-value-
+  # representation-unification.md`. So any failure/timeout is still
+  # non-blocking (reported via ::warning::) rather than failing `devenv
+  # test`/CI, until THAT lands too (and any further bug the self-compile
+  # might still hit after it, each needs its own confirmed-pre-existing
+  # check via a `git worktree` baseline comparison before being treated
+  # as blocking this task).
   #
   # NOT wired into `devenv test` yet (the `after` dependency below is
-  # commented out): too slow to run on every invocation as-is. Run manually
-  # via `devenv tasks run monad:bootstrap-compile` in the meantime.
-  # TODO: enable `after = [ "devenv:enterTest" ]` once this is fast enough
-  # (or the known-broken fix lands) to be worth running automatically, then
-  # also drop the `timeout`/`|| { ...; true; }` wrapping so it blocks like
-  # everything else.
+  # commented out): too slow to run on every invocation as-is, AND still
+  # genuinely failing. Run manually via `devenv tasks run monad:bootstrap-
+  # compile` in the meantime.
+  # TODO: enable `after = [ "devenv:enterTest" ]` once the self-compile is
+  # clean end-to-end (the string-representation fix above, plus whatever
+  # else surfaces after it, all land) AND the resulting `/tmp/monad`
+  # binary is verified to actually WORK when run (not just that `llc`/
+  # `clang` succeed -- a self-compile that links but silently compiles
+  # the wrong thing is a real, previously-hit false positive, see the
+  # `implementations/2026-08-27-bootstrap-compile-and-test.md` plan's own
+  # "main-colliding test fixture" bug) -- add that verification step to
+  # this task's own `exec` at the same time, then drop the `timeout`/
+  # `|| { ...; true; }` wrapping so it blocks like everything else.
   tasks."monad:bootstrap-compile" = {
     exec = ''
-      timeout 900 cargo run --release -- run lang/main.mo compile lang/main.mo monad || {
-        echo "::warning::self-hosted self-compile failed or timed out (known-broken, fix in progress on a separate branch) -- not blocking CI" >&2
+      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo monad || {
+        echo "::warning::self-hosted self-compile failed or timed out (known-broken, fix in progress -- see plans/implementations/2026-08-28-string-value-representation-unification.md) -- not blocking CI" >&2
         true
       }
     '';
-    # TODO: enable when more optimized
+    # TODO: enable when the self-compile is clean end-to-end AND this
+    # task's own exec is extended to verify the resulting binary works
+    # (see the comment above).
     # after = [ "devenv:enterTest" ];
   };
 
