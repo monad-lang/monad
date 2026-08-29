@@ -57,6 +57,21 @@ type LLVMValue {
     icmp_sgt (lhs : LLVMValue) (rhs : LLVMValue),
     zext (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     trunc (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
+    /// Pointer-to-integer cast -- LLVM's ONLY legal conversion from a
+    /// pointer value to an integer (`bitcast` explicitly disallows
+    /// ptr<->int; confirmed via LLVM's own LangRef). Used to normalize a
+    /// string LITERAL's `global_` (`ptr i8_`) reference to `i64` at its
+    /// own construction site (`compile_lit_ir`'s `Literal.str` arm) --
+    /// every COMPUTED String (`String.concat`, a boxed field, ...) is
+    /// already `i64`-typed, so a bare literal used as a `phi`/match-merge
+    /// branch's own value (the only place this backend needs every
+    /// contributor to share ONE declared type -- ordinary calls tolerate
+    /// per-argument type mismatches via `llc`'s own lenient callee-
+    /// pointer-bitcast handling) previously produced a `phi i64 [ ...,
+    /// @str_N, ... ]` that `llc` rejected outright ("global variable
+    /// reference must have pointer type"). See plans/implementations/
+    /// 2026-08-28-string-value-representation-unification.md.
+    ptrtoint (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     phi (pairs : List PhiPair),
     gep (base : LLVMValue) (indices : List I64),
     load (ptr : LLVMValue),
@@ -105,7 +120,7 @@ open LLVMType {fn_, i1_, i32_, i64_, i8_, ptr, struct_, void}
 open LLVMValue {
   add, alloc_closure, alloc_constructor, bitcast, bool_, call, fn_ref, gep, global_,
   icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, load, mul, native_op, parm_,
-  phi, sdiv, sub, trunc, var_, void_val, zext,
+  phi, ptrtoint, sdiv, sub, trunc, var_, void_val, zext,
 }
 open LLVMInstruction {assign, branch, comment, jump, ret}
 open ParamPair {mk}
@@ -183,6 +198,7 @@ def show_llvm_value (val : LLVMValue) : String := match val {
     icmp_sgt lhs rhs => show_arith "icmp sgt" lhs rhs,
     zext v from_ty to_ty => show_ext "zext" v from_ty to_ty,
     trunc v from_ty to_ty => show_ext "trunc" v from_ty to_ty,
+    ptrtoint v from_ty to_ty => show_ext "ptrtoint" v from_ty to_ty,
     phi pairs => show_phi pairs,
     gep base indices => show_gep base indices,
     load ptr_ => String.concat "load " (show_llvm_value ptr_),
@@ -234,6 +250,7 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     icmp_sgt x y => i1_,
     zext x y to_ty => to_ty,
     trunc x y to_ty => to_ty,
+    ptrtoint x y to_ty => to_ty,
     // Previously hardcoded `i64_` regardless of what's actually merged
     // -- correct for an int-typed if/match merge, wrong for anything
     // pointer-typed (e.g. two different `String` literals: `if b then

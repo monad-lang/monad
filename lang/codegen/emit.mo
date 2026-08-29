@@ -12,10 +12,10 @@ use lang.codegen.ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMInstruction,
   LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair, PhiPair, add, alloc_closure,
   alloc_constructor, assign, bitcast, bool_, branch, call, comment, emit_module,
-  fn_, gep, global_, i64_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_,
+  fn_, gep, global_, i64_, i8_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_,
   jump, load, mk, mul, native_op, op_add, op_eq, op_file_exists, op_gt, op_lt,
   op_mul, op_ne, op_print_str, op_read_file, op_sdiv, op_sub, op_write_file,
-  parm_, phi, ret, sdiv, show_llvm_type, sub, trunc, var_, void_val, zext,
+  parm_, phi, ptr, ptrtoint, ret, sdiv, show_llvm_type, sub, trunc, var_, void_val, zext,
 }
 use lang.module {
   LoadedModules, ModuleInfo, elaborate_module_decls_best_effort, get_loaded_all,
@@ -28,11 +28,11 @@ use lang.scope {
 }
 
 open IO {println}
-open LLVMType {i32_, i64_}
+open LLVMType {i32_, i64_, i8_, ptr}
 open LLVMValue {
   add, alloc_closure, alloc_constructor, bitcast, bool_, call, gep, global_,
   icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, load, mul, native_op, parm_,
-  phi, sdiv, sub, trunc, var_, void_val, zext,
+  phi, ptrtoint, sdiv, sub, trunc, var_, void_val, zext,
 }
 
 type LocalBinding {
@@ -493,7 +493,30 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
                 // Add 1 to byte length for the null terminator \00 appended in the LLVM IR
                 let byte_len := String.length s + 1 in
                 let global := LLVMGlobal.mk name s byte_len true in
-                CompileResult.ok ctx1 empty_instrs (LLVMValue.global_ name) empty_blocks empty_funcs (cons_global global empty_globals_list),
+                match fresh_temp ctx1 {
+                    CtxStrPair.mk ctx2 temp =>
+                        // Normalize to i64 immediately, matching every
+                        // COMPUTED String's own representation
+                        // (`String.concat`/`monad_string_eq`/... are all
+                        // i64-typed). Without this, a bare literal used
+                        // directly as a `phi`/match-merge branch value
+                        // (e.g. `if b then String.concat " " x else ""`)
+                        // keeps its raw `ptr i8_` type while the OTHER
+                        // branch is `i64`, and `llc` rejects the
+                        // resulting phi outright ("global variable
+                        // reference must have pointer type") -- `phi` is
+                        // the one construct here with zero tolerance for
+                        // this; ordinary calls already type each argument
+                        // independently (`show_llvm_value_typed`) and
+                        // tolerate it via `llc`'s own lenient callee-
+                        // pointer-bitcast handling, so this is the only
+                        // site that actually needs the cast. See
+                        // plans/implementations/2026-08-28-string-value-
+                        // representation-unification.md.
+                        let cast_val := LLVMValue.ptrtoint (LLVMValue.global_ name) (ptr i8_) i64_ in
+                        let cast_instr := LLVMInstruction.assign temp cast_val in
+                        CompileResult.ok ctx2 (cons_instr cast_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs (cons_global global empty_globals_list),
+                },
         },
     Literal.if_ cond then_ else_ => compile_db_if_ir c cond then_ else_,
     Literal.match_ scrutinee cases => compile_match_ir c scrutinee cases,
@@ -711,16 +734,19 @@ def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs
                             // -- a native-call argument can't legally
                             // be `void` either.
                             match materialize_void ctx_t val_raw {
-                                MaterializedVal.mk ctx_tm void_instrs val =>
-                                    let instrs_m := append_instrs instrs void_instrs in
-                                    match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs_m blocks_t val) {
-                                        Triple.tr new_instrs new_blocks new_val =>
-                                            compile_ntv_args_go ctx_tm rest
-                                                new_instrs new_blocks
-                                                (append_funcs acc_funcs funcs_t)
-                                                (append_globals acc_globals globals_t)
-                                                (cons_val val acc_vals)
-                                                new_val,
+                                MaterializedVal.mk ctx_tm void_instrs val_v =>
+                                    match materialize_native_bool_arg ctx_tm term_ val_v {
+                                        MaterializedVal.mk ctx_tb bool_instrs val =>
+                                            let instrs_m := append_instrs instrs (append_instrs void_instrs bool_instrs) in
+                                            match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs_m blocks_t val) {
+                                                Triple.tr new_instrs new_blocks new_val =>
+                                                    compile_ntv_args_go ctx_tb rest
+                                                        new_instrs new_blocks
+                                                        (append_funcs acc_funcs funcs_t)
+                                                        (append_globals acc_globals globals_t)
+                                                        (cons_val val acc_vals)
+                                                        new_val,
+                                            },
                                     },
                             },
                     },
@@ -782,6 +808,56 @@ def materialize_void (c : CodegenCtx) (v : LLVMValue) : MaterializedVal := match
         },
     _ => MaterializedVal.mk c empty_instrs v,
 }
+
+/// A native boolean-comparison term (`I64.lt`/`.gt`/`.eq`/`.ne`, whatever
+/// `term_is_native_bool_op` recognizes) compiles, via `emit_arith_instr`,
+/// to a raw `icmp`-produced `i1` materialized into a `var_` temp --
+/// deliberately left UNBOXED there so `ensure_i1_cond`'s "is this
+/// condition already a genuine i1" fast path (keyed off this SAME
+/// `term_is_native_bool_op` check on the SOURCE TERM, not the compiled
+/// value -- this backend tracks no real per-register type, `llvm_value_
+/// type (var_ x)` is hardcoded `i64_` regardless of what the register
+/// actually holds) can use it directly as a branch condition with no
+/// unboxing round-trip. That's correct for an `if`'s own condition, but
+/// wrong the moment the SAME comparison is used as an ORDINARY VALUE --
+/// a function-call argument, a constructor field, ... -- nothing
+/// downstream can tell "this `var_` is secretly `i1`" apart from a
+/// genuine `i64`, so the raw i1 register ends up passed to a callee
+/// call verbatim, declared `i64` in the call's own text. Confirmed as a
+/// real gap via `bootstrap compile lang/main.mo monad`'s own self-compile
+/// (`lang/parser/diagnostic.mo`'s `line_end_after_go`, `not (a < b)`):
+/// `call i64 @Bool_not(i64 %tN)` where `%tN` was actually declared `i1`
+/// -- `llc: '%tN' defined with type 'i1' but expected 'i64'`.
+///
+/// Fixed by boxing into a genuine heap-allocated, tagged Bool object
+/// whenever the ARGUMENT TERM (not the compiled value -- same
+/// term-shape-based approach `ensure_i1_cond` already relies on) is a
+/// native comparison: `zext` the raw `i1` to `i64` first (arithmetic on
+/// it, like `NativeWrapKind.bool_result`'s existing `2 - raw` mapping
+/// below, needs a real i64 operand -- `show_arith`'s `sub` rendering
+/// hardcodes `i64` for both operands, and a genuinely `i1`-declared
+/// register there would repeat this exact same mismatch one level down),
+/// then map 1/0 -> Bool.true/false's own tags (1/2) the same way.
+#[partial]
+def materialize_native_bool_arg (c : CodegenCtx) (t : Term) (v : LLVMValue) : MaterializedVal :=
+    if term_is_native_bool_op t
+    then
+        match fresh_temp c {
+            CtxStrPair.mk ctx1 zext_temp =>
+                match fresh_temp ctx1 {
+                    CtxStrPair.mk ctx2 tag_temp =>
+                        match fresh_temp ctx2 {
+                            CtxStrPair.mk ctx3 con_temp =>
+                                let zext_instr := LLVMInstruction.assign zext_temp (LLVMValue.zext v LLVMType.i1_ LLVMType.i64_) in
+                                let tag_val := LLVMValue.sub (LLVMValue.int_ 2) (LLVMValue.var_ zext_temp) in
+                                let tag_instr := LLVMInstruction.assign tag_temp tag_val in
+                                let con_val := LLVMValue.call "alloc_constructor" LLVMType.i64_ (cons_val (LLVMValue.var_ tag_temp) (cons_val (LLVMValue.int_ 0) empty_vals)) false in
+                                let con_instr := LLVMInstruction.assign con_temp con_val in
+                                MaterializedVal.mk ctx3 (cons_instr zext_instr (cons_instr tag_instr (cons_instr con_instr empty_instrs))) (LLVMValue.var_ con_temp),
+                        },
+                },
+        }
+    else MaterializedVal.mk c empty_instrs v
 
 #[partial]
 def compile_ntv_ir (c : CodegenCtx) (native : Native) : CompileResult :=
@@ -1766,13 +1842,43 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                 unnamed => Identifier.id "_",
             } in
             match compile_db_term_ir c arg {
-                CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
-                    let ctx_bound := ctx_bind_local ctx1 name val1 in
-                    match compile_db_term_ir ctx_bound body {
-                        CompileResult.ok ctx2 instrs2 val2 blocks2 funcs2 globals2 =>
-                            match compose_seq (Triple.tr instrs1 blocks1 val1) (Triple.tr instrs2 blocks2 val2) {
-                                Triple.tr combined all_blocks last_val =>
-                                    Option.some (CompileResult.ok ctx2 combined last_val all_blocks (append_funcs funcs1 funcs2) (append_globals globals1 globals2)),
+                CompileResult.ok ctx1 instrs1 val1_raw blocks1 funcs1 globals1 =>
+                    // `arg` may be a native boolean comparison
+                    // (`I64.lt`/etc) -- box it into a genuine tagged
+                    // Bool object HERE, at the let-binding site, same as
+                    // `materialize_native_bool_arg`'s own doc comment
+                    // (`compile_spine_args_go`/`compile_ntv_args_go`
+                    // above): once bound to `name`, every LATER reference
+                    // is just `Term.var name`, which loses the "this came
+                    // from a native comparison" term-shape signal
+                    // `ensure_i1_cond`/this same check needs -- so a
+                    // let-bound comparison's raw `i1` must be boxed NOW,
+                    // not deferred to whichever later use-site happens to
+                    // re-derive it (most of them can't). Confirmed as a
+                    // real gap via `bootstrap compile lang/main.mo
+                    // monad`'s own self-compile (`render_source_context`,
+                    // `lang/parser/diagnostic.mo`): a `let`-bound
+                    // comparison reused as a LATER `if`'s own condition
+                    // hit `ensure_i1_cond`'s "needs unboxing" branch
+                    // (correctly, since `Term.var name` isn't itself a
+                    // native-op application) and called `monad_get_tag`
+                    // on a still-raw `i1` -- `llc: '%tN' defined with
+                    // type 'i1' but expected 'i64'`. Safe to append
+                    // `bool_instrs` directly (no `compose_seq` splicing
+                    // needed): a native comparison never itself compiles
+                    // to a branch/multiple blocks, so `instrs1` never
+                    // ends in a terminator whenever `bool_instrs` is
+                    // non-empty.
+                    match materialize_native_bool_arg ctx1 arg val1_raw {
+                        MaterializedVal.mk ctx1b bool_instrs val1 =>
+                            let instrs1m := append_instrs instrs1 bool_instrs in
+                            let ctx_bound := ctx_bind_local ctx1b name val1 in
+                            match compile_db_term_ir ctx_bound body {
+                                CompileResult.ok ctx2 instrs2 val2 blocks2 funcs2 globals2 =>
+                                    match compose_seq (Triple.tr instrs1m blocks1 val1) (Triple.tr instrs2 blocks2 val2) {
+                                        Triple.tr combined all_blocks last_val =>
+                                            Option.some (CompileResult.ok ctx2 combined last_val all_blocks (append_funcs funcs1 funcs2) (append_globals globals1 globals2)),
+                                    },
                             },
                     },
             },
@@ -2035,16 +2141,19 @@ def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : Lis
                     // `void`), so materialize a real Unit value first
                     // (see `materialize_void`'s own doc comment).
                     match materialize_void ctx1 val1_raw {
-                        MaterializedVal.mk ctx1m void_instrs val1 =>
-                            let instrs1m := append_instrs instrs1 void_instrs in
-                            match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs1m blocks1 val1) {
-                                Triple.tr new_instrs new_blocks new_val =>
-                                    compile_spine_args_go ctx1m rest
-                                        new_instrs new_blocks
-                                        (append_funcs acc_funcs funcs1)
-                                        (append_globals acc_globals globals1)
-                                        (cons_val val1 acc_vals)
-                                        new_val,
+                        MaterializedVal.mk ctx1m void_instrs val1_v =>
+                            match materialize_native_bool_arg ctx1m t val1_v {
+                                MaterializedVal.mk ctx1b bool_instrs val1 =>
+                                    let instrs1m := append_instrs instrs1 (append_instrs void_instrs bool_instrs) in
+                                    match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs1m blocks1 val1) {
+                                        Triple.tr new_instrs new_blocks new_val =>
+                                            compile_spine_args_go ctx1b rest
+                                                new_instrs new_blocks
+                                                (append_funcs acc_funcs funcs1)
+                                                (append_globals acc_globals globals1)
+                                                (cons_val val1 acc_vals)
+                                                new_val,
+                                    },
                             },
                     },
             },
@@ -2230,6 +2339,7 @@ def extract_lit_from_val (val : LLVMValue) : Option I64 := match val {
     LLVMValue.icmp_sgt lhs rhs => Option.none,
     LLVMValue.zext val from_ty to_ty => Option.none,
     LLVMValue.trunc val from_ty to_ty => Option.none,
+    LLVMValue.ptrtoint val from_ty to_ty => Option.none,
     LLVMValue.phi pairs => Option.none,
     LLVMValue.gep base indices => Option.none,
     LLVMValue.load ptr => Option.none,
@@ -2466,6 +2576,14 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
         Option.some target =>
             if String.beq target "string_concat" then Option.some (NativeWrapKind.passthrough "monad_string_concat")
             else if String.beq target "string_eq" then Option.some (NativeWrapKind.bool_result "monad_string_eq")
+            // `String.length` (std/string.mo) had no entry here either --
+            // same "confirmed as a real gap" shape as `string_concat`'s
+            // own doc comment above: a `#[native string_length]` def with
+            // no real body silently compiled to the generic "return Unit"
+            // stub, discarding its argument entirely. Found via a direct
+            // repro (`println (I64.to_string (String.length "abc"))`
+            // printed a garbage heap address instead of `3`).
+            else if String.beq target "string_length" then Option.some (NativeWrapKind.passthrough "monad_string_length")
             else Option.none,
     }
 
