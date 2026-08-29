@@ -2269,6 +2269,35 @@ def native_op_to_fn_name (op : NativeOp) : String := match op {
     NativeOp.op_i64_to_string => "monad_i64_to_string",
 }
 
+/// `compile_native_app_db` is reached for ANY 2-arg saturated call whose
+/// head resolves via `lookup_native_any` -- not just the 8 arithmetic/
+/// comparison ops. `NativeOp.op_write_file` is the one IO op with arity 2
+/// (`IO.write_file path content`, `init/io.mo`), so a real call like
+/// `lang/main.mo`'s own `link_ir`'s `IO.write_file ir_path ir_text` reaches
+/// here too -- `compile_native_val`/`fold_native_const` (only 8 arms, no IO
+/// ops) used to be called UNCONDITIONALLY, panicking the Rust host
+/// interpreter with a non-exhaustive match on `NativeOp.op_write_file`
+/// (confirmed blocking `bootstrap compile lang/main.mo monad`'s self-
+/// compile -- see `implementations/2026-08-29-native-io-op-non-exhaustive-
+/// match-crash.md`). Route non-arithmetic ops to `emit_native_call2_instr`
+/// instead, which calls the real runtime function.
+#[partial]
+def is_arith_native_op (op : NativeOp) : Bool := match op {
+    NativeOp.op_add => true,
+    NativeOp.op_sub => true,
+    NativeOp.op_mul => true,
+    NativeOp.op_sdiv => true,
+    NativeOp.op_eq => true,
+    NativeOp.op_ne => true,
+    NativeOp.op_lt => true,
+    NativeOp.op_gt => true,
+    NativeOp.op_print_str => false,
+    NativeOp.op_read_file => false,
+    NativeOp.op_write_file => false,
+    NativeOp.op_file_exists => false,
+    NativeOp.op_i64_to_string => false,
+}
+
 /// `arg2`'s own compiled fragment (`instrs2`/`blocks2`/...) used to be
 /// combined with `arg`'s via blind `append_instrs instrs2 instrs1`,
 /// with `blocks`/`funcs`/`globals` from BOTH operands silently
@@ -2289,6 +2318,9 @@ def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : 
                         { instrs := combined, blocks := all_blocks, val := last_val } =>
                             let all_funcs := append_funcs funcs2 funcs1 in
                             let all_globals := append_globals globals2 globals1 in
+                            if not (is_arith_native_op op) then
+                                emit_native_call2_instr ctx1 op val2 val1 combined all_blocks all_funcs all_globals last_val
+                            else
                             match extract_lit_from_val val2 {
                                 Option.some n1 =>
                                     match extract_lit_from_val val1 {
@@ -2561,6 +2593,53 @@ def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : L
             match compose_seq ({ instrs := instrs, blocks := blocks, val := last_val }) ({ instrs := (cons_instr arith_instr empty_instrs), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
                 { instrs := new_instrs, blocks := new_blocks, val := _ } =>
                     CompileResult.ok new_ctx new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
+            },
+    }
+
+/// Non-arithmetic sibling of `emit_arith_instr` for `compile_native_app_db`
+/// (see its own doc comment for why): `arg1_val`/`arg2_val` are the two
+/// already-compiled operand values in call order (`arg1_val` first).
+///
+/// `NativeOp.op_write_file` needs special handling: `monad_write_file`'s
+/// real C signature is `(path, data, len)` (`lang/codegen/runtime.c`), but
+/// the mo-level call (`IO.write_file path content`, `init/io.mo`) only
+/// supplies 2 args -- `len` must be computed here via `monad_string_length`
+/// first, or the runtime call reads a garbage length from an unset
+/// register and `fwrite`s garbage. Every other non-arithmetic op that
+/// could reach this path is a plain 2-arg runtime call (none do today --
+/// the remaining IO ops are all arity-1, handled by
+/// `compile_native_app_unary_db` -- kept generic rather than crashing).
+#[partial]
+def emit_native_call2_instr (c : CodegenCtx) (op : NativeOp) (arg1_val : LLVMValue) (arg2_val : LLVMValue) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
+    match op {
+        NativeOp.op_write_file =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx_len temp_len =>
+                    let len_call := LLVMValue.call "monad_string_length" LLVMType.i64_ (cons_val arg2_val empty_vals) false in
+                    let len_instr := LLVMInstruction.assign temp_len len_call in
+                    match fresh_temp ctx_len {
+                        CtxStrPair.mk new_ctx temp =>
+                            let write_call := LLVMValue.call "monad_write_file" LLVMType.i64_ (cons_val arg1_val (cons_val arg2_val (cons_val (LLVMValue.var_ temp_len) empty_vals))) false in
+                            let write_instr := LLVMInstruction.assign temp write_call in
+                            match compose_seq ({ instrs := instrs, blocks := blocks, val := last_val }) ({ instrs := (cons_instr len_instr (cons_instr write_instr empty_instrs)), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
+                                { instrs := new_instrs, blocks := new_blocks, val := _ } =>
+                                    wrap_void_native_result new_ctx new_instrs new_blocks funcs globals,
+                            },
+                    },
+            },
+        _ =>
+            match fresh_temp c {
+                CtxStrPair.mk new_ctx temp =>
+                    let fn_name := native_op_to_fn_name op in
+                    let call_val := LLVMValue.call fn_name LLVMType.i64_ (cons_val arg1_val (cons_val arg2_val empty_vals)) false in
+                    let call_instr := LLVMInstruction.assign temp call_val in
+                    match compose_seq ({ instrs := instrs, blocks := blocks, val := last_val }) ({ instrs := (cons_instr call_instr empty_instrs), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
+                        { instrs := new_instrs, blocks := new_blocks, val := _ } =>
+                            if is_void_native op then
+                                wrap_void_native_result new_ctx new_instrs new_blocks funcs globals
+                            else
+                                CompileResult.ok new_ctx new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
+                    },
             },
     }
 
