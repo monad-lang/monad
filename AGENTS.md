@@ -737,6 +737,87 @@ cargo run -- test std/   # runs all std/ tests including new ones
 - Prefer descriptive names
 - Comment with `//` (never `--`)
 
+### Readability and Ease of Refactoring (Monad code)
+
+Optimize for a reader who has to change this code later, not just for it
+to typecheck once. Concretely, in order of how often each comes up:
+
+1. **Every single-constructor type should be a `struct`, not a `type`.**
+   `type X { mk (f1:T1) (f2:T2) ... }` with exactly one constructor gives
+   up named-field construction, dot-notation access, and struct-update
+   syntax for no benefit over `struct X { f1:T1, f2:T2, ... }` — the two
+   forms use IDENTICAL match/destructuring syntax
+   (`X.mk pat1 pat2 => ...` or `TypeName.ctor_name` patterns work the
+   same either way), so converting costs nothing at existing pattern-match
+   call sites and only improves construction/access sites. When adding a
+   *new* type, reach for `struct` first and only fall back to `type` if
+   it genuinely needs more than one constructor.
+   _(TODO: this should eventually be a `check` warning — "single-
+   constructor `type` could be a `struct`" — rather than something to
+   remember by convention. Not implemented yet.)_
+2. **Prefer struct-literal + dot-notation + named-args over positional
+   construction/destructuring** once a type is a `struct`: `{ f1 := v1,
+   f2 := v2 }` to build, `value.field` to read a single field, and
+   `{ base with field := v }` to update one field of an existing value
+   (much clearer than reconstructing every positional argument by hand
+   when only one changed — see `CodegenCtx`'s `fresh_temp`/
+   `ctx_bind_local`/etc. in `lang/codegen/emit.mo` for the pattern).
+   When you DO need to destructure several fields of a `struct` at once
+   in a match arm, prefer the field-pattern form,
+   `match v { { field1, field2, .. } => e }` (or `Ctor { field1,
+   field2 } => e` for a named constructor), over positional
+   `X.mk pat1 pat2 => e` — it self-documents which field is which at the
+   call site instead of relying on declaration-order memory, survives a
+   field being added/reordered without silently binding the wrong name
+   to the wrong position, and `..` lets you ignore fields you don't need
+   instead of naming a placeholder for each. `field := new_binder` renames
+   a field to a different local name; a bare `field` puns (binds a local
+   of the same name). Positional destructuring is still fine for an
+   ordinary multi-constructor sum `type` (there are no field names to
+   pun on there).
+3. **Don't prefix field names with a type-specific abbreviation**
+   (`cr_ctx`, `mcr_blocks`, `as_head`, `lname`) — the field is already
+   namespaced by the struct/record it lives in (`result.ctx`, not
+   `result.cr_ctx`); a prefix only adds noise to every call site. Plain,
+   short field names (`ctx`, `val`, `blocks`, `head`, `args`) read better
+   and are just as unambiguous, since Monad field access is always
+   through a typed value (`x.field`), never a bare global name.
+4. **Avoid nested `if`** — prefer `match` for genuine multi-way dispatch,
+   and combine compound conditions with `&&`/`||` rather than nesting
+   `if`s that test unrelated things one after another. A real two-way
+   `then`/`else` split that IS the actual logic (not just chained checks)
+   is fine as `if`; this is about avoidable nesting, not banning `if`.
+5. **Remove dead/duplicated code as you find it** in a file you're
+   already touching for readability — an unused helper or a hand-rolled
+   duplicate of something already imported doesn't need its own separate
+   change to justify removing it.
+
+**A known pitfall when applying rule 1 to an *existing* type with many
+call sites**: the type-checker doesn't always desugar a bare struct
+literal to a real constructor when it can't see a concrete expected type
+at that exact point — two confirmed shapes:
+  - a struct literal passed directly as a function ARGUMENT with no
+    outer type annotation (e.g. `List.cons { field := val } rest`) can
+    fail with a misleading `` `List.cons` has no field named `field` ``
+    error. Workaround: bind it first with an explicit annotation
+    (`let x : T := { field := val } in List.cons x rest`), which resolves
+    correctly.
+  - converting a type used as MANY struct literals across many nested
+    `match` arms within one large function (confirmed at ~15+ call sites
+    in one pass) can produce a runtime `MatchTraversalMismatch` from the
+    Rust host's `lower_core_ir.rs` — a genuine, pre-existing checker/
+    lowering desync bug (the type-checking pass and the lowering pass
+    must visit `Match`/`if`/`StructUpdate` nodes in the same order to
+    correctly replay queued constructor resolutions, and don't always
+    agree at this scale). `check` stays completely silent about this —
+    only running the actual test suite (`cargo run -- test ...`) surfaces
+    it. If converting a type to `struct` reproduces this, the safe
+    fallback is to keep it as a `type` (plain constructor-call syntax
+    still works everywhere) rather than force the conversion — readability
+    is not worth a silent runtime miscompile. Always re-run the real test
+    suite (not just `check`) after a `type`→`struct` conversion for a
+    widely-used type, for exactly this reason.
+
 ### Rust Code Style
 
 - Always use `use` statements at the top of the file instead of fully qualified paths
