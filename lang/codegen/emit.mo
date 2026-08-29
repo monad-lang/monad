@@ -1986,10 +1986,38 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                             let instrs1m := append_instrs instrs1 bool_instrs in
                             let ctx_bound := ctx_bind_local ctx1b name val1 in
                             match compile_db_term_ir ctx_bound body {
-                                CompileResult.ok ctx2 instrs2 val2 blocks2 funcs2 globals2 =>
-                                    match compose_seq (Triple.tr instrs1m blocks1 val1) (Triple.tr instrs2 blocks2 val2) {
-                                        Triple.tr combined all_blocks last_val =>
-                                            Option.some (CompileResult.ok ctx2 combined last_val all_blocks (append_funcs funcs1 funcs2) (append_globals globals1 globals2)),
+                                CompileResult.ok ctx2 instrs2_raw val2_raw blocks2 funcs2 globals2 =>
+                                    // `body` (the let's own continuation)
+                                    // needs the same materialization as
+                                    // `arg` above -- confirmed via a real
+                                    // repro (`lang/parser/position.mo`'s
+                                    // `combine_line_col_scan`: `let
+                                    // trailing := (if ...) in { struct
+                                    // literal using trailing }`). The
+                                    // struct literal is a SEPARATE,
+                                    // already-filed bug (doesn't desugar
+                                    // to `Term.con` here, `implementations/
+                                    // 2026-08-29-struct-literal-not-
+                                    // desugared-in-branch-position.md`),
+                                    // but its `void_val` reaches THIS
+                                    // exact site (a let's own body/
+                                    // continuation) and `compose_seq`
+                                    // splices it straight into the
+                                    // `if`-expr's own dangling `ret %tN`
+                                    // (from compiling `arg`) unmaterialized
+                                    // -- `ret void` where `i64` is
+                                    // expected. `materialize_branch_val`'s
+                                    // own "skip if already terminated"
+                                    // guard means this is a no-op whenever
+                                    // `body` is itself branching (its own
+                                    // `instrs2_raw` already ends in a
+                                    // terminator then).
+                                    match materialize_branch_val ctx2 body instrs2_raw val2_raw {
+                                        BranchMaterializeResult.mk ctx2m instrs2 val2 =>
+                                            match compose_seq (Triple.tr instrs1m blocks1 val1) (Triple.tr instrs2 blocks2 val2) {
+                                                Triple.tr combined all_blocks last_val =>
+                                                    Option.some (CompileResult.ok ctx2m combined last_val all_blocks (append_funcs funcs1 funcs2) (append_globals globals1 globals2)),
+                                            },
                                     },
                             },
                     },

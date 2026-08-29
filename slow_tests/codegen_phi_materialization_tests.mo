@@ -136,3 +136,35 @@ def main (args : List String) : IO I64 := do {
 }
 "# in
     compile_source_run_expect source "test_def_body_bare_native_comparison_return" 1
+
+/// A `let`'s own BODY/continuation (not its bound argument -- that site
+/// was already covered by `implementations/2026-08-29-let-bound-native-
+/// bool-boxing.md`) reaching `void_val` with no materialization step:
+/// `try_compile_let_beta_db` passes `body`'s own compiled value straight
+/// into `compose_seq`, which splices it into the ALREADY-COMPILED `arg`
+/// expression's own dangling `ret` -- if `body` is void-shaped (a struct
+/// literal that doesn't desugar to `Term.con`, `implementations/
+/// 2026-08-29-struct-literal-not-desugared-in-branch-position.md`, is
+/// the real-world trigger; `lang/parser/position.mo`'s `combine_line_
+/// col_scan` is the exact shape: `let trailing := (if ...) in { struct
+/// literal } `), the spliced `ret` ends up `ret void` where `i64` is
+/// expected. This test's own `main` never reads back `p`'s fields, so it
+/// only exercises whether `make_pair` compiles+links+runs without
+/// crashing (this fix's actual scope) -- the struct's own field
+/// correctness is the SEPARATE, still-open bug tracked in that doc.
+#[test]
+def test_let_body_void_struct_literal : IO Bool :=
+    let source := r#"use io {IO}
+struct Pair {
+    a : I64,
+    b : I64,
+}
+def make_pair (n : I64) : Pair :=
+    let x := if I64.gt n 0 then 1 else 2 in
+    { a := x, b := n }
+def main (args : List String) : IO I64 := do {
+    let p := make_pair 5;
+    return 42
+}
+"# in
+    compile_source_run_expect source "test_let_body_void_struct_literal" 42
