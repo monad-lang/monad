@@ -19,7 +19,7 @@ use lang.parser.core {
 use lang.parser.char_preds {is_ident_char, is_space}
 use lang.parser.combinators {
   alt, alt_fold, bind_parse, delimited_by, many1, map_parse, opt,
-  preceded_by, separated_by, tag, take_while, terminated_by,
+  preceded_by, separated_by, tag, tag_keyword, take_while, terminated_by,
 }
 use lang.parser.number {number, numeric_literal}
 use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
@@ -127,9 +127,13 @@ def do_stmts_tail_semi (r : ParseResult String) (after_sp : String) (orig : Stri
 		fail _ => after_sp
 	}
 
+// `tag_keyword`, not `tag`: a bare `is_prefix` check on "return" wrongly
+// matches an ordinary identifier like `return_foo` too (`return` + `_foo`
+// left as if it were a separate expression) -- see `tag_keyword`'s own
+// doc comment for the confirmed real bug this caused.
 #[partial]
 def do_stmt_return (ctx: List Identifier) (input: String) : ParseResult DoStmt :=
-    do_stmt_ret_kw (tag "return" input) input ctx
+    do_stmt_ret_kw (tag_keyword "return" input) input ctx
 
 #[partial]
 def do_stmt_ret_kw (r: ParseResult String) (orig: String) (ctx: List Identifier) : ParseResult DoStmt :=
@@ -347,9 +351,13 @@ def do_parser_desugar (rem: String) (stmts: List DoStmt) : ParseResult Term :=
 // `return (1 + 2)`, with the whole `return expr` then returned directly
 // (no further outer climbing) since the inner `expression` call already
 // consumed everything climbable.
+// `tag_keyword`, not `tag` -- see `do_stmt_return`'s own doc comment
+// above and `tag_keyword`'s: this is the specific site that mis-parsed
+// `return_foo 41` (an ordinary call to a def literally named
+// `return_foo`) as the keyword `return` applied to `_foo 41`.
 #[partial]
 def return_shorthand_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
-    return_shorthand_kw (tag "return" input) ctx
+    return_shorthand_kw (tag_keyword "return" input) ctx
 
 #[partial]
 def return_shorthand_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=

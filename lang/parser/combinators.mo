@@ -4,7 +4,7 @@ use lang.parser.core {
   ParseError, ParseResult, custom, fail, is_empty, parse_error_remaining,
   success, tag,
 }
-use lang.parser.char_preds {is_prefix}
+use lang.parser.char_preds {is_ident_char, is_prefix}
 use lang.types {custom, list_reverse}
 use std.list {length}
 
@@ -17,6 +17,42 @@ def tag (s : String) (input : String) : ParseResult String :=
 	if is_prefix s input
 	then success (String.drop (String.length s) input) s
 	else fail (ParseError.tag s input)
+
+/// Like `tag`, but for a KEYWORD specifically: `tag` alone is a bare
+/// `is_prefix` check, so `tag "return" "return_foo 41"` succeeds,
+/// consuming only `"return"` and leaving `"_foo 41"` -- wrongly treating
+/// the ordinary identifier `return_foo` as the keyword `return` followed
+/// by a separate expression. Confirmed as a real bug via a direct repro
+/// (`def return_foo (x : I64) : I64 := x`, called as `return_foo 41`
+/// elsewhere): `check` (which never calls `return_shorthand_parser`/
+/// `do_stmt_return` on that reference position) accepts it, but `compile`
+/// hit `unknown variable '_foo'`, and the self-hosted compiler's own
+/// `bootstrap compile lang/main.mo monad` self-compile hit the identical
+/// class of bug on `lang/scope.mo`'s own `return_type_after_n_args`
+/// (compiled to a call to undefined `@_type_after_n_args` plus a spurious
+/// `@Monad_pure` wrap) -- see `implementations/2026-08-29-return-
+/// prefixed-def-name-mangled-with-spurious-monad-pure.md`. Requires a
+/// genuine word boundary after the keyword (end of input, or a
+/// non-identifier character) before accepting the match -- mirrors
+/// `lang.parser.identifier`'s own correct pattern of parsing a FULL
+/// identifier first and checking `is_keyword` on the whole thing, just
+/// inverted (here the keyword is checked FIRST, so the boundary has to be
+/// checked explicitly afterward instead of getting it for free).
+#[partial]
+def tag_keyword (s : String) (input : String) : ParseResult String :=
+	match tag s input {
+		success rem matched =>
+			if keyword_boundary_ok rem
+			then success rem matched
+			else fail (ParseError.tag s input),
+		fail e => fail e,
+	}
+
+#[partial]
+def keyword_boundary_ok (rem : String) : Bool :=
+	if String.is_empty rem
+	then true
+	else not (is_ident_char (String.slice rem 0 1))
 
 
 /// "Furthest progress wins" error selection — mirrors the Rust
