@@ -3040,9 +3040,34 @@ def build_fields_from (count : I64) (idx : I64) : List LLVMValue :=
     if idx == count then empty_vals
     else List.cons (LLVMValue.parm_ idx) (build_fields_from count (idx + 1))
 
+/// Starts a fresh top-level def's own body with an EMPTY `locals` list
+/// (`ctx_reset_locals`) before binding its params -- the SAME
+/// cross-function-leak protection `compile_db_lam_ir` already has for a
+/// lifted lambda's own body, just missing here at the TOP-LEVEL DEF
+/// boundary. Without this, `locals` accumulates every param/match-field/
+/// let-binding name from EVERY previously-compiled def in the same
+/// `compile_db_def_list` pass, forever -- `ctx_lookup_local` is checked
+/// BEFORE `is_constructor_var` in `compile_db_term_ir`'s `Term.var` arm,
+/// so a later def whose body happens to reference an identifier with
+/// the SAME NAME as some ancient, unrelated local (any single-letter
+/// param name, or a constructor name like `none` that also happens to
+/// be some earlier def's OWN pattern-bound field name) silently resolves
+/// to that stale, cross-function SSA value instead of its own intended
+/// meaning. Confirmed as a real, previously-undiagnosed bug via
+/// `bootstrap compile lang/main.mo monad`'s own self-compile
+/// (`init/init.mo`'s `List.get`, ~1700 defs into the reachable set):
+/// its own `empty => none` match arm resolved to a `%tN` SSA value left
+/// over from an entirely different, much-earlier-compiled def
+/// (`params_for_names_attrs`) -- `llc: use of undefined value '%tN'`
+/// (a cross-function reference, always invalid). No `ctx_restore_locals`
+/// counterpart needed here (unlike the lambda case): each top-level def
+/// in `compile_db_def_list`'s sequence is independent, not nested inside
+/// another's compilation, so there's no "outer" locals to restore
+/// afterward -- the NEXT def's own `bind_params_in_ctx_db` call resets
+/// again before adding its own params.
 #[partial]
 def bind_params_in_ctx_db (c : CodegenCtx) (params : List Param) : CodegenCtx :=
-    bind_params_with_idx_db c params 0
+    bind_params_with_idx_db (ctx_reset_locals c) params 0
 
 #[partial]
 def bind_params_with_idx_db (c : CodegenCtx) (params : List Param) (idx : I64) : CodegenCtx := match params {
