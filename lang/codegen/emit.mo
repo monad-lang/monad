@@ -76,8 +76,9 @@ type CompileResult {
     ok (ctx : CodegenCtx) (instrs : List LLVMInstruction) (val : LLVMValue) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal),
 }
 
-type CtxStrPair {
-    mk (ctx : CodegenCtx) (str : String),
+struct CtxStrPair {
+    ctx : CodegenCtx,
+    str : String,
 }
 
 #[partial]
@@ -99,13 +100,13 @@ def empty_ctx (arities : List ArityEntry) (ctor_tags : HashMap String I64) : Cod
 def fresh_temp (c : CodegenCtx) : CtxStrPair :=
     let name := String.concat "t" (I64.to_string c.next_temp) in
     let c2 : CodegenCtx := { c with next_temp := c.next_temp + 1 } in
-    CtxStrPair.mk c2 name
+    { ctx := c2, str := name }
 
 #[partial]
 def fresh_label (c : CodegenCtx) (prefix : String) : CtxStrPair :=
     let name := String.concat prefix (String.concat "_" (I64.to_string c.next_label)) in
     let c2 : CodegenCtx := { c with next_label := c.next_label + 1 } in
-    CtxStrPair.mk c2 name
+    { ctx := c2, str := name }
 
 #[partial]
 def ctx_bind_local (c : CodegenCtx) (name : Identifier) (val : LLVMValue) : CodegenCtx :=
@@ -635,10 +636,10 @@ def compile_match_ir (c : CodegenCtx) (scrutinee : Term) (cases : List MatchCase
                                             // blindly appending (see its own doc comment above
                                             // `ends_with_terminator`).
                                             let tag_and_jump := cons_instr tag_instr (cons_instr (LLVMInstruction.jump first_check_label) empty_instrs) in
-                                            match compose_seq (Triple.tr instrs_s blocks_s val_s) (Triple.tr tag_and_jump empty_blocks tag_val) {
-                                                Triple.tr entry_instrs blocks_s_spliced _ =>
+                                            match compose_seq ({ instrs := instrs_s, blocks := blocks_s, val := val_s }) ({ instrs := tag_and_jump, blocks := empty_blocks, val := tag_val }) {
+                                                { instrs := entry_instrs, blocks := blocks_s_spliced, val := _ } =>
                                                     match build_match_chain ctx_merge tag_val val_s cases merge_label first_check_label {
-                                                        MatchChainResult.mk ctx_chain chain_blocks chain_funcs chain_globals phi_pairs =>
+                                                        { ctx := ctx_chain, blocks := chain_blocks, funcs := chain_funcs, globals := chain_globals, phis := phi_pairs } =>
                                                             match fresh_temp ctx_chain {
                                                                 CtxStrPair.mk ctx_final phi_temp =>
                                                                     let phi_instr := LLVMInstruction.assign phi_temp (LLVMValue.phi phi_pairs) in
@@ -657,8 +658,12 @@ def compile_match_ir (c : CodegenCtx) (scrutinee : Term) (cases : List MatchCase
             },
     }
 
-type MatchChainResult {
-    mk (ctx : CodegenCtx) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (phis : List PhiPair),
+struct MatchChainResult {
+    ctx : CodegenCtx,
+    blocks : List LLVMBasicBlock,
+    funcs : List LLVMFunction,
+    globals : List LLVMGlobal,
+    phis : List PhiPair,
 }
 
 /// Recursively builds the check/case block chain for every case in
@@ -669,7 +674,7 @@ type MatchChainResult {
 def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LLVMValue) (cases : List MatchCase) (merge_label : String) (check_label : String) : MatchChainResult :=
     match cases {
         List.empty =>
-            MatchChainResult.mk c empty_blocks empty_funcs empty_globals_list empty_phis,
+            { ctx := c, blocks := empty_blocks, funcs := empty_funcs, globals := empty_globals_list, phis := empty_phis },
         List.cons this_case rest =>
             match rest {
                 List.empty =>
@@ -690,14 +695,16 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
                                                     let branch_instr := LLVMInstruction.branch (LLVMValue.var_ cmp_temp) case_label next_check_label in
                                                     let check_block := LLVMBasicBlock.mk check_label (cons_instr cmp_instr (cons_instr branch_instr empty_instrs)) in
                                                     match build_match_case_block ctx3 scrutinee_val this_case case_label merge_label {
-                                                        MatchChainResult.mk ctx4 case_blocks case_funcs case_globals case_phis =>
+                                                        { ctx := ctx4, blocks := case_blocks, funcs := case_funcs, globals := case_globals, phis := case_phis } =>
                                                             match build_match_chain ctx4 tag_val scrutinee_val rest merge_label next_check_label {
-                                                                MatchChainResult.mk ctx5 rest_blocks rest_funcs rest_globals rest_phis =>
-                                                                    MatchChainResult.mk ctx5
-                                                                        (cons_block check_block (append_blocks case_blocks rest_blocks))
-                                                                        (append_funcs case_funcs rest_funcs)
-                                                                        (append_globals case_globals rest_globals)
-                                                                        (append_phis case_phis rest_phis),
+                                                                { ctx := ctx5, blocks := rest_blocks, funcs := rest_funcs, globals := rest_globals, phis := rest_phis } =>
+                                                                    {
+                                                                        ctx := ctx5,
+                                                                        blocks := cons_block check_block (append_blocks case_blocks rest_blocks),
+                                                                        funcs := append_funcs case_funcs rest_funcs,
+                                                                        globals := append_globals case_globals rest_globals,
+                                                                        phis := append_phis case_phis rest_phis,
+                                                                    },
                                                             },
                                                     },
                                             },
@@ -707,8 +714,9 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
             },
     }
 
-type FieldBindResult {
-    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction),
+struct FieldBindResult {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
 }
 
 /// Binds every name in a case's pattern args, in order, to a
@@ -719,7 +727,7 @@ type FieldBindResult {
 #[partial]
 def bind_match_fields (c : CodegenCtx) (scrutinee_val : LLVMValue) (args : List Identifier) (idx : I64) : FieldBindResult :=
     match args {
-        List.empty => FieldBindResult.mk c empty_instrs,
+        List.empty => { ctx := c, instrs := empty_instrs },
         List.cons name rest =>
             match fresh_temp c {
                 CtxStrPair.mk ctx1 temp =>
@@ -727,8 +735,8 @@ def bind_match_fields (c : CodegenCtx) (scrutinee_val : LLVMValue) (args : List 
                     let field_instr := LLVMInstruction.assign temp field_call in
                     let ctx2 := ctx_bind_local ctx1 name (LLVMValue.var_ temp) in
                     match bind_match_fields ctx2 scrutinee_val rest (idx + 1) {
-                        FieldBindResult.mk ctx3 rest_instrs =>
-                            FieldBindResult.mk ctx3 (cons_instr field_instr rest_instrs),
+                        { ctx := ctx3, instrs := rest_instrs } =>
+                            { ctx := ctx3, instrs := cons_instr field_instr rest_instrs },
                     },
             },
     }
@@ -746,7 +754,7 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
     match case_ {
         MatchCase.mc _name args body _fp =>
             match bind_match_fields c scrutinee_val args 0 {
-                FieldBindResult.mk c1 field_instrs =>
+                { ctx := c1, instrs := field_instrs } =>
                     match compile_db_term_ir c1 body {
                         CompileResult.ok ctx_r instrs_r val_r_raw blocks_r funcs_r globals_r =>
                             let raw_instrs := append_instrs field_instrs instrs_r in
@@ -757,7 +765,7 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
                                 if already_terminated
                                 then empty_phis
                                 else cons_phi (PhiPair.mk bmr.val case_label) empty_phis in
-                            MatchChainResult.mk bmr.ctx (cons_block case_block blocks_r) funcs_r globals_r phis,
+                            { ctx := bmr.ctx, blocks := cons_block case_block blocks_r, funcs := funcs_r, globals := globals_r, phis := phis },
                     },
             },
     }
@@ -770,8 +778,13 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
 /// referenced would be undefined in the final module. Now threaded
 /// through properly, same as every other multi-arg accumulator in this
 /// file.
-type NtvArgs {
-    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (vals : List LLVMValue) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal),
+struct NtvArgs {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
+    vals : List LLVMValue,
+    blocks : List LLVMBasicBlock,
+    funcs : List LLVMFunction,
+    globals : List LLVMGlobal,
 }
 
 /// Sequences each arg's own compiled fragment via `compose_seq` (see
@@ -799,12 +812,12 @@ def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs
                             // -- a native-call argument can't legally
                             // be `void` either.
                             match materialize_void ctx_t val_raw {
-                                MaterializedVal.mk ctx_tm void_instrs val_v =>
+                                { ctx := ctx_tm, instrs := void_instrs, val := val_v } =>
                                     match materialize_native_bool_arg ctx_tm term_ val_v {
-                                        MaterializedVal.mk ctx_tb bool_instrs val =>
+                                        { ctx := ctx_tb, instrs := bool_instrs, val := val } =>
                                             let instrs_m := append_instrs instrs (append_instrs void_instrs bool_instrs) in
-                                            match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs_m blocks_t val) {
-                                                Triple.tr new_instrs new_blocks new_val =>
+                                            match compose_seq ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs_m, blocks := blocks_t, val := val }) {
+                                                { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
                                                     compile_ntv_args_go ctx_tb rest
                                                         new_instrs new_blocks
                                                         (append_funcs acc_funcs funcs_t)
@@ -819,7 +832,7 @@ def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs
                     compile_ntv_args_go c rest acc_instrs acc_blocks acc_funcs acc_globals acc_vals acc_val,
             },
         List.empty =>
-            NtvArgs.mk c acc_instrs (rev_vals acc_vals empty_vals) acc_blocks acc_funcs acc_globals,
+            { ctx := c, instrs := acc_instrs, vals := rev_vals acc_vals empty_vals, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals },
     }
 
 #[partial]
@@ -832,8 +845,10 @@ def rev_vals (xs : List LLVMValue) (acc : List LLVMValue) : List LLVMValue := ma
     List.empty => acc,
 }
 
-type MaterializedVal {
-    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (val : LLVMValue),
+struct MaterializedVal {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
+    val : LLVMValue,
 }
 
 /// Substitutes a genuine heap-allocated Unit value for `LLVMValue.void_val`
@@ -869,9 +884,9 @@ def materialize_void (c : CodegenCtx) (v : LLVMValue) : MaterializedVal := match
             CtxStrPair.mk ctx1 temp =>
                 let unit_val := LLVMValue.alloc_constructor 0 empty_vals in
                 let assign := LLVMInstruction.assign temp unit_val in
-                MaterializedVal.mk ctx1 (cons_instr assign empty_instrs) (LLVMValue.var_ temp),
+                { ctx := ctx1, instrs := (cons_instr assign empty_instrs), val := (LLVMValue.var_ temp) },
         },
-    _ => MaterializedVal.mk c empty_instrs v,
+    _ => { ctx := c, instrs := empty_instrs, val := v },
 }
 
 /// A native boolean-comparison term (`I64.lt`/`.gt`/`.eq`/`.ne`, whatever
@@ -918,11 +933,11 @@ def materialize_native_bool_arg (c : CodegenCtx) (t : Term) (v : LLVMValue) : Ma
                                 let tag_instr := LLVMInstruction.assign tag_temp tag_val in
                                 let con_val := LLVMValue.call "alloc_constructor" LLVMType.i64_ (cons_val (LLVMValue.var_ tag_temp) (cons_val (LLVMValue.int_ 0) empty_vals)) false in
                                 let con_instr := LLVMInstruction.assign con_temp con_val in
-                                MaterializedVal.mk ctx3 (cons_instr zext_instr (cons_instr tag_instr (cons_instr con_instr empty_instrs))) (LLVMValue.var_ con_temp),
+                                { ctx := ctx3, instrs := (cons_instr zext_instr (cons_instr tag_instr (cons_instr con_instr empty_instrs))), val := (LLVMValue.var_ con_temp) },
                         },
                 },
         }
-    else MaterializedVal.mk c empty_instrs v
+    else { ctx := c, instrs := empty_instrs, val := v }
 
 struct BranchMaterializeResult {
     ctx : CodegenCtx,
@@ -963,9 +978,9 @@ def materialize_branch_val (c : CodegenCtx) (term_ : Term) (raw_instrs : List LL
     then { ctx := c, instrs := raw_instrs, val := raw_val }
     else
         match materialize_void c raw_val {
-            MaterializedVal.mk c1 void_instrs val_v =>
+            { ctx := c1, instrs := void_instrs, val := val_v } =>
                 match materialize_native_bool_arg c1 term_ val_v {
-                    MaterializedVal.mk c2 bool_instrs val =>
+                    { ctx := c2, instrs := bool_instrs, val := val } =>
                         { ctx := c2, instrs := append_instrs raw_instrs (append_instrs void_instrs bool_instrs), val := val },
                 },
         }
@@ -978,7 +993,7 @@ def compile_ntv_ir (c : CodegenCtx) (native : Native) : CompileResult :=
             let llvm_name := extract_base_name name_str in
             let fn_name := String.concat "monad_" llvm_name in
             match compile_ntv_args c args empty_instrs empty_vals {
-                NtvArgs.mk ctx_args all_instrs all_vals all_blocks all_funcs all_globals =>
+                { ctx := ctx_args, instrs := all_instrs, vals := all_vals, blocks := all_blocks, funcs := all_funcs, globals := all_globals } =>
                     match fresh_temp ctx_args {
                         CtxStrPair.mk ctx_t temp =>
                             let call_val := LLVMValue.call fn_name LLVMType.i64_ all_vals false in
@@ -1006,7 +1021,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
     match con {
         Con.mk name typ_name num_args args =>
             match compile_ntv_args c args empty_instrs empty_vals {
-                NtvArgs.mk ctx_args all_instrs all_vals all_blocks all_funcs all_globals =>
+                { ctx := ctx_args, instrs := all_instrs, vals := all_vals, blocks := all_blocks, funcs := all_funcs, globals := all_globals } =>
                     match fresh_temp ctx_args {
                         CtxStrPair.mk ctx_t temp =>
                             // Call the @alloc_constructor runtime function
@@ -1024,7 +1039,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
                             // e.g. `some 42`, allocated a correctly
                             // tagged/sized-but-uninitialized object).
                             match build_set_field_instrs (LLVMValue.var_ temp) all_vals 0 ctx_t {
-                                SetFieldResult.mk ctx_set set_instrs =>
+                                { ctx := ctx_set, instrs := set_instrs } =>
                                     let all_con_instrs := append_instrs all_instrs (cons_instr assign_instr set_instrs) in
                                     CompileResult.ok ctx_set all_con_instrs (LLVMValue.var_ temp) all_blocks all_funcs all_globals,
                             },
@@ -1032,8 +1047,9 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
             },
     }
 
-type SetFieldResult {
-    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction),
+struct SetFieldResult {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
 }
 
 /// One @monad_set_field call per already-compiled argument value, in
@@ -1042,15 +1058,15 @@ type SetFieldResult {
 #[partial]
 def build_set_field_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : I64) (c : CodegenCtx) : SetFieldResult :=
     match vals {
-        List.empty => SetFieldResult.mk c empty_instrs,
+        List.empty => { ctx := c, instrs := empty_instrs },
         List.cons v rest =>
             match fresh_temp c {
                 CtxStrPair.mk ctx1 temp =>
                     let set_call := LLVMValue.call "monad_set_field" LLVMType.i64_ (cons_val obj_val (cons_val (LLVMValue.int_ idx) (cons_val v empty_vals))) false in
                     let set_instr := LLVMInstruction.assign temp set_call in
                     match build_set_field_instrs obj_val rest (idx + 1) ctx1 {
-                        SetFieldResult.mk ctx2 rest_instrs =>
-                            SetFieldResult.mk ctx2 (cons_instr set_instr rest_instrs),
+                        { ctx := ctx2, instrs := rest_instrs } =>
+                            { ctx := ctx2, instrs := (cons_instr set_instr rest_instrs) },
                     },
             },
     }
@@ -1133,18 +1149,20 @@ def is_terminator_instr (instr : LLVMInstruction) : Bool := match instr {
 // behavior whenever `a` isn't itself branching, i.e. the overwhelming
 // majority of real code — this changes nothing about ordinary,
 // non-branching compilation.
-type Triple {
-    tr (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (val : LLVMValue),
+struct Triple {
+    instrs : List LLVMInstruction,
+    blocks : List LLVMBasicBlock,
+    val : LLVMValue,
 }
 
 #[partial]
 def compose_seq (a : Triple) (b : Triple) : Triple := match a {
-    Triple.tr a_instrs a_blocks a_val => match b {
-        Triple.tr b_instrs b_blocks b_val =>
+    { instrs := a_instrs, blocks := a_blocks, val := a_val } => match b {
+        { instrs := b_instrs, blocks := b_blocks, val := b_val } =>
             if ends_with_terminator a_instrs then
                 match splice_into_terminal_block a_blocks a_val b_instrs b_val {
                     Option.some rewritten =>
-                        Triple.tr a_instrs (append_blocks rewritten b_blocks) b_val,
+                        { instrs := a_instrs, blocks := append_blocks rewritten b_blocks, val := b_val }
                     // Couldn't find a's own terminal block (shouldn't
                     // happen given compile_db_if_ir/compile_match_ir's
                     // own invariant that a branching term's LAST
@@ -1153,10 +1171,10 @@ def compose_seq (a : Triple) (b : Triple) : Triple := match a {
                     // than crash if that invariant is ever violated by
                     // something not yet accounted for here).
                     Option.none =>
-                        Triple.tr (append_instrs a_instrs b_instrs) (append_blocks a_blocks b_blocks) b_val,
+                        { instrs := append_instrs a_instrs b_instrs, blocks := append_blocks a_blocks b_blocks, val := b_val }
                 }
             else
-                Triple.tr (append_instrs a_instrs b_instrs) (append_blocks a_blocks b_blocks) b_val,
+                { instrs := append_instrs a_instrs b_instrs, blocks := append_blocks a_blocks b_blocks, val := b_val }
     },
 }
 
@@ -1612,8 +1630,8 @@ def compile_db_if_ir (c : CodegenCtx) (cond : Term) (then_ : Term) (else_ : Term
                             // terminator; splice via `compose_seq`
                             // instead of blindly appending (see its own
                             // doc comment above `ends_with_terminator`).
-                            match compose_seq (Triple.tr instrs_bool blocks_bool bool_val) (Triple.tr (cons_instr branch_instr empty_instrs) empty_blocks bool_val) {
-                                Triple.tr entry_instrs blocks_bool_spliced _ =>
+                            match compose_seq ({ instrs := instrs_bool, blocks := blocks_bool, val := bool_val }) ({ instrs := (cons_instr branch_instr empty_instrs), blocks := empty_blocks, val := bool_val }) {
+                                { instrs := entry_instrs, blocks := blocks_bool_spliced, val := _ } =>
                                     build_db_if_blocks ctx_branches then_label else_label merge_label then_ else_ entry_instrs blocks_bool_spliced funcs_cond globals_cond,
                             },
                     },
@@ -1657,8 +1675,8 @@ def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (blocks : Li
                         let bool_true_tag := constructor_tag c "true" in
                         let cmp_instr := LLVMInstruction.assign bool_temp (LLVMValue.icmp_eq (LLVMValue.var_ tag_temp) (LLVMValue.int_ bool_true_tag)) in
                         let extra := cons_instr tag_instr (cons_instr cmp_instr empty_instrs) in
-                        match compose_seq (Triple.tr instrs blocks cond_val) (Triple.tr extra empty_blocks (LLVMValue.var_ bool_temp)) {
-                            Triple.tr new_instrs new_blocks new_val =>
+                        match compose_seq ({ instrs := instrs, blocks := blocks, val := cond_val }) ({ instrs := extra, blocks := empty_blocks, val := (LLVMValue.var_ bool_temp) }) {
+                            { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
                                 BoolCondResult.mk ctx2 new_instrs new_blocks new_val,
                         },
                 },
@@ -2024,7 +2042,7 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                     // ends in a terminator whenever `bool_instrs` is
                     // non-empty.
                     match materialize_native_bool_arg ctx1 arg val1_raw {
-                        MaterializedVal.mk ctx1b bool_instrs val1 =>
+                        { ctx := ctx1b, instrs := bool_instrs, val := val1 } =>
                             let instrs1m := append_instrs instrs1 bool_instrs in
                             let ctx_bound := ctx_bind_local ctx1b name val1 in
                             match compile_db_term_ir ctx_bound body {
@@ -2056,8 +2074,8 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                                     // terminator then).
                                     match materialize_branch_val ctx2 body instrs2_raw val2_raw {
                                         { ctx := ctx2m, instrs := instrs2, val := val2 } =>
-                                            match compose_seq (Triple.tr instrs1m blocks1 val1) (Triple.tr instrs2 blocks2 val2) {
-                                                Triple.tr combined all_blocks last_val =>
+                                            match compose_seq ({ instrs := instrs1m, blocks := blocks1, val := val1 }) ({ instrs := instrs2, blocks := blocks2, val := val2 }) {
+                                                { instrs := combined, blocks := all_blocks, val := last_val } =>
                                                     Option.some (CompileResult.ok ctx2m combined last_val all_blocks (append_funcs funcs1 funcs2) (append_globals globals1 globals2)),
                                             },
                                     },
@@ -2197,8 +2215,8 @@ def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : 
                     // ends in a terminator -- splice via `compose_seq`
                     // instead of blindly appending (see its own doc
                     // comment above `ends_with_terminator`).
-                    match compose_seq (Triple.tr instrs1 blocks1 val1) (Triple.tr (cons_instr assign_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
-                        Triple.tr new_instrs new_blocks _ =>
+                    match compose_seq ({ instrs := instrs1, blocks := blocks1, val := val1 }) ({ instrs := (cons_instr assign_instr empty_instrs), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
+                        { instrs := new_instrs, blocks := new_blocks, val := _ } =>
                             if is_void_native op then
                                 wrap_void_native_result ctx_t new_instrs new_blocks funcs1 globals1
                             else
@@ -2224,7 +2242,7 @@ def wrap_void_native_result (ctx : CodegenCtx) (prior_instrs : List LLVMInstruct
                     let alloc_val := LLVMValue.alloc_constructor (constructor_tag ctx "IO.io") (List.cons unit_val List.empty) in
                     let alloc_instr := LLVMInstruction.assign temp_io alloc_val in
                     match build_set_field_instrs (LLVMValue.var_ temp_io) (List.cons unit_val List.empty) 0 ctx_io {
-                        SetFieldResult.mk ctx_set set_instrs =>
+                        { ctx := ctx_set, instrs := set_instrs } =>
                             let all_instrs := append_instrs prior_instrs (cons_instr unit_instr (cons_instr alloc_instr set_instrs)) in
                             CompileResult.ok ctx_set all_instrs (LLVMValue.var_ temp_io) prior_blocks funcs globals,
                     },
@@ -2264,8 +2282,8 @@ def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : 
         CompileResult.ok ctx2 instrs2 val2 blocks2 funcs2 globals2 =>
             match compile_db_term_ir ctx2 arg {
                 CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
-                    match compose_seq (Triple.tr instrs2 blocks2 val2) (Triple.tr instrs1 blocks1 val1) {
-                        Triple.tr combined all_blocks last_val =>
+                    match compose_seq ({ instrs := instrs2, blocks := blocks2, val := val2 }) ({ instrs := instrs1, blocks := blocks1, val := val1 }) {
+                        { instrs := combined, blocks := all_blocks, val := last_val } =>
                             let all_funcs := append_funcs funcs2 funcs1 in
                             let all_globals := append_globals globals2 globals1 in
                             match extract_lit_from_val val2 {
@@ -2348,12 +2366,12 @@ def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : Lis
                     // `void`), so materialize a real Unit value first
                     // (see `materialize_void`'s own doc comment).
                     match materialize_void ctx1 val1_raw {
-                        MaterializedVal.mk ctx1m void_instrs val1_v =>
+                        { ctx := ctx1m, instrs := void_instrs, val := val1_v } =>
                             match materialize_native_bool_arg ctx1m t val1_v {
-                                MaterializedVal.mk ctx1b bool_instrs val1 =>
+                                { ctx := ctx1b, instrs := bool_instrs, val := val1 } =>
                                     let instrs1m := append_instrs instrs1 (append_instrs void_instrs bool_instrs) in
-                                    match compose_seq (Triple.tr acc_instrs acc_blocks acc_val) (Triple.tr instrs1m blocks1 val1) {
-                                        Triple.tr new_instrs new_blocks new_val =>
+                                    match compose_seq ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs1m, blocks := blocks1, val := val1 }) {
+                                        { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
                                             compile_spine_args_go ctx1b rest
                                                 new_instrs new_blocks
                                                 (append_funcs acc_funcs funcs1)
@@ -2426,8 +2444,8 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
                 CompileResult.ok ctx_h instrs_h val_h blocks_h funcs_h globals_h =>
                     match compile_spine_args ctx_h args {
                         SpineArgs.mk ctx_a instrs_a blocks_a funcs_a globals_a vals_a last_val_a =>
-                            match compose_seq (Triple.tr instrs_h blocks_h val_h) (Triple.tr instrs_a blocks_a last_val_a) {
-                                Triple.tr combined all_blocks combined_val =>
+                            match compose_seq ({ instrs := instrs_h, blocks := blocks_h, val := val_h }) ({ instrs := instrs_a, blocks := blocks_a, val := last_val_a }) {
+                                { instrs := combined, blocks := all_blocks, val := combined_val } =>
                                     let all_funcs := append_funcs funcs_h funcs_a in
                                     let all_globals := append_globals globals_h globals_a in
                                     // Dispatch on `val_h` itself (WHICH
@@ -2481,8 +2499,8 @@ def combine_direct_call (ctx_a : CodegenCtx) (name : String) (arg_vals : List LL
         CtxStrPair.mk ctx_t temp =>
             let call_instr := LLVMInstruction.assign temp
                 (LLVMValue.call name LLVMType.i64_ arg_vals false) in
-            match compose_seq (Triple.tr combined blocks last_val) (Triple.tr (cons_instr call_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
-                Triple.tr new_instrs new_blocks _ =>
+            match compose_seq ({ instrs := combined, blocks := blocks, val := last_val }) ({ instrs := (cons_instr call_instr empty_instrs), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
+                { instrs := new_instrs, blocks := new_blocks, val := _ } =>
                     CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
             },
     }
@@ -2514,8 +2532,8 @@ def combine_indirect_call (ctx_a : CodegenCtx) (callee_val : LLVMValue) (arg_val
         CtxStrPair.mk ctx_t temp =>
             let call_instr := LLVMInstruction.assign temp
                 (LLVMValue.call trampoline_name LLVMType.i64_ (cons_val callee_val arg_vals) false) in
-            match compose_seq (Triple.tr combined blocks last_val) (Triple.tr (cons_instr call_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
-                Triple.tr new_instrs new_blocks _ =>
+            match compose_seq ({ instrs := combined, blocks := blocks, val := last_val }) ({ instrs := (cons_instr call_instr empty_instrs), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
+                { instrs := new_instrs, blocks := new_blocks, val := _ } =>
                     CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
             },
     }
@@ -2531,8 +2549,8 @@ def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : L
         CtxStrPair.mk new_ctx temp =>
             let arith_val := compile_native_val op lhs rhs in
             let arith_instr := LLVMInstruction.assign temp arith_val in
-            match compose_seq (Triple.tr instrs blocks last_val) (Triple.tr (cons_instr arith_instr empty_instrs) empty_blocks (LLVMValue.var_ temp)) {
-                Triple.tr new_instrs new_blocks _ =>
+            match compose_seq ({ instrs := instrs, blocks := blocks, val := last_val }) ({ instrs := (cons_instr arith_instr empty_instrs), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
+                { instrs := new_instrs, blocks := new_blocks, val := _ } =>
                     CompileResult.ok new_ctx new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
             },
     }
