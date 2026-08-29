@@ -91,15 +91,14 @@ def compile_source_run_expect (source : String) (basename : String) (expected : 
 /// own argument is exactly the boxing site this fix covers.
 #[test]
 def test_native_comparison_as_ordinary_bool_arg_true : IO Bool :=
-    let source :=
-        "use io {IO}\n" ++
-        "def check (a : I64) (b : I64) : I64 :=\n" ++
-        "    if Bool.not (I64.lt a b) then 1 else 0\n" ++
-        "def main (args : List String) : IO I64 := do {\n" ++
-        "    let r := check 5 3;\n" ++
-        "    return r\n" ++
-        "}\n"
-    in
+    let source := r#"use io {IO}
+def check (a : I64) (b : I64) : I64 :=
+    if Bool.not (I64.lt a b) then 1 else 0
+def main (args : List String) : IO I64 := do {
+    let r := check 5 3;
+    return r
+}
+"# in
     compile_source_run_expect source "test_native_comparison_as_ordinary_bool_arg_true" 1
 
 /// Same shape, `a < b` this time: `I64.lt` is true, `Bool.not` flips it
@@ -107,15 +106,14 @@ def test_native_comparison_as_ordinary_bool_arg_true : IO Bool :=
 /// `zext`/`2 - raw` tag mapping.
 #[test]
 def test_native_comparison_as_ordinary_bool_arg_false : IO Bool :=
-    let source :=
-        "use io {IO}\n" ++
-        "def check (a : I64) (b : I64) : I64 :=\n" ++
-        "    if Bool.not (I64.lt a b) then 1 else 0\n" ++
-        "def main (args : List String) : IO I64 := do {\n" ++
-        "    let r := check 3 5;\n" ++
-        "    return r\n" ++
-        "}\n"
-    in
+    let source := r#"use io {IO}
+def check (a : I64) (b : I64) : I64 :=
+    if Bool.not (I64.lt a b) then 1 else 0
+def main (args : List String) : IO I64 := do {
+    let r := check 3 5;
+    return r
+}
+"# in
     compile_source_run_expect source "test_native_comparison_as_ordinary_bool_arg_false" 0
 
 /// A native comparison bound via `let` and REUSED (as two separate later
@@ -133,34 +131,32 @@ def test_native_comparison_as_ordinary_bool_arg_false : IO Bool :=
 /// `r2` picks 10 => 11.
 #[test]
 def test_let_bound_native_comparison_reused_true : IO Bool :=
-    let source :=
-        "use io {IO}\n" ++
-        "def check (a : I64) (b : I64) : I64 :=\n" ++
-        "    let too_small := I64.lt a b in\n" ++
-        "    let r1 := if too_small then 1 else 0 in\n" ++
-        "    let r2 := if too_small then 10 else 20 in\n" ++
-        "    I64.add r1 r2\n" ++
-        "def main (args : List String) : IO I64 := do {\n" ++
-        "    let r := check 3 5;\n" ++
-        "    return r\n" ++
-        "}\n"
-    in
+    let source := r#"use io {IO}
+def check (a : I64) (b : I64) : I64 :=
+    let too_small := I64.lt a b in
+    let r1 := if too_small then 1 else 0 in
+    let r2 := if too_small then 10 else 20 in
+    I64.add r1 r2
+def main (args : List String) : IO I64 := do {
+    let r := check 3 5;
+    return r
+}
+"# in
     compile_source_run_expect source "test_let_bound_native_comparison_reused_true" 11
 
 /// Same shape, `5 < 3` (false) this time: `r1` picks 0, `r2` picks 20
 /// => 20.
 #[test]
 def test_let_bound_native_comparison_reused_false : IO Bool :=
-    let source :=
-        "use io {IO}\n" ++
-        "def check (a : I64) (b : I64) : I64 :=\n" ++
-        "    let too_small := I64.lt a b in\n" ++
-        "    let r1 := if too_small then 1 else 0 in\n" ++
-        "    let r2 := if too_small then 10 else 20 in\n" ++
-        "    I64.add r1 r2\n" ++
-        "def main (args : List String) : IO I64 := do {\n" ++
-        "    let r := check 5 3;\n" ++
-        "    return r\n" ++
-        "}\n"
-    in
+    let source := r#"use io {IO}
+def check (a : I64) (b : I64) : I64 :=
+    let too_small := I64.lt a b in
+    let r1 := if too_small then 1 else 0 in
+    let r2 := if too_small then 10 else 20 in
+    I64.add r1 r2
+def main (args : List String) : IO I64 := do {
+    let r := check 5 3;
+    return r
+}
+"# in
     compile_source_run_expect source "test_let_bound_native_comparison_reused_false" 20

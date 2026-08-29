@@ -151,7 +151,15 @@ def test_compile_division : Bool :=
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "sdiv i64"
 
-/// Test compilation of equality comparison
+/// Test compilation of equality comparison.
+/// Uses `I64_beq` (mangled from `I64.beq`) -- the real, only I64
+/// equality function in the whole corpus (`init/number.mo`'s `BEq I64`
+/// instance method; there is no `I64.eq`, confirmed "unknown variable").
+/// `lookup_native`'s dispatch table (`lang/codegen/emit.mo`) used to
+/// hardcode `"I64_eq"` instead, which no real parsed program could ever
+/// reference -- this test's own prior `"I64_eq"` name masked that gap
+/// rather than catching it, since a hand-built `Term.var` can reference
+/// any string regardless of whether real source could ever produce it.
 #[test]
 def test_compile_equality : Bool :=
     let id := Identifier.id "equals" in
@@ -159,7 +167,7 @@ def test_compile_equality : Bool :=
     let y_id := Identifier.id "y" in
     let x_var := Term.var 0 (DebugName.named x_id) in
     let y_var := Term.var 1 (DebugName.named y_id) in
-    let eq_var := Term.var 0 (DebugName.named (Identifier.id "I64_eq")) in
+    let eq_var := Term.var 0 (DebugName.named (Identifier.id "I64_beq")) in
     let body := Term.app (Term.app eq_var x_var) y_var in
     let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) (Term.lam (DebugName.named y_id) (Term.type_ 1) body) in
     let def_ := Def.mk

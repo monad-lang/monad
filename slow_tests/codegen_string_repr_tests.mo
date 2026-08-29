@@ -95,15 +95,14 @@ def compile_source_run_expect (source : String) (basename : String) (expected : 
 /// out of scope here, not introduced by this fix).
 #[test]
 def test_string_literal_if_phi_merge : IO Bool :=
-    let source :=
-        "use io {IO}\n" ++
-        "def spaces (n : I64) : String :=\n" ++
-        "    if I64.gt n 0\n" ++
-        "    then String.concat \" \" (spaces (I64.sub n 1))\n" ++
-        "    else \"\"\n" ++
-        "def main (args : List String) : IO I64 :=\n" ++
-        "    IO.io (String.length (spaces 3))\n"
-    in
+    let source := r#"use io {IO}
+def spaces (n : I64) : String :=
+    if I64.gt n 0
+    then String.concat " " (spaces (I64.sub n 1))
+    else ""
+def main (args : List String) : IO I64 :=
+    IO.io (String.length (spaces 3))
+"# in
     compile_source_run_expect source "test_string_literal_if_phi_merge" 3
 
 /// A literal used directly as a whole `if` branch (no recursion, no
@@ -115,12 +114,11 @@ def test_string_literal_if_phi_merge : IO Bool :=
 /// above.
 #[test]
 def test_string_literal_both_branches_phi_merge : IO Bool :=
-    let source :=
-        "use io {IO}\n" ++
-        "def pick (b : Bool) : String := if b then \"yes\" else \"no\"\n" ++
-        "def main (args : List String) : IO I64 :=\n" ++
-        "    IO.io (String.length (pick true))\n"
-    in
+    let source := r#"use io {IO}
+def pick (b : Bool) : String := if b then "yes" else "no"
+def main (args : List String) : IO I64 :=
+    IO.io (String.length (pick true))
+"# in
     compile_source_run_expect source "test_string_literal_both_branches_phi_merge" 3
 
 /// `String.length` (std/string.mo) had no entry in `native_runtime_fn_
@@ -133,9 +131,8 @@ def test_string_literal_both_branches_phi_merge : IO Bool :=
 /// of 3) while building out this file's other tests.
 #[test]
 def test_string_length_native_wiring : IO Bool :=
-    let source :=
-        "use io {IO}\n" ++
-        "def main (args : List String) : IO I64 :=\n" ++
-        "    IO.io (String.length \"abc\")\n"
-    in
+    let source := r#"use io {IO}
+def main (args : List String) : IO I64 :=
+    IO.io (String.length "abc")
+"# in
     compile_source_run_expect source "test_string_length_native_wiring" 3

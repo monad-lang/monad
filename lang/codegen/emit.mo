@@ -1,5 +1,14 @@
 use io {IO, println}
 use std.bench {now, report}
+// `str_map_*` below is a `std.map` `HashMap String V`. Empty import:
+// naming any of `std.map`'s `Map`-class-instance exports explicitly hits
+// a pre-existing latent instance/dictionary-resolution bug (same
+// workaround `lang/scope.mo`'s own `modpath_map_*`/`use std.map {}` doc
+// comment documents, and `std/map_tests.mo`/`bench/scope_lookup.mo`
+// already use) -- everything remains available regardless via the same
+// always-on mechanism that lets any top-level type/def resolve without
+// being explicitly `use`d.
+use std.map {}
 use lang.types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
   LoadedModules, LocalScope, MatchCase, ModulePath, Native, Operator,
@@ -394,7 +403,22 @@ def lookup_native (name : String) : Option NativeOp :=
     else if String.beq name "I64_sub" then Option.some NativeOp.op_sub
     else if String.beq name "I64_mul" then Option.some NativeOp.op_mul
     else if String.beq name "I64_div" then Option.some NativeOp.op_sdiv
-    else if String.beq name "I64_eq" then Option.some NativeOp.op_eq
+    // `"I64_eq"` (no such identifier exists -- `I64.eq` doesn't typecheck,
+    // "unknown variable") was dead code: the real, only I64 equality
+    // function throughout the whole corpus is `I64.beq` (`init/number.mo`,
+    // the `BEq I64` instance's own method), which mangles to `I64_beq`,
+    // never matching this table at all. Confirmed as a real, previously
+    // undiscovered gap via a direct repro: `I64.beq` compiled to the
+    // generic "return Unit" stub (`native_runtime_fn_name` has no entry
+    // for it either) both as a bare call AND as an `if`'s own condition
+    // (`is_native_bool_op_name`/`ensure_i1_cond` never recognized it as
+    // already-i1 either, same root cause) -- every I64 equality check in
+    // real code silently miscompiled. `I64.ne`/`"I64_ne"` has the same
+    // "no such identifier" shape (`Bool.not (I64.beq a b)` is how real
+    // code expresses it, per this session's own `materialize_native_
+    // bool_arg` fix) -- left as dead code, not touched here (nothing
+    // reaches it, out of scope for this fix).
+    else if String.beq name "I64_beq" then Option.some NativeOp.op_eq
     else if String.beq name "I64_lt" then Option.some NativeOp.op_lt
     else if String.beq name "I64_gt" then Option.some NativeOp.op_gt
     else if String.beq name "I64_ne" then Option.some NativeOp.op_ne
@@ -684,15 +708,16 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
             match bind_match_fields c scrutinee_val args 0 {
                 FieldBindResult.mk c1 field_instrs =>
                     match compile_db_term_ir c1 body {
-                        CompileResult.ok ctx_r instrs_r val_r blocks_r funcs_r globals_r =>
-                            let full_instrs := append_instrs field_instrs instrs_r in
-                            let already_terminated := ends_with_terminator full_instrs in
-                            let case_block := build_branch_block case_label merge_label full_instrs in
+                        CompileResult.ok ctx_r instrs_r val_r_raw blocks_r funcs_r globals_r =>
+                            let raw_instrs := append_instrs field_instrs instrs_r in
+                            let already_terminated := ends_with_terminator raw_instrs in
+                            let bmr := materialize_branch_val ctx_r body raw_instrs val_r_raw in
+                            let case_block := build_branch_block case_label merge_label bmr.bmr_instrs in
                             let phis :=
                                 if already_terminated
                                 then empty_phis
-                                else cons_phi (PhiPair.mk val_r case_label) empty_phis in
-                            MatchChainResult.mk ctx_r (cons_block case_block blocks_r) funcs_r globals_r phis,
+                                else cons_phi (PhiPair.mk bmr.bmr_val case_label) empty_phis in
+                            MatchChainResult.mk bmr.bmr_ctx (cons_block case_block blocks_r) funcs_r globals_r phis,
                     },
             },
     }
@@ -858,6 +883,52 @@ def materialize_native_bool_arg (c : CodegenCtx) (t : Term) (v : LLVMValue) : Ma
                 },
         }
     else MaterializedVal.mk c empty_instrs v
+
+struct BranchMaterializeResult {
+    bmr_ctx : CodegenCtx,
+    bmr_instrs : List LLVMInstruction,
+    bmr_val : LLVMValue,
+}
+
+/// A `then`/`else` branch (`build_db_if_blocks`) or `match` case body
+/// (`build_match_case_block`) whose value is about to become a `phi`
+/// operand needs the SAME materialization call-argument positions
+/// already get (`materialize_void`/`materialize_native_bool_arg` above)
+/// -- a phi is just as intolerant of a raw `void_val` or a secretly-`i1`
+/// native-comparison result as a call argument is, and this codebase's
+/// own PhiPair construction (`build_merge_result`/`build_match_case_
+/// block`) used `then_val`/`else_val`/`val_r` completely unmaterialized
+/// until this fix. Confirmed as a real gap via `bootstrap compile
+/// lang/main.mo monad`'s own self-compile (`line_col_scan_direct`,
+/// `lang/parser/diagnostic.mo`): an `if`'s `then` branch compiling to a
+/// bare `void_val` (a `Term.hole`-shaped body) merged against the `else`
+/// branch's real `i64` result -- `llc: void type only allowed for
+/// function results`, the exact same class of error the string-literal-
+/// vs-computed-string phi fix addressed, just for `void` instead of a
+/// pointer.
+///
+/// Skips materialization entirely when `raw_instrs` already ends in a
+/// terminator (the branch is itself a nested if/match that returns
+/// directly and never reaches the enclosing merge block at all --
+/// `build_match_case_block`'s own prior doc comment already documents
+/// this shape for match arms; the same reasoning applies to `if`
+/// branches) -- `raw_val` is irrelevant there (no phi entry is
+/// contributed for it either way), and appending instructions after an
+/// already-real terminator would itself be the "dead code after
+/// terminator" bug class this file's `compose_seq` exists to avoid
+/// elsewhere.
+#[partial]
+def materialize_branch_val (c : CodegenCtx) (term_ : Term) (raw_instrs : List LLVMInstruction) (raw_val : LLVMValue) : BranchMaterializeResult :=
+    if ends_with_terminator raw_instrs
+    then { bmr_ctx := c, bmr_instrs := raw_instrs, bmr_val := raw_val }
+    else
+        match materialize_void c raw_val {
+            MaterializedVal.mk c1 void_instrs val_v =>
+                match materialize_native_bool_arg c1 term_ val_v {
+                    MaterializedVal.mk c2 bool_instrs val =>
+                        { bmr_ctx := c2, bmr_instrs := append_instrs raw_instrs (append_instrs void_instrs bool_instrs), bmr_val := val },
+                },
+        }
 
 #[partial]
 def compile_ntv_ir (c : CodegenCtx) (native : Native) : CompileResult :=
@@ -1614,28 +1685,69 @@ def is_native_bool_op_name (name : String) : Bool := match lookup_native_any nam
 #[partial]
 def build_db_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : String) (merge_label : String) (then_ : Term) (else_ : Term) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) (entry_funcs : List LLVMFunction) (entry_globals : List LLVMGlobal) : CompileResult :=
     match compile_db_term_ir ctx then_ {
-        CompileResult.ok ctx_then then_instrs then_val blocks_then funcs_then globals_then =>
-            let then_block := build_branch_block then_label merge_label then_instrs in
-            match compile_db_term_ir ctx_then else_ {
-                CompileResult.ok ctx_else else_instrs else_val blocks_else funcs_else globals_else =>
-                    let else_block := build_branch_block else_label merge_label else_instrs in
-                    build_merge_result ctx_else merge_label then_val then_label else_val else_label entry_instrs entry_blocks entry_funcs entry_globals blocks_then blocks_else funcs_then funcs_else globals_then globals_else then_block else_block,
+        CompileResult.ok ctx_then then_instrs_raw then_val_raw blocks_then funcs_then globals_then =>
+            // A branch whose OWN instructions already end in a real
+            // terminator (a nested if/match that itself returns
+            // directly) never actually reaches `merge_label` at all --
+            // `build_branch_block` correctly leaves its own terminator
+            // alone rather than appending a `jump merge_label`, but
+            // `build_merge_result` used to unconditionally build a
+            // 2-entry phi keyed on `then_label`/`else_label` regardless,
+            // producing a real, non-predecessor phi edge -- confirmed
+            // via a direct repro (`lang/parser/position.mo`'s
+            // `line_col_scan_direct`, chained/nested ifs): `llc`'s
+            // verifier rejects it ("PHINode should have one entry for
+            // each predecessor of its parent basic block!" /
+            // "Instruction does not dominate all uses!"). Mirrors
+            // `build_match_case_block`'s own already-established handling
+            // of the identical shape for match arms.
+            let then_reaches := not (ends_with_terminator then_instrs_raw) in
+            let then_bmr := materialize_branch_val ctx_then then_ then_instrs_raw then_val_raw in
+            let then_block := build_branch_block then_label merge_label then_bmr.bmr_instrs in
+            match compile_db_term_ir then_bmr.bmr_ctx else_ {
+                CompileResult.ok ctx_else else_instrs_raw else_val_raw blocks_else funcs_else globals_else =>
+                    let else_reaches := not (ends_with_terminator else_instrs_raw) in
+                    let else_bmr := materialize_branch_val ctx_else else_ else_instrs_raw else_val_raw in
+                    let else_block := build_branch_block else_label merge_label else_bmr.bmr_instrs in
+                    build_merge_result else_bmr.bmr_ctx merge_label then_reaches then_bmr.bmr_val then_label else_reaches else_bmr.bmr_val else_label entry_instrs entry_blocks entry_funcs entry_globals blocks_then blocks_else funcs_then funcs_else globals_then globals_else then_block else_block,
             },
     }
 
+/// Builds `merge_label`'s own `PhiPair` list from whichever of
+/// `then`/`else` actually reach it -- see `build_db_if_blocks`'s own
+/// doc comment for why a branch might not.
 #[partial]
-def build_merge_result (ctx_else : CodegenCtx) (merge_label : String) (then_val : LLVMValue) (then_label : String) (else_val : LLVMValue) (else_label : String) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) (entry_funcs : List LLVMFunction) (entry_globals : List LLVMGlobal) (blocks_then : List LLVMBasicBlock) (blocks_else : List LLVMBasicBlock) (funcs_then : List LLVMFunction) (funcs_else : List LLVMFunction) (globals_then : List LLVMGlobal) (globals_else : List LLVMGlobal) (then_block : LLVMBasicBlock) (else_block : LLVMBasicBlock) : CompileResult :=
+def build_merge_phi_pairs (then_reaches : Bool) (then_val : LLVMValue) (then_label : String) (else_reaches : Bool) (else_val : LLVMValue) (else_label : String) : List PhiPair :=
+    let then_pairs := if then_reaches then cons_phi (PhiPair.mk then_val then_label) empty_phis else empty_phis in
+    if else_reaches then cons_phi (PhiPair.mk else_val else_label) then_pairs else then_pairs
+
+#[partial]
+def build_merge_result (ctx_else : CodegenCtx) (merge_label : String) (then_reaches : Bool) (then_val : LLVMValue) (then_label : String) (else_reaches : Bool) (else_val : LLVMValue) (else_label : String) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) (entry_funcs : List LLVMFunction) (entry_globals : List LLVMGlobal) (blocks_then : List LLVMBasicBlock) (blocks_else : List LLVMBasicBlock) (funcs_then : List LLVMFunction) (funcs_else : List LLVMFunction) (globals_then : List LLVMGlobal) (globals_else : List LLVMGlobal) (then_block : LLVMBasicBlock) (else_block : LLVMBasicBlock) : CompileResult :=
     match fresh_temp ctx_else {
         CtxStrPair.mk ctx_phi phi_temp =>
-            let phi_val := LLVMValue.phi (cons_phi (PhiPair.mk then_val then_label) (cons_phi (PhiPair.mk else_val else_label) empty_phis)) in
-            let phi_instr := LLVMInstruction.assign phi_temp phi_val in
-            let ret_instr := LLVMInstruction.ret (LLVMValue.var_ phi_temp) in
-            let merge_instrs := cons_instr phi_instr (cons_instr ret_instr empty_instrs) in
+            let pairs := build_merge_phi_pairs then_reaches then_val then_label else_reaches else_val else_label in
+            let merge_instrs := match pairs {
+                // Neither branch reaches `merge_label` -- both diverge
+                // via their own nested control flow, so this block is
+                // genuinely dead code and no real value ever flows into
+                // it. `ret` a harmless placeholder instead of emitting
+                // an operand-less `phi` (invalid IR) -- mirrors
+                // `phi_pairs_type`'s own "empty pairs" fallback.
+                List.empty => cons_instr (LLVMInstruction.ret (LLVMValue.int_ 0)) empty_instrs,
+                List.cons _ _ =>
+                    let phi_instr := LLVMInstruction.assign phi_temp (LLVMValue.phi pairs) in
+                    let ret_instr := LLVMInstruction.ret (LLVMValue.var_ phi_temp) in
+                    cons_instr phi_instr (cons_instr ret_instr empty_instrs),
+            } in
             let merge_block := LLVMBasicBlock.mk merge_label merge_instrs in
             let all_blocks := cons_block then_block (cons_block else_block (cons_block merge_block (append_blocks (append_blocks entry_blocks blocks_then) blocks_else))) in
             let all_funcs := append_funcs (append_funcs entry_funcs funcs_then) funcs_else in
             let all_globals := append_globals (append_globals entry_globals globals_then) globals_else in
-            CompileResult.ok ctx_phi entry_instrs (LLVMValue.var_ phi_temp) all_blocks all_funcs all_globals,
+            let result_val := match pairs {
+                List.empty => LLVMValue.int_ 0,
+                List.cons _ _ => LLVMValue.var_ phi_temp,
+            } in
+            CompileResult.ok ctx_phi entry_instrs result_val all_blocks all_funcs all_globals,
     }
 
 #[partial]
@@ -2728,16 +2840,29 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                         // (e.g. a match's phi temp) outside the block it's
                         // actually defined in. Only append `ret` when the
                         // body is a plain, non-branching computation.
+                        //
+                        // A body that's a BARE native comparison (e.g.
+                        // `String.is_empty s := I64.beq (String.length s)
+                        // 0`) needs the same boxing `materialize_branch_
+                        // val`/`materialize_native_bool_arg` already give
+                        // call arguments/let-bindings/if-branches -- `ret`,
+                        // like `phi` and an ordinary call argument, doesn't
+                        // tolerate a raw `i1` declared as `i64` either.
+                        // Confirmed via a direct repro (`line_col_scan_
+                        // direct`'s own `String.is_empty` call):
+                        // `llc: '%tN' defined with type 'i1' but expected
+                        // 'i64'` at the `ret i64 %tN` itself.
                         let already_terminated := ends_with_terminator instrs_r in
+                        let bmr := materialize_branch_val ctx_r body instrs_r val_r in
                         let entry_instrs :=
                             if already_terminated
                             then instrs_r
-                            else append_instrs instrs_r (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
+                            else append_instrs bmr.bmr_instrs (cons_instr (LLVMInstruction.ret bmr.bmr_val) empty_instrs) in
                         let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                         let all_blocks_raw := append_blocks (cons_block entry_block empty_blocks) blocks_r in
                         let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks all_blocks_raw 0 else all_blocks_raw in
                         let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
-                        DefResult.dr ctx_r (cons_func main_func funcs_r) globals_r,
+                        DefResult.dr bmr.bmr_ctx (cons_func main_func funcs_r) globals_r,
                 },
         }
 
@@ -3426,8 +3551,67 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
 def filter_reachable_decls (decl_list : List Decl) : List Decl :=
     let all_defs := extract_defs decl_list in
     let all_inds := extract_inductives decl_list in
-    let reachable := reachable_defs_from all_defs (List.cons "main" List.empty) List.empty List.empty in
+    // O(total) once, instead of `reachable_defs_from` re-scanning
+    // `all_defs` per worklist item (O(reachable x total) -- confirmed the
+    // dominant cost of a full self-compile via `--verbose` stage timing,
+    // ~453s of ~944s). See `str_map_*`'s own doc comment for why this
+    // bypasses `Map`'s typeclass dispatch (`BTreeMap.insert_loop`/
+    // `lookup_loop` directly with `String.lt`/`String.gt`) instead of
+    // calling `Map.insert`/`Map.lookup` -- same latent-bug workaround
+    // `lang/scope.mo`'s `modpath_map_*` already uses.
+    let defs_map := build_def_name_map all_defs str_map_empty in
+    let reachable := reachable_defs_from defs_map (List.cons "main" List.empty) str_map_empty List.empty in
     List.append (map_inductive_decl all_inds) (map_def_decl reachable)
+
+/// A `String`-keyed `HashMap` (preferred over `BTreeMap` here for
+/// performance -- 16-bucket chaining beats an unbalanced-in-the-worst-
+/// case tree walk at this N), bypassing `Map`'s abstract typeclass
+/// dispatch (`Map.insert`/`Map.lookup`, the `[Hashable K, BOrd K] Map
+/// HashMap` instance, `std/map.mo`) in favor of `HashMap.bucket_of`/
+/// `get_bucket`/`set_bucket`/`bucket_insert`/`bucket_lookup` called
+/// directly with plain `String.hash`/`String.lt`/`String.gt` (concrete
+/// native functions, no class-method resolution at all). Mirrors
+/// `lang/scope.mo`'s own `modpath_map_*` helpers exactly (just without
+/// their `show_module_path` projection step -- `String` needs none),
+/// which document why: calling through `Map`'s generic dispatch resolves
+/// `Hashable.hash`/`BOrd.lt`/`BOrd.gt` as abstract class-method
+/// references INSIDE `HashMap`'s own generic `[K, V]`-parameterized
+/// body, and AGENTS.md's documented evaluator limitation
+/// ("`resolve_class_method_instance` picks the FIRST REGISTERED
+/// instance", not a type-directed lookup) means these can silently
+/// resolve to the WRONG instance whenever invoked from deep within an
+/// already-polymorphic call chain -- confirmed as a real, live bug for
+/// `ScopeData.def_refs`/`inductives`, not just theoretical.
+/// `String.hash`/`String.lt`/`String.gt` need no such dispatch at all
+/// (native, already monomorphic), so this sidesteps the whole class of
+/// risk rather than merely hoping it doesn't fire here too.
+#[partial]
+def str_map_empty {V : Type} : HashMap String V := HashMap.map HashMap.empty_buckets
+
+#[partial]
+def str_map_insert {V : Type} (key : String) (val : V) (m : HashMap String V) : HashMap String V :=
+    match m {
+        HashMap.map buckets =>
+            let idx := HashMap.bucket_of (String.hash key) in
+            let bucket := HashMap.get_bucket buckets idx in
+            let new_bucket := HashMap.bucket_insert String.lt String.gt key val bucket in
+            HashMap.map (HashMap.set_bucket buckets idx new_bucket)
+    }
+
+#[partial]
+def str_map_lookup {V : Type} (key : String) (m : HashMap String V) : Option V :=
+    match m {
+        HashMap.map buckets =>
+            let idx := HashMap.bucket_of (String.hash key) in
+            let bucket := HashMap.get_bucket buckets idx in
+            HashMap.bucket_lookup String.lt String.gt key bucket
+    }
+
+#[partial]
+def build_def_name_map (defs : List Def) (acc : HashMap String Def) : HashMap String Def := match defs {
+    List.empty => acc,
+    List.cons d rest => build_def_name_map rest (str_map_insert (def_name_str d) d acc),
+}
 
 #[partial]
 def map_def_decl (defs : List Def) : List Decl := match defs {
@@ -3452,15 +3636,6 @@ def def_body_term (d : Def) : Term := match d {
 }
 
 #[partial]
-def find_def_by_name (defs : List Def) (name : String) : Option Def := match defs {
-    List.empty => Option.none,
-    List.cons d rest =>
-        if String.beq (def_name_str d) name
-        then Option.some d
-        else find_def_by_name rest name,
-}
-
-#[partial]
 def list_contains_str (xs : List String) (x : String) : Bool := match xs {
     List.empty => false,
     List.cons hd rest => if String.beq hd x then true else list_contains_str rest x,
@@ -3475,21 +3650,29 @@ def list_contains_str (xs : List String) (x : String) : Bool := match xs {
 /// every `Term.var`/`Con`/`MatchCase` name in a body, not just genuinely
 /// free top-level references, so it may keep a few unreachable-in-
 /// practice defs, but never drops one that's actually needed).
+///
+/// `defs_map`/`visited` are `str_map_*`-backed `HashMap String _`
+/// lookups (O(log total) each) rather than the `List`-linear-scan this
+/// used to do (`find_def_by_name` + `list_contains_str` over `visited`,
+/// O(reachable x total) + O(reachable^2) respectively) -- confirmed via
+/// `--verbose` stage timing as the single largest cost of a full
+/// self-compile (~453s of ~944s, bigger than `elaborate_class`).
 #[partial]
-def reachable_defs_from (all_defs : List Def) (worklist : List String) (visited : List String) (acc : List Def) : List Def :=
+def reachable_defs_from (defs_map : HashMap String Def) (worklist : List String) (visited : HashMap String Bool) (acc : List Def) : List Def :=
     match worklist {
         List.empty => acc,
         List.cons name rest =>
-            if list_contains_str visited name
-            then reachable_defs_from all_defs rest visited acc
-            else
-                match find_def_by_name all_defs name {
-                    Option.some d =>
-                        let referenced := collect_referenced_names (def_body_term d) List.empty in
-                        reachable_defs_from all_defs (List.append referenced rest) (List.cons name visited) (List.cons d acc),
-                    Option.none =>
-                        reachable_defs_from all_defs rest (List.cons name visited) acc,
-                },
+            match str_map_lookup name visited {
+                Option.some _ => reachable_defs_from defs_map rest visited acc,
+                Option.none =>
+                    match str_map_lookup name defs_map {
+                        Option.some d =>
+                            let referenced := collect_referenced_names (def_body_term d) List.empty in
+                            reachable_defs_from defs_map (List.append referenced rest) (str_map_insert name true visited) (List.cons d acc),
+                        Option.none =>
+                            reachable_defs_from defs_map rest (str_map_insert name true visited) acc,
+                    },
+            },
     }
 
 /// Collects every name referenced anywhere inside a Term -- variable
