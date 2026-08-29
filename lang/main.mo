@@ -22,19 +22,45 @@ def link_ir (ir_text : String) (output_dir : String) (output_name : String) (ver
     let runtime_obj := output_dir ++ "/monad_runtime.o";
     let output_path := output_dir ++ "/" ++ output_name;
 
+    // Per-stage `Bench.report` timing, gated on `--verbose` (same
+    // convention as `lang.codegen.emit`'s `compile_loaded_modules_to_ir`)
+    // -- added to measure where the plan's own "compile_file total minus
+    // compile_loaded_modules_to_ir total" ~255s inferred remainder
+    // (write .ll / llc / clang runtime.c / clang link, previously
+    // entirely unbenched) actually goes, before guessing at a fix.
+    let t_write := Bench.now;
     IO.write_file ir_path ir_text;
+    if verbose then do {
+        let _ := Bench.report "link_ir: write .ll" (I64.sub Bench.now t_write);
+        return unit
+    } else return unit;
 
+    let t_llc := Bench.now;
     let result <- exec_cmd "llc" [ "-filetype=obj", ir_path, "-o", obj_path];
+    if verbose then do {
+        let _ := Bench.report "link_ir: llc" (I64.sub Bench.now t_llc);
+        return unit
+    } else return unit;
     if not (result == 0) then do {
         println <| (String.concat "Compiling ir " (String.concat ir_path " with llc failed"));
         return 1
     } else do {
+        let t_rtc := Bench.now;
         let result <- exec_cmd "clang" (List.append [ "-c", "lang/codegen/runtime.c", "-o", runtime_obj] (if verbose then ["-v"] else [""]));
+        if verbose then do {
+            let _ := Bench.report "link_ir: clang runtime.c" (I64.sub Bench.now t_rtc);
+            return unit
+        } else return unit;
         if not (result == 0) then do {
             println <| "compiling runtime failed";
             return 1
         } else do {
+            let t_link := Bench.now;
             let result <- exec_cmd "clang" (List.append [ obj_path, runtime_obj, "-o", output_path] (if verbose then ["-v"] else [""]));
+            if verbose then do {
+                let _ := Bench.report "link_ir: clang link" (I64.sub Bench.now t_link);
+                return unit
+            } else return unit;
             if not (result == 0) then do {
                 println <| "linking failed";
                 return 1
