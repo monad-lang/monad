@@ -64,13 +64,26 @@
   # slow_tests/ failure fails `devenv test`/CI like every other check.
   tasks."monad:test" = {
     exec = ''
-      cargo run --release -- test init std lang examples slow_tests --json
+      ${config.devenv.root}/scripts/check-monad-tests.sh
     '';
   };
+  # Still known-broken as of 2026-08-29 -- non-blocking (`|| { ...; true; }`)
+  # until it compiles+links+runs cleanly AND the resulting binary is
+  # verified correct (not just that llc/clang succeed). Five bugs fixed
+  # chasing this exact command this session (write_file's 2-arg native
+  # dispatch panic, IO.read_file/file_exists missing IO-wrap, an
+  # indirect-call callee materialization gap, `Append_append` --
+  # `List.append` instead of `++` -- and a parser bug mis-recognizing any
+  # `return_`-prefixed identifier as the `return` keyword) got the
+  # self-compile past `compile_db_module` entirely and progressively
+  # further into `llc`; current frontier is `Show.show` unresolved inside
+  # a nested match arm, see
+  # `plans/implementations/2026-08-29-show-show-unresolved-carrier-in-
+  # nested-match-arm.md`.
   tasks."monad:bootstrap-compile" = {
     exec = ''
       timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo monad --verbose || {
-        echo "::warning::self-hosted self-compile failed or timed out (known-broken, fix in progress -- see plans/implementations/2026-08-28-string-value-representation-unification.md) -- not blocking CI" >&2
+        echo "::warning::self-hosted self-compile failed or timed out (known-broken, fix in progress -- see plans/implementations/2026-08-29-show-show-unresolved-carrier-in-nested-match-arm.md) -- not blocking CI" >&2
         true
       }
     '';
@@ -100,9 +113,11 @@
       pass_filenames = false;
       files = "\\.(rs|mo)$";
     };
-    monad-tests = {
+    monad-check = {
       enable = true;
-      entry = "${config.devenv.root}/scripts/check-monad-tests.sh";
+      entry = ''
+        cargo run --release -- check init std examples lang
+      '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";
     };
