@@ -45,6 +45,10 @@
   enterShell = "";
 
   # https://devenv.sh/tests/
+  # NB: Do not use for CI tests. this is run every time devenv is loaded
+  enterTest = "";
+
+  # https://devenv.sh/tasks/
   # Full "run everything" sweep for CI (see .github/workflows/ci.yml).
   # Reuses the git-hooks below (rustfmt, clippy, cargo test --release, and the
   # fast `init std lang examples` .mo sweep) via `prek` (the Rust pre-commit
@@ -58,51 +62,11 @@
   # slow_tests/ now passes (107/107 as of the self-hosted parser fixes that
   # unblocked `test_typecheck_lang_main`), so it runs unwrapped here and a
   # slow_tests/ failure fails `devenv test`/CI like every other check.
-  enterTest = ''
-    prek run --all-files
-    cargo run --release -- test init std lang examples slow_tests --json
-  '';
-
-  # https://devenv.sh/tasks/
-  # Self-hosted compiler self-compile smoke test: `lang/main.mo` (the
-  # self-hosted compiler) compiling its own source via itself. Extremely
-  # slow -- a real, complete (not timed-out) run measured 2026-08-28 takes
-  # ~950-965s (~16 min; see `plans/implementations/2026-08-28-codegen-
-  # closure-free-var-capture.md`'s own timing notes -- dominated by
-  # `elaborate_class`/`elaborate_loaded_modules`, ~150-165s each, and
-  # `filter_reachable`, ~450s, a separate known perf issue in
-  # `find_def_by_name`'s O(reachable×total) linear scan). Bumped the
-  # timeout below from 900s (which was cutting a real run off BEFORE it
-  # reached its own actual error, making failures look like timeouts) to
-  # 1200s so a genuine failure is distinguishable from "just needed more
-  # time".
-  #
-  # Still known-broken as of 2026-08-28, but the failure has moved: the
-  # closure-free-variable-capture bug that WAS the blocker
-  # (`implementations/2026-08-28-codegen-closure-free-var-capture.md`) is
-  # now fixed (`f197a52`) -- the self-compile now runs the ENTIRE
-  # elaborate/reachability/IR-emission pipeline (it used to fail almost
-  # immediately) and reaches a FURTHER, different, unrelated bug: a
-  # phi-merge type mismatch between string-literal globals and computed
-  # String values (`llc: global variable reference must have pointer
-  # type`), filed as `implementations/2026-08-28-string-value-
-  # representation-unification.md`. So any failure/timeout is still
-  # non-blocking (reported via ::warning::) rather than failing `devenv
-  # test`/CI, until THAT lands too (and any further bug the self-compile
-  # might still hit after it, each needs its own confirmed-pre-existing
-  # check via a `git worktree` baseline comparison before being treated
-  # as blocking this task).
-  #
-  # TODO: enable `after = [ "devenv:enterTest" ]` once the self-compile is
-  # clean end-to-end (the string-representation fix above, plus whatever
-  # else surfaces after it, all land) AND the resulting `/tmp/monad`
-  # binary is verified to actually WORK when run (not just that `llc`/
-  # `clang` succeed -- a self-compile that links but silently compiles
-  # the wrong thing is a real, previously-hit false positive, see the
-  # `implementations/2026-08-27-bootstrap-compile-and-test.md` plan's own
-  # "main-colliding test fixture" bug) -- add that verification step to
-  # this task's own `exec` at the same time, then drop the `timeout`/
-  # `|| { ...; true; }` wrapping so it blocks like everything else.
+  tasks."monad:test" = {
+    exec = ''
+      cargo run --release -- test init std lang examples slow_tests --json
+    '';
+  };
   tasks."monad:bootstrap-compile" = {
     exec = ''
       timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo monad --verbose || {
@@ -110,7 +74,6 @@
         true
       }
     '';
-    after = [ "devenv:enterTest" ];
   };
 
   # https://devenv.sh/git-hooks/

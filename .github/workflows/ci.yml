@@ -38,12 +38,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      # Runs enterTest (devenv.nix): git hooks via prek (rustfmt, clippy,
-      # `cargo test --release`, and the fast .mo sweep), plus slow_tests/
-      # (now passing -- 107/107 -- and blocking CI like every other check).
-      #
-      # `tasks."monad:bootstrap-compile"` (devenv.nix) is NOT run here yet --
-      # too slow to run on every push as-is; see its own TODO for when to
-      # wire it in.
+      - name: Run pre commit checks
+        run: devenv tasks run devenv:git-hooks:run
+
       - name: Run tests
-        run: devenv test
+        run: devenv tasks run monad:test
+
+      - name: Bootstap compiler
+        run: devenv tasks run monad:bootstrap-compile
