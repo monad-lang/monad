@@ -2203,6 +2203,37 @@ def is_void_native (op : NativeOp) : Bool :=
         _ => false,
     }
 
+/// Every native op whose Monad-level declared type is `IO _`
+/// (`init/io.mo`) -- `op_print_str`/`op_read_file`/`op_write_file`/
+/// `op_file_exists` -- needs its raw call result wrapped in a real
+/// `IO.io`-tagged constructor before it can be used as an `IO` value
+/// (do-notation's `<-`, `Monad_IO_bind`, ...). The 8 arithmetic/comparison
+/// ops and `op_i64_to_string` (`I64 -> String`, genuinely pure, no `IO` in
+/// its type at all) do not.
+///
+/// `is_void_native` (above) was previously the ONLY signal used to decide
+/// this, conflating "the C function is declared `void`" with "the Monad
+/// type is `IO _`" -- true for `print_str`/`write_file` (both void AND
+/// `IO Unit`), but `read_file`/`file_exists` are `IO _`-returning WITHOUT
+/// being C-`void` (`monad_read_file`/`monad_file_exists` return a real
+/// `char*`). Their raw call result was used AS-IS wherever an `IO` value
+/// was expected -- `Monad_IO_bind`'s own generated body calls
+/// `monad_get_field(io_val, 0)` on it, misreading the raw string pointer
+/// as if it were a tagged constructor object. Confirmed via a direct
+/// repro (`let s <- IO.read_file path; IO.println s; ...`): compiled and
+/// linked cleanly, segfaulted at runtime the moment `s` was used for
+/// anything beyond being bound-and-ignored -- silent as long as the bound
+/// value was never touched.
+#[partial]
+def needs_io_wrap (op : NativeOp) : Bool :=
+    match op {
+        NativeOp.op_print_str => true,
+        NativeOp.op_read_file => true,
+        NativeOp.op_write_file => true,
+        NativeOp.op_file_exists => true,
+        _ => false,
+    }
+
 #[partial]
 def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : CompileResult :=
     match compile_db_term_ir c arg {
@@ -2222,6 +2253,8 @@ def compile_native_app_unary_db (c : CodegenCtx) (op : NativeOp) (arg : Term) : 
                         { instrs := new_instrs, blocks := new_blocks, val := _ } =>
                             if is_void_native op then
                                 wrap_void_native_result ctx_t new_instrs new_blocks funcs1 globals1
+                            else if needs_io_wrap op then
+                                wrap_io_value_native_result ctx_t new_instrs new_blocks funcs1 globals1 (LLVMValue.var_ temp)
                             else
                                 CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs1 globals1,
                     },
@@ -2240,15 +2273,30 @@ def wrap_void_native_result (ctx : CodegenCtx) (prior_instrs : List LLVMInstruct
             let unit_call := LLVMValue.call "monad_ctor_Unit_unit" LLVMType.i64_ empty_vals false in
             let unit_instr := LLVMInstruction.assign temp_unit unit_call in
             let unit_val := LLVMValue.var_ temp_unit in
-            match fresh_temp ctx_unit {
-                CtxStrPair.mk ctx_io temp_io =>
-                    let alloc_val := LLVMValue.alloc_constructor (constructor_tag ctx "IO.io") (List.cons unit_val List.empty) in
-                    let alloc_instr := LLVMInstruction.assign temp_io alloc_val in
-                    match build_set_field_instrs (LLVMValue.var_ temp_io) (List.cons unit_val List.empty) 0 ctx_io {
-                        { ctx := ctx_set, instrs := set_instrs } =>
-                            let all_instrs := append_instrs prior_instrs (cons_instr unit_instr (cons_instr alloc_instr set_instrs)) in
-                            CompileResult.ok ctx_set all_instrs (LLVMValue.var_ temp_io) prior_blocks funcs globals,
-                    },
+            wrap_io_value_native_result_go ctx_unit unit_val (cons_instr unit_instr empty_instrs) prior_instrs prior_blocks funcs globals,
+    }
+
+/// Non-void sibling of `wrap_void_native_result`: wraps an ALREADY-
+/// COMPUTED value (`inner_val`, e.g. `read_file`'s real `char*`-as-`i64`
+/// result) as `IO.io inner_val`, instead of always synthesizing a fresh
+/// `Unit`. See `needs_io_wrap`'s own doc comment for why this is needed.
+#[partial]
+def wrap_io_value_native_result (ctx : CodegenCtx) (prior_instrs : List LLVMInstruction) (prior_blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (inner_val : LLVMValue) : CompileResult :=
+    wrap_io_value_native_result_go ctx inner_val empty_instrs prior_instrs prior_blocks funcs globals
+
+/// Shared tail for both wrap helpers above: `pre_instrs` computes
+/// `inner_val` (empty when it's already computed), then both allocate the
+/// `IO.io` constructor and set its one field.
+#[partial]
+def wrap_io_value_native_result_go (ctx : CodegenCtx) (inner_val : LLVMValue) (pre_instrs : List LLVMInstruction) (prior_instrs : List LLVMInstruction) (prior_blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) : CompileResult :=
+    match fresh_temp ctx {
+        CtxStrPair.mk ctx_io temp_io =>
+            let alloc_val := LLVMValue.alloc_constructor (constructor_tag ctx "IO.io") (List.cons inner_val List.empty) in
+            let alloc_instr := LLVMInstruction.assign temp_io alloc_val in
+            match build_set_field_instrs (LLVMValue.var_ temp_io) (List.cons inner_val List.empty) 0 ctx_io {
+                { ctx := ctx_set, instrs := set_instrs } =>
+                    let all_instrs := append_instrs prior_instrs (append_instrs pre_instrs (cons_instr alloc_instr set_instrs)) in
+                    CompileResult.ok ctx_set all_instrs (LLVMValue.var_ temp_io) prior_blocks funcs globals,
             },
     }
 
@@ -2482,7 +2530,21 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
     match flatten_app_spine (Term.app fun arg) {
         { head, args } =>
             match compile_call_head c head {
-                CompileResult.ok ctx_h instrs_h val_h blocks_h funcs_h globals_h =>
+                CompileResult.ok ctx_h_raw instrs_h_raw val_h_raw blocks_h funcs_h globals_h =>
+                    // `head` -- a COMPUTED callee (a struct/dictionary
+                    // field extraction, a branching expression, ...) --
+                    // can compile to a raw `void_val`/native-`i1`, same as
+                    // any other call-argument or branch-merge position
+                    // (`materialize_branch_val`'s own doc comment). Left
+                    // unmaterialized here, `combine_indirect_call` passed
+                    // it straight through as `apply_closureN`'s own first
+                    // argument -- `llc: void type only allowed for
+                    // function results`, `call i64 @apply_closure3(void
+                    // void, ...)`. Confirmed blocking `bootstrap compile
+                    // lang/main.mo monad`'s self-compile once it got past
+                    // the write_file/user-defined-constructor fixes.
+                    match materialize_branch_val ctx_h_raw head instrs_h_raw val_h_raw {
+                        { ctx := ctx_h, instrs := instrs_h, val := val_h } =>
                     match compile_spine_args ctx_h args {
                         { ctx := ctx_a, instrs := instrs_a, blocks := blocks_a, funcs := funcs_a, globals := globals_a, vals := vals_a, last_val := last_val_a } =>
                             match compose_seq ({ instrs := instrs_h, blocks := blocks_h, val := val_h }) ({ instrs := instrs_a, blocks := blocks_a, val := last_val_a }) {
@@ -2523,6 +2585,7 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
                                             combine_indirect_call ctx_a val_h vals_a combined all_blocks all_funcs all_globals combined_val,
                                     },
                             },
+                    },
                     },
             },
     }
@@ -2637,6 +2700,8 @@ def emit_native_call2_instr (c : CodegenCtx) (op : NativeOp) (arg1_val : LLVMVal
                         { instrs := new_instrs, blocks := new_blocks, val := _ } =>
                             if is_void_native op then
                                 wrap_void_native_result new_ctx new_instrs new_blocks funcs globals
+                            else if needs_io_wrap op then
+                                wrap_io_value_native_result new_ctx new_instrs new_blocks funcs globals (LLVMValue.var_ temp)
                             else
                                 CompileResult.ok new_ctx new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
                     },
