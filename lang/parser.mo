@@ -4409,7 +4409,6 @@ def skip_block_comment_end (input : String) : String :=
 
 // ─── Term atom ──────────────────────────────────────────────────────────
 
-#[partial]
 // ─── General `let ... in ...` term (previously do-block-only) ─────────
 //
 // `let name [: Type] := value in body` desugars to an immediately-
@@ -6273,7 +6272,6 @@ def param_named_V (p : Param) : Bool :=
 		Param.mk pname _typ _mult _default _attrs => Similar.similar pname (Identifier.id "V")
 	}
 
-#[test]
 /// Strengthened beyond a bare `success` check — same rationale as
 /// `test_class_with_constraints`: `class_close` used to hardcode an
 /// empty *params* list too, regardless of what `(F : Type -> Type)`
