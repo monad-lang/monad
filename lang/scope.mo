@@ -2890,14 +2890,153 @@ def dict_binding_class_of (id : Identifier) : Option ModulePath :=
 /// every `Decl.def_d`'s own `.term` (not `.typ` -- a type's own Pi-chain
 /// never contains a class-method CALL to resolve, only Phase 3's own
 /// dict-parameter Pi's, which this pass doesn't touch).
+///
+/// `resolve_class_call_term`'s own resolution chain has a SILENT give-up
+/// built in by design (`rebuild_call orig_head resolved_args`, used
+/// throughout `resolve_class_method_call_with_carrier`/`_with_dict_args`/
+/// `_d4_default_carrier`/`resolve_ordinary_constrained_call` whenever no
+/// matching instance/carrier is found) -- it just leaves the ORIGINAL
+/// `ClassName.method` reference in the term tree untouched, no error. That
+/// silent survivor then gets dot-to-underscore-mangled by codegen into an
+/// `@ClassName_method` global reference that was never compiled, caught
+/// only by `llc`'s own "undefined value" check many pipeline stages (and,
+/// in a real self-compile, minutes) later -- this is what the
+/// `Append_append`/`Show_show` bug family (`6cf8da7`, `a47856c`, `855be99`)
+/// all turned out to be, each requiring its own manual archaeology session
+/// to even FIND which call was unresolved. Fail fast instead: after
+/// resolving, walk the OWN output once more for any surviving `Term.var`
+/// that still matches `class_method_ref classes` -- by construction, a
+/// successful resolution always REWRITES such a reference to a concrete
+/// mangled name (no longer matching `class_method_ref`), so any survivor
+/// found here is unambiguously a real "no instance available" failure,
+/// reported with the class/method/enclosing-def named directly instead of
+/// discovered via a cryptic downstream `llc` error.
 #[partial]
-def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
+def resolve_class_calls_decls (decl_list : List Decl) : Result String (List Decl) :=
     let classes := collect_classes decl_list in
     let instances := collect_instances decl_list in
     let ctor_owners := collect_ctor_owners decl_list in
     let def_constraints := collect_def_constraints decl_list in
     let def_types := collect_def_types decl_list in
-    resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types decl_list
+    let dispatched := resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types decl_list in
+    match find_unresolved_class_calls_decls classes dispatched {
+        List.empty => Result.ok dispatched,
+        List.cons msg _rest => Result.err msg,
+    }
+
+/// Walks every top-level def's own term looking for a `Term.var`
+/// reference that still matches `class_method_ref classes` -- see
+/// `resolve_class_calls_decls`'s own doc comment for why any such
+/// survivor is unambiguously a real unresolved-instance failure.
+#[partial]
+def find_unresolved_class_calls_decls (classes : List Class) (decl_list : List Decl) : List String :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.def_d def_ =>
+                    match def_ {
+                        Def.mk name _typ term_ _constraints _attrs _vis =>
+                            let found := find_unresolved_class_calls_term classes term_ List.empty in
+                            List.append (format_unresolved_class_calls (module_path_to_str_scope name) found) (find_unresolved_class_calls_decls classes rest),
+                    },
+                _ => find_unresolved_class_calls_decls classes rest,
+            },
+    }
+
+#[partial]
+def format_unresolved_class_calls (def_name : String) (refs : List ClassMethodRef) : List String :=
+    match refs {
+        List.empty => List.empty,
+        List.cons r rest => List.cons (format_unresolved_class_call def_name r) (format_unresolved_class_calls def_name rest),
+    }
+
+#[partial]
+def format_unresolved_class_call (def_name : String) (ref : ClassMethodRef) : String :=
+    match ref {
+        ClassMethodRef.mk cls method_name =>
+            match cls {
+                Class.mk cname _ _ _ _ =>
+                    let cls_name := show_identifier cname in
+                    let method_str := show_identifier method_name in
+                    let call := String.concat cls_name (String.concat "." method_str) in
+                    let prefix := String.concat "no instance found for `" call in
+                    let suffix := String.concat "` (needed in `" (String.concat def_name "`)") in
+                    String.concat prefix suffix
+            }
+    }
+
+#[partial]
+def find_unresolved_class_calls_term (classes : List Class) (t : Term) (acc : List ClassMethodRef) : List ClassMethodRef := match t {
+    Term.var _idx dbg =>
+        match dbg {
+            DebugName.named id =>
+                match class_method_ref classes id {
+                    Option.some ref => List.cons ref acc,
+                    Option.none => acc,
+                },
+            DebugName.unnamed => acc,
+        },
+    Term.lam _dbg typ body => find_unresolved_class_calls_term classes body (find_unresolved_class_calls_term classes typ acc),
+    Term.forall _dbg kind body => find_unresolved_class_calls_term classes body (find_unresolved_class_calls_term classes kind acc),
+    Term.pi arg ret => find_unresolved_class_calls_term classes ret (find_unresolved_class_calls_term classes arg acc),
+    Term.app fun_ arg_ => find_unresolved_class_calls_term classes arg_ (find_unresolved_class_calls_term classes fun_ acc),
+    Term.ntv native => find_unresolved_class_calls_native classes native acc,
+    Term.con con_ => find_unresolved_class_calls_con classes con_ acc,
+    Term.lit lit_ => find_unresolved_class_calls_lit classes lit_ acc,
+    Term.type_ _universe => acc,
+    Term.hole => acc,
+}
+
+#[partial]
+def find_unresolved_class_calls_lit (classes : List Class) (l : Literal) (acc : List ClassMethodRef) : List ClassMethodRef := match l {
+    Literal.num _n _suffix => acc,
+    Literal.flt _text _suffix => acc,
+    Literal.str _s => acc,
+    Literal.if_ cond then_ else_ => find_unresolved_class_calls_term classes else_ (find_unresolved_class_calls_term classes then_ (find_unresolved_class_calls_term classes cond acc)),
+    Literal.match_ scrutinee cases => find_unresolved_class_calls_cases classes cases (find_unresolved_class_calls_term classes scrutinee acc),
+    Literal.struct_lit fields _type_name => find_unresolved_class_calls_struct_fields classes fields acc,
+    Literal.struct_update base fields => find_unresolved_class_calls_struct_fields classes fields (find_unresolved_class_calls_term classes base acc),
+}
+
+#[partial]
+def find_unresolved_class_calls_struct_fields (classes : List Class) (fields : List StructLitField) (acc : List ClassMethodRef) : List ClassMethodRef :=
+    match fields {
+        List.empty => acc,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk _name value => find_unresolved_class_calls_struct_fields classes rest (find_unresolved_class_calls_term classes value acc),
+            }
+    }
+
+#[partial]
+def find_unresolved_class_calls_cases (classes : List Class) (cases : List MatchCase) (acc : List ClassMethodRef) : List ClassMethodRef := match cases {
+    List.empty => acc,
+    List.cons c rest =>
+        match c {
+            MatchCase.mc _name _args body _fp => find_unresolved_class_calls_cases classes rest (find_unresolved_class_calls_term classes body acc),
+        },
+}
+
+#[partial]
+def find_unresolved_class_calls_native (classes : List Class) (n : Native) (acc : List ClassMethodRef) : List ClassMethodRef := match n {
+    Native.mk _name _num_args args => find_unresolved_class_calls_opt_list classes args acc,
+}
+
+#[partial]
+def find_unresolved_class_calls_con (classes : List Class) (c : Con) (acc : List ClassMethodRef) : List ClassMethodRef := match c {
+    Con.mk _name _typ_name _num_args args => find_unresolved_class_calls_opt_list classes args acc,
+}
+
+#[partial]
+def find_unresolved_class_calls_opt_list (classes : List Class) (args : List (Option Term)) (acc : List ClassMethodRef) : List ClassMethodRef := match args {
+    List.empty => acc,
+    List.cons opt_ rest =>
+        match opt_ {
+            Option.some t => find_unresolved_class_calls_opt_list classes rest (find_unresolved_class_calls_term classes t acc),
+            Option.none => find_unresolved_class_calls_opt_list classes rest acc,
+        },
+}
 
 /// One ordinary (non-class-method) def's own constraints -- needed so a
 /// CALL SITE to a constrained def (e.g. `show_twice 5`, where

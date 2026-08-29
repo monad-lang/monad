@@ -275,9 +275,13 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                     let elaborated := elaborate_module_decls_best_effort scope dict_param_spliced empty_locs;
-                    let dispatched_spliced := resolve_class_calls_decls elaborated;
-                    let reachable := filter_reachable_decls dispatched_spliced;
-                    return Result.ok (compile_db_module reachable)
+                    match resolve_class_calls_decls elaborated {
+                        Result.err e => return (Result.err e),
+                        Result.ok dispatched_spliced => do {
+                            let reachable := filter_reachable_decls dispatched_spliced;
+                            return Result.ok (compile_db_module reachable)
+                        },
+                    }
                 },
                 Option.none => do {
                     return Result.err "internal error: failed to parse synthesized test driver (this is a monad-test bug, not a problem with the target file)"

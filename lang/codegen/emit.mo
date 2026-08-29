@@ -3822,7 +3822,7 @@ def ends_with_main (name : String) : Bool :=
 /// (`lang/main.mo`'s own compile-file progress markers, link failures,
 /// the user's program output) in low-value noise.
 #[partial]
-def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO LLVMModule := do {
+def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result String LLVMModule) := do {
     let total_start := Bench.now;
 
     let all_mods := get_loaded_all loaded;
@@ -3905,35 +3905,47 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
     let elaborated := elaborate_module_decls_best_effort scope dict_param_decls empty_locs;
-    let dispatched_decls := resolve_class_calls_decls elaborated;
+    let dispatched_result := resolve_class_calls_decls elaborated;
     if verbose then do {
         let _ := Bench.report "elaborate_class" (I64.sub Bench.now t_elab);
         return unit
     } else return unit;
 
-    // Stage 5: only compile Defs actually reachable (transitively) from `main` --
-    // compiling the FULL 264-def loaded set unconditionally meant any
-    // codegen bug anywhere in the whole standard library, reached or
-    // not, blocked compiling any program at all. See
-    // filter_reachable_decls's own doc comment.
-    let t_reach := Bench.now;
-    let reachable_decls := filter_reachable_decls dispatched_decls;
-    if verbose then do {
-        let reachable_count := List.length reachable_decls;
-        let _ := Bench.report "filter_reachable" (I64.sub Bench.now t_reach);
-        println ("Reachable decl_list: " ++ I64.to_string reachable_count)
-    } else return unit;
+    match dispatched_result {
+        // `resolve_class_calls_decls` found a `ClassName.method` reference
+        // that survived resolution with no matching instance -- fail here,
+        // with a precise message, instead of proceeding to codegen/`llc`
+        // and surfacing it many stages later as an undefined-symbol error.
+        Result.err e => do {
+            if verbose then println ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")") else return unit;
+            return (Result.err e)
+        },
+        Result.ok dispatched_decls => do {
+            // Stage 5: only compile Defs actually reachable (transitively) from `main` --
+            // compiling the FULL 264-def loaded set unconditionally meant any
+            // codegen bug anywhere in the whole standard library, reached or
+            // not, blocked compiling any program at all. See
+            // filter_reachable_decls's own doc comment.
+            let t_reach := Bench.now;
+            let reachable_decls := filter_reachable_decls dispatched_decls;
+            if verbose then do {
+                let reachable_count := List.length reachable_decls;
+                let _ := Bench.report "filter_reachable" (I64.sub Bench.now t_reach);
+                println ("Reachable decl_list: " ++ I64.to_string reachable_count)
+            } else return unit;
 
-    // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
-    let t_llvm := Bench.now;
-    let mod_ := compile_db_module reachable_decls;
-    if verbose then do {
-        let _ := Bench.report "compile_db_module" (I64.sub Bench.now t_llvm);
-        let _ := Bench.report "compile_loaded_modules_to_ir total" (I64.sub Bench.now total_start);
-        return unit
-    } else return unit;
+            // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
+            let t_llvm := Bench.now;
+            let mod_ := compile_db_module reachable_decls;
+            if verbose then do {
+                let _ := Bench.report "compile_db_module" (I64.sub Bench.now t_llvm);
+                let _ := Bench.report "compile_loaded_modules_to_ir total" (I64.sub Bench.now total_start);
+                return unit
+            } else return unit;
 
-    return mod_
+            return (Result.ok mod_)
+        },
+    }
 }
 
 /// Restricts `decl_list` to the transitive closure of Defs reachable from a

@@ -46,6 +46,25 @@ def link_ir (ir_text : String) (output_dir : String) (output_name : String) (ver
     }
 }
 
+/// `compile_loaded_modules_to_ir` can now fail cleanly (`resolve_class_
+/// calls_decls` found a `ClassName.method` call with no available
+/// instance -- see its own doc comment in `lang.codegen.emit`) instead of
+/// only ever succeeding -- report that failure the same way a typecheck
+/// failure already is (`FAILED at stage: ...`) rather than proceeding to
+/// `emit_module`/`link_ir` with no module to link.
+#[partial]
+def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 :=
+    match mod_result {
+        Result.err e => do {
+            println ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")");
+            return 1
+        },
+        Result.ok mod_ => do {
+            let ir_text := emit_module mod_;
+            link_ir ir_text output_dir output_name verbose
+        },
+    }
+
 /// Parse a source file and compile + run it via LLVM.
 #[partial]
 def compile_parsed_decls (decl_list : List Decl) (output_dir : String) (output_name : String) (verbose: Bool) : IO I64 {
@@ -153,13 +172,11 @@ def compile_file_codegen (file_path : String) (output_dir : String) (output_name
             if verbose then do {
                 let loaded_count : I64 := List.length (get_loaded_all loaded);
                 println <| "loaded " ++ I64.to_string loaded_count ++ " modules";
-                let mod_ <- compile_loaded_modules_to_ir loaded verbose;
-                let ir_text := emit_module mod_;
-                link_ir ir_text output_dir output_name verbose
+                let mod_result <- compile_loaded_modules_to_ir loaded verbose;
+                link_compiled_module mod_result output_dir output_name verbose
             } else do {
-                let mod_ <- compile_loaded_modules_to_ir loaded verbose;
-                let ir_text := emit_module mod_;
-                link_ir ir_text output_dir output_name verbose
+                let mod_result <- compile_loaded_modules_to_ir loaded verbose;
+                link_compiled_module mod_result output_dir output_name verbose
             }
         },
         Result.err e => do {

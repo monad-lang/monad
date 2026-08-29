@@ -434,8 +434,23 @@ def test_promote_instance_defs_compiles_and_runs : IO Bool := do {
 /// (a promoted method's constraints, from Phase 2's threading of
 /// Instance.constraints, are exactly what Phase 3 reads next).
 #[partial]
-def full_dict_pipeline (decl_list : List Decl) : List Decl :=
+def full_dict_pipeline (decl_list : List Decl) : Result String (List Decl) :=
     resolve_class_calls_decls (add_constraint_dict_params_decls (promote_instance_defs decl_list))
+
+/// Runs `full_dict_pipeline` then `compile_decls_link_run_expect` --
+/// these are hand-built, deliberately-valid dict-pipeline fixtures, so a
+/// `Result.err` here means the fixture itself regressed, not a real
+/// "no instance available" case; report it as a failed test rather than
+/// silently swallowing it.
+#[partial]
+def run_full_dict_pipeline (decl_list : List Decl) (basename : String) (expected : I64) : IO Bool :=
+    match full_dict_pipeline decl_list {
+        Result.err e => do {
+            println (basename ++ ": full_dict_pipeline failed to resolve class-method calls: " ++ e);
+            return false
+        },
+        Result.ok dispatched => compile_decls_link_run_expect dispatched basename expected,
+    }
 
 /// Phase 4 (D4) end-to-end regression test: a plain concrete class-
 /// method call (`MyEq.eq2 2 3`, no wildcard/constrained instance
@@ -464,7 +479,7 @@ def test_resolve_class_calls_concrete_d4 : IO Bool := do {
     let main_def := mk_def "main" call;
 
     let base_decls := [Decl.class_d cls, Decl.instance_d ins, Decl.def_d main_def];
-    compile_decls_link_run_expect (full_dict_pipeline base_decls) "test_d4_concrete" 5
+    run_full_dict_pipeline base_decls "test_d4_concrete" 5
 }
 
 /// Phase 4 (D4 with a recursive inner dict arg) end-to-end regression
@@ -521,7 +536,7 @@ def test_resolve_class_calls_recursive_dict_arg : IO Bool := do {
         Decl.class_d wrapped2_cls, Decl.instance_d wrapped2_ins,
         Decl.def_d main_def,
     ];
-    compile_decls_link_run_expect (full_dict_pipeline base_decls) "test_d4_recursive" 5
+    run_full_dict_pipeline base_decls "test_d4_recursive" 5
 }
 
 /// Phase 4 capstone (D5, genuine polymorphism): a `[MyShow3 A]`-
@@ -591,5 +606,5 @@ def test_resolve_class_calls_genuine_polymorphism : IO Bool := do {
     // the underlying I64 computation inside the compiled program
     // itself is genuinely 610 throughout (confirmed separately by
     // temporarily printing the raw I64 before truncation).
-    compile_decls_link_run_expect (full_dict_pipeline base_decls) "test_d5_polymorphism" 98
+    run_full_dict_pipeline base_decls "test_d5_polymorphism" 98
 }

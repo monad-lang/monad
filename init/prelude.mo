@@ -343,10 +343,19 @@ def List.map (f : A -> B) (self: List A) : List B :=
 
 
 instance Functor List {
+  // `List.map` (not the recursive `Functor.map`) -- a match-arm PATTERN-
+  // bound variable (`tail`, from `cons a tail => ...`) is never added to
+  // `env` by `resolve_class_call_term`'s term walker (`lang/scope.mo`,
+  // only `Term.lam`-introduced bindings are, see its own doc comment) --
+  // a distinct gap from the bare-local-var one already fixed, caught by
+  // the new fail-fast check (`no instance found for 'Functor.map'`) this
+  // instance's own recursive call had been silently hitting. `List.map`
+  // (just above) is the identical concrete implementation, already
+  // correct and non-generic -- reuse it instead of chasing this gap here.
   def map (f : A -> B) (self: List A) : List B :=
     match self {
       empty => List.empty,
-      cons a tail => List.cons (f a) (Functor.map f tail),
+      cons a tail => List.cons (f a) (List.map f tail),
       _ => List.empty
     }
 }

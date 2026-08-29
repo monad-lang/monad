@@ -51,32 +51,40 @@ def compile_source_run_expect (source : String) (basename : String) (expected : 
             return false
         },
         Result.ok loaded => do {
-            let mod_ <- compile_loaded_modules_to_ir loaded false;
-            let ir_text := emit_module mod_;
-            IO.write_file ir_path ir_text;
-
-            let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
-            if not (llc_result == 0) then do {
-                IO.println (basename ++ ": llc failed");
-                return false
-            } else do {
-                let rt_result <- exec_cmd "clang" ["-c", "lang/codegen/runtime.c", "-o", runtime_obj];
-                if not (rt_result == 0) then do {
-                    IO.println (basename ++ ": compiling runtime failed");
+            let mod_result <- compile_loaded_modules_to_ir loaded false;
+            match mod_result {
+                Result.err e => do {
+                    IO.println (basename ++ ": failed to resolve class-method calls: " ++ e);
                     return false
-                } else do {
-                    let link_args := [obj_path, runtime_obj];
-                    let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
-                    if not (link_result == 0) then do {
-                        IO.println (basename ++ ": clang linker failed");
+                },
+                Result.ok mod_ => do {
+                    let ir_text := emit_module mod_;
+                    IO.write_file ir_path ir_text;
+
+                    let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
+                    if not (llc_result == 0) then do {
+                        IO.println (basename ++ ": llc failed");
                         return false
                     } else do {
-                        let exec_result <- exec_cmd output_path [];
-                        let _ <- exec_cmd "rm" ["-f", src_path, ir_path, obj_path, runtime_obj, output_path];
-                        IO.println (basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result);
-                        return (exec_result == expected)
+                        let rt_result <- exec_cmd "clang" ["-c", "lang/codegen/runtime.c", "-o", runtime_obj];
+                        if not (rt_result == 0) then do {
+                            IO.println (basename ++ ": compiling runtime failed");
+                            return false
+                        } else do {
+                            let link_args := [obj_path, runtime_obj];
+                            let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
+                            if not (link_result == 0) then do {
+                                IO.println (basename ++ ": clang linker failed");
+                                return false
+                            } else do {
+                                let exec_result <- exec_cmd output_path [];
+                                let _ <- exec_cmd "rm" ["-f", src_path, ir_path, obj_path, runtime_obj, output_path];
+                                IO.println (basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result);
+                                return (exec_result == expected)
+                            }
+                        }
                     }
-                }
+                },
             }
         },
     }

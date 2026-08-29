@@ -2150,13 +2150,16 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
     if has_reflect_type_info_call graph_subst || has_reflect_type_info_call target_subst then
         let inds : List Inductive := collect_inductives whole_graph_decls in
         let empty_locs : LocalScope := { vars := List.empty, parent := Option.none } in
-        let dispatched : List Decl := resolve_class_calls_decls (elaborate_module_decls_best_effort scope whole_graph_decls empty_locs) in
-        match resolve_reflect_calls inds dispatched graph_subst {
+        match resolve_class_calls_decls (elaborate_module_decls_best_effort scope whole_graph_decls empty_locs) {
             Result.err e => Result.err e,
-            Result.ok graph_final =>
-                match resolve_reflect_calls inds dispatched target_subst {
+            Result.ok dispatched =>
+                match resolve_reflect_calls inds dispatched graph_subst {
                     Result.err e => Result.err e,
-                    Result.ok target_final => Result.ok (Pair.pair graph_final target_final),
+                    Result.ok graph_final =>
+                        match resolve_reflect_calls inds dispatched target_subst {
+                            Result.err e => Result.err e,
+                            Result.ok target_final => Result.ok (Pair.pair graph_final target_final),
+                        },
                 },
         }
     else Result.ok (Pair.pair graph_subst target_subst)
@@ -2541,8 +2544,10 @@ def test_resolve_class_calls_decls_uses_class_declared_default_carrier : IO Bool
             let resolved := resolve_infix_decls infixes decl_list;
             let promoted := promote_instance_defs resolved;
             let dict_paramed := add_constraint_dict_params_decls promoted;
-            let dispatched := resolve_class_calls_decls dict_paramed;
-            decl_list_has_use_it_calling_makeempty_mybox_empty dispatched
+            match resolve_class_calls_decls dict_paramed {
+                Result.err _ => false,
+                Result.ok dispatched => decl_list_has_use_it_calling_makeempty_mybox_empty dispatched,
+            }
         },
         ParseResult.fail _ => false,
     })
