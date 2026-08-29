@@ -1925,7 +1925,22 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
                     // `collect_dep_module_infos`'s own doc comment for the
                     // `lang/parser/string.mo` shadowing bug this fixes.
                     let direct_deps : List ModulePath := extract_use_decls decl_list;
-                    let direct_deps_with_prelude : List ModulePath := [prelude_module_path, init_module_path] ++ direct_deps;
+                    // `++` (`Append.append`) needs an `Append (List A)`
+                    // instance -- only defined in `std/list.mo`, which
+                    // isn't in `lang/main.mo`'s own dependency closure
+                    // (`lang.module` itself never `use`s `std.list`).
+                    // Compiling `lang/main.mo` through itself then hits
+                    // an unresolvable `Append.append` class-method call
+                    // (no matching instance in scope), which
+                    // `resolve_class_calls_decls`'s own documented
+                    // fallback leaves as an unrewritten reference --
+                    // `llc: use of undefined value '@Append_append'` once
+                    // codegen dot-to-underscore-mangles it. `List.append`
+                    // (`init/prelude.mo`, always in scope, no typeclass
+                    // needed) is the idiom already used elsewhere in this
+                    // exact file (`new_to_visit` above) for the identical
+                    // purpose -- use it here too instead of `++`.
+                    let direct_deps_with_prelude : List ModulePath := List.append [prelude_module_path, init_module_path] direct_deps;
                     let no_visited : List ModuleInfo := List.empty;
                     let no_visiting : List ModulePath := List.empty;
                     let dep_modules : List ModuleInfo <- collect_dep_module_infos main_base_dir direct_deps_with_prelude no_visiting no_visited;
