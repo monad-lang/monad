@@ -63,7 +63,7 @@ type ArityEntry {
 }
 
 type CodegenCtx {
-    ctx (locals : List LocalBinding) (next_temp : I64) (next_label : I64) (arities : List ArityEntry),
+    ctx (locals : List LocalBinding) (next_temp : I64) (next_label : I64) (arities : List ArityEntry) (ctor_tags : HashMap String I64),
 }
 
 type CompileResult {
@@ -86,30 +86,39 @@ def empty_arities : List ArityEntry := List.empty
 /// global reference falls back to today's eager-0-arg-call behavior --
 /// correct only for genuinely 0-arity defs).
 #[partial]
-def empty_ctx (arities : List ArityEntry) : CodegenCtx := CodegenCtx.ctx empty_bindings 0 0 arities
+def empty_ctx (arities : List ArityEntry) (ctor_tags : HashMap String I64) : CodegenCtx := CodegenCtx.ctx empty_bindings 0 0 arities ctor_tags
 
 #[partial]
 def fresh_temp (c : CodegenCtx) : CtxStrPair := match c {
-    CodegenCtx.ctx locals nt nl arities =>
+    CodegenCtx.ctx locals nt nl arities ctor_tags =>
         let name := String.concat "t" (I64.to_string nt) in
-        CtxStrPair.mk (CodegenCtx.ctx locals (nt + 1) nl arities) name,
+        CtxStrPair.mk (CodegenCtx.ctx locals (nt + 1) nl arities ctor_tags) name,
 }
 
 #[partial]
 def fresh_label (c : CodegenCtx) (prefix : String) : CtxStrPair := match c {
-    CodegenCtx.ctx locals nt nl arities =>
+    CodegenCtx.ctx locals nt nl arities ctor_tags =>
         let name := String.concat prefix (String.concat "_" (I64.to_string nl)) in
-        CtxStrPair.mk (CodegenCtx.ctx locals nt (nl + 1) arities) name,
+        CtxStrPair.mk (CodegenCtx.ctx locals nt (nl + 1) arities ctor_tags) name,
 }
 
 #[partial]
 def ctx_bind_local (c : CodegenCtx) (name : Identifier) (val : LLVMValue) : CodegenCtx := match c {
-    CodegenCtx.ctx locals nt nl arities => CodegenCtx.ctx (List.cons (LocalBinding.mk name val) locals) nt nl arities,
+    CodegenCtx.ctx locals nt nl arities ctor_tags => CodegenCtx.ctx (List.cons (LocalBinding.mk name val) locals) nt nl arities ctor_tags,
 }
 
 #[partial]
 def ctx_lookup_local (c : CodegenCtx) (name : Identifier) : Option LLVMValue := match c {
-    CodegenCtx.ctx locals nt nl arities => lookup_binding locals name,
+    CodegenCtx.ctx locals nt nl arities ctor_tags => lookup_binding locals name,
+}
+
+/// Looks up `name`'s constructor tag from `c`'s own dynamically-built
+/// table (`build_constructor_tag_map`) -- the fallback `is_constructor_
+/// var_dyn`/`constructor_tag_dyn` use for anything not in the hardcoded
+/// builtin list.
+#[partial]
+def ctx_lookup_ctor_tag (c : CodegenCtx) (name : String) : Option I64 := match c {
+    CodegenCtx.ctx locals nt nl arities ctor_tags => str_map_lookup name ctor_tags,
 }
 
 /// Rebuilds `c` with an EMPTY `locals` list, preserving `next_temp`/
@@ -129,7 +138,7 @@ def ctx_lookup_local (c : CodegenCtx) (name : Identifier) : Option LLVMValue := 
 /// captures (`build_get_env_instrs`) should be visible inside.
 #[partial]
 def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := match c {
-    CodegenCtx.ctx _locals nt nl arities => CodegenCtx.ctx empty_bindings nt nl arities,
+    CodegenCtx.ctx _locals nt nl arities ctor_tags => CodegenCtx.ctx empty_bindings nt nl arities ctor_tags,
 }
 
 /// The other half of `ctx_reset_locals`: after compiling a lifted
@@ -156,9 +165,9 @@ def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := match c {
 #[partial]
 def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx :=
     match outer {
-        CodegenCtx.ctx outer_locals _ont _onl _oarities =>
+        CodegenCtx.ctx outer_locals _ont _onl _oarities _octor_tags =>
             match inner {
-                CodegenCtx.ctx _ilocals int_ inl iarities => CodegenCtx.ctx outer_locals int_ inl iarities,
+                CodegenCtx.ctx _ilocals int_ inl iarities ictor_tags => CodegenCtx.ctx outer_locals int_ inl iarities ictor_tags,
             },
     }
 
@@ -174,7 +183,7 @@ def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx :=
 /// anything else.
 #[partial]
 def ctx_lookup_arity (c : CodegenCtx) (llvm_name : String) : Option I64 := match c {
-    CodegenCtx.ctx locals nt nl arities => lookup_arity arities llvm_name,
+    CodegenCtx.ctx locals nt nl arities ctor_tags => lookup_arity arities llvm_name,
 }
 
 #[partial]
@@ -296,15 +305,40 @@ def constructor_names : List String :=
     ["unit", "true", "false", "none", "some", "empty", "cons", "io", "IO.io",
      "trivial", "refl", "ok", "err", "zero", "succ", "nil", "pair"]
 
+/// A genuine, previously-undiscovered bug lived here (and in
+/// `string_find_last_loop` below) until this session: `String.slice`'s
+/// own signature (`init/string.mo`) is `(s, start, LEN)` -- a LENGTH,
+/// not an end index -- but both call sites here passed `String.length
+/// name` (the WHOLE string's own length, an end-index-shaped value) as
+/// the LEN argument, silently reading past the intended suffix's real
+/// length. Latent/unnoticed for a long time because `constructor_tag`'s
+/// own "check qualified names first" tier (whole-string comparisons
+/// against `"IO.io"`/`"Unit.unit"`/... ) never needed this "base name"
+/// fallback tier to work correctly for any of the ~16 hardcoded
+/// builtins; only surfaced once the new dynamic `ctor_tags` fallback
+/// (`build_constructor_tag_map`) started relying on `extract_base_name`
+/// actually stripping a qualifier correctly. Confirmed via an isolated
+/// unit test bypassing the whole self-hosted pipeline: `extract_base_
+/// name "Option.Some"` returned `"Option.Some"` unchanged (the `last_dot
+/// > -1` branch's own slice never actually fired due to `string_find_
+/// last`'s OWN identical bug below, so this line's fix matters once that
+/// one is fixed too).
 #[partial]
 def extract_base_name (name : String) : String :=
     let last_dot := string_find_last name "." in
     if I64.gt last_dot (-1)
-    then String.slice name (last_dot + 1) (String.length name)
+    then String.slice name (last_dot + 1) (String.length name - last_dot - 1)
     else name
 
+/// Falls back to `c`'s own dynamically-built `ctor_tags` table
+/// (`build_constructor_tag_map`) for anything not in the hardcoded
+/// builtin list below -- every user-defined inductive's constructor,
+/// and any BUILTIN constructor referenced by its full dotted name in a
+/// shape this hardcoded list doesn't happen to enumerate. The hardcoded
+/// list/tags (0-15) are left completely unchanged -- zero risk to
+/// already-working code -- this is purely an additive fallback.
 #[partial]
-def constructor_tag (name : String) : I64 :=
+def constructor_tag (c : CodegenCtx) (name : String) : I64 :=
     // Extract base name for qualified constructors like IO.io
     let base_name := extract_base_name name in
     // Simple mapping of constructor names to tags
@@ -335,15 +369,26 @@ def constructor_tag (name : String) : I64 :=
     else if String.beq base_name "succ" then 13
     else if String.beq base_name "nil" then 14
     else if String.beq base_name "pair" then 15
-    else 0
+    else match ctx_lookup_ctor_tag c base_name {
+        Option.some tag => tag,
+        Option.none => 0,
+    }
 
 /// Check if a variable name is a known constructor
-/// Handles both simple names ("unit", "true") and qualified names ("Unit.unit", "IO.io")
+/// Handles both simple names ("unit", "true") and qualified names ("Unit.unit", "IO.io"),
+/// falling back to `c`'s own dynamically-built `ctor_tags` table
+/// (`build_constructor_tag_map`) for anything not in the hardcoded list
+/// -- see `constructor_tag`'s own doc comment.
 #[partial]
-def is_constructor_var (name : String) : Bool :=
+def is_constructor_var (c : CodegenCtx) (name : String) : Bool :=
     // Extract the last component after the final dot (for qualified names like "Unit.unit")
     let base_name := extract_base_name name in
-    check_constructor base_name constructor_names
+    if check_constructor base_name constructor_names
+    then true
+    else match ctx_lookup_ctor_tag c base_name {
+        Option.some _ => true,
+        Option.none => false,
+    }
 
 #[partial]
 def check_constructor (name : String) (names : List String) : Bool := match names {
@@ -383,10 +428,13 @@ def string_find_last (haystack : String) (needle : String) : I64 :=
     else if I64.gt (String.length needle) (String.length haystack) then -1
     else string_find_last_loop haystack needle (String.length haystack - String.length needle)
 
+/// `String.slice`'s own third argument is a LENGTH (`init/string.mo`),
+/// not an end index -- see `extract_base_name`'s own doc comment for
+/// the full story on this bug (fixed alongside it here).
 #[partial]
 def string_find_last_loop (haystack : String) (needle : String) (start_idx : I64) : I64 :=
     if I64.lt start_idx 0 then -1
-    else if String.beq (String.slice haystack start_idx (start_idx + String.length needle)) needle then start_idx
+    else if String.beq (String.slice haystack start_idx (String.length needle)) needle then start_idx
     else string_find_last_loop haystack needle (start_idx - 1)
 
 #[partial]
@@ -645,7 +693,7 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
                                         CtxStrPair.mk ctx3 cmp_temp =>
                                             match this_case {
                                                 MatchCase.mc name _args _body _fp =>
-                                                    let tag_of_case := constructor_tag (show_identifier name) in
+                                                    let tag_of_case := constructor_tag ctx3 (show_identifier name) in
                                                     let cmp_instr := LLVMInstruction.assign cmp_temp (LLVMValue.icmp_eq tag_val (LLVMValue.int_ tag_of_case)) in
                                                     let branch_instr := LLVMInstruction.branch (LLVMValue.var_ cmp_temp) case_label next_check_label in
                                                     let check_block := LLVMBasicBlock.mk check_label (cons_instr cmp_instr (cons_instr branch_instr empty_instrs)) in
@@ -972,7 +1020,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
                             // Call the @alloc_constructor runtime function
                             // alloc_constructor takes (tag, field_count) and allocates space for fields
                             // The tag is determined by the constructor name
-                            let tag_val := constructor_tag (show_identifier name) in
+                            let tag_val := constructor_tag c (show_identifier name) in
                             let alloc_val := LLVMValue.alloc_constructor tag_val all_vals in
                             let assign_instr := LLVMInstruction.assign temp alloc_val in
                             // alloc_constructor only ALLOCATES the fields
@@ -1612,7 +1660,7 @@ def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (blocks : Li
                 let tag_instr := LLVMInstruction.assign tag_temp tag_call in
                 match fresh_temp ctx1 {
                     CtxStrPair.mk ctx2 bool_temp =>
-                        let bool_true_tag := constructor_tag "true" in
+                        let bool_true_tag := constructor_tag c "true" in
                         let cmp_instr := LLVMInstruction.assign bool_temp (LLVMValue.icmp_eq (LLVMValue.var_ tag_temp) (LLVMValue.int_ bool_true_tag)) in
                         let extra := cons_instr tag_instr (cons_instr cmp_instr empty_instrs) in
                         match compose_seq (Triple.tr instrs blocks cond_val) (Triple.tr extra empty_blocks (LLVMValue.var_ bool_temp)) {
@@ -1762,7 +1810,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                         // Check if this is a constructor reference
                         let name := show_identifier id in
                         let llvm_name := replace_dots_with_underscores name in
-                        if is_constructor_var name then
+                        if is_constructor_var c name then
                             // Compile as alloc_constructor with 0 fields.
                             // Must use THIS constructor's own tag (e.g.
                             // `none` = 3), not a hardcoded 0 (`Unit.unit`'s
@@ -1771,7 +1819,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                             // from Unit.unit during match dispatch.
                             match fresh_temp c {
                                 CtxStrPair.mk ctx_t temp =>
-                                    let tag_val := constructor_tag name in
+                                    let tag_val := constructor_tag c name in
                                     let alloc_val := LLVMValue.call "alloc_constructor" LLVMType.i64_ (List.cons (LLVMValue.int_ tag_val) (List.cons (LLVMValue.int_ 0) List.empty)) false in
                                     let assign_instr := LLVMInstruction.assign temp alloc_val in
                                     CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
@@ -2025,25 +2073,49 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
         _ => Option.none,
     }
 
+/// Detects a fully-applied constructor call of ANY arity by flattening
+/// the WHOLE application spine (`Term.app fun arg` as a unit, not just
+/// `fun`/`arg` in isolation) and checking whether its ultimate HEAD is a
+/// known constructor -- generalizes the previous single-arg-only version
+/// (which only matched when `fun` was directly `Term.var`, so a 2+-arg
+/// constructor call's outer `Term.app` -- `fun` itself another `Term.app`
+/// -- never matched at all and fell through to `compile_general_db_call`'s
+/// ordinary-function-call path, producing `llc: use of undefined value
+/// '@Foo_bar'` for any constructor with 2+ fields, INCLUDING builtins
+/// like `List.cons`, not just user-defined types). Safe to flatten the
+/// full spine here: `compile_db_app_ir` (this function's own caller) is
+/// only ever invoked once per ORIGINAL, outermost `Term.app` node in the
+/// term tree (`compile_db_term_ir`'s own top-down dispatch) --
+/// `compile_general_db_call`'s own internal spine-flattening never
+/// re-enters this "try" chain on an inner node, so there's no risk of
+/// this matching a PARTIAL sub-application twice.
+/// See `implementations/2026-08-29-user-defined-constructor-codegen-gap.md`.
 #[partial]
 def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
-    match fun {
-        Term.var idx dbg =>
-            match dbg {
-                DebugName.named id =>
-                    let name := show_identifier id in
-                    if is_constructor_var name then
-                        // This is a constructor application like IO.io unit or io unit
-                        // Compile it as a constructor with the argument
-                        let base_name := extract_base_name name in
-                        let tag := constructor_tag base_name in
-                        let con := Con.mk (Identifier.id base_name) (ModulePath.mp List.empty) 1 (List.cons (Option.some arg) List.empty) in
-                        Option.some (compile_con_ir c con)
-                    else Option.none,
-                DebugName.unnamed => Option.none,
+    match flatten_app_spine (Term.app fun arg) {
+        AppSpine.mk head all_args =>
+            match head {
+                Term.var idx dbg =>
+                    match dbg {
+                        DebugName.named id =>
+                            let name := show_identifier id in
+                            if is_constructor_var c name
+                            then
+                                let base_name := extract_base_name name in
+                                let con := Con.mk (Identifier.id base_name) (ModulePath.mp List.empty) (List.length all_args) (wrap_some_list all_args) in
+                                Option.some (compile_con_ir c con)
+                            else Option.none,
+                        DebugName.unnamed => Option.none,
+                    },
+                _ => Option.none,
             },
-        _ => Option.none,
     }
+
+#[partial]
+def wrap_some_list (xs : List Term) : List (Option Term) := match xs {
+    List.empty => List.empty,
+    List.cons x rest => List.cons (Option.some x) (wrap_some_list rest),
+}
 
 #[partial]
 def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
@@ -2155,7 +2227,7 @@ def wrap_void_native_result (ctx : CodegenCtx) (prior_instrs : List LLVMInstruct
             let unit_val := LLVMValue.var_ temp_unit in
             match fresh_temp ctx_unit {
                 CtxStrPair.mk ctx_io temp_io =>
-                    let alloc_val := LLVMValue.alloc_constructor (constructor_tag "IO.io") (List.cons unit_val List.empty) in
+                    let alloc_val := LLVMValue.alloc_constructor (constructor_tag ctx "IO.io") (List.cons unit_val List.empty) in
                     let alloc_instr := LLVMInstruction.assign temp_io alloc_val in
                     match build_set_field_instrs (LLVMValue.var_ temp_io) (List.cons unit_val List.empty) 0 ctx_io {
                         SetFieldResult.mk ctx_set set_instrs =>
@@ -2322,7 +2394,19 @@ def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
                         Option.some _ => compile_db_term_ir c head,
                         Option.none =>
                             let name := show_identifier id in
-                            if is_constructor_var name
+                            // Now unreachable in practice: `compile_call_
+                            // head` is only ever reached via `compile_
+                            // general_db_call`, the LAST fallback in
+                            // `compile_db_app_ir`'s try-chain, AFTER
+                            // `try_compile_constructor_app_db` (which
+                            // now flattens the whole spine and intercepts
+                            // EVERY constructor call, any arity) has
+                            // already tried and failed against this SAME
+                            // `is_constructor_var` check -- left in place
+                            // (rather than removed) to keep this fix
+                            // scoped to correctness; a whole-file cleanup
+                            // pass is the right place to remove it.
+                            if is_constructor_var c name
                             then compile_db_term_ir c head
                             else
                                 // `fn_ref`, not `var_` -- this IS a
@@ -2912,7 +2996,7 @@ def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match 
 #[partial]
 def compile_db_decls_ir (defs : List Def) : LLVMModule :=
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities) defs {
+    match compile_db_def_list (empty_ctx arities str_map_empty) defs {
         DefResult.dr _ compiled_funcs compiled_globals =>
             let funcs := ren_main_and_wrap compiled_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
@@ -2924,9 +3008,10 @@ def compile_db_decls_ir (defs : List Def) : LLVMModule :=
 def compile_db_module (decl_list : List Decl) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
-    let ctor_funcs := compile_db_inductive_decls inds in
+    let ctor_tags := build_constructor_tag_map inds in
+    let ctor_funcs := compile_db_inductive_decls inds ctor_tags in
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities) defs {
+    match compile_db_def_list (empty_ctx arities ctor_tags) defs {
         DefResult.dr _ compiled_funcs compiled_globals =>
             let all_funcs := append_funcs ctor_funcs compiled_funcs in
             let funcs := ren_main_and_wrap all_funcs in
@@ -2960,8 +3045,14 @@ def extract_inductives (decl_list : List Decl) : List Inductive := match decl_li
 }
 
 /// Compile a list of canonical InductConstructors to LLVM constructor wrapper functions.
+/// `ctor_tags` -- see `build_constructor_tag_map`'s own doc comment;
+/// looked up by the constructor's full DOTTED name ("TypeName.ctorName")
+/// -- falls back to tag 0 for anything not found (shouldn't happen for a
+/// real reachable inductive, since `ctor_tags` is built from this exact
+/// same `List Inductive`; matches this file's other "absent from the
+/// table" fallbacks, e.g. `ctx_lookup_arity`'s own doc comment).
 #[partial]
-def compile_db_inductive_constructors (type_name : String) (constructors : List InductConstructor) : List LLVMFunction := match constructors {
+def compile_db_inductive_constructors (type_name : String) (constructors : List InductConstructor) (ctor_tags : HashMap String I64) : List LLVMFunction := match constructors {
     List.empty => empty_funcs,
     List.cons c rest =>
         match c {
@@ -2981,25 +3072,90 @@ def compile_db_inductive_constructors (type_name : String) (constructors : List 
                 let name_str := module_path_to_str name in
                 let qualified_name := type_name ++ "_" ++ name_str in
                 let field_count := count_db_params params 0 in
-                let func := compile_constructor_decl qualified_name field_count in
-                cons_func func (compile_db_inductive_constructors type_name rest)
+                // Keyed by BARE name -- see `assign_constructor_tags`'s
+                // own doc comment for why (match dispatch can only ever
+                // supply the bare name, so the map is keyed that way
+                // uniformly).
+                let tag := match str_map_lookup name_str ctor_tags {
+                    Option.some t => t,
+                    Option.none => 0,
+                } in
+                let func := compile_constructor_decl qualified_name field_count tag in
+                cons_func func (compile_db_inductive_constructors type_name rest ctor_tags)
         }
 }
 
 /// Compile a single canonical Inductive to LLVM constructor wrapper functions.
 #[partial]
-def compile_db_inductive (ind : Inductive) : List LLVMFunction := match ind {
+def compile_db_inductive (ind : Inductive) (ctor_tags : HashMap String I64) : List LLVMFunction := match ind {
     Inductive.mk name params typ constructors attrs _vis =>
-        compile_db_inductive_constructors (module_path_to_str name) constructors
+        compile_db_inductive_constructors (module_path_to_str name) constructors ctor_tags
 }
 
 /// Compile a list of canonical Inductives to LLVM constructor wrapper functions.
 #[partial]
-def compile_db_inductive_decls (ind_decls : List Inductive) : List LLVMFunction := match ind_decls {
+def compile_db_inductive_decls (ind_decls : List Inductive) (ctor_tags : HashMap String I64) : List LLVMFunction := match ind_decls {
     List.empty => empty_funcs,
     List.cons ind rest =>
-        let funcs := compile_db_inductive ind in
-        append_funcs funcs (compile_db_inductive_decls rest)
+        let funcs := compile_db_inductive ind ctor_tags in
+        append_funcs funcs (compile_db_inductive_decls rest ctor_tags)
+}
+
+/// Builds a `HashMap` from a constructor's full DOTTED name
+/// ("TypeName.ctorName") to a fresh, globally-unique tag, for every
+/// constructor of every declared `Inductive` in the whole program.
+/// Starts at 16 -- past `constructor_tag`'s existing hardcoded 0-15
+/// builtin range (`unit, true, false, none, some, empty, cons, io,
+/// trivial, refl, ok, err, zero, succ, nil, pair`), which is left
+/// completely untouched (zero risk to already-working code) --
+/// `constructor_tag`/`is_constructor_var` only ever consult this map as
+/// a FALLBACK for a name the hardcoded list doesn't recognize.
+/// See `implementations/2026-08-29-user-defined-constructor-codegen-gap.md`.
+#[partial]
+def build_constructor_tag_map (inds : List Inductive) : HashMap String I64 :=
+    build_constructor_tag_map_go inds 16 str_map_empty
+
+#[partial]
+def build_constructor_tag_map_go (inds : List Inductive) (next_tag : I64) (acc : HashMap String I64) : HashMap String I64 := match inds {
+    List.empty => acc,
+    List.cons ind rest =>
+        match ind {
+            Inductive.mk _name _params _typ constructors _attrs _vis =>
+                match assign_constructor_tags constructors next_tag acc {
+                    TagAssignResult.mk next_tag2 acc2 => build_constructor_tag_map_go rest next_tag2 acc2,
+                },
+        },
+}
+
+type TagAssignResult {
+    mk (next_tag : I64) (acc : HashMap String I64),
+}
+
+/// Keyed by the constructor's own BARE name only (e.g. "present"), NOT
+/// qualified by its enclosing type -- match dispatch (`build_match_
+/// chain`'s own `MatchCase.mc` field, which never carries the type it
+/// belongs to) can only ever supply the bare name, so a qualified key
+/// would silently miss there and fall back to tag 0 (confirmed as a real
+/// bug via a direct repro: a match on a custom 2-constructor type always
+/// took the first arm, since BOTH arms' tag comparisons resolved to 0).
+/// This mirrors the EXISTING hardcoded builtin table's own "check base
+/// names" tier exactly (`unit`/`true`/`false`/... are already assumed
+/// globally unique by bare name) -- extends the SAME assumption to
+/// user-defined types rather than fixing it, which would need threading
+/// the scrutinee's own static type down into match compilation (a much
+/// bigger, separate change). Two different reachable user-defined types
+/// sharing a bare constructor name would collide here, same as they
+/// always could against the hardcoded 16 -- a known, accepted limitation,
+/// not a regression.
+#[partial]
+def assign_constructor_tags (constructors : List InductConstructor) (next_tag : I64) (acc : HashMap String I64) : TagAssignResult := match constructors {
+    List.empty => TagAssignResult.mk next_tag acc,
+    List.cons c rest =>
+        match c {
+            InductConstructor.mk name _params _typ =>
+                let acc2 := str_map_insert (module_path_to_str name) next_tag acc in
+                assign_constructor_tags rest (next_tag + 1) acc2,
+        },
 }
 
 /// Compile an inductive type constructor to an LLVM wrapper function.
@@ -3010,10 +3166,10 @@ def compile_db_inductive_decls (ind_decls : List Inductive) : List LLVMFunction 
 /// }
 /// Matches Rust reference: llvm-codegen/src/codegen/constructors.rs:38-82
 #[partial]
-def compile_constructor_decl (con_name : String) (field_count : I64) : LLVMFunction :=
+def compile_constructor_decl (con_name : String) (field_count : I64) (tag : I64) : LLVMFunction :=
     let params := build_constructor_params field_count in
     let fields := build_param_fields field_count in
-    let alloc_val := LLVMValue.alloc_constructor 0 fields in
+    let alloc_val := LLVMValue.alloc_constructor tag fields in
     let assign_instr := LLVMInstruction.assign "ctemp" alloc_val in
     let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "ctemp") in
     let entry_block := LLVMBasicBlock.mk "entry" (cons_instr assign_instr (cons_instr ret_instr empty_instrs)) in
@@ -3348,7 +3504,7 @@ def test_compile_db_inductive_decls : Bool :=
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
     let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs Visibility.package_private in
-    let funcs := compile_db_inductive_decls (List.cons ind List.empty) in
+    let funcs := compile_db_inductive_decls (List.cons ind List.empty) str_map_empty in
     let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls in
     let text := emit_module mod_ in
     // Constructor function names are qualified with their enclosing
@@ -3360,6 +3516,29 @@ def test_compile_db_inductive_decls : Bool :=
     if check_contains text "monad_ctor_Option_Some"
     then check_contains text "monad_ctor_Option_None"
     else false
+
+/// Regression test for the `string_find_last`/`extract_base_name`
+/// off-by-length bug (see `extract_base_name`'s own doc comment):
+/// `String.slice`'s third argument is a LENGTH, not an end index, so
+/// `is_constructor_var`/`constructor_tag`'s dynamic-fallback tier
+/// (`build_constructor_tag_map`) silently failed to strip a qualified
+/// name's own type prefix, looking up "Option.Some" in a map keyed by
+/// the bare "Some" and never finding it. Isolated from the whole self-
+/// hosted parse/typecheck/elaborate pipeline (a hand-built `Inductive`,
+/// like `test_compile_db_inductive_decls` above) so this test exercises
+/// exactly the map-building + lookup mechanism, not elaboration.
+#[test]
+def test_ctor_tag_map_qualified_name_lookup : Bool :=
+    let some_name := ModulePath.mp (List.cons (Identifier.id "Some") List.empty) in
+    let some_ctor := InductConstructor.mk some_name empty_params_list (Term.type_ 1) in
+    let none_name := ModulePath.mp (List.cons (Identifier.id "None") List.empty) in
+    let none_ctor := InductConstructor.mk none_name empty_params_list (Term.type_ 1) in
+    let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
+    let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
+    let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs Visibility.package_private in
+    let tag_map := build_constructor_tag_map (List.cons ind List.empty) in
+    let c := empty_ctx empty_arities tag_map in
+    is_constructor_var c "Option.Some" && is_constructor_var c "Option.None"
 
 /// Regression tests for `native_runtime_fn_name`/`compile_native_def_wrapper_ir`:
 /// a `#[native string_concat]`/`#[native string_eq]`-attributed def
@@ -3386,7 +3565,7 @@ def native_def_fixture (name : String) (target : String) : Def :=
 
 #[partial]
 def compile_native_def_fixture_text (name : String) (target : String) : String :=
-    match compile_db_def_ir (empty_ctx empty_arities) (native_def_fixture name target) {
+    match compile_db_def_ir (empty_ctx empty_arities str_map_empty) (native_def_fixture name target) {
         DefResult.dr _ funcs _ =>
             emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls),
     }
