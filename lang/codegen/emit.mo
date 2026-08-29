@@ -31,9 +31,10 @@ use lang.module {
   get_loaded_main, get_module_info_decls, mk,
 }
 use lang.scope {
-  add_constraint_dict_params_decls, build_scope_from_decls, collect_infixes,
-  promote_instance_defs, resolve_class_calls_decls, resolve_infix_decls,
-  strip_all_leading_binders,
+  add_constraint_dict_params_decls, build_scope_from_decls, collect_classes,
+  collect_infixes, promote_instance_defs, resolve_class_calls_decls,
+  resolve_infix_decls, strip_all_leading_binders,
+  validate_no_unresolved_class_calls,
 }
 
 open IO {println}
@@ -3905,35 +3906,40 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
     let elaborated := elaborate_module_decls_best_effort scope dict_param_decls empty_locs;
-    let dispatched_result := resolve_class_calls_decls elaborated;
+    let dispatched_decls := resolve_class_calls_decls elaborated;
     if verbose then do {
         let _ := Bench.report "elaborate_class" (I64.sub Bench.now t_elab);
         return unit
     } else return unit;
 
-    match dispatched_result {
-        // `resolve_class_calls_decls` found a `ClassName.method` reference
-        // that survived resolution with no matching instance -- fail here,
-        // with a precise message, instead of proceeding to codegen/`llc`
-        // and surfacing it many stages later as an undefined-symbol error.
+    // Stage 5: only compile Defs actually reachable (transitively) from `main` --
+    // compiling the FULL 264-def loaded set unconditionally meant any
+    // codegen bug anywhere in the whole standard library, reached or
+    // not, blocked compiling any program at all. See
+    // filter_reachable_decls's own doc comment.
+    let t_reach := Bench.now;
+    let reachable_decls := filter_reachable_decls dispatched_decls;
+    if verbose then do {
+        let reachable_count := List.length reachable_decls;
+        let _ := Bench.report "filter_reachable" (I64.sub Bench.now t_reach);
+        println ("Reachable decl_list: " ++ I64.to_string reachable_count)
+    } else return unit;
+
+    // `resolve_class_calls_decls` can leave a `ClassName.method` call
+    // unresolved with no matching instance (its own doc comment) -- check
+    // the REACHABLE decls (not the full loaded graph: a bug in dead code
+    // the program never uses must not block a compile that otherwise
+    // works, see `validate_no_unresolved_class_calls`'s own doc comment
+    // for the direct repro that found this the hard way) and fail here,
+    // with a precise message, instead of proceeding to codegen/`llc` and
+    // surfacing it many stages later as an undefined-symbol error.
+    let dispatched_classes := collect_classes dispatched_decls;
+    match validate_no_unresolved_class_calls dispatched_classes reachable_decls {
         Result.err e => do {
             if verbose then println ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")") else return unit;
             return (Result.err e)
         },
-        Result.ok dispatched_decls => do {
-            // Stage 5: only compile Defs actually reachable (transitively) from `main` --
-            // compiling the FULL 264-def loaded set unconditionally meant any
-            // codegen bug anywhere in the whole standard library, reached or
-            // not, blocked compiling any program at all. See
-            // filter_reachable_decls's own doc comment.
-            let t_reach := Bench.now;
-            let reachable_decls := filter_reachable_decls dispatched_decls;
-            if verbose then do {
-                let reachable_count := List.length reachable_decls;
-                let _ := Bench.report "filter_reachable" (I64.sub Bench.now t_reach);
-                println ("Reachable decl_list: " ++ I64.to_string reachable_count)
-            } else return unit;
-
+        Result.ok _ => do {
             // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
             let t_llvm := Bench.now;
             let mod_ := compile_db_module reachable_decls;

@@ -22,10 +22,11 @@ use lang.typecheck.meta_reflect {
 }
 use lang.scope {
   add_constraint_dict_params_decls, alias_decls_in_scope, build_scope_from_decls,
-  collect_infixes, constraint_vars, decls_have_aliasable_decls, list_append,
-  modpath_eq, param_names, promote_instance_defs, resolve_class_calls_decls,
-  resolve_infix_decls, scope_data_empty, scope_find_inductive, scope_push_local,
-  scope_resolve_name,
+  collect_classes, collect_infixes, constraint_vars, decls_have_aliasable_decls,
+  list_append, modpath_eq, param_names, promote_instance_defs,
+  resolve_class_calls_decls, resolve_infix_decls, scope_data_empty,
+  scope_find_inductive, scope_push_local, scope_resolve_name,
+  validate_no_unresolved_class_calls,
 }
 use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, tt_term, type_check}
@@ -2150,9 +2151,11 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
     if has_reflect_type_info_call graph_subst || has_reflect_type_info_call target_subst then
         let inds : List Inductive := collect_inductives whole_graph_decls in
         let empty_locs : LocalScope := { vars := List.empty, parent := Option.none } in
-        match resolve_class_calls_decls (elaborate_module_decls_best_effort scope whole_graph_decls empty_locs) {
+        let dispatched := resolve_class_calls_decls (elaborate_module_decls_best_effort scope whole_graph_decls empty_locs) in
+        let dispatched_classes := collect_classes dispatched in
+        match validate_no_unresolved_class_calls dispatched_classes dispatched {
             Result.err e => Result.err e,
-            Result.ok dispatched =>
+            Result.ok _ =>
                 match resolve_reflect_calls inds dispatched graph_subst {
                     Result.err e => Result.err e,
                     Result.ok graph_final =>
@@ -2544,10 +2547,8 @@ def test_resolve_class_calls_decls_uses_class_declared_default_carrier : IO Bool
             let resolved := resolve_infix_decls infixes decl_list;
             let promoted := promote_instance_defs resolved;
             let dict_paramed := add_constraint_dict_params_decls promoted;
-            match resolve_class_calls_decls dict_paramed {
-                Result.err _ => false,
-                Result.ok dispatched => decl_list_has_use_it_calling_makeempty_mybox_empty dispatched,
-            }
+            let dispatched := resolve_class_calls_decls dict_paramed;
+            decl_list_has_use_it_calling_makeempty_mybox_empty dispatched
         },
         ParseResult.fail _ => false,
     })

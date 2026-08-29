@@ -5,14 +5,23 @@
 /// `llc: undefined value '@ClassName_method'` error.
 ///
 /// Guards against a regression of the check itself (e.g. someone reverting
-/// `resolve_class_calls_decls`'s `Result` return type, or its own
-/// `find_unresolved_class_calls_decls` walk) -- this session found two
-/// genuine, previously-silent instances of exactly this bug empirically
-/// (`instance Functor List`'s own recursive `Functor.map` call,
-/// `init/prelude.mo`; `std/derive_tests.mo`'s `FromListLiteral.cons`) once
-/// this check landed, both fixed/skipped separately -- this test exercises
-/// the mechanism directly with a minimal, deliberately-unresolvable class
-/// method call, independent of either of those.
+/// `validate_no_unresolved_class_calls`'s own walk, or
+/// `compile_loaded_modules_to_ir` no longer calling it) -- this session
+/// found two genuine, previously-silent instances of exactly this bug
+/// empirically (`instance Functor List`'s own recursive `Functor.map`
+/// call, `init/prelude.mo`; `std/derive_tests.mo`'s `FromListLiteral.cons`)
+/// once this check landed, both fixed/skipped separately -- this test
+/// exercises the mechanism directly with a minimal, deliberately-
+/// unresolvable class method call, independent of either of those.
+///
+/// The unresolved call MUST be reachable from `main` -- the check runs
+/// on the REACHABLE decls only (`lang.codegen.emit`'s own
+/// `compile_loaded_modules_to_ir` / `validate_no_unresolved_class_calls`'s
+/// own doc comment explains why: validating the whole loaded graph
+/// blocked a compile over a bug in dead code the program never actually
+/// used), so an unreferenced `use_it` would get filtered out by
+/// `filter_reachable_decls` before the check ever saw it, silently
+/// passing this test for the wrong reason.
 use io {IO}
 use process {exec_cmd}
 use lang.types {LoadedModules}
@@ -25,7 +34,10 @@ def test_unresolved_class_method_call_fails_fast : IO Bool := do {
     let src_path := output_dir ++ "/unresolved_class_call.mo";
     let source := r#"class NoInstance A { def only_method : A -> A }
 def use_it (x : Bool) : Bool := NoInstance.only_method x
-def main (args : List String) : IO I64 := do { return 0 }
+def main (args : List String) : IO I64 := do {
+    let _ := use_it true;
+    return 0
+}
 "#;
     let _ <- exec_cmd "mkdir" ["-p", output_dir];
     IO.write_file src_path source;

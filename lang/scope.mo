@@ -2890,7 +2890,15 @@ def dict_binding_class_of (id : Identifier) : Option ModulePath :=
 /// every `Decl.def_d`'s own `.term` (not `.typ` -- a type's own Pi-chain
 /// never contains a class-method CALL to resolve, only Phase 3's own
 /// dict-parameter Pi's, which this pass doesn't touch).
-///
+#[partial]
+def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
+    let classes := collect_classes decl_list in
+    let instances := collect_instances decl_list in
+    let ctor_owners := collect_ctor_owners decl_list in
+    let def_constraints := collect_def_constraints decl_list in
+    let def_types := collect_def_types decl_list in
+    resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types decl_list
+
 /// `resolve_class_call_term`'s own resolution chain has a SILENT give-up
 /// built in by design (`rebuild_call orig_head resolved_args`, used
 /// throughout `resolve_class_method_call_with_carrier`/`_with_dict_args`/
@@ -2903,24 +2911,44 @@ def dict_binding_class_of (id : Identifier) : Option ModulePath :=
 /// in a real self-compile, minutes) later -- this is what the
 /// `Append_append`/`Show_show` bug family (`6cf8da7`, `a47856c`, `855be99`)
 /// all turned out to be, each requiring its own manual archaeology session
-/// to even FIND which call was unresolved. Fail fast instead: after
-/// resolving, walk the OWN output once more for any surviving `Term.var`
-/// that still matches `class_method_ref classes` -- by construction, a
-/// successful resolution always REWRITES such a reference to a concrete
-/// mangled name (no longer matching `class_method_ref`), so any survivor
-/// found here is unambiguously a real "no instance available" failure,
-/// reported with the class/method/enclosing-def named directly instead of
-/// discovered via a cryptic downstream `llc` error.
+/// to even FIND which call was unresolved.
+///
+/// Fail fast instead -- but deliberately NOT inside `resolve_class_calls_
+/// decls` itself: that pass runs on the FULL loaded decl graph, before
+/// reachability filtering, so validating its own output directly would
+/// fail a compile over a bug in dead code the program never actually
+/// uses (confirmed via a direct repro: `std/list.mo`'s own unreachable
+/// `test_length` def blocked `bootstrap compile lang/main.mo monad`,
+/// exactly the "any codegen bug anywhere in the whole standard library,
+/// reached or not, blocked compiling any program at all" problem
+/// `filter_reachable_decls`'s own doc comment says THAT pass exists to
+/// avoid). Callers that filter reachability should validate the
+/// REACHABLE decls, after `filter_reachable_decls`, not the full ones --
+/// see `compile_loaded_modules_to_ir`'s own use of this for the pattern.
+///
+/// Walk `decl_list` for any surviving `Term.var` that still matches
+/// `class_method_ref classes` -- by construction, a successful resolution
+/// always REWRITES such a reference to a concrete mangled name (no longer
+/// matching `class_method_ref`), so any survivor found here is
+/// unambiguously a real "no instance available" failure, reported with
+/// the class/method/enclosing-def named directly instead of discovered
+/// via a cryptic downstream `llc` error.
+///
+/// `classes` is taken as its own explicit param, NOT recomputed via
+/// `collect_classes decl_list` -- `filter_reachable_decls`'s own output
+/// (the intended `decl_list` here, see this def's own doc comment above)
+/// contains ONLY `Decl.def_d`/`Decl.inductive_d` entries; `Decl.class_d`
+/// is unconditionally dropped (never reachability-filtered at all, since
+/// nothing downstream of `resolve_class_calls_decls` needs it), so
+/// `collect_classes` on THAT decl_list always finds zero classes,
+/// silently turning this whole check into a no-op. Callers must compute
+/// `classes` from the PRE-filter decls (`collect_classes dispatched_decls`
+/// -- confirmed via a direct repro, the same one that found the dead-code
+/// false-positive above).
 #[partial]
-def resolve_class_calls_decls (decl_list : List Decl) : Result String (List Decl) :=
-    let classes := collect_classes decl_list in
-    let instances := collect_instances decl_list in
-    let ctor_owners := collect_ctor_owners decl_list in
-    let def_constraints := collect_def_constraints decl_list in
-    let def_types := collect_def_types decl_list in
-    let dispatched := resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types decl_list in
-    match find_unresolved_class_calls_decls classes dispatched {
-        List.empty => Result.ok dispatched,
+def validate_no_unresolved_class_calls (classes : List Class) (decl_list : List Decl) : Result String (List Decl) :=
+    match find_unresolved_class_calls_decls classes decl_list {
+        List.empty => Result.ok decl_list,
         List.cons msg _rest => Result.err msg,
     }
 

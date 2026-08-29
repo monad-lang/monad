@@ -4,7 +4,7 @@ use lang.types {
 }
 use lang.codegen.ir {emit_module, mk}
 use lang.codegen.emit {compile_db_decls_ir, compile_db_module, mk}
-use lang.scope {add_constraint_dict_params_decls, promote_instance_defs, resolve_class_calls_decls}
+use lang.scope {add_constraint_dict_params_decls, collect_classes, promote_instance_defs, resolve_class_calls_decls, validate_no_unresolved_class_calls}
 
 open Term {lit, type_}
 open Literal {num}
@@ -435,7 +435,8 @@ def test_promote_instance_defs_compiles_and_runs : IO Bool := do {
 /// Instance.constraints, are exactly what Phase 3 reads next).
 #[partial]
 def full_dict_pipeline (decl_list : List Decl) : Result String (List Decl) :=
-    resolve_class_calls_decls (add_constraint_dict_params_decls (promote_instance_defs decl_list))
+    let dispatched := resolve_class_calls_decls (add_constraint_dict_params_decls (promote_instance_defs decl_list)) in
+    validate_no_unresolved_class_calls (collect_classes dispatched) dispatched
 
 /// Runs `full_dict_pipeline` then `compile_decls_link_run_expect` --
 /// these are hand-built, deliberately-valid dict-pipeline fixtures, so a

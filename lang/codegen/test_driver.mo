@@ -39,8 +39,9 @@ use lang.module {
   get_loaded_all, get_loaded_main, get_module_info_decls, try_parse_decls,
 }
 use lang.scope {
-  add_constraint_dict_params_decls, build_scope_from_decls, collect_infixes,
-  promote_instance_defs, resolve_class_calls_decls, resolve_infix_decls,
+  add_constraint_dict_params_decls, build_scope_from_decls, collect_classes,
+  collect_infixes, promote_instance_defs, resolve_class_calls_decls,
+  resolve_infix_decls, validate_no_unresolved_class_calls,
 }
 use io {IO}
 
@@ -275,12 +276,19 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                     let elaborated := elaborate_module_decls_best_effort scope dict_param_spliced empty_locs;
-                    match resolve_class_calls_decls elaborated {
+                    let dispatched_spliced := resolve_class_calls_decls elaborated;
+                    let reachable := filter_reachable_decls dispatched_spliced;
+                    // Validate the REACHABLE decls, not the full spliced
+                    // graph -- see `lang.codegen.emit`'s own
+                    // `compile_loaded_modules_to_ir` / `validate_no_
+                    // unresolved_class_calls`'s own doc comment for why
+                    // (a bug in dead code the test driver never actually
+                    // exercises must not block every other test in the
+                    // same file from running).
+                    let dispatched_classes := collect_classes dispatched_spliced;
+                    match validate_no_unresolved_class_calls dispatched_classes reachable {
                         Result.err e => return (Result.err e),
-                        Result.ok dispatched_spliced => do {
-                            let reachable := filter_reachable_decls dispatched_spliced;
-                            return Result.ok (compile_db_module reachable)
-                        },
+                        Result.ok _ => return (Result.ok (compile_db_module reachable)),
                     }
                 },
                 Option.none => do {
