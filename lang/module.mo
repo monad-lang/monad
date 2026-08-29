@@ -601,8 +601,22 @@ struct ModuleScopeCache {
     misses : I64,
 }
 
+// `HashMap.map HashMap.empty_buckets` (not `Map.empty`) -- `Map.empty`'s
+// own instance for `HashMap` is CONSTRAINED (`instance [Hashable K, BOrd
+// K] Map HashMap`), and this call site's `K`/`V` (`ModulePath`/
+// `ScopeData`, from `ModuleScopeCache.entries`'s own declared field
+// type) aren't visible to `resolve_class_calls_decls`'s syntactic
+// resolution at all -- even with `class Map`'s own declared default
+// carrier (`:= HashMap`) letting `find_matching_instance` find the
+// RIGHT instance, `resolve_dict_args` then has no concrete `K` to build
+// the instance's own `Hashable`/`BOrd` dict args from, so it still gives
+// up. `HashMap.map`/`.empty_buckets` (used identically elsewhere in this
+// exact style, e.g. `lang/codegen/emit.mo`'s `str_map_empty`) bypasses
+// the typeclass entirely -- the concrete, always-correct choice here
+// anyway (`filter_reachable_decls`'s own doc comment: "HashMap preferred
+// over BTreeMap here for performance").
 def module_scope_cache_empty : ModuleScopeCache := {
-    entries := Map.empty,
+    entries := HashMap.map HashMap.empty_buckets,
     hits := 0,
     misses := 0,
 }

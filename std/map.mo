@@ -1,6 +1,19 @@
 /// Key-value map type class. Types implementing Map provide ordered
 /// key-value storage with insertion, lookup, and deletion.
-class Map (M: (K : Type) -> (V : Type) -> Type) {
+///
+/// `:= HashMap` -- a declared default carrier, matching
+/// `class FromListLiteral (L : Type -> Type := List)`'s own convention
+/// -- so a NULLARY call like `Map.empty` (no args to infer a carrier
+/// from at all) can still resolve via
+/// `resolve_class_method_call_d4_default_carrier` (`lang/scope.mo`)
+/// instead of giving up. Confirmed via `bootstrap compile lang/main.mo
+/// monad`: `lang/module.mo`'s `module_scope_cache_empty`'s own struct-
+/// literal field `entries := Map.empty` (declared field type `HashMap
+/// ModulePath ScopeData`, `ModuleScopeCache`) hit exactly this --
+/// `HashMap` is already this codebase's own preferred `Map` instance
+/// (see `filter_reachable_decls`'s own doc comment on why), so it's the
+/// correct default here too.
+class Map (M: (K : Type) -> (V : Type) -> Type := HashMap) {
   def empty : M K V
   def insert (key: K) (val: V) (m: M K V) : M K V
   def lookup (key: K) (m: M K V) : Option V
