@@ -791,6 +791,28 @@ to typecheck once. Concretely, in order of how often each comes up:
    already touching for readability — an unused helper or a hand-rolled
    duplicate of something already imported doesn't need its own separate
    change to justify removing it.
+6. **Prefer a real `Map`/`HashMap` lookup over a hand-rolled
+   `if String.beq x "a" then ... else if String.beq x "b" then ...` chain**
+   for a genuine key→value dispatch table (a `String → SomeType` mapping
+   with several branches) — self-documenting, no risk of a mistyped
+   comparison silently falling through to the wrong branch or an
+   unreachable duplicate key, and adding an entry is one line instead of
+   an `else if`. This codebase's own `Map` typeclass has known
+   instance-resolution bugs (see "Known Type Checker Issues" #3 below) —
+   use the direct `str_map_empty`/`str_map_insert`/`str_map_lookup`
+   bypass helpers (`lang/codegen/emit.mo`) or the equivalent
+   `modpath_map_*` ones (`lang/scope.mo`) instead of the `Map` class
+   directly. As with any `List`→`HashMap` swap in self-hosted code, this
+   is a genuine, MEASURED win when the table is built once and looked up
+   many times across a large corpus (this project's own precedent: the
+   `filter_reachable`/`ctor_tags`/`CodegenCtx.arities` fixes) — but per
+   "Known Type Checker Issues" #4's `BTreeMap`-regression lesson, still
+   measure rather than assume for a table on a narrower or more
+   expensive-per-call path; a small (single-digit-entry), rarely-changing
+   dispatch table's readability win doesn't require a measured perf win
+   to justify converting; a table that's rebuilt from scratch on every
+   call (rather than built once and reused) is a different, much riskier
+   shape — measure that one directly before converting.
 
 **A known pitfall when applying rule 1 to an *existing* type with many
 call sites**: the type-checker doesn't always desugar a bare struct
