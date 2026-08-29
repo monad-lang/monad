@@ -1071,8 +1071,11 @@ def build_set_field_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : 
             },
     }
 
-type IfLabels {
-    mk (ctx_after : CodegenCtx) (then_label : String) (else_label : String) (merge_label : String),
+struct IfLabels {
+    ctx_after : CodegenCtx,
+    then_label : String,
+    else_label : String,
+    merge_label : String,
 }
 
 #[partial]
@@ -1083,7 +1086,7 @@ def build_if_labels (c : CodegenCtx) : IfLabels :=
                 CtxStrPair.mk ctx2 el =>
                     match fresh_label ctx2 "merge" {
                         CtxStrPair.mk ctx3 ml =>
-                            IfLabels.mk ctx3 tl el ml,
+                            { ctx_after := ctx3, then_label := tl, else_label := el, merge_label := ml }
                     },
             },
     }
@@ -1440,8 +1443,9 @@ def captures_to_vals (captures : List LocalBinding) : List LLVMValue := match ca
     List.cons cap rest => List.cons cap.val (captures_to_vals rest),
 }
 
-type GetEnvResult {
-    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction),
+struct GetEnvResult {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
 }
 
 /// Binds each captured name, in order, to a fresh
@@ -1454,7 +1458,7 @@ type GetEnvResult {
 /// holds by construction.
 #[partial]
 def build_get_env_instrs (c : CodegenCtx) (captures : List LocalBinding) (idx : I64) : GetEnvResult := match captures {
-    List.empty => GetEnvResult.mk c empty_instrs,
+    List.empty => { ctx := c, instrs := empty_instrs }
     List.cons cap rest =>
         match cap {
             LocalBinding.mk cname _cval =>
@@ -1465,14 +1469,15 @@ def build_get_env_instrs (c : CodegenCtx) (captures : List LocalBinding) (idx : 
                         let get_instr := LLVMInstruction.assign temp get_call in
                         let ctx2 := ctx_bind_local ctx1 cname (LLVMValue.var_ temp) in
                         match build_get_env_instrs ctx2 rest (idx + 1) {
-                            GetEnvResult.mk ctx3 rest_instrs => GetEnvResult.mk ctx3 (cons_instr get_instr rest_instrs),
+                            { ctx := ctx3, instrs := rest_instrs } => { ctx := ctx3, instrs := cons_instr get_instr rest_instrs },
                         },
                 },
         },
 }
 
-type SetEnvResult {
-    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction),
+struct SetEnvResult {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
 }
 
 /// One `@monad_closure_set_env` call per captured value, in order --
@@ -1481,7 +1486,7 @@ type SetEnvResult {
 /// `lang/codegen/runtime.c`).
 #[partial]
 def build_set_env_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : I64) (c : CodegenCtx) : SetEnvResult := match vals {
-    List.empty => SetEnvResult.mk c empty_instrs,
+    List.empty => { ctx := c, instrs := empty_instrs }
     List.cons v rest =>
         match fresh_temp c {
             CtxStrPair.mk ctx1 temp =>
@@ -1489,7 +1494,7 @@ def build_set_env_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : I6
                     (cons_val obj_val (cons_val (LLVMValue.int_ idx) (cons_val v empty_vals))) false in
                 let set_instr := LLVMInstruction.assign temp set_call in
                 match build_set_env_instrs obj_val rest (idx + 1) ctx1 {
-                    SetEnvResult.mk ctx2 rest_instrs => SetEnvResult.mk ctx2 (cons_instr set_instr rest_instrs),
+                    { ctx := ctx2, instrs := rest_instrs } => { ctx := ctx2, instrs := cons_instr set_instr rest_instrs },
                 },
         },
 }
@@ -1560,7 +1565,7 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
             let ctx_inner0 := ctx_reset_locals ctx1 in
             let ctx_inner1 := ctx_bind_local ctx_inner0 name (LLVMValue.parm_ 1) in
             match build_get_env_instrs ctx_inner1 captures 0 {
-                GetEnvResult.mk ctx_inner2 get_env_instrs =>
+                { ctx := ctx_inner2, instrs := get_env_instrs } =>
                     match compile_db_term_ir ctx_inner2 body {
                         CompileResult.ok ctx2_raw instrs_r val_r blocks_r funcs_r globals_r =>
                             // `ctx2_raw`'s own `locals` is still the
@@ -1606,7 +1611,7 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
                                     let box_val := LLVMValue.alloc_closure entry_text 1 capture_vals in
                                     let box_instr := LLVMInstruction.assign temp box_val in
                                     match build_set_env_instrs (LLVMValue.var_ temp) capture_vals 0 ctx_box {
-                                        SetEnvResult.mk ctx_set set_env_instrs =>
+                                        { ctx := ctx_set, instrs := set_env_instrs } =>
                                             let all_instrs := cons_instr box_instr set_env_instrs in
                                             CompileResult.ok ctx_set all_instrs (LLVMValue.var_ temp) empty_blocks (cons_func lam_func funcs_r) globals_r,
                                     },
@@ -1620,9 +1625,9 @@ def compile_db_if_ir (c : CodegenCtx) (cond : Term) (then_ : Term) (else_ : Term
     match compile_db_term_ir c cond {
         CompileResult.ok ctx_cond cond_instrs cond_val blocks_cond funcs_cond globals_cond =>
             match ensure_i1_cond ctx_cond cond_instrs blocks_cond cond_val cond {
-                BoolCondResult.mk ctx_bool instrs_bool blocks_bool bool_val =>
+                { ctx := ctx_bool, instrs := instrs_bool, blocks := blocks_bool, val := bool_val } =>
                     match build_if_labels ctx_bool {
-                        IfLabels.mk ctx_branches then_label else_label merge_label =>
+                        { ctx_after := ctx_branches, then_label := then_label, else_label := else_label, merge_label := merge_label } =>
                             let branch_instr := LLVMInstruction.branch bool_val then_label else_label in
                             // `if (if p then true else false) then ...`
                             // -- a branching COND itself -- means
@@ -1638,8 +1643,11 @@ def compile_db_if_ir (c : CodegenCtx) (cond : Term) (then_ : Term) (else_ : Term
             },
     }
 
-type BoolCondResult {
-    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (val : LLVMValue),
+struct BoolCondResult {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
+    blocks : List LLVMBasicBlock,
+    val : LLVMValue,
 }
 
 /// LLVM's `br i1 <cond>` requires a genuine i1 value. Native comparison
@@ -1664,7 +1672,7 @@ type BoolCondResult {
 #[partial]
 def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (cond_val : LLVMValue) (cond_term : Term) : BoolCondResult :=
     if term_is_native_bool_op cond_term
-    then BoolCondResult.mk c instrs blocks cond_val
+    then { ctx := c, instrs := instrs, blocks := blocks, val := cond_val }
     else
         match fresh_temp c {
             CtxStrPair.mk ctx1 tag_temp =>
@@ -1677,7 +1685,7 @@ def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (blocks : Li
                         let extra := cons_instr tag_instr (cons_instr cmp_instr empty_instrs) in
                         match compose_seq ({ instrs := instrs, blocks := blocks, val := cond_val }) ({ instrs := extra, blocks := empty_blocks, val := (LLVMValue.var_ bool_temp) }) {
                             { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
-                                BoolCondResult.mk ctx2 new_instrs new_blocks new_val,
+                                { ctx := ctx2, instrs := new_instrs, blocks := new_blocks, val := new_val }
                         },
                 },
         }
@@ -2329,8 +2337,14 @@ def flatten_app_spine_go (t : Term) (acc : List Term) : AppSpine :=
 /// spine's own caller (`compile_general_db_call`) can keep correctly
 /// splicing after it too, instead of losing track once the args are
 /// fully combined.
-type SpineArgs {
-    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (vals : List LLVMValue) (last_val : LLVMValue),
+struct SpineArgs {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
+    blocks : List LLVMBasicBlock,
+    funcs : List LLVMFunction,
+    globals : List LLVMGlobal,
+    vals : List LLVMValue,
+    last_val : LLVMValue,
 }
 
 #[partial]
@@ -2354,7 +2368,7 @@ def compile_spine_args (c : CodegenCtx) (terms : List Term) : SpineArgs :=
 #[partial]
 def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : List LLVMInstruction) (acc_blocks : List LLVMBasicBlock) (acc_funcs : List LLVMFunction) (acc_globals : List LLVMGlobal) (acc_vals : List LLVMValue) (acc_val : LLVMValue) : SpineArgs :=
     match terms {
-        List.empty => SpineArgs.mk c acc_instrs acc_blocks acc_funcs acc_globals (rev_vals acc_vals empty_vals) acc_val,
+        List.empty => { ctx := c, instrs := acc_instrs, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals, vals := (rev_vals acc_vals empty_vals), last_val := acc_val }
         List.cons t rest =>
             match compile_db_term_ir c t {
                 CompileResult.ok ctx1 instrs1 val1_raw blocks1 funcs1 globals1 =>
@@ -2443,7 +2457,7 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
             match compile_call_head c head {
                 CompileResult.ok ctx_h instrs_h val_h blocks_h funcs_h globals_h =>
                     match compile_spine_args ctx_h args {
-                        SpineArgs.mk ctx_a instrs_a blocks_a funcs_a globals_a vals_a last_val_a =>
+                        { ctx := ctx_a, instrs := instrs_a, blocks := blocks_a, funcs := funcs_a, globals := globals_a, vals := vals_a, last_val := last_val_a } =>
                             match compose_seq ({ instrs := instrs_h, blocks := blocks_h, val := val_h }) ({ instrs := instrs_a, blocks := blocks_a, val := last_val_a }) {
                                 { instrs := combined, blocks := all_blocks, val := combined_val } =>
                                     let all_funcs := append_funcs funcs_h funcs_a in
@@ -2642,8 +2656,10 @@ def join_ids_rest (hd : Identifier) (rest : List Identifier) : String :=
         List.cons x y => String.concat (show_identifier hd) (String.concat "__" (join_identifiers rest)),
     }
 
-type DefResult {
-    dr (ctx : CodegenCtx) (funcs : List LLVMFunction) (globals : List LLVMGlobal),
+struct DefResult {
+    ctx : CodegenCtx,
+    funcs : List LLVMFunction,
+    globals : List LLVMGlobal,
 }
 
 #[partial]
@@ -2865,7 +2881,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                     let entry_instrs := cons_instr assign_instr (cons_instr (LLVMInstruction.ret (LLVMValue.var_ temp)) empty_instrs) in
                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                     let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true in
-                    DefResult.dr ctx_t (cons_func native_func empty_funcs) empty_globals_list,
+                    { ctx := ctx_t, funcs := (cons_func native_func empty_funcs), globals := empty_globals_list }
             },
         NativeWrapKind.bool_result rt_fn_name =>
             match fresh_temp c {
@@ -2888,7 +2904,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                     let entry_instrs := cons_instr raw_instr (cons_instr tag_instr (cons_instr con_instr (cons_instr (LLVMInstruction.ret (LLVMValue.var_ con_temp)) empty_instrs))) in
                                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                                     let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true in
-                                    DefResult.dr ctx3 (cons_func native_func empty_funcs) empty_globals_list,
+                                    { ctx := ctx3, funcs := (cons_func native_func empty_funcs), globals := empty_globals_list }
                             },
                     },
             },
@@ -2950,7 +2966,7 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                                 let all_blocks_raw := append_blocks (cons_block entry_block empty_blocks) blocks_r in
                                 let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks all_blocks_raw 0 else all_blocks_raw in
                                 let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
-                                DefResult.dr ctx_t (cons_func main_func funcs_r) globals_r,
+                                { ctx := ctx_t, funcs := (cons_func main_func funcs_r), globals := globals_r }
                         },
                     _ =>
                         // A def whose whole (stripped-of-params) body is
@@ -2987,20 +3003,20 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                         let all_blocks_raw := append_blocks (cons_block entry_block empty_blocks) blocks_r in
                         let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks all_blocks_raw 0 else all_blocks_raw in
                         let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
-                        DefResult.dr bmr.ctx (cons_func main_func funcs_r) globals_r,
+                        { ctx := bmr.ctx, funcs := (cons_func main_func funcs_r), globals := globals_r }
                 },
         }
 
 /// Compile a list of canonical Defs to LLVM functions.
 #[partial]
 def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match defs {
-    List.empty => DefResult.dr c empty_funcs empty_globals_list,
+    List.empty => { ctx := c, funcs := empty_funcs, globals := empty_globals_list }
     List.cons d rest =>
         match compile_db_def_ir c d {
-            DefResult.dr ctx_d funcs_d globals_d =>
+            { ctx := ctx_d, funcs := funcs_d, globals := globals_d } =>
                 match compile_db_def_list ctx_d rest {
-                    DefResult.dr ctx_rest funcs_rest globals_rest =>
-                        DefResult.dr ctx_rest (append_funcs funcs_d funcs_rest) (append_globals globals_d globals_rest),
+                    { ctx := ctx_rest, funcs := funcs_rest, globals := globals_rest } =>
+                        { ctx := ctx_rest, funcs := (append_funcs funcs_d funcs_rest), globals := (append_globals globals_d globals_rest) }
                 },
         },
 }
@@ -3010,7 +3026,7 @@ def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match 
 def compile_db_decls_ir (defs : List Def) : LLVMModule :=
     let arities := build_arity_table defs in
     match compile_db_def_list (empty_ctx arities str_map_empty) defs {
-        DefResult.dr _ compiled_funcs compiled_globals =>
+        { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
             let funcs := ren_main_and_wrap compiled_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
     }
@@ -3025,7 +3041,7 @@ def compile_db_module (decl_list : List Decl) : LLVMModule :=
     let ctor_funcs := compile_db_inductive_decls inds ctor_tags in
     let arities := build_arity_table defs in
     match compile_db_def_list (empty_ctx arities ctor_tags) defs {
-        DefResult.dr _ compiled_funcs compiled_globals =>
+        { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
             let all_funcs := append_funcs ctor_funcs compiled_funcs in
             let funcs := ren_main_and_wrap all_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
@@ -3580,7 +3596,7 @@ def native_def_fixture (name : String) (target : String) : Def :=
 #[partial]
 def compile_native_def_fixture_text (name : String) (target : String) : String :=
     match compile_db_def_ir (empty_ctx empty_arities str_map_empty) (native_def_fixture name target) {
-        DefResult.dr _ funcs _ =>
+        { ctx := _, funcs := funcs, globals := _ } =>
             emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls),
     }
 
