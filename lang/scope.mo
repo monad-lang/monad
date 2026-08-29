@@ -1446,7 +1446,11 @@ def term_to_slug (t : Term) : String :=
                 DebugName.named id => show_identifier id,
                 DebugName.unnamed => "T",
             },
-        Term.app f a => term_to_slug f ++ "_" ++ term_to_slug a,
+        // `String.concat`, not `++` (`Append.append`) chained with a
+        // recursive call as the outermost RHS -- same shallow-carrier-
+        // inference gap `mangle_instance_method_name` (this function's
+        // own caller) hits, see its doc comment.
+        Term.app f a => String.concat (String.concat (term_to_slug f) "_") (term_to_slug a),
         _ => "T",
     }
 
@@ -1457,7 +1461,7 @@ def terms_to_slug (args : List Term) : String :=
         List.cons t rest =>
             match rest {
                 List.empty => term_to_slug t,
-                _ => term_to_slug t ++ "_" ++ terms_to_slug rest,
+                _ => String.concat (String.concat (term_to_slug t) "_") (terms_to_slug rest),
             },
     }
 
@@ -1472,7 +1476,18 @@ def mangle_instance_method_name (cls_name : ModulePath) (ins_args : List Term) (
     let cls_str := show_module_path cls_name in
     let args_str := terms_to_slug ins_args in
     let sep_args := if String.is_empty args_str then "" else "_" ++ args_str in
-    let full := cls_str ++ sep_args ++ "_" ++ show_identifier method_name in
+    // `++` (`Append.append`) chained 3+ deep, with neither operand of
+    // the OUTERMOST call a literal/bare-var/constructor once the inner
+    // ones are already resolved (both are opaque already-resolved
+    // calls), defeats `infer_carrier_from_args`'s shallow, one-level
+    // syntactic guess -- same root cause class as `Append_append`
+    // (`lang/module.mo`'s `load_file_modules`, fixed via `List.append`
+    // instead of `++`) and `2026-08-29-show-show-unresolved-carrier-
+    // in-nested-match-arm.md`, but NOT fixed by that fix's env/
+    // ctor_owners threading (the args here are already-resolved calls,
+    // not bare local vars). `String.concat` is the same idiom already
+    // used elsewhere to sidestep this class of gap entirely.
+    let full := String.concat (String.concat cls_str sep_args) (String.concat "_" (show_identifier method_name)) in
     ModulePath.mp (List.cons (Identifier.id full) List.empty)
 
 /// The mangled top-level name an instance's own dictionary VALUE def
@@ -1482,7 +1497,7 @@ def mangle_instance_dict_name (cls_name : ModulePath) (ins_args : List Term) : M
     let cls_str := show_module_path cls_name in
     let args_str := terms_to_slug ins_args in
     let sep_args := if String.is_empty args_str then "" else "_" ++ args_str in
-    let full := "__Dict_" ++ cls_str ++ sep_args in
+    let full := String.concat (String.concat "__Dict_" cls_str) sep_args in
     ModulePath.mp (List.cons (Identifier.id full) List.empty)
 
 /// Builds one instance's promoted method Decls (real top-level defs,
