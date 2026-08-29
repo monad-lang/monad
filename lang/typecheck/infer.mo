@@ -750,7 +750,69 @@ def type_check_field_pattern_case (name : Identifier) (args : List Identifier) (
                     let permuted_body : Term := term_permute old_n new_n old_depths new_depths body in
                     let extended_types : List Term := prepend_typed declared_names declared_types local_types in
                     let extended_locals : LocalScope := prepend_typed_local_vars declared_names declared_types locals in
-                    type_check_case_body_checked resolved_name declared_names permuted_body expected_type scope extended_types extended_locals,
+                    // The ELABORATED `MatchCase`'s own `args` (what codegen's
+                    // `bind_match_fields`/`free_names_of_cases` actually bind
+                    // names against -- see their own doc comments,
+                    // `lang/codegen/emit.mo`) must be the WRITTEN BINDER
+                    // names (`{ term := body }`'s `body`), NOT `declared_
+                    // names` (`term`, the struct's own canonical field name)
+                    // -- `body`'s own embedded `Term.var` references are
+                    // untouched by `term_permute` (a pure de-Bruijn-index
+                    // permutation, never touches a `Term.var`'s `dbg`), so
+                    // they still say "body" throughout. Passing
+                    // `declared_names` here left `args`/the body's own
+                    // variable references silently DISJOINT for any RENAMED
+                    // field (a punned field like `name` is unaffected --
+                    // written binder == declared name coincidentally) --
+                    // codegen's `ctx_lookup_local` for "body" then always
+                    // failed, silently falling back to treating it as an
+                    // unresolved GLOBAL 0-arg call (`@body()`), confirmed
+                    // via a minimal repro and traced all the way from an
+                    // `llc: undefined value '@body'` self-compile failure
+                    // (`elaborate_def_with_scope`'s own `{ name, typ, term
+                    // := body, ... }` param). `declared_order_binders`
+                    // reorders `fp`'s own written binder names into the
+                    // same DECLARED position order `args` must be in for
+                    // `bind_match_fields`'s positional `monad_get_field`
+                    // extraction to line up -- falling back to a declared
+                    // field's own name only for a `..`-discarded, never-
+                    // written position (unreachable in `body` by
+                    // construction, so what it's bound to there doesn't
+                    // matter for correctness, just needs to be SOME valid
+                    // identifier).
+                    let declared_binders : List Identifier := declared_order_binders declared_names fp in
+                    type_check_case_body_checked resolved_name declared_binders permuted_body expected_type scope extended_types extended_locals,
+            },
+    }
+
+/// See `type_check_field_pattern_case`'s own doc comment above for why
+/// this exists -- reorders a `FieldPattern`'s written `(field, binder)`
+/// entries into DECLARED-field-order binder names, falling back to each
+/// declared field's own canonical name for a position no written entry
+/// covers (only reachable via a trailing `..`).
+#[partial]
+def declared_order_binders (declared_names : List Identifier) (fp : FieldPattern) : List Identifier :=
+    match fp {
+        FieldPattern.mk entries _rest => declared_order_binders_go declared_names entries,
+    }
+
+#[partial]
+def declared_order_binders_go (declared_names : List Identifier) (entries : List FieldPatternEntry) : List Identifier :=
+    match declared_names {
+        List.empty => List.empty,
+        List.cons dn rest_dn =>
+            let binder : Identifier := binder_for_declared_field entries dn in
+            List.cons binder (declared_order_binders_go rest_dn entries),
+    }
+
+#[partial]
+def binder_for_declared_field (entries : List FieldPatternEntry) (declared_name : Identifier) : Identifier :=
+    match entries {
+        List.empty => declared_name,
+        List.cons e rest =>
+            match e {
+                FieldPatternEntry.mk field binder =>
+                    if id_eq field declared_name then binder else binder_for_declared_field rest declared_name,
             },
     }
 

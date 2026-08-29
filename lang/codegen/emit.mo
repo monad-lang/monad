@@ -2570,7 +2570,7 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
                                         // runtime closure value) must NOT
                                         // be treated the same way.
                                         LLVMValue.fn_ref name =>
-                                            combine_direct_call ctx_a name vals_a combined all_blocks all_funcs all_globals combined_val,
+                                            combine_direct_call_arity_checked ctx_a name vals_a combined all_blocks all_funcs all_globals combined_val,
                                         // Any other shape (`var_`, `parm_`,
                                         // or a computed value -- a struct/
                                         // dictionary field extraction, a
@@ -2607,6 +2607,93 @@ def combine_direct_call (ctx_a : CodegenCtx) (name : String) (arg_vals : List LL
             match compose_seq ({ instrs := combined, blocks := blocks, val := last_val }) ({ instrs := (cons_instr call_instr empty_instrs), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
                 { instrs := new_instrs, blocks := new_blocks, val := _ } =>
                     CompileResult.ok ctx_t new_instrs (LLVMValue.var_ temp) new_blocks funcs globals,
+            },
+    }
+
+/// `flatten_app_spine`'s own arg count is driven purely by the SOURCE
+/// TERM's `Term.app` spine -- for an ordinary top-level def this always
+/// matches the def's own REAL compiled arity (`collect_db_params`/
+/// `build_arity_table`, both "count leading `Term.lam`s"), since both are
+/// driven by the same source-level lambda chain. It does NOT match for a
+/// def whose first param is `destructured` (`({ x, y } : T) (extra) :=
+/// ...`, `lang/parser.mo`'s `lam_parsed_params_loop`): the desugared term
+/// is only ONE leading `Term.lam` (the struct param) followed by a
+/// `Literal.match_` whose case body holds the REST of the curried chain
+/// as NESTED `Term.lam`s -- so the def's own compiled arity is 1
+/// regardless of how many more params it logically has, while a call
+/// site applying ALL of them (`use_it r_in 3`) still flattens to a
+/// 2-arg spine. `combine_direct_call`'s blind `call @name(all_args)`
+/// then emits an LLVM call with more args than `name`'s declared
+/// signature -- confirmed via a minimal repro to silently return the
+/// wrong (garbage-looking, boxed-closure-as-if-it-were-a-plain-i64)
+/// value rather than fail to link, discovered chasing `elaborate_def_
+/// with_scope`'s identically-shaped `({ name, typ, term := body, ... } :
+/// Def) (scope) (locals)` once the `@body` unresolved-capture bug
+/// (`lang/typecheck/infer.mo`'s `type_check_field_pattern_case`) was
+/// fixed and self-compile progressed far enough to actually call it.
+/// Splits the flattened args at the callee's REAL arity (when known and
+/// smaller than the spine) -- the first `real_arity` go into one direct
+/// call, matching `name`'s true declared signature; everything past that
+/// applies one arg at a time (`apply_extra_args_one_by_one`) against the
+/// direct call's own result, which -- per `lam_parsed_params_loop`'s own
+/// desugaring -- is exactly a boxed closure expecting the NEXT curried
+/// param, mirroring how `compile_call_head`'s "arity>0 def referenced as
+/// a value" case already boxes a shim for the identical currying shape.
+/// Falls through to the original unconditional behavior whenever arity
+/// is unknown or already matches/exceeds the spine (the overwhelming
+/// common case) -- this only changes behavior for genuine over-
+/// application of an under-arity compiled function.
+#[partial]
+def combine_direct_call_arity_checked (ctx_a : CodegenCtx) (name : String) (arg_vals : List LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
+    match ctx_lookup_arity ctx_a name {
+        Option.some real_arity =>
+            if I64.gt (List.length arg_vals) real_arity then
+                let direct_args := take_vals real_arity arg_vals in
+                let extra_args := drop_vals real_arity arg_vals in
+                match combine_direct_call ctx_a name direct_args combined blocks funcs globals last_val {
+                    CompileResult.ok ctx_d instrs_d val_d blocks_d funcs_d globals_d =>
+                        apply_extra_args_one_by_one ctx_d val_d extra_args instrs_d blocks_d funcs_d globals_d,
+                }
+            else
+                combine_direct_call ctx_a name arg_vals combined blocks funcs globals last_val,
+        Option.none =>
+            combine_direct_call ctx_a name arg_vals combined blocks funcs globals last_val,
+    }
+
+/// First `n` values, or the whole list if it has fewer than `n`.
+#[partial]
+def take_vals (n : I64) (xs : List LLVMValue) : List LLVMValue :=
+    if I64.lt n 1 then List.empty
+    else match xs {
+        List.empty => List.empty,
+        List.cons v rest => List.cons v (take_vals (n - 1) rest),
+    }
+
+/// Everything after the first `n` values.
+#[partial]
+def drop_vals (n : I64) (xs : List LLVMValue) : List LLVMValue :=
+    if I64.lt n 1 then xs
+    else match xs {
+        List.empty => List.empty,
+        List.cons _v rest => drop_vals (n - 1) rest,
+    }
+
+/// Applies each of `extra_args`, one at a time, to the running callee
+/// value -- see `combine_direct_call_arity_checked`'s own doc comment.
+/// Each step is a single-arg `combine_indirect_call` (its own trampoline
+/// name is `apply_closure<List.length arg_vals>`, so passing exactly one
+/// arg per step always picks `apply_closure1`, matching how each
+/// remaining curried param was lifted as its OWN separate one-param
+/// closure, never fused with its siblings).
+#[partial]
+def apply_extra_args_one_by_one (ctx : CodegenCtx) (callee_val : LLVMValue) (extra_args : List LLVMValue) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) : CompileResult :=
+    match extra_args {
+        List.empty => CompileResult.ok ctx instrs callee_val blocks funcs globals,
+        List.cons arg rest =>
+            let one_arg : List LLVMValue := List.cons arg List.empty in
+            match combine_indirect_call ctx callee_val one_arg instrs blocks funcs globals callee_val {
+                CompileResult.ok ctx2 instrs2 val2 blocks2 funcs2 globals2 =>
+                    apply_extra_args_one_by_one ctx2 val2 rest instrs2 blocks2 funcs2 globals2,
             },
     }
 
