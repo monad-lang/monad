@@ -44,8 +44,9 @@ open LLVMValue {
   phi, ptrtoint, sdiv, sub, trunc, var_, void_val, zext,
 }
 
-type LocalBinding {
-    mk (lname : Identifier) (lval : LLVMValue),
+struct LocalBinding {
+    lname : Identifier,
+    lval : LLVMValue,
 }
 
 /// One top-level def's own known arity (its param count, i.e. the number
@@ -58,12 +59,17 @@ type LocalBinding {
 /// (still an eager 0-arg call, unchanged) from an arity>0 def (now boxed
 /// via `alloc_closure` instead of miscompiling as a 0-arg call to a
 /// function that isn't one).
-type ArityEntry {
-    mk (aname : String) (aarity : I64),
+struct ArityEntry {
+    aname : String,
+    aarity : I64,
 }
 
-type CodegenCtx {
-    ctx (locals : List LocalBinding) (next_temp : I64) (next_label : I64) (arities : List ArityEntry) (ctor_tags : HashMap String I64),
+struct CodegenCtx {
+    locals : List LocalBinding,
+    next_temp : I64,
+    next_label : I64,
+    arities : List ArityEntry,
+    ctor_tags : HashMap String I64,
 }
 
 type CompileResult {
@@ -86,40 +92,35 @@ def empty_arities : List ArityEntry := List.empty
 /// global reference falls back to today's eager-0-arg-call behavior --
 /// correct only for genuinely 0-arity defs).
 #[partial]
-def empty_ctx (arities : List ArityEntry) (ctor_tags : HashMap String I64) : CodegenCtx := CodegenCtx.ctx empty_bindings 0 0 arities ctor_tags
+def empty_ctx (arities : List ArityEntry) (ctor_tags : HashMap String I64) : CodegenCtx :=
+    { locals := empty_bindings, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags }
 
 #[partial]
-def fresh_temp (c : CodegenCtx) : CtxStrPair := match c {
-    CodegenCtx.ctx locals nt nl arities ctor_tags =>
-        let name := String.concat "t" (I64.to_string nt) in
-        CtxStrPair.mk (CodegenCtx.ctx locals (nt + 1) nl arities ctor_tags) name,
-}
+def fresh_temp (c : CodegenCtx) : CtxStrPair :=
+    let name := String.concat "t" (I64.to_string c.next_temp) in
+    let c2 : CodegenCtx := { c with next_temp := c.next_temp + 1 } in
+    CtxStrPair.mk c2 name
 
 #[partial]
-def fresh_label (c : CodegenCtx) (prefix : String) : CtxStrPair := match c {
-    CodegenCtx.ctx locals nt nl arities ctor_tags =>
-        let name := String.concat prefix (String.concat "_" (I64.to_string nl)) in
-        CtxStrPair.mk (CodegenCtx.ctx locals nt (nl + 1) arities ctor_tags) name,
-}
+def fresh_label (c : CodegenCtx) (prefix : String) : CtxStrPair :=
+    let name := String.concat prefix (String.concat "_" (I64.to_string c.next_label)) in
+    let c2 : CodegenCtx := { c with next_label := c.next_label + 1 } in
+    CtxStrPair.mk c2 name
 
 #[partial]
-def ctx_bind_local (c : CodegenCtx) (name : Identifier) (val : LLVMValue) : CodegenCtx := match c {
-    CodegenCtx.ctx locals nt nl arities ctor_tags => CodegenCtx.ctx (List.cons (LocalBinding.mk name val) locals) nt nl arities ctor_tags,
-}
+def ctx_bind_local (c : CodegenCtx) (name : Identifier) (val : LLVMValue) : CodegenCtx :=
+    let binding : LocalBinding := { lname := name, lval := val } in
+    { c with locals := List.cons binding c.locals }
 
 #[partial]
-def ctx_lookup_local (c : CodegenCtx) (name : Identifier) : Option LLVMValue := match c {
-    CodegenCtx.ctx locals nt nl arities ctor_tags => lookup_binding locals name,
-}
+def ctx_lookup_local (c : CodegenCtx) (name : Identifier) : Option LLVMValue := lookup_binding c.locals name
 
 /// Looks up `name`'s constructor tag from `c`'s own dynamically-built
 /// table (`build_constructor_tag_map`) -- the fallback `is_constructor_
 /// var_dyn`/`constructor_tag_dyn` use for anything not in the hardcoded
 /// builtin list.
 #[partial]
-def ctx_lookup_ctor_tag (c : CodegenCtx) (name : String) : Option I64 := match c {
-    CodegenCtx.ctx locals nt nl arities ctor_tags => str_map_lookup name ctor_tags,
-}
+def ctx_lookup_ctor_tag (c : CodegenCtx) (name : String) : Option I64 := str_map_lookup name c.ctor_tags
 
 /// Rebuilds `c` with an EMPTY `locals` list, preserving `next_temp`/
 /// `next_label`/`arities`. Used when entering a freshly-lifted
@@ -137,9 +138,7 @@ def ctx_lookup_ctor_tag (c : CodegenCtx) (name : String) : Option I64 := match c
 /// for). Only the lambda's own param and its explicitly rebuilt
 /// captures (`build_get_env_instrs`) should be visible inside.
 #[partial]
-def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := match c {
-    CodegenCtx.ctx _locals nt nl arities ctor_tags => CodegenCtx.ctx empty_bindings nt nl arities ctor_tags,
-}
+def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := { c with locals := empty_bindings }
 
 /// The other half of `ctx_reset_locals`: after compiling a lifted
 /// function's own body (`compile_db_lam_ir`) with a reset-and-rebuilt
@@ -163,13 +162,7 @@ def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := match c {
 /// instead and silently miscompiles into a bogus 0-arg call
 /// (`call i64 @n()`, `llc: use of undefined value '@n'`).
 #[partial]
-def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx :=
-    match outer {
-        CodegenCtx.ctx outer_locals _ont _onl _oarities _octor_tags =>
-            match inner {
-                CodegenCtx.ctx _ilocals int_ inl iarities ictor_tags => CodegenCtx.ctx outer_locals int_ inl iarities ictor_tags,
-            },
-    }
+def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx := { inner with locals := outer.locals }
 
 /// Looks up a global's own known arity by its already-mangled
 /// `llvm_name` (see `ArityEntry`'s doc comment). `Option.none` for any
@@ -182,9 +175,7 @@ def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx :=
 /// correct for 0-arity defs, and no worse than before Phase 0 for
 /// anything else.
 #[partial]
-def ctx_lookup_arity (c : CodegenCtx) (llvm_name : String) : Option I64 := match c {
-    CodegenCtx.ctx locals nt nl arities ctor_tags => lookup_arity arities llvm_name,
-}
+def ctx_lookup_arity (c : CodegenCtx) (llvm_name : String) : Option I64 := lookup_arity c.arities llvm_name
 
 #[partial]
 def lookup_arity (arities : List ArityEntry) (llvm_name : String) : Option I64 := match arities {
@@ -213,7 +204,8 @@ def build_arity_table (defs : List Def) : List ArityEntry := match defs {
             Def.mk name typ term_ constraints attrs _vis =>
                 let llvm_name := replace_dots_with_underscores (module_path_to_str name) in
                 let arity := List.length (collect_db_params term_) in
-                List.cons (ArityEntry.mk llvm_name arity) (build_arity_table rest),
+                let entry : ArityEntry := { aname := llvm_name, aarity := arity } in
+                List.cons entry (build_arity_table rest),
         },
 }
 
@@ -1417,7 +1409,9 @@ def build_capture_list (c : CodegenCtx) (names : List Identifier) : List LocalBi
     List.empty => List.empty,
     List.cons n rest =>
         match ctx_lookup_local c n {
-            Option.some val => List.cons (LocalBinding.mk n val) (build_capture_list c rest),
+            Option.some val =>
+                let binding : LocalBinding := { lname := n, lval := val } in
+                List.cons binding (build_capture_list c rest),
             Option.none => build_capture_list c rest,
         },
 }
@@ -1425,7 +1419,7 @@ def build_capture_list (c : CodegenCtx) (names : List Identifier) : List LocalBi
 #[partial]
 def captures_to_vals (captures : List LocalBinding) : List LLVMValue := match captures {
     List.empty => List.empty,
-    List.cons cap rest => match cap { LocalBinding.mk _n v => List.cons v (captures_to_vals rest) },
+    List.cons cap rest => List.cons cap.lval (captures_to_vals rest),
 }
 
 type GetEnvResult {
@@ -2289,8 +2283,9 @@ def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : 
             },
     }
 
-type AppSpine {
-    mk (as_head : Term) (as_args : List Term),
+struct AppSpine {
+    as_head : Term,
+    as_args : List Term,
 }
 
 /// Walks a left-nested `Term.app` chain (`f a b c` desugars to
@@ -2308,7 +2303,7 @@ def flatten_app_spine (t : Term) : AppSpine :=
 def flatten_app_spine_go (t : Term) (acc : List Term) : AppSpine :=
     match t {
         Term.app fun_ arg_ => flatten_app_spine_go fun_ (List.cons arg_ acc),
-        _ => AppSpine.mk t acc,
+        _ => { as_head := t, as_args := acc },
     }
 
 /// `sa_last_val` is the running "last-known value" from `compose_seq`'s
@@ -3127,8 +3122,9 @@ def build_constructor_tag_map_go (inds : List Inductive) (next_tag : I64) (acc :
         },
 }
 
-type TagAssignResult {
-    mk (next_tag : I64) (acc : HashMap String I64),
+struct TagAssignResult {
+    next_tag : I64,
+    acc : HashMap String I64,
 }
 
 /// Keyed by the constructor's own BARE name only (e.g. "present"), NOT
@@ -3149,7 +3145,7 @@ type TagAssignResult {
 /// not a regression.
 #[partial]
 def assign_constructor_tags (constructors : List InductConstructor) (next_tag : I64) (acc : HashMap String I64) : TagAssignResult := match constructors {
-    List.empty => TagAssignResult.mk next_tag acc,
+    List.empty => { next_tag := next_tag, acc := acc },
     List.cons c rest =>
         match c {
             InductConstructor.mk name _params _typ =>
