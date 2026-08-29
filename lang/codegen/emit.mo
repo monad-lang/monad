@@ -45,8 +45,8 @@ open LLVMValue {
 }
 
 struct LocalBinding {
-    lname : Identifier,
-    lval : LLVMValue,
+    name : Identifier,
+    val : LLVMValue,
 }
 
 /// One top-level def's own known arity (its param count, i.e. the number
@@ -60,8 +60,8 @@ struct LocalBinding {
 /// via `alloc_closure` instead of miscompiling as a 0-arg call to a
 /// function that isn't one).
 struct ArityEntry {
-    aname : String,
-    aarity : I64,
+    name : String,
+    arity : I64,
 }
 
 struct CodegenCtx {
@@ -73,11 +73,11 @@ struct CodegenCtx {
 }
 
 type CompileResult {
-    ok (cr_ctx : CodegenCtx) (cr_instrs : List LLVMInstruction) (cr_val : LLVMValue) (cr_blocks : List LLVMBasicBlock) (cr_funcs : List LLVMFunction) (cr_globals : List LLVMGlobal),
+    ok (ctx : CodegenCtx) (instrs : List LLVMInstruction) (val : LLVMValue) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal),
 }
 
 type CtxStrPair {
-    mk (cs_ctx : CodegenCtx) (cs_str : String),
+    mk (ctx : CodegenCtx) (str : String),
 }
 
 #[partial]
@@ -109,7 +109,7 @@ def fresh_label (c : CodegenCtx) (prefix : String) : CtxStrPair :=
 
 #[partial]
 def ctx_bind_local (c : CodegenCtx) (name : Identifier) (val : LLVMValue) : CodegenCtx :=
-    let binding : LocalBinding := { lname := name, lval := val } in
+    let binding : LocalBinding := { name := name, val := val } in
     { c with locals := List.cons binding c.locals }
 
 #[partial]
@@ -182,9 +182,9 @@ def lookup_arity (arities : List ArityEntry) (llvm_name : String) : Option I64 :
     List.empty => Option.none,
     List.cons a rest =>
         match a {
-            ArityEntry.mk aname aarity =>
-                if String.beq aname llvm_name
-                then Option.some aarity
+            { name, arity } =>
+                if String.beq name llvm_name
+                then Option.some arity
                 else lookup_arity rest llvm_name,
         },
 }
@@ -204,7 +204,7 @@ def build_arity_table (defs : List Def) : List ArityEntry := match defs {
             Def.mk name typ term_ constraints attrs _vis =>
                 let llvm_name := replace_dots_with_underscores (module_path_to_str name) in
                 let arity := List.length (collect_db_params term_) in
-                let entry : ArityEntry := { aname := llvm_name, aarity := arity } in
+                let entry : ArityEntry := { name := llvm_name, arity := arity } in
                 List.cons entry (build_arity_table rest),
         },
 }
@@ -276,7 +276,7 @@ def lookup_binding (bindings : List LocalBinding) (name : Identifier) : Option L
     List.empty => Option.none,
     List.cons b rest =>
         match b {
-            LocalBinding.mk lname lval =>
+            { name := lname, val := lval } =>
                 if identifier_eq lname name
                 then Option.some lval
                 else lookup_binding rest name,
@@ -658,7 +658,7 @@ def compile_match_ir (c : CodegenCtx) (scrutinee : Term) (cases : List MatchCase
     }
 
 type MatchChainResult {
-    mk (mcr_ctx : CodegenCtx) (mcr_blocks : List LLVMBasicBlock) (mcr_funcs : List LLVMFunction) (mcr_globals : List LLVMGlobal) (mcr_phis : List PhiPair),
+    mk (ctx : CodegenCtx) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (phis : List PhiPair),
 }
 
 /// Recursively builds the check/case block chain for every case in
@@ -708,7 +708,7 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
     }
 
 type FieldBindResult {
-    mk (fbr_ctx : CodegenCtx) (fbr_instrs : List LLVMInstruction),
+    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction),
 }
 
 /// Binds every name in a case's pattern args, in order, to a
@@ -752,12 +752,12 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
                             let raw_instrs := append_instrs field_instrs instrs_r in
                             let already_terminated := ends_with_terminator raw_instrs in
                             let bmr := materialize_branch_val ctx_r body raw_instrs val_r_raw in
-                            let case_block := build_branch_block case_label merge_label bmr.bmr_instrs in
+                            let case_block := build_branch_block case_label merge_label bmr.instrs in
                             let phis :=
                                 if already_terminated
                                 then empty_phis
-                                else cons_phi (PhiPair.mk bmr.bmr_val case_label) empty_phis in
-                            MatchChainResult.mk bmr.bmr_ctx (cons_block case_block blocks_r) funcs_r globals_r phis,
+                                else cons_phi (PhiPair.mk bmr.val case_label) empty_phis in
+                            MatchChainResult.mk bmr.ctx (cons_block case_block blocks_r) funcs_r globals_r phis,
                     },
             },
     }
@@ -833,7 +833,7 @@ def rev_vals (xs : List LLVMValue) (acc : List LLVMValue) : List LLVMValue := ma
 }
 
 type MaterializedVal {
-    mk (mv_ctx : CodegenCtx) (mv_instrs : List LLVMInstruction) (mv_val : LLVMValue),
+    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (val : LLVMValue),
 }
 
 /// Substitutes a genuine heap-allocated Unit value for `LLVMValue.void_val`
@@ -925,9 +925,9 @@ def materialize_native_bool_arg (c : CodegenCtx) (t : Term) (v : LLVMValue) : Ma
     else MaterializedVal.mk c empty_instrs v
 
 struct BranchMaterializeResult {
-    bmr_ctx : CodegenCtx,
-    bmr_instrs : List LLVMInstruction,
-    bmr_val : LLVMValue,
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
+    val : LLVMValue,
 }
 
 /// A `then`/`else` branch (`build_db_if_blocks`) or `match` case body
@@ -960,13 +960,13 @@ struct BranchMaterializeResult {
 #[partial]
 def materialize_branch_val (c : CodegenCtx) (term_ : Term) (raw_instrs : List LLVMInstruction) (raw_val : LLVMValue) : BranchMaterializeResult :=
     if ends_with_terminator raw_instrs
-    then { bmr_ctx := c, bmr_instrs := raw_instrs, bmr_val := raw_val }
+    then { ctx := c, instrs := raw_instrs, val := raw_val }
     else
         match materialize_void c raw_val {
             MaterializedVal.mk c1 void_instrs val_v =>
                 match materialize_native_bool_arg c1 term_ val_v {
                     MaterializedVal.mk c2 bool_instrs val =>
-                        { bmr_ctx := c2, bmr_instrs := append_instrs raw_instrs (append_instrs void_instrs bool_instrs), bmr_val := val },
+                        { ctx := c2, instrs := append_instrs raw_instrs (append_instrs void_instrs bool_instrs), val := val },
                 },
         }
 
@@ -1033,7 +1033,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
     }
 
 type SetFieldResult {
-    mk (sfr_ctx : CodegenCtx) (sfr_instrs : List LLVMInstruction),
+    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction),
 }
 
 /// One @monad_set_field call per already-compiled argument value, in
@@ -1134,7 +1134,7 @@ def is_terminator_instr (instr : LLVMInstruction) : Bool := match instr {
 // majority of real code — this changes nothing about ordinary,
 // non-branching compilation.
 type Triple {
-    tr (t_instrs : List LLVMInstruction) (t_blocks : List LLVMBasicBlock) (t_val : LLVMValue),
+    tr (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (val : LLVMValue),
 }
 
 #[partial]
@@ -1410,7 +1410,7 @@ def build_capture_list (c : CodegenCtx) (names : List Identifier) : List LocalBi
     List.cons n rest =>
         match ctx_lookup_local c n {
             Option.some val =>
-                let binding : LocalBinding := { lname := n, lval := val } in
+                let binding : LocalBinding := { name := n, val := val } in
                 List.cons binding (build_capture_list c rest),
             Option.none => build_capture_list c rest,
         },
@@ -1419,11 +1419,11 @@ def build_capture_list (c : CodegenCtx) (names : List Identifier) : List LocalBi
 #[partial]
 def captures_to_vals (captures : List LocalBinding) : List LLVMValue := match captures {
     List.empty => List.empty,
-    List.cons cap rest => List.cons cap.lval (captures_to_vals rest),
+    List.cons cap rest => List.cons cap.val (captures_to_vals rest),
 }
 
 type GetEnvResult {
-    mk (ger_ctx : CodegenCtx) (ger_instrs : List LLVMInstruction),
+    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction),
 }
 
 /// Binds each captured name, in order, to a fresh
@@ -1454,7 +1454,7 @@ def build_get_env_instrs (c : CodegenCtx) (captures : List LocalBinding) (idx : 
 }
 
 type SetEnvResult {
-    mk (ser_ctx : CodegenCtx) (ser_instrs : List LLVMInstruction),
+    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction),
 }
 
 /// One `@monad_closure_set_env` call per captured value, in order --
@@ -1621,7 +1621,7 @@ def compile_db_if_ir (c : CodegenCtx) (cond : Term) (then_ : Term) (else_ : Term
     }
 
 type BoolCondResult {
-    mk (bcr_ctx : CodegenCtx) (bcr_instrs : List LLVMInstruction) (bcr_blocks : List LLVMBasicBlock) (bcr_val : LLVMValue),
+    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (val : LLVMValue),
 }
 
 /// LLVM's `br i1 <cond>` requires a genuine i1 value. Native comparison
@@ -1745,13 +1745,13 @@ def build_db_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : St
             // of the identical shape for match arms.
             let then_reaches := not (ends_with_terminator then_instrs_raw) in
             let then_bmr := materialize_branch_val ctx_then then_ then_instrs_raw then_val_raw in
-            let then_block := build_branch_block then_label merge_label then_bmr.bmr_instrs in
-            match compile_db_term_ir then_bmr.bmr_ctx else_ {
+            let then_block := build_branch_block then_label merge_label then_bmr.instrs in
+            match compile_db_term_ir then_bmr.ctx else_ {
                 CompileResult.ok ctx_else else_instrs_raw else_val_raw blocks_else funcs_else globals_else =>
                     let else_reaches := not (ends_with_terminator else_instrs_raw) in
                     let else_bmr := materialize_branch_val ctx_else else_ else_instrs_raw else_val_raw in
-                    let else_block := build_branch_block else_label merge_label else_bmr.bmr_instrs in
-                    build_merge_result else_bmr.bmr_ctx merge_label then_reaches then_bmr.bmr_val then_label else_reaches else_bmr.bmr_val else_label entry_instrs entry_blocks entry_funcs entry_globals blocks_then blocks_else funcs_then funcs_else globals_then globals_else then_block else_block,
+                    let else_block := build_branch_block else_label merge_label else_bmr.instrs in
+                    build_merge_result else_bmr.ctx merge_label then_reaches then_bmr.val then_label else_reaches else_bmr.val else_label entry_instrs entry_blocks entry_funcs entry_globals blocks_then blocks_else funcs_then funcs_else globals_then globals_else then_block else_block,
             },
     }
 
@@ -2055,7 +2055,7 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                                     // `instrs2_raw` already ends in a
                                     // terminator then).
                                     match materialize_branch_val ctx2 body instrs2_raw val2_raw {
-                                        BranchMaterializeResult.mk ctx2m instrs2 val2 =>
+                                        { ctx := ctx2m, instrs := instrs2, val := val2 } =>
                                             match compose_seq (Triple.tr instrs1m blocks1 val1) (Triple.tr instrs2 blocks2 val2) {
                                                 Triple.tr combined all_blocks last_val =>
                                                     Option.some (CompileResult.ok ctx2m combined last_val all_blocks (append_funcs funcs1 funcs2) (append_globals globals1 globals2)),
@@ -2087,7 +2087,7 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
 #[partial]
 def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
     match flatten_app_spine (Term.app fun arg) {
-        AppSpine.mk head all_args =>
+        { head, args } =>
             match head {
                 Term.var idx dbg =>
                     match dbg {
@@ -2096,7 +2096,7 @@ def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : 
                             if is_constructor_var c name
                             then
                                 let base_name := extract_base_name name in
-                                let con := Con.mk (Identifier.id base_name) (ModulePath.mp List.empty) (List.length all_args) (wrap_some_list all_args) in
+                                let con := Con.mk (Identifier.id base_name) (ModulePath.mp List.empty) (List.length args) (wrap_some_list args) in
                                 Option.some (compile_con_ir c con)
                             else Option.none,
                         DebugName.unnamed => Option.none,
@@ -2284,8 +2284,8 @@ def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : 
     }
 
 struct AppSpine {
-    as_head : Term,
-    as_args : List Term,
+    head : Term,
+    args : List Term,
 }
 
 /// Walks a left-nested `Term.app` chain (`f a b c` desugars to
@@ -2303,16 +2303,16 @@ def flatten_app_spine (t : Term) : AppSpine :=
 def flatten_app_spine_go (t : Term) (acc : List Term) : AppSpine :=
     match t {
         Term.app fun_ arg_ => flatten_app_spine_go fun_ (List.cons arg_ acc),
-        _ => { as_head := t, as_args := acc },
+        _ => { head := t, args := acc },
     }
 
-/// `sa_last_val` is the running "last-known value" from `compose_seq`'s
+/// `last_val` is the running "last-known value" from `compose_seq`'s
 /// own accumulation (see `compile_spine_args_go`) -- exposed so THIS
 /// spine's own caller (`compile_general_db_call`) can keep correctly
 /// splicing after it too, instead of losing track once the args are
 /// fully combined.
 type SpineArgs {
-    mk (sa_ctx : CodegenCtx) (sa_instrs : List LLVMInstruction) (sa_blocks : List LLVMBasicBlock) (sa_funcs : List LLVMFunction) (sa_globals : List LLVMGlobal) (sa_vals : List LLVMValue) (sa_last_val : LLVMValue),
+    mk (ctx : CodegenCtx) (instrs : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (vals : List LLVMValue) (last_val : LLVMValue),
 }
 
 #[partial]
@@ -2421,7 +2421,7 @@ def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
 #[partial]
 def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : CompileResult :=
     match flatten_app_spine (Term.app fun arg) {
-        AppSpine.mk head args =>
+        { head, args } =>
             match compile_call_head c head {
                 CompileResult.ok ctx_h instrs_h val_h blocks_h funcs_h globals_h =>
                     match compile_spine_args ctx_h args {
@@ -2964,12 +2964,12 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                         let entry_instrs :=
                             if already_terminated
                             then instrs_r
-                            else append_instrs bmr.bmr_instrs (cons_instr (LLVMInstruction.ret bmr.bmr_val) empty_instrs) in
+                            else append_instrs bmr.instrs (cons_instr (LLVMInstruction.ret bmr.val) empty_instrs) in
                         let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                         let all_blocks_raw := append_blocks (cons_block entry_block empty_blocks) blocks_r in
                         let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks all_blocks_raw 0 else all_blocks_raw in
                         let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
-                        DefResult.dr bmr.bmr_ctx (cons_func main_func funcs_r) globals_r,
+                        DefResult.dr bmr.ctx (cons_func main_func funcs_r) globals_r,
                 },
         }
 
