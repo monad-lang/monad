@@ -2759,7 +2759,24 @@ def resolve_class_method_call_d4 (classes : List Class) (instances : List Instan
 #[partial]
 def resolve_class_method_call_d4_from_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
     match infer_carrier_from_args_go env ctor_owners def_types resolved_args {
-        Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
+        // `infer_carrier_from_args_go` takes the FIRST arg that reveals
+        // ANY carrier -- sound when an arg's own type IS the class's
+        // carrier (`Show.show x` -> `x`'s type), but wrong for a method
+        // like `FromListLiteral.cons (a : A) (L A) : L A`, whose FIRST
+        // arg is the ELEMENT (type `A`), not the container (`L`) the
+        // class is actually parameterized over: `[1, 2, 3]`'s desugared
+        // `FromListLiteral.cons 1 (...)` gets carrier `I64` (from the
+        // literal `1`) instead of `List`, which then finds no matching
+        // `instance FromListLiteral I64` and gives up -- even though the
+        // class's OWN declared default (`List`) would have worked, and
+        // `resolve_class_method_call_d4_default_carrier` below exists
+        // exactly for this. Confirmed via `bootstrap compile lang/main.mo
+        // monad`: `lang/parser/core.mo`'s `op_chars : List String :=
+        // [...]` (a literal-first list, the simplest possible shape) hit
+        // this. So: if the ARGS-inferred carrier doesn't actually match
+        // any instance, retry with the class's own default carrier
+        // before giving up, instead of giving up immediately.
+        Option.some carrier => resolve_class_method_call_try_carrier_then_default classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
         Option.none =>
             if modpath_eq cls_name monad_class_name then
                 match def_carrier {
@@ -2767,6 +2784,23 @@ def resolve_class_method_call_d4_from_args (classes : List Class) (instances : L
                     Option.none => resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args,
                 }
             else resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args,
+    }
+
+/// One-shot fallback chain for the `Option.some carrier` branch above --
+/// try the args-inferred `carrier` directly (NOT via
+/// `resolve_class_method_call_with_carrier`, whose own `Option.none`
+/// fallback is `rebuild_call`/give-up, which would make this a dead-end
+/// rather than a real fallback); if no instance matches it, retry via
+/// the class's own declared default carrier (`resolve_class_method_call_
+/// d4_default_carrier`, itself calling the UNCHANGED
+/// `resolve_class_method_call_with_carrier` -- so this never mutually
+/// recurses back into itself, terminating in at most two instance
+/// lookups).
+#[partial]
+def resolve_class_method_call_try_carrier_then_default (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (carrier : Term) : Term :=
+    match find_matching_instance instances cls_name carrier {
+        Option.some ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins,
+        Option.none => resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args,
     }
 
 /// Last-resort fallback once neither the call's own args nor (for
