@@ -49,26 +49,24 @@ struct LocalBinding {
     val : LLVMValue,
 }
 
-/// One top-level def's own known arity (its param count, i.e. the number
-/// of leading `Term.lam`s in its body) keyed by the SAME `llvm_name` a
-/// bare `Term.var` reference to it would compute (`replace_dots_with_
-/// underscores` of its module path) -- built once per module compile
-/// (`build_arity_table`) and threaded through `CodegenCtx` so `Term.var`'s
-/// value-position case (Phase 0 of the dictionary-passing plan, see
-/// plans/bootstrapping/self-hosted-compiler.md) can tell an arity-0 def
-/// (still an eager 0-arg call, unchanged) from an arity>0 def (now boxed
-/// via `alloc_closure` instead of miscompiling as a 0-arg call to a
-/// function that isn't one).
-struct ArityEntry {
-    name : String,
-    arity : I64,
-}
-
 struct CodegenCtx {
     locals : List LocalBinding,
     next_temp : I64,
     next_label : I64,
-    arities : List ArityEntry,
+    /// Each top-level def's own known arity (its param count, i.e. the
+    /// number of leading `Term.lam`s in its body) keyed by the SAME
+    /// `llvm_name` a bare `Term.var` reference to it would compute
+    /// (`replace_dots_with_underscores` of its module path) -- built once
+    /// per module compile (`build_arity_table`) so `Term.var`'s
+    /// value-position case (Phase 0 of the dictionary-passing plan, see
+    /// plans/bootstrapping/self-hosted-compiler.md) can tell an arity-0
+    /// def (still an eager 0-arg call, unchanged) from an arity>0 def (now
+    /// boxed via `alloc_closure` instead of miscompiling as a 0-arg call
+    /// to a function that isn't one). A `HashMap` (not a `List`), mirroring
+    /// `ctor_tags` -- looked up once per `Term.var` reference across a
+    /// whole compile, the same shape that already made `ctor_tags`/
+    /// `filter_reachable`'s HashMap conversions decisive wins.
+    arities : HashMap String I64,
     ctor_tags : HashMap String I64,
 }
 
@@ -85,15 +83,15 @@ struct CtxStrPair {
 def empty_bindings : List LocalBinding := List.empty
 
 #[partial]
-def empty_arities : List ArityEntry := List.empty
+def empty_arities : HashMap String I64 := str_map_empty
 
-/// `arities` -- see `ArityEntry`'s own doc comment. Callers with a real
+/// `arities` -- see `CodegenCtx`'s own doc comment. Callers with a real
 /// `List Def` in scope should build one via `build_arity_table` instead
 /// of passing `empty_arities` (an empty table just means every bare
 /// global reference falls back to today's eager-0-arg-call behavior --
 /// correct only for genuinely 0-arity defs).
 #[partial]
-def empty_ctx (arities : List ArityEntry) (ctor_tags : HashMap String I64) : CodegenCtx :=
+def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) : CodegenCtx :=
     { locals := empty_bindings, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags }
 
 #[partial]
@@ -166,29 +164,21 @@ def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := { c with locals := empty_b
 def ctx_restore_locals (outer : CodegenCtx) (inner : CodegenCtx) : CodegenCtx := { inner with locals := outer.locals }
 
 /// Looks up a global's own known arity by its already-mangled
-/// `llvm_name` (see `ArityEntry`'s doc comment). `Option.none` for any
-/// name not in the table -- a name genuinely absent from the compiled
-/// module's own def list (shouldn't happen for a real reachable
+/// `llvm_name` (see `CodegenCtx.arities`'s doc comment). `Option.none`
+/// for any name not in the table -- a name genuinely absent from the
+/// compiled module's own def list (shouldn't happen for a real reachable
 /// reference) as well as for a module compiled via `empty_ctx
 /// empty_arities` (no table built) both fall back safely to the
 /// pre-Phase-0 eager-0-arg-call behavior at the one call site that reads
 /// this (`compile_db_term_ir`'s `Term.var` value-position case) --
 /// correct for 0-arity defs, and no worse than before Phase 0 for
-/// anything else.
+/// anything else. A direct `str_map_lookup` -- this table is built ONCE
+/// per module compile and looked up once per `Term.var` reference across
+/// the whole compiled program, the same shape `ctor_tags`/
+/// `filter_reachable` already measured as a decisive HashMap win over a
+/// `List`+linear-scan at this corpus's scale.
 #[partial]
-def ctx_lookup_arity (c : CodegenCtx) (llvm_name : String) : Option I64 := lookup_arity c.arities llvm_name
-
-#[partial]
-def lookup_arity (arities : List ArityEntry) (llvm_name : String) : Option I64 := match arities {
-    List.empty => Option.none,
-    List.cons a rest =>
-        match a {
-            { name, arity } =>
-                if String.beq name llvm_name
-                then Option.some arity
-                else lookup_arity rest llvm_name,
-        },
-}
+def ctx_lookup_arity (c : CodegenCtx) (llvm_name : String) : Option I64 := str_map_lookup llvm_name c.arities
 
 /// Builds the arity table `empty_ctx` needs from a module's own `List
 /// Def`, keyed by the exact same `llvm_name` `compile_db_def_ir` gives
@@ -198,15 +188,17 @@ def lookup_arity (arities : List ArityEntry) (llvm_name : String) : Option I64 :
 /// compiling any of them, so this runs once per module compile, not per
 /// reference.
 #[partial]
-def build_arity_table (defs : List Def) : List ArityEntry := match defs {
-    List.empty => List.empty,
+def build_arity_table (defs : List Def) : HashMap String I64 := build_arity_table_go defs str_map_empty
+
+#[partial]
+def build_arity_table_go (defs : List Def) (acc : HashMap String I64) : HashMap String I64 := match defs {
+    List.empty => acc,
     List.cons d rest =>
         match d {
             Def.mk name typ term_ constraints attrs _vis =>
                 let llvm_name := replace_dots_with_underscores (module_path_to_str name) in
                 let arity := List.length (collect_db_params term_) in
-                let entry : ArityEntry := { name := llvm_name, arity := arity } in
-                List.cons entry (build_arity_table rest),
+                build_arity_table_go rest (str_map_insert llvm_name arity acc),
         },
 }
 
@@ -291,13 +283,6 @@ def identifier_eq (a : Identifier) (b : Identifier) : Bool := match a {
     },
 }
 
-/// List of known constructor names that should be compiled as alloc_constructor
-/// instead of variable references. These are constructors with 0 or more arguments.
-#[partial]
-def constructor_names : List String :=
-    ["unit", "true", "false", "none", "some", "empty", "cons", "io", "IO.io",
-     "trivial", "refl", "ok", "err", "zero", "succ", "nil", "pair"]
-
 /// A genuine, previously-undiscovered bug lived here (and in
 /// `string_find_last_loop` below) until this session: `String.slice`'s
 /// own signature (`init/string.mo`) is `(s, start, LEN)` -- a LENGTH,
@@ -323,73 +308,78 @@ def extract_base_name (name : String) : String :=
     then String.slice name (last_dot + 1) (String.length name - last_dot - 1)
     else name
 
+/// The ~16 builtin constructors' tags (0-15), keyed by BOTH their
+/// qualified ("IO.io") and base ("io") name forms -- built once, looked
+/// up via `str_map_lookup` instead of a hand-rolled `if/else-if` chain.
+/// Tags match the runtime's own assignment; left completely unchanged
+/// from the original hardcoded chain this replaces -- zero risk to
+/// already-working code, purely a readability/dispatch-mechanism change.
+#[partial]
+def builtin_ctor_tags : HashMap String I64 :=
+    let m := str_map_empty in
+    let m := str_map_insert "IO.io" 7 m in
+    let m := str_map_insert "Unit.unit" 0 m in
+    let m := str_map_insert "Bool.true" 1 m in
+    let m := str_map_insert "Bool.false" 2 m in
+    let m := str_map_insert "Option.none" 3 m in
+    let m := str_map_insert "Option.some" 4 m in
+    let m := str_map_insert "List.empty" 5 m in
+    let m := str_map_insert "List.cons" 6 m in
+    let m := str_map_insert "unit" 0 m in
+    let m := str_map_insert "true" 1 m in
+    let m := str_map_insert "false" 2 m in
+    let m := str_map_insert "none" 3 m in
+    let m := str_map_insert "some" 4 m in
+    let m := str_map_insert "empty" 5 m in
+    let m := str_map_insert "cons" 6 m in
+    let m := str_map_insert "io" 7 m in
+    let m := str_map_insert "trivial" 8 m in
+    let m := str_map_insert "refl" 9 m in
+    let m := str_map_insert "ok" 10 m in
+    let m := str_map_insert "err" 11 m in
+    let m := str_map_insert "zero" 12 m in
+    let m := str_map_insert "succ" 13 m in
+    let m := str_map_insert "nil" 14 m in
+    let m := str_map_insert "pair" 15 m in
+    m
+
 /// Falls back to `c`'s own dynamically-built `ctor_tags` table
-/// (`build_constructor_tag_map`) for anything not in the hardcoded
-/// builtin list below -- every user-defined inductive's constructor,
-/// and any BUILTIN constructor referenced by its full dotted name in a
-/// shape this hardcoded list doesn't happen to enumerate. The hardcoded
-/// list/tags (0-15) are left completely unchanged -- zero risk to
-/// already-working code -- this is purely an additive fallback.
+/// (`build_constructor_tag_map`) for anything not in `builtin_ctor_tags`
+/// -- every user-defined inductive's constructor, and any BUILTIN
+/// constructor referenced by its full dotted name in a shape
+/// `builtin_ctor_tags` doesn't happen to enumerate.
 #[partial]
 def constructor_tag (c : CodegenCtx) (name : String) : I64 :=
-    // Extract base name for qualified constructors like IO.io
     let base_name := extract_base_name name in
-    // Simple mapping of constructor names to tags
-    // This should match the tag assignment in the runtime
-    // Check qualified names first
-    if String.beq name "IO.io" then 7
-    else if String.beq name "Unit.unit" then 0
-    else if String.beq name "Bool.true" then 1
-    else if String.beq name "Bool.false" then 2
-    else if String.beq name "Option.none" then 3
-    else if String.beq name "Option.some" then 4
-    else if String.beq name "List.empty" then 5
-    else if String.beq name "List.cons" then 6
-    // Check base names
-    else if String.beq base_name "unit" then 0
-    else if String.beq base_name "true" then 1
-    else if String.beq base_name "false" then 2
-    else if String.beq base_name "none" then 3
-    else if String.beq base_name "some" then 4
-    else if String.beq base_name "empty" then 5
-    else if String.beq base_name "cons" then 6
-    else if String.beq base_name "io" then 7
-    else if String.beq base_name "trivial" then 8
-    else if String.beq base_name "refl" then 9
-    else if String.beq base_name "ok" then 10
-    else if String.beq base_name "err" then 11
-    else if String.beq base_name "zero" then 12
-    else if String.beq base_name "succ" then 13
-    else if String.beq base_name "nil" then 14
-    else if String.beq base_name "pair" then 15
-    else match ctx_lookup_ctor_tag c base_name {
+    match str_map_lookup name builtin_ctor_tags {
         Option.some tag => tag,
-        Option.none => 0,
+        Option.none =>
+            match str_map_lookup base_name builtin_ctor_tags {
+                Option.some tag => tag,
+                Option.none =>
+                    match ctx_lookup_ctor_tag c base_name {
+                        Option.some tag => tag,
+                        Option.none => 0,
+                    },
+            },
     }
 
-/// Check if a variable name is a known constructor
+/// Check if a variable name is a known constructor.
 /// Handles both simple names ("unit", "true") and qualified names ("Unit.unit", "IO.io"),
 /// falling back to `c`'s own dynamically-built `ctor_tags` table
-/// (`build_constructor_tag_map`) for anything not in the hardcoded list
+/// (`build_constructor_tag_map`) for anything not in `builtin_ctor_tags`
 /// -- see `constructor_tag`'s own doc comment.
 #[partial]
 def is_constructor_var (c : CodegenCtx) (name : String) : Bool :=
-    // Extract the last component after the final dot (for qualified names like "Unit.unit")
     let base_name := extract_base_name name in
-    if check_constructor base_name constructor_names
-    then true
-    else match ctx_lookup_ctor_tag c base_name {
+    match str_map_lookup base_name builtin_ctor_tags {
         Option.some _ => true,
-        Option.none => false,
+        Option.none =>
+            match ctx_lookup_ctor_tag c base_name {
+                Option.some _ => true,
+                Option.none => false,
+            },
     }
-
-#[partial]
-def check_constructor (name : String) (names : List String) : Bool := match names {
-    List.empty => false,
-    List.cons hd rest =>
-        if String.beq name hd then true
-        else check_constructor name rest,
-}
 
 #[partial]
 def show_identifier (id : Identifier) : String := match id {
@@ -439,40 +429,45 @@ def show_operator (op : Operator) : String := match op {
 def cons_val (v : LLVMValue) (vs : List LLVMValue) : List LLVMValue := List.cons v vs
 
 #[partial]
-def lookup_native (name : String) : Option NativeOp :=
-    if String.beq name "I64_add" then Option.some NativeOp.op_add
-    else if String.beq name "I64_sub" then Option.some NativeOp.op_sub
-    else if String.beq name "I64_mul" then Option.some NativeOp.op_mul
-    else if String.beq name "I64_div" then Option.some NativeOp.op_sdiv
-    // `"I64_eq"` (no such identifier exists -- `I64.eq` doesn't typecheck,
-    // "unknown variable") was dead code: the real, only I64 equality
-    // function throughout the whole corpus is `I64.beq` (`init/number.mo`,
-    // the `BEq I64` instance's own method), which mangles to `I64_beq`,
-    // never matching this table at all. Confirmed as a real, previously
-    // undiscovered gap via a direct repro: `I64.beq` compiled to the
-    // generic "return Unit" stub (`native_runtime_fn_name` has no entry
-    // for it either) both as a bare call AND as an `if`'s own condition
-    // (`is_native_bool_op_name`/`ensure_i1_cond` never recognized it as
-    // already-i1 either, same root cause) -- every I64 equality check in
-    // real code silently miscompiled. `I64.ne`/`"I64_ne"` has the same
-    // "no such identifier" shape (`Bool.not (I64.beq a b)` is how real
-    // code expresses it, per this session's own `materialize_native_
-    // bool_arg` fix) -- left as dead code, not touched here (nothing
-    // reaches it, out of scope for this fix).
-    else if String.beq name "I64_beq" then Option.some NativeOp.op_eq
-    else if String.beq name "I64_lt" then Option.some NativeOp.op_lt
-    else if String.beq name "I64_gt" then Option.some NativeOp.op_gt
-    else if String.beq name "I64_ne" then Option.some NativeOp.op_ne
-    else if String.beq name "monad_print_str" then Option.some NativeOp.op_print_str
-    else if String.beq name "println" then Option.some NativeOp.op_print_str
-    else if String.beq name "monad_read_file" then Option.some NativeOp.op_read_file
-    else if String.beq name "read_file" then Option.some NativeOp.op_read_file
-    else if String.beq name "monad_write_file" then Option.some NativeOp.op_write_file
-    else if String.beq name "write_file" then Option.some NativeOp.op_write_file
-    else if String.beq name "monad_file_exists" then Option.some NativeOp.op_file_exists
-    else if String.beq name "file_exists" then Option.some NativeOp.op_file_exists
-    else if String.beq name "I64_to_string" then Option.some NativeOp.op_i64_to_string
-    else Option.none
+def lookup_native (name : String) : Option NativeOp := str_map_lookup name native_op_table
+
+/// `"I64_eq"` (no such identifier exists -- `I64.eq` doesn't typecheck,
+/// "unknown variable") is deliberately NOT one of this table's keys: the
+/// real, only I64 equality function throughout the whole corpus is
+/// `I64.beq` (`init/number.mo`, the `BEq I64` instance's own method),
+/// which mangles to `I64_beq`, never matching a hypothetical `"I64_eq"`
+/// entry at all. Confirmed as a real, previously undiscovered gap via a
+/// direct repro: `I64.beq` compiled to the generic "return Unit" stub
+/// (`native_runtime_fn_name` has no entry for it either) both as a bare
+/// call AND as an `if`'s own condition (`is_native_bool_op_name`/
+/// `ensure_i1_cond` never recognized it as already-i1 either, same root
+/// cause) -- every I64 equality check in real code silently miscompiled.
+/// `I64.ne`/`"I64_ne"` has the same "no such identifier" shape
+/// (`Bool.not (I64.beq a b)` is how real code expresses it, per this
+/// session's own `materialize_native_bool_arg` fix) -- its `"I64_ne"` key
+/// below is left as dead code, not touched here (nothing reaches it, out
+/// of scope for this fix).
+#[partial]
+def native_op_table : HashMap String NativeOp :=
+    let m := str_map_empty in
+    let m := str_map_insert "I64_add" NativeOp.op_add m in
+    let m := str_map_insert "I64_sub" NativeOp.op_sub m in
+    let m := str_map_insert "I64_mul" NativeOp.op_mul m in
+    let m := str_map_insert "I64_div" NativeOp.op_sdiv m in
+    let m := str_map_insert "I64_beq" NativeOp.op_eq m in
+    let m := str_map_insert "I64_lt" NativeOp.op_lt m in
+    let m := str_map_insert "I64_gt" NativeOp.op_gt m in
+    let m := str_map_insert "I64_ne" NativeOp.op_ne m in
+    let m := str_map_insert "monad_print_str" NativeOp.op_print_str m in
+    let m := str_map_insert "println" NativeOp.op_print_str m in
+    let m := str_map_insert "monad_read_file" NativeOp.op_read_file m in
+    let m := str_map_insert "read_file" NativeOp.op_read_file m in
+    let m := str_map_insert "monad_write_file" NativeOp.op_write_file m in
+    let m := str_map_insert "write_file" NativeOp.op_write_file m in
+    let m := str_map_insert "monad_file_exists" NativeOp.op_file_exists m in
+    let m := str_map_insert "file_exists" NativeOp.op_file_exists m in
+    let m := str_map_insert "I64_to_string" NativeOp.op_i64_to_string m in
+    m
 
 /// `lookup_native` needs its match arms in two different forms depending
 /// on caller: dotted arithmetic ops (`I64.add`) are only registered
