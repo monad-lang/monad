@@ -1953,6 +1953,28 @@ def collect_def_types (decl_list : List Decl) : List DefTypeEntry :=
             },
     }
 
+/// `ename`'s own `last_segment` used to be the ONLY comparison against
+/// `name` -- correct for an UNQUALIFIED call site (`open IO {println};
+/// println "x"`, `name = "println"`, matching `IO.println`'s own
+/// registered entry via its bare last segment,
+/// `test_lookup_def_type_finds_dotted_own_name_def_by_bare_query`'s own
+/// coverage) but WRONG for a QUALIFIED one (`String.length a`, `name =
+/// "String.length"` -- the call site's own full dotted text, per
+/// `show_identifier`'s trivial pass-through -- never matches `ename`'s
+/// bare last segment `"length"`), so `infer_carrier_type`'s `Term.app`
+/// case (looking up a called def's own declared return type to infer a
+/// class-method carrier from it, e.g. `String.length a - String.length
+/// b`'s own `Sub.sub`/`HAdd.add`) silently never fired for any QUALIFIED
+/// dotted call -- confirmed via `bootstrap compile lang/main.mo monad`:
+/// `lang/parser.mo`'s `string_find_last` hit exactly this
+/// (`String.length haystack - String.length needle`). Try the FULL
+/// dotted text first (`show_module_path`/`show_identifier`, both
+/// "."-joined, matching surface syntax -- covers the qualified case),
+/// falling back to the existing bare-last-segment match (covers the
+/// unqualified case) -- same "try the fully-qualified form first, then
+/// the bare form" idiom `lookup_native_any`'s own doc comment already
+/// establishes for the identical dotted-vs-bare ambiguity elsewhere in
+/// this file.
 #[partial]
 def lookup_def_type (entries : List DefTypeEntry) (name : Identifier) : Option Term :=
     match entries {
@@ -1960,7 +1982,7 @@ def lookup_def_type (entries : List DefTypeEntry) (name : Identifier) : Option T
         List.cons e rest =>
             match e {
                 DefTypeEntry.mk ename etyp =>
-                    if Similar.similar (last_segment ename) name
+                    if String.beq (show_module_path ename) (show_identifier name) || Similar.similar (last_segment ename) name
                     then Option.some etyp
                     else lookup_def_type rest name,
             },
