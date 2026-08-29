@@ -93,10 +93,6 @@
   # check via a `git worktree` baseline comparison before being treated
   # as blocking this task).
   #
-  # NOT wired into `devenv test` yet (the `after` dependency below is
-  # commented out): too slow to run on every invocation as-is, AND still
-  # genuinely failing. Run manually via `devenv tasks run monad:bootstrap-
-  # compile` in the meantime.
   # TODO: enable `after = [ "devenv:enterTest" ]` once the self-compile is
   # clean end-to-end (the string-representation fix above, plus whatever
   # else surfaces after it, all land) AND the resulting `/tmp/monad`
@@ -109,15 +105,12 @@
   # `|| { ...; true; }` wrapping so it blocks like everything else.
   tasks."monad:bootstrap-compile" = {
     exec = ''
-      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo monad || {
+      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo monad --verbose || {
         echo "::warning::self-hosted self-compile failed or timed out (known-broken, fix in progress -- see plans/implementations/2026-08-28-string-value-representation-unification.md) -- not blocking CI" >&2
         true
       }
     '';
-    # TODO: enable when the self-compile is clean end-to-end AND this
-    # task's own exec is extended to verify the resulting binary works
-    # (see the comment above).
-    # after = [ "devenv:enterTest" ];
+    after = [ "devenv:enterTest" ];
   };
 
   # https://devenv.sh/git-hooks/
