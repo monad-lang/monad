@@ -392,9 +392,12 @@ impl GlobalScopeData {
       }
     }
 
-    // Include default implicit modules: prelude, init
-    let default_names: Vec<ModulePath> =
-      vec![builtins.prelude_path.clone(), ModulePath::top("init")];
+    // Include default implicit modules: prelude, init, std
+    let default_names: Vec<ModulePath> = vec![
+      builtins.prelude_path.clone(),
+      ModulePath::top("init"),
+      ModulePath::top("std"),
+    ];
     for default_name in &default_names {
       if let Some(mo) = loaded.get_module(default_name) {
         visible_modules.insert(mo.path(), mo);
@@ -725,7 +728,7 @@ impl<'a> GlobalScope<'a> {
         .collect();
       implicit.insert(&builtins.prelude_path, prelude);
     }
-    let default_implicit = vec![ModulePath::top("init")];
+    let default_implicit = vec![ModulePath::top("init"), ModulePath::top("std")];
     for name in default_implicit {
       if let Some(mo) = loaded.get_module(&name) {
         implicit.insert(mo.path(), mo);
@@ -820,9 +823,12 @@ impl<'a> GlobalScope<'a> {
       }
     }
 
-    // Include default implicit modules: prelude, init
-    let default_names: Vec<ModulePath> =
-      vec![builtins.prelude_path.clone(), ModulePath::top("init")];
+    // Include default implicit modules: prelude, init, std
+    let default_names: Vec<ModulePath> = vec![
+      builtins.prelude_path.clone(),
+      ModulePath::top("init"),
+      ModulePath::top("std"),
+    ];
     for default_name in default_names {
       if let Some(mo) = loaded.get_module(&default_name) {
         let mo_path = mo.path();
@@ -2092,66 +2098,107 @@ fn stdlib_dir() -> std::path::PathBuf {
     .join("init")
 }
 
-/// `(module path, source text)` pairs for the `init` package, in
-/// dependency order (`prelude`/`id`/`io`/`number` have no deps; `math`
-/// depends on `number`; `string` depends on `math`; `init` depends on
-/// `io`/`number`/`math`/`string`; `process` is last) — the same order
-/// `init_module` below loads them in, factored out so a caller that needs
-/// the raw `Decl`s (not just an already-checked `Module`) can get them
-/// without hand-duplicating this path/order list. Respects `embed-stdlib`
-/// exactly like `init_module` does: compiled-in text when that feature is
-/// on, read from disk at runtime (via `stdlib_dir()`) otherwise.
-pub fn init_package_sources() -> Result<Vec<(ModulePath, String)>, LoadingError> {
-  let names = [
-    "'prelude", "id", "io", "number", "math", "string", "init", "process",
-  ];
+/// Sibling of `stdlib_dir()` for the `std/` package (see AGENTS.md's
+/// "init vs std" section) — derived as `stdlib_dir()`'s own sibling
+/// directory rather than an independent `MONAD_STDLIB`-style override,
+/// since both packages are expected to live side by side in any real
+/// deployment layout (default or `MONAD_STDLIB`-relocated alike).
+#[cfg(not(feature = "embed-stdlib"))]
+fn std_dir() -> std::path::PathBuf {
+  stdlib_dir()
+    .parent()
+    .map(|p| p.join("std"))
+    .unwrap_or_else(|| std::path::PathBuf::from("std"))
+}
 
+/// `(module path, source text)` pairs for the always-loaded `init`+`std`
+/// packages, in dependency order (`prelude`/`id`/`io`/`number` have no
+/// deps; `math` depends on `number`; `string` depends on `math`; `list`
+/// has no deps; `init` — `init/lib.mo`, the ambient re-export hub —
+/// depends on `io`/`number`/`math`/`string`/`list`; `path` has no deps;
+/// `std.io` depends on `path`; `process` has no deps; `std` —
+/// `std/lib.mo`, the ambient re-export hub — depends on `path`/
+/// `std.io`/`process`) — the same order `init_module` below loads them
+/// in, factored out so a caller that needs the raw `Decl`s (not just an
+/// already-checked `Module`) can get them without hand-duplicating this
+/// path/order list. Respects `embed-stdlib` exactly like `init_module`
+/// does: compiled-in text when that feature is on, read from disk at
+/// runtime (via `stdlib_dir()`/`std_dir()`) otherwise. `io`/`path` are
+/// deliberately full two-segment `std.io`/`std.path` paths, not bare
+/// top-level names — `std/*.mo` files are addressed externally via
+/// `std.<name>` (matching `resolve_module_file`'s own search order,
+/// which tries a bare name against `init/` before `std/`), unlike
+/// `init/*.mo` files, which stay addressed by their bare name. See
+/// AGENTS.md's "init vs std" section.
+pub fn init_package_sources() -> Result<Vec<(ModulePath, String)>, LoadingError> {
   #[cfg(feature = "embed-stdlib")]
-  let texts: [&str; 8] = [
-    include_str!("../../../init/prelude.mo"),
-    include_str!("../../../init/id.mo"),
-    include_str!("../../../init/io.mo"),
-    include_str!("../../../init/number.mo"),
-    include_str!("../../../init/math.mo"),
-    include_str!("../../../init/string.mo"),
-    include_str!("../../../init/init.mo"),
-    include_str!("../../../init/process.mo"),
-  ];
-  #[cfg(feature = "embed-stdlib")]
-  let sources = names
-    .into_iter()
-    .zip(texts)
-    .map(|(name, text)| (ModulePath::top(name), text.to_string()))
-    .collect();
+  {
+    let entries: [(ModulePath, &str); 12] = [
+      (mpt("'prelude"), include_str!("../../../init/prelude.mo")),
+      (mpt("id"), include_str!("../../../init/id.mo")),
+      (mpt("io"), include_str!("../../../init/io.mo")),
+      (mpt("number"), include_str!("../../../init/number.mo")),
+      (mpt("math"), include_str!("../../../init/math.mo")),
+      (mpt("string"), include_str!("../../../init/string.mo")),
+      (mpt("list"), include_str!("../../../init/list.mo")),
+      (mpt("init"), include_str!("../../../init/lib.mo")),
+      (
+        ModulePath::new(vec![id("std"), id("path")]),
+        include_str!("../../../std/path.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("std"), id("io")]),
+        include_str!("../../../std/io.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("std"), id("process")]),
+        include_str!("../../../std/process.mo"),
+      ),
+      (mpt("std"), include_str!("../../../std/lib.mo")),
+    ];
+    return Ok(
+      entries
+        .into_iter()
+        .map(|(path, text)| (path, text.to_string()))
+        .collect(),
+    );
+  }
 
   #[cfg(not(feature = "embed-stdlib"))]
-  let sources = {
-    let dir = stdlib_dir();
-    let files = [
-      "prelude.mo",
-      "id.mo",
-      "io.mo",
-      "number.mo",
-      "math.mo",
-      "string.mo",
-      "init.mo",
-      "process.mo",
+  {
+    let init_dir = stdlib_dir();
+    let std_dir = std_dir();
+    let entries: [(ModulePath, std::path::PathBuf); 12] = [
+      (mpt("'prelude"), init_dir.join("prelude.mo")),
+      (mpt("id"), init_dir.join("id.mo")),
+      (mpt("io"), init_dir.join("io.mo")),
+      (mpt("number"), init_dir.join("number.mo")),
+      (mpt("math"), init_dir.join("math.mo")),
+      (mpt("string"), init_dir.join("string.mo")),
+      (mpt("list"), init_dir.join("list.mo")),
+      (mpt("init"), init_dir.join("lib.mo")),
+      (
+        ModulePath::new(vec![id("std"), id("path")]),
+        std_dir.join("path.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("std"), id("io")]),
+        std_dir.join("io.mo"),
+      ),
+      (
+        ModulePath::new(vec![id("std"), id("process")]),
+        std_dir.join("process.mo"),
+      ),
+      (mpt("std"), std_dir.join("lib.mo")),
     ];
-    let mut sources = Vec::with_capacity(names.len());
-    for (name, file) in names.into_iter().zip(files) {
-      let text = std::fs::read_to_string(dir.join(file)).map_err(|e| {
-        LoadingError::Generic(format!(
-          "failed to read {}: {}",
-          dir.join(file).display(),
-          e
-        ))
-      })?;
-      sources.push((ModulePath::top(name), text));
+    let mut sources = Vec::with_capacity(entries.len());
+    for (path, file) in entries {
+      let text = std::fs::read_to_string(&file)
+        .map_err(|e| LoadingError::Generic(format!("failed to read {}: {}", file.display(), e)))?;
+      sources.push((path, text));
     }
-    sources
-  };
-
-  Ok(sources)
+    Ok(sources)
+  }
 }
 
 pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingError> {
@@ -2174,23 +2221,26 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
 /// of whether `embed-stdlib` baked its contents into the binary at compile
 /// time, so the same path list is valid for both build configurations.
 pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
-  let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    .parent()
-    .expect("CARGO_MANIFEST_DIR has no parent")
-    .join("init");
-  [
+  let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+  let root = manifest_dir.parent().expect("CARGO_MANIFEST_DIR has no parent");
+  let init_dir = root.join("init");
+  let std_dir = root.join("std");
+  let init_files = [
     "prelude.mo",
     "id.mo",
     "io.mo",
     "number.mo",
     "math.mo",
     "string.mo",
-    "init.mo",
-    "process.mo",
-  ]
-  .iter()
-  .filter_map(|name| dir.join(name).canonicalize().ok())
-  .collect()
+    "list.mo",
+    "lib.mo",
+  ];
+  let std_files = ["path.mo", "io.mo", "process.mo", "lib.mo"];
+  init_files
+    .iter()
+    .filter_map(|name| init_dir.join(name).canonicalize().ok())
+    .chain(std_files.iter().filter_map(|name| std_dir.join(name).canonicalize().ok()))
+    .collect()
 }
 
 pub(crate) fn format_duration(d: std::time::Duration) -> String {

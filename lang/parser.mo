@@ -5584,7 +5584,7 @@ def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: Term) (op: String) (ctx: 
 /// variant (unlike the Rust reference's own `NameRef::Op`, core/src/
 /// term.rs) to preserve it in, so nothing downstream could ever recover
 /// which operator an application like this meant; every `infix (op) :=
-/// target` declaration (init/init.mo, init/prelude.mo) was consequently
+/// target` declaration (init/lib.mo, init/prelude.mo) was consequently
 /// unreachable from a parsed operator application, and even built-in
 /// arithmetic (`n + 1`) silently compiled to a `Unit` placeholder.
 ///

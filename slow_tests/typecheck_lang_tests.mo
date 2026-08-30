@@ -1,4 +1,4 @@
-use io {IO, read_file}
+use io {IO}
 use lang.types {
   Decl, Def, Identifier, InductConstructor, Inductive, LocalScope, ModulePath,
   Scope, ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
@@ -10,7 +10,7 @@ use lang.module {
 use lang.parser.core {fail, mk, success}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
-open IO {println, read_file}
+open IO {println}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,

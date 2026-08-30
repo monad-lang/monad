@@ -1,5 +1,3 @@
-use io {IO, println}
-use init {IO, println}
 open IO {println}
 
 #[terminating]

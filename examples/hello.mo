@@ -1,4 +1,4 @@
-use io {IO, println}
+use io {IO}
 open IO {println}
 
 def say_hello (s : String) : IO Unit := println s

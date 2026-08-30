@@ -5,7 +5,7 @@
 // NO_COLOR is set. This is a deliberate scope cut (see
 // implementations/ansi-colors.md in the plans repo), not an oversight.
 
-use io {IO, get_env}
+use io {IO}
 open IO {get_env}
 
 type Color {

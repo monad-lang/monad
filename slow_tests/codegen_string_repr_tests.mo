@@ -23,9 +23,9 @@
 /// following `test_closure_capture_e2e.mo`'s `compile_source_run_expect`
 /// convention (reused verbatim below) -- real parsing/typechecking/
 /// desugaring needs to run to reach the actual bug shape.
-use io {IO, println}
+use io {IO}
 open IO {println}
-use process {exec_cmd}
+use std.process {exec_cmd}
 use lang.types {LoadedModules}
 use lang.module {load_file_modules}
 use lang.codegen.ir {emit_module}
@@ -41,7 +41,7 @@ def compile_source_run_expect (source : String) (basename : String) (expected : 
     let output_path := output_dir ++ "/" ++ basename;
 
     let _ <- exec_cmd "mkdir" ["-p", output_dir];
-    IO.write_file src_path source;
+    IO.write_file (Path.path src_path) source;
 
     let loaded_result : Result String LoadedModules <- load_file_modules src_path;
     match loaded_result {
@@ -58,7 +58,7 @@ def compile_source_run_expect (source : String) (basename : String) (expected : 
                 },
                 Result.ok mod_ => do {
                     let ir_text := emit_module mod_;
-                    IO.write_file ir_path ir_text;
+                    IO.write_file (Path.path ir_path) ir_text;
 
                     let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
                     if not (llc_result == 0) then do {

@@ -23,7 +23,7 @@
 /// `implementations/2026-08-29-native-bind-result-use-crash.md`, then
 /// root-caused and fixed here.
 use io {IO}
-use process {exec_cmd}
+use std.process {exec_cmd}
 use lang.types {LoadedModules}
 use lang.module {load_file_modules}
 use lang.codegen.ir {emit_module}

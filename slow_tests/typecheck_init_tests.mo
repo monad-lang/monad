@@ -64,7 +64,7 @@ def test_typecheck_init_string : IO Bool := typecheck_file "init/string.mo" "str
 def test_typecheck_init_process : IO Bool := typecheck_file "init/process.mo" "process"
 
 #[test]
-def test_typecheck_init_init : IO Bool := typecheck_file "init/init.mo" "init"
+def test_typecheck_init_init : IO Bool := typecheck_file "init/lib.mo" "init"
 
 #[test]
 def test_typecheck_init_parser : IO Bool := typecheck_file "lang/parser/combinators.mo" "combinators"

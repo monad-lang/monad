@@ -1,4 +1,4 @@
-use process {exec_cmd}
+use std.process {exec_cmd}
 use lang.types {
   Decl, Def, Term, TypeConstraint, i64, id, lit, mk, mp, name, num, type_,
 }
@@ -39,7 +39,9 @@ def test_compile_42 : IO Bool := do {
 
     let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
     let ir_text := lang.codegen.ir.emit_module mod_;
-    IO.write_file ir_path ir_text;
+    // `ir_path` is always non-empty by construction (built from
+    // non-empty literal fragments above) -- `Path.path` directly.
+    IO.write_file (Path.path ir_path) ir_text;
     println ("wrote ir to: " ++ ir_path);
 
     let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
@@ -92,7 +94,8 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
 
     let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
     let ir_text := lang.codegen.ir.emit_module mod_;
-    IO.write_file ir_path ir_text;
+    // `ir_path` is always non-empty by construction -- `Path.path` directly.
+    IO.write_file (Path.path ir_path) ir_text;
 
     let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
     if not (llc_result == 0) then do {
@@ -355,7 +358,8 @@ def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (e
 
     let mod_ := lang.codegen.emit.compile_db_module decl_list;
     let ir_text := lang.codegen.ir.emit_module mod_;
-    IO.write_file ir_path ir_text;
+    // `ir_path` is always non-empty by construction -- `Path.path` directly.
+    IO.write_file (Path.path ir_path) ir_text;
 
     let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
     if not (llc_result == 0) then do {

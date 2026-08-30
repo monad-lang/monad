@@ -3620,11 +3620,11 @@ mod test {
   // -------------------------------------------------------------------
 
   #[test]
-  fn test_real_file_init_process() {
+  fn test_real_file_std_process() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../init/process.mo");
+    let source = include_str!("../../std/process.mo");
     let report = check_module_source(&env, source);
-    print_report("init/process.mo", &report);
+    print_report("std/process.mo", &report);
   }
 
   #[test]

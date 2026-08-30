@@ -14,7 +14,7 @@ use lang.main {*}
 def test_from_args_compile_positional_name : Bool :=
     match Command.from_args ["compile", "a.mo", "myname"] {
         Command.compile path out_name verbose =>
-            path == "a.mo" && out_name == "myname" && verbose == false,
+            Path.to_string path == "a.mo" && Path.to_string out_name == "myname" && verbose == false,
         _ => false,
     }
 
@@ -22,7 +22,7 @@ def test_from_args_compile_positional_name : Bool :=
 def test_from_args_compile_default_name : Bool :=
     match Command.from_args ["compile", "a.mo"] {
         Command.compile path out_name verbose =>
-            path == "a.mo" && out_name == "source" && verbose == false,
+            Path.to_string path == "a.mo" && Path.to_string out_name == "source" && verbose == false,
         _ => false,
     }
 
@@ -30,7 +30,7 @@ def test_from_args_compile_default_name : Bool :=
 def test_from_args_compile_output_flag : Bool :=
     match Command.from_args ["compile", "a.mo", "--output", "out", "--verbose"] {
         Command.compile path out_name verbose =>
-            path == "a.mo" && out_name == "out" && verbose == true,
+            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true,
         _ => false,
     }
 
@@ -38,7 +38,7 @@ def test_from_args_compile_output_flag : Bool :=
 def test_from_args_compile_short_flags : Bool :=
     match Command.from_args ["compile", "a.mo", "-o", "out", "-v"] {
         Command.compile path out_name verbose =>
-            path == "a.mo" && out_name == "out" && verbose == true,
+            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true,
         _ => false,
     }
 

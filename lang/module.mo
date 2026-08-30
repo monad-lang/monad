@@ -1,7 +1,8 @@
 /// Module loading infrastructure for the self-hosted compiler.
 /// Parses source text and builds scope data from declarations.
 
-use io {IO, file_exists, is_dir, list_dir, println, read_file}
+use io {IO}
+use std.io {file_exists, is_dir, list_dir, println, read_file}
 use lang.elaborate {free_vars, names_of_decls, elaborate_def}
 use lang.types {
   Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
@@ -44,6 +45,8 @@ open ParseResult {fail, success}
 def prelude_module_path : ModulePath := ModulePath.mp [Identifier.id "prelude"]
 
 def init_module_path : ModulePath := ModulePath.mp [Identifier.id "init"]
+
+def std_module_path : ModulePath := ModulePath.mp [Identifier.id "std"]
 
 /// Parse all declarations from source text.
 /// Uses decls_parser which properly handles docstrings.
@@ -191,15 +194,11 @@ def module_name_from_path (file_path : String) : String :=
         file_name_only
 
 /// Join two path components with a separator
+/// Delegates to `std/path.mo`'s `raw_path_join` -- the single shared
+/// implementation of this empty-component/trailing-slash-handling
+/// logic (was duplicated here before `Path` existed).
 def path_join (a : String) (b : String) : String :=
-    if String.beq a "" then
-        b
-    else if String.beq b "" then
-        a
-    else if String.ends_with a "/" then
-        String.concat a b
-    else
-        String.concat (String.concat a "/") b
+    raw_path_join a b
 
 /// Return the first path in `candidates` that exists on disk (checked in
 /// order via `file_exists`), or `Option.none` if none do. Factored out of
@@ -212,7 +211,12 @@ def first_existing (candidates : List String) : IO (Option String) := do {
     match candidates {
         List.empty => do { return Option.none },
         List.cons path rest => do {
-            let exists : Bool <- file_exists path;
+            // `path` here is one of `first_existing`'s own candidate
+            // strings -- always non-empty by construction (built from
+            // non-empty literal fragments, see call sites below), so
+            // the raw `Path.path` constructor (not the validating
+            // `Path.of`) is safe here.
+            let exists : Bool <- file_exists (Path.path path);
             if exists
             then do { return Option.some path }
             else first_existing rest
@@ -236,6 +240,15 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
 
     if String.beq mp_str "prelude"
     then first_existing [prelude_path]
+    // Bare `init`/`std` are ambient re-export hubs (`init/lib.mo`/
+    // `std/lib.mo`) -- their own module NAME no longer matches their
+    // FILE name (unlike every other bare top-level module), so they
+    // need the same kind of explicit special case `prelude` already
+    // has, ahead of the general `<dir>/<name>.mo` search below.
+    else if String.beq mp_str "init"
+    then first_existing ["init/lib.mo"]
+    else if String.beq mp_str "std"
+    then first_existing ["std/lib.mo"]
     else first_existing [
         relative_path, direct_path, init_path, std_path, lang_path, examples_path,
     ]
@@ -247,7 +260,10 @@ def try_read_module_file (base_dir : String) (mp : ModulePath) : IO (Option Stri
     let resolved : Option String <- resolve_module_file base_dir mp;
     match resolved {
         Option.some resolved_path => do {
-            let s : String <- IO.read_file resolved_path;
+            // `resolved_path` was just confirmed to exist on disk by
+            // `resolve_module_file`/`first_existing` above -- always
+            // non-empty by construction.
+            let s : String <- IO.read_file (Path.path resolved_path);
             return Option.some s
         },
         Option.none => do {
@@ -517,7 +533,7 @@ struct PreludeInitBase {
 def build_prelude_init_base : IO PreludeInitBase := do {
     let no_visiting : List ModulePath := List.empty;
     let no_visited : List ModulePath := List.empty;
-    let roots : List ModulePath := [prelude_module_path, init_module_path];
+    let roots : List ModulePath := [prelude_module_path, init_module_path, std_module_path];
     let all_deps : List ModulePath <- extract_all_dependencies_go "" roots no_visiting no_visited;
     let loaded_deps_result : Result String (List ScopeData) <- load_dependency_entries (load_scope_entry "") dependency_not_found_msg all_deps List.empty;
     match loaded_deps_result {
@@ -1566,7 +1582,7 @@ struct FileCheckAndCache {
 /// `bootstrapping/check-deps-memory-blowup.md`.
 #[partial]
 def check_file_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
-    let exists : Bool <- file_exists file_path;
+    let exists : Bool <- file_exists (Path.path file_path);
     if exists then do {
         if verbose then println ("checking " ++ file_path) else do { return unit };
         let elaborated_result <- elaborate_loaded_modules file_path false;
@@ -1596,7 +1612,7 @@ def check_file_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_
 /// Recursively collect every `*.mo` file under `dir`.
 #[partial]
 def collect_mo_files (dir : String) : IO (List String) := do {
-    let entries : List String <- list_dir dir;
+    let entries : List String <- list_dir (Path.path dir);
     collect_mo_files_entries dir entries
 }
 
@@ -1608,7 +1624,7 @@ def collect_mo_files_entries (dir : String) (entries : List String) : IO (List S
         List.empty => do { return List.empty },
         List.cons name rest => do {
             let path : String := dir ++ "/" ++ name;
-            let is_directory : Bool <- is_dir path;
+            let is_directory : Bool <- is_dir (Path.path path);
             let here : List String <- if is_directory then
                     collect_mo_files path
                 else if String.ends_with path ".mo" then do {
@@ -1631,7 +1647,7 @@ def expand_check_paths (paths : List String) : IO (List String) :=
     match paths {
         List.empty => do { return List.empty },
         List.cons p rest => do {
-            let is_directory : Bool <- is_dir p;
+            let is_directory : Bool <- is_dir (Path.path p);
             let here : List String <- if is_directory then collect_mo_files p else do { return [p] };
             let there : List String <- expand_check_paths rest;
             return (list_append here there)
@@ -1972,7 +1988,7 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
                     // needed) is the idiom already used elsewhere in this
                     // exact file (`new_to_visit` above) for the identical
                     // purpose -- use it here too instead of `++`.
-                    let direct_deps_with_prelude : List ModulePath := List.append [prelude_module_path, init_module_path] direct_deps;
+                    let direct_deps_with_prelude : List ModulePath := List.append [prelude_module_path, init_module_path, std_module_path] direct_deps;
                     let no_visited : List ModuleInfo := List.empty;
                     let no_visiting : List ModulePath := List.empty;
                     let dep_modules : List ModuleInfo <- collect_dep_module_infos main_base_dir direct_deps_with_prelude no_visiting no_visited;

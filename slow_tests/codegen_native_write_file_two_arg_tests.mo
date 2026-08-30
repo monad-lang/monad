@@ -39,7 +39,7 @@
 /// newly-found, not-yet-filed bug, unrelated to `write_file`'s own arity-2
 /// dispatch gap -- out of scope here.
 use io {IO}
-use process {exec_cmd}
+use std.process {exec_cmd}
 use lang.types {LoadedModules}
 use lang.module {load_file_modules}
 use lang.codegen.ir {emit_module}

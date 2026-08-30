@@ -14,13 +14,18 @@ def print_parsed (r : Result Json.ParseError Json) : IO Unit :=
   }
 
 def run_file (path : String) : IO Unit {
-  let exists <- IO.file_exists path;
-  if exists
-  then do {
-    let content <- IO.read_file path;
-    print_parsed (Json.parse content)
+  match Path.of path {
+    err e => IO.println (String.concat "invalid path: " e),
+    ok p => do {
+      let exists <- IO.file_exists p;
+      if exists
+      then do {
+        let content <- IO.read_file p;
+        print_parsed (Json.parse content)
+      }
+      else IO.println (String.concat "File not found: " path)
+    },
   }
-  else IO.println (String.concat "File not found: " path)
 }
 
 def main (args : List String) : IO Unit :=

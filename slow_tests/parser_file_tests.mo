@@ -1,8 +1,8 @@
 /// Integration tests for parsing Monad files
 /// Tests that the self hosted parser can parse all Monad source files
 
-use io {io, read_file}
-open IO {io, read_file}
+use io {io}
+open IO {io}
 use lang.parser {decls_parser}
 use lang.parser.core {fail, success}
 
@@ -12,7 +12,8 @@ open ParseResult {fail, success}
 #[partial]
 def init_files_safe : List String :=
     ["init/id.mo",
-     "init/init.mo",
+     "init/lib.mo",
+     "init/list.mo",
      "init/io.mo",
      "init/math.mo",
      "init/number.mo",
@@ -29,7 +30,7 @@ def init_files_safe : List String :=
 // unparseable by this self-hosted parser at all.
 #[partial]
 def std_files : List String :=
-    ["std/test.mo", "std/derive.mo"]
+    ["std/test.mo", "std/derive.mo", "std/path.mo", "std/io.mo", "std/process.mo", "std/lib.mo"]
 
 /// All examples/ files to parse (safe - no box-drawing characters)
 #[partial]
@@ -85,7 +86,7 @@ def lang_files_utf8 : List String :=
 /// Parse a single file and return success status
 #[partial]
 def parse_file (path : String) : Bool :=
-    match IO.read_file path {
+    match IO.read_file (Path.path path) {
         io content =>
             match decls_parser content {
                 success _ _ => true,
@@ -158,7 +159,7 @@ def test_parse_lang_all_utf8 : Bool := parse_all lang_files_utf8
 /// a non-empty remainder both count as "didn't fully parse."
 #[partial]
 def file_fully_parses (path : String) : Bool :=
-    match IO.read_file path {
+    match IO.read_file (Path.path path) {
         io content =>
             match decls_parser content {
                 success rem _ => String.is_empty rem,

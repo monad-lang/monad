@@ -1,4 +1,4 @@
-use io {IO, println}
+use io {IO}
 use std.bench {now, report}
 // `str_map_*` below is a `std.map` `HashMap String V`. Empty import:
 // naming any of `std.map`'s `Map`-class-instance exports explicitly hits
@@ -3497,7 +3497,7 @@ def build_fields_from (count : I64) (idx : I64) : List LLVMValue :=
 /// to that stale, cross-function SSA value instead of its own intended
 /// meaning. Confirmed as a real, previously-undiagnosed bug via
 /// `bootstrap compile lang/main.mo monad`'s own self-compile
-/// (`init/init.mo`'s `List.get`, ~1700 defs into the reachable set):
+/// (`init/lib.mo`'s `List.get`, ~1700 defs into the reachable set):
 /// its own `empty => none` match arm resolved to a `%tN` SSA value left
 /// over from an entirely different, much-earlier-compiled def
 /// (`params_for_names_attrs`) -- `llc: use of undefined value '%tN'`

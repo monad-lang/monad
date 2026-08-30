@@ -1072,7 +1072,7 @@ def add_module_infixes (acc : ScopeData) (infxs : List Infix) : ScopeData :=
 // implementation is `lang.typecheck.infer`'s `resolve_class_method`'s
 // job, itself a separate, still-incomplete piece of work (see that
 // function's own doc comment). An operator whose registered target
-// IS a plain, direct function (e.g. `init/init.mo`'s `infix (+) :=
+// IS a plain, direct function (e.g. `init/lib.mo`'s `infix (+) :=
 // I64.add`) resolves and compiles all the way through; one whose only
 // registered target is typeclass-routed surfaces as a normal
 // unresolved-method situation downstream instead of a silent `void`.

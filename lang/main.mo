@@ -1,6 +1,6 @@
-use io {IO, println, read_file, write_file}
+use io {IO}
 open IO {println, read_file, write_file}
-use process {exec_cmd}
+use std.process {exec_cmd}
 use std.bench {now, report}
 use lang.types {Decl, LoadedModules, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
@@ -10,17 +10,32 @@ use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
 
+/// The default output directory for `compile` when no `--output`/
+/// positional name supplies an absolute one -- a compile-time literal,
+/// known non-empty by inspection, so `Path.path` directly (not the
+/// validating `Path.of`) is the right constructor here.
+def default_output_dir : Path := Path.path "/tmp"
+
 
 /// Write LLVM IR to disk and link it into a native binary via llc + clang.
 /// Shared by `compile_file`'s primary path and its module-loading-failure
 /// fallback (`compile_parsed_decls`) — both produce an `ir_text : String`
 /// by different routes and then need the identical llc/clang/link steps.
 #[partial]
-def link_ir (ir_text : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
-    let ir_path := output_dir ++ "/" ++ output_name ++ ".ll";
-    let obj_path := output_dir ++ "/" ++ output_name ++ ".o";
-    let runtime_obj := output_dir ++ "/monad_runtime.o";
-    let output_path := output_dir ++ "/" ++ output_name;
+def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 {
+    // `Path.join` here is THE fix for the mangled-double-slash bug this
+    // whole `Path` type exists to prevent: if `output_name` is already
+    // absolute, it replaces `output_dir` outright instead of naively
+    // concatenating (`os.path.join`-style semantics).
+    let target := Path.join output_dir output_name;
+    let ir_path := Path.with_suffix target ".ll";
+    let obj_path := Path.with_suffix target ".o";
+    let runtime_obj := Path.join output_dir (Path.path "monad_runtime.o");
+    let output_path := target;
+    let ir_path_s := Path.to_string ir_path;
+    let obj_path_s := Path.to_string obj_path;
+    let runtime_obj_s := Path.to_string runtime_obj;
+    let output_path_s := Path.to_string output_path;
 
     // Per-stage `Bench.report` timing, gated on `--verbose` (same
     // convention as `lang.codegen.emit`'s `compile_loaded_modules_to_ir`)
@@ -36,17 +51,17 @@ def link_ir (ir_text : String) (output_dir : String) (output_name : String) (ver
     } else return unit;
 
     let t_llc := Bench.now;
-    let result <- exec_cmd "llc" [ "-filetype=obj", ir_path, "-o", obj_path];
+    let result <- exec_cmd "llc" [ "-filetype=obj", ir_path_s, "-o", obj_path_s];
     if verbose then do {
         let _ := Bench.report "link_ir: llc" (I64.sub Bench.now t_llc);
         return unit
     } else return unit;
     if not (result == 0) then do {
-        println <| (String.concat "Compiling ir " (String.concat ir_path " with llc failed"));
+        println <| (String.concat "Compiling ir " (String.concat ir_path_s " with llc failed"));
         return 1
     } else do {
         let t_rtc := Bench.now;
-        let result <- exec_cmd "clang" (List.append [ "-c", "lang/codegen/runtime.c", "-o", runtime_obj] (if verbose then ["-v"] else [""]));
+        let result <- exec_cmd "clang" (List.append [ "-c", "lang/codegen/runtime.c", "-o", runtime_obj_s] (if verbose then ["-v"] else [""]));
         if verbose then do {
             let _ := Bench.report "link_ir: clang runtime.c" (I64.sub Bench.now t_rtc);
             return unit
@@ -56,7 +71,7 @@ def link_ir (ir_text : String) (output_dir : String) (output_name : String) (ver
             return 1
         } else do {
             let t_link := Bench.now;
-            let result <- exec_cmd "clang" (List.append [ obj_path, runtime_obj, "-o", output_path] (if verbose then ["-v"] else [""]));
+            let result <- exec_cmd "clang" (List.append [ obj_path_s, runtime_obj_s, "-o", output_path_s] (if verbose then ["-v"] else [""]));
             if verbose then do {
                 let _ := Bench.report "link_ir: clang link" (I64.sub Bench.now t_link);
                 return unit
@@ -79,7 +94,7 @@ def link_ir (ir_text : String) (output_dir : String) (output_name : String) (ver
 /// failure already is (`FAILED at stage: ...`) rather than proceeding to
 /// `emit_module`/`link_ir` with no module to link.
 #[partial]
-def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 :=
+def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 :=
     match mod_result {
         Result.err e => do {
             println ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")");
@@ -93,10 +108,10 @@ def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : S
 
 /// Parse a source file and compile + run it via LLVM.
 #[partial]
-def compile_parsed_decls (decl_list : List Decl) (output_dir : String) (output_name : String) (verbose: Bool) : IO I64 {
+def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_name : Path) (verbose: Bool) : IO I64 {
     let mod_ := compile_db_module decl_list;
     let ir_text := emit_module mod_;
-    println <| "Writing LLVM IR to: " ++ output_dir ++ "/" ++ output_name ++ ".ll";
+    println <| "Writing LLVM IR to: " ++ Path.to_string (Path.with_suffix (Path.join output_dir output_name) ".ll");
     link_ir ir_text output_dir output_name verbose
 }
 
@@ -121,9 +136,9 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : String) (output_n
 /// purely to improve codegen's own dictionary-dispatch resolution (see its
 /// own doc comment) -- that is NOT a second copy of this gate.
 #[partial]
-def compile_file (file_path : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
+def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 {
     let total_start := Bench.now;
-    println <| "compiling: " ++ file_path ++ " to " ++ output_dir ++ "/" ++ output_name;
+    println <| "compiling: " ++ file_path ++ " to " ++ Path.to_string (Path.join output_dir output_name);
     let t_elaborate := Bench.now;
     let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules file_path false;
     if verbose then do {
@@ -181,7 +196,7 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
 /// real, rendered diagnostic the old code already did via its own
 /// fallback path below, rather than a bare "gate failed").
 #[partial]
-def compile_file_codegen (file_path : String) (output_dir : String) (output_name : String) (verbose : Bool) : IO I64 {
+def compile_file_codegen (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 {
     // First try to load with module boundaries preserved
     let res : Result String LoadedModules <- load_file_modules file_path;
     match res {
@@ -207,8 +222,11 @@ def compile_file_codegen (file_path : String) (output_dir : String) (output_name
         },
         Result.err e => do {
             println ("Failed to parse dependencies: " ++ e);
-            // Fallback to simple parsing without dependencies (for error reporting)
-            let source <- IO.read_file file_path;
+            // Fallback to simple parsing without dependencies (for error reporting).
+            // `file_path` was already used successfully by `load_file_modules`
+            // just above (that's the error being handled), so it's known
+            // non-empty -- `Path.path` directly, not `Path.of`.
+            let source <- IO.read_file (Path.path file_path);
             match try_parse_decls source {
                 Option.some decl_list => compile_parsed_decls decl_list output_dir output_name verbose,
                 Option.none => do {
@@ -444,7 +462,11 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                         ok llvm_mod => do {
                             let ir_text := emit_module llvm_mod;
                             let bin_name := "monad_test_bin_" ++ I64.to_string bin_idx;
-                            let link_result <- link_ir ir_text out_dir bin_name verbose;
+                            // Both always non-empty by construction --
+                            // `out_dir` (see `run_test`'s own caller) and
+                            // `bin_name` (a literal prefix + counter) --
+                            // `Path.path` directly, not `Path.of`.
+                            let link_result <- link_ir ir_text (Path.path out_dir) (Path.path bin_name) verbose;
                             if not (link_result == 0) then do {
                                 println ("FAIL  " ++ f ++ " (compilation failed)");
                                 run_test_loop rest out_dir (bin_idx + 1) passed (failed + 1) skipped verbose
@@ -476,7 +498,7 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
 // demo in lang/tests/cli_derive_tests.mo, though — same argv-munging
 // primitives either way.
 type Command {
-    compile (file: String) (out_name: String) (verbose: Bool),
+    compile (file: Path) (out_name: Path) (verbose: Bool),
     pretty (file: String),
     check (files: List String) (verbose: Bool),
     test (files: List String) (verbose: Bool),
@@ -508,7 +530,18 @@ def Command.from_args (args : List String) : Command :=
                                                         opt_out_name
                                                 in
                                                 match path_opt {
-                                                    Option.some path => Command.compile path out_name verbose,
+                                                    // A path/out_name that fails to validate (currently:
+                                                    // only the empty string) falls back to `Command.help`,
+                                                    // mirroring the sibling `Option.none => Command.help`
+                                                    // arm right below for a simply-missing positional arg.
+                                                    Option.some path =>
+                                                        match Path.of path {
+                                                            err _ => Command.help,
+                                                            ok p => match Path.of out_name {
+                                                                err _ => Command.help,
+                                                                ok o => Command.compile p o verbose,
+                                                            },
+                                                        },
                                                     Option.none => Command.help,
                                                 },
                                         },
@@ -540,11 +573,10 @@ def Command.from_args (args : List String) : Command :=
 
 /// Current main entrypoint of self hosted compiler
 def main (args : List String) : IO I64 {
-    let out_dir := "/tmp";
     let cmd : Command := Command.from_args args;
     match cmd {
         compile file_path out_name verbose => do {
-            compile_file file_path out_dir out_name verbose
+            compile_file (Path.to_string file_path) default_output_dir out_name verbose
         },
         pretty file_path => do {
             // Prints the TARGET FILE's own declarations, pretty-printed
@@ -579,7 +611,7 @@ def main (args : List String) : IO I64 {
             run_check files verbose
         },
         test files verbose => do {
-            run_test files out_dir verbose
+            run_test files (Path.to_string default_output_dir) verbose
         },
         help => do {
             print_help

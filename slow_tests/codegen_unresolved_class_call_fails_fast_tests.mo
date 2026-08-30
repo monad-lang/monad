@@ -23,7 +23,7 @@
 /// `filter_reachable_decls` before the check ever saw it, silently
 /// passing this test for the wrong reason.
 use io {IO}
-use process {exec_cmd}
+use std.process {exec_cmd}
 use lang.types {LoadedModules}
 use lang.module {load_file_modules}
 use lang.codegen.emit {compile_loaded_modules_to_ir}

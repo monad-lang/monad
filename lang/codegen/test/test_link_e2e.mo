@@ -1,6 +1,6 @@
-use io {IO, println, write_file}
+use io {IO}
 open IO {println, write_file}
-use process {exec_cmd}
+use std.process {exec_cmd}
 use lang.types {Def, i64, id, lit, mk, mp, num, type_}
 use lang.codegen.ir {emit_module, mk}
 use lang.codegen.emit {compile_db_decls_ir, mk}
@@ -42,7 +42,8 @@ def main : IO I64 {
     let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
     let ir_text := lang.codegen.ir.emit_module mod_;
 
-    IO.write_file ir_path ir_text;
+    // `ir_path` is always non-empty by construction -- `Path.path` directly.
+    IO.write_file (Path.path ir_path) ir_text;
 
     let llc_args := args4 "-filetype=obj" ir_path "-o" obj_path;
     let _ <- exec_cmd "llc" llc_args;

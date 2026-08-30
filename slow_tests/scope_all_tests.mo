@@ -1,4 +1,4 @@
-use io {io, read_file}
+use io {io}
 use lang.types {
   LocalScope, ModulePath, NameRef, Scope, ScopeData, id, mp, name, nid,
 }
@@ -6,7 +6,7 @@ use lang.module {parse_all_decls}
 use lang.parser.core {fail, success}
 use lang.scope {build_scope_from_decls, scope_resolve_name}
 
-open IO {io, read_file}
+open IO {io}
 
 def empty_local_scope : LocalScope := {
     vars := List.empty,
@@ -23,7 +23,7 @@ def name_ref (name : String) : NameRef := NameRef.nid (Identifier.id name)
 
 #[partial]
 def build_scope_for_file (file_path : String) (mod_name : String) : Bool := 
-    match IO.read_file file_path {
+    match IO.read_file (Path.path file_path) {
         IO.io content => 
             match parse_all_decls content {
                 success _ decls => 
@@ -46,7 +46,7 @@ def build_scope_for_file (file_path : String) (mod_name : String) : Bool :=
 def test_scope_init_id : Bool := build_scope_for_file "init/id.mo" "id"
 
 #[test]
-def test_scope_init_init : Bool := build_scope_for_file "init/init.mo" "init"
+def test_scope_init_init : Bool := build_scope_for_file "init/lib.mo" "init"
 
 #[test]
 def test_scope_init_io : Bool := build_scope_for_file "init/io.mo" "io"
@@ -64,7 +64,7 @@ def test_scope_init_parser_file : Bool := build_scope_for_file "lang/parser/comb
 def test_scope_init_prelude : Bool := build_scope_for_file "init/prelude.mo" "prelude"
 
 #[test]
-def test_scope_init_process : Bool := build_scope_for_file "init/process.mo" "process"
+def test_scope_std_process : Bool := build_scope_for_file "std/process.mo" "process"
 
 #[test]
 def test_scope_init_string : Bool := build_scope_for_file "init/string.mo" "string"

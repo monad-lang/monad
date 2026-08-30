@@ -26,15 +26,18 @@ a different branch and cause confusion.
 ├── cli/              # CLI entry point
 │   └── src/main.rs
 ├── wasm/             # WebAssembly bindings
-├── init/             # Standard library
+├── init/             # Pure, portable core (see "init vs std" below)
 │   ├── prelude.mo     # Basic types (Bool, List, Option, etc.)
-│   ├── io.mo         # IO operations
-│   ├── term.mo        # Term manipulation
-│   ├── parser.mo      # Parser combinators
+│   ├── io.mo         # The `IO` type + `Monad IO` instance only -- no natives
+│   ├── list.mo        # List.get and other List-specific extras
 │   ├── string.mo      # String operations
-│   ├── init.mo        # Init module with From class
+│   ├── lib.mo          # Re-export hub (`pub use io {*}` etc.) -- bare `init` resolves here
 │   └── tests.mo       # Standard library tests
-├── std/
+├── std/              # OS-specific implementations and side effects (see below)
+│   ├── path.mo         # Path type
+│   ├── io.mo           # Path-typed file I/O natives (write_file/read_file/...)
+│   ├── process.mo       # exec_cmd
+│   ├── lib.mo           # Re-export hub -- bare `std` resolves here
 │   └── test.mo        # Test utilities (Test.assert)
 ├── examples/         # Example programs
 ├── bench/            # Standalone .mo micro-benchmarks (Bench.now/Bench.report,
@@ -87,6 +90,27 @@ a different branch and cause confusion.
 │                     # manual/CI use, not the fast local commit path.
 └── plans/            # Symlink to external repo with design plans
 ```
+
+### Standard library layout: `init/` vs `std/`
+
+**`init/` is for pure, portable, core language structures — code that
+must work in any environment, including wasm and embedded targets.**
+**`std/` is where OS-specific implementations and side effects
+belong** — file I/O, process execution, environment variables, and
+anything else that touches the outside world. File I/O is the concrete
+example that motivated codifying this: it used to live in `init/io.mo`
+(natives included), and moved to `std/io.mo`, leaving `init/io.mo` with
+only the pure `IO` monad wrapper type itself.
+
+Both `init/` and `std/` have a `lib.mo` re-export hub (`pub use
+submodule {*}` for each sibling file, mirroring the existing pattern),
+and both are **ambient** — ordinary `.mo` files never need `use init
+{...}`/`use std {...}` to reach anything either re-exports; a bare
+`init`/`std` module reference resolves straight to `init/lib.mo`/
+`std/lib.mo`, the same way Rust's own `std`/`core` crate name refers to
+that crate's root file (`lang/module.mo`'s `resolve_module_file` has an
+explicit special case for each, alongside the pre-existing one for
+`prelude`).
 
 ## Building and Running
 

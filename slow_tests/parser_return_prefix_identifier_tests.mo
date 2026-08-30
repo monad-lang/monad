@@ -26,7 +26,7 @@
 /// succeeds) and using it at both `return`-recognition call sites instead
 /// of the bare `tag`.
 use io {IO}
-use process {exec_cmd}
+use std.process {exec_cmd}
 use lang.types {LoadedModules}
 use lang.module {load_file_modules}
 use lang.codegen.ir {emit_module}
