@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 typedef struct {
     _Atomic(int64_t) refcount;
@@ -314,6 +315,31 @@ char* monad_file_exists(char* path) {
     FILE* f = fopen(path, "rb");
     if (f) { fclose(f); return (char*)"1"; }
     return NULL;
+}
+
+/* Same truthy-pointer convention as monad_file_exists above (a non-NULL
+   return means true, NULL means false) -- IO.is_dir (init/io.mo, moved
+   to std/io.mo) needs the identical shape. */
+char* monad_is_dir(char* path) {
+    if (!path) return NULL;
+    struct stat st;
+    if (stat(path, &st) != 0) return NULL;
+    return S_ISDIR(st.st_mode) ? (char*)"1" : NULL;
+}
+
+/* djb2 hash: hash = hash * 33 + byte, seed 5381 -- bit-identical to
+   `core/src/core_native.rs`'s own `string_hash` (wrapping u64 mul/add)
+   and to `init/string.mo`'s own `String.hash_selfhosted` reference
+   implementation. Pure (no `IO` in String.hash's declared type), so
+   this returns a plain i64 rather than the truthy-pointer convention
+   above -- see `needs_io_wrap`'s own doc comment in lang/codegen/emit.mo. */
+int64_t monad_string_hash(char* s) {
+    uint64_t hash = 5381u;
+    if (!s) return (int64_t)hash;
+    for (unsigned char* p = (unsigned char*)s; *p; p++) {
+        hash = hash * 33u + (uint64_t)(*p);
+    }
+    return (int64_t)hash;
 }
 
 /* Build a List String (linked list) from command line args.
