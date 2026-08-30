@@ -763,14 +763,56 @@ def bind_match_fields (c : CodegenCtx) (scrutinee_val : LLVMValue) (args : List 
             },
     }
 
+struct RetargetResult {
+    blocks : List LLVMBasicBlock,
+    label : String,
+}
+
+/// Finds the block among `blocks` ending in `ret <target_val>` and
+/// rewrites it to `br label <merge_label>` instead, returning that
+/// block's own label alongside the rewritten list -- the terminal-
+/// block-rewriting half of `splice_into_terminal_block` (which only
+/// ever REPLACES that `ret` with more instructions plus a new `ret`,
+/// never with a plain `br`), needed by `build_match_case_block` below.
+#[partial]
+def retarget_terminal_ret (blocks : List LLVMBasicBlock) (target_val : LLVMValue) (merge_label : String) : Option RetargetResult :=
+    match blocks {
+        List.empty => Option.none,
+        List.cons b rest =>
+            match b {
+                LLVMBasicBlock.mk label instrs =>
+                    if block_ends_with_ret_of instrs target_val
+                    then
+                        let without_ret := drop_last_instr instrs in
+                        let new_instrs := append_instrs without_ret (cons_instr (LLVMInstruction.jump merge_label) empty_instrs) in
+                        Option.some { blocks := List.cons (LLVMBasicBlock.mk label new_instrs) rest, label := label }
+                    else
+                        match retarget_terminal_ret rest target_val merge_label {
+                            Option.some result => Option.some { blocks := List.cons b result.blocks, label := result.label },
+                            Option.none => Option.none,
+                        },
+            },
+    }
+
 /// Compiles a single case's body (after binding its fields) into its own
 /// block. If the body's own instructions already end in a terminator
-/// (e.g. the body is itself a nested if/match that returns directly, as
-/// `List.last`'s `cons a tail => if ... then some a else List.last tail`
-/// does), this case never actually reaches the match's merge block --
-/// contributing a phi entry for it anyway would reference a
-/// non-predecessor block, invalid LLVM IR -- so no phi entry is produced
-/// for that case at all.
+/// (e.g. the body is itself a nested if/match, or a general call whose
+/// own args needed one, as `resolve_class_method`'s `Option.some ins =>
+/// resolve_class_method_d4 ins.cls ...` does), that DOESN'T mean this
+/// case never reaches the match's own merge block -- it means the
+/// body's own deepest nested block currently `ret`s `bmr.val` directly
+/// (correct only when THIS match is the enclosing function's own final
+/// answer, exactly `compose_seq`'s own documented convention one level
+/// up) and must be RETARGETED to `br label merge_label` instead, via
+/// `retarget_terminal_ret`. An earlier version of this function instead
+/// contributed NO phi entry at all whenever a case body was already
+/// terminated, on the theory that it "never actually reaches the
+/// match's merge block" -- confirmed wrong live via the full `lang/
+/// main.mo` self-compile: malformed PHI nodes at `llc`'s own IR-
+/// verification stage (a case whose value silently never reached the
+/// merge, the same "wrong, early answer" failure mode `compose_seq`'s
+/// own doc comment describes for a different call site, here never
+/// migrated at all since this shape long predates `compose_seq`).
 #[partial]
 def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ : MatchCase) (case_label : String) (merge_label : String) : MatchChainResult :=
     match case_ {
@@ -783,11 +825,25 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
                             let already_terminated := ends_with_terminator raw_instrs in
                             let bmr := materialize_branch_val ctx_r body raw_instrs val_r_raw in
                             let case_block := build_branch_block case_label merge_label bmr.instrs in
-                            let phis :=
-                                if already_terminated
-                                then empty_phis
-                                else cons_phi (PhiPair.mk bmr.val case_label) empty_phis in
-                            { ctx := bmr.ctx, blocks := cons_block case_block blocks_r, funcs := funcs_r, globals := globals_r, phis := phis },
+                            if already_terminated
+                            then
+                                match retarget_terminal_ret blocks_r bmr.val merge_label {
+                                    Option.some result =>
+                                        { ctx := bmr.ctx, blocks := cons_block case_block result.blocks, funcs := funcs_r, globals := globals_r, phis := cons_phi (PhiPair.mk bmr.val result.label) empty_phis },
+                                    // Shouldn't happen -- `splice_into_
+                                    // terminal_block`'s own invariant
+                                    // (a branching term's last block is
+                                    // always closed with `ret <its own
+                                    // val>`) applies here too. Fall back
+                                    // to the prior (no-phi) behavior
+                                    // rather than crash if it's ever
+                                    // violated by something not yet
+                                    // accounted for.
+                                    Option.none =>
+                                        { ctx := bmr.ctx, blocks := cons_block case_block blocks_r, funcs := funcs_r, globals := globals_r, phis := empty_phis },
+                                }
+                            else
+                                { ctx := bmr.ctx, blocks := cons_block case_block blocks_r, funcs := funcs_r, globals := globals_r, phis := cons_phi (PhiPair.mk bmr.val case_label) empty_phis },
                     },
             },
     }
@@ -1878,11 +1934,49 @@ def build_merge_phi_pairs (then_reaches : Bool) (then_val : LLVMValue) (then_lab
     let then_pairs := if then_reaches then cons_phi (PhiPair.mk then_val then_label) empty_phis else empty_phis in
     if else_reaches then cons_phi (PhiPair.mk else_val else_label) then_pairs else then_pairs
 
+/// `reaches`/`val`/`label`/`blocks` for ONE side (then or else) after
+/// accounting for `retarget_terminal_ret` -- see `build_merge_result`'s
+/// own doc comment for why a branch not directly reaching
+/// `merge_label` doesn't mean it never reaches it at all.
+struct BranchMergeInfo {
+    reaches : Bool,
+    label : String,
+    blocks : List LLVMBasicBlock,
+}
+
+#[partial]
+def resolve_branch_merge_info (reaches : Bool) (val : LLVMValue) (label : String) (blocks : List LLVMBasicBlock) (merge_label : String) : BranchMergeInfo :=
+    if reaches
+    then { reaches := true, label := label, blocks := blocks }
+    else
+        match retarget_terminal_ret blocks val merge_label {
+            Option.some result => { reaches := true, label := result.label, blocks := result.blocks },
+            // Shouldn't happen -- see `build_match_case_block`'s own
+            // identical fallback.
+            Option.none => { reaches := false, label := label, blocks := blocks },
+        }
+
+/// `then_reaches`/`else_reaches` being `false` means that side's own
+/// compiled instructions already end in a real terminator (a nested
+/// if/match, or a general call whose own args needed one) -- NOT that
+/// it never reaches `merge_label` at all: its own deepest nested block
+/// currently `ret`s its own value directly (correct only when THIS
+/// if-expression is the enclosing function's own final answer, exactly
+/// `compose_seq`'s own documented convention one level up) and must be
+/// RETARGETED to `br label merge_label` instead, via `retarget_terminal_
+/// ret` (`resolve_branch_merge_info`). An earlier version of this
+/// function instead contributed NO phi entry at all for such a branch,
+/// on the theory that it "never actually reaches `merge_label`" --
+/// confirmed wrong live via the full `lang/main.mo` self-compile:
+/// malformed PHI nodes at `llc`'s own IR-verification stage. Mirrors
+/// `build_match_case_block`'s own identical fix for match arms.
 #[partial]
 def build_merge_result (ctx_else : CodegenCtx) (merge_label : String) (then_reaches : Bool) (then_val : LLVMValue) (then_label : String) (else_reaches : Bool) (else_val : LLVMValue) (else_label : String) (entry_instrs : List LLVMInstruction) (entry_blocks : List LLVMBasicBlock) (entry_funcs : List LLVMFunction) (entry_globals : List LLVMGlobal) (blocks_then : List LLVMBasicBlock) (blocks_else : List LLVMBasicBlock) (funcs_then : List LLVMFunction) (funcs_else : List LLVMFunction) (globals_then : List LLVMGlobal) (globals_else : List LLVMGlobal) (then_block : LLVMBasicBlock) (else_block : LLVMBasicBlock) : CompileResult :=
     match fresh_temp ctx_else {
         CtxStrPair.mk ctx_phi phi_temp =>
-            let pairs := build_merge_phi_pairs then_reaches then_val then_label else_reaches else_val else_label in
+            let then_info := resolve_branch_merge_info then_reaches then_val then_label blocks_then merge_label in
+            let else_info := resolve_branch_merge_info else_reaches else_val else_label blocks_else merge_label in
+            let pairs := build_merge_phi_pairs then_info.reaches then_val then_info.label else_info.reaches else_val else_info.label in
             let merge_instrs := match pairs {
                 // Neither branch reaches `merge_label` -- both diverge
                 // via their own nested control flow, so this block is
@@ -1897,7 +1991,7 @@ def build_merge_result (ctx_else : CodegenCtx) (merge_label : String) (then_reac
                     cons_instr phi_instr (cons_instr ret_instr empty_instrs),
             } in
             let merge_block := LLVMBasicBlock.mk merge_label merge_instrs in
-            let all_blocks := cons_block then_block (cons_block else_block (cons_block merge_block (append_blocks (append_blocks entry_blocks blocks_then) blocks_else))) in
+            let all_blocks := cons_block then_block (cons_block else_block (cons_block merge_block (append_blocks (append_blocks entry_blocks then_info.blocks) else_info.blocks))) in
             let all_funcs := append_funcs (append_funcs entry_funcs funcs_then) funcs_else in
             let all_globals := append_globals (append_globals entry_globals globals_then) globals_else in
             let result_val := match pairs {

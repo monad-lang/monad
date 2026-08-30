@@ -708,9 +708,34 @@ def desugar_do_inner (stmts : List DoStmt) (rest : Term) : Term :=
                 let_s name typ expr =>
                     Term.app (Term.lam (DebugName.named name) typ (desugar_do_inner ss rest)) expr,
                 ret_s expr => Term.app monad_pure_term expr,
+                // A bare-expression statement with nothing following it
+                // (`ss` empty) IS the do-block's own final value -- used
+                // DIRECTLY, exactly like `ret_s` already does, not bound
+                // via `Monad.bind` to a discarding continuation (which
+                // silently replaces its real value with the block's own
+                // default `rest`, `Monad.pure ()`). Mirrors the Rust
+                // reference's own `desugar_do_statements` (core/src/
+                // parser.rs): `DoStatement::Expr { value } => value` when
+                // it's the LAST statement (processed first, iterating in
+                // reverse) -- no bind at all. This self-hosted port never
+                // special-cased that. Confirmed as a real, previously-
+                // masked bug via the full `lang/main.mo` self-compile: a
+                // do-block whose only/last statement is a bare `match`/
+                // `if` containing its own internal `return`s (`do { let
+                // xs := ...; match xs { ... => return x, ... } }`) had
+                // its real value silently discarded and replaced with
+                // Unit -- masked until now by a DIFFERENT, now-fixed
+                // codegen bug (a branching case body's own deepest block
+                // used to `ret` directly instead of continuing to this
+                // bind at all, `retarget_terminal_ret`), which
+                // accidentally bypassed this one.
                 expr_s expr =>
-                    Term.app (Term.app monad_bind_term expr)
-                        (Term.lam (DebugName.unnamed) Term.hole (desugar_do_inner ss rest))
+                    match ss {
+                        List.empty => expr,
+                        List.cons _ _ =>
+                            Term.app (Term.app monad_bind_term expr)
+                                (Term.lam (DebugName.unnamed) Term.hole (desugar_do_inner ss rest)),
+                    }
             },
         List.empty => rest
     }
