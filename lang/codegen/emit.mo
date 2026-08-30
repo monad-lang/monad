@@ -28,12 +28,12 @@ use lang.codegen.ir {
 }
 use lang.module {
   LoadedModules, ModuleInfo, elaborate_module_decls_best_effort, get_loaded_all,
-  get_loaded_main, get_module_info_decls, mk,
+  get_loaded_main, get_module_info_decls, mk, resolve_open_aliases_in_modules,
 }
 use lang.scope {
   add_constraint_dict_params_decls, build_scope_from_decls, collect_classes,
-  collect_infixes, collect_open_aliases, promote_instance_defs, resolve_class_calls_decls,
-  resolve_infix_decls, resolve_open_alias_decls, strip_all_leading_binders,
+  collect_infixes, promote_instance_defs, resolve_class_calls_decls,
+  resolve_infix_decls, strip_all_leading_binders,
   validate_no_unresolved_class_calls,
 }
 
@@ -4169,9 +4169,27 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
     let module_count := List.length all_mods;
     if verbose then println ("Loaded " ++ I64.to_string module_count ++ " modules") else return unit;
 
+    // Stage 0b: resolve every `open`/`use`-brought bare-name alias
+    // (`open IO {file_exists}`, `use std.io {file_exists}`) to its real,
+    // fully qualified target -- MUST run per-module, on each module's
+    // own `decl_list`, BEFORE `collect_all_decls_from_modules` flattens
+    // everything into one global list just below. Applying this AFTER
+    // flattening (an earlier version of this fix) let one module's own
+    // alias shadow an unrelated LOCAL variable of the same bare name in
+    // a completely different module -- see `lang.module`'s own
+    // `resolve_open_aliases_in_module_info` doc comment for the
+    // confirmed regression (`Reachable decl_list` collapsing from 1925
+    // to 181) this fixes.
+    let t_open_alias := Bench.now;
+    let aliased_mods := resolve_open_aliases_in_modules all_mods;
+    if verbose then do {
+        let _ := Bench.report "open_alias_resolve" (I64.sub Bench.now t_open_alias);
+        return unit
+    } else return unit;
+
     // Stage 1: collect all declarations without module prefixes
     let t_collect := Bench.now;
-    let all_decls := collect_all_decls_from_modules all_mods List.empty;
+    let all_decls := collect_all_decls_from_modules aliased_mods List.empty;
     if verbose then do {
         let def_count := List.length all_decls;
         let _ := Bench.report "collect_decls" (I64.sub Bench.now t_collect);
@@ -4199,25 +4217,6 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
         return unit
     } else return unit;
 
-    // Stage 2b: resolve every `open`/`use`-brought bare-name alias
-    // (`open IO {file_exists}`, `use std.io {file_exists}`) to its real,
-    // fully qualified target -- same "must run before reachability
-    // filtering" reasoning as infix resolution just above (see
-    // lang.scope's own extended doc comment above `OpenAlias`/
-    // `resolve_open_alias_decls`): reachability's name-based walk is
-    // blind to a bare `file_exists` reference actually meaning `IO.
-    // file_exists`, so the real def gets filtered out as unreachable
-    // and codegen later emits a call to a global that was never
-    // compiled ("undefined value '@file_exists'" at link time) --
-    // confirmed live compiling `lang/main.mo` itself.
-    let t_open_alias := Bench.now;
-    let open_aliases := collect_open_aliases resolved_decls;
-    let aliased_decls := resolve_open_alias_decls open_aliases resolved_decls;
-    if verbose then do {
-        let _ := Bench.report "open_alias_resolve" (I64.sub Bench.now t_open_alias);
-        return unit
-    } else return unit;
-
     // Stage 3: dictionary-passing typeclass dispatch (see
     // plans/bootstrapping/self-hosted-compiler.md's Phases 2-4) -- same
     // "must run before reachability filtering" reasoning as infix
@@ -4233,7 +4232,7 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
     // before 4 (Phase 4 needs the dict PARAMETERS Phase 3 adds already
     // in place to know which locals are bound dicts).
     let t_dict := Bench.now;
-    let promoted_decls := promote_instance_defs aliased_decls;
+    let promoted_decls := promote_instance_defs resolved_decls;
     let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
     if verbose then do {
         let _ := Bench.report "dict_dispatch" (I64.sub Bench.now t_dict);

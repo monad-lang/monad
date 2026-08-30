@@ -36,12 +36,13 @@ use lang.codegen.emit {collect_all_decls_from_modules, compile_db_module, filter
 use lang.codegen.ir {LLVMModule}
 use lang.module {
   elaborate_module_decls_best_effort,
-  get_loaded_all, get_loaded_main, get_module_info_decls, try_parse_decls,
+  get_loaded_all, get_loaded_main, get_module_info_decls, resolve_open_aliases_in_modules,
+  try_parse_decls,
 }
 use lang.scope {
   add_constraint_dict_params_decls, build_scope_from_decls, collect_classes,
-  collect_infixes, collect_open_aliases, promote_instance_defs, resolve_class_calls_decls,
-  resolve_infix_decls, resolve_open_alias_decls, validate_no_unresolved_class_calls,
+  collect_infixes, promote_instance_defs, resolve_class_calls_decls,
+  resolve_infix_decls, validate_no_unresolved_class_calls,
 }
 use io {IO}
 
@@ -234,7 +235,18 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
             let driver_source := synthesize_test_driver_source (test_def_names test_defs);
             match try_parse_decls driver_source {
                 Option.some driver_decls => do {
-                    let all_decls := collect_all_decls_from_modules (get_loaded_all loaded) List.empty;
+                    // Must run per-module, on each loaded module's own
+                    // decl_list, BEFORE `collect_all_decls_from_modules`
+                    // flattens everything -- see `lang.module`'s own
+                    // `resolve_open_aliases_in_module_info` doc comment
+                    // (confirmed regression: applying this to an
+                    // already-flattened multi-module list lets one
+                    // module's own alias shadow an unrelated local
+                    // variable of the same bare name elsewhere). The
+                    // synthesized `driver_decls` need no resolution here
+                    // -- generated source, no `use`/`open` of its own.
+                    let aliased_mods := resolve_open_aliases_in_modules (get_loaded_all loaded);
+                    let all_decls := collect_all_decls_from_modules aliased_mods List.empty;
                     let spliced := List.append driver_decls all_decls;
                     // See lang.codegen.emit's own `compile_loaded_modules_to_ir`
                     // for why this must resolve infixes BEFORE reachability
@@ -247,15 +259,6 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     // actually compile at all.
                     let infixes := collect_infixes all_decls;
                     let resolved_spliced := resolve_infix_decls infixes spliced;
-                    // Same "must run before reachability filtering"
-                    // reasoning, for `open`/`use`-brought bare-name
-                    // aliases (`open IO {file_exists}`) instead of infix
-                    // operators -- see lang.scope's own `OpenAlias`/
-                    // `resolve_open_alias_decls` doc comment, and
-                    // lang.codegen.emit's `compile_loaded_modules_to_ir`
-                    // for where this was first confirmed necessary.
-                    let open_aliases_spliced := collect_open_aliases resolved_spliced;
-                    let aliased_spliced := resolve_open_alias_decls open_aliases_spliced resolved_spliced;
                     // Dictionary-passing typeclass dispatch (see
                     // lang.codegen.emit's own compile_loaded_modules_to_ir
                     // for the full ordering rationale) -- the synthesized
@@ -263,7 +266,7 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     // routed after infix resolution), so this is what
                     // actually closes the gap `28d98dc`'s own commit
                     // message left explicitly open for `monad test`.
-                    let promoted_spliced := promote_instance_defs aliased_spliced;
+                    let promoted_spliced := promote_instance_defs resolved_spliced;
                     let dict_param_spliced := add_constraint_dict_params_decls promoted_spliced;
 
                     // Stage 3 of `bootstrapping/unify-check-compile-test-

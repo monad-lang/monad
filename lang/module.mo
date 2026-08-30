@@ -23,9 +23,9 @@ use lang.typecheck.meta_reflect {
 }
 use lang.scope {
   add_constraint_dict_params_decls, alias_decls_in_scope, build_scope_from_decls,
-  collect_classes, collect_infixes, constraint_vars, decls_have_aliasable_decls,
+  collect_classes, collect_infixes, collect_open_aliases, constraint_vars, decls_have_aliasable_decls,
   list_append, modpath_eq, param_names, promote_instance_defs,
-  resolve_class_calls_decls, resolve_infix_decls, scope_data_empty,
+  resolve_class_calls_decls, resolve_infix_decls, resolve_open_alias_decls, scope_data_empty,
   scope_find_inductive, scope_push_local, scope_resolve_name,
   validate_no_unresolved_class_calls,
 }
@@ -1922,6 +1922,39 @@ def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
 def get_module_info_decls (mi : ModuleInfo) : List Decl :=
     match mi {
         ModuleInfo.mk path file_path decl_list => decl_list
+    }
+
+/// Resolves every bare `open`/`use`-imported name inside ONE module's
+/// own `decl_list` to its real, fully qualified target -- see
+/// `lang.scope`'s own `OpenAlias`/`collect_open_aliases`/`resolve_open_
+/// alias_decls` doc comment. Must run PER-MODULE, before `lang.codegen.
+/// emit`'s `collect_all_decls_from_modules` flattens every loaded
+/// module's own decls into one global list -- collecting and applying
+/// the alias table AFTER flattening (an earlier version of this fix)
+/// let one module's own `use X {name}` alias shadow an unrelated LOCAL
+/// variable of the same bare name in a completely different module,
+/// since `resolve_open_alias_term` (like the pre-existing `resolve_
+/// infix_term` it mirrors) does a blind, name-only rewrite with no
+/// per-module or local-binder-shadowing awareness at all. Confirmed as
+/// a real regression via the full `lang/main.mo` self-compile: `Reach
+/// able decl_list` collapsed from 1925 to 181 the moment the (then-
+/// global) pass landed, starving `resolve_class_calls_decls` of
+/// instances that used to be reachable.
+def resolve_open_aliases_in_module_info (mi : ModuleInfo) : ModuleInfo :=
+    match mi {
+        ModuleInfo.mk path file_path decl_list =>
+            let aliases := collect_open_aliases decl_list in
+            ModuleInfo.mk path file_path (resolve_open_alias_decls aliases decl_list)
+    }
+
+/// `resolve_open_aliases_in_module_info` applied to every loaded
+/// module -- the actual entry point `lang.codegen.emit`/`lang.codegen.
+/// test_driver` call, on `get_loaded_all`'s own `List ModuleInfo`,
+/// BEFORE `collect_all_decls_from_modules` flattens it.
+def resolve_open_aliases_in_modules (modules : List ModuleInfo) : List ModuleInfo :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.cons (resolve_open_aliases_in_module_info m) (resolve_open_aliases_in_modules rest),
     }
 
 #[partial]
