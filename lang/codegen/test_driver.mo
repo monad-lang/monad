@@ -40,8 +40,8 @@ use lang.module {
 }
 use lang.scope {
   add_constraint_dict_params_decls, build_scope_from_decls, collect_classes,
-  collect_infixes, promote_instance_defs, resolve_class_calls_decls,
-  resolve_infix_decls, validate_no_unresolved_class_calls,
+  collect_infixes, collect_open_aliases, promote_instance_defs, resolve_class_calls_decls,
+  resolve_infix_decls, resolve_open_alias_decls, validate_no_unresolved_class_calls,
 }
 use io {IO}
 
@@ -247,6 +247,15 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     // actually compile at all.
                     let infixes := collect_infixes all_decls;
                     let resolved_spliced := resolve_infix_decls infixes spliced;
+                    // Same "must run before reachability filtering"
+                    // reasoning, for `open`/`use`-brought bare-name
+                    // aliases (`open IO {file_exists}`) instead of infix
+                    // operators -- see lang.scope's own `OpenAlias`/
+                    // `resolve_open_alias_decls` doc comment, and
+                    // lang.codegen.emit's `compile_loaded_modules_to_ir`
+                    // for where this was first confirmed necessary.
+                    let open_aliases_spliced := collect_open_aliases resolved_spliced;
+                    let aliased_spliced := resolve_open_alias_decls open_aliases_spliced resolved_spliced;
                     // Dictionary-passing typeclass dispatch (see
                     // lang.codegen.emit's own compile_loaded_modules_to_ir
                     // for the full ordering rationale) -- the synthesized
@@ -254,7 +263,7 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     // routed after infix resolution), so this is what
                     // actually closes the gap `28d98dc`'s own commit
                     // message left explicitly open for `monad test`.
-                    let promoted_spliced := promote_instance_defs resolved_spliced;
+                    let promoted_spliced := promote_instance_defs aliased_spliced;
                     let dict_param_spliced := add_constraint_dict_params_decls promoted_spliced;
 
                     // Stage 3 of `bootstrapping/unify-check-compile-test-

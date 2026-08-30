@@ -1268,6 +1268,204 @@ def resolve_infix_decls (infixes : List Infix) (decl_list : List Decl) : List De
         List.cons d rest => List.cons (resolve_infix_decl infixes d) (resolve_infix_decls infixes rest),
     }
 
+// --- Open/use alias resolution: rewrite a bare `open`/`use`-imported
+// name reference to its real, fully qualified target -----------------
+//
+// `alias_def` (above, `apply_open_names`/`apply_use_item`) registers a
+// bare-imported name (`open IO {file_exists}`, `use std.io {file_exists}`)
+// as its OWN, separate `ScopeData` entry -- same signature/body as the
+// real def, but under the BARE name, not the qualified one. That's
+// exactly what the type checker needs to resolve a bare call's
+// signature. But codegen (`lang.codegen.emit`) never consults
+// `ScopeData` at all -- it walks the raw, still-bare `Term`s directly,
+// and a bare call's own `Term.var` still carries whatever bare name the
+// SOURCE TEXT wrote, never rewritten to the real qualified path the way
+// `resolve_infix_term` already does for operators. `compile_call_head`'s
+// own fallback (the ordinary, non-native/non-constructor call path)
+// mangles THAT bare name directly (`replace_dots_with_underscores`),
+// producing a call to a global that was never actually compiled (the
+// real one compiled under its qualified, mangled name instead) --
+// `llc: undefined value '@file_exists'`, confirmed live compiling
+// `lang/main.mo` itself (`lang/module.mo`'s own `open IO {file_exists,
+// is_dir, list_dir, read_file}`, used bare throughout). `println` never
+// exposed this: it's ALSO separately registered as a native fast-path
+// name (`native_op_table`'s bare "println" key), so its bare calls are
+// term-level-inlined before ever reaching `compile_call_head`'s
+// fallback at all.
+//
+// Fixed the same way `resolve_infix_decls` fixes its own analogous
+// "operator not yet resolved to its real target" gap: a dedicated pass,
+// run once per compile over the flat, already-loaded decl_list, that
+// finds every `open`/`use` alias declared anywhere in it and rewrites
+// every bare `Term.var` reference matching one to the real, fully
+// qualified name -- mirrors `resolve_infix_term`'s own recursion
+// exactly (a blind, name-only `term_map_children` walk, no local-
+// binder-shadowing check -- same tolerated risk `resolve_infix_term`
+// already accepts, low in practice: none of `file_exists`/`is_dir`/
+// `list_dir`/`read_file`/`write_file` collide with any local variable
+// name anywhere in this corpus).
+struct OpenAlias {
+    bare_name : String,
+    qualified_name : String,
+}
+
+#[partial]
+def mk_open_alias (bare : String) (qualified : String) : OpenAlias :=
+    { bare_name := bare, qualified_name := qualified }
+
+#[partial]
+def lookup_open_alias (aliases : List OpenAlias) (name : String) : Option String :=
+    match aliases {
+        List.empty => Option.none,
+        List.cons a rest =>
+            match a {
+                { bare_name := b, qualified_name := q } =>
+                    if String.beq b name then Option.some q else lookup_open_alias rest name,
+            },
+    }
+
+#[partial]
+def append_open_aliases (a : List OpenAlias) (b : List OpenAlias) : List OpenAlias :=
+    match a {
+        List.empty => b,
+        List.cons x rest => List.cons x (append_open_aliases rest b),
+    }
+
+#[partial]
+def open_aliases_from_names (path : ModulePath) (names : List Identifier) : List OpenAlias :=
+    match names {
+        List.empty => List.empty,
+        List.cons n rest =>
+            List.cons (mk_open_alias (show_identifier n) (show_module_path (path_extend path n))) (open_aliases_from_names path rest),
+    }
+
+#[partial]
+def open_aliases_from_filter (path : ModulePath) (filter : OpenFilter) : List OpenAlias :=
+    match filter {
+        OpenFilter.open_all => List.empty,
+        OpenFilter.open_only names => open_aliases_from_names path names,
+    }
+
+#[partial]
+def use_aliases_from_item (path : ModulePath) (item : UseItem) : List OpenAlias :=
+    match item {
+        UseItem.use_name n => List.cons (mk_open_alias (show_identifier n) (show_module_path (path_extend path n))) List.empty,
+        UseItem.use_rename n alias_name => List.cons (mk_open_alias (show_identifier alias_name) (show_module_path (path_extend path n))) List.empty,
+        UseItem.use_glob => List.empty,
+        UseItem.use_sub n items => use_aliases_from_items (path_extend path n) items,
+        UseItem.use_sub_rename n _alias items => use_aliases_from_items (path_extend path n) items,
+    }
+
+#[partial]
+def use_aliases_from_items (path : ModulePath) (items : List UseItem) : List OpenAlias :=
+    match items {
+        List.empty => List.empty,
+        List.cons item rest => append_open_aliases (use_aliases_from_item path item) (use_aliases_from_items path rest),
+    }
+
+#[partial]
+def open_aliases_from_decl (d : Decl) : List OpenAlias :=
+    match d {
+        Decl.open_d path filter => open_aliases_from_filter path filter,
+        Decl.scoped_open_d path filter inner =>
+            append_open_aliases (open_aliases_from_filter path filter) (open_aliases_from_decl inner),
+        Decl.use_d path filter _public =>
+            match filter {
+                UseFilter.use_bare => List.empty,
+                UseFilter.use_items items => use_aliases_from_items path items,
+            },
+        _ => List.empty,
+    }
+
+/// Collects every `open`/`use` bare-name alias declared anywhere in
+/// `decl_list` -- mirrors `collect_infixes`'s identical role/doc
+/// comment for operators.
+#[partial]
+def collect_open_aliases (decl_list : List Decl) : List OpenAlias :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest => append_open_aliases (open_aliases_from_decl d) (collect_open_aliases rest),
+    }
+
+/// Deliberately does NOT mirror `resolve_infix_term`'s family all the
+/// way down into `Param`/`InductConstructor`/`StructField`/`ClassDef`
+/// TYPE positions the way `resolve_infix_decl` does -- those are pure
+/// type-level annotations, never "compiled as a call" the way
+/// `compile_call_head`'s buggy fallback is, so they don't need this
+/// fix. Rewriting them anyway is actively WRONG: `IO` itself is
+/// routinely brought in bare (`use io {IO, println}`), and `emit_type_
+/// head_is_io` (`lang.scope`, used by `compile_db_def_ir_body`'s own
+/// "does `main`'s `IO`-typed return value need unwrapping for the C
+/// runtime's `int main()`" check) matches the type head by EXACT STRING
+/// COMPARISON against literal `"IO"` -- rewriting a bare `IO` type
+/// annotation to some qualified alternative breaks that match, leaving
+/// `main`'s real computed value wrapped and an arbitrary tag/pointer
+/// returned as the process exit code instead. Confirmed as a real
+/// regression from an earlier, broader version of this same pass (which
+/// did walk `Def.typ` too, mirroring `resolve_infix_def` exactly): every
+/// `lang/codegen/test/test_closure_capture_e2e.mo` test started failing
+/// with a plausible-looking but wrong number (e.g. expected 15, got 16)
+/// the moment it landed, all four sharing this exact "IO", used both as
+/// an opened value name and a bare type annotation" shape. Restricted to
+/// `Def.term` (and `Instance.defs`' own method bodies) only -- the two
+/// places an executable `Term.var` naming a bare `open`/`use`d function
+/// can actually reach `compile_call_head`'s fallback.
+#[partial]
+def resolve_open_alias_term (aliases : List OpenAlias) (t : Term) : Term :=
+    match t {
+        Term.var idx dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match lookup_open_alias aliases (show_identifier id) {
+                        Option.some qualified => Term.var idx (DebugName.named (Identifier.id qualified)),
+                        Option.none => t,
+                    },
+                DebugName.unnamed => t,
+            },
+        _ => term_map_children (resolve_open_alias_term aliases) t,
+    }
+
+#[partial]
+def resolve_open_alias_def (aliases : List OpenAlias) (d : Def) : Def :=
+    match d {
+        Def.mk dname typ term constraints attrs vis =>
+            Def.mk dname typ (resolve_open_alias_term aliases term) constraints attrs vis,
+    }
+
+#[partial]
+def resolve_open_alias_defs_list (aliases : List OpenAlias) (defs : List Def) : List Def :=
+    match defs {
+        List.empty => List.empty,
+        List.cons d rest => List.cons (resolve_open_alias_def aliases d) (resolve_open_alias_defs_list aliases rest),
+    }
+
+#[partial]
+def resolve_open_alias_instance (aliases : List OpenAlias) (ins : Instance) : Instance :=
+    match ins {
+        Instance.mk insname cls constraints args vis implicit_params defs =>
+            Instance.mk insname cls constraints args vis implicit_params (resolve_open_alias_defs_list aliases defs),
+    }
+
+#[partial]
+def resolve_open_alias_decl (aliases : List OpenAlias) (d : Decl) : Decl :=
+    match d {
+        Decl.def_d d_val => Decl.def_d (resolve_open_alias_def aliases d_val),
+        Decl.instance_d ins => Decl.instance_d (resolve_open_alias_instance aliases ins),
+        Decl.scoped_open_d path filter inner => Decl.scoped_open_d path filter (resolve_open_alias_decl aliases inner),
+        _ => d,
+    }
+
+/// Resolves open/use aliases across a whole decl_list at once --
+/// `resolve_open_alias_decl` applied to every entry. Wired in right
+/// alongside `resolve_infix_decls` (`lang.codegen.emit`'s
+/// `compile_loaded_modules_to_ir`).
+#[partial]
+def resolve_open_alias_decls (aliases : List OpenAlias) (decl_list : List Decl) : List Decl :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest => List.cons (resolve_open_alias_decl aliases d) (resolve_open_alias_decls aliases rest),
+    }
+
 // --- Phase 2 (dictionary-passing plan, see
 // plans/bootstrapping/self-hosted-compiler.md): promote instance
 // methods to real top-level defs, and synthesize one dictionary VALUE

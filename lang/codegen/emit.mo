@@ -32,8 +32,8 @@ use lang.module {
 }
 use lang.scope {
   add_constraint_dict_params_decls, build_scope_from_decls, collect_classes,
-  collect_infixes, promote_instance_defs, resolve_class_calls_decls,
-  resolve_infix_decls, strip_all_leading_binders,
+  collect_infixes, collect_open_aliases, promote_instance_defs, resolve_class_calls_decls,
+  resolve_infix_decls, resolve_open_alias_decls, strip_all_leading_binders,
   validate_no_unresolved_class_calls,
 }
 
@@ -4199,6 +4199,25 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
         return unit
     } else return unit;
 
+    // Stage 2b: resolve every `open`/`use`-brought bare-name alias
+    // (`open IO {file_exists}`, `use std.io {file_exists}`) to its real,
+    // fully qualified target -- same "must run before reachability
+    // filtering" reasoning as infix resolution just above (see
+    // lang.scope's own extended doc comment above `OpenAlias`/
+    // `resolve_open_alias_decls`): reachability's name-based walk is
+    // blind to a bare `file_exists` reference actually meaning `IO.
+    // file_exists`, so the real def gets filtered out as unreachable
+    // and codegen later emits a call to a global that was never
+    // compiled ("undefined value '@file_exists'" at link time) --
+    // confirmed live compiling `lang/main.mo` itself.
+    let t_open_alias := Bench.now;
+    let open_aliases := collect_open_aliases resolved_decls;
+    let aliased_decls := resolve_open_alias_decls open_aliases resolved_decls;
+    if verbose then do {
+        let _ := Bench.report "open_alias_resolve" (I64.sub Bench.now t_open_alias);
+        return unit
+    } else return unit;
+
     // Stage 3: dictionary-passing typeclass dispatch (see
     // plans/bootstrapping/self-hosted-compiler.md's Phases 2-4) -- same
     // "must run before reachability filtering" reasoning as infix
@@ -4214,7 +4233,7 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
     // before 4 (Phase 4 needs the dict PARAMETERS Phase 3 adds already
     // in place to know which locals are bound dicts).
     let t_dict := Bench.now;
-    let promoted_decls := promote_instance_defs resolved_decls;
+    let promoted_decls := promote_instance_defs aliased_decls;
     let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
     if verbose then do {
         let _ := Bench.report "dict_dispatch" (I64.sub Bench.now t_dict);
