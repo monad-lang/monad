@@ -2136,7 +2136,36 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
             match dbg {
                 DebugName.named id =>
                     match lookup_local_type env id {
-                        Option.some typ => Option.some typ,
+                        // A local's own DECLARED type is often a fully-
+                        // APPLIED type (e.g. `acc : BTreeMap String Json`,
+                        // an App chain), not the bare type-constructor
+                        // name a class carrier actually is (`BTreeMap`) --
+                        // every OTHER branch here already normalizes to a
+                        // bare `carrier_var` (via `show_module_path`/
+                        // `show_identifier`), this was the one outlier
+                        // still returning the raw declared type verbatim.
+                        // `term_matches_carrier` (this file) compares an
+                        // instance's own bare declared carrier
+                        // structurally, so a fully-applied carrier from
+                        // here NEVER matched (a `Term.var` instance head
+                        // only matches another bare `Term.var`, never a
+                        // `Term.app`) -- confirmed as a real, live gap via
+                        // `examples/json.mo`'s `Map.insert k v acc`
+                        // (`acc : BTreeMap String Json`): the carrier
+                        // inferred from `acc` was the full applied type,
+                        // silently failed to match `instance [BOrd K] Map
+                        // BTreeMap`, and (since the args-inferred carrier
+                        // wasn't `Option.none`) the class's own default-
+                        // carrier fallback was never even attempted,
+                        // leaving `Map.insert` completely unresolved.
+                        // `type_head_name_local` reduces to just the head
+                        // identifier, matching every other branch's own
+                        // convention.
+                        Option.some typ =>
+                            match type_head_name_local typ {
+                                Option.some head_name => Option.some (carrier_var (show_identifier head_name)),
+                                Option.none => Option.some typ,
+                            },
                         Option.none =>
                             match lookup_ctor_owner ctor_owners id {
                                 Option.some owner => Option.some (carrier_var (show_module_path owner)),
