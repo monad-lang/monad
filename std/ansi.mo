@@ -56,10 +56,10 @@ def style_code (s : Style) : String :=
 /// Constructs an ANSI escape sequence for a single modifier.
 def escape (m : Modifier) : String :=
     match m {
-        fg c => "\u{1b}[" ++ color_fg_code c ++ "m",
-        bg c => "\u{1b}[" ++ color_bg_code c ++ "m",
-        style s => "\u{1b}[" ++ style_code s ++ "m",
-        reset => "\u{1b}[0m"
+        fg c => "[" ++ color_fg_code c ++ "m",
+        bg c => "[" ++ color_bg_code c ++ "m",
+        style s => "[" ++ style_code s ++ "m",
+        reset => "[0m"
     }
 
 def red (s : String) : String :=
@@ -104,60 +104,64 @@ def term_is_dumb (v : Option String) : Bool :=
 /// Whether ANSI colors should be used, per NO_COLOR / FORCE_COLOR / TERM.
 /// NO_COLOR (https://no-color.org) always wins; FORCE_COLOR forces colors on
 /// unless NO_COLOR is set; otherwise colors are on unless TERM=dumb.
-def colors_enabled : IO Bool :=
-    get_env "NO_COLOR" >>= fn (no_color : Option String) =>
-    if env_flag_set no_color then Monad.pure false
-    else
-        get_env "FORCE_COLOR" >>= fn (force_color : Option String) =>
-        if env_flag_set force_color then Monad.pure true
-        else
-            get_env "TERM" >>= fn (term : Option String) =>
-            Monad.pure (Bool.not (term_is_dumb term))
+def colors_enabled : IO Bool := do {
+    let no_color <- get_env "NO_COLOR";
+    if env_flag_set no_color then return false
+    else do {
+        let force_color <- get_env "FORCE_COLOR";
+        if env_flag_set force_color then return true
+        else do {
+            let term <- get_env "TERM";
+            return (Bool.not (term_is_dumb term))
+        }
+    }
+}
 
 /// Wraps `s` in `color` if colors are enabled, otherwise returns `s` unchanged.
-pub def colored (s : String) (color : Color) : IO String :=
-    colors_enabled >>= fn (enabled : Bool) =>
-    if enabled then Monad.pure (escape (Modifier.fg color) ++ s ++ escape Modifier.reset)
-    else Monad.pure s
+pub def colored (s : String) (color : Color) : IO String := do {
+    let enabled <- colors_enabled;
+    if enabled then return (escape (Modifier.fg color) ++ s ++ escape Modifier.reset)
+    else return s
+}
 
 // ---------- Tests ----------
 
 
 #[test]
 def test_escape_reset : Bool :=
-    escape Modifier.reset == "\u{1b}[0m"
+    escape Modifier.reset == "[0m"
 
 #[test]
 def test_escape_fg_red : Bool :=
-    escape (Modifier.fg Color.red) == "\u{1b}[31m"
+    escape (Modifier.fg Color.red) == "[31m"
 
 #[test]
 def test_escape_bg_blue : Bool :=
-    escape (Modifier.bg Color.blue) == "\u{1b}[44m"
+    escape (Modifier.bg Color.blue) == "[44m"
 
 #[test]
 def test_escape_style_bold : Bool :=
-    escape (Modifier.style Style.bold) == "\u{1b}[1m"
+    escape (Modifier.style Style.bold) == "[1m"
 
 #[test]
 def test_escape_color256 : Bool :=
-    escape (Modifier.fg (Color.color256 42u8)) == "\u{1b}[38;5;42m"
+    escape (Modifier.fg (Color.color256 42u8)) == "[38;5;42m"
 
 #[test]
 def test_escape_true_color : Bool :=
-    escape (Modifier.fg (Color.true_color 1u8 2u8 3u8)) == "\u{1b}[38;2;1;2;3m"
+    escape (Modifier.fg (Color.true_color 1u8 2u8 3u8)) == "[38;2;1;2;3m"
 
 #[test]
 def test_red_wraps_and_resets : Bool :=
-    red "x" == "\u{1b}[31mx\u{1b}[0m"
+    red "x" == "[31mx[0m"
 
 #[test]
 def test_green_wraps_and_resets : Bool :=
-    green "x" == "\u{1b}[32mx\u{1b}[0m"
+    green "x" == "[32mx[0m"
 
 #[test]
 def test_bold_wraps_and_resets : Bool :=
-    bold "x" == "\u{1b}[1mx\u{1b}[0m"
+    bold "x" == "[1mx[0m"
 
 #[test]
 def test_fail_is_bold_red : Bool :=

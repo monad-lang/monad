@@ -162,8 +162,7 @@ def cli_bad_arg_field_in_ctor (ctor_display : String) (fields : List FieldInfo) 
                 then Option.some
                     (cli_concat_all
                         ["#[derive_cli]: `", ctor_display, "`'s field `", cli_field_name f,
-                         "` is annotated `#[arg]` but is not `Bool` — only boolean flags are \
-                          supported (v1)"])
+                         "` is annotated `#[arg]` but is not `Bool` — only boolean flags are supported (v1)"])
                 else cli_bad_arg_field_in_ctor ctor_display tail,
     }
 

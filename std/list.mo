@@ -122,10 +122,10 @@ def test_sum : Bool :=
         |> List.sum
         |> BEq.beq 10
     
+// TODO fix instance resolution, then use `|> List.contains "c"` here instead.
 #[test]
 def test_contains : Bool :=
     ["a", "b", "c"]
-        // |> List.contains "c" // TODO fix instance resolution
         |> List.any (fn a => a == "c")
 
 #[test]

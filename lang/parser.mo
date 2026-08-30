@@ -5525,6 +5525,26 @@ def expr_climb_first (r: ParseResult Term) (ctx: List Identifier) (min_prec: I64
 def expr_climb_rest (input: String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
     expr_climb_rest_ws (take_while is_space input) lhs ctx min_prec
 
+/// Deliberately whitespace-only here (NOT comment-skipping too) --
+/// `atom_term` tries "one more bare application argument" next, and a
+/// bare identifier is inherently ambiguous between "another argument to
+/// `lhs`" and "the start of the next unrelated construct" (a sibling
+/// match-case's own constructor name, the next top-level decl's own
+/// name, ...). Skipping a comment here would let that ambiguity reach
+/// PAST the comment into whatever follows it -- confirmed as a real
+/// regression from an earlier version of this exact fix, which skipped
+/// comments unconditionally right here: `lang/codegen/emit.mo`'s own
+/// `compose_seq` (a match arm's struct-literal body, no trailing comma,
+/// followed by a multi-line comment, then the next arm's `Option.none`)
+/// got its body corrupted by swallowing `Option.none` as a bogus extra
+/// argument, truncating the rest of the file -- the exact same failure
+/// mode `c1ed034` already fixed for a missing comma with no comment
+/// involved at all, just hit through a different door. `expr_climb_op`
+/// below (reached once `atom_term` here has already failed) is the
+/// right, safe place to skip comments -- an explicit infix OPERATOR
+/// token is unambiguous: nothing else in this grammar starts a case
+/// body/declaration with `|>`/`&&`/`++`/..., so seeing one is only ever
+/// a genuine continuation of THIS expression.
 #[partial]
 def expr_climb_rest_ws (r: ParseResult String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
     match r {
@@ -5539,9 +5559,20 @@ def expr_climb_rest_next (r: ParseResult Term) (input: String) (lhs: Term) (ctx:
         fail _ => expr_climb_op input lhs ctx min_prec
     }
 
+/// Skips comments (`skip_docstrings`, not just whitespace) before
+/// trying to match an infix operator -- safe, unlike `atom_term`'s own
+/// bare-application attempt above (see `expr_climb_rest_ws`'s own doc
+/// comment for why): an operator TOKEN is unambiguous, so a `//`/`///`
+/// comment line sitting between two lines of a multi-line operator
+/// chain (`lhs\n  // comment\n  && rhs`, `lhs\n  // comment\n  |> rhs`)
+/// no longer silently ends the climb right there. Confirmed live via
+/// the full `lang/main.mo` self-compile: `std/list.mo`'s `|> List.any
+/// (...)` and `lang/core_eval.mo`'s `&& is_num (...)`, each preceded by
+/// exactly this shape, both truncated the rest of their own file before
+/// this fix.
 #[partial]
 def expr_climb_op (input: String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
-    expr_climb_op_try (operator_parse input) input lhs ctx min_prec
+    expr_climb_op_try (operator_parse (skip_docstrings (skip_spaces input))) input lhs ctx min_prec
 
 #[partial]
 def expr_climb_op_try (r: ParseResult String) (input: String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
