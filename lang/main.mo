@@ -136,7 +136,7 @@ def compile_file (file_path : String) (output_dir : String) (output_name : Strin
                 ElaboratedModules.mk scope_ target_decls_ _elaborated => do {
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                     let t_check := Bench.now;
-                    let diags <- check_module_with_scope scope_ target_decls_ empty_locs (Option.some file_path) verbose;
+                    let diags : List String <- check_module_with_scope scope_ target_decls_ empty_locs (Option.some file_path) verbose;
                     if verbose then do {
                         let _ := Bench.report "check_module_with_scope" (I64.sub Bench.now t_check);
                         return unit
@@ -408,7 +408,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
                     match em {
                         ElaboratedModules.mk scope_ target_decls_ _elaborated => do {
                             let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-                            let diags <- check_module_with_scope scope_ target_decls_ empty_locs (Option.some f) verbose;
+                            let diags : List String <- check_module_with_scope scope_ target_decls_ empty_locs (Option.some f) verbose;
                             match diags {
                                 List.cons _ _ => do {
                                     print_diagnostics diags;

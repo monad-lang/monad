@@ -1262,6 +1262,24 @@ struct ScopeData {
     // evaluation with "unresolved global: Map.empty") -- `HashMap.map`/
     // `.empty_buckets` are ordinary functions, no dispatch needed.
     def_params : HashMap ModulePath (List (Pair Identifier Term)) := HashMap.map HashMap.empty_buckets,
+    // A def's own DECLARED return type (the final non-`Pi`/`Forall` type
+    // at the end of its signature's own Pi-chain, `Def.typ` -- NOT its
+    // body's inferred type, and NOT `ScopeDef.sig`, which stays
+    // unconditionally `Term.hole` by its own load-bearing design, see
+    // `build_scope_def`'s doc comment). Lets `find_inductive_for_cases`
+    // (`lang/typecheck/infer.mo`) resolve a match's scrutinee type when
+    // it's a bare call to a known def (`match fresh_temp c { ... }`) --
+    // pure INFER-mode type-checking a call otherwise can't recover a
+    // return type at all (`ScopeDef.sig` is hole), so it fell through to
+    // an ambiguous constructor-NAME-only scan across every inductive in
+    // scope; every `struct`'s auto-generated constructor is named `mk`
+    // (`build_scope_struct`), so that scan is ambiguous between ANY two
+    // structs the moment either is matched directly on a call result --
+    // confirmed to silently return the WRONG field's value, not just
+    // fail loudly. Mirrors `def_params`'s own precedent exactly (added
+    // for the analogous "recover param types without touching the
+    // load-bearing `sig`/`body` hole sentinel" need).
+    def_return_types : HashMap ModulePath Term := HashMap.map HashMap.empty_buckets,
 }
 
 // A scope node in the linked list.

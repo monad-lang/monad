@@ -99,17 +99,17 @@ def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) : 
 def fresh_temp (c : CodegenCtx) : CtxStrPair :=
     let name := String.concat "t" (I64.to_string c.next_temp) in
     let c2 : CodegenCtx := { c with next_temp := c.next_temp + 1 } in
-    { ctx := c2, str := name }
+    CtxStrPair.mk c2 name
 
 #[partial]
 def fresh_label (c : CodegenCtx) (prefix : String) : CtxStrPair :=
     let name := String.concat prefix (String.concat "_" (I64.to_string c.next_label)) in
     let c2 : CodegenCtx := { c with next_label := c.next_label + 1 } in
-    { ctx := c2, str := name }
+    CtxStrPair.mk c2 name
 
 #[partial]
 def ctx_bind_local (c : CodegenCtx) (name : Identifier) (val : LLVMValue) : CodegenCtx :=
-    let binding : LocalBinding := { name := name, val := val } in
+    let binding : LocalBinding := LocalBinding.mk name val in
     { c with locals := List.cons binding c.locals }
 
 #[partial]
@@ -1427,7 +1427,7 @@ def build_capture_list (c : CodegenCtx) (names : List Identifier) : List LocalBi
     List.cons n rest =>
         match ctx_lookup_local c n {
             Option.some val =>
-                let binding : LocalBinding := { name := n, val := val } in
+                let binding : LocalBinding := LocalBinding.mk n val in
                 List.cons binding (build_capture_list c rest),
             Option.none => build_capture_list c rest,
         },
@@ -1436,7 +1436,10 @@ def build_capture_list (c : CodegenCtx) (names : List Identifier) : List LocalBi
 #[partial]
 def captures_to_vals (captures : List LocalBinding) : List LLVMValue := match captures {
     List.empty => List.empty,
-    List.cons cap rest => List.cons cap.val (captures_to_vals rest),
+    List.cons cap rest =>
+        match cap {
+            LocalBinding.mk _cname cval => List.cons cval (captures_to_vals rest),
+        },
 }
 
 struct GetEnvResult {

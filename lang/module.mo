@@ -879,25 +879,19 @@ def dependency_not_found_msg (mp : ModulePath) : String :=
 /// casing emptiness wouldn't save anything measurable.
 #[partial]
 def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
-    match sd1 {
-        ScopeData.mk dr1 cd1 ins1 ind1 cls1 inf1 conf1 dp1 =>
-            match sd2 {
-                ScopeData.mk dr2 cd2 ins2 ind2 cls2 inf2 conf2 dp2 =>
-                    {
-                        def_refs := HashMap.merge_buckets dr1 dr2,
-                        class_defs := list_append cd1 cd2,
-                        instances := merge_instances ins1 ins2,
-                        inductives := HashMap.merge_buckets ind1 ind2,
-                        classes := list_append cls1 cls2,
-                        infixes := list_append inf1 inf2,
-                        conflicts := list_append conf1 conf2,
-                        // Same bucket-to-bucket merge as `def_refs` just
-                        // above -- see this function's own doc comment
-                        // for why `merge_buckets` (not `to_list`+refold)
-                        // is the right tool here.
-                        def_params := HashMap.merge_buckets dp1 dp2,
-                    }
-            }
+    {
+        def_refs := HashMap.merge_buckets sd1.def_refs sd2.def_refs,
+        class_defs := list_append sd1.class_defs sd2.class_defs,
+        instances := merge_instances sd1.instances sd2.instances,
+        inductives := HashMap.merge_buckets sd1.inductives sd2.inductives,
+        classes := list_append sd1.classes sd2.classes,
+        infixes := list_append sd1.infixes sd2.infixes,
+        conflicts := list_append sd1.conflicts sd2.conflicts,
+        // Same bucket-to-bucket merge as `def_refs` just above -- see
+        // this function's own doc comment for why `merge_buckets` (not
+        // `to_list`+refold) is the right tool here.
+        def_params := HashMap.merge_buckets sd1.def_params sd2.def_params,
+        def_return_types := HashMap.merge_buckets sd1.def_return_types sd2.def_return_types,
     }
 
 /// Merge lists of ScopeData
@@ -1389,12 +1383,35 @@ def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path 
 /// Same skolemization/hole-skipping as `check_def_with_scope`, but
 /// returns the REBUILT `Def` (with its elaborated `.term`) on success
 /// instead of an empty diagnostics list.
+///
+/// Checks `body` against `typ` (the def's own DECLARED signature) --
+/// NOT `Term.hole` (this function's own previous behavior, and the bug
+/// this comment now documents). `check_def_with_scope` just above
+/// already gets this right (`type_check body typ scope ...`); this
+/// sibling didn't, and pure-infer-mode (`Term.hole`) type-checking a
+/// bare struct literal with no `: StructName` self-annotation has no
+/// way to learn its own type at all (`type_check_struct_lit`'s own
+/// error: "cannot infer struct type for struct literal (no expected
+/// type from context)") -- confirmed via a minimal repro (`def make_a
+/// (x : I64) : PairA := { a1 := x, a2 := x }`, no match/let involved at
+/// all): `check` (which uses `check_def_with_scope`) passes it cleanly,
+/// but codegen's `elaborate_module_decls_best_effort` (which calls THIS
+/// function) silently failed to elaborate it, leaving the struct
+/// literal un-desugared for `compile_lit_ir`'s own `Literal.struct_lit`
+/// stub (assumes elaboration ALWAYS desugars to a real `Term.con` --
+/// see its own doc comment) to silently compile as `void_val`. This is
+/// very likely the REAL root cause behind the `build_get_env_instrs`
+/// ("constructor not found in inductive") failure this whole session's
+/// `find_inductive_for_cases` work was chasing too -- that def's own
+/// body is a `match` whose branches return struct literals checked
+/// against `build_get_env_instrs`'s own declared return type, exactly
+/// the same "body needs `typ`, not `Term.hole`" shape.
 def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis } : Def) (scope : Scope) (locals : LocalScope) : Result String Def :=
     if is_term_hole body then
         Result.ok (Def.mk name typ body constraints attrs vis)
     else
         let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
-        match type_check body Term.hole scope empty_local_types locals_ {
+        match type_check body typ scope empty_local_types locals_ {
             Result.ok tt => Result.ok (Def.mk name typ (tt_term tt) constraints attrs vis),
             Result.err e => Result.err (render_type_error (module_path_to_string name) Option.none e),
         }

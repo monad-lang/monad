@@ -736,12 +736,8 @@ def classdef_scope : Scope :=
         name := beq_id,
         sig := Term.type_ 1,
     } in
-    let sd_with_cd : ScopeData := match test_sd {
-        mk dr cd insts ind cls infs conf dp =>
-            { def_refs := dr, class_defs := List.cons scd cd, instances := insts,
-              inductives := ind, classes := cls, infixes := infs, conflicts := conf,
-              def_params := dp }
-    } in
+    let base_sd : ScopeData := test_sd in
+    let sd_with_cd : ScopeData := { base_sd with class_defs := List.cons scd base_sd.class_defs } in
     { module_id := empty_path, scope := sd_with_cd, parent := Option.none }
 
 #[test]

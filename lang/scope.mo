@@ -103,39 +103,15 @@ def modpath_eq (a : ModulePath) (b : ModulePath) : Bool :=
 // --- Helper: add a ScopeDef to ScopeData ---
 
 def scope_data_add_def (sd : ScopeData) (d : ScopeDef) : ScopeData :=
-    match sd {
-        mk dr cd ins ind cls infs conf dp =>
-            match d {
-                mk dname _ _ _ => {
-                    def_refs := modpath_map_insert dname d dr,
-                    class_defs := cd,
-                    instances := ins,
-                    inductives := ind,
-                    classes := cls,
-                    infixes := infs,
-                    conflicts := conf,
-                    def_params := dp,
-                }
-            }
+    match d {
+        mk dname _ _ _ => { sd with def_refs := modpath_map_insert dname d sd.def_refs }
     }
 
 // --- Helper: add an Inductive to ScopeData ---
 
 def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
-    match sd {
-        mk dr cd ins inds cls infs conf dp =>
-            match ind {
-                mk indname _ _ _ _ _ => {
-                    def_refs := dr,
-                    class_defs := cd,
-                    instances := ins,
-                    inductives := modpath_map_insert indname ind inds,
-                    classes := cls,
-                    infixes := infs,
-                    conflicts := conf,
-                    def_params := dp,
-                }
-            }
+    match ind {
+        mk indname _ _ _ _ _ => { sd with inductives := modpath_map_insert indname ind sd.inductives }
     }
 
 // --- build_scope_from_decls: build ScopeData from parsed declarations ---
@@ -316,7 +292,7 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
 
 def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match df {
-        mk defname _ term_ _ _ _ =>
+        mk defname typ term_ _ _ _ =>
             let sd : ScopeDef := {
                 name := defname,
                 module := path,
@@ -336,7 +312,14 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // declared parameter (name, type) list for named-call
             // resolution to consult later.
             let params : List (Pair Identifier Term) := def_params_of_term term_ in
-            scope_data_add_def_params with_def defname params
+            let with_params : ScopeData := scope_data_add_def_params with_def defname params in
+            // `typ` (the def's own DECLARED signature, `Def.typ` -- e.g.
+            // `CodegenCtx -> CtxStrPair` -- distinct from `term_`'s body
+            // and never itself stored in `sd.sig` above) stripped down to
+            // its final return type -- see `ScopeData.def_return_types`'s
+            // own doc comment for why this side-table exists.
+            let ret_typ : Term := strip_pi_chain_to_return_type typ in
+            scope_data_add_def_return_type with_params defname ret_typ
     }
 
 /// A def's declared parameter (name, type) list, in order, recovered
@@ -367,18 +350,27 @@ def scope_debug_name_to_id (dbg : DebugName) : Identifier :=
 /// Register `name -> params` into `sd.def_params`, ADDITIONAL to (never
 /// replacing) `scope_data_add_def`'s own `def_refs` registration.
 def scope_data_add_def_params (sd : ScopeData) (name : ModulePath) (params : List (Pair Identifier Term)) : ScopeData :=
-    match sd {
-        mk dr cd ins ind cls infs conf dp => {
-            def_refs := dr,
-            class_defs := cd,
-            instances := ins,
-            inductives := ind,
-            classes := cls,
-            infixes := infs,
-            conflicts := conf,
-            def_params := modpath_map_insert name params dp,
-        }
+    { sd with def_params := modpath_map_insert name params sd.def_params }
+
+/// Strips a def's own declared signature (`Def.typ`, a `Term.pi`/
+/// `Term.forall` chain) down to its final, non-binder return type --
+/// e.g. `CodegenCtx -> CtxStrPair` (`Term.pi CodegenCtx (Term.pi ... )`
+/// -- actually `Term.pi CodegenCtx CtxStrPair` for a single-arg def)
+/// strips to `CtxStrPair`. Mirrors `lang/codegen/emit.mo`'s own
+/// `strip_db_lams`/the checker's general "strip leading binders" idiom.
+#[terminating]
+def strip_pi_chain_to_return_type (t : Term) : Term :=
+    match t {
+        Term.pi _arg ret => strip_pi_chain_to_return_type ret,
+        Term.forall _dbg _kind body => strip_pi_chain_to_return_type body,
+        _ => t,
     }
+
+/// Register `name -> return_type` into `sd.def_return_types`, ADDITIONAL
+/// to (never replacing) `scope_data_add_def`'s own `def_refs`
+/// registration -- see `ScopeData.def_return_types`'s own doc comment.
+def scope_data_add_def_return_type (sd : ScopeData) (name : ModulePath) (ret_typ : Term) : ScopeData :=
+    { sd with def_return_types := modpath_map_insert name ret_typ sd.def_return_types }
 
 /// Registers `ind` two ways: into `.inductives` (constructor/arity
 /// lookups — `scope_find_inductive` and friends) *and*, like
@@ -551,9 +543,7 @@ def scope_find_inductive (name : ModulePath) (s : Scope) : Result ScopeError Ind
 // recoverable from a `ScopeClassDef` alone. ---
 
 def scope_data_classes (sd : ScopeData) : List Class :=
-    match sd {
-        mk _ _ _ _ cls _ _ _ => cls
-    }
+    sd.classes
 
 def scope_find_class (name : ModulePath) (s : Scope) : Option Class :=
     find_class_by_name (scope_data_classes (scope_globals s)) name
@@ -571,9 +561,7 @@ def scope_find_inductive_by_constructor (con_name : ModulePath) (s : Scope) : Op
 // measured this specific path as unreached in the corpus it tested, so
 // it's kept as a scan rather than given its own index preemptively.
 def scope_data_find_inductive_by_constructor (sd : ScopeData) (con_name : ModulePath) : Option Inductive :=
-    match sd {
-        mk _ _ _ inds _ _ _ _ => find_inductive_by_constructor_in_pairs (HashMap.to_list inds) con_name
-    }
+    find_inductive_by_constructor_in_pairs (HashMap.to_list sd.inductives) con_name
 
 def find_inductive_by_constructor_in_pairs (pairs : List (Pair ModulePath Inductive)) (con_name : ModulePath) : Option Inductive :=
     match pairs {
@@ -584,6 +572,40 @@ def find_inductive_by_constructor_in_pairs (pairs : List (Pair ModulePath Induct
                     if inductive_has_constructor ind con_name
                     then Option.some ind
                     else find_inductive_by_constructor_in_pairs rest con_name
+            }
+    }
+
+// --- scope_find_all_inductives_by_constructor: EVERY inductive with a
+// matching constructor, not just the first -- used by `lang/typecheck/
+// infer.mo`'s `find_inductive_for_cases_by_constructor` to detect a
+// genuine ambiguity (>1 match) and fail loudly instead of silently
+// picking whichever hash-bucket order happens to find first. `struct`'s
+// auto-generated constructor is always named `mk` (`build_scope_struct`
+// below), so this scan is ambiguous between ANY two structs in the
+// whole loaded corpus the moment a match's scrutinee type isn't known
+// via a more precise path -- confirmed to silently return the WRONG
+// field's value, not just fail to compile (a minimal 2-struct repro,
+// matching directly on a bare function call's own result with no outer
+// annotation, reproduced it). ---
+
+def scope_data_find_all_inductives_by_constructor (sd : ScopeData) (con_name : ModulePath) : List Inductive :=
+    match sd {
+        mk _ _ _ inds _ _ _ _ _ => find_all_inductives_by_constructor_in_pairs (HashMap.to_list inds) con_name
+    }
+
+def scope_find_all_inductives_by_constructor (con_name : ModulePath) (s : Scope) : List Inductive :=
+    let g : ScopeData := scope_globals s in
+    scope_data_find_all_inductives_by_constructor g con_name
+
+def find_all_inductives_by_constructor_in_pairs (pairs : List (Pair ModulePath Inductive)) (con_name : ModulePath) : List Inductive :=
+    match pairs {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p {
+                Pair.pair _ ind =>
+                    if inductive_has_constructor ind con_name
+                    then List.cons ind (find_all_inductives_by_constructor_in_pairs rest con_name)
+                    else find_all_inductives_by_constructor_in_pairs rest con_name
             }
     }
 
@@ -648,9 +670,7 @@ def scope_find_class_def_by_name (method_name : Identifier) (s : Scope) : Result
     }
 
 def scope_data_find_class_def_by_name (sd : ScopeData) (name : Identifier) : Option ScopeClassDef :=
-    match sd {
-        mk _ cds _ _ _ _ _ _ => find_class_def_by_name_in_list cds name
-    }
+    find_class_def_by_name_in_list sd.class_defs name
 
 def find_class_def_by_name_in_list (cds : List ScopeClassDef) (name : Identifier) : Option ScopeClassDef :=
     match cds {
@@ -765,17 +785,13 @@ def resolve_def_in_scope_by_name (name : ModulePath) (s : Scope) : Result ScopeE
 // theoretical risk).
 
 def scope_data_find_def (sd : ScopeData) (name : ModulePath) : Option ScopeDef :=
-    match sd {
-        mk dr _ _ _ _ _ _ _ => modpath_map_lookup name dr
-    }
+    modpath_map_lookup name sd.def_refs
 
 // --- ScopeData: find a def's own declared param (name, type) list ---
 // (`plans/implementations/named-field-construction.md`'s Phase 6.)
 
 def scope_data_find_def_params (sd : ScopeData) (name : ModulePath) : Option (List (Pair Identifier Term)) :=
-    match sd {
-        mk _ _ _ _ _ _ _ dp => modpath_map_lookup name dp
-    }
+    modpath_map_lookup name sd.def_params
 
 /// Top-level `Scope`-based wrapper, mirroring `scope_find_inductive_by_
 /// constructor`'s own plain-`Option` shape (not `Result`, unlike `scope_
@@ -786,32 +802,28 @@ def scope_find_def_params (name : ModulePath) (s : Scope) : Option (List (Pair I
     let g : ScopeData := scope_globals s in
     scope_data_find_def_params g name
 
+// --- ScopeData: find a def's own declared RETURN type ---
+// (see `ScopeData.def_return_types`'s own doc comment.)
+
+def scope_data_find_def_return_type (sd : ScopeData) (name : ModulePath) : Option Term :=
+    modpath_map_lookup name sd.def_return_types
+
+/// Top-level `Scope`-based wrapper, same shape as `scope_find_def_params`.
+def scope_find_def_return_type (name : ModulePath) (s : Scope) : Option Term :=
+    let g : ScopeData := scope_globals s in
+    scope_data_find_def_return_type g name
+
 // --- ScopeData: find an Inductive by ModulePath ---
 
 def scope_data_find_inductive (sd : ScopeData) (name : ModulePath) : Option Inductive :=
-    match sd {
-        mk _ _ _ inds _ _ _ _ => modpath_map_lookup name inds
-    }
+    modpath_map_lookup name sd.inductives
 
 // --- Instance handling helpers ---
 
 def scope_data_add_instance (sd : ScopeData) (ins : Instance) : ScopeData :=
     match ins {
         mk _ cname _ _ _ _ _ =>
-            match sd {
-                mk dr cd insts ind cls infs conf dp =>
-                    let updated_insts : List ScopeInstance := scope_add_to_instances insts cname ins in
-                    {
-                        def_refs := dr,
-                        class_defs := cd,
-                        instances := updated_insts,
-                        inductives := ind,
-                        classes := cls,
-                        infixes := infs,
-                        conflicts := conf,
-                        def_params := dp,
-                    }
-            }
+            { sd with instances := scope_add_to_instances sd.instances cname ins }
     }
 
 def scope_add_to_instances (insts : List ScopeInstance) (cls_name : ModulePath) (ins : Instance) : List ScopeInstance :=
@@ -841,46 +853,13 @@ def scope_add_to_instances (insts : List ScopeInstance) (cls_name : ModulePath) 
 
 def scope_data_add_infix (sd : ScopeData) (op : Operator) (name : ModulePath) : ScopeData :=
     let inf : Infix := { operator := op, name := name } in
-    match sd {
-        mk dr cd ins ind cls infs conf dp => {
-            def_refs := dr,
-            class_defs := cd,
-            instances := ins,
-            inductives := ind,
-            classes := cls,
-            infixes := List.cons inf infs,
-            conflicts := conf,
-            def_params := dp,
-        }
-    }
+    { sd with infixes := List.cons inf sd.infixes }
 
 def scope_data_add_class (sd : ScopeData) (cls : Class) : ScopeData :=
-    match sd {
-        mk dr cd ins ind clss infs conf dp => {
-            def_refs := dr,
-            class_defs := cd,
-            instances := ins,
-            inductives := ind,
-            classes := List.cons cls clss,
-            infixes := infs,
-            conflicts := conf,
-            def_params := dp,
-        }
-    }
+    { sd with classes := List.cons cls sd.classes }
 
 def scope_data_add_class_def (sd : ScopeData) (cd : ScopeClassDef) : ScopeData :=
-    match sd {
-        mk dr cds ins ind cls infs conf dp => {
-            def_refs := dr,
-            class_defs := List.cons cd cds,
-            instances := ins,
-            inductives := ind,
-            classes := cls,
-            infixes := infs,
-            conflicts := conf,
-            def_params := dp,
-        }
-    }
+    { sd with class_defs := List.cons cd sd.class_defs }
 
 // --- Builtins ---
 
@@ -1024,20 +1003,7 @@ def add_module_instances (acc : ScopeData) (insts : List ScopeInstance) : ScopeD
     }
 
 def add_module_instance_group (acc : ScopeData) (si : ScopeInstance) : ScopeData :=
-    match acc {
-        mk dr cd insts ind cls infs conf dp =>
-            let merged : List ScopeInstance := scope_add_instance_group insts si in
-            {
-                def_refs := dr,
-                class_defs := cd,
-                instances := merged,
-                inductives := ind,
-                classes := cls,
-                infixes := infs,
-                conflicts := conf,
-                def_params := dp,
-            }
-    }
+    { acc with instances := scope_add_instance_group acc.instances si }
 
 def scope_add_instance_group (insts : List ScopeInstance) (si : ScopeInstance) : List ScopeInstance :=
     match si {
@@ -1072,19 +1038,7 @@ def scope_add_instances_to_group (insts : List ScopeInstance) (cls_name : Module
 def add_module_infixes (acc : ScopeData) (infxs : List Infix) : ScopeData :=
     match infxs {
         List.empty => acc,
-        List.cons inf rest =>
-            match acc {
-                mk dr cd ins ind cls infs conf dp => {
-                    def_refs := dr,
-                    class_defs := cd,
-                    instances := ins,
-                    inductives := ind,
-                    classes := cls,
-                    infixes := List.cons inf infs,
-                    conflicts := conf,
-                    def_params := dp,
-                }
-            }
+        List.cons inf rest => { acc with infixes := List.cons inf acc.infixes },
     }
 
 // ─── Infix operator resolution ─────────────────────────────────────
@@ -3240,9 +3194,7 @@ def scope_resolve_instance (class_name : ModulePath) (instance_key : InstanceKey
     first_matching_instance candidates instance_key
 
 def scope_instance_candidates (sd : ScopeData) (cls_name : ModulePath) : List Instance :=
-    match sd {
-        mk _ _ insts _ _ _ _ _ => find_instances_by_class insts cls_name
-    }
+    find_instances_by_class sd.instances cls_name
 
 def find_instances_by_class (insts : List ScopeInstance) (cls_name : ModulePath) : List Instance :=
     match insts {

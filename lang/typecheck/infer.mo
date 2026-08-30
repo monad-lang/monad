@@ -14,8 +14,9 @@ use lang.scope {
   find_matching_instance, flatten_call_spine, inductive_has_constructor, list_append,
   mangle_instance_method_name, mangled_to_identifier, rebuild_call,
   resolve_dict_args, scope_data_add_inductive, scope_data_classes,
-  scope_data_empty, scope_find_class, scope_find_class_def_by_name,
-  scope_find_def_params, scope_find_inductive, scope_find_inductive_by_constructor,
+  scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
+  scope_find_class_def_by_name, scope_find_def_params, scope_find_def_return_type,
+  scope_find_inductive, scope_find_inductive_by_constructor,
   scope_find_local, scope_globals, scope_instance_candidates, scope_push_local,
   scope_resolve_name,
 }
@@ -388,11 +389,15 @@ def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : T
 /// previous behavior exactly).
 def validate_match_constructors (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
     match find_inductive_for_cases cases scrutinee_term scrutinee_typ scope {
-        Option.none => ok Option.none,
-        Option.some ind =>
-            match validate_cases_against_inductive cases ind {
-                ok _ => ok (Option.some ind),
-                err e => err e,
+        err e => err e,
+        ok maybe_ind =>
+            match maybe_ind {
+                Option.none => ok Option.none,
+                Option.some ind =>
+                    match validate_cases_against_inductive cases ind {
+                        ok _ => ok (Option.some ind),
+                        err e => err e,
+                    },
             },
     }
 
@@ -436,7 +441,7 @@ def type_head_name (t : Term) : Option Identifier :=
 /// version instead only ever ADDS a strictly-better preferred path and
 /// never changes the shared fallback's behavior, so it can't regress
 /// any case that previously worked.
-def find_inductive_for_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) : Option Inductive :=
+def find_inductive_for_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
     match con_owner_name scrutinee_term {
         Option.some typ_name =>
             match scope_find_inductive typ_name scope {
@@ -453,26 +458,84 @@ def find_inductive_for_cases (cases : List MatchCase) (scrutinee_term : Term) (s
                     // preferred path; fall back to the pre-existing chain
                     // exactly as if `con_owner_name` had found nothing.
                     match validate_cases_against_inductive cases ind {
-                        ok _ => Option.some ind,
-                        err _ => find_inductive_by_type_head_or_scan cases scrutinee_typ scope,
+                        ok _ => ok (Option.some ind),
+                        err _ => find_inductive_by_type_head_or_scan cases scrutinee_term scrutinee_typ scope,
                     },
-                err _ => find_inductive_by_type_head_or_scan cases scrutinee_typ scope,
+                err _ => find_inductive_by_type_head_or_scan cases scrutinee_term scrutinee_typ scope,
             },
-        Option.none => find_inductive_by_type_head_or_scan cases scrutinee_typ scope,
+        Option.none => find_inductive_by_type_head_or_scan cases scrutinee_term scrutinee_typ scope,
     }
 
 /// `find_inductive_for_cases`'s SECOND preference, after the new
 /// `con_owner_name` check just above: the pre-existing `type_head_name`-
-/// on-the-INFERRED-TYPE path, falling back to the ambiguous constructor-
-/// name scan. Unchanged from before `con_owner_name` was added.
-def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_typ : Term) (scope : Scope) : Option Inductive :=
+/// on-the-INFERRED-TYPE path, falling to `find_inductive_by_call_return_
+/// type_or_scan` (the scrutinee's own call-head-return-type check, THEN
+/// the ambiguous constructor-name scan) when it doesn't apply.
+def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
     match type_head_name scrutinee_typ {
         Option.some id =>
             match scope_find_inductive (ModulePath.mp (List.cons id List.empty)) scope {
-                ok ind => Option.some ind,
-                err _ => find_inductive_for_cases_by_constructor cases scope,
+                ok ind => ok (Option.some ind),
+                err _ => find_inductive_by_call_return_type_or_scan cases scrutinee_term scope,
+            },
+        Option.none => find_inductive_by_call_return_type_or_scan cases scrutinee_term scope,
+    }
+
+/// Third preferred path, tried before the ambiguous constructor-name
+/// scan: when the scrutinee term is a call chain headed by a known
+/// global def (`Term.app` chain bottoming out at `Term.var _ (named
+/// id)`), resolve the inductive from THAT DEF'S OWN DECLARED return
+/// type (`ScopeData.def_return_types`, populated from `Def.typ` --
+/// deliberately NOT `ScopeDef.sig`, which stays unconditionally
+/// `Term.hole` by its own load-bearing design, see `build_scope_def`'s
+/// doc comment). `type_check_match`'s scrutinee is always checked in
+/// pure INFER mode (`Term.hole` expected type) -- for a scrutinee
+/// that's a bare function call, infer mode had NO way to recover the
+/// call's return type at all before this (`extract_pi_ret` never sees a
+/// real `Term.pi` for the callee, since `ScopeDef.sig` is hole), so
+/// `match <a bare call> { <Ctor> args => ... }` (no outer annotation --
+/// exactly `match fresh_temp c { CtxStrPair.mk ctx1 temp => ... }`'s own
+/// shape) always fell straight through to the ambiguous scan below --
+/// confirmed to silently return the WRONG field's value whenever two
+/// inductives share that constructor name, not just fail to compile.
+/// Every `struct`'s auto-generated constructor is always named `mk`
+/// (`build_scope_struct`), so this was ambiguous between EVERY pair of
+/// structs in the whole loaded corpus. Bare-name lookup only, matching
+/// `type_head_name`'s own established convention just above -- a
+/// dotted/cross-module call head is left to the existing fallback chain
+/// unchanged, same "only ever ADD a strictly-better preferred path"
+/// design this whole function already follows.
+def find_inductive_by_call_return_type_or_scan (cases : List MatchCase) (scrutinee_term : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
+    match call_head_def_name scrutinee_term {
+        Option.some id =>
+            match scope_find_def_return_type (ModulePath.mp (List.cons id List.empty)) scope {
+                Option.some ret_typ =>
+                    match type_head_name ret_typ {
+                        Option.some tid =>
+                            match scope_find_inductive (ModulePath.mp (List.cons tid List.empty)) scope {
+                                ok ind => ok (Option.some ind),
+                                err _ => find_inductive_for_cases_by_constructor cases scope,
+                            },
+                        Option.none => find_inductive_for_cases_by_constructor cases scope,
+                    },
+                Option.none => find_inductive_for_cases_by_constructor cases scope,
             },
         Option.none => find_inductive_for_cases_by_constructor cases scope,
+    }
+
+/// Unwrap a `Term.app f a` chain to its head identifier, when that head
+/// is a named global reference (`Term.var _ (DebugName.named id)`) --
+/// mirrors `type_head_name`'s own identical unwrap just above, over the
+/// scrutinee TERM (the call itself) instead of its inferred TYPE.
+def call_head_def_name (t : Term) : Option Identifier :=
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => Option.some id,
+                DebugName.unnamed => Option.none,
+            },
+        Term.app f _ => call_head_def_name f,
+        _ => Option.none,
     }
 
 /// Extract the qualifier prefix of a dotted name string (e.g.
@@ -551,13 +614,20 @@ def con_owner_name (t : Term) : Option ModulePath :=
         _ => Option.none,
     }
 
-/// The original constructor-name-scan lookup, unchanged -- ambiguous
-/// when constructor names collide, but still the correct behavior when
-/// the scrutinee's own type isn't concretely known (see
-/// `find_inductive_for_cases`'s own doc comment above).
-def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Scope) : Option Inductive :=
+/// The last-resort constructor-name-scan lookup -- still the correct
+/// behavior when the scrutinee's own type isn't concretely known via any
+/// of the preferred paths above, but now detects a genuine AMBIGUITY
+/// (more than one inductive with a matching constructor name -- always
+/// true between any two `struct`s, whose auto-generated constructor is
+/// always `mk`) and fails loudly instead of silently returning whichever
+/// candidate `HashMap.to_list`'s arbitrary bucket order finds first (see
+/// `scope_find_all_inductives_by_constructor`'s own doc comment,
+/// `lang/scope.mo`, for the confirmed-live silent-wrong-value repro this
+/// closes). A single, unambiguous match still resolves exactly as
+/// before.
+def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Scope) : Result TypeError (Option Inductive) :=
     match cases {
-        List.empty => Option.none,
+        List.empty => ok Option.none,
         List.cons hd rest =>
             match hd {
                 MatchCase.mc name _ _ _ =>
@@ -576,8 +646,29 @@ def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Sc
                     then find_inductive_for_cases_by_constructor rest scope
                     else
                         let con_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
-                        scope_find_inductive_by_constructor con_mp scope,
+                        match scope_find_all_inductives_by_constructor con_mp scope {
+                            List.empty => ok Option.none,
+                            List.cons only more =>
+                                match more {
+                                    List.empty => ok (Option.some only),
+                                    List.cons second _rest =>
+                                        err (TypeError.custom (ambiguous_constructor_message name only second)),
+                                },
+                        },
             },
+    }
+
+/// Error text for `find_inductive_for_cases_by_constructor`'s new
+/// ambiguity check -- names both colliding types so the diagnostic is
+/// immediately actionable, not just "ambiguous, good luck".
+def ambiguous_constructor_message (con_name : Identifier) (ind1 : Inductive) (ind2 : Inductive) : String :=
+    "ambiguous constructor `" ++ show_identifier con_name ++ "`: could resolve to either `"
+        ++ inductive_name_str ind1 ++ "` or `" ++ inductive_name_str ind2
+        ++ "` here -- annotate the scrutinee's type, or bind it to a local first"
+
+def inductive_name_str (ind : Inductive) : String :=
+    match ind {
+        Inductive.mk name _ _ _ _ _ => show_module_path name,
     }
 
 /// Check that every non-wildcard case constructor exists in the
