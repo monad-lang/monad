@@ -60,7 +60,7 @@ def std_module_path : ModulePath := ModulePath.mp [Identifier.id "std"]
 /// its strict twin is `try_parse_decls_strict` below. `ParseResult`'s
 /// own `remaining` is untouched -- only the parsed payload changes.
 def parse_all_decls (input : String) : ParseResult (List Decl) :=
-    match lang.parser.decls_parser input {
+    match decls_parser input {
         ParseResult.success rem decl_list => ParseResult.success rem (expand_decls decl_list),
         ParseResult.fail e => ParseResult.fail e,
     }

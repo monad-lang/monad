@@ -25,7 +25,7 @@ def empty_str_list : List String := List.empty
 #[partial]
 def compile_defs_to_ir (defs : List Def) : String :=
     let module_ := compile_db_decls_ir defs in
-    lang.codegen.ir.emit_module module_
+    emit_module module_
 
 /// Full pipeline: compile Defs to IR, write to file, run llc,
 /// compile runtime, link, run the binary, return exit code.
