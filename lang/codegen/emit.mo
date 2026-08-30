@@ -800,6 +800,25 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
 /// referenced would be undefined in the final module. Now threaded
 /// through properly, same as every other multi-arg accumulator in this
 /// file.
+///
+/// `last_val` (the LAST arg's own compiled value, i.e. `compile_ntv_
+/// args_go`'s own running `acc_val` after the final arg) was ALSO
+/// silently discarded until now -- needed by callers (`compile_con_ir`/
+/// `compile_ntv_ir`) to use `compose_seq` themselves when combining
+/// THESE args' own `instrs`/`blocks` with the wrap-up code that
+/// actually builds the call/constructor, exactly the same "prior_val"
+/// requirement `wrap_io_value_native_result_go` already documents.
+/// Without it, a constructor/native call whose LAST argument was itself
+/// branching (an `if`/`match`) had its OWN alloc/set-field/call
+/// instructions appended as dead code after that argument's own branch
+/// instead of spliced into its merge block -- confirmed live via the
+/// full `lang/main.mo` self-compile as malformed PHI nodes at `llc`'s
+/// own IR-verification stage (`lang/typecheck/meta_reflect.mo`'s
+/// `reify_e_bool`: `Term.var sentinel (DebugName.named (Identifier.id
+/// (if b then "true" else "false")))` -- `Identifier.id`'s own `alloc_
+/// constructor`/`monad_set_field` calls landed after the `if`'s branch,
+/// unreachable, while the `if`'s own merge block's placeholder `ret`
+/// became the constructor's wrong, early "value").
 struct NtvArgs {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
@@ -807,6 +826,7 @@ struct NtvArgs {
     blocks : List LLVMBasicBlock,
     funcs : List LLVMFunction,
     globals : List LLVMGlobal,
+    last_val : LLVMValue,
 }
 
 /// Sequences each arg's own compiled fragment via `compose_seq` (see
@@ -854,7 +874,7 @@ def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs
                     compile_ntv_args_go c rest acc_instrs acc_blocks acc_funcs acc_globals acc_vals acc_val,
             },
         List.empty =>
-            { ctx := c, instrs := acc_instrs, vals := rev_vals acc_vals empty_vals, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals },
+            { ctx := c, instrs := acc_instrs, vals := rev_vals acc_vals empty_vals, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals, last_val := acc_val },
     }
 
 #[partial]
@@ -1015,7 +1035,7 @@ def compile_ntv_ir (c : CodegenCtx) (native : Native) : CompileResult :=
             let llvm_name := extract_base_name name_str in
             let fn_name := String.concat "monad_" llvm_name in
             match compile_ntv_args c args empty_instrs empty_vals {
-                { ctx := ctx_args, instrs := all_instrs, vals := all_vals, blocks := all_blocks, funcs := all_funcs, globals := all_globals } =>
+                { ctx := ctx_args, instrs := all_instrs, vals := all_vals, blocks := all_blocks, funcs := all_funcs, globals := all_globals, last_val := args_last_val } =>
                     match fresh_temp ctx_args {
                         CtxStrPair.mk ctx_t temp =>
                             let call_val := LLVMValue.call fn_name LLVMType.i64_ all_vals false in
@@ -1033,7 +1053,18 @@ def compile_ntv_ir (c : CodegenCtx) (native : Native) : CompileResult :=
                             // corruption seen while chasing the
                             // separate let/if-argument bug this file's
                             // `compose_seq` now also fixes).
-                            CompileResult.ok ctx_t (append_instrs all_instrs (cons_instr assign_instr empty_instrs)) (LLVMValue.var_ temp) all_blocks all_funcs all_globals,
+                            //
+                            // `compose_seq` (not a blind append) -- see
+                            // `NtvArgs.last_val`'s own doc comment: if
+                            // the LAST arg was itself branching,
+                            // `all_instrs` already ends in a real
+                            // terminator, and this call's own assign
+                            // instr must be spliced into that arg's own
+                            // merge block, not appended after its branch.
+                            match compose_seq ({ instrs := all_instrs, blocks := all_blocks, val := args_last_val }) ({ instrs := (cons_instr assign_instr empty_instrs), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
+                                { instrs := final_instrs, blocks := final_blocks, val := final_val } =>
+                                    CompileResult.ok ctx_t final_instrs final_val final_blocks all_funcs all_globals,
+                            },
                     },
             },
     }
@@ -1043,7 +1074,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
     match con {
         Con.mk name typ_name num_args args =>
             match compile_ntv_args c args empty_instrs empty_vals {
-                { ctx := ctx_args, instrs := all_instrs, vals := all_vals, blocks := all_blocks, funcs := all_funcs, globals := all_globals } =>
+                { ctx := ctx_args, instrs := all_instrs, vals := all_vals, blocks := all_blocks, funcs := all_funcs, globals := all_globals, last_val := args_last_val } =>
                     match fresh_temp ctx_args {
                         CtxStrPair.mk ctx_t temp =>
                             // Call the @alloc_constructor runtime function
@@ -1062,8 +1093,19 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
                             // tagged/sized-but-uninitialized object).
                             match build_set_field_instrs (LLVMValue.var_ temp) all_vals 0 ctx_t {
                                 { ctx := ctx_set, instrs := set_instrs } =>
-                                    let all_con_instrs := append_instrs all_instrs (cons_instr assign_instr set_instrs) in
-                                    CompileResult.ok ctx_set all_con_instrs (LLVMValue.var_ temp) all_blocks all_funcs all_globals,
+                                    // `compose_seq` (not a blind append) --
+                                    // see `NtvArgs.last_val`'s own doc
+                                    // comment: if the LAST arg was itself
+                                    // branching, `all_instrs` already ends
+                                    // in a real terminator, and this
+                                    // constructor's own alloc/set-field
+                                    // instrs must be spliced into that
+                                    // arg's own merge block, not appended
+                                    // after its branch.
+                                    match compose_seq ({ instrs := all_instrs, blocks := all_blocks, val := args_last_val }) ({ instrs := (cons_instr assign_instr set_instrs), blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
+                                        { instrs := final_instrs, blocks := final_blocks, val := final_val } =>
+                                            CompileResult.ok ctx_set final_instrs final_val final_blocks all_funcs all_globals,
+                                    },
                             },
                     },
             },
