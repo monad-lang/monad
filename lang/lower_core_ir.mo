@@ -654,11 +654,6 @@ def push_done (acc : LowerAcc) (gd : GlobalDef) : LowerAcc :=
     LowerAcc.lower_acc seen done => LowerAcc.lower_acc seen (List.append done [gd]),
   }
 
-/// Resolve one interned path's real body from `ctx`'s flat `List Def`
-/// and lower it -- anything not found there becomes `gd_unresolved`,
-/// matching Rust's `GlobalDef::Unresolved` fallback (see this module's
-/// doc comment on what's not attempted).
-#[partial]
 /// Whether `attrs` carries `#[native some_name]` and, if so, the bare
 /// native name -- mirrors real corpus source exactly (`init/string.mo`
 /// etc: `#[native string_concat]`, a single bare-identifier `AttrArg`,
