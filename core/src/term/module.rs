@@ -2222,7 +2222,9 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
 /// time, so the same path list is valid for both build configurations.
 pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
   let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  let root = manifest_dir.parent().expect("CARGO_MANIFEST_DIR has no parent");
+  let root = manifest_dir
+    .parent()
+    .expect("CARGO_MANIFEST_DIR has no parent");
   let init_dir = root.join("init");
   let std_dir = root.join("std");
   let init_files = [
@@ -2239,7 +2241,11 @@ pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
   init_files
     .iter()
     .filter_map(|name| init_dir.join(name).canonicalize().ok())
-    .chain(std_files.iter().filter_map(|name| std_dir.join(name).canonicalize().ok()))
+    .chain(
+      std_files
+        .iter()
+        .filter_map(|name| std_dir.join(name).canonicalize().ok()),
+    )
     .collect()
 }
 
