@@ -37,8 +37,36 @@ open ParseResult {fail, success}
 def at_least_two (ids : List String) : Bool :=
 	Bool.not (List.is_empty (List.tail ids))
 
+/// `separated_by` is genuinely zero-or-more (many other callers rely on
+/// that -- an empty comma-separated list is a legitimate result for
+/// them), so it can't be tightened itself. A *name*, however, can never
+/// be empty: every call site here (`module_path_parser`, `dotted_def_
+/// name`, `path_variable`, `match_case_name`'s constructor-name parse)
+/// treats a `dotted_identifier` success as "a real name was found" and
+/// would otherwise build a bogus empty-string name instead of failing.
+/// Concretely confirmed as a live, SILENT miscompilation source (not
+/// just a theoretical gap): `match_case_name`'s own `dotted_identifier`
+/// call, at a source position that isn't actually a valid case pattern
+/// (e.g. one an unrelated parsing bug elsewhere already corrupted --
+/// see `lang/codegen/emit.mo`'s `build_get_env_instrs`'s own doc
+/// comment / `plans/implementations/2026-08-30-match-case-comma-parser-
+/// bug.md`), used to silently return `success` with an EMPTY id list
+/// rather than failing -- which `match_case_name` then turned into a
+/// match case with constructor name `""`, matching nothing, instead of
+/// a parse error at the actual point of confusion. Requiring at least
+/// one identifier here turns that into a loud, immediate parse error.
 def dotted_identifier (input : String) : ParseResult (List String) :=
-	separated_by (tag ".") identifier input
+	dotted_identifier_require_nonempty (separated_by (tag ".") identifier input) input
+
+#[partial]
+def dotted_identifier_require_nonempty (r : ParseResult (List String)) (orig : String) : ParseResult (List String) :=
+	match r {
+		success rem ids =>
+			if List.is_empty ids
+			then fail (ParseError.custom "expected an identifier" orig)
+			else success rem ids,
+		fail e => fail e,
+	}
 
 /// Join a list of identifiers into a dotted string (e.g., ["Unit", "unit"] -> "Unit.unit")
 #[partial]

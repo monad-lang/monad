@@ -1457,7 +1457,24 @@ struct GetEnvResult {
 /// holds by construction.
 #[partial]
 def build_get_env_instrs (c : CodegenCtx) (captures : List LocalBinding) (idx : I64) : GetEnvResult := match captures {
-    List.empty => { ctx := c, instrs := empty_instrs }
+    // The trailing comma here is LOAD-BEARING, not style -- without it,
+    // this case's body (`{ ctx := c, instrs := empty_instrs }`) is a
+    // struct literal whose last field value is a bare identifier
+    // (`empty_instrs`), and the expression parser's application-chain
+    // continuation (`expr_climb_rest`, lang/parser.mo) doesn't stop at
+    // the newline: it keeps parsing further atoms as more curried args,
+    // swallowing the NEXT case's own constructor name and bound pattern
+    // names (`List.cons cap rest`) as if they were extra arguments to
+    // this case's body. That corrupted the match's own case list with a
+    // wrong/empty constructor name -- see `plans/implementations/
+    // 2026-08-30-match-case-comma-parser-bug.md` for the full
+    // root-cause writeup. `match_case_name`'s own `dotted_identifier`
+    // call now fails loudly instead of silently accepting the resulting
+    // empty name (see that same doc), but the actual fix here is this
+    // comma: never omit the trailing comma after a match case whose body
+    // ends in a bare identifier/call (anything that could itself be a
+    // curried application head).
+    List.empty => { ctx := c, instrs := empty_instrs },
     List.cons cap rest =>
         match cap {
             LocalBinding.mk cname _cval =>
@@ -1485,7 +1502,12 @@ struct SetEnvResult {
 /// `lang/codegen/runtime.c`).
 #[partial]
 def build_set_env_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : I64) (c : CodegenCtx) : SetEnvResult := match vals {
-    List.empty => { ctx := c, instrs := empty_instrs }
+    // See `build_get_env_instrs`'s own doc comment above -- this trailing
+    // comma is load-bearing for the exact same reason (bare-identifier
+    // struct-literal field value + no comma corrupts the NEXT case's own
+    // constructor name via the expression parser's application-chain
+    // continuation).
+    List.empty => { ctx := c, instrs := empty_instrs },
     List.cons v rest =>
         match fresh_temp c {
             CtxStrPair.mk ctx1 temp =>
@@ -2447,7 +2469,9 @@ def compile_spine_args (c : CodegenCtx) (terms : List Term) : SpineArgs :=
 #[partial]
 def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : List LLVMInstruction) (acc_blocks : List LLVMBasicBlock) (acc_funcs : List LLVMFunction) (acc_globals : List LLVMGlobal) (acc_vals : List LLVMValue) (acc_val : LLVMValue) : SpineArgs :=
     match terms {
-        List.empty => { ctx := c, instrs := acc_instrs, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals, vals := (rev_vals acc_vals empty_vals), last_val := acc_val }
+        // Trailing comma load-bearing -- see `build_get_env_instrs`'s
+        // doc comment (lang/codegen/emit.mo) for why.
+        List.empty => { ctx := c, instrs := acc_instrs, blocks := acc_blocks, funcs := acc_funcs, globals := acc_globals, vals := (rev_vals acc_vals empty_vals), last_val := acc_val },
         List.cons t rest =>
             match compile_db_term_ir c t {
                 CompileResult.ok ctx1 instrs1 val1_raw blocks1 funcs1 globals1 =>
@@ -3240,7 +3264,9 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
 /// Compile a list of canonical Defs to LLVM functions.
 #[partial]
 def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match defs {
-    List.empty => { ctx := c, funcs := empty_funcs, globals := empty_globals_list }
+    // Trailing comma load-bearing -- see `build_get_env_instrs`'s doc
+    // comment above for why.
+    List.empty => { ctx := c, funcs := empty_funcs, globals := empty_globals_list },
     List.cons d rest =>
         match compile_db_def_ir c d {
             { ctx := ctx_d, funcs := funcs_d, globals := globals_d } =>
