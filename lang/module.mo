@@ -23,7 +23,8 @@ use lang.typecheck.meta_reflect {
 }
 use lang.scope {
   add_constraint_dict_params_decls, alias_decls_in_scope, build_scope_from_decls,
-  collect_classes, collect_infixes, collect_open_aliases, constraint_vars, decls_have_aliasable_decls,
+  collect_classes, collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
+  decls_have_aliasable_decls, filter_valid_open_aliases,
   list_append, modpath_eq, param_names, promote_instance_defs,
   resolve_class_calls_decls, resolve_infix_decls, resolve_open_alias_decls, scope_data_empty,
   scope_find_inductive, scope_push_local, scope_resolve_name,
@@ -1940,21 +1941,39 @@ def get_module_info_decls (mi : ModuleInfo) : List Decl :=
 /// able decl_list` collapsed from 1925 to 181 the moment the (then-
 /// global) pass landed, starving `resolve_class_calls_decls` of
 /// instances that used to be reachable.
-def resolve_open_aliases_in_module_info (mi : ModuleInfo) : ModuleInfo :=
+def resolve_open_aliases_in_module_info (known_names : List String) (mi : ModuleInfo) : ModuleInfo :=
     match mi {
         ModuleInfo.mk path file_path decl_list =>
-            let aliases := collect_open_aliases decl_list in
+            let candidates := collect_open_aliases decl_list in
+            let aliases := filter_valid_open_aliases known_names candidates in
             ModuleInfo.mk path file_path (resolve_open_alias_decls aliases decl_list)
+    }
+
+#[partial]
+def all_module_decl_names (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => list_append (collect_def_names (get_module_info_decls m)) (all_module_decl_names rest),
     }
 
 /// `resolve_open_aliases_in_module_info` applied to every loaded
 /// module -- the actual entry point `lang.codegen.emit`/`lang.codegen.
 /// test_driver` call, on `get_loaded_all`'s own `List ModuleInfo`,
-/// BEFORE `collect_all_decls_from_modules` flattens it.
+/// BEFORE `collect_all_decls_from_modules` flattens it. `known_names`
+/// (every real def name across the WHOLE loaded program) is computed
+/// once here and threaded to every module's own alias validation --
+/// see `filter_valid_open_aliases`'s own doc comment for why this
+/// validation step is required at all.
 def resolve_open_aliases_in_modules (modules : List ModuleInfo) : List ModuleInfo :=
+    let known_names := all_module_decl_names modules in
+    resolve_open_aliases_in_modules_go known_names modules
+
+#[partial]
+def resolve_open_aliases_in_modules_go (known_names : List String) (modules : List ModuleInfo) : List ModuleInfo :=
     match modules {
         List.empty => List.empty,
-        List.cons m rest => List.cons (resolve_open_aliases_in_module_info m) (resolve_open_aliases_in_modules rest),
+        List.cons m rest =>
+            List.cons (resolve_open_aliases_in_module_info known_names m) (resolve_open_aliases_in_modules_go known_names rest),
     }
 
 #[partial]

@@ -1,13 +1,14 @@
 use lang.types {
-  Class, ClassDef, Decl, Def, DebugName, Identifier, InductConstructor, Inductive,
-  Infix, Instance, InstanceKey, LoadedModules, LocalScope, LocalVar, Module,
-  ModulePath, NameRef, Operator, Param, Scope, ScopeClassDef, ScopeData, ScopeDef,
-  ScopeError, ScopeInstance, Similar, Struct, StructField, Term, class_d,
+  Class, ClassDef, Con, Decl, Def, DebugName, FieldPattern, FieldPatternEntry,
+  Identifier, InductConstructor, Inductive,
+  Infix, Instance, InstanceKey, Literal, LoadedModules, LocalScope, LocalVar, MatchCase, Module,
+  ModulePath, NameRef, Native, Operator, Param, Scope, ScopeClassDef, ScopeData, ScopeDef,
+  ScopeError, ScopeInstance, Similar, Struct, StructField, StructLitField, Term, class_d,
   class_not_found, def_d, hole, id, inductive_d, inductive_not_found, infix_d,
   instance_d, instance_not_found, mk, mp, name, name_not_found, nid, nmp, nop,
   open_d, scoped_open_d, struct_d, type_, use_d,
 }
-use lang.typecheck.macro_expand {term_map_children}
+use lang.typecheck.macro_expand {con_map_children, native_map_children, term_map_children}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
 // `bench/scope_lookup.mo`. Empty import: naming any of `std.map`'s
 // `Map`-class-instance exports explicitly hits a pre-existing latent
@@ -1379,12 +1380,82 @@ def open_aliases_from_decl (d : Decl) : List OpenAlias :=
 
 /// Collects every `open`/`use` bare-name alias declared anywhere in
 /// `decl_list` -- mirrors `collect_infixes`'s identical role/doc
-/// comment for operators.
+/// comment for operators. These are CANDIDATES only -- see `filter_
+/// valid_open_aliases`'s own doc comment for why the reconstructed
+/// qualified name isn't always real, and must be validated against the
+/// whole program's own known def names before being used to rewrite
+/// anything.
 #[partial]
 def collect_open_aliases (decl_list : List Decl) : List OpenAlias :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest => append_open_aliases (open_aliases_from_decl d) (collect_open_aliases rest),
+    }
+
+#[partial]
+def def_name_from_decl (d : Decl) : Option String :=
+    match d {
+        Decl.def_d dd => match dd { Def.mk name _typ _term _constraints _attrs _vis => Option.some (show_module_path name) },
+        _ => Option.none,
+    }
+
+/// Every real, existing top-level `Def`'s own registered name in
+/// `decl_list` -- used by `filter_valid_open_aliases` to validate a
+/// candidate alias's reconstructed qualified name actually refers to
+/// something real, not a guess. Mirrors `lang.codegen.emit`'s own
+/// `extract_defs` (`Decl.def_d` only -- promoted instance methods don't
+/// exist as real `Def`s yet at the point this runs, before `promote_
+/// instance_defs`, but a `use`/`open` alias targeting one specifically
+/// is not a shape this corpus actually uses).
+#[partial]
+def collect_def_names (decl_list : List Decl) : List String :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match def_name_from_decl d {
+                Option.some n => List.cons n (collect_def_names rest),
+                Option.none => collect_def_names rest,
+            },
+    }
+
+/// Filters `candidates` (from `collect_open_aliases`) down to the ones
+/// whose RECONSTRUCTED qualified name (`path_extend`'s `use`/`open`
+/// path prepended onto the bare imported name, then `show_module_path`)
+/// actually matches a real, existing top-level `Def` somewhere in
+/// `known_names` (the whole loaded program's own def names, gathered
+/// once via `collect_def_names` across every loaded module -- a `use`/
+/// `open`'s own `path` argument usually names a DIFFERENT file than the
+/// one currently being resolved).
+///
+/// This reconstruction is only correct when the target def's OWN
+/// declared name genuinely carries that dotted prefix (`IO.file_exists`,
+/// declared exactly that way in `std/io.mo`) -- NOT for the far more
+/// common cross-file `use some.file.path {bare_name}` shape, where the
+/// real def is registered under its own plain, undotted name and
+/// `path` merely names which FILE it lives in, no part of its own
+/// identity. Confirmed as a real, severe regression via the full self-
+/// compile: EVERY bare-imported, bare-called cross-file def (`use
+/// lang.module {load_file_modules}`-style, the dominant import style
+/// across this whole 51-module corpus) was being "resolved" to a bogus
+/// qualified name matching no real def at all, dropping `Reachable
+/// decl_list` from ~1925 to ~171 -- including `compile_loaded_modules_
+/// to_ir` itself, `main`'s own entry point into codegen. A candidate
+/// whose qualified name doesn't validate is simply dropped (not
+/// rewritten at all) -- its bare form was already the term's real name
+/// all along in that case, so leaving it alone is correct, matching
+/// `alias_def`'s own conservative `Option.none => acc` fallback for the
+/// type checker's identical situation.
+#[partial]
+def filter_valid_open_aliases (known_names : List String) (aliases : List OpenAlias) : List OpenAlias :=
+    match aliases {
+        List.empty => List.empty,
+        List.cons a rest =>
+            match a {
+                { bare_name := _b, qualified_name := q } =>
+                    if str_list_contains known_names q
+                    then List.cons a (filter_valid_open_aliases known_names rest)
+                    else filter_valid_open_aliases known_names rest,
+            },
     }
 
 /// Deliberately does NOT mirror `resolve_infix_term`'s family all the
@@ -1410,19 +1481,148 @@ def collect_open_aliases (decl_list : List Decl) : List OpenAlias :=
 /// `Def.term` (and `Instance.defs`' own method bodies) only -- the two
 /// places an executable `Term.var` naming a bare `open`/`use`d function
 /// can actually reach `compile_call_head`'s fallback.
+///
+/// Unlike `resolve_infix_term` (whose blind, name-only rewrite this
+/// pass originally mirrored exactly), this ALSO needs real local-binder
+/// shadowing awareness, threaded as `bound` -- a plain-English bare
+/// import name (`use std.path {Path}`, `use lang.types {content}`, ...)
+/// coincides with an ordinary `let`-bound/lambda-param/match-arm local
+/// variable name FAR more often than an operator symbol like `+` ever
+/// would, and this codebase's own `Term` here is still name-based (not
+/// yet lowered to real de Bruijn indices -- a synthesized reference at
+/// this stage, e.g. `resolve_class_method`'s own `Term.var 0 (DebugName.
+/// named ...)`, uses a placeholder index regardless of true binder
+/// depth, so `idx` can't discriminate "genuinely local" from "genuinely
+/// free" here either). Confirmed as a real regression from the
+/// non-shadowing-aware version: the full `lang/main.mo` self-compile's
+/// own `Reachable decl_list` collapsed from ~1925 to ~181 even after
+/// alias collection/resolution was correctly scoped per-module --
+/// because a `use`/`open` alias in one FUNCTION was still incorrectly
+/// shadowing an unrelated local variable of the same bare name in a
+/// DIFFERENT function within the very same module.
 #[partial]
 def resolve_open_alias_term (aliases : List OpenAlias) (t : Term) : Term :=
+    resolve_open_alias_term_scoped aliases List.empty t
+
+#[partial]
+def str_list_contains (xs : List String) (x : String) : Bool := match xs {
+    List.empty => false,
+    List.cons hd rest => if String.beq hd x then true else str_list_contains rest x,
+}
+
+#[partial]
+def push_bound_dbg (bound : List String) (dbg : DebugName) : List String :=
+    match dbg {
+        DebugName.named id => List.cons (show_identifier id) bound,
+        DebugName.unnamed => bound,
+    }
+
+#[partial]
+def push_bound_names (bound : List String) (names : List Identifier) : List String :=
+    match names {
+        List.empty => bound,
+        List.cons n rest => push_bound_names (List.cons (show_identifier n) bound) rest,
+    }
+
+#[partial]
+def push_bound_field_pattern (bound : List String) (fp : Option FieldPattern) : List String :=
+    match fp {
+        Option.none => bound,
+        Option.some pat => match pat {
+            FieldPattern.mk entries _rest => push_bound_field_entries bound entries,
+        },
+    }
+
+#[partial]
+def push_bound_field_entries (bound : List String) (entries : List FieldPatternEntry) : List String :=
+    match entries {
+        List.empty => bound,
+        List.cons e rest =>
+            match e {
+                FieldPatternEntry.mk _field binder => push_bound_field_entries (List.cons (show_identifier binder) bound) rest,
+            },
+    }
+
+#[partial]
+def resolve_open_alias_term_scoped (aliases : List OpenAlias) (bound : List String) (t : Term) : Term :=
     match t {
         Term.var idx dbg =>
             match dbg {
                 DebugName.named id =>
-                    match lookup_open_alias aliases (show_identifier id) {
+                    let name := show_identifier id in
+                    if str_list_contains bound name
+                    then t
+                    else match lookup_open_alias aliases name {
                         Option.some qualified => Term.var idx (DebugName.named (Identifier.id qualified)),
                         Option.none => t,
                     },
                 DebugName.unnamed => t,
             },
-        _ => term_map_children (resolve_open_alias_term aliases) t,
+        Term.lam dbg typ body =>
+            Term.lam dbg (resolve_open_alias_term_scoped aliases bound typ) (resolve_open_alias_term_scoped aliases (push_bound_dbg bound dbg) body),
+        Term.forall dbg kind body =>
+            Term.forall dbg (resolve_open_alias_term_scoped aliases bound kind) (resolve_open_alias_term_scoped aliases (push_bound_dbg bound dbg) body),
+        Term.pi arg ret =>
+            Term.pi (resolve_open_alias_term_scoped aliases bound arg) (resolve_open_alias_term_scoped aliases bound ret),
+        Term.app fun_ arg =>
+            Term.app (resolve_open_alias_term_scoped aliases bound fun_) (resolve_open_alias_term_scoped aliases bound arg),
+        Term.lit value => Term.lit (resolve_open_alias_literal_scoped aliases bound value),
+        Term.ntv n => Term.ntv (native_map_children (resolve_open_alias_term_scoped aliases bound) n),
+        Term.con c => Term.con (con_map_children (resolve_open_alias_term_scoped aliases bound) c),
+        Term.type_ u => Term.type_ u,
+        Term.hole => Term.hole,
+        Term.quote_ inner => Term.quote_ (resolve_open_alias_term_scoped aliases bound inner),
+        Term.var_macro idx dbg => Term.var_macro idx dbg,
+    }
+
+#[partial]
+def resolve_open_alias_literal_scoped (aliases : List OpenAlias) (bound : List String) (l : Literal) : Literal :=
+    match l {
+        Literal.str v => Literal.str v,
+        Literal.num n suf => Literal.num n suf,
+        Literal.flt txt suf => Literal.flt txt suf,
+        Literal.if_ a b c =>
+            Literal.if_ (resolve_open_alias_term_scoped aliases bound a) (resolve_open_alias_term_scoped aliases bound b) (resolve_open_alias_term_scoped aliases bound c),
+        Literal.match_ scrut cases =>
+            Literal.match_ (resolve_open_alias_term_scoped aliases bound scrut) (resolve_open_alias_match_cases aliases bound cases),
+        Literal.struct_lit fields type_name =>
+            Literal.struct_lit (resolve_open_alias_struct_lit_fields aliases bound fields) (resolve_open_alias_opt_term_scoped aliases bound type_name),
+        Literal.struct_update base fields =>
+            Literal.struct_update (resolve_open_alias_term_scoped aliases bound base) (resolve_open_alias_struct_lit_fields aliases bound fields),
+    }
+
+#[partial]
+def resolve_open_alias_opt_term_scoped (aliases : List OpenAlias) (bound : List String) (t : Option Term) : Option Term :=
+    match t {
+        Option.some x => Option.some (resolve_open_alias_term_scoped aliases bound x),
+        Option.none => Option.none,
+    }
+
+#[partial]
+def resolve_open_alias_struct_lit_fields (aliases : List OpenAlias) (bound : List String) (fields : List StructLitField) : List StructLitField :=
+    match fields {
+        List.empty => List.empty,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk name value =>
+                    List.cons (StructLitField.mk name (resolve_open_alias_term_scoped aliases bound value)) (resolve_open_alias_struct_lit_fields aliases bound rest),
+            },
+    }
+
+#[partial]
+def resolve_open_alias_match_cases (aliases : List OpenAlias) (bound : List String) (cases : List MatchCase) : List MatchCase :=
+    match cases {
+        List.empty => List.empty,
+        List.cons c rest => List.cons (resolve_open_alias_match_case aliases bound c) (resolve_open_alias_match_cases aliases bound rest),
+    }
+
+#[partial]
+def resolve_open_alias_match_case (aliases : List OpenAlias) (bound : List String) (c : MatchCase) : MatchCase :=
+    match c {
+        MatchCase.mc name args body fp =>
+            let bound1 := push_bound_names bound args in
+            let bound2 := push_bound_field_pattern bound1 fp in
+            MatchCase.mc name args (resolve_open_alias_term_scoped aliases bound2 body) fp,
     }
 
 #[partial]
