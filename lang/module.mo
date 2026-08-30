@@ -22,6 +22,7 @@ use lang.typecheck.meta_reflect {
   reify_decls_value_to_decls, term_free_var_name,
 }
 use lang.scope {
+  OpenAlias,
   add_constraint_dict_params_decls, alias_decls_in_scope, build_scope_from_decls,
   collect_classes, collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
   decls_have_aliasable_decls, filter_valid_open_aliases,
@@ -1941,11 +1942,17 @@ def get_module_info_decls (mi : ModuleInfo) : List Decl :=
 /// able decl_list` collapsed from 1925 to 181 the moment the (then-
 /// global) pass landed, starving `resolve_class_calls_decls` of
 /// instances that used to be reachable.
-def resolve_open_aliases_in_module_info (known_names : List String) (mi : ModuleInfo) : ModuleInfo :=
+/// `root_aliases` -- see `resolve_open_aliases_in_modules`'s own doc
+/// comment for what these are and why every module needs them merged
+/// in, not just its own explicit `open`/`use` declarations. Put first
+/// so a module's OWN alias (rare, but possible) shadows an ambient
+/// root one of the same bare name, matching ordinary shadowing.
+def resolve_open_aliases_in_module_info (known_names : List String) (root_aliases : List OpenAlias) (mi : ModuleInfo) : ModuleInfo :=
     match mi {
         ModuleInfo.mk path file_path decl_list =>
             let candidates := collect_open_aliases decl_list in
-            let aliases := filter_valid_open_aliases known_names candidates in
+            let own_aliases := filter_valid_open_aliases known_names candidates in
+            let aliases := list_append own_aliases root_aliases in
             ModuleInfo.mk path file_path (resolve_open_alias_decls aliases decl_list)
     }
 
@@ -1956,6 +1963,49 @@ def all_module_decl_names (modules : List ModuleInfo) : List String :=
         List.cons m rest => list_append (collect_def_names (get_module_info_decls m)) (all_module_decl_names rest),
     }
 
+#[partial]
+def find_module_by_path (modules : List ModuleInfo) (target : ModulePath) : Option ModuleInfo :=
+    match modules {
+        List.empty => Option.none,
+        List.cons m rest =>
+            match m {
+                ModuleInfo.mk path _fp _decls =>
+                    if modpath_eq path target then Option.some m else find_module_by_path rest target,
+            },
+    }
+
+/// `prelude`/`init`/`std` are ambiently available to EVERY loaded
+/// module (`direct_deps_with_prelude`, above) -- a bare name any of
+/// them brings into scope via their OWN `open`/`use` (e.g. `init/
+/// prelude.mo`'s `open Bool {and, false, not, or, true}`) is callable
+/// bare from ANY file, without that file writing its own `open`/`use`
+/// for it, exactly the way the type checker's own shared `ScopeData`
+/// already treats it. `resolve_open_aliases_in_module_info`'s per-
+/// module scoping is otherwise correct (and necessary -- see its own
+/// history) for an ORDINARY file's `use X {name}`, but was too narrow
+/// for these three: confirmed live as the `llc` frontier immediately
+/// following the previous commit's parser-truncation fix -- `undefined
+/// value '@not'` (`Bool.not`, `init/prelude.mo`), called bare
+/// throughout the corpus by files with no `open`/`use` of their own
+/// naming it, exactly like the `println`/`file_exists`-style natives
+/// were for `IO`.
+#[partial]
+def collect_root_aliases (modules : List ModuleInfo) (known_names : List String) : List OpenAlias :=
+    collect_root_aliases_go modules [prelude_module_path, init_module_path, std_module_path] known_names
+
+#[partial]
+def collect_root_aliases_go (modules : List ModuleInfo) (roots : List ModulePath) (known_names : List String) : List OpenAlias :=
+    match roots {
+        List.empty => List.empty,
+        List.cons r rest =>
+            let this_root_aliases :=
+                match find_module_by_path modules r {
+                    Option.some mi => filter_valid_open_aliases known_names (collect_open_aliases (get_module_info_decls mi)),
+                    Option.none => List.empty,
+                } in
+            list_append this_root_aliases (collect_root_aliases_go modules rest known_names),
+    }
+
 /// `resolve_open_aliases_in_module_info` applied to every loaded
 /// module -- the actual entry point `lang.codegen.emit`/`lang.codegen.
 /// test_driver` call, on `get_loaded_all`'s own `List ModuleInfo`,
@@ -1963,17 +2013,20 @@ def all_module_decl_names (modules : List ModuleInfo) : List String :=
 /// (every real def name across the WHOLE loaded program) is computed
 /// once here and threaded to every module's own alias validation --
 /// see `filter_valid_open_aliases`'s own doc comment for why this
-/// validation step is required at all.
+/// validation step is required at all. `root_aliases` (see its own doc
+/// comment) is ALSO computed once and merged into every module's own
+/// alias list, not just prelude/init/std's own.
 def resolve_open_aliases_in_modules (modules : List ModuleInfo) : List ModuleInfo :=
     let known_names := all_module_decl_names modules in
-    resolve_open_aliases_in_modules_go known_names modules
+    let root_aliases := collect_root_aliases modules known_names in
+    resolve_open_aliases_in_modules_go known_names root_aliases modules
 
 #[partial]
-def resolve_open_aliases_in_modules_go (known_names : List String) (modules : List ModuleInfo) : List ModuleInfo :=
+def resolve_open_aliases_in_modules_go (known_names : List String) (root_aliases : List OpenAlias) (modules : List ModuleInfo) : List ModuleInfo :=
     match modules {
         List.empty => List.empty,
         List.cons m rest =>
-            List.cons (resolve_open_aliases_in_module_info known_names m) (resolve_open_aliases_in_modules_go known_names rest),
+            List.cons (resolve_open_aliases_in_module_info known_names root_aliases m) (resolve_open_aliases_in_modules_go known_names root_aliases rest),
     }
 
 #[partial]
