@@ -69,6 +69,11 @@ struct CodegenCtx {
     /// `filter_reachable`'s HashMap conversions decisive wins.
     arities : HashMap String I64,
     ctor_tags : HashMap String I64,
+    /// Mirrors `ctor_tags` exactly (same keying, same build site) but
+    /// for each user-defined constructor's field count instead of its
+    /// tag -- see `constructor_arity`'s own doc comment for why this is
+    /// needed.
+    ctor_arities : HashMap String I64,
 }
 
 type CompileResult {
@@ -92,8 +97,8 @@ def empty_arities : HashMap String I64 := str_map_empty
 /// global reference falls back to today's eager-0-arg-call behavior --
 /// correct only for genuinely 0-arity defs).
 #[partial]
-def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) : CodegenCtx :=
-    { locals := empty_bindings, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags }
+def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) : CodegenCtx :=
+    { locals := empty_bindings, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities }
 
 #[partial]
 def fresh_temp (c : CodegenCtx) : CtxStrPair :=
@@ -121,6 +126,9 @@ def ctx_lookup_local (c : CodegenCtx) (name : Identifier) : Option LLVMValue := 
 /// builtin list.
 #[partial]
 def ctx_lookup_ctor_tag (c : CodegenCtx) (name : String) : Option I64 := str_map_lookup name c.ctor_tags
+
+#[partial]
+def ctx_lookup_ctor_arity (c : CodegenCtx) (name : String) : Option I64 := str_map_lookup name c.ctor_arities
 
 /// Rebuilds `c` with an EMPTY `locals` list, preserving `next_temp`/
 /// `next_label`/`arities`. Used when entering a freshly-lifted
@@ -264,6 +272,42 @@ def build_llvm_params_from_db_shifted (n : I64) (start_idx : I64) : List ParamPa
 def shim_fwd_args (n : I64) (start_idx : I64) : List LLVMValue :=
     if I64.beq n 0 then empty_vals
     else cons_val (LLVMValue.parm_ start_idx) (shim_fwd_args (n - 1) (start_idx + 1))
+
+/// A forwarding shim for an arity>0 CONSTRUCTOR referenced as a bare
+/// VALUE (`compile_db_term_ir`'s `Term.var` case, e.g. `List.map
+/// Identifier.id ids`) rather than immediately, fully applied. Mirrors
+/// `build_closure_shim_func` just above (the ordinary-def case) exactly
+/// in shape -- same uniform (self, p1..p_arity) signature `apply_
+/// closureN` expects -- but instead of forwarding to another function's
+/// call, allocates a genuine tagged Constructor and sets each of its
+/// `arity` fields from the shim's own forwarded args.
+#[partial]
+def build_constructor_closure_shim_func (shim_name : String) (tag : I64) (arity : I64) : LLVMFunction :=
+    let self_pair := ParamPair.mk "p0" LLVMType.i64_ in
+    let real_params := build_llvm_params_from_db_shifted arity 1 in
+    let params := cons_pair self_pair real_params in
+    let alloc_val := LLVMValue.call "alloc_constructor" LLVMType.i64_
+        (cons_val (LLVMValue.int_ tag) (cons_val (LLVMValue.int_ arity) empty_vals)) false in
+    let alloc_instr := LLVMInstruction.assign "obj" alloc_val in
+    let set_instrs := build_ctor_shim_set_fields arity 1 in
+    let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "obj") in
+    let entry_instrs := cons_instr alloc_instr (append_instrs set_instrs (cons_instr ret_instr empty_instrs)) in
+    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+    LLVMFunction.mk shim_name params LLVMType.i64_ (cons_block entry_block empty_blocks) false
+
+/// `monad_set_field(obj, i-1, p_i)` for i in [1, n] -- fixed temp names
+/// ("s1", "s2", ...) are safe here without `CodegenCtx`/`fresh_temp`
+/// threading, same reasoning as `build_shim_env_gets`'s own doc comment
+/// (a shim body is always one flat sequence, never nested/reentrant).
+#[partial]
+def build_ctor_shim_set_fields (n : I64) (idx : I64) : List LLVMInstruction :=
+    if I64.gt idx n then empty_instrs
+    else
+        let set_temp := String.concat "s" (I64.to_string idx) in
+        let set_call := LLVMValue.call "monad_set_field" LLVMType.i64_
+            (cons_val (LLVMValue.var_ "obj") (cons_val (LLVMValue.int_ (idx - 1)) (cons_val (LLVMValue.parm_ idx) empty_vals))) false in
+        let set_instr := LLVMInstruction.assign set_temp set_call in
+        cons_instr set_instr (build_ctor_shim_set_fields n (idx + 1))
 
 /// See `combine_direct_call_arity_checked`'s own under-application
 /// branch for the bug this fixes: boxes a genuine closure for a direct
@@ -430,6 +474,40 @@ def builtin_ctor_tags : HashMap String I64 :=
     let m := str_map_insert "pair" 15 m in
     m
 
+/// Field counts for the same builtin constructors `builtin_ctor_tags`
+/// enumerates -- needed by `constructor_arity` (see its own doc comment
+/// for why: a bare, unapplied reference to an arity>0 constructor, e.g.
+/// `List.map Option.some xs`, needs to know it must box a real closure,
+/// not just allocate a 0-field object).
+#[partial]
+def builtin_ctor_arities : HashMap String I64 :=
+    let m := str_map_empty in
+    let m := str_map_insert "IO.io" 1 m in
+    let m := str_map_insert "Unit.unit" 0 m in
+    let m := str_map_insert "Bool.true" 0 m in
+    let m := str_map_insert "Bool.false" 0 m in
+    let m := str_map_insert "Option.none" 0 m in
+    let m := str_map_insert "Option.some" 1 m in
+    let m := str_map_insert "List.empty" 0 m in
+    let m := str_map_insert "List.cons" 2 m in
+    let m := str_map_insert "unit" 0 m in
+    let m := str_map_insert "true" 0 m in
+    let m := str_map_insert "false" 0 m in
+    let m := str_map_insert "none" 0 m in
+    let m := str_map_insert "some" 1 m in
+    let m := str_map_insert "empty" 0 m in
+    let m := str_map_insert "cons" 2 m in
+    let m := str_map_insert "io" 1 m in
+    let m := str_map_insert "trivial" 0 m in
+    let m := str_map_insert "refl" 0 m in
+    let m := str_map_insert "ok" 1 m in
+    let m := str_map_insert "err" 1 m in
+    let m := str_map_insert "zero" 0 m in
+    let m := str_map_insert "succ" 1 m in
+    let m := str_map_insert "nil" 0 m in
+    let m := str_map_insert "pair" 2 m in
+    m
+
 /// Falls back to `c`'s own dynamically-built `ctor_tags` table
 /// (`build_constructor_tag_map`) for anything not in `builtin_ctor_tags`
 /// -- every user-defined inductive's constructor, and any BUILTIN
@@ -446,6 +524,41 @@ def constructor_tag (c : CodegenCtx) (name : String) : I64 :=
                 Option.none =>
                     match ctx_lookup_ctor_tag c base_name {
                         Option.some tag => tag,
+                        Option.none => 0,
+                    },
+            },
+    }
+
+/// Same 3-tier lookup shape as `constructor_tag` just above (hardcoded
+/// builtin table, by full name then base name, then `c`'s own
+/// dynamically-built table), for a constructor's FIELD COUNT instead of
+/// its tag. Needed by `compile_db_term_ir`'s `Term.var` case (a bare,
+/// unapplied constructor reference in VALUE position, e.g. `List.map
+/// Identifier.id ids` or `List.map Option.some xs`): that case used to
+/// unconditionally allocate a 0-field object regardless of the
+/// constructor's REAL declared arity, correct only for a genuinely
+/// nullary constructor -- confirmed as a real gap via a live self-
+/// compiled binary's own SIGSEGV (jumping to a garbage function pointer
+/// inside `List.map`'s `apply_closure1`, traced to `ids_to_module_path`'s
+/// own `List.map Identifier.id ids`, a 1-field constructor referenced
+/// bare). Falls back to 0 (matching `constructor_tag`'s own "unknown ->
+/// 0" fallback) if the name isn't found anywhere -- a name that isn't
+/// even a known constructor never reaches this function to begin with
+/// (`is_constructor_var` already gated the caller), so this only means
+/// "found the tag via `builtin_ctor_tags`/`ctor_tags` but has no
+/// separately-recorded arity", which shouldn't happen in practice but
+/// isn't worth a crash if it somehow does.
+#[partial]
+def constructor_arity (c : CodegenCtx) (name : String) : I64 :=
+    let base_name := extract_base_name name in
+    match str_map_lookup name builtin_ctor_arities {
+        Option.some arity => arity,
+        Option.none =>
+            match str_map_lookup base_name builtin_ctor_arities {
+                Option.some arity => arity,
+                Option.none =>
+                    match ctx_lookup_ctor_arity c base_name {
+                        Option.some arity => arity,
                         Option.none => 0,
                     },
             },
@@ -2182,19 +2295,60 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                             Option.none => false,
                         } in
                         if is_constructor_var c name && Bool.not also_a_real_fn then
-                            // Compile as alloc_constructor with 0 fields.
-                            // Must use THIS constructor's own tag (e.g.
-                            // `none` = 3), not a hardcoded 0 (`Unit.unit`'s
-                            // tag) -- a hardcoded tag made every bare
-                            // 0-arg constructor reference indistinguishable
-                            // from Unit.unit during match dispatch.
-                            match fresh_temp c {
-                                CtxStrPair.mk ctx_t temp =>
-                                    let tag_val := constructor_tag c name in
-                                    let alloc_val := LLVMValue.call "alloc_constructor" LLVMType.i64_ (List.cons (LLVMValue.int_ tag_val) (List.cons (LLVMValue.int_ 0) List.empty)) false in
-                                    let assign_instr := LLVMInstruction.assign temp alloc_val in
-                                    CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
-                            }
+                            let tag_val := constructor_tag c name in
+                            let ctor_arity := constructor_arity c name in
+                            if I64.beq ctor_arity 0 then
+                                // Compile as alloc_constructor with 0
+                                // fields. Must use THIS constructor's own
+                                // tag (e.g. `none` = 3), not a hardcoded 0
+                                // (`Unit.unit`'s tag) -- a hardcoded tag
+                                // made every bare 0-arg constructor
+                                // reference indistinguishable from
+                                // Unit.unit during match dispatch.
+                                match fresh_temp c {
+                                    CtxStrPair.mk ctx_t temp =>
+                                        let alloc_val := LLVMValue.call "alloc_constructor" LLVMType.i64_ (List.cons (LLVMValue.int_ tag_val) (List.cons (LLVMValue.int_ 0) List.empty)) false in
+                                        let assign_instr := LLVMInstruction.assign temp alloc_val in
+                                        CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks empty_funcs empty_globals_list,
+                                }
+                            else
+                                // A bare, unapplied reference to an
+                                // arity>0 constructor (e.g. `List.map
+                                // Identifier.id ids`, `List.map Option.
+                                // some xs`) -- the constructor ITSELF is
+                                // a first-class value here, not a
+                                // saturated application (that shape goes
+                                // through `try_compile_constructor_app_
+                                // db` instead, never reaching this bare-
+                                // Term.var case at all). The `ctor_arity
+                                // == 0` branch above would allocate a
+                                // 0-field object regardless of the real
+                                // field count -- correct only for a
+                                // genuinely nullary constructor. Boxes a
+                                // genuine closure instead, mirroring the
+                                // ordinary "arity>0 def referenced as a
+                                // value" case just below
+                                // (`build_closure_shim_func`), generalized
+                                // for a constructor: `build_constructor_
+                                // closure_shim_func`'s shim allocates a
+                                // real tagged Constructor and sets each
+                                // field from its own forwarded args,
+                                // rather than forwarding to another
+                                // function. Confirmed as a real gap via a
+                                // live self-compiled binary's own SIGSEGV
+                                // (jumping to a garbage function pointer
+                                // inside `List.map`'s `apply_closure1`,
+                                // traced to `ids_to_module_path`'s own
+                                // `List.map Identifier.id ids`).
+                                match fresh_temp c {
+                                    CtxStrPair.mk ctx_t temp =>
+                                        let shim_name := String.concat llvm_name "_ctor_closure_shim" in
+                                        let shim_func := build_constructor_closure_shim_func shim_name tag_val ctor_arity in
+                                        let entry_text := global_fn_ptr_text shim_name (ctor_arity + 1) in
+                                        let box_val := LLVMValue.alloc_closure entry_text ctor_arity List.empty in
+                                        let assign_instr := LLVMInstruction.assign temp box_val in
+                                        CompileResult.ok ctx_t (cons_instr assign_instr empty_instrs) (LLVMValue.var_ temp) empty_blocks (cons_func shim_func empty_funcs) empty_globals_list,
+                                }
                         else
                             // A bare reference to a global (non-local,
                             // non-constructor) name, in VALUE position --
@@ -3890,7 +4044,7 @@ def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match 
 #[partial]
 def compile_db_decls_ir (defs : List Def) : LLVMModule :=
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities str_map_empty) defs {
+    match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
             let funcs := ren_main_and_wrap compiled_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
@@ -3903,9 +4057,10 @@ def compile_db_module (decl_list : List Decl) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
     let ctor_tags := build_constructor_tag_map inds in
+    let ctor_arities := build_constructor_arity_map inds in
     let ctor_funcs := compile_db_inductive_decls inds ctor_tags in
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities ctor_tags) defs {
+    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
             let all_funcs := append_funcs ctor_funcs compiled_funcs in
             let funcs := ren_main_and_wrap all_funcs in
@@ -4050,6 +4205,35 @@ def assign_constructor_tags (constructors : List InductConstructor) (next_tag : 
             InductConstructor.mk name _params _typ =>
                 let acc2 := str_map_insert (module_path_to_str name) next_tag acc in
                 assign_constructor_tags rest (next_tag + 1) acc2,
+        },
+}
+
+/// Mirrors `build_constructor_tag_map`/`assign_constructor_tags` exactly
+/// (same keying, same traversal shape) but records each constructor's
+/// FIELD COUNT instead of assigning it a tag -- see `constructor_arity`'s
+/// own doc comment for why this is needed.
+#[partial]
+def build_constructor_arity_map (inds : List Inductive) : HashMap String I64 :=
+    build_constructor_arity_map_go inds str_map_empty
+
+#[partial]
+def build_constructor_arity_map_go (inds : List Inductive) (acc : HashMap String I64) : HashMap String I64 := match inds {
+    List.empty => acc,
+    List.cons ind rest =>
+        match ind {
+            Inductive.mk _name _params _typ constructors _attrs _vis =>
+                build_constructor_arity_map_go rest (assign_constructor_arities constructors acc),
+        },
+}
+
+#[partial]
+def assign_constructor_arities (constructors : List InductConstructor) (acc : HashMap String I64) : HashMap String I64 := match constructors {
+    List.empty => acc,
+    List.cons c rest =>
+        match c {
+            InductConstructor.mk name params _typ =>
+                let acc2 := str_map_insert (module_path_to_str name) (List.length params) acc in
+                assign_constructor_arities rest acc2,
         },
 }
 
@@ -4440,7 +4624,7 @@ def test_ctor_tag_map_qualified_name_lookup : Bool :=
     let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons ind List.empty) in
-    let c := empty_ctx empty_arities tag_map in
+    let c := empty_ctx empty_arities tag_map str_map_empty in
     is_constructor_var c "Option.Some" && is_constructor_var c "Option.None"
 
 /// Regression tests for `native_runtime_fn_name`/`compile_native_def_wrapper_ir`:
@@ -4468,7 +4652,7 @@ def native_def_fixture (name : String) (target : String) : Def :=
 
 #[partial]
 def compile_native_def_fixture_text (name : String) (target : String) : String :=
-    match compile_db_def_ir (empty_ctx empty_arities str_map_empty) (native_def_fixture name target) {
+    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty) (native_def_fixture name target) {
         { ctx := _, funcs := funcs, globals := _ } =>
             emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls),
     }
