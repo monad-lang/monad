@@ -4718,9 +4718,29 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                                 let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                                 let all_blocks_raw := append_blocks (cons_block entry_block empty_blocks) blocks_r in
                                 let tco := apply_self_tco ctx_t fn_name (List.length llvm_params) all_blocks_raw in
-                                let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco.blocks 0 else tco.blocks in
+                                // `tco.ctx`/`tco.blocks` bound ONCE here,
+                                // not inlined into each if/else arm below
+                                // -- a struct field access is itself a
+                                // branching (single-constructor-match-
+                                // shaped) sub-term, and evaluating it a
+                                // SECOND time inside a sibling arm of the
+                                // very `if` that consumes it (rather than
+                                // once, before the `if`) hit a genuine,
+                                // separate compose_seq-splicing gap here
+                                // (confirmed live via a real self-compile:
+                                // `llc`'s verifier rejected the result --
+                                // "PHINode should have one entry for each
+                                // predecessor", dead code stranded after
+                                // an unrelated terminator). Binding once
+                                // avoids the whole class, matching how
+                                // every other multi-field struct result in
+                                // this file (`bmr.val`/`bmr.instrs`, ...)
+                                // is already used.
+                                let tco_ctx := tco.ctx in
+                                let tco_blocks := tco.blocks in
+                                let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
                                 let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
-                                { ctx := tco.ctx, funcs := (cons_func main_func funcs_r), globals := globals_r }
+                                { ctx := tco_ctx, funcs := (cons_func main_func funcs_r), globals := globals_r }
                         },
                     _ =>
                         // A def whose whole (stripped-of-params) body is
@@ -4756,9 +4776,14 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                         let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                         let all_blocks_raw := append_blocks (cons_block entry_block empty_blocks) blocks_r in
                         let tco := apply_self_tco bmr.ctx fn_name (List.length llvm_params) all_blocks_raw in
-                        let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco.blocks 0 else tco.blocks in
+                        // See the `void_val` arm above for why `tco.ctx`/
+                        // `tco.blocks` are bound once here rather than
+                        // inlined into each `if`/else arm.
+                        let tco_ctx := tco.ctx in
+                        let tco_blocks := tco.blocks in
+                        let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
                         let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
-                        { ctx := tco.ctx, funcs := (cons_func main_func funcs_r), globals := globals_r }
+                        { ctx := tco_ctx, funcs := (cons_func main_func funcs_r), globals := globals_r }
                 },
         }
 
