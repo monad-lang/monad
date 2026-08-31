@@ -2064,10 +2064,25 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                 match ctx_lookup_local c id {
                     Option.some val => CompileResult.ok c empty_instrs val empty_blocks empty_funcs empty_globals_list,
                     Option.none =>
-                        // Check if this is a constructor reference
+                        // Check if this is a constructor reference --
+                        // guarded by `ctx_lookup_arity` too, not just
+                        // `is_constructor_var`'s own bare-name-only
+                        // lookup, for the same reason `try_compile_
+                        // constructor_app_db`'s own identical guard
+                        // exists (see its doc comment): a real top-level
+                        // function can share its bare name with an
+                        // unrelated constructor (e.g. `lang/parser/
+                        // combinators.mo`'s `def tag` vs `ParseError`'s
+                        // `tag` constructor), and a genuine constructor
+                        // is never ALSO a real def, so this cannot
+                        // false-negative on any real constructor.
                         let name := show_identifier id in
                         let llvm_name := replace_dots_with_underscores name in
-                        if is_constructor_var c name then
+                        let also_a_real_fn := match ctx_lookup_arity c llvm_name {
+                            Option.some _ => true,
+                            Option.none => false,
+                        } in
+                        if is_constructor_var c name && Bool.not also_a_real_fn then
                             // Compile as alloc_constructor with 0 fields.
                             // Must use THIS constructor's own tag (e.g.
                             // `none` = 3), not a hardcoded 0 (`Unit.unit`'s
@@ -2347,6 +2362,31 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
 /// re-enters this "try" chain on an inner node, so there's no risk of
 /// this matching a PARTIAL sub-application twice.
 /// See `implementations/2026-08-29-user-defined-constructor-codegen-gap.md`.
+/// `is_constructor_var`'s own bare-name-only lookup (needed for match-arm
+/// dispatch, which really can only ever supply a bare constructor name --
+/// see its own doc comment) can't distinguish an ordinary top-level
+/// FUNCTION from a data constructor of some unrelated type that happens
+/// to share the same bare name -- e.g. `lang/parser/combinators.mo`'s own
+/// `def tag (s : String) (input : String) : ParseResult String` versus
+/// `lang/parser/core.mo`'s `ParseError`'s `tag (expected) (remaining)`
+/// constructor: same bare name, same arity. Reusing that table here to
+/// decide "is this call spine's head actually a constructor?" silently
+/// miscompiled EVERY call to the real `tag` function throughout
+/// `lang/parser.mo`/`combinators.mo` into `alloc_constructor`-ing a bare
+/// `ParseError.tag` object instead -- confirmed via a minimal standalone
+/// repro (a same-named 2-arg function alongside a same-named 2-arg
+/// constructor) and via the real self-compiled binary's own crash
+/// (`String_length` segfaulting on a garbage pointer, deep in
+/// `furthest_error`/`alt_fold`'s recursion, the moment the resulting
+/// binary tried to parse anything -- `llc`'s IR verifier can't catch
+/// this, the miscompiled IR is structurally valid, just semantically
+/// wrong). A genuine constructor is never ALSO a real top-level def, so
+/// checking `ctx_lookup_arity` (keyed the same way an ordinary function
+/// call's own callee name resolution already is, `compile_db_term_ir`'s
+/// `Term.var` case just above) and preferring the function-call
+/// interpretation whenever it's present cannot false-negative on any
+/// real constructor call, and directly resolves this class of collision
+/// without touching the parser's own source.
 #[partial]
 def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option CompileResult :=
     match flatten_app_spine (Term.app fun arg) {
@@ -2356,7 +2396,13 @@ def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : 
                     match dbg {
                         DebugName.named id =>
                             let name := show_identifier id in
-                            if is_constructor_var c name
+                            let llvm_name := replace_dots_with_underscores name in
+                            let looks_like_ctor := is_constructor_var c name in
+                            let also_a_real_fn := match ctx_lookup_arity c llvm_name {
+                                Option.some _ => true,
+                                Option.none => false,
+                            } in
+                            if looks_like_ctor && Bool.not also_a_real_fn
                             then
                                 let base_name := extract_base_name name in
                                 let con := Con.mk (Identifier.id base_name) (ModulePath.mp List.empty) (List.length args) (wrap_some_list args) in
@@ -2829,19 +2875,26 @@ def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
                         Option.some _ => compile_db_term_ir c head,
                         Option.none =>
                             let name := show_identifier id in
-                            // Now unreachable in practice: `compile_call_
-                            // head` is only ever reached via `compile_
-                            // general_db_call`, the LAST fallback in
-                            // `compile_db_app_ir`'s try-chain, AFTER
-                            // `try_compile_constructor_app_db` (which
-                            // now flattens the whole spine and intercepts
-                            // EVERY constructor call, any arity) has
-                            // already tried and failed against this SAME
-                            // `is_constructor_var` check -- left in place
-                            // (rather than removed) to keep this fix
-                            // scoped to correctness; a whole-file cleanup
-                            // pass is the right place to remove it.
-                            if is_constructor_var c name
+                            let llvm_name := replace_dots_with_underscores name in
+                            // IS reachable: `try_compile_constructor_app_
+                            // db` bails out to `Option.none` (falling
+                            // through to here, via `compile_general_db_
+                            // call`) whenever `is_constructor_var` is
+                            // true but `ctx_lookup_arity` shows the SAME
+                            // bare name is ALSO a real top-level def --
+                            // see that function's own doc comment for
+                            // why (a function/constructor bare-name
+                            // collision). This check must stay in sync
+                            // with that one: without the SAME `ctx_
+                            // lookup_arity` guard here, a real function
+                            // reaching this fallback would still get
+                            // misclassified as a constructor right here
+                            // instead, one level down.
+                            let also_a_real_fn := match ctx_lookup_arity c llvm_name {
+                                Option.some _ => true,
+                                Option.none => false,
+                            } in
+                            if is_constructor_var c name && Bool.not also_a_real_fn
                             then compile_db_term_ir c head
                             else
                                 // `fn_ref`, not `var_` -- this IS a
@@ -2850,7 +2903,6 @@ def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
                                 // register that merely happens to hold
                                 // a runtime value) -- see `fn_ref`'s own
                                 // doc comment, `lang/codegen/ir.mo`.
-                                let llvm_name := replace_dots_with_underscores name in
                                 CompileResult.ok c empty_instrs (LLVMValue.fn_ref llvm_name) empty_blocks empty_funcs empty_globals_list,
                     },
                 DebugName.unnamed => compile_db_term_ir c head,
