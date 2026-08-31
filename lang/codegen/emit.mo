@@ -478,7 +478,7 @@ def remove_quotes_from_identifier (s : String) : String :=
     remove_quotes_loop s ""
 
 #[partial]
-def remove_quotes_loop (s : String) (acc : String) : String := 
+def remove_quotes_loop (s : String) (acc : String) : String :=
     if String.beq s "" then acc
     else
         let first_byte : U8 := match String.get s 0 {
@@ -486,10 +486,23 @@ def remove_quotes_loop (s : String) (acc : String) : String :=
             Option.none => 0u8
         } in
         let single_quote : U8 := 39u8 in
+        // `String.slice`'s own third argument is a LENGTH, not an end
+        // index (`init/string.mo` -- see `extract_base_name`'s own
+        // already-fixed calls just above for the same story). These two
+        // calls were still using the OLD, wrong convention
+        // (`String.slice s 1 (String.length s)`, i.e. "take `length s`
+        // characters starting at index 1" -- one character too many,
+        // out of bounds by construction) -- confirmed live via a real
+        // self-compiled binary's own SIGSEGV/stack-overflow: `String.
+        // slice`'s out-of-bounds length request never actually SHRANK
+        // `s` on the recursive call, so this looped effectively forever
+        // (until the native stack overflowed, ~22700 frames deep in
+        // `remove_quotes_loop` itself) instead of terminating once `s`
+        // became empty.
         if U8.beq first_byte single_quote then
-            remove_quotes_loop (String.slice s 1 (String.length s)) acc
+            remove_quotes_loop (String.slice s 1 (String.length s - 1)) acc
         else
-            remove_quotes_loop (String.slice s 1 (String.length s)) (String.concat acc (String.slice s 0 1))
+            remove_quotes_loop (String.slice s 1 (String.length s - 1)) (String.concat acc (String.slice s 0 1))
 
 /// Find the last occurrence of a substring in a string, return its index or -1
 #[partial]
@@ -4480,7 +4493,7 @@ def empty_attrs : List Attribute := List.empty
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true
-    else check_contains (String.slice text 1 (String.length text)) needle
+    else check_contains (String.slice text 1 (String.length text - 1)) needle
 
 // === Multi-module compilation ===
 
@@ -4497,7 +4510,7 @@ def replace_dots_loop (s : String) (acc : String) : String :=
             Option.some b => b,
             Option.none => 0u8
         } in
-        let rest := String.slice s 1 (String.length s) in
+        let rest := String.slice s 1 (String.length s - 1) in
         let dot_byte : U8 := 46u8 in  // '.' character
         if U8.beq first_char dot_byte then
             replace_dots_loop rest (String.concat acc "_")
