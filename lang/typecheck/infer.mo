@@ -1807,14 +1807,38 @@ def list_last (ids : List Identifier) : Option Identifier :=
 /// ignored (same leniency the reference's `check_struct_fields` has --
 /// it only ever walks the struct's OWN declared fields, never the
 /// literal's).
+///
+/// A field OMITTED from the literal falls back to its own declared
+/// DEFAULT expression (`Param`'s own `default : Option Term`, `lang/
+/// types.mo`) when the struct declares one -- previously discarded
+/// entirely (`Param.mk pname _ _ _ _`), always producing `Option.none`
+/// for any omitted field regardless of whether a default existed.
+/// `codegen`'s `lower_sparse_args` (`lang/lower_core_ir.mo`) lowers a
+/// constructor's args left-to-right and STOPS at the first `Option.
+/// none` hole -- correct for a genuinely under-saturated constructor
+/// call, but a struct literal that legitimately omits a DEFAULTED field
+/// (not a real "hole") needs that field's value actually present, not a
+/// hole codegen will truncate the whole allocation at. Confirmed live
+/// via a real self-compiled binary's own SIGSEGV: `lang/scope.mo`'s
+/// `scope_data_empty` (a 9-field `ScopeData`, 2 of which --
+/// `def_params`/`def_return_types` -- are declared with defaults and
+/// omitted from the literal) compiled to `alloc_constructor(318, 7)`,
+/// silently allocating only 7 fields' worth of space -- any later
+/// `monad_get_field`/`monad_set_field` on field 7 or 8 read/wrote past
+/// the end of the allocation.
 #[terminating]
 def struct_lit_build_args (params : List Param) (fields : List StructLitField) : List (Option Term) :=
     match params {
         List.empty => List.empty,
         List.cons p rest =>
             match p {
-                Param.mk pname _ _ _ _ =>
-                    List.cons (struct_lit_find_field fields pname) (struct_lit_build_args rest fields)
+                Param.mk pname _ _ pdefault _ =>
+                    let found := struct_lit_find_field fields pname in
+                    let val := match found {
+                        Option.some _ => found,
+                        Option.none => pdefault,
+                    } in
+                    List.cons val (struct_lit_build_args rest fields)
             }
     }
 
