@@ -1354,16 +1354,63 @@ def instr_is_ret_of (i : LLVMInstruction) (target_val : LLVMValue) : Bool := mat
     LLVMInstruction.comment a => false,
 }
 
-/// Structural equality on the one shape that actually arises here: a
-/// branching sub-expression's own reported value is always a fresh SSA
-/// temp (`LLVMValue.var_`, `compile_db_if_ir`/`build_merge_result`'s own
-/// `fresh_temp`-allocated phi result) — every other `LLVMValue` variant
-/// falls through to `false`, since none of them are ever what a merge
-/// block's own `ret` returns.
+/// Structural equality over every ATOMIC `LLVMValue` variant that can
+/// plausibly appear as a `Triple.val`/"running composed result" threaded
+/// through `compose_seq`'s repeated splice-target search
+/// (`splice_into_terminal_block`/`retarget_terminal_ret`) -- NOT just
+/// `var_` (a branching sub-expression's own fresh SSA phi/call temp,
+/// `compile_db_if_ir`/`build_merge_result`'s own `fresh_temp`-allocated
+/// result). A bare, unrebound function-parameter reference compiles to
+/// `LLVMValue.parm_`, not `var_` -- confirmed as a real gap via a minimal
+/// standalone repro isomorphic to `build_db_if_blocks`'s own call to
+/// `build_merge_result` (a chained dot-access match immediately followed
+/// by a bare parameter, immediately followed by more dot-access matches,
+/// all as sibling call arguments): once a `parm_` value got spliced into
+/// a block's `ret` as the running composed value, the NEXT `compose_seq`
+/// step's search for that exact `parm_` value always returned `false`
+/// (old code's wildcard `_ => false` for any non-`var_` pair, even two
+/// structurally-identical ones), so `splice_into_terminal_block` could
+/// never find that block again -- silently falling back to flat
+/// concatenation instead of splicing, corrupting every subsequent
+/// argument's control flow into unreachable, unlabeled dead code and
+/// leaving the earlier block permanently `ret`ing the stale value instead
+/// of its real continuation. Every compound/expression variant (`call`,
+/// `add`, `icmp_eq`, `phi`, ...) still falls through to `false` via the
+/// wildcard -- none of those should ever legitimately appear as a splice
+/// target (a `Triple.val` is always some atomic identifier, never a live
+/// unassigned expression), so no case is added for them.
 #[partial]
 def llvm_value_eq (a : LLVMValue) (b : LLVMValue) : Bool := match a {
     LLVMValue.var_ na => match b {
         LLVMValue.var_ nb => String.beq na nb,
+        _ => false,
+    },
+    LLVMValue.parm_ ia => match b {
+        LLVMValue.parm_ ib => I64.beq ia ib,
+        _ => false,
+    },
+    LLVMValue.global_ na => match b {
+        LLVMValue.global_ nb => String.beq na nb,
+        _ => false,
+    },
+    LLVMValue.fn_ref na => match b {
+        LLVMValue.fn_ref nb => String.beq na nb,
+        _ => false,
+    },
+    LLVMValue.int_ na => match b {
+        LLVMValue.int_ nb => I64.beq na nb,
+        _ => false,
+    },
+    LLVMValue.int32_ na => match b {
+        LLVMValue.int32_ nb => I32.beq na nb,
+        _ => false,
+    },
+    LLVMValue.bool_ ba => match b {
+        LLVMValue.bool_ bb => if ba then bb else Bool.not bb,
+        _ => false,
+    },
+    LLVMValue.void_val => match b {
+        LLVMValue.void_val => true,
         _ => false,
     },
     _ => false,
