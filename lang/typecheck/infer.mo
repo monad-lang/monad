@@ -2252,7 +2252,7 @@ def struct_update_project_field (base : Term) (con_name : ModulePath) (all_names
 /// itself already gives `Term.hole` elsewhere) — the fallback for a
 /// constructor whose inductive type isn't registered in scope, matching
 /// `core_check.rs`'s own documented simplification for this case.
-#[terminating]
+///
 /// Returns the ELABORATED args (not just success/failure) -- a
 /// constructor/struct-literal/struct-update argument that's (or
 /// contains) a dot-access field projection (`x.field`, desugared by
