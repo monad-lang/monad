@@ -1354,10 +1354,12 @@ def instr_is_ret_of (i : LLVMInstruction) (target_val : LLVMValue) : Bool := mat
     LLVMInstruction.comment a => false,
 }
 
-/// Structural equality over every ATOMIC `LLVMValue` variant that can
-/// plausibly appear as a `Triple.val`/"running composed result" threaded
-/// through `compose_seq`'s repeated splice-target search
-/// (`splice_into_terminal_block`/`retarget_terminal_ret`) -- NOT just
+/// Structural equality over every ATOMIC `LLVMValue` variant that
+/// uniquely, unambiguously identifies ONE logical value within a single
+/// function's compilation -- these are the variants that can plausibly
+/// appear as a `Triple.val`/"running composed result" threaded through
+/// `compose_seq`'s repeated splice-target search
+/// (`splice_into_terminal_block`/`retarget_terminal_ret`). NOT just
 /// `var_` (a branching sub-expression's own fresh SSA phi/call temp,
 /// `compile_db_if_ir`/`build_merge_result`'s own `fresh_temp`-allocated
 /// result). A bare, unrebound function-parameter reference compiles to
@@ -1374,11 +1376,32 @@ def instr_is_ret_of (i : LLVMInstruction) (target_val : LLVMValue) : Bool := mat
 /// concatenation instead of splicing, corrupting every subsequent
 /// argument's control flow into unreachable, unlabeled dead code and
 /// leaving the earlier block permanently `ret`ing the stale value instead
-/// of its real continuation. Every compound/expression variant (`call`,
+/// of its real continuation. `global_`/`fn_ref` are the same shape
+/// (`idx`/`name` uniquely picks out one specific parameter/global/
+/// function within this compilation) so get the same treatment.
+///
+/// Deliberately NOT extended to `int_`/`int32_`/`bool_`/`void_val`: a
+/// bare literal is NOT a unique identifier the way a parameter index or
+/// global/function name is -- two UNRELATED branches within the same
+/// accumulated `blocks` list can each legitimately `ret` the identical
+/// literal (e.g. two different arms both happening to return `0`, or two
+/// different Unit-typed computations both `ret`ing `void_val`) without
+/// being "the same running composed value" `compose_seq` is trying to
+/// splice into. Treating those as equal would make `splice_into_terminal_
+/// block` match the WRONG (coincidentally-identical-valued but logically
+/// unrelated) block, so those four variants were dropped from an earlier,
+/// broader version of this function on principle -- NOT because doing so
+/// was confirmed to fix a live bug (a runtime crash surfaced once the
+/// self-compile got far enough to actually RUN the resulting binary --
+/// `strlen` segfaulting on a garbage `String` -- persisted identically
+/// with or without the literal cases, so it has a different, not yet
+/// root-caused source; still worth keeping this function narrow to its
+/// PROVEN-necessary variants regardless). Every compound/expression
+/// variant (`call`,
 /// `add`, `icmp_eq`, `phi`, ...) still falls through to `false` via the
 /// wildcard -- none of those should ever legitimately appear as a splice
-/// target (a `Triple.val` is always some atomic identifier, never a live
-/// unassigned expression), so no case is added for them.
+/// target either (a `Triple.val` is always some atomic identifier, never
+/// a live unassigned expression).
 #[partial]
 def llvm_value_eq (a : LLVMValue) (b : LLVMValue) : Bool := match a {
     LLVMValue.var_ na => match b {
@@ -1395,22 +1418,6 @@ def llvm_value_eq (a : LLVMValue) (b : LLVMValue) : Bool := match a {
     },
     LLVMValue.fn_ref na => match b {
         LLVMValue.fn_ref nb => String.beq na nb,
-        _ => false,
-    },
-    LLVMValue.int_ na => match b {
-        LLVMValue.int_ nb => I64.beq na nb,
-        _ => false,
-    },
-    LLVMValue.int32_ na => match b {
-        LLVMValue.int32_ nb => I32.beq na nb,
-        _ => false,
-    },
-    LLVMValue.bool_ ba => match b {
-        LLVMValue.bool_ bb => if ba then bb else Bool.not bb,
-        _ => false,
-    },
-    LLVMValue.void_val => match b {
-        LLVMValue.void_val => true,
         _ => false,
     },
     _ => false,
