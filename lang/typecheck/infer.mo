@@ -1689,7 +1689,7 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
                     match scope_find_inductive typ_name scope {
                         err _ =>
                             match check_con_args_untyped args scope local_types locals {
-                                ok _ => ok (mk_typed (Term.con c) expected_type),
+                                ok elab_args => ok (mk_typed (Term.con (Con.mk cname typ_name num_args elab_args)) expected_type),
                                 err e => err e,
                             },
                         ok ind =>
@@ -1700,7 +1700,7 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
                                         InductConstructor.mk _ params _ =>
                                             if I64.beq num_args (List.length params) then
                                                 match check_con_args_against_params args params scope local_types locals {
-                                                    ok _ => ok (mk_typed (Term.con c) expected_type),
+                                                    ok elab_args => ok (mk_typed (Term.con (Con.mk cname typ_name num_args elab_args)) expected_type),
                                                     err e => err e,
                                                 }
                                             else
@@ -1750,9 +1750,9 @@ def type_check_struct_lit (fields : List StructLitField) (type_name : Option Ter
                                             let args : List (Option Term) := struct_lit_build_args params fields in
                                             match check_con_args_against_params args params scope local_types locals {
                                                 err e => err e,
-                                                ok _ =>
+                                                ok elab_args =>
                                                     let mk_name : Identifier := struct_lit_con_name con_name in
-                                                    let c : Con := Con.mk mk_name typ_mp (List.length params) args in
+                                                    let c : Con := Con.mk mk_name typ_mp (List.length params) elab_args in
                                                     let result_typ : Term := match type_name {
                                                         Option.some _ => Term.var sentinel (DebugName.named sname),
                                                         Option.none => expected_type,
@@ -1974,9 +1974,9 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (expected_ty
                                                     let args : List (Option Term) := struct_lit_build_args params fields in
                                                     match check_con_args_against_params args params scope local_types locals {
                                                         err e => err e,
-                                                        ok _ =>
+                                                        ok elab_args =>
                                                             let mk_name : Identifier := struct_lit_con_name con_name in
-                                                            let c : Con := Con.mk mk_name (inductive_module_path ind) (List.length params) args in
+                                                            let c : Con := Con.mk mk_name (inductive_module_path ind) (List.length params) elab_args in
                                                             let result_typ : Term := Term.var sentinel (DebugName.named (inductive_bare_name ind)) in
                                                             ok (Option.some (mk_typed (Term.con c) result_typ)),
                                                     }
@@ -2178,9 +2178,9 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
                                                     // helper expects).
                                                     match check_con_args_against_params args params scope local_types locals {
                                                         err e => err e,
-                                                        ok _ =>
+                                                        ok elab_args =>
                                                             let mk_name : Identifier := struct_lit_con_name con_name in
-                                                            let c : Con := Con.mk mk_name typ_mp n args in
+                                                            let c : Con := Con.mk mk_name typ_mp n elab_args in
                                                             ok (mk_typed (Term.con c) base_typ),
                                                     },
                                             }
@@ -2253,16 +2253,51 @@ def struct_update_project_field (base : Term) (con_name : ModulePath) (all_names
 /// constructor whose inductive type isn't registered in scope, matching
 /// `core_check.rs`'s own documented simplification for this case.
 #[terminating]
-def check_con_args_untyped (args : List (Option Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Bool :=
+/// Returns the ELABORATED args (not just success/failure) -- a
+/// constructor/struct-literal/struct-update argument that's (or
+/// contains) a dot-access field projection (`x.field`, desugared by
+/// `field_access_chain`, `lang/parser.mo`, into a single-entry `Literal.
+/// match_`) gets REWRITTEN during type-checking (`type_check_field_
+/// pattern_case`'s own `declared_order_binders`, above) into a full,
+/// declared-order positional match `bind_match_fields`
+/// (`lang/codegen/emit.mo`) actually needs to extract the right field.
+/// An earlier version of this function (and `check_con_args_against_
+/// params` below) only returned `Bool`, discarding that elaboration --
+/// every caller then rebuilt the final `Con`/`Term.con` from the
+/// ORIGINAL, un-elaborated `args`, so any embedded dot-access argument
+/// silently reverted to its single-entry, un-reordered form by the time
+/// codegen saw it, and `bind_match_fields`'s positional extraction read
+/// field 0 of the wrong object no matter which field was actually named
+/// -- confirmed live via a real self-compiled binary's own SIGSEGV
+/// (`lang/scope.mo`'s `scope_data_add_instance`, `{ sd with instances :=
+/// scope_add_to_instances sd.instances cname ins }`: `sd.instances`
+/// -- field index 2 of `ScopeData` -- compiled to read field 0 instead,
+/// handing `scope_add_to_instances` an unrelated `HashMap` to recurse
+/// into as if it were a `List ScopeInstance`) and independently via a
+/// minimal repro (`{ sd with f0 := sd.f1 }` on a 2-field struct reading
+/// back the WRONG, pre-update value). Invisible for the overwhelming
+/// majority of arguments (plain literals, calls, bare var refs) since
+/// their elaborated and un-elaborated forms are identical -- only a
+/// dot-access argument's shape actually changes.
+#[terminating]
+def check_con_args_untyped (args : List (Option Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (List (Option Term)) :=
     match args {
-        List.empty => ok true,
+        List.empty => ok List.empty,
         List.cons a rest =>
             match a {
-                Option.none => check_con_args_untyped rest scope local_types locals,
+                Option.none =>
+                    match check_con_args_untyped rest scope local_types locals {
+                        err e => err e,
+                        ok rest_elab => ok (List.cons Option.none rest_elab),
+                    },
                 Option.some term =>
                     match type_check term Term.hole scope local_types locals {
-                        ok _ => check_con_args_untyped rest scope local_types locals,
                         err e => err e,
+                        ok tt =>
+                            match check_con_args_untyped rest scope local_types locals {
+                                err e => err e,
+                                ok rest_elab => ok (List.cons (Option.some (tt_term tt)) rest_elab),
+                            },
                     }
             }
     }
@@ -2272,23 +2307,33 @@ def check_con_args_untyped (args : List (Option Term)) (scope : Scope) (local_ty
 /// literal declared type. If `args` somehow outlasts `params` (shouldn't
 /// happen once `type_check_con`'s own arity check has already run, but
 /// stay defensive rather than silently skipping the overflow), the
-/// remaining args fall back to `check_con_args_untyped`.
+/// remaining args fall back to `check_con_args_untyped`. Returns the
+/// ELABORATED args -- see `check_con_args_untyped`'s own doc comment
+/// just above for why.
 #[terminating]
-def check_con_args_against_params (args : List (Option Term)) (params : List Param) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Bool :=
+def check_con_args_against_params (args : List (Option Term)) (params : List Param) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (List (Option Term)) :=
     match args {
-        List.empty => ok true,
+        List.empty => ok List.empty,
         List.cons a rest =>
             match params {
                 List.empty => check_con_args_untyped args scope local_types locals,
                 List.cons p prest =>
                     match a {
-                        Option.none => check_con_args_against_params rest prest scope local_types locals,
+                        Option.none =>
+                            match check_con_args_against_params rest prest scope local_types locals {
+                                err e => err e,
+                                ok rest_elab => ok (List.cons Option.none rest_elab),
+                            },
                         Option.some term =>
                             match p {
                                 Param.mk _ ptyp _ _ _ =>
                                     match type_check term ptyp scope local_types locals {
-                                        ok _ => check_con_args_against_params rest prest scope local_types locals,
                                         err e => err e,
+                                        ok tt =>
+                                            match check_con_args_against_params rest prest scope local_types locals {
+                                                err e => err e,
+                                                ok rest_elab => ok (List.cons (Option.some (tt_term tt)) rest_elab),
+                                            },
                                     }
                             }
                     }
