@@ -265,6 +265,92 @@ def shim_fwd_args (n : I64) (start_idx : I64) : List LLVMValue :=
     if I64.beq n 0 then empty_vals
     else cons_val (LLVMValue.parm_ start_idx) (shim_fwd_args (n - 1) (start_idx + 1))
 
+/// See `combine_direct_call_arity_checked`'s own under-application
+/// branch for the bug this fixes: boxes a genuine closure for a direct
+/// top-level function call site that supplied FEWER args than the
+/// callee's real declared arity, instead of emitting an arity-mismatched
+/// direct call. `real_arity - supplied` is always `> 0` here (the caller
+/// only reaches this on `supplied < real_arity`).
+#[partial]
+def combine_partial_apply (ctx_a : CodegenCtx) (name : String) (arg_vals : List LLVMValue) (real_arity : I64) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
+    let supplied := List.length arg_vals in
+    let remaining := real_arity - supplied in
+    match fresh_temp ctx_a {
+        CtxStrPair.mk ctx1 temp =>
+            let shim_name := String.concat name (String.concat "_partial_shim_" (I64.to_string supplied)) in
+            let shim_func := build_partial_apply_shim_func shim_name name supplied remaining in
+            let entry_text := global_fn_ptr_text shim_name (remaining + 1) in
+            let box_val := LLVMValue.alloc_closure entry_text remaining arg_vals in
+            let box_instr := LLVMInstruction.assign temp box_val in
+            match build_set_env_instrs (LLVMValue.var_ temp) arg_vals 0 ctx1 {
+                { ctx := ctx2, instrs := set_instrs } =>
+                    match compose_seq ({ instrs := combined, blocks := blocks, val := last_val }) ({ instrs := append_instrs (cons_instr box_instr empty_instrs) set_instrs, blocks := empty_blocks, val := (LLVMValue.var_ temp) }) {
+                        { instrs := new_instrs, blocks := new_blocks, val := _ } =>
+                            CompileResult.ok ctx2 new_instrs (LLVMValue.var_ temp) new_blocks (cons_func shim_func funcs) globals,
+                    },
+            },
+    }
+
+/// A forwarding shim for a PARTIALLY-applied top-level def. Mirrors
+/// `build_closure_shim_func` (the ZERO-supplied-args case) above,
+/// generalized: `captured_count` values already supplied at the call
+/// site are read back via `monad_closure_get_env` (populated separately
+/// by `combine_partial_apply`'s own `build_set_env_instrs` call); the
+/// shim's own params (`p1..p{remaining_arity}`, past the uniform leading
+/// `self` `apply_closureN` always supplies) carry whatever args are
+/// still missing. Forwards `real_name`'s full argument list -- captured
+/// values first, then the newly-supplied ones -- in the same order the
+/// original curried application would have.
+#[partial]
+def build_partial_apply_shim_func (shim_name : String) (real_name : String) (captured_count : I64) (remaining_arity : I64) : LLVMFunction :=
+    let self_pair := ParamPair.mk "p0" LLVMType.i64_ in
+    let real_params := build_llvm_params_from_db_shifted remaining_arity 1 in
+    let params := cons_pair self_pair real_params in
+    let env_gets := build_shim_env_gets captured_count in
+    let new_arg_vals := shim_fwd_args remaining_arity 1 in
+    let fwd_args := append_vals env_gets.vals new_arg_vals in
+    let call_val := LLVMValue.call real_name LLVMType.i64_ fwd_args false in
+    let call_instr := LLVMInstruction.assign "r" call_val in
+    let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "r") in
+    let entry_instrs := append_instrs env_gets.instrs (cons_instr call_instr (cons_instr ret_instr empty_instrs)) in
+    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+    LLVMFunction.mk shim_name params LLVMType.i64_ (cons_block entry_block empty_blocks) false
+
+struct ShimEnvGets {
+    instrs : List LLVMInstruction,
+    vals : List LLVMValue,
+}
+
+/// `monad_closure_get_env(p0, i)` for i in [0, n) -- reads a partial-
+/// application shim's own captured args back out, in the order
+/// `combine_partial_apply` populates them via `build_set_env_instrs`.
+/// Fixed temp names ("e0", "e1", ...) are safe here without
+/// `CodegenCtx`/`fresh_temp` threading -- a shim body is always one flat
+/// sequence, never nested/reentrant (same reasoning as `build_closure_
+/// shim_func`'s own fixed `"r"` return temp).
+#[partial]
+def build_shim_env_gets (n : I64) : ShimEnvGets := build_shim_env_gets_go n 0
+
+#[partial]
+def build_shim_env_gets_go (n : I64) (idx : I64) : ShimEnvGets :=
+    if I64.beq idx n
+    then { instrs := empty_instrs, vals := empty_vals }
+    else
+        let temp := String.concat "e" (I64.to_string idx) in
+        let get_call := LLVMValue.call "monad_closure_get_env" LLVMType.i64_
+            (cons_val (LLVMValue.parm_ 0) (cons_val (LLVMValue.int_ idx) empty_vals)) false in
+        let get_instr := LLVMInstruction.assign temp get_call in
+        match build_shim_env_gets_go n (idx + 1) {
+            { instrs := rest_instrs, vals := rest_vals } =>
+                { instrs := cons_instr get_instr rest_instrs, vals := cons_val (LLVMValue.var_ temp) rest_vals },
+        }
+
+#[partial]
+def append_vals (a : List LLVMValue) (b : List LLVMValue) : List LLVMValue := match a {
+    List.empty => b,
+    List.cons hd tl => cons_val hd (append_vals tl b),
+}
+
 #[partial]
 def lookup_binding (bindings : List LocalBinding) (name : Identifier) : Option LLVMValue := match bindings {
     List.empty => Option.none,
@@ -3031,13 +3117,48 @@ def combine_direct_call (ctx_a : CodegenCtx) (name : String) (arg_vals : List LL
 def combine_direct_call_arity_checked (ctx_a : CodegenCtx) (name : String) (arg_vals : List LLVMValue) (combined : List LLVMInstruction) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal) (last_val : LLVMValue) : CompileResult :=
     match ctx_lookup_arity ctx_a name {
         Option.some real_arity =>
-            if I64.gt (List.length arg_vals) real_arity then
+            let supplied := List.length arg_vals in
+            if I64.gt supplied real_arity then
                 let direct_args := take_vals real_arity arg_vals in
                 let extra_args := drop_vals real_arity arg_vals in
                 match combine_direct_call ctx_a name direct_args combined blocks funcs globals last_val {
                     CompileResult.ok ctx_d instrs_d val_d blocks_d funcs_d globals_d =>
                         apply_extra_args_one_by_one ctx_d val_d extra_args instrs_d blocks_d funcs_d globals_d,
                 }
+            else if I64.lt supplied real_arity then
+                // UNDER-application: a genuine partial application of a
+                // direct top-level function reference (e.g. `load_scope_
+                // entry ""`, `lang/module.mo`'s `build_prelude_init_base`,
+                // passed as `load_dependency_entries`'s own `loader`
+                // param, later invoked via `apply_closure1`). Previously
+                // fell through to the `else` branch below unconditionally
+                // -- `combine_direct_call` blindly emits `call @name(<all
+                // supplied args>)` with FEWER arguments than `name`'s own
+                // real declared LLVM signature. This is invalid IR (an
+                // arg-count mismatch against the callee's own signature),
+                // but this project's own `link_ir` step passes clang
+                // `-disable-llvm-verifier`, so it links and runs anyway
+                // -- the missing parameter register(s) inside `name` just
+                // read whatever an EARLIER, unrelated call happened to
+                // leave there, silently corrupting execution instead of
+                // failing to compile. Confirmed as the real cause of a
+                // live self-compile SIGSEGV inside `monad_get_tag`
+                // (traced through `build_prelude_init_base` ->
+                // `load_scope_entry ""` -> `module_path_to_file`: the
+                // leftover register held a stale `List ModulePath`
+                // instead of the missing `mp : ModulePath` argument) via
+                // a minimal direct repro (a 2-arg def partially applied
+                // to 1 arg and called through an intermediate function,
+                // SIGSEGVs before this fix). Boxes a genuine closure
+                // instead -- mirrors `compile_db_term_ir`'s own "arity>0
+                // def referenced as a bare value" case (`Term.var`, ZERO
+                // supplied args) and `build_closure_shim_func` just
+                // above, generalized to `supplied > 0`: the already-
+                // supplied args become the closure's own captures
+                // (`build_set_env_instrs`, same as any other closure with
+                // real captures), and its own declared arity is only the
+                // REMAINING (`real_arity - supplied`) args still needed.
+                combine_partial_apply ctx_a name arg_vals real_arity combined blocks funcs globals last_val
             else
                 combine_direct_call ctx_a name arg_vals combined blocks funcs globals last_val,
         Option.none =>
