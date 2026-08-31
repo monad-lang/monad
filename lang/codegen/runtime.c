@@ -285,6 +285,54 @@ int64_t monad_string_eq(char* a, char* b) {
     return strcmp(a, b) == 0 ? 1 : 0;
 }
 
+/* `#[native string_slice]` (init/string.mo's `String.slice`) -- another
+   previously-unwired gap: `#[native]` with no real body silently
+   compiled to the generic "return Unit" stub, discarding every argument
+   -- confirmed live via a self-compiled binary calling itself: `lang/
+   codegen/emit.mo`'s own `remove_quotes_loop` recursing on `String.slice
+   s 1 (String.length s - 1)` never actually shrank `s` (the stub always
+   returned the same bogus zero-tag value regardless of input), looping
+   until the native stack overflowed instead of terminating once `s`
+   became empty.
+
+   Byte-oriented (not UTF-8-char-aware) and clamps rather than errors on
+   any out-of-range input, bit-for-bit matching the Rust host's own
+   reference semantics (`core/src/core_native.rs`'s `string_slice`,
+   `SharedStr::subslice`) so compiled and interpreted execution agree:
+   `start` clamps into `[0, strlen(s)]`, `len` clamps to `>= 0` and to
+   whatever remains after `start`, and a NULL `s` yields `""` -- never a
+   panic/OOB read for a bad boundary or an over-long `len`. */
+char* monad_string_slice(char* s, int64_t start_in, int64_t len_in) {
+    size_t slen = s ? strlen(s) : 0;
+    size_t start = start_in < 0 ? 0 : (size_t)start_in;
+    if (start > slen) start = slen;
+    size_t len = len_in < 0 ? 0 : (size_t)len_in;
+    size_t max_len = slen - start;
+    if (len > max_len) len = max_len;
+    char* out = (char*)malloc(len + 1);
+    if (!out) return NULL;
+    if (len) memcpy(out, s + start, len);
+    out[len] = '\0';
+    return out;
+}
+
+/* `#[native string_drop]` (init/string.mo's `String.drop`) -- same gap
+   and same reference semantics as `monad_string_slice` above
+   (`core/src/core_native.rs`'s `string_drop`/`SharedStr::drop_prefix`):
+   drops the first `n` bytes (clamped to `[0, strlen(s)]`), never errors
+   on an out-of-range `n`. */
+char* monad_string_drop(int64_t n, char* s) {
+    size_t slen = s ? strlen(s) : 0;
+    size_t start = n < 0 ? 0 : (size_t)n;
+    if (start > slen) start = slen;
+    size_t len = slen - start;
+    char* out = (char*)malloc(len + 1);
+    if (!out) return NULL;
+    if (len) memcpy(out, s + start, len);
+    out[len] = '\0';
+    return out;
+}
+
 char* monad_read_file(char* path) {
     if (!path) return NULL;
     FILE* f = fopen(path, "rb");

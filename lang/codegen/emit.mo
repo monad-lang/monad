@@ -3615,6 +3615,20 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // compiled `IO_is_dir_native` global was the bogus Unit
             // stub, called for real from `IO_is_dir`'s own compiled body.
             else if String.beq target "string_hash" then Option.some (NativeWrapKind.passthrough "monad_string_hash")
+            // `String.slice`/`String.drop` (init/string.mo) -- same
+            // previously-unwired-wrapper gap as `string_length`/`string_
+            // hash` above, but with a DEEPER root cause underneath it:
+            // `monad_string_slice`/`monad_string_drop` didn't exist in
+            // `lang/codegen/runtime.c` AT ALL (confirmed live via a real
+            // self-compiled binary calling itself: `remove_quotes_loop`'s
+            // own `String.slice s 1 (String.length s - 1)` recursion
+            // never actually shrank `s`, looping until the native stack
+            // overflowed instead of terminating), so both the wrapper
+            // AND the runtime primitive needed adding together -- see
+            // `monad_string_slice`'s own doc comment, `runtime.c`, for
+            // the exact (Rust-host-matching) clamping semantics.
+            else if String.beq target "string_slice" then Option.some (NativeWrapKind.passthrough "monad_string_slice")
+            else if String.beq target "string_drop" then Option.some (NativeWrapKind.passthrough "monad_string_drop")
             else if String.beq target "read_file" then Option.some (NativeWrapKind.io_passthrough "monad_read_file")
             else if String.beq target "file_exists" then Option.some (NativeWrapKind.io_truthy_ptr_bool_result "monad_file_exists")
             else if String.beq target "is_dir" then Option.some (NativeWrapKind.io_truthy_ptr_bool_result "monad_is_dir")
@@ -4225,8 +4239,14 @@ def runtime_declarations : List LLVMDeclaration :=
     // own doc comment above).
     let d26 := mk_decl "monad_closure_get_env" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
     let d27 := mk_decl "monad_closure_set_env" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "void" in
+    // Same "no implicit declare" requirement as every other native above
+    // -- `monad_string_slice`/`monad_string_drop` (runtime.c) were added
+    // together with their own `native_runtime_fn_name` wiring, see that
+    // wiring's own doc comment.
+    let d28 := mk_decl "monad_string_slice" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "i64" in
+    let d29 := mk_decl "monad_string_drop" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d8, d9, d10, d11, d12, d13,
-     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27]
+     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform
@@ -4474,13 +4494,15 @@ def test_native_string_eq_wraps_raw_result_as_tagged_bool : Bool :=
 
 #[test]
 def test_native_unwhitelisted_native_still_gets_unit_stub : Bool :=
-    // A native this backend doesn't implement yet (e.g. string_slice)
-    // must be completely unaffected by the whitelist -- still the
-    // pre-existing stub behavior, not a call to a nonexistent runtime
-    // function.
-    let text := compile_native_def_fixture_text "String.slice" "string_slice" in
+    // A native this backend doesn't implement yet (e.g. string_to_
+    // lowercase -- string_slice/string_drop were this test's own
+    // example until they got real runtime.c implementations + wrapper
+    // wiring, see native_runtime_fn_name's own doc comment) must be
+    // completely unaffected by the whitelist -- still the pre-existing
+    // stub behavior, not a call to a nonexistent runtime function.
+    let text := compile_native_def_fixture_text "String.to_lowercase" "string_to_lowercase" in
     if check_contains text "call i64 @alloc_constructor(i64 0, i64 0)"
-    then not (check_contains text "@monad_string_slice")
+    then not (check_contains text "@monad_string_to_lowercase")
     else false
 
 #[partial]
