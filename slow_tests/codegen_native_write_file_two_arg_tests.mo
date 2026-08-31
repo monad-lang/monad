@@ -55,7 +55,7 @@ def compile_source_run_expect (source : String) (basename : String) (expected : 
     let output_path := output_dir ++ "/" ++ basename;
 
     let _ <- exec_cmd "mkdir" ["-p", output_dir];
-    IO.write_file src_path source;
+    IO.write_file (Path.path src_path) source;
 
     let loaded_result : Result String LoadedModules <- load_file_modules src_path;
     match loaded_result {
@@ -72,7 +72,7 @@ def compile_source_run_expect (source : String) (basename : String) (expected : 
                 },
                 Result.ok mod_ => do {
                     let ir_text := emit_module mod_;
-                    IO.write_file ir_path ir_text;
+                    IO.write_file (Path.path ir_path) ir_text;
 
                     let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
                     if not (llc_result == 0) then do {
@@ -115,12 +115,12 @@ def test_write_file_two_arg_native_dispatch_roundtrip : IO Bool := do {
 def main (args : List String) : IO I64 := do {
     let path := "/tmp/monad_e2e/write_file_roundtrip_out.txt";
     let content := "hello from the native write_file fast path";
-    IO.write_file path content;
+    IO.write_file_native path content;
     return 0
 }
 "#;
     let compiled_ok <- compile_source_run_expect source "test_write_file_two_arg_native_dispatch_roundtrip" 0;
-    let written <- IO.read_file write_path;
+    let written <- IO.read_file (Path.path write_path);
     let content_matches := String.beq written content;
     return (compiled_ok && content_matches)
 }

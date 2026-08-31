@@ -39,7 +39,7 @@ def compile_source_run_expect (source : String) (basename : String) (expected : 
     let output_path := output_dir ++ "/" ++ basename;
 
     let _ <- exec_cmd "mkdir" ["-p", output_dir];
-    IO.write_file src_path source;
+    IO.write_file (Path.path src_path) source;
 
     let loaded_result : Result String LoadedModules <- load_file_modules src_path;
     match loaded_result {
@@ -56,7 +56,7 @@ def compile_source_run_expect (source : String) (basename : String) (expected : 
                 },
                 Result.ok mod_ => do {
                     let ir_text := emit_module mod_;
-                    IO.write_file ir_path ir_text;
+                    IO.write_file (Path.path ir_path) ir_text;
 
                     let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
                     if not (llc_result == 0) then do {
@@ -97,8 +97,8 @@ def test_read_file_bind_result_used_downstream : IO Bool :=
 def main (args : List String) : IO I64 := do {
     let path := "/tmp/monad_e2e/io_result_wrap_fixture.txt";
     let content := "needs io wrap";
-    IO.write_file path content;
-    let read_back <- IO.read_file path;
+    IO.write_file_native path content;
+    let read_back <- IO.read_file_native path;
     let matched := String.beq read_back content;
     let result := if matched then 1 else 0;
     return result

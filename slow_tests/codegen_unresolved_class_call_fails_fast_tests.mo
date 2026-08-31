@@ -40,7 +40,7 @@ def main (args : List String) : IO I64 := do {
 }
 "#;
     let _ <- exec_cmd "mkdir" ["-p", output_dir];
-    IO.write_file src_path source;
+    IO.write_file (Path.path src_path) source;
 
     let loaded_result : Result String LoadedModules <- load_file_modules src_path;
     match loaded_result {
