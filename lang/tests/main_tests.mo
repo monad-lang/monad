@@ -13,32 +13,48 @@ use lang.main {*}
 #[test]
 def test_from_args_compile_positional_name : Bool :=
     match Command.from_args ["compile", "a.mo", "myname"] {
-        Command.compile path out_name verbose =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "myname" && verbose == false,
+        Command.compile path out_name verbose debug =>
+            Path.to_string path == "a.mo" && Path.to_string out_name == "myname" && verbose == false && debug == false,
         _ => false,
     }
 
 #[test]
 def test_from_args_compile_default_name : Bool :=
     match Command.from_args ["compile", "a.mo"] {
-        Command.compile path out_name verbose =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "source" && verbose == false,
+        Command.compile path out_name verbose debug =>
+            Path.to_string path == "a.mo" && Path.to_string out_name == "source" && verbose == false && debug == false,
         _ => false,
     }
 
 #[test]
 def test_from_args_compile_output_flag : Bool :=
     match Command.from_args ["compile", "a.mo", "--output", "out", "--verbose"] {
-        Command.compile path out_name verbose =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true,
+        Command.compile path out_name verbose debug =>
+            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true && debug == false,
         _ => false,
     }
 
 #[test]
 def test_from_args_compile_short_flags : Bool :=
     match Command.from_args ["compile", "a.mo", "-o", "out", "-v"] {
-        Command.compile path out_name verbose =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true,
+        Command.compile path out_name verbose debug =>
+            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true && debug == false,
+        _ => false,
+    }
+
+#[test]
+def test_from_args_compile_debug_flag : Bool :=
+    match Command.from_args ["compile", "a.mo", "--debug"] {
+        Command.compile path out_name verbose debug =>
+            Path.to_string path == "a.mo" && verbose == false && debug == true,
+        _ => false,
+    }
+
+#[test]
+def test_from_args_compile_debug_short_flag : Bool :=
+    match Command.from_args ["compile", "a.mo", "-g", "-v"] {
+        Command.compile path out_name verbose debug =>
+            Path.to_string path == "a.mo" && verbose == true && debug == true,
         _ => false,
     }
 

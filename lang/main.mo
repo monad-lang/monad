@@ -2,10 +2,11 @@ use io {IO}
 open IO {println, read_file, write_file}
 use std.process {exec_cmd}
 use std.bench {now, report}
-use lang.types {Decl, LoadedModules, LocalScope, ModulePath}
+use lang.types {Decl, LoadedModules, Location, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
-use lang.codegen.emit {compile_db_module, compile_loaded_modules_to_ir, ok}
-use lang.module {ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.codegen.emit {build_debug_locs, compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
+use lang.module {ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
+use std.map {}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
@@ -106,14 +107,43 @@ def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : P
         },
     }
 
-/// Parse a source file and compile + run it via LLVM.
+/// Parse a source file and compile + run it via LLVM. `source_path`/
+/// `debug_locs` are DWARF debug-info inputs (plans/bootstrapping/
+/// debug-info.md, v1: one location per top-level def) -- pass
+/// `Option.none`/`str_map_empty` (see `no_debug_info`) to disable, same
+/// as `compile_db_module_with_debug` itself. `link_ir` needs no
+/// separate `--debug` flag of its own: `llc`/`clang` pick up whatever
+/// debug metadata `emit_module` already wrote into `ir_text` with no
+/// extra flag required (confirmed directly -- a `-g`-style flag doesn't
+/// exist on `llc`, unlike `clang`'s own C-source `-g`).
 #[partial]
-def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_name : Path) (verbose: Bool) : IO I64 {
-    let mod_ := compile_db_module decl_list;
+def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_name : Path) (verbose: Bool) (source_path : Option String) (debug_locs : HashMap String Location) : IO I64 {
+    let mod_ := compile_db_module_with_debug decl_list source_path debug_locs;
     let ir_text := emit_module mod_;
     println <| "Writing LLVM IR to: " ++ Path.to_string (Path.with_suffix (Path.join output_dir output_name) ".ll");
     link_ir ir_text output_dir output_name verbose
 }
+
+/// `Option.none`/`str_map_empty` -- the "debug info off" inputs to
+/// `compile_parsed_decls`/`compile_loaded_modules_to_ir_with_debug`.
+#[partial]
+def no_debug_info : Pair (Option String) (HashMap String Location) := Pair.pair Option.none str_map_empty
+
+/// Build the `(source_path, debug_locs)` DWARF debug-info inputs from a
+/// file's own raw source text -- `no_debug_info` when parsing that text
+/// for locations fails, which should be rare here (the caller already
+/// knows the file parses, from a separate successful parse/typecheck
+/// attempt) but must stay total rather than block compilation on a
+/// best-effort side channel. See plans/bootstrapping/debug-info.md.
+#[partial]
+def debug_info_for_source (file_path : String) (source : String) : Pair (Option String) (HashMap String Location) :=
+    match try_parse_decls_with_locs source {
+        Option.some result =>
+            match result {
+                Pair.pair _decls decls_with_locs => Pair.pair (Option.some file_path) (build_debug_locs decls_with_locs),
+            },
+        Option.none => Pair.pair (Option.some file_path) str_map_empty,
+    }
 
 /// Parse a source file and compile + run it via LLVM. Stage 3 of
 /// `bootstrapping/unify-check-compile-test-elaboration.md`: gates on the
@@ -136,7 +166,7 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_nam
 /// purely to improve codegen's own dictionary-dispatch resolution (see its
 /// own doc comment) -- that is NOT a second copy of this gate.
 #[partial]
-def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 {
+def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) (debug : Bool) : IO I64 {
     let total_start := Bench.now;
     println <| "compiling: " ++ file_path ++ " to " ++ Path.to_string (Path.join output_dir output_name);
     let t_elaborate := Bench.now;
@@ -167,7 +197,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                             return 1
                         },
                         List.empty => do {
-                            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose };
+                            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug };
                             if verbose then do {
                                 let _ := Bench.report "compile_file total" (I64.sub Bench.now total_start);
                                 return unit
@@ -179,7 +209,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
             },
         Result.err e => do {
             println ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
-            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose };
+            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug };
             if verbose then do {
                 let _ := Bench.report "compile_file total" (I64.sub Bench.now total_start);
                 return unit
@@ -195,29 +225,51 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
 /// failed, in which case this redundant re-attempt produces the same
 /// real, rendered diagnostic the old code already did via its own
 /// fallback path below, rather than a bare "gate failed").
+/// `debug` (from `--debug`/`-g`, `Command.compile`'s own field) gates
+/// DWARF debug info (plans/bootstrapping/debug-info.md, v1: one
+/// location per top-level def) -- off by default, same rationale as the
+/// plan's own "off by default for `monad compile`" decision (binary
+/// size / compile time cost). When on, this re-reads and re-parses
+/// `file_path` (via `debug_info_for_source`) purely to recover each
+/// top-level def's own source location -- independent of, and
+/// redundant with, `load_file_modules`'s own internal parsing, but a
+/// much smaller change than threading a location table through that
+/// whole module-loading pipeline. A `Def` whose final compiled name
+/// doesn't match this second, standalone parse (macro-expanded,
+/// renamed, lambda-lifted) just gets no debug info, not a compile
+/// error -- see `build_debug_locs`'s own doc comment.
 #[partial]
-def compile_file_codegen (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 {
+def compile_file_codegen (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) (debug : Bool) : IO I64 {
     // First try to load with module boundaries preserved
     let res : Result String LoadedModules <- load_file_modules file_path;
     match res {
         Result.ok loaded => do {
-            // `verbose` thread-through: previously this branch dumped the
-            // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
-            // walking every loaded module's full content) on every
-            // successful compile -- pure noise on a working build AND a
-            // real perf hit. Now we forward `verbose` to
-            // `compile_loaded_modules_to_ir` (which has its own
-            // `--verbose`-gated per-stage printlns -- see its own doc
-            // comment in `lang/codegen/emit.mo`) and emit only a single
-            // one-line module-count summary, also gated on `verbose`.
-            if verbose then do {
-                let loaded_count : I64 := List.length (get_loaded_all loaded);
-                println <| "loaded " ++ I64.to_string loaded_count ++ " modules";
-                let mod_result <- compile_loaded_modules_to_ir loaded verbose;
-                link_compiled_module mod_result output_dir output_name verbose
-            } else do {
-                let mod_result <- compile_loaded_modules_to_ir loaded verbose;
-                link_compiled_module mod_result output_dir output_name verbose
+            let dbg_info : Pair (Option String) (HashMap String Location) <-
+                if debug then do {
+                    let source <- IO.read_file (Path.path file_path);
+                    return (debug_info_for_source file_path source)
+                } else return no_debug_info;
+            match dbg_info {
+                Pair.pair source_path debug_locs => do {
+                    // `verbose` thread-through: previously this branch dumped the
+                    // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
+                    // walking every loaded module's full content) on every
+                    // successful compile -- pure noise on a working build AND a
+                    // real perf hit. Now we forward `verbose` to
+                    // `compile_loaded_modules_to_ir_with_debug` (which has its own
+                    // `--verbose`-gated per-stage printlns -- see its own doc
+                    // comment in `lang/codegen/emit.mo`) and emit only a single
+                    // one-line module-count summary, also gated on `verbose`.
+                    if verbose then do {
+                        let loaded_count : I64 := List.length (get_loaded_all loaded);
+                        println <| "loaded " ++ I64.to_string loaded_count ++ " modules";
+                        let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path debug_locs;
+                        link_compiled_module mod_result output_dir output_name verbose
+                    } else do {
+                        let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path debug_locs;
+                        link_compiled_module mod_result output_dir output_name verbose
+                    }
+                },
             }
         },
         Result.err e => do {
@@ -228,7 +280,13 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
             // non-empty -- `Path.path` directly, not `Path.of`.
             let source <- IO.read_file (Path.path file_path);
             match try_parse_decls source {
-                Option.some decl_list => compile_parsed_decls decl_list output_dir output_name verbose,
+                Option.some decl_list => do {
+                    let dbg_info := if debug then debug_info_for_source file_path source else no_debug_info;
+                    match dbg_info {
+                        Pair.pair source_path debug_locs =>
+                            compile_parsed_decls decl_list output_dir output_name verbose source_path debug_locs,
+                    }
+                },
                 Option.none => do {
                     // `try_parse_decls` (leniently truncate-and-succeed) just
                     // told us decls_parser bailed outright — genuinely rare
@@ -498,7 +556,7 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
 // demo in lang/tests/cli_derive_tests.mo, though — same argv-munging
 // primitives either way.
 type Command {
-    compile (file: Path) (out_name: Path) (verbose: Bool),
+    compile (file: Path) (out_name: Path) (verbose: Bool) (debug: Bool),
     pretty (file: String),
     check (files: List String) (verbose: Bool),
     test (files: List String) (verbose: Bool),
@@ -506,43 +564,49 @@ type Command {
 }
 
 /// `compile <path> [name]` (original positional form) and `compile <path>
-/// [--output/-o <name>] [--verbose/-v]` (flag form) both work; an explicit
-/// `--output`/`-o` wins over a positional name if both are given.
+/// [--output/-o <name>] [--verbose/-v] [--debug/-g]` (flag form) both
+/// work; an explicit `--output`/`-o` wins over a positional name if both
+/// are given. `--debug`/`-g` enables DWARF debug info (plans/
+/// bootstrapping/debug-info.md, v1: one location per top-level def) --
+/// off by default, same as `--verbose`.
 def Command.from_args (args : List String) : Command :=
     match args {
         List.cons cmd rest =>
             if cmd == "compile" then
                 match Cli.take_flag "verbose" "v" rest {
                     Cli.FlagResult.flag_result verbose rest1 =>
-                        match Cli.take_opt "output" "o" "" rest1 {
-                            Cli.OptResult.opt_result opt_out_name rest2 =>
-                                match Cli.take_positional rest2 {
-                                    Cli.PosResult.pos_result path_opt rest3 =>
-                                        match Cli.take_positional rest3 {
-                                            Cli.PosResult.pos_result name_opt _ =>
-                                                let out_name :=
-                                                    if String.is_empty opt_out_name then
-                                                        match name_opt {
-                                                            Option.some n => n,
-                                                            Option.none => "source",
-                                                        }
-                                                    else
-                                                        opt_out_name
-                                                in
-                                                match path_opt {
-                                                    // A path/out_name that fails to validate (currently:
-                                                    // only the empty string) falls back to `Command.help`,
-                                                    // mirroring the sibling `Option.none => Command.help`
-                                                    // arm right below for a simply-missing positional arg.
-                                                    Option.some path =>
-                                                        match Path.of path {
-                                                            err _ => Command.help,
-                                                            ok p => match Path.of out_name {
-                                                                err _ => Command.help,
-                                                                ok o => Command.compile p o verbose,
-                                                            },
+                        match Cli.take_flag "debug" "g" rest1 {
+                            Cli.FlagResult.flag_result debug rest1b =>
+                                match Cli.take_opt "output" "o" "" rest1b {
+                                    Cli.OptResult.opt_result opt_out_name rest2 =>
+                                        match Cli.take_positional rest2 {
+                                            Cli.PosResult.pos_result path_opt rest3 =>
+                                                match Cli.take_positional rest3 {
+                                                    Cli.PosResult.pos_result name_opt _ =>
+                                                        let out_name :=
+                                                            if String.is_empty opt_out_name then
+                                                                match name_opt {
+                                                                    Option.some n => n,
+                                                                    Option.none => "source",
+                                                                }
+                                                            else
+                                                                opt_out_name
+                                                        in
+                                                        match path_opt {
+                                                            // A path/out_name that fails to validate (currently:
+                                                            // only the empty string) falls back to `Command.help`,
+                                                            // mirroring the sibling `Option.none => Command.help`
+                                                            // arm right below for a simply-missing positional arg.
+                                                            Option.some path =>
+                                                                match Path.of path {
+                                                                    err _ => Command.help,
+                                                                    ok p => match Path.of out_name {
+                                                                        err _ => Command.help,
+                                                                        ok o => Command.compile p o verbose debug,
+                                                                    },
+                                                                },
+                                                            Option.none => Command.help,
                                                         },
-                                                    Option.none => Command.help,
                                                 },
                                         },
                                 },
@@ -575,8 +639,8 @@ def Command.from_args (args : List String) : Command :=
 def main (args : List String) : IO I64 {
     let cmd : Command := Command.from_args args;
     match cmd {
-        compile file_path out_name verbose => do {
-            compile_file (Path.to_string file_path) default_output_dir out_name verbose
+        compile file_path out_name verbose debug => do {
+            compile_file (Path.to_string file_path) default_output_dir out_name verbose debug
         },
         pretty file_path => do {
             // Prints the TARGET FILE's own declarations, pretty-printed
@@ -621,8 +685,9 @@ def main (args : List String) : IO I64 {
 
 #[partial]
 def print_help : IO I64 {
-    println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v]";
+    println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v] [--debug/-g]";
     println "         Parse and compile a .mo source file";
+    println "         --debug/-g emits DWARF debug info (one source location per top-level def)";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
     println "       monad check <path>... [--verbose/-v]  Parse and typecheck .mo source files (no execution)";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";

@@ -94,12 +94,24 @@ type LLVMBasicBlock {
     mk (label : String) (instructions : List LLVMInstruction),
 }
 
+/// A single point-in-source location for DWARF debug info -- v1 scope
+/// is "one location per top-level def" (see plans/bootstrapping/
+/// debug-info.md), not per-instruction, so this deliberately carries
+/// just line/column, not a full `lang.types.SourceRange`/`Location`
+/// (this file has no dependency on `lang.types` today; keeping it that
+/// way avoids introducing one just for two integers).
+struct DbgLoc {
+    line : I64,
+    column : I64,
+}
+
 type LLVMFunction {
     mk (name : String)
        (params : List ParamPair)
        (ret_ty : LLVMType)
        (blocks : List LLVMBasicBlock)
-       (ghc_cc : Bool),
+       (ghc_cc : Bool)
+       (dbg_loc : Option DbgLoc),
 }
 
 type LLVMGlobal {
@@ -114,7 +126,11 @@ type LLVMModule {
     mk (target_triple : String)
        (globals : List LLVMGlobal)
        (functions : List LLVMFunction)
-       (declarations : List LLVMDeclaration),
+       (declarations : List LLVMDeclaration)
+       /// The `.mo` source path debug info was requested for -- `none`
+       /// means debug info is off (the default), in which case
+       /// `emit_module` emits exactly the same text it always has.
+       (debug_source : Option String),
 }
 
 open LLVMType {fn_, i1_, i32_, i64_, i8_, ptr, struct_, void}
@@ -349,18 +365,25 @@ def join_gep_indices (pre : String) (indices : List I64) : String := match indic
             rest,
 }
 
+/// `dbg_suffix` is a whole function's single `!dbg` annotation (e.g.
+/// `", !dbg !7"`, or `""` when debug info is off or this function has
+/// no known source location) -- v1 attaches the SAME suffix to every
+/// instruction in a function rather than a distinct one per
+/// instruction (see `DbgLoc`'s own doc comment). `comment` is a
+/// source-text-only `;` line, not a real instruction, so it never
+/// takes a `!dbg` suffix.
 #[partial]
-def show_instruction (instr : LLVMInstruction) : String := match instr {
+def show_instruction (instr : LLVMInstruction) (dbg_suffix : String) : String := match instr {
     assign target value =>
         String.concat "  %" (String.concat target (String.concat " = "
-            (show_llvm_value value))),
+            (String.concat (show_llvm_value value) dbg_suffix))),
     branch cond then_label else_label =>
         String.concat "  br i1 " (String.concat (show_llvm_value cond)
             (String.concat ", label %" (String.concat then_label
-            (String.concat ", label %" else_label)))),
+            (String.concat ", label %" (String.concat else_label dbg_suffix))))),
     jump label =>
-        String.concat "  br label %" label,
-    ret val => show_ret_instr val,
+        String.concat "  br label %" (String.concat label dbg_suffix),
+    ret val => String.concat (show_ret_instr val) dbg_suffix,
     comment text =>
         String.concat "  ; " text,
 }
@@ -392,29 +415,68 @@ def show_ret_instr (val : LLVMValue) : String := match val {
 }
 
 #[partial]
-def emit_block (block : LLVMBasicBlock) : String := match block {
+def emit_block (block : LLVMBasicBlock) (dbg_suffix : String) : String := match block {
     LLVMBasicBlock.mk label instructions =>
-        String.concat "\n" (String.concat label (String.concat ":" (emit_instrs instructions))),
+        String.concat "\n" (String.concat label (String.concat ":" (emit_instrs instructions dbg_suffix))),
 }
 
 #[partial]
-def emit_instrs (instructions : List LLVMInstruction) : String := match instructions {
+def emit_instrs (instructions : List LLVMInstruction) (dbg_suffix : String) : String := match instructions {
     List.empty => "",
     List.cons i rest =>
-        String.concat "\n" (String.concat (show_instruction i) (emit_instrs rest)),
+        String.concat "\n" (String.concat (show_instruction i dbg_suffix) (emit_instrs rest dbg_suffix)),
+}
+
+/// A function's own two `!dbg` attachment forms -- LLVM needs BOTH, not
+/// just one, for `llc` to actually emit a real `.debug_line`/
+/// `.debug_info`: `define_suffix` (` !dbg !N`, referencing the
+/// `!DISubprogram` directly, spliced into the `define` line itself --
+/// with NO attachment there, LLVM has no way to associate the
+/// subprogram with this function's machine code at all, and silently
+/// emits no debug sections whatsoever) and `instr_suffix` (`, !dbg !N`,
+/// referencing the `!DILocation`, appended to every instruction --
+/// see `DbgLoc`'s own doc comment for why every instruction in a
+/// function shares the same one). Confirmed the hard way: an earlier
+/// version attached only `instr_suffix` and produced a `.o` with zero
+/// `.debug_line` entries despite `llc` exiting 0.
+struct DbgFuncRefs {
+    define_suffix : String,
+    instr_suffix : String,
 }
 
 #[partial]
-def emit_function (func : LLVMFunction) : String := match func {
-    LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+def empty_dbg_func_refs : DbgFuncRefs := { define_suffix := "", instr_suffix := "" }
+
+/// `dbg_refs` is the module-wide `(function name -> DbgFuncRefs)` table
+/// built once by `emit_debug_metadata` -- `List.empty` when debug info
+/// is off, in which case `find_dbg_refs` always misses and every
+/// function renders exactly as it did before this field existed.
+#[partial]
+def emit_function (func : LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String := match func {
+    LLVMFunction.mk name params ret_ty blocks ghc_cc dbg_loc =>
         let cc := if ghc_cc then " cc 9" else "" in
         let prefix := String.concat "\n; Function: " (String.concat name "\n") in
         let sig := String.concat "define" (String.concat cc
             (String.concat " " (String.concat (show_llvm_type ret_ty)
             (String.concat " @" (String.concat name "("))))) in
-        let sig2 := String.concat sig (String.concat (join_params params) ") {") in
-        let body := emit_blocks blocks in
+        let refs := find_dbg_refs name dbg_refs in
+        let sig2 := String.concat sig (String.concat (join_params params) (String.concat ")" (String.concat refs.define_suffix " {"))) in
+        let body := emit_blocks blocks refs.instr_suffix in
         String.concat prefix (String.concat sig2 (String.concat body "\n}")),
+}
+
+/// Look up a function's `DbgFuncRefs` by name in the assoc list built
+/// by `emit_debug_metadata` -- both fields `""` (no attachment at all)
+/// on a miss, which covers both "debug info is off" (`dbg_refs` is
+/// always `List.empty`) and "this function has no known source
+/// location" uniformly.
+#[partial]
+def find_dbg_refs (name : String) (refs : List (Pair String DbgFuncRefs)) : DbgFuncRefs := match refs {
+    List.empty => empty_dbg_func_refs,
+    List.cons r rest =>
+        match r {
+            Pair.pair fname found => if String.beq fname name then found else find_dbg_refs name rest,
+        },
 }
 
 #[partial]
@@ -438,9 +500,9 @@ def show_one_param (p : ParamPair) : String := match p {
 }
 
 #[partial]
-def emit_blocks (blocks : List LLVMBasicBlock) : String := match blocks {
+def emit_blocks (blocks : List LLVMBasicBlock) (dbg_suffix : String) : String := match blocks {
     List.empty => "",
-    List.cons b rest => String.concat (emit_block b) (emit_blocks rest),
+    List.cons b rest => String.concat (emit_block b dbg_suffix) (emit_blocks rest dbg_suffix),
 }
 
 #[partial]
@@ -562,14 +624,135 @@ def join_strs_rest (x : String) (rest : List String) : String :=
     }
 
 #[partial]
-def emit_functions (fs : List LLVMFunction) : String := match fs {
+def emit_functions (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String := match fs {
     List.empty => "",
-    List.cons f rest => String.concat (emit_function f) (String.concat "\n" (emit_functions rest)),
+    List.cons f rest => String.concat (emit_function f dbg_refs) (String.concat "\n" (emit_functions rest dbg_refs)),
 }
+
+// --- DWARF debug info (v1: one location per top-level def) ---
+// See plans/bootstrapping/debug-info.md. Every module that opts in gets
+// exactly one `!DICompileUnit` + one `!DIFile` (one `.mo` file per
+// compile) and every def with a known `dbg_loc` gets one
+// `!DISubprogram` + one `!DILocation`, all sharing one empty
+// `!DISubroutineType` (`!4`) and one empty retained-nodes list (`!5`) --
+// a fixed, small shape that doesn't need a general metadata ADT the way
+// a future per-instruction phase might.
+
+/// '/' as U8 -- mirrors `lang/module.mo`'s own `slash_byte`/
+/// `string_find_last_slash`. This file has no dependency on that
+/// module, so a small local copy avoids introducing one just for this.
+#[partial]
+def ir_slash_byte : U8 := 47u8
+
+#[partial]
+def ir_find_last_slash (s : String) (idx : I64) : I64 :=
+    if I64.lt 0 idx then
+        match (String.get s (idx - 1) : Option U8) {
+            Option.some b => if U8.beq b ir_slash_byte then idx - 1 else ir_find_last_slash s (idx - 1),
+            Option.none => -1,
+        }
+    else -1
+
+/// Split a file path into `Pair.pair directory filename` for
+/// `!DIFile`. No slash in the path -- directory is `"."`.
+#[partial]
+def llvm_split_path (path : String) : Pair String String :=
+    let last_slash := ir_find_last_slash path (String.length path) in
+    if I64.lt last_slash 0 then
+        Pair.pair "." path
+    else
+        Pair.pair (String.slice path 0 last_slash) (String.slice path (last_slash + 1) (String.length path - last_slash - 1))
+
+/// The fixed module-level preamble: module flags (`!0`/`!1`), the
+/// compile unit (`!2`), the file (`!3`), and the two nodes every
+/// `!DISubprogram` shares in v1 -- an empty subroutine type (`!4`,
+/// v1 doesn't describe parameter types) and an empty retained-nodes
+/// list (`!5`).
+#[partial]
+def show_debug_preamble (filename : String) (directory : String) : String :=
+    let flags := "!llvm.module.flags = !{!0, !1}\n!llvm.dbg.cu = !{!2}\n\n" in
+    let f0 := "!0 = !{i32 2, !\"Dwarf Version\", i32 5}\n" in
+    let f1 := "!1 = !{i32 2, !\"Debug Info Version\", i32 3}\n" in
+    // `!DICompileUnit` has no `name:` field -- that's `!DIFile`'s own
+    // field (below). Confirmed the hard way: `llc` rejected an earlier
+    // version of this with "invalid field 'name'" pointed straight at
+    // this node.
+    let cu := "!2 = distinct !DICompileUnit(language: DW_LANG_C, file: !3, producer: \"monad 0.1.0\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, splitDebugInlining: false, debugInfoForProfiling: true)\n" in
+    let file_head := String.concat "!3 = !DIFile(filename: \"" filename in
+    let file_mid := String.concat file_head "\", directory: \"" in
+    let file_ := String.concat (String.concat file_mid directory) "\")\n" in
+    let sub_ty := "!4 = !DISubroutineType(types: !{})\n" in
+    let retained := "!5 = !{}\n" in
+    String.concat flags (String.concat f0 (String.concat f1 (String.concat cu (String.concat file_ (String.concat sub_ty retained)))))
+
+#[partial]
+def show_disubprogram (id : I64) (name : String) (line : I64) : String :=
+    let line_s := I64.to_string line in
+    let head := String.concat "!" (String.concat (I64.to_string id) " = distinct !DISubprogram(name: \"") in
+    let with_name := String.concat head (String.concat name "\", linkageName: \"") in
+    let with_name2 := String.concat with_name (String.concat name "\", scope: !3, file: !3, line: ") in
+    let with_line := String.concat with_name2 (String.concat line_s ", type: !4, scopeLine: ") in
+    String.concat with_line (String.concat line_s ", unit: !2, retainedNodes: !5)")
+
+#[partial]
+def show_dilocation (id : I64) (line : I64) (column : I64) (scope_ref : I64) : String :=
+    let head := String.concat "!" (String.concat (I64.to_string id) " = !DILocation(line: ") in
+    let with_line := String.concat head (String.concat (I64.to_string line) ", column: ") in
+    let with_col := String.concat with_line (String.concat (I64.to_string column) ", scope: !") in
+    String.concat with_col (String.concat (I64.to_string scope_ref) ")")
+
+/// Walk `functions` once, in module order, assigning each function
+/// with a known `dbg_loc` the next pair of free metadata IDs (`!N` =
+/// its `!DISubprogram`, `!N+1` = its `!DILocation`) -- `next_id` starts
+/// at 6 (0-5 are the fixed preamble from `show_debug_preamble`).
+/// Returns BOTH the `(function name -> DbgFuncRefs)` assoc list AND the
+/// rendered `!N = ...` text for every node just assigned, built
+/// together in one pass so the two can never drift apart.
+#[partial]
+def build_dbg_refs (functions : List LLVMFunction) (next_id : I64) : Pair (List (Pair String DbgFuncRefs)) String := match functions {
+    List.empty => Pair.pair List.empty "",
+    List.cons f rest =>
+        match f {
+            LLVMFunction.mk name _ _ _ _ dbg_loc =>
+                match dbg_loc {
+                    Option.none => build_dbg_refs rest next_id,
+                    Option.some loc =>
+                        match loc {
+                            DbgLoc.mk line column =>
+                                let sp_ref := next_id in
+                                let loc_ref := next_id + 1 in
+                                let sp_text := show_disubprogram sp_ref name line in
+                                let loc_text := show_dilocation loc_ref line column sp_ref in
+                                match build_dbg_refs rest (next_id + 2) {
+                                    Pair.pair rest_refs rest_text =>
+                                        let define_suffix := String.concat " !dbg !" (I64.to_string sp_ref) in
+                                        let instr_suffix := String.concat ", !dbg !" (I64.to_string loc_ref) in
+                                        let refs : DbgFuncRefs := { define_suffix := define_suffix, instr_suffix := instr_suffix } in
+                                        let this_text := String.concat sp_text (String.concat "\n" (String.concat loc_text "\n")) in
+                                        Pair.pair
+                                            (List.cons (Pair.pair name refs) rest_refs)
+                                            (String.concat this_text rest_text),
+                                },
+                        },
+                },
+        },
+}
+
+/// Build both the per-function `DbgFuncRefs` table and the trailing
+/// debug-metadata block for a module, together (see `build_dbg_refs`).
+#[partial]
+def emit_debug_metadata (source_path : String) (functions : List LLVMFunction) : Pair (List (Pair String DbgFuncRefs)) String :=
+    match llvm_split_path source_path {
+        Pair.pair directory filename =>
+            let preamble := show_debug_preamble filename directory in
+            match build_dbg_refs functions 6 {
+                Pair.pair refs body => Pair.pair refs (String.concat preamble body),
+            },
+    }
 
 #[partial]
 def emit_module (module_ : LLVMModule) : String := match module_ {
-    LLVMModule.mk target_triple globals functions declarations =>
+    LLVMModule.mk target_triple globals functions declarations debug_source =>
         let h1 := String.concat "; ModuleID = 'monad'\ntarget triple = \"" (String.concat target_triple "\"\n\n") in
         let h2 := String.concat h1 "; === Type Definitions ===\n%Header = type { i64, i16, i16 }\n%Closure = type { %Header, i8*, i64, i64, [0 x i8*] }\n%Constructor = type { %Header, i64, i64, [0 x i8*] }\n%StringObj = type { %Header, i64, [0 x i8] }\n\n" in
         let h3 := match declarations {
@@ -582,12 +765,24 @@ def emit_module (module_ : LLVMModule) : String := match module_ {
             List.cons x y => String.concat h3 (String.concat "; === Globals ===\n"
                 (String.concat (emit_globals globals) "\n")),
         } in
-        let h5 := match functions {
-            List.empty => h4,
-            List.cons x y => String.concat h4 (String.concat "; === Functions ===\n"
-                (emit_functions functions)),
-        } in
-        h5
+        match debug_source {
+            Option.none =>
+                match functions {
+                    List.empty => h4,
+                    List.cons x y => String.concat h4 (String.concat "; === Functions ===\n"
+                        (emit_functions functions List.empty)),
+                },
+            Option.some path =>
+                match emit_debug_metadata path functions {
+                    Pair.pair dbg_refs metadata_text =>
+                        let h5 := match functions {
+                            List.empty => h4,
+                            List.cons x y => String.concat h4 (String.concat "; === Functions ===\n"
+                                (emit_functions functions dbg_refs)),
+                        } in
+                        String.concat h5 (String.concat "\n; === Debug Info ===\n" metadata_text),
+                },
+        },
 }
 
 #[test]
@@ -657,12 +852,17 @@ def test_value_icmp_eq : Bool :=
 #[test]
 def test_instruction_assign : Bool :=
     let instr := assign "t0" (add (parm_ 0) (parm_ 1)) in
-    String.beq (show_instruction instr) "  %t0 = add i64 %p0, %p1"
+    String.beq (show_instruction instr "") "  %t0 = add i64 %p0, %p1"
 
 #[test]
 def test_instruction_ret_void : Bool :=
-    String.beq (show_instruction (ret void_val)) "  ret void"
+    String.beq (show_instruction (ret void_val) "") "  ret void"
 
 #[test]
 def test_instruction_ret_int : Bool :=
-    String.beq (show_instruction (ret (int_ 42))) "  ret i64 42"
+    String.beq (show_instruction (ret (int_ 42)) "") "  ret i64 42"
+
+#[test]
+def test_instruction_assign_with_dbg_suffix : Bool :=
+    let instr := assign "t0" (add (parm_ 0) (parm_ 1)) in
+    String.beq (show_instruction instr ", !dbg !7") "  %t0 = add i64 %p0, %p1, !dbg !7"

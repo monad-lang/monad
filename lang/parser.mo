@@ -3554,6 +3554,33 @@ def decls_parser (input : String) : ParseResult (List Decl) :=
 def decls_skip (input : String) (acc : List Decl) : ParseResult (List Decl) :=
 	decls_try (decl_parser input) input acc
 
+/// `decls_parser`'s own doc comment applies identically here (same
+/// lenient truncate-on-failure behavior) -- this twin additionally
+/// records each declaration's own start `Location`, purely for DWARF
+/// debug info (plans/bootstrapping/debug-info.md, v1: one location per
+/// top-level def). `whole_file` is the UNCHANGED original source text,
+/// threaded alongside so `location_of_remaining` can recover a
+/// `Location` by diffing against it (see `lang.parser.position`'s own
+/// doc comment for why that's a diff rather than a threaded
+/// `LocatedSpan`) -- it is NEVER the shrinking `input` a real parse
+/// step consumes from.
+#[partial]
+def decls_parser_with_locs (input : String) : ParseResult (List (Pair Decl Location)) :=
+	decls_skip_with_locs input (skip_docstrings (skip_spaces input)) List.empty
+
+#[partial]
+def decls_skip_with_locs (whole_file : String) (input : String) (acc : List (Pair Decl Location)) : ParseResult (List (Pair Decl Location)) :=
+	decls_try_with_locs whole_file (decl_parser input) input acc
+
+#[partial]
+def decls_try_with_locs (whole_file : String) (r : ParseResult Decl) (attempt_start : String) (acc : List (Pair Decl Location)) : ParseResult (List (Pair Decl Location)) :=
+	match r {
+		success rem decl =>
+			let loc := location_of_remaining whole_file attempt_start in
+			decls_skip_with_locs whole_file (skip_docstrings (skip_spaces rem)) (List.cons (Pair.pair decl loc) acc),
+		fail _ => success attempt_start (list_reverse acc),
+	}
+
 #[partial]
 def decls_try (r : ParseResult Decl) (orig : String) (acc : List Decl) : ParseResult (List Decl) :=
 	match r {
@@ -4198,6 +4225,42 @@ def test_location_of_remaining_multi_line : Bool :=
 	match loc {
 		mk off line col => I64.beq off 11 && I64.beq line 2 && I64.beq col 3
 	}
+
+/// `decls_parser_with_locs` end to end: two top-level defs, the second
+/// preceded by a blank line and a comment -- exercises that each
+/// def's own captured `Location` lands on the `def` keyword itself,
+/// not on the parser's post-skip_spaces/skip_docstrings resting point
+/// from the PREVIOUS declaration.
+#[test]
+def test_decls_parser_with_locs_two_defs : Bool :=
+	let src := "def foo : I64 := 1\n\n// a comment\ndef bar : I64 := 2\n" in
+	match decls_parser_with_locs src {
+		success _ pairs => decls_with_locs_two_defs_check pairs,
+		fail _ => false,
+	}
+
+#[partial]
+def decls_with_locs_two_defs_check (pairs : List (Pair Decl Location)) : Bool := match pairs {
+	List.cons first rest1 => match rest1 {
+		List.cons second rest2 => match rest2 {
+			List.empty => decls_with_locs_two_defs_check_go first second,
+			_ => false,
+		},
+		List.empty => false,
+	},
+	List.empty => false,
+}
+
+#[partial]
+def decls_with_locs_two_defs_check_go (first : Pair Decl Location) (second : Pair Decl Location) : Bool := match first {
+	Pair.pair _ loc1 => match second {
+		Pair.pair _ loc2 => match loc1 {
+			mk _ line1 col1 => match loc2 {
+				mk _ line2 col2 => I64.beq line1 1 && I64.beq col1 1 && I64.beq line2 4 && I64.beq col2 1
+			}
+		}
+	}
+}
 
 /// `location_of_remaining` must correctly account for a multi-byte
 /// character already consumed when computing the column of what's left

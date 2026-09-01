@@ -6,11 +6,11 @@ use std.io {file_exists, is_dir, list_dir, println, read_file}
 use lang.elaborate {free_vars, names_of_decls, elaborate_def}
 use lang.types {
   Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
-  LoadedModules, LocalScope, LocalVar, ModulePath, NameRef, Scope,
+  LoadedModules, LocalScope, LocalVar, Location, ModulePath, NameRef, Scope,
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id, id_eq,
   inductive_d, list_reverse, mk, mp, name, nid, to_name, union_ids, use_d,
 }
-use lang.parser {decls_parser, decls_parser_strict, module_path_to_string}
+use lang.parser {decls_parser, decls_parser_strict, decls_parser_with_locs, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
 use lang.pretty {show_term}
@@ -73,6 +73,34 @@ def try_parse_decls (input : String) : Option (List Decl) :=
         ParseResult.success _ decl_list => Option.some decl_list,
         ParseResult.fail _ => Option.none,
     }
+
+/// `try_parse_decls`'s own doc comment applies identically here (same
+/// lenient parse) -- this twin additionally returns each PRE-expansion
+/// declaration's own captured `Location`, purely for DWARF debug info
+/// (plans/bootstrapping/debug-info.md, v1: one location per top-level
+/// def). Deliberately captured BEFORE `expand_decls` runs: a macro can
+/// add, remove, or rename declarations, so a location captured after
+/// expansion could no longer correspond to anything in the expanded
+/// list. A `Def` whose final compiled name doesn't match anything in
+/// the returned `List (Pair Decl Location)` (macro-expanded, renamed,
+/// lambda-lifted) is an accepted, documented gap -- it just gets no
+/// debug info, not a compile error.
+def try_parse_decls_with_locs (input : String) : Option (Pair (List Decl) (List (Pair Decl Location))) :=
+    match decls_parser_with_locs input {
+        ParseResult.success _ decls_with_locs =>
+            let decls := decls_of_pairs decls_with_locs in
+            Option.some (Pair.pair (expand_decls decls) decls_with_locs),
+        ParseResult.fail _ => Option.none,
+    }
+
+#[partial]
+def decls_of_pairs (pairs : List (Pair Decl Location)) : List Decl := match pairs {
+    List.empty => List.empty,
+    List.cons p rest =>
+        match p {
+            Pair.pair d _ => List.cons d (decls_of_pairs rest),
+        },
+}
 
 /// A `try_parse_decls` twin built on `decls_parser_strict` instead of
 /// the lenient `decls_parser` — where `try_parse_decls` silently returns
@@ -1662,6 +1690,16 @@ def test_parse_all_decls_empty : Bool :=
     match result {
         ParseResult.success _ _ => true,
         ParseResult.fail _ => false
+    }
+
+#[test]
+def test_try_parse_decls_with_locs_captures_one_per_def : Bool :=
+    match try_parse_decls_with_locs "def foo : I64 := 1\ndef bar : I64 := 2\n" {
+        Option.some result => match result {
+            Pair.pair decls decls_with_locs =>
+                I64.beq (List.length decls) 2 && I64.beq (List.length decls_with_locs) 2,
+        },
+        Option.none => false,
     }
 
 // --- Integration: parse source text, build scope, resolve names ---

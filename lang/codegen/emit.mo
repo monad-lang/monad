@@ -11,14 +11,14 @@ use std.bench {now, report}
 use std.map {}
 use lang.types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
-  LoadedModules, LocalScope, MatchCase, ModulePath, Native, Operator,
+  LoadedModules, LocalScope, Location, MatchCase, ModulePath, Native, Operator,
   Param, Scope, ScopeData, StructLitField, Term,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, join_identifiers, lam,
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
   param_many, pi, show_identifier, str, type_, unnamed, var,
 }
 use lang.codegen.ir {
-  LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMInstruction,
+  DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMInstruction,
   LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair, PhiPair, add, alloc_closure,
   alloc_constructor, assign, bitcast, bool_, branch, call, comment, emit_module,
   fn_, gep, global_, i64_, i8_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_,
@@ -74,6 +74,15 @@ struct CodegenCtx {
     /// tag -- see `constructor_arity`'s own doc comment for why this is
     /// needed.
     ctor_arities : HashMap String I64,
+    /// DWARF debug info (v1: one location per top-level def --
+    /// plans/bootstrapping/debug-info.md). Keyed exactly like `arities`
+    /// (`replace_dots_with_underscores` of the def's module path),
+    /// built once by `lang.parser`'s `decls_parser_with_locs` at parse
+    /// time and threaded in unchanged. `str_map_empty` when debug info
+    /// is off or the location table wasn't threaded through -- a miss
+    /// (macro-expanded/lambda-lifted/renamed name) just means that one
+    /// function gets no debug info, not a compile error.
+    debug_locs : HashMap String Location,
 }
 
 type CompileResult {
@@ -97,8 +106,23 @@ def empty_arities : HashMap String I64 := str_map_empty
 /// global reference falls back to today's eager-0-arg-call behavior --
 /// correct only for genuinely 0-arity defs).
 #[partial]
-def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) : CodegenCtx :=
-    { locals := empty_bindings, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities }
+def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (debug_locs : HashMap String Location) : CodegenCtx :=
+    { locals := empty_bindings, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, debug_locs := debug_locs }
+
+/// Look up `fn_name`'s captured source location (see `CodegenCtx.
+/// debug_locs`'s own doc comment) and convert it to the minimal
+/// `lang.codegen.ir.DbgLoc` shape `LLVMFunction.dbg_loc` expects --
+/// `Option.none` on a miss (debug info off, or no location known for
+/// this name).
+#[partial]
+def dbg_loc_for (c : CodegenCtx) (fn_name : String) : Option DbgLoc :=
+    match str_map_lookup fn_name c.debug_locs {
+        Option.some loc =>
+            match loc {
+                Location.mk _offset line column => Option.some (DbgLoc.mk line column),
+            },
+        Option.none => Option.none,
+    }
 
 #[partial]
 def fresh_temp (c : CodegenCtx) : CtxStrPair :=
@@ -211,6 +235,39 @@ def build_arity_table_go (defs : List Def) (acc : HashMap String I64) : HashMap 
         },
 }
 
+/// Build the def-name -> `Location` table `CodegenCtx.debug_locs`
+/// needs, from the PRE-expansion `(Decl, Location)` pairs `lang.module`'s
+/// `try_parse_decls_with_locs` returns (plans/bootstrapping/
+/// debug-info.md, v1: one location per top-level def). Keyed exactly
+/// like `build_arity_table` (`replace_dots_with_underscores` of the
+/// def's module path) -- non-`def_d` declarations (type/struct/class/
+/// instance/...) are skipped, they never become an `LLVMFunction`. A
+/// `Def` whose FINAL compiled name doesn't match anything here (macro-
+/// expanded, renamed, lambda-lifted) is an accepted gap: it just gets
+/// no debug info (see `dbg_loc_for`'s own doc comment).
+#[partial]
+def build_debug_locs (pairs : List (Pair Decl Location)) : HashMap String Location := build_debug_locs_go pairs str_map_empty
+
+#[partial]
+def build_debug_locs_go (pairs : List (Pair Decl Location)) (acc : HashMap String Location) : HashMap String Location := match pairs {
+    List.empty => acc,
+    List.cons p rest =>
+        match p {
+            Pair.pair decl loc => build_debug_locs_go_step decl loc rest acc,
+        },
+}
+
+#[partial]
+def build_debug_locs_go_step (decl : Decl) (loc : Location) (rest : List (Pair Decl Location)) (acc : HashMap String Location) : HashMap String Location := match decl {
+    Decl.def_d def_ =>
+        match def_ {
+            Def.mk name _typ _term _constraints _attrs _vis =>
+                let llvm_name := replace_dots_with_underscores (module_path_to_str name) in
+                build_debug_locs_go rest (str_map_insert llvm_name loc acc),
+        },
+    _ => build_debug_locs_go rest acc,
+}
+
 /// The `entry` text `alloc_closure` needs (see `LLVMValue.alloc_closure`'s
 /// own IR emission, `lang/codegen/ir.mo`) to box a bare reference to
 /// `llvm_name` as a callable value: every top-level def in this backend
@@ -260,7 +317,7 @@ def build_closure_shim_func (shim_name : String) (real_name : String) (arity : I
     let call_instr := LLVMInstruction.assign "r" call_val in
     let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "r") in
     let entry_block := LLVMBasicBlock.mk "entry" (cons_instr call_instr (cons_instr ret_instr empty_instrs)) in
-    LLVMFunction.mk shim_name params LLVMType.i64_ (cons_block entry_block empty_blocks) false
+    LLVMFunction.mk shim_name params LLVMType.i64_ (cons_block entry_block empty_blocks) false Option.none
 
 #[partial]
 def build_llvm_params_from_db_shifted (n : I64) (start_idx : I64) : List ParamPair :=
@@ -293,7 +350,7 @@ def build_constructor_closure_shim_func (shim_name : String) (tag : I64) (arity 
     let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "obj") in
     let entry_instrs := cons_instr alloc_instr (append_instrs set_instrs (cons_instr ret_instr empty_instrs)) in
     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-    LLVMFunction.mk shim_name params LLVMType.i64_ (cons_block entry_block empty_blocks) false
+    LLVMFunction.mk shim_name params LLVMType.i64_ (cons_block entry_block empty_blocks) false Option.none
 
 /// `monad_set_field(obj, i-1, p_i)` for i in [1, n] -- fixed temp names
 /// ("s1", "s2", ...) are safe here without `CodegenCtx`/`fresh_temp`
@@ -358,7 +415,7 @@ def build_partial_apply_shim_func (shim_name : String) (real_name : String) (cap
     let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "r") in
     let entry_instrs := append_instrs env_gets.instrs (cons_instr call_instr (cons_instr ret_instr empty_instrs)) in
     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-    LLVMFunction.mk shim_name params LLVMType.i64_ (cons_block entry_block empty_blocks) false
+    LLVMFunction.mk shim_name params LLVMType.i64_ (cons_block entry_block empty_blocks) false Option.none
 
 struct ShimEnvGets {
     instrs : List LLVMInstruction,
@@ -2001,7 +2058,7 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
                             let self_pair := ParamPair.mk "p0" LLVMType.i64_ in
                             let lam_pair := ParamPair.mk "p1" LLVMType.i64_ in
                             let lam_params := cons_pair self_pair (cons_pair lam_pair empty_pairs) in
-                            let lam_func := LLVMFunction.mk lam_name lam_params LLVMType.i64_ (cons_block entry_block blocks_r) false in
+                            let lam_func := LLVMFunction.mk lam_name lam_params LLVMType.i64_ (cons_block entry_block blocks_r) false Option.none in
                             match fresh_temp ctx2 {
                                 CtxStrPair.mk ctx_box temp =>
                                     // `2` here is `lam_func`'s own real
@@ -4566,7 +4623,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                     let assign_instr := LLVMInstruction.assign temp call_val in
                     let entry_instrs := cons_instr assign_instr (cons_instr (LLVMInstruction.ret (LLVMValue.var_ temp)) empty_instrs) in
                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true in
+                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true Option.none in
                     { ctx := ctx_t, funcs := (cons_func native_func empty_funcs), globals := empty_globals_list }
             },
         NativeWrapKind.bool_result rt_fn_name =>
@@ -4589,7 +4646,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                     let con_instr := LLVMInstruction.assign con_temp con_val in
                                     let entry_instrs := cons_instr raw_instr (cons_instr tag_instr (cons_instr con_instr (cons_instr (LLVMInstruction.ret (LLVMValue.var_ con_temp)) empty_instrs))) in
                                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true in
+                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true Option.none in
                                     { ctx := ctx3, funcs := (cons_func native_func empty_funcs), globals := empty_globals_list }
                             },
                     },
@@ -4607,7 +4664,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                 { ctx := ctx_set, instrs := set_instrs } =>
                                     let entry_instrs := cons_instr raw_instr (cons_instr alloc_instr (append_instrs set_instrs (cons_instr (LLVMInstruction.ret (LLVMValue.var_ io_temp)) empty_instrs))) in
                                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true in
+                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true Option.none in
                                     { ctx := ctx_set, funcs := (cons_func native_func empty_funcs), globals := empty_globals_list }
                             },
                     },
@@ -4627,7 +4684,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                         { ctx := ctx_set, instrs := set_instrs } =>
                                             let entry_instrs := cons_instr raw_instr (append_instrs bool_instrs (cons_instr alloc_instr (append_instrs set_instrs (cons_instr (LLVMInstruction.ret (LLVMValue.var_ io_temp)) empty_instrs)))) in
                                             let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                            let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true in
+                                            let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true Option.none in
                                             { ctx := ctx_set, funcs := (cons_func native_func empty_funcs), globals := empty_globals_list }
                                     },
                             },
@@ -4654,7 +4711,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                                 { ctx := ctx_set, instrs := set_instrs } =>
                                                     let entry_instrs := cons_instr len_instr (cons_instr write_instr (cons_instr unit_instr (cons_instr alloc_instr (append_instrs set_instrs (cons_instr (LLVMInstruction.ret (LLVMValue.var_ io_temp)) empty_instrs))))) in
                                                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true in
+                                                    let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (cons_block entry_block empty_blocks) true Option.none in
                                                     { ctx := ctx_set, funcs := (cons_func native_func empty_funcs), globals := empty_globals_list }
                                             },
                                     },
@@ -4739,7 +4796,7 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                                 let tco_ctx := tco.ctx in
                                 let tco_blocks := tco.blocks in
                                 let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
-                                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
+                                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_for c fn_name) in
                                 { ctx := tco_ctx, funcs := (cons_func main_func funcs_r), globals := globals_r }
                         },
                     _ =>
@@ -4782,7 +4839,7 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                         let tco_ctx := tco.ctx in
                         let tco_blocks := tco.blocks in
                         let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
-                        let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true in
+                        let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_for c fn_name) in
                         { ctx := tco_ctx, funcs := (cons_func main_func funcs_r), globals := globals_r }
                 },
         }
@@ -4806,28 +4863,48 @@ def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match 
 /// Compile a list of canonical Defs to a complete LLVM module.
 #[partial]
 def compile_db_decls_ir (defs : List Def) : LLVMModule :=
+    compile_db_decls_ir_with_debug defs Option.none str_map_empty
+
+/// `compile_db_decls_ir`, with DWARF debug info (v1: one location per
+/// top-level def -- plans/bootstrapping/debug-info.md). A sibling
+/// function rather than new params on `compile_db_decls_ir` itself: that
+/// function has ~90 existing single-argument call sites across the test
+/// suite, all of which would otherwise need updating for a feature they
+/// don't exercise. `source_path` is the `.mo` file debug info is being
+/// generated for (`Option.none` disables debug info entirely, matching
+/// plain `compile_db_decls_ir` exactly); `debug_locs` is the def-name ->
+/// `Location` table built by `lang.parser`'s `decls_parser_with_locs`.
+#[partial]
+def compile_db_decls_ir_with_debug (defs : List Def) (source_path : Option String) (debug_locs : HashMap String Location) : LLVMModule :=
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty) defs {
+    match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty debug_locs) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
             let funcs := ren_main_and_wrap compiled_funcs in
-            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
+            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path,
     }
 
 /// Compile a list of Decl to a complete LLVM module.
 /// Extracts def_d and inductive_d entries, compiles constructors and defs.
 #[partial]
 def compile_db_module (decl_list : List Decl) : LLVMModule :=
+    compile_db_module_with_debug decl_list Option.none str_map_empty
+
+/// `compile_db_module`, with DWARF debug info -- see
+/// `compile_db_decls_ir_with_debug`'s own doc comment for why this is a
+/// sibling function rather than new params on `compile_db_module`.
+#[partial]
+def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_locs : HashMap String Location) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
     let ctor_tags := build_constructor_tag_map inds in
     let ctor_arities := build_constructor_arity_map inds in
     let ctor_funcs := compile_db_inductive_decls inds ctor_tags in
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities) defs {
+    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities debug_locs) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
             let all_funcs := append_funcs ctor_funcs compiled_funcs in
             let funcs := ren_main_and_wrap all_funcs in
-            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations,
+            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path,
     }
 
 /// Extract def_d entries from a list of Decl. A def wrapped in
@@ -5016,7 +5093,7 @@ def compile_constructor_decl (con_name : String) (field_count : I64) (tag : I64)
     let ret_instr := LLVMInstruction.ret (LLVMValue.var_ "ctemp") in
     let entry_block := LLVMBasicBlock.mk "entry" (cons_instr assign_instr (cons_instr ret_instr empty_instrs)) in
     let func_name := String.concat "monad_ctor_" con_name in
-    LLVMFunction.mk func_name params LLVMType.i64_ (cons_block entry_block empty_blocks) true
+    LLVMFunction.mk func_name params LLVMType.i64_ (cons_block entry_block empty_blocks) true Option.none
 
 #[partial]
 def build_constructor_params (count : I64) : List ParamPair :=
@@ -5245,7 +5322,7 @@ def dedup_funcs_by_name_go (funcs : List LLVMFunction) (seen : List String) : Li
     List.empty => List.empty,
     List.cons f rest =>
         match f {
-            LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+            LLVMFunction.mk name params ret_ty blocks ghc_cc dbg_loc =>
                 if list_contains_str seen name
                 then dedup_funcs_by_name_go rest seen
                 else List.cons f (dedup_funcs_by_name_go rest (List.cons name seen)),
@@ -5264,7 +5341,7 @@ def has_main (funcs : List LLVMFunction) : Bool := match funcs {
     List.empty => false,
     List.cons f rest =>
         match f {
-            LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+            LLVMFunction.mk name params ret_ty blocks ghc_cc dbg_loc =>
                 if String.beq name "main" then true
                 else has_main rest,
         },
@@ -5272,21 +5349,25 @@ def has_main (funcs : List LLVMFunction) : Bool := match funcs {
 
 /// When the user's main has no params, add an `args` param (List String from C runtime).
 /// If main already has params (user wrote `def main (args : List String)`), keep them.
+/// `dbg_loc` (main's own debug-info location, if any) is threaded through
+/// unchanged into the renamed function -- the rename must not silently
+/// drop it, since `main`/`main_monad` is exactly the function a user is
+/// most likely to want a real source line for.
 #[partial]
 def rename_main (funcs : List LLVMFunction) : List LLVMFunction := match funcs {
     List.empty => empty_funcs,
     List.cons f rest =>
         match f {
-            LLVMFunction.mk name params ret_ty blocks ghc_cc =>
+            LLVMFunction.mk name params ret_ty blocks ghc_cc dbg_loc =>
                 if String.beq name "main"
                 then
                     let main_params := ensure_main_params params in
-                    cons_func (LLVMFunction.mk "main_monad" main_params ret_ty blocks ghc_cc) (rename_main rest)
+                    cons_func (LLVMFunction.mk "main_monad" main_params ret_ty blocks ghc_cc dbg_loc) (rename_main rest)
                 else if ends_with_main name then
                     // For module-qualified main functions, always rename to just "main_monad"
                     // The runtime expects this exact name
                     let main_params := ensure_main_params params in
-                    cons_func (LLVMFunction.mk "main_monad" main_params ret_ty blocks ghc_cc) (rename_main rest)
+                    cons_func (LLVMFunction.mk "main_monad" main_params ret_ty blocks ghc_cc dbg_loc) (rename_main rest)
                 else
                     cons_func f (rename_main rest),
         },
@@ -5341,7 +5422,7 @@ def test_module_emit_has_header : Bool :=
 #[test]
 def test_empty_decls_module : Bool :=
     match (compile_db_decls_ir List.empty) {
-        LLVMModule.mk triple globals funcs decl_list =>
+        LLVMModule.mk triple globals funcs decl_list debug_source =>
             String.beq triple "x86_64-unknown-linux-gnu",
     }
 
@@ -5355,7 +5436,7 @@ def test_compile_db_inductive_decls : Bool :=
     let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let funcs := compile_db_inductive_decls (List.cons ind List.empty) str_map_empty in
-    let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls in
+    let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls Option.none in
     let text := emit_module mod_ in
     // Constructor function names are qualified with their enclosing
     // type ("Option_Some"/"Option_None"), not just the bare constructor
@@ -5387,7 +5468,7 @@ def test_ctor_tag_map_qualified_name_lookup : Bool :=
     let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name empty_params_list (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons ind List.empty) in
-    let c := empty_ctx empty_arities tag_map str_map_empty in
+    let c := empty_ctx empty_arities tag_map str_map_empty str_map_empty in
     is_constructor_var c "Option.Some" && is_constructor_var c "Option.None"
 
 /// Regression tests for `native_runtime_fn_name`/`compile_native_def_wrapper_ir`:
@@ -5415,9 +5496,9 @@ def native_def_fixture (name : String) (target : String) : Def :=
 
 #[partial]
 def compile_native_def_fixture_text (name : String) (target : String) : String :=
-    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty) (native_def_fixture name target) {
+    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty str_map_empty) (native_def_fixture name target) {
         { ctx := _, funcs := funcs, globals := _ } =>
-            emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls),
+            emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list funcs empty_decls Option.none),
     }
 
 #[test]
@@ -5451,6 +5532,61 @@ def test_native_unwhitelisted_native_still_gets_unit_stub : Bool :=
     if check_contains text "call i64 @alloc_constructor(i64 0, i64 0)"
     then not (check_contains text "@monad_string_to_lowercase")
     else false
+
+/// A single, unlocated `myfunc` fixture def -- shared by the
+/// `build_debug_locs`/`compile_db_decls_ir_with_debug` tests below.
+#[partial]
+def debug_fixture_def : Def :=
+    Def.mk (ModulePath.mp (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
+        (Term.lit (Literal.num 42 NumSuffix.i64)) List.empty empty_attrs Visibility.package_private
+
+#[test]
+def test_build_debug_locs_keys_by_flat_name : Bool :=
+    let loc := Location.mk 5 2 3 in
+    let pairs := List.cons (Pair.pair (Decl.def_d debug_fixture_def) loc) List.empty in
+    let locs := build_debug_locs pairs in
+    match str_map_lookup "myfunc" locs {
+        Option.some found => match found {
+            Location.mk _offset line column => I64.beq line 2 && I64.beq column 3,
+        },
+        Option.none => false,
+    }
+
+#[test]
+def test_compile_db_decls_ir_with_debug_emits_dbg : Bool :=
+    let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
+    let mod_ := compile_db_decls_ir_with_debug (List.cons debug_fixture_def List.empty) (Option.some "hello.mo") locs in
+    let text := emit_module mod_ in
+    if check_contains text "!DICompileUnit"
+    then (if check_contains text "!DISubprogram" then check_contains text "!dbg !" else false)
+    else false
+
+/// Exact-content regression: the captured `Location.mk 5 2 3` (line 2,
+/// column 3) must land verbatim in the emitted `!DILocation`, the
+/// function name in `!DISubprogram`, and the source path (split into
+/// filename/directory by `llvm_split_path`) in `!DIFile`.
+#[test]
+def test_compile_db_decls_ir_with_debug_exact_content : Bool :=
+    let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
+    let mod_ := compile_db_decls_ir_with_debug (List.cons debug_fixture_def List.empty) (Option.some "hello.mo") locs in
+    let text := emit_module mod_ in
+    if check_contains text "!DIFile(filename: \"hello.mo\", directory: \".\")"
+    then (if check_contains text "name: \"myfunc\""
+        then (if check_contains text "line: 2"
+            then check_contains text "!DILocation(line: 2, column: 3, scope: !6)"
+            else false)
+        else false)
+    else false
+
+/// The plain (non-`_with_debug`) entry point must emit BYTE-IDENTICAL
+/// text (no debug metadata at all) whether or not this feature exists --
+/// it always passes `Option.none`/`str_map_empty` through, so this is a
+/// straightforward regression guard for that default.
+#[test]
+def test_compile_db_decls_ir_default_has_no_debug_info : Bool :=
+    let mod_ := compile_db_decls_ir (List.cons debug_fixture_def List.empty) in
+    let text := emit_module mod_ in
+    not (check_contains text "!DICompileUnit")
 
 #[partial]
 def empty_params_list : List Param := List.empty
@@ -5505,7 +5641,20 @@ def ends_with_main (name : String) : Bool :=
 /// (`lang/main.mo`'s own compile-file progress markers, link failures,
 /// the user's program output) in low-value noise.
 #[partial]
-def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result String LLVMModule) := do {
+def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result String LLVMModule) :=
+    compile_loaded_modules_to_ir_with_debug loaded verbose Option.none str_map_empty
+
+/// `compile_loaded_modules_to_ir`, with DWARF debug info (v1: one
+/// location per top-level def -- plans/bootstrapping/debug-info.md).
+/// `source_path` and `debug_locs` are passed straight through to
+/// `compile_db_module_with_debug` at the very end of this function --
+/// everything else is identical to the plain version. A sibling
+/// function (like `compile_db_decls_ir_with_debug`) rather than new
+/// params on `compile_loaded_modules_to_ir` itself, so its existing
+/// callers (`main.mo`, `test_closure_capture_e2e.mo`) don't need to
+/// change for a feature they don't exercise.
+#[partial]
+def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) (debug_locs : HashMap String Location) : IO (Result String LLVMModule) := do {
     let total_start := Bench.now;
 
     let all_mods := get_loaded_all loaded;
@@ -5642,7 +5791,7 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
         Result.ok _ => do {
             // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
             let t_llvm := Bench.now;
-            let mod_ := compile_db_module reachable_decls;
+            let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
             if verbose then do {
                 let _ := Bench.report "compile_db_module" (I64.sub Bench.now t_llvm);
                 let _ := Bench.report "compile_loaded_modules_to_ir total" (I64.sub Bench.now total_start);
