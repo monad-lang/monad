@@ -4562,6 +4562,22 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // compiled `IO_is_dir_native` global was the bogus Unit
             // stub, called for real from `IO_is_dir`'s own compiled body.
             else if String.beq target "string_hash" then Option.some (NativeWrapKind.passthrough "monad_string_hash")
+            // `String.lt`/`String.gt` (`init/string.mo`, `instance BOrd
+            // String`'s own backing natives) -- same previously-unwired
+            // gap as `string_length`/`string_hash` above (a `#[native]`
+            // def with no real body silently compiled to the generic
+            // "return Unit" stub). Confirmed live via a real compiled
+            // binary: `std/map.mo`'s `instance [BOrd K] Map BTreeMap`'s
+            // own `BOrd.lt`/`BOrd.gt` calls always took the SAME branch
+            // regardless of input, corrupting every `BTreeMap String _`
+            // built through this backend -- see `monad_string_lt`/`_gt`'s
+            // own doc comment (`lang/codegen/runtime.c`) for the full
+            // story. `bool_result`, not `passthrough` -- same wrap kind
+            // `string_eq` uses, for the same reason (a real `i1`-shaped
+            // comparison result needs boxing into a tagged `Bool`, not a
+            // raw `i64` passthrough).
+            else if String.beq target "string_lt" then Option.some (NativeWrapKind.bool_result "monad_string_lt")
+            else if String.beq target "string_gt" then Option.some (NativeWrapKind.bool_result "monad_string_gt")
             // `String.slice`/`String.drop` (init/string.mo) -- same
             // previously-unwired-wrapper gap as `string_length`/`string_
             // hash` above, but with a DEEPER root cause underneath it:
@@ -5269,8 +5285,15 @@ def runtime_declarations : List LLVMDeclaration :=
     // wiring's own doc comment.
     let d28 := mk_decl "monad_string_slice" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "i64" in
     let d29 := mk_decl "monad_string_drop" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    // Same "no implicit declare" requirement as every other native above
+    // -- `monad_string_lt`/`monad_string_gt` (runtime.c) were added
+    // together with their own `native_runtime_fn_name` wiring, see that
+    // wiring's own doc comment. Same signature shape as `monad_string_eq`
+    // just above (two boxed-string i64s in, a raw 0/1 i64 out).
+    let d30 := mk_decl "monad_string_lt" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d31 := mk_decl "monad_string_gt" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d8, d9, d10, d11, d12, d13,
-     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29]
+     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

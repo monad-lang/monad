@@ -139,29 +139,134 @@ typedef int64_t (*Fn7)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int
 typedef int64_t (*Fn8)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
 typedef int64_t (*Fn9)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t);
 
-int64_t apply_closure1(void* clos, int64_t a0) {
+/* Raw, non-arity-checked trampolines -- the ORIGINAL apply_closureN
+   behavior (blind-cast `entry` to an N-ary function and call it with
+   all N args at once). Not called directly by codegen -- kept as the
+   base case `apply_closure_dispatch` (below) chains through, one
+   `clos`-own-arity-sized bite at a time. */
+static int64_t apply_closure_raw1(void* clos, int64_t a0) {
     return ((Fn2)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0);
 }
-int64_t apply_closure2(void* clos, int64_t a0, int64_t a1) {
+static int64_t apply_closure_raw2(void* clos, int64_t a0, int64_t a1) {
     return ((Fn3)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1);
 }
-int64_t apply_closure3(void* clos, int64_t a0, int64_t a1, int64_t a2) {
+static int64_t apply_closure_raw3(void* clos, int64_t a0, int64_t a1, int64_t a2) {
     return ((Fn4)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2);
 }
-int64_t apply_closure4(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {
+static int64_t apply_closure_raw4(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {
     return ((Fn5)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3);
 }
-int64_t apply_closure5(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {
+static int64_t apply_closure_raw5(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {
     return ((Fn6)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3, a4);
 }
-int64_t apply_closure6(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5) {
+static int64_t apply_closure_raw6(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5) {
     return ((Fn7)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3, a4, a5);
 }
-int64_t apply_closure7(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+static int64_t apply_closure_raw7(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
     return ((Fn8)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3, a4, a5, a6);
 }
-int64_t apply_closure8(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6, int64_t a7) {
+static int64_t apply_closure_raw8(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6, int64_t a7) {
     return ((Fn9)((Closure*)clos)->entry)((int64_t)(intptr_t)clos, a0, a1, a2, a3, a4, a5, a6, a7);
+}
+
+/* The REAL fix: `apply_closureN`'s own historical assumption ("every
+   entry function this backend ever boxes is compiled with a UNIFORM
+   (self, a0, ..., a{N-1}) -> i64 signature", the doc comment above)
+   holds for a boxed TOP-LEVEL DEF's own shim (build_closure_shim_func,
+   lang/codegen/emit.mo -- always genuinely flat, forwards all its args
+   in one call) but NOT for a CURRIED inline `fn a b c => ...` lambda's
+   own closure chain: compile_db_lam_ir compiles each NESTED Term.lam as
+   its own independent closure with arity 1 (alloc_closure's own second
+   argument), so a 5-param inline lambda like `std/map.mo`'s
+   `BTreeMap.with_node` callback (`fn k v left right h => ...`) is FIVE
+   chained arity-1 closures, never one flat arity-5 entry. `combine_
+   indirect_call` (lang/codegen/emit.mo) has no way to know at compile
+   time which shape a given computed callee will turn out to be at
+   runtime, so it always emits a single `apply_closureN` call sized to
+   the STATIC argument count -- correct when the runtime closure's own
+   arity happens to match N (the common case), silently wrong otherwise:
+   the old blind-cast `apply_closure5` above only ever ran the FIRST
+   curry level of a 5-level chain and returned an intermediate CLOSURE
+   POINTER as if it were the real i64 result. Confirmed live: exactly
+   this call site, `BTreeMap_with_node`'s own `apply_closure5`, silently
+   corrupted every `BTreeMap` built through this backend (heights,
+   comparisons, and tree fields all became garbage closure pointers
+   masquerading as real values) -- the first time this instance
+   method's own codegen became reachable at all (a self-hosted-parser
+   fix earlier the same session, `lambda_dispatch`/`lambda_typed_params`,
+   let its `with_node` callback finally get explicit param types the
+   dictionary-passing pass needed).
+
+   `alloc_closure`'s own `arity` field (already stored, previously never
+   READ by apply_closureN) is exactly the missing piece: chase through
+   `clos`'s own arity, `take` args at a time (`take = min(arity, n)`),
+   feeding each intermediate result back in as the NEXT `clos` for the
+   remaining args, until all `n` are consumed. For `clos->arity == n`
+   (the common, previously-only-correct case) this takes exactly one
+   raw call, identical to the old behavior -- this is a strict
+   generalization, not a behavior change for anything that already
+   worked. */
+static int64_t apply_closure_dispatch(void* clos, int64_t* args, int n) {
+    while (1) {
+        int64_t arity = ((Closure*)clos)->arity;
+        // Defensive: an arity outside [1, n] (0, negative, or -- not
+        // expected in practice but not worth crashing over -- larger
+        // than what this call site statically has) is treated as 1
+        // rather than trusted blindly, so a malformed/unexpected
+        // closure degrades to the old per-arg chaining behavior instead
+        // of an out-of-bounds `args` read or an infinite loop.
+        int64_t take = (arity >= 1 && arity <= n) ? arity : 1;
+        int64_t result;
+        switch (take) {
+            case 1: result = apply_closure_raw1(clos, args[0]); break;
+            case 2: result = apply_closure_raw2(clos, args[0], args[1]); break;
+            case 3: result = apply_closure_raw3(clos, args[0], args[1], args[2]); break;
+            case 4: result = apply_closure_raw4(clos, args[0], args[1], args[2], args[3]); break;
+            case 5: result = apply_closure_raw5(clos, args[0], args[1], args[2], args[3], args[4]); break;
+            case 6: result = apply_closure_raw6(clos, args[0], args[1], args[2], args[3], args[4], args[5]); break;
+            case 7: result = apply_closure_raw7(clos, args[0], args[1], args[2], args[3], args[4], args[5], args[6]); break;
+            default: result = apply_closure_raw8(clos, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]); break;
+        }
+        n -= (int)take;
+        if (n <= 0) return result;
+        args += take;
+        clos = (void*)(intptr_t)result;
+    }
+}
+
+int64_t apply_closure1(void* clos, int64_t a0) {
+    // n=1 has no chaining ambiguity (there is no "remaining args" to
+    // possibly re-dispatch) -- goes straight to the raw trampoline,
+    // same as before.
+    return apply_closure_raw1(clos, a0);
+}
+int64_t apply_closure2(void* clos, int64_t a0, int64_t a1) {
+    int64_t args[2] = {a0, a1};
+    return apply_closure_dispatch(clos, args, 2);
+}
+int64_t apply_closure3(void* clos, int64_t a0, int64_t a1, int64_t a2) {
+    int64_t args[3] = {a0, a1, a2};
+    return apply_closure_dispatch(clos, args, 3);
+}
+int64_t apply_closure4(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3) {
+    int64_t args[4] = {a0, a1, a2, a3};
+    return apply_closure_dispatch(clos, args, 4);
+}
+int64_t apply_closure5(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4) {
+    int64_t args[5] = {a0, a1, a2, a3, a4};
+    return apply_closure_dispatch(clos, args, 5);
+}
+int64_t apply_closure6(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5) {
+    int64_t args[6] = {a0, a1, a2, a3, a4, a5};
+    return apply_closure_dispatch(clos, args, 6);
+}
+int64_t apply_closure7(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6) {
+    int64_t args[7] = {a0, a1, a2, a3, a4, a5, a6};
+    return apply_closure_dispatch(clos, args, 7);
+}
+int64_t apply_closure8(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6, int64_t a7) {
+    int64_t args[8] = {a0, a1, a2, a3, a4, a5, a6, a7};
+    return apply_closure_dispatch(clos, args, 8);
 }
 
 void* alloc_constructor(int64_t tag, int64_t field_count) {
@@ -283,6 +388,39 @@ int64_t monad_string_eq(char* a, char* b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
     return strcmp(a, b) == 0 ? 1 : 0;
+}
+
+/* `#[native string_lt]`/`#[native string_gt]` (init/string.mo's
+   `String.lt`/`String.gt`, used by `instance BOrd String`) -- same
+   previously-unwired gap as `monad_string_eq` above: with no entry in
+   `native_runtime_fn_name` (lang/codegen/emit.mo), a `#[native]` def
+   with no real body silently compiled to the generic "return Unit"
+   stub, discarding both arguments and returning the SAME value every
+   time. Confirmed live via a real compiled binary: `std/map.mo`'s
+   `instance [BOrd K] Map BTreeMap`'s own `BOrd.lt`/`BOrd.gt` calls,
+   backed by these natives, always took the SAME branch regardless of
+   input -- silently corrupting every `BTreeMap String _` built through
+   the self-hosted LLVM codegen path (a later `BTreeMap_to_list_asc`
+   crashed dereferencing a field that was never a valid tree pointer to
+   begin with). Byte-lexicographic `strcmp` ordering, matching the Rust
+   host's own `str < str`/`str > str` (`core/src/core_native.rs`'s
+   `string_lt`/`string_gt`, whose own doc comment notes UTF-8's byte
+   ordering agrees with codepoint ordering) -- same `strcmp` choice
+   `monad_string_eq` above already made, same "NULL treated as empty"
+   tolerance as `monad_string_concat`. Returns a plain `int64_t` 0/1, not
+   a real tagged `Bool` -- `NativeWrapKind.bool_result` (lang/codegen/
+   emit.mo) does the raw-int-to-tagged-`Bool` conversion at the call
+   site, matching `monad_string_eq`'s own convention. */
+int64_t monad_string_lt(char* a, char* b) {
+    const char* sa = a ? a : "";
+    const char* sb = b ? b : "";
+    return strcmp(sa, sb) < 0 ? 1 : 0;
+}
+
+int64_t monad_string_gt(char* a, char* b) {
+    const char* sa = a ? a : "";
+    const char* sb = b ? b : "";
+    return strcmp(sa, sb) > 0 ? 1 : 0;
 }
 
 /* `#[native string_slice]` (init/string.mo's `String.slice`) -- another
