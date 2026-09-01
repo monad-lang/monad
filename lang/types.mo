@@ -1324,6 +1324,26 @@ struct Module {
 }
 
 // Global map of loaded module paths to modules.
+// TODO(name-collision cleanup): `lang/module.mo` ALSO declares a
+// `LoadedModules` -- a DIFFERENT struct (`{main_module: ModuleInfo,
+// all_modules: List ModuleInfo}`, not `{modules: List Module}`). The
+// self-hosted compiler's global name table is not module-scoped, so two
+// same-named top-level types/defs across different files silently
+// collide -- whichever gets registered last wins for every caller
+// project-wide, including callers in the file that "owns" the shadowed
+// one (confirmed as a real, general hazard while investigating a
+// separate `join_identifiers` bug, 2026-08-31 -- see this repo's own
+// commit history/session notes around that date; not yet root-caused
+// whether THIS specific pair has ever caused a live bug, only confirmed
+// the collision exists). A grep-based sweep (2026-09-01) found ~862
+// other duplicated bare top-level names across `lang/*.mo` alone
+// (`sentinel` x6, `show_identifier` x4, `id_str` x3, ...) -- this is
+// one instance of a broad, pre-existing pattern, not an isolated case.
+// Flagged here per direct request; NOT fixed this session -- a real fix
+// needs either qualifying the global name table by module path or
+// renaming every colliding pair, both a larger, dedicated cleanup pass
+// (audit which collisions are load-bearing accidents vs. harmless
+// coincidences first).
 struct LoadedModules {
     modules : List Module,
 }

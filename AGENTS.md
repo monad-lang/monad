@@ -1847,6 +1847,40 @@ Key patterns when writing self-hosted Monad code:
     targets that investigation's leading hypothesis #1 directly; re-run
     that repro once `check_deps` is available here to confirm how much of
     it this closes.
+18. **TODO (not fixed, flagged per direct request): the self-hosted
+    compiler's global name table is not module-scoped -- duplicate
+    top-level names across different `lang/*.mo` files silently collide**,
+    confirmed both structurally and via a grep sweep (2026-09-01).
+    Concrete confirmed instance: `lang/types.mo` and `lang/module.mo`
+    EACH declare their own, DIFFERENT `struct LoadedModules` (`{modules:
+    List Module}` vs. `{main_module: ModuleInfo, all_modules: List
+    ModuleInfo}`) -- TODO comments left at both definitions pointing at
+    each other. A broader sweep (`grep -oE '^def [A-Za-z_][A-Za-z0-9_.]*'`
+    across `lang/*.mo`, deduped) found **~862 other duplicated bare
+    top-level def names** in the corpus (`sentinel` x6, `show_identifier`
+    x4, `id_str`/`name_ref_to_string`/`module_path_last`/
+    `string_find_last` x3 each, ...) -- this is a broad, pre-existing
+    pattern, not an isolated case. First surfaced as a real mechanism
+    while investigating the `join_identifiers`/`join_id_rest` self-compile
+    hang (2026-08-31): `lang/types.mo`'s own dot-joining
+    `join_identifiers` and `lang/codegen/emit.mo`'s `"__"`-joining
+    `join_identifiers` collide the same way, and only ONE (whichever the
+    global registration order happens to favor) actually gets compiled
+    into a self-compiled binary, discoverable today only by grepping the
+    output `.ll` by hand. **Not fixed this session** -- flagged here per
+    direct request, for a future dedicated cleanup pass. A real fix needs
+    either qualifying the global name table by module path (the
+    principled fix, likely touches `lang/module.mo`'s scope-building and
+    every name-resolution call site that currently assumes bare-name
+    uniqueness) or renaming every colliding pair (mechanical but large,
+    ~862+ names) -- either way, audit first which collisions are
+    load-bearing accidents (two defs that happen to do the same thing, so
+    the collision is harmless) vs. genuine bugs (two UNRELATED defs
+    sharing a name, where the wrong one winning is a live correctness
+    risk) before touching anything, since a blind rename sweep risks
+    papering over real bugs by "fixing" the symptom (the collision) while
+    leaving whichever def was silently losing the fight to become
+    unreachable dead code instead of properly wired in.
 
 ## Committing Changes
 

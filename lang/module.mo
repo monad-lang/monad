@@ -1933,6 +1933,11 @@ instance Show ModuleInfo {
     def show (m : ModuleInfo) : String := show_module_info m
 }
 
+// TODO(name-collision cleanup): `lang/types.mo` ALSO declares a
+// `LoadedModules` -- a DIFFERENT struct. See that file's own TODO
+// comment on its `LoadedModules` for the full writeup (this codebase's
+// global name table isn't module-scoped; ~862 other duplicated
+// top-level names exist across `lang/*.mo`). Not fixed this session.
 struct LoadedModules {
     main_module : ModuleInfo,
     all_modules : List ModuleInfo,
