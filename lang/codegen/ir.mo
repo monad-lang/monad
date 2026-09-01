@@ -54,10 +54,14 @@ type LLVMValue {
     sub (lhs : LLVMValue) (rhs : LLVMValue),
     mul (lhs : LLVMValue) (rhs : LLVMValue),
     sdiv (lhs : LLVMValue) (rhs : LLVMValue),
+    udiv (lhs : LLVMValue) (rhs : LLVMValue),
+    urem (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_eq (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_ne (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_slt (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_sgt (lhs : LLVMValue) (rhs : LLVMValue),
+    icmp_ult (lhs : LLVMValue) (rhs : LLVMValue),
+    icmp_ugt (lhs : LLVMValue) (rhs : LLVMValue),
     zext (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     trunc (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     /// Pointer-to-integer cast -- LLVM's ONLY legal conversion from a
@@ -75,9 +79,28 @@ type LLVMValue {
     /// reference must have pointer type"). See plans/implementations/
     /// 2026-08-28-string-value-representation-unification.md.
     ptrtoint (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
+    /// Integer-to-pointer cast -- the inverse of `ptrtoint`, and the
+    /// companion a raw-`char*` byte access needs (see `load`'s own doc
+    /// comment): this backend holds every pointer in an `i64` (Strings
+    /// are raw `char*`, runtime.c:539-543), so reaching a loadable
+    /// `i8*` first takes `inttoptr`. Used by the `lang/runtime.mo`
+    /// generated-IR natives (plans/bootstrapping/self-hosted-runtime.md).
+    inttoptr (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     phi (pairs : List PhiPair),
     gep (base : LLVMValue) (indices : List I64),
-    load (ptr : LLVMValue),
+    /// Typed load -- `load <ty>, <ptr_ty> <ptr>`. Previously a dead,
+    /// never-constructed `load (ptr)` variant that rendered the invalid
+    /// `load %p0` (no result type, untyped pointer); reborn with both
+    /// missing pieces for the `lang/runtime.mo` generated-IR byte
+    /// loop (`load i8, i8* %q` on an `inttoptr`'d address). `ptr_ty` is
+    /// EXPLICIT (not derived via `llvm_value_type`) because the operand
+    /// is in practice an SSA `var_` holding an `inttoptr`/`gep` result,
+    /// and this backend's vars are `i64`-typed BY CONVENTION
+    /// (`llvm_value_type`'s own `var_` arm) -- a var's real pointer
+    /// type is unknowable from the value alone, and inttoptr on an SSA
+    /// operand can't be inlined into the load (non-constant inttoptr is
+    /// an instruction, not a constant expression).
+    load (ty : LLVMType) (ptr_ty : LLVMType) (ptr : LLVMValue),
     bitcast (val : LLVMValue) (to_ty : LLVMType),
     alloc_closure (entry : String) (arity : I64) (env : List LLVMValue),
     alloc_constructor (tag : I64) (fields : List LLVMValue),
@@ -89,6 +112,12 @@ type LLVMInstruction {
     branch (cond : LLVMValue) (then_label : String) (else_label : String),
     jump (label : String),
     ret (val : LLVMValue),
+    /// `store <typed val>, <ptr_ty> <ptr>` -- the write side `load`'s new
+    /// typed form pairs with; no target SSA name (a store produces no
+    /// value). `ptr_ty` is explicit for the same reason as `load`'s own
+    /// (SSA vars are i64-typed by convention; the value's real pointer
+    /// type is not derivable).
+    store (val : LLVMValue) (ptr_ty : LLVMType) (ptr : LLVMValue),
     comment (text : String),
 }
 
@@ -138,10 +167,11 @@ type LLVMModule {
 open LLVMType {fn_, i1_, i32_, i64_, i8_, ptr, struct_, void}
 open LLVMValue {
   add, alloc_closure, alloc_constructor, bitcast, bool_, call, fn_ref, gep, global_,
-  icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, load, mul, native_op, parm_,
-  phi, ptrtoint, sdiv, sub, trunc, var_, void_val, zext,
+  icmp_eq, icmp_ne, icmp_sgt, icmp_slt, icmp_ult, icmp_ugt, int32_, int_, inttoptr,
+  load, mul, native_op, parm_, phi, ptrtoint, sdiv, sub, trunc, udiv, urem, var_,
+  void_val, zext,
 }
-open LLVMInstruction {assign, branch, comment, jump, ret}
+open LLVMInstruction {assign, branch, comment, jump, ret, store}
 open ParamPair {mk}
 open PhiPair {mk}
 
@@ -191,16 +221,24 @@ def show_llvm_value (val : LLVMValue) : String := match val {
     sub lhs rhs => show_arith "sub" lhs rhs,
     mul lhs rhs => show_arith "mul" lhs rhs,
     sdiv lhs rhs => show_arith "sdiv" lhs rhs,
+    udiv lhs rhs => show_arith "udiv" lhs rhs,
+    urem lhs rhs => show_arith "urem" lhs rhs,
     icmp_eq lhs rhs => show_arith "icmp eq" lhs rhs,
     icmp_ne lhs rhs => show_arith "icmp ne" lhs rhs,
     icmp_slt lhs rhs => show_arith "icmp slt" lhs rhs,
     icmp_sgt lhs rhs => show_arith "icmp sgt" lhs rhs,
+    icmp_ult lhs rhs => show_arith "icmp ult" lhs rhs,
+    icmp_ugt lhs rhs => show_arith "icmp ugt" lhs rhs,
     zext v from_ty to_ty => show_ext "zext" v from_ty to_ty,
     trunc v from_ty to_ty => show_ext "trunc" v from_ty to_ty,
     ptrtoint v from_ty to_ty => show_ext "ptrtoint" v from_ty to_ty,
+    inttoptr v from_ty to_ty => show_ext "inttoptr" v from_ty to_ty,
     phi pairs => show_phi pairs,
     gep base indices => show_gep base indices,
-    load ptr_ => String.concat "load " (show_llvm_value ptr_),
+    load ty ptr_ty ptr_ =>
+        String.concat "load " (String.concat (show_llvm_type ty)
+            (String.concat ", " (String.concat (show_llvm_type ptr_ty)
+            (String.concat " " (show_llvm_value ptr_))))),
     bitcast v to_ty =>
         String.concat "bitcast " (String.concat (show_llvm_value v)
             (String.concat " to " (show_llvm_type to_ty))),
@@ -243,13 +281,18 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     sub x y => i64_,
     mul x y => i64_,
     sdiv x y => i64_,
+    udiv x y => i64_,
+    urem x y => i64_,
     icmp_eq x y => i1_,
     icmp_ne x y => i1_,
     icmp_slt x y => i1_,
     icmp_sgt x y => i1_,
+    icmp_ult x y => i1_,
+    icmp_ugt x y => i1_,
     zext x y to_ty => to_ty,
     trunc x y to_ty => to_ty,
     ptrtoint x y to_ty => to_ty,
+    inttoptr x y to_ty => to_ty,
     // Previously hardcoded `i64_` regardless of what's actually merged
     // -- correct for an int-typed if/match merge, wrong for anything
     // pointer-typed (e.g. two different `String` literals: `if b then
@@ -261,7 +304,7 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     // authoritative for all of them.
     phi pairs => phi_pairs_type pairs,
     gep x y => ptr i8_,
-    load x => i64_,
+    load ty x y => ty,
     bitcast x to_ty => to_ty,
     alloc_closure x y z => ptr i8_,
     alloc_constructor x y => ptr i8_,
@@ -355,6 +398,10 @@ def show_instruction (instr : LLVMInstruction) (dbg_suffix : String) : String :=
             (String.concat ", label %" (String.concat else_label dbg_suffix))))),
     jump label =>
         String.concat "  br label %" (String.concat label dbg_suffix),
+    store val ptr_ty ptr_ =>
+        String.concat "  store " (String.concat (show_llvm_value_typed val)
+            (String.concat ", " (String.concat (show_llvm_type ptr_ty)
+            (String.concat " " (String.concat (show_llvm_value ptr_) dbg_suffix))))),
     ret val => String.concat (show_ret_instr val) dbg_suffix,
     comment text =>
         String.concat "  ; " text,
@@ -819,3 +866,37 @@ def test_instruction_ret_int : Bool :=
 def test_instruction_assign_with_dbg_suffix : Bool :=
     let instr := assign "t0" (add (parm_ 0) (parm_ 1)) in
     String.beq (show_instruction instr ", !dbg !7") "  %t0 = add i64 %p0, %p1, !dbg !7"
+
+/// The `lang/runtime.mo` generated-IR natives' byte-access shape: an
+/// i64-held address becomes a loadable pointer via `inttoptr`, then a
+/// typed `load` reads through it (see both variants' own doc comments
+/// above -- Strings are raw `char*`, so there is no header to offset).
+#[test]
+def test_value_inttoptr_load : Bool :=
+    let cast := inttoptr (parm_ 0) i64_ (ptr i8_) in
+    let ld := load i8_ (ptr i8_) cast in
+    (String.beq (show_llvm_value cast) "inttoptr i64 %p0 to i8*"
+        && String.beq (show_llvm_value ld) "load i8, i8* inttoptr i64 %p0 to i8*"
+        && String.beq (show_llvm_value_typed ld) "i8 load i8, i8* inttoptr i64 %p0 to i8*")
+
+/// The byte loop's actual shape: the inttoptr lands in an SSA temp
+/// first, so the load's pointer operand is a plain i64-typed `var_` --
+/// exactly why `load` carries an explicit `ptr_ty` (see the variant's
+/// own doc comment).
+#[test]
+def test_value_load_typed_var : Bool :=
+    let ld := load i8_ (ptr i8_) (var_ "q0") in
+    String.beq (show_llvm_value ld) "load i8, i8* %q0"
+        && String.beq (show_llvm_value_typed ld) "i8 load i8, i8* %q0"
+
+#[test]
+def test_value_store : Bool :=
+    let instr := store (var_ "b0") (ptr i8_) (var_ "q0") in
+    String.beq (show_instruction instr "") "  store i64 %b0, i8* %q0"
+
+#[test]
+def test_value_urem_ult : Bool :=
+    String.beq (show_llvm_value (urem (parm_ 0) (parm_ 1))) "urem i64 %p0, %p1"
+        && String.beq (show_llvm_value (icmp_ult (parm_ 0) (parm_ 1))) "icmp ult i64 %p0, %p1"
+        && String.beq (show_llvm_value (icmp_ugt (parm_ 0) (parm_ 1))) "icmp ugt i64 %p0, %p1"
+        && String.beq (show_llvm_value (udiv (parm_ 0) (parm_ 1))) "udiv i64 %p0, %p1"
