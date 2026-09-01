@@ -2373,6 +2373,214 @@ def type_head_name_local (t : Term) : Option Identifier :=
         _ => Option.none,
     }
 
+/// One constructor's own declared field types, positionally -- lets a
+/// `match p { Ctor a b => ... }` arm recover `a`/`b`'s real types from
+/// `Ctor`'s own declared params, the same way `Term.lam` already
+/// registers a lambda param's declared type into `env` (see
+/// `resolve_class_call_term`'s `Literal.match_` case below). Keyed by
+/// the constructor's bare name only (`last_segment`), matching
+/// `CtorOwner`'s own convention -- `MatchCase.mc`'s own `name` field is
+/// bare too, with no type-qualification available structurally at this
+/// syntactic pass.
+/// `owner_params` -- the OWNING inductive's own declared type-param
+/// identifiers (e.g. `[A, B]` for `type Pair A B { pair (fst:A) (snd:B) }`)
+/// -- in the same order `field_types` references them. Needed because a
+/// generic constructor's own declared field types are the ABSTRACT type
+/// params, not any particular use site's concrete instantiation (`Pair
+/// String Json`'s `fst`/`snd` are declared `A`/`B` in `Pair`'s own decl,
+/// not `String`/`Json`) -- `match_arm_env` below substitutes using the
+/// scrutinee's own concrete type args once it has both pieces.
+type CtorFieldTypes {
+    mk (ctor_name : Identifier) (owner_params : List Identifier) (field_types : List Term),
+}
+
+#[partial]
+def collect_ctor_field_types (decl_list : List Decl) : List CtorFieldTypes :=
+    match decl_list {
+        List.empty => List.empty,
+        List.cons d rest =>
+            match d {
+                Decl.inductive_d ind =>
+                    match ind {
+                        Inductive.mk _owner params _ constructors _ _ =>
+                            List.append (ctor_field_types_of (param_names_of params) constructors) (collect_ctor_field_types rest),
+                    },
+                _ => collect_ctor_field_types rest,
+            },
+    }
+
+#[partial]
+def ctor_field_types_of (owner_params : List Identifier) (constructors : List InductConstructor) : List CtorFieldTypes :=
+    match constructors {
+        List.empty => List.empty,
+        List.cons c rest =>
+            match c {
+                InductConstructor.mk cname params _ =>
+                    List.cons (CtorFieldTypes.mk (last_segment cname) owner_params (param_types_of params)) (ctor_field_types_of owner_params rest),
+            },
+    }
+
+#[partial]
+def param_types_of (params : List Param) : List Term :=
+    match params {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p {
+                Param.mk _name typ_ _mult _default _attrs => List.cons typ_ (param_types_of rest),
+            },
+    }
+
+#[partial]
+def param_names_of (params : List Param) : List Identifier :=
+    match params {
+        List.empty => List.empty,
+        List.cons p rest =>
+            match p {
+                Param.mk name_ _typ _mult _default _attrs => List.cons name_ (param_names_of rest),
+            },
+    }
+
+#[partial]
+def lookup_ctor_field_types (entries : List CtorFieldTypes) (ctor_name : Identifier) : Option CtorFieldTypes :=
+    match entries {
+        List.empty => Option.none,
+        List.cons e rest =>
+            match e {
+                CtorFieldTypes.mk ename _ _ =>
+                    if Similar.similar ename ctor_name
+                    then Option.some e
+                    else lookup_ctor_field_types rest ctor_name,
+            },
+    }
+
+/// Position of `id` within `owner_params` (0-indexed), if present --
+/// used to find which of the scrutinee's own concrete type args a bare
+/// type-param reference in a field type should substitute to.
+#[partial]
+def index_of_ident (owner_params : List Identifier) (id : Identifier) (i : I64) : Option I64 :=
+    match owner_params {
+        List.empty => Option.none,
+        List.cons p rest =>
+            if Similar.similar p id then Option.some i else index_of_ident rest id (i + 1),
+    }
+
+#[partial]
+def nth_term (ts : List Term) (i : I64) : Option Term :=
+    match ts {
+        List.empty => Option.none,
+        List.cons t rest => if I64.beq i 0 then Option.some t else nth_term rest (i - 1),
+    }
+
+/// A field type's own concrete instantiation. Two cases:
+/// - The field's declared type is a BARE reference to one of the owning
+///   inductive's own type params (`fst : A` in `Pair A B`) -- substitute
+///   the scrutinee's own concrete arg at that position (`String` for
+///   `fst` on a `Pair String Json` scrutinee). Needed so an ELEMENT
+///   field's carrier is the real concrete type, not the abstract param
+///   name itself (a bare "A" matches no real instance).
+/// - The field's declared type is an APPLICATION whose own head is
+///   something OTHER than one of `owner_params` (`left : BTreeMap K V`
+///   in `type BTreeMap K V { node ... (left: BTreeMap K V) ... }`,
+///   `xs : List A` in a `Cons`-like constructor) -- pass it through
+///   UNCHANGED rather than attempting full substitution of its own
+///   nested args. Sound because carrier inference only ever needs the
+///   HEAD (`infer_carrier_type`'s `type_head_name_local` reduction,
+///   downstream of whatever `env` entry this produces) and the head
+///   here is ALREADY a concrete type constructor name regardless of
+///   what its own type arguments reference -- confirmed load-bearing by
+///   `std/map.mo`'s `instance [BOrd K] Map BTreeMap`'s own `lookup`:
+///   `match m { BTreeMap.node k v left right _ => ... Map.lookup key
+///   left ... }`'s `left`/`right` need exactly this to recover
+///   "BTreeMap" as their own recursive `Map.lookup` call's carrier.
+/// A field type matching NEITHER shape (an unnamed/anonymous var, the
+/// only remaining possibility) yields no substitution, leaving that one
+/// pattern var out of `env` -- the existing, safe "no carrier found"
+/// outcome.
+#[partial]
+def subst_field_type (owner_params : List Identifier) (concrete_args : List Term) (field_type : Term) : Option Term :=
+    match field_type {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match index_of_ident owner_params id 0 {
+                        Option.some i => nth_term concrete_args i,
+                        Option.none => Option.some field_type,
+                    },
+                DebugName.unnamed => Option.none,
+            },
+        Term.app _ _ => Option.some field_type,
+        _ => Option.none,
+    }
+
+/// Zip a match arm's own pattern-bound variable names (`MatchCase.args`)
+/// against the matched constructor's declared field types, substituting
+/// each field's abstract type param for the scrutinee's own concrete
+/// arg (`subst_field_type`) -- a field whose substitution doesn't
+/// resolve (a non-bare-var field type, e.g. `List A`, or a mismatched
+/// arity) is simply left out of `env`, not guessed at.
+#[partial]
+def extend_env_with_ctor_fields (env : List LocalTypeBinding) (owner_params : List Identifier) (concrete_args : List Term) (arg_names : List Identifier) (field_types : List Term) : List LocalTypeBinding :=
+    match arg_names {
+        List.empty => env,
+        List.cons a arest =>
+            match field_types {
+                List.empty => env,
+                List.cons t trest =>
+                    let rest_env := extend_env_with_ctor_fields env owner_params concrete_args arest trest in
+                    match subst_field_type owner_params concrete_args t {
+                        Option.some concrete_typ => List.cons (LocalTypeBinding.mk a concrete_typ) rest_env,
+                        Option.none => rest_env,
+                    },
+            },
+    }
+
+/// The scrutinee's own concrete type ARGS (`[String, Json]` for a
+/// scrutinee declared `p : Pair String Json`) -- only recoverable when
+/// the scrutinee is itself a bare, already-`env`-registered local
+/// (`lookup_local_type`, the SAME lookup `infer_carrier_type`'s
+/// `Term.var` branch already uses, just without that branch's own
+/// "reduce to head" step, since the whole point here is the type ARGS,
+/// not the head). Any other scrutinee shape (a computed call, a nested
+/// match, ...) yields `List.empty` -- match arms in that position get
+/// no field-type env enrichment, same as before this fix.
+#[partial]
+def scrutinee_type_args (env : List LocalTypeBinding) (scrutinee : Term) : List Term :=
+    match scrutinee {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match lookup_local_type env id {
+                        Option.some raw_typ =>
+                            match flatten_call_spine raw_typ { CallSpine.mk _head args => args },
+                        Option.none => List.empty,
+                    },
+                DebugName.unnamed => List.empty,
+            },
+        _ => List.empty,
+    }
+
+/// `env` for one match arm's own body -- looks up the matched
+/// constructor's declared field types (`ctor_field_types`), substitutes
+/// each against the scrutinee's own concrete type args
+/// (`scrutinee_type_args`), and extends `env` accordingly; falls back to
+/// the unchanged `env` when the constructor isn't found (e.g. a name
+/// this pass doesn't recognize) -- the existing behavior, not a
+/// regression.
+#[partial]
+def match_arm_env (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (scrutinee : Term) (case_ : MatchCase) : List LocalTypeBinding :=
+    match case_ {
+        MatchCase.mc cname cargs _body _fp =>
+            match lookup_ctor_field_types ctor_field_types cname {
+                Option.some entry =>
+                    match entry {
+                        CtorFieldTypes.mk _ owner_params field_types =>
+                            let concrete_args := scrutinee_type_args env scrutinee in
+                            extend_env_with_ctor_fields env owner_params concrete_args cargs field_types,
+                    },
+                Option.none => env,
+            },
+    }
+
 #[partial]
 def collect_ctor_owners (decl_list : List Decl) : List CtorOwner :=
     match decl_list {
@@ -2881,22 +3089,68 @@ def method_suffix_of (s : String) : Option String :=
 def class_own_name (cls : Class) : ModulePath :=
     match cls { Class.mk cname _ _ _ _ => ModulePath.mp (List.cons cname List.empty) }
 
-/// Resolves ONE dict argument a promoted method's own constraint
-/// needs, given the SAME concrete `carrier` already established at the
-/// outer call site (the one-level, non-deeply-recursive simplification
-/// this plan's own corpus-reality-check calls for -- every real corpus
-/// case has at most one inner constraint, on the same type variable as
-/// the instance's own carrier). Checks `dict_env` first (D5 forwarding,
-/// for completeness/generality), then falls back to a fresh D4 concrete
-/// lookup.
 #[partial]
-def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (carrier : Term) (c : TypeConstraint) : Option Term :=
+def find_matching_instance_any (instances : List Instance) (cls_name : ModulePath) (carriers : List Term) : Option Instance :=
+    match carriers {
+        List.empty => Option.none,
+        List.cons c rest =>
+            match find_matching_instance instances cls_name c {
+                Option.some ins => Option.some ins,
+                Option.none => find_matching_instance_any instances cls_name rest,
+            },
+    }
+
+/// Sibling of `find_matching_instance_any` that also returns WHICH
+/// candidate carrier matched -- needed by `resolve_class_method_call_d4_
+/// from_args` (unlike `resolve_dict_arg`'s own use of the `_any` form,
+/// which only needs the instance itself; the OUTER call-site dispatch
+/// also needs the matched carrier term to hand to `resolve_class_method_
+/// call_with_instance`/`_with_dict_args` for THEIR OWN nested-constraint
+/// resolution).
+#[partial]
+def find_matching_instance_carrier_any (instances : List Instance) (cls_name : ModulePath) (carriers : List Term) : Option (Pair Term Instance) :=
+    match carriers {
+        List.empty => Option.none,
+        List.cons c rest =>
+            match find_matching_instance instances cls_name c {
+                Option.some ins => Option.some (Pair.pair c ins),
+                Option.none => find_matching_instance_carrier_any instances cls_name rest,
+            },
+    }
+
+/// Resolves ONE dict argument a promoted method's own constraint
+/// needs, given the concrete `carrier` already established at the outer
+/// call site. Checks `dict_env` first (D5 forwarding, for completeness/
+/// generality), then a fresh D4 lookup against `carrier` itself (the
+/// common case: the constraint is on the SAME type variable as the
+/// instance's own carrier, e.g. `instance [Show A] Foo A`'s own `A`).
+///
+/// `extra_carriers` is the fallback for the OTHER real corpus shape:
+/// `instance [BOrd K] Map BTreeMap`'s `[BOrd K]` constrains `K` (the
+/// map's KEY type), a DIFFERENT type variable than `Map`'s own carrier
+/// (`M = BTreeMap`) -- `carrier` alone can never match a `BOrd`
+/// instance (there is no `instance BOrd BTreeMap`), so this pass used
+/// to give up on `Map.insert`/`Map.lookup`/... entirely (confirmed via
+/// `examples/json.mo`'s `pairs_to_map_insert`). `extra_carriers` is the
+/// call's own argument carriers (`infer_all_carriers_from_args_go`,
+/// computed once per call site from the SAME `resolved_args` this
+/// pass's carrier inference already reads) -- for `Map.insert k v acc`,
+/// `k`'s own inferred carrier (`String`, once `match_arm_env` below can
+/// see it) finds `instance BOrd String` here. Tried only after the
+/// primary `carrier` fails, preserving the existing, already-correct
+/// behavior for the common same-type-variable case.
+#[partial]
+def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (carrier : Term) (extra_carriers : List Term) (c : TypeConstraint) : Option Term :=
     match c {
         TypeConstraint.mk cls_name _ =>
             match lookup_dict_binding dict_env cls_name {
                 Option.some bound_id => Option.some (Term.var 0 (DebugName.named bound_id)),
                 Option.none =>
-                    match find_matching_instance instances cls_name carrier {
+                    let found := match find_matching_instance instances cls_name carrier {
+                        Option.some ins => Option.some ins,
+                        Option.none => find_matching_instance_any instances cls_name extra_carriers,
+                    } in
+                    match found {
                         Option.some ins =>
                             match ins {
                                 Instance.mk _ _ _ ins_args _ _ _ =>
@@ -2913,14 +3167,14 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
     }
 
 #[partial]
-def resolve_dict_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (carrier : Term) (constraints : List TypeConstraint) : Option (List Term) :=
+def resolve_dict_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (carrier : Term) (extra_carriers : List Term) (constraints : List TypeConstraint) : Option (List Term) :=
     match constraints {
         List.empty => Option.some List.empty,
         List.cons c rest =>
-            match resolve_dict_arg classes instances dict_env carrier c {
+            match resolve_dict_arg classes instances dict_env carrier extra_carriers c {
                 Option.none => Option.none,
                 Option.some arg =>
-                    match resolve_dict_args classes instances dict_env carrier rest {
+                    match resolve_dict_args classes instances dict_env carrier extra_carriers rest {
                         Option.none => Option.none,
                         Option.some rest_args => Option.some (List.cons arg rest_args),
                     },
@@ -3021,7 +3275,7 @@ def build_dict_field_projection_checked (cls : Class) (dict_id : Identifier) (me
 /// still failed (`undefined @Monad_pure` at link time) -- exactly this
 /// gap.
 #[partial]
-def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
+def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
     match t {
         Term.lam dbg typ body =>
             match dbg {
@@ -3032,16 +3286,16 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                         Option.some cls_name => List.cons (DictBinding.mk cls_name id) dict_env,
                         Option.none => dict_env,
                     } in
-                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier typ)
-                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types new_env new_dict_env def_carrier body),
+                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier typ)
+                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types new_env new_dict_env def_carrier body),
                 DebugName.unnamed =>
-                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier typ)
-                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier body),
+                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier typ)
+                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier body),
             },
         Term.app _ _ =>
             match flatten_call_spine t {
                 CallSpine.mk head args =>
-                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types env dict_env def_carrier args in
+                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier args in
                     match head {
                         Term.var _ dbg =>
                             match dbg {
@@ -3056,7 +3310,7 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                                     },
                                 DebugName.unnamed => rebuild_call head resolved_args,
                             },
-                        _ => rebuild_call (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier head) resolved_args,
+                        _ => rebuild_call (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier head) resolved_args,
                     },
             },
         // A NULLARY class method reference (e.g. `FromListLiteral.empty`,
@@ -3083,15 +3337,50 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                     },
                 DebugName.unnamed => t,
             },
-        _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier) t,
+        // `Literal.match_` gets its OWN case (not the generic
+        // `term_map_children` fallback below) so each arm's own body can
+        // see an `env` enriched with that arm's pattern-bound variable
+        // types (`match_arm_env`, `lang/scope.mo`'s own `CtorFieldTypes`
+        // section above) -- `k`/`v` in `match p { Pair.pair k v => ...
+        // }` are otherwise still bare, type-less names by the time
+        // carrier inference runs on a class-method call inside the arm
+        // (e.g. `Map.insert k v acc`'s `k`), the same gap `a47856c`
+        // already fixed for `let`/lambda bindings (which desugar to
+        // `Term.lam`, handled above) but never extended to match-bound
+        // ones. Every OTHER `Literal` variant still goes through
+        // `term_map_children` unchanged.
+        Term.lit lit_ =>
+            match lit_ {
+                Literal.match_ scrutinee cases =>
+                    let resolved_scrutinee := resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee in
+                    Term.lit (Literal.match_ resolved_scrutinee (resolve_class_call_cases classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee cases)),
+                _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier) t,
+            },
+        _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier) t,
     }
 
 #[partial]
-def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (args : List Term) : List Term :=
+def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (args : List Term) : List Term :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
-            List.cons (resolve_class_call_term classes instances ctor_owners def_constraints def_types env dict_env def_carrier a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types env dict_env def_carrier rest),
+            List.cons (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier rest),
+    }
+
+#[partial]
+def resolve_class_call_cases (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (cases : List MatchCase) : List MatchCase :=
+    match cases {
+        List.empty => List.empty,
+        List.cons c rest =>
+            List.cons (resolve_class_call_case classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee c) (resolve_class_call_cases classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee rest),
+    }
+
+#[partial]
+def resolve_class_call_case (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (c : MatchCase) : MatchCase :=
+    match c {
+        MatchCase.mc name args body fp =>
+            let new_env := match_arm_env ctor_field_types env scrutinee c in
+            MatchCase.mc name args (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types new_env dict_env def_carrier body) fp,
     }
 
 /// D5-first, D4-fallback resolution for one class-method call, given
@@ -3105,7 +3394,14 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
     let cls_name := class_own_name cls in
     match lookup_dict_binding dict_env cls_name {
         Option.some dict_id => build_dict_field_projection cls dict_id method_name resolved_args,
-        Option.none => resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners,
+        Option.none =>
+            // Computed once here (the highest point `resolved_args`/`env`/
+            // `ctor_owners`/`def_types` are all still together) and
+            // threaded unchanged through the whole D4 chain down to
+            // `resolve_dict_arg`'s own `extra_carriers` fallback -- see
+            // that function's doc comment for why this exists.
+            let extra_carriers := infer_all_carriers_from_args_go env ctor_owners def_types resolved_args in
+            resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
     }
 
 /// D4: no bound dict for this class in scope -- try a fresh concrete
@@ -3138,13 +3434,13 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
 /// and the call was left unresolved) even after `def_carrier` landed for
 /// `bind`.
 #[partial]
-def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
+def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
     if modpath_eq cls_name monad_class_name && String.beq (show_identifier method_name) "pure" then
         match def_carrier {
-            Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
-            Option.none => resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners,
+            Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
+            Option.none => resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
         }
-    else resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners
+    else resolve_class_method_call_d4_from_args classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers
 
 /// `env`/`ctor_owners` are the REAL lexical carrier-inference context
 /// (threaded from `resolve_class_call_term`'s own recursive walk), NOT
@@ -3160,50 +3456,46 @@ def resolve_class_method_call_d4 (classes : List Class) (instances : List Instan
 /// name, and only the REAL `env` can say what type that name was
 /// declared with.
 #[partial]
-def resolve_class_method_call_d4_from_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
-    match infer_carrier_from_args_go env ctor_owners def_types resolved_args {
-        // `infer_carrier_from_args_go` takes the FIRST arg that reveals
-        // ANY carrier -- sound when an arg's own type IS the class's
-        // carrier (`Show.show x` -> `x`'s type), but wrong for a method
-        // like `FromListLiteral.cons (a : A) (L A) : L A`, whose FIRST
-        // arg is the ELEMENT (type `A`), not the container (`L`) the
-        // class is actually parameterized over: `[1, 2, 3]`'s desugared
-        // `FromListLiteral.cons 1 (...)` gets carrier `I64` (from the
-        // literal `1`) instead of `List`, which then finds no matching
-        // `instance FromListLiteral I64` and gives up -- even though the
-        // class's OWN declared default (`List`) would have worked, and
-        // `resolve_class_method_call_d4_default_carrier` below exists
-        // exactly for this. Confirmed via `bootstrap compile lang/main.mo
-        // monad`: `lang/parser/core.mo`'s `op_chars : List String :=
-        // [...]` (a literal-first list, the simplest possible shape) hit
-        // this. So: if the ARGS-inferred carrier doesn't actually match
-        // any instance, retry with the class's own default carrier
-        // before giving up, instead of giving up immediately.
-        Option.some carrier => resolve_class_method_call_try_carrier_then_default classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
+def resolve_class_method_call_d4_from_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
+    // Was `infer_carrier_from_args_go` (first arg that reveals ANY
+    // carrier) feeding a single candidate into a "try it, else class
+    // default" two-step -- sound when an arg's own type IS the class's
+    // carrier (`Show.show x` -> `x`'s type), but wrong for a method
+    // whose FIRST arg(s) are ELEMENT types, not the container the class
+    // is actually parameterized over: `FromListLiteral.cons (a : A) (L
+    // A) : L A`'s `[1, 2, 3]` desugar (confirmed via `bootstrap compile
+    // lang/main.mo monad`: `lang/parser/core.mo`'s `op_chars : List
+    // String := [...]`) and, once `match_arm_env` (above) could recover
+    // `k`'s own type inside `match p { Pair.pair k v => Map.insert k v
+    // acc }`, `Map.insert (key:K) (val:V) (m:M K V) : M K V` too --
+    // `k`'s carrier (`String`) used to be the FIRST (and only-tried)
+    // candidate, matched no `instance Map String`, and silently fell
+    // through to the class's own declared DEFAULT carrier (`HashMap`)
+    // instead of ever trying `acc`'s real carrier (`BTreeMap`) --
+    // confirmed as a real, live regression via `examples/json.mo`:
+    // `pairs_to_map_insert` compiled to a call to `Map_HashMap_insert`
+    // on a value actually tagged `BTreeMap`, corrupting the tree
+    // (`BTreeMap_to_list_asc` later segfaulting on a bogus field read).
+    // Fixed by trying EVERY arg's own candidate carrier (`infer_all_
+    // carriers_from_args_go`, the same "candidate list, first that
+    // actually matches an instance wins" pattern `resolve_dict_arg`'s
+    // own `extra_carriers` fallback already uses) against a REAL
+    // instance lookup (`find_matching_instance_carrier_any`) before
+    // ever falling back to the class's own default -- `k`'s "String"
+    // candidate is tried and correctly rejected (no `instance Map
+    // String`), and `acc`'s "BTreeMap" candidate (tried next) succeeds.
+    match find_matching_instance_carrier_any instances cls_name (infer_all_carriers_from_args_go env ctor_owners def_types resolved_args) {
+        Option.some found =>
+            match found {
+                Pair.pair carrier ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
+            },
         Option.none =>
             if modpath_eq cls_name monad_class_name then
                 match def_carrier {
-                    Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
-                    Option.none => resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args,
+                    Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
+                    Option.none => resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args extra_carriers,
                 }
-            else resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args,
-    }
-
-/// One-shot fallback chain for the `Option.some carrier` branch above --
-/// try the args-inferred `carrier` directly (NOT via
-/// `resolve_class_method_call_with_carrier`, whose own `Option.none`
-/// fallback is `rebuild_call`/give-up, which would make this a dead-end
-/// rather than a real fallback); if no instance matches it, retry via
-/// the class's own declared default carrier (`resolve_class_method_call_
-/// d4_default_carrier`, itself calling the UNCHANGED
-/// `resolve_class_method_call_with_carrier` -- so this never mutually
-/// recurses back into itself, terminating in at most two instance
-/// lookups).
-#[partial]
-def resolve_class_method_call_try_carrier_then_default (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (carrier : Term) : Term :=
-    match find_matching_instance instances cls_name carrier {
-        Option.some ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins,
-        Option.none => resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args,
+            else resolve_class_method_call_d4_default_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args extra_carriers,
     }
 
 /// Last-resort fallback once neither the call's own args nor (for
@@ -3226,13 +3518,13 @@ def resolve_class_method_call_try_carrier_then_default (classes : List Class) (i
 /// unresolved, unlike every list literal that DOES sit in a directly
 /// type-annotated position.
 #[partial]
-def resolve_class_method_call_d4_default_carrier (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) : Term :=
+def resolve_class_method_call_d4_default_carrier (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (extra_carriers : List Term) : Term :=
     match find_class_by_name classes cls_name {
         Option.none => rebuild_call orig_head resolved_args,
         Option.some cls =>
             match class_default_carrier cls {
                 Option.none => rebuild_call orig_head resolved_args,
-                Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier,
+                Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
             },
     }
 
@@ -3256,22 +3548,22 @@ def monad_class_name : ModulePath :=
     ModulePath.mp (List.cons (Identifier.id "Monad") List.empty)
 
 #[partial]
-def resolve_class_method_call_with_carrier (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (carrier : Term) : Term :=
+def resolve_class_method_call_with_carrier (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (carrier : Term) (extra_carriers : List Term) : Term :=
     match find_matching_instance instances cls_name carrier {
         Option.none => rebuild_call orig_head resolved_args,
-        Option.some ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins,
+        Option.some ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
     }
 
 #[partial]
-def resolve_class_method_call_with_instance (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins : Instance) : Term :=
+def resolve_class_method_call_with_instance (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins : Instance) (extra_carriers : List Term) : Term :=
     match ins {
         Instance.mk _ ins_cls_name ins_constraints ins_args _ _ _ =>
-            resolve_class_method_call_with_dict_args classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier ins_constraints ins_args,
+            resolve_class_method_call_with_dict_args classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier ins_constraints ins_args extra_carriers,
     }
 
 #[partial]
-def resolve_class_method_call_with_dict_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins_constraints : List TypeConstraint) (ins_args : List Term) : Term :=
-    match resolve_dict_args classes instances dict_env carrier ins_constraints {
+def resolve_class_method_call_with_dict_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins_constraints : List TypeConstraint) (ins_args : List Term) (extra_carriers : List Term) : Term :=
+    match resolve_dict_args classes instances dict_env carrier extra_carriers ins_constraints {
         Option.none => rebuild_call orig_head resolved_args,
         Option.some dict_args =>
             let mangled := mangle_instance_method_name cls_name ins_args method_name in
@@ -3301,6 +3593,26 @@ def resolve_class_method_call_with_dict_args (classes : List Class) (instances :
 /// with. An empty env silently failed to resolve every such call,
 /// leaving it as an unrewritten reference that `llc` later rejected as
 /// an undefined symbol.
+/// Sibling of `infer_carrier_from_args_go` that collects EVERY arg's own
+/// inferred carrier, not just the first -- used as the candidate list
+/// for a NESTED instance constraint on a type variable different from
+/// the outer call's own carrier (e.g. `instance [BOrd K] Map BTreeMap`'s
+/// `K`, vs. `Map`'s own carrier `M = BTreeMap`) -- see
+/// `resolve_dict_arg`'s own doc comment for the full story. The outer
+/// carrier itself is still tried FIRST by `resolve_dict_arg` (the
+/// existing, already-correct behavior for the common "same type
+/// variable" case); this list is only consulted once that fails.
+#[partial]
+def infer_all_carriers_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : List DefTypeEntry) (args : List Term) : List Term :=
+    match args {
+        List.empty => List.empty,
+        List.cons a rest =>
+            match infer_carrier_type env ctor_owners def_types a {
+                Option.some t => List.cons t (infer_all_carriers_from_args_go env ctor_owners def_types rest),
+                Option.none => infer_all_carriers_from_args_go env ctor_owners def_types rest,
+            },
+    }
+
 #[partial]
 def infer_carrier_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : List DefTypeEntry) (args : List Term) : Option Term :=
     match args {
@@ -3332,9 +3644,10 @@ def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
     let classes := collect_classes decl_list in
     let instances := collect_instances decl_list in
     let ctor_owners := collect_ctor_owners decl_list in
+    let ctor_field_types := collect_ctor_field_types decl_list in
     let def_constraints := collect_def_constraints decl_list in
     let def_types := collect_def_types decl_list in
-    resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types decl_list
+    resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types decl_list
 
 /// `resolve_class_call_term`'s own resolution chain has a SILENT give-up
 /// built in by design (`rebuild_call orig_head resolved_args`, used
@@ -3564,7 +3877,7 @@ def resolve_ordinary_constrained_call (classes : List Class) (instances : List I
             match infer_carrier_from_args_go env ctor_owners def_types resolved_args {
                 Option.none => rebuild_call head resolved_args,
                 Option.some carrier =>
-                    match resolve_dict_args classes instances dict_env carrier constraints {
+                    match resolve_dict_args classes instances dict_env carrier (infer_all_carriers_from_args_go env ctor_owners def_types resolved_args) constraints {
                         Option.none => rebuild_call head resolved_args,
                         Option.some dict_args => rebuild_call head (List.append dict_args resolved_args),
                     },
@@ -3572,7 +3885,7 @@ def resolve_ordinary_constrained_call (classes : List Class) (instances : List I
     }
 
 #[partial]
-def resolve_class_calls_decls_go (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (decl_list : List Decl) : List Decl :=
+def resolve_class_calls_decls_go (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (ctor_field_types : List CtorFieldTypes) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
@@ -3581,10 +3894,10 @@ def resolve_class_calls_decls_go (classes : List Class) (instances : List Instan
                     match def_ {
                         Def.mk name typ term_ constraints attrs vis =>
                             let def_carrier := full_return_carrier typ in
-                            let new_term := resolve_class_call_term classes instances ctor_owners def_constraints def_types List.empty List.empty def_carrier term_ in
-                            List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis)) (resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types rest),
+                            let new_term := resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types List.empty List.empty def_carrier term_ in
+                            List.cons (Decl.def_d (Def.mk name typ new_term constraints attrs vis)) (resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types rest),
                     },
-                _ => List.cons d (resolve_class_calls_decls_go classes instances ctor_owners def_constraints def_types rest),
+                _ => List.cons d (resolve_class_calls_decls_go classes instances ctor_owners ctor_field_types def_constraints def_types rest),
             },
     }
 

@@ -242,7 +242,16 @@ def resolve_class_method_d4
                     let classes := scope_data_classes (scope_globals scope) in
                     let instances := scope_instance_candidates (scope_globals scope) ins_cls_name in
                     let dict_env := dict_env_from_locals locals in
-                    match resolve_dict_args classes instances dict_env carrier ins_constraints {
+                    // `List.empty` -- extending this call site with the same
+                    // args-derived `extra_carriers` fallback `lang.scope`'s
+                    // codegen pass now has (`resolve_dict_arg`'s own doc
+                    // comment) is out of scope here: this checker-level path
+                    // doesn't hard-fail on a miss anyway (see
+                    // `resolve_class_method`'s own `err _ =>` fallback to the
+                    // method's abstract signature, `type_check_free_var`),
+                    // and every codegen path re-resolves this same call
+                    // later via the now-fixed `lang.scope` pass regardless.
+                    match resolve_dict_args classes instances dict_env carrier List.empty ins_constraints {
                         Option.none => err (TypeError.custom "cannot resolve inner instance dictionary"),
                         Option.some dict_args =>
                             let applied_typ : Term := strip_n_pis real_sig (List.length dict_args) in
