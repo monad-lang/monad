@@ -136,13 +136,17 @@ struct DbgLoc {
     column : I64,
 }
 
-type LLVMFunction {
-    mk (name : String)
-       (params : List ParamPair)
-       (ret_ty : LLVMType)
-       (blocks : List LLVMBasicBlock)
-       (ghc_cc : Bool)
-       (dbg_loc : Option DbgLoc),
+/// `ghc_cc` selects LLVM's `cc 9` (GHC calling convention) -- true for
+/// every compiled Monad def, false for the `lang/codegen/runtime.mo`
+/// generated natives, which are ordinary ccc functions called from
+/// cc-9 wrapper bodies.
+struct LLVMFunction {
+    name : String,
+    params : List ParamPair,
+    ret_ty : LLVMType,
+    blocks : List LLVMBasicBlock,
+    ghc_cc : Bool,
+    dbg_loc : Option DbgLoc,
 }
 
 type LLVMGlobal {

@@ -147,9 +147,12 @@ def emit_string_starts_with : LLVMFunction :=
       [assign "i_next" (add (var_ "i") (int_ 1)), jump "loop"] in
   let done := LLVMBasicBlock.mk "done" [ret (int_ 1)] in
   let fail := LLVMBasicBlock.mk "fail" [ret (int_ 0)] in
-  LLVMFunction.mk "monad_string_starts_with" (i64_params 2) i64_
-    [entry, loop, body, next, done, fail]
-    false Option.none
+  { name := "monad_string_starts_with",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry, loop, body, next, done, fail],
+    ghc_cc := false,
+    dbg_loc := Option.none }
 
 /// `monad_string_to_list(s) -> List U8` (wired `passthrough`): walk the
 /// bytes right-to-left PREPENDING each `cons` -- the same shape as the
@@ -182,9 +185,12 @@ def emit_string_to_list : LLVMFunction :=
          assign "i_next" (sub (var_ "i") (int_ 1)),
          jump "loop"]) in
   let done := LLVMBasicBlock.mk "done" [ret (var_ "acc")] in
-  LLVMFunction.mk "monad_string_to_list" (i64_params 1) i64_
-    [entry, loop, body, done]
-    false Option.none
+  { name := "monad_string_to_list",
+    params := (i64_params 1),
+    ret_ty := i64_,
+    blocks := [entry, loop, body, done],
+    ghc_cc := false,
+    dbg_loc := Option.none }
 
 /// `monad_string_get(s, i) -> Option U8` (wired `passthrough`):
 /// `none` (tag 3) for `i < 0 || i >= length(s)`, else `some` (tag 4)
@@ -212,9 +218,12 @@ def emit_string_get : LLVMFunction :=
         [assign "some_con" (alloc_constructor rt_tag_some [var_ "gbyte"]),
          set_field_call (var_ "some_con") 0 (var_ "gbyte") "gsf",
          ret (var_ "some_con")]) in
-  LLVMFunction.mk "monad_string_get" (i64_params 2) i64_
-    [entry, check_hi, none_block, some_block]
-    false Option.none
+  { name := "monad_string_get",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry, check_hi, none_block, some_block],
+    ghc_cc := false,
+    dbg_loc := Option.none }
 
 // ─── U8/U64 arithmetic + comparison natives ─────────────────────────
 
@@ -241,7 +250,12 @@ def emit_icmp_native (name : String) (cmp : LLVMValue) : LLVMFunction :=
       [assign "raw" cmp,
        assign "wide" (zext (var_ "raw") i1_ i64_),
        ret (var_ "wide")] in
-  LLVMFunction.mk name (i64_params 2) i64_ [entry] false Option.none
+  { name := name,
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
 
 /// `monad_u8_sub(a, b)` (wired `passthrough`): plain wrapping i64 sub
 /// -- the reference's `wrapping_sub`, with no width mask.
@@ -249,13 +263,23 @@ def emit_u8_sub : LLVMFunction :=
   let entry :=
     LLVMBasicBlock.mk "entry"
       [assign "r" (sub (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  LLVMFunction.mk "monad_u8_sub" (i64_params 2) i64_ [entry] false Option.none
+  { name := "monad_u8_sub",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
 
 def emit_u8_mul : LLVMFunction :=
   let entry :=
     LLVMBasicBlock.mk "entry"
       [assign "r" (mul (parm_ 0) (parm_ 1)), ret (var_ "r")] in
-  LLVMFunction.mk "monad_u8_mul" (i64_params 2) i64_ [entry] false Option.none
+  { name := "monad_u8_mul",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
 
 /// `monad_u8_div(a, b)`: 0 when `b == 0`, else `a / b` -- matching the
 /// reference's `if b == 0 { 0 } else { a.wrapping_div(b) }` guard.
@@ -277,7 +301,12 @@ def emit_guarded_native (name : String) (op : LLVMValue) : LLVMFunction :=
        branch (var_ "zero_b") "zero" "calc"] in
   let zero := LLVMBasicBlock.mk "zero" [ret (int_ 0)] in
   let calc := LLVMBasicBlock.mk "calc" [assign "r" op, ret (var_ "r")] in
-  LLVMFunction.mk name (i64_params 2) i64_ [entry, zero, calc] false Option.none
+  { name := name,
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry, zero, calc],
+    ghc_cc := false,
+    dbg_loc := Option.none }
 
 // ─── Bench stubs ────────────────────────────────────────────────────
 
@@ -291,10 +320,20 @@ def emit_guarded_native (name : String) (op : LLVMValue) : LLVMFunction :=
 
 def emit_bench_now : LLVMFunction :=
   let entry := LLVMBasicBlock.mk "entry" [ret (int_ 0)] in
-  LLVMFunction.mk "monad_bench_now" [] i64_ [entry] false Option.none
+  { name := "monad_bench_now",
+    params := [],
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
 
 /// `Bench.report : String -> I64 -> Bool` -- returns raw 1 (`true`)
 /// and drops both arguments, mirroring a successful no-op report.
 def emit_bench_report : LLVMFunction :=
   let entry := LLVMBasicBlock.mk "entry" [ret (int_ 1)] in
-  LLVMFunction.mk "monad_bench_report" (i64_params 2) i64_ [entry] false Option.none
+  { name := "monad_bench_report",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
