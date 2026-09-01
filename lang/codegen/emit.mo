@@ -27,6 +27,7 @@ use lang.codegen.ir {
   op_mul, op_ne, op_print_str, op_read_file, op_sdiv, op_sub, op_write_file,
   parm_, phi, ptr, ptrtoint, ret, sdiv, show_llvm_type, sub, trunc, var_, void_val, zext,
 }
+use lang.codegen.runtime {runtime_native_functions}
 use lang.module {
   LoadedModules, ModuleInfo, elaborate_module_decls_best_effort, get_loaded_all,
   get_loaded_main, get_module_info_decls, mk, resolve_open_aliases_in_modules,
@@ -4666,6 +4667,59 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "file_exists" then Option.some (NativeWrapKind.io_truthy_ptr_bool_result "monad_file_exists")
             else if String.beq target "is_dir" then Option.some (NativeWrapKind.io_truthy_ptr_bool_result "monad_is_dir")
             else if String.beq target "write_file" then Option.some (NativeWrapKind.io_write_file "monad_write_file")
+            // ─── The compiler's own remaining closure ───────────────
+            // Exactly the set `validate_no_unwired_natives` reported for
+            // a self-compile of `lang/main.mo` -- wired together so the
+            // bootstrap ladder advances in ONE step (each self-compile
+            // costs ~14 minutes, so a partial wiring just relocates the
+            // fail-fast error rather than making progress).
+            //
+            // Most are backed by GENERATED IR (`lang/codegen/runtime.mo`,
+            // built in Monad itself from the `lang.codegen.ir` ADTs);
+            // the rest are C in `runtime.c`. Which one a symbol is makes
+            // no difference here -- an entry just names a symbol, and
+            // `compile_native_def_wrapper_ir` emits the same wrapper
+            // either way.
+
+            // Generated IR: pure byte loops over the raw-`char*` String
+            // representation.
+            else if String.beq target "string_starts_with" then Option.some (NativeWrapKind.bool_result "monad_string_starts_with")
+            else if String.beq target "string_to_list" then Option.some (NativeWrapKind.passthrough "monad_string_to_list")
+            else if String.beq target "string_get" then Option.some (NativeWrapKind.passthrough "monad_string_get")
+            // Generated IR: single-instruction integer bodies. `U8`/`U64`
+            // values are unboxed i64s here and the reference applies NO
+            // width mask (`core_native.rs`'s own doc comment records this
+            // known gap), so plain i64 ops ARE the matching semantics.
+            else if String.beq target "u8_eq" then Option.some (NativeWrapKind.bool_result "monad_u8_eq")
+            else if String.beq target "u8_lt" then Option.some (NativeWrapKind.bool_result "monad_u8_lt")
+            else if String.beq target "u8_gt" then Option.some (NativeWrapKind.bool_result "monad_u8_gt")
+            else if String.beq target "u64_eq" then Option.some (NativeWrapKind.bool_result "monad_u64_eq")
+            else if String.beq target "u8_sub" then Option.some (NativeWrapKind.passthrough "monad_u8_sub")
+            else if String.beq target "u8_mul" then Option.some (NativeWrapKind.passthrough "monad_u8_mul")
+            else if String.beq target "u8_div" then Option.some (NativeWrapKind.passthrough "monad_u8_div")
+            else if String.beq target "u64_mod" then Option.some (NativeWrapKind.passthrough "monad_u64_mod")
+            // Generated IR: documented stubs (0 / true). `Bench` is a
+            // measurement API, never load-bearing for correctness, and
+            // the compiled runtime has no clock wired yet -- a typed
+            // zero keeps `--verbose` compiles from crashing on a Unit
+            // stub. Real timing is a later self-hosted-runtime phase.
+            else if String.beq target "bench_now" then Option.some (NativeWrapKind.passthrough "monad_bench_now")
+            else if String.beq target "bench_report" then Option.some (NativeWrapKind.bool_result "monad_bench_report")
+            // C: libc-shaped or growable-buffer-shaped.
+            else if String.beq target "string_to_lowercase" then Option.some (NativeWrapKind.passthrough "monad_string_to_lowercase")
+            else if String.beq target "string_from_list" then Option.some (NativeWrapKind.passthrough "monad_string_from_list")
+            else if String.beq target "i32_to_string" then Option.some (NativeWrapKind.passthrough "monad_i32_to_string")
+            // Unsigned formatting: a U64 near the top of its range is a
+            // NEGATIVE i64 in this backend's uniform representation, so
+            // these can't share `monad_i64_to_string`.
+            else if String.beq target "u8_to_string" then Option.some (NativeWrapKind.passthrough "monad_u8_to_string")
+            else if String.beq target "u64_to_string" then Option.some (NativeWrapKind.passthrough "monad_u64_to_string")
+            // `exec_cmd` is THE load-bearing one for the ladder:
+            // `lang/codegen/link.mo` shells out to `llc`/`clang` through
+            // it, so without it a self-compiled compiler can never run
+            // its own `compile` command at all.
+            else if String.beq target "exec_cmd" then Option.some (NativeWrapKind.io_passthrough "monad_exec_cmd")
+            else if String.beq target "list_dir" then Option.some (NativeWrapKind.io_passthrough "monad_list_dir")
             else Option.none,
     }
 
@@ -5072,7 +5126,13 @@ def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option S
     let arities := build_arity_table defs in
     match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities debug_locs) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
-            let all_funcs := append_funcs ctor_funcs compiled_funcs in
+            // Prepend the GENERATED runtime natives (`lang/codegen/
+            // runtime.mo`) -- ordinary `define`s in this same module,
+            // called by the native wrappers `native_runtime_fn_name`
+            // wires. They deliberately carry no matching `declare` (see
+            // `runtime_declarations`' own note on the redefinition
+            // error that would cause).
+            let all_funcs := append_funcs runtime_native_functions (append_funcs ctor_funcs compiled_funcs) in
             let funcs := ren_main_and_wrap all_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path,
     }
@@ -5446,8 +5506,23 @@ def runtime_declarations : List LLVMDeclaration :=
     // just above (two boxed-string i64s in, a raw 0/1 i64 out).
     let d30 := mk_decl "monad_string_lt" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
     let d31 := mk_decl "monad_string_gt" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    // The remaining genuinely-C-shaped natives (`runtime.c`): they need
+    // libc (fork/exec, opendir, qsort) or growable buffers, which the
+    // GENERATED natives (`lang/codegen/runtime.mo`) have no way to
+    // express yet. Note the asymmetry: only these get a `declare` --
+    // a generated native is `define`d in this same module, and a
+    // `declare` alongside a `define` of one name is an invalid
+    // redefinition `llc` rejects outright.
+    let d32 := mk_decl "monad_string_to_lowercase" (cons_str "i64" empty_strs) "i64" in
+    let d33 := mk_decl "monad_string_from_list" (cons_str "i64" empty_strs) "i64" in
+    let d34 := mk_decl "monad_i32_to_string" (cons_str "i64" empty_strs) "i8*" in
+    let d35 := mk_decl "monad_exec_cmd" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d36 := mk_decl "monad_list_dir" (cons_str "i64" empty_strs) "i64" in
+    let d37 := mk_decl "monad_u8_to_string" (cons_str "i64" empty_strs) "i8*" in
+    let d38 := mk_decl "monad_u64_to_string" (cons_str "i64" empty_strs) "i8*" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d8, d9, d10, d11, d12, d13,
-     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31]
+     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31,
+     d32, d33, d34, d35, d36, d37, d38]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

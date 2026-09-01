@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 typedef struct {
     _Atomic(int64_t) refcount;
@@ -554,6 +557,188 @@ int64_t monad_string_hash(char* s) {
    the correct fix, not introducing a second, competing representation
    here.
    Builds the list in reverse (cons prepends), so argv[0] is first. */
+/* ─── Natives that are genuinely C-shaped ────────────────────────────
+   These need libc facilities (fork/exec, opendir, qsort) or buffer
+   building that the `lang/codegen/runtime.mo` generated-IR emitters
+   have no clean way to express yet. Everything simpler than these --
+   the String byte loops, the U8/U64 arithmetic -- is now GENERATED
+   Monad-side (see that module's own doc comment); this file keeps only
+   what actually earns its C.
+
+   All of them follow this file's uniform conventions: Strings are raw
+   NUL-terminated char*, and List/Option results are built with
+   alloc_constructor + direct field stores using the fixed builtin tag
+   table (List.empty 5, List.cons 6) that emit.mo's builtin_ctor_tags
+   is the single source of truth for. */
+
+/* `#[native string_to_lowercase]` (init/string.mo). ASCII-only, matching
+   what every caller in the compiler's own closure needs (identifier and
+   keyword folding); the reference's Rust `to_lowercase` is full Unicode,
+   a difference that cannot show up for the ASCII inputs this backend
+   sees. Returns a fresh malloc'd buffer -- never mutates its argument,
+   which may well be a read-only string literal in .rodata. */
+char* monad_string_to_lowercase(char* s) {
+    if (!s) return NULL;
+    size_t n = strlen(s);
+    char* out = (char*)malloc(n + 1);
+    if (!out) return NULL;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        out[i] = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : (char)c;
+    }
+    out[n] = '\0';
+    return out;
+}
+
+/* `#[native string_from_list]` (init/string.mo): walk a `List U8` cons
+   chain, collecting each head byte into a fresh NUL-terminated buffer.
+   The inverse of the GENERATED monad_string_to_list -- kept in C
+   because the buffer-building loop needs a growable allocation, which
+   the generated-IR emitters have no malloc/realloc story for yet.
+   Two passes (count, then fill) so the allocation is exact. */
+char* monad_string_from_list(void* list) {
+    int64_t n = 0;
+    for (void* cur = list; cur && monad_get_tag(cur) == 6; ) {
+        n++;
+        cur = monad_get_field(cur, 1);
+    }
+    char* out = (char*)malloc((size_t)n + 1);
+    if (!out) return NULL;
+    int64_t i = 0;
+    for (void* cur = list; cur && monad_get_tag(cur) == 6; ) {
+        out[i++] = (char)((int64_t)monad_get_field(cur, 0) & 0xFF);
+        cur = monad_get_field(cur, 1);
+    }
+    out[n] = '\0';
+    return out;
+}
+
+/* `#[native i32_to_string]` (init/number.mo). Same shape as
+   monad_i64_to_string above -- this backend holds every integer width
+   in an i64, so the only real difference is truncating to 32 bits
+   first, matching the reference's own I32 formatting. */
+char* monad_i32_to_string(int64_t n) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%d", (int)(int32_t)n);
+    char* out = (char*)malloc((size_t)len + 1);
+    if (out) memcpy(out, buf, (size_t)len + 1);
+    return out;
+}
+
+/* `#[native u8_to_string]`/`#[native u64_to_string]` (init/number.mo).
+   Same shape as monad_i64_to_string/monad_i32_to_string above; both
+   print UNSIGNED, which is the whole difference from the signed
+   variants (a U64 near the top of its range is a negative i64 in this
+   backend's uniform i64 representation, and must still print as the
+   large positive number the reference prints). */
+char* monad_u8_to_string(int64_t n) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%u", (unsigned)(uint8_t)n);
+    char* out = (char*)malloc((size_t)len + 1);
+    if (out) memcpy(out, buf, (size_t)len + 1);
+    return out;
+}
+
+char* monad_u64_to_string(int64_t n) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)n);
+    char* out = (char*)malloc((size_t)len + 1);
+    if (out) memcpy(out, buf, (size_t)len + 1);
+    return out;
+}
+
+/* `#[native "exec_cmd"]` (std/process.mo, `exec_cmd : String -> List
+   String -> IO I64`). THE load-bearing native for the bootstrap ladder:
+   lang/codegen/link.mo shells out to `llc` and `clang` through this, so
+   without it a self-compiled compiler can never run its own `compile`
+   command at all.
+
+   Walks the `List String` cons chain into a NULL-terminated argv (with
+   the command itself as argv[0], as execvp requires), then
+   fork + execvp + waitpid. Returns the child's exit code, or -1 if the
+   command could not be spawned or died on a signal -- matching the
+   reference's `status.code().unwrap_or(-1)`. The wrapper
+   (native_runtime_fn_name's io_passthrough kind) does the IO boxing. */
+int64_t monad_exec_cmd(char* cmd, void* args) {
+    int64_t argc = 0;
+    for (void* cur = args; cur && monad_get_tag(cur) == 6; ) {
+        argc++;
+        cur = monad_get_field(cur, 1);
+    }
+    char** argv = (char**)malloc(sizeof(char*) * (size_t)(argc + 2));
+    if (!argv) return -1;
+    argv[0] = cmd;
+    int64_t i = 1;
+    for (void* cur = args; cur && monad_get_tag(cur) == 6; ) {
+        argv[i++] = (char*)monad_get_field(cur, 0);
+        cur = monad_get_field(cur, 1);
+    }
+    argv[i] = NULL;
+
+    pid_t pid = fork();
+    if (pid < 0) { free(argv); return -1; }
+    if (pid == 0) {
+        execvp(cmd, argv);
+        _exit(127);            /* exec failed -- conventional shell code */
+    }
+    int status = 0;
+    free(argv);
+    if (waitpid(pid, &status, 0) < 0) return -1;
+    return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
+}
+
+/* `#[native "list_dir"]` (std/io.mo's IO.list_dir_native): bare entry
+   names, one directory level, SORTED -- the sort is load-bearing, not
+   cosmetic: readdir order is filesystem-dependent, and the reference
+   sorts, so without it a compiled binary and the interpreter would
+   disagree on any directory-walking output. Skips "." and "..".
+   Returns a `List String`; NULL-tolerant, yielding List.empty for an
+   unreadable path (the reference errors, but this runtime has no
+   error channel -- an empty listing is the same shape a caller can
+   already get from an empty directory). */
+static int monad_cmp_strs(const void* a, const void* b) {
+    return strcmp(*(const char* const*)a, *(const char* const*)b);
+}
+
+void* monad_list_dir(char* path) {
+    DIR* d = path ? opendir(path) : NULL;
+    if (!d) return (void*)alloc_constructor(5, 0);   /* List.empty */
+
+    size_t cap = 16, n = 0;
+    char** names = (char**)malloc(sizeof(char*) * cap);
+    if (!names) { closedir(d); return (void*)alloc_constructor(5, 0); }
+
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (n == cap) {
+            cap *= 2;
+            char** grown = (char**)realloc(names, sizeof(char*) * cap);
+            if (!grown) break;
+            names = grown;
+        }
+        size_t len = strlen(e->d_name);
+        char* copy = (char*)malloc(len + 1);
+        if (!copy) break;
+        memcpy(copy, e->d_name, len + 1);
+        names[n++] = copy;
+    }
+    closedir(d);
+
+    qsort(names, n, sizeof(char*), monad_cmp_strs);
+
+    /* Build in reverse (cons prepends) so the list comes out sorted. */
+    void* list = (void*)alloc_constructor(5, 0);
+    for (size_t i = n; i > 0; i--) {
+        Constructor* cons = (Constructor*)alloc_constructor(6, 2);
+        cons->fields[0] = names[i - 1];
+        cons->fields[1] = list;
+        list = cons;
+    }
+    free(names);
+    return list;
+}
+
 void* monad_build_args(int argc, char** argv) {
     void* list = alloc_constructor(5, 0);   /* List.empty */
     for (int i = argc - 1; i >= 0; i--) {
