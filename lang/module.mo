@@ -304,6 +304,25 @@ def try_read_module_file (base_dir : String) (mp : ModulePath) : IO (Option Stri
 
 /// Load a module by its ModulePath, returning parsed declarations or none
 /// base_dir is the directory to resolve relative imports from
+///
+/// `decls_parser`/`parse_all_decls` are LENIENT by design (`decls_try`'s
+/// own doc comment, `lang/parser.mo`): any real parse failure partway
+/// through a file just stops there and reports SUCCESS with whatever was
+/// accumulated so far, discarding everything from that point to EOF with
+/// no diagnostic at all. This is the ONE real load path every dependency
+/// (not just the target file) goes through, so it's exactly where that
+/// leniency turns into silent, hard-to-find data loss -- confirmed live:
+/// a `///` doc comment the self-hosted parser choked on partway through
+/// `lang/codegen/ir.mo` (91 real declarations) silently truncated it to
+/// 11, and every name declared after that point (including `LLVMModule`/
+/// `emit_module`) simply vanished from scope for every file that
+/// depended on it, surfacing many calls later as a confusing "unknown
+/// variable" far from the actual cause. Checking `String.is_empty rem`
+/// here turns that into a loud, immediate, correctly-located error
+/// instead -- `rem`, by `decls_skip`'s own construction, is already
+/// docstring/whitespace-stripped by the time a real failure stops it, so
+/// a genuinely fully-parsed file always leaves it empty; non-empty means
+/// real, un-parsed source content remains.
 #[partial]
 def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List Decl)) {
     let file : Option String <- try_read_module_file base_dir mp;
@@ -311,7 +330,14 @@ def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List D
         Option.some content => do {
             let result : ParseResult (List Decl) := parse_all_decls content;
             match result {
-                ParseResult.success _ decl_list => do { return Option.some decl_list },
+                ParseResult.success rem decl_list =>
+                    if String.is_empty rem
+                    then do { return Option.some decl_list }
+                    else do {
+                        let _ <- println (String.concat "parse error: " (String.concat (module_path_to_string mp) " did not fully parse (stopped before end of file) -- remaining text starts:"));
+                        let _ <- println (String.slice rem 0 (if I64.gt (String.length rem) 300 then 300 else String.length rem));
+                        return Option.none
+                    },
                 ParseResult.fail _ => do { return Option.none }
             }
         },
