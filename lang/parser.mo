@@ -1709,9 +1709,26 @@ def type_cons_group_close_try (r : ParseResult String) (orig : String) (name : I
 	}
 
 /// After a group closes: another curried `(...)` group, or done.
+/// `skip_docstrings` (not just `skip_spaces`) before probing for the next
+/// `(` -- a `///` doc comment sitting BETWEEN two curried param groups
+/// (e.g. `lang/codegen/ir.mo`'s `LLVMModule.mk`, which documents its own
+/// `debug_source` field this way) otherwise makes `tag "("` fail here,
+/// falls through to `type_cons_try_return_type`'s own `tag ":"` probe
+/// (which fails too, on the same unskipped comment text), and the
+/// constructor silently ends early with the comment+every remaining
+/// param group left unconsumed -- which then fails the enclosing `type`
+/// declaration's own closing-`}` check and, since `decls_parser`'s
+/// top-level loop treats any decl failure as "no more decls" rather than
+/// a hard error, silently truncates the REST OF THE FILE from the decls
+/// list. Confirmed via a minimal repro (`type Foo { mk (a : I64) (b :
+/// I64) /// comment\n (c : I64), }`) and directly on `lang/codegen/ir.mo`
+/// itself (`decls_parser` stopped at exactly 11 decls, right before
+/// `type LLVMModule`, matching `LLVMModule.mk`'s own mid-param-list
+/// doc comment) -- this was `test_typecheck_lang_main`'s actual root
+/// cause, not a signature-visibility or instance-dispatch bug.
 #[partial]
 def type_cons_more_groups (input : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
-	type_cons_try_next_group (tag "(" (skip_spaces input)) input name ctx params
+	type_cons_try_next_group (tag "(" (skip_docstrings (skip_spaces input))) input name ctx params
 
 #[partial]
 def type_cons_try_next_group (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
