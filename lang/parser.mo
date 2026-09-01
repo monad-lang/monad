@@ -114,19 +114,6 @@ def show_operator (op : Operator) : String := match op {
     Operator.operator s => s,
 }
 
-/// Find the last occurrence of a substring in a string, return its index or -1
-#[partial]
-def string_find_last (haystack : String) (needle : String) : I64 :=
-    if String.beq needle "" then -1
-    else if I64.gt (String.length needle) (String.length haystack) then -1
-    else string_find_last_loop haystack needle (String.length haystack - String.length needle)
-
-#[partial]
-def string_find_last_loop (haystack : String) (needle : String) (start_idx : I64) : I64 :=
-    if I64.lt start_idx 0 then -1
-    else if String.beq (String.slice haystack start_idx (start_idx + String.length needle)) needle then start_idx
-    else string_find_last_loop haystack needle (start_idx - 1)
-
 #[partial]
 def path_variable (input : String) : ParseResult TermV0 :=
         match dotted_identifier input {

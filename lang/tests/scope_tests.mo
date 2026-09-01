@@ -1,6 +1,6 @@
 use lang.types {
   Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
-  InstanceKey, LoadedModules, LocalScope, LocalVar, Module, ModulePath, NameRef,
+  InstanceKey, LocalScope, LocalVar, Module, ModulePath, ModuleRegistry, NameRef,
   Param, Scope, ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, Term,
   TypeConstraint, def_d, hole, id, inductive_d, many, mk, mp, name, nmp,
   param_many, type_,
@@ -307,7 +307,7 @@ def test_builtin_type_inductive : Bool :=
 def test_build_from_modules_empty : Bool :=
     let empty_id_list : List Identifier := List.empty in
     let empty_path : ModulePath := ModulePath.mp empty_id_list in
-    let empty_modules : LoadedModules := {
+    let empty_modules : ModuleRegistry := {
         modules := List.empty,
     } in
     let sd : ScopeData := build_scope_from_modules empty_path empty_modules in
@@ -337,7 +337,7 @@ def test_build_from_modules_one_def : Bool :=
         infixs := empty_infixes,
         instances := empty_instances,
     } in
-    let loaded : LoadedModules := {
+    let loaded : ModuleRegistry := {
         modules := List.cons m List.empty,
     } in
     let sd : ScopeData := build_scope_from_modules mod_path loaded in

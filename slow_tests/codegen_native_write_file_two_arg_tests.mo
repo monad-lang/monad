@@ -40,8 +40,7 @@
 /// dispatch gap -- out of scope here.
 use io {IO}
 use std.process {exec_cmd}
-use lang.types {LoadedModules}
-use lang.module {load_file_modules}
+use lang.module {LoadedModules, load_file_modules}
 use lang.codegen.ir {emit_module}
 use lang.codegen.emit {compile_loaded_modules_to_ir}
 

@@ -2,7 +2,7 @@ use io {IO}
 open IO {println, read_file, write_file}
 use std.process {exec_cmd}
 use std.bench {now, report}
-use lang.types {Decl, LoadedModules, Location, LocalScope, ModulePath}
+use lang.types {Decl, Location, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {build_debug_locs, compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
 use lang.module {ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}

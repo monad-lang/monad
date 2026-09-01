@@ -4,10 +4,9 @@ use lang.types {
   Scope, ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
 }
 use lang.module {
-  elaborate_loaded_modules, file_path_to_module_path, mk, parse_all_decls,
-  string_find_last_slash, typecheck_module_with_scope,
+  elaborate_loaded_modules, mk, typecheck_module_with_scope,
 }
-use lang.parser.core {fail, mk, success}
+use lang.parser.core {mk}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
 open IO {println}
@@ -22,28 +21,6 @@ def make_scope (path : ModulePath) (sd : ScopeData) : Scope := {
     scope := sd,
     parent := Option.none,
 }
-
-/// Convert a file path (e.g., "lang/module.mo") to a ModulePath
-/// by splitting on '/' and removing the .mo extension
-def file_path_to_module_path (file_path : String) : ModulePath := 
-    // Remove .mo extension if present
-    let without_ext := 
-        if String.ends_with file_path ".mo" then
-            String.slice file_path 0 (String.length file_path - 3)
-        else
-            file_path
-    in
-    // Use recursive helper to split by '/' and build ModulePath
-    file_path_to_module_path_helper without_ext List.empty
-
-/// Helper to recursively build ModulePath from path string
-/// Processes from right to left, building up the identifier list
-#[terminating]
-def file_path_to_module_path_helper (path_str : String) (acc : List Identifier) : ModulePath := 
-    let last_slash := string_find_last_slash path_str in
-    if I64.lt last_slash 0
-    then ModulePath.mp (List.cons (Identifier.id path_str) acc)
-    else file_path_to_module_path_helper (String.slice path_str 0 last_slash) (List.cons (Identifier.id (String.slice path_str (last_slash + 1) (String.length path_str))) acc)
 
 def is_hole (t : Term) : Bool := 
     match t {

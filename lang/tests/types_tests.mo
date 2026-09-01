@@ -1,6 +1,6 @@
 use lang.types {
   DoStmt, Identifier, InductConstructor, Inductive, Infix, InstanceKey,
-  LoadedModules, LocalVar, Module, ModulePath, Multiplicity, Operator, Param,
+  LocalVar, Module, ModulePath, ModuleRegistry, Multiplicity, Operator, Param,
   Scope, ScopeClassDef, ScopeConflict, ScopeData, ScopeDef, ScopeError,
   ScopeInstance, Similar, Term, desugar_do, hole, id, many, mk, mp,
   name_not_found, nid, nmp, nop, operator, type_,
@@ -88,8 +88,8 @@ instance Similar Module {
         }
 }
 
-instance Similar LoadedModules {
-    def similar (a : LoadedModules) (b : LoadedModules) : Bool :=
+instance Similar ModuleRegistry {
+    def similar (a : ModuleRegistry) (b : ModuleRegistry) : Bool :=
         match a {
             mk mods1 => match b {
                 mk mods2 => true
@@ -273,7 +273,7 @@ def test_module_construct : Bool :=
 
 #[test]
 def test_loaded_modules_construct : Bool :=
-    let lm : LoadedModules := {
+    let lm : ModuleRegistry := {
         modules := List.empty,
     } in
     match lm {

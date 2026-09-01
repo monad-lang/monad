@@ -1,7 +1,7 @@
 use lang.types {
   Class, ClassDef, Con, Decl, Def, DebugName, FieldPattern, FieldPatternEntry,
   Identifier, InductConstructor, Inductive,
-  Infix, Instance, InstanceKey, Literal, LoadedModules, LocalScope, LocalVar, MatchCase, Module,
+  Infix, Instance, InstanceKey, Literal, LocalScope, LocalVar, MatchCase, Module, ModuleRegistry,
   ModulePath, NameRef, Native, Operator, Param, Scope, ScopeClassDef, ScopeData, ScopeDef,
   ScopeError, ScopeInstance, Similar, Struct, StructField, StructLitField, Term, class_d,
   class_not_found, def_d, hole, id, inductive_d, inductive_not_found, infix_d,
@@ -955,7 +955,7 @@ def add_builtin_pred (sd : ScopeData) : ScopeData :=
 
 // --- build_scope_from_modules: build ScopeData from loaded modules ---
 
-def build_scope_from_modules (path : ModulePath) (loaded : LoadedModules) : ScopeData :=
+def build_scope_from_modules (path : ModulePath) (loaded : ModuleRegistry) : ScopeData :=
     match loaded {
         mk modules =>
             let empty : ScopeData := scope_data_empty in

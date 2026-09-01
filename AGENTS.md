@@ -1847,15 +1847,34 @@ Key patterns when writing self-hosted Monad code:
     targets that investigation's leading hypothesis #1 directly; re-run
     that repro once `check_deps` is available here to confirm how much of
     it this closes.
-18. **TODO (not fixed, flagged per direct request): the self-hosted
-    compiler's global name table is not module-scoped -- duplicate
-    top-level names across different `lang/*.mo` files silently collide**,
-    confirmed both structurally and via a grep sweep (2026-09-01).
-    Concrete confirmed instance: `lang/types.mo` and `lang/module.mo`
-    EACH declare their own, DIFFERENT `struct LoadedModules` (`{modules:
-    List Module}` vs. `{main_module: ModuleInfo, all_modules: List
-    ModuleInfo}`) -- TODO comments left at both definitions pointing at
-    each other. A broader sweep (`grep -oE '^def [A-Za-z_][A-Za-z0-9_.]*'`
+18. **The self-hosted compiler's global name table is not module-scoped --
+    duplicate top-level names across different `lang/*.mo` files silently
+    collide**, confirmed both structurally and via a grep sweep
+    (2026-09-01). The general problem is still open; the two concrete
+    instances named below are now FIXED (2026-09-01, Phase 1 of
+    `plans/bootstrapping/self-hosted-dedup-and-pipeline-cleanup.md`).
+    Concrete confirmed instance, **FIXED**: `lang/types.mo` and
+    `lang/module.mo` EACH declared their own, DIFFERENT `struct
+    LoadedModules` (`{modules: List Module}` vs. `{main_module:
+    ModuleInfo, all_modules: List ModuleInfo}`). `lang/types.mo`'s is now
+    `ModuleRegistry`; `lang/module.mo` keeps `LoadedModules` (it is the
+    one the real `load_file_modules` -> `elaborate_loaded_modules` ->
+    codegen pipeline uses). **The collision was load-bearing, not
+    harmless**: nine test files (`slow_tests/codegen_*`,
+    `parser_return_prefix_identifier_tests.mo`,
+    `lang/codegen/test/test_closure_capture_e2e.mo`) imported
+    `LoadedModules` from `lang.types` while using it as
+    `load_file_modules`' return type -- i.e. they only type-checked
+    because the collision silently resolved their import to the OTHER
+    file's struct. Renaming surfaced all nine; their imports were
+    retargeted to `lang.module`. Second instance, **FIXED**:
+    `string_find_last`/`string_find_last_loop` existed in both
+    `lang/parser.mo` and `lang/codegen/emit.mo`; the `parser.mo` copy had
+    ZERO callers and a real bug (passing an end index where
+    `String.slice`'s third argument is a LENGTH), so whichever won
+    registration order decided whether a correct or broken implementation
+    was live. The dead, buggy copy was deleted; `emit.mo`'s correct,
+    called version remains. A broader sweep (`grep -oE '^def [A-Za-z_][A-Za-z0-9_.]*'`
     across `lang/*.mo`, deduped) found **~862 other duplicated bare
     top-level def names** in the corpus (`sentinel` x6, `show_identifier`
     x4, `id_str`/`name_ref_to_string`/`module_path_last`/

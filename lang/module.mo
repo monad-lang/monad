@@ -369,15 +369,6 @@ def load_module_scope (base_dir : String) (mp : ModulePath) : IO (Option ScopeDa
 def load_module_scope_default (mp : ModulePath) : IO (Option ScopeData) :=
     load_module_scope "" mp
 
-/// Extract all transitive dependencies from a list of declarations
-/// with a base directory for resolving relative imports
-#[partial]
-def extract_all_dependencies (base_dir : String) (decl_list : List Decl) : IO (List ModulePath) :=
-    let direct_deps : List ModulePath := extract_use_decls decl_list in
-    let empty_mp_list : List ModulePath := List.empty in
-    extract_all_dependencies_go base_dir direct_deps empty_mp_list empty_mp_list
-
-
 /// Extract all transitive dependencies with cycle detection
 /// visiting: modules currently being visited (for cycle detection)
 /// visited: modules already fully processed
@@ -503,65 +494,6 @@ def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (v
             }
     }
 
-
-/// Load all dependencies for a module and merge their scopes
-/// base_dir is the directory to resolve the initial module from
-pub def load_module_with_dependencies (base_dir : String) (mp : ModulePath) : IO (Option Scope) {
-    let opt_decls : Option (List Decl) <- load_module_decls base_dir mp;
-    match opt_decls {
-        Option.some decl_list => do {
-            // Get the actual file path for this module to determine its directory
-            let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
-            let module_base_dir : String :=
-                match resolved_path_opt {
-                    Option.some fp => extract_directory fp,
-                    Option.none => base_dir
-                };
-            let all_deps : List ModulePath <- extract_all_dependencies module_base_dir decl_list;
-            let loaded_deps_result : Result String (List ScopeData) <- load_dependency_entries (load_scope_entry module_base_dir) dependency_not_found_msg all_deps List.empty;
-            match loaded_deps_result {
-                // An unresolvable dependency is a real error -- see
-                // `load_dependency_entries`'s own doc comment for why this
-                // no longer silently skips it the way this function used to.
-                Result.err e => do { return Option.none },
-                Result.ok loaded_deps => do {
-                    let merged_scope : ScopeData := merge_scope_data_list loaded_deps;
-                    let this_scope : ScopeData := build_scope_from_decls mp decl_list;
-                    let final_scope : ScopeData := merge_scope_data merged_scope this_scope;
-                    // Outer aliasing pass: `build_scope_from_decls`'s own alias pass
-                    // (inside `this_scope`) only sees the CURRENT file's own decl_list,
-                    // so it can't alias a name whose REAL entry lives in a
-                    // dependency (e.g. `open IO {println}` where `IO` is declared
-                    // in a different file) -- that dependency's entries only
-                    // become visible once merged into `final_scope`, right here.
-                    // Re-walking `decl_list`' own `use_d`/`open_d`s against the now-
-                    // fully-merged scope catches exactly that case; same-file
-                    // opens are already aliased (a no-op re-alias here, cheap).
-                    // Same `decls_have_aliasable_decls` no-op skip as
-                    // `build_scope_from_decls` (`lang/scope.mo`, Track B) --
-                    // correctness-preserving by construction (nothing to alias
-                    // means the skipped pass would have done nothing regardless),
-                    // and this is the exact call path `test_typecheck_lang_main`
-                    // exercises (a single flat walk from here, per AGENTS.md item
-                    // 10's own note).
-                    let aliased_scope : ScopeData :=
-                        if decls_have_aliasable_decls decl_list
-                        then alias_decls_in_scope decl_list final_scope
-                        else final_scope;
-                    let scope : Scope := {
-                        module_id := mp,
-                        scope := aliased_scope,
-                        parent := Option.none,
-                    };
-                    return Option.some scope
-                }
-            }
-        },
-        Option.none => do {
-            return Option.none
-        }
-    }
-}
 
 // --- Corpus-check caching: build prelude+init once, reuse across files ---
 //
@@ -1959,11 +1891,12 @@ instance Show ModuleInfo {
     def show (m : ModuleInfo) : String := show_module_info m
 }
 
-// TODO(name-collision cleanup): `lang/types.mo` ALSO declares a
-// `LoadedModules` -- a DIFFERENT struct. See that file's own TODO
-// comment on its `LoadedModules` for the full writeup (this codebase's
-// global name table isn't module-scoped; ~862 other duplicated
-// top-level names exist across `lang/*.mo`). Not fixed this session.
+// The module set a single `load_file_modules` call produced: the target
+// file's own module plus its whole transitive dependency closure.
+//
+// This is THE `LoadedModules` -- `lang/types.mo`'s former same-named
+// struct was renamed to `ModuleRegistry` (2026-09-01) to resolve the
+// name collision the two used to have; see that type's own comment.
 struct LoadedModules {
     main_module : ModuleInfo,
     all_modules : List ModuleInfo,
