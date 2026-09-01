@@ -203,10 +203,23 @@ def BTreeMap.delete_loop {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) 
 instance [BOrd K] Map BTreeMap {
   def empty : BTreeMap K V := BTreeMap.empty
 
+  // `with_node`'s callback params are explicitly typed (`left`/`right :
+  // BTreeMap K V`) -- needed so `lang.scope`'s syntactic dictionary-
+  // passing pass (`resolve_class_call_term`'s `Term.lam` case, the same
+  // one that already registers any OTHER typed lambda/let param) can
+  // see `left`/`right`'s own carrier when resolving the SELF-RECURSIVE
+  // `Map.insert key val left`/`right` calls below. Confirmed load-
+  // bearing via `examples/json.mo`'s `Map.insert` on a real `BTreeMap`
+  // compiling to a hard "no instance found" failure without this. Typed
+  // `fn` params inside a function-call argument position (this
+  // `with_node` call) needed a separate self-hosted-parser fix first
+  // (`lambda_dispatch`/`lambda_typed_params`, `lang/parser.mo`) --
+  // before that, this exact annotation broke self-hosted parsing
+  // outright.
   #[terminating]
   def insert (key: K) (val: V) (m: BTreeMap K V) : BTreeMap K V :=
     BTreeMap.with_node m
-      (fn k v left right h =>
+      (fn (k : K) (v : V) (left : BTreeMap K V) (right : BTreeMap K V) (h : I64) =>
         let insert_left : BTreeMap K V := Map.insert key val left in
         let insert_right : BTreeMap K V := Map.insert key val right in
         if BOrd.lt key k
@@ -228,10 +241,15 @@ instance [BOrd K] Map BTreeMap {
         else Option.some v
     }
 
+  // Same rationale as `insert`'s own doc comment above -- `left`/`right`
+  // need real declared types for the self-recursive `Map.delete` calls
+  // (both directly below and nested inside the `else` branch's own
+  // `with_node` calls, which still see this outer `right` in scope) to
+  // resolve their own `Map` instance dispatch.
   #[terminating]
   def delete (key: K) (m: BTreeMap K V) : BTreeMap K V :=
     BTreeMap.with_node m
-      (fn k v left right h =>
+      (fn (k : K) (v : V) (left : BTreeMap K V) (right : BTreeMap K V) (h : I64) =>
         let delete_left : BTreeMap K V := Map.delete key left in
         let delete_right : BTreeMap K V := Map.delete key right in
         if BOrd.lt key k
