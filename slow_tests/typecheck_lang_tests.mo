@@ -144,7 +144,7 @@ def test_typecheck_lang_main : IO Bool := typecheck_file "lang/main.mo"
 /// `reflect_type_info!`'s self-hosted evaluation
 /// (`lang/typecheck/meta_eval.mo`) works for `lang/cli.mo`'s own
 /// meta-def too, not just `std/derive.mo`'s four derives (see
-/// `test_typecheck_std_derive_tests`, `typecheck_std_tests.mo`).
+/// `known_broken_typecheck_std_derive_tests`, `typecheck_std_tests.mo`).
 #[test]
 def test_typecheck_lang_cli_derive_self_hosted : IO Bool := typecheck_file "lang/tests/cli_derive_self_hosted_tests.mo"
 

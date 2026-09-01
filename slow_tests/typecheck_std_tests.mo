@@ -84,7 +84,11 @@ def test_typecheck_std_map_tests : IO Bool := typecheck_file "std/map_tests.mo" 
 // class-method call (see its own doc comment) instead of silently, this
 // test correctly FAILS instead of falsely passing -- re-enable once the
 // derive macro's own `FromListLiteral.cons` gap is fixed, not before.
-def test_typecheck_std_derive_tests : IO Bool := typecheck_file "std/derive_tests.mo" "derive_tests"
+// Named `known_broken_...`, not `test_...` (a PR review flagged the
+// former `test_typecheck_std_derive_tests` name as misleading in a file
+// that's otherwise entirely real `#[test]`s): this def is intentionally
+// not part of the test suite, so its name shouldn't look like it is.
+def known_broken_typecheck_std_derive_tests : IO Bool := typecheck_file "std/derive_tests.mo" "derive_tests"
 
 #[test]
 def test_typecheck_std_sha256_tests : IO Bool := typecheck_file "std/sha256_tests.mo" "sha256_tests"
