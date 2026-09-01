@@ -1616,8 +1616,25 @@ def type_cons_try_bare (r : ParseResult Term) (orig : String) (name : Identifier
 /// single-name-only) implementation.
 #[partial]
 def type_cons_one_group_content (input : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
-	let cleaned : String := skip_spaces input in
-	type_cons_group_name (identifier cleaned) cleaned name ctx params
+	// Skip zero-or-more `#[attr]`s before the field itself (e.g. `lang/
+	// tests/cli_derive_self_hosted_tests.mo`'s `compile (path : String)
+	// (#[arg] verbose : Bool)` -- a per-FIELD attribute, distinct from
+	// `def_try_attrs`'s own per-DEF attribute list this constructor-field
+	// grammar never shared code with). Same "accept the syntax, discard
+	// the content" simplification already established for constructor
+	// implicit params (`type_cons_implicit`) -- nothing downstream reads
+	// a field's own attributes today. Without this, `identifier`/`type_
+	// expression` both failed outright on the leading `#`, failing the
+	// whole constructor, the whole enclosing `type`, and (via `decls_
+	// try`'s "any failure silently truncates the rest of the file"
+	// leniency) silently dropping every declaration after it.
+	let empty_attrs : List Attribute := List.empty in
+	match opt_attributes_go (skip_spaces input) empty_attrs {
+		success cleaned _ => type_cons_group_name (identifier cleaned) cleaned name ctx params,
+		fail _ =>
+			let cleaned : String := skip_spaces input in
+			type_cons_group_name (identifier cleaned) cleaned name ctx params,
+	}
 
 #[partial]
 def type_cons_group_name (r : ParseResult String) (orig : String) (name : Identifier) (ctx : List Identifier) (params : List Param) : ParseResult InductConstructor :=
@@ -2652,13 +2669,98 @@ def class_methods_single (input : String) (name : Identifier) (methods : List Cl
 #[partial]
 def class_method_name (r : ParseResult String) (name : Identifier) (methods : List ClassDef) (vis : Visibility) : ParseResult Decl :=
 	match r {
-		success rem mname => class_method_colon_or_sig rem (Identifier.id mname) name methods vis,
+		success rem mname => class_method_try_own_constraint rem (Identifier.id mname) name methods vis,
 		fail e => fail e
+	}
+
+/// Skip an optional `[Constraint1, Constraint2]`-shaped per-method
+/// constraint list right after a class method's own name and before its
+/// `{implicit}`/`(explicit)` params (e.g. `init/foldable.mo`'s `def
+/// traverse [Applicative F] {A B : Type} (f : A -> F B) (t : T A) : F (T
+/// B)`) -- same "accept the syntax, discard the content" simplification
+/// `class_method_try_implicit`'s own `{...}` skip just below already
+/// makes for implicit params: a class method's own ABSTRACT signature
+/// doesn't need to encode this constraint (a real instance's own method
+/// body independently supplies whatever dictionary it actually calls).
+/// Without this, `class_method_colon_or_sig` (previously entered
+/// directly from here) probed straight for `{`/`(`, so a method
+/// signature with a `[...]` constraint before its params failed
+/// outright, failing the whole method, the whole enclosing class, and
+/// (via `decls_try`'s own "any failure silently truncates the rest of
+/// the file" leniency) silently dropping every declaration after it --
+/// the second half of `init/foldable.mo`'s own silent-truncation bug
+/// this session's new `load_module_decls` EOF check surfaced (see
+/// `class_method_try_implicit`'s doc comment for the first half, the
+/// same method's missing `{A B : Type}` support -- both gaps sit on
+/// this exact one method signature, constraint first, implicit params
+/// second).
+#[partial]
+def class_method_try_own_constraint (input : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (vis : Visibility) : ParseResult Decl :=
+	class_method_try_own_constraint_bracket (tag "[" (skip_spaces input)) input mname name methods vis
+
+#[partial]
+def class_method_try_own_constraint_bracket (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_own_constraint_skip (take_while is_not_bracket rem) rem mname name methods vis,
+		fail _ => class_method_colon_or_sig orig mname name methods vis,
+	}
+
+#[partial]
+def class_method_own_constraint_skip (r : ParseResult String) (rem : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success after_bracket _ => class_method_own_constraint_close (tag "]" (skip_spaces after_bracket)) after_bracket mname name methods vis,
+		fail _ => class_method_colon_or_sig rem mname name methods vis,
+	}
+
+#[partial]
+def class_method_own_constraint_close (r : ParseResult String) (after_bracket : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_colon_or_sig rem mname name methods vis,
+		fail _ => class_method_colon_or_sig after_bracket mname name methods vis,
 	}
 
 #[partial]
 def class_method_colon_or_sig (input : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (vis : Visibility) : ParseResult Decl :=
-	class_method_params_try (tag "(" (skip_spaces input)) input mname name methods List.empty vis
+	class_method_try_implicit (tag "{" (skip_spaces input)) input mname name methods vis
+
+/// Skip an optional `{A B : Type}`-shaped implicit-param block before a
+/// class method's own explicit `(...)` params (e.g. `init/foldable.mo`'s
+/// `class [Foldable T] Traversable (T : Type -> Type) { def traverse {A
+/// B : Type} (f : A -> F B) (t : T A) : F (T B) }`) -- previously
+/// unsupported at all: `class_method_colon_or_sig` went straight to
+/// probing for `(`, so a method signature starting with `{` failed
+/// outright, failing the WHOLE enclosing class and (via `decls_try`'s
+/// own "any failure silently truncates the rest of the file" leniency)
+/// silently dropping every declaration after it -- confirmed live via
+/// `load_module_decls`'s new EOF check (this same session): `init/
+/// foldable.mo` was silently truncating right here, taking `Foldable`/
+/// `Semigroup`/`Monoid`'s own `List`/`String` instances down with it for
+/// the self-hosted checker. Mirrors `type_cons_implicit`'s identical
+/// "accept the syntax, discard the content" simplification for
+/// constructor implicit params (this section's own established
+/// precedent) -- a class method's own ABSTRACT signature doesn't need to
+/// encode these (an INSTANCE method's own real body independently
+/// declares its own generic context), so there's nothing useful to keep.
+#[partial]
+def class_method_try_implicit (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_implicit_skip (take_while is_not_close_curly rem) rem mname name methods vis,
+		fail _ => class_method_params_try (tag "(" (skip_spaces orig)) orig mname name methods List.empty vis,
+	}
+
+#[partial]
+def class_method_implicit_skip (r : ParseResult String) (rem : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success after_bracket _ => class_method_implicit_close (tag "}" (skip_spaces after_bracket)) after_bracket mname name methods vis,
+		fail _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty vis,
+	}
+
+#[partial]
+def class_method_implicit_close (r : ParseResult String) (after_bracket : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (vis : Visibility) : ParseResult Decl :=
+	match r {
+		success rem _ => class_method_params_try (tag "(" (skip_spaces rem)) rem mname name methods List.empty vis,
+		fail _ => class_method_params_try (tag "(" (skip_spaces after_bracket)) after_bracket mname name methods List.empty vis,
+	}
 
 #[partial]
 def class_method_params_try (r : ParseResult String) (orig : String) (mname : Identifier) (name : Identifier) (methods : List ClassDef) (param_types : List Term) (vis : Visibility) : ParseResult Decl :=
@@ -5483,10 +5585,138 @@ def lambda_parser (ctx: List Identifier) (input: String) : ParseResult Term :=
 #[partial]
 def lambda_kw (r: ParseResult String) (ctx: List Identifier) : ParseResult Term :=
     match r {
-        success rem _ =>
-            let empty_names : List Identifier := List.empty in
-            lambda_names (skip_spaces rem) ctx empty_names,
+        success rem _ => lambda_dispatch (skip_spaces rem) ctx,
         fail e => fail e
+    }
+
+/// `fn (a:T) (b:T) => body` (explicit per-param types) vs. `fn a b c =>
+/// body` (bare names, `Term.type_ 1` placeholder types, the pre-existing
+/// path below) -- dispatched on whether the token right after
+/// `fn`/`\`/`ꟛ` is `(` (can only start a typed param group; a bare
+/// identifier never does). The self-hosted parser previously had NO
+/// support for typed lambda params at all -- confirmed via a minimal
+/// standalone repro AND directly on `std/map_tests.mo`'s own already-
+/// existing `BTreeMap.fold (fn (acc: I64) (k: I64) (v: I64) => acc + v)
+/// 0 m`, which self-hosted-parsed to a hard failure (0 decls, total
+/// file truncation via `decls_parser`'s own "any decl failure means no
+/// more decls" convention) despite working fine through the Rust
+/// reference parser and being ordinary, unremarkable, pre-existing
+/// corpus code. Surfaced while trying to give `std/map.mo`'s `instance
+/// [BOrd K] Map BTreeMap`'s own `with_node` callback explicit param
+/// types so `lang.scope`'s dictionary-passing pass could see them.
+#[partial]
+def lambda_dispatch (input : String) (ctx : List Identifier) : ParseResult Term :=
+    match tag "(" input {
+        success _ _ => lambda_typed_params input ctx,
+        fail _ =>
+            let empty_names : List Identifier := List.empty in
+            lambda_names input ctx empty_names,
+    }
+
+/// One or more `(name : Type)` groups, then `=>` and the body -- `ctx`
+/// stays FIXED throughout param-group parsing (a param's own type isn't
+/// expected to reference an earlier param's value name; mirrors
+/// `type_cons_group_colon`'s identical "one ctx threaded through the
+/// whole group chain" convention for constructor param groups), and is
+/// only extended once, for the body itself (`lambda_typed_extend_ctx`,
+/// the typed sibling of `lambda_extend_ctx` just below).
+#[partial]
+def lambda_typed_params (input : String) (ctx : List Identifier) : ParseResult Term :=
+    lambda_typed_arrow (lambda_typed_params_loop input ctx List.empty) ctx
+
+#[partial]
+def lambda_typed_params_loop (input : String) (ctx : List Identifier) (acc : List Param) : ParseResult (List Param) :=
+    match lambda_typed_param_group (skip_spaces input) ctx {
+        success rem p => lambda_typed_params_loop rem ctx (List.cons p acc),
+        fail e =>
+            if List.is_empty acc
+            then fail e
+            else success input (list_reverse acc),
+    }
+
+#[partial]
+def lambda_typed_arrow (r : ParseResult (List Param)) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem params => lambda_typed_arrow_tag (tag "=>" (skip_spaces rem)) params ctx,
+        fail e => fail e,
+    }
+
+#[partial]
+def lambda_typed_arrow_tag (r : ParseResult String) (params : List Param) (ctx : List Identifier) : ParseResult Term :=
+    match r {
+        success rem _ => lambda_typed_body (expression (lambda_typed_extend_ctx params ctx) (skip_docstrings (skip_spaces rem))) params,
+        fail e => fail e,
+    }
+
+/// Typed sibling of `lambda_extend_ctx` -- same "declaration order in,
+/// last-declared ends up at `ctx`'s own head (innermost lambda, de
+/// Bruijn index 0)" convention, just reading each param's name off a
+/// `Param` instead of a bare `Identifier`.
+#[partial]
+def lambda_typed_extend_ctx (params : List Param) (ctx : List Identifier) : List Identifier :=
+    match params {
+        List.cons p rest => lambda_typed_extend_ctx rest (List.cons (lambda_param_name p) ctx),
+        List.empty => ctx,
+    }
+
+#[partial]
+def lambda_param_name (p : Param) : Identifier :=
+    match p { Param.mk name_ _typ _mult _default _attrs => name_ }
+
+#[partial]
+def lambda_typed_body (r : ParseResult Term) (params : List Param) : ParseResult Term :=
+    match r {
+        // `lam_params` (already defined below, used by `def`'s own body
+        // parsing) builds the SAME outermost-first `Term.lam` nesting
+        // `build_nested_lambdas` does for the untyped path, just with
+        // each param's REAL declared type instead of the `Term.type_ 1`
+        // placeholder.
+        success rem body => success rem (lam_params params body),
+        fail e => fail e,
+    }
+
+/// One `(name : Type)` lambda param group -- deliberately single-name
+/// only (unlike `def`'s own multi-name-per-group support,
+/// `type_cons_group_more_names`'s sibling): no corpus lambda uses
+/// `(a b : T)` sharing syntax, and keeping this minimal matches the
+/// narrow, targeted scope of this fix.
+#[partial]
+def lambda_typed_param_group (input : String) (ctx : List Identifier) : ParseResult Param :=
+    lambda_typed_param_open (tag "(" input) ctx
+
+#[partial]
+def lambda_typed_param_open (r : ParseResult String) (ctx : List Identifier) : ParseResult Param :=
+    match r {
+        success rem _ => lambda_typed_param_name (identifier (skip_spaces rem)) ctx,
+        fail e => fail e,
+    }
+
+#[partial]
+def lambda_typed_param_name (r : ParseResult String) (ctx : List Identifier) : ParseResult Param :=
+    match r {
+        success rem name => lambda_typed_param_colon (tag ":" (skip_spaces rem)) name ctx,
+        fail e => fail e,
+    }
+
+#[partial]
+def lambda_typed_param_colon (r : ParseResult String) (name : String) (ctx : List Identifier) : ParseResult Param :=
+    match r {
+        success rem _ => lambda_typed_param_type (type_expression ctx (skip_spaces rem)) name,
+        fail e => fail e,
+    }
+
+#[partial]
+def lambda_typed_param_type (r : ParseResult Term) (name : String) : ParseResult Param :=
+    match r {
+        success rem typ => lambda_typed_param_close (tag ")" (skip_spaces rem)) name typ,
+        fail e => fail e,
+    }
+
+#[partial]
+def lambda_typed_param_close (r : ParseResult String) (name : String) (typ : Term) : ParseResult Param :=
+    match r {
+        success rem _ => success rem (param_many (Identifier.id name) typ),
+        fail e => fail e,
     }
 
 #[partial]
