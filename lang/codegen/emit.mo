@@ -4656,6 +4656,90 @@ def attr_arg_as_string_first (args : List AttrArg) : Option String :=
             },
     }
 
+/// A bodyless `#[native X]` def compiles to a "return Unit" stub unless
+/// X is wired into the native backend somewhere -- a
+/// `native_runtime_fn_name` entry (the def compiles to a real wrapper
+/// calling a runtime `monad_*` function) or an inline `native_op_table`
+/// key (`lookup_native_any` on the def's own name, the same lookup every
+/// direct call site's own fast path uses). This exact gap has now cost
+/// two multi-hour runtime-debugging sessions: `String.length`'s "printed
+/// a garbage heap address instead of `3`" repro (see its own doc comment
+/// above) and the self-compiled v25 binary's SIGSEGV deep inside
+/// `List_reverse_append` -- `String_to_list` stubbed to Unit,
+/// `String.ends_with`/`String.reverse` then pattern-matching that Unit
+/// object and walking a wild pointer out of `monad_get_field`. In both
+/// cases the miscompile was silent and structural: `llc`'s IR verifier
+/// passes it, only running the binary finds it. Fail fast instead, over
+/// the REACHABLE decls (same reasoning as
+/// `validate_no_unresolved_class_calls`'s own doc comment: a bug in dead
+/// code the program never uses must not block a compile that works),
+/// with the native target and enclosing def named directly.
+///
+/// Deliberately NOT covered: a native that IS in `native_op_table` still
+/// has its stub def emitted (direct calls inline, but a VALUE-position
+/// reference -- `List.map I64.to_string ids`, a class-instance method
+/// binding -- calls the stub global). That narrower gap needs the def
+/// itself to compile a wrapper, not a validator; left alone here rather
+/// than false-positive-ing every program that only ever calls it directly.
+#[partial]
+def validate_no_unwired_natives (decl_list : List Decl) : Result String (List Decl) :=
+    let msgs := find_unwired_native_defs (extract_defs decl_list) in
+    match msgs {
+        List.empty => Result.ok decl_list,
+        List.cons _ _ => Result.err (join_unwired_native_msgs msgs ""),
+    }
+
+/// `"; "`-join `find_unwired_native_defs`'s messages -- unlike
+/// `validate_no_unresolved_class_calls` (first message only), a broken
+/// compile here usually has a whole FAMILY of missing natives at once
+/// (the self-hosted compiler's own closure references ~20), and naming
+/// them one per compile would cost one full ~8-minute self-compile run
+/// each. The complete list is the point.
+#[partial]
+def join_unwired_native_msgs (msgs : List String) (acc : String) : String :=
+    match msgs {
+        List.empty => acc,
+        List.cons m rest =>
+            if String.beq acc ""
+            then join_unwired_native_msgs rest m
+            else join_unwired_native_msgs rest (String.concat acc (String.concat "; " m)),
+    }
+
+/// One error message per reachable bodyless `#[native X]` def whose X is
+/// wired nowhere -- see `validate_no_unwired_natives`'s own doc comment
+/// for the fail-fast contract. Only BODYLESS natives are checked: a
+/// real-bodied def compiles a real function whatever its attributes.
+#[partial]
+def find_unwired_native_defs (defs : List Def) : List String :=
+    match defs {
+        List.empty => List.empty,
+        List.cons d rest =>
+            let rest_msgs := find_unwired_native_defs rest in
+            match d {
+                Def.mk name _typ term_ _constraints attrs _vis =>
+                    match strip_db_lams term_ {
+                        Term.hole =>
+                            match native_attr_target_name attrs {
+                                Option.some target =>
+                                    match native_runtime_fn_name attrs {
+                                        Option.some _ => rest_msgs,
+                                        Option.none =>
+                                            match lookup_native_any (module_path_to_str name) {
+                                                Option.some _ => rest_msgs,
+                                                Option.none =>
+                                                    let def_name := module_path_to_str name in
+                                                    let head := String.concat "native `" (String.concat target "`") in
+                                                    let mid := String.concat " (needed by def `" (String.concat def_name "`)") in
+                                                    List.cons (String.concat head (String.concat mid " is not wired into the native backend -- it would silently compile to a 'return Unit' stub; add a monad_* runtime function + native_runtime_fn_name entry, or an inline native_op_table key")) rest_msgs,
+                                            },
+                                    },
+                                Option.none => rest_msgs,
+                            },
+                        _ => rest_msgs,
+                    },
+            },
+    }
+
 /// A thin wrapper def: calls the native's own runtime function with
 /// every one of `params` (positionally, `%p0`/`%p1`/... -- same naming
 /// `build_llvm_params_db` already gives the function's own parameters),
@@ -5843,18 +5927,31 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
             if verbose then println ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")") else return unit;
             return (Result.err e)
         },
-        Result.ok _ => do {
-            // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
-            let t_llvm := Bench.now;
-            let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
-            if verbose then do {
-                let _ := Bench.report "compile_db_module" (I64.sub Bench.now t_llvm);
-                let _ := Bench.report "compile_loaded_modules_to_ir total" (I64.sub Bench.now total_start);
-                return unit
-            } else return unit;
+        Result.ok _ =>
+            // Same fail-fast reasoning as `validate_no_unresolved_class_calls`
+            // just above, for the silent-"return Unit"-stub bug family --
+            // a reachable bodyless `#[native X]` def wired nowhere would
+            // otherwise compile to a stub only discovered as a runtime
+            // SIGSEGV in the resulting binary (`String_to_list`'s v25
+            // crash; see `validate_no_unwired_natives`'s own doc comment).
+            match validate_no_unwired_natives reachable_decls {
+                Result.err e => do {
+                    if verbose then println ("FAILED at stage: validate_no_unwired_natives (" ++ e ++ ")") else return unit;
+                    return (Result.err e)
+                },
+                Result.ok _ => do {
+                    // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
+                    let t_llvm := Bench.now;
+                    let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
+                    if verbose then do {
+                        let _ := Bench.report "compile_db_module" (I64.sub Bench.now t_llvm);
+                        let _ := Bench.report "compile_loaded_modules_to_ir total" (I64.sub Bench.now total_start);
+                        return unit
+                    } else return unit;
 
-            return (Result.ok mod_)
-        },
+                    return (Result.ok mod_)
+                },
+            },
     }
 }
 

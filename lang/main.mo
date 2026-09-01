@@ -88,17 +88,22 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
     }
 }
 
-/// `compile_loaded_modules_to_ir` can now fail cleanly (`resolve_class_
-/// calls_decls` found a `ClassName.method` call with no available
-/// instance -- see its own doc comment in `lang.codegen.emit`) instead of
-/// only ever succeeding -- report that failure the same way a typecheck
-/// failure already is (`FAILED at stage: ...`) rather than proceeding to
-/// `emit_module`/`link_ir` with no module to link.
+/// `compile_loaded_modules_to_ir` can now fail cleanly -- either
+/// `resolve_class_calls_decls` found a `ClassName.method` call with no
+/// available instance, or `validate_no_unwired_natives` found a reachable
+/// bodyless `#[native X]` def wired nowhere (both: see their own doc
+/// comments in `lang.codegen.emit`) -- instead of only ever succeeding.
+/// Report that failure the same way a typecheck failure already is
+/// (`FAILED at stage: ...`) rather than proceeding to
+/// `emit_module`/`link_ir` with no module to link. The error message
+/// itself already names the exact def at fault, so a generic stage label
+/// is enough here (the `--verbose` compile pipeline prints the precise
+/// stage names too).
 #[partial]
 def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 :=
     match mod_result {
         Result.err e => do {
-            println ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")");
+            println ("FAILED at stage: compile_loaded_modules_to_ir (" ++ e ++ ")");
             return 1
         },
         Result.ok mod_ => do {
