@@ -1900,6 +1900,70 @@ Key patterns when writing self-hosted Monad code:
     papering over real bugs by "fixing" the symptom (the collision) while
     leaving whichever def was silently losing the fight to become
     unreachable dead code instead of properly wired in.
+19. **Item 18's audit, done -- every DIVERGENT collision found and fixed
+    (2026-09-02).** A corpus-wide scan for the specific shape item 18
+    warns about (a file that both `use`s a name AND declares its own)
+    found 8 sites, and the split item 18 predicted turned out to be
+    exactly the right one to make:
+    - **Divergent (the two definitions produce DIFFERENT results, so
+      which one won was a live correctness hazard) -- all four fixed:**
+      `LoadedModules` (`lang/types.mo` `{modules}` vs `lang/module.mo`
+      `{main_module, all_modules}`); `join_identifiers` (types joins with
+      `.`, emit with `__` -- this one decided emitted LLVM SYMBOL NAMES,
+      and is the pair from the 2026-08-31 self-compile hang; emit's is now
+      `mangle_identifiers`); `show_identifier` (types returns text
+      verbatim, emit strips `'` quotes, across 18 codegen call sites;
+      emit's is now `symbol_identifier`); and `string_find_last` (the
+      `lang/parser.mo` copy passed an END INDEX where `String.slice`'s
+      third argument is a LENGTH -- it had zero callers, so it was
+      deleted rather than repaired).
+    - **Identical (harmless) -- deduped:** `show_identifier`/
+      `show_operator` in `lang/parser.mo`, `list_reverse`/`list_rev_loop`
+      in `lang/typecheck/infer.mo`, `ident_start` in
+      `lang/parser/identifier.mo`.
+    - **NOT deduped, deliberately:** `list_append`/`list_append_go`
+      (`lang/module.mo` vs `lang/scope.mo`) LOOK like an obvious
+      duplicate but are not interchangeable -- scope's declares an
+      explicit `{A : Type}` binder, module's relies on implicit
+      generalization, and the four call sites are on `merge_scope_data`'s
+      measured hot path. Neither may fall back to prelude `List.append`
+      either: both add the `ys`-empty short-circuit item 12 measured as
+      load-bearing. This is the concrete example of item 18's own warning
+      that a blind rename/dedup sweep can destroy a measured optimization.
+    Item 18's ~862-name figure counts every duplicated bare name; the 8
+    above are specifically the ones where a single file both imports and
+    redefines, which is the subset where the hazard is live rather than
+    theoretical. The general fix (module-scoping the name table) is still
+    open.
+20. **Deleting a def can silently truncate the self-hosted parse -- and
+    `check` will not tell you (2026-09-02).** Removing a def while
+    leaving its `#[partial]` attribute behind produces `#[partial]` ->
+    `///` doc comment -> `#[partial]` -> `def`, and `decls_parser`
+    (`lang/parser.mo`) stops dead there: a real instance dropped 13,719
+    bytes of `lang/toml.mo` -- roughly half the file -- while
+    `monad-rs check` reported **0 errors and 0 warnings**, because the
+    Rust-native checker parses independently of the self-hosted parser.
+    One attribute followed by a doc comment still parses; only TWO
+    straddling a doc comment truncate. Only
+    `slow_tests/parser_file_tests.mo`'s `file_fully_parses` tests catch
+    this class. **After any def deletion, grep the touched files for an
+    attribute immediately followed by `///`** (`#\[[a-z_]+\]\n(?=///)`)
+    and run `parser_file_tests.mo`. This is the same "attribute
+    artifacts" hazard the Rebase Resolution Workflow section already
+    warns about, but the consequence (silent parse truncation, invisible
+    to `check`) was not previously documented.
+21. **`init/` and parts of `std/` are EMBEDDED IN THE BINARY**
+    (`include_str!`, `core/src/term/module.rs`, `embed-stdlib` feature):
+    `prelude`, `id`, `io`, `number`, `math`, `string`, `list`, `init/
+    lib.mo`, plus `std/path.mo`, `std/io.mo`, `std/process.mo`,
+    `std/lib.mo`. Edits to any of those are INVISIBLE until
+    `cargo build --release`, and the failure mode is a silent
+    `unbound variable` at every call site -- not a parse error, and not
+    an error naming the file you just edited. Other `std/` files
+    (`std/list.mo`, `std/base.mo`, ...) load from disk normally and need
+    no rebuild. Also note `monad-rs check <file>` SKIPS `init/` entirely
+    ("0 file(s) checked"), so it cannot be used to validate an `init/`
+    edit -- run a `#[test]` instead.
 
 ## Committing Changes
 
