@@ -12,127 +12,43 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v5
-
-      - uses: cachix/install-nix-action@v31
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: cachix/cachix-action@v17
-        with:
-          name: devenv
-
-      - name: Install devenv
-        run: nix profile add nixpkgs#devenv
-
-      - name: Cache cargo/target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
 
       # Populates the shared cargo/target cache once so the three jobs
       # below (which all restore the SAME key) hit a warm cache instead
       # of each independently doing a full `cargo build` from cold in
       # parallel. `--workspace` builds every crate (including monad-wasm)
       # so nothing downstream has to compile a crate this job skipped.
+      # No actions/cache needed — target/ and ~/.cargo persist on the
+      # self-hosted runner's filesystem between runs.
       - name: Build release binary
-        run: cargo build --release --workspace
+        run: nix develop --no-pure-eval --accept-flake-config -c cargo build --release --workspace
 
   pre-commit-checks:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v5
 
-      - uses: cachix/install-nix-action@v31
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: cachix/cachix-action@v17
-        with:
-          name: devenv
-
-      - name: Install devenv
-        run: nix profile add nixpkgs#devenv
-
-      - name: Cache cargo/target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
       - name: Run pre commit checks
-        run: devenv tasks run devenv:git-hooks:run
+        run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run devenv:git-hooks
 
   test:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v5
 
-      - uses: cachix/install-nix-action@v31
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: cachix/cachix-action@v17
-        with:
-          name: devenv
-
-      - name: Install devenv
-        run: nix profile add nixpkgs#devenv
-
-      - name: Cache cargo/target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
       - name: Run tests
-        run: devenv tasks run monad:test
+        run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run monad:test
 
   bootstrap:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v5
 
-      - uses: cachix/install-nix-action@v31
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: cachix/cachix-action@v17
-        with:
-          name: devenv
-
-      - name: Install devenv
-        run: nix profile add nixpkgs#devenv
-
-      - name: Cache cargo/target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
       - name: Bootstap compiler
-        run: devenv tasks run monad:bootstrap-compile
+        run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run monad:bootstrap-compile
