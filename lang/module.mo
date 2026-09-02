@@ -541,7 +541,14 @@ def build_prelude_init_base : IO PreludeInitBase := do {
     let loaded_deps_result : Result String (List ScopeData) <- load_dependency_entries (load_scope_entry "") dependency_not_found_msg all_deps List.empty;
     match loaded_deps_result {
         Result.ok loaded_deps => do {
-            return { scope_data := merge_scope_data_list loaded_deps, covered := all_deps }
+            // Annotated local first: a bare struct literal in `return`'s
+            // argument position gets no expected type through the
+            // self-hosted checker (constructor signatures are
+            // `Term.hole`), so it can't resolve its own struct -- see
+            // AGENTS.md's struct-literal note and `validate_no_
+            // undesugared_struct_lits` (lang/codegen/emit.mo).
+            let base : PreludeInitBase := { scope_data := merge_scope_data_list loaded_deps, covered := all_deps };
+            return base
         },
         // Prelude/init are bundled with the compiler itself, not
         // user-supplied -- this should never happen in practice. Rather
@@ -551,7 +558,8 @@ def build_prelude_init_base : IO PreludeInitBase := do {
         // missing dependency, which is at least visible, not silent.
         Result.err e => do {
             println ("fatal: failed to load prelude/init: " ++ e);
-            return { scope_data := scope_data_empty, covered := List.empty }
+            let empty_base : PreludeInitBase := { scope_data := scope_data_empty, covered := List.empty };
+            return empty_base
         }
     }
 }
@@ -681,7 +689,10 @@ struct ScopesAndCache {
 def load_dependency_scopes_cached (base_dir : String) (deps : List ModulePath) (acc : List ScopeData) (cache : ModuleScopeCache) : IO ScopesAndCache :=
     match deps {
         List.empty => do {
-            return { scopes := acc, cache := cache }
+            // Annotated local first -- see `build_prelude_init_base`'s
+            // own note above.
+            let result : ScopesAndCache := { scopes := acc, cache := cache };
+            return result
         },
         List.cons head tail => do {
             match module_scope_cache_lookup head cache {
@@ -791,12 +802,16 @@ def load_module_with_dependencies_and_prelude_cached (base : PreludeInitBase) (c
                                 scope := aliased_scope,
                                 parent := Option.none,
                             };
-                            return { scope := Option.some scope, cache := updated_cache }
+                            // Annotated locals first -- see
+                            // `build_prelude_init_base`'s own note above.
+                            let result : ScopeAndCache := { scope := Option.some scope, cache := updated_cache };
+                            return result
                         }
                     }
                 },
                 Option.none => do {
-                    return { scope := Option.none, cache := cache }
+                    let miss : ScopeAndCache := { scope := Option.none, cache := cache };
+                    return miss
                 }
             }
         }
@@ -984,7 +999,11 @@ def list_append_go (xs : List A) (ys : List A) : List A :=
 /// `slow_tests/*.mo`'s own corpus-checking `#[test]`s.
 #[partial]
 pub def typecheck_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : IO Bool := do {
-    let diags <- check_module_with_scope scope decl_list locals Option.none false;
+    // Annotated bind: without the type, the self-hosted checker can't
+    // tell this match's `empty`/`cons` from `BTreeMap`'s own same-named
+    // constructors ("ambiguous constructor `empty`") -- an IO bind's
+    // result type isn't recoverable in pure infer mode.
+    let diags : List String <- check_module_with_scope scope decl_list locals Option.none false;
     match diags {
         List.empty => do { return true },
         List.cons _ _ => do {
@@ -1593,7 +1612,12 @@ def check_file_cached (base : PreludeInitBase) (cache : ModuleInfoCache) (file_p
         match ec.elaborated {
             Result.ok em => do {
                 let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-                let diags <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
+                // Annotated bind: an IO bind's result type isn't
+                // recoverable in pure infer mode, so without it the
+                // self-hosted checker can't tell this list's
+                // `empty`/`cons` from `BTreeMap`'s same-named
+                // constructors ("ambiguous constructor `empty`").
+                let diags : List String <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
                 // Each level bound with an explicit annotation rather
                 // than nested inline -- see `load_module_with_info`'s
                 // own note. `out_cache`, not `cache`: the walk extended
@@ -2773,7 +2797,7 @@ def test_dict_resolution_d4_concrete_instance_resolves : IO Bool := do {
         "type Dog { woof }\n" ++
         "instance Speak Dog { def say (a : Dog) : String := \"woof\" }\n" ++
         "def greet (d : Dog) : String := Speak.say d";
-    let diags <- check_synthetic_source src;
+    let diags : List String <- check_synthetic_source src;
     return (match diags { List.empty => true, List.cons _ _ => false })
 }
 
@@ -2794,7 +2818,7 @@ def test_dict_resolution_d5_forwarding_resolves : IO Bool := do {
         "type Dog { woof }\n" ++
         "instance Speak Dog { def say (a : Dog) : String := \"woof\" }\n" ++
         "def speak_twice [Speak A] (a : A) : String := Speak.say a";
-    let diags <- check_synthetic_source src;
+    let diags : List String <- check_synthetic_source src;
     return (match diags { List.empty => true, List.cons _ _ => false })
 }
 
@@ -2937,12 +2961,14 @@ def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
 /// actually testing.
 #[test]
 def test_elaborate_loaded_modules_resolves_file_with_no_use_decls : IO Bool := do {
-    let result <- elaborate_loaded_modules "std/test.mo" false;
+    // Annotated bind -- `em.scope`/`em.target_decls` below desugar to
+    // `{ .. }` field patterns, which need the matched value's own type.
+    let result : Result String ElaboratedModules <- elaborate_loaded_modules "std/test.mo" false;
     match result {
         Result.err _ => return false,
         Result.ok em => do {
             let locals : LocalScope := { vars := List.empty, parent := Option.none };
-            let diags <- check_module_with_scope em.scope em.target_decls locals Option.none false;
+            let diags : List String <- check_module_with_scope em.scope em.target_decls locals Option.none false;
             return (match diags {
                 List.empty => true,
                 List.cons _ _ => false,
