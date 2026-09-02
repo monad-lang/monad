@@ -1,3 +1,5 @@
+use std.list {intercalate}
+
 type LLVMType {
     void,
     i1_,
@@ -167,32 +169,12 @@ def show_llvm_type_fn (params : List LLVMType) (ret : LLVMType) : String :=
     String.concat (show_llvm_type ret) (String.concat " (" (String.concat params_str ")"))
 
 #[partial]
-def join_types (types : List LLVMType) : String := match types {
-    List.empty => "",
-    List.cons t rest => join_types_rest t rest,
-}
+def join_types (types : List LLVMType) : String :=
+    List.intercalate ", " (List.map show_llvm_type types)
 
 #[partial]
-def join_types_rest (t : LLVMType) (rest : List LLVMType) : String :=
-    let shown := show_llvm_type t in
-    match rest {
-        List.empty => shown,
-        List.cons x y => String.concat shown (String.concat ", " (join_types rest)),
-    }
-
-#[partial]
-def show_args_typed (args : List LLVMValue) : String := match args {
-    List.empty => "",
-    List.cons a rest => show_args_typed_rest a rest,
-}
-
-#[partial]
-def show_args_typed_rest (a : LLVMValue) (rest : List LLVMValue) : String :=
-    let shown := show_llvm_value_typed a in
-    match rest {
-        List.empty => shown,
-        List.cons x y => String.concat shown (String.concat ", " (show_args_typed rest)),
-    }
+def show_args_typed (args : List LLVMValue) : String :=
+    List.intercalate ", " (List.map show_llvm_value_typed args)
 
 #[partial]
 def show_llvm_value (val : LLVMValue) : String := match val {
@@ -330,18 +312,8 @@ def show_phi (pairs : List PhiPair) : String :=
     String.concat "phi " (String.concat (show_llvm_type (phi_pairs_type pairs)) (String.concat " " inner))
 
 #[partial]
-def join_phi_pairs (pairs : List PhiPair) : String := match pairs {
-    List.empty => "",
-    List.cons p rest => join_phi_rest p rest,
-}
-
-#[partial]
-def join_phi_rest (p : PhiPair) (rest : List PhiPair) : String :=
-    let shown := show_one_phi p in
-    match rest {
-        List.empty => shown,
-        List.cons x y => String.concat shown (String.concat ", " (join_phi_pairs rest)),
-    }
+def join_phi_pairs (pairs : List PhiPair) : String :=
+    List.intercalate ", " (List.map show_one_phi pairs)
 
 #[partial]
 def show_one_phi (p : PhiPair) : String := match p {
@@ -480,18 +452,8 @@ def find_dbg_refs (name : String) (refs : List (Pair String DbgFuncRefs)) : DbgF
 }
 
 #[partial]
-def join_params (params : List ParamPair) : String := match params {
-    List.empty => "",
-    List.cons p rest => join_params_rest p rest,
-}
-
-#[partial]
-def join_params_rest (p : ParamPair) (rest : List ParamPair) : String :=
-    let shown := show_one_param p in
-    match rest {
-        List.empty => shown,
-        List.cons x y => String.concat shown (String.concat ", " (join_params rest)),
-    }
+def join_params (params : List ParamPair) : String :=
+    List.intercalate ", " (List.map show_one_param params)
 
 #[partial]
 def show_one_param (p : ParamPair) : String := match p {
@@ -611,17 +573,8 @@ def show_llvm_decl (d : LLVMDeclaration) : String := match d {
 }
 
 #[partial]
-def join_strs (xs : List String) : String := match xs {
-    List.empty => "",
-    List.cons x rest => join_strs_rest x rest,
-}
-
-#[partial]
-def join_strs_rest (x : String) (rest : List String) : String :=
-    match rest {
-        List.empty => x,
-        List.cons y z => String.concat x (String.concat ", " (join_strs rest)),
-    }
+def join_strs (xs : List String) : String :=
+    List.intercalate ", " xs
 
 #[partial]
 def emit_functions (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String := match fs {

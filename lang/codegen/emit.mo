@@ -9,11 +9,12 @@ use std.bench {now, report}
 // always-on mechanism that lets any top-level type/def resolve without
 // being explicitly `use`d.
 use std.map {}
+use std.list {intercalate}
 use lang.types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
   LoadedModules, LocalScope, Location, MatchCase, ModulePath, Native, Operator,
   Param, Scope, ScopeData, StructLitField, Term,
-  app, con, ctx, def_d, forall, hole, id, if_, inductive_d, join_identifiers, lam,
+  app, con, ctx, def_d, forall, hole, id, if_, inductive_d, lam,
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
   param_many, pi, show_identifier, str, type_, unnamed, var,
 }
@@ -3596,21 +3597,22 @@ def cons_block (b : LLVMBasicBlock) (bs : List LLVMBasicBlock) : List LLVMBasicB
 
 #[partial]
 def module_path_to_str (mp : ModulePath) : String := match mp {
-    ModulePath.mp ids => join_identifiers ids,
+    ModulePath.mp ids => mangle_identifiers ids,
 }
 
+/// Join a module path's segments with `__` for use in an LLVM symbol
+/// name (`Foo.bar` -> `Foo__bar`).
+///
+/// Named `mangle_identifiers`, NOT `join_identifiers`: `lang/types.mo`
+/// exports its own `join_identifiers` that joins with `.` instead, and
+/// this file IMPORTS that one (see the `use lang.types` list above).
+/// Since the global name table is not module-scoped, the two collided
+/// and which one `module_path_to_str` actually called was decided by
+/// registration order -- a real hazard, since the two produce different
+/// symbol names. See AGENTS.md item 18.
 #[partial]
-def join_identifiers (ids : List Identifier) : String := match ids {
-    List.empty => "",
-    List.cons hd rest => join_ids_rest hd rest,
-}
-
-#[partial]
-def join_ids_rest (hd : Identifier) (rest : List Identifier) : String :=
-    match rest {
-        List.empty => show_identifier hd,
-        List.cons x y => String.concat (show_identifier hd) (String.concat "__" (join_identifiers rest)),
-    }
+def mangle_identifiers (ids : List Identifier) : String :=
+    List.intercalate "__" (List.map show_identifier ids)
 
 struct DefResult {
     ctx : CodegenCtx,

@@ -12,6 +12,7 @@ use std.show {Show}
 // explicitly hits a separate, pre-existing latent instance/dictionary-
 // resolution bug (`std/map_tests.mo`'s own documented workaround).
 use std.map {}
+use std.list {intercalate}
 
 type Identifier {
     id String
@@ -133,20 +134,11 @@ def show_module_path (mp : ModulePath) : String := match mp {
     ModulePath.mp ids => join_identifiers ids,
 }
 
-def join_identifiers (ids : List Identifier) : String := match ids {
-    List.empty => "",
-    List.cons hd rest => join_id_rest hd rest,
-}
-
-def join_id_rest (hd : Identifier) (rest : List Identifier) : String :=
-    match rest {
-        List.empty => show_identifier hd,
-        List.cons x y =>
-            let dot := String.concat (show_identifier hd) "." in
-            let rest_str := join_id_rest x y in
-            String.concat dot rest_str,
-        _ => show_identifier hd
-    }
+/// Join a module path's segments with `.` (`[Foo, bar]` -> `Foo.bar`).
+/// For the LLVM symbol-name form (`Foo__bar`) see
+/// `lang/codegen/emit.mo`'s `mangle_identifiers`.
+def join_identifiers (ids : List Identifier) : String :=
+    List.intercalate "." (List.map show_identifier ids)
 
 
 instance Show ModulePath {
