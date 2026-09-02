@@ -753,18 +753,6 @@ def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scr
             ok ({ body_typ := acc_typ, cases := reversed }),
     }
 
-/// List reverse helper.
-#[terminating]
-def list_reverse {A : Type} (xs : List A) : List A :=
-    list_rev_loop xs List.empty
-
-#[terminating]
-def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
-    match xs {
-        List.cons x rest => list_rev_loop rest (List.cons x acc),
-        List.empty => acc,
-    }
-
 /// Type check a single match case arm. A `field_pattern: Option.some`
 /// case (`{ x, y } => ...`/`ConsName { x, y } => ...`,
 /// `plans/implementations/struct-field-destructuring.md`'s Phase 6)

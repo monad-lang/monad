@@ -3,16 +3,10 @@
 
 use lang.types {custom}
 use lang.parser.core {ParseResult, custom, fail, is_empty, success}
-use lang.parser.char_preds {ident_start, is_alpha, is_ident_char, is_keyword}
+use lang.parser.char_preds {ident_start, is_ident_char, is_keyword}
 use lang.parser.combinators {take_while}
 
 open ParseResult {fail, success}
-
-/// Check if a character can start an identifier (letter or underscore)
-#[partial]
-def ident_start (c : String) : Bool :=
-	if is_alpha c then true
-	else String.beq "_" c
 
 /// Parse an identifier from the input string
 /// Returns the parsed identifier string and remaining input
