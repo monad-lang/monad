@@ -448,7 +448,7 @@ def run_check (files : List String) (verbose : Bool) : IO I64 := do {
 #[partial]
 def run_test (files : List String) (out_dir : String) (verbose : Bool) : IO I64 := do {
     let expanded : List String <- expand_check_paths files;
-    run_test_loop expanded out_dir 0 0 0 0 verbose
+    run_test_loop { files := expanded, out_dir := out_dir, bin_idx := 0, passed := 0, failed := 0, skipped := 0, verbose := verbose }
 }
 
 /// `tested`/`passed`/`failed`/`skipped` accumulate across all files.
@@ -476,7 +476,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
             match elaborated_result {
                 Result.err e => do {
                     println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                    run_test_loop rest out_dir bin_idx passed failed (skipped + 1) verbose
+                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose }
                 },
                 Result.ok em =>
                     do {
@@ -486,7 +486,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
                                 List.cons _ _ => do {
                                     print_diagnostics diags;
                                     println ("SKIP  " ++ f ++ " (does not typecheck)");
-                                    run_test_loop rest out_dir bin_idx passed failed (skipped + 1) verbose
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose }
                                 },
                                 List.empty => run_test_loop_codegen { f := f, rest := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped, verbose := verbose, preloaded := Option.some em.loaded },
                             }
@@ -511,14 +511,14 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
             match res {
                 err e => do {
                     println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                    run_test_loop rest out_dir bin_idx passed failed (skipped + 1) verbose
+                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose }
                 },
                 ok loaded => do {
                     let ir_res : Result String LLVMModule <- compile_loaded_modules_to_test_ir loaded;
                     match ir_res {
                         err e => do {
                             println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                            run_test_loop rest out_dir bin_idx passed failed (skipped + 1) verbose
+                            run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose }
                         },
                         ok llvm_mod => do {
                             let ir_text := emit_module llvm_mod;
@@ -530,16 +530,16 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                             let link_result <- link_ir ir_text (Path.path out_dir) (Path.path bin_name) verbose;
                             if not (link_result == 0) then do {
                                 println ("FAIL  " ++ f ++ " (compilation failed)");
-                                run_test_loop rest out_dir (bin_idx + 1) passed (failed + 1) skipped verbose
+                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed, failed := failed + 1, skipped := skipped, verbose := verbose }
                             } else do {
                                 let bin_path := out_dir ++ "/" ++ bin_name;
                                 let exit_code <- exec_cmd bin_path [];
                                 if exit_code == 0 then do {
                                     println ("ok    " ++ f);
-                                    run_test_loop rest out_dir (bin_idx + 1) (passed + 1) failed skipped verbose
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed + 1, failed := failed, skipped := skipped, verbose := verbose }
                                 } else do {
                                     println ("FAIL  " ++ f);
-                                    run_test_loop rest out_dir (bin_idx + 1) passed (failed + 1) skipped verbose
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed, failed := failed + 1, skipped := skipped, verbose := verbose }
                                 }
                             }
                         }
