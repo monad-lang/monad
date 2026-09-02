@@ -2020,5 +2020,3 @@ def test_compile_io_bind : Bool :=
     let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ List.empty) in
     let text := lang.codegen.ir.emit_module mod_ in
     check_contains text "io_bind_test"
-
-def main : I64 := 42

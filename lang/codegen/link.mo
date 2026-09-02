@@ -1,5 +1,4 @@
 use lang.types {Def, app, i64, id, lam, lit, mk, mp, named, num, type_, var}
-use io {IO}
 use lang.codegen.ir {emit_module, mk}
 use lang.codegen.emit {check_contains, compile_db_decls_ir, mk}
 
@@ -34,8 +33,3 @@ def test_link_compile_defs_to_ir : Bool :=
     let def_ := Def.mk (ModulePath.mp (List.cons id_val List.empty)) (Term.type_ 1) term_ List.empty List.empty Visibility.package_private in
     let text := compile_defs_to_ir (List.cons def_ List.empty) in
     check_contains text "add i64"
-
-def main : IO I64 {
-    IO.println "LLVM codegen linker module loaded.";
-    return 0
-}

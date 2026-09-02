@@ -2,10 +2,12 @@
 /// Structurally independent from lang/json.mo — no shared Serialize/Deserialize
 /// classes (Phase 7 of the JSON plan was deliberately deferred; see
 /// plans/bootstrapping/json-parser-serializer-plan.md). Own string-escape helpers,
-/// own hand-rolled beq family, own `intercalate` — all namespaced under `Toml.`/
-/// `toml_` rather than reusing json.mo's bare `List.intercalate`/`String.concat_list`/
-/// `neg_i64` globals, since both files may be loaded in the same test sweep
-/// (`cargo run -- test lang/`) and top-level names are not file-scoped.
+/// own hand-rolled beq family. `intercalate`/`concat_list` USED to be
+/// duplicated here under `Toml.`/`toml_` names (top-level names are not
+/// file-scoped, so sharing json.mo's bare globals would have collided);
+/// both now come from `std/list.mo`'s `List.intercalate` and
+/// `init/string.mo`'s `String.concat_all`, which is safe because there is
+/// exactly one definition of each corpus-wide.
 /// Supported grammar (MVP, per plan): `[table]` / `[dotted.nested.table]` headers
 /// (including empty tables), `key = value`, double-quoted strings with the escape
 /// subset `\" \\ \n \t \r`, integers, booleans, and single-line arrays of scalars.
@@ -27,7 +29,7 @@
 // exports in a non-empty `use` filter breaks `Map.insert`/etc. at runtime,
 // even though type-checking succeeds).
 use std.map {}
-use std.list {Show, filter}
+use std.list {Show, filter, intercalate}
 use init.string {beq, concat, drop, is_empty, slice, starts_with, to_list}
 use init.number {beq, sub, to_string}
 use lang.parser.core {
@@ -226,15 +228,6 @@ def Toml.parse_string_content (input : String) : ParseResult (List String) :=
   many0 (alt Toml.parse_escape Toml.parse_string_char) input
 
 #[partial]
-def toml_concat_list_body (hd : String) (tl : List String) : String :=
-  String.concat hd (Toml.concat_list tl)
-
-def Toml.concat_list (ss : List String) : String :=
-  match ss {
-    List.empty => "",
-    List.cons hd tl => toml_concat_list_body hd tl
-  }
-
 def toml_parse_string_close (r : ParseResult String) (s : String) : ParseResult Toml.Value :=
   match r {
     success rem _ => success rem (string s),
@@ -244,7 +237,7 @@ def toml_parse_string_close (r : ParseResult String) (s : String) : ParseResult 
 #[partial]
 def toml_parse_string_content_result (r : ParseResult (List String)) : ParseResult Toml.Value :=
   match r {
-    success rem chars => toml_parse_string_close (tag "\"" rem) (Toml.concat_list chars),
+    success rem chars => toml_parse_string_close (tag "\"" rem) (String.concat_all chars),
     fail e => fail e
   }
 
@@ -259,11 +252,10 @@ def toml_parse_string_open (r : ParseResult String) : ParseResult Toml.Value :=
 def Toml.parse_string (input : String) : ParseResult Toml.Value :=
   toml_parse_string_open (tag "\"" input)
 
-def Toml.neg_i64 (n : I64) : I64 := 0 - n
 
 def toml_parse_integer_negative (r : ParseResult I64) : ParseResult I64 :=
   match r {
-    success rem n => success rem (Toml.neg_i64 n),
+    success rem n => success rem (I64.neg n),
     fail e => fail (ParseError.custom "expected digits after -" (parse_error_remaining e))
   }
 
@@ -546,18 +538,6 @@ def Toml.bool_to_string (b : Bool) : String :=
   if b then "true" else "false"
 
 #[partial]
-def Toml.intercalate_rest (sep : String) (acc : String) (xs : List String) : String :=
-  match xs {
-    List.empty => acc,
-    List.cons hd tl => Toml.intercalate_rest sep (String.concat acc (String.concat sep hd)) tl
-  }
-
-def Toml.intercalate (sep : String) (xs : List String) : String :=
-  match xs {
-    List.empty => "",
-    List.cons hd tl => Toml.intercalate_rest sep hd tl
-  }
-
 /// Serialize a scalar or array value. NOTE: not meant to be called on a `table`
 /// (tables are only ever emitted as `[header]` sections by Toml.render_table) —
 /// returns "" defensively if it is.
@@ -573,7 +553,7 @@ def Toml.value_to_string (v : Toml.Value) : String :=
 
 #[partial]
 def Toml.array_to_string (a : List Toml.Value) : String :=
-  String.concat "[" (String.concat (Toml.intercalate "," (List.map Toml.value_to_string a)) "]")
+  String.concat "[" (String.concat (List.intercalate "," (List.map Toml.value_to_string a)) "]")
 
 def Toml.is_table (v : Toml.Value) : Bool :=
   match v { table _ => true, _ => false }
@@ -596,12 +576,12 @@ def Toml.kv_line_to_string (p : Pair String Toml.Value) : String :=
 def Toml.render_header (path : List String) : String :=
   if List.is_empty path
   then ""
-  else String.concat "[" (String.concat (Toml.intercalate "." path) "]\n")
+  else String.concat "[" (String.concat (List.intercalate "." path) "]\n")
 
 def Toml.render_body (header_str : String) (scalars : List (Pair String Toml.Value)) : String :=
   if List.is_empty scalars
   then header_str
-  else String.concat header_str (String.concat (Toml.intercalate "\n" (List.map Toml.kv_line_to_string scalars)) "\n")
+  else String.concat header_str (String.concat (List.intercalate "\n" (List.map Toml.kv_line_to_string scalars)) "\n")
 
 /// Serialize one table (and everything nested under it) at `path` — root-level
 /// scalar/array keys first, then a depth-first walk of nested tables emitting
@@ -716,7 +696,7 @@ def test_parse_integer_kv : Bool :=
 #[test]
 def test_parse_negative_integer_kv : Bool :=
   match Toml.parse "n = -42" {
-    ok t => toml_table_lookup_eq "n" t (integer (Toml.neg_i64 42)),
+    ok t => toml_table_lookup_eq "n" t (integer (I64.neg 42)),
     err _ => false
   }
 
@@ -909,7 +889,7 @@ def toml_check_workspace_package (found : Option Toml.Value) : Bool :=
 def test_serialize_scalars : Bool :=
   Toml.value_to_string (string "hi") == "\"hi\"" &&
   Toml.value_to_string (integer 42) == "42" &&
-  Toml.value_to_string (integer (Toml.neg_i64 7)) == "-7" &&
+  Toml.value_to_string (integer (I64.neg 7)) == "-7" &&
   Toml.value_to_string (boolean true) == "true" &&
   Toml.value_to_string (boolean false) == "false"
 

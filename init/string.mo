@@ -222,3 +222,36 @@ def trim_leading (bytes : List U8) : List U8 :=
 
 def String.trim (s : String) : String :=
 	String.from_list (List.reverse (trim_leading (List.reverse (trim_leading (String.to_list s)))))
+
+/// Index of the last occurrence of `needle` in `haystack`, or -1.
+///
+/// Canonical home for what `lang/codegen/emit.mo` had as a local
+/// `string_find_last`/`_loop` pair. A second, DIVERGED copy lived in
+/// `lang/parser.mo` with a real bug -- it passed an end index where
+/// `String.slice`'s third argument is a LENGTH -- and was deleted
+/// (2026-09-01) rather than repaired, since it had no callers.
+///
+/// `#[terminating]`: `start_idx` counts DOWN to -1, which the structural
+/// termination checker can't see is well-founded.
+#[terminating]
+def String.find_last_loop (haystack : String) (needle : String) (start_idx : I64) : I64 :=
+	if I64.lt start_idx 0 then -1
+	else if String.beq (String.slice haystack start_idx (String.length needle)) needle then start_idx
+	else String.find_last_loop haystack needle (start_idx - 1)
+
+def String.find_last (haystack : String) (needle : String) : I64 :=
+	if String.beq needle "" then -1
+	else if I64.gt (String.length needle) (String.length haystack) then -1
+	else String.find_last_loop haystack needle (String.length haystack - String.length needle)
+
+/// Concatenate every string in a list, no separator.
+/// (For a separator, use `List.intercalate` in `std/list.mo`.)
+///
+/// Moved here from `lang/json.mo`, which declared this `String` method
+/// inside a compiler module; `lang/cli.mo`'s `cli_concat_all` and
+/// `lang/toml.mo`'s `toml_concat_list_body` were further copies.
+def String.concat_all (ss : List String) : String :=
+	match ss {
+		empty => "",
+		cons hd tl => String.concat hd (String.concat_all tl)
+	}

@@ -140,15 +140,6 @@ def cli_is_bool_typ (t : Expr) : Bool :=
         _ => false,
     }
 
-/// Concatenate every string in `parts`, in order — used throughout below
-/// to build multi-piece messages without deeply nested `String.concat`
-/// chains.
-def cli_concat_all (parts : List String) : String :=
-    match parts {
-        empty => "",
-        cons p tail => String.concat p (cli_concat_all tail),
-    }
-
 /// `#[arg]` used on a non-`Bool` field is a hard error (v1 only supports
 /// boolean flags) — checked across every field of every constructor
 /// before any code is generated, so the FIRST violation (in constructor/
@@ -160,7 +151,7 @@ def cli_bad_arg_field_in_ctor (ctor_display : String) (fields : List FieldInfo) 
         cons f tail =>
             if cli_has_arg_attr f && Bool.not (cli_is_bool_typ (cli_field_typ f))
                 then Option.some
-                    (cli_concat_all
+                    (String.concat_all
                         ["#[derive_cli]: `", ctor_display, "`'s field `", cli_field_name f,
                          "` is annotated `#[arg]` but is not `Bool` — only boolean flags are supported (v1)"])
                 else cli_bad_arg_field_in_ctor ctor_display tail,
@@ -197,7 +188,7 @@ def cli_wrap_positional (ctor_display : String) (field_name : String) (inner : E
                 [match_arm "some" [field_name] inner,
                  match_arm "none" []
                      (e_app (e_var "Result.err")
-                         (e_str (cli_concat_all
+                         (e_str (String.concat_all
                              [ctor_display, ": missing required argument '", field_name, "'"])))])]
 
 def cli_wrap_flags (fields : List FieldInfo) (inner : Expr) : Expr :=
@@ -261,7 +252,7 @@ pub def derive_cli_meta (info : TypeInfo) : List Decl :=
         type_info type_name ctors =>
             match ctors {
                 empty =>
-                    [d_error (cli_concat_all ["#[derive_cli]: `", type_name, "` has no constructors"])],
+                    [d_error (String.concat_all ["#[derive_cli]: `", type_name, "` has no constructors"])],
                 cons _ _ =>
                     match cli_bad_arg_field ctors {
                         some msg => [d_error msg],

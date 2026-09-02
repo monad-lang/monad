@@ -198,6 +198,11 @@ def I64.beq (a b : I64) : Bool
 #[native i64_to_string]
 def I64.to_string (a : I64) : String
 
+/// Arithmetic negation. Canonical home for what `lang/json.mo` and
+/// `lang/toml.mo` each had as their own `neg_i64`/`Toml.neg_i64`
+/// (duplicated only because top-level names are not file-scoped).
+def I64.neg (n : I64) : I64 := 0 - n
+
 instance Add I64 {
 	def add (a b : I64) : I64 := I64.add a b
 }

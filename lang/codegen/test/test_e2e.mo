@@ -130,5 +130,3 @@ def empty_ids : List Identifier := List.empty
 
 #[partial]
 def empty_cons : List TypeConstraint := List.empty
-
-def main : I64 := 42

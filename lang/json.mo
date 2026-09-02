@@ -5,7 +5,7 @@
 // NOT listed here; the same pre-existing latent instance/dictionary-
 // resolution bug.
 use std.map {}
-use std.list {Show, length}
+use std.list {Show, intercalate, length}
 use init.string {beq, concat, drop, gt, is_empty, length, slice, to_list}
 use init.number {beq, gt, to_string}
 use lang.parser.core {
@@ -193,12 +193,6 @@ def Json.ParseError.to_string (e : Json.ParseError) : String :=
 
 /// Helper function to concatenate a list of strings
 #[partial]
-def String.concat_list (ss : List String) : String :=
-  match ss {
-    List.empty => "",
-    List.cons hd tl => String.concat hd (String.concat_list tl)
-  }
-
 /// EOF parser - succeeds if input is empty
 def Json.eof (input : String) : ParseResult Unit :=
   if is_empty input
@@ -255,11 +249,10 @@ def Json.parse_bool (input : String) : ParseResult Json :=
 
 // ─── Parser: number (MVP: integers only) ───
 
-def neg_i64 (n : I64) : I64 := 0 - n
 
 def parse_integer_negative (r : ParseResult I64) : ParseResult I64 :=
   match r {
-    success rem n => success rem (neg_i64 n),
+    success rem n => success rem (I64.neg n),
     fail e => fail (ParseError.custom "expected digits after -" (parse_error_remaining e))
   }
 
@@ -367,7 +360,7 @@ def parse_string_close (r : ParseResult String) (s : String) : ParseResult Json 
 #[partial]
 def parse_string_content_result (r : ParseResult (List String)) : ParseResult Json :=
   match r {
-    success rem chars => parse_string_close (tag "\"" rem) (String.concat_list chars),
+    success rem chars => parse_string_close (tag "\"" rem) (String.concat_all chars),
     fail e => fail e
   }
 
@@ -534,19 +527,6 @@ def Json.Number.to_string (n : Json.Number) : String :=
   }
 
 // ─── Serializer: main ───
-
-def List.intercalate (sep : String) (xs : List String) : String :=
-  match xs {
-    List.empty => "",
-    List.cons hd tl => List.intercalate_rest sep hd tl
-  }
-
-#[partial]
-def List.intercalate_rest (sep : String) (acc : String) (xs : List String) : String :=
-  match xs {
-    List.empty => acc,
-    List.cons hd tl => List.intercalate_rest sep (String.concat acc (String.concat sep hd)) tl
-  }
 
 def Json.bool_to_string (b : Bool) : String :=
   if b then "true" else "false"
@@ -843,7 +823,7 @@ def test_parse_integer : Bool :=
 #[test]
 def test_parse_negative_integer : Bool :=
   match Json.parse "-42" {
-    ok j => Json.beq j (num (int (neg_i64 42))),
+    ok j => Json.beq j (num (int (I64.neg 42))),
     err _ => false
   }
 
@@ -939,7 +919,7 @@ def test_serialize_integer : Bool :=
 
 #[test]
 def test_serialize_negative_integer : Bool :=
-  Json.to_string (num (int (neg_i64 42))) == "-42"
+  Json.to_string (num (int (I64.neg 42))) == "-42"
 
 #[test]
 def test_serialize_string : Bool :=
@@ -987,8 +967,8 @@ def test_roundtrip_bool : Bool :=
 
 #[test]
 def test_roundtrip_integer : Bool :=
-  match Json.parse (Json.to_string (num (int (neg_i64 7)))) {
-    ok j => Json.beq j (num (int (neg_i64 7))),
+  match Json.parse (Json.to_string (num (int (I64.neg 7)))) {
+    ok j => Json.beq j (num (int (I64.neg 7))),
     err _ => false
   }
 
@@ -1089,7 +1069,7 @@ def test_serializer_bool : Bool :=
 
 #[test]
 def test_serializer_i64 : Bool :=
-  Json.beq (Json.Serializer.serialize (neg_i64 7)) (num (int (neg_i64 7)))
+  Json.beq (Json.Serializer.serialize (I64.neg 7)) (num (int (I64.neg 7)))
 
 #[test]
 def test_serializer_string : Bool :=
