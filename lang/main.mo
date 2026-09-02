@@ -5,7 +5,7 @@ use std.bench {now, report}
 use lang.types {Decl, Location, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {build_debug_locs, compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang.module {ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleScopeCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_scope_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
+use lang.module {ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
 use std.map {}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
@@ -344,34 +344,19 @@ def print_diagnostics (diags : List String) : IO I64 :=
 /// driver this feeds, which needs a real per-file pass/fail matrix,
 /// not just a final count).
 #[partial]
-def run_check_loop (base : PreludeInitBase) (cache : ModuleScopeCache) (files : List String) (checked : I64) (errors : I64) (verbose : Bool) : IO I64 :=
+def run_check_loop (base : PreludeInitBase) (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (verbose : Bool) : IO I64 :=
     match files {
         List.empty => do {
             println (I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)");
-            // Whole-run module-scope cache visibility (see ModuleScopeCache's
-            // own doc comment, lang/module.mo): `hits` is how many times a
-            // dependency load was served from a PRIOR file's own load in
-            // this same run instead of re-reading/re-parsing/re-scope-
-            // building it from scratch -- the direct measure of the
-            // redundant-reload cost this cache eliminates.
-            //
-            // CURRENTLY ALWAYS 0/0 (confirmed 2026-08-25): `check_file_
-            // cached` (lang/module.mo) accepts `base : PreludeInitBase` /
-            // `cache : ModuleScopeCache` but routes through `elaborate_
-            // loaded_modules` instead, which has no `base`/`cache`
-            // parameters at all -- it re-walks/re-parses/re-promotes the
-            // full dependency graph from scratch on every call (a real
-            // O(N*D) perf regression for a multi-file `check`, since the
-            // caching architecture this counter was built to report on
-            // is no longer actually consulted by the real pipeline; see
-            // `bootstrapping/self-hosted-compiler-review.md`'s 2026-08-25
-            // refresh). Kept printing (rather than silently removed) so
-            // the moment caching is restored, this starts reporting real
-            // numbers again with no further wiring needed.
+            // Whole-run module cache visibility: `hits` counts dependency
+            // loads served from an EARLIER file's own load in this same
+            // run, instead of re-reading and re-parsing the file from
+            // disk -- the direct measure of the cross-file redundancy
+            // `ModuleInfoCache` (lang/module.mo) exists to remove.
             if verbose then
                 match cache {
-                    ModuleScopeCache.mk _ hits misses =>
-                        println ("module scope cache: " ++ I64.to_string hits ++ " hit(s), " ++ I64.to_string misses ++ " miss(es) (NOTE: cache is not currently threaded through elaborate_loaded_modules -- always 0/0 today, see doc comment above)")
+                    ModuleInfoCache.mk _ hits misses =>
+                        println ("module cache: " ++ I64.to_string hits ++ " hit(s), " ++ I64.to_string misses ++ " miss(es)")
                 }
             else do { return unit };
             return (if I64.gt errors 0 then 1 else 0)
@@ -428,7 +413,7 @@ def run_check_loop (base : PreludeInitBase) (cache : ModuleScopeCache) (files : 
 def run_check (files : List String) (verbose : Bool) : IO I64 := do {
     let base : PreludeInitBase <- build_prelude_init_base;
     let expanded : List String <- expand_check_paths files;
-    let cache : ModuleScopeCache := module_scope_cache_empty;
+    let cache : ModuleInfoCache := module_info_cache_empty;
     run_check_loop base cache expanded 0 0 verbose
 }
 

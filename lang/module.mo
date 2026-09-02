@@ -463,33 +463,48 @@ def list_contains_module_info (xs : List ModuleInfo) (x : ModulePath) : Bool :=
 /// `extract_all_dependencies_go`'s own existing lenient skip), not
 /// fatal -- the canonical pipeline surfaces genuine "module not found"
 /// failures via `elaborate_loaded_modules`'s own `Result` path.
+/// The walk's result plus the (extended) cache it built along the way.
+struct LoadedAndCache {
+    loaded : Result String LoadedModules,
+    cache : ModuleInfoCache,
+}
+
+struct InfosAndCache {
+    infos : List ModuleInfo,
+    cache : ModuleInfoCache,
+}
+
 #[partial]
-def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (visiting : List ModulePath) (visited : List ModuleInfo) : IO (List ModuleInfo) :=
+def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (visiting : List ModulePath) (visited : List ModuleInfo) (cache : ModuleInfoCache) : IO InfosAndCache :=
     match to_visit {
         List.empty => do {
-            return visited
+            return { infos := visited, cache := cache }
         },
         List.cons head tail =>
             if list_contains visiting head then
                 // Circular dependency - skip to avoid infinite loop
-                collect_dep_module_infos base_dir tail visiting visited
+                collect_dep_module_infos base_dir tail visiting visited cache
             else if list_contains_module_info visited head then
                 // Already loaded - skip
-                collect_dep_module_infos base_dir tail visiting visited
+                collect_dep_module_infos base_dir tail visiting visited cache
             else do {
                 let new_visiting : List ModulePath := List.cons head visiting;
-                let info_opt : Option ModuleInfo <- load_module_with_info base_dir head;
-                match info_opt {
+                // Cached: within one `check`/`compile` run the same
+                // dependency is reached once per importing file, and
+                // re-reading + re-parsing it each time is the dominant
+                // cross-file cost (see `ModuleInfoCache`'s own note).
+                let loaded : InfoAndCache <- load_module_with_info_cached base_dir head cache;
+                match loaded.info {
                     Option.some info => do {
                         let new_base_dir : String := extract_directory info.file_path;
                         let dep_decls : List Decl := get_module_info_decls info;
                         let dep_deps : List ModulePath := extract_use_decls dep_decls;
                         let new_to_visit : List ModulePath := List.append dep_deps tail;
-                        collect_dep_module_infos new_base_dir new_to_visit new_visiting (List.cons info visited)
+                        collect_dep_module_infos new_base_dir new_to_visit new_visiting (List.cons info visited) loaded.cache
                     },
                     Option.none =>
                         // Module not found, skip but continue with tail
-                        collect_dep_module_infos base_dir tail new_visiting visited
+                        collect_dep_module_infos base_dir tail new_visiting visited loaded.cache
                 }
             }
     }
@@ -1538,7 +1553,7 @@ struct FileCheckResult {
 /// next file in the same run.
 struct FileCheckAndCache {
     result : FileCheckResult,
-    cache : ModuleScopeCache,
+    cache : ModuleInfoCache,
 }
 
 /// The file checker — now routes through `elaborate_loaded_modules`
@@ -1569,19 +1584,20 @@ struct FileCheckAndCache {
 /// killed) — root cause under investigation, see
 /// `bootstrapping/check-deps-memory-blowup.md`.
 #[partial]
-def check_file_cached (base : PreludeInitBase) (cache : ModuleScopeCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
+def check_file_cached (base : PreludeInitBase) (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
     let exists : Bool <- file_exists (Path.path file_path);
     if exists then do {
         if verbose then println ("checking " ++ file_path) else do { return unit };
-        let elaborated_result <- elaborate_loaded_modules file_path false;
-        match elaborated_result {
+        let ec : ElaboratedAndCache <- elaborate_loaded_modules_cached file_path false cache;
+        let out_cache : ModuleInfoCache := ec.cache;
+        match ec.elaborated {
             Result.ok em => do {
                 let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                 let diags <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
-                return { result := { path := file_path, diagnostics := diags }, cache := cache }
+                return { result := { path := file_path, diagnostics := diags }, cache := out_cache }
             },
             Result.err e => do {
-                return { result := { path := file_path, diagnostics := [e] }, cache := cache }
+                return { result := { path := file_path, diagnostics := [e] }, cache := out_cache }
             },
         }
     } else do {
@@ -1879,6 +1895,71 @@ struct ModuleInfo {
     decl_list : List Decl,
 }
 
+// --- Whole-run ModuleInfo cache -------------------------------------
+//
+// `load_module_with_info` is a pure function of `(base_dir, mp)`: it
+// resolves the module's file, reads it, and parses it. Within one
+// `check`/`compile` invocation the SAME dependency is loaded again for
+// every file that imports it -- and a `lang/`-corpus file's closure is
+// dominated by a handful of large shared modules (`lang/types.mo` alone
+// is imported by ~47 files).
+//
+// Measured before adding this (wall time, `check`, minus a ~19.8s
+// interpreter-startup floor): `lang/elaborate.mo` alone ~10.2s of real
+// work, `lang/core_ir.mo` alone ~9.0s -- but checking BOTH together
+// ~26.1s, i.e. WORSE than the 19.2s sum, because each re-parses the
+// shared closure from scratch.
+//
+// Keyed on `ModulePath`, like `ModuleScopeCache` (see that type's own
+// note on why that key is safe for the current corpus). Distinct from
+// `ModuleScopeCache` on purpose: that one caches `ScopeData`, which is
+// NOT what `elaborate_loaded_modules` needs -- its promotion/dict-param/
+// expansion passes want the raw per-module decls this one holds.
+struct ModuleInfoCache {
+    entries : HashMap ModulePath ModuleInfo,
+    hits : I64,
+    misses : I64,
+}
+
+def module_info_cache_empty : ModuleInfoCache := {
+    entries := modpath_map_empty,
+    hits := 0,
+    misses := 0,
+}
+
+def module_info_cache_lookup (key : ModulePath) (cache : ModuleInfoCache) : Option ModuleInfo :=
+    modpath_map_lookup key cache.entries
+
+def module_info_cache_hit (cache : ModuleInfoCache) : ModuleInfoCache :=
+    { cache with hits := cache.hits + 1 }
+
+def module_info_cache_insert (key : ModulePath) (info : ModuleInfo) (cache : ModuleInfoCache) : ModuleInfoCache :=
+    { cache with entries := modpath_map_insert key info cache.entries, misses := cache.misses + 1 }
+
+/// A `load_module_with_info` that consults (and extends) the cache.
+struct InfoAndCache {
+    info : Option ModuleInfo,
+    cache : ModuleInfoCache,
+}
+
+#[partial]
+def load_module_with_info_cached (base_dir : String) (mp : ModulePath) (cache : ModuleInfoCache) : IO InfoAndCache := do {
+    match module_info_cache_lookup mp cache {
+        Option.some hit => do {
+            return { info := Option.some hit, cache := module_info_cache_hit cache }
+        },
+        Option.none => do {
+            let loaded : Option ModuleInfo <- load_module_with_info base_dir mp;
+            match loaded {
+                Option.some info => do {
+                    return { info := Option.some info, cache := module_info_cache_insert mp info cache }
+                },
+                Option.none => do { return { info := Option.none, cache := cache } },
+            }
+        },
+    }
+}
+
 def show_module_info (m : ModuleInfo) : String :=
     match m {
         mk path file decl_list =>
@@ -2052,8 +2133,12 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option Mod
     }
 }
 
+/// `cache` carries `ModuleInfo`s already loaded earlier in this same
+/// run; the returned `LoadedAndCache` hands back the extended one so a
+/// multi-file caller (`run_check_loop`) can reuse it for the next file.
+/// Pass `module_info_cache_empty` for a standalone load.
 #[partial]
-def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
+def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) : IO LoadedAndCache {
     let base_dir : String := extract_directory file_path;
     let module_name : String := module_name_from_path file_path;
     let mp : ModulePath := ModulePath.mp [Identifier.id module_name];
@@ -2098,15 +2183,23 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) {
                     let direct_deps_with_prelude : List ModulePath := List.append [prelude_module_path, init_module_path, std_module_path] direct_deps;
                     let no_visited : List ModuleInfo := List.empty;
                     let no_visiting : List ModulePath := List.empty;
-                    let dep_modules : List ModuleInfo <- collect_dep_module_infos main_base_dir direct_deps_with_prelude no_visiting no_visited;
-                    let all_modules : List ModuleInfo := List.cons main_module dep_modules;
-                    return (Result.ok { main_module := ModuleInfo.mk mp_path file_path decl_list, all_modules := all_modules })
+                    let walked : InfosAndCache <- collect_dep_module_infos main_base_dir direct_deps_with_prelude no_visiting no_visited cache;
+                    let all_modules : List ModuleInfo := List.cons main_module walked.infos;
+                    return { loaded := Result.ok { main_module := ModuleInfo.mk mp_path file_path decl_list, all_modules := all_modules }, cache := walked.cache }
                 }
             },
         Option.none => do {
-            return Result.err ("Failed to load" ++ Show.show mp)
+            return { loaded := Result.err ("Failed to load" ++ Show.show mp), cache := cache }
         }
     }
+}
+
+/// Backwards-compatible wrapper: a standalone load with a fresh cache.
+/// Every caller that isn't threading a whole-run cache uses this.
+#[partial]
+def load_file_modules (file_path : String) : IO (Result String LoadedModules) := do {
+    let r : LoadedAndCache <- load_file_modules_cached file_path module_info_cache_empty;
+    return r.loaded
 }
 
 // --- elaborate_loaded_modules: THE unified check/compile/test front end ---
@@ -2135,6 +2228,11 @@ struct ElaboratedModules {
     /// included) twice: once here for the typecheck gate, once again in
     /// `compile_file_codegen`.
     loaded : LoadedModules,
+}
+
+struct ElaboratedAndCache {
+    elaborated : Result String ElaboratedModules,
+    cache : ModuleInfoCache,
 }
 
 /// A trivial local flatten of every loaded module's own decls into one
@@ -2355,9 +2453,11 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
 ///     actually named "check"/"compile"/"test" should mean: verifying a
 ///     file also verifies what it depends on.
 #[partial]
-def elaborate_loaded_modules (file_path : String) (check_deps : Bool) : IO (Result String ElaboratedModules) := do {
-    let loaded_result : Result String LoadedModules <- load_file_modules file_path;
-    return match loaded_result {
+def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) : IO ElaboratedAndCache := do {
+    let lc : LoadedAndCache <- load_file_modules_cached file_path cache;
+    let loaded_result : Result String LoadedModules := lc.loaded;
+    let out_cache : ModuleInfoCache := lc.cache;
+    return { elaborated := match loaded_result {
         Result.err e => Result.err e,
         Result.ok loaded =>
             let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty in
@@ -2416,7 +2516,14 @@ def elaborate_loaded_modules (file_path : String) (check_deps : Bool) : IO (Resu
                             Result.ok { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded }
                     },
             }
-    }
+    }, cache := out_cache }
+}
+
+/// Backwards-compatible wrapper: elaborate with a fresh cache.
+#[partial]
+def elaborate_loaded_modules (file_path : String) (check_deps : Bool) : IO (Result String ElaboratedModules) := do {
+    let r : ElaboratedAndCache <- elaborate_loaded_modules_cached file_path check_deps module_info_cache_empty;
+    return r.elaborated
 }
 
 // --- Tests: check_module_with_scope / check_file ---
@@ -2568,7 +2675,7 @@ def test_check_module_with_scope_dotted_module_path_still_resolves : IO Bool := 
 #[test]
 def test_check_file_reports_missing_file : Bool :=
     let empty_base : PreludeInitBase := { scope_data := scope_data_empty, covered := List.empty } in
-    let empty_cache : ModuleScopeCache := module_scope_cache_empty in
+    let empty_cache : ModuleInfoCache := module_info_cache_empty in
     match check_file_cached empty_base empty_cache "definitely/does/not/exist.mo" false {
         IO.io result =>
             match result {
