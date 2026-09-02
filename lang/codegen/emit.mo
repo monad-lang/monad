@@ -16,7 +16,7 @@ use lang.types {
   Param, Scope, ScopeData, StructLitField, Term,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, lam,
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
-  param_many, pi, show_identifier, str, type_, unnamed, var,
+  param_many, pi, str, type_, unnamed, var,
 }
 use lang.codegen.ir {
   DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMInstruction,
@@ -639,8 +639,17 @@ def is_constructor_var (c : CodegenCtx) (name : String) : Bool :=
             },
     }
 
+/// An identifier as it should appear in a generated LLVM symbol name:
+/// the raw text with any `'` quote characters stripped.
+///
+/// Named `symbol_identifier`, NOT `show_identifier`: this file used to
+/// import `lang.types`' own `show_identifier` (which returns the text
+/// verbatim, quotes included) while also defining this one, and since the
+/// global name table is not module-scoped the two collided -- which one
+/// each call site actually got was decided by registration order, even
+/// though they produce DIFFERENT strings. See AGENTS.md item 18.
 #[partial]
-def show_identifier (id : Identifier) : String := match id {
+def symbol_identifier (id : Identifier) : String := match id {
     Identifier.id s => remove_quotes_from_identifier s,
 }
 
@@ -982,7 +991,7 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
                                         CtxStrPair.mk ctx3 cmp_temp =>
                                             match this_case {
                                                 MatchCase.mc name _args _body _fp =>
-                                                    let tag_of_case := constructor_tag ctx3 (show_identifier name) in
+                                                    let tag_of_case := constructor_tag ctx3 (symbol_identifier name) in
                                                     let cmp_instr := LLVMInstruction.assign cmp_temp (LLVMValue.icmp_eq tag_val (LLVMValue.int_ tag_of_case)) in
                                                     let branch_instr := LLVMInstruction.branch (LLVMValue.var_ cmp_temp) case_label next_check_label in
                                                     let check_block := LLVMBasicBlock.mk check_label (cons_instr cmp_instr (cons_instr branch_instr empty_instrs)) in
@@ -1357,7 +1366,7 @@ def materialize_branch_val (c : CodegenCtx) (term_ : Term) (raw_instrs : List LL
 def compile_ntv_ir (c : CodegenCtx) (native : Native) : CompileResult :=
     match native {
         Native.mk name num_args args =>
-            let name_str := show_identifier name in
+            let name_str := symbol_identifier name in
             let llvm_name := extract_base_name name_str in
             let fn_name := String.concat "monad_" llvm_name in
             match compile_ntv_args c args empty_instrs empty_vals {
@@ -1406,7 +1415,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
                             // Call the @alloc_constructor runtime function
                             // alloc_constructor takes (tag, field_count) and allocates space for fields
                             // The tag is determined by the constructor name
-                            let tag_val := constructor_tag c (show_identifier name) in
+                            let tag_val := constructor_tag c (symbol_identifier name) in
                             let alloc_val := LLVMValue.alloc_constructor tag_val all_vals in
                             let assign_instr := LLVMInstruction.assign temp alloc_val in
                             // alloc_constructor only ALLOCATES the fields
@@ -2161,7 +2170,7 @@ def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (blocks : Li
 
 /// Dispatches through `lookup_native_any` (above), NOT a private,
 /// narrower name-matching copy -- `is_native_bool_op_name`'s own prior
-/// body compared `extract_base_name (show_identifier id)` (bare-only,
+/// body compared `extract_base_name (symbol_identifier id)` (bare-only,
 /// e.g. `"lt"` for `I64.lt`) against underscore-mangled strings
 /// (`"I64_lt"`), which can never match: the exact same dotted-vs-
 /// mangled-name mismatch class of bug `lookup_native_any`'s own doc
@@ -2187,7 +2196,7 @@ def term_is_native_bool_op (t : Term) : Bool := match t {
                 match fun2 {
                     Term.var _idx dbg =>
                         match dbg {
-                            DebugName.named id => is_native_bool_op_name (show_identifier id),
+                            DebugName.named id => is_native_bool_op_name (symbol_identifier id),
                             DebugName.unnamed => false,
                         },
                     _ => false,
@@ -2346,7 +2355,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                         // `tag` constructor), and a genuine constructor
                         // is never ALSO a real def, so this cannot
                         // false-negative on any real constructor.
-                        let name := show_identifier id in
+                        let name := symbol_identifier id in
                         let llvm_name := replace_dots_with_underscores name in
                         let also_a_real_fn := match ctx_lookup_arity c llvm_name {
                             Option.some _ => true,
@@ -2706,7 +2715,7 @@ def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : 
                 Term.var idx dbg =>
                     match dbg {
                         DebugName.named id =>
-                            let name := show_identifier id in
+                            let name := symbol_identifier id in
                             let llvm_name := replace_dots_with_underscores name in
                             let looks_like_ctor := is_constructor_var c name in
                             let also_a_real_fn := match ctx_lookup_arity c llvm_name {
@@ -2739,7 +2748,7 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
                 Term.var idx dbg =>
                     match dbg {
                         DebugName.named id =>
-                            let name := show_identifier id in
+                            let name := symbol_identifier id in
                             match lookup_native_any name {
                                 Option.some op =>
                                     Option.some (compile_native_app_db c op arg2 arg),
@@ -2752,7 +2761,7 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
         Term.var idx dbg =>
             match dbg {
                 DebugName.named id =>
-                    let name := show_identifier id in
+                    let name := symbol_identifier id in
                     match lookup_native_any name {
                         Option.some op =>
                             Option.some (compile_native_app_unary_db c op arg),
@@ -3185,7 +3194,7 @@ def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
                     match ctx_lookup_local c id {
                         Option.some _ => compile_db_term_ir c head,
                         Option.none =>
-                            let name := show_identifier id in
+                            let name := symbol_identifier id in
                             let llvm_name := replace_dots_with_underscores name in
                             // IS reachable: `try_compile_constructor_app_
                             // db` bails out to `Option.none` (falling
@@ -3612,7 +3621,7 @@ def module_path_to_str (mp : ModulePath) : String := match mp {
 /// symbol names. See AGENTS.md item 18.
 #[partial]
 def mangle_identifiers (ids : List Identifier) : String :=
-    List.intercalate "__" (List.map show_identifier ids)
+    List.intercalate "__" (List.map symbol_identifier ids)
 
 struct DefResult {
     ctx : CodegenCtx,
@@ -3661,7 +3670,7 @@ def emit_type_head_is_io (t : Term) : Bool :=
 #[partial]
 def emit_type_head_is_io_go (t : Term) : Bool := match t {
     Term.var _idx dbg => match dbg {
-        DebugName.named id_ => String.beq (show_identifier id_) "IO",
+        DebugName.named id_ => String.beq (symbol_identifier id_) "IO",
         DebugName.unnamed => false,
     },
     Term.app f _arg => emit_type_head_is_io_go f,
@@ -4620,7 +4629,7 @@ def attr_arg_as_string_first (args : List AttrArg) : Option String :=
         List.empty => Option.none,
         List.cons a _ =>
             match a {
-                AttrArg.ident aid => Option.some (show_identifier aid),
+                AttrArg.ident aid => Option.some (symbol_identifier aid),
                 AttrArg.str s => Option.some s,
                 _ => Option.none,
             },
@@ -5978,7 +5987,7 @@ def reachable_defs_from (defs_map : HashMap String Def) (worklist : List String)
 def collect_referenced_names (t : Term) (acc : List String) : List String := match t {
     Term.var _idx dbg =>
         match dbg {
-            DebugName.named id => List.cons (show_identifier id) acc,
+            DebugName.named id => List.cons (symbol_identifier id) acc,
             DebugName.unnamed => acc,
         },
     Term.lam _dbg typ body => collect_referenced_names body (collect_referenced_names typ acc),
@@ -6024,7 +6033,7 @@ def collect_referenced_names_cases (cases : List MatchCase) (acc : List String) 
     List.cons c rest =>
         match c {
             MatchCase.mc name _args body _fp =>
-                collect_referenced_names_cases rest (List.cons (show_identifier name) (collect_referenced_names body acc)),
+                collect_referenced_names_cases rest (List.cons (symbol_identifier name) (collect_referenced_names body acc)),
         },
 }
 
@@ -6035,7 +6044,7 @@ def collect_referenced_names_native (n : Native) (acc : List String) : List Stri
 
 #[partial]
 def collect_referenced_names_con (c : Con) (acc : List String) : List String := match c {
-    Con.mk name _typ_name _num_args args => List.cons (show_identifier name) (collect_referenced_names_opt_list args acc),
+    Con.mk name _typ_name _num_args args => List.cons (symbol_identifier name) (collect_referenced_names_opt_list args acc),
 }
 
 #[partial]
