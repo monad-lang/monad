@@ -518,11 +518,7 @@ def add_methods_go (acc : ScopeData) (methods : List ClassDef) (cls_mp : ModuleP
 
 // --- scope_globals: extract ScopeData from Scope ---
 
-def scope_globals (s : Scope) : ScopeData :=
-    match s {
-        Scope.mk _ d _ => d,
-        _ => scope_data_empty
-    }
+def scope_globals (s : Scope) : ScopeData := s.scope
 
 // ---- scope_find_inductive ---
 

@@ -494,10 +494,7 @@ struct Def {
     vis: Visibility
 }
 
-def Def.name (d : Def) : ModulePath :=
-    match d {
-        mk name _ _ _ _ _ => name
-    }
+def Def.name (d : Def) : ModulePath := d.name
 
 // Canonical InductConstructor uses de Bruijn Term. InductConstructorV0 is the legacy V0 variant.
 type InductConstructor {

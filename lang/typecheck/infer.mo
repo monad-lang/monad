@@ -89,11 +89,11 @@ def mk_typed (a : Term) (b : Term) : TypedTerm :=
 
 /// Get the term field from a TypedTerm.
 def tt_term (tt : TypedTerm) : Term :=
-    match tt { mk term _ => term }
+    tt.term
 
 /// Get the type field from a TypedTerm.
 def tt_typ (tt : TypedTerm) : Term :=
-    match tt { mk _ typ => typ }
+    tt.typ
 
 // --- Instance resolution helpers ---
 //
@@ -235,7 +235,7 @@ def resolve_class_method_d4
     match scope_resolve_name (NameRef.nid mangled_id) scope locals {
         err _ => err (TypeError.custom "instance is missing its promoted method"),
         ok resolved_sd =>
-            let real_sig : Term := match resolved_sd { mk _ _ sig_ _ => sig_ } in
+            let real_sig : Term := resolved_sd.sig in
             let mangled_ref : Term := Term.var sentinel (DebugName.named mangled_id) in
             match ins_constraints {
                 List.empty => ok (mk_typed mangled_ref real_sig),
