@@ -16,12 +16,13 @@ use lang.scope {
   resolve_dict_args, scope_data_add_inductive, scope_data_classes,
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
   scope_find_class_def_by_name, scope_find_def_params, scope_find_def_return_type,
+  scope_find_def_sig,
   scope_find_inductive, scope_find_inductive_by_constructor,
   scope_find_local, scope_globals, scope_instance_candidates, scope_push_local,
   scope_resolve_name,
 }
 use lang.typecheck.name_subst {name_subst_term}
-use lang.typecheck.subst {term_permute}
+use lang.typecheck.subst {term_permute, term_subst}
 use lang.typecheck.unify {unify}
 use std.list {length}
 
@@ -78,7 +79,11 @@ def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types
         Term.con c => type_check_con c expected_type scope local_types locals,
         Term.ntv ntv => type_check_ntv ntv expected_type scope local_types locals,
         Term.type_ level => type_check_sort_full level expected_type,
-        Term.hole => ok ({ term := expected_type, typ := expected_type }),
+        // Struct literals in ctor-arg position must be bound to an
+        // annotated local first (AGENTS.md): a bare `{ ... }` reaching
+        // `ok`'s argument gets no expected type (constructor sigs are
+        // `Term.hole`), so the named-call path can't resolve its fields.
+        Term.hole => ok (mk_typed expected_type expected_type),
         Term.quote_ _ => err (TypeError.custom "unresolved quote reached the type checker (macro expansion should have resolved it first)"),
         Term.var_macro _ _ => err (TypeError.custom "unresolved macro-template variable reached the type checker (macro expansion should have resolved it first)"),
     }
@@ -751,7 +756,11 @@ def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scr
             },
         List.empty =>
             let reversed : List MatchCase := list_reverse acc_cases in
-            ok ({ body_typ := acc_typ, cases := reversed }),
+            // Annotated local first -- a bare struct literal in `ok`'s
+            // argument position gets no expected type (see the matching
+            // comment in `type_check`'s `Term.hole` arm).
+            let acc : CaseAcc := { body_typ := acc_typ, cases := reversed } in
+            ok acc,
     }
 
 /// Type check a single match case arm. A `field_pattern: Option.some`
@@ -1009,12 +1018,17 @@ def resolve_field_pattern_against_constructor (resolved_name : Identifier) (ctor
                             ok written_to_declared =>
                                 if Bool.not rest && Bool.not (I64.beq (List.length written_to_declared) (List.length declared_names))
                                 then err (TypeError.custom "field pattern is missing field(s) (add `..` to discard them)")
-                                else ok ({
-                                    resolved_name := resolved_name,
-                                    declared_names := declared_names,
-                                    declared_types := types_from_params params,
-                                    written_to_declared := written_to_declared,
-                                }),
+                                else
+                                    // Annotated local first -- see the
+                                    // matching comment in `type_check`'s
+                                    // `Term.hole` arm.
+                                    let rfp : ResolvedFieldPattern := {
+                                        resolved_name := resolved_name,
+                                        declared_names := declared_names,
+                                        declared_types := types_from_params params,
+                                        written_to_declared := written_to_declared,
+                                    } in
+                                    ok rfp,
                         },
                 }
             else
@@ -1277,7 +1291,10 @@ def type_check_case_body_checked (name : Identifier) (args : List Identifier) (b
             let body_typ : Term := tt_typ body_tt in
             let no_fp : Option FieldPattern := Option.none in
             let new_case : MatchCase := MatchCase.mc name args body_term no_fp in
-            ok ({ case_ := new_case, body_typ_ := body_typ }),
+            // Annotated local first -- see the matching comment in
+            // `type_check`'s `Term.hole` arm.
+            let cc : CheckedCase := { case_ := new_case, body_typ_ := body_typ } in
+            ok cc,
         err e => err e,
     }
 
@@ -1369,8 +1386,34 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
             let result : Result ScopeError ScopeDef := scope_resolve_name nref scope locals in
             match result {
                 ok sd => match sd {
-                    mk _ _ sig _ =>
-                        ok (mk_typed (Term.var sentinel dbg) sig),
+                    // `ScopeDef.sig` is unconditionally `Term.hole` by
+                    // its own load-bearing design (`build_scope_def`,
+                    // `lang/scope.mo`) -- the def's REAL declared
+                    // signature lives in the `def_sigs` side-table.
+                    // Returning it here (falling back to the old
+                    // `sig`-hole behavior for anything not registered
+                    // there -- builtins, promoted class methods, ...)
+                    // is what lets `type_check_app`'s signature-driven
+                    // path below check arguments against real parameter
+                    // types and solve the signature's type variables
+                    // (V in `def get_first {V : Type} (xs : List V) :
+                    // Option V`) from the arguments' actual types --
+                    // without it, EVERY call result types as `Term.hole`
+                    // and match arms on it bind the constructor's raw
+                    // skolemized parameter ("type mismatch: expected A,
+                    // found I64"), nested matches on those can't
+                    // disambiguate a bare `mk`/`empty` constructor
+                    // ("ambiguous constructor"), `{ .. }` struct
+                    // patterns can't resolve ("the matched value's type
+                    // isn't known"), and struct literals passed as call
+                    // arguments get no expected type ("cannot infer
+                    // struct type"). One root cause, ~70 sites in the
+                    // compiler's own closure.
+                    mk resolved_name _ sig _ =>
+                        match scope_find_def_sig resolved_name scope {
+                            Option.some real_sig => ok (mk_typed (Term.var sentinel dbg) real_sig),
+                            Option.none => ok (mk_typed (Term.var sentinel dbg) sig),
+                        },
                 },
                 err _ =>
                     // A qualified class-method reference (`Foldable.foldr`)
@@ -1539,7 +1582,298 @@ def debug_name_to_id (dbg : DebugName) : Identifier :=
 /// change: no program with this shape type-checked successfully before
 /// (confirmed: this is the exact gap noted in that plan's own Current
 /// State investigation of this file), so there is nothing to preserve.
+/// Signature-driven application checking: when a `Term.app` spine's head
+/// is a free (global) def reference with a registered signature in
+/// `ScopeData.def_sigs`, check the WHOLE spine against that signature in
+/// one pass -- each argument against its parameter's real declared type
+/// (with the type variables solved so far substituted in), collecting
+/// the type-variable solution by structurally matching each parameter
+/// type against the argument's actual inferred type (`List V` vs
+/// `List I64` solves `V := I64`), and returning the substituted return
+/// type.
+///
+/// This is the self-hosted counterpart of the reference checker's own
+/// bidirectional application inference (`core_check.rs`). Without it,
+/// `type_check_free_var` returning the real signature alone would only
+/// move the problem: the application's result type would keep the
+/// signature's type variables FREE (`Option V` with `V` unsolved), and
+/// match arms on it would fail with "expected A, found I64" exactly as
+/// they did when the signature was `Term.hole`.
+///
+/// `Option.none` everywhere the preconditions don't hold -- head is not
+/// a free var, name doesn't resolve, no registered signature, more
+/// arguments than parameters (over-application), or any argument failing
+/// to check against its real parameter type -- falling back to
+/// `type_check_app`'s previous per-layer behavior unchanged (which
+/// checks arguments against `Term.hole`, i.e. accepts them, and resolves
+/// struct-literal arguments via the named-call fallback).
+#[partial]
+def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option (Result TypeError TypedTerm) :=
+    match flatten_call_spine app_term {
+        CallSpine.mk head args =>
+            match head {
+                Term.var idx dbg =>
+                    match dbg {
+                        DebugName.named id =>
+                            if not (I64.beq idx sentinel) then Option.none
+                            else
+                                match scope_resolve_name (NameRef.nid id) scope locals {
+                                    err _ => Option.none,
+                                    ok sd =>
+                                        match sd {
+                                            mk resolved_name _ _ _ =>
+                                                match scope_find_def_sig resolved_name scope {
+                                                    Option.none => Option.none,
+                                                    Option.some sig =>
+                                                        match sig_tvars_params_ret sig {
+                                                            SigInfo.mk params ret =>
+                                                                if I64.gt (List.length args) (List.length params)
+                                                                then Option.none
+                                                                else
+                                                                    match def_call_check_args head args params List.empty scope local_types locals {
+                                                                        err _ => Option.none,
+                                                                        ok pair =>
+                                                                            match pair {
+                                                                                DccPair.mk elab_args subst =>
+                                                                                    let subst_ret : Term := subst_typevars_term ret subst in
+                                                                                    let result_typ : Term :=
+                                                                                        match unify subst_ret expected_type {
+                                                                                            ok u => u,
+                                                                                            err _ => subst_ret,
+                                                                                        } in
+                                                                                    let rebuilt : Term := rebuild_call head elab_args in
+                                                                                    Option.some (ok (mk_typed rebuilt result_typ)),
+                                                                            },
+                                                                    },
+                                                        },
+                                                },
+                                        },
+                                },
+                        DebugName.unnamed => Option.none,
+                    },
+                _ => Option.none,
+            },
+    }
+
+struct DccPair {
+    elab_args : List Term,
+    subst : List (Pair Identifier Term),
+}
+
+/// `try_type_check_def_call`'s argument loop: infer each argument's own
+/// type, solve this parameter's remaining type variables against it,
+/// and recurse (with the solutions so far substituted into the later
+/// parameter types). Any argument check failure is an `err` (the caller
+/// falls back to `type_check_app`'s previous behavior, preserving its
+/// leniency).
+///
+/// The argument is inferred INTRINSICALLY first (checked against
+/// `Term.hole`): checking it against the parameter type directly would
+/// fail whenever that parameter still mentions an UNSOLVED type
+/// variable (`List V` vs the concrete `List I64` -- this checker's
+/// `unify` does no typevar solving), and an argument checked against
+/// the typevar-carrying param type can come back POLLUTED with the
+/// unsolved var itself, leaving nothing to solve from. Only arguments
+/// that cannot be inferred in isolation -- a struct literal, which
+/// needs its expected type to know which struct it is -- fall back to
+/// checking against the parameter type itself.
+#[partial]
+def def_call_check_args (head : Term) (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
+    match args {
+        List.empty => ok (DccPair.mk List.empty subst),
+        List.cons arg rest =>
+            match params {
+                List.empty => err (TypeError.custom "over-application"),
+                List.cons param_ty rest_params =>
+                    let a_expected : Term := subst_typevars_term param_ty subst in
+                    match type_check arg Term.hole scope local_types locals {
+                        ok a_tt =>
+                            def_call_continue arg a_tt param_ty rest rest_params subst scope local_types locals,
+                        err _ =>
+                            match type_check arg a_expected scope local_types locals {
+                                err e => err e,
+                                ok a_tt =>
+                                    def_call_continue arg a_tt param_ty rest rest_params subst scope local_types locals,
+                            },
+                    },
+            },
+    }
+
+/// `def_call_check_args`'s per-argument tail: solve this parameter's
+/// type variables from the argument's (already inferred) type, then
+/// recurse for the remaining arguments.
+#[partial]
+def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : List Term) (rest_params : List Term) (subst : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
+    let a_typ : Term := tt_typ a_tt in
+    let next_subst : List (Pair Identifier Term) := solve_typevars param_ty a_typ subst in
+    match def_call_check_args arg rest rest_params next_subst scope local_types locals {
+        err e => err e,
+        ok pair =>
+            match pair {
+                DccPair.mk rest_elab rest_subst =>
+                    ok (DccPair.mk (List.cons (tt_term a_tt) rest_elab) rest_subst),
+            },
+    }
+
+/// A signature decomposed for `try_type_check_def_call`: its explicit
+/// `Term.pi` chain's parameter types, and the final return type. Its
+/// implicit type parameters need no separate field: a def's registered
+/// `Def.typ` stores them as FREE vars (`Term.var sentinel ...`) -- the
+/// parser leaves them free and `elaborate_def_typs` (`lang/module.mo`)
+/// forall-wraps them only AFTER the scope (and its `def_sigs` entries)
+/// is built -- and `solve_typevars` records every free-var match it
+/// finds, no precomputed name set required.
+struct SigInfo {
+    params : List Term,
+    ret : Term,
+}
+
+#[partial]
+def sig_tvars_params_ret (sig : Term) : SigInfo :=
+    sig_tvars_go sig 0 List.empty
+
+/// Decompose the pi chain, OPENING any `Term.forall` binder met along
+/// the way with a fresh free placeholder (`sig_tv_<n>`) via the standard
+/// open (`term_subst 0 placeholder body`) -- so that even a sig whose
+/// type parameters arrive forall-BOUND (not this pipeline's usual
+/// already-free shape, see `SigInfo`'s doc comment) still leaves them
+/// as free vars that `solve_typevars` and `subst_typevars_term` can
+/// solve and rewrite. `term_subst_go`'s fused shift also corrects the
+/// remaining indices when the binder drops off.
+#[partial]
+def sig_tvars_go (t : Term) (n : I64) (params : List Term) : SigInfo :=
+    match t {
+        Term.forall _dbg _kind body =>
+            let fresh : Identifier := Identifier.id (String.concat "sig_tv_" (I64.to_string n)) in
+            let placeholder : Term := Term.var sentinel (DebugName.named fresh) in
+            sig_tvars_go (term_subst 0 placeholder body) (n + 1) params,
+        Term.pi arg ret =>
+            sig_tvars_go ret n (list_append params [arg]),
+        _ => { params := params, ret := t },
+    }
+
+/// Best-effort type-variable solver: structurally walk a callee's
+/// declared parameter type against the argument's actual inferred
+/// type, recording `name := actual_part` for every FREE `Term.var`
+/// occurrence in the parameter type. Free vars in a registered
+/// `Def.typ` are exactly the def's implicit type parameters (see
+/// `SigInfo`'s doc comment), so no precomputed typevar-name set is
+/// needed -- but the `sentinel` gate matters: a var BOUND by an
+/// enclosing binder inside the parameter type must never be recorded.
+/// Never fails -- a shape mismatch just stops collecting (the argument
+/// was already checked successfully; this walk only recovers the
+/// type-variable instantiation, it is not the correctness gate).
+#[partial]
+def solve_typevars (param : Term) (actual : Term) (subst : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match param {
+        Term.var idx dbg =>
+            if not (I64.beq idx sentinel) then subst
+            else
+                match dbg {
+                    DebugName.named vid =>
+                        // A `Term.hole` actual carries NO type information
+                        // (an argument this infer-only checker couldn't
+                        // type -- e.g. a constructor call whose own
+                        // expected type bottomed out at hole). Recording
+                        // it anyway poisons the substitution: EVERY free
+                        // var in a pre-elaboration `Def.typ` has
+                        // `idx == sentinel` (concrete type names like
+                        // `ParamPair` included -- there is no `forall`
+                        // wrapper distinguishing typevars from them at
+                        // this point), so `cons_pair (ParamPair.mk ...)
+                        // empty_pairs` solved `ParamPair := Term.hole`
+                        // from the hole-typed ctor arg and rewrote the
+                        // monomorphic `List ParamPair` return into
+                        // `(List _)` -- confirmed live via a minimal
+                        // probe (match-arm shape only; the annotated
+                        // top-level form masked it).
+                        match actual {
+                            Term.hole => subst,
+                            _ => if subst_has_id subst vid then subst else List.cons (Pair.pair vid actual) subst,
+                        },
+                    DebugName.unnamed => subst,
+                },
+        Term.pi p_arg p_ret =>
+            match actual {
+                Term.pi a_arg a_ret => solve_typevars p_ret a_ret (solve_typevars p_arg a_arg subst),
+                Term.forall _ _ body => solve_typevars param body subst,
+                _ => subst,
+            },
+        Term.forall _dbg _kind body => solve_typevars body actual subst,
+        Term.app p_f p_a =>
+            match actual {
+                Term.app a_f a_a => solve_typevars p_f a_f (solve_typevars p_a a_a subst),
+                _ => subst,
+            },
+        Term.con p_con =>
+            match p_con {
+                Con.mk _name _typ_name _num_args p_args => con_solve_typevars p_args actual subst,
+            },
+        _ => subst,
+    }
+
+#[partial]
+def con_solve_typevars (p_args : List (Option Term)) (actual : Term) (subst : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match actual {
+        Term.con a_con =>
+            match a_con {
+                Con.mk _name _typ_name _num_args a_args => con_args_solve_typevars p_args a_args subst,
+            },
+        _ => subst,
+    }
+
+#[partial]
+def con_args_solve_typevars (p_args : List (Option Term)) (a_args : List (Option Term)) (subst : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match p_args {
+        List.empty => subst,
+        List.cons p_opt p_rest =>
+            match p_opt {
+                Option.some p_t =>
+                    match a_args {
+                        List.empty => subst,
+                        List.cons a_opt a_rest =>
+                            match a_opt {
+                                Option.some a_t => con_args_solve_typevars p_rest a_rest (solve_typevars p_t a_t subst),
+                                Option.none => con_args_solve_typevars p_rest a_rest subst,
+                            },
+                    },
+                Option.none =>
+                    match a_args {
+                        List.empty => subst,
+                        List.cons _ a_rest => con_args_solve_typevars p_rest a_rest subst,
+                    },
+            },
+    }
+
+/// Substitute a solved type-variable mapping (from `solve_typevars`)
+/// throughout `t` -- reuses `name_subst_term` (`lang.typecheck.name_subst`)
+/// per entry, whose own "free `Term.var sentinel (DebugName.named X)`"
+/// target shape is exactly how a signature's implicit type parameter
+/// appears in its parameter and return types (see `SigInfo`'s doc
+/// comment above).
+#[partial]
+def subst_typevars_term (t : Term) (subst : List (Pair Identifier Term)) : Term :=
+    match subst {
+        List.empty => t,
+        List.cons entry rest =>
+            match entry {
+                Pair.pair vid replacement => subst_typevars_term (name_subst_term vid replacement t) rest,
+            },
+    }
+
+def subst_has_id (subst : List (Pair Identifier Term)) (target : Identifier) : Bool :=
+    match subst {
+        List.empty => false,
+        List.cons entry rest =>
+            match entry {
+                Pair.pair vid _ => if id_eq vid target then true else subst_has_id rest target,
+            },
+    }
+
 def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match try_type_check_def_call (Term.app f a) expected_type scope local_types locals {
+        Option.some r => r,
+        Option.none =>
     let a_expected : Term := app_arg_expected_type f in
     match type_check a a_expected scope local_types locals {
         ok a_tt =>
@@ -1565,6 +1899,7 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
                         },
                     }
             },
+    }
     }
 
 /// When `f` is an inline lambda with a KNOWN (non-hole) declared param

@@ -1294,6 +1294,18 @@ struct ScopeData {
     // for the analogous "recover param types without touching the
     // load-bearing `sig`/`body` hole sentinel" need).
     def_return_types : HashMap ModulePath Term := HashMap.map HashMap.empty_buckets,
+    // A def's own FULL declared signature (`Def.typ` itself, e.g.
+    // `forall V. Pi (xs : List V) (Option V)` for `def get_first {V :
+    // Type} ...`) -- unlike `def_return_types` just above (the Pi-chain
+    // STRIPPED final return type) this keeps the implicit-binder and
+    // parameter types too, so a call site can check each argument
+    // against the parameter's real declared type and solve the
+    // signature's type variables from the arguments' actual types.
+    // Same side-table pattern (and same never-touch-the-load-bearing-
+    // `sig`-hole rule) as `def_params`/`def_return_types`; populated by
+    // `build_scope_def`, consumed by `type_check_app`'s signature-driven
+    // path (`lang/typecheck/infer.mo`).
+    def_sigs : HashMap ModulePath Term := HashMap.map HashMap.empty_buckets,
 }
 
 // A scope node in the linked list.

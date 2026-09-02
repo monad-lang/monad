@@ -321,7 +321,14 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // its final return type -- see `ScopeData.def_return_types`'s
             // own doc comment for why this side-table exists.
             let ret_typ : Term := strip_pi_chain_to_return_type typ in
-            scope_data_add_def_return_type with_params defname ret_typ
+            let with_ret : ScopeData := scope_data_add_def_return_type with_params defname ret_typ in
+            // ... and UNSTRIPPED, too (`ScopeData.def_sigs`) -- the
+            // checker's signature-driven application path
+            // (`type_check_app`, `lang/typecheck/infer.mo`) needs the
+            // implicit-binder and parameter types, not just the final
+            // return type, to check arguments against their real
+            // declared types and solve the signature's type variables.
+            scope_data_add_def_sig with_ret defname typ
     }
 
 /// A def's declared parameter (name, type) list, in order, recovered
@@ -373,6 +380,13 @@ def strip_pi_chain_to_return_type (t : Term) : Term :=
 /// registration -- see `ScopeData.def_return_types`'s own doc comment.
 def scope_data_add_def_return_type (sd : ScopeData) (name : ModulePath) (ret_typ : Term) : ScopeData :=
     { sd with def_return_types := modpath_map_insert name ret_typ sd.def_return_types }
+
+/// Register `name -> sig` (the def's own FULL declared signature,
+/// `Def.typ` -- implicit binders and parameter types included, unlike
+/// `scope_data_add_def_return_type`'s stripped form) into
+/// `sd.def_sigs` -- see `ScopeData.def_sigs`'s own doc comment.
+def scope_data_add_def_sig (sd : ScopeData) (name : ModulePath) (sig : Term) : ScopeData :=
+    { sd with def_sigs := modpath_map_insert name sig sd.def_sigs }
 
 /// Registers `ind` two ways: into `.inductives` (constructor/arity
 /// lookups — `scope_find_inductive` and friends) *and*, like
@@ -588,7 +602,12 @@ def find_inductive_by_constructor_in_pairs (pairs : List (Pair ModulePath Induct
 
 def scope_data_find_all_inductives_by_constructor (sd : ScopeData) (con_name : ModulePath) : List Inductive :=
     match sd {
-        mk _ _ _ inds _ _ _ _ _ => find_all_inductives_by_constructor_in_pairs (HashMap.to_list inds) con_name
+        // 10 binders, one per ScopeData field (def_sigs, the
+        // side-table behind `scope_find_def_sig`, is the newest) --
+        // a positional match here must track the struct's field
+        // count exactly or matching a real ScopeData value fails at
+        // runtime with an arity mismatch.
+        mk _ _ _ inds _ _ _ _ _ _ => find_all_inductives_by_constructor_in_pairs (HashMap.to_list inds) con_name
     }
 
 def scope_find_all_inductives_by_constructor (con_name : ModulePath) (s : Scope) : List Inductive :=
@@ -810,6 +829,17 @@ def scope_data_find_def_return_type (sd : ScopeData) (name : ModulePath) : Optio
 def scope_find_def_return_type (name : ModulePath) (s : Scope) : Option Term :=
     let g : ScopeData := scope_globals s in
     scope_data_find_def_return_type g name
+
+// --- ScopeData: find a def's own FULL declared signature ---
+
+def scope_data_find_def_sig (sd : ScopeData) (name : ModulePath) : Option Term :=
+    modpath_map_lookup name sd.def_sigs
+
+/// Top-level `Scope`-based wrapper, same shape as
+/// `scope_find_def_return_type`.
+def scope_find_def_sig (name : ModulePath) (s : Scope) : Option Term :=
+    let g : ScopeData := scope_globals s in
+    scope_data_find_def_sig g name
 
 // --- ScopeData: find an Inductive by ModulePath ---
 
@@ -3982,6 +4012,30 @@ def test_scope_data_empty_lookup_misses : Bool :=
     match scope_data_find_def sd (ModulePath.mp List.empty) {
         Option.some _ => false,
         Option.none => true
+    }
+
+// Regression test for `scope_data_find_all_inductives_by_constructor`'s
+// POSITIONAL `ScopeData` pattern: it binds one variable per field, so
+// adding a field to `ScopeData` (`def_sigs` was the most recent) without
+// widening that pattern makes every call fail at RUNTIME with "expected
+// N constructor fields, got N+1" -- an abort with no location and no
+// def name, which took down the whole self-hosted `check lang/scope.mo`
+// (and `lang/module.mo`) run rather than reporting a diagnostic. No
+// static arity check catches it: `mk _ _ _ x _ _ _ _ _` typechecks fine
+// against a 10-field struct. This test calls the function against a
+// REAL `ScopeData` (not just constructing one), which is exactly what
+// the crashing path did.
+#[test]
+def test_find_all_inductives_by_constructor_matches_scope_data_arity : Bool :=
+    let ind_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Pair2") List.empty) in
+    let con_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "both") List.empty) in
+    let cn : InductConstructor := InductConstructor.mk con_name List.empty (Term.type_ 1) in
+    let ind : Inductive := Inductive.mk ind_name List.empty (Term.type_ 1)
+        (List.cons cn List.empty) List.empty Visibility.package_private in
+    let sd : ScopeData := scope_data_add_inductive scope_data_empty ind in
+    match scope_data_find_all_inductives_by_constructor sd con_name {
+        List.cons _ _ => true,
+        List.empty => false,
     }
 
 // Regression tests for `build_scope_one_decl`'s wildcard arm covering
