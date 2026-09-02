@@ -876,6 +876,21 @@ at that exact point — two confirmed shapes:
     `void_val` placeholder. Same fix: bind each level to a local with an
     explicit type annotation first.
 
+**Adding a field to a `struct` breaks every POSITIONAL match on it, and
+nothing catches it statically.** A pattern like `mk _ _ _ inds _ _ _ _ _`
+binds one variable per field; against a struct that has since grown a
+tenth field it still typechecks fine and then aborts at RUNTIME with
+`expected 9 constructor fields, got 10` — no location, no def name, the
+whole run dead rather than a diagnostic. Adding `def_sigs` to
+`ScopeData` did exactly this to
+`scope_data_find_all_inductives_by_constructor` (`lang/scope.mo`),
+taking down the self-hosted `check` of both `lang/scope.mo` and
+`lang/module.mo`. When you add a struct field, `grep` for positional
+matches on that type (`grep -rnE 'mk( [a-z_][a-z_0-9]*){N,} =>'`) and
+widen them; prefer a `{ .. }` field pattern or field access for new
+code, which is immune. A test that CALLS such a function against a real
+value (not just constructs one) is what catches it.
+
 `lang/codegen/emit.mo`'s `validate_no_undesugared_struct_lits` now
 fails the compile fast, naming the enclosing def, for any struct literal
 that reaches codegen un-desugared — that third shape used to cost a

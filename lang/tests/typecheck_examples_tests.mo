@@ -2,7 +2,7 @@ use lang.types {
   Decl, Def, InductConstructor, Inductive, LocalScope, ModulePath, Scope,
   ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
 }
-use lang.module {mk, parse_all_decls}
+use lang.module {elaborate_module_decls, locals_with_def_typevars, mk, parse_all_decls}
 use lang.parser.core {fail, mk, success}
 use lang.scope {build_scope_from_decls}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
@@ -49,7 +49,19 @@ def typecheck_def (df : Def) (scope : Scope) : Bool :=
             if is_hole body then
                 true
             else
-                match type_check body Term.hole scope empty_local_types empty_locals {
+                // `typ`, not `Term.hole` -- mirrors `check_def_with_
+                // scope` (lang/module.mo): checking the body against its
+                // full declared Pi-chain lets expected-type information
+                // flow into the body (a match arm whose result is an
+                // unannotated constructor call, a polymorphic call whose
+                // typevar must come from the declared return type, ...),
+                // which pure infer mode can't recover. Needs the
+                // `elaborate_module_decls` step `typecheck_source` below
+                // now does (the declared `typ` of a def with an implicit
+                // binder is only Pi-chain-shaped AFTER that pass
+                // forall-wraps it -- before, the typevar is a free var
+                // the body check can't resolve).
+                match type_check body typ scope empty_local_types (locals_with_def_typevars typ body scope empty_locals) {
                     ok _ => true,
                     err _ => false,
                 }
@@ -97,9 +109,23 @@ def typecheck_source (source : String) : Bool :=
     match parse_all_decls source {
         success _ decl_list =>
             let path := ModulePath.mp (List.cons (Identifier.id "synthetic") List.empty) in
+            // Scope FIRST, from the raw (pre-elaboration) decls -- same
+            // order as `elaborate_loaded_modules` (lang/module.mo), and
+            // load-bearing for the signature-driven call path: the def
+            // signatures `ScopeData.def_sigs` registers here are the
+            // PRE-`elaborate_def_typs` ones, where an implicit binder's
+            // type variable is still a free `sentinel` var (that's what
+            // `solve_typevars` matches against).
             let sd := build_scope_from_decls path decl_list in
             let scope := make_scope path sd in
-            typecheck_module path scope decl_list,
+            // Then elaborate (forall-wrap implicit binders, resolve class
+            // calls, ...): all-or-nothing `elaborate_module_decls`, same
+            // as `check`'s own gate -- a source whose defs can't
+            // elaborate fails the test, no silent partial elaboration.
+            match elaborate_module_decls scope decl_list empty_locals {
+                Result.err _ => false,
+                Result.ok elaborated => typecheck_module path scope elaborated,
+            },
         fail _ => false
     }
 
@@ -110,6 +136,36 @@ def test_typecheck_module_self_contained_def : Bool :=
 #[test]
 def test_typecheck_module_rejects_unbound_variable : Bool :=
     not (typecheck_source "def bad (x : Type) : Type := totally_undefined_name")
+
+// --- signature-driven application typing (`ScopeData.def_sigs`,
+// `try_type_check_def_call`, lang/typecheck/infer.mo) -- regression
+// tests for the self-hosted checker's call-typing gaps, each pinned to
+// a bug that cost real corpus defs (`ScopeDef.sig` being
+// unconditionally `Term.hole` left ~70 defs in the compiler's own
+// closure unable to type a plain call to a known def). ---
+
+// A polymorphic def called with a CONCRETE argument: the signature's
+// type variable must be solved from the argument's own inferred type
+// (`V := Type` here) and substituted into the return type. Before the
+// signature-driven path this failed with "expected V, found Type".
+#[test]
+def test_typecheck_sig_driven_poly_call : Bool :=
+    typecheck_source "def ident {V : Type} (x : V) : V := x\ndef use_ident : Type := ident Type"
+
+// A hole-typed argument must NOT poison the signature's concrete type
+// names. `P.mk`'s call infers `Term.hole` (constructor sigs are hole,
+// so the con-fallback path has nothing to trust yet in this
+// expected-type-bottoms-out-at-hole position); `solve_typevars`
+// used to record `P := Term.hole` from it anyway -- and since EVERY
+// free var in a pre-elaboration `Def.typ` is a `sentinel` var (concrete
+// type names included), that rewrote the monomorphic `Box P` return
+// into `(Box _)`, failing the whole match with "type mismatch:
+// expected (Box _), found (Box P)" (live in `lang/codegen/emit.mo`'s
+// `ensure_main_params`; only the match-arm shape exposed it, the
+// annotated top-level form masked it).
+#[test]
+def test_typecheck_hole_arg_does_not_poison_sig : Bool :=
+    typecheck_source "type Box (A : Type) { be, bc (h : A) (t : Box A) }\ntype P { mk (n : Prop) (t : Prop) }\ndef cp (p : P) (ps : Box P) : Box P := Box.bc p ps\ndef eps : Box P := Box.be\ndef m5 (params : Box P) : Box P := match params { Box.be => cp (P.mk Prop Prop) eps, _ => params }"
 
 // --- examples/ non-test files ---
 
