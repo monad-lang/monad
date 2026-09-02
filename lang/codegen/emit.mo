@@ -4842,6 +4842,125 @@ def find_unwired_native_defs (defs : List Def) : List String :=
             },
     }
 
+/// Fail fast on a struct literal that reached codegen still spelled as
+/// `Literal.struct_lit`/`Literal.struct_update` instead of a real
+/// `Term.con`.
+///
+/// `compile_lit_ir` compiles both of those to `void_val` -- a silent
+/// placeholder written on the assumption that
+/// `lang/typecheck/infer.mo`'s `type_check_struct_lit` ALWAYS desugars
+/// them first (see its own doc comment there). That assumption holds
+/// only for a def that elaboration actually SUCCEEDED on:
+/// `elaborate_module_decls_best_effort` is best-effort by design, and
+/// when `type_check` fails for a def it keeps the ORIGINAL, un-desugared
+/// decl and codegen proceeds anyway. A bare struct literal with no
+/// `: StructName` annotation and no expected type from context (the
+/// literal `type_check_struct_lit` rejects with "cannot infer struct
+/// type for struct literal") is exactly such a def, and `compile`/
+/// `check` typecheck only the TARGET file -- so one written in a
+/// DEPENDENCY module is never diagnosed anywhere and goes straight to
+/// `void_val`.
+///
+/// That cost a full ladder rung. `check_file_cached` (lang/module.mo)
+/// returned `{ result := { path := ..., diagnostics := ... }, cache :=
+/// ... }` under a `return`; the self-compiled binary printed
+/// `FAIL   (0 error(s))` -- empty path, and a `diagnostics` value that
+/// answered "cons" to `run_check_loop`'s match while `List.length` read
+/// it as empty -- then `print_diagnostics` recursed on its garbage tail
+/// until the 16MB stack was gone (SIGSEGV, no output, frame-pointer
+/// chain destroyed). Same silent-structural-miscompile shape as the
+/// unwired-native stubs above: `llc` verifies it, only running the
+/// binary finds it.
+///
+/// Reachable decls only, same reasoning as
+/// `validate_no_unwired_natives`. The fix at any reported site is to
+/// bind the literal to a local with an explicit type annotation first
+/// (AGENTS.md's rule-1 pitfall).
+#[partial]
+def validate_no_undesugared_struct_lits (decl_list : List Decl) : Result String (List Decl) :=
+    let msgs := find_undesugared_struct_lit_defs (extract_defs decl_list) in
+    match msgs {
+        List.empty => Result.ok decl_list,
+        List.cons _ _ => Result.err (join_unwired_native_msgs msgs ""),
+    }
+
+/// One message per reachable def whose body still contains an
+/// un-desugared struct literal -- see
+/// `validate_no_undesugared_struct_lits`'s own doc comment.
+#[partial]
+def find_undesugared_struct_lit_defs (defs : List Def) : List String :=
+    match defs {
+        List.empty => List.empty,
+        List.cons d rest =>
+            let rest_msgs := find_undesugared_struct_lit_defs rest in
+            match d {
+                Def.mk name _typ term_ _constraints _attrs _vis =>
+                    if term_has_struct_lit term_
+                    then
+                        let def_name := module_path_to_str name in
+                        let head := String.concat "def `" (String.concat def_name "`") in
+                        List.cons (String.concat head " contains a struct literal that never desugared to a constructor -- it would silently compile to a void placeholder; give the literal an explicit `: StructName` annotation, or bind it to an annotated local before passing it") rest_msgs
+                    else rest_msgs,
+            },
+    }
+
+/// Total structural walk for a surviving `Literal.struct_lit`/
+/// `Literal.struct_update` anywhere inside `t`.
+def term_has_struct_lit (t : Term) : Bool := match t {
+    Term.var _idx _dbg => false,
+    Term.lam _dbg typ body => term_has_struct_lit typ || term_has_struct_lit body,
+    Term.forall _dbg kind body => term_has_struct_lit kind || term_has_struct_lit body,
+    Term.pi arg ret => term_has_struct_lit arg || term_has_struct_lit ret,
+    Term.app fun_ arg_ => term_has_struct_lit fun_ || term_has_struct_lit arg_,
+    Term.ntv native => native_has_struct_lit native,
+    Term.con con_ => con_has_struct_lit con_,
+    Term.lit lit_ => lit_has_struct_lit lit_,
+    Term.type_ _universe => false,
+    Term.hole => false,
+}
+
+def lit_has_struct_lit (l : Literal) : Bool := match l {
+    Literal.num _n _suffix => false,
+    Literal.flt _text _suffix => false,
+    Literal.str _s => false,
+    Literal.if_ cond then_ else_ =>
+        term_has_struct_lit cond || term_has_struct_lit then_ || term_has_struct_lit else_,
+    Literal.match_ scrutinee cases =>
+        term_has_struct_lit scrutinee || cases_have_struct_lit cases,
+    Literal.struct_lit _fields _type_name => true,
+    Literal.struct_update _base _fields => true,
+}
+
+#[partial]
+def native_has_struct_lit (n : Native) : Bool := match n {
+    Native.mk _name _num_args args => opt_terms_have_struct_lit args,
+}
+
+#[partial]
+def con_has_struct_lit (c : Con) : Bool := match c {
+    Con.mk _name _typ_name _num_args args => opt_terms_have_struct_lit args,
+}
+
+#[partial]
+def opt_terms_have_struct_lit (args : List (Option Term)) : Bool := match args {
+    List.empty => false,
+    List.cons opt_ rest =>
+        match opt_ {
+            Option.some t => term_has_struct_lit t || opt_terms_have_struct_lit rest,
+            Option.none => opt_terms_have_struct_lit rest,
+        },
+}
+
+#[partial]
+def cases_have_struct_lit (cases : List MatchCase) : Bool := match cases {
+    List.empty => false,
+    List.cons c rest =>
+        match c {
+            MatchCase.mc _name _args body _fp =>
+                term_has_struct_lit body || cases_have_struct_lit rest,
+        },
+}
+
 /// A thin wrapper def: calls the native's own runtime function with
 /// every one of `params` (positionally, `%p0`/`%p1`/... -- same naming
 /// `build_llvm_params_db` already gives the function's own parameters),
@@ -6075,7 +6194,17 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                     if verbose then println ("FAILED at stage: validate_no_unwired_natives (" ++ e ++ ")") else return unit;
                     return (Result.err e)
                 },
-                Result.ok _ => do {
+                Result.ok _ =>
+                  // And once more for the OTHER silent-placeholder path
+                  // codegen has: a struct literal that best-effort
+                  // elaboration never desugared still compiles to
+                  // `void_val` (see `validate_no_undesugared_struct_lits`).
+                  match validate_no_undesugared_struct_lits reachable_decls {
+                    Result.err e => do {
+                        if verbose then println ("FAILED at stage: validate_no_undesugared_struct_lits (" ++ e ++ ")") else return unit;
+                        return (Result.err e)
+                    },
+                    Result.ok _ => do {
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                     let t_llvm := Bench.now;
                     let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
@@ -6086,7 +6215,8 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                     } else return unit;
 
                     return (Result.ok mod_)
-                },
+                    },
+                  },
             },
     }
 }

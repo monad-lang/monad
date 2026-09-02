@@ -863,6 +863,25 @@ at that exact point — two confirmed shapes:
     is not worth a silent runtime miscompile. Always re-run the real test
     suite (not just `check`) after a `type`→`struct` conversion for a
     widely-used type, for exactly this reason.
+  - a bare struct literal under `return` (i.e. as `Monad.pure`'s
+    argument), especially with a second literal nested inside it as a
+    field value:
+    `return { result := { path := fp, diagnostics := ds }, cache := c }`.
+    The reference interpreter accepts it. The self-hosted checker
+    rejects it ("cannot infer struct type for struct literal"), but
+    `compile`/`check` typecheck only the TARGET file, so one written in
+    a DEPENDENCY module is diagnosed nowhere — best-effort elaboration
+    (`elaborate_module_decls_best_effort`) silently keeps the
+    un-desugared decl and `compile_lit_ir` compiles the literal to a
+    `void_val` placeholder. Same fix: bind each level to a local with an
+    explicit type annotation first.
+
+`lang/codegen/emit.mo`'s `validate_no_undesugared_struct_lits` now
+fails the compile fast, naming the enclosing def, for any struct literal
+that reaches codegen un-desugared — that third shape used to cost a
+whole bootstrap-ladder rung before anyone saw it (the self-compiled
+compiler printed `FAIL   (0 error(s))` and then blew the stack in
+`print_diagnostics`, recursing on a garbage list tail).
 
 ### Rust Code Style
 

@@ -1594,14 +1594,24 @@ def check_file_cached (base : PreludeInitBase) (cache : ModuleInfoCache) (file_p
             Result.ok em => do {
                 let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                 let diags <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
-                return { result := { path := file_path, diagnostics := diags }, cache := out_cache }
+                // Each level bound with an explicit annotation rather
+                // than nested inline -- see `load_module_with_info`'s
+                // own note. `out_cache`, not `cache`: the walk extended
+                // it, and the caller needs the extended one.
+                let ok_result : FileCheckResult := { path := file_path, diagnostics := diags };
+                let ok_bundle : FileCheckAndCache := { result := ok_result, cache := out_cache };
+                return ok_bundle
             },
             Result.err e => do {
-                return { result := { path := file_path, diagnostics := [e] }, cache := out_cache }
+                let err_result : FileCheckResult := { path := file_path, diagnostics := [e] };
+                let err_bundle : FileCheckAndCache := { result := err_result, cache := out_cache };
+                return err_bundle
             },
         }
     } else do {
-        return { result := { path := file_path, diagnostics := ["error: file not found: " ++ file_path] }, cache := cache }
+        let missing_result : FileCheckResult := { path := file_path, diagnostics := ["error: file not found: " ++ file_path] };
+        let missing_bundle : FileCheckAndCache := { result := missing_result, cache := cache };
+        return missing_bundle
     }
 }
 

@@ -149,3 +149,97 @@ def main (args : List String) : IO I64 := do {
 }
 "# in
     compile_struct_lit_run_expect source "struct_lit_return_match" 7
+
+/// The variant that cost the SECOND ladder rung, in its FIXED form:
+/// the same nested `FileCheckAndCache`/`FileCheckResult` shape
+/// `check_file_cached` (lang/module.mo) builds, with both levels bound
+/// to annotated locals before `return` sees them.
+///
+/// Written bare -- `return { result := { path := fp, diagnostics := ds
+/// }, cache := 7 }` -- this compiled to a void placeholder: the
+/// self-compiled compiler printed `FAIL   (0 error(s))` (empty path, and
+/// a `diagnostics` value that answered "cons" to one match while
+/// `List.length` read it as empty), then `print_diagnostics` recursed on
+/// the garbage tail until the 16MB stack was gone. `compile`/`check`
+/// only typecheck the TARGET file, so a dependency module's literal
+/// never reached `type_check_struct_lit` at all.
+/// `validate_no_undesugared_struct_lits` now rejects the bare form (see
+/// the fail-fast test below); this one pins the fix.
+///
+/// Exit code 7 means both levels round-tripped.
+#[test]
+def test_nested_struct_literals_via_annotated_locals_round_trip : IO Bool :=
+    let source := r#"use io {IO}
+struct Inner { path : String, diagnostics : List String }
+struct Outer { result : Inner, cache : I64 }
+def make (fp : String) (ds : List String) : IO Outer := do {
+    let inner : Inner := { path := fp, diagnostics := ds };
+    let outer : Outer := { result := inner, cache := 7 };
+    return outer
+}
+def main (args : List String) : IO I64 := do {
+    let o <- make "examples/hello.mo" [];
+    match o {
+        Outer.mk r c =>
+            match r {
+                Inner.mk p ds =>
+                    match ds {
+                        List.empty => return (if String.beq p "examples/hello.mo" then c else 1),
+                        List.cons _ _ => return 1,
+                    }
+            }
+    }
+}
+"# in
+    compile_struct_lit_run_expect source "struct_lit_annotated_nested" 7
+
+/// The fail-fast half: the BARE form must now be rejected by
+/// `validate_no_undesugared_struct_lits` (lang/codegen/emit.mo) with a
+/// message naming the enclosing def, instead of compiling to a void
+/// placeholder that only a running binary can catch.
+///
+/// The literal must be reachable from `main` -- the validator runs over
+/// the reachable decls only, same as `validate_no_unwired_natives`.
+#[test]
+def test_bare_nested_struct_literal_fails_fast : IO Bool := do {
+    let output_dir := "/tmp/monad_e2e";
+    let src_path := output_dir ++ "/undesugared_struct_lit.mo";
+    let source := r#"use io {IO}
+struct Inner { path : String, diagnostics : List String }
+struct Outer { result : Inner, cache : I64 }
+def make (fp : String) (ds : List String) : IO Outer := do {
+    return { result := { path := fp, diagnostics := ds }, cache := 7 }
+}
+def main (args : List String) : IO I64 := do {
+    let _ <- make "examples/hello.mo" [];
+    return 0
+}
+"#;
+    let _ <- exec_cmd "mkdir" ["-p", output_dir];
+    IO.write_file (Path.path src_path) source;
+
+    let loaded_result : Result String LoadedModules <- load_file_modules src_path;
+    match loaded_result {
+        Result.err e => do {
+            println ("test_bare_nested_struct_literal_fails_fast: failed to load: " ++ e);
+            return false
+        },
+        Result.ok loaded => do {
+            let mod_result <- compile_loaded_modules_to_ir loaded false;
+            let _ <- exec_cmd "rm" ["-f", src_path];
+            match mod_result {
+                Result.err msg =>
+                    if String.contains msg "make" && String.contains msg "struct literal"
+                    then return true
+                    else do {
+                        println ("test_bare_nested_struct_literal_fails_fast: error message missing def name / reason: " ++ msg);
+                        return false
+                    },
+                Result.ok _ => do {
+                    println "test_bare_nested_struct_literal_fails_fast: compile SUCCEEDED, expected a fail-fast error";
+                    return false
+                },
+            }
+        },
+    }
+}
