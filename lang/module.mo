@@ -2128,7 +2128,22 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option Mod
                     Option.some fp => fp,
                     Option.none => String.concat (module_path_to_file mp) ".mo"
                 } in
-            Option.some { path := mp, file_path := file_path, decl_list := decl_list },
+            // Bound with an explicit annotation rather than written
+            // inline as `Option.some { path := ..., ... }`: a bare
+            // struct literal passed straight as a constructor ARGUMENT
+            // has no concrete expected type at that point, and the
+            // checker does not reliably desugar it to a real
+            // constructor there (AGENTS.md's "known pitfall when
+            // applying rule 1"). Under the REFERENCE interpreter the
+            // inline form happens to work; through the SELF-HOSTED
+            // codegen it silently compiled to a value whose fields were
+            // read at the wrong offsets, so `file_path` came back as a
+            // small integer that `String.length` then dereferenced as a
+            // `char*` -- a SIGSEGV in `__strlen_avx2` on the very first
+            // module load, which is every `check`/`compile` this
+            // compiler runs on itself.
+            let info : ModuleInfo := { path := mp, file_path := file_path, decl_list := decl_list } in
+            Option.some info,
         Option.none => Option.none
     }
 }
@@ -2185,7 +2200,17 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) : IO
                     let no_visiting : List ModulePath := List.empty;
                     let walked : InfosAndCache <- collect_dep_module_infos main_base_dir direct_deps_with_prelude no_visiting no_visited cache;
                     let all_modules : List ModuleInfo := List.cons main_module walked.infos;
-                    return { loaded := Result.ok { main_module := ModuleInfo.mk mp_path file_path decl_list, all_modules := all_modules }, cache := walked.cache }
+                    // Each level bound with an explicit annotation
+                    // rather than inlined as `Result.ok { ... }` inside
+                    // an outer literal -- same constructor-argument
+                    // struct-literal pitfall documented at
+                    // `load_module_with_info`'s own `Option.some info`
+                    // above, which reached a real SIGSEGV through this
+                    // backend.
+                    let main_info : ModuleInfo := ModuleInfo.mk mp_path file_path decl_list;
+                    let loaded : LoadedModules := { main_module := main_info, all_modules := all_modules };
+                    let result : LoadedAndCache := { loaded := Result.ok loaded, cache := walked.cache };
+                    return result
                 }
             },
         Option.none => do {
@@ -2513,7 +2538,11 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                             let scope2 : Scope := { module_id := target_mp, scope := scope_data2, parent := Option.none } in
                             let known_names : List Identifier := names_of_decls dict_paramed2 in
                             let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names in
-                            Result.ok { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded }
+                            // Annotated local, not an inline literal --
+                            // see `load_module_with_info`'s own note.
+                            let elaborated : ElaboratedModules :=
+                                { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded } in
+                            Result.ok elaborated
                     },
             }
     }, cache := out_cache }

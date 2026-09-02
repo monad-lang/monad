@@ -1065,10 +1065,18 @@ def retarget_terminal_ret (blocks : List LLVMBasicBlock) (target_val : LLVMValue
                     then
                         let without_ret := drop_last_instr instrs in
                         let new_instrs := append_instrs without_ret (cons_instr (LLVMInstruction.jump merge_label) empty_instrs) in
-                        Option.some { blocks := List.cons (LLVMBasicBlock.mk label new_instrs) rest, label := label }
+                        // Annotated local, never an inline literal in
+                        // constructor-argument position -- see
+                        // `load_module_with_info` (lang/module.mo) for
+                        // the SIGSEGV this exact shape produced through
+                        // this backend, and AGENTS.md's "known pitfall".
+                        let retargeted : RetargetResult := { blocks := List.cons (LLVMBasicBlock.mk label new_instrs) rest, label := label } in
+                        Option.some retargeted
                     else
                         match retarget_terminal_ret rest target_val merge_label {
-                            Option.some result => Option.some { blocks := List.cons b result.blocks, label := result.label },
+                            Option.some result =>
+                                let bubbled : RetargetResult := { blocks := List.cons b result.blocks, label := result.label } in
+                                Option.some bubbled,
                             Option.none => Option.none,
                         },
             },
@@ -3905,7 +3913,9 @@ def try_apply_self_tco (ctx : CodegenCtx) (fn_name : String) (arity : I64) (bloc
                     match prune_all_phi_predecessors stripped_blocks sites1 {
                         Option.some pruned_blocks =>
                             match split_entry_for_tco pruned_blocks header_label arity loop_names sites1 {
-                                Option.some final_blocks => Option.some { ctx := ctx2, blocks := final_blocks },
+                                Option.some final_blocks =>
+                                    let tco : SelfTcoResult := { ctx := ctx2, blocks := final_blocks } in
+                                    Option.some tco,
                                 Option.none => Option.none,
                             },
                         Option.none => Option.none,
