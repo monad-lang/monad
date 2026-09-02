@@ -59,13 +59,16 @@ def test_runtime_string_get_option_tags : Bool :=
     check_contains t "%none_con = call i64 @alloc_constructor(i64 3, i64 0)"
         && check_contains t "%some_con = call i64 @alloc_constructor(i64 4, i64 1)"
 
-/// Unsigned ops and the zero-divisor guard both reference natives the
-/// compiler's own closure needs (`std/map.mo`'s bucket arithmetic).
+/// Division-family ops and the zero-divisor guard both reference
+/// natives the compiler's own closure needs (`std/map.mo`'s bucket
+/// arithmetic). `u8_div` is `sdiv` (the reference's `wrapping_div` is
+/// signed), `u64_mod` is `urem` (bucketing only needs self-consistency,
+/// see its doc comment in runtime.mo).
 #[test]
 def test_runtime_unsigned_ops : Bool :=
     let t := runtime_ir_text in
     check_contains t "%r = urem i64 %p0, %p1"
-        && check_contains t "%r = udiv i64 %p0, %p1"
+        && check_contains t "%r = sdiv i64 %p0, %p1"
         && check_contains t "%zero_b = icmp eq i64 %p1, 0"
 
 /// No instruction may nest inside another: every arithmetic result

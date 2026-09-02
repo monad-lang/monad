@@ -39,7 +39,7 @@ use std.list {List}
 open LLVMType {i1_, i8_, i64_, ptr}
 open LLVMValue {
   add, alloc_constructor, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
-  int_, inttoptr, load, mul, parm_, phi, sub, udiv, urem, var_, zext,
+  int_, inttoptr, load, mul, parm_, phi, sdiv, sub, urem, var_, zext,
 }
 open LLVMInstruction {assign, branch, jump, ret}
 
@@ -283,7 +283,12 @@ def emit_u8_mul : LLVMFunction :=
 
 /// `monad_u8_div(a, b)`: 0 when `b == 0`, else `a / b` -- matching the
 /// reference's `if b == 0 { 0 } else { a.wrapping_div(b) }` guard.
-def emit_u8_div : LLVMFunction := emit_guarded_native "monad_u8_div" (udiv (parm_ 0) (parm_ 1))
+/// `sdiv`, not `udiv`: the reference's `wrapping_div` is SIGNED
+/// (core_native.rs:174-175), and these values are i64-carried u8s --
+/// identical to `udiv` for in-range operands, but the mirror-the-
+/// reference rule that `emit_u8_lt`/`emit_u8_gt`'s signed `slt`/`sgt`
+/// already follow says match it exactly.
+def emit_u8_div : LLVMFunction := emit_guarded_native "monad_u8_div" (sdiv (parm_ 0) (parm_ 1))
 
 /// `monad_u64_mod(a, b)`: 0 when `b == 0`, else `a % b`. `urem`, not
 /// the reference's signed `wrapping_rem` -- for `String.hash`'s

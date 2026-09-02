@@ -112,11 +112,15 @@ type LLVMInstruction {
     branch (cond : LLVMValue) (then_label : String) (else_label : String),
     jump (label : String),
     ret (val : LLVMValue),
-    /// `store <typed val>, <ptr_ty> <ptr>` -- the write side `load`'s new
-    /// typed form pairs with; no target SSA name (a store produces no
-    /// value). `ptr_ty` is explicit for the same reason as `load`'s own
-    /// (SSA vars are i64-typed by convention; the value's real pointer
-    /// type is not derivable).
+    /// `store <pointee-typed val>, <ptr_ty> <ptr>` -- the write side
+    /// `load`'s new typed form pairs with; no target SSA name (a store
+    /// produces no value). `ptr_ty` is explicit for the same reason as
+    /// `load`'s own (SSA vars are i64-typed by convention; the value's
+    /// real pointer type is not derivable), and the renderer types the
+    /// VALUE at `ptr_ty`'s pointee (`llvm_pointee`), not the value's own
+    /// convention type -- LLVM requires the stored value's type to equal
+    /// the pointee type, so the construction site must supply a value
+    /// already at that width (e.g. `trunc` for an `i8*` store).
     store (val : LLVMValue) (ptr_ty : LLVMType) (ptr : LLVMValue),
     comment (text : String),
 }
@@ -195,6 +199,19 @@ def show_llvm_type (ty : LLVMType) : String := match ty {
     ptr inner => String.concat (show_llvm_type inner) "*",
     fn_ params ret => show_llvm_type_fn params ret,
     struct_ name => String.concat "%" name,
+}
+
+/// The element type a pointer type points at -- what a `store` through
+/// it must render its value at (LLVM requires the stored value's type
+/// to equal the pointee type, NOT the value's own convention type:
+/// SSA vars are i64 by convention, so `store`'s renderer can't use
+/// `llvm_value_type` on the value or every byte-pointer store would
+/// come out as the ill-typed `store i64 %b, i8* %q`). A non-pointer
+/// `ty` degenerates to `i64_` (never happens for a well-formed store;
+/// keeps the function total).
+def llvm_pointee (ty : LLVMType) : LLVMType := match ty {
+    ptr inner => inner,
+    _ => i64_,
 }
 
 #[partial]
@@ -403,9 +420,10 @@ def show_instruction (instr : LLVMInstruction) (dbg_suffix : String) : String :=
     jump label =>
         String.concat "  br label %" (String.concat label dbg_suffix),
     store val ptr_ty ptr_ =>
-        String.concat "  store " (String.concat (show_llvm_value_typed val)
+        String.concat "  store " (String.concat (show_llvm_type (llvm_pointee ptr_ty))
+            (String.concat " " (String.concat (show_llvm_value val)
             (String.concat ", " (String.concat (show_llvm_type ptr_ty)
-            (String.concat " " (String.concat (show_llvm_value ptr_) dbg_suffix))))),
+            (String.concat " " (String.concat (show_llvm_value ptr_) dbg_suffix))))))),
     ret val => String.concat (show_ret_instr val) dbg_suffix,
     comment text =>
         String.concat "  ; " text,
@@ -893,10 +911,18 @@ def test_value_load_typed_var : Bool :=
     String.beq (show_llvm_value ld) "load i8, i8* %q0"
         && String.beq (show_llvm_value_typed ld) "i8 load i8, i8* %q0"
 
+/// A store's value renders at the POINTER's pointee type, not the
+/// value's own convention type (an SSA var would otherwise render
+/// `i64`, making every byte-pointer store ill-typed IR: `store i64 %b,
+/// i8* %q`). The construction site's job is supplying a width-correct
+/// value (a `trunc` temp for `i8*`); the renderer just keeps the
+/// instruction internally consistent.
 #[test]
 def test_value_store : Bool :=
     let instr := store (var_ "b0") (ptr i8_) (var_ "q0") in
-    String.beq (show_instruction instr "") "  store i64 %b0, i8* %q0"
+    let instr64 := store (var_ "b0") (ptr i64_) (var_ "q1") in
+    String.beq (show_instruction instr "") "  store i8 %b0, i8* %q0"
+        && String.beq (show_instruction instr64 "") "  store i64 %b0, i64* %q1"
 
 #[test]
 def test_value_urem_ult : Bool :=
