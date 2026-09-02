@@ -44,12 +44,15 @@ use lang.types {
   StructField, StructLitField, Term, TypeConstraint,
   id_eq,
 }
+use lang.typecheck.traverse {con_map_children, native_map_children, opt_term_map_children, opt_terms_map_children, term_map_children}
 
 // ─── Term-level walk ─────────────────────────────────────────────────
 
-#[partial]
+#[terminating]
 def name_subst_term (target : Identifier) (replacement : Term) (t : Term) : Term :=
     match t {
+        // The ONLY node this walk treats specially: a free, named
+        // reference matching `target` becomes `replacement`.
         Term.var idx dbg =>
             match dbg {
                 DebugName.named id => if id_eq id target then replacement else Term.var idx dbg,
@@ -59,95 +62,42 @@ def name_subst_term (target : Identifier) (replacement : Term) (t : Term) : Term
         // entirely (see `lang/types.mo`'s own `Term.var_macro` doc
         // comment) -- never a plain param reference, so never a
         // substitution target here, and (being a leaf) nothing to
-        // recurse into either.
-        Term.var_macro idx dbg => Term.var_macro idx dbg,
-        Term.lam dbg typ body =>
-            Term.lam dbg (name_subst_term target replacement typ) (name_subst_term target replacement body),
-        Term.forall dbg kind body =>
-            Term.forall dbg (name_subst_term target replacement kind) (name_subst_term target replacement body),
-        Term.pi arg ret =>
-            Term.pi (name_subst_term target replacement arg) (name_subst_term target replacement ret),
-        Term.app callee arg =>
-            Term.app (name_subst_term target replacement callee) (name_subst_term target replacement arg),
-        Term.lit value => Term.lit (literal_name_subst target replacement value),
-        Term.ntv n => Term.ntv (native_name_subst target replacement n),
-        Term.con c => Term.con (con_name_subst target replacement c),
-        Term.type_ u => Term.type_ u,
-        Term.hole => Term.hole,
-        // Walk INTO quote (matches the reference's own `subst_macro`,
-        // which substitutes before `resolve_quote` ever runs) -- a
-        // quoted `unquote(param)` needs the same treatment as a bare
-        // reference, and this module has no `resolve_quote`-equivalent
-        // of its own to defer to.
-        Term.quote_ inner => Term.quote_ (name_subst_term target replacement inner),
+        // recurse into either. `term_map_children` rebuilds it as-is.
+        //
+        // Everything else is ordinary structural recursion, including
+        // walking INTO `Term.quote_` (matching the reference's own
+        // `subst_macro`, which substitutes before `resolve_quote` ever
+        // runs -- a quoted `unquote(param)` needs the same treatment as
+        // a bare reference, and this module has no `resolve_quote`
+        // equivalent of its own to defer to).
+        _ => term_map_children (name_subst_term target replacement) t,
     }
 
-#[partial]
-def literal_name_subst (target : Identifier) (replacement : Term) (l : Literal) : Literal :=
-    match l {
-        Literal.str v => Literal.str v,
-        Literal.num n suf => Literal.num n suf,
-        Literal.flt t suf => Literal.flt t suf,
-        Literal.if_ a b c =>
-            Literal.if_ (name_subst_term target replacement a) (name_subst_term target replacement b) (name_subst_term target replacement c),
-        Literal.match_ scrut cases =>
-            Literal.match_ (name_subst_term target replacement scrut) (match_cases_name_subst target replacement cases),
-        Literal.struct_lit fields type_name =>
-            Literal.struct_lit (struct_fields_name_subst target replacement fields) (opt_term_name_subst target replacement type_name),
-        Literal.struct_update base fields =>
-            Literal.struct_update (name_subst_term target replacement base) (struct_fields_name_subst target replacement fields),
-    }
-
-#[partial]
-def match_cases_name_subst (target : Identifier) (replacement : Term) (cases : List MatchCase) : List MatchCase :=
-    match cases {
-        List.empty => List.empty,
-        List.cons c rest => List.cons (match_case_name_subst target replacement c) (match_cases_name_subst target replacement rest),
-    }
-
-#[partial]
-def match_case_name_subst (target : Identifier) (replacement : Term) (c : MatchCase) : MatchCase :=
-    match c { MatchCase.mc name args body fp => MatchCase.mc name args (name_subst_term target replacement body) fp }
-
-#[partial]
-def struct_fields_name_subst (target : Identifier) (replacement : Term) (fields : List StructLitField) : List StructLitField :=
-    match fields {
-        List.empty => List.empty,
-        List.cons f rest => List.cons (struct_field_name_subst target replacement f) (struct_fields_name_subst target replacement rest),
-    }
-
-#[partial]
-def struct_field_name_subst (target : Identifier) (replacement : Term) (f : StructLitField) : StructLitField :=
-    match f { StructLitField.mk name value => StructLitField.mk name (name_subst_term target replacement value) }
+// The `Literal`/`MatchCase`/`StructLitField` walks this module used to
+// spell out by hand are now `term_map_children`'s own siblings in
+// [[lang/typecheck/traverse.mo]]; only the wrappers the Decl-level walk
+// below actually calls are kept.
 
 #[partial]
 def opt_term_name_subst (target : Identifier) (replacement : Term) (t : Option Term) : Option Term :=
-    match t {
-        Option.some x => Option.some (name_subst_term target replacement x),
-        Option.none => Option.none,
-    }
+    opt_term_map_children (name_subst_term target replacement) t
 
 #[partial]
 def opt_terms_name_subst (target : Identifier) (replacement : Term) (ts : List (Option Term)) : List (Option Term) :=
-    match ts {
-        List.empty => List.empty,
-        List.cons x rest => List.cons (opt_term_name_subst target replacement x) (opt_terms_name_subst target replacement rest),
-    }
+    opt_terms_map_children (name_subst_term target replacement) ts
 
 #[partial]
 def terms_name_subst (target : Identifier) (replacement : Term) (ts : List Term) : List Term :=
-    match ts {
-        List.empty => List.empty,
-        List.cons x rest => List.cons (name_subst_term target replacement x) (terms_name_subst target replacement rest),
-    }
+    List.map (name_subst_term target replacement) ts
 
 #[partial]
 def con_name_subst (target : Identifier) (replacement : Term) (c : Con) : Con :=
-    match c { Con.mk name typ_name num_args args => Con.mk name typ_name num_args (opt_terms_name_subst target replacement args) }
+    con_map_children (name_subst_term target replacement) c
 
 #[partial]
 def native_name_subst (target : Identifier) (replacement : Term) (n : Native) : Native :=
-    match n { Native.mk name num_args args => Native.mk name num_args (opt_terms_name_subst target replacement args) }
+    native_map_children (name_subst_term target replacement) n
+
 
 // ─── Param / signature-level walk ───────────────────────────────────
 
