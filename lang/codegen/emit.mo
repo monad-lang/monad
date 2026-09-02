@@ -1111,7 +1111,32 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
                         CompileResult.ok ctx_r instrs_r val_r_raw blocks_r funcs_r globals_r =>
                             let raw_instrs := append_instrs field_instrs instrs_r in
                             let already_terminated := ends_with_terminator raw_instrs in
-                            let bmr := materialize_branch_val ctx_r body raw_instrs val_r_raw in
+                            let bmr_raw := materialize_branch_val ctx_r body raw_instrs val_r_raw in
+                            // Pop this arm's own pattern bindings before
+                            // handing the ctx to the NEXT arm: `bind_
+                            // match_fields` pushed one local per pattern
+                            // variable, and `ctx_restore_locals` puts
+                            // `c`'s own locals back while keeping the
+                            // arm's updated fresh-name counters (exactly
+                            // what it already does for a lifted lambda's
+                            // body -- see its own doc comment). Without
+                            // this, a later arm that references a name
+                            // an EARLIER arm happened to bind (a field
+                            // access like `result.label` binds `label`,
+                            // colliding with the enclosing def's own
+                            // `label` parameter) resolves to the earlier
+                            // arm's temp instead of its own -- and that
+                            // temp is defined in a block this arm isn't
+                            // dominated by, so `llc` rejects the whole
+                            // module ("Instruction does not dominate all
+                            // uses!"). Confirmed live: this was the
+                            // `lang/main.mo` self-compile's own failure
+                            // in `resolve_branch_merge_info`, whose
+                            // `Option.none` arm built its result from
+                            // the `Option.some` arm's `result.label`/
+                            // `result.blocks` temps rather than its own
+                            // `label`/`blocks` parameters.
+                            let bmr := { bmr_raw with ctx := ctx_restore_locals c bmr_raw.ctx } in
                             let case_block := build_branch_block case_label merge_label bmr.instrs in
                             if already_terminated
                             then
