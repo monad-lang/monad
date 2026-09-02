@@ -10,6 +10,7 @@ use lang.types {
   use_d, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename, var,
   zero,
 }
+use std.list {intercalate}
 
 open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
 open Literal {flt, if_, match_, num, str}
@@ -141,21 +142,8 @@ def show_literal (lit : Literal) : String := match lit {
         String.concat inner "\n}",
 }
 
-def show_match_cases (cases : List MatchCase) : String := match cases {
-    List.empty => "",
-    List.cons first rest => show_match_cases_rest first rest,
-}
-
-#[partial]
-def show_match_cases_rest (first : MatchCase) (rest : List MatchCase) : String :=
-    match rest {
-        List.empty => show_match_case first,
-        List.cons x y =>
-            let first_str := show_match_case first in
-            let rest_str := show_match_cases_rest x y in
-            let sep := String.concat first_str ",\n " in
-            String.concat sep rest_str,
-    }
+def show_match_cases (cases : List MatchCase) : String :=
+    List.intercalate ",\n " (List.map show_match_case cases)
 
 #[partial]
 def show_match_case (c : MatchCase) : String := match c {
@@ -175,20 +163,8 @@ def show_match_case (c : MatchCase) : String := match c {
         },
 }
 
-def show_id_list (ids : List Identifier) : String := match ids {
-    List.empty => "",
-    List.cons hd rest => show_id_list_rest hd rest,
-}
-
-def show_id_list_rest (hd : Identifier) (rest : List Identifier) : String :=
-    match rest {
-        List.empty => show_identifier hd,
-        List.cons x y =>
-            let hd_str := show_identifier hd in
-            let rest_str := show_id_list_rest x y in
-            let sp := String.concat hd_str " " in
-            String.concat sp rest_str,
-    }
+def show_id_list (ids : List Identifier) : String :=
+    List.intercalate " " (List.map show_identifier ids)
 
 #[partial]
 def show_native (n : Native) : String := match n {
@@ -213,25 +189,16 @@ def show_con (c : Con) : String := match c {
         },
 }
 
+/// A `Con`/`Native` argument slot: an unapplied slot renders as `_`.
 #[partial]
-def show_opt_term_list (args : List (Option Term)) : String := match args {
-    List.empty => "",
-    List.cons hd rest => show_opt_term_rest hd rest,
+def show_opt_term (arg : Option Term) : String := match arg {
+    Option.some t => show_term t,
+    Option.none => "_",
 }
 
 #[partial]
-def show_opt_term_rest (hd : Option Term) (rest : List (Option Term)) : String :=
-    let head_str := match hd {
-        Option.some t => show_term t,
-        Option.none => "_",
-    } in
-    match rest {
-        List.empty => head_str,
-        List.cons x y =>
-            let rest_str := show_opt_term_rest x y in
-            let sp := String.concat head_str " " in
-            String.concat sp rest_str,
-    }
+def show_opt_term_list (args : List (Option Term)) : String :=
+    List.intercalate " " (List.map show_opt_term args)
 
 /// `pub `/`priv `, or "" for the default `package_private` (never written
 /// back out explicitly — round-trips as the same absence of a prefix).
@@ -274,37 +241,11 @@ def list_param_is_empty (ps : List Param) : Bool := match ps {
 }
 
 #[partial]
-def show_params (ps : List Param) : String := match ps {
-    List.empty => "",
-    List.cons hd rest => show_params_rest hd rest,
-}
+def show_params (ps : List Param) : String :=
+    List.intercalate " " (List.map show_param ps)
 
-#[partial]
-def show_params_rest (hd : Param) (rest : List Param) : String :=
-    match rest {
-        List.empty => show_param hd,
-        List.cons x y =>
-            let hd_str := show_param hd in
-            let rest_str := show_params_rest x y in
-            let sp := String.concat hd_str " " in
-            String.concat sp rest_str,
-    }
-
-def show_induct_constructors (ctors : List InductConstructor) : String := match ctors {
-    List.empty => "",
-    List.cons hd rest => show_induct_ctors_rest hd rest,
-}
-
-#[partial]
-def show_induct_ctors_rest (hd : InductConstructor) (rest : List InductConstructor) : String :=
-    match rest {
-        List.empty => show_induct_constructor hd,
-        List.cons x y =>
-            let hd_str := show_induct_constructor hd in
-            let rest_str := show_induct_ctors_rest x y in
-            let sep := String.concat hd_str ",\n  " in
-            String.concat sep rest_str,
-    }
+def show_induct_constructors (ctors : List InductConstructor) : String :=
+    List.intercalate ",\n  " (List.map show_induct_constructor ctors)
 
 #[partial]
 def show_induct_constructor (c : InductConstructor) : String := match c {
@@ -322,24 +263,15 @@ def show_induct_constructor (c : InductConstructor) : String := match c {
 }
 
 #[partial]
-def show_induct_ctor_params (ps : List Param) : String := match ps {
-    List.empty => "",
-    List.cons hd rest => show_induct_ctor_params_rest hd rest,
-}
-
-#[partial]
-def show_induct_ctor_params_rest (hd : Param) (rest : List Param) : String :=
-    let name_str := show_identifier (param_name hd) in
-    let type_str := show_term (param_type hd) in
+/// One `name : Type` pair inside an inductive constructor's parameter list.
+def show_induct_ctor_param (p : Param) : String :=
+    let name_str := show_identifier (param_name p) in
+    let type_str := show_term (param_type p) in
     let colon_type := String.concat " : " type_str in
-    let prefix := String.concat name_str colon_type in
-    match rest {
-        List.empty => prefix,
-        List.cons x y =>
-            let rest_str := show_induct_ctor_params_rest x y in
-            let sep := String.concat prefix ", " in
-            String.concat sep rest_str,
-    }
+    String.concat name_str colon_type
+
+def show_induct_ctor_params (ps : List Param) : String :=
+    List.intercalate ", " (List.map show_induct_ctor_param ps)
 
 def param_name (p : Param) : Identifier := match p {
     Param.mk name type_ mult default _attrs => name,
@@ -360,21 +292,8 @@ def show_struct (s : Struct) : String := match s {
         String.concat inner "\n}",
 }
 
-def show_struct_fields (fs : List StructField) : String := match fs {
-    List.empty => "",
-    List.cons hd rest => show_struct_fields_rest hd rest,
-}
-
-#[partial]
-def show_struct_fields_rest (hd : StructField) (rest : List StructField) : String :=
-    match rest {
-        List.empty => show_struct_field hd,
-        List.cons x y =>
-            let hd_str := show_struct_field hd in
-            let rest_str := show_struct_fields_rest x y in
-            let sep := String.concat hd_str ",\n  " in
-            String.concat sep rest_str,
-    }
+def show_struct_fields (fs : List StructField) : String :=
+    List.intercalate ",\n  " (List.map show_struct_field fs)
 
 /// Source-level multiplicity prefix (parseable, round-trips through
 /// `multiplicity_prefix`) — distinct from `Multiplicity`'s own `Display`
@@ -423,37 +342,16 @@ def show_class (cls : Class) : String := match cls {
         String.concat inner "\n}",
 }
 
-def show_class_params (ps : List Param) : String := match ps {
-    List.empty => "",
-    List.cons hd rest => show_class_params_rest hd rest,
-}
-
+/// A class parameter, parenthesised: `(name : Type)`.
 #[partial]
-def show_class_params_rest (hd : Param) (rest : List Param) : String :=
-    let prefix := String.concat "(" (show_param hd) in
-    match rest {
-        List.empty => String.concat prefix ")",
-        List.cons x y =>
-            let rest_str := show_class_params_rest x y in
-            let rp := String.concat prefix ") " in
-            String.concat rp rest_str,
-    }
+def show_class_param (p : Param) : String :=
+    String.concat (String.concat "(" (show_param p)) ")"
 
-def show_class_defs (ms : List ClassDef) : String := match ms {
-    List.empty => "",
-    List.cons hd rest => show_class_defs_rest hd rest,
-}
+def show_class_params (ps : List Param) : String :=
+    List.intercalate " " (List.map show_class_param ps)
 
-#[partial]
-def show_class_defs_rest (hd : ClassDef) (rest : List ClassDef) : String :=
-    match rest {
-        List.empty => show_class_def hd,
-        List.cons x y =>
-            let hd_str := show_class_def hd in
-            let rest_str := show_class_defs_rest x y in
-            let sep := String.concat hd_str ",\n  " in
-            String.concat sep rest_str,
-    }
+def show_class_defs (ms : List ClassDef) : String :=
+    List.intercalate ",\n  " (List.map show_class_def ms)
 
 #[partial]
 def show_class_def (m : ClassDef) : String := match m {
@@ -542,19 +440,8 @@ def show_use_item (item : UseItem) : String := match item {
 }
 
 #[partial]
-def show_use_items_joined (items : List UseItem) : String := match items {
-    List.empty => "",
-    List.cons hd rest => show_use_items_joined_rest hd rest,
-}
-
-#[partial]
-def show_use_items_joined_rest (hd : UseItem) (rest : List UseItem) : String :=
-    match rest {
-        List.empty => show_use_item hd,
-        List.cons x y =>
-            let sep := String.concat (show_use_item hd) ", " in
-            String.concat sep (show_use_items_joined rest),
-    }
+def show_use_items_joined (items : List UseItem) : String :=
+    List.intercalate ", " (List.map show_use_item items)
 
 #[partial]
 def show_use_items_braced (items : List UseItem) : String :=
@@ -568,19 +455,8 @@ def show_use_filter (filter : UseFilter) : String := match filter {
 }
 
 #[partial]
-def show_identifier_list_joined (names : List Identifier) : String := match names {
-    List.empty => "",
-    List.cons hd rest => show_identifier_list_joined_rest hd rest,
-}
-
-#[partial]
-def show_identifier_list_joined_rest (hd : Identifier) (rest : List Identifier) : String :=
-    match rest {
-        List.empty => show_identifier hd,
-        List.cons x y =>
-            let sep := String.concat (show_identifier hd) ", " in
-            String.concat sep (show_identifier_list_joined rest),
-    }
+def show_identifier_list_joined (names : List Identifier) : String :=
+    List.intercalate ", " (List.map show_identifier names)
 
 /// What an `open` declaration makes unqualified. `open_all` (no braces)
 /// renders as no suffix at all.
