@@ -16,69 +16,8 @@
 /// `validate_no_unwired_natives`'s own doc comment for that story.
 /// `String.reverse` is therefore deliberately exercised below.
 use io {IO}
-open IO {println}
-use std.process {exec_cmd}
-use lang.types {LoadedModules}
-use lang.module {load_file_modules}
-use lang.codegen.ir {emit_module}
-use lang.codegen.emit {compile_loaded_modules_to_ir}
+use lang.codegen.test.e2e_harness {compile_source_run_expect}
 
-#[partial]
-def compile_natives_run_expect (source : String) (basename : String) (expected : I64) : IO Bool := do {
-    let output_dir := "/tmp/monad_e2e";
-    let src_path := output_dir ++ "/" ++ basename ++ ".mo";
-    let ir_path := output_dir ++ "/" ++ basename ++ ".ll";
-    let obj_path := output_dir ++ "/" ++ basename ++ ".o";
-    let runtime_obj := output_dir ++ "/" ++ basename ++ "_runtime.o";
-    let output_path := output_dir ++ "/" ++ basename;
-
-    let _ <- exec_cmd "mkdir" ["-p", output_dir];
-    IO.write_file (Path.path src_path) source;
-
-    let loaded_result : Result String LoadedModules <- load_file_modules src_path;
-    match loaded_result {
-        Result.err e => do {
-            println (basename ++ ": failed to load: " ++ e);
-            return false
-        },
-        Result.ok loaded => do {
-            let mod_result <- compile_loaded_modules_to_ir loaded false;
-            match mod_result {
-                Result.err e => do {
-                    println (basename ++ ": compile_loaded_modules_to_ir failed: " ++ e);
-                    return false
-                },
-                Result.ok mod_ => do {
-                    let ir_text := emit_module mod_;
-                    IO.write_file (Path.path ir_path) ir_text;
-                    let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
-                    if not (llc_result == 0) then do {
-                        println (basename ++ ": llc failed");
-                        return false
-                    } else do {
-                        let rt_result <- exec_cmd "clang" ["-c", "lang/codegen/runtime.c", "-o", runtime_obj];
-                        if not (rt_result == 0) then do {
-                            println (basename ++ ": compiling runtime failed");
-                            return false
-                        } else do {
-                            let link_args := [obj_path, runtime_obj];
-                            let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
-                            if not (link_result == 0) then do {
-                                println (basename ++ ": clang linker failed");
-                                return false
-                            } else do {
-                                let exec_result <- exec_cmd output_path [];
-                                let _ <- exec_cmd "rm" ["-f", src_path, ir_path, obj_path, runtime_obj, output_path];
-                                println (basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result);
-                                return (exec_result == expected)
-                            }
-                        }
-                    }
-                },
-            }
-        },
-    }
-}
 
 /// The generated `monad_string_starts_with` byte loop. A too-long
 /// prefix must fall out through the byte comparison against the NUL
@@ -93,7 +32,7 @@ def test_generated_string_starts_with : IO Bool :=
     return (if yes && not no && not too_long && empty_prefix then 7 else 1)
 }
 "# in
-    compile_natives_run_expect source "gen_starts_with" 7
+    compile_source_run_expect source "gen_starts_with" 7
 
 /// `String.reverse` -- the exact path that SIGSEGV'd in v25. Routes
 /// through the generated `string_to_list`, `List.reverse`, and the C
@@ -108,7 +47,7 @@ def test_generated_to_list_reverse_round_trip : IO Bool :=
     return (if there_and_back && reversed && empty_ok then 7 else 1)
 }
 "# in
-    compile_natives_run_expect source "gen_reverse_round_trip" 7
+    compile_source_run_expect source "gen_reverse_round_trip" 7
 
 /// `String.ends_with` builds directly on reverse + starts_with, and is
 /// what `module_name_from_path` (lang/module.mo) calls on EVERY module
@@ -121,7 +60,7 @@ def test_generated_ends_with : IO Bool :=
     return (if yes && not no then 7 else 1)
 }
 "# in
-    compile_natives_run_expect source "gen_ends_with" 7
+    compile_source_run_expect source "gen_ends_with" 7
 
 /// The generated `monad_string_get`: `Option U8` tags (none 3, some 4)
 /// through `alloc_constructor`, plus both out-of-bounds directions.
@@ -134,7 +73,7 @@ def test_generated_string_get_option : IO Bool :=
     return (if at_1 && past_end && negative then 7 else 1)
 }
 "# in
-    compile_natives_run_expect source "gen_string_get" 7
+    compile_source_run_expect source "gen_string_get" 7
 
 /// The generated unsigned ops, including the zero-divisor guard both
 /// `u8_div` and `u64_mod` carry (the reference returns 0 rather than
@@ -151,7 +90,7 @@ def test_generated_unsigned_ops : IO Bool :=
     return (if m && m0 && d && d0 && cmp then 7 else 1)
 }
 "# in
-    compile_natives_run_expect source "gen_unsigned_ops" 7
+    compile_source_run_expect source "gen_unsigned_ops" 7
 
 /// The C `monad_string_to_lowercase` and `monad_u64_to_string`. The
 /// unsigned formatting cannot share `monad_i64_to_string`: a U64 near
@@ -166,7 +105,7 @@ def test_c_lowercase_and_unsigned_to_string : IO Bool :=
     return (if lower && u && b then 7 else 1)
 }
 "# in
-    compile_natives_run_expect source "c_lowercase_to_string" 7
+    compile_source_run_expect source "c_lowercase_to_string" 7
 
 /// The C `monad_exec_cmd` -- THE load-bearing native for the bootstrap
 /// ladder (`lang/codegen/link.mo` invokes `llc`/`clang` through it, so
@@ -184,7 +123,7 @@ def main (args : List String) : IO I64 := do {
     return (if ok == 0 && bad == 1 && seven == 7 && missing == 127 then 7 else 1)
 }
 "# in
-    compile_natives_run_expect source "c_exec_cmd" 7
+    compile_source_run_expect source "c_exec_cmd" 7
 
 /// The C `monad_list_dir`: bare names, one level, SORTED. The sort is
 /// load-bearing rather than cosmetic -- readdir order is
@@ -211,4 +150,4 @@ def main (args : List String) : IO I64 := do {
     return (if sorted && no_extra then 7 else 1)
 }
 "# in
-    compile_natives_run_expect source "c_list_dir" 7
+    compile_source_run_expect source "c_list_dir" 7
