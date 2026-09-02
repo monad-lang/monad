@@ -191,8 +191,6 @@ def Json.ParseError.to_string (e : Json.ParseError) : String :=
 
 // ─── Parser: helpers ───
 
-/// Helper function to concatenate a list of strings
-#[partial]
 /// EOF parser - succeeds if input is empty
 def Json.eof (input : String) : ParseResult Unit :=
   if is_empty input

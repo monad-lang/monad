@@ -537,7 +537,6 @@ def Toml.string_to_string (s : String) : String :=
 def Toml.bool_to_string (b : Bool) : String :=
   if b then "true" else "false"
 
-#[partial]
 /// Serialize a scalar or array value. NOTE: not meant to be called on a `table`
 /// (tables are only ever emitted as `[header]` sections by Toml.render_table) —
 /// returns "" defensively if it is.

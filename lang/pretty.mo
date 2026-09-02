@@ -262,7 +262,6 @@ def show_induct_constructor (c : InductConstructor) : String := match c {
         with_params,
 }
 
-#[partial]
 /// One `name : Type` pair inside an inductive constructor's parameter list.
 def show_induct_ctor_param (p : Param) : String :=
     let name_str := show_identifier (param_name p) in
