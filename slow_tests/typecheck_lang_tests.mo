@@ -1,20 +1,11 @@
 use io {IO}
-use lang.types {
-  Decl, Def, Identifier, InductConstructor, Inductive, LocalScope, ModulePath,
-  Scope, ScopeData, Term, def_d, hole, id, inductive_d, mk, mp,
-}
-use lang.module {
-  elaborate_loaded_modules, mk, typecheck_module_with_scope,
-}
+use slow_tests.typecheck_harness {typecheck_file}
+use lang.types {Decl, Def, Identifier, InductConstructor, Inductive, ModulePath, Scope, ScopeData, Term, def_d, hole, id, inductive_d, mk, mp}
+use lang.module {mk}
 use lang.parser.core {mk}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 
 open IO {println}
-
-def empty_local_scope : LocalScope := {
-    vars := List.empty,
-    parent := Option.none,
-}
 
 def make_scope (path : ModulePath) (sd : ScopeData) : Scope := {
     module_id := path,
@@ -85,30 +76,6 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
             }
     }
 
-/// Type check a file by loading it with all dependencies and type checking
-/// the result — routes through `elaborate_loaded_modules`, the one
-/// canonical front-end pipeline `check`/`compile`/`test`/`slow_tests` all
-/// now share (see `bootstrapping/unify-check-compile-test-elaboration.md`).
-///
-/// Passes `check_deps=false` for now, same as
-/// `slow_tests/typecheck_init_tests.mo`'s `typecheck_file` (see its own
-/// doc comment for the general rationale). `check_deps=true` is the
-/// eventual goal specifically for THIS test, though — it's the natural
-/// place for a genuine full-closure safety-net check to live — but isn't
-/// safe to turn on yet: see `elaborate_loaded_modules`'s own doc comment
-/// (`lang/module.mo`) for what `check_deps=true` does, and
-/// `bootstrapping/check-deps-memory-blowup.md` for why it's still off
-/// everywhere.
-def typecheck_file (file_path : String) : IO Bool := do {
-    let result <- elaborate_loaded_modules file_path false;
-    match result {
-        Result.ok em => typecheck_module_with_scope em.scope em.target_decls empty_local_scope,
-        Result.err e => do {
-            println ("error loading " ++ file_path ++ ": " ++ e);
-            return false
-        },
-    }
-}
 
 // --- lang/ non-test files ---
 
