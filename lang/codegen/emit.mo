@@ -2255,7 +2255,28 @@ def build_db_if_blocks (ctx : CodegenCtx) (then_label : String) (else_label : St
                     let else_reaches := not (ends_with_terminator else_instrs_raw) in
                     let else_bmr := materialize_branch_val ctx_else else_ else_instrs_raw else_val_raw in
                     let else_block := build_branch_block else_label merge_label else_bmr.instrs in
-                    build_merge_result else_bmr.ctx merge_label then_reaches then_bmr.val then_label else_reaches else_bmr.val else_label entry_instrs entry_blocks entry_funcs entry_globals blocks_then blocks_else funcs_then funcs_else globals_then globals_else then_block else_block,
+                    build_merge_result {
+                        ctx_else := else_bmr.ctx,
+                        merge_label := merge_label,
+                        then_reaches := then_reaches,
+                        then_val := then_bmr.val,
+                        then_label := then_label,
+                        else_reaches := else_reaches,
+                        else_val := else_bmr.val,
+                        else_label := else_label,
+                        entry_instrs := entry_instrs,
+                        entry_blocks := entry_blocks,
+                        entry_funcs := entry_funcs,
+                        entry_globals := entry_globals,
+                        blocks_then := blocks_then,
+                        blocks_else := blocks_else,
+                        funcs_then := funcs_then,
+                        funcs_else := funcs_else,
+                        globals_then := globals_then,
+                        globals_else := globals_else,
+                        then_block := then_block,
+                        else_block := else_block,
+                    },
             },
     }
 
