@@ -602,10 +602,10 @@ def test_match_with_let_annotation : Bool :=
 
 #[test]
 def test_do_bind_with_match : IO Bool := do {
-    let x : Option I64 <- IO.io (Option.some 42);
+    let x : Option I64 <- IO.pure (Option.some 42);
     match x {
-        Option.some _ => IO.io true,
-        Option.none => IO.io false
+        Option.some _ => IO.pure true,
+        Option.none => IO.pure false
     }
 }
 

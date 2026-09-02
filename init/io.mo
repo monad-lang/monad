@@ -7,9 +7,17 @@ type IO A {
  io A
 }
 
+/// IO construction wrapper — the public API for creating IO values.
+/// Call sites use `IO.pure` instead of `IO.io` directly, so the
+/// constructor can eventually be hidden without touching every use
+/// site. Currently just wraps `IO.io`; will become a native once the
+/// self-hosted codegen supports it.
+def IO.pure (a : A) : IO A :=
+    IO.io a
+
 instance Monad IO {
   def pure (a : A) : IO A :=
-    IO.io a
+    IO.pure a
   def bind (a : IO A) (f : A -> IO B) : IO B :=
     match a {
       io a => f a

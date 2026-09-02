@@ -3,11 +3,11 @@
 
 use std.concurrent.fiber {await_fiber, fiber, forkIO}
 
-def io_42_action (_ : Unit) : IO I64 := IO.io 42
+def io_42_action (_ : Unit) : IO I64 := IO.pure 42
 
-def io_7_action (_ : Unit) : IO I64 := IO.io 7
+def io_7_action (_ : Unit) : IO I64 := IO.pure 7
 
-def io_true_action (_ : Unit) : IO Bool := IO.io true
+def io_true_action (_ : Unit) : IO Bool := IO.pure true
 
 #[test]
 def test_fork_and_await : IO Bool {

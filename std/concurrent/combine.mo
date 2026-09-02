@@ -26,7 +26,7 @@ def scope_drop (s : Scope) : IO Unit
 // Await all fibers in order, collecting results.
 def all_aux (fibers : List (Fiber A)) (acc : List A) : IO (List A) :=
   match fibers {
-    List.empty => IO.io acc,
+    List.empty => IO.pure acc,
     List.cons f rest =>
       Monad.bind (await_fiber f) (fn head =>
         all_aux rest (List.cons head acc))
@@ -38,7 +38,7 @@ def all {A : Type} (fibers : List (Fiber A)) : IO (List A) :=
 #[partial]
 def cancel_all (fibers : List (Fiber A)) : IO Unit :=
   match fibers {
-    List.empty => IO.io Unit.unit,
+    List.empty => IO.pure Unit.unit,
     List.cons f rest => do {
       cancel_fiber f;
       cancel_all rest

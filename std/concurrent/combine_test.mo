@@ -5,19 +5,19 @@ use std.concurrent.combine {Scope, scope_fork, scoped, sleepIO}
 
 // Helper thunks
 
-def io_10_action (_ : Unit) : IO I64 := IO.io 10
+def io_10_action (_ : Unit) : IO I64 := IO.pure 10
 
-def io_20_action (_ : Unit) : IO I64 := IO.io 20
+def io_20_action (_ : Unit) : IO I64 := IO.pure 20
 
-def io_30_action (_ : Unit) : IO I64 := IO.io 30
+def io_30_action (_ : Unit) : IO I64 := IO.pure 30
 
-def io_42_action (_ : Unit) : IO I64 := IO.io 42
+def io_42_action (_ : Unit) : IO I64 := IO.pure 42
 
 // all: concrete specialized
 
 def all_i64 (fibers : List (Fiber I64)) : IO (List I64) :=
   match fibers {
-    List.empty => IO.io (List.empty : List I64),
+    List.empty => IO.pure (List.empty : List I64),
     List.cons f rest => do {
       let head <- await_fiber f;
       let tail <- all_i64 rest;
@@ -29,7 +29,7 @@ def all_i64 (fibers : List (Fiber I64)) : IO (List I64) :=
 
 def cancel_i64 (fibers : List (Fiber I64)) : IO Unit :=
   match fibers {
-    List.empty => IO.io Unit.unit,
+    List.empty => IO.pure Unit.unit,
     List.cons f rest => do {
       cancel_fiber f;
       cancel_i64 rest

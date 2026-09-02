@@ -64,6 +64,41 @@ class [Applicative M] Monad (M: Type -> Type) {
 
 infix (>>=) := Monad.bind
 
+/// State monad: thread state S through a monad M.
+/// Single-param class (M only) — S is an implicit forall variable,
+/// like Map's K/V, so `KnownInstances` can key on the monad's concrete
+/// head (e.g. `State`), not a variable.
+class MonadState (M : Type -> Type) {
+    def get : M S
+    def set (s : S) : M Unit
+    def modify_get (f : S -> Pair S A) : M A
+
+    /// Modify the state and return unit
+    def modify (f : S -> S) : M Unit :=
+        modify_get (fn s => Pair.pair (f s) unit)
+
+    /// Get the state, apply a function, and return the result
+    def get_map (f : S -> A) : M A :=
+        modify_get (fn s => Pair.pair s (f s))
+}
+
+/// Lift computations from monad `m` into monad `n`
+class MonadLift (m : Type -> Type) (n : Type -> Type) {
+    def monad_lift (a : m A) : n A
+}
+
+/// Transitive monad lift. The reflexive instance (lifting from
+/// `m` to `m`) is the identity below; for other pairs, provide
+/// an instance that delegates to `MonadLift`.
+class MonadLiftT (m : Type -> Type) (n : Type -> Type) {
+    def monad_lift_t (a : m A) : n A
+}
+
+/// Reflexive: lifting from m to m is the identity
+instance MonadLiftT m m {
+    def monad_lift_t (a : m A) : m A := a
+}
+
 type Void {}
 
 /// UTF8 string
@@ -390,4 +425,28 @@ class IndexedMonad (M : Type -> Type -> Type -> Type) {
 
     /// Lift a pure value into the indexed monad at any index
     def lift (a : A) : M I I A := pure a
+}
+
+/// Any `IndexedMonad M` at equal indices (`M I I`) is a regular `Monad`.
+/// This bridge instance provides `Monad (M I I)` for every `IndexedMonad M`,
+/// enabling do-notation for indexed monads without type-checker changes.
+instance {I : Type} [IndexedMonad M] Monad (M I I) {
+    def pure (a : A) : M I I A := IndexedMonad.pure a
+    def bind (a : M I I A) (f : A -> M I I B) : M I I B := IndexedMonad.bind a f
+}
+
+/// Indexed state monad: thread state S through an indexed monad M.
+/// State operations preserve the index (M I I), so they can be
+/// sequenced in any position without changing the protocol state.
+/// Single-param class (M only) — S is implicit forall, same as
+/// `MonadState` above.
+class IndexedMonadState (M : Type -> Type -> Type -> Type) {
+    def get : M I I S
+    def set (s : S) : M I I Unit
+    def modify_get (f : S -> Pair S A) : M I I A
+}
+
+/// Lift computations from indexed monad `m` into indexed monad `n`
+class IndexedMonadLift (m : Type -> Type -> Type -> Type) (n : Type -> Type -> Type -> Type) {
+    def monad_lift (a : m I J A) : n I J A
 }
