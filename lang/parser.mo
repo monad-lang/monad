@@ -11,7 +11,7 @@ use lang.types {
   show_operator, struct_d, type_, unnamed, use_bare, use_d, use_glob, use_items,
   use_name, use_rename, use_sub, use_sub_rename, var,
 }
-use std.list {filter, length}
+use std.list {filter, intercalate, length}
 use lang.parser.core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
   op_lookup_prec, op_table, parse_error_remaining, success, tag,
@@ -69,17 +69,12 @@ def dotted_identifier_require_nonempty (r : ParseResult (List String)) (orig : S
 	}
 
 /// Join a list of identifiers into a dotted string (e.g., ["Unit", "unit"] -> "Unit.unit")
+///
+/// Stays a named def rather than being inlined: `dotted_def_name` passes it
+/// to `map_parse` as a first-class function value.
 #[partial]
-def join_dotted_identifiers (ids : List String) : String := match ids {
-    List.empty => "",
-    List.cons hd rest => join_dotted_rest hd rest,
-}
-
-#[partial]
-def join_dotted_rest (hd : String) (rest : List String) : String := match rest {
-    List.empty => hd,
-    List.cons x y => String.concat (String.concat hd ".") (join_dotted_identifiers rest),
-}
+def join_dotted_identifiers (ids : List String) : String :=
+    List.intercalate "." ids
 
 /// Extract the identifier string from a NameRef
 #[partial]
@@ -89,29 +84,16 @@ def name_ref_to_string (nref : NameRef) : Option String := match nref {
     NameRef.nop op => Option.some (show_operator op),
 }
 
-/// Convert a ModulePath to a dotted string
+/// Convert a ModulePath to a dotted string.
+///
+/// `show_identifier`/`show_operator` are deliberately NOT redefined here:
+/// this file already imports both from `lang.types` (see the `use` list
+/// above), so local copies were a name collision -- the same shape
+/// AGENTS.md item 18 describes, harmless in this one instance only
+/// because the two definitions happened to agree byte-for-byte.
 #[partial]
 def module_path_to_string (mp : ModulePath) : String := match mp {
-    ModulePath.mp ids => join_dotted_identifiers (map_show_identifier ids),
-}
-
-/// Map a list of Identifiers to their string representations
-#[partial]
-def map_show_identifier (ids : List Identifier) : List String := match ids {
-    List.empty => List.empty,
-    List.cons hd rest => List.cons (show_identifier hd) (map_show_identifier rest),
-}
-
-/// Show an Identifier as a string
-#[partial]
-def show_identifier (id : Identifier) : String := match id {
-    Identifier.id s => s,
-}
-
-/// Show an Operator as a string
-#[partial]
-def show_operator (op : Operator) : String := match op {
-    Operator.operator s => s,
+    ModulePath.mp ids => List.intercalate "." (List.map show_identifier ids),
 }
 
 #[partial]
