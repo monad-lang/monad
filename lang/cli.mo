@@ -20,6 +20,15 @@
 /// note on `derive_cli_meta` below.
 
 use std.list {length, filter, any}
+// `String.concat_all` lives in `init/string.mo` (moved there by
+// c431ba0, which deleted this file's own `cli_concat_all` copy). An
+// explicit import is required, not optional: this module's defs are
+// meta-evaluated during `#[derive_cli]` expansion, and that closure is
+// scoped to the module's own declared dependencies -- without this the
+// expansion fails with `unbound variable String.concat_all`, taking
+// `lang/main.mo` and four test files down with it. `lang/json.mo`
+// imports from `init.string` the same way.
+use init.string {concat_all}
 use init.meta {TypeInfo, CtorInfo, FieldInfo, Expr, Decl}
 open List {length}
 open TypeInfo {type_info}
