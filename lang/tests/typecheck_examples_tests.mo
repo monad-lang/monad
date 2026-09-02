@@ -167,6 +167,17 @@ def test_typecheck_sig_driven_poly_call : Bool :=
 def test_typecheck_hole_arg_does_not_poison_sig : Bool :=
     typecheck_source "type Box (A : Type) { be, bc (h : A) (t : Box A) }\ntype P { mk (n : Prop) (t : Prop) }\ndef cp (p : P) (ps : Box P) : Box P := Box.bc p ps\ndef eps : Box P := Box.be\ndef m5 (params : Box P) : Box P := match params { Box.be => cp (P.mk Prop Prop) eps, _ => params }"
 
+// A call whose parameter type is a CONCRETE type name (pre-elaboration
+// `Def.typ` represents it as the same free `sentinel` var shape as an
+// implicit type parameter -- `is_scope_type_name` is the discriminator
+// `solve_typevars` uses). Passing a var of exactly that type must leave
+// the return type unpoisoned: without the scope gate, a mismatched
+// actual at such a position would record `P := <actual>` and rewrite
+// every later `P` in the signature into garbage.
+#[test]
+def test_typecheck_concrete_param_name_not_solved : Bool :=
+    typecheck_source "type P { p0 }\ntype Box (A : Type) { be, bc (h : A) (t : Box A) }\ndef cp (x : P) : Box P := Box.bc x Box.be\ndef use (q : P) : Box P := cp q"
+
 // --- examples/ non-test files ---
 
 // These examples depend on external modules (io, init, math, etc.) and require module loading.

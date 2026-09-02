@@ -1616,6 +1616,27 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                     match dbg {
                         DebugName.named id =>
                             if not (I64.beq idx sentinel) then Option.none
+                            // A LOCAL of this name shadows any global of
+                            // the same name, and a local's own type is
+                            // not a registered signature. Without this
+                            // guard `scope_resolve_name` correctly returns
+                            // the LOCAL's `ScopeDef`, but its `.name` is
+                            // the same single-segment `ModulePath` the
+                            // global is registered under -- so the
+                            // `def_sigs` lookup below would hand back the
+                            // GLOBAL's signature and check this call's
+                            // arguments against the wrong parameter types
+                            // (`def danger (pick : String -> I64) ... :=
+                            // pick s`, with an unrelated global `pick`).
+                            // Today that degrades to `Option.none` rather
+                            // than a false error, since `def_call_check_
+                            // args` infers each argument intrinsically
+                            // first and any failure bails out -- but that
+                            // is luck, not design; a shadowed name whose
+                            // arguments happened to fit the global's
+                            // parameters would silently type against the
+                            // wrong signature.
+                            else if is_some_local (scope_find_local id locals) then Option.none
                             else
                                 match scope_resolve_name (NameRef.nid id) scope locals {
                                     err _ => Option.none,
@@ -1630,12 +1651,22 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                 if I64.gt (List.length args) (List.length params)
                                                                 then Option.none
                                                                 else
-                                                                    match def_call_check_args head args params List.empty scope local_types locals {
+                                                                    match def_call_check_args args params List.empty scope local_types locals {
                                                                         err _ => Option.none,
                                                                         ok pair =>
                                                                             match pair {
                                                                                 DccPair.mk elab_args subst =>
-                                                                                    let subst_ret : Term := subst_typevars_term ret subst in
+                                                                                    // A PARTIAL application's type is the
+                                                                                    // remaining pi chain, not the final
+                                                                                    // return type: `add2 1` (of `def add2
+                                                                                    // (a : I64) (b : I64) : I64`) is
+                                                                                    // `I64 -> I64`, not `I64`. Returning
+                                                                                    // `ret` unconditionally accepted
+                                                                                    // `def wrong : I64 := add2 1`, which
+                                                                                    // the reference checker rejects.
+                                                                                    let full_ret : Term :=
+                                                                                        rebuild_pi_chain (drop_params (List.length args) params) ret in
+                                                                                    let subst_ret : Term := subst_typevars_term full_ret subst in
                                                                                     let result_typ : Term :=
                                                                                         match unify subst_ret expected_type {
                                                                                             ok u => u,
@@ -1653,6 +1684,39 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                     },
                 _ => Option.none,
             },
+    }
+
+/// `Option.some`-ness test for a `LocalVar` lookup -- `try_type_check_
+/// def_call`'s shadow guard only needs to know WHETHER a local of that
+/// name exists, not what it is.
+#[partial]
+def is_some_local (lv : Option LocalVar) : Bool :=
+    match lv {
+        Option.some _ => true,
+        Option.none => false,
+    }
+
+/// Drop the first `n` entries of a parameter-type list -- the ones a
+/// call actually supplied arguments for. What remains is the callee's
+/// still-unapplied parameters (empty for a saturated call).
+#[partial]
+def drop_params (n : I64) (params : List Term) : List Term :=
+    if I64.lt n 1 then params
+    else
+        match params {
+            List.empty => List.empty,
+            List.cons _ rest => drop_params (n - 1) rest,
+        }
+
+/// Rebuild a `Term.pi` chain over `ret` from the still-unapplied
+/// parameter types, right-associated: `[A, B]` over `R` gives
+/// `Pi A (Pi B R)`. Empty list (a saturated call) gives `ret` itself,
+/// so the common case is unchanged.
+#[partial]
+def rebuild_pi_chain (params : List Term) (ret : Term) : Term :=
+    match params {
+        List.empty => ret,
+        List.cons p rest => Term.pi p (rebuild_pi_chain rest ret),
     }
 
 struct DccPair {
@@ -1678,7 +1742,7 @@ struct DccPair {
 /// needs its expected type to know which struct it is -- fall back to
 /// checking against the parameter type itself.
 #[partial]
-def def_call_check_args (head : Term) (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
+def def_call_check_args (args : List Term) (params : List Term) (subst : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
     match args {
         List.empty => ok (DccPair.mk List.empty subst),
         List.cons arg rest =>
@@ -1705,8 +1769,8 @@ def def_call_check_args (head : Term) (args : List Term) (params : List Term) (s
 #[partial]
 def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : List Term) (rest_params : List Term) (subst : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
     let a_typ : Term := tt_typ a_tt in
-    let next_subst : List (Pair Identifier Term) := solve_typevars param_ty a_typ subst in
-    match def_call_check_args arg rest rest_params next_subst scope local_types locals {
+    let next_subst : List (Pair Identifier Term) := solve_typevars scope param_ty a_typ subst in
+    match def_call_check_args rest rest_params next_subst scope local_types locals {
         err e => err e,
         ok pair =>
             match pair {
@@ -1756,15 +1820,19 @@ def sig_tvars_go (t : Term) (n : I64) (params : List Term) : SigInfo :=
 /// declared parameter type against the argument's actual inferred
 /// type, recording `name := actual_part` for every FREE `Term.var`
 /// occurrence in the parameter type. Free vars in a registered
-/// `Def.typ` are exactly the def's implicit type parameters (see
-/// `SigInfo`'s doc comment), so no precomputed typevar-name set is
-/// needed -- but the `sentinel` gate matters: a var BOUND by an
-/// enclosing binder inside the parameter type must never be recorded.
+/// `Def.typ` are the def's implicit type parameters OR references to
+/// global concrete types (see `SigInfo`'s doc comment) -- so recording
+/// is additionally gated on the name NOT resolving in scope
+/// (`is_scope_type_name` below): a concrete type name solved from a
+/// mismatched actual would rewrite every later mention of it (the
+/// same poisoning shape as the `Term.hole` case). The `sentinel` gate
+/// also matters: a var BOUND by an enclosing binder inside the
+/// parameter type must never be recorded.
 /// Never fails -- a shape mismatch just stops collecting (the argument
 /// was already checked successfully; this walk only recovers the
 /// type-variable instantiation, it is not the correctness gate).
 #[partial]
-def solve_typevars (param : Term) (actual : Term) (subst : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+def solve_typevars (scope : Scope) (param : Term) (actual : Term) (subst : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
     match param {
         Term.var idx dbg =>
             if not (I64.beq idx sentinel) then subst
@@ -1789,41 +1857,56 @@ def solve_typevars (param : Term) (actual : Term) (subst : List (Pair Identifier
                         // top-level form masked it).
                         match actual {
                             Term.hole => subst,
-                            _ => if subst_has_id subst vid then subst else List.cons (Pair.pair vid actual) subst,
+                            // A free var that RESOLVES in scope is a
+                            // concrete type name, not one of the def's
+                            // implicit type parameters (those are never
+                            // registered anywhere) -- and pre-elaboration
+                            // `Def.typ` represents both identically, so
+                            // resolution is the only discriminator. Not
+                            // recording it keeps e.g. `def cp (x : P) :
+                            // Box P`'s `P` unsolved when an argument
+                            // infers to something else (the call is
+                            // ill-typed; falling through unsolved
+                            // degrades to the old lenient path rather
+                            // than rewriting `Box P` into garbage).
+                            _ =>
+                                if is_scope_type_name vid scope then subst
+                                else if subst_has_id subst vid then subst
+                                else List.cons (Pair.pair vid actual) subst,
                         },
                     DebugName.unnamed => subst,
                 },
         Term.pi p_arg p_ret =>
             match actual {
-                Term.pi a_arg a_ret => solve_typevars p_ret a_ret (solve_typevars p_arg a_arg subst),
-                Term.forall _ _ body => solve_typevars param body subst,
+                Term.pi a_arg a_ret => solve_typevars scope p_ret a_ret (solve_typevars scope p_arg a_arg subst),
+                Term.forall _ _ body => solve_typevars scope param body subst,
                 _ => subst,
             },
-        Term.forall _dbg _kind body => solve_typevars body actual subst,
+        Term.forall _dbg _kind body => solve_typevars scope body actual subst,
         Term.app p_f p_a =>
             match actual {
-                Term.app a_f a_a => solve_typevars p_f a_f (solve_typevars p_a a_a subst),
+                Term.app a_f a_a => solve_typevars scope p_f a_f (solve_typevars scope p_a a_a subst),
                 _ => subst,
             },
         Term.con p_con =>
             match p_con {
-                Con.mk _name _typ_name _num_args p_args => con_solve_typevars p_args actual subst,
+                Con.mk _name _typ_name _num_args p_args => con_solve_typevars scope p_args actual subst,
             },
         _ => subst,
     }
 
 #[partial]
-def con_solve_typevars (p_args : List (Option Term)) (actual : Term) (subst : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+def con_solve_typevars (scope : Scope) (p_args : List (Option Term)) (actual : Term) (subst : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
     match actual {
         Term.con a_con =>
             match a_con {
-                Con.mk _name _typ_name _num_args a_args => con_args_solve_typevars p_args a_args subst,
+                Con.mk _name _typ_name _num_args a_args => con_args_solve_typevars scope p_args a_args subst,
             },
         _ => subst,
     }
 
 #[partial]
-def con_args_solve_typevars (p_args : List (Option Term)) (a_args : List (Option Term)) (subst : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+def con_args_solve_typevars (scope : Scope) (p_args : List (Option Term)) (a_args : List (Option Term)) (subst : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
     match p_args {
         List.empty => subst,
         List.cons p_opt p_rest =>
@@ -1833,16 +1916,29 @@ def con_args_solve_typevars (p_args : List (Option Term)) (a_args : List (Option
                         List.empty => subst,
                         List.cons a_opt a_rest =>
                             match a_opt {
-                                Option.some a_t => con_args_solve_typevars p_rest a_rest (solve_typevars p_t a_t subst),
-                                Option.none => con_args_solve_typevars p_rest a_rest subst,
+                                Option.some a_t => con_args_solve_typevars scope p_rest a_rest (solve_typevars scope p_t a_t subst),
+                                Option.none => con_args_solve_typevars scope p_rest a_rest subst,
                             },
                     },
                 Option.none =>
                     match a_args {
                         List.empty => subst,
-                        List.cons _ a_rest => con_args_solve_typevars p_rest a_rest subst,
+                        List.cons _ a_rest => con_args_solve_typevars scope p_rest a_rest subst,
                     },
             },
+    }
+
+/// Does this identifier resolve to something in scope? Free vars in a
+/// registered pre-elaboration `Def.typ` are EITHER the def's implicit
+/// type parameters (never registered) OR references to global
+/// concrete types (registered by `build_scope_*`), and both look like
+/// `Term.var sentinel (DebugName.named ...)` -- so `solve_typevars`
+/// uses this as its "is this really a type variable?" gate.
+#[partial]
+def is_scope_type_name (vid : Identifier) (scope : Scope) : Bool :=
+    match scope_resolve_name (NameRef.nid vid) scope empty_locals {
+        err _ => false,
+        ok _ => true,
     }
 
 /// Substitute a solved type-variable mapping (from `solve_typevars`)
