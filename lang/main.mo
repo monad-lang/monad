@@ -177,11 +177,10 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
     } else return unit;
     match elaborated_result {
         Result.ok em =>
-            match em {
-                ElaboratedModules.mk scope_ target_decls_ _elaborated => do {
+            do {
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                     let t_check := Bench.now;
-                    let diags : List String <- check_module_with_scope scope_ target_decls_ empty_locs (Option.some file_path) verbose;
+                    let diags : List String <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
                     if verbose then do {
                         let _ := Bench.report "check_module_with_scope" (I64.sub Bench.now t_check);
                         return unit
@@ -197,7 +196,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                             return 1
                         },
                         List.empty => do {
-                            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug };
+                            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug, preloaded := Option.some em.loaded };
                             if verbose then do {
                                 let _ := Bench.report "compile_file total" (I64.sub Bench.now total_start);
                                 return unit
@@ -205,11 +204,10 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                             return link_result
                         },
                     }
-                }
             },
         Result.err e => do {
             println ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
-            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug };
+            let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug, preloaded := Option.none };
             if verbose then do {
                 let _ := Bench.report "compile_file total" (I64.sub Bench.now total_start);
                 return unit
@@ -239,9 +237,19 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
 /// renamed, lambda-lifted) just gets no debug info, not a compile
 /// error -- see `build_debug_locs`'s own doc comment.
 #[partial]
-def compile_file_codegen (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) (debug : Bool) : IO I64 {
-    // First try to load with module boundaries preserved
-    let res : Result String LoadedModules <- load_file_modules file_path;
+def compile_file_codegen (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) (debug : Bool) (preloaded : Option LoadedModules) : IO I64 {
+    // `preloaded` is the module set the typecheck gate already loaded, if
+    // it got that far -- reusing it avoids reading and re-parsing the
+    // target's ENTIRE transitive closure (prelude and init included) a
+    // second time, which is exactly what this function used to do on
+    // every successful compile. `Option.none` (the gate's own load
+    // failed) falls back to loading here, so the error path still
+    // produces the same rendered diagnostic it always did.
+    let res : Result String LoadedModules <-
+        match preloaded {
+            Option.some already => do { return (Result.ok already) },
+            Option.none => load_file_modules file_path,
+        };
     match res {
         Result.ok loaded => do {
             let dbg_info : Pair (Option String) (HashMap String Location) <-
@@ -481,19 +489,17 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
                     run_test_loop rest out_dir bin_idx passed failed (skipped + 1) verbose
                 },
                 Result.ok em =>
-                    match em {
-                        ElaboratedModules.mk scope_ target_decls_ _elaborated => do {
+                    do {
                             let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-                            let diags : List String <- check_module_with_scope scope_ target_decls_ empty_locs (Option.some f) verbose;
+                            let diags : List String <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some f) verbose;
                             match diags {
                                 List.cons _ _ => do {
                                     print_diagnostics diags;
                                     println ("SKIP  " ++ f ++ " (does not typecheck)");
                                     run_test_loop rest out_dir bin_idx passed failed (skipped + 1) verbose
                                 },
-                                List.empty => run_test_loop_codegen { f := f, rest := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped, verbose := verbose },
+                                List.empty => run_test_loop_codegen { f := f, rest := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped, verbose := verbose, preloaded := Option.some em.loaded },
                             }
-                        }
                     },
             }
         }
@@ -503,8 +509,15 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
 /// own loading + compile + run pipeline, reached only once the gate
 /// above has confirmed `f` itself checks cleanly.
 #[partial]
-def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (bin_idx : I64) (passed : I64) (failed : I64) (skipped : I64) (verbose : Bool) : IO I64 := do {
-            let res : Result String LoadedModules <- load_file_modules f;
+def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (bin_idx : I64) (passed : I64) (failed : I64) (skipped : I64) (verbose : Bool) (preloaded : Option LoadedModules) : IO I64 := do {
+            // Reuses the module set `run_test_loop`'s typecheck gate
+            // already loaded -- see `compile_file_codegen`'s own
+            // `preloaded` comment for the redundancy this removes.
+            let res : Result String LoadedModules <-
+                match preloaded {
+                    Option.some already => do { return (Result.ok already) },
+                    Option.none => load_file_modules f,
+                };
             match res {
                 err e => do {
                     println ("SKIP  " ++ f ++ " (" ++ e ++ ")");

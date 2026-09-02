@@ -2125,6 +2125,16 @@ struct ElaboratedModules {
     scope : Scope,
     target_decls : List Decl,
     elaborated_decls : List Decl,
+    /// The `load_file_modules` result this elaboration was built from.
+    ///
+    /// Carried on the result so a caller that needs the raw module set
+    /// too -- `compile`/`test`, which hand it to codegen -- can reuse
+    /// THIS load instead of calling `load_file_modules` a second time.
+    /// Before this field existed, one `monad compile` read and parsed
+    /// the target's entire transitive closure (prelude and init
+    /// included) twice: once here for the typecheck gate, once again in
+    /// `compile_file_codegen`.
+    loaded : LoadedModules,
 }
 
 /// A trivial local flatten of every loaded module's own decls into one
@@ -2403,7 +2413,7 @@ def elaborate_loaded_modules (file_path : String) (check_deps : Bool) : IO (Resu
                             let scope2 : Scope := { module_id := target_mp, scope := scope_data2, parent := Option.none } in
                             let known_names : List Identifier := names_of_decls dict_paramed2 in
                             let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names in
-                            Result.ok { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2 }
+                            Result.ok { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded }
                     },
             }
     }
