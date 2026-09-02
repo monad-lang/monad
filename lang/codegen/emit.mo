@@ -2099,7 +2099,32 @@ def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Te
                             // reset ctx never had.
                             let ctx2 := ctx_restore_locals c ctx2_raw in
                             let body_instrs := append_instrs get_env_instrs instrs_r in
-                            let entry_instrs := append_instrs body_instrs (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
+                            // Only append the body's own `ret` when the
+                            // entry block does not ALREADY end in a
+                            // terminator. A lifted lambda whose body is
+                            // an `if`/`match` compiles its entry
+                            // instructions down to a `br` into its own
+                            // branch blocks, and `val_r` is then produced
+                            // by a phi in the merge block those branches
+                            // reach -- appending a `ret val_r` here emits
+                            // an instruction AFTER the terminator that
+                            // references a value defined in a LATER
+                            // block. LLVM silently drops unreachable
+                            // trailing instructions rather than
+                            // rejecting them, so `llc` accepted the
+                            // module and the bug surfaced only at
+                            // runtime, as a corrupt value crossing a
+                            // do-block `Monad_IO_bind` boundary
+                            // (confirmed live: `elaborate_loaded_modules`
+                            // segfaulted in `flatten_module_decls` on the
+                            // `loaded` it received). 66 such blocks in
+                            // one self-compiled binary. Same guard
+                            // `build_match_case_block` already applies to
+                            // a match arm's own instructions.
+                            let entry_instrs :=
+                                if ends_with_terminator body_instrs
+                                then body_instrs
+                                else append_instrs body_instrs (cons_instr (LLVMInstruction.ret val_r) empty_instrs) in
                             let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                             let self_pair := ParamPair.mk "p0" LLVMType.i64_ in
                             let lam_pair := ParamPair.mk "p1" LLVMType.i64_ in
