@@ -21,6 +21,7 @@ use lang.scope {
   scope_resolve_name,
 }
 use lang.typecheck.name_subst {name_subst_term}
+use lang.typecheck.subst {term_permute}
 use lang.typecheck.unify {unify}
 use std.list {length}
 

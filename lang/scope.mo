@@ -8,7 +8,7 @@ use lang.types {
   instance_d, instance_not_found, mk, mp, name, name_not_found, nid, nmp, nop,
   open_d, scoped_open_d, struct_d, type_, use_d,
 }
-use lang.typecheck.macro_expand {con_map_children, native_map_children, term_map_children}
+use lang.typecheck.traverse {con_map_children, native_map_children, term_map_children}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
 // `bench/scope_lookup.mo`. Empty import: naming any of `std.map`'s
 // `Map`-class-instance exports explicitly hits a pre-existing latent
