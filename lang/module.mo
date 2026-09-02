@@ -27,7 +27,8 @@ use lang.scope {
   collect_classes, collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
   decls_have_aliasable_decls, filter_valid_open_aliases,
   list_append, modpath_eq, param_names, promote_instance_defs,
-  resolve_class_calls_decls, resolve_infix_decls, resolve_open_alias_decls, scope_data_empty,
+  resolve_class_calls_decls, resolve_infix_decls, resolve_open_alias_decls,
+  scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
   scope_find_inductive, scope_push_local, scope_resolve_name,
   validate_no_unresolved_class_calls,
 }
@@ -926,6 +927,16 @@ def merge_scope_data (sd1 : ScopeData) (sd2 : ScopeData) : ScopeData :=
         // `to_list`+refold) is the right tool here.
         def_params := HashMap.merge_buckets sd1.def_params sd2.def_params,
         def_return_types := HashMap.merge_buckets sd1.def_return_types sd2.def_return_types,
+        // Must be merged like every sibling side-table above: an
+        // omitted field here silently takes `ScopeData`'s own DEFAULT
+        // (an empty map) rather than keeping either input's entries, so
+        // leaving it out drops every dependency module's signatures on
+        // the floor at the first cross-module merge -- the whole
+        // signature-driven application path (`try_type_check_def_call`,
+        // lang/typecheck/infer.mo) then silently reverts to its
+        // `Option.none` fallback for anything not declared in the file
+        // being checked.
+        def_sigs := HashMap.merge_buckets sd1.def_sigs sd2.def_sigs,
     }
 
 /// Merge lists of ScopeData
@@ -1708,6 +1719,40 @@ def test_try_parse_decls_with_locs_captures_one_per_def : Bool :=
                 I64.beq (List.length decls) 2 && I64.beq (List.length decls_with_locs) 2,
         },
         Option.none => false,
+    }
+
+/// Regression test for `merge_scope_data` silently DROPPING a side
+/// table it forgets to list.
+///
+/// The literal there names every field explicitly, and an omitted field
+/// does not keep either input's value -- it takes `ScopeData`'s own
+/// declared DEFAULT (an empty map). So forgetting one entry means every
+/// cross-module merge throws that table away wholesale. `def_sigs` was
+/// added without a line here, which dropped every dependency module's
+/// signatures at the first merge and silently reverted the
+/// signature-driven application path (`try_type_check_def_call`,
+/// lang/typecheck/infer.mo) to its `Option.none` fallback for anything
+/// not declared in the file being checked.
+///
+/// Checking round-trip through a merge (rather than eyeballing the
+/// literal) is what makes this catch the NEXT forgotten field too.
+#[test]
+def test_merge_scope_data_preserves_def_sigs : Bool :=
+    let name_a : ModulePath := ModulePath.mp [Identifier.id "a_def"] in
+    let name_b : ModulePath := ModulePath.mp [Identifier.id "b_def"] in
+    let sig_a : Term := Term.pi Term.hole (Term.type_ 1) in
+    let sig_b : Term := Term.type_ 1 in
+    let sd_a : ScopeData := scope_data_add_def_sig scope_data_empty name_a sig_a in
+    let sd_b : ScopeData := scope_data_add_def_sig scope_data_empty name_b sig_b in
+    let merged : ScopeData := merge_scope_data sd_a sd_b in
+    // BOTH inputs' entries must survive the merge.
+    match scope_data_find_def_sig merged name_a {
+        Option.none => false,
+        Option.some _ =>
+            match scope_data_find_def_sig merged name_b {
+                Option.none => false,
+                Option.some _ => true,
+            },
     }
 
 // --- Integration: parse source text, build scope, resolve names ---
