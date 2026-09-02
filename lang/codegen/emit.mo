@@ -5784,15 +5784,28 @@ def test_native_string_eq_wraps_raw_result_as_tagged_bool : Bool :=
 
 #[test]
 def test_native_unwhitelisted_native_still_gets_unit_stub : Bool :=
-    // A native this backend doesn't implement yet (e.g. string_to_
-    // lowercase -- string_slice/string_drop were this test's own
-    // example until they got real runtime.c implementations + wrapper
-    // wiring, see native_runtime_fn_name's own doc comment) must be
-    // completely unaffected by the whitelist -- still the pre-existing
-    // stub behavior, not a call to a nonexistent runtime function.
-    let text := compile_native_def_fixture_text "String.to_lowercase" "string_to_lowercase" in
+    // A native this backend doesn't implement must be completely
+    // unaffected by the whitelist -- still the pre-existing stub
+    // behavior at THIS level, not a call to a nonexistent runtime
+    // function that would fail at link time.
+    //
+    // The example is a deliberately fictional native rather than a real
+    // unimplemented one: every previous choice here
+    // (string_slice/string_drop, then string_to_lowercase) eventually
+    // got a real implementation and silently flipped this test to
+    // failing for the wrong reason. A name no runtime will ever define
+    // cannot rot that way.
+    //
+    // Reaching this stub is now a COMPILE ERROR one level up:
+    // `validate_no_unwired_natives` rejects any such def that is
+    // actually reachable, precisely because the stub miscompiles
+    // silently (see that def's own doc comment). This test pins the
+    // fallback the validator guards, which still has to behave sanely
+    // for an UNREACHABLE native -- dead code the validator deliberately
+    // does not block a compile over.
+    let text := compile_native_def_fixture_text "String.no_such_op" "definitely_not_a_real_native" in
     if check_contains text "call i64 @alloc_constructor(i64 0, i64 0)"
-    then not (check_contains text "@monad_string_to_lowercase")
+    then not (check_contains text "@monad_definitely_not_a_real_native")
     else false
 
 /// A single, unlocated `myfunc` fixture def -- shared by the
