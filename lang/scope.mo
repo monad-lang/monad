@@ -17,6 +17,7 @@ use lang.typecheck.macro_expand {con_map_children, native_map_children, term_map
 // regardless via the same always-on mechanism that lets any top-level
 // type/def resolve without being explicitly `use`d.
 use std.map {}
+use std.list {filter, filter_map}
 
 // --- ModulePath-keyed HashMap ops, bypassing `Map`'s typeclass dispatch ---
 //
@@ -1248,17 +1249,14 @@ def resolve_infix_decl (infixes : List Infix) (d : Decl) : Decl :=
 /// which already threads a real `Scope` through and should read its
 /// own `ScopeData.infixes` instead of calling this).
 #[partial]
-def collect_infixes (decl_list : List Decl) : List Infix :=
-    match decl_list {
-        List.empty => List.empty,
-        List.cons d rest =>
-            match d {
-                Decl.infix_d op target _vis =>
-                    let inf : Infix := { operator := op, name := target } in
-                    List.cons inf (collect_infixes rest),
-                _ => collect_infixes rest,
-            },
+def infix_from_decl (d : Decl) : Option Infix :=
+    match d {
+        Decl.infix_d op target _vis => Option.some { operator := op, name := target },
+        _ => Option.none,
     }
+
+def collect_infixes (decl_list : List Decl) : List Infix :=
+    List.filter_map infix_from_decl decl_list
 
 /// Resolves infix operators across a whole decl_list at once —
 /// `resolve_infix_decl` applied to every entry.
@@ -1409,14 +1407,7 @@ def def_name_from_decl (d : Decl) : Option String :=
 /// is not a shape this corpus actually uses).
 #[partial]
 def collect_def_names (decl_list : List Decl) : List String :=
-    match decl_list {
-        List.empty => List.empty,
-        List.cons d rest =>
-            match def_name_from_decl d {
-                Option.some n => List.cons n (collect_def_names rest),
-                Option.none => collect_def_names rest,
-            },
-    }
+    List.filter_map def_name_from_decl decl_list
 
 /// Filters `candidates` (from `collect_open_aliases`) down to the ones
 /// whose RECONSTRUCTED qualified name (`path_extend`'s `use`/`open`
@@ -1447,16 +1438,7 @@ def collect_def_names (decl_list : List Decl) : List String :=
 /// type checker's identical situation.
 #[partial]
 def filter_valid_open_aliases (known_names : List String) (aliases : List OpenAlias) : List OpenAlias :=
-    match aliases {
-        List.empty => List.empty,
-        List.cons a rest =>
-            match a {
-                { bare_name := _b, qualified_name := q } =>
-                    if str_list_contains known_names q
-                    then List.cons a (filter_valid_open_aliases known_names rest)
-                    else filter_valid_open_aliases known_names rest,
-            },
-    }
+    List.filter (fn (a : OpenAlias) => str_list_contains known_names a.qualified_name) aliases
 
 /// Deliberately does NOT mirror `resolve_infix_term`'s family all the
 /// way down into `Param`/`InductConstructor`/`StructField`/`ClassDef`
@@ -1690,27 +1672,25 @@ def resolve_open_alias_decls (aliases : List OpenAlias) (decl_list : List Decl) 
 
 /// Flat scan for every top-level Class declaration.
 #[partial]
-def collect_classes (decl_list : List Decl) : List Class :=
-    match decl_list {
-        List.empty => List.empty,
-        List.cons d rest =>
-            match d {
-                Decl.class_d cls => List.cons cls (collect_classes rest),
-                _ => collect_classes rest,
-            },
+def class_from_decl (d : Decl) : Option Class :=
+    match d {
+        Decl.class_d cls => Option.some cls,
+        _ => Option.none,
     }
+
+def collect_classes (decl_list : List Decl) : List Class :=
+    List.filter_map class_from_decl decl_list
 
 /// Flat scan for every top-level Instance declaration.
 #[partial]
-def collect_instances (decl_list : List Decl) : List Instance :=
-    match decl_list {
-        List.empty => List.empty,
-        List.cons d rest =>
-            match d {
-                Decl.instance_d ins => List.cons ins (collect_instances rest),
-                _ => collect_instances rest,
-            },
+def instance_from_decl (d : Decl) : Option Instance :=
+    match d {
+        Decl.instance_d ins => Option.some ins,
+        _ => Option.none,
     }
+
+def collect_instances (decl_list : List Decl) : List Instance :=
+    List.filter_map instance_from_decl decl_list
 
 /// The ordered list of method names a class declares -- load-bearing:
 /// this exact order is the dictionary's own field order, used both when
@@ -2973,26 +2953,11 @@ def find_matching_instance (instances : List Instance) (cls_name : ModulePath) (
 /// own doc comment already gives for why this pass can't use `Scope`).
 #[partial]
 def filter_instances_by_class (instances : List Instance) (cls_name : ModulePath) : List Instance :=
-    match instances {
-        List.empty => List.empty,
-        List.cons ins rest =>
-            match ins {
-                Instance.mk _ ins_cls _ _ _ _ _ =>
-                    if modpath_eq ins_cls cls_name
-                    then List.cons ins (filter_instances_by_class rest cls_name)
-                    else filter_instances_by_class rest cls_name,
-            },
-    }
+    List.filter (fn (ins : Instance) => modpath_eq ins.cls cls_name) instances
 
 #[partial]
 def filter_concrete (instances : List Instance) : List Instance :=
-    match instances {
-        List.empty => List.empty,
-        List.cons ins rest =>
-            if instance_is_fully_concrete ins
-            then List.cons ins (filter_concrete rest)
-            else filter_concrete rest,
-    }
+    List.filter instance_is_fully_concrete instances
 
 #[partial]
 def first_instance_matching (instances : List Instance) (carrier : Term) : Option Instance :=
