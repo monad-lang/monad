@@ -1965,6 +1965,38 @@ Key patterns when writing self-hosted Monad code:
     ("0 file(s) checked"), so it cannot be used to validate an `init/`
     edit -- run a `#[test]` instead.
 
+22. **`MatchCase` is a BINDING FORM -- a fourth one, easy to miss
+    (2026-09-02).** `Term.lam`/`forall`/`pi` are the obvious de Bruijn
+    binders, but a match arm's own pattern bindings (`MatchCase.mc`'s
+    `args`) bind over its BODY too: the body sits `List.length args`
+    binders deeper than the enclosing `Literal.match_` node. All three
+    walkers in `lang/typecheck/subst.mo` (`term_shift_go`,
+    `term_permute_go`, `term_subst_go`) have always handled this
+    (`cutoff + List.length args`), and `lang/typecheck/traverse.mo`'s
+    depth-aware `match_case_map_children_at_depth` now does too -- but
+    its depth-AGNOSTIC sibling `match_case_map_children` deliberately
+    does not (a walk that tracks no depth has nothing to adjust). Any
+    NEW depth-tracking walk over `Term` must account for it. The
+    standing guard is `subst.mo`'s own
+    `test_match_case_binder_depth_shift`, which caught exactly this
+    mistake during the traverse.mo consolidation; it asserts through the
+    public `term_shift` entry point, so it keeps working regardless of
+    how the per-node helpers are factored.
+23. **A `.mo` file can depend on another module without importing it,
+    and only breaks when the module graph changes (2026-09-02).**
+    `lang/typecheck/infer.mo` called `subst.mo`'s `term_permute` with no
+    `use lang.typecheck.subst` anywhere -- it resolved only because
+    `macro_expand.mo` happened to pull `subst` in via `macro_apply`, and
+    the whole-program name table made it visible. Moving an unrelated
+    function into a new module changed the load graph and broke 5 files
+    at once with `unbound variable term_permute`. This is the same
+    non-module-scoped-name-table root cause as item 18, seen from the
+    other side: item 18 is about two definitions colliding, this is
+    about one definition being found without being asked for. When
+    extracting or moving a module, expect latent implicit dependencies
+    to surface; the fix is always an explicit `use`, which is strictly
+    more robust than the accident it replaces.
+
 ## Committing Changes
 
 ### Commit Message Format
