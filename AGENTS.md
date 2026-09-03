@@ -2068,7 +2068,15 @@ Key patterns when writing self-hosted Monad code:
       `expand_decls_graph` now returns a `GraphExpansion` with a
       `changed` flag; the caller reuses the existing scope when nothing
       was rewritten. `elaborate_loaded_modules` 5255ms -> 3847ms (-27%),
-      total compile 7747ms -> 6510ms (-16%). Note the subtlety in
+      total compile 7747ms -> 6510ms (-16%). Confirmed by an
+      INTERLEAVED A/B (before, after, before, after, ... in one loop):
+      5029/5109/5131ms -> 3594/3579/3626ms, a stable -29%. Interleaving
+      matters on this machine -- parallel sessions running `cargo
+      build`/`monad-rs test` push load average past 9 and make
+      single-shot readings swing 5394-15023ms for the SAME binary.
+      Measure A and B back-to-back in one loop rather than trusting two
+      readings taken minutes apart, and check `uptime`/`ps` before
+      believing any perf delta. Note the subtlety in
       computing `changed`: a `macro_call_d` whose name is NOT in the
       decl-gen registry passes through unchanged and must NOT count as
       an expansion (`has_decl_gen_expansion` checks registry membership,
