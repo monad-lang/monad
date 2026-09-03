@@ -1770,6 +1770,24 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
                         ok a_tt =>
                             def_call_continue arg a_tt param_ty rest rest_params subst scope local_types locals,
                         err _ =>
+                            // Same vacuous-success trap `type_check_app`
+                            // guards against (see `struct_literal_arg_
+                            // matches_expected`): an unannotated struct
+                            // literal "checks" against ANY registered
+                            // inductive's first constructor, fields
+                            // unexamined. This fast path has no named-call
+                            // spread of its own to fall back to, so it must
+                            // DECLINE outright -- `try_type_check_def_call`
+                            // turns this `err` into `Option.none` and
+                            // `type_check_app`'s own guarded path (which
+                            // does have the spread) handles the call
+                            // correctly. Without this, a bare literal
+                            // argument to a def whose matching param is a
+                            // registered inductive (`file_path : String`)
+                            // committed here as an empty constructor.
+                            if not (struct_literal_arg_matches_expected arg a_expected scope)
+                            then err (TypeError.custom "named call: struct literal argument does not describe the expected type")
+                            else
                             match type_check arg a_expected scope local_types locals {
                                 err e => err e,
                                 ok a_tt =>
@@ -1982,6 +2000,12 @@ def subst_has_id (subst : List (Pair Identifier Term)) (target : Identifier) : B
             },
     }
 
+// `#[terminating]`: `type_check_app_ordinary` is this function's own
+// factored-out tail (see its doc comment), not a recursive descent --
+// it consumes the ALREADY-CHECKED `a_tt` and never re-enters
+// `type_check_app` with the same arguments, so the pair terminates
+// exactly as the single fused function did before the split.
+#[terminating]
 def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match try_type_check_def_call (Term.app f a) expected_type scope local_types locals {
         Option.some r => r,
@@ -1989,16 +2013,26 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
     let a_expected : Term := app_arg_expected_type f in
     match type_check a a_expected scope local_types locals {
         ok a_tt =>
-            let a_term : Term := tt_term a_tt in
-            let a_typ : Term := tt_typ a_tt in
-            let f_expected : Term := Term.pi a_typ expected_type in
-            match type_check f f_expected scope local_types locals {
-                ok f_tt =>
-                    let f_term : Term := tt_term f_tt in
-                    let f_typ : Term := tt_typ f_tt in
-                    extract_pi_ret f_term a_term f_typ a_typ expected_type scope local_types locals,
-                err e => err e,
-            },
+            if not (struct_literal_arg_matches_expected a a_expected scope) then
+                // The argument's ordinary check SUCCEEDED, but only
+                // vacuously -- see `struct_literal_arg_matches_expected`.
+                // Treat it as not applying, so the named-call spread
+                // below gets its chance, exactly as the reference does
+                // (`core_check.rs`, `Ok(()) if struct_literal_arg_
+                // matches_expected(..)`).
+                match named_call_fields_of a {
+                    Option.none => type_check_app_ordinary a_tt f expected_type scope local_types locals,
+                    Option.some fields =>
+                        match type_check_named_call f fields expected_type scope local_types locals {
+                            err e2 => err e2,
+                            ok result => match result {
+                                Option.some tt => ok tt,
+                                Option.none => type_check_app_ordinary a_tt f expected_type scope local_types locals,
+                            },
+                        }
+                }
+            else
+            type_check_app_ordinary a_tt f expected_type scope local_types locals,
         err e =>
             match named_call_fields_of a {
                 Option.none => err e,
@@ -2013,6 +2047,25 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
             },
     }
     }
+
+/// The ordinary (non-named-call) continuation of `type_check_app` once
+/// the argument has been checked: check `f` against the Pi built from
+/// the argument's own inferred type, then extract the result. Factored
+/// out of `type_check_app`'s own body so BOTH its success paths -- the
+/// plain one, and the one reached after a vacuously-checking struct
+/// literal declined to become a named call -- share it verbatim
+/// instead of duplicating the sequence.
+def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+            let a_term : Term := tt_term a_tt in
+            let a_typ : Term := tt_typ a_tt in
+            let f_expected : Term := Term.pi a_typ expected_type in
+            match type_check f f_expected scope local_types locals {
+                ok f_tt =>
+                    let f_term : Term := tt_term f_tt in
+                    let f_typ : Term := tt_typ f_tt in
+                    extract_pi_ret f_term a_term f_typ a_typ expected_type scope local_types locals,
+                err e => err e,
+            }
 
 /// When `f` is an inline lambda with a KNOWN (non-hole) declared param
 /// type -- the shape every `let x : T := value in body` (and do-block
@@ -2319,6 +2372,98 @@ def struct_lit_find_field (fields : List StructLitField) (name : Identifier) : O
 /// struct," never "spread across NAME's own params", matching the
 /// reference's identical rule), its fields; `Option.none` otherwise
 /// (including for an ANNOTATED struct literal, or any other term shape).
+/// Whether an argument's already-SUCCESSFUL ordinary check should be
+/// trusted, or is only vacuously successful and must not preempt a
+/// named-call spread. Mirrors the reference compiler's own
+/// `struct_literal_arg_matches_expected` (`core/src/core_check.rs`),
+/// added there after the identical real failure.
+///
+/// `type_check_struct_lit` is deliberately LAX about a literal's field
+/// set: given an expected type, it takes that type's FIRST constructor
+/// and walks the CONSTRUCTOR's own declared params, silently producing
+/// `Option.none` for every param the literal doesn't mention and
+/// ignoring every literal field the constructor doesn't declare. So an
+/// unannotated literal whose fields don't overlap the expected type at
+/// ALL still "checks" fine against it -- nothing is ever compared --
+/// and desugars to a constructor application with zero real arguments.
+///
+/// That is exactly the shape a genuine NAMED CALL produces
+/// (`callee { param := v, ... }`, where the literal's fields are the
+/// CALLEE's own param names, not any struct's fields). Because
+/// `type_check_app` only tries the named-call spread in its argument-
+/// check ERROR branch, a vacuous success silently steals every such
+/// call. Confirmed live on the self-compiled compiler: `main.mo`'s
+/// `compile_file_codegen { file_path := ..., output_dir := ..., ... }`
+/// -- whose first param is a `String`, and `String` is an inductive
+/// whose first constructor is `of_bytes (List U8)` -- compiled to
+/// `alloc_constructor(18, 0)` (an empty `String.of_bytes`) applied as
+/// ONE argument to a 5-arity partial shim, so `monad compile` returned
+/// 1 without ever reaching codegen. Non-String params never hit this:
+/// their expected type isn't a registered inductive, so the literal's
+/// own check genuinely fails and the sugar fires as intended.
+///
+/// Returns `true` (trust the ordinary success) for everything except
+/// that one shape: a non-literal argument, an EXPLICITLY annotated
+/// literal (`{ ... } : StructName` -- the annotation is the author's
+/// own statement of intent), an expected type that names no known
+/// inductive, and a literal whose every field IS declared by the
+/// expected type's own constructor.
+#[terminating]
+def struct_literal_arg_matches_expected (a : Term) (a_expected : Term) (scope : Scope) : Bool :=
+    match named_call_fields_of a {
+        Option.none => true,
+        Option.some fields =>
+            match type_head_name a_expected {
+                Option.none => true,
+                Option.some sname =>
+                    let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
+                    match scope_find_inductive typ_mp scope {
+                        err _ => true,
+                        ok ind =>
+                            match ind {
+                                Inductive.mk _ _ _ ctors _ _ =>
+                                    match ctors {
+                                        List.empty => true,
+                                        List.cons ctor _ =>
+                                            match ctor {
+                                                InductConstructor.mk _ params _ =>
+                                                    struct_lit_fields_all_declared fields params,
+                                            }
+                                    }
+                            }
+                    }
+            }
+    }
+
+/// Every literal field name is among `params`' own declared names --
+/// the "does this literal actually describe THIS constructor" test
+/// `struct_literal_arg_matches_expected` needs. An empty literal
+/// (`{}`) is vacuously all-declared, matching the reference's own
+/// `fields.keys().all(..)`.
+#[terminating]
+def struct_lit_fields_all_declared (fields : List StructLitField) (params : List Param) : Bool :=
+    match fields {
+        List.empty => true,
+        List.cons f rest =>
+            match f {
+                StructLitField.mk fname _ =>
+                    if struct_lit_param_declares params fname
+                    then struct_lit_fields_all_declared rest params
+                    else false
+            }
+    }
+
+#[terminating]
+def struct_lit_param_declares (params : List Param) (name : Identifier) : Bool :=
+    match params {
+        List.empty => false,
+        List.cons p rest =>
+            match p {
+                Param.mk pname _ _ _ _ =>
+                    if id_eq pname name then true else struct_lit_param_declares rest name
+            }
+    }
+
 def named_call_fields_of (a : Term) : Option (List StructLitField) :=
     match a {
         Term.lit lit_val =>
