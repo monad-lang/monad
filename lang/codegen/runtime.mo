@@ -194,19 +194,39 @@ def emit_string_to_list : LLVMFunction :=
 
 /// `monad_string_get(s, i) -> Option U8` (wired `passthrough`):
 /// `none` (tag 3) for `i < 0 || i >= length(s)`, else `some` (tag 4)
-/// wrapping the byte -- two chained branch blocks instead of one
-/// `and` (the IR has no and-instruction; a branch chain needs no phi).
-/// The second test is spelled `i < len` with SWAPPED branch targets,
-/// since the IR has no `icmp_sge`.
+/// wrapping the byte. The general path calls `monad_string_length` (a
+/// full `strlen`) for the bounds check -- but `i == 0`, overwhelmingly
+/// the parser's case (`is_empty`, `utf8_char_width`, every scanner's
+/// first-byte peek), is in range exactly when `s[0]` isn't the NUL
+/// terminator, so a fast path skips the `strlen` and reads one byte.
+/// Without it a per-char scan loop paid a whole-remaining-input
+/// `strlen` per step -- an O(n^2) pure-CPU cost on top of any scan.
+/// The fast path still checks `s == NULL` itself (the general path's
+/// `monad_string_length` was what made NULL safe; the byte load must
+/// not dereference it). The `i < len` test is spelled with SWAPPED
+/// branch targets, since the IR has no `icmp_sge`.
 def emit_string_get : LLVMFunction :=
   let entry :=
     LLVMBasicBlock.mk "entry"
+      [assign "neg" (icmp_slt (parm_ 1) (int_ 0)),
+       branch (var_ "neg") "none_block" "zero_check"] in
+  let zero_check :=
+    LLVMBasicBlock.mk "zero_check"
+      [assign "is_zero" (icmp_eq (parm_ 1) (int_ 0)),
+       branch (var_ "is_zero") "null_check" "len_check"] in
+  let null_check :=
+    LLVMBasicBlock.mk "null_check"
+      [assign "is_null" (icmp_eq (parm_ 0) (int_ 0)),
+       branch (var_ "is_null") "none_block" "first_byte_check"] in
+  let first_byte_check :=
+    LLVMBasicBlock.mk "first_byte_check"
+      (List.append (load_byte_instrs (parm_ 0) (int_ 0) "addr_f" "qf" "fbyte8" "fbyte")
+        [assign "is_nul" (icmp_eq (var_ "fbyte") (int_ 0)),
+         branch (var_ "is_nul") "none_block" "some_block"]) in
+  let len_check :=
+    LLVMBasicBlock.mk "len_check"
       [assign "len" (call "monad_string_length" i64_ [parm_ 0] false),
-       assign "neg" (icmp_slt (parm_ 1) (int_ 0)),
-       branch (var_ "neg") "none_block" "check_hi"] in
-  let check_hi :=
-    LLVMBasicBlock.mk "check_hi"
-      [assign "in_range" (icmp_slt (parm_ 1) (var_ "len")),
+       assign "in_range" (icmp_slt (parm_ 1) (var_ "len")),
        branch (var_ "in_range") "some_block" "none_block"] in
   let none_block :=
     LLVMBasicBlock.mk "none_block"
@@ -221,7 +241,7 @@ def emit_string_get : LLVMFunction :=
   { name := "monad_string_get",
     params := (i64_params 2),
     ret_ty := i64_,
-    blocks := [entry, check_hi, none_block, some_block],
+    blocks := [entry, zero_check, null_check, first_byte_check, len_check, none_block, some_block],
     ghc_cc := false,
     dbg_loc := Option.none }
 

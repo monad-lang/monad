@@ -204,5 +204,19 @@ def kw_member (s : String) (kws : List String) : Bool :=
 		}
 
 
-def is_empty (s : String) : Bool := (String.length s) == 0
+// O(1) on both sides: `String.get s 0` reads one byte (the native's
+// `i == 0` fast path skips the length call entirely in compiled
+// binaries), while the old `String.length s == 0` ran a full `strlen`
+// of the whole remaining input -- called once per scan step by every
+// `take_while`-style loop, that made a native parse O(n^2) in pure
+// byte-scans (an empty-check costing more than the scan itself).
+// `get` returns `Option.none` exactly when the index is out of range,
+// and index 0 is in range exactly when the string is non-empty, so
+// this is semantics-preserving (including the NULL case: length is 0,
+// `get` yields none).
+def is_empty (s : String) : Bool :=
+	match String.get s 0 {
+		Option.some _ => false,
+		Option.none => true
+	}
 

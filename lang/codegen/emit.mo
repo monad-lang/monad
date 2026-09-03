@@ -3959,13 +3959,16 @@ def unwrap_io_return_instrs (instrs : List LLVMInstruction) (temp_name : String)
 // machinery, so this can't affect (or be affected by) any of it.
 //
 // Deliberately SELF-recursion only (confirmed with the user before
-// implementing): mutual tail recursion (e.g. `take_while_loop`/`take_
-// while_check`, `lang/parser/combinators.mo`) would need real LLVM
+// implementing): mutual tail recursion would need real LLVM
 // `musttail` calls instead, which require the call to be immediately
 // adjacent to its own `ret` -- incompatible with how this codebase's
 // match/if compilation works today (a call's result always flows through
 // a `phi`+merge, never a bare `ret <call>`). That's a materially riskier,
-// separate follow-on, not implemented here.
+// separate follow-on, not implemented here -- code that used to rely on
+// mutual tail loops (the parser's old `take_while_loop`/`take_while_check`
+// pair, which blew the 8MB stack at ~11K input chars in compiled
+// binaries) has instead been RESTRUCTURED to self-recursion
+// (`lang/parser/combinators.mo`), which this pass handles.
 
 /// One detected self-recursive tail-call site: `site_block` is the label
 /// of the block containing the `assign ret_temp (call <this Def's own

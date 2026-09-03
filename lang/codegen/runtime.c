@@ -457,21 +457,35 @@ char* monad_string_slice(char* s, int64_t start_in, int64_t len_in) {
     return out;
 }
 
-/* `#[native string_drop]` (init/string.mo's `String.drop`) -- same gap
-   and same reference semantics as `monad_string_slice` above
-   (`core/src/core_native.rs`'s `string_drop`/`SharedStr::drop_prefix`):
-   drops the first `n` bytes (clamped to `[0, strlen(s)]`), never errors
-   on an out-of-range `n`. */
+/* `#[native string_drop]` (init/string.mo's `String.drop`) -- same
+   reference semantics as `core/src/core_native.rs`'s `string_drop`/
+   `SharedStr::drop_prefix`: drops the first `n` bytes (clamped to
+   `[0, strlen(s)]`), never errors on an out-of-range `n`.
+   ZERO-COPY: returns a pointer INTO `s` rather than a fresh buffer.
+   This is sound because strings in this runtime are immutable
+   NUL-terminated `char*` and nothing ever mutates or frees one
+   (`monad_release` is never emitted; runtime.c only frees its own
+   scratch buffers) -- the alias keeps the whole original buffer
+   alive, and the dropped prefix becomes unreachable, which is no
+   worse than this runtime's uniform no-free discipline elsewhere.
+   The old malloc+memcpy of the whole REMAINDER made every parser
+   scan step cost O(remaining) bytes both in copies and leaked RSS:
+   measured, a single `take_while` pass over a 225KB file (one
+   drop per input char) leaked ~2.4GB in one glibc arena and made
+   `check lang/main.mo` OOM at 30GB. Scanning forward at most `n`
+   bytes to find the clamp point keeps the common small-`n` scan step
+   O(1) (a full `strlen` would reintroduce the same O(n^2) in CPU);
+   for `n > strlen(s)` the first NUL terminates the walk early and
+   `s + that_index` is the empty string, identical to the old clamped
+   result. NULL input propagates NULL (every string native here is
+   NULL-tolerant, treating it as empty). */
 char* monad_string_drop(int64_t n, char* s) {
-    size_t slen = s ? strlen(s) : 0;
-    size_t start = n < 0 ? 0 : (size_t)n;
-    if (start > slen) start = slen;
-    size_t len = slen - start;
-    char* out = (char*)malloc(len + 1);
-    if (!out) return NULL;
-    if (len) memcpy(out, s + start, len);
-    out[len] = '\0';
-    return out;
+    if (!s) return NULL;
+    if (n <= 0) return s;
+    for (size_t i = 0; i < (size_t)n; i++) {
+        if (s[i] == '\0') return s + i;
+    }
+    return s + n;
 }
 
 char* monad_read_file(char* path) {

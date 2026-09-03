@@ -400,20 +400,32 @@ def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
 	take_while_loop pred input input
 
 
+// Deliberately SELF-tail-recursive: the previous shape split the loop
+// into a `take_while_loop`/`take_while_check` MUTUAL tail recursion
+// (check called loop, loop called check), which compiled binaries can
+// not grow through -- the self-hosted backend's tail-call optimization
+// (`apply_self_tco`, lang/codegen/emit.mo) rewrites only SELF-recursion
+// into loops; mutual tail recursion would need LLVM `musttail`, not
+// implemented. A whole-file scan then cost two real stack frames per
+// input char and a ~225KB file blew the 8MB stack at ~11K chars
+// (measured: backtrace of 22.7K alternating frames, rsp pinned at the
+// stack guard page -- /tmp probe over lang/scope.mo's own text, the
+// `check lang/main.mo` rung-2 blocker). Merging the predicate check
+// into the loop body puts the recursive call in the same Def, where
+// `apply_self_tco` turns it into a `br` back-edge: constant stack for
+// any input length. The interpreted side is unaffected (same
+// per-char work, one call less).
 #[partial]
 def take_while_loop (pred : String -> Bool) (original : String) (input : String) : ParseResult String :=
 	if is_empty input
 	then take_while_done original input
 	else
 		let width : I64 := utf8_char_width input in
-		take_while_check pred original input (String.slice input 0 width) (String.drop width input)
-
-
-#[partial]
-def take_while_check (pred : String -> Bool) (original : String) (input : String) (ch : String) (rest : String) : ParseResult String :=
-	if pred ch
-	then take_while_loop pred original rest
-	else take_while_done original input
+		let ch : String := String.slice input 0 width in
+		let rest : String := String.drop width input in
+		if pred ch
+		then take_while_loop pred original rest
+		else take_while_done original input
 
 
 #[partial]
