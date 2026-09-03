@@ -73,7 +73,7 @@ def modpath_map_insert {V : Type} (key : ModulePath) (val : V) (m : HashMap Modu
         HashMap.map buckets =>
             let idx := HashMap.bucket_of (modpath_hash key) in
             let bucket := HashMap.get_bucket buckets idx in
-            let new_bucket := HashMap.bucket_insert modpath_lt modpath_gt key val bucket in
+            let new_bucket := HashMap.bucket_insert_eq modpath_str_eq key val bucket in
             HashMap.map (HashMap.set_bucket buckets idx new_bucket)
     }
 
@@ -82,7 +82,7 @@ def modpath_map_lookup {V : Type} (key : ModulePath) (m : HashMap ModulePath V) 
         HashMap.map buckets =>
             let idx := HashMap.bucket_of (modpath_hash key) in
             let bucket := HashMap.get_bucket buckets idx in
-            HashMap.bucket_lookup modpath_lt modpath_gt key bucket
+            HashMap.bucket_lookup_eq modpath_str_eq key bucket
     }
 
 // --- Helper: empty ScopeData ---
@@ -101,6 +101,12 @@ def scope_data_empty : ScopeData := {
 
 def modpath_eq (a : ModulePath) (b : ModulePath) : Bool :=
     Similar.similar a b
+
+/// Exactly `!modpath_lt(a,b) && !modpath_gt(a,b)`, but rendering each
+/// side ONCE instead of twice. `String.beq` is native, and no typeclass
+/// dispatch is involved -- see `modpath_map_*`'s own doc comment.
+def modpath_str_eq (a : ModulePath) (b : ModulePath) : Bool :=
+    String.beq (show_module_path a) (show_module_path b)
 
 // --- Helper: add a ScopeDef to ScopeData ---
 

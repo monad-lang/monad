@@ -401,6 +401,41 @@ def HashMap.bucket_insert {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool)
       }
   }
 
+/// Equality-predicate variants of `bucket_insert`/`bucket_lookup`.
+///
+/// The lt/gt versions above use `!lt(k1,k2) && !gt(k1,k2)` purely as an
+/// EQUALITY test -- the chain is not kept sorted (insert appends at the
+/// end; only an existing equal key is replaced in place), so ordering is
+/// never relied on. That costs TWO comparator calls per chain step, and
+/// for a key whose comparator renders a string (`lang/scope.mo`'s
+/// `modpath_lt`/`modpath_gt` both call `show_module_path`, which rebuilds
+/// the path via `List.map` + `intercalate`) that is four string
+/// constructions per step. These variants take a single `eq` instead.
+#[terminating]
+def HashMap.bucket_insert_eq {K V : Type} (eq: K -> K -> Bool) (key: K) (val: V) (bucket: List (Pair K V)) : List (Pair K V) :=
+  match bucket {
+    List.empty => List.cons (Pair.pair key val) List.empty,
+    List.cons pair rest =>
+      match pair {
+        Pair.pair k v =>
+          if eq key k
+          then List.cons (Pair.pair key val) rest
+          else List.cons pair (HashMap.bucket_insert_eq eq key val rest)
+      }
+  }
+
+#[terminating]
+def HashMap.bucket_lookup_eq {K V : Type} (eq: K -> K -> Bool) (key: K) (bucket: List (Pair K V)) : Option V :=
+  match bucket {
+    List.empty => Option.none,
+    List.cons pair rest =>
+      match pair {
+        Pair.pair k v =>
+          if eq key k then Option.some v
+          else HashMap.bucket_lookup_eq eq key rest
+      }
+  }
+
 /// Look up a key in a single bucket.
 #[terminating]
 def HashMap.bucket_lookup {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (bucket: List (Pair K V)) : Option V :=
