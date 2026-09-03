@@ -1198,8 +1198,8 @@ struct NtvArgs {
     last_val : LLVMValue,
 }
 
-/// Sequences each arg's own compiled fragment via `compose_seq` (see
-/// its own extended doc comment above `ends_with_terminator`) instead
+/// Sequences each arg's own compiled fragment via `compose_seq_acc`
+/// (see its own extended doc comment) instead
 /// of blindly concatenating `instrs` -- a branching argument (an
 /// `if`/`match` passed to a native call or constructor) used to have
 /// every FOLLOWING arg's instructions silently become unreachable dead
@@ -1227,7 +1227,13 @@ def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs
                                     match materialize_native_bool_arg ctx_tm term_ val_v {
                                         { ctx := ctx_tb, instrs := bool_instrs, val := val } =>
                                             let instrs_m := append_instrs instrs (append_instrs void_instrs bool_instrs) in
-                                            match compose_seq ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs_m, blocks := blocks_t, val := val }) {
+                                            // `compose_seq_acc`, not `compose_seq`: a PURE arg
+                                            // (literal/bare reference -- `triple_is_pure`)
+                                            // must leave the accumulator untouched so
+                                            // `acc_val` keeps identifying the block
+                                            // execution is actually in (its own value
+                                            // still reaches `acc_vals` below regardless).
+                                            match compose_seq_acc ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs_m, blocks := blocks_t, val := val }) {
                                                 { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
                                                     compile_ntv_args_go ctx_tb rest
                                                         new_instrs new_blocks
@@ -1614,6 +1620,52 @@ def compose_seq (a : Triple) (b : Triple) : Triple := match a {
                 { instrs := append_instrs a_instrs b_instrs, blocks := append_blocks a_blocks b_blocks, val := b_val }
     },
 }
+
+/// True when a compiled fragment contributes NO code at all -- no
+/// instructions and no blocks: a literal, a bare parameter/global/
+/// function reference, or a const-folded native op. Such a fragment
+/// moves execution nowhere, so at ACCUMULATION call sites (argument
+/// lists, native operands -- `compose_seq_acc` below) it must not
+/// perturb the running splice-target token; see `compose_seq_acc`'s
+/// own doc comment for the corruption composing it anyway causes.
+#[partial]
+def triple_is_pure (t : Triple) : Bool := match t {
+    { instrs := i_s, blocks := b_s, val := _v_s } => match i_s {
+        List.empty => match b_s {
+            List.empty => true,
+            List.cons _ _ => false,
+        },
+        List.cons _ _ => false,
+    },
+}
+
+/// `compose_seq` for ACCUMULATION call sites -- argument lists
+/// (`compile_ntv_args_go`/`compile_spine_args_go`), native operands
+/// (`compile_native_app_db`), callee-with-spine
+/// (`compile_general_db_call`) -- where `b`'s own value is NOT the
+/// expression's semantic result, only a token threaded onward as the
+/// NEXT compose step's splice-target identifier. A pure `b` (see
+/// `triple_is_pure`) contributes no code and moves execution nowhere,
+/// so here it must be a complete NO-OP returning `a` UNCHANGED
+/// (`a.val` still identifies the block execution is actually in).
+/// Plain `compose_seq` would instead splice into `a`'s terminal block
+/// and rewrite its `ret <a.val>` to `ret <b.val>` -- destroying the
+/// previous argument's computed value (its phi) AND, whenever `b.val`
+/// is a literal, leaving a token `llvm_value_eq` deliberately never
+/// matches (see its own doc comment), so every FOLLOWING compose
+/// step degrades into dead code flat-appended after the branch while
+/// the corrupted `ret <literal>` silently stays the function's real
+/// early return. Exact mechanism behind `{ x with f := x.f + 1 }`
+/// miscompiling to `ret i64 1` (the literal `1` operand of the `+`,
+/// following the projected-field match) and v29's
+/// `module_info_cache_insert`/`module_info_cache_hit` SIGSEGVs.
+/// NOT a drop-in replacement everywhere: where `b`'s value IS the
+/// expression's own result (a let's body in
+/// `try_compile_let_beta_db`, a def body), the pure-`b` ret rewrite
+/// is load-bearing -- those callers keep plain `compose_seq`.
+#[partial]
+def compose_seq_acc (a : Triple) (b : Triple) : Triple :=
+    if triple_is_pure b then a else compose_seq a b
 
 /// Finds the block among `blocks` that ends in `ret <target_val>`
 /// (structurally — same SSA temp/global name, `llvm_value_eq`) and
@@ -3141,7 +3193,14 @@ def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : 
         CompileResult.ok ctx2 instrs2 val2 blocks2 funcs2 globals2 =>
             match compile_db_term_ir ctx2 arg {
                 CompileResult.ok ctx1 instrs1 val1 blocks1 funcs1 globals1 =>
-                    match compose_seq ({ instrs := instrs2, blocks := blocks2, val := val2 }) ({ instrs := instrs1, blocks := blocks1, val := val1 }) {
+                    // `compose_seq_acc`: a PURE second operand (a literal --
+                    // `triple_is_pure`) must keep `val2` as the running
+                    // splice-target token; composing it anyway would rewrite a
+                    // branching FIRST operand's terminal block to
+                    // `ret <literal>` and strand the native op itself as dead
+                    // code after its branch (`llvm_value_eq` refuses literal
+                    // splice targets).
+                    match compose_seq_acc ({ instrs := instrs2, blocks := blocks2, val := val2 }) ({ instrs := instrs1, blocks := blocks1, val := val1 }) {
                         { instrs := combined, blocks := all_blocks, val := last_val } =>
                             let all_funcs := append_funcs funcs2 funcs1 in
                             let all_globals := append_globals globals2 globals1 in
@@ -3210,8 +3269,8 @@ def compile_spine_args (c : CodegenCtx) (terms : List Term) : SpineArgs :=
 /// each one -- same pattern `compile_ntv_args_go` uses for native calls,
 /// just over a plain `List Term` (no `Option` wrapping needed).
 ///
-/// Accumulator-style, sequencing each arg via `compose_seq` (see its
-/// own doc comment above `ends_with_terminator`) instead of blindly
+/// Accumulator-style, sequencing each arg via `compose_seq_acc` (see
+/// its own doc comment) instead of blindly
 /// concatenating instrs -- this USED to combine the first arg's own
 /// instrs with the WHOLE recursively-combined rest of the spine as one
 /// flat step, which had no single value to splice against whenever the
@@ -3240,7 +3299,14 @@ def compile_spine_args_go (c : CodegenCtx) (terms : List Term) (acc_instrs : Lis
                             match materialize_native_bool_arg ctx1m t val1_v {
                                 { ctx := ctx1b, instrs := bool_instrs, val := val1 } =>
                                     let instrs1m := append_instrs instrs1 (append_instrs void_instrs bool_instrs) in
-                                    match compose_seq ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs1m, blocks := blocks1, val := val1 }) {
+                                    // `compose_seq_acc` for the same reason as
+                                    // `compile_ntv_args_go` above: a PURE arg
+                                    // (literal/bare reference -- `triple_is_pure`)
+                                    // must leave the accumulator untouched so
+                                    // `acc_val` keeps identifying the block
+                                    // execution is actually in (its own value
+                                    // still reaches `acc_vals` below regardless).
+                                    match compose_seq_acc ({ instrs := acc_instrs, blocks := acc_blocks, val := acc_val }) ({ instrs := instrs1m, blocks := blocks1, val := val1 }) {
                                         { instrs := new_instrs, blocks := new_blocks, val := new_val } =>
                                             compile_spine_args_go ctx1b rest
                                                 new_instrs new_blocks
@@ -3334,7 +3400,14 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
                         { ctx := ctx_h, instrs := instrs_h, val := val_h } =>
                     match compile_spine_args ctx_h args {
                         { ctx := ctx_a, instrs := instrs_a, blocks := blocks_a, funcs := funcs_a, globals := globals_a, vals := vals_a, last_val := last_val_a } =>
-                            match compose_seq ({ instrs := instrs_h, blocks := blocks_h, val := val_h }) ({ instrs := instrs_a, blocks := blocks_a, val := last_val_a }) {
+                            // `compose_seq_acc`: an all-PURE spine (every
+                            // argument a literal/bare reference --
+                            // `triple_is_pure`) must keep `val_h` as the
+                            // running splice-target token; composing it anyway
+                            // would rewrite a BRANCHING callee's terminal
+                            // block to `ret <last literal>` and strand the
+                            // call itself as dead code after its branch.
+                            match compose_seq_acc ({ instrs := instrs_h, blocks := blocks_h, val := val_h }) ({ instrs := instrs_a, blocks := blocks_a, val := last_val_a }) {
                                 { instrs := combined, blocks := all_blocks, val := combined_val } =>
                                     let all_funcs := append_funcs funcs_h funcs_a in
                                     let all_globals := append_globals globals_h globals_a in
