@@ -2510,10 +2510,49 @@ def resolve_reflect_calls (inds : List Inductive) (dispatched : List Decl) (decl
                 },
     }
 
-def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) : Result String (Pair (List Decl) (List Decl)) :=
+/// Whether one decl is a decl-gen macro call the registry can actually
+/// expand -- a `macro_call_d` whose name IS registered. A `macro_call_d`
+/// with no registry entry passes through unchanged (the same "an
+/// unresolved macro name is not an error" rule `decl_gen_subst_one`
+/// itself follows), so it does NOT count as an expansion.
+def decl_gen_call_expands (registry : List DeclGenEntry) (d : Decl) : Bool :=
+    match d {
+        Decl.macro_call_d name _ =>
+            match lookup_decl_gen registry name {
+                Option.some _ => true,
+                Option.none => false,
+            },
+        _ => false,
+    }
+
+#[partial]
+def has_decl_gen_expansion (registry : List DeclGenEntry) (decls : List Decl) : Bool :=
+    match decls {
+        List.empty => false,
+        List.cons d rest =>
+            if decl_gen_call_expands registry d then true else has_decl_gen_expansion registry rest,
+    }
+
+/// `expand_decls_graph`'s result, plus whether it actually CHANGED
+/// anything. The caller rebuilds its `Scope` from the expanded decls,
+/// which is one full `build_scope_from_decls` over the whole dependency
+/// graph -- measured at 1523ms of `elaborate_loaded_modules`' 5255ms on
+/// `examples/hello.mo`. For the overwhelming majority of files nothing
+/// expands (only `std/derive.mo` genuinely invokes `reflect_type_info!`
+/// in this corpus), so `changed = false` lets the caller keep the scope
+/// it already built instead of rebuilding an identical one.
+struct GraphExpansion {
+    graph : List Decl,
+    target : List Decl,
+    changed : Bool,
+}
+
+def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target : List Decl) : Result String GraphExpansion :=
     let registry : List DeclGenEntry := build_decl_gen_registry whole_graph_decls in
     let graph_subst : List Decl := decl_gen_subst_decls registry whole_graph_decls in
     let target_subst : List Decl := decl_gen_subst_decls registry target in
+    let substituted : Bool :=
+        has_decl_gen_expansion registry whole_graph_decls || has_decl_gen_expansion registry target in
     if has_reflect_type_info_call graph_subst || has_reflect_type_info_call target_subst then
         let inds : List Inductive := collect_inductives whole_graph_decls in
         let empty_locs : LocalScope := { vars := List.empty, parent := Option.none } in
@@ -2527,11 +2566,19 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
                     Result.ok graph_final =>
                         match resolve_reflect_calls inds dispatched target_subst {
                             Result.err e => Result.err e,
-                            Result.ok target_final => Result.ok (Pair.pair graph_final target_final),
+                            // This branch always rewrites at least the
+                            // `reflect_type_info!` call it just resolved.
+                            Result.ok target_final =>
+                                let expanded : GraphExpansion :=
+                                    { graph := graph_final, target := target_final, changed := true } in
+                                Result.ok expanded,
                         },
                 },
         }
-    else Result.ok (Pair.pair graph_subst target_subst)
+    else
+        let unexpanded : GraphExpansion :=
+            { graph := graph_subst, target := target_subst, changed := substituted } in
+        Result.ok unexpanded
 
 /// THE canonical front-end pipeline: parse -> load the full transitive
 /// dependency graph (prelude/init always seeded, via `load_file_modules`)
@@ -2610,19 +2657,30 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
             // `reflect_type_info!`, so safe to run unconditionally.
             match expand_decls_graph scope dict_paramed target_decls_pre {
                 Result.err e => Result.err e,
-                Result.ok expanded_pair =>
-                    match expanded_pair {
-                        Pair.pair dict_paramed2 target_decls_pre2 =>
-                            let scope_data2 : ScopeData := build_scope_from_decls target_mp dict_paramed2 in
-                            let scope2 : Scope := { module_id := target_mp, scope := scope_data2, parent := Option.none } in
-                            let known_names : List Identifier := names_of_decls dict_paramed2 in
-                            let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names in
-                            // Annotated local, not an inline literal --
-                            // see `load_module_with_info`'s own note.
-                            let elaborated : ElaboratedModules :=
-                                { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded } in
-                            Result.ok elaborated
-                    },
+                Result.ok expansion =>
+                    let dict_paramed2 : List Decl := expansion.graph in
+                    let target_decls_pre2 : List Decl := expansion.target in
+                    // Rebuild the scope ONLY if the expansion actually
+                    // rewrote decls. When nothing expanded -- the norm,
+                    // since only `std/derive.mo` invokes
+                    // `reflect_type_info!` in this corpus --
+                    // `dict_paramed2` IS `dict_paramed`, so a rebuild
+                    // would produce a scope identical to the one built
+                    // just above, at the cost of a second full
+                    // `build_scope_from_decls` over the whole dependency
+                    // graph (measured: 1523ms of `elaborate_loaded_
+                    // modules`' 5255ms on `examples/hello.mo`).
+                    let scope2 : Scope :=
+                        if expansion.changed then
+                            { module_id := target_mp, scope := build_scope_from_decls target_mp dict_paramed2, parent := Option.none }
+                        else scope in
+                    let known_names : List Identifier := names_of_decls dict_paramed2 in
+                    let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names in
+                    // Annotated local, not an inline literal --
+                    // see `load_module_with_info`'s own note.
+                    let elaborated : ElaboratedModules :=
+                        { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded } in
+                    Result.ok elaborated,
             }
     }, cache := out_cache }
 }
