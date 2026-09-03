@@ -2109,6 +2109,44 @@ Key patterns when writing self-hosted Monad code:
     To time a lazy sub-step, force it inside the span (bind through an
     `IO` action, or consume the value) -- otherwise the measurement is
     silently meaningless rather than wrong-looking.
+26. **`HashMap`'s bucket chains tested key equality as `!lt && !gt` --
+    two comparator calls per chain step, and for `ModulePath` that meant
+    FOUR string constructions per step (2026-09-03).**
+    `build_scope_from_decls` was the single largest self-hosted cost:
+    1482ms of `elaborate_class`'s 1857ms (80%), itself 89% of codegen.
+    The name misleads -- elaboration was 7% of that span; the cost was
+    building the scope's `HashMap`s. With ~349 defs over a FIXED 16
+    buckets (`std/map.mo`'s `Buckets16`), chains run ~22 deep, and
+    `bucket_insert`/`bucket_lookup` tested equality as
+    `!lt(k1,k2) && !gt(k1,k2)`. `lang/scope.mo`'s `modpath_lt`/
+    `modpath_gt` BOTH call `show_module_path`, which rebuilds the path
+    via `List.map` + `List.intercalate` -- so each chain step built four
+    strings. **The chain is not sorted** (insert appends at the end and
+    only replaces an existing equal key), so `lt`/`gt` were never
+    serving as an ordering at all, only as an equality test.
+    Fixed by adding `bucket_insert_eq`/`bucket_lookup_eq` taking a
+    single `eq` predicate (additive -- the `lt`/`gt` versions stay for
+    the generic `Map` instance) and pointing `modpath_map_*` at
+    `modpath_str_eq` (`String.beq` of the two rendered paths: identical
+    semantics, one render per side instead of two). `emit.mo`'s
+    `str_map_*` got the same treatment with `String.beq` directly.
+    Measured, interleaved A/B: `elaborate_class` 1767/1766/1767ms ->
+    1037/1033/1033ms (**-41.5%**); `filter_reachable` 100ms -> 72ms
+    (-29%); total `compile examples/hello.mo` 5976ms -> 4378ms (-27%).
+    LLVM IR byte-identical, corpus 1402/1402.
+    **Two substitutions that look right and are NOT** -- both found by
+    probes that broke the build, so do not "simplify" to either:
+    - `modpath_eq` (the existing one) delegates to `Similar.similar`,
+      which does NOT agree with string comparison on aliases: swapping
+      it in fails with `unknown variable 'println'`.
+    - A structural segment-wise comparator is not order-equivalent to
+      string comparison either (`.` sorts differently than segment
+      boundaries) -- it broke typechecking outright.
+    Note what was NOT done: widening past 16 buckets. Item 6 measured
+    bucket-dispatch restructuring as a consistent 10-30% REGRESSION in
+    this interpreter. The win here is in the per-step comparator, not
+    the bucket count -- a reminder to attack what each step COSTS before
+    attacking how many steps there are.
 
 ## Committing Changes
 
