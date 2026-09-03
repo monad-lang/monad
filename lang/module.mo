@@ -479,7 +479,13 @@ struct InfosAndCache {
 def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (visiting : List ModulePath) (visited : List ModuleInfo) (cache : ModuleInfoCache) : IO InfosAndCache :=
     match to_visit {
         List.empty => do {
-            return { infos := visited, cache := cache }
+            // Annotated local, not a bare `return { ... }` -- the
+            // struct-literal pitfall (`validate_no_undesugared_struct_
+            // lits`'s own message): an unannotated literal never
+            // desugars to a constructor and silently compiles to a
+            // void placeholder through this backend.
+            let r : InfosAndCache := { infos := visited, cache := cache };
+            return r
         },
         List.cons head tail =>
             if list_contains visiting head then
@@ -2029,16 +2035,24 @@ struct InfoAndCache {
 #[partial]
 def load_module_with_info_cached (base_dir : String) (mp : ModulePath) (cache : ModuleInfoCache) : IO InfoAndCache := do {
     match module_info_cache_lookup mp cache {
+        // Every result is an annotated local, not a bare
+        // `return { ... }` -- the struct-literal pitfall
+        // (`validate_no_undesugared_struct_lits`'s own message).
         Option.some hit => do {
-            return { info := Option.some hit, cache := module_info_cache_hit cache }
+            let r : InfoAndCache := { info := Option.some hit, cache := module_info_cache_hit cache };
+            return r
         },
         Option.none => do {
             let loaded : Option ModuleInfo <- load_module_with_info base_dir mp;
             match loaded {
                 Option.some info => do {
-                    return { info := Option.some info, cache := module_info_cache_insert mp info cache }
+                    let r : InfoAndCache := { info := Option.some info, cache := module_info_cache_insert mp info cache };
+                    return r
                 },
-                Option.none => do { return { info := Option.none, cache := cache } },
+                Option.none => do {
+                    let r : InfoAndCache := { info := Option.none, cache := cache };
+                    return r
+                },
             }
         },
     }
@@ -2298,7 +2312,11 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) : IO
                 }
             },
         Option.none => do {
-            return { loaded := Result.err ("Failed to load" ++ Show.show mp), cache := cache }
+            // Annotated local, not a bare `return { ... }` -- same
+            // struct-literal pitfall as the `loaded`/`result` bindings
+            // above.
+            let r : LoadedAndCache := { loaded := Result.err ("Failed to load" ++ Show.show mp), cache := cache };
+            return r
         }
     }
 }
@@ -2613,7 +2631,12 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
     let lc : LoadedAndCache <- load_file_modules_cached file_path cache;
     let loaded_result : Result String LoadedModules := lc.loaded;
     let out_cache : ModuleInfoCache := lc.cache;
-    return { elaborated := match loaded_result {
+    // The whole elaborate is an annotated local pair, not one bare
+    // `return { elaborated := <huge match>, ... }` -- the struct-literal
+    // pitfall again: this literal (the largest in the file) is exactly
+    // what `validate_no_undesugared_struct_lits` flagged on the v29
+    // self-compile.
+    let elaborated_result : Result String ElaboratedModules := match loaded_result {
         Result.err e => Result.err e,
         Result.ok loaded =>
             let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty in
@@ -2687,7 +2710,9 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                         { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded } in
                     Result.ok elaborated,
             }
-    }, cache := out_cache }
+    };
+    let out : ElaboratedAndCache := { elaborated := elaborated_result, cache := out_cache };
+    return out
 }
 
 /// Backwards-compatible wrapper: elaborate with a fresh cache.

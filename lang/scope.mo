@@ -1283,7 +1283,15 @@ def resolve_infix_decl (infixes : List Infix) (d : Decl) : Decl :=
 #[partial]
 def infix_from_decl (d : Decl) : Option Infix :=
     match d {
-        Decl.infix_d op target _vis => Option.some { operator := op, name := target },
+        // Annotated local, not `Option.some { ... }` -- the bare
+        // struct-literal-in-argument-position pitfall
+        // (`validate_no_undesugared_struct_lits`'s own message): the
+        // unannotated literal never desugars to `Infix.mk` and silently
+        // compiles to a void placeholder, so EVERY infix operator
+        // resolution would read garbage through this backend.
+        Decl.infix_d op target _vis =>
+            let fx : Infix := { operator := op, name := target } in
+            Option.some fx,
         _ => Option.none,
     }
 
