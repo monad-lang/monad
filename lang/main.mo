@@ -5,7 +5,7 @@ use std.bench {now, report}
 use lang.types {Decl, Location, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {build_debug_locs, compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang.module {ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
+use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
 use std.map {}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
@@ -448,7 +448,7 @@ def run_check (files : List String) (verbose : Bool) : IO I64 := do {
 #[partial]
 def run_test (files : List String) (out_dir : String) (verbose : Bool) : IO I64 := do {
     let expanded : List String <- expand_check_paths files;
-    run_test_loop { files := expanded, out_dir := out_dir, bin_idx := 0, passed := 0, failed := 0, skipped := 0, verbose := verbose }
+    run_test_loop { files := expanded, out_dir := out_dir, bin_idx := 0, passed := 0, failed := 0, skipped := 0, verbose := verbose, cache := module_info_cache_empty }
 }
 
 /// `tested`/`passed`/`failed`/`skipped` accumulate across all files.
@@ -456,12 +456,29 @@ def run_test (files : List String) (out_dir : String) (verbose : Bool) : IO I64 
 /// (`monad_test_bin_<N>`, `out_dir`) so running `test` against several
 /// files in one invocation doesn't have each file's driver binary
 /// overwrite the last one's before it's even run.
+///
+/// `cache` is the same whole-run `ModuleInfoCache` `run_check_loop`
+/// threads: every file in one `test` invocation shares most of its
+/// dependency closure (prelude/init at minimum, plus whatever `std`/
+/// `lang` modules the files have in common), and without the cache each
+/// file re-read and re-parsed all of it from disk. Measured on a
+/// 5-file `check` run over `lang/`, the same cache serves 69 of 92
+/// dependency loads (75%) from an earlier file's work.
 #[partial]
-def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (passed : I64) (failed : I64) (skipped : I64) (verbose : Bool) : IO I64 :=
+def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (passed : I64) (failed : I64) (skipped : I64) (verbose : Bool) (cache : ModuleInfoCache) : IO I64 :=
     match files {
         List.empty => do {
             let tested := passed + failed;
             println (I64.to_string tested ++ " file(s) tested, " ++ I64.to_string passed ++ " passed, " ++ I64.to_string failed ++ " failed, " ++ I64.to_string skipped ++ " skipped");
+            // Same whole-run cache visibility `run_check_loop` prints --
+            // `hits` counts dependency loads served from an earlier
+            // file's own load in this same run.
+            if verbose then
+                match cache {
+                    ModuleInfoCache.mk _ hits misses =>
+                        println ("module cache: " ++ I64.to_string hits ++ " hit(s), " ++ I64.to_string misses ++ " miss(es)")
+                }
+            else do { return unit };
             return (if I64.gt failed 0 then 1 else 0)
         },
         List.cons f rest => do {
@@ -472,11 +489,14 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
             // "already defines its own main" SKIP convention just below
             // (a pre-existing problem with the file, not a new test
             // failure this run introduced).
-            let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules f false;
-            match elaborated_result {
+            let ec : ElaboratedAndCache <- elaborate_loaded_modules_cached f false cache;
+            // `out_cache`, not `cache`: this file's load extended it, and
+            // every later file in the run needs the extended one.
+            let out_cache : ModuleInfoCache := ec.cache;
+            match ec.elaborated {
                 Result.err e => do {
                     println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose }
+                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose, cache := out_cache }
                 },
                 Result.ok em =>
                     do {
@@ -486,9 +506,9 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
                                 List.cons _ _ => do {
                                     print_diagnostics diags;
                                     println ("SKIP  " ++ f ++ " (does not typecheck)");
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose }
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose, cache := out_cache }
                                 },
-                                List.empty => run_test_loop_codegen { f := f, rest := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped, verbose := verbose, preloaded := Option.some em.loaded },
+                                List.empty => run_test_loop_codegen { f := f, rest := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped, verbose := verbose, preloaded := Option.some em.loaded, cache := out_cache },
                             }
                     },
             }
@@ -499,10 +519,14 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
 /// own loading + compile + run pipeline, reached only once the gate
 /// above has confirmed `f` itself checks cleanly.
 #[partial]
-def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (bin_idx : I64) (passed : I64) (failed : I64) (skipped : I64) (verbose : Bool) (preloaded : Option LoadedModules) : IO I64 := do {
+def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (bin_idx : I64) (passed : I64) (failed : I64) (skipped : I64) (verbose : Bool) (preloaded : Option LoadedModules) (cache : ModuleInfoCache) : IO I64 := do {
             // Reuses the module set `run_test_loop`'s typecheck gate
             // already loaded -- see `compile_file_codegen`'s own
             // `preloaded` comment for the redundancy this removes.
+            // `cache` is carried, not consulted: this path never loads
+            // anything itself (that's what `preloaded` is for), it only
+            // has to hand the whole-run cache back to `run_test_loop`
+            // for the NEXT file.
             let res : Result String LoadedModules <-
                 match preloaded {
                     Option.some already => do { return (Result.ok already) },
@@ -511,14 +535,14 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
             match res {
                 err e => do {
                     println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose }
+                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose, cache := cache }
                 },
                 ok loaded => do {
                     let ir_res : Result String LLVMModule <- compile_loaded_modules_to_test_ir loaded;
                     match ir_res {
                         err e => do {
                             println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                            run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose }
+                            run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose, cache := cache }
                         },
                         ok llvm_mod => do {
                             let ir_text := emit_module llvm_mod;
@@ -530,16 +554,16 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                             let link_result <- link_ir ir_text (Path.path out_dir) (Path.path bin_name) verbose;
                             if not (link_result == 0) then do {
                                 println ("FAIL  " ++ f ++ " (compilation failed)");
-                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed, failed := failed + 1, skipped := skipped, verbose := verbose }
+                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed, failed := failed + 1, skipped := skipped, verbose := verbose, cache := cache }
                             } else do {
                                 let bin_path := out_dir ++ "/" ++ bin_name;
                                 let exit_code <- exec_cmd bin_path [];
                                 if exit_code == 0 then do {
                                     println ("ok    " ++ f);
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed + 1, failed := failed, skipped := skipped, verbose := verbose }
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed + 1, failed := failed, skipped := skipped, verbose := verbose, cache := cache }
                                 } else do {
                                     println ("FAIL  " ++ f);
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed, failed := failed + 1, skipped := skipped, verbose := verbose }
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed, failed := failed + 1, skipped := skipped, verbose := verbose, cache := cache }
                                 }
                             }
                         }
