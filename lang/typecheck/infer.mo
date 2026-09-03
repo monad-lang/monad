@@ -1607,6 +1607,22 @@ def debug_name_to_id (dbg : DebugName) : Identifier :=
 /// `type_check_app`'s previous per-layer behavior unchanged (which
 /// checks arguments against `Term.hole`, i.e. accepts them, and resolves
 /// struct-literal arguments via the named-call fallback).
+///
+/// That fallback is a CONTRACT, not an oversight: this path is fail-open
+/// BY DESIGN relative to the old behavior. An argument-check failure
+/// returning `Option.none` means "this checker can't type this call
+/// signature-driven; use the old lenient path" -- NOT "reject the
+/// program". The same holds for deliberately NOT unifying each
+/// argument's inferred type against its substituted parameter type: a
+/// mismatch there would, if it errored, only relocate the leniency (the
+/// `err` would bubble to `Option.none` and the old path, which checks
+/// against `Term.hole`, would accept the same argument anyway) -- there
+/// is no soundness delta available through this path, only a loss of
+/// return-type precision. What WAS tightened here (partial-application
+/// residual pi chain, local-shadow guard, concrete-type-name solving
+/// gate) is the subset that could previously commit a WRONG result
+/// rather than merely a lenient one. The hard checking stays with the
+/// reference checker (`core_check.rs`) and the Rust host's `check`.
 #[partial]
 def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Option (Result TypeError TypedTerm) :=
     match flatten_call_spine app_term {

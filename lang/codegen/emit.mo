@@ -5602,18 +5602,31 @@ def empty_decls : List LLVMDeclaration := List.empty
 
 #[partial]
 def runtime_declarations : List LLVMDeclaration :=
-    let d1 := mk_decl "monad_alloc" (cons_str "i64" empty_strs) "i8*" in
-    let d2 := mk_decl "monad_retain" (cons_str "i8*" empty_strs) "void" in
-    let d3 := mk_decl "monad_release" (cons_str "i8*" empty_strs) "void" in
-    let d4 := mk_decl "monad_print_str" (cons_str "i8*" empty_strs) "void" in
-    let d5 := mk_decl "monad_read_file" (cons_str "i8*" empty_strs) "i8*" in
-    let d6 := mk_decl "monad_write_file" (cons_str "i8*" (cons_str "i8*" (cons_str "i64" empty_strs))) "void" in
-    let d7 := mk_decl "monad_file_exists" (cons_str "i8*" empty_strs) "i8*" in
-    let d7b := mk_decl "monad_is_dir" (cons_str "i8*" empty_strs) "i8*" in
-    let d7c := mk_decl "monad_string_hash" (cons_str "i8*" empty_strs) "i64" in
-    let d8 := mk_decl "alloc_closure" (cons_str "i8*" (cons_str "i64" (cons_str "i64" empty_strs))) "i64" in
+    // CONVENTION: every parameter and return type below is i64. The
+    // backend holds Strings (and pointers generally) as raw i64 values
+    // ("a String is always a bare char*/i64", `NativeWrapKind`'s own doc
+    // comment), so EVERY emitter -- `compile_native_def_wrapper_ir` (all
+    // `NativeWrapKind`s), the `native_op` paths, the generated natives
+    // -- types its calls with `LLVMType.i64_`, and a declare typed any
+    // other way (`i8*` used to appear here, copied from the C header
+    // shapes) silently mismatches every call site of that native in the
+    // emitted module. The current `llc` (21.1.8) happens to accept a
+    // mismatched direct call (verified: the call survives into real
+    // assembly; the v28 binary built and ran with dozens of them), but
+    // it is malformed IR per the spec and a stricter parser could
+    // reject it. `test_runtime_decls_i64_convention` pins this.
+    let d1 := mk_decl "monad_alloc" (cons_str "i64" empty_strs) "i64" in
+    let d2 := mk_decl "monad_retain" (cons_str "i64" empty_strs) "void" in
+    let d3 := mk_decl "monad_release" (cons_str "i64" empty_strs) "void" in
+    let d4 := mk_decl "monad_print_str" (cons_str "i64" empty_strs) "void" in
+    let d5 := mk_decl "monad_read_file" (cons_str "i64" empty_strs) "i64" in
+    let d6 := mk_decl "monad_write_file" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "void" in
+    let d7 := mk_decl "monad_file_exists" (cons_str "i64" empty_strs) "i64" in
+    let d7b := mk_decl "monad_is_dir" (cons_str "i64" empty_strs) "i64" in
+    let d7c := mk_decl "monad_string_hash" (cons_str "i64" empty_strs) "i64" in
+    let d8 := mk_decl "alloc_closure" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "i64" in
     let d9 := mk_decl "alloc_constructor" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
-    let d10 := mk_decl "alloc_string" (cons_str "i8*" (cons_str "i64" empty_strs)) "i64" in
+    let d10 := mk_decl "alloc_string" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
     // Tag/field accessors for match dispatch (compile_match_ir) --
     // there's no other way to read back what an already-allocated value
     // was tagged/constructed with.
@@ -5647,7 +5660,10 @@ def runtime_declarations : List LLVMDeclaration :=
     // repro). `monad_i64_to_string` (runtime.c) is the actual
     // implementation; `test_compile_i64_to_string_native`
     // (lang/codegen/test/compile_tests.mo) is its regression test.
-    let d22 := mk_decl "monad_i64_to_string" (cons_str "i64" empty_strs) "i8*" in
+    // i64, not the C header's `char*` -- see the CONVENTION comment at
+    // the head of this list (the returned char* IS the String value,
+    // held as i64, and every call site types it i64).
+    let d22 := mk_decl "monad_i64_to_string" (cons_str "i64" empty_strs) "i64" in
     // `Term.ntv`/`compile_ntv_ir`'s generic native-call mechanism (used
     // for every `#[native ...]`-attributed def, e.g. `String.length`)
     // emits a bare `call i64 @monad_<name>(...)` with no accompanying
@@ -5694,11 +5710,13 @@ def runtime_declarations : List LLVMDeclaration :=
     // redefinition `llc` rejects outright.
     let d32 := mk_decl "monad_string_to_lowercase" (cons_str "i64" empty_strs) "i64" in
     let d33 := mk_decl "monad_string_from_list" (cons_str "i64" empty_strs) "i64" in
-    let d34 := mk_decl "monad_i32_to_string" (cons_str "i64" empty_strs) "i8*" in
+    // Same i64-not-`char*` convention as `monad_i64_to_string` (d22) --
+    // the CONVENTION comment at the head of this list.
+    let d34 := mk_decl "monad_i32_to_string" (cons_str "i64" empty_strs) "i64" in
     let d35 := mk_decl "monad_exec_cmd" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
     let d36 := mk_decl "monad_list_dir" (cons_str "i64" empty_strs) "i64" in
-    let d37 := mk_decl "monad_u8_to_string" (cons_str "i64" empty_strs) "i8*" in
-    let d38 := mk_decl "monad_u64_to_string" (cons_str "i64" empty_strs) "i8*" in
+    let d37 := mk_decl "monad_u8_to_string" (cons_str "i64" empty_strs) "i64" in
+    let d38 := mk_decl "monad_u64_to_string" (cons_str "i64" empty_strs) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38]
@@ -5843,6 +5861,50 @@ def test_runtime_decls_not_empty : Bool :=
         List.empty => false,
         List.cons x y => true,
     }
+
+/// `test_runtime_decls_i64_convention`'s data-level half: no
+/// declaration's parameter or return type string is `i8*`. Walks the
+/// `LLVMDeclaration` values directly rather than scanning rendered
+/// text -- `emit_module`'s type-definitions block (`%Closure = type {
+/// %Header, i8*, ... }`) and function bodies (`inttoptr ... to i8*`,
+/// `load i8, i8* ...`) legitimately contain `i8*` and would make a
+/// whole-module text scan false-positive.
+#[partial]
+def decls_have_no_i8_star (ds : List LLVMDeclaration) : Bool :=
+    match ds {
+        List.empty => true,
+        List.cons d rest =>
+            match d {
+                LLVMDeclaration.mk _name params ret_ty =>
+                    if String.beq ret_ty "i8*" then false
+                    else if strs_have_no_i8_star params then decls_have_no_i8_star rest
+                    else false,
+            },
+    }
+
+#[partial]
+def strs_have_no_i8_star (ss : List String) : Bool :=
+    match ss {
+        List.empty => true,
+        List.cons s rest =>
+            if String.beq s "i8*" then false else strs_have_no_i8_star rest,
+    }
+
+/// Every runtime declaration uses the i64 calling convention (see
+/// `runtime_declarations`' own CONVENTION comment): the backend holds
+/// Strings and pointers as raw i64 values, every emitter types its
+/// calls `LLVMType.i64_`, and a declare typed any other way mismatches
+/// every call site of that native in the emitted module. This used to
+/// be live: 15 declares carried the C header's `i8*` shapes while the
+/// module called them all as i64 (malformed IR that the current llc
+/// 21.1.8 happens to silently accept; a stricter parser would reject
+/// the whole module).
+#[test]
+def test_runtime_decls_i64_convention : Bool :=
+    decls_have_no_i8_star runtime_declarations
+        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list empty_funcs runtime_declarations Option.none)) "declare void @monad_print_str(i64)"
+        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list empty_funcs runtime_declarations Option.none)) "declare i64 @monad_read_file(i64)"
+        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" empty_globals_list empty_funcs runtime_declarations Option.none)) "declare i64 @monad_i64_to_string(i64)"
 
 #[test]
 def test_module_emit_has_header : Bool :=
