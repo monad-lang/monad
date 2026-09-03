@@ -1595,14 +1595,19 @@ struct FileCheckAndCache {
 /// class-method call's own dictionary dispatch was never actually
 /// exercised by `check` the way it now is.
 ///
-/// `base`/`cache` (`PreludeInitBase`/`ModuleScopeCache`) are accepted but
-/// currently UNUSED — `elaborate_loaded_modules` re-walks/re-parses/
-/// re-promotes the whole transitive closure (including prelude/init) on
-/// every call instead of reusing them, reintroducing the O(N·D) corpus-
-/// run cost those two caches existed to eliminate. This is an explicit,
-/// accepted Stage-1 cost (see `bootstrapping/unify-check-compile-test-
-/// elaboration.md`), not an oversight — restoring equivalent caching for
-/// the new pipeline is real, separate follow-up work.
+/// `cache` (`ModuleInfoCache`) IS threaded now, through
+/// `elaborate_loaded_modules_cached`: a dependency already loaded by an
+/// earlier file in the same run is served from it instead of being
+/// re-read and re-parsed, which is the O(N·D) -> O(N+D) corpus-run
+/// behavior. Measured on a 5-file `check` over `lang/`: 69 of 92
+/// dependency loads served from cache (75%).
+///
+/// `base` (`PreludeInitBase`) is still accepted and UNUSED. It predates
+/// `ModuleInfoCache` and covers the narrower prelude+init case that the
+/// general cache now also covers, just without `base`'s pre-built
+/// `ScopeData`. Removing the parameter, or reviving it to skip
+/// prelude/init scope-building specifically, is open follow-up work
+/// (see `bootstrapping/unify-check-compile-test-elaboration.md`).
 ///
 /// Passes `check_deps=false` to `elaborate_loaded_modules` — see that
 /// function's own doc comment for the two-mode rationale. `check_deps=true`

@@ -1225,7 +1225,17 @@ Key patterns when writing self-hosted Monad code:
      prelude+init, module-scope cache) and a natural next target for a
      future performance pass.
 10. **Whole-corpus module-scope cache** (`ModuleScopeCache`,
-    `lang/module.mo`) closes item 9's own remaining gap: a growing,
+    `lang/module.mo`). NOTE (2026-09-03): this item describes
+    `ModuleScopeCache`, which is now superseded on the live path by
+    `ModuleInfoCache` (caching `ModuleInfo`, i.e. the parse, rather
+    than `ScopeData`) threaded through `elaborate_loaded_modules_cached`
+    -- see item 24. `ModuleScopeCache` and the
+    `load_module_with_dependencies_and_prelude_cached` path this item
+    describes still exist but are no longer what `check`/`test` run on;
+    `load_module_with_dependencies`, named below, was deleted outright.
+    The reasoning about WHY caching is sound here (flat, not recursive,
+    dependency loading) carries over unchanged and is why
+    `ModuleInfoCache` is equally safe. Closes item 9's own remaining gap: a growing,
     whole-`run_check`-invocation cache of already-loaded non-base
     dependencies' `ScopeData`, threaded through `run_check_loop`/
     `check_file_cached`/`load_module_with_dependencies_and_prelude_
@@ -1670,6 +1680,14 @@ Key patterns when writing self-hosted Monad code:
 15. **Follow-up: the literal `bootstrap compile <file>` command has its OWN,
     much bigger, entirely separate bug — a diamond-dependency re-parse
     blowup in the self-hosted loader, not touched by items 13/14.**
+    NOTE (2026-09-03): the fix described here is still in place, but
+    several functions this item names by hand no longer exist —
+    `load_module_with_dependencies`, `extract_all_dependencies`, and
+    `load_dependencies_with_info` were deleted or folded away during the
+    2026-09-01/02 dedup pass (`extract_all_dependencies_go` survives).
+    Read the mechanism below (a per-node re-walk of an
+    already-complete dependency list) rather than the specific names;
+    the same shape recurred twice more, see item 24.
     Prompted by a direct question ("does the self-hosted checker load
     modules once or several times?"). Found **two structurally different
     module-graph traversals** in `lang/module.mo`:
@@ -2030,6 +2048,59 @@ Key patterns when writing self-hosted Monad code:
     extracting or moving a module, expect latent implicit dependencies
     to surface; the fix is always an explicit `use`, which is strictly
     more robust than the accident it replaces.
+
+24. **The self-hosted pipeline's redundant work is STRUCTURAL, not
+    algorithmic -- look for the same expensive pass running twice
+    before optimizing any single pass's internals (2026-09-03).**
+    `bootstrap compile examples/hello.mo --verbose` prints a full
+    `Bench.report` phase breakdown; use it before guessing. It showed
+    `elaborate_loaded_modules` at 5255ms of a 7747ms total (68%), with
+    `check_module_with_scope` -- the phase whose name sounds expensive
+    -- at 5ms. Two structural redundancies found and fixed there:
+    - **The post-expansion scope rebuild** (`elaborate_loaded_modules_
+      cached`, `lang/module.mo`): the function built a `Scope`, ran
+      `expand_decls_graph`, then UNCONDITIONALLY rebuilt the `Scope`
+      from the result. Since only `std/derive.mo` genuinely invokes
+      `reflect_type_info!` in this corpus, the expansion is a no-op for
+      almost every file and the rebuilt scope was identical to the one
+      discarded -- a second full `build_scope_from_decls` over the whole
+      dependency graph, measured at **1523ms of the 5255ms**.
+      `expand_decls_graph` now returns a `GraphExpansion` with a
+      `changed` flag; the caller reuses the existing scope when nothing
+      was rewritten. `elaborate_loaded_modules` 5255ms -> 3847ms (-27%),
+      total compile 7747ms -> 6510ms (-16%). Note the subtlety in
+      computing `changed`: a `macro_call_d` whose name is NOT in the
+      decl-gen registry passes through unchanged and must NOT count as
+      an expansion (`has_decl_gen_expansion` checks registry membership,
+      not just "is a macro call"), matching `decl_gen_subst_one`'s own
+      "an unresolved macro name is not an error" rule.
+    - **The uncached test loop** (`lang/main.mo`): `run_check_loop` had
+      threaded a `ModuleInfoCache` since `b0c96a7`, but `run_test_loop`
+      called the uncached `elaborate_loaded_modules`, so every file in
+      one `monad test a.mo b.mo c.mo` re-read and re-parsed its whole
+      closure. Threading the same cache: 20.99s -> 18.89s (-10%) on
+      three load-dominated files, 12 of 24 dependency loads cached.
+      `run_test_loop_codegen` CARRIES the cache without consulting it --
+      that path loads nothing itself (that is what `preloaded` is for),
+      it only hands the cache to the next file.
+    **Proving a redundancy elimination is safe**: for anything feeding
+    codegen, diff the generated LLVM IR rather than relying on tests --
+    `compile examples/hello.mo` before and after must be byte-identical
+    (it was, for the scope-rebuild change). Tests alone would not have
+    distinguished "the rebuild was redundant" from "the rebuild was
+    load-bearing but nothing covers it".
+25. **`Bench.report` around a `let` binding measures NOTHING -- the
+    language is lazy (2026-09-03).** An attempt to sub-time
+    `elaborate_class`'s three internal steps by wrapping each `let` in
+    `Bench.now`/`Bench.report` printed no sub-timings at all and left
+    the enclosing total unchanged (1949ms vs 1941ms): a `let`-bound
+    value is not forced where it is bound, so the timer spans the
+    binding, not the work. The existing phase benches in
+    `lang/codegen/emit.mo`/`lang/main.mo` only report real numbers
+    because something downstream forces their values inside the span.
+    To time a lazy sub-step, force it inside the span (bind through an
+    `IO` action, or consume the value) -- otherwise the measurement is
+    silently meaningless rather than wrong-looking.
 
 ## Committing Changes
 
