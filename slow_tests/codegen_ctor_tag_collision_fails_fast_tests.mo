@@ -25,6 +25,10 @@
 use io {IO}
 open IO {println}
 use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use std.process {process_id, exec_cmd}
+use lang.module {LoadedModules, load_file_modules}
+use lang.codegen.emit {compile_loaded_modules_to_ir}
+use lang.codegen.ir {emit_module}
 
 
 /// Two types both declaring `mk`, at arities 1 and 3, both constructed
@@ -97,3 +101,74 @@ def main (args : List String) : IO I64 := do {
 }
 "# in
     compile_source_run_expect source "ctor_value_position_shim" 7
+
+/// A user constructor that shares a BUILTIN's bare name at a different
+/// arity -- `CompileResult.ok` (6 fields) against builtin `Result.ok`
+/// (1 field) is the real instance, in lang/codegen/emit.mo itself.
+///
+/// The builtin tag tables are consulted before the arity-keyed map, and
+/// `Con.mk`'s own `name` field is the constructor's BARE name, so a user
+/// `Wide.ok` reached `constructor_tag` as plain "ok" and matched the
+/// builtin outright. The ALLOCATION site then got builtin tag 10 while
+/// the constructor's own wrapper function got its real composite tag --
+/// two incompatible layouts for one constructor. That cost a v30 ladder
+/// rung: a `CompileResult` allocated with 6 fields and read back as a
+/// 1-field `Result.ok` left a raw unboxed `1` where an `Identifier`'s
+/// `char*` belonged, SIGSEGV in `__strcmp_avx2` via
+/// `Similar_Identifier_similar` <- `term_matches_carrier`, ~45s into
+/// `check lang/main.mo`.
+///
+/// Asserted on the IR rather than an exit code, deliberately: in a
+/// SMALL program every site picks the same wrong tag consistently, so
+/// the binary still returns the right answer and an exit-code test
+/// passes either way (verified -- it stayed green with the fix
+/// reverted). What actually distinguishes the two states is that the
+/// unguarded compiler emits BOTH tag 10 and the real tag for the same
+/// 3-field constructor; the guarded one emits only the real tag. The
+/// match arm is written BARE (`ok x y z`), which is what a real `match`
+/// supplies and what makes the bare-name tiers fire.
+#[test]
+def test_user_ctor_shadowing_builtin_name_keeps_own_layout : IO Bool := do {
+    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
+    let src_path := output_dir ++ "/ctor_builtin_shadow.mo";
+    let source := r#"use io {IO}
+type Wide { ok (a : I64) (b : I64) (c : I64) }
+def build : Wide := Wide.ok 1 2 3
+def unwrap (w : Wide) : I64 :=
+    match w { ok x y z => x + y + z }
+def main (args : List String) : IO I64 :=
+    return (if unwrap build == 6 then 7 else 1)
+"#;
+    let _ <- exec_cmd "mkdir" ["-p", output_dir];
+    IO.write_file (Path.path src_path) source;
+
+    let loaded_result : Result String LoadedModules <- load_file_modules src_path;
+    match loaded_result {
+        Result.err e => do {
+            println ("test_user_ctor_shadowing_builtin_name: failed to load: " ++ e);
+            return false
+        },
+        Result.ok loaded => do {
+            let mod_result <- compile_loaded_modules_to_ir loaded false;
+            let _ <- exec_cmd "rm" ["-f", src_path];
+            match mod_result {
+                Result.err e => do {
+                    println ("test_user_ctor_shadowing_builtin_name: compile failed: " ++ e);
+                    return false
+                },
+                Result.ok mod_ => do {
+                    let ir := emit_module mod_;
+                    // Builtin `ok`'s tag is 10 and its real arity is 1,
+                    // so a 3-field allocation carrying that tag is the
+                    // bug and nothing else.
+                    if String.contains ir "alloc_constructor(i64 10, i64 3)"
+                    then do {
+                        println "test_user_ctor_shadowing_builtin_name: 3-field ctor borrowed builtin `ok`'s tag 10";
+                        return false
+                    }
+                    else return true
+                },
+            }
+        },
+    }
+}

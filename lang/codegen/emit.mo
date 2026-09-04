@@ -625,10 +625,17 @@ def constructor_arity (c : CodegenCtx) (name : String) : I64 :=
     match str_map_lookup name builtin_ctor_arities {
         Option.some arity => arity,
         Option.none =>
-            match str_map_lookup base_name builtin_ctor_arities {
+            // The owner-qualified ctx alias ("CompileResult.ok") is tried
+            // BEFORE the bare-name builtin tier, for the same reason
+            // `constructor_tag_at` reorders its own tiers: a user
+            // constructor sharing a builtin's bare name would otherwise
+            // report the BUILTIN's field count and allocate the wrong
+            // size. The full-name builtin tier above still wins for a
+            // genuine "Result.ok".
+            match ctx_lookup_ctor_arity c name {
                 Option.some arity => arity,
                 Option.none =>
-                    match ctx_lookup_ctor_arity c name {
+                    match str_map_lookup base_name builtin_ctor_arities {
                         Option.some arity => arity,
                         Option.none =>
                             match ctx_lookup_ctor_arity c base_name {
@@ -717,17 +724,65 @@ def bare_ctor_tag (c : CodegenCtx) (bare : String) : I64 :=
 #[partial]
 def constructor_tag_at (c : CodegenCtx) (name : String) (arity : I64) : I64 :=
     let base_name := extract_base_name name in
+    // Even the FULL-name tier needs the arity guard: `Con.mk`'s own
+    // `name` field is the constructor's BARE name (`compile_con_ir`
+    // passes it directly), so a user `Wide.ok` arrives here as plain
+    // "ok" and matched the builtin outright -- before any of the tiers
+    // below could see it. That is how the wrapper function and the
+    // allocation site ended up disagreeing (tag 37 vs tag 10) for the
+    // same constructor.
     match str_map_lookup name builtin_ctor_tags {
-        Option.some tag => tag,
+        Option.some tag => if builtin_arity_matches name arity then tag else constructor_tag_at_nonbuiltin c base_name arity,
         Option.none =>
-            match str_map_lookup base_name builtin_ctor_tags {
+            // The BARE-name builtin tier is consulted only after the
+            // composite key, and only for a matching arity. A user type
+            // may declare a constructor sharing a builtin's bare name --
+            // `lang/codegen/emit.mo`'s own `CompileResult.ok` carries SIX
+            // fields against builtin `Result.ok`'s one -- and answering
+            // the builtin's tag there hands two incompatible layouts the
+            // same tag, exactly the corruption the composite key exists
+            // to prevent (this one cost a v30 rung: a `CompileResult`
+            // allocated with 6 fields, read back as a 1-field
+            // `Result.ok`, put a raw unboxed `1` where an `Identifier`'s
+            // `char*` belonged -> SIGSEGV in `__strcmp_avx2` via
+            // `Similar_Identifier_similar` <- `term_matches_carrier`).
+            // The FULL-name tier above stays first and is unaffected:
+            // "Result.ok" names the builtin unambiguously.
+            match ctx_lookup_ctor_tag c (ctor_composite_key base_name arity) {
                 Option.some tag => tag,
                 Option.none =>
-                    match ctx_lookup_ctor_tag c (ctor_composite_key base_name arity) {
-                        Option.some tag => tag,
+                    match str_map_lookup base_name builtin_ctor_tags {
+                        Option.some tag =>
+                            // Only when the builtin really has this
+                            // arity; otherwise it is a different
+                            // constructor that merely shares the name.
+                            if builtin_arity_matches base_name arity then tag else bare_ctor_tag c base_name,
                         Option.none => bare_ctor_tag c base_name,
                     },
             },
+    }
+
+/// `constructor_tag_at`'s tiers with the builtin tables skipped -- what a
+/// name that LOOKS builtin but has the wrong arity should consult
+/// instead. Separate function only because the guard above needs it
+/// before the tier chain below is reached.
+#[partial]
+def constructor_tag_at_nonbuiltin (c : CodegenCtx) (base_name : String) (arity : I64) : I64 :=
+    match ctx_lookup_ctor_tag c (ctor_composite_key base_name arity) {
+        Option.some tag => tag,
+        Option.none => bare_ctor_tag c base_name,
+    }
+
+/// Whether `base_name` names a BUILTIN constructor that really declares
+/// `arity` fields -- the guard that keeps `constructor_tag_at`'s
+/// bare-name builtin tier from claiming a same-named user constructor of
+/// a different shape. An unknown name answers `false`, so it falls
+/// through to the ctx table rather than silently borrowing a builtin tag.
+#[partial]
+def builtin_arity_matches (base_name : String) (arity : I64) : Bool :=
+    match str_map_lookup base_name builtin_ctor_arities {
+        Option.some a => I64.beq a arity,
+        Option.none => false,
     }
 
 /// An identifier as it should appear in a generated LLVM symbol name:
