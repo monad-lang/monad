@@ -1372,7 +1372,7 @@ def type_check_free_var_con (id : Identifier) (expected_type : Term) (dbg : Debu
     match scope_find_inductive_by_constructor con_mp scope {
         Option.some ind =>
             match find_constructor_in_inductive ind con_mp {
-                Option.some _ => ok (mk_typed (Term.var sentinel dbg) (con_ref_result_type id ind expected_type scope)),
+                Option.some _ => ok (mk_typed (Term.var sentinel dbg) (con_ref_result_type id expected_type scope)),
                 Option.none => err (TypeError.unknown_var (NameRef.nid id)),
             },
         Option.none => err (TypeError.unknown_var (NameRef.nid id)),
@@ -1414,11 +1414,11 @@ def type_check_free_var_con (id : Identifier) (expected_type : Term) (dbg : Debu
 /// today's behavior untouched, so this only ever ADDS precision --
 /// `find_inductive_for_cases`'s own "only ever add a strictly-better
 /// preferred path" discipline.
-def con_ref_result_type (id : Identifier) (ind : Inductive) (expected_type : Term) (scope : Scope) : Term :=
+def con_ref_result_type (id : Identifier) (expected_type : Term) (scope : Scope) : Term :=
     // A PARAMETERIZED inductive's bare name is not a complete type
     // (`List.cons 1 rest` is `List I64`, not `List`) -- see
     // `inductive_has_params`; leave those to the existing hole fallback.
-    if con_ref_wants_inference expected_type && Bool.not (inductive_has_params ind)
+    if con_ref_wants_inference expected_type
     then
         match id {
             Identifier.id s =>
@@ -1426,7 +1426,18 @@ def con_ref_result_type (id : Identifier) (ind : Inductive) (expected_type : Ter
                     Option.some qual =>
                         let qual_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id qual) List.empty) in
                         match scope_find_inductive qual_mp scope {
-                            ok qual_ind => Term.var sentinel (DebugName.named (inductive_bare_name qual_ind)),
+                            // The params check must be on the inductive
+                            // actually being NAMED (`qual_ind`, from the
+                            // written qualifier), not on `ind` -- `ind`
+                            // comes from a first-match bare-name scan
+                            // (`scope_find_inductive_by_constructor`) and
+                            // is a DIFFERENT inductive whenever two types
+                            // share a constructor name, which is the whole
+                            // scenario this path exists for.
+                            ok qual_ind =>
+                                if inductive_has_params qual_ind
+                                then expected_type
+                                else Term.var sentinel (DebugName.named (inductive_bare_name qual_ind)),
                             err _ => expected_type,
                         },
                     Option.none => expected_type,
