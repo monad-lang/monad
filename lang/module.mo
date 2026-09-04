@@ -2342,8 +2342,9 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
             let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty in
             let t_flat : I64 := bench_step verbose "  elab: flatten_module_decls" t0 (List.length all_decls) in
             let infixes : List Infix := collect_infixes all_decls in
+            let t_collect : I64 := bench_step verbose "  elab: collect_infixes" t_flat (List.length infixes) in
             let resolved : List Decl := resolve_infix_decls infixes all_decls in
-            let t_infix : I64 := bench_step verbose "  elab: resolve_infix_decls" t_flat (List.length resolved) in
+            let t_infix : I64 := bench_step verbose "  elab: resolve_infix_decls" t_collect (List.length resolved) in
             let promoted : List Decl := promote_instance_defs resolved in
             let t_promote : I64 := bench_step verbose "  elab: promote_instance_defs" t_infix (List.length promoted) in
             let dict_paramed : List Decl := add_constraint_dict_params_decls promoted in
@@ -2410,8 +2411,17 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                         if expansion.changed then
                             { module_id := target_mp, scope := build_scope_from_decls target_mp dict_paramed2, parent := Option.none }
                         else scope in
+                    // Timed separately from `names_of_decls` below: when
+                    // `expansion.changed` this is a SECOND whole-graph
+                    // `build_scope_from_decls` (~1500ms, per the note
+                    // above), and folding it into the next span would
+                    // silently attribute that to `names_of_decls`. The
+                    // arithmetic self-check (AGENTS.md item 25) cannot
+                    // catch a mislabelled boundary -- the sub-times still
+                    // sum to the total either way.
+                    let t_scope2 : I64 := bench_step verbose "  elab: post-expansion scope rebuild" t_expand (List.length scope2.scope.classes) in
                     let known_names : List Identifier := names_of_decls dict_paramed2 in
-                    let t_names : I64 := bench_step verbose "  elab: names_of_decls" t_expand (List.length known_names) in
+                    let t_names : I64 := bench_step verbose "  elab: names_of_decls" t_scope2 (List.length known_names) in
                     let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names in
                     let _t_typs : I64 := bench_step verbose "  elab: elaborate_def_typs" t_names (List.length target_decls) in
                     // Annotated local, not an inline literal --

@@ -2179,6 +2179,19 @@ Key patterns when writing self-hosted Monad code:
       total                                 3732ms
     (Sums to 3732ms against item 24's ~3847ms for the same phase, which
     is the arithmetic check item 25 now insists on.)
+    **Two span boundaries were corrected after review**, and the lesson
+    generalises: the arithmetic check CANNOT catch a mislabelled
+    boundary, because the sub-times still sum to the total either way.
+    `names_of_decls`'s span had begun before the conditional
+    post-expansion scope rebuild -- which is a SECOND whole-graph
+    `build_scope_from_decls` (~1500ms) whenever `expansion.changed` --
+    and `resolve_infix_decls`'s had begun before `collect_infixes`. Both
+    now have their own spans. Re-measured with the corrected boundaries,
+    the numbers above stand for this workload: the rebuild is 0ms
+    (`examples/hello.mo` triggers no expansion, as only `std/derive.mo`
+    invokes `reflect_type_info!`) and `collect_infixes` is 1ms. On a file
+    that DOES expand, the old grouping would have silently reported
+    ~1500ms of scope building as `names_of_decls`.
     Consequences for where to spend effort:
     - **Two thirds of the phase is the self-hosted parser running
       interpreted over prelude/init/std.** Nothing in the whole-graph
@@ -2241,7 +2254,16 @@ Key patterns when writing self-hosted Monad code:
       take_while is_ident_char short  263ms -> BYTE 176ms   -33%
     End to end, converting 5 call sites (`whitespace.mo` x4,
     `identifier.mo` x1), interleaved A/B on `check examples/hello.mo`:
-    load+parse **1715/1694/1701ms -> 1205/1201/1178ms, -30%**. Adding
+    load+parse **1715/1694/1701ms -> 1205/1201/1178ms, -30%**.
+    **That -30% came from 5 sites, but 9 more were still on the old path
+    and this entry originally read as though the conversion were
+    complete.** Review caught them: `take_while is_space` in
+    `expr_climb_rest_ws`/`expr_climb_op_rhs_ws` and three sites in the
+    type-expression climber -- i.e. once per operator-precedence step and
+    per type atom, hotter than several of the sites that HAD been
+    converted -- plus `take_while is_ident_char` in the type-constraint
+    parser. All now converted (17 sites total). When recording a
+    conversion, count the call sites that remain, not the ones changed. Adding
     `number.mo`'s 3 sites afterwards moved it no further than noise --
     digits are simply rarer in source than whitespace and identifiers --
     but was kept as consistent and harmless.

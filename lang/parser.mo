@@ -16,10 +16,10 @@ use lang.parser.core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
   op_lookup_prec, op_table, parse_error_remaining, success, tag,
 }
-use lang.parser.char_preds {is_ident_char, is_space}
+use lang.parser.char_preds {is_ident_char_byte, is_space_byte}
 use lang.parser.combinators {
   alt, alt_fold, bind_parse, delimited_by, many1, map_parse, opt,
-  preceded_by, separated_by, tag, tag_keyword, take_while, terminated_by,
+  preceded_by, separated_by, tag, tag_keyword, take_while_byte, terminated_by,
 }
 use lang.parser.number {number, numeric_literal}
 use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
@@ -108,7 +108,7 @@ def path_variable (input : String) : ParseResult NameRef :=
 
 #[partial]
 def do_stmts_tail (input : String) : String :=
-	do_stmts_tail_sp (take_while is_space input) input
+	do_stmts_tail_sp (take_while_byte is_space_byte input) input
 
 #[partial]
 def do_stmts_tail_sp (r : ParseResult String) (orig : String) : String :=
@@ -2382,7 +2382,7 @@ def type_constraint_one_name (r : ParseResult ModulePath) (orig : String) : Pars
 	match r {
 		success rem cls =>
 			let empty_vars : List Identifier := List.empty in
-			type_constraint_vars (take_while is_ident_char (skip_spaces rem)) cls empty_vars rem,
+			type_constraint_vars (take_while_byte is_ident_char_byte (skip_spaces rem)) cls empty_vars rem,
 		fail _ => fail (ParseError.custom "expected class name in constraint" orig)
 	}
 
@@ -2392,7 +2392,7 @@ def type_constraint_vars (r : ParseResult String) (cls : ModulePath) (acc : List
 		success rest ident =>
 			if is_empty ident
 			then success rest (TypeConstraint.mk cls (list_reverse acc))
-			else type_constraint_vars (take_while is_ident_char (skip_spaces rest)) cls (List.cons (Identifier.id ident) acc) orig,
+			else type_constraint_vars (take_while_byte is_ident_char_byte (skip_spaces rest)) cls (List.cons (Identifier.id ident) acc) orig,
 		fail _ => success orig (TypeConstraint.mk cls (list_reverse acc))
 	}
 
@@ -5327,7 +5327,7 @@ def match_case_body (r: ParseResult Term) (name: Identifier) (args : List Identi
 /// exactly this shape.
 #[partial]
 def match_case_tail (input: String) : String :=
-    match take_while is_space input {
+    match take_while_byte is_space_byte input {
         success after_sp _ =>
             match tag "," after_sp {
                 success rem _ => skip_docstrings (skip_spaces rem),
@@ -5795,7 +5795,7 @@ def expr_climb_first (r: ParseResult Term) (ctx: List Identifier) (min_prec: I64
 
 #[partial]
 def expr_climb_rest (input: String) (lhs: Term) (ctx: List Identifier) (min_prec: I64) : ParseResult Term :=
-    expr_climb_rest_ws (take_while is_space input) lhs ctx min_prec
+    expr_climb_rest_ws (take_while_byte is_space_byte input) lhs ctx min_prec
 
 /// Deliberately whitespace-only here (NOT comment-skipping too) --
 /// `atom_term` tries "one more bare application argument" next, and a
@@ -5866,7 +5866,7 @@ def expr_climb_op_prec (input: String) (lhs: Term) (op: String) (rem: String) (c
             let prec : I64 := op_entry_prec entry in
             if I64.lt prec min_prec
             then success input lhs
-            else expr_climb_op_rhs_ws (take_while is_space rem) lhs op ctx prec (op_entry_rassoc entry) min_prec
+            else expr_climb_op_rhs_ws (take_while_byte is_space_byte rem) lhs op ctx prec (op_entry_rassoc entry) min_prec
     }
 
 #[partial]
@@ -5923,7 +5923,7 @@ def expr_climb_op_rhs_expr (r: ParseResult Term) (lhs: Term) (op: String) (ctx: 
 
 #[partial]
 def type_expression (ctx: List Identifier) (input: String) : ParseResult Term :=
-    type_expr_ws (take_while is_space input) input ctx
+    type_expr_ws (take_while_byte is_space_byte input) input ctx
 
 #[partial]
 def type_expr_ws (r: ParseResult String) (input: String) (ctx: List Identifier) : ParseResult Term :=
@@ -5969,7 +5969,7 @@ def type_dep_close (r: ParseResult String) (input: String) (name: String) (typ: 
 
 #[partial]
 def type_dep_arrow (rem: String) (name: String) (typ: Term) (ctx: List Identifier) : ParseResult Term :=
-    type_dep_arrow_ws (take_while is_space rem) rem name typ ctx
+    type_dep_arrow_ws (take_while_byte is_space_byte rem) rem name typ ctx
 
 #[partial]
 def type_dep_arrow_ws (r: ParseResult String) (rem: String) (name: String) (typ: Term) (ctx: List Identifier) : ParseResult Term :=
@@ -6009,7 +6009,7 @@ def type_plain_expr (r: ParseResult Term) (ctx: List Identifier) : ParseResult T
 
 #[partial]
 def type_check_arrow (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=
-    type_arrow_ws (take_while is_space input) input lhs ctx
+    type_arrow_ws (take_while_byte is_space_byte input) input lhs ctx
 
 #[partial]
 def type_arrow_ws (r: ParseResult String) (input: String) (lhs: Term) (ctx: List Identifier) : ParseResult Term :=

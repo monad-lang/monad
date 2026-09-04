@@ -29,102 +29,26 @@
 /// threaded through this pass instead -- one place rather than the whole
 /// grammar.
 ///
-/// The name-resolution helpers (`sentinel`, `find_index`, `var_term`,
-/// `field_access_chain`, `field_pattern_binder_names`,
-/// `name_ref_to_string`) MOVED here from `lang/parser.mo` rather than
-/// being copied: duplicate top-level names across `lang/*.mo` silently
-/// collide (AGENTS.md item 18), so a second copy would be a live bug, not
-/// redundancy. `lang/parser.mo` imports them back.
+/// Name resolution (`sentinel`, `find_index`, `field_access_chain`,
+/// `name_ref_to_string`) is IMPORTED from
+/// `lang/parser.mo`, not redefined -- duplicate top-level names across
+/// `lang/*.mo` silently collide (AGENTS.md item 18).
 use lang.types {
-  Con, DebugName, FieldPattern, FieldPatternEntry, Identifier,
-  Literal, MatchCase, ModulePath, NameRef, Native,
+  Con, DebugName, Identifier, Literal, MatchCase, ModulePath, NameRef, Native,
   ParseCon, ParseLiteral, ParseMatchCase, ParseNative,
   ParseStructLitField, ParseTerm, ParseTermKind, StructLitField, Term,
-  show_identifier,
 }
-
-
-// --- Name resolution (moved from lang/parser.mo) --------------------
-
-/// Free/unresolved de Bruijn index. A variable that is not bound by any
-/// enclosing binder keeps its name and gets this index; the module
-/// resolver and type checker resolve it later.
-def sentinel : I64 := -1
-
-
-#[partial]
-def find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64 :=
-    match ctx {
-        List.cons x rest =>
-            if String.beq (show_identifier id) (show_identifier x)
-            then Option.some depth
-            else find_index id rest (depth + 1),
-        List.empty => Option.none
-    }
-
-
-#[partial]
-def var_term (ctx: List Identifier) (s: String) : Term :=
-    let sid : Identifier := Identifier.id s in
-    match find_index sid ctx 0 {
-        Option.some idx => Term.var idx (DebugName.named sid),
-        Option.none => Term.var sentinel (DebugName.named sid)
-    }
-
-
-#[partial]
-def name_ref_to_string (nref : NameRef) : Option String := match nref {
-    NameRef.nid id => Option.some (show_identifier id),
-    NameRef.nmp mp => Option.some (show_module_path_dotted mp),
-    NameRef.nop _ => Option.none,
+// Imported, NOT redefined. An earlier revision of this file copied these
+// six in and claimed in its own comment to have moved them -- which armed
+// exactly the duplicate-top-level-name collision AGENTS.md item 18
+// records, and silently diverged (`name_ref_to_string`'s `nop` arm threw
+// away the operator spelling that `resolve_infix_decls` needs). The
+// layering is temporarily inverted -- a submodule importing its parent --
+// and is resolved when the grammar is wired to this pass: at that point
+// these move here for real and `lang/parser.mo` imports them back.
+use lang.parser {
+  field_access_chain, find_index, name_ref_to_string, sentinel,
 }
-
-
-#[partial]
-def show_module_path_dotted (mp : ModulePath) : String := match mp {
-    ModulePath.mp ids => List.intercalate "." (List.map show_identifier ids),
-}
-
-
-#[partial]
-def field_pattern_binder_names (fp : FieldPattern) : List Identifier :=
-    match fp {
-        FieldPattern.mk entries _rest => field_pattern_entry_binders entries,
-    }
-
-
-#[partial]
-def field_pattern_entry_binders (entries : List FieldPatternEntry) : List Identifier :=
-    match entries {
-        List.empty => List.empty,
-        List.cons e rest =>
-            match e {
-                FieldPatternEntry.mk _field binder =>
-                    List.cons binder (field_pattern_entry_binders rest),
-            },
-    }
-
-
-/// Nested bare-form field-pattern `Match` chain desugaring a dotted-path
-/// field access into ordinary struct-field destructuring -- mirrors the
-/// Rust reference's `lower_core.rs::lower_field_access_chain` and reuses
-/// the same `MatchCase`/`FieldPattern` shape destructured `def` params
-/// already build, so the type checker handles it with no new logic.
-#[partial]
-def field_access_chain (scrutinee : Term) (fields : List Identifier) : Term :=
-    match fields {
-        List.empty => scrutinee,
-        List.cons field rest =>
-            let value : Term := field_access_chain (Term.var 0 (DebugName.named field)) rest in
-            let bare_name : Identifier := Identifier.id "" in
-            let entry : FieldPatternEntry := FieldPatternEntry.mk field field in
-            let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
-            let binders : List Identifier := field_pattern_binder_names fp in
-            let some_fp : Option FieldPattern := Option.some fp in
-            let case_ : MatchCase := MatchCase.mc bare_name binders value some_fp in
-            let cases : List MatchCase := List.cons case_ List.empty in
-            Term.lit (Literal.match_ scrutinee cases),
-    }
 
 
 /// Extend `ctx` with a binder group. Each name is consed in order, so the
@@ -152,7 +76,14 @@ def extend_ctx (names : List Identifier) (ctx : List Identifier) : List Identifi
 #[partial]
 def lower_name_ref (ctx : List Identifier) (nref : NameRef) : Term :=
     match nref {
-        NameRef.nid id => var_term ctx (show_identifier id),
+        // `find_index` directly rather than `var_term`, which only takes
+        // a `String` to re-wrap it as an `Identifier` immediately -- and
+        // that round trip is what tripped whole-corpus resolution.
+        NameRef.nid id =>
+            match find_index id ctx 0 {
+                Option.some idx => Term.var idx (DebugName.named id),
+                Option.none => Term.var sentinel (DebugName.named id),
+            },
         NameRef.nmp mp => lower_path ctx mp nref,
         NameRef.nop _ => lower_name_global nref,
     }

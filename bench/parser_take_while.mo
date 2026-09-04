@@ -119,7 +119,7 @@ def run_bench (calls : I64) (run_len : I64) (label : String) : Bool :=
     let idb_start := Bench.now in
     let idb_total := scan_idents_byte 0 calls idents 0 in
     let idb_elapsed := I64.sub Bench.now idb_start in
-    let logged_idb := Bench.report (String.concat "  BYTE is_ident_char_byte" label) idb_elapsed in
+    let logged_idb := Bench.report (String.concat "  BYTE is_ident_char_byte " label) idb_elapsed in
     // All four totals are `calls * consumed-per-call` and must be
     // positive — proof the loops actually ran and the predicates
     // actually matched. The byte totals must EQUAL their string

@@ -2,8 +2,8 @@
 
 use lang.types {NumSuffix, Term}
 use lang.parser.core {ParseResult, custom, fail, is_empty, success}
-use lang.parser.char_preds {is_digit, is_digit_byte, is_digit_or_underscore_byte, is_hex_digit, is_hex_digit_byte}
-use lang.parser.combinators {tag, take_while, take_while_byte}
+use lang.parser.char_preds {is_digit, is_digit_byte, is_digit_or_underscore_byte, is_hex_digit_byte}
+use lang.parser.combinators {tag, take_while_byte}
 
 open ParseResult {fail, success}
 

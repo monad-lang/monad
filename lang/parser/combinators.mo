@@ -4,7 +4,7 @@ use lang.parser.core {
   ParseError, ParseResult, custom, fail, is_empty, parse_error_remaining,
   success, tag,
 }
-use lang.parser.char_preds {byte_at, is_ident_char, is_prefix}
+use lang.parser.char_preds {byte_at, is_ident_char, is_ident_char_byte, is_prefix, is_space, is_space_byte}
 use lang.types {custom, list_reverse}
 use std.list {length}
 
@@ -577,3 +577,73 @@ def test_alt_fold_empty_list_still_fails : Bool :=
 	}
 
 // --- End of combinators ---
+
+// --- take_while_byte -------------------------------------------------
+//
+// The byte scanner's only equivalence assertion used to live in
+// `bench/parser_take_while.mo`, which nothing under `.github/workflows`
+// or `.pre-commit-config.yaml` runs -- so a wrong edit to a `*_byte`
+// predicate would have been caught only by whichever grammar test
+// happened to exercise it. These run in the ordinary sweep.
+
+#[partial]
+def tw_byte_out (r : ParseResult String) : String :=
+	match r {
+		success _ out => out,
+		fail _ => "<fail>"
+	}
+
+#[partial]
+def tw_byte_rem (r : ParseResult String) : String :=
+	match r {
+		success rem _ => rem,
+		fail _ => "<fail>"
+	}
+
+#[test]
+def test_take_while_byte_consumes_run : Bool :=
+	String.beq (tw_byte_out (take_while_byte is_space_byte "   xy")) "   "
+
+#[test]
+def test_take_while_byte_leaves_remainder : Bool :=
+	String.beq (tw_byte_rem (take_while_byte is_space_byte "   xy")) "xy"
+
+#[test]
+def test_take_while_byte_empty_run : Bool :=
+	String.beq (tw_byte_out (take_while_byte is_space_byte "xy")) ""
+
+#[test]
+def test_take_while_byte_empty_input : Bool :=
+	String.beq (tw_byte_out (take_while_byte is_space_byte "")) ""
+
+#[test]
+def test_take_while_byte_whole_input : Bool :=
+	String.beq (tw_byte_rem (take_while_byte is_ident_char_byte "abc")) ""
+
+/// The correctness argument for scanning bytes rather than characters: a
+/// UTF-8 lead byte (>= 0xC0) fails every ASCII predicate, so the scan
+/// stops at the character boundary instead of splitting the character.
+/// The em dash here is the exact shape `lang/json.mo`/`lang/toml.mo` hit
+/// before their first declaration (see `utf8_char_width`'s own note).
+#[test]
+def test_take_while_byte_stops_at_utf8_boundary : Bool :=
+	String.beq (tw_byte_out (take_while_byte is_ident_char_byte "ab—cd")) "ab"
+
+#[test]
+def test_take_while_byte_utf8_remainder_intact : Bool :=
+	String.beq (tw_byte_rem (take_while_byte is_ident_char_byte "ab—cd")) "—cd"
+
+/// Byte and string scanners must agree. This is the property
+/// `bench/parser_take_while.mo` asserts at scale; asserted here too so it
+/// is actually run.
+#[test]
+def test_take_while_byte_matches_string_scanner : Bool :=
+	let src : String := "  \tfoo_bar1 baz" in
+	String.beq (tw_byte_out (take_while_byte is_space_byte src))
+	           (tw_byte_out (take_while is_space src))
+
+#[test]
+def test_take_while_byte_matches_string_scanner_ident : Bool :=
+	let src : String := "foo_bar1 baz" in
+	String.beq (tw_byte_out (take_while_byte is_ident_char_byte src))
+	           (tw_byte_out (take_while is_ident_char src))
