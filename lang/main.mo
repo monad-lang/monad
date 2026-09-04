@@ -32,7 +32,11 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
     let target := Path.join output_dir output_name;
     let ir_path := Path.with_suffix target ".ll";
     let obj_path := Path.with_suffix target ".o";
-    let runtime_obj := Path.join output_dir (Path.path "monad_runtime.o");
+    // Beside the other artifacts (i.e. next to `target`), NOT in
+    // `output_dir` -- an absolute or directory-bearing `output_name`
+    // makes those two different places, and only the former is created
+    // below.
+    let runtime_obj := Path.with_suffix target "_runtime.o";
     let output_path := target;
     let ir_path_s := Path.to_string ir_path;
     let obj_path_s := Path.to_string obj_path;
@@ -45,6 +49,21 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
     // compile_loaded_modules_to_ir total" ~255s inferred remainder
     // (write .ll / llc / clang runtime.c / clang link, previously
     // entirely unbenched) actually goes, before guessing at a fix.
+    // Nothing creates the directory these artifacts are written into.
+    // `default_output_dir` is `/tmp/monad_out_<pid>` -- a fresh path
+    // every single run -- so `clang -o .../monad_runtime.o` failed with
+    // "unable to open output file ... No such file or directory" AFTER a
+    // full ~18-minute codegen had already succeeded. Derived from the
+    // JOINED target rather than `output_dir` alone, because `Path.join`
+    // lets an absolute `output_name` replace `output_dir` outright (its
+    // own `os.path.join` semantics), and because a relative name like
+    // `out/hello` puts the real directory inside the NAME. An empty
+    // result means "current directory", which needs no mkdir.
+    let target_dir : String := extract_directory (Path.to_string target);
+    let _mkdir <- (if String.beq target_dir ""
+        then return 0
+        else exec_cmd "mkdir" ["-p", target_dir]);
+
     let t_write := Bench.now;
     IO.write_file ir_path ir_text;
     if verbose then do {
