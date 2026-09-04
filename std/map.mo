@@ -9,7 +9,9 @@
 /// instead of giving up. Confirmed via `bootstrap compile lang/main.mo
 /// monad`: `lang/module.mo`'s `module_scope_cache_empty`'s own struct-
 /// literal field `entries := Map.empty` (declared field type `HashMap
-/// ModulePath ScopeData`, `ModuleScopeCache`) hit exactly this --
+/// ModulePath ScopeData`, `ModuleScopeCache`) hit exactly this -- that
+/// caller has since been deleted as dead code, but the gap it found is
+/// real and this default is what closes it --
 /// `HashMap` is already this codebase's own preferred `Map` instance
 /// (see `filter_reachable_decls`'s own doc comment on why), so it's the
 /// correct default here too.

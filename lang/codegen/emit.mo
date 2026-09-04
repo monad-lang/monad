@@ -3517,9 +3517,10 @@ def combine_direct_call_arity_checked (ctx_a : CodegenCtx) (name : String) (arg_
             else if I64.lt supplied real_arity then
                 // UNDER-application: a genuine partial application of a
                 // direct top-level function reference (e.g. `load_scope_
-                // entry ""`, `lang/module.mo`'s `build_prelude_init_base`,
-                // passed as `load_dependency_entries`'s own `loader`
-                // param, later invoked via `apply_closure1`). Previously
+                // entry ""`, passed as `load_dependency_entries`'s own
+                // `loader` param by `lang/module.mo`'s since-deleted
+                // `build_prelude_init_base`, later invoked via
+                // `apply_closure1`). Previously
                 // fell through to the `else` branch below unconditionally
                 // -- `combine_direct_call` blindly emits `call @name(<all
                 // supplied args>)` with FEWER arguments than `name`'s own
