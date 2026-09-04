@@ -401,9 +401,9 @@ type Visibility {
 //     from, which is the only place that information is cheaply
 //     available.
 //
-// The location lives on the wrapper struct rather than being repeated on
+// The span lives on the wrapper struct rather than being repeated on
 // each variant, so a walk matches `.kind` once and a constructor sets
-// `loc` once. `Term` itself is deliberately NOT given locations: it is
+// `span` once. `Term` itself is deliberately NOT given locations: it is
 // walked by `elaborate.mo`, `typecheck/subst.mo`, `traverse.mo`'s
 // `term_map_children`, `infer.mo` and `emit.mo`, and it sits on the
 // measured hot path (AGENTS.md item 27). Lowering emits positions into a
@@ -416,10 +416,97 @@ type Visibility {
 // `path_variable` building a `TermV0.var` that `variable_try_path_got`
 // destructured straight back into a `Term`.
 
+/// Where a `ParseTerm` came from, recorded as the LENGTH OF THE REMAINING
+/// INPUT at the start and end of the construct.
+///
+/// Not an absolute offset, because no parser def sees the whole file --
+/// each one is handed only the unconsumed remainder, and `whole_file`
+/// exists nowhere in the grammar except `decls_parser_with_locs`. Both
+/// numbers here are available locally and for free: `String.length input`
+/// before a parser runs and `String.length rem` after it succeeds, each
+/// an O(1) read on the `SharedStr` window the remainder actually is.
+/// Recording an absolute offset instead would mean threading the file
+/// (or its length) through all ~235 grammar defs -- re-adding exactly
+/// the threading that dropping the de Bruijn `ctx` removes.
+///
+/// Converted to a real `SourceRange` only at the top level, where the
+/// file IS known: `offset = total_length - start_rem`, then
+/// `lang/parser/position.mo`'s divide-and-conquer scan for line/column.
+/// Note the ordering is inverted from an offset -- a LARGER `start_rem`
+/// means EARLIER in the file.
+struct ParseSpan {
+    start_rem : I64,
+    end_rem : I64,
+}
+
+/// The span of a construct whose position has not been recorded. Distinct
+/// from a zero-length span at end-of-input (`0`/`0`), which is a real
+/// position.
+def parse_span_unknown : ParseSpan := { start_rem := -1, end_rem := -1 }
+
+#[partial]
+def parse_span_is_unknown (sp : ParseSpan) : Bool :=
+    I64.beq sp.start_rem -1
+
 struct ParseTerm {
-    loc : SourceRange,
+    span : ParseSpan,
     kind : ParseTermKind,
 }
+
+/// Build a `ParseTerm` whose position has not been recorded yet.
+#[partial]
+def pt_ (k : ParseTermKind) : ParseTerm :=
+    { span := parse_span_unknown, kind := k }
+
+/// Build a located `ParseTerm` from the input it started at and the
+/// remainder it left, which is the shape every parser already has in
+/// hand at the point it succeeds.
+#[partial]
+def pt_at (input : String) (rem : String) (k : ParseTermKind) : ParseTerm :=
+    { span := { start_rem := String.length input, end_rem := String.length rem }, kind := k }
+
+
+// Same-arity constructors for each kind, so converting a grammar site is
+// a token rename (`Term.app` -> `pt_app`) rather than a wrap that would
+// have to re-parenthesise the arguments. Span is the placeholder; a
+// later pass swaps these for span-carrying forms.
+
+#[partial]
+def pt_var (n : NameRef) : ParseTerm := pt_ (ParseTermKind.var n)
+
+#[partial]
+def pt_var_macro (n : NameRef) : ParseTerm := pt_ (ParseTermKind.var_macro n)
+
+#[partial]
+def pt_lam (name : Identifier) (typ : ParseTerm) (body : ParseTerm) : ParseTerm :=
+    pt_ (ParseTermKind.lam name typ body)
+
+#[partial]
+def pt_forall (name : Identifier) (typ : ParseTerm) (body : ParseTerm) : ParseTerm :=
+    pt_ (ParseTermKind.forall name typ body)
+
+#[partial]
+def pt_pi (arg : ParseTerm) (ret : ParseTerm) : ParseTerm := pt_ (ParseTermKind.pi arg ret)
+
+#[partial]
+def pt_app (f : ParseTerm) (a : ParseTerm) : ParseTerm := pt_ (ParseTermKind.app f a)
+
+#[partial]
+def pt_lit (l : ParseLiteral) : ParseTerm := pt_ (ParseTermKind.lit l)
+
+#[partial]
+def pt_ntv (n : ParseNative) : ParseTerm := pt_ (ParseTermKind.ntv n)
+
+#[partial]
+def pt_con (c : ParseCon) : ParseTerm := pt_ (ParseTermKind.con c)
+
+#[partial]
+def pt_type_ (u : I64) : ParseTerm := pt_ (ParseTermKind.type_ u)
+
+#[partial]
+def pt_quote_ (t : ParseTerm) : ParseTerm := pt_ (ParseTermKind.quote_ t)
+
+def pt_hole : ParseTerm := pt_ ParseTermKind.hole
 
 type ParseTermKind {
     var (name: NameRef),
@@ -427,7 +514,7 @@ type ParseTermKind {
     /// tagged `var` for the same reason `Term.var_macro` is (see its own
     /// doc comment): macro names resolve in a separate namespace.
     var_macro (name: NameRef),
-    lam (param: ParseParam) (body: ParseTerm),
+    lam (name: Identifier) (typ: ParseTerm) (body: ParseTerm),
     forall (name: Identifier) (typ: ParseTerm) (body: ParseTerm),
     pi (arg: ParseTerm) (ret: ParseTerm),
     app (fun: ParseTerm) (arg: ParseTerm),
@@ -437,14 +524,6 @@ type ParseTermKind {
     type_ (universe: I64),
     quote_ (term: ParseTerm),
     hole,
-}
-
-struct ParseParam {
-    name : Identifier,
-    type_ : ParseTerm,
-    mult : Multiplicity,
-    default : Option ParseTerm,
-    attrs : List Attribute,
 }
 
 struct ParseMatchCase {
