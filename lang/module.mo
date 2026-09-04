@@ -479,13 +479,7 @@ struct InfosAndCache {
 def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (visiting : List ModulePath) (visited : List ModuleInfo) (cache : ModuleInfoCache) : IO InfosAndCache :=
     match to_visit {
         List.empty => do {
-            // Annotated local, not a bare `return { ... }` -- the
-            // struct-literal pitfall (`validate_no_undesugared_struct_
-            // lits`'s own message): an unannotated literal never
-            // desugars to a constructor and silently compiles to a
-            // void placeholder through this backend.
-            let r : InfosAndCache := { infos := visited, cache := cache };
-            return r
+            return { infos := visited, cache := cache }
         },
         List.cons head tail =>
             if list_contains visiting head then
@@ -1608,13 +1602,6 @@ struct FileCheckAndCache {
 /// behavior. Measured on a 5-file `check` over `lang/`: 69 of 92
 /// dependency loads served from cache (75%).
 ///
-/// `base` (`PreludeInitBase`) is still accepted and UNUSED. It predates
-/// `ModuleInfoCache` and covers the narrower prelude+init case that the
-/// general cache now also covers, just without `base`'s pre-built
-/// `ScopeData`. Removing the parameter, or reviving it to skip
-/// prelude/init scope-building specifically, is open follow-up work
-/// (see `bootstrapping/unify-check-compile-test-elaboration.md`).
-///
 /// Passes `check_deps=false` to `elaborate_loaded_modules` — see that
 /// function's own doc comment for the two-mode rationale. `check_deps=true`
 /// (checking the whole dependency closure a file pulls in, not just its
@@ -1625,7 +1612,7 @@ struct FileCheckAndCache {
 /// killed) — root cause under investigation, see
 /// `bootstrapping/check-deps-memory-blowup.md`.
 #[partial]
-def check_file_cached (base : PreludeInitBase) (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
+def check_file_cached (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
     let exists : Bool <- file_exists (Path.path file_path);
     if exists then do {
         if verbose then println ("checking " ++ file_path) else do { return unit };
@@ -2035,24 +2022,16 @@ struct InfoAndCache {
 #[partial]
 def load_module_with_info_cached (base_dir : String) (mp : ModulePath) (cache : ModuleInfoCache) : IO InfoAndCache := do {
     match module_info_cache_lookup mp cache {
-        // Every result is an annotated local, not a bare
-        // `return { ... }` -- the struct-literal pitfall
-        // (`validate_no_undesugared_struct_lits`'s own message).
         Option.some hit => do {
-            let r : InfoAndCache := { info := Option.some hit, cache := module_info_cache_hit cache };
-            return r
+            return { info := Option.some hit, cache := module_info_cache_hit cache }
         },
         Option.none => do {
             let loaded : Option ModuleInfo <- load_module_with_info base_dir mp;
             match loaded {
                 Option.some info => do {
-                    let r : InfoAndCache := { info := Option.some info, cache := module_info_cache_insert mp info cache };
-                    return r
+                    return { info := Option.some info, cache := module_info_cache_insert mp info cache }
                 },
-                Option.none => do {
-                    let r : InfoAndCache := { info := Option.none, cache := cache };
-                    return r
-                },
+                Option.none => do { return { info := Option.none, cache := cache } },
             }
         },
     }
@@ -2312,11 +2291,7 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) : IO
                 }
             },
         Option.none => do {
-            // Annotated local, not a bare `return { ... }` -- same
-            // struct-literal pitfall as the `loaded`/`result` bindings
-            // above.
-            let r : LoadedAndCache := { loaded := Result.err ("Failed to load" ++ Show.show mp), cache := cache };
-            return r
+            return { loaded := Result.err ("Failed to load" ++ Show.show mp), cache := cache }
         }
     }
 }
@@ -2631,12 +2606,7 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
     let lc : LoadedAndCache <- load_file_modules_cached file_path cache;
     let loaded_result : Result String LoadedModules := lc.loaded;
     let out_cache : ModuleInfoCache := lc.cache;
-    // The whole elaborate is an annotated local pair, not one bare
-    // `return { elaborated := <huge match>, ... }` -- the struct-literal
-    // pitfall again: this literal (the largest in the file) is exactly
-    // what `validate_no_undesugared_struct_lits` flagged on the v29
-    // self-compile.
-    let elaborated_result : Result String ElaboratedModules := match loaded_result {
+    return { elaborated := match loaded_result {
         Result.err e => Result.err e,
         Result.ok loaded =>
             let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty in
@@ -2710,9 +2680,7 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                         { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded } in
                     Result.ok elaborated,
             }
-    };
-    let out : ElaboratedAndCache := { elaborated := elaborated_result, cache := out_cache };
-    return out
+    }, cache := out_cache }
 }
 
 /// Backwards-compatible wrapper: elaborate with a fresh cache.
@@ -2870,9 +2838,8 @@ def test_check_module_with_scope_dotted_module_path_still_resolves : IO Bool := 
 
 #[test]
 def test_check_file_reports_missing_file : Bool :=
-    let empty_base : PreludeInitBase := { scope_data := scope_data_empty, covered := List.empty } in
     let empty_cache : ModuleInfoCache := module_info_cache_empty in
-    match check_file_cached empty_base empty_cache "definitely/does/not/exist.mo" false {
+    match check_file_cached empty_cache "definitely/does/not/exist.mo" false {
         IO.io result =>
             match result {
                 FileCheckAndCache.mk fc_result _cache =>

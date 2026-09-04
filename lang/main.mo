@@ -5,7 +5,7 @@ use std.bench {now, report}
 use lang.types {Decl, Location, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {build_debug_locs, compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, PreludeInitBase, build_prelude_init_base, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
+use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
 use std.map {}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
@@ -350,7 +350,7 @@ def print_diagnostics (diags : List String) : IO I64 :=
 /// driver this feeds, which needs a real per-file pass/fail matrix,
 /// not just a final count).
 #[partial]
-def run_check_loop (base : PreludeInitBase) (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (verbose : Bool) : IO I64 :=
+def run_check_loop (cache : ModuleInfoCache) (files : List String) (checked : I64) (errors : I64) (verbose : Bool) : IO I64 :=
     match files {
         List.empty => do {
             println (I64.to_string checked ++ " file(s) checked, " ++ I64.to_string errors ++ " error(s)");
@@ -368,7 +368,7 @@ def run_check_loop (base : PreludeInitBase) (cache : ModuleInfoCache) (files : L
             return (if I64.gt errors 0 then 1 else 0)
         },
         List.cons f rest => do {
-            let checked_and_cache : FileCheckAndCache <- check_file_cached base cache f verbose;
+            let checked_and_cache : FileCheckAndCache <- check_file_cached cache f verbose;
             match checked_and_cache {
                 FileCheckAndCache.mk result updated_cache =>
                     match result {
@@ -376,12 +376,12 @@ def run_check_loop (base : PreludeInitBase) (cache : ModuleInfoCache) (files : L
                             match diags {
                                 List.empty => do {
                                     println ("ok    " ++ path);
-                                    run_check_loop base updated_cache rest (checked + 1) errors verbose
+                                    run_check_loop updated_cache rest (checked + 1) errors verbose
                                 },
                                 List.cons _ _ => do {
                                     println ("FAIL  " ++ path ++ " (" ++ I64.to_string (List.length diags) ++ " error(s))");
                                     print_diagnostics diags;
-                                    run_check_loop base updated_cache rest (checked + 1) (errors + List.length diags) verbose
+                                    run_check_loop updated_cache rest (checked + 1) (errors + List.length diags) verbose
                                 }
                             }
                     }
@@ -407,20 +407,18 @@ def run_check_loop (base : PreludeInitBase) (cache : ModuleInfoCache) (files : L
 /// for isolating exactly where a large file's check gets stuck, since
 /// the flat diagnostic list alone doesn't say where the checker got to.
 ///
-/// `prelude`/`init` are always implicit dependencies of every file
-/// (`build_prelude_init_base`'s own doc comment) — loaded once, here,
-/// up front, and threaded through every file in the corpus instead of
-/// each `check_file_cached` call independently reloading/reparsing
-/// them from scratch. For a corpus run of N files, this turns an
-/// O(N·D) cost (D = prelude/init's own dependency-closure size) into
-/// O(D+N) — the dominant cost of a multi-file `check` run, since this
-/// all executes *interpreted*.
+/// The cross-file redundancy this used to guard against — every file
+/// independently reloading and reparsing prelude/init — is now removed
+/// by `ModuleInfoCache` (`lang/module.mo`), threaded through every
+/// `check_file_cached` call below. A separate `PreludeInitBase`,
+/// prebuilt here and handed down, was accepted but never read by
+/// `check_file_cached`, so building it cost ~3.7s of dead work on
+/// every `check` invocation; it is gone.
 #[partial]
 def run_check (files : List String) (verbose : Bool) : IO I64 := do {
-    let base : PreludeInitBase <- build_prelude_init_base;
     let expanded : List String <- expand_check_paths files;
     let cache : ModuleInfoCache := module_info_cache_empty;
-    run_check_loop base cache expanded 0 0 verbose
+    run_check_loop cache expanded 0 0 verbose
 }
 
 /// A `monad test <path>...` subcommand mirroring `monad-rs test`: for
