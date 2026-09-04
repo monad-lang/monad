@@ -27,6 +27,13 @@ def String.starts_with (prefix : String) (s : String) : Bool
 #[native string_get]
 def String.get (s : String) (i : I64) : Option U8
 
+/// NOT USABLE FOR SCANNING -- see AGENTS.md's `Char` item.
+/// `i` is a CHARACTER index, not a byte offset, and the native decodes
+/// the whole string into a `Vec<char>` on EVERY call, so any per-character
+/// loop built on this is quadratic. `lang/parser/combinators.mo`'s
+/// `utf8_char_width` uses `String.get` (an O(1) byte read) for exactly
+/// this reason. There is also nothing you can do with the `Char` you get
+/// back: `Char` has no operations and no `BEq` instance anywhere.
 #[native string_get_char]
 def String.get_char (s : String) (i : I64) : Option Char
 
@@ -36,9 +43,17 @@ def String.to_list (s : String) : List U8
 #[native string_from_list]
 def String.from_list (bytes : List U8) : String
 
+/// UNWIRED -- declared here but absent from `exec_native`'s dispatch
+/// table (`core/src/core_native.rs`), so calling it fails at runtime.
+/// This is the hazard `validate_no_unwired_natives` (lang/codegen/emit.mo)
+/// exists to catch; it never fires here only because nothing reaches
+/// these. See AGENTS.md's `Char` item before relying on either.
 #[native string_to_chars]
 def String.to_chars (s : String) : List Char
 
+/// UNWIRED (as `to_chars` above), and its parameter type `Chars` is not
+/// a type that exists anywhere in the corpus -- presumably a typo for
+/// `List Char`.
 #[native string_from_chars]
 def String.from_chars (bytes : List Chars) : String
 

@@ -2251,6 +2251,54 @@ Key patterns when writing self-hosted Monad code:
     Do not expect parse-phase wins to show up 1:1 in the total.
 
 
+29. **`Char` is a stub: do not reach for it, and never scan with it
+    (2026-09-04).** Raised as "why not use `Char` instead of `U8`" during
+    item 28's work. Four independent reasons it does not work, found by
+    checking rather than assuming:
+    - **`String.get_char` is O(n) per call.** `core/src/core_native.rs`
+      does `s.chars().collect::<Vec<char>>()` on every call and then
+      indexes it, so a per-character loop built on it is quadratic in
+      time AND allocation. `lang/parser/combinators.mo`'s
+      `utf8_char_width` already documents this and deliberately uses
+      `String.get` (an O(1) byte read) instead.
+    - **Its `i` is a CHARACTER index, not a byte offset**, so it cannot
+      drive byte-offset advancement even ignoring cost.
+    - **`Char` has no operations at all** -- zero `Char.*` functions and
+      no `BEq`/ordering instance anywhere in `init/`, `std/` or `lang/`.
+      Nothing consumes a `Char` except two tests in
+      `lang/parser/tests/test_string_get.mo`.
+    - **The declared type contradicts the runtime representation.**
+      `init/prelude.mo` declares `type Char { of_bytes (List U8) }`, but
+      the native produces `Value::Lit(IrLit::Char(c))` -- a scalar
+      literal, not a constructor application -- so destructuring
+      `Char.of_bytes bs` hits `NotAConstructor` and a comparison cannot
+      even be hand-written in `.mo`.
+    Fixing the last two needs new natives, or changing `Char`'s runtime
+    representation to a real `of_bytes (List U8)` (a heap list per
+    character, far worse than what exists).
+    **Worse, two of the three are not wired at all**: `string_to_chars`
+    and `string_from_chars` are declared in `init/string.mo` but absent
+    from `exec_native`'s dispatch table, so calling either fails at
+    runtime -- exactly the hazard `validate_no_unwired_natives`
+    (`lang/codegen/emit.mo`) exists to catch, which never fires only
+    because nothing reaches them. `String.from_chars`'s parameter type
+    `Chars` is not a type that exists anywhere in the corpus either.
+    **There is also no correctness gap for `Char` to close in the
+    parser.** The scanned classes are ASCII by the grammar's own
+    definition -- `is_alpha_lower` is a-m, `is_alpha_lower2` n-z,
+    `is_alpha_upper` A-M, `is_alpha_upper2` N-Z, each enumerated one
+    letter at a time -- so item 28's byte range checks are exactly
+    equivalent, and Monad identifiers cannot contain non-ASCII in the
+    first place. Byte scanning stops precisely at character boundaries
+    because a UTF-8 lead byte (>= 0xC0) and continuation bytes
+    (0x80-0xBF) fail every ASCII predicate. The one scanner that must
+    pass over arbitrary UTF-8, the string-literal scanner, is
+    deliberately left on the `utf8_char_width` path.
+    Left in place rather than removed (two tests use `get_char`, and it
+    is declared API), with warning doc comments on all three natives
+    pointing here.
+
+
 ## Committing Changes
 
 ### Commit Message Format
