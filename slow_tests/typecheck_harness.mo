@@ -24,7 +24,7 @@ pub def empty_local_scope : LocalScope := {
 /// crash.
 #[partial]
 pub def typecheck_file (file_path : String) : IO Bool := do {
-    let result <- elaborate_loaded_modules file_path false;
+    let result <- elaborate_loaded_modules file_path false false;
     match result {
         Result.ok em => typecheck_module_with_scope em.scope em.target_decls empty_local_scope,
         Result.err e => do {

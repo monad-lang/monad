@@ -3,6 +3,7 @@
 
 use io {IO}
 use std.io {file_exists, is_dir, list_dir, println, read_file}
+use std.bench {now, report}
 use lang.elaborate {free_vars, names_of_decls, elaborate_def}
 use lang.types {
   Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
@@ -1315,7 +1316,7 @@ def check_file_cached (cache : ModuleInfoCache) (file_path : String) (verbose : 
     let exists : Bool <- file_exists (Path.path file_path);
     if exists then do {
         if verbose then println ("checking " ++ file_path) else do { return unit };
-        let ec : ElaboratedAndCache <- elaborate_loaded_modules_cached file_path false cache;
+        let ec : ElaboratedAndCache <- elaborate_loaded_modules_cached file_path false cache verbose;
         let out_cache : ModuleInfoCache := ec.cache;
         match ec.elaborated {
             Result.ok em => do {
@@ -2005,6 +2006,31 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) :=
     return r.loaded
 }
 
+/// Report one elaboration sub-step's elapsed time and hand back a fresh
+/// timestamp for the next one, so a chain of `let`s can be timed by
+/// threading the return value through it. Silent (and still returns a
+/// timestamp) when `verbose` is false.
+///
+/// `forced` is not read: it exists so the caller can pass something that
+/// consumes the step's own result (a `List.length`, a count), which
+/// guarantees the work happens INSIDE the span rather than at some later
+/// use. The evaluator is strict call-by-value -- `core/src/core_eval.rs`'s
+/// `App` arm reduces both sides before applying, and `let x := v in b`
+/// desugars to `App(Lam b, v)` -- so a `let`-bound step is already forced
+/// where it is bound and `forced` is belt-and-braces. AGENTS.md item 25
+/// claims the opposite ("the language is lazy", so a `Bench.report`
+/// around a `let` measures nothing); whatever caused that measurement to
+/// print nothing, laziness is not it. The check that matters either way
+/// is arithmetic: these sub-times must add up to the enclosing
+/// `elaborate_loaded_modules` total that `lang/main.mo` already prints.
+/// If they do not, the spans are wrong -- do not reason about which.
+#[partial]
+def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : I64 :=
+    if verbose then
+        let _ : Bool := Bench.report label (I64.sub Bench.now t0) in
+        Bench.now
+    else Bench.now
+
 // --- elaborate_loaded_modules: THE unified check/compile/test front end ---
 //
 // `check` (via `check_file_cached`), `compile`/`test` (via `lang/main.mo`'s
@@ -2303,21 +2329,29 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
 ///     actually named "check"/"compile"/"test" should mean: verifying a
 ///     file also verifies what it depends on.
 #[partial]
-def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) : IO ElaboratedAndCache := do {
+def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) (verbose : Bool) : IO ElaboratedAndCache := do {
+    let t_load : I64 := Bench.now;
     let lc : LoadedAndCache <- load_file_modules_cached file_path cache;
     let loaded_result : Result String LoadedModules := lc.loaded;
     let out_cache : ModuleInfoCache := lc.cache;
+    let _t_load_done : I64 := bench_step verbose "  elab: load_file_modules (read+parse)" t_load 0;
     return { elaborated := match loaded_result {
         Result.err e => Result.err e,
         Result.ok loaded =>
+            let t0 : I64 := Bench.now in
             let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty in
+            let t_flat : I64 := bench_step verbose "  elab: flatten_module_decls" t0 (List.length all_decls) in
             let infixes : List Infix := collect_infixes all_decls in
             let resolved : List Decl := resolve_infix_decls infixes all_decls in
+            let t_infix : I64 := bench_step verbose "  elab: resolve_infix_decls" t_flat (List.length resolved) in
             let promoted : List Decl := promote_instance_defs resolved in
+            let t_promote : I64 := bench_step verbose "  elab: promote_instance_defs" t_infix (List.length promoted) in
             let dict_paramed : List Decl := add_constraint_dict_params_decls promoted in
+            let t_dict : I64 := bench_step verbose "  elab: add_constraint_dict_params_decls" t_promote (List.length dict_paramed) in
             let main_module : ModuleInfo := get_loaded_main loaded in
             let target_mp : ModulePath := main_module.path in
             let scope_data : ScopeData := build_scope_from_decls target_mp dict_paramed in
+            let t_scope : I64 := bench_step verbose "  elab: build_scope_from_decls" t_dict (List.length scope_data.classes) in
             let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none } in
             // `target_decls` must go through the SAME infix-resolution/
             // promotion/dict-param passes as the whole graph above -- the
@@ -2341,6 +2375,7 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                     dict_paramed
                 else
                     add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw)) in
+            let t_target : I64 := bench_step verbose "  elab: target-only re-run of the same 3 passes" t_scope (List.length target_decls_pre) in
             // Forall-wrap each target def's type with its free + constraint-
             // only type vars (`elaborate_def_typs`), using the whole-graph
             // name set so globals aren't wrapped. `known_names` comes from
@@ -2354,7 +2389,9 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
             // -- see `expand_decls_graph`'s own doc comment. A no-op for
             // any file that never (transitively) invokes
             // `reflect_type_info!`, so safe to run unconditionally.
-            match expand_decls_graph scope dict_paramed target_decls_pre {
+            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed target_decls_pre in
+            let t_expand : I64 := bench_step verbose "  elab: expand_decls_graph" t_target 0 in
+            match expansion_result {
                 Result.err e => Result.err e,
                 Result.ok expansion =>
                     let dict_paramed2 : List Decl := expansion.graph in
@@ -2374,7 +2411,9 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                             { module_id := target_mp, scope := build_scope_from_decls target_mp dict_paramed2, parent := Option.none }
                         else scope in
                     let known_names : List Identifier := names_of_decls dict_paramed2 in
+                    let t_names : I64 := bench_step verbose "  elab: names_of_decls" t_expand (List.length known_names) in
                     let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names in
+                    let _t_typs : I64 := bench_step verbose "  elab: elaborate_def_typs" t_names (List.length target_decls) in
                     // Annotated local, not an inline literal --
                     // see `load_module_with_info`'s own note.
                     let elaborated : ElaboratedModules :=
@@ -2386,8 +2425,8 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
 
 /// Backwards-compatible wrapper: elaborate with a fresh cache.
 #[partial]
-def elaborate_loaded_modules (file_path : String) (check_deps : Bool) : IO (Result String ElaboratedModules) := do {
-    let r : ElaboratedAndCache <- elaborate_loaded_modules_cached file_path check_deps module_info_cache_empty;
+def elaborate_loaded_modules (file_path : String) (check_deps : Bool) (verbose : Bool) : IO (Result String ElaboratedModules) := do {
+    let r : ElaboratedAndCache <- elaborate_loaded_modules_cached file_path check_deps module_info_cache_empty verbose;
     return r.elaborated
 }
 
@@ -2764,7 +2803,7 @@ def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
 def test_elaborate_loaded_modules_resolves_file_with_no_use_decls : IO Bool := do {
     // Annotated bind -- `em.scope`/`em.target_decls` below desugar to
     // `{ .. }` field patterns, which need the matched value's own type.
-    let result : Result String ElaboratedModules <- elaborate_loaded_modules "std/test.mo" false;
+    let result : Result String ElaboratedModules <- elaborate_loaded_modules "std/test.mo" false false;
     match result {
         Result.err _ => return false,
         Result.ok em => do {

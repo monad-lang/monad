@@ -176,7 +176,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
     let total_start := Bench.now;
     println <| "compiling: " ++ file_path ++ " to " ++ Path.to_string (Path.join output_dir output_name);
     let t_elaborate := Bench.now;
-    let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules file_path false;
+    let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules file_path false verbose;
     if verbose then do {
         let _ := Bench.report "elaborate_loaded_modules" (I64.sub Bench.now t_elaborate);
         return unit
@@ -488,7 +488,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
             // "already defines its own main" SKIP convention just below
             // (a pre-existing problem with the file, not a new test
             // failure this run introduced).
-            let ec : ElaboratedAndCache <- elaborate_loaded_modules_cached f false cache;
+            let ec : ElaboratedAndCache <- elaborate_loaded_modules_cached f false cache verbose;
             // `out_cache`, not `cache`: this file's load extended it, and
             // every later file in the run needs the extended one.
             let out_cache : ModuleInfoCache := ec.cache;

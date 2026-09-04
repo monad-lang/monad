@@ -2097,18 +2097,30 @@ Key patterns when writing self-hosted Monad code:
     (it was, for the scope-rebuild change). Tests alone would not have
     distinguished "the rebuild was redundant" from "the rebuild was
     load-bearing but nothing covers it".
-25. **`Bench.report` around a `let` binding measures NOTHING -- the
-    language is lazy (2026-09-03).** An attempt to sub-time
-    `elaborate_class`'s three internal steps by wrapping each `let` in
-    `Bench.now`/`Bench.report` printed no sub-timings at all and left
-    the enclosing total unchanged (1949ms vs 1941ms): a `let`-bound
-    value is not forced where it is bound, so the timer spans the
-    binding, not the work. The existing phase benches in
-    `lang/codegen/emit.mo`/`lang/main.mo` only report real numbers
-    because something downstream forces their values inside the span.
-    To time a lazy sub-step, force it inside the span (bind through an
-    `IO` action, or consume the value) -- otherwise the measurement is
-    silently meaningless rather than wrong-looking.
+25. **CORRECTED (2026-09-04): the "`Bench.report` around a `let`
+    measures nothing because the language is lazy" diagnosis was
+    WRONG.** The original entry recorded that sub-timing
+    `elaborate_class`'s three internal steps printed no sub-timings at
+    all and left the enclosing total unchanged (1949ms vs 1941ms), and
+    concluded a `let`-bound value is not forced where it is bound.
+    Laziness is not the explanation: the evaluator is strict
+    call-by-value. `core/src/core_eval.rs`'s `App` arm reduces both
+    sides fully before applying ("Strict call-by-value: both sides are
+    fully reduced to a Value before applying"), and `let x := v in b`
+    desugars to `App(Lam b, v)` (`core/src/term.rs`), so a `let`-bound
+    step IS forced exactly where it is bound.
+    Demonstrated directly: `elaborate_loaded_modules_cached`
+    (`lang/module.mo`) is now sub-timed by threading a `bench_step`
+    timestamp through its pure `let` chain, and every span reports a
+    real number that sums correctly (see item 27). Whatever went wrong
+    in the `elaborate_class` attempt -- an untaken branch, a span around
+    the wrong expression -- it was not thunking, and looking for a
+    laziness fix there will waste time.
+    The useful rule that survives is the ARITHMETIC one, which catches
+    a bad span whatever its cause: sub-times must add up to the
+    enclosing total that already prints. If they do not, or a span
+    reports 0, the span is wrong -- fix it rather than reasoning about
+    why.
 26. **`HashMap`'s bucket chains tested key equality as `!lt && !gt` --
     two comparator calls per chain step, and for `ModulePath` that meant
     FOUR string constructions per step (2026-09-03).**
@@ -2147,6 +2159,48 @@ Key patterns when writing self-hosted Monad code:
     this interpreter. The win here is in the per-step comparator, not
     the bucket count -- a reminder to attack what each step COSTS before
     attacking how many steps there are.
+
+27. **`elaborate_loaded_modules` is dominated by READING AND PARSING,
+    not by any of the whole-graph rewrite passes (2026-09-04).** Item 24
+    established the phase total but not its shape. `lang/module.mo`'s
+    `elaborate_loaded_modules_cached` now sub-times every step
+    (`bench_step`, threaded through its pure `let` chain, gated on
+    `verbose`). `check examples/hello.mo --verbose`, 12 modules, 0 cache
+    hits:
+      load_file_modules (read+parse)        2519ms   67%
+      build_scope_from_decls                 907ms   24%
+      names_of_decls                         190ms    5%
+      resolve_infix_decls                     87ms  2.3%
+      promote_instance_defs                   19ms  0.5%
+      add_constraint_dict_params_decls         3ms
+      expand_decls_graph                       4ms
+      flatten_module_decls / target re-run /
+        elaborate_def_typs                     3ms
+      total                                 3732ms
+    (Sums to 3732ms against item 24's ~3847ms for the same phase, which
+    is the arithmetic check item 25 now insists on.)
+    Consequences for where to spend effort:
+    - **Two thirds of the phase is the self-hosted parser running
+      interpreted over prelude/init/std.** Nothing in the whole-graph
+      rewrite family can touch it. `ModuleInfoCache` already removes
+      this ACROSS files in one run; a single-file `check`/`compile`
+      still pays it in full (0 hits, 12 misses here).
+    - `resolve_infix_decls` is 87ms, so the `lookup_infix`
+      re-rendering fix (the item-26-shaped cost-per-step win available
+      there) is capped at well under that. Measured before it was
+      built, not after -- this is exactly what item 24's "look for
+      structure before optimizing internals" rule is for.
+    - `names_of_decls` at 190ms is the larger of the two self-hosted
+      algorithmic smells, and it IS O(n^2): it folds with `union_ids`
+      whose `a` side is one element and `b` side the accumulated tail,
+      so building the list costs O(n^2) `String.beq` with n roughly
+      500-800 after promotion. Its only consumer is `free_vars` for the
+      target file's own defs (2, for `hello.mo`).
+    - `build_scope_from_decls` at 907ms remains the biggest single
+      rewrite-family cost, and item 26 already attacked its comparator.
+      Note it runs a SECOND time per `compile`, in
+      `lang/codegen/emit.mo`, because `ElaboratedModules.
+      elaborated_decls` has zero readers -- see that field.
 
 ## Committing Changes
 
