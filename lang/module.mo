@@ -498,7 +498,14 @@ struct InfosAndCache {
 def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (visiting : List ModulePath) (visited : List ModuleInfo) (cache : ModuleInfoCache) : IO InfosAndCache :=
     match to_visit {
         List.empty => do {
-            return { infos := visited, cache := cache }
+            // Annotated local, never a bare literal in `return` position
+            // -- see AGENTS.md's own "known pitfall" and
+            // `validate_no_undesugared_struct_lits`: a bare `return
+            // { ... }` never reaches `type_check_struct_lit` with an
+            // expected type, so it survives to codegen as a
+            // `Literal.struct_lit` and compiles to a void placeholder.
+            let out : InfosAndCache := { infos := visited, cache := cache };
+            return out
         },
         List.cons head tail =>
             if list_contains visiting head then
@@ -1725,15 +1732,20 @@ struct InfoAndCache {
 def load_module_with_info_cached (base_dir : String) (mp : ModulePath) (cache : ModuleInfoCache) : IO InfoAndCache := do {
     match module_info_cache_lookup mp cache {
         Option.some hit => do {
-            return { info := Option.some hit, cache := module_info_cache_hit cache }
+            let out : InfoAndCache := { info := Option.some hit, cache := module_info_cache_hit cache };
+            return out
         },
         Option.none => do {
             let loaded : Option ModuleInfo <- load_module_with_info base_dir mp;
             match loaded {
                 Option.some info => do {
-                    return { info := Option.some info, cache := module_info_cache_insert mp info cache }
+                    let out : InfoAndCache := { info := Option.some info, cache := module_info_cache_insert mp info cache };
+                    return out
                 },
-                Option.none => do { return { info := Option.none, cache := cache } },
+                Option.none => do {
+                    let out : InfoAndCache := { info := Option.none, cache := cache };
+                    return out
+                },
             }
         },
     }
@@ -1993,7 +2005,8 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) : IO
                 }
             },
         Option.none => do {
-            return { loaded := Result.err ("Failed to load" ++ Show.show mp), cache := cache }
+            let out : LoadedAndCache := { loaded := Result.err ("Failed to load" ++ Show.show mp), cache := cache };
+            return out
         }
     }
 }
@@ -2335,7 +2348,9 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
     let loaded_result : Result String LoadedModules := lc.loaded;
     let out_cache : ModuleInfoCache := lc.cache;
     let _t_load_done : I64 := bench_step verbose "  elab: load_file_modules (read+parse)" t_load 0;
-    return { elaborated := match loaded_result {
+    // Annotated local, never a bare literal in `return` position -- see
+    // the identical note in `collect_dep_module_infos` above.
+    let elaborated_result : Result String ElaboratedModules := match loaded_result {
         Result.err e => Result.err e,
         Result.ok loaded =>
             let t0 : I64 := Bench.now in
@@ -2407,9 +2422,21 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                     // `build_scope_from_decls` over the whole dependency
                     // graph (measured: 1523ms of `elaborate_loaded_
                     // modules`' 5255ms on `examples/hello.mo`).
+                    // The literal needs its OWN annotated binding: a
+                    // `let x : T := if c then { ... } else y` annotation
+                    // does not reach into the branch, so the bare literal
+                    // there gets no expected type, never desugars, and
+                    // survives to codegen as a `Literal.struct_lit` (see
+                    // `validate_no_undesugared_struct_lits`). It also made
+                    // this whole def fail to elaborate ("expected Bool,
+                    // found Type"), which -- because codegen elaboration
+                    // is best-effort -- silently left the ENTIRE body
+                    // unelaborated.
+                    let rebuilt_scope : Scope :=
+                        { module_id := target_mp, scope := build_scope_from_decls target_mp dict_paramed2, parent := Option.none } in
+                    let did_change : Bool := expansion.changed in
                     let scope2 : Scope :=
-                        if expansion.changed then
-                            { module_id := target_mp, scope := build_scope_from_decls target_mp dict_paramed2, parent := Option.none }
+                        if did_change then rebuilt_scope
                         else scope in
                     // Timed separately from `names_of_decls` below: when
                     // `expansion.changed` this is a SECOND whole-graph
@@ -2430,7 +2457,9 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                         { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded } in
                     Result.ok elaborated,
             }
-    }, cache := out_cache }
+    };
+    let out : ElaboratedAndCache := { elaborated := elaborated_result, cache := out_cache };
+    return out
 }
 
 /// Backwards-compatible wrapper: elaborate with a fresh cache.
