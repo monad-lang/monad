@@ -14,14 +14,14 @@
 /// repo root).
 use io {IO}
 open IO {println}
-use std.process {exec_cmd}
+use std.process {exec_cmd, process_id}
 use lang.module {LoadedModules, load_file_modules}
 use lang.codegen.ir {emit_module}
 use lang.codegen.emit {compile_loaded_modules_to_ir}
 
 #[partial]
 pub def compile_source_run_expect (source : String) (basename : String) (expected : I64) : IO Bool := do {
-    let output_dir := "/tmp/monad_e2e";
+    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
     let src_path := output_dir ++ "/" ++ basename ++ ".mo";
     let ir_path := output_dir ++ "/" ++ basename ++ ".ll";
     let obj_path := output_dir ++ "/" ++ basename ++ ".o";

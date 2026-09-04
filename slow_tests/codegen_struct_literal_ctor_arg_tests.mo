@@ -24,6 +24,7 @@
 /// compiles, links and executes rather than inspecting IR text.
 use io {IO}
 open IO {println}
+use std.process {process_id}
 use lang.codegen.test.e2e_harness {compile_source_run_expect}
 
 
@@ -142,7 +143,7 @@ def main (args : List String) : IO I64 := do {
 /// the reachable decls only, same as `validate_no_unwired_natives`.
 #[test]
 def test_bare_nested_struct_literal_fails_fast : IO Bool := do {
-    let output_dir := "/tmp/monad_e2e";
+    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
     let src_path := output_dir ++ "/undesugared_struct_lit.mo";
     let source := r#"use io {IO}
 struct Inner { path : String, diagnostics : List String }

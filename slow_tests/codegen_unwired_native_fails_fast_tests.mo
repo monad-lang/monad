@@ -26,13 +26,13 @@
 /// `filter_reachable_decls` before the check ever saw it, silently
 /// passing for the wrong reason.
 use io {IO}
-use std.process {exec_cmd}
+use std.process {exec_cmd, process_id}
 use lang.module {LoadedModules, load_file_modules}
 use lang.codegen.emit {compile_loaded_modules_to_ir}
 
 #[test]
 def test_unwired_native_fails_fast : IO Bool := do {
-    let output_dir := "/tmp/monad_e2e";
+    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
     let src_path := output_dir ++ "/unwired_native.mo";
     let source := r#"#[native definitely_not_a_real_native]
 def use_it (x : I64) : I64

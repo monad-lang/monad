@@ -1,6 +1,6 @@
 use io {IO}
 open IO {println, read_file, write_file}
-use std.process {exec_cmd}
+use std.process {exec_cmd, process_id}
 use std.bench {now, report}
 use lang.types {Decl, Location, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
@@ -11,11 +11,12 @@ use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
 
-/// The default output directory for `compile` when no `--output`/
-/// positional name supplies an absolute one -- a compile-time literal,
-/// known non-empty by inspection, so `Path.path` directly (not the
-/// validating `Path.of`) is the right constructor here.
-def default_output_dir : Path := Path.path "/tmp"
+/// The default output directory for `compile`/`test` when no `--output`/
+/// positional name supplies an absolute one. Includes the process ID so
+/// parallel invocations (e.g. two `bootstrap test` runs, or `cargo test`
+/// threads) don't collide on the same `/tmp/monad_test_bin_<N>` or output
+/// binary paths.
+def default_output_dir : Path := Path.path ("/tmp/monad_out_" ++ I64.to_string process_id)
 
 
 /// Write LLVM IR to disk and link it into a native binary via llc + clang.

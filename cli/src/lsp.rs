@@ -998,12 +998,12 @@ mod test {
 
   #[test]
   fn test_organize_imports_workspace_edit_for_bare_open() {
-    let uri = "file:///tmp/monad-lsp-test-bare-open.mo";
-    let path = uri_to_path(uri).unwrap();
+    let uri = test_uri("bare-open.mo");
+    let path = uri_to_path(&uri).unwrap();
     let text = "open IO\n\ndef x : I64 := 1\n";
-    let edit = organize_imports_workspace_edit(uri, text, &path, &[])
+    let edit = organize_imports_workspace_edit(&uri, text, &path, &[])
       .expect("bare `open IO` should produce an edit");
-    let changes = &edit["changes"][uri];
+    let changes = &edit["changes"][&uri];
     let edits = changes.as_array().expect("changes should be an array");
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0]["newText"], "open IO {}");
@@ -1013,23 +1013,23 @@ mod test {
 
   #[test]
   fn test_organize_imports_workspace_edit_none_when_already_explicit() {
-    let uri = "file:///tmp/monad-lsp-test-explicit.mo";
-    let path = uri_to_path(uri).unwrap();
+    let uri = test_uri("explicit.mo");
+    let path = uri_to_path(&uri).unwrap();
     let text = "open IO {}\n\ndef x : I64 := 1\n";
-    assert!(organize_imports_workspace_edit(uri, text, &path, &[]).is_none());
+    assert!(organize_imports_workspace_edit(&uri, text, &path, &[]).is_none());
   }
 
   #[test]
   fn test_organize_imports_workspace_edit_none_on_parse_error() {
-    let uri = "file:///tmp/monad-lsp-test-broken.mo";
-    let path = uri_to_path(uri).unwrap();
+    let uri = test_uri("broken.mo");
+    let path = uri_to_path(&uri).unwrap();
     let text = "def x : I64 := \n"; // incomplete, doesn't parse
-    assert!(organize_imports_workspace_edit(uri, text, &path, &[]).is_none());
+    assert!(organize_imports_workspace_edit(&uri, text, &path, &[]).is_none());
   }
 
   #[test]
   fn test_code_action_response_shape() {
-    let uri = "file:///tmp/monad-lsp-test-codeaction.mo";
+    let uri = test_uri("codeaction.mo");
     let mut documents = HashMap::new();
     documents.insert(
       uri.to_string(),
@@ -1060,7 +1060,7 @@ mod test {
 
   #[test]
   fn test_execute_command_sends_apply_edit_request() {
-    let uri = "file:///tmp/monad-lsp-test-execcommand.mo";
+    let uri = test_uri("execcommand.mo");
     let mut documents = HashMap::new();
     documents.insert(
       uri.to_string(),
@@ -1103,13 +1103,13 @@ mod test {
 
   #[test]
   fn test_workspace_symbol_finds_symbol_across_mote_dirs() {
-    let dir_a = "/tmp/monad-lsp-test-ws-symbol-a";
-    let dir_b = "/tmp/monad-lsp-test-ws-symbol-b";
-    std::fs::create_dir_all(dir_a).unwrap();
-    std::fs::create_dir_all(dir_b).unwrap();
+    let dir_a = test_tmp("ws-symbol-a");
+    let dir_b = test_tmp("ws-symbol-b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
     std::fs::write(format!("{dir_a}/one.mo"), "def alpha : I64 := 1\n").unwrap();
     std::fs::write(format!("{dir_b}/two.mo"), "def beta : I64 := 2\n").unwrap();
-    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let mote_path = [PathBuf::from(&*dir_a), PathBuf::from(&*dir_b)];
     let params = serde_json::json!({ "query": "alph" });
     let mut buf: Vec<u8> = Vec::new();
     workspace_symbol(&mut buf, Some(serde_json::json!(1)), &params, &mote_path).unwrap();
@@ -1121,14 +1121,14 @@ mod test {
 
   #[test]
   fn test_workspace_symbol_empty_query_returns_all() {
-    let dir_a = "/tmp/monad-lsp-test-ws-symbol-all-a";
-    std::fs::create_dir_all(dir_a).unwrap();
+    let dir_a = test_tmp("ws-symbol-all-a");
+    std::fs::create_dir_all(&dir_a).unwrap();
     std::fs::write(
       format!("{dir_a}/one.mo"),
       "def alpha : I64 := 1\ndef gamma : I64 := 2\n",
     )
     .unwrap();
-    let mote_path = [PathBuf::from(dir_a)];
+    let mote_path = [PathBuf::from(&*dir_a)];
     let mut buf: Vec<u8> = Vec::new();
     workspace_symbol(
       &mut buf,
@@ -1144,13 +1144,13 @@ mod test {
 
   #[test]
   fn test_diagnose_workspace_publishes_diagnostics_per_file() {
-    let dir_a = "/tmp/monad-lsp-test-ws-diag-a";
-    let dir_b = "/tmp/monad-lsp-test-ws-diag-b";
-    std::fs::create_dir_all(dir_a).unwrap();
-    std::fs::create_dir_all(dir_b).unwrap();
+    let dir_a = test_tmp("ws-diag-a");
+    let dir_b = test_tmp("ws-diag-b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
     std::fs::write(format!("{dir_a}/ok.mo"), "def x : I64 := 1\n").unwrap();
     std::fs::write(format!("{dir_b}/bad.mo"), "def y : I64 := \"nope\"\n").unwrap();
-    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let mote_path = [PathBuf::from(&*dir_a), PathBuf::from(&*dir_b)];
     let mut buf: Vec<u8> = Vec::new();
     diagnose_workspace(&mut buf, &mote_path).unwrap();
     let messages = parse_all_messages(&buf);
@@ -1177,8 +1177,8 @@ mod test {
     dir_a: &str,
     dir_b: &str,
   ) -> ([PathBuf; 2], HashMap<String, Document>, serde_json::Value) {
-    std::fs::create_dir_all(dir_a).unwrap();
-    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
     std::fs::write(format!("{dir_a}/wsdep.mo"), "def shared_val : I64 := 99\n").unwrap();
     let consumer_uri = format!("file://{dir_b}/consumer.mo");
     let mut documents = HashMap::new();
@@ -1193,7 +1193,7 @@ mod test {
       "position": { "line": 2, "character": 24 },
     });
     (
-      [PathBuf::from(dir_a), PathBuf::from(dir_b)],
+      [PathBuf::from(&*dir_a), PathBuf::from(&*dir_b)],
       documents,
       params,
     )
@@ -1202,8 +1202,8 @@ mod test {
   #[test]
   fn test_hover_resolves_cross_file_symbol() {
     let (mote_path, documents, params) = cross_mote_fixture(
-      "/tmp/monad-lsp-test-ws-hover-a",
-      "/tmp/monad-lsp-test-ws-hover-b",
+      test_tmp("ws-hover-a").as_str(),
+      test_tmp("ws-hover-b").as_str(),
     );
     let mut buf: Vec<u8> = Vec::new();
     hover(
@@ -1221,10 +1221,8 @@ mod test {
 
   #[test]
   fn test_definition_resolves_cross_file_symbol_and_uses_defining_file_uri() {
-    let (mote_path, documents, params) = cross_mote_fixture(
-      "/tmp/monad-lsp-test-ws-def-a",
-      "/tmp/monad-lsp-test-ws-def-b",
-    );
+    let (mote_path, documents, params) =
+      cross_mote_fixture(test_tmp("ws-def-a").as_str(), test_tmp("ws-def-b").as_str());
     let mut buf: Vec<u8> = Vec::new();
     definition(
       &documents,
@@ -1256,9 +1254,21 @@ mod test {
       .to_path_buf()
   }
 
+  /// Unique per-process tmp path so parallel `cargo test` runs don't
+  /// collide on the same `/tmp/monad-lsp-test-*` files.
+  fn test_tmp(name: &str) -> String {
+    format!("/tmp/monad-lsp-test-{name}-{:x}", std::process::id())
+  }
+
+  /// Same as `test_tmp` but returns a `file://` URI (for LSP tests that
+  /// key documents by URI).
+  fn test_uri(name: &str) -> String {
+    format!("file://{}", test_tmp(name))
+  }
+
   #[test]
   fn test_code_lens_returns_one_lens_per_test_plus_file_lens() {
-    let uri = "file:///tmp/monad-lsp-test-codelens.mo";
+    let uri = test_uri("codelens.mo");
     let mut documents = HashMap::new();
     documents.insert(
       uri.to_string(),
@@ -1294,7 +1304,7 @@ mod test {
 
   #[test]
   fn test_code_lens_empty_for_file_with_no_tests() {
-    let uri = "file:///tmp/monad-lsp-test-codelens-none.mo";
+    let uri = test_uri("codelens-none.mo");
     let mut documents = HashMap::new();
     documents.insert(
       uri.to_string(),
@@ -1338,7 +1348,7 @@ mod test {
       },
     ];
     let (passed, failed) =
-      append_test_failure_diagnostics(&mut diagnostics, &PathBuf::from("/tmp/x.mo"), &tests);
+      append_test_failure_diagnostics(&mut diagnostics, &PathBuf::from(test_tmp("x.mo")), &tests);
     assert_eq!(passed, 1);
     assert_eq!(failed, 1);
     // Original warning preserved, one new failure diagnostic appended.
@@ -1350,9 +1360,9 @@ mod test {
 
   #[test]
   fn test_run_tests_and_report_publishes_test_results_notification_and_diagnostics() {
-    let path = "/tmp/monad-lsp-test-run-tests-report.mo";
+    let path = test_tmp("run-tests-report.mo");
     std::fs::write(
-      path,
+      &path,
       "#[test]\ndef test_ok : Bool := true\n\n#[test]\ndef test_bad : Bool := false\n",
     )
     .unwrap();
@@ -1378,9 +1388,9 @@ mod test {
 
   #[test]
   fn test_run_tests_and_report_respects_test_name_filter() {
-    let path = "/tmp/monad-lsp-test-run-tests-filter.mo";
+    let path = test_tmp("run-tests-filter.mo");
     std::fs::write(
-      path,
+      &path,
       "#[test]\ndef test_a : Bool := true\n\n#[test]\ndef test_b : Bool := true\n",
     )
     .unwrap();
@@ -1397,8 +1407,8 @@ mod test {
 
   #[test]
   fn test_execute_command_run_test_and_run_file_tests_dispatch() {
-    let path = "/tmp/monad-lsp-test-execcommand-runtests.mo";
-    std::fs::write(path, "#[test]\ndef test_a : Bool := true\n").unwrap();
+    let path = test_tmp("execcommand-runtests.mo");
+    std::fs::write(&path, "#[test]\ndef test_a : Bool := true\n").unwrap();
     let uri = format!("file://{path}");
     let mote_path = [workspace_root()];
     let documents = HashMap::new();

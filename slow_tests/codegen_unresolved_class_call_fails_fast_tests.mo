@@ -23,13 +23,13 @@
 /// `filter_reachable_decls` before the check ever saw it, silently
 /// passing this test for the wrong reason.
 use io {IO}
-use std.process {exec_cmd}
+use std.process {exec_cmd, process_id}
 use lang.module {LoadedModules, load_file_modules}
 use lang.codegen.emit {compile_loaded_modules_to_ir}
 
 #[test]
 def test_unresolved_class_method_call_fails_fast : IO Bool := do {
-    let output_dir := "/tmp/monad_e2e";
+    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
     let src_path := output_dir ++ "/unresolved_class_call.mo";
     let source := r#"class NoInstance A { def only_method : A -> A }
 def use_it (x : Bool) : Bool := NoInstance.only_method x

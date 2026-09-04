@@ -4841,6 +4841,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // stub. Real timing is a later self-hosted-runtime phase.
             else if String.beq target "bench_now" then Option.some (NativeWrapKind.passthrough "monad_bench_now")
             else if String.beq target "bench_report" then Option.some (NativeWrapKind.bool_result "monad_bench_report")
+            else if String.beq target "process_id" then Option.some (NativeWrapKind.passthrough "monad_process_id")
             // C: libc-shaped or growable-buffer-shaped.
             else if String.beq target "string_to_lowercase" then Option.some (NativeWrapKind.passthrough "monad_string_to_lowercase")
             else if String.beq target "string_from_list" then Option.some (NativeWrapKind.passthrough "monad_string_from_list")
@@ -5793,9 +5794,10 @@ def runtime_declarations : List LLVMDeclaration :=
     let d36 := mk_decl "monad_list_dir" (cons_str "i64" empty_strs) "i64" in
     let d37 := mk_decl "monad_u8_to_string" (cons_str "i64" empty_strs) "i64" in
     let d38 := mk_decl "monad_u64_to_string" (cons_str "i64" empty_strs) "i64" in
+    let d39 := mk_decl "monad_process_id" empty_strs "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31,
-     d32, d33, d34, d35, d36, d37, d38]
+     d32, d33, d34, d35, d36, d37, d38, d39]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

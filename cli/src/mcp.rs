@@ -634,8 +634,8 @@ mod test {
 
   #[test]
   fn test_check_tool_reports_type_error() {
-    let path = "/tmp/monad-mcp-test-check-err.mo";
-    std::fs::write(path, "def x : I64 := \"nope\"\n").unwrap();
+    let path = test_tmp("check-err.mo");
+    std::fs::write(&path, "def x : I64 := \"nope\"\n").unwrap();
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "check", "arguments": { "paths": [path] } }),
@@ -649,8 +649,8 @@ mod test {
 
   #[test]
   fn test_check_tool_clean_file_has_no_errors() {
-    let path = "/tmp/monad-mcp-test-check-ok.mo";
-    std::fs::write(path, "def x : I64 := 1\n").unwrap();
+    let path = test_tmp("check-ok.mo");
+    std::fs::write(&path, "def x : I64 := 1\n").unwrap();
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "check", "arguments": { "paths": [path] } }),
@@ -663,8 +663,8 @@ mod test {
 
   #[test]
   fn test_symbols_tool_lists_def() {
-    let path = "/tmp/monad-mcp-test-symbols.mo";
-    std::fs::write(path, "def add (x : I64) (y : I64) : I64 := x + y\n").unwrap();
+    let path = test_tmp("symbols.mo");
+    std::fs::write(&path, "def add (x : I64) (y : I64) : I64 := x + y\n").unwrap();
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "symbols", "arguments": { "paths": [path] } }),
@@ -683,8 +683,8 @@ mod test {
 
   #[test]
   fn test_hover_tool_finds_symbol() {
-    let path = "/tmp/monad-mcp-test-hover.mo";
-    std::fs::write(path, "def foo : I64 := 42\ndef bar : I64 := foo\n").unwrap();
+    let path = test_tmp("hover.mo");
+    std::fs::write(&path, "def foo : I64 := 42\ndef bar : I64 := foo\n").unwrap();
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "hover", "arguments": { "file": path, "line": 2, "col": 19 } }),
@@ -699,8 +699,8 @@ mod test {
 
   #[test]
   fn test_hover_tool_no_symbol_returns_null_not_error() {
-    let path = "/tmp/monad-mcp-test-hover-empty.mo";
-    std::fs::write(path, "def foo : I64 := 42\n").unwrap();
+    let path = test_tmp("hover-empty.mo");
+    std::fs::write(&path, "def foo : I64 := 42\n").unwrap();
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "hover", "arguments": { "file": path, "line": 1, "col": 1 } }),
@@ -713,8 +713,8 @@ mod test {
 
   #[test]
   fn test_definition_tool_finds_location() {
-    let path = "/tmp/monad-mcp-test-definition.mo";
-    std::fs::write(path, "def foo : I64 := 42\ndef bar : I64 := foo\n").unwrap();
+    let path = test_tmp("definition.mo");
+    std::fs::write(&path, "def foo : I64 := 42\ndef bar : I64 := foo\n").unwrap();
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "definition", "arguments": { "file": path, "line": 2, "col": 19 } }),
@@ -749,8 +749,8 @@ mod test {
 
   #[test]
   fn test_organize_imports_dry_run_does_not_touch_disk() {
-    let path = "/tmp/monad-mcp-test-organize.mo";
-    std::fs::write(path, "open IO\n\ndef x : I64 := 1\n").unwrap();
+    let path = test_tmp("organize.mo");
+    std::fs::write(&path, "open IO\n\ndef x : I64 := 1\n").unwrap();
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "organize_imports", "arguments": { "paths": [path] } }),
@@ -766,8 +766,8 @@ mod test {
 
   #[test]
   fn test_organize_imports_write_applies_to_disk() {
-    let path = "/tmp/monad-mcp-test-organize-write.mo";
-    std::fs::write(path, "open IO\n\ndef x : I64 := 1\n").unwrap();
+    let path = test_tmp("organize-write.mo");
+    std::fs::write(&path, "open IO\n\ndef x : I64 := 1\n").unwrap();
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "organize_imports", "arguments": { "paths": [path], "write": true } }),
@@ -789,8 +789,8 @@ mod test {
   /// tmp dirs (parallel test threads, so no path can be shared across
   /// tests).
   fn write_cross_mote_fixture(dir_a: &str, dir_b: &str) -> (PathBuf, PathBuf) {
-    std::fs::create_dir_all(dir_a).unwrap();
-    std::fs::create_dir_all(dir_b).unwrap();
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
     std::fs::write(format!("{dir_a}/wsdep.mo"), "def shared_val : I64 := 99\n").unwrap();
     let consumer = format!("{dir_b}/consumer.mo");
     std::fs::write(
@@ -798,14 +798,14 @@ mod test {
       "use wsdep {shared_val}\n\ndef use_it : I64 := shared_val\n",
     )
     .unwrap();
-    (PathBuf::from(dir_a), PathBuf::from(dir_b))
+    (PathBuf::from(&*dir_a), PathBuf::from(&*dir_b))
   }
 
   #[test]
   fn test_hover_tool_resolves_cross_file_symbol() {
     let (dir_a, dir_b) = write_cross_mote_fixture(
-      "/tmp/monad-mcp-test-ws-hover-a",
-      "/tmp/monad-mcp-test-ws-hover-b",
+      test_tmp("ws-hover-a").as_str(),
+      test_tmp("ws-hover-b").as_str(),
     );
     let mote_path = [dir_a, dir_b.clone()];
     let response = dispatch(
@@ -824,10 +824,8 @@ mod test {
 
   #[test]
   fn test_definition_tool_resolves_cross_file_symbol() {
-    let (dir_a, dir_b) = write_cross_mote_fixture(
-      "/tmp/monad-mcp-test-ws-def-a",
-      "/tmp/monad-mcp-test-ws-def-b",
-    );
+    let (dir_a, dir_b) =
+      write_cross_mote_fixture(test_tmp("ws-def-a").as_str(), test_tmp("ws-def-b").as_str());
     let mote_path = [dir_a, dir_b.clone()];
     let response = dispatch(
       "tools/call",
@@ -849,13 +847,13 @@ mod test {
 
   #[test]
   fn test_check_tool_workspace_mode_scans_all_mote_dirs() {
-    let dir_a = "/tmp/monad-mcp-test-ws-check-a";
-    let dir_b = "/tmp/monad-mcp-test-ws-check-b";
-    std::fs::create_dir_all(dir_a).unwrap();
-    std::fs::create_dir_all(dir_b).unwrap();
+    let dir_a = test_tmp("ws-check-a");
+    let dir_b = test_tmp("ws-check-b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
     std::fs::write(format!("{dir_a}/ok.mo"), "def x : I64 := 1\n").unwrap();
     std::fs::write(format!("{dir_b}/bad.mo"), "def y : I64 := \"nope\"\n").unwrap();
-    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let mote_path = [PathBuf::from(&*dir_a), PathBuf::from(&*dir_b)];
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "check", "arguments": { "workspace": true } }),
@@ -869,13 +867,13 @@ mod test {
 
   #[test]
   fn test_symbols_tool_workspace_mode_scans_all_mote_dirs() {
-    let dir_a = "/tmp/monad-mcp-test-ws-symbols-a";
-    let dir_b = "/tmp/monad-mcp-test-ws-symbols-b";
-    std::fs::create_dir_all(dir_a).unwrap();
-    std::fs::create_dir_all(dir_b).unwrap();
+    let dir_a = test_tmp("ws-symbols-a");
+    let dir_b = test_tmp("ws-symbols-b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
     std::fs::write(format!("{dir_a}/one.mo"), "def alpha : I64 := 1\n").unwrap();
     std::fs::write(format!("{dir_b}/two.mo"), "def beta : I64 := 2\n").unwrap();
-    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let mote_path = [PathBuf::from(&*dir_a), PathBuf::from(&*dir_b)];
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "symbols", "arguments": { "workspace": true } }),
@@ -896,13 +894,13 @@ mod test {
 
   #[test]
   fn test_organize_imports_tool_workspace_mode_scans_all_mote_dirs() {
-    let dir_a = "/tmp/monad-mcp-test-ws-organize-a";
-    let dir_b = "/tmp/monad-mcp-test-ws-organize-b";
-    std::fs::create_dir_all(dir_a).unwrap();
-    std::fs::create_dir_all(dir_b).unwrap();
+    let dir_a = test_tmp("ws-organize-a");
+    let dir_b = test_tmp("ws-organize-b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
     std::fs::write(format!("{dir_a}/one.mo"), "open IO\n\ndef x : I64 := 1\n").unwrap();
     std::fs::write(format!("{dir_b}/two.mo"), "open IO\n\ndef y : I64 := 2\n").unwrap();
-    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let mote_path = [PathBuf::from(&*dir_a), PathBuf::from(&*dir_b)];
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "organize_imports", "arguments": { "workspace": true } }),
@@ -928,11 +926,17 @@ mod test {
       .to_path_buf()
   }
 
+  /// Unique per-process tmp path so parallel `cargo test` runs don't
+  /// collide on the same `/tmp/monad-mcp-test-*` files.
+  fn test_tmp(name: &str) -> String {
+    format!("/tmp/monad-mcp-test-{name}-{:x}", std::process::id())
+  }
+
   #[test]
   fn test_test_tool_reports_pass_and_fail_counts() {
-    let path = "/tmp/monad-mcp-test-test-pass-fail.mo";
+    let path = test_tmp("test-pass-fail.mo");
     std::fs::write(
-      path,
+      &path,
       "#[test]\ndef test_ok : Bool := true\n\n#[test]\ndef test_bad : Bool := false\n",
     )
     .unwrap();
@@ -951,8 +955,8 @@ mod test {
 
   #[test]
   fn test_test_tool_reports_file_error_for_broken_file() {
-    let path = "/tmp/monad-mcp-test-test-broken.mo";
-    std::fs::write(path, "def x : I64 := \n").unwrap(); // incomplete, doesn't parse
+    let path = test_tmp("test-broken.mo");
+    std::fs::write(&path, "def x : I64 := \n").unwrap(); // incomplete, doesn't parse
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "test", "arguments": { "paths": [path] } }),
@@ -966,10 +970,10 @@ mod test {
 
   #[test]
   fn test_test_tool_workspace_mode_scans_all_mote_dirs() {
-    let dir_a = "/tmp/monad-mcp-test-ws-test-a";
-    let dir_b = "/tmp/monad-mcp-test-ws-test-b";
-    std::fs::create_dir_all(dir_a).unwrap();
-    std::fs::create_dir_all(dir_b).unwrap();
+    let dir_a = test_tmp("ws-test-a");
+    let dir_b = test_tmp("ws-test-b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
     std::fs::write(
       format!("{dir_a}/one.mo"),
       "#[test]\ndef test_one : Bool := true\n",
@@ -990,7 +994,7 @@ mod test {
     std::fs::create_dir_all(format!("{dir_a}/std")).unwrap();
     std::fs::write(format!("{dir_a}/std/test.mo"), "").unwrap();
 
-    let mote_path = [PathBuf::from(dir_a), PathBuf::from(dir_b)];
+    let mote_path = [PathBuf::from(&*dir_a), PathBuf::from(&*dir_b)];
     let response = dispatch(
       "tools/call",
       serde_json::json!({ "name": "test", "arguments": { "workspace": true } }),

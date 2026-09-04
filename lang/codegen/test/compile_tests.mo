@@ -1,4 +1,4 @@
-use std.process {exec_cmd}
+use std.process {exec_cmd, process_id}
 use lang.types {
   Decl, Def, Term, TypeConstraint, i64, id, lit, mk, mp, name, num, type_,
 }
@@ -29,7 +29,7 @@ def mk_i64 (n : I64) : Term :=
 def test_compile_42 : IO Bool := do {
     let defs := [mk_def "main" (mk_i64 42)];
 
-    let output_dir := "/tmp/monad_e2e";
+    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
     let ir_path := String.concat output_dir "/test_42.ll";
     let obj_path := String.concat output_dir "/test_42.o";
     let runtime_obj := String.concat output_dir "/monad_runtime.o";
@@ -78,7 +78,7 @@ def test_compile_42 : IO Bool := do {
 /// the expected process exit code.
 #[partial]
 def compile_link_run_expect (defs : List Def) (basename : String) (expected : I64) : IO Bool := do {
-    let output_dir := "/tmp/monad_e2e";
+    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
     let ir_path := output_dir ++ "/" ++ basename ++ ".ll";
     let obj_path := output_dir ++ "/" ++ basename ++ ".o";
     // Per-test runtime object path (not the shared "monad_runtime.o"
@@ -348,7 +348,7 @@ def test_compile_string_literal_with_embedded_quote_and_backslash : IO Bool := d
 /// needs, no dependency on the wider check/scope pipeline.
 #[partial]
 def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (expected : I64) : IO Bool := do {
-    let output_dir := "/tmp/monad_e2e";
+    let output_dir := "/tmp/monad_e2e_" ++ I64.to_string process_id;
     let ir_path := output_dir ++ "/" ++ basename ++ ".ll";
     let obj_path := output_dir ++ "/" ++ basename ++ ".o";
     let runtime_obj := output_dir ++ "/" ++ basename ++ "_runtime.o";

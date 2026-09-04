@@ -37,7 +37,7 @@
     cargo run --release -- run lang/main.mo $@
   '';
 
-  scripts.monad-rs.exec = ''
+  scripts.monad-re.exec = ''
     cargo run --release -- $@
   '';
 
@@ -82,10 +82,7 @@
   # nested-match-arm.md`.
   tasks."monad:bootstrap-compile" = {
     exec = ''
-      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo monad --verbose || {
-        echo "::warning::self-hosted self-compile failed or timed out (known-broken, fix in progress -- see plans/implementations/2026-08-29-show-show-unresolved-carrier-in-nested-match-arm.md) -- not blocking CI" >&2
-        true
-      }
+      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo monad --verbose
     '';
   };
 

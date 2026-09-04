@@ -16,6 +16,7 @@
 /// `validate_no_unwired_natives`'s own doc comment for that story.
 /// `String.reverse` is therefore deliberately exercised below.
 use io {IO}
+use std.process {process_id}
 use lang.codegen.test.e2e_harness {compile_source_run_expect}
 
 
@@ -132,10 +133,11 @@ def main (args : List String) : IO I64 := do {
 /// disagree on any directory walk.
 #[test]
 def test_c_list_dir_sorted : IO Bool :=
+    let dir := "/tmp/monad_e2e_listdir_" ++ I64.to_string process_id in
     let source := r#"use io {IO}
 use std.process {exec_cmd}
 def main (args : List String) : IO I64 := do {
-    let dir := "/tmp/monad_e2e_listdir";
+    let dir := ""# ++ dir ++ r#"";
     let _ <- exec_cmd "rm" ["-rf", dir];
     let _ <- exec_cmd "mkdir" ["-p", dir];
     let _ <- exec_cmd "touch" [dir ++ "/zeta", dir ++ "/alpha", dir ++ "/mid"];

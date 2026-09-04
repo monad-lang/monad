@@ -1142,7 +1142,7 @@ mod test {
   fn test_build_json_test_report_summary_counts() {
     let results = vec![
       FileTestResult {
-        path: PathBuf::from("/tmp/a.mo"),
+        path: PathBuf::from(format!("/tmp/a-{:x}.mo", std::process::id())),
         tests: vec![
           monad_core::TestCaseResult {
             name: Arc::from("test_a"),
@@ -1160,7 +1160,7 @@ mod test {
         error_message: None,
       },
       FileTestResult {
-        path: PathBuf::from("/tmp/broken.mo"),
+        path: PathBuf::from(format!("/tmp/broken-{:x}.mo", std::process::id())),
         tests: Vec::new(),
         error_message: Some("parse error".to_string()),
       },

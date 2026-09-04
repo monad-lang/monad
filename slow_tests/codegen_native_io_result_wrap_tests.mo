@@ -23,6 +23,7 @@
 /// `implementations/2026-08-29-native-bind-result-use-crash.md`, then
 /// root-caused and fixed here.
 use io {IO}
+use std.process {process_id}
 use lang.codegen.test.e2e_harness {compile_source_run_expect}
 
 
@@ -32,9 +33,10 @@ use lang.codegen.test.e2e_harness {compile_source_run_expect}
 /// silently misbehave) before `read_file`'s result was `IO.io`-wrapped.
 #[test]
 def test_read_file_bind_result_used_downstream : IO Bool :=
+    let fixture_path := "/tmp/monad_e2e_" ++ I64.to_string process_id ++ "/io_result_wrap_fixture.txt" in
     let source := r#"use io {IO}
 def main (args : List String) : IO I64 := do {
-    let path := "/tmp/monad_e2e/io_result_wrap_fixture.txt";
+    let path := ""# ++ fixture_path ++ r#"";
     let content := "needs io wrap";
     IO.write_file_native path content;
     let read_back <- IO.read_file_native path;

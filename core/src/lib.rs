@@ -2200,7 +2200,10 @@ def test_direct_generic_call : Bool :=
   fn test_test_defs_from_source_finds_test_attributed_defs_only() {
     let source = "def plain : Bool := true\n\n#[test]\ndef test_one : Bool := true\n\n#[test]\ndef test_two : Bool := false\n";
     let defs = test_defs_from_source(
-      &PathBuf::from("/tmp/monad-test-defs-mixed.mo"),
+      &PathBuf::from(format!(
+        "/tmp/monad-test-defs-mixed-{:x}.mo",
+        std::process::id()
+      )),
       source,
       vec![],
     )
@@ -2214,7 +2217,10 @@ def test_direct_generic_call : Bool :=
   fn test_test_defs_from_source_empty_when_no_tests() {
     let source = "def plain : Bool := true\n";
     let defs = test_defs_from_source(
-      &PathBuf::from("/tmp/monad-test-defs-none.mo"),
+      &PathBuf::from(format!(
+        "/tmp/monad-test-defs-none-{:x}.mo",
+        std::process::id()
+      )),
       source,
       vec![],
     )
@@ -2226,7 +2232,10 @@ def test_direct_generic_call : Bool :=
   fn test_test_defs_from_source_empty_on_parse_error() {
     let source = "def x : I64 := \n"; // incomplete, doesn't parse
     let defs = test_defs_from_source(
-      &PathBuf::from("/tmp/monad-test-defs-broken.mo"),
+      &PathBuf::from(format!(
+        "/tmp/monad-test-defs-broken-{:x}.mo",
+        std::process::id()
+      )),
       source,
       vec![],
     )

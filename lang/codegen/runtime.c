@@ -701,6 +701,14 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
     return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
 }
 
+/* `#[native "process_id"]` (std/process.mo's `process_id : I64`) -- returns
+   the OS process ID, used to build unique /tmp paths for parallel test
+   isolation. Pure (no IO), returns a plain i64, matching `monad_bench_now`'s
+   own convention. */
+int64_t monad_process_id(void) {
+    return (int64_t)getpid();
+}
+
 /* `#[native "list_dir"]` (std/io.mo's IO.list_dir_native): bare entry
    names, one directory level, SORTED -- the sort is load-bearing, not
    cosmetic: readdir order is filesystem-dependent, and the reference

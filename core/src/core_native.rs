@@ -261,6 +261,7 @@ pub fn exec_native(
     "scope_new" => scope_new(natives),
     "scope_fork" => scope_fork(args, natives),
     "scope_drop" => scope_drop(args, natives),
+    "process_id" => process_id(),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
     // `NativeTable`'s range); this is the one call site that only has the
@@ -964,6 +965,13 @@ fn bench_now() -> Result<Value, CoreEvalError> {
     .unwrap_or_default()
     .as_millis() as i64;
   Ok(Value::Lit(IrLit::Num(now, NumSuffix::I64)))
+}
+
+fn process_id() -> Result<Value, CoreEvalError> {
+  Ok(Value::Lit(IrLit::Num(
+    std::process::id() as i64,
+    NumSuffix::I64,
+  )))
 }
 
 fn bench_report(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
