@@ -1372,11 +1372,156 @@ def type_check_free_var_con (id : Identifier) (expected_type : Term) (dbg : Debu
     match scope_find_inductive_by_constructor con_mp scope {
         Option.some ind =>
             match find_constructor_in_inductive ind con_mp {
-                Option.some _ => ok (mk_typed (Term.var sentinel dbg) expected_type),
+                Option.some _ => ok (mk_typed (Term.var sentinel dbg) (con_ref_result_type id ind expected_type scope)),
                 Option.none => err (TypeError.unknown_var (NameRef.nid id)),
             },
         Option.none => err (TypeError.unknown_var (NameRef.nid id)),
     }
+
+/// A constructor REFERENCE's own result type, for the INFER case --
+/// `type_check_free_var_con`'s counterpart to `con_result_type`.
+///
+/// This is the path a real source program actually takes: the parser
+/// never builds `Term.con` (see `type_check_con`'s own doc comment), so
+/// `Slim.mk 1` is an application whose head is the FREE VARIABLE
+/// "Slim.mk", resolved here. Returning `expected_type` verbatim meant
+/// that in infer mode a constructor application had no inferred type,
+/// which propagated into every `let`-bound scrutinee (both `let ... in`
+/// and the do-block form, which desugar to `Term.app (Term.lam x hole
+/// ...) value`): `type_check_app_ordinary` builds its Pi from the
+/// ARGUMENT's inferred type, `type_check_lam`'s `if is_hole t then
+/// arg_typ else t` then had two holes to choose between, so the local's
+/// type stayed hole and `find_inductive_for_cases` fell all the way
+/// through to the ambiguous constructor-name scan. On a bare name two
+/// inductives share (every `mk`), that scan correctly errors -- and
+/// under codegen's best-effort elaboration (`elaborate_module_decls_
+/// best_effort`, lang/module.mo, which by design leaves a failing decl
+/// unchanged) the arms' binders were left untyped, so `+` stayed a
+/// GENERIC class call whose dictionary (`Add_A_add` -> `__Dict_Add_A`
+/// -> `Add_A_add_closure_shim` -> `Add_A_add`) recursed until the stack
+/// died. Confirmed live as a SIGSEGV in `Add_A_add`'s prologue
+/// `movaps`, on a program whose IR was otherwise correct, and by
+/// bisection: the identical program with the constructors RENAMED apart
+/// specialized to `Add_I64_add` and ran fine.
+///
+/// Only fires when the reference is written QUALIFIED ("Slim.mk"), and
+/// only when that qualifier names a real inductive owning this
+/// constructor -- so the type is read off the name the source actually
+/// wrote, never guessed from an ambiguous bare-name scan
+/// (`scope_find_inductive_by_constructor` is first-match, which is
+/// exactly what must not be trusted here). A bare reference, an
+/// unrecognized qualifier, or a real ambient `expected_type` all keep
+/// today's behavior untouched, so this only ever ADDS precision --
+/// `find_inductive_for_cases`'s own "only ever add a strictly-better
+/// preferred path" discipline.
+def con_ref_result_type (id : Identifier) (ind : Inductive) (expected_type : Term) (scope : Scope) : Term :=
+    // A PARAMETERIZED inductive's bare name is not a complete type
+    // (`List.cons 1 rest` is `List I64`, not `List`) -- see
+    // `inductive_has_params`; leave those to the existing hole fallback.
+    if con_ref_wants_inference expected_type && Bool.not (inductive_has_params ind)
+    then
+        match id {
+            Identifier.id s =>
+                match dotted_qualifier s {
+                    Option.some qual =>
+                        let qual_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id qual) List.empty) in
+                        match scope_find_inductive qual_mp scope {
+                            ok qual_ind => Term.var sentinel (DebugName.named (inductive_bare_name qual_ind)),
+                            err _ => expected_type,
+                        },
+                    Option.none => expected_type,
+                },
+        }
+    else expected_type
+
+/// Whether a constructor reference's ambient expected type carries no
+/// real information about its RESULT, so inferring the owning inductive
+/// is strictly better than echoing it back.
+///
+/// A bare `Term.hole` is the obvious case. The subtler one is the shape
+/// `type_check_app_ordinary` synthesizes for a call's callee --
+/// `Term.pi <arg type> <the call's own expected type>` -- which is NOT a
+/// hole even when the call itself is being inferred, because only its
+/// RETURN is. A constructor reference checked against that Pi used to
+/// echo the Pi straight back, `extract_pi_ret` then returned its hole
+/// return, and the application came out untyped after all: `Slim.mk`
+/// alone inferred as `Slim` while `Slim.mk 1` inferred as a hole.
+/// Looking through the Pi to its return is what makes the FIX actually
+/// reach applied constructors, which is the only form that matters here
+/// (a `let` binds `Slim.mk 1`, never the bare reference).
+///
+/// Nested pis are walked to the final return for the multi-argument
+/// case (`Wide.mk 10 20 30` builds one Pi layer per argument).
+#[terminating]
+def con_ref_wants_inference (expected_type : Term) : Bool :=
+    match expected_type {
+        Term.hole => true,
+        Term.pi _ ret => con_ref_wants_inference ret,
+        _ => false,
+    }
+
+/// Whether an inductive declares type PARAMETERS (`List A`, `Option A`,
+/// `Result E T`) as opposed to being a ground type (`Slim`, `Term`,
+/// `Identifier`).
+///
+/// `qualified_con_ref_typ` names an inductive by its bare name alone,
+/// which is only a complete type for a ground one: for `List` the real
+/// type of `List.cons 1 rest` is `List I64`, and answering the
+/// unapplied `List` produces a "type mismatch: expected (List A), found
+/// List" the moment it meets a real signature (confirmed live against
+/// `init/prelude.mo`'s own `List.append`). Reconstructing the applied
+/// form would mean solving the parameters from the arguments -- exactly
+/// the job `scope_find_def_sig`'s registered signatures already do for
+/// everything that has one -- so a parameterized inductive is simply
+/// left to the existing hole fallback, unchanged. The collision hazard
+/// this whole fix targets is ground-type constructors (`mk` on two
+/// different record-shaped types), which is precisely the case kept.
+def inductive_has_params (ind : Inductive) : Bool :=
+    match ind {
+        Inductive.mk _ params _ _ _ _ =>
+            match params {
+                List.empty => false,
+                List.cons _ _ => true,
+            },
+    }
+
+/// The type for a resolved-but-signature-less free variable: its owning
+/// inductive when the reference is a QUALIFIED constructor
+/// (`Slim.mk` -> `Slim`), else the `sig` hole this always returned.
+///
+/// Only fires when the qualifier names a real inductive that really
+/// declares this constructor, so the answer comes from the name the
+/// source wrote rather than an ambiguous bare-name scan -- and only when
+/// `sig` carries nothing (a registered def signature always wins). Purely
+/// additive: every other reference keeps the exact hole it had.
+/// See `con_ref_result_type` for the failure this closes.
+def qualified_con_ref_typ (dbg : DebugName) (sig : Term) (scope : Scope) : Term :=
+    if is_hole sig
+    then
+        match dbg {
+            DebugName.named id =>
+                match id {
+                    Identifier.id s =>
+                        match dotted_qualifier s {
+                            Option.some qual =>
+                                let qual_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id qual) List.empty) in
+                                let bare_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id (last_dotted_segment s)) List.empty) in
+                                match scope_find_inductive qual_mp scope {
+                                    ok qual_ind =>
+                                        if inductive_has_params qual_ind then sig
+                                        else
+                                            match find_constructor_in_inductive qual_ind bare_mp {
+                                                Option.some _ => Term.var sentinel (DebugName.named (inductive_bare_name qual_ind)),
+                                                Option.none => sig,
+                                            },
+                                    err _ => sig,
+                                },
+                            Option.none => sig,
+                        },
+                },
+            DebugName.unnamed => sig,
+        }
+    else sig
 
 /// Look up a free variable by debug name in the scope.
 def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope) (locals : LocalScope) : Result TypeError TypedTerm :=
@@ -1412,7 +1557,27 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                     mk resolved_name _ sig _ =>
                         match scope_find_def_sig resolved_name scope {
                             Option.some real_sig => ok (mk_typed (Term.var sentinel dbg) real_sig),
-                            Option.none => ok (mk_typed (Term.var sentinel dbg) sig),
+                            // No registered signature. For an ordinary def
+                            // that means the `sig`-hole fallback below; but
+                            // a CONSTRUCTOR reference resolves here too
+                            // (constructors ARE registered names), and for
+                            // one written qualified -- `Slim.mk` -- the
+                            // qualifier names its owning inductive exactly.
+                            // Recovering that is what gives a `let`-bound
+                            // constructor value a real type; see
+                            // `con_ref_result_type` for why the hole was
+                            // load-bearing in the worst way (an untyped
+                            // scrutinee sent `find_inductive_for_cases`
+                            // into its ambiguous bare-name scan, which
+                            // under codegen's best-effort elaboration left
+                            // `+` generic and its dictionary recursing
+                            // until the stack died). `type_check_free_var_
+                            // con` below does the same job for a name that
+                            // DOESN'T resolve here -- this is the same fix
+                            // on the path a real qualified constructor
+                            // reference actually takes.
+                            Option.none =>
+                                ok (mk_typed (Term.var sentinel dbg) (qualified_con_ref_typ dbg sig scope)),
                         },
                 },
                 err _ =>
@@ -2096,12 +2261,65 @@ def extract_pi_ret (f_term : Term) (a_term : Term) (f_typ : Term) (a_typ : Term)
     match f_typ {
         Term.pi pi_arg pi_ret =>
             let app_term : Term := Term.app f_term a_term in
-            ok (mk_typed app_term pi_ret),
+            // A CONSTRUCTOR's callee type is not a real signature pi: for
+            // a MULTI-argument constructor the callee is itself a partial
+            // application, whose type came back as the pi
+            // `type_check_app_ordinary` synthesized one level up
+            // (`Term.pi <arg type> <this call's expected type>`) -- so
+            // `pi_ret` here is that expected type, a HOLE in infer mode,
+            // and peeling it discards the result type the innermost
+            // reference already knew. Recover it the same way the non-pi
+            // arm below does. `Wide.mk 10 20 30` is the shape that made
+            // this matter: the single-argument `Slim.mk 1` never builds a
+            // nested pi and so was already correct, which is exactly how
+            // this narrowed down. A real (non-hole) `pi_ret` is a genuine
+            // signature return type and always wins.
+            if is_hole pi_ret
+            then ok (mk_typed app_term (con_spine_result_typ f_term pi_ret scope))
+            else ok (mk_typed app_term pi_ret),
         Term.forall _ _ body_ =>
             extract_pi_ret f_term a_term body_ a_typ expected_type scope local_types locals,
         _ =>
             let app_term : Term := Term.app f_term a_term in
-            ok (mk_typed app_term expected_type),
+            // `f_typ` is not a pi chain, so there is no return type to
+            // peel -- which is exactly the shape a CONSTRUCTOR reference
+            // has: `type_check_free_var_con` has no per-constructor
+            // signature to build a pi from (a constructor's params live
+            // on its `InductConstructor`, and `ScopeDef.sig` is
+            // unconditionally hole by design), so it returns the owning
+            // inductive's named type directly (`con_ref_result_type`).
+            // For a saturated `Slim.mk 1` that named type IS the
+            // application's type, so echoing back a hole `expected_type`
+            // discarded the one thing that was known -- leaving every
+            // `let`-bound constructor value untyped and sending
+            // `find_inductive_for_cases` into its ambiguous bare-name
+            // scan (see `con_ref_result_type` for the stack-death that
+            // followed). Prefer a real ambient expectation whenever
+            // there is one; a genuinely unknown callee makes this a
+            // no-op, since `f_typ` is then hole too.
+            if is_hole expected_type
+            then ok (mk_typed app_term (con_spine_result_typ f_term expected_type scope))
+            else ok (mk_typed app_term expected_type),
+    }
+
+/// The result type of an application spine whose head is a constructor
+/// reference: the head's own already-inferred type, threaded back out
+/// through however many argument layers the spine has.
+///
+/// `type_check_free_var`/`type_check_free_var_con` type a qualified
+/// constructor reference as its owning inductive
+/// (`qualified_con_ref_typ`), but each applied argument re-enters
+/// `type_check_app_ordinary`, which checks the callee against a
+/// SYNTHESIZED pi and then peels its return -- a hole while the call
+/// itself is being inferred. Walking back to the spine head recovers the
+/// type that was known all along. Returns `fallback` for any spine whose
+/// head is not a typed constructor reference, so nothing else changes.
+#[partial]
+def con_spine_result_typ (f_term : Term) (fallback : Term) (scope : Scope) : Term :=
+    match f_term {
+        Term.app g _ => con_spine_result_typ g fallback scope,
+        Term.var _ dbg => qualified_con_ref_typ dbg fallback scope,
+        _ => fallback,
     }
 
 /// Type check a forall binder.
@@ -2198,7 +2416,7 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
                                         InductConstructor.mk _ params _ =>
                                             if I64.beq num_args (List.length params) then
                                                 match check_con_args_against_params args params scope local_types locals {
-                                                    ok elab_args => ok (mk_typed (Term.con (Con.mk cname typ_name num_args elab_args)) expected_type),
+                                                    ok elab_args => ok (mk_typed (Term.con (Con.mk cname typ_name num_args elab_args)) (con_result_type ind expected_type)),
                                                     err e => err e,
                                                 }
                                             else
@@ -2208,6 +2426,45 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
                     }
             }
     }
+
+/// A constructor application's own result type, for the INFER case.
+///
+/// `type_check_con` used to return `expected_type` verbatim, which in
+/// infer mode (`Term.hole`) meant a constructor application had no
+/// inferred type at all -- even though the owning `Inductive` was
+/// resolved (`scope_find_inductive`) and its constructor found and
+/// arity-checked immediately above. That hole then propagated: an
+/// unannotated `let s := Slim.mk 1` desugars to `Term.app (Term.lam s
+/// hole ...) (Slim.mk 1)` (`desugar_do_inner`'s `let_s`, lang/types.mo),
+/// `type_check_app_ordinary` builds its Pi from the ARGUMENT's inferred
+/// type, and `type_check_lam`'s own `if is_hole t then arg_typ else t`
+/// preference (see its doc comment, which names this very scenario)
+/// then had two holes to choose between -- so `s`'s local type stayed
+/// hole, `find_inductive_for_cases` fell past `con_owner_name` (the
+/// scrutinee is a VARIABLE now, not a `Term.con`) and `type_head_name`
+/// down to the ambiguous constructor-name scan, and
+/// `find_inductive_for_cases_by_constructor` correctly errored on a
+/// bare name two inductives share (`mk`). Under codegen's best-effort
+/// elaboration (`elaborate_module_decls_best_effort`, lang/module.mo,
+/// which swallows a failing decl unchanged by design) that error left
+/// the match arms' binders untyped, so `+` stayed a GENERIC class call
+/// and its dictionary (`Add_A_add` -> `__Dict_Add_A` ->
+/// `Add_A_add_closure_shim` -> `Add_A_add`) recursed until the stack
+/// died -- confirmed live as a SIGSEGV in `Add_A_add`'s prologue
+/// `movaps`, on a program whose IR was otherwise correct.
+///
+/// Returns the inductive's own named type in the `Term.var sentinel
+/// (DebugName.named ...)` shape `type_head_name` consumes -- exactly
+/// what `type_check_struct_lit` returns for an explicitly-annotated
+/// literal, via the same `inductive_bare_name` helper. A real ambient
+/// `expected_type` is always preferred and never overridden, so this
+/// only ever ADDS precision where there was none, matching
+/// `find_inductive_for_cases`'s own "only ever add a strictly-better
+/// preferred path, never change the shared fallback" discipline.
+def con_result_type (ind : Inductive) (expected_type : Term) : Term :=
+    if is_hole expected_type && Bool.not (inductive_has_params ind)
+    then Term.var sentinel (DebugName.named (inductive_bare_name ind))
+    else expected_type
 
 def con_arity_msg (full_name : ModulePath) (got : I64) (want : I64) : String :=
     "constructor arity mismatch: " ++ show_module_path full_name ++ " expects "

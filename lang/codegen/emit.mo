@@ -571,7 +571,14 @@ def builtin_ctor_arities : HashMap String I64 :=
 /// (`build_constructor_tag_map`) for anything not in `builtin_ctor_tags`
 /// -- every user-defined inductive's constructor, and any BUILTIN
 /// constructor referenced by its full dotted name in a shape
-/// `builtin_ctor_tags` doesn't happen to enumerate.
+/// `builtin_ctor_tags` doesn't happen to enumerate. The ctx tiers try
+/// the name AS WRITTEN first ("Box.mk" -- the map carries an
+/// owner-qualified alias per constructor) and then its bare name --
+/// which for a bare name claimed at several arities is the -1
+/// ambiguity sentinel, answered as 0 by `bare_ctor_tag`. Callers that
+/// know the constructor's field count should use `constructor_tag_at`
+/// instead: its composite bare#arity key distinguishes the differing-
+/// arity colliders this bare-name path cannot.
 #[partial]
 def constructor_tag (c : CodegenCtx) (name : String) : I64 :=
     let base_name := extract_base_name name in
@@ -581,32 +588,37 @@ def constructor_tag (c : CodegenCtx) (name : String) : I64 :=
             match str_map_lookup base_name builtin_ctor_tags {
                 Option.some tag => tag,
                 Option.none =>
-                    match ctx_lookup_ctor_tag c base_name {
+                    match ctx_lookup_ctor_tag c name {
                         Option.some tag => tag,
-                        Option.none => 0,
+                        Option.none => bare_ctor_tag c base_name,
                     },
             },
     }
 
 /// Same 3-tier lookup shape as `constructor_tag` just above (hardcoded
 /// builtin table, by full name then base name, then `c`'s own
-/// dynamically-built table), for a constructor's FIELD COUNT instead of
-/// its tag. Needed by `compile_db_term_ir`'s `Term.var` case (a bare,
-/// unapplied constructor reference in VALUE position, e.g. `List.map
-/// Identifier.id ids` or `List.map Option.some xs`): that case used to
+/// dynamically-built table -- name as written, then bare), for a
+/// constructor's FIELD COUNT instead of its tag. Needed by
+/// `compile_db_term_ir`'s `Term.var` case (a bare, unapplied
+/// constructor reference in VALUE position, e.g. `List.map Identifier.id
+/// ids` or `List.map Option.some xs`): that case used to
 /// unconditionally allocate a 0-field object regardless of the
 /// constructor's REAL declared arity, correct only for a genuinely
 /// nullary constructor -- confirmed as a real gap via a live self-
 /// compiled binary's own SIGSEGV (jumping to a garbage function pointer
 /// inside `List.map`'s `apply_closure1`, traced to `ids_to_module_path`'s
 /// own `List.map Identifier.id ids`, a 1-field constructor referenced
-/// bare). Falls back to 0 (matching `constructor_tag`'s own "unknown ->
-/// 0" fallback) if the name isn't found anywhere -- a name that isn't
-/// even a known constructor never reaches this function to begin with
-/// (`is_constructor_var` already gated the caller), so this only means
-/// "found the tag via `builtin_ctor_tags`/`ctor_tags` but has no
-/// separately-recorded arity", which shouldn't happen in practice but
-/// isn't worth a crash if it somehow does.
+/// bare). The ctx tiers key `ctor_arities` by the owner-qualified
+/// alias first ("Box.mk" -- how such a reference is actually written)
+/// and the bare name second; a bare name claimed at several arities
+/// records its FIRST-encountered arity there -- an arbitrary but
+/// deterministic answer for a shape that is genuinely unresolvable
+/// without the owning type (write the reference qualified and the
+/// alias tier answers exactly). Falls back to 0 (matching
+/// `constructor_tag`'s own "unknown -> 0" fallback) if the name isn't
+/// found anywhere -- a name that isn't even a known constructor never
+/// reaches this function to begin with (`is_constructor_var` already
+/// gated the caller).
 #[partial]
 def constructor_arity (c : CodegenCtx) (name : String) : I64 :=
     let base_name := extract_base_name name in
@@ -616,9 +628,13 @@ def constructor_arity (c : CodegenCtx) (name : String) : I64 :=
             match str_map_lookup base_name builtin_ctor_arities {
                 Option.some arity => arity,
                 Option.none =>
-                    match ctx_lookup_ctor_arity c base_name {
+                    match ctx_lookup_ctor_arity c name {
                         Option.some arity => arity,
-                        Option.none => 0,
+                        Option.none =>
+                            match ctx_lookup_ctor_arity c base_name {
+                                Option.some arity => arity,
+                                Option.none => 0,
+                            },
                     },
             },
     }
@@ -627,7 +643,10 @@ def constructor_arity (c : CodegenCtx) (name : String) : I64 :=
 /// Handles both simple names ("unit", "true") and qualified names ("Unit.unit", "IO.io"),
 /// falling back to `c`'s own dynamically-built `ctor_tags` table
 /// (`build_constructor_tag_map`) for anything not in `builtin_ctor_tags`
-/// -- see `constructor_tag`'s own doc comment.
+/// -- see `constructor_tag`'s own doc comment. A bare name claimed at
+/// several arities still has a ctx-table entry (the -1 ambiguity
+/// sentinel, see `constructor_tag_at`) -- presence alone answers this
+/// question.
 #[partial]
 def is_constructor_var (c : CodegenCtx) (name : String) : Bool :=
     let base_name := extract_base_name name in
@@ -637,6 +656,77 @@ def is_constructor_var (c : CodegenCtx) (name : String) : Bool :=
             match ctx_lookup_ctor_tag c base_name {
                 Option.some _ => true,
                 Option.none => false,
+            },
+    }
+
+/// The composite tag-map key: a constructor's BARE name plus its
+/// declared field count, joined by `#` ("mk#7", "present#2"). `#` never
+/// appears in an identifier, so the composite key can never collide
+/// with a qualified "Type.ctor" alias or a bare name. This is the key
+/// that makes same-bare-name constructors at DIFFERING arities
+/// distinguishable at runtime -- see `build_constructor_tag_map`.
+def ctor_composite_key (name : String) (arity : I64) : String :=
+    String.concat name (String.concat "#" (I64.to_string arity))
+
+/// The ctx-table's bare entry, answered as a tag. A bare constructor
+/// name claimed at exactly ONE arity has a real tag here; one claimed at
+/// several arities gets the -1 ambiguity sentinel instead (see
+/// `constructor_tag_at`), which this answers as 0 -- the same "unknown"
+/// answer a missing entry gets, and unreachable for real shapes, since
+/// every caller that knows its arity goes through the composite key
+/// first.
+#[partial]
+def bare_ctor_tag (c : CodegenCtx) (bare : String) : I64 :=
+    match ctx_lookup_ctor_tag c bare {
+        Option.some tag => if I64.gt tag (-1) then tag else 0,
+        Option.none => 0,
+    }
+
+/// Same 3-tier lookup shape as `constructor_tag` (hardcoded builtin
+/// table, full name then base name, then `c`'s own dynamically-built
+/// table) but for a consumer that ALSO knows the constructor's field
+/// count -- which is every alloc/dispatch site:
+///
+///   - match dispatch: the case's own positional binder count
+///     (`build_match_chain` -- a well-typed arm binds one binder per
+///     declared field),
+///   - saturated allocation: the constructor application's own
+///     compiled-argument count (`compile_con_ir`),
+///   - the constructor wrappers: their declared param count
+///     (`compile_db_inductive_constructors`).
+///
+/// The ctx tier keys `ctor_tags` by the COMPOSITE bare#arity key, so
+/// two different types sharing a bare constructor name at DIFFERING
+/// arities answer with different tags: a match arm for `Wide.mk a b c`
+/// compares against Wide's own tag, a Slim value (same bare name, one
+/// field) carries a different one, and the arm can never accept -- let
+/// alone `monad_get_field` past -- a Slim allocation. That differing-
+/// arity collision class is what cost the v29 rung-3 ladder rung
+/// (283 constructors sharing one `mk` tag at seven arities; a
+/// value-position reference sized its allocation from the last
+/// claimant's arity and a neighbouring object's memory came back where
+/// a `List` spine pointer belonged).
+///
+/// The final bare-name tier only exists for a bare name claimed at one
+/// single arity (real tag) -- a name claimed at several arities carries
+/// the -1 sentinel there, answered as 0 by `bare_ctor_tag`. Struct
+/// `mk`s never enter the map at all (structs stay `Decl.struct_d`,
+/// `extract_inductives` only matches `inductive_d`), so they take the
+/// 0 fallback at BOTH alloc and dispatch -- consistently, exactly as
+/// before.
+#[partial]
+def constructor_tag_at (c : CodegenCtx) (name : String) (arity : I64) : I64 :=
+    let base_name := extract_base_name name in
+    match str_map_lookup name builtin_ctor_tags {
+        Option.some tag => tag,
+        Option.none =>
+            match str_map_lookup base_name builtin_ctor_tags {
+                Option.some tag => tag,
+                Option.none =>
+                    match ctx_lookup_ctor_tag c (ctor_composite_key base_name arity) {
+                        Option.some tag => tag,
+                        Option.none => bare_ctor_tag c base_name,
+                    },
             },
     }
 
@@ -991,8 +1081,15 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
                                     match fresh_temp ctx2 {
                                         CtxStrPair.mk ctx3 cmp_temp =>
                                             match this_case {
-                                                MatchCase.mc name _args _body _fp =>
-                                                    let tag_of_case := constructor_tag ctx3 (symbol_identifier name) in
+                                                MatchCase.mc name args _body _fp =>
+                                                    // Composite bare#arity key: the case's
+                                                    // own positional binder count IS the
+                                                    // constructor's field count for a
+                                                    // well-typed arm, and it is what
+                                                    // disambiguates a bare name two
+                                                    // different types both declare (see
+                                                    // `constructor_tag_at`).
+                                                    let tag_of_case := constructor_tag_at ctx3 (symbol_identifier name) (List.length args) in
                                                     let cmp_instr := LLVMInstruction.assign cmp_temp (LLVMValue.icmp_eq tag_val (LLVMValue.int_ tag_of_case)) in
                                                     let branch_instr := LLVMInstruction.branch (LLVMValue.var_ cmp_temp) case_label next_check_label in
                                                     let check_block := LLVMBasicBlock.mk check_label (cons_instr cmp_instr (cons_instr branch_instr empty_instrs)) in
@@ -1454,8 +1551,12 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
                         CtxStrPair.mk ctx_t temp =>
                             // Call the @alloc_constructor runtime function
                             // alloc_constructor takes (tag, field_count) and allocates space for fields
-                            // The tag is determined by the constructor name
-                            let tag_val := constructor_tag c (symbol_identifier name) in
+                            // The tag is determined by the constructor name AND this
+                            // application's own compiled-arg count -- the composite
+                            // key that keeps same-named constructors of different
+                            // types distinguishable at match dispatch (see
+                            // `constructor_tag_at`).
+                            let tag_val := constructor_tag_at c (symbol_identifier name) (List.length all_vals) in
                             let alloc_val := LLVMValue.alloc_constructor tag_val all_vals in
                             let assign_instr := LLVMInstruction.assign temp alloc_val in
                             // alloc_constructor only ALLOCATES the fields
@@ -4923,13 +5024,11 @@ def validate_no_unwired_natives (decl_list : List Decl) : Result String (List De
 /// `validate_no_unresolved_class_calls` (first message only), a broken
 /// compile from the fail-fast validator family usually has a whole
 /// FAMILY of defects at once (the self-hosted compiler's own closure
-/// references ~20 unwired natives; its loaded graph claims one bare
-/// constructor name at seven different arities), and naming them one
+/// references ~20 unwired natives), and naming them one
 /// per compile would cost one full ~8-minute self-compile run each.
-/// The complete list is the point. Shared by all three fail-fast
-/// gates: `validate_no_unwired_natives`,
-/// `validate_no_undesugared_struct_lits`, and
-/// `validate_no_ctor_tag_collisions`.
+/// The complete list is the point. Shared by both fail-fast
+/// gates: `validate_no_unwired_natives` and
+/// `validate_no_undesugared_struct_lits`.
 #[partial]
 def join_semicolon_msgs (msgs : List String) (acc : String) : String :=
     match msgs {
@@ -4974,122 +5073,6 @@ def find_unwired_native_defs (defs : List Def) : List String :=
                     },
             },
     }
-
-/// Fail fast on two different reachable inductives claiming the same
-/// bare-name constructor-tag key at DIFFERENT arities -- the silent
-/// memory-corruption class that cost the v29 rung-3 ladder rung
-/// (2026-09-03/04).
-///
-/// `assign_constructor_tags`/`build_constructor_arity_map` key a
-/// constructor's runtime tag AND its recorded field count by the
-/// constructor's BARE name only (see their own doc comments for why --
-/// match dispatch, `build_match_chain`'s `MatchCase.mc`, can only ever
-/// supply the bare name). Every `struct` declares that same-named `mk`
-/// constructor (`lang/typecheck/meta_reflect.mo`'s `struct_to_
-/// inductive` builds it unqualified), so in a struct-heavy loaded graph
-/// hundreds of distinct types share one key: the v29 self-compiled
-/// binary's own IR had 283 distinct `mk` constructors sharing one tag,
-/// allocated at seven different arities (2, 3, 4, 5, 6, 7 and 10
-/// fields).
-///
-/// A shared key alone is survivable -- allocation sites and match arms
-/// both read the same map entry, and a match arm binds its fields from
-/// its own pattern's arg list (`bind_match_fields`), so a program where
-/// every claimant of a key has the SAME layout stays self-consistent
-/// (the nested Inner/Outer two-struct regression shape, both 2 fields,
-/// keeps passing on purpose). The shared ARITY is what is not
-/// consistent: `constructor_arity` (a bare constructor referenced in
-/// VALUE position, e.g. `List.map Inner.mk xs`) answers the key's
-/// last-written arity whatever the constructor actually declares, so a
-/// key claimed at 10 fields makes a 2-field `mk` reference allocate a
-/// 10-slot object and a 10-field reference allocate 2 slots -- and any
-/// `monad_get_field` past that reads a neighbouring object. That is
-/// precisely the v29 crash: a raw unboxed `1` stored where a `List`
-/// spine pointer belonged, `monad_get_tag` on it, SIGSEGV in
-/// `List_filter_map` -> `collect_def_names` on the FIRST module's decl
-/// list -- silent, structural, `llc`-verified clean; only running the
-/// binary found it, the same shape as the two fail-fast gates above.
-///
-/// The typechecker already guards this exact hazard name-resolution-side
-/// (`scope_data_find_all_inductives_by_constructor`, lang/scope.mo,
-/// returns EVERY matching inductive so >1 match fails loudly); this is
-/// codegen's side of the same discipline. NOT covered: a user ctor
-/// whose bare name shadows a builtin tag (`constructor_tag`'s hardcoded
-/// 16 are checked before this map and stay consistent-by-lookup), and
-/// same-arity collisions, which are consistent by construction (see
-/// above) -- qualifying tags by owning type rather than bare name
-/// (the real fix) is tracked separately.
-#[partial]
-def validate_no_ctor_tag_collisions (decl_list : List Decl) : Result String (List Decl) :=
-    let msgs := find_ctor_tag_collisions (extract_inductives decl_list) str_map_empty str_map_empty List.empty in
-    match msgs {
-        List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
-    }
-
-/// One message per bare-name constructor-tag key claimed at two
-/// different arities -- see `validate_no_ctor_tag_collisions`'s own doc
-/// comment for the fail-fast contract. `seen_owners`/`seen_arities`
-/// mirror `assign_constructor_tags`'s own key choice exactly (the
-/// constructor name rendered by `module_path_to_str` -- bare in
-/// practice, per `compile_db_inductive_constructors`'s own note), so
-/// what collides here is exactly what collides in the real tag map.
-/// The same inductive seen twice (a module loaded twice) is skipped by
-/// owner-name equality, matching the old silent last-writer-wins map
-/// behavior for that benign case.
-#[partial]
-def find_ctor_tag_collisions (inds : List Inductive) (seen_owners : HashMap String String) (seen_arities : HashMap String I64) (msgs : List String) : List String := match inds {
-    List.empty => msgs,
-    List.cons ind rest =>
-        match ind {
-            Inductive.mk name _params _typ constructors _attrs _vis =>
-                find_ctor_tag_collisions_ctors (module_path_to_str name) constructors rest seen_owners seen_arities msgs,
-        },
-}
-
-#[partial]
-def find_ctor_tag_collisions_ctors (owner : String) (ctors : List InductConstructor) (inds : List Inductive) (seen_owners : HashMap String String) (seen_arities : HashMap String I64) (msgs : List String) : List String := match ctors {
-    List.empty => find_ctor_tag_collisions inds seen_owners seen_arities msgs,
-    List.cons c rest =>
-        match c {
-            InductConstructor.mk cname params _typ =>
-                let key := module_path_to_str cname in
-                let arity := List.length params in
-                match str_map_lookup key seen_owners {
-                    Option.some prev_owner =>
-                        if String.beq prev_owner owner
-                        then find_ctor_tag_collisions_ctors owner rest inds seen_owners seen_arities msgs
-                        else
-                            let prev_arity := match str_map_lookup key seen_arities {
-                                Option.some a => a,
-                                Option.none => 0,
-                            } in
-                            let msgs2 := if arity == prev_arity
-                                then msgs
-                                else List.cons (ctor_tag_collision_msg key prev_owner prev_arity owner arity) msgs
-                            in
-                            find_ctor_tag_collisions_ctors owner rest inds
-                                (str_map_insert key owner seen_owners)
-                                (str_map_insert key arity seen_arities)
-                                msgs2,
-                    Option.none =>
-                        find_ctor_tag_collisions_ctors owner rest inds
-                            (str_map_insert key owner seen_owners)
-                            (str_map_insert key arity seen_arities)
-                            msgs,
-                },
-        },
-}
-
-/// The collision diagnostic: the bare key both constructors claim, both
-/// owning types' qualified names, and both arities -- the facts a fix
-/// needs (which constructor to rename, and confirmation the layouts
-/// really do differ).
-#[partial]
-def ctor_tag_collision_msg (key : String) (prev_owner : String) (prev_arity : I64) (owner : String) (arity : I64) : String :=
-    let head := "constructor-tag key `" ++ key ++ "`" in
-    let who := (" is claimed at differing arities by `" ++ prev_owner ++ "` (" ++ I64.to_string prev_arity ++ " fields) and `" ++ owner ++ "` (" ++ I64.to_string arity ++ " fields)") in
-    String.concat head (String.concat who " -- codegen keys runtime constructor tags and field counts by bare constructor name (assign_constructor_tags/build_constructor_arity_map), so both constructors share one tag while their values have different layouts, and any match or monad_get_field on either can read the other's memory; rename one constructor to make the bare name unique")
 
 /// Fail fast on a struct literal that reached codegen still spelled as
 /// `Literal.struct_lit`/`Literal.struct_update` instead of a real
@@ -5543,11 +5526,12 @@ def extract_inductives (decl_list : List Decl) : List Inductive := match decl_li
 
 /// Compile a list of canonical InductConstructors to LLVM constructor wrapper functions.
 /// `ctor_tags` -- see `build_constructor_tag_map`'s own doc comment;
-/// looked up by the constructor's full DOTTED name ("TypeName.ctorName")
-/// -- falls back to tag 0 for anything not found (shouldn't happen for a
-/// real reachable inductive, since `ctor_tags` is built from this exact
-/// same `List Inductive`; matches this file's other "absent from the
-/// table" fallbacks, e.g. `ctx_lookup_arity`'s own doc comment).
+/// looked up by the constructor's composite bare#arity key (the
+/// wrapper's own param count is the constructor's field count) -- falls
+/// back to tag 0 for anything not found (shouldn't happen for a real
+/// reachable inductive, since `ctor_tags` is built from this exact same
+/// `List Inductive`; matches this file's other "absent from the table"
+/// fallbacks, e.g. `ctx_lookup_arity`'s own doc comment).
 #[partial]
 def compile_db_inductive_constructors (type_name : String) (constructors : List InductConstructor) (ctor_tags : HashMap String I64) : List LLVMFunction := match constructors {
     List.empty => empty_funcs,
@@ -5569,13 +5553,22 @@ def compile_db_inductive_constructors (type_name : String) (constructors : List 
                 let name_str := module_path_to_str name in
                 let qualified_name := type_name ++ "_" ++ name_str in
                 let field_count := count_db_params params 0 in
-                // Keyed by BARE name -- see `assign_constructor_tags`'s
-                // own doc comment for why (match dispatch can only ever
-                // supply the bare name, so the map is keyed that way
-                // uniformly).
-                let tag := match str_map_lookup name_str ctor_tags {
+                // Composite bare#arity key -- this wrapper's own param
+                // count is exactly the constructor's field count, so the
+                // tag embedded here agrees with what saturated
+                // allocations and match dispatch compute for the same
+                // constructor (see `constructor_tag_at`). The bare tier
+                // underneath only answers a single-arity bare name; its
+                // -1 ambiguity sentinel degrades to 0 (these wrappers
+                // are vestigial -- nothing in codegen calls them -- so
+                // the tag is documentation, kept consistent anyway).
+                let tag := match str_map_lookup (ctor_composite_key name_str field_count) ctor_tags {
                     Option.some t => t,
-                    Option.none => 0,
+                    Option.none =>
+                        match str_map_lookup name_str ctor_tags {
+                            Option.some t => if I64.gt t (-1) then t else 0,
+                            Option.none => 0,
+                        },
                 } in
                 let func := compile_constructor_decl qualified_name field_count tag in
                 cons_func func (compile_db_inductive_constructors type_name rest ctor_tags)
@@ -5598,94 +5591,186 @@ def compile_db_inductive_decls (ind_decls : List Inductive) (ctor_tags : HashMap
         append_funcs funcs (compile_db_inductive_decls rest ctor_tags)
 }
 
-/// Builds a `HashMap` from a constructor's full DOTTED name
-/// ("TypeName.ctorName") to a fresh, globally-unique tag, for every
-/// constructor of every declared `Inductive` in the whole program.
-/// Starts at 16 -- past `constructor_tag`'s existing hardcoded 0-15
-/// builtin range (`unit, true, false, none, some, empty, cons, io,
-/// trivial, refl, ok, err, zero, succ, nil, pair`), which is left
-/// completely untouched (zero risk to already-working code) --
-/// `constructor_tag`/`is_constructor_var` only ever consult this map as
-/// a FALLBACK for a name the hardcoded list doesn't recognize.
-/// See `implementations/2026-08-29-user-defined-constructor-codegen-gap.md`.
-#[partial]
-def build_constructor_tag_map (inds : List Inductive) : HashMap String I64 :=
-    build_constructor_tag_map_go inds 16 str_map_empty
-
-#[partial]
-def build_constructor_tag_map_go (inds : List Inductive) (next_tag : I64) (acc : HashMap String I64) : HashMap String I64 := match inds {
-    List.empty => acc,
-    List.cons ind rest =>
-        match ind {
-            Inductive.mk _name _params _typ constructors _attrs _vis =>
-                match assign_constructor_tags constructors next_tag acc {
-                    TagAssignResult.mk next_tag2 acc2 => build_constructor_tag_map_go rest next_tag2 acc2,
-                },
-        },
+/// One constructor "claim" collected from the declared `Inductive`s:
+/// the constructor's BARE rendered name (how match dispatch will refer
+/// to it), its declared FIELD COUNT (how the composite key
+/// disambiguates colliders), and its owner-QUALIFIED name
+/// ("TypeName.ctorName" -- how a value-position reference is written).
+struct CtorClaim {
+    bare : String,
+    arity : I64,
+    qualified : String,
 }
 
-struct TagAssignResult {
-    next_tag : I64,
-    acc : HashMap String I64,
-}
-
-/// Keyed by the constructor's own BARE name only (e.g. "present"), NOT
-/// qualified by its enclosing type -- match dispatch (`build_match_
-/// chain`'s own `MatchCase.mc` field, which never carries the type it
-/// belongs to) can only ever supply the bare name, so a qualified key
-/// would silently miss there and fall back to tag 0 (confirmed as a real
-/// bug via a direct repro: a match on a custom 2-constructor type always
-/// took the first arm, since BOTH arms' tag comparisons resolved to 0).
-/// This mirrors the EXISTING hardcoded builtin table's own "check base
-/// names" tier exactly (`unit`/`true`/`false`/... are already assumed
-/// globally unique by bare name) -- extends the SAME assumption to
-/// user-defined types rather than fixing it, which would need threading
-/// the scrutinee's own static type down into match compilation (a much
-/// bigger, separate change). Two different reachable user-defined types
-/// sharing a bare constructor name would collide here, same as they
-/// always could against the hardcoded 16 -- no longer silently accepted:
-/// `validate_no_ctor_tag_collisions` fails the compile when the
-/// claimants' arities differ (the memory-unsafe class that cost the
-/// v29 rung-3 ladder rung; see its own doc comment). Same-arity
-/// collisions stay tolerated -- consistent by construction -- until the
-/// real qualify-by-owning-type fix lands.
+/// Collect every declared constructor's claim, in declaration order.
+/// `Inductive.name` is the OWNING type's path -- the qualifier every
+/// `mk`-shaped bare name needs to become unique.
 #[partial]
-def assign_constructor_tags (constructors : List InductConstructor) (next_tag : I64) (acc : HashMap String I64) : TagAssignResult := match constructors {
-    List.empty => { next_tag := next_tag, acc := acc },
-    List.cons c rest =>
-        match c {
-            InductConstructor.mk name _params _typ =>
-                let acc2 := str_map_insert (module_path_to_str name) next_tag acc in
-                assign_constructor_tags rest (next_tag + 1) acc2,
-        },
-}
-
-/// Mirrors `build_constructor_tag_map`/`assign_constructor_tags` exactly
-/// (same keying, same traversal shape) but records each constructor's
-/// FIELD COUNT instead of assigning it a tag -- see `constructor_arity`'s
-/// own doc comment for why this is needed.
-#[partial]
-def build_constructor_arity_map (inds : List Inductive) : HashMap String I64 :=
-    build_constructor_arity_map_go inds str_map_empty
-
-#[partial]
-def build_constructor_arity_map_go (inds : List Inductive) (acc : HashMap String I64) : HashMap String I64 := match inds {
-    List.empty => acc,
-    List.cons ind rest =>
-        match ind {
-            Inductive.mk _name _params _typ constructors _attrs _vis =>
-                build_constructor_arity_map_go rest (assign_constructor_arities constructors acc),
-        },
-}
-
-#[partial]
-def assign_constructor_arities (constructors : List InductConstructor) (acc : HashMap String I64) : HashMap String I64 := match constructors {
+def collect_ctor_claims (owner : String) (ctors : List InductConstructor) (acc : List CtorClaim) : List CtorClaim := match ctors {
     List.empty => acc,
     List.cons c rest =>
         match c {
             InductConstructor.mk name params _typ =>
-                let acc2 := str_map_insert (module_path_to_str name) (List.length params) acc in
-                assign_constructor_arities rest acc2,
+                let claim : CtorClaim := {
+                    bare := module_path_to_str name,
+                    arity := List.length params,
+                    qualified := String.concat owner (String.concat "." (module_path_to_str name)),
+                } in
+                collect_ctor_claims owner rest (List.cons claim acc),
+        },
+}
+
+#[partial]
+def collect_ctor_claims_inds (inds : List Inductive) (acc : List CtorClaim) : List CtorClaim := match inds {
+    List.empty => acc,
+    List.cons ind rest =>
+        match ind {
+            Inductive.mk name _params _typ constructors _attrs _vis =>
+                collect_ctor_claims_inds rest (collect_ctor_claims (module_path_to_str name) constructors acc),
+        },
+}
+
+/// The per-bare-name arity scan every map build starts with: the FIRST
+/// arity each bare name was claimed at, and whether it was later
+/// claimed at a DIFFERENT arity too (the ambiguity marker -- a bare
+/// name with several arities cannot answer an arity-unknown lookup and
+/// gets the -1 sentinel in the tag map).
+struct BareArityScan {
+    first : HashMap String I64,
+    multi : HashMap String Bool,
+}
+
+#[partial]
+def scan_ctor_bare_arities (claims : List CtorClaim) (st : BareArityScan) : BareArityScan := match claims {
+    List.empty => st,
+    List.cons cl rest =>
+        match cl {
+            CtorClaim.mk bare arity _qualified =>
+                let st2 := match str_map_lookup bare st.first {
+                    Option.some first =>
+                        if arity == first
+                        then st
+                        else { st with multi := str_map_insert bare true st.multi },
+                    Option.none => { st with first := str_map_insert bare arity st.first },
+                } in
+                scan_ctor_bare_arities rest st2,
+        },
+}
+
+struct CtorTagBuildState {
+    next_tag : I64,
+    tags : HashMap String I64,
+}
+
+/// Assign one fresh, globally-unique tag per DISTINCT bare#arity pair,
+/// first-encounter order. Duplicate claims (the same pair again, a
+/// module loaded twice, another type with the same-named same-arity
+/// constructor) reuse the tag -- same-layout claimants are
+/// interchangeable at runtime by construction, since alloc and match
+/// both key by (name, arity).
+#[partial]
+def assign_ctor_pair_tags (claims : List CtorClaim) (st : CtorTagBuildState) : CtorTagBuildState := match claims {
+    List.empty => st,
+    List.cons cl rest =>
+        match cl {
+            CtorClaim.mk bare arity _qualified =>
+                let comp := ctor_composite_key bare arity in
+                let st2 := match str_map_lookup comp st.tags {
+                    Option.some _ => st,
+                    Option.none => { st with tags := str_map_insert comp st.next_tag st.tags, next_tag := st.next_tag + 1 },
+                } in
+                assign_ctor_pair_tags rest st2,
+        },
+}
+
+/// Add the two alias keys every claim also gets, on top of the
+/// composite keys: the owner-qualified name ("Box.mk" -> Box's own
+/// tag -- the tier a value-position reference written qualified hits)
+/// and the bare name (real tag when the name is claimed at one single
+/// arity, the -1 ambiguity sentinel when claimed at several -- so
+/// `is_constructor_var` still sees presence, while arity-unknown tag
+/// lookups degrade to 0 rather than silently answering one claimant).
+#[partial]
+def add_ctor_alias_tags (claims : List CtorClaim) (scan : BareArityScan) (tags : HashMap String I64) : HashMap String I64 := match claims {
+    List.empty => tags,
+    List.cons cl rest =>
+        match cl {
+            CtorClaim.mk bare arity qualified =>
+                let comp := ctor_composite_key bare arity in
+                let tag := match str_map_lookup comp tags {
+                    Option.some t => t,
+                    Option.none => 0,
+                } in
+                let bare_entry := match str_map_lookup bare scan.multi {
+                    Option.some amb => if amb then (-1) else tag,
+                    Option.none => tag,
+                } in
+                add_ctor_alias_tags rest scan (str_map_insert bare bare_entry (str_map_insert qualified tag tags)),
+        },
+}
+
+/// Builds `ctor_tags` for every constructor of every declared
+/// `Inductive` in the whole program, keyed THREE ways:
+///
+///   - `bare#arity` (the composite key -- `constructor_tag_at`'s ctx
+///     tier): one fresh tag per distinct pair, so constructors sharing
+///     a bare name at differing arities -- the 283-way `mk` collision
+///     that cost the v29 rung-3 ladder rung -- get DIFFERENT tags and
+///     can never be confused at alloc or match dispatch;
+///   - `TypeName.ctorName` (the owner-qualified alias --
+///     `constructor_tag`/`constructor_arity`'s ctx tier): the shape a
+///     value-position reference is actually written in;
+///   - the bare name alone (last-resort tier): real tag when claimed
+///     at one arity, -1 sentinel when ambiguous.
+///
+/// Starts at 16 -- past `constructor_tag`'s existing hardcoded 0-15
+/// builtin range (`unit, true, false, none, some, empty, cons, io,
+/// trivial, refl, ok, err, zero, succ, nil, pair`), which is left
+/// completely untouched -- those tiers are consulted BEFORE this map.
+/// Matching a bare name with its arity at every alloc/dispatch site is
+/// what makes the composite key sufficient without threading the
+/// scrutinee's static type into match compilation (`MatchCase` carries
+/// only the bare Identifier -- the parser accepts and drops the
+/// qualifier -- but it also carries the case's own binder list, which
+/// IS the arity; see `build_match_chain`).
+/// See `implementations/2026-08-29-user-defined-constructor-codegen-gap.md`
+/// for the map's original single-key design.
+#[partial]
+def build_constructor_tag_map (inds : List Inductive) : HashMap String I64 :=
+    let claims := List.reverse (collect_ctor_claims_inds inds List.empty) in
+    let scan := scan_ctor_bare_arities claims { first := str_map_empty, multi := str_map_empty } in
+    let assigned := assign_ctor_pair_tags claims { next_tag := 16, tags := str_map_empty } in
+    add_ctor_alias_tags claims scan assigned.tags
+
+/// Mirrors `build_constructor_tag_map`'s qualified/bare alias keying
+/// (built from the same claim scan) but records each constructor's
+/// FIELD COUNT instead of its tag -- see `constructor_arity`'s own doc
+/// comment for why this is needed. A bare name claimed at several
+/// arities records its FIRST-encountered arity under the bare key --
+/// arbitrary but deterministic; write such references qualified.
+#[partial]
+def build_constructor_arity_map (inds : List Inductive) : HashMap String I64 :=
+    let claims := List.reverse (collect_ctor_claims_inds inds List.empty) in
+    let scan := scan_ctor_bare_arities claims { first := str_map_empty, multi := str_map_empty } in
+    add_ctor_arity_keys claims scan str_map_empty
+
+#[partial]
+def add_ctor_arity_keys (claims : List CtorClaim) (scan : BareArityScan) (acc : HashMap String I64) : HashMap String I64 := match claims {
+    List.empty => acc,
+    List.cons cl rest =>
+        match cl {
+            CtorClaim.mk bare arity qualified =>
+                let bare_entry := match str_map_lookup bare scan.multi {
+                    Option.some amb =>
+                        if amb
+                        then match str_map_lookup bare scan.first {
+                            Option.some first => first,
+                            Option.none => arity,
+                        }
+                        else arity,
+                    Option.none => arity,
+                } in
+                add_ctor_arity_keys rest scan (str_map_insert bare bare_entry (str_map_insert qualified arity acc)),
         },
 }
 
@@ -6168,6 +6253,49 @@ def test_ctor_tag_map_qualified_name_lookup : Bool :=
     let c := empty_ctx empty_arities tag_map str_map_empty str_map_empty in
     is_constructor_var c "Option.Some" && is_constructor_var c "Option.None"
 
+/// A hand-built single-field Param -- the fixture shape for the
+/// composite-keying test below (see `point_ind` in lang/tests/infer_tests.mo
+/// for the source of the pattern).
+#[partial]
+def unit_test_param (nm : String) : Param :=
+    Param.mk (Identifier.id nm) (Term.type_ 1) Multiplicity.many Option.none List.empty
+
+/// Composite tag keying (`build_constructor_tag_map` +
+/// `constructor_tag_at`): two different types both declaring a `mk`
+/// constructor at DIFFERING arities -- the v29 self-compiled binary's
+/// 283-way `mk` collision scaled to a hand-built minimum -- must get
+/// DISTINCT tags, both past the builtin range; the arity-unknown
+/// qualified lookups ("Slim.mk"/"Wide.mk", how a value-position
+/// reference is written) must agree with the arity-carrying composite
+/// lookups; and the bare name, now claimed at two arities, must still
+/// answer `is_constructor_var` (its bare entry is the -1 sentinel).
+/// Isolated from the whole self-hosted pipeline like
+/// `test_ctor_tag_map_qualified_name_lookup` above so this exercises
+/// exactly the map-building + lookup mechanism.
+#[test]
+def test_ctor_tags_distinguish_same_name_differing_arity : Bool :=
+    let slim_mk := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "mk") List.empty))
+        (List.cons (unit_test_param "only") List.empty) (Term.type_ 1) in
+    let slim := Inductive.mk (ModulePath.mp (List.cons (Identifier.id "Slim") List.empty))
+        empty_params_list (Term.type_ 1) (List.cons slim_mk List.empty) empty_attrs Visibility.package_private in
+    let wide_mk := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "mk") List.empty))
+        (List.cons (unit_test_param "a") (List.cons (unit_test_param "b") (List.cons (unit_test_param "c") List.empty))) (Term.type_ 1) in
+    let wide := Inductive.mk (ModulePath.mp (List.cons (Identifier.id "Wide") List.empty))
+        empty_params_list (Term.type_ 1) (List.cons wide_mk List.empty) empty_attrs Visibility.package_private in
+    let tag_map := build_constructor_tag_map (List.cons slim (List.cons wide List.empty)) in
+    let arity_map := build_constructor_arity_map (List.cons slim (List.cons wide List.empty)) in
+    let c := empty_ctx empty_arities tag_map arity_map str_map_empty in
+    let slim_at := constructor_tag_at c "mk" 1 in
+    let wide_at := constructor_tag_at c "mk" 3 in
+    Bool.not (I64.beq slim_at wide_at)
+        && I64.gt slim_at 15
+        && I64.gt wide_at 15
+        && I64.beq (constructor_tag c "Slim.mk") slim_at
+        && I64.beq (constructor_tag c "Wide.mk") wide_at
+        && I64.beq (constructor_arity c "Slim.mk") 1
+        && I64.beq (constructor_arity c "Wide.mk") 3
+        && is_constructor_var c "mk"
+
 /// Regression tests for `native_runtime_fn_name`/`compile_native_def_wrapper_ir`:
 /// a `#[native string_concat]`/`#[native string_eq]`-attributed def
 /// (`String.concat`/`String.beq`'s own shape, init/string.mo) must
@@ -6520,25 +6648,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                         if verbose then println ("FAILED at stage: validate_no_undesugared_struct_lits (" ++ e ++ ")") else return unit;
                         return (Result.err e)
                     },
-                    Result.ok _ =>
-                      // And a fourth fail-fast gate, for the silent
-                      // memory-corruption family a running binary can
-                      // only ever discover as a SIGSEGV: two different
-                      // reachable inductives claiming the same bare
-                      // constructor-tag key at DIFFERING arities. Every
-                      // struct's auto-generated `mk` constructor shares
-                      // one key, so this fires on any struct-heavy
-                      // loaded graph whose struct shapes differ -- the
-                      // v29 self-compiled binary's 283-way `mk`
-                      // collision is exactly this (see
-                      // `validate_no_ctor_tag_collisions`'s own doc
-                      // comment for the crash it caused).
-                      match validate_no_ctor_tag_collisions reachable_decls {
-                        Result.err e => do {
-                            if verbose then println ("FAILED at stage: validate_no_ctor_tag_collisions (" ++ e ++ ")") else return unit;
-                            return (Result.err e)
-                        },
-                        Result.ok _ => do {
+                    Result.ok _ => do {
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                     let t_llvm := Bench.now;
                     let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
@@ -6550,7 +6660,6 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
 
                     return (Result.ok mod_)
                         },
-                      },
                   },
             },
     }
