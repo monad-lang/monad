@@ -4916,23 +4916,28 @@ def validate_no_unwired_natives (decl_list : List Decl) : Result String (List De
     let msgs := find_unwired_native_defs (extract_defs decl_list) in
     match msgs {
         List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_unwired_native_msgs msgs ""),
+        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
     }
 
-/// `"; "`-join `find_unwired_native_defs`'s messages -- unlike
+/// `"; "`-join a fail-fast validator's error messages. Unlike
 /// `validate_no_unresolved_class_calls` (first message only), a broken
-/// compile here usually has a whole FAMILY of missing natives at once
-/// (the self-hosted compiler's own closure references ~20), and naming
-/// them one per compile would cost one full ~8-minute self-compile run
-/// each. The complete list is the point.
+/// compile from the fail-fast validator family usually has a whole
+/// FAMILY of defects at once (the self-hosted compiler's own closure
+/// references ~20 unwired natives; its loaded graph claims one bare
+/// constructor name at seven different arities), and naming them one
+/// per compile would cost one full ~8-minute self-compile run each.
+/// The complete list is the point. Shared by all three fail-fast
+/// gates: `validate_no_unwired_natives`,
+/// `validate_no_undesugared_struct_lits`, and
+/// `validate_no_ctor_tag_collisions`.
 #[partial]
-def join_unwired_native_msgs (msgs : List String) (acc : String) : String :=
+def join_semicolon_msgs (msgs : List String) (acc : String) : String :=
     match msgs {
         List.empty => acc,
         List.cons m rest =>
             if String.beq acc ""
-            then join_unwired_native_msgs rest m
-            else join_unwired_native_msgs rest (String.concat acc (String.concat "; " m)),
+            then join_semicolon_msgs rest m
+            else join_semicolon_msgs rest (String.concat acc (String.concat "; " m)),
     }
 
 /// One error message per reachable bodyless `#[native X]` def whose X is
@@ -4969,6 +4974,122 @@ def find_unwired_native_defs (defs : List Def) : List String :=
                     },
             },
     }
+
+/// Fail fast on two different reachable inductives claiming the same
+/// bare-name constructor-tag key at DIFFERENT arities -- the silent
+/// memory-corruption class that cost the v29 rung-3 ladder rung
+/// (2026-09-03/04).
+///
+/// `assign_constructor_tags`/`build_constructor_arity_map` key a
+/// constructor's runtime tag AND its recorded field count by the
+/// constructor's BARE name only (see their own doc comments for why --
+/// match dispatch, `build_match_chain`'s `MatchCase.mc`, can only ever
+/// supply the bare name). Every `struct` declares that same-named `mk`
+/// constructor (`lang/typecheck/meta_reflect.mo`'s `struct_to_
+/// inductive` builds it unqualified), so in a struct-heavy loaded graph
+/// hundreds of distinct types share one key: the v29 self-compiled
+/// binary's own IR had 283 distinct `mk` constructors sharing one tag,
+/// allocated at seven different arities (2, 3, 4, 5, 6, 7 and 10
+/// fields).
+///
+/// A shared key alone is survivable -- allocation sites and match arms
+/// both read the same map entry, and a match arm binds its fields from
+/// its own pattern's arg list (`bind_match_fields`), so a program where
+/// every claimant of a key has the SAME layout stays self-consistent
+/// (the nested Inner/Outer two-struct regression shape, both 2 fields,
+/// keeps passing on purpose). The shared ARITY is what is not
+/// consistent: `constructor_arity` (a bare constructor referenced in
+/// VALUE position, e.g. `List.map Inner.mk xs`) answers the key's
+/// last-written arity whatever the constructor actually declares, so a
+/// key claimed at 10 fields makes a 2-field `mk` reference allocate a
+/// 10-slot object and a 10-field reference allocate 2 slots -- and any
+/// `monad_get_field` past that reads a neighbouring object. That is
+/// precisely the v29 crash: a raw unboxed `1` stored where a `List`
+/// spine pointer belonged, `monad_get_tag` on it, SIGSEGV in
+/// `List_filter_map` -> `collect_def_names` on the FIRST module's decl
+/// list -- silent, structural, `llc`-verified clean; only running the
+/// binary found it, the same shape as the two fail-fast gates above.
+///
+/// The typechecker already guards this exact hazard name-resolution-side
+/// (`scope_data_find_all_inductives_by_constructor`, lang/scope.mo,
+/// returns EVERY matching inductive so >1 match fails loudly); this is
+/// codegen's side of the same discipline. NOT covered: a user ctor
+/// whose bare name shadows a builtin tag (`constructor_tag`'s hardcoded
+/// 16 are checked before this map and stay consistent-by-lookup), and
+/// same-arity collisions, which are consistent by construction (see
+/// above) -- qualifying tags by owning type rather than bare name
+/// (the real fix) is tracked separately.
+#[partial]
+def validate_no_ctor_tag_collisions (decl_list : List Decl) : Result String (List Decl) :=
+    let msgs := find_ctor_tag_collisions (extract_inductives decl_list) str_map_empty str_map_empty List.empty in
+    match msgs {
+        List.empty => Result.ok decl_list,
+        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
+    }
+
+/// One message per bare-name constructor-tag key claimed at two
+/// different arities -- see `validate_no_ctor_tag_collisions`'s own doc
+/// comment for the fail-fast contract. `seen_owners`/`seen_arities`
+/// mirror `assign_constructor_tags`'s own key choice exactly (the
+/// constructor name rendered by `module_path_to_str` -- bare in
+/// practice, per `compile_db_inductive_constructors`'s own note), so
+/// what collides here is exactly what collides in the real tag map.
+/// The same inductive seen twice (a module loaded twice) is skipped by
+/// owner-name equality, matching the old silent last-writer-wins map
+/// behavior for that benign case.
+#[partial]
+def find_ctor_tag_collisions (inds : List Inductive) (seen_owners : HashMap String String) (seen_arities : HashMap String I64) (msgs : List String) : List String := match inds {
+    List.empty => msgs,
+    List.cons ind rest =>
+        match ind {
+            Inductive.mk name _params _typ constructors _attrs _vis =>
+                find_ctor_tag_collisions_ctors (module_path_to_str name) constructors rest seen_owners seen_arities msgs,
+        },
+}
+
+#[partial]
+def find_ctor_tag_collisions_ctors (owner : String) (ctors : List InductConstructor) (inds : List Inductive) (seen_owners : HashMap String String) (seen_arities : HashMap String I64) (msgs : List String) : List String := match ctors {
+    List.empty => find_ctor_tag_collisions inds seen_owners seen_arities msgs,
+    List.cons c rest =>
+        match c {
+            InductConstructor.mk cname params _typ =>
+                let key := module_path_to_str cname in
+                let arity := List.length params in
+                match str_map_lookup key seen_owners {
+                    Option.some prev_owner =>
+                        if String.beq prev_owner owner
+                        then find_ctor_tag_collisions_ctors owner rest inds seen_owners seen_arities msgs
+                        else
+                            let prev_arity := match str_map_lookup key seen_arities {
+                                Option.some a => a,
+                                Option.none => 0,
+                            } in
+                            let msgs2 := if arity == prev_arity
+                                then msgs
+                                else List.cons (ctor_tag_collision_msg key prev_owner prev_arity owner arity) msgs
+                            in
+                            find_ctor_tag_collisions_ctors owner rest inds
+                                (str_map_insert key owner seen_owners)
+                                (str_map_insert key arity seen_arities)
+                                msgs2,
+                    Option.none =>
+                        find_ctor_tag_collisions_ctors owner rest inds
+                            (str_map_insert key owner seen_owners)
+                            (str_map_insert key arity seen_arities)
+                            msgs,
+                },
+        },
+}
+
+/// The collision diagnostic: the bare key both constructors claim, both
+/// owning types' qualified names, and both arities -- the facts a fix
+/// needs (which constructor to rename, and confirmation the layouts
+/// really do differ).
+#[partial]
+def ctor_tag_collision_msg (key : String) (prev_owner : String) (prev_arity : I64) (owner : String) (arity : I64) : String :=
+    let head := "constructor-tag key `" ++ key ++ "`" in
+    let who := (" is claimed at differing arities by `" ++ prev_owner ++ "` (" ++ I64.to_string prev_arity ++ " fields) and `" ++ owner ++ "` (" ++ I64.to_string arity ++ " fields)") in
+    String.concat head (String.concat who " -- codegen keys runtime constructor tags and field counts by bare constructor name (assign_constructor_tags/build_constructor_arity_map), so both constructors share one tag while their values have different layouts, and any match or monad_get_field on either can read the other's memory; rename one constructor to make the bare name unique")
 
 /// Fail fast on a struct literal that reached codegen still spelled as
 /// `Literal.struct_lit`/`Literal.struct_update` instead of a real
@@ -5009,7 +5130,7 @@ def validate_no_undesugared_struct_lits (decl_list : List Decl) : Result String 
     let msgs := find_undesugared_struct_lit_defs (extract_defs decl_list) in
     match msgs {
         List.empty => Result.ok decl_list,
-        List.cons _ _ => Result.err (join_unwired_native_msgs msgs ""),
+        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
     }
 
 /// One message per reachable def whose body still contains an
@@ -5522,8 +5643,12 @@ struct TagAssignResult {
 /// the scrutinee's own static type down into match compilation (a much
 /// bigger, separate change). Two different reachable user-defined types
 /// sharing a bare constructor name would collide here, same as they
-/// always could against the hardcoded 16 -- a known, accepted limitation,
-/// not a regression.
+/// always could against the hardcoded 16 -- no longer silently accepted:
+/// `validate_no_ctor_tag_collisions` fails the compile when the
+/// claimants' arities differ (the memory-unsafe class that cost the
+/// v29 rung-3 ladder rung; see its own doc comment). Same-arity
+/// collisions stay tolerated -- consistent by construction -- until the
+/// real qualify-by-owning-type fix lands.
 #[partial]
 def assign_constructor_tags (constructors : List InductConstructor) (next_tag : I64) (acc : HashMap String I64) : TagAssignResult := match constructors {
     List.empty => { next_tag := next_tag, acc := acc },
@@ -6395,7 +6520,25 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                         if verbose then println ("FAILED at stage: validate_no_undesugared_struct_lits (" ++ e ++ ")") else return unit;
                         return (Result.err e)
                     },
-                    Result.ok _ => do {
+                    Result.ok _ =>
+                      // And a fourth fail-fast gate, for the silent
+                      // memory-corruption family a running binary can
+                      // only ever discover as a SIGSEGV: two different
+                      // reachable inductives claiming the same bare
+                      // constructor-tag key at DIFFERING arities. Every
+                      // struct's auto-generated `mk` constructor shares
+                      // one key, so this fires on any struct-heavy
+                      // loaded graph whose struct shapes differ -- the
+                      // v29 self-compiled binary's 283-way `mk`
+                      // collision is exactly this (see
+                      // `validate_no_ctor_tag_collisions`'s own doc
+                      // comment for the crash it caused).
+                      match validate_no_ctor_tag_collisions reachable_decls {
+                        Result.err e => do {
+                            if verbose then println ("FAILED at stage: validate_no_ctor_tag_collisions (" ++ e ++ ")") else return unit;
+                            return (Result.err e)
+                        },
+                        Result.ok _ => do {
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                     let t_llvm := Bench.now;
                     let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
@@ -6406,7 +6549,8 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                     } else return unit;
 
                     return (Result.ok mod_)
-                    },
+                        },
+                      },
                   },
             },
     }
