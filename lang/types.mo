@@ -203,7 +203,7 @@ struct LocatedSpan {
     location : Location,
 }
 
-// Canonical Param uses de Bruijn Term. ParamV0 is the legacy V0 variant.
+// Canonical Param uses de Bruijn Term; `ParseParam` is the parser's.
 type Param {
     mk (name: Identifier) (type_: Term) (mult: Multiplicity) (default: Option Term) (attrs: List Attribute)
 }
@@ -229,7 +229,7 @@ pub def param_with_attrs (name: Identifier) (type_: Term) (attrs: List Attribute
     let none : Option Term := Option.none in
     Param.mk name type_ Multiplicity.many none attrs
 
-// Canonical MatchCase uses de Bruijn Term. MatchCaseV0 is the legacy V0 variant.
+// Canonical MatchCase uses de Bruijn Term; `ParseMatchCase` is the parser's.
 //
 // `field_pattern` mirrors the Rust reference's `MatchCase.field_pattern`
 // (core/src/term.rs, `plans/implementations/struct-field-destructuring.md`):
@@ -299,7 +299,7 @@ type NumSuffix {
     i8, i16, i32, i64, u8, u16, u32, u64, f32, f64,
 }
 
-// Canonical Literal uses de Bruijn Term. LiteralV0 is the legacy V0 variant.
+// Canonical Literal uses de Bruijn Term; `ParseLiteral` is the parser's.
 type Literal {
     str (value: String),
     num (value: I64) (suffix: NumSuffix),
@@ -381,39 +381,107 @@ type Visibility {
     package_private,
 }
 
-type ParamV0 {
-    mk (name: Identifier) (type_: TermV0) (mult: Multiplicity) (default: Option TermV0)
+// --- ParseTerm: the parser's own output, before de Bruijn resolution --
+//
+// The stage this compiler did not have. `Literal.struct_update`'s own doc
+// comment (above) names the gap exactly: "this checker has no separate
+// parse-then-lower stage the way the reference's `Literal`
+// (pre-lowering) vs `CoreLit` (post-lowering) split does, so the parser
+// resolves `base` directly".
+//
+// Two things distinguish a `ParseTerm` from the canonical `Term` below:
+//
+//   - **Named, not de Bruijn.** A variable is a `NameRef`, exactly as
+//     written. The parser no longer computes de Bruijn indices inline
+//     (`var_term`/`find_index`, `lang/parser.mo`) and no longer threads a
+//     `ctx : List Identifier` through its grammar; binder structure is
+//     recovered during lowering, where `lam`/`forall`/`pi`/`match_` arms
+//     say what they bind.
+//   - **Located.** Every node carries the source range it was parsed
+//     from, which is the only place that information is cheaply
+//     available.
+//
+// The location lives on the wrapper struct rather than being repeated on
+// each variant, so a walk matches `.kind` once and a constructor sets
+// `loc` once. `Term` itself is deliberately NOT given locations: it is
+// walked by `elaborate.mo`, `typecheck/subst.mo`, `traverse.mo`'s
+// `term_map_children`, `infer.mo` and `emit.mo`, and it sits on the
+// measured hot path (AGENTS.md item 27). Lowering emits positions into a
+// side table instead.
+//
+// Replaces the `TermV0`/`ParamV0`/`MatchCaseV0`/`LiteralV0` family, which
+// was a vestige: incomplete (no `quote_`, `var_macro`, `struct_lit`,
+// `struct_update`), carrying a `ctx (loc) (term)` variant that was an
+// abandoned attempt at exactly this feature, and reached only by
+// `path_variable` building a `TermV0.var` that `variable_try_path_got`
+// destructured straight back into a `Term`.
+
+struct ParseTerm {
+    loc : SourceRange,
+    kind : ParseTermKind,
 }
 
-
-type MatchCaseV0 {
-    mc_v0 (name: Identifier) (args: List Identifier) (value: TermV0)
-}
-
-type LiteralV0 {
-    str (value: String),
-    num (value: I64) (suffix: NumSuffix),
-    if_ (one: TermV0) (two: TermV0) (three: TermV0),
-    match_ (value: TermV0) (cases: List MatchCaseV0),
-}
-
-/// ParseTerm
-type TermV0 {
-    forall (name: Identifier) (typ: TermV0) (body: TermV0),
-    pi (arg: TermV0) (ret: TermV0),
+type ParseTermKind {
     var (name: NameRef),
-    lam (param: ParamV0) (body: TermV0),
-    app (fun: TermV0) (arg: TermV0),
-    lit (value: LiteralV0),
-    ntv (native: Native),
-    con (c: Con),
+    /// Term-position `name!`. Kept a separate variant rather than a
+    /// tagged `var` for the same reason `Term.var_macro` is (see its own
+    /// doc comment): macro names resolve in a separate namespace.
+    var_macro (name: NameRef),
+    lam (param: ParseParam) (body: ParseTerm),
+    forall (name: Identifier) (typ: ParseTerm) (body: ParseTerm),
+    pi (arg: ParseTerm) (ret: ParseTerm),
+    app (fun: ParseTerm) (arg: ParseTerm),
+    lit (value: ParseLiteral),
+    ntv (native: ParseNative),
+    con (c: ParseCon),
     type_ (universe: I64),
-    ctx (loc : SourceRange) (term : Term),
+    quote_ (term: ParseTerm),
     hole,
 }
 
-// De Bruijn TermV0 IR — staged alongside existing named TermV0.
-// Phase 0: coexistence. Phase 4: replaces TermV0 entirely.
+struct ParseParam {
+    name : Identifier,
+    type_ : ParseTerm,
+    mult : Multiplicity,
+    default : Option ParseTerm,
+    attrs : List Attribute,
+}
+
+struct ParseMatchCase {
+    name : Identifier,
+    args : List Identifier,
+    body : ParseTerm,
+    field_pattern : Option FieldPattern,
+}
+
+type ParseLiteral {
+    str (value: String),
+    num (value: I64) (suffix: NumSuffix),
+    flt (text: String) (suffix: NumSuffix),
+    if_ (one: ParseTerm) (two: ParseTerm) (three: ParseTerm),
+    match_ (value: ParseTerm) (cases: List ParseMatchCase),
+    struct_lit (fields: List ParseStructLitField) (type_name: Option ParseTerm),
+    /// `base` is a `ParseTerm` here for the same reason it is a `Term`
+    /// in `Literal` -- it is an expression, not a name -- but at THIS
+    /// stage it is still the unresolved one the source wrote.
+    struct_update (base: ParseTerm) (fields: List ParseStructLitField),
+}
+
+struct ParseStructLitField {
+    name : Identifier,
+    value : ParseTerm,
+}
+
+type ParseCon {
+    mk (name: Identifier) (typ_name: ModulePath) (num_args: I64) (args: List (Option ParseTerm))
+}
+
+type ParseNative {
+    mk (native_name: Identifier) (num_args: I64) (args: List (Option ParseTerm))
+}
+
+// The canonical de Bruijn term IR — what everything after the parser
+// works on. `ParseTerm` above is lowered into this.
 //
 // De Bruijn convention: index 0 = most recently bound variable.
 // Free variables use sentinel index (I64.max) and are resolved

@@ -3,7 +3,7 @@
 use lang.types {
   ClassDef, DebugName, Decl, Def, DoStmt, Identifier, InductConstructor,
   LocatedSpan, Location, MatchCase, ModulePath, NameRef, OpenFilter, Operator,
-  Param, StructField, Term, TermV0, TypeConstraint, UseFilter, UseItem, app,
+  Param, StructField, Term, TypeConstraint, UseFilter, UseItem, app,
   bind_s, class_d, con, ctx, custom, def_d, desugar_do, expr_s, forall, hole,
   id, if_, inductive_d, infix_d, instance_d, lam, let_s, list_reverse, lit,
   match_, mc, mk, mp, name, named, nid, nmp, nop, ntv, open_all, open_d,
@@ -97,11 +97,11 @@ def module_path_to_string (mp : ModulePath) : String := match mp {
 }
 
 #[partial]
-def path_variable (input : String) : ParseResult TermV0 :=
+def path_variable (input : String) : ParseResult NameRef :=
         match dotted_identifier input {
                 success rem ids =>
                         if at_least_two ids
-                        then success rem (TermV0.var (NameRef.nmp (ModulePath.mp (List.map Identifier.id ids))))
+                        then success rem (NameRef.nmp (ModulePath.mp (List.map Identifier.id ids)))
                         else fail (ParseError.custom "not a dotted path" rem),
                 fail e => fail e
         }
@@ -4402,17 +4402,10 @@ def variable (ctx: List Identifier) (input: String) : ParseResult Term :=
     variable_try_path (path_variable input) ctx input
 
 #[partial]
-def variable_try_path (r: ParseResult TermV0) (ctx: List Identifier) (input: String) : ParseResult Term :=
+def variable_try_path (r: ParseResult NameRef) (ctx: List Identifier) (input: String) : ParseResult Term :=
     match r {
-        success rem out => variable_try_path_got out ctx rem,
+        success rem nref => variable_try_path_nref nref ctx rem,
         fail _ => variable_got (identifier input) ctx
-    }
-
-#[partial]
-def variable_try_path_got (out : TermV0) (ctx : List Identifier) (rem : String) : ParseResult Term :=
-    match out {
-        TermV0.var nref => variable_try_path_nref nref ctx rem,
-        _ => success rem (Term.var sentinel DebugName.unnamed),
     }
 
 /// A dotted path (`NameRef.nmp`) is ambiguous at parse time between a
