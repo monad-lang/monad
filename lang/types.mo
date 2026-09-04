@@ -540,6 +540,122 @@ def pt_quote_ (t : ParseTerm) : ParseTerm := pt_ (ParseTermKind.quote_ t)
 
 def pt_hole : ParseTerm := pt_ ParseTermKind.hole
 
+
+// --- The declaration half of the parse stage -------------------------
+//
+// Each mirrors its canonical twin with every `Term` replaced by
+// `ParseTerm`, and mirrors its SHAPE too (a `type` with `mk` where the
+// canonical one is a `type`, a `struct` where it is a struct) so that
+// converting a grammar construction site is a rename rather than a
+// rewrite.
+//
+// These exist because lowering cannot sit at the decl boundary. An
+// earlier attempt assumed it could -- that `Decl`/`Def` keep holding
+// `Term` and the change stays inside the expression parsers -- and it
+// does not: `DoStmt`, `Param`, `StructField`, `InductConstructor`,
+// `ClassDef`, `Def` and `Inductive` all embed `Term` and sit BETWEEN
+// expressions and declarations. `ParseDoStmt` is the clearest case: it
+// holds a term per statement and its binder context accumulates across
+// statements, so there is no point at which one can be lowered without
+// already having the `ctx` threading this whole change exists to remove.
+//
+// Not mirrored, checked rather than assumed: `TypeConstraint` (only a
+// `ModulePath` and `Identifier`s), `Attribute`/`AttrArg` (no `Term`
+// anywhere), `Operator`, `UseFilter`, `OpenFilter`, `Visibility`.
+
+type ParseParam {
+    mk (name: Identifier) (type_: ParseTerm) (mult: Multiplicity) (default: Option ParseTerm) (attrs: List Attribute)
+}
+
+/// Parse-stage `DoStmt`. Lowered to the canonical `DoStmt` and then
+/// handed to the existing `desugar_do` below -- `DoStmt` is
+/// parser-internal (only `desugar_do` and one test consume it), so
+/// nothing downstream sees this type.
+type ParseDoStmt {
+    bind_s (name: Identifier) (typ: ParseTerm) (expr: ParseTerm),
+    let_s (name: Identifier) (typ: ParseTerm) (expr: ParseTerm),
+    ret_s (expr: ParseTerm),
+    expr_s (expr: ParseTerm),
+}
+
+type ParseStructField {
+    mk (name: Identifier) (typ: ParseTerm) (default: Option ParseTerm) (mult: Multiplicity)
+}
+
+type ParseInductConstructor {
+    mk (name: ModulePath) (params: List ParseParam) (typ: ParseTerm)
+}
+
+type ParseClassDef {
+    mk (name: Identifier) (typ: ParseTerm) (default: Option ParseTerm)
+}
+
+struct ParseDef {
+    name: ModulePath,
+    typ: ParseTerm,
+    term: ParseTerm,
+    constraints: List TypeConstraint,
+    attrs: List Attribute,
+    vis: Visibility
+}
+
+type ParseInductive {
+    mk (name: ModulePath) (params: List ParseParam) (typ: ParseTerm) (constructors: List ParseInductConstructor) (attrs: List Attribute) (vis: Visibility)
+}
+
+type ParseClass {
+    mk (name: Identifier) (params: List ParseParam) (constraints: List TypeConstraint) (methods: List ParseClassDef) (vis: Visibility)
+}
+
+type ParseInstance {
+    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List ParseTerm) (vis: Visibility) (implicit_params: List ParseParam) (defs: List ParseDef)
+}
+
+type ParseStruct {
+    mk (name: Identifier) (fields: List ParseStructField) (vis: Visibility)
+}
+
+/// A declaration plus the span it was parsed from.
+///
+/// The span is what collapses the two parallel top-level parsers into
+/// one. `decls_parser_with_locs` currently re-derives each declaration's
+/// position by measuring the remaining input against the whole file;
+/// with a span recorded here that becomes a projection over what the
+/// parser already knows -- at the top level the total length IS
+/// available, so `offset = total_length - span.start_rem`, then
+/// `lang/parser/position.mo`'s scan for line/column. Same arithmetic,
+/// one parser instead of two.
+struct ParseDecl {
+    span : ParseSpan,
+    kind : ParseDeclKind,
+}
+
+type ParseDeclKind {
+    def_d (ParseDef),
+    inductive_d (ParseInductive),
+    struct_d (ParseStruct),
+    class_d (ParseClass),
+    instance_d (ParseInstance),
+    infix_d (op: Operator) (path: ModulePath) (vis: Visibility),
+    use_d (path: ModulePath) (filter: UseFilter) (public: Bool),
+    open_d (path: ModulePath) (filter: OpenFilter),
+    scoped_open_d (path: ModulePath) (filter: OpenFilter) (decl: ParseDecl),
+    def_macro_d (ParseDef),
+    decl_gen_d (name: ModulePath) (params: List ParseParam) (decl_list: List ParseDecl) (attrs: List Attribute),
+    macro_call_d (name: Identifier) (args: List ParseTerm),
+}
+
+/// Build a `ParseDecl` whose position has not been recorded yet.
+#[partial]
+def pd_ (k : ParseDeclKind) : ParseDecl :=
+    { span := parse_span_unknown, kind := k }
+
+/// Build a located `ParseDecl` from the input it started at and the
+/// remainder it left.
+#[partial]
+def pd_at (input : String) (rem : String) (k : ParseDeclKind) : ParseDecl :=
+    { span := { start_rem := String.length input, end_rem := String.length rem }, kind := k }
+
 type ParseTermKind {
     var (name: NameRef),
     /// Term-position `name!`. Kept a separate variant rather than a

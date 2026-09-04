@@ -34,10 +34,13 @@
 /// `lang/parser.mo`, not redefined -- duplicate top-level names across
 /// `lang/*.mo` silently collide (AGENTS.md item 18).
 use lang.types {
-  Con, DebugName, Identifier, Literal, MatchCase, ModulePath, NameRef, Native,
-  ParseCon, ParseLiteral, ParseMatchCase, ParseNative,
-  ParseStructLitField, ParseTerm, ParseTermKind, StructLitField, Term,
-  sentinel,
+  Class, ClassDef, Con, DebugName, Decl, Def, DoStmt, Identifier,
+  InductConstructor, Inductive, Instance, Literal, MatchCase, ModulePath,
+  NameRef, Native, Param, ParseClass, ParseClassDef, ParseCon, ParseDecl,
+  ParseDeclKind, ParseDef, ParseDoStmt, ParseInductConstructor, ParseInductive,
+  ParseInstance, ParseLiteral, ParseMatchCase, ParseNative, ParseParam,
+  ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind,
+  Struct, StructField, StructLitField, Term, desugar_do, sentinel,
 }
 // Imported, NOT redefined. An earlier revision of this file copied these
 // six in and claimed in its own comment to have moved them -- which armed
@@ -191,11 +194,11 @@ def lower_parse_literal (ctx : List Identifier) (l : ParseLiteral) : Literal :=
             Literal.match_ (lower_parse_term ctx scrut)
                            (lower_parse_match_cases ctx cases),
         ParseLiteral.struct_lit fields type_name =>
-            Literal.struct_lit (lower_parse_struct_fields ctx fields)
+            Literal.struct_lit (lower_parse_struct_lit_fields ctx fields)
                                (lower_parse_opt ctx type_name),
         ParseLiteral.struct_update base fields =>
             Literal.struct_update (lower_parse_term ctx base)
-                                  (lower_parse_struct_fields ctx fields),
+                                  (lower_parse_struct_lit_fields ctx fields),
     }
 
 
@@ -232,13 +235,18 @@ def lower_parse_opts (ctx : List Identifier) (ts : List (Option ParseTerm)) : Li
     }
 
 
+/// Struct-LITERAL fields (`{ x := 1 }`). Distinct from
+/// `lower_parse_struct_decl_fields` below, which handles a struct's
+/// DECLARED fields (`x : T := default`) -- the two were briefly given the
+/// same name, which the checker caught as a type mismatch rather than
+/// letting it become an item-18 collision.
 #[partial]
-def lower_parse_struct_fields (ctx : List Identifier) (fs : List ParseStructLitField) : List StructLitField :=
+def lower_parse_struct_lit_fields (ctx : List Identifier) (fs : List ParseStructLitField) : List StructLitField :=
     match fs {
         List.empty => List.empty,
         List.cons f rest =>
             List.cons (StructLitField.mk f.name (lower_parse_term ctx f.value))
-                      (lower_parse_struct_fields ctx rest),
+                      (lower_parse_struct_lit_fields ctx rest),
     }
 
 
@@ -255,4 +263,242 @@ def lower_parse_native (ctx : List Identifier) (n : ParseNative) : Native :=
     match n {
         ParseNative.mk name num_args args =>
             Native.mk name num_args (lower_parse_opts ctx args),
+    }
+
+
+// --- The declaration half -------------------------------------------
+//
+// Every decl-level position simply carries the incoming `ctx`: the
+// grammar's binders all live INSIDE the terms, as lambda chains built by
+// `lam_params_loop`. Checked rather than assumed -- `type_params_loop`
+// (`lang/parser.mo`) threads no `ctx` at all, so an inductive's own
+// parameters do NOT bind over its constructor types. (`elaborate.mo`'s
+// `elaborate_constructor` does extend a name set with them, but that is
+// the Forall-wrapping stage working on names, not de Bruijn indices --
+// a different concern.)
+//
+// `ParseDoStmt` is the one exception, and the only part of this file
+// with real semantic content.
+
+#[partial]
+def lower_parse_param (ctx : List Identifier) (p : ParseParam) : Param :=
+    match p {
+        ParseParam.mk name type_ mult default attrs =>
+            Param.mk name (lower_parse_term ctx type_) mult (lower_parse_opt ctx default) attrs,
+    }
+
+
+#[partial]
+def lower_parse_params (ctx : List Identifier) (ps : List ParseParam) : List Param :=
+    match ps {
+        List.empty => List.empty,
+        List.cons p rest => List.cons (lower_parse_param ctx p) (lower_parse_params ctx rest),
+    }
+
+
+// --- do-notation ------------------------------------------------------
+//
+// Lower each statement under the context the ones before it established,
+// then hand the result to the EXISTING `desugar_do` (`lang/types.mo`) --
+// unchanged, and still the only place do-notation is desugared.
+//
+// The accumulation rule is copied exactly from the grammar's own
+// `do_stmts_extend_ctx`, including the part that is easy to miss and
+// expensive to get wrong: `expr_s` extends the context with an
+// EMPTY-IDENTIFIER PLACEHOLDER. A bare-expression statement desugars to
+// `bind expr (lam unnamed hole rest)`, so the continuation sits under one
+// real binder and every later statement is de Bruijn-shifted by one.
+// Without the placeholder, a do-block that references an OUTER variable
+// after a bare-expression statement resolves it to the wrong binder --
+// a documented off-by-one, and one that no type error would catch.
+// The empty identifier is never produced by `identifier`, so
+// `find_index`'s comparison can never match it.
+
+#[partial]
+def do_stmt_extend_ctx (stmt : ParseDoStmt) (ctx : List Identifier) : List Identifier :=
+    match stmt {
+        ParseDoStmt.bind_s name _ _ => List.cons name ctx,
+        ParseDoStmt.let_s name _ _ => List.cons name ctx,
+        ParseDoStmt.ret_s _ => ctx,
+        ParseDoStmt.expr_s _ => List.cons (Identifier.id "") ctx,
+    }
+
+
+#[partial]
+def lower_parse_do_stmt (ctx : List Identifier) (stmt : ParseDoStmt) : DoStmt :=
+    match stmt {
+        ParseDoStmt.bind_s name typ expr =>
+            DoStmt.bind_s name (lower_parse_term ctx typ) (lower_parse_term ctx expr),
+        ParseDoStmt.let_s name typ expr =>
+            DoStmt.let_s name (lower_parse_term ctx typ) (lower_parse_term ctx expr),
+        ParseDoStmt.ret_s expr => DoStmt.ret_s (lower_parse_term ctx expr),
+        ParseDoStmt.expr_s expr => DoStmt.expr_s (lower_parse_term ctx expr),
+    }
+
+
+#[partial]
+def lower_parse_do_stmts (ctx : List Identifier) (stmts : List ParseDoStmt) : List DoStmt :=
+    match stmts {
+        List.empty => List.empty,
+        List.cons s rest =>
+            List.cons (lower_parse_do_stmt ctx s)
+                      (lower_parse_do_stmts (do_stmt_extend_ctx s ctx) rest),
+    }
+
+
+/// A whole `do { }` block: lower the statements under accumulating
+/// context, then desugar exactly as the grammar does today.
+#[partial]
+def lower_parse_do (ctx : List Identifier) (stmts : List ParseDoStmt) : Term :=
+    desugar_do (lower_parse_do_stmts ctx stmts)
+
+
+// --- declarations -----------------------------------------------------
+
+#[partial]
+def lower_parse_struct_field (ctx : List Identifier) (f : ParseStructField) : StructField :=
+    match f {
+        ParseStructField.mk name typ default mult =>
+            StructField.mk name (lower_parse_term ctx typ) (lower_parse_opt ctx default) mult,
+    }
+
+
+#[partial]
+def lower_parse_struct_decl_fields (ctx : List Identifier) (fs : List ParseStructField) : List StructField :=
+    match fs {
+        List.empty => List.empty,
+        List.cons f rest =>
+            List.cons (lower_parse_struct_field ctx f) (lower_parse_struct_decl_fields ctx rest),
+    }
+
+
+#[partial]
+def lower_parse_induct_ctor (ctx : List Identifier) (c : ParseInductConstructor) : InductConstructor :=
+    match c {
+        ParseInductConstructor.mk name params typ =>
+            InductConstructor.mk name (lower_parse_params ctx params) (lower_parse_term ctx typ),
+    }
+
+
+#[partial]
+def lower_parse_induct_ctors (ctx : List Identifier) (cs : List ParseInductConstructor) : List InductConstructor :=
+    match cs {
+        List.empty => List.empty,
+        List.cons c rest =>
+            List.cons (lower_parse_induct_ctor ctx c) (lower_parse_induct_ctors ctx rest),
+    }
+
+
+#[partial]
+def lower_parse_class_def (ctx : List Identifier) (m : ParseClassDef) : ClassDef :=
+    match m {
+        ParseClassDef.mk name typ default =>
+            ClassDef.mk name (lower_parse_term ctx typ) (lower_parse_opt ctx default),
+    }
+
+
+#[partial]
+def lower_parse_class_defs (ctx : List Identifier) (ms : List ParseClassDef) : List ClassDef :=
+    match ms {
+        List.empty => List.empty,
+        List.cons m rest =>
+            List.cons (lower_parse_class_def ctx m) (lower_parse_class_defs ctx rest),
+    }
+
+
+#[partial]
+def lower_parse_def (ctx : List Identifier) (d : ParseDef) : Def :=
+    { name := d.name,
+      typ := lower_parse_term ctx d.typ,
+      term := lower_parse_term ctx d.term,
+      constraints := d.constraints,
+      attrs := d.attrs,
+      vis := d.vis }
+
+
+#[partial]
+def lower_parse_defs (ctx : List Identifier) (ds : List ParseDef) : List Def :=
+    match ds {
+        List.empty => List.empty,
+        List.cons d rest => List.cons (lower_parse_def ctx d) (lower_parse_defs ctx rest),
+    }
+
+
+#[partial]
+def lower_parse_inductive (ctx : List Identifier) (i : ParseInductive) : Inductive :=
+    match i {
+        ParseInductive.mk name params typ ctors attrs vis =>
+            Inductive.mk name (lower_parse_params ctx params) (lower_parse_term ctx typ)
+                         (lower_parse_induct_ctors ctx ctors) attrs vis,
+    }
+
+
+#[partial]
+def lower_parse_class (ctx : List Identifier) (c : ParseClass) : Class :=
+    match c {
+        ParseClass.mk name params constraints methods vis =>
+            Class.mk name (lower_parse_params ctx params) constraints
+                     (lower_parse_class_defs ctx methods) vis,
+    }
+
+
+#[partial]
+def lower_parse_instance (ctx : List Identifier) (i : ParseInstance) : Instance :=
+    match i {
+        ParseInstance.mk name cls constraints args vis implicit_params defs =>
+            Instance.mk name cls constraints (lower_parse_terms ctx args) vis
+                        (lower_parse_params ctx implicit_params) (lower_parse_defs ctx defs),
+    }
+
+
+#[partial]
+def lower_parse_terms (ctx : List Identifier) (ts : List ParseTerm) : List Term :=
+    match ts {
+        List.empty => List.empty,
+        List.cons t rest => List.cons (lower_parse_term ctx t) (lower_parse_terms ctx rest),
+    }
+
+
+#[partial]
+def lower_parse_struct (ctx : List Identifier) (s : ParseStruct) : Struct :=
+    match s {
+        ParseStruct.mk name fields vis =>
+            Struct.mk name (lower_parse_struct_decl_fields ctx fields) vis,
+    }
+
+
+#[partial]
+def lower_parse_decl (ctx : List Identifier) (d : ParseDecl) : Decl :=
+    lower_parse_decl_kind ctx d.kind
+
+
+#[partial]
+def lower_parse_decl_kind (ctx : List Identifier) (k : ParseDeclKind) : Decl :=
+    match k {
+        ParseDeclKind.def_d d => Decl.def_d (lower_parse_def ctx d),
+        ParseDeclKind.inductive_d i => Decl.inductive_d (lower_parse_inductive ctx i),
+        ParseDeclKind.struct_d s => Decl.struct_d (lower_parse_struct ctx s),
+        ParseDeclKind.class_d c => Decl.class_d (lower_parse_class ctx c),
+        ParseDeclKind.instance_d i => Decl.instance_d (lower_parse_instance ctx i),
+        ParseDeclKind.infix_d op path vis => Decl.infix_d op path vis,
+        ParseDeclKind.use_d path filter public => Decl.use_d path filter public,
+        ParseDeclKind.open_d path filter => Decl.open_d path filter,
+        ParseDeclKind.scoped_open_d path filter inner =>
+            Decl.scoped_open_d path filter (lower_parse_decl ctx inner),
+        ParseDeclKind.def_macro_d d => Decl.def_macro_d (lower_parse_def ctx d),
+        ParseDeclKind.decl_gen_d name params decl_list attrs =>
+            Decl.decl_gen_d name (lower_parse_params ctx params)
+                            (lower_parse_decls ctx decl_list) attrs,
+        ParseDeclKind.macro_call_d name args =>
+            Decl.macro_call_d name (lower_parse_terms ctx args),
+    }
+
+
+/// The single entry point. The grammar's three top-level parsers call
+/// this with an empty context; everything downstream keeps seeing `Decl`.
+#[partial]
+def lower_parse_decls (ctx : List Identifier) (ds : List ParseDecl) : List Decl :=
+    match ds {
+        List.empty => List.empty,
+        List.cons d rest => List.cons (lower_parse_decl ctx d) (lower_parse_decls ctx rest),
     }
