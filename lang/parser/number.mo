@@ -2,8 +2,8 @@
 
 use lang.types {NumSuffix, Term}
 use lang.parser.core {ParseResult, custom, fail, is_empty, success}
-use lang.parser.char_preds {is_digit, is_hex_digit}
-use lang.parser.combinators {tag, take_while}
+use lang.parser.char_preds {is_digit, is_digit_byte, is_digit_or_underscore_byte, is_hex_digit, is_hex_digit_byte}
+use lang.parser.combinators {tag, take_while, take_while_byte}
 
 open ParseResult {fail, success}
 
@@ -18,7 +18,7 @@ def is_digit_or_underscore (c : String) : Bool :=
 
 #[partial]
 def number (input : String) : ParseResult I64 :=
-	number_body (take_while is_digit_or_underscore input)
+	number_body (take_while_byte is_digit_or_underscore_byte input)
 
 
 #[partial]
@@ -81,7 +81,7 @@ def parse_digits_char (ch : String) (rest : String) (acc : I64) : I64 :=
 
 #[partial]
 def hex_number (input : String) : ParseResult I64 :=
-	hex_number_body (take_while is_hex_digit input)
+	hex_number_body (take_while_byte is_hex_digit_byte input)
 
 
 #[partial]
@@ -332,7 +332,7 @@ def numeric_literal_digits_done (r : ParseResult I64) (negative : Bool) : ParseR
 #[partial]
 def numeric_literal_try_dot (input : String) (n : I64) (negative : Bool) : ParseResult Term :=
 	match tag "." input {
-		success rem _ => numeric_literal_frac (take_while is_digit rem) n negative,
+		success rem _ => numeric_literal_frac (take_while_byte is_digit_byte rem) n negative,
 		fail _ => numeric_literal_int_suffix input n negative
 	}
 

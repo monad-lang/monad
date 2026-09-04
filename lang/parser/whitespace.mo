@@ -1,8 +1,8 @@
 /// Whitespace parsing functions for the self-hosted Monad parser.
 
 use lang.parser.core {ParseResult, custom, fail, is_empty, success}
-use lang.parser.char_preds {is_space}
-use lang.parser.combinators {take_while}
+use lang.parser.char_preds {is_space_byte}
+use lang.parser.combinators {take_while_byte}
 
 open ParseResult {fail, success}
 
@@ -11,17 +11,17 @@ open ParseResult {fail, success}
 
 #[partial]
 def spaces (input : String) : ParseResult String :=
-	take_while is_space input
+	take_while_byte is_space_byte input
 
 
 #[partial]
 def ws0 (input : String) : ParseResult String :=
-	take_while is_space input
+	take_while_byte is_space_byte input
 
 
 #[partial]
 def ws1 (input : String) : ParseResult String :=
-	ws1_body (take_while is_space input) input
+	ws1_body (take_while_byte is_space_byte input) input
 
 
 #[partial]
@@ -34,7 +34,7 @@ def ws1_body (r : ParseResult String) (input : String) : ParseResult String :=
 
 #[partial]
 def skip_spaces (input : String) : String :=
-	skip_spaces_match (take_while is_space input) input
+	skip_spaces_match (take_while_byte is_space_byte input) input
 
 
 #[partial]

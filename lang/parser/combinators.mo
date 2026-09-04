@@ -4,7 +4,7 @@ use lang.parser.core {
   ParseError, ParseResult, custom, fail, is_empty, parse_error_remaining,
   success, tag,
 }
-use lang.parser.char_preds {is_ident_char, is_prefix}
+use lang.parser.char_preds {byte_at, is_ident_char, is_prefix}
 use lang.types {custom, list_reverse}
 use std.list {length}
 
@@ -432,6 +432,53 @@ def take_while_loop (pred : String -> Bool) (original : String) (input : String)
 def take_while_done (original : String) (remaining : String) : ParseResult String :=
 	let consumed : I64 := I64.sub (String.length original) (String.length remaining) in
 	success remaining (String.slice original 0 consumed)
+
+
+// --- Byte-indexed take_while --------------------------------------
+//
+// Same contract as `take_while` above, for the ASCII character classes
+// (`is_space_byte`/`is_ident_char_byte`/`is_digit_byte`/... in
+// `lang/parser/char_preds.mo`). The difference is what it costs per
+// input character.
+//
+// `take_while_loop` does, per character: `is_empty`, `utf8_char_width`
+// (a `String.get` plus up to four `U8.lt`), `String.slice input 0 width`
+// -- which ALLOCATES a fresh one-character string -- the predicate call
+// on that string, and a `String.drop` to produce the tail it recurses
+// on. Two allocations per character, plus a `String.beq` chain inside
+// the predicate.
+//
+// This scans a byte index instead and slices exactly twice, at the token
+// boundary: two allocations per TOKEN rather than per character, and the
+// predicate compares numbers. See `bench/parser_take_while.mo` for the
+// measurement this was built against, and `char_preds.mo`'s own note for
+// why byte-wise scanning is correct for ASCII classes specifically (a
+// UTF-8 lead or continuation byte fails all of them, so a scan stops
+// cleanly at a character boundary rather than splitting one).
+//
+// Deliberately NOT expressed as a `match` on `String.get`: the loop has
+// to stay a self-tail-recursive `if`/`else` chain in ONE def, for the
+// reason `take_while_loop` documents above -- `apply_self_tco`
+// (`lang/codegen/emit.mo`) rewrites only self-recursion into a loop, and
+// anything else costs a real stack frame per character in a compiled
+// binary. `byte_at` (`char_preds.mo`) absorbs the `Option`.
+#[partial]
+def take_while_byte (pred : U8 -> Bool) (input : String) : ParseResult String :=
+	take_while_byte_at pred input 0 (String.length input)
+
+
+#[partial]
+def take_while_byte_at (pred : U8 -> Bool) (input : String) (i : I64) (n : I64) : ParseResult String :=
+	if I64.beq i n
+	then take_while_byte_done input i
+	else if pred (byte_at input i)
+	then take_while_byte_at pred input (i + 1) n
+	else take_while_byte_done input i
+
+
+#[partial]
+def take_while_byte_done (input : String) (i : I64) : ParseResult String :=
+	success (String.drop i input) (String.slice input 0 i)
 
 
 // --- Optional parser ---

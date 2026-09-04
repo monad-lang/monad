@@ -3,8 +3,8 @@
 
 use lang.types {custom}
 use lang.parser.core {ParseResult, custom, fail, is_empty, success}
-use lang.parser.char_preds {ident_start, is_ident_char, is_keyword}
-use lang.parser.combinators {take_while}
+use lang.parser.char_preds {ident_start, is_ident_char_byte, is_keyword}
+use lang.parser.combinators {take_while_byte}
 
 open ParseResult {fail, success}
 
@@ -12,7 +12,7 @@ open ParseResult {fail, success}
 /// Returns the parsed identifier string and remaining input
 #[partial]
 def identifier (input : String) : ParseResult String :=
-	identifier_try (take_while is_ident_char input)
+	identifier_try (take_while_byte is_ident_char_byte input)
 
 /// Helper: validate and return the parsed identifier
 #[partial]

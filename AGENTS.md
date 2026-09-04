@@ -2202,6 +2202,55 @@ Key patterns when writing self-hosted Monad code:
       `lang/codegen/emit.mo`, because `ElaboratedModules.
       elaborated_decls` has zero readers -- see that field.
 
+28. **The parser's `take_while` allocated a one-character string PER
+    INPUT CHARACTER; scanning a byte index instead cut the parse phase
+    30% (2026-09-04).** Item 27 put `load_file_modules` (read+parse) at
+    67% of `elaborate_loaded_modules` but not what shape that cost had.
+    `take_while_loop` (`lang/parser/combinators.mo`) did, per character:
+    `is_empty`, `utf8_char_width` (a `String.get` plus up to four
+    `U8.lt`), `String.slice input 0 width` -- **an allocation** -- the
+    predicate call on that fresh one-character string, and a
+    `String.drop` to build the tail it recursed on. Two allocations per
+    character. The predicates compounded it: `is_space` up to four
+    `String.beq`, `is_digit` a ten-way chain, `is_ident_char` reaching
+    `is_alphanumeric` -> `is_alpha` -> four helpers.
+    **Fix**: `take_while_byte` scans a byte index with `String.get`
+    (already a native returning `U8`) and slices exactly twice, at the
+    token boundary -- two allocations per TOKEN, with numeric `U8.lt`/
+    `U8.beq` range checks instead of string equality. **No new natives**
+    (a deliberate constraint here); `String.get`/`slice`/`drop` and the
+    `U8` ops all already existed. The `String`-taking `take_while` and
+    every original predicate are KEPT, not replaced -- `lang/json.mo`,
+    `lang/toml.mo` and the string-literal scanner have predicates of
+    their own.
+    Byte-wise scanning is correct for these classes precisely because
+    they are all ASCII: a UTF-8 lead byte (>= 0xC0) and a continuation
+    byte (0x80-0xBF) both fail every one of them, so a scan stops at a
+    character boundary rather than splitting one. **A predicate that
+    must ACCEPT non-ASCII cannot use this path** -- that is why the
+    string-literal scanner was left alone.
+    **Measured** with `bench/parser_take_while.mo`, added as standing
+    infrastructure. It runs both scanners in ONE process (so machine
+    load cannot distort the comparison -- this box runs a CI runner and
+    load ranged 1.4-17.8 the day this landed) and asserts the two
+    consume byte-identical input, so a byte scan that stopped early
+    would fail the test rather than look faster:
+      take_while is_space      long   122ms -> BYTE  79ms   -35%
+      take_while is_ident_char long   250ms -> BYTE 161ms   -36%
+      take_while is_space      short  141ms -> BYTE  94ms   -33%
+      take_while is_ident_char short  263ms -> BYTE 176ms   -33%
+    End to end, converting 5 call sites (`whitespace.mo` x4,
+    `identifier.mo` x1), interleaved A/B on `check examples/hello.mo`:
+    load+parse **1715/1694/1701ms -> 1205/1201/1178ms, -30%**. Adding
+    `number.mo`'s 3 sites afterwards moved it no further than noise --
+    digits are simply rarer in source than whitespace and identifiers --
+    but was kept as consistent and harmless.
+    Whole-invocation `check` only moved -3.5% (12.6s -> 12.1s): most of
+    that wall time is the RUST host loading and type-checking
+    `lang/main.mo` itself before the self-hosted compiler runs at all.
+    Do not expect parse-phase wins to show up 1:1 in the total.
+
+
 ## Committing Changes
 
 ### Commit Message Format
