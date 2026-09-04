@@ -236,7 +236,7 @@ pub fn eval(
         // (declaration) order, which leaves the *last*-declared field
         // innermost (`Local(0)`), matching `project_dict_field`'s
         // documented `fields.len()-1-idx` convention.
-        let Value::Con { tag, mut args } = v else {
+        let Value::Con { tag, args } = v else {
           return Err(CoreEvalError::NotAConstructor(v));
         };
         let arm = arms
@@ -249,15 +249,33 @@ pub fn eval(
           });
         }
         let mut extended = cur_env.clone();
-        // `Arc::make_mut` + `drain` (copy-on-write, not a raw `Vec`
-        // `IntoIterator`): `args` is an `Arc<Vec<Value>>` now (see
-        // `Value::Con`'s doc comment) — this is the single most-executed
-        // `Con`-consumption point in the evaluator (every pattern match
-        // against a constructor), so it matters that this stays O(1) in
-        // the common (uniquely-owned) case rather than falling back to a
-        // per-field clone.
-        for field in Arc::make_mut(&mut args).drain(..) {
-          extended = Env::extend(&extended, field);
+        // The single most-executed `Con`-consumption point in the
+        // evaluator (every pattern match against a constructor), so what
+        // it allocates matters. This used to be
+        // `Arc::make_mut(&mut args).drain(..)`, justified as "O(1) in the
+        // common (uniquely-owned) case" — but uniquely-owned is the RARE
+        // case here, not the common one: the scrutinee came from
+        // `eval(scrutinee, ...)`, and for the overwhelmingly common
+        // `CoreIr::Local` case that is `Env::get(...).cloned()` (above),
+        // so the environment still holds a second `Arc` and `make_mut`
+        // takes the COPY path — allocating a fresh `Vec`, shallow-cloning
+        // `arity` values into it, draining it, and dropping it, on every
+        // single match. Splitting the two cases explicitly allocates no
+        // `Vec` on either path: uniquely owned (`try_unwrap`) moves each
+        // field out with no clone at all, and shared borrows in place and
+        // clones each field, which is an O(1) refcount bump per `Value`
+        // since the `Con`/`PartialNtv` args Arc-wrap.
+        match Arc::try_unwrap(args) {
+          Ok(mut owned) => {
+            for field in owned.drain(..) {
+              extended = Env::extend(&extended, field);
+            }
+          }
+          Err(shared) => {
+            for field in shared.iter() {
+              extended = Env::extend(&extended, field.clone());
+            }
+          }
         }
         cur_env = extended;
         cur_ir = arm.body.clone();

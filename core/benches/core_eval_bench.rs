@@ -171,6 +171,47 @@ def input : String :=
 def main : I64 := chain 0 input
 "#;
 
+// Mirrors the self-hosted compiler's own dominant access pattern: wide,
+// single-constructor records (`lang/types.mo`'s `Def` has 6 fields,
+// `Instance` 7) whose individual fields are read constantly through dot
+// syntax. Every `node.a` lowers to a one-arm `Match`
+// (`lower_core.rs`'s `lower_field_access_chain`) whose pattern binds
+// EVERY field of the constructor, not just the one being read —
+// `core_check.rs`'s `resolve_field_pattern_case` expands a `{a}` pattern
+// to the constructor's full `declared_field_names`, so `bind_count ==
+// arity`. One field read therefore costs `arity` `Env::extend`
+// allocations plus whatever the `Match` arm does with the constructor's
+// own `args`. That second half is what this benchmark was added to hold
+// still: it is the workload that shows `core_eval.rs`'s `Match` arm
+// allocating a fresh `Vec` per match, which `CLASS_DISPATCH`'s 2-field
+// `List.cons` barely registers.
+const STRUCT_FIELD_ACCESS: &str = r#"
+use init
+
+struct Node {
+    a : I64,
+    b : I64,
+    c : I64,
+    d : I64,
+    e : I64,
+    f : I64,
+}
+
+#[partial]
+def mk_node (i : I64) : Node :=
+    { a := i, b := i + 1, c := i + 2, d := i + 3, e := i + 4, f := i + 5 }
+
+#[terminating]
+def sum_fields (n : I64) (acc : I64) : I64 :=
+    if n == 0
+    then acc
+    else
+        let node : Node := mk_node n in
+        sum_fields (n - 1) (acc + node.a + node.b + node.c + node.d + node.e + node.f)
+
+def main : I64 := sum_fields 2000 0
+"#;
+
 fn arithmetic_recursion(c: &mut Criterion) {
   bench_core_eval(c, "core_arithmetic_recursion", ARITHMETIC_RECURSION);
 }
@@ -187,11 +228,16 @@ fn parser_combinator_shaped(c: &mut Criterion) {
   bench_core_eval(c, "core_parser_combinator_shaped", PARSER_COMBINATOR_SHAPED);
 }
 
+fn struct_field_access(c: &mut Criterion) {
+  bench_core_eval(c, "core_struct_field_access", STRUCT_FIELD_ACCESS);
+}
+
 criterion_group!(
   benches,
   arithmetic_recursion,
   class_dispatch,
   class_dispatch_large,
-  parser_combinator_shaped
+  parser_combinator_shaped,
+  struct_field_access
 );
 criterion_main!(benches);

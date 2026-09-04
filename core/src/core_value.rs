@@ -199,9 +199,13 @@ pub enum Value {
   /// workloads — see `plans/implementations/value-con-arc-wrap-
   /// optimization.md`. Mutating sites (`core_eval.rs`'s incremental
   /// application, `eval/meta_reflect.rs`'s reification helpers) use
-  /// `Arc::make_mut` (copy-on-write) — cheap in the common case since a
-  /// `Value` about to receive another argument or be destructured is
-  /// essentially never aliased at that exact moment.
+  /// `Arc::make_mut` (copy-on-write). Do NOT assume that is the O(1)
+  /// unique path: a `Value` reached through `Env::get(...).cloned()` or
+  /// `GlobalCache::get`'s `v.clone()` is still aliased by the environment
+  /// or the cache at the moment it is applied to or destructured, so
+  /// `make_mut` copies. `core_eval.rs`'s `Match` arm — the most-executed
+  /// consumption point of all — no longer uses `make_mut` for exactly
+  /// that reason; see its own comment.
   Con {
     tag: u32,
     args: std::sync::Arc<ConArgs>,
