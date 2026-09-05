@@ -40,7 +40,7 @@ a different branch and cause confusion.
 │   ├── lib.mo           # Re-export hub -- bare `std` resolves here
 │   └── test.mo        # Test utilities (Test.assert)
 ├── lang/             # The self-hosted compiler, written in Monad
-│   └── codegen/        # LLVM backend, split by concern (was one 8.2k-line emit.mo)
+│   └── codegen/        # LLVM backend, split by concern (emit.mo was 8.2k lines)
 │       ├── util.mo       # shared list/instruction builders + str_map_* -- imported
 │       │                 # by every other codegen module, depends on almost nothing
 │       ├── symbols.mo    # how a Monad name becomes an LLVM symbol; def_symbol_name
@@ -51,8 +51,15 @@ a different branch and cause confusion.
 │       │                 # collect_referenced_names (binder-blind); pick deliberately
 │       ├── tco.mo        # self-recursive tail call -> loop; one entry, apply_self_tco
 │       ├── qualify.mo    # Stage 0c: every def gets its `module::name` symbol
+│       ├── decls.mo      # decl-list helpers + reachability from an EXPLICIT root
+│       ├── natives.mo    # native op table, native->runtime wiring, `declare`s
+│       ├── ctors.mo      # constructor tags/arities -- their OWN key namespace,
+│       │                 # keyed `bare#arity` because match dispatch only ever
+│       │                 # has a bare name to offer
+│       ├── validate.mo   # the four fail-fast gates; each exists because the
+│       │                 # silent-miscompile it catches actually shipped once
 │       ├── ir.mo         # the LLVM IR data types and their rendering
-│       ├── emit.mo       # term compiler, constructor tags, natives, gates, pipeline
+│       ├── emit.mo       # the term compiler and the multi-module pipeline
 │       ├── runtime.c     # the C runtime linked into every compiled binary
 │       └── runtime.mo    # LLVM IR for the natives that are generated, not written in C
 ├── examples/         # Example programs
