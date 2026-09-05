@@ -56,7 +56,7 @@ def test_compile_42 : IO Bool := do {
             return false
         } else do {
 
-            let link_args := [obj_path, runtime_obj];
+            let link_args := [obj_path, runtime_obj, "-lgc"];
             let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
             if not (link_result == 0) then do {
                 println <| "clang linker failed";
@@ -107,7 +107,7 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
             println <| basename ++ ": compiling runtime failed";
             return false
         } else do {
-            let link_args := [obj_path, runtime_obj];
+            let link_args := [obj_path, runtime_obj, "-lgc"];
             let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
             if not (link_result == 0) then do {
                 println <| basename ++ ": clang linker failed";
@@ -371,7 +371,7 @@ def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (e
             println <| basename ++ ": compiling runtime failed";
             return false
         } else do {
-            let link_args := [obj_path, runtime_obj];
+            let link_args := [obj_path, runtime_obj, "-lgc"];
             let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
             if not (link_result == 0) then do {
                 println <| basename ++ ": clang linker failed";

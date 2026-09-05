@@ -51,7 +51,7 @@ def main : IO I64 {
     let rt_args := args4 "-c" "lang/codegen/runtime.c" "-o" runtime_obj;
     let _ <- exec_cmd "clang" rt_args;
 
-    let ld_args := args4 obj_path runtime_obj "-o" output_path;
+    let ld_args := List.cons obj_path (List.cons runtime_obj (List.cons "-lgc" (List.cons "-o" (List.cons output_path List.empty))));
     let _ <- exec_cmd "clang" ld_args;
 
     let bin_args := List.empty;

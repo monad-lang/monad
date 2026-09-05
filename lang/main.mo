@@ -92,7 +92,13 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
             return 1
         } else do {
             let t_link := Bench.now;
-            let result <- exec_cmd "clang" (List.append [ obj_path_s, runtime_obj_s, "-o", output_path_s] (if verbose then ["-v"] else [""]));
+            // `-lgc`: the generated runtime's heap is collected (see
+            // `monad_alloc` in lang/codegen/runtime.c, and
+            // plans/bootstrapping/linear-types-memory.md for why that is
+            // temporary). The include and library search paths come from
+            // the nix cc-wrapper via `boehmgc` in devenv.nix, so nothing
+            // here hardcodes a store path.
+            let result <- exec_cmd "clang" (List.append [ obj_path_s, runtime_obj_s, "-lgc", "-o", output_path_s] (if verbose then ["-v"] else [""]));
             if verbose then do {
                 let _ := Bench.report "link_ir: clang link" (I64.sub Bench.now t_link);
                 return unit

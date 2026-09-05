@@ -1,3 +1,4 @@
+#include <gc.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -35,8 +36,20 @@ typedef struct {
     char data[];
 } StringObj;
 
+/* All Monad heap objects come from here (and `monad_alloc_atomic` just
+   below for pointer-free payloads). Those two functions are the ENTIRE
+   extent of the garbage collector in this runtime, deliberately: the GC
+   is a stopgap until the compiler tracks ownership through the linear/
+   affine multiplicities the language already has, at which point these
+   two bodies get real frees and the dependency goes away. See
+   plans/bootstrapping/linear-types-memory.md.
+
+   Why a collector is here at all: codegen never emits `monad_release`,
+   so nothing was ever freed. Measured on `check lang/main.mo`, that
+   meant 5.99 GiB allocated of which 98.24% was garbage, and `compile
+   lang/main.mo` was OOM-killed at 29.7 GB. */
 void* monad_alloc(size_t size) {
-    void* ptr = malloc(size);
+    void* ptr = GC_malloc(size);
     if (ptr) {
         Header* h = (Header*)ptr;
         h->refcount = 1;
@@ -44,6 +57,14 @@ void* monad_alloc(size_t size) {
         h->flags = 0;
     }
     return ptr;
+}
+
+/* Pointer-free payloads -- string buffers. Allocated `atomic` so the
+   collector does not scan their contents: it is faster, and it stops
+   arbitrary text bytes from being mistaken for heap addresses and
+   pinning garbage alive. */
+void* monad_alloc_atomic(size_t size) {
+    return GC_malloc_atomic(size);
 }
 
 void monad_retain(void* ptr) {
@@ -55,9 +76,11 @@ void monad_retain(void* ptr) {
 void monad_release(void* ptr) {
     if (!ptr) return;
     Header* h = (Header*)ptr;
-    if (atomic_fetch_sub(&h->refcount, 1) == 1) {
-        free(h);
-    }
+    /* Deliberately does NOT free: the block is GC-owned, and calling
+       free() on it would corrupt the collector's heap. The refcount is
+       still maintained so that the eventual linear-types work has a
+       correct starting point -- at that point this regains its free. */
+    atomic_fetch_sub(&h->refcount, 1);
 }
 
 void* alloc_closure(void* entry, int64_t arity, int64_t env_size) {
@@ -272,13 +295,39 @@ int64_t apply_closure8(void* clos, int64_t a0, int64_t a1, int64_t a2, int64_t a
     return apply_closure_dispatch(clos, args, 8);
 }
 
+/* A NULLARY constructor carries no payload -- its entire identity is
+   its tag -- so every `List.empty`, `Option.none`, `Bool.true`,
+   `Unit.unit` can be ONE shared immutable object rather than a fresh
+   32-byte allocation each time.
+
+   This is not a micro-optimization. Measured on `check lang/main.mo`:
+   68,312,246 of the 133,912,941 total allocations were 0-field
+   constructors, 2.19 GiB of 4.30 GiB. Sharing them collapses that to
+   one object per distinct tag (16 in that run), cutting total
+   allocations by 51% and bytes by 47%, and taking collections from 497
+   to 281.
+
+   Sound because a 0-field constructor has nothing to write --
+   `monad_set_field` is never called at field_count 0 -- and Monad
+   compares constructors by TAG, never by address. Tags above the cache
+   bound simply allocate as before. */
+#define MONAD_NULLARY_CACHE 4096
+static Constructor* g_nullary[MONAD_NULLARY_CACHE];
+
 void* alloc_constructor(int64_t tag, int64_t field_count) {
+    if (field_count == 0 && tag >= 0 && tag < MONAD_NULLARY_CACHE) {
+        Constructor* cached = g_nullary[tag];
+        if (cached) return cached;
+    }
     size_t size = sizeof(Constructor) + field_count * sizeof(void*);
     Constructor* c = (Constructor*)monad_alloc(size);
     if (c) {
         c->header.tag = 2;
         c->tag = tag;
         c->field_count = field_count;
+        if (field_count == 0 && tag >= 0 && tag < MONAD_NULLARY_CACHE) {
+            g_nullary[tag] = c;
+        }
     }
     return c;
 }
@@ -350,7 +399,7 @@ int64_t monad_string_length(char* s) {
 char* monad_i64_to_string(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%lld", (long long)n);
-    char* out = (char*)malloc((size_t)len + 1);
+    char* out = (char*)monad_alloc_atomic((size_t)len + 1);
     if (out) memcpy(out, buf, (size_t)len + 1);
     return out;
 }
@@ -372,7 +421,7 @@ char* monad_i64_to_string(int64_t n) {
 char* monad_string_concat(char* a, char* b) {
     size_t la = a ? strlen(a) : 0;
     size_t lb = b ? strlen(b) : 0;
-    char* out = (char*)malloc(la + lb + 1);
+    char* out = (char*)monad_alloc_atomic(la + lb + 1);
     if (!out) return NULL;
     if (la) memcpy(out, a, la);
     if (lb) memcpy(out + la, b, lb);
@@ -450,7 +499,7 @@ char* monad_string_slice(char* s, int64_t start_in, int64_t len_in) {
     size_t len = len_in < 0 ? 0 : (size_t)len_in;
     size_t max_len = slen - start;
     if (len > max_len) len = max_len;
-    char* out = (char*)malloc(len + 1);
+    char* out = (char*)monad_alloc_atomic(len + 1);
     if (!out) return NULL;
     if (len) memcpy(out, s + start, len);
     out[len] = '\0';
@@ -496,11 +545,11 @@ char* monad_read_file(char* path) {
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
     if (size < 0) { fclose(f); return NULL; }
-    char* buf = (char*)malloc(size + 1);
+    char* buf = (char*)monad_alloc_atomic(size + 1);
     if (!buf) { fclose(f); return NULL; }
     size_t got = fread(buf, 1, size, f);
     fclose(f);
-    if (got != (size_t)size) { free(buf); return NULL; }
+    if (got != (size_t)size) { return NULL; }
     buf[size] = '\0';
     return buf;
 }
@@ -594,7 +643,7 @@ int64_t monad_string_hash(char* s) {
 char* monad_string_to_lowercase(char* s) {
     if (!s) return NULL;
     size_t n = strlen(s);
-    char* out = (char*)malloc(n + 1);
+    char* out = (char*)monad_alloc_atomic(n + 1);
     if (!out) return NULL;
     for (size_t i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
@@ -616,7 +665,7 @@ char* monad_string_from_list(void* list) {
         n++;
         cur = monad_get_field(cur, 1);
     }
-    char* out = (char*)malloc((size_t)n + 1);
+    char* out = (char*)monad_alloc_atomic((size_t)n + 1);
     if (!out) return NULL;
     int64_t i = 0;
     for (void* cur = list; cur && monad_get_tag(cur) == 6; ) {
@@ -634,7 +683,7 @@ char* monad_string_from_list(void* list) {
 char* monad_i32_to_string(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%d", (int)(int32_t)n);
-    char* out = (char*)malloc((size_t)len + 1);
+    char* out = (char*)monad_alloc_atomic((size_t)len + 1);
     if (out) memcpy(out, buf, (size_t)len + 1);
     return out;
 }
@@ -648,7 +697,7 @@ char* monad_i32_to_string(int64_t n) {
 char* monad_u8_to_string(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%u", (unsigned)(uint8_t)n);
-    char* out = (char*)malloc((size_t)len + 1);
+    char* out = (char*)monad_alloc_atomic((size_t)len + 1);
     if (out) memcpy(out, buf, (size_t)len + 1);
     return out;
 }
@@ -656,7 +705,7 @@ char* monad_u8_to_string(int64_t n) {
 char* monad_u64_to_string(int64_t n) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%llu", (unsigned long long)n);
-    char* out = (char*)malloc((size_t)len + 1);
+    char* out = (char*)monad_alloc_atomic((size_t)len + 1);
     if (out) memcpy(out, buf, (size_t)len + 1);
     return out;
 }
@@ -727,7 +776,7 @@ void* monad_list_dir(char* path) {
     if (!d) return (void*)alloc_constructor(5, 0);   /* List.empty */
 
     size_t cap = 16, n = 0;
-    char** names = (char**)malloc(sizeof(char*) * cap);
+    char** names = (char**)GC_malloc(sizeof(char*) * cap);
     if (!names) { closedir(d); return (void*)alloc_constructor(5, 0); }
 
     struct dirent* e;
@@ -735,12 +784,12 @@ void* monad_list_dir(char* path) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
         if (n == cap) {
             cap *= 2;
-            char** grown = (char**)realloc(names, sizeof(char*) * cap);
+            char** grown = (char**)GC_realloc(names, sizeof(char*) * cap);
             if (!grown) break;
             names = grown;
         }
         size_t len = strlen(e->d_name);
-        char* copy = (char*)malloc(len + 1);
+        char* copy = (char*)monad_alloc_atomic(len + 1);
         if (!copy) break;
         memcpy(copy, e->d_name, len + 1);
         names[n++] = copy;
@@ -757,7 +806,6 @@ void* monad_list_dir(char* path) {
         cons->fields[1] = list;
         list = cons;
     }
-    free(names);
     return list;
 }
 
@@ -775,6 +823,7 @@ void* monad_build_args(int argc, char** argv) {
 int64_t main_monad(void* args);
 
 int main(int argc, char** argv) {
+    GC_INIT();
     /* Exclude argv[0] (the binary's own path) -- matches the
        interpreter's own `run <file> <args...>` semantics (args passed to
        a compiled program's `main` are just the extra CLI args, not the

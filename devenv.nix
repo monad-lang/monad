@@ -14,6 +14,15 @@
     lld
     llvm
     clang
+    # Conservative GC for the GENERATED runtime (lang/codegen/runtime.c),
+    # not for anything in this repo's Rust host. The nix cc-wrapper puts
+    # its include/lib paths on clang's search path, which is why
+    # `link_ir` can just say `-lgc` and `runtime.c` can just say
+    # `#include <gc.h>` with no store paths hardcoded anywhere.
+    #
+    # DELIBERATELY TEMPORARY -- see
+    # plans/bootstrapping/linear-types-memory.md.
+    boehmgc
   ];
 
   # https://devenv.sh/languages/
