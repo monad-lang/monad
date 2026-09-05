@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/wait.h>
@@ -48,6 +49,17 @@ typedef struct {
    so nothing was ever freed. Measured on `check lang/main.mo`, that
    meant 5.99 GiB allocated of which 98.24% was garbage, and `compile
    lang/main.mo` was OOM-killed at 29.7 GB. */
+/* `#[native bench_now]` (std/bench.mo's `Bench.now`) -- milliseconds
+   from an arbitrary fixed origin, monotonic so a span is never negative
+   across a wall-clock adjustment. Previously a GENERATED stub that
+   returned 0 (`emit_bench_now`, lang/codegen/runtime.mo), which made
+   every `--verbose` timing in a compiled binary read "0ms". */
+int64_t monad_bench_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
 void* monad_alloc(size_t size) {
     void* ptr = GC_malloc(size);
     if (ptr) {

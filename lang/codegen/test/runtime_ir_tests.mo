@@ -39,9 +39,13 @@ def test_runtime_byte_load_shape : Bool :=
 #[test]
 def test_runtime_arity_exact : Bool :=
     let t := runtime_ir_text in
+    // `monad_bench_now` is deliberately NOT here any more: it used to be
+    // a GENERATED stub returning 0, which made every `--verbose` timing
+    // in a compiled binary read "0ms". It is now a real C function in
+    // `runtime.c`, reached through an ordinary `declare`.
     check_contains t "define i64 @monad_string_starts_with(i64 %p0, i64 %p1) {"
         && check_contains t "define i64 @monad_string_to_list(i64 %p0) {"
-        && check_contains t "define i64 @monad_bench_now() {"
+        && Bool.not (check_contains t "define i64 @monad_bench_now")
 
 /// `List U8` marshaling via the fixed builtin tag convention:
 /// `List.cons` is tag 6 with 2 fields, `List.empty` tag 5 with 0.

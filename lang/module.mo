@@ -2065,11 +2065,11 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) :=
 /// `elaborate_loaded_modules` total that `lang/main.mo` already prints.
 /// If they do not, the spans are wrong -- do not reason about which.
 #[partial]
-def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : I64 :=
-    if verbose then
-        let _ : Bool := Bench.report label (I64.sub Bench.now t0) in
-        Bench.now
-    else Bench.now
+def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : IO I64 :=
+    if verbose then do {
+        let _ <- Bench.report label (I64.sub Bench.now t0);
+        return Bench.now
+    } else return Bench.now
 
 // --- elaborate_loaded_modules: THE unified check/compile/test front end ---
 //
@@ -2374,28 +2374,28 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
     let lc : LoadedAndCache <- load_file_modules_cached file_path cache;
     let loaded_result : Result String LoadedModules := lc.loaded;
     let out_cache : ModuleInfoCache := lc.cache;
-    let _t_load_done : I64 := bench_step verbose "  elab: load_file_modules (read+parse)" t_load 0;
+    let _t_load_done : I64 <- bench_step verbose "  elab: load_file_modules (read+parse)" t_load 0;
     // Annotated local, never a bare literal in `return` position -- see
     // the identical note in `collect_dep_module_infos` above.
-    let elaborated_result : Result String ElaboratedModules := match loaded_result {
-        Result.err e => Result.err e,
-        Result.ok loaded =>
-            let t0 : I64 := Bench.now in
-            let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty in
-            let t_flat : I64 := bench_step verbose "  elab: flatten_module_decls" t0 (List.length all_decls) in
-            let infixes : List Infix := collect_infixes all_decls in
-            let t_collect : I64 := bench_step verbose "  elab: collect_infixes" t_flat (List.length infixes) in
-            let resolved : List Decl := resolve_infix_decls infixes all_decls in
-            let t_infix : I64 := bench_step verbose "  elab: resolve_infix_decls" t_collect (List.length resolved) in
-            let promoted : List Decl := promote_instance_defs resolved in
-            let t_promote : I64 := bench_step verbose "  elab: promote_instance_defs" t_infix (List.length promoted) in
-            let dict_paramed : List Decl := add_constraint_dict_params_decls promoted in
-            let t_dict : I64 := bench_step verbose "  elab: add_constraint_dict_params_decls" t_promote (List.length dict_paramed) in
-            let main_module : ModuleInfo := get_loaded_main loaded in
-            let target_mp : ModulePath := main_module.path in
-            let scope_data : ScopeData := build_scope_from_decls target_mp dict_paramed in
-            let t_scope : I64 := bench_step verbose "  elab: build_scope_from_decls" t_dict (List.length scope_data.classes) in
-            let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none } in
+    let elaborated_result : Result String ElaboratedModules <- match loaded_result {
+        Result.err e => return (Result.err e),
+        Result.ok loaded => do {
+            let t0 : I64 := Bench.now;
+            let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty;
+            let t_flat : I64 <- bench_step verbose "  elab: flatten_module_decls" t0 (List.length all_decls);
+            let infixes : List Infix := collect_infixes all_decls;
+            let t_collect : I64 <- bench_step verbose "  elab: collect_infixes" t_flat (List.length infixes);
+            let resolved : List Decl := resolve_infix_decls infixes all_decls;
+            let t_infix : I64 <- bench_step verbose "  elab: resolve_infix_decls" t_collect (List.length resolved);
+            let promoted : List Decl := promote_instance_defs resolved;
+            let t_promote : I64 <- bench_step verbose "  elab: promote_instance_defs" t_infix (List.length promoted);
+            let dict_paramed : List Decl := add_constraint_dict_params_decls promoted;
+            let t_dict : I64 <- bench_step verbose "  elab: add_constraint_dict_params_decls" t_promote (List.length dict_paramed);
+            let main_module : ModuleInfo := get_loaded_main loaded;
+            let target_mp : ModulePath := main_module.path;
+            let scope_data : ScopeData := build_scope_from_decls target_mp dict_paramed;
+            let t_scope : I64 <- bench_step verbose "  elab: build_scope_from_decls" t_dict (List.length scope_data.classes);
+            let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
             // `target_decls` must go through the SAME infix-resolution/
             // promotion/dict-param passes as the whole graph above -- the
             // raw `main_module.decl_list` still has bare
@@ -2408,37 +2408,37 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
             // a bogus `unknown variable '+'` before this fix. When
             // `check_deps` is true, `dict_paramed` already IS that fully-
             // resolved list, for the whole graph (main module's own decls
-            // included -- `all_decls`/`flatten_module_decls` folds in
+            // included -- `all_decls`/`flatten_module_decls` folds;
             // `main_module` too, see `load_file_modules`), so reuse it
             // directly instead of redundantly re-running the same three
             // passes on just the main module's own raw decls again.
-            let target_decls_raw : List Decl := main_module.decl_list in
+            let target_decls_raw : List Decl := main_module.decl_list;
             let target_decls_pre : List Decl :=
                 if check_deps then
                     dict_paramed
                 else
-                    add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw)) in
-            let t_target : I64 := bench_step verbose "  elab: target-only re-run of the same 3 passes" t_scope (List.length target_decls_pre) in
+                    add_constraint_dict_params_decls (promote_instance_defs (resolve_infix_decls infixes target_decls_raw));
+            let t_target : I64 <- bench_step verbose "  elab: target-only re-run of the same 3 passes" t_scope (List.length target_decls_pre);
             // Forall-wrap each target def's type with its free + constraint-
             // only type vars (`elaborate_def_typs`), using the whole-graph
             // name set so globals aren't wrapped. `known_names` comes from
             // `dict_paramed` (the fully-prepared whole-graph list) -- a
             // target-only `names_of_decls` would miss dependency globals and
             // wrongly Forall-wrap them. This re-introduces the implicit
-            // type vars the parser deliberately dropped (e.g. `F` in
+            // type vars the parser deliberately dropped (e.g. `F`;
             // `def Lens [Functor F] {F : ...} ...`); `locals_with_def_typevars`
             // then skolemizes them from the resulting `Forall` chain.
             // Whole-graph macro/intrinsic expansion (`reflect_type_info!`)
             // -- see `expand_decls_graph`'s own doc comment. A no-op for
             // any file that never (transitively) invokes
             // `reflect_type_info!`, so safe to run unconditionally.
-            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed target_decls_pre in
-            let t_expand : I64 := bench_step verbose "  elab: expand_decls_graph" t_target 0 in
+            let expansion_result : Result String GraphExpansion := expand_decls_graph scope dict_paramed target_decls_pre;
+            let t_expand : I64 <- bench_step verbose "  elab: expand_decls_graph" t_target 0;
             match expansion_result {
-                Result.err e => Result.err e,
-                Result.ok expansion =>
-                    let dict_paramed2 : List Decl := expansion.graph in
-                    let target_decls_pre2 : List Decl := expansion.target in
+                Result.err e => return (Result.err e),
+                Result.ok expansion => do {
+                    let dict_paramed2 : List Decl := expansion.graph;
+                    let target_decls_pre2 : List Decl := expansion.target;
                     // Rebuild the scope ONLY if the expansion actually
                     // rewrote decls. When nothing expanded -- the norm,
                     // since only `std/derive.mo` invokes
@@ -2460,11 +2460,11 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                     // is best-effort -- silently left the ENTIRE body
                     // unelaborated.
                     let rebuilt_scope : Scope :=
-                        { module_id := target_mp, scope := build_scope_from_decls target_mp dict_paramed2, parent := Option.none } in
-                    let did_change : Bool := expansion.changed in
+                        { module_id := target_mp, scope := build_scope_from_decls target_mp dict_paramed2, parent := Option.none };
+                    let did_change : Bool := expansion.changed;
                     let scope2 : Scope :=
                         if did_change then rebuilt_scope
-                        else scope in
+                        else scope;
                     // Timed separately from `names_of_decls` below: when
                     // `expansion.changed` this is a SECOND whole-graph
                     // `build_scope_from_decls` (~1500ms, per the note
@@ -2473,17 +2473,19 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                     // arithmetic self-check (AGENTS.md item 25) cannot
                     // catch a mislabelled boundary -- the sub-times still
                     // sum to the total either way.
-                    let t_scope2 : I64 := bench_step verbose "  elab: post-expansion scope rebuild" t_expand (List.length scope2.scope.classes) in
-                    let known_names : List Identifier := names_of_decls dict_paramed2 in
-                    let t_names : I64 := bench_step verbose "  elab: names_of_decls" t_scope2 (List.length known_names) in
-                    let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names in
-                    let _t_typs : I64 := bench_step verbose "  elab: elaborate_def_typs" t_names (List.length target_decls) in
+                    let t_scope2 : I64 <- bench_step verbose "  elab: post-expansion scope rebuild" t_expand (List.length scope2.scope.classes);
+                    let known_names : List Identifier := names_of_decls dict_paramed2;
+                    let t_names : I64 <- bench_step verbose "  elab: names_of_decls" t_scope2 (List.length known_names);
+                    let target_decls : List Decl := elaborate_def_typs target_decls_pre2 known_names;
+                    let _t_typs : I64 <- bench_step verbose "  elab: elaborate_def_typs" t_names (List.length target_decls);
                     // Annotated local, not an inline literal --
                     // see `load_module_with_info`'s own note.
                     let elaborated : ElaboratedModules :=
-                        { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded } in
-                    Result.ok elaborated,
+                        { scope := scope2, target_decls := target_decls, elaborated_decls := dict_paramed2, loaded := loaded };
+                    return (Result.ok elaborated)
+                },
             }
+        },
     };
     let out : ElaboratedAndCache := { elaborated := elaborated_result, cache := out_cache };
     return out

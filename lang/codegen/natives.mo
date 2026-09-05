@@ -203,6 +203,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // compiled `IO_is_dir_native` global was the bogus Unit
             // stub, called for real from `IO_is_dir`'s own compiled body.
             else if String.beq target "string_hash" then Option.some (NativeWrapKind.passthrough "monad_string_hash")
+            else if String.beq target "bench_now" then Option.some (NativeWrapKind.passthrough "monad_bench_now")
             // `String.lt`/`String.gt` (`init/string.mo`, `instance BOrd
             // String`'s own backing natives) -- same previously-unwired
             // gap as `string_length`/`string_hash` above (a `#[native]`
@@ -347,6 +348,7 @@ def runtime_declarations : List LLVMDeclaration :=
     let d7 := mk_decl "monad_file_exists" (List.cons "i64" List.empty) "i64" in
     let d7b := mk_decl "monad_is_dir" (List.cons "i64" List.empty) "i64" in
     let d7c := mk_decl "monad_string_hash" (List.cons "i64" List.empty) "i64" in
+    let d7d := mk_decl "monad_bench_now" List.empty "i64" in
     let d8 := mk_decl "alloc_closure" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d9 := mk_decl "alloc_constructor" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d10 := mk_decl "alloc_string" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
@@ -441,7 +443,7 @@ def runtime_declarations : List LLVMDeclaration :=
     let d37 := mk_decl "monad_u8_to_string" (List.cons "i64" List.empty) "i64" in
     let d38 := mk_decl "monad_u64_to_string" (List.cons "i64" List.empty) "i64" in
     let d39 := mk_decl "monad_process_id" List.empty "i64" in
-    [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d8, d9, d10, d11, d12, d13,
+    [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39]
 

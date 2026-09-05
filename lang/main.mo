@@ -67,14 +67,14 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
     let t_write := Bench.now;
     IO.write_file ir_path ir_text;
     if verbose then do {
-        let _ := Bench.report "link_ir: write .ll" (I64.sub Bench.now t_write);
+        let _ <- Bench.report "link_ir: write .ll" (I64.sub Bench.now t_write);
         return unit
     } else return unit;
 
     let t_llc := Bench.now;
     let result <- exec_cmd "llc" [ "-filetype=obj", ir_path_s, "-o", obj_path_s];
     if verbose then do {
-        let _ := Bench.report "link_ir: llc" (I64.sub Bench.now t_llc);
+        let _ <- Bench.report "link_ir: llc" (I64.sub Bench.now t_llc);
         return unit
     } else return unit;
     if not (result == 0) then do {
@@ -84,7 +84,7 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
         let t_rtc := Bench.now;
         let result <- exec_cmd "clang" (List.append [ "-c", "lang/codegen/runtime.c", "-o", runtime_obj_s] (if verbose then ["-v"] else [""]));
         if verbose then do {
-            let _ := Bench.report "link_ir: clang runtime.c" (I64.sub Bench.now t_rtc);
+            let _ <- Bench.report "link_ir: clang runtime.c" (I64.sub Bench.now t_rtc);
             return unit
         } else return unit;
         if not (result == 0) then do {
@@ -100,7 +100,7 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
             // here hardcodes a store path.
             let result <- exec_cmd "clang" (List.append [ obj_path_s, runtime_obj_s, "-lgc", "-o", output_path_s] (if verbose then ["-v"] else [""]));
             if verbose then do {
-                let _ := Bench.report "link_ir: clang link" (I64.sub Bench.now t_link);
+                let _ <- Bench.report "link_ir: clang link" (I64.sub Bench.now t_link);
                 return unit
             } else return unit;
             if not (result == 0) then do {
@@ -203,7 +203,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
     let t_elaborate := Bench.now;
     let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules file_path false verbose;
     if verbose then do {
-        let _ := Bench.report "elaborate_loaded_modules" (I64.sub Bench.now t_elaborate);
+        let _ <- Bench.report "elaborate_loaded_modules" (I64.sub Bench.now t_elaborate);
         return unit
     } else return unit;
     match elaborated_result {
@@ -213,7 +213,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                     let t_check := Bench.now;
                     let diags : List String <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
                     if verbose then do {
-                        let _ := Bench.report "check_module_with_scope" (I64.sub Bench.now t_check);
+                        let _ <- Bench.report "check_module_with_scope" (I64.sub Bench.now t_check);
                         return unit
                     } else return unit;
                     match diags {
@@ -221,7 +221,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                             println "FAILED at stage: typecheck (target file did not typecheck cleanly)";
                             print_diagnostics diags;
                             if verbose then do {
-                                let _ := Bench.report "compile_file total (failed at typecheck)" (I64.sub Bench.now total_start);
+                                let _ <- Bench.report "compile_file total (failed at typecheck)" (I64.sub Bench.now total_start);
                                 return unit
                             } else return unit;
                             return 1
@@ -229,7 +229,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                         List.empty => do {
                             let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug, preloaded := Option.some em.loaded };
                             if verbose then do {
-                                let _ := Bench.report "compile_file total" (I64.sub Bench.now total_start);
+                                let _ <- Bench.report "compile_file total" (I64.sub Bench.now total_start);
                                 return unit
                             } else return unit;
                             return link_result
@@ -240,7 +240,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
             println ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
             let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug, preloaded := Option.none };
             if verbose then do {
-                let _ := Bench.report "compile_file total" (I64.sub Bench.now total_start);
+                let _ <- Bench.report "compile_file total" (I64.sub Bench.now total_start);
                 return unit
             } else return unit;
             return link_result

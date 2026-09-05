@@ -63,9 +63,13 @@ def rt_tag_list_cons : I64 := 6
 /// emitted (an unreferenced internal define is dead code `llc` drops
 /// happily); trimming to the referenced set is a later
 /// self-hosted-runtime phase, not a PoC concern.
+/// `Bench.now` is a real C function (`monad_bench_now`, runtime.c) and
+/// `Bench.report` is ordinary Monad (`std/bench.mo`), so neither needs a
+/// generated stub any more -- the pair used to return 0/1 and print
+/// nothing, which silently disabled every `--verbose` timing in a
+/// compiled binary.
 def runtime_native_functions : List LLVMFunction :=
-  List.append string_runtime_functions
-    (List.append numeric_runtime_functions bench_runtime_functions)
+  List.append string_runtime_functions numeric_runtime_functions
 
 def string_runtime_functions : List LLVMFunction :=
   [emit_string_starts_with, emit_string_to_list, emit_string_get]
@@ -73,9 +77,6 @@ def string_runtime_functions : List LLVMFunction :=
 def numeric_runtime_functions : List LLVMFunction :=
   [emit_u8_eq, emit_u8_lt, emit_u8_gt, emit_u64_eq,
    emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod]
-
-def bench_runtime_functions : List LLVMFunction :=
-  [emit_bench_now, emit_bench_report]
 
 // ─── Shared emitter helpers ─────────────────────────────────────────
 
@@ -342,23 +343,3 @@ def emit_guarded_native (name : String) (op : LLVMValue) : LLVMFunction :=
 /// wrong-but-typed `0`/`1` is exactly what keeps the verbose paths
 /// from crashing on a Unit stub. Real timing is a later
 /// self-hosted-runtime phase.
-
-def emit_bench_now : LLVMFunction :=
-  let entry := LLVMBasicBlock.mk "entry" [ret (int_ 0)] in
-  { name := "monad_bench_now",
-    params := [],
-    ret_ty := i64_,
-    blocks := [entry],
-    ghc_cc := false,
-    dbg_loc := Option.none }
-
-/// `Bench.report : String -> I64 -> Bool` -- returns raw 1 (`true`)
-/// and drops both arguments, mirroring a successful no-op report.
-def emit_bench_report : LLVMFunction :=
-  let entry := LLVMBasicBlock.mk "entry" [ret (int_ 1)] in
-  { name := "monad_bench_report",
-    params := (i64_params 2),
-    ret_ty := i64_,
-    blocks := [entry],
-    ghc_cc := false,
-    dbg_loc := Option.none }

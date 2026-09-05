@@ -4259,7 +4259,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let t_open_alias := Bench.now;
     let aliased_mods := resolve_open_aliases_in_modules all_mods;
     if verbose then do {
-        let _ := Bench.report "open_alias_resolve" (I64.sub Bench.now t_open_alias);
+        let _ <- Bench.report "open_alias_resolve" (I64.sub Bench.now t_open_alias);
         return unit
     } else return unit;
 
@@ -4275,7 +4275,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
       },
       Result.ok qualified_mods => do {
     if verbose then do {
-        let _ := Bench.report "qualify_modules" (I64.sub Bench.now t_qualify);
+        let _ <- Bench.report "qualify_modules" (I64.sub Bench.now t_qualify);
         return unit
     } else return unit;
 
@@ -4285,7 +4285,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let all_decls := collect_all_decls_from_modules qualified_mods List.empty;
     if verbose then do {
         let def_count := List.length all_decls;
-        let _ := Bench.report "collect_decls" (I64.sub Bench.now t_collect);
+        let _ <- Bench.report "collect_decls" (I64.sub Bench.now t_collect);
         println ("Total defs collected: " ++ I64.to_string def_count)
     } else return unit;
 
@@ -4306,7 +4306,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let infixes := collect_infixes all_decls;
     let resolved_decls := resolve_infix_decls infixes all_decls;
     if verbose then do {
-        let _ := Bench.report "infix_resolve" (I64.sub Bench.now t_infix);
+        let _ <- Bench.report "infix_resolve" (I64.sub Bench.now t_infix);
         return unit
     } else return unit;
 
@@ -4328,7 +4328,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let promoted_decls := promote_instance_defs resolved_decls;
     let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
     if verbose then do {
-        let _ := Bench.report "dict_dispatch" (I64.sub Bench.now t_dict);
+        let _ <- Bench.report "dict_dispatch" (I64.sub Bench.now t_dict);
         return unit
     } else return unit;
 
@@ -4356,7 +4356,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let elaborated := elaborate_module_decls_best_effort scope dict_param_decls empty_locs;
     let dispatched_decls := resolve_class_calls_decls elaborated;
     if verbose then do {
-        let _ := Bench.report "elaborate_class" (I64.sub Bench.now t_elab);
+        let _ <- Bench.report "elaborate_class" (I64.sub Bench.now t_elab);
         return unit
     } else return unit;
 
@@ -4373,7 +4373,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let reachable_decls := filter_reachable_decls main_root dispatched_decls;
     if verbose then do {
         let reachable_count := List.length reachable_decls;
-        let _ := Bench.report "filter_reachable" (I64.sub Bench.now t_reach);
+        let _ <- Bench.report "filter_reachable" (I64.sub Bench.now t_reach);
         println ("Reachable decl_list: " ++ I64.to_string reachable_count)
     } else return unit;
 
@@ -4427,8 +4427,8 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                     let t_llvm := Bench.now;
                     let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
                     if verbose then do {
-                        let _ := Bench.report "compile_db_module" (I64.sub Bench.now t_llvm);
-                        let _ := Bench.report "compile_loaded_modules_to_ir total" (I64.sub Bench.now total_start);
+                        let _ <- Bench.report "compile_db_module" (I64.sub Bench.now t_llvm);
+                        let _ <- Bench.report "compile_loaded_modules_to_ir total" (I64.sub Bench.now total_start);
                         return unit
                     } else return unit;
 
