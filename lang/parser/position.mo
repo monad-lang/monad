@@ -178,6 +178,17 @@ def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
 /// byte), so the byte-length diff below always lands on one too.
 #[partial]
 def location_of_remaining (original : String) (remaining : String) : Location :=
-	let consumed_len : I64 := String.length original - String.length remaining in
+	location_of_remaining_len original (String.length remaining)
+
+/// The same arithmetic from a recorded remaining-input LENGTH rather
+/// than the remainder string itself, which is what a `ParseSpan` stores
+/// (see `ParseSpan`'s own doc comment, lang/types.mo, for why the
+/// parser records lengths and not absolute offsets). `decls_parser`'s
+/// located twin goes through here: the parser already recorded where
+/// each declaration began, so the position is a projection over that
+/// span rather than a second parse that re-derives it.
+#[partial]
+def location_of_remaining_len (original : String) (remaining_len : I64) : Location :=
+	let consumed_len : I64 := String.length original - remaining_len in
 	let consumed : String := String.slice original 0 consumed_len in
 	advance_location (Location.mk 0 1 1) consumed

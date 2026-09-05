@@ -2343,6 +2343,60 @@ Key patterns when writing self-hosted Monad code:
     is declared API), with warning doc comments on all three natives
     pointing here.
 
+30. **Record a source span at the parser's choke points, never at the
+    construction sites (2026-09-05).** The parse stage's fourth and last
+    commit gave `ParseTerm`/`ParseDecl` real positions. The obvious
+    reading of "replace `pt_` with `pt_at` at each construction site" is
+    wrong, and checking why is what made this cheap:
+    - **Most construction sites cannot see their own start.** Of the 57
+      `pt_*` and 20 `pd_*` sites in `lang/parser.mo`, the great majority
+      sit in continuation helpers (`type_dep_body`, `open_build`,
+      `struct_lit_fields_end`, ...) whose own `input` parameter is
+      somewhere in the MIDDLE of the construct being built. Stamping
+      `pt_at input rem` there compiles and produces a confidently WRONG
+      position -- the worst possible outcome for a debugger, and one no
+      type error would ever catch.
+    - **Two functions see every construct.** `atom_term` is handed the
+      exact start of every atom (all eleven `atom_parsers`, plus
+      `lambda_parser` and `paren_expr`) and `decl_parser` the exact start
+      of every declaration. One stamp in each -- via a
+      `ParseResult`-level `term_at`/`decl_at` -- located the whole
+      grammar. `scoped_open_inner_decl` is the single declaration that
+      bypasses `decl_parser` and stamps its own.
+    - **Compounds read their start back off their left operand.**
+      Application chains and infix climbs are built bottom-up, so the
+      text where they began is long consumed by the time the combined
+      term exists -- but the left operand still carries its own span.
+      `pt_from left rem kind` (`lang/types.mo`) is why locating a whole
+      expression needed no threading, which is the same threading the
+      de Bruijn `ctx` removal had just deleted. It yields an unknown span
+      when the operand has none: a span from an unknown start to a real
+      end is not a position.
+    - **An unknown span is a correct answer, not a gap.** A `pt_hole`
+      standing in for an omitted annotation, the cons cells
+      `build_list_literal` synthesises, the `pt_pi` chain
+      `build_param_pi_chain` folds out of a parameter list -- none were
+      written anywhere. `parse_span_is_unknown` distinguishes them from
+      a real position.
+    **`decls_parser_with_locs` stopped being a parser.** It was a
+    parallel traversal (`decls_skip_with_locs`/`decls_try_with_locs`)
+    threading the whole file alongside the shrinking input to re-derive
+    each declaration's position; it is now a projection over the span
+    `decl_parser` already recorded, and the two can no longer disagree.
+    Same arithmetic (`location_of_remaining_len`, factored out of
+    `location_of_remaining`), 44 fewer lines, one traversal.
+    **Cost, measured, as promised: +0.25%.** Interleaved A/B, four paired
+    rounds, load 1.2: parse phase 1116.5ms -> 1119.25ms. Under the noise
+    floor in magnitude, but B was slower in 4/4 paired rounds, so the
+    sign is real and the honest number is "about a quarter of a percent",
+    not "free". Set against item 28's -30% on the same phase.
+    **Equivalence oracle: LLVM IR for `compile examples/hello.mo`
+    byte-identical** to the pre-parse-stage baseline, as it was after the
+    two commits before this. Spans are pure addition; any IR diff would
+    have been a bug. Tests 251/251 parser (8 new span assertions,
+    each checking the exact substring a construct claims via `span_text`),
+    1420/1420 overall, corpus 113 files / 0 errors.
+
 
 ## Committing Changes
 

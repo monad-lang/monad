@@ -1,18 +1,9 @@
 /// `ParseTerm` -> `Term`: de Bruijn resolution, as its own pass.
 ///
-// TODO: NOT YET WIRED. `lang/parser.mo` still builds `Term` directly and
-// still threads `ctx : List Identifier` through its grammar, so nothing
-// calls into this module yet. Remaining to connect it, with measured
-// counts as of this commit:
-//   - 199 `Term.*` construction sites -> `ParseTermKind` via `pt_`/`pt_at`
-//   - 161 defs returning `ParseResult Term` -> `ParseResult ParseTerm`
-//   - 235 defs taking `ctx : List Identifier` -> dropped, along with the
-//     binder-extension call sites (`List.cons name ctx`,
-//     `lambda_extend_ctx binders ctx`) that `extend_ctx` below replaces
-//   - ~10 decl-parser sites that seed `empty_ctx` -> call
-//     `lower_parse_term` on the parsed `ParseTerm` instead
-// Then a second pass replaces `pt_`'s placeholder span with `pt_at`'s
-// real one at each construction site.
+/// Fully wired: `lang/parser.mo` builds `ParseDecl`/`ParseTerm`
+/// throughout and lowers here at its three entry points
+/// (`decls_parser`, `decls_parser_strict`, `decls_parser_with_locs`).
+/// Nothing outside `lang/parser*` ever sees a `Parse*` type.
 ///
 /// This is the stage the compiler did not have. The parser used to
 /// resolve variables inline -- `var_term`/`find_index` against a

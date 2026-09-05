@@ -508,10 +508,38 @@ def pt_at (input : String) (rem : String) (k : ParseTermKind) : ParseTerm :=
     { span := { start_rem := String.length input, end_rem := String.length rem }, kind := k }
 
 
+/// Span a compound term from the start of its LEFTMOST sub-term to
+/// `rem`. The grammar builds application chains and infix climbs
+/// bottom-up, so by the time the combined term exists the text where it
+/// began is long since consumed -- but the left operand still carries
+/// its own span, and that start IS the compound's start. This is why
+/// `expr_climb` needs no extra threading to locate a whole expression.
+///
+/// If the left operand has no recorded span (a synthesized sub-term),
+/// the compound has none either: a span running from an unknown start
+/// to a real end is not a position, and half a location is worse than
+/// none.
+#[partial]
+def pt_from (left : ParseTerm) (rem : String) (k : ParseTermKind) : ParseTerm :=
+    if parse_span_is_unknown left.span
+    then pt_ k
+    else { span := { start_rem := left.span.start_rem, end_rem := String.length rem }, kind := k }
+
+
 // Same-arity constructors for each kind, so converting a grammar site is
 // a token rename (`Term.app` -> `pt_app`) rather than a wrap that would
-// have to re-parenthesise the arguments. Span is the placeholder; a
-// later pass swaps these for span-carrying forms.
+// have to re-parenthesise the arguments.
+//
+// These leave the span UNRECORDED, and most grammar sites are right to
+// use them: a construct is located once, at `atom_term`/`decl_parser`
+// (see their doc comments in `lang/parser.mo`), where the text it starts
+// at is actually in hand. The sites that keep an unknown span are the
+// ones with no source extent to record at all -- a `pt_hole` standing in
+// for an omitted type annotation, the cons cells `build_list_literal`
+// synthesises from a `[a, b, c]` that has only one position, the
+// `pt_pi` chain `build_param_pi_chain` folds out of a parameter list.
+// `parse_span_is_unknown` is how a consumer tells "not written in the
+// source" from a real position.
 
 #[partial]
 def pt_var (n : NameRef) : ParseTerm := pt_ (ParseTermKind.var n)
@@ -631,13 +659,14 @@ type ParseStruct {
 /// A declaration plus the span it was parsed from.
 ///
 /// The span is what collapses the two parallel top-level parsers into
-/// one. `decls_parser_with_locs` currently re-derives each declaration's
-/// position by measuring the remaining input against the whole file;
-/// with a span recorded here that becomes a projection over what the
-/// parser already knows -- at the top level the total length IS
+/// one. `decls_parser_with_locs` used to re-derive each declaration's
+/// position with a parallel `decls_skip_with_locs` that threaded the
+/// whole file alongside the shrinking input; it is now a projection over
+/// the span recorded here -- at the top level the total length IS
 /// available, so `offset = total_length - span.start_rem`, then
 /// `lang/parser/position.mo`'s scan for line/column. Same arithmetic,
-/// one parser instead of two.
+/// one parser instead of two, and no way for the two to disagree about
+/// where a declaration starts.
 struct ParseDecl {
     span : ParseSpan,
     kind : ParseDeclKind,
@@ -673,7 +702,10 @@ def pd_at (input : String) (rem : String) (k : ParseDeclKind) : ParseDecl :=
 // Same-arity constructors per declaration kind, for the same reason the
 // `pt_*` family exists: a grammar site converts by renaming
 // `Decl.def_d` -> `pd_def_d` rather than by a wrap that would have to
-// re-parenthesise its argument. Span is the placeholder.
+// re-parenthesise its argument. As with `pt_*`, the span is recorded at
+// the choke point (`decl_parser`) rather than here -- every one of these
+// twenty sites sits somewhere in the middle of the declaration it
+// builds, and none of them can see where it began.
 
 #[partial]
 def pd_def_d (d : ParseDef) : ParseDecl := pd_ (ParseDeclKind.def_d d)

@@ -25,7 +25,7 @@ use lang.parser.combinators {
 }
 use lang.parser.number {number, numeric_literal}
 use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
-use lang.parser.position {consume_span, location_of_remaining, new_span, span_fragment, span_location}
+use lang.parser.position {consume_span, location_of_remaining, location_of_remaining_len, new_span, span_fragment, span_location}
 use lang.parser.identifier {identifier}
 use lang.parser.string {raw_string_parse, string_parse}
 use lang.parser.diagnostic {render_parse_error}
@@ -907,8 +907,17 @@ def open_opt_filter (input : String) : ParseResult OpenFilter :=
 def in_kw (input : String) : ParseResult String :=
 	tag "in" (skip_spaces input)
 
+/// The one declaration that does NOT go through `decl_parser` (it admits
+/// only the five forms that can be scoped by an `open ... in`), so it
+/// records its own span. The start is the input with leading whitespace
+/// already dropped, not the raw `input`, so the span covers the
+/// declaration rather than the gap before it.
 def scoped_open_inner_decl (input : String) : ParseResult ParseDecl :=
-	alt_fold [def_parser, class_parser, instance_parser, struct_parser, type_parser] (skip_spaces input)
+	scoped_open_inner_decl_at (skip_spaces input)
+
+#[partial]
+def scoped_open_inner_decl_at (src : String) : ParseResult ParseDecl :=
+	decl_at src (alt_fold [def_parser, class_parser, instance_parser, struct_parser, type_parser] src)
 
 #[partial]
 def open_parser (input : String) : ParseResult ParseDecl :=
@@ -3511,9 +3520,14 @@ def decl_parsers : List (String -> ParseResult ParseDecl) :=
 	[use_parser, open_parser, infix_parser, defmacro_parser, def_parser,
 	 struct_parser, type_parser, class_parser, instance_parser, macro_call_decl_parser]
 
+/// `input` is the exact text the declaration starts at -- `decls_skip`
+/// has already skipped the whitespace and docstrings ahead of it -- so
+/// this stamp is what `decls_parser_with_locs` later projects a
+/// `Location` out of, and what replaced its separate re-derivation of
+/// each declaration's position.
 #[partial]
 def decl_parser (input : String) : ParseResult ParseDecl :=
-	decl_fail_to_unknown (alt_fold decl_parsers input) input
+	decl_at input (decl_fail_to_unknown (alt_fold decl_parsers input) input)
 
 /// Now that `alt_fold` tracks furthest-progress-wins across
 /// `decl_parsers`'s alternatives (see `lang/parser/combinators.mo`'s
@@ -3563,51 +3577,52 @@ def decls_skip (input : String) (acc : List ParseDecl) : ParseResult (List Parse
 /// lenient truncate-on-failure behavior) -- this twin additionally
 /// records each declaration's own start `Location`, purely for DWARF
 /// debug info (plans/bootstrapping/debug-info.md, v1: one location per
-/// top-level def). `whole_file` is the UNCHANGED original source text,
-/// threaded alongside so `location_of_remaining` can recover a
-/// `Location` by diffing against it (see `lang.parser.position`'s own
-/// doc comment for why that's a diff rather than a threaded
-/// `LocatedSpan`) -- it is NEVER the shrinking `input` a real parse
-/// step consumes from.
+/// top-level def).
+///
+/// This is now a PROJECTION over `decls_skip`, not a second parser.
+/// Every `ParseDecl` carries the span `decl_parser` stamped on it, so
+/// the position is read back out of the parse rather than re-derived by
+/// a parallel `decls_skip_with_locs` threading the whole file alongside
+/// a shrinking input. The arithmetic is unchanged -- `location_of_span`
+/// below performs exactly the diff `location_of_remaining` did -- but
+/// there is one traversal of the grammar instead of two, and no way for
+/// the two to disagree about where a declaration starts.
 #[partial]
 def decls_parser_with_locs (input : String) : ParseResult (List (Pair Decl Location)) :=
-	lower_locs_result (decls_skip_with_locs input (skip_docstrings (skip_spaces input)) List.empty)
+	locate_decls_result input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
 
-/// Lower the parse-stage pairs to the canonical ones the DWARF path
-/// consumes. Positions still come from `location_of_remaining` because
-/// `ParseDecl`'s span is a placeholder until the spans commit; at that
-/// point this becomes a projection over the span the parser already
-/// recorded, and `decls_skip_with_locs` stops threading `whole_file`.
 #[partial]
-def lower_locs_result (r : ParseResult (List (Pair ParseDecl Location))) : ParseResult (List (Pair Decl Location)) :=
+def locate_decls_result (whole_file : String) (r : ParseResult (List ParseDecl)) : ParseResult (List (Pair Decl Location)) :=
 	match r {
-		success rem pairs => success rem (lower_loc_pairs pairs),
+		success rem ds => success rem (locate_decls whole_file ds),
 		fail e => fail e,
 	}
 
 #[partial]
-def lower_loc_pairs (pairs : List (Pair ParseDecl Location)) : List (Pair Decl Location) :=
-	match pairs {
+def locate_decls (whole_file : String) (ds : List ParseDecl) : List (Pair Decl Location) :=
+	match ds {
 		List.empty => List.empty,
-		List.cons pr rest =>
-			match pr {
-				Pair.pair pd loc =>
-					List.cons (Pair.pair (lower_parse_decl List.empty pd) loc) (lower_loc_pairs rest),
-			},
+		List.cons d rest =>
+			List.cons
+				(Pair.pair (lower_parse_decl List.empty d) (location_of_span whole_file d.span))
+				(locate_decls whole_file rest),
 	}
 
+/// A recorded span's start, as a `Location` in `whole_file`. `whole_file`
+/// is the UNCHANGED original source text -- never the shrinking input a
+/// parse step consumes from -- because a `ParseSpan` stores remaining-
+/// input LENGTHS and only the full text can turn one back into an
+/// offset (see `ParseSpan`'s own doc comment, lang/types.mo).
+///
+/// A declaration reaching here without a span would be a bug in
+/// `decl_parser`'s stamping rather than bad input, so the unknown case
+/// reports the start of the file instead of inventing a position from
+/// the placeholder's `-1`.
 #[partial]
-def decls_skip_with_locs (whole_file : String) (input : String) (acc : List (Pair ParseDecl Location)) : ParseResult (List (Pair ParseDecl Location)) :=
-	decls_try_with_locs whole_file (decl_parser input) input acc
-
-#[partial]
-def decls_try_with_locs (whole_file : String) (r : ParseResult ParseDecl) (attempt_start : String) (acc : List (Pair ParseDecl Location)) : ParseResult (List (Pair ParseDecl Location)) :=
-	match r {
-		success rem decl =>
-			let loc := location_of_remaining whole_file attempt_start in
-			decls_skip_with_locs whole_file (skip_docstrings (skip_spaces rem)) (List.cons (Pair.pair decl loc) acc),
-		fail _ => success attempt_start (list_reverse acc),
-	}
+def location_of_span (whole_file : String) (sp : ParseSpan) : Location :=
+	if parse_span_is_unknown sp
+	then Location.mk 0 1 1
+	else location_of_remaining_len whole_file sp.start_rem
 
 #[partial]
 def decls_try (r : ParseResult ParseDecl) (orig : String) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
@@ -4305,6 +4320,104 @@ def test_span_fragment_after_consume : Bool :=
 	let rest : String := span_fragment next in
 	String.beq rest "world"
 
+// ─── Recorded spans ────────────────────────────────────────────────────
+//
+// `span_text` reads a recorded span back out of the source it came from,
+// so each of these asserts the exact substring a construct claims to
+// cover — which is the property that matters for a diagnostic and the
+// one an off-by-one would break invisibly.
+
+#[partial]
+def span_text_of_term (r : ParseResult ParseTerm) (src : String) : String :=
+	match r {
+		success _ t => span_text src t.span,
+		fail _ => "<parse failed>",
+	}
+
+#[test]
+def test_span_covers_atom_only : Bool :=
+	// The atom stops at `foo`; the rest of the line is not its extent.
+	String.beq (span_text_of_term (atom_term "foo bar") "foo bar") "foo"
+
+#[test]
+def test_span_covers_whole_application : Bool :=
+	String.beq (span_text_of_term (expression "f x y") "f x y") "f x y"
+
+#[test]
+def test_span_covers_infix_from_left_operand : Bool :=
+	// Nothing threads the start of `a` down to where the `+` application
+	// is built — `pt_from` reads it back off the left operand's own span.
+	String.beq (span_text_of_term (expression "a + b") "a + b") "a + b"
+
+/// A parenthesised expression's span includes its parentheses: that is
+/// what was written at this position.
+#[test]
+def test_span_covers_parens : Bool :=
+	String.beq (span_text_of_term (atom_term "(a + b)") "(a + b)") "(a + b)"
+
+/// The compound's span must not overwrite its operands'. `a + b` builds
+/// `app (app (var "+") a) b`, so two `app` layers down on the left is
+/// the original `a` atom, which has to still claim just `a`.
+#[test]
+def test_span_of_nested_operand_is_its_own : Bool :=
+	match expression "foo + 1" {
+		success _ t =>
+			match t.kind {
+				ParseTermKind.app f _ =>
+					match f.kind {
+						ParseTermKind.app _ lhs => String.beq (span_text "foo + 1" lhs.span) "foo",
+						_ => false,
+					},
+				_ => false,
+			},
+		fail _ => false,
+	}
+
+/// Multi-byte source: spans are byte lengths throughout, so a span
+/// recorded after an em dash still slices back to exactly its construct.
+#[test]
+def test_span_after_multibyte_char : Bool :=
+	let src : String := "// — comment\nfoo" in
+	// The comment is skipped BEFORE parsing, exactly as `decls_skip` does
+	// -- `expression` itself skips whitespace only. The span is still
+	// measured against the full `src`, which is the whole point: both
+	// remainders are suffixes of the same string, so the byte arithmetic
+	// has to survive the 3-byte em dash sitting in the skipped part.
+	String.beq (span_text_of_term (expression (skip_docstrings (skip_spaces src))) src) "foo"
+
+#[test]
+def test_decl_span_covers_declaration : Bool :=
+	let src : String := "def f : I64 := 1" in
+	match decl_parser src {
+		success _ d => String.beq (span_text src d.span) src,
+		fail _ => false,
+	}
+
+/// The second of two declarations: its span must start at its own text,
+/// not at the file. This is the same fact `test_decls_parser_with_locs_
+/// two_defs` asserts as a `Location`, checked here at the span the
+/// projection now reads.
+#[test]
+def test_decl_span_second_decl_starts_at_itself : Bool :=
+	let src : String := "def a : I64 := 1\n\ndef b : I64 := 2" in
+	match decls_skip (skip_docstrings (skip_spaces src)) List.empty {
+		// Nested patterns are not supported by this parser, so the tail
+		// is destructured by a second match rather than `cons _ (cons ..)`.
+		success _ ds =>
+			match ds {
+				List.cons _ rest => second_decl_span_is src rest,
+				List.empty => false,
+			},
+		fail _ => false,
+	}
+
+#[partial]
+def second_decl_span_is (src : String) (rest : List ParseDecl) : Bool :=
+	match rest {
+		List.cons second _ => String.beq (span_text src second.span) "def b : I64 := 2",
+		List.empty => false,
+	}
+
 #[partial]
 def variable (input: String) : ParseResult ParseTerm :=
     variable_try_path (path_variable input) input
@@ -4766,8 +4879,67 @@ def struct_lit_finish (input : String) (fields : List ParseStructLitField) (type
         fail e => fail (ParseError.custom "expected } to close struct literal" input)
     }
 
+// ─── Recording source positions ────────────────────────────────────────
+//
+// A span is recorded at the two points every parsed construct passes
+// through -- `atom_term` for terms, `decl_parser` for declarations --
+// and NOT at the ~77 individual `pt_*`/`pd_*` construction sites. Both
+// of those are handed the input at exactly the point their construct
+// begins and hand back the remainder where it ends, so both ends of the
+// span are already in hand there and no threading is needed.
+//
+// Most individual construction sites could not do this even if each
+// were edited: they sit in continuation helpers (`type_dep_body`,
+// `struct_lit_fields_end`, ...) whose own `input` parameter is somewhere
+// in the MIDDLE of the construct being built, so stamping there would
+// record a confidently wrong position. Sites that genuinely cannot see
+// their own start keep `parse_span_unknown` -- a wrong location is worse
+// for debugging than an absent one, and `parse_span_is_unknown` lets a
+// consumer tell the two apart.
+//
+// The one shape that needs neither is a compound built bottom-up from
+// an already-located left operand (application, infix, arrow): `pt_from`
+// reads the start back off that operand. See its doc comment in
+// `lang/types.mo`.
+
+#[partial]
+def term_at (input : String) (r : ParseResult ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem t => success rem (pt_at input rem t.kind),
+        fail e => fail e,
+    }
+
+#[partial]
+def decl_at (input : String) (r : ParseResult ParseDecl) : ParseResult ParseDecl :=
+    match r {
+        success rem d => success rem (pd_at input rem d.kind),
+        fail e => fail e,
+    }
+
+/// The source text a span covers. A `ParseSpan` stores remaining-input
+/// LENGTHS, so recovering the text means converting both ends back
+/// against the full source: the start offset is `total - start_rem` and
+/// the length is `start_rem - end_rem`. Byte-exact, which is what makes
+/// it a usable assertion over multi-byte source too.
+#[partial]
+def span_text (whole_file : String) (sp : ParseSpan) : String :=
+	let total : I64 := String.length whole_file in
+	let start : I64 := I64.sub total sp.start_rem in
+	String.slice (String.drop start whole_file) 0 (I64.sub sp.start_rem sp.end_rem)
+
+/// Every atom -- variable, literal, `match`, `if`, `do`, lambda, list
+/// and struct literal, and a parenthesised expression -- reaches the
+/// grammar through here, so this single stamp locates all eleven
+/// `atom_parsers` plus the two fallbacks. A parenthesised expression's
+/// span deliberately INCLUDES its parentheses: that is the extent of the
+/// atom as written, and the inner expression is not what appeared at
+/// this position.
 #[partial]
 def atom_term (input: String) : ParseResult ParseTerm :=
+    term_at input (atom_term_unlocated input)
+
+#[partial]
+def atom_term_unlocated (input: String) : ParseResult ParseTerm :=
     match alt_fold (atom_parsers) input {
         success rem out => success rem out,
         fail _ =>
@@ -5582,7 +5754,16 @@ def expression (input: String) : ParseResult ParseTerm :=
 
 #[partial]
 def expr_climb (input: String) (min_prec: I64) : ParseResult ParseTerm :=
-    expr_climb_try_return (return_shorthand_parser (skip_spaces input)) input min_prec
+    expr_climb_at (skip_spaces input) min_prec
+
+/// `skip_spaces` hoisted out of the two call sites below, which each
+/// used to redo it: this names the point the expression actually starts
+/// at, which is what `term_at` needs to locate a `return` shorthand
+/// (the one term form reaching `expr_climb` without passing through
+/// `atom_term`).
+#[partial]
+def expr_climb_at (src: String) (min_prec: I64) : ParseResult ParseTerm :=
+    expr_climb_try_return (term_at src (return_shorthand_parser src)) src min_prec
 
 // Tried before `atom_term` -- see `return_shorthand_parser`'s own doc
 // comment above for why this must be `expr_climb`'s own entry point and
@@ -5593,7 +5774,7 @@ def expr_climb (input: String) (min_prec: I64) : ParseResult ParseTerm :=
 def expr_climb_try_return (r: ParseResult ParseTerm) (input: String) (min_prec: I64) : ParseResult ParseTerm :=
     match r {
         success rem out => success rem out,
-        fail _ => expr_climb_first (atom_term (skip_spaces input)) min_prec
+        fail _ => expr_climb_first (atom_term input) min_prec
     }
 
 #[partial]
@@ -5637,7 +5818,7 @@ def expr_climb_rest_ws (r: ParseResult String) (lhs: ParseTerm) (min_prec: I64) 
 #[partial]
 def expr_climb_rest_next (r: ParseResult ParseTerm) (input: String) (lhs: ParseTerm) (min_prec: I64) : ParseResult ParseTerm :=
     match r {
-        success rem rhs => expr_climb_rest rem (pt_app  lhs rhs) min_prec,
+        success rem rhs => expr_climb_rest rem (pt_from lhs rem (ParseTermKind.app lhs rhs)) min_prec,
         fail _ => expr_climb_op input lhs min_prec
     }
 
@@ -5715,15 +5896,19 @@ def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: ParseTerm) (op: String) (
 def expr_climb_op_rhs_expr (r: ParseResult ParseTerm) (lhs: ParseTerm) (op: String) (min_prec: I64) : ParseResult ParseTerm :=
     match r {
         success rem rhs =>
+            // Spanned from `lhs`'s own start to `rem` in every branch --
+            // including `|>`, where the applied function is textually to
+            // the RIGHT: the span records where the expression was
+            // written, not the order the desugaring puts its parts in.
             let combined : ParseTerm :=
                 if String.beq op "|>"
-                then pt_app  rhs lhs
+                then pt_from lhs rem (ParseTermKind.app rhs lhs)
                 else if String.beq op "<|"
-                then pt_app  lhs rhs
+                then pt_from lhs rem (ParseTermKind.app lhs rhs)
                 else
                     // Operator desugars to: op lhs rhs → app (app (var SENTINEL op) lhs) rhs
                     let op_var : ParseTerm := pt_var (NameRef.nid (Identifier.id op)) in
-                    pt_app  (pt_app  op_var lhs) rhs
+                    pt_from lhs rem (ParseTermKind.app (pt_from lhs rem (ParseTermKind.app op_var lhs)) rhs)
             in
             expr_climb_rest rem combined min_prec,
         fail e => fail e
@@ -5815,7 +6000,7 @@ def type_dep_arrow_tag (r: ParseResult String) (input: String) (rem: String) (na
 def type_dep_body (r: ParseResult ParseTerm) (input: String) (name: String) (typ: ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem body =>
-            success rem (pt_at input rem (ParseTermKind.pi_dep (Identifier.id name) typ body)),
+            success rem (pt_from typ rem (ParseTermKind.pi_dep (Identifier.id name) typ body)),
         fail e => fail e
     }
 
@@ -5855,7 +6040,7 @@ def type_arrow_tag (r: ParseResult String) (input: String) (lhs: ParseTerm) : Pa
 #[partial]
 def type_arrow_rhs (lhs: ParseTerm) (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
     match r {
-        success rem rhs => success rem (pt_pi  lhs rhs),
+        success rem rhs => success rem (pt_from lhs rem (ParseTermKind.pi lhs rhs)),
         fail e => fail e
     }
 
