@@ -274,39 +274,74 @@ instance [BOrd K] Map BTreeMap {
 
 /// ─── HashMap ────────────────────────────────────────────────
 
-/// Compute bucket index (0–15) from a hash value.
-def HashMap.bucket_of (hash: U64) : U64 := U64.mod hash 16u64
+/// Compute bucket index (0-255) from a hash value.
+///
+/// 256, not 16. The table is two LEVELS of the same 16-way dispatch
+/// (`Bucket16` below), so widening cost no new dispatch code -- and the
+/// old 16 was badly under-provisioned for how this codebase actually
+/// uses `HashMap`: the compiler keeps ~4,200 def names and ~2,700
+/// reachability entries in one map, which at 16 buckets is ~260 entries
+/// per bucket, and `bucket_lookup_eq` scans a bucket LINEARLY. That made
+/// every lookup ~130 key comparisons on the hottest paths in the
+/// backend. At 256 the same maps sit at ~16 per bucket.
+def HashMap.bucket_of (hash: U64) : U64 := U64.mod hash 256u64
 
-/// Fixed 16 buckets for the hash map.
-type Buckets16 K V {
+/// One level of 16-way dispatch, generic in what a slot holds.
+///
+/// Generic in `P` specifically so it can nest: a `HashMap`'s table is
+/// `Bucket16 (Bucket16 (List (Pair K V)))`, which is 256 buckets built
+/// from ONE 16-arm dispatch written once, rather than a 256-field
+/// constructor and two 256-arm chains.
+type Bucket16 P {
   buckets (
-    b0 b1 b2 b3 b4 b5 b6 b7 
-    b8 b9 b10 b11 b12 b13 b14 b15 
-    : List (Pair K V))
+    b0 b1 b2 b3 b4 b5 b6 b7
+    b8 b9 b10 b11 b12 b13 b14 b15
+    : P)
 }
 
-/// Hash map type: 16-bucket chaining hash table.
+/// Hash map type: 256-bucket chaining hash table, as 16x16.
 type HashMap K V {
-  map (Buckets16 K V)
+  map (Bucket16 (Bucket16 (List (Pair K V))))
 }
+
+/// Every slot, in index order -- the basis for the whole-table folds
+/// (`to_list`, `is_empty`) that used to be written out 16 ways.
+def Bucket16.to_list {P : Type} (b : Bucket16 P) : List P :=
+  match b {
+    Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+      [b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15]
+  }
+
+/// All 16 slots set to the same value.
+def Bucket16.replicate {P : Type} (e : P) : Bucket16 P :=
+  Bucket16.buckets e e e e e e e e e e e e e e e e
+
+/// Slot-wise combine of two levels -- what `merge_buckets` is.
+def Bucket16.map2 {P : Type} (f : P -> P -> P) (x : Bucket16 P) (y : Bucket16 P) : Bucket16 P :=
+  match x {
+    Bucket16.buckets a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 =>
+      match y {
+        Bucket16.buckets c0 c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 c12 c13 c14 c15 =>
+          Bucket16.buckets
+            (f a0 c0) (f a1 c1) (f a2 c2) (f a3 c3)
+            (f a4 c4) (f a5 c5) (f a6 c6) (f a7 c7)
+            (f a8 c8) (f a9 c9) (f a10 c10) (f a11 c11)
+            (f a12 c12) (f a13 c13) (f a14 c14) (f a15 c15)
+      }
+  }
 
 /// 16 empty buckets.
-def HashMap.empty_buckets {K V : Type} : Buckets16 K V :=
-  Buckets16.buckets 
-    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
-    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
-    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
-    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
-    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
-    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
-    (List.empty : List (Pair K V)) (List.empty : List (Pair K V)) 
-    (List.empty : List (Pair K V)) (List.empty : List (Pair K V))
+def HashMap.empty_buckets {K V : Type} : Bucket16 (Bucket16 (List (Pair K V))) :=
+  Bucket16.replicate (Bucket16.replicate (List.empty : List (Pair K V)))
 
-/// Look up the bucket at a given U64 index.
-#[terminating]
-def HashMap.get_bucket {K V : Type} (b: Buckets16 K V) (idx: U64) : List (Pair K V) :=
+/// One 16-way step per level. The index is a flat 0-255 so that every
+/// caller -- `str_map_*` (`lang/codegen/util.mo`), `modpath_map_*` and
+/// `alias_map_*` (`lang/scope.mo`) -- keeps working unchanged against
+/// `bucket_of`/`get_bucket`/`set_bucket`; the two-level shape is an
+/// implementation detail of this file.
+def Bucket16.get {P : Type} (b : Bucket16 P) (idx : U64) : P :=
   match b {
-    Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+    Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
       if U64.beq 0u64 idx then b0 else
       if U64.beq 1u64 idx then b1 else
       if U64.beq 2u64 idx then b2 else
@@ -321,32 +356,37 @@ def HashMap.get_bucket {K V : Type} (b: Buckets16 K V) (idx: U64) : List (Pair K
       if U64.beq 11u64 idx then b11 else
       if U64.beq 12u64 idx then b12 else
       if U64.beq 13u64 idx then b13 else
-      if U64.beq 14u64 idx then b14 else
-      b15
+      if U64.beq 14u64 idx then b14 else b15
   }
 
-/// Return buckets with bucket at idx replaced by new_val.
-#[terminating]
-def HashMap.set_bucket {K V : Type} (b: Buckets16 K V) (idx: U64) (new_val: List (Pair K V)) : Buckets16 K V :=
+def Bucket16.set {P : Type} (b : Bucket16 P) (idx : U64) (v : P) : Bucket16 P :=
   match b {
-    Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
-      if U64.beq 0u64 idx then Buckets16.buckets new_val b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 1u64 idx then Buckets16.buckets b0 new_val b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 2u64 idx then Buckets16.buckets b0 b1 new_val b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 3u64 idx then Buckets16.buckets b0 b1 b2 new_val b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 4u64 idx then Buckets16.buckets b0 b1 b2 b3 new_val b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 5u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 new_val b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 6u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 new_val b7 b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 7u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 new_val b8 b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 8u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 new_val b9 b10 b11 b12 b13 b14 b15 else
-      if U64.beq 9u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 new_val b10 b11 b12 b13 b14 b15 else
-      if U64.beq 10u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 new_val b11 b12 b13 b14 b15 else
-      if U64.beq 11u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 new_val b12 b13 b14 b15 else
-      if U64.beq 12u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 new_val b13 b14 b15 else
-      if U64.beq 13u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 new_val b14 b15 else
-      if U64.beq 14u64 idx then Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 new_val b15 else
-      Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 new_val
+    Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
+      if U64.beq 0u64 idx then Bucket16.buckets v b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 1u64 idx then Bucket16.buckets b0 v b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 2u64 idx then Bucket16.buckets b0 b1 v b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 3u64 idx then Bucket16.buckets b0 b1 b2 v b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 4u64 idx then Bucket16.buckets b0 b1 b2 b3 v b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 5u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 v b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 6u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 v b7 b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 7u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 v b8 b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 8u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 v b9 b10 b11 b12 b13 b14 b15 else
+      if U64.beq 9u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 v b10 b11 b12 b13 b14 b15 else
+      if U64.beq 10u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 v b11 b12 b13 b14 b15 else
+      if U64.beq 11u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 v b12 b13 b14 b15 else
+      if U64.beq 12u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 v b13 b14 b15 else
+      if U64.beq 13u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 v b14 b15 else
+      if U64.beq 14u64 idx then Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 v b15 else
+      Bucket16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 v
   }
+
+def HashMap.get_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V)))) (idx: U64) : List (Pair K V) :=
+  Bucket16.get (Bucket16.get b (U64.div idx 16u64)) (U64.mod idx 16u64)
+
+def HashMap.set_bucket {K V : Type} (b: Bucket16 (Bucket16 (List (Pair K V)))) (idx: U64) (new_val: List (Pair K V)) : Bucket16 (Bucket16 (List (Pair K V))) :=
+  let hi : U64 := U64.div idx 16u64 in
+  let lo : U64 := U64.mod idx 16u64 in
+  Bucket16.set b hi (Bucket16.set (Bucket16.get b hi) lo new_val)
 
 /// Instance: HashMap implements the Map type class using hashing + ordering-based equality.
 /// NOTE: uses BOrd K instead of BEq K due to evaluator instance resolution limitation.
@@ -388,9 +428,6 @@ instance [Hashable K, BOrd K] Map HashMap {
     }
 }
 
-/// Insert (key, val) into a single bucket, replacing existing key if present.
-/// Equality check: not (lt a b) && not (gt a b)  (equivalent to a == b for total orders).
-#[terminating]
 def HashMap.bucket_insert {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (val: V) (bucket: List (Pair K V)) : List (Pair K V) :=
   match bucket {
     List.empty => List.cons (Pair.pair key val) List.empty,
@@ -490,36 +527,42 @@ def HashMap.concat_all {K V : Type} (lists : List (List (Pair K V))) : List (Pai
 /// relationship to key order for a hash table).
 def HashMap.to_list {K V : Type} (m: HashMap K V) : List (Pair K V) :=
   match m {
-    HashMap.map buckets =>
-      match buckets {
-        Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
-          HashMap.concat_all [b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, b12, b13, b14, b15]
-      }
+    HashMap.map outer => HashMap.concat_inners (Bucket16.to_list outer)
   }
 
-/// Cheap (O(16) — 16 fixed bucket checks, never walks entries) emptiness
-/// test, split into two ≤8-wide `&&` chains per AGENTS.md's `||`/`&&`
-/// chain-length rule (same reasoning as `get_bucket`'s lo/hi split).
-/// Exists specifically so `lang/module.mo`'s `merge_scope_data` can
-/// short-circuit its `HashMap.to_list`-then-reinsert merge when the
-/// target side has nothing to add — see self-hosted-compiler-perf.md
-/// Step 4.
-def HashMap.buckets_all_empty_lo {K V : Type} (b0 b1 b2 b3 b4 b5 b6 b7 : List (Pair K V)) : Bool :=
-  List.is_empty b0 && List.is_empty b1 && List.is_empty b2 && List.is_empty b3
-  && List.is_empty b4 && List.is_empty b5 && List.is_empty b6 && List.is_empty b7
+/// Flatten one outer level: each slot is itself 16 buckets.
+def HashMap.concat_inners {K V : Type} (inners : List (Bucket16 (List (Pair K V)))) : List (Pair K V) :=
+  match inners {
+    List.empty => List.empty,
+    List.cons inner rest =>
+      HashMap.concat_lists (HashMap.concat_all (Bucket16.to_list inner))
+        (HashMap.concat_inners rest)
+  }
 
-def HashMap.buckets_all_empty_hi {K V : Type} (b8 b9 b10 b11 b12 b13 b14 b15 : List (Pair K V)) : Bool :=
-  List.is_empty b8 && List.is_empty b9 && List.is_empty b10 && List.is_empty b11
-  && List.is_empty b12 && List.is_empty b13 && List.is_empty b14 && List.is_empty b15
+/// Emptiness without walking entries. Recursive over the two levels
+/// rather than two 8-wide `&&` chains: the chain-length rule that shaped
+/// the old `buckets_all_empty_lo`/`_hi` pair does not scale to 256, and
+/// the recursion short-circuits on the first non-empty bucket anyway.
+/// Kept cheap because `lang/module.mo`'s `merge_scope_data` uses it to
+/// skip a `to_list`-then-reinsert merge entirely.
+def HashMap.lists_all_empty {K V : Type} (ls : List (List (Pair K V))) : Bool :=
+  match ls {
+    List.empty => true,
+    List.cons l rest => if List.is_empty l then HashMap.lists_all_empty rest else false
+  }
+
+def HashMap.inners_all_empty {K V : Type} (inners : List (Bucket16 (List (Pair K V)))) : Bool :=
+  match inners {
+    List.empty => true,
+    List.cons inner rest =>
+      if HashMap.lists_all_empty (Bucket16.to_list inner)
+      then HashMap.inners_all_empty rest
+      else false
+  }
 
 def HashMap.is_empty {K V : Type} (m: HashMap K V) : Bool :=
   match m {
-    HashMap.map buckets =>
-      match buckets {
-        Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
-          HashMap.buckets_all_empty_lo b0 b1 b2 b3 b4 b5 b6 b7
-          && HashMap.buckets_all_empty_hi b8 b9 b10 b11 b12 b13 b14 b15
-      }
+    HashMap.map outer => HashMap.inners_all_empty (Bucket16.to_list outer)
   }
 
 /// NOTE: a generic `HashMap.insert_all [Hashable K, BOrd K] (pairs: List
@@ -584,19 +627,10 @@ def HashMap.is_empty {K V : Type} (m: HashMap K V) : Bool :=
 /// performance section for the measured before/after.
 def HashMap.merge_buckets {K V : Type} (m1: HashMap K V) (m2: HashMap K V) : HashMap K V :=
   match m1 {
-    HashMap.map buckets1 =>
+    HashMap.map a =>
       match m2 {
-        HashMap.map buckets2 =>
-          match buckets1 {
-            Buckets16.buckets a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13 a14 a15 =>
-              match buckets2 {
-                Buckets16.buckets b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 =>
-                  HashMap.map (Buckets16.buckets
-                    (List.append a0 b0) (List.append a1 b1) (List.append a2 b2) (List.append a3 b3)
-                    (List.append a4 b4) (List.append a5 b5) (List.append a6 b6) (List.append a7 b7)
-                    (List.append a8 b8) (List.append a9 b9) (List.append a10 b10) (List.append a11 b11)
-                    (List.append a12 b12) (List.append a13 b13) (List.append a14 b14) (List.append a15 b15))
-              }
-          }
+        HashMap.map b =>
+          HashMap.map (Bucket16.map2 (Bucket16.map2 List.append) a b)
       }
   }
+

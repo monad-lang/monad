@@ -21,30 +21,30 @@ use std.bench {now, report}
 use std.list {length}
 
 #[terminating]
-def set_loop (i : I64) (n : I64) (idx : U64) (b : Buckets16 I64 I64) : Buckets16 I64 I64 :=
+def set_loop (i : I64) (n : I64) (idx : U64) (b : Bucket16 (Bucket16 (List (Pair I64 I64)))) : Bucket16 (Bucket16 (List (Pair I64 I64))) :=
     if I64.beq i n then b
     else
-        let next_idx : U64 := U64.mod (U64.add idx 1u64) 16u64 in
+        let next_idx : U64 := U64.mod (U64.add idx 1u64) 256u64 in
         set_loop (i + 1) n next_idx (HashMap.set_bucket b idx (List.cons (Pair.pair i i) List.empty))
 
 #[terminating]
-def get_loop (i : I64) (n : I64) (idx : U64) (b : Buckets16 I64 I64) (acc : I64) : I64 :=
+def get_loop (i : I64) (n : I64) (idx : U64) (b : Bucket16 (Bucket16 (List (Pair I64 I64)))) (acc : I64) : I64 :=
     if I64.beq i n then acc
     else
-        let next_idx : U64 := U64.mod (U64.add idx 1u64) 16u64 in
+        let next_idx : U64 := U64.mod (U64.add idx 1u64) 256u64 in
         let bucket : List (Pair I64 I64) := HashMap.get_bucket b idx in
         get_loop (i + 1) n next_idx b (acc + List.length bucket)
 
-def run_bench (n : I64) (label : String) : Bool :=
-    let empty : Buckets16 I64 I64 := HashMap.empty_buckets in
-    let set_start := Bench.now in
-    let b := set_loop 0 n 0u64 empty in
-    let set_elapsed := I64.sub Bench.now set_start in
-    let logged_set := Bench.report (String.concat "set_bucket " label) set_elapsed in
-    let get_start := Bench.now in
-    let total := get_loop 0 n 0u64 b 0 in
-    let get_elapsed := I64.sub Bench.now get_start in
-    let logged_get := Bench.report (String.concat "get_bucket " label) get_elapsed in
+def run_bench (n : I64) (label : String) : IO Bool := do {
+    let empty : Bucket16 (Bucket16 (List (Pair I64 I64))) := HashMap.empty_buckets;
+    let set_start := Bench.now;
+    let b := set_loop 0 n 0u64 empty;
+    let set_elapsed := I64.sub Bench.now set_start;
+    let _ <- Bench.report (String.concat "set_bucket " label) set_elapsed;
+    let get_start := Bench.now;
+    let total := get_loop 0 n 0u64 b 0;
+    let get_elapsed := I64.sub Bench.now get_start;
+    let _ <- Bench.report (String.concat "get_bucket " label) get_elapsed;
     // `total` just needs to be deterministic and non-degenerate (proof
     // the loop actually ran and touched real bucket content), not a
     // specific value -- every bucket holds exactly one 1-element list
@@ -52,10 +52,11 @@ def run_bench (n : I64) (label : String) : Bool :=
     // each bucket's slot every 16 calls), so `total` == the number of
     // buckets actually read (== n once n >= 16, since every idx 0..15
     // is visited before any repeats).
-    I64.gt total 0
+    return (I64.gt total 0)
+}
 
 #[test]
-def bench_bucket_dispatch_50k : Bool := run_bench 50000 "n=50000"
+def bench_bucket_dispatch_50k : IO Bool := run_bench 50000 "n=50000"
 
 #[test]
-def bench_bucket_dispatch_200k : Bool := run_bench 200000 "n=200000"
+def bench_bucket_dispatch_200k : IO Bool := run_bench 200000 "n=200000"
