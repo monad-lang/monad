@@ -453,12 +453,36 @@ pub fn eval_core_program(path: &ModulePath, source: &str) -> Result<core_value::
     .map_err(|e| format!("eval: {e}"))
 }
 
+/// A program's own exit code, from the value `main` evaluated to.
+///
+/// `main : IO I64` forces to the `I64` itself here (the IO action has
+/// already been performed by the time this sees it), so a plain numeric
+/// literal is the code. Anything else -- `IO Unit`, a constructor, a
+/// closure -- has no meaningful code and reports success.
+fn exit_code_of(v: &core_value::Value) -> i64 {
+  match v {
+    core_value::Value::Lit(crate::core_ir::IrLit::Num(n, _)) => *n,
+    // `main : IO I64` forces to the IO constructor still wrapping its
+    // payload (`Con { args: [Lit(Num(..))] }`), so unwrap single-argument
+    // constructors to reach it. Anything else -- `IO Unit`, a closure --
+    // has no meaningful code and reports success.
+    core_value::Value::Con { args, .. } if args.len() == 1 => exit_code_of(&args[0]),
+    _ => 0,
+  }
+}
+
+/// Returns the program's own exit code. Previously returned `Ok(())`,
+/// discarding whatever `main` produced -- so `monad-rs run lang/main.mo
+/// compile ...` exited 0 even when the compile FAILED at a gate and
+/// emitted no binary. Any script or CI treating that as success would
+/// have been silently wrong; it is exactly how a broken build slips
+/// through.
 pub fn run(
   input: PathBuf,
   args: Vec<String>,
   options: EvalOptions,
   extra_mote_paths: Vec<PathBuf>,
-) -> Result<(), String> {
+) -> Result<i64, String> {
   let path: ModulePath = input.clone().into();
   let source = fs::read_to_string(&input).map_err(|e| format!("{e}"))?;
   let mut loaded = default_modules().map_err(|e| format!("{e}"))?;
@@ -515,7 +539,7 @@ pub fn run(
   // (`force_global_with_timeout`, the parallel test-file workers) both
   // already spawn a 64MB-stack thread for exactly this reason; `run()`'s
   // single-shot eval never did. Match that existing precedent here.
-  let eval_result: Result<(), String> = std::thread::Builder::new()
+  let eval_result: Result<i64, String> = std::thread::Builder::new()
     .stack_size(64 * 1024 * 1024)
     .spawn(move || {
       let natives = core_value::NativeTable::from_lowered(&lowered);
@@ -542,7 +566,7 @@ pub fn run(
       if options.debug {
         println!("Eval result {result:?}");
       }
-      Ok(())
+      Ok(exit_code_of(&result))
     })
     .map_err(|e| format!("failed to spawn eval thread: {e}"))?
     .join()

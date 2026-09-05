@@ -39,7 +39,7 @@ use std.list {List}
 open LLVMType {i1_, i8_, i64_, ptr}
 open LLVMValue {
   add, alloc_constructor, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
-  int_, inttoptr, load, mul, parm_, phi, sdiv, sub, urem, var_, zext,
+  int_, inttoptr, load, mul, parm_, phi, sdiv, sub, udiv, urem, var_, zext,
 }
 open LLVMInstruction {assign, branch, jump, ret}
 
@@ -76,7 +76,7 @@ def string_runtime_functions : List LLVMFunction :=
 
 def numeric_runtime_functions : List LLVMFunction :=
   [emit_u8_eq, emit_u8_lt, emit_u8_gt, emit_u64_eq,
-   emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod]
+   emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod, emit_u64_div]
 
 // ─── Shared emitter helpers ─────────────────────────────────────────
 
@@ -318,6 +318,17 @@ def emit_u8_div : LLVMFunction := emit_guarded_native "monad_u8_div" (sdiv (parm
 /// self-consistency matters (`std/map.mo`'s own 0-15 bucket chain is
 /// simply never entered with a negative index).
 def emit_u64_mod : LLVMFunction := emit_guarded_native "monad_u64_mod" (urem (parm_ 0) (parm_ 1))
+
+/// `#[native u64_div]` (init/number.mo's `U64.div`). Guarded like
+/// `u64_mod`: a zero divisor yields 0 rather than trapping.
+///
+/// Newly REACHABLE as of `std/map.mo`'s 256-bucket table, whose
+/// `get_bucket` splits a flat index with `U64.div idx 16u64`. Before
+/// that nothing in the compiled closure divided a `U64`, so this was
+/// missing -- and `validate_no_unwired_natives` caught it as a build
+/// failure rather than letting it compile to a "return Unit" stub that
+/// would have silently produced garbage bucket indices.
+def emit_u64_div : LLVMFunction := emit_guarded_native "monad_u64_div" (udiv (parm_ 0) (parm_ 1))
 
 #[partial]
 def emit_guarded_native (name : String) (op : LLVMValue) : LLVMFunction :=

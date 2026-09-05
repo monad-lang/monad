@@ -953,12 +953,21 @@ fn execute(command: Commands) -> Result<(), String> {
         mote_path,
       );
       match result {
-        Ok(_) => (),
-        Err(ref e) => {
-          eprintln!("error: {e}")
+        // The program's own exit code becomes this process's exit code.
+        // Without this a failed `monad-rs run lang/main.mo compile ...`
+        // -- a gate rejecting the build and emitting no binary -- still
+        // exited 0 and read as success to any caller.
+        Ok(code) => {
+          if code != 0 {
+            std::process::exit(code as i32);
+          }
+          Ok(())
+        }
+        Err(e) => {
+          eprintln!("error: {e}");
+          Err(e)
         }
       }
-      result
     }
     Commands::Test {
       inputs,

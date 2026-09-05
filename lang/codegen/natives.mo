@@ -269,6 +269,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "u8_mul" then Option.some (NativeWrapKind.passthrough "monad_u8_mul")
             else if String.beq target "u8_div" then Option.some (NativeWrapKind.passthrough "monad_u8_div")
             else if String.beq target "u64_mod" then Option.some (NativeWrapKind.passthrough "monad_u64_mod")
+            else if String.beq target "u64_div" then Option.some (NativeWrapKind.passthrough "monad_u64_div")
             // Generated IR: documented stubs (0 / true). `Bench` is a
             // measurement API, never load-bearing for correctness, and
             // the compiled runtime has no clock wired yet -- a typed
