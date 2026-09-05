@@ -29,10 +29,22 @@
 /// threaded through this pass instead -- one place rather than the whole
 /// grammar.
 ///
-/// Name resolution (`sentinel`, `find_index`, `field_access_chain`,
-/// `name_ref_to_string`) is IMPORTED from
-/// `lang/parser.mo`, not redefined -- duplicate top-level names across
-/// `lang/*.mo` silently collide (AGENTS.md item 18).
+/// Name resolution lives HERE: `find_index`, `show_module_path_dotted`,
+/// `name_ref_to_string` and `field_access_chain` are DEFINED in this
+/// module, and `lang/parser.mo` imports `name_ref_to_string` back rather
+/// than keeping the byte-identical copy it used to carry beside that
+/// import -- two definitions of one bare LLVM symbol, the shape
+/// `validate_no_colliding_def_symbols` (`lang/codegen/validate.mo`) now
+/// rejects and AGENTS.md item 18 describes.
+///
+/// `sentinel` is the exception: it belongs to `Term`'s representation
+/// rather than to this pass, so `lang/types.mo` owns it and both modules
+/// import it from there.
+///
+/// `show_module_path_dotted` still duplicates `lang/parser.mo`'s
+/// `module_path_to_string` body under a different name. Not a symbol
+/// collision, so it is left alone here; unifying them means deciding
+/// which module owns dotted-path rendering, which is a separate change.
 use lang.types {
   Class, ClassDef, Con, DebugName, Decl, Def, DoStmt, Identifier,
   InductConstructor, Inductive, Instance, Literal, MatchCase, ModulePath,
@@ -42,17 +54,12 @@ use lang.types {
   ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind,
   Struct, StructField, StructLitField, Term, desugar_do, sentinel,
 }
-// Imported, NOT redefined. An earlier revision of this file copied these
-// six in and claimed in its own comment to have moved them -- which armed
-// exactly the duplicate-top-level-name collision AGENTS.md item 18
-// records, and silently diverged (`name_ref_to_string`'s `nop` arm threw
-// away the operator spelling that `resolve_infix_decls` needs). The
-// layering is temporarily inverted -- a submodule importing its parent --
-// and is resolved when the grammar is wired to this pass: at that point
-// these move here for real and `lang/parser.mo` imports them back.
-use lang.parser {
-  field_access_chain, find_index, name_ref_to_string,
-}
+// Name resolution lives HERE now, moved out of `lang/parser.mo` for real
+// (an earlier revision copied it while claiming to have moved it, arming
+// the duplicate-top-level-name collision item 18 records). The grammar no
+// longer resolves names at all, so nothing flows the other way: it
+// imports `lower_parse_do` from here and that is the only edge.
+use lang.types {FieldPattern, FieldPatternEntry, show_operator}
 
 
 /// Extend `ctx` with a binder group. Each name is consed in order, so the
@@ -124,6 +131,68 @@ def lower_name_global (nref : NameRef) : Term :=
     }
 
 
+// --- Name resolution -------------------------------------------------
+//
+// `sentinel` (the free/unresolved de Bruijn index this pass emits for a
+// name bound by no enclosing binder) is IMPORTED from `lang.types`, not
+// declared here: codegen mangles a top-level def to its bare name, so a
+// second `def sentinel` would be a second definition of the LLVM symbol
+// `@sentinel` -- the shape `validate_no_colliding_def_symbols`
+// (`lang/codegen/validate.mo`) now rejects outright.
+
+#[partial]
+def find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64 :=
+    match ctx {
+        List.cons x rest =>
+            if String.beq (show_identifier id) (show_identifier x)
+            then Option.some depth
+            else find_index id rest (depth + 1),
+        List.empty => Option.none
+    }
+
+
+#[partial]
+def show_module_path_dotted (mp : ModulePath) : String := match mp {
+    ModulePath.mp ids => List.intercalate "." (List.map show_identifier ids),
+}
+
+
+/// Faithful to `lang/parser.mo`'s original, INCLUDING the `nop` arm: an
+/// operator keeps its spelling, because `resolve_infix_decls`
+/// (`lang/scope.mo`) rewrites placeholder operator vars into their real
+/// targets by that name. An earlier copy of this returned `Option.none`
+/// there and would have silently discarded it.
+#[partial]
+def name_ref_to_string (nref : NameRef) : Option String := match nref {
+    NameRef.nid id => Option.some (show_identifier id),
+    NameRef.nmp mp => Option.some (show_module_path_dotted mp),
+    NameRef.nop op => Option.some (show_operator op),
+}
+
+
+/// Nested bare-form field-pattern `Match` chain desugaring a dotted-path
+/// field access into ordinary struct-field destructuring -- mirrors the
+/// Rust reference's `lower_core.rs::lower_field_access_chain`.
+///
+/// The binder list is `[field]` inline rather than via
+/// `field_pattern_binder_names`: the pattern built here has exactly one
+/// entry whose binder IS `field`, so calling that helper would only add a
+/// dependency back on `lang/parser.mo`, which is the edge this module
+/// exists without.
+#[partial]
+def field_access_chain (scrutinee : Term) (fields : List Identifier) : Term :=
+    match fields {
+        List.empty => scrutinee,
+        List.cons field rest =>
+            let value : Term := field_access_chain (Term.var 0 (DebugName.named field)) rest in
+            let entry : FieldPatternEntry := FieldPatternEntry.mk field field in
+            let fp : FieldPattern := FieldPattern.mk (List.cons entry List.empty) true in
+            let binders : List Identifier := List.cons field List.empty in
+            let case_ : MatchCase := MatchCase.mc (Identifier.id "") binders value (Option.some fp) in
+            Term.lit (Literal.match_ scrutinee (List.cons case_ List.empty)),
+    }
+
+
 // --- The lowering itself --------------------------------------------
 
 #[partial]
@@ -174,6 +243,9 @@ def lower_parse_kind (ctx : List Identifier) (k : ParseTermKind) : Term :=
         ParseTermKind.con c => Term.con (lower_parse_con ctx c),
         ParseTermKind.type_ u => Term.type_ u,
         ParseTermKind.quote_ inner => Term.quote_ (lower_parse_term ctx inner),
+        // Desugared HERE, not in the grammar -- this is the whole reason
+        // the parse stage can drop `ctx`.
+        ParseTermKind.do_ stmts => lower_parse_do ctx stmts,
         ParseTermKind.hole => Term.hole,
     }
 

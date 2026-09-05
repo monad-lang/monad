@@ -259,11 +259,11 @@ def float_suffix_try_f64 (r : ParseResult String) (orig : String) : ParseResult 
 // operator) never reaches here as anything but a `fail` that lets the
 // caller's operator-parsing fall through correctly.
 #[partial]
-def numeric_literal (input : String) : ParseResult Term :=
+def numeric_literal (input : String) : ParseResult ParseTerm :=
 	numeric_literal_sign (tag "-" input) input
 
 #[partial]
-def numeric_literal_sign (r : ParseResult String) (orig : String) : ParseResult Term :=
+def numeric_literal_sign (r : ParseResult String) (orig : String) : ParseResult ParseTerm :=
 	match r {
 		success rem _ => numeric_literal_digits rem true,
 		fail _ => numeric_literal_digits orig false
@@ -271,12 +271,12 @@ def numeric_literal_sign (r : ParseResult String) (orig : String) : ParseResult 
 
 // Try a `0x`/`0X` hex prefix before falling back to decimal digits.
 #[partial]
-def numeric_literal_digits (input : String) (negative : Bool) : ParseResult Term :=
+def numeric_literal_digits (input : String) (negative : Bool) : ParseResult ParseTerm :=
 	numeric_literal_try_hex_lower (tag "0x" input) input negative
 
 
 #[partial]
-def numeric_literal_try_hex_lower (r : ParseResult String) (orig : String) (negative : Bool) : ParseResult Term :=
+def numeric_literal_try_hex_lower (r : ParseResult String) (orig : String) (negative : Bool) : ParseResult ParseTerm :=
 	match r {
 		success rem _ => numeric_literal_hex_digits rem negative,
 		fail _ => numeric_literal_try_hex_upper (tag "0X" orig) orig negative
@@ -284,7 +284,7 @@ def numeric_literal_try_hex_lower (r : ParseResult String) (orig : String) (nega
 
 
 #[partial]
-def numeric_literal_try_hex_upper (r : ParseResult String) (orig : String) (negative : Bool) : ParseResult Term :=
+def numeric_literal_try_hex_upper (r : ParseResult String) (orig : String) (negative : Bool) : ParseResult ParseTerm :=
 	match r {
 		success rem _ => numeric_literal_hex_digits rem negative,
 		fail _ => numeric_literal_decimal_digits orig negative
@@ -295,18 +295,18 @@ def numeric_literal_try_hex_upper (r : ParseResult String) (orig : String) (nega
 // float-suffix/int-suffix machinery below (numeric_literal_digits_done /
 // _try_dot / _frac / etc.).
 #[partial]
-def numeric_literal_decimal_digits (input : String) (negative : Bool) : ParseResult Term :=
+def numeric_literal_decimal_digits (input : String) (negative : Bool) : ParseResult ParseTerm :=
 	numeric_literal_digits_done (number input) negative
 
 
 // Hex path -- integers only, no float-dot try (no `0x1.8p3` hex floats).
 #[partial]
-def numeric_literal_hex_digits (input : String) (negative : Bool) : ParseResult Term :=
+def numeric_literal_hex_digits (input : String) (negative : Bool) : ParseResult ParseTerm :=
 	numeric_literal_hex_digits_done (hex_number input) negative
 
 
 #[partial]
-def numeric_literal_hex_digits_done (r : ParseResult I64) (negative : Bool) : ParseResult Term :=
+def numeric_literal_hex_digits_done (r : ParseResult I64) (negative : Bool) : ParseResult ParseTerm :=
 	match r {
 		success rem n => numeric_literal_hex_int_suffix rem n negative,
 		fail e => fail e
@@ -314,30 +314,30 @@ def numeric_literal_hex_digits_done (r : ParseResult I64) (negative : Bool) : Pa
 
 
 #[partial]
-def numeric_literal_hex_int_suffix (input : String) (n : I64) (negative : Bool) : ParseResult Term :=
+def numeric_literal_hex_int_suffix (input : String) (n : I64) (negative : Bool) : ParseResult ParseTerm :=
 	match int_suffix_parser input {
 		success rem suffix =>
 			let value : I64 := if negative then (0 - n) else n in
-			success rem (Term.lit (Literal.num value suffix)),
+			success rem (pt_lit  (ParseLiteral.num value suffix)),
 		fail e => fail e
 	}
 
 #[partial]
-def numeric_literal_digits_done (r : ParseResult I64) (negative : Bool) : ParseResult Term :=
+def numeric_literal_digits_done (r : ParseResult I64) (negative : Bool) : ParseResult ParseTerm :=
 	match r {
 		success rem n => numeric_literal_try_dot rem n negative,
 		fail e => fail e
 	}
 
 #[partial]
-def numeric_literal_try_dot (input : String) (n : I64) (negative : Bool) : ParseResult Term :=
+def numeric_literal_try_dot (input : String) (n : I64) (negative : Bool) : ParseResult ParseTerm :=
 	match tag "." input {
 		success rem _ => numeric_literal_frac (take_while_byte is_digit_byte rem) n negative,
 		fail _ => numeric_literal_int_suffix input n negative
 	}
 
 #[partial]
-def numeric_literal_frac (r : ParseResult String) (n : I64) (negative : Bool) : ParseResult Term :=
+def numeric_literal_frac (r : ParseResult String) (n : I64) (negative : Bool) : ParseResult ParseTerm :=
 	match r {
 		success rem frac =>
 			let sign_text : String := if negative then "-" else "" in
@@ -349,17 +349,17 @@ def numeric_literal_frac (r : ParseResult String) (n : I64) (negative : Bool) : 
 	}
 
 #[partial]
-def numeric_literal_float_suffix (input : String) (text : String) : ParseResult Term :=
+def numeric_literal_float_suffix (input : String) (text : String) : ParseResult ParseTerm :=
 	match float_suffix_parser input {
-		success rem suffix => success rem (Term.lit (Literal.flt text suffix)),
+		success rem suffix => success rem (pt_lit  (ParseLiteral.flt text suffix)),
 		fail e => fail e
 	}
 
 #[partial]
-def numeric_literal_int_suffix (input : String) (n : I64) (negative : Bool) : ParseResult Term :=
+def numeric_literal_int_suffix (input : String) (n : I64) (negative : Bool) : ParseResult ParseTerm :=
 	match int_suffix_parser input {
 		success rem suffix =>
 			let value : I64 := if negative then (0 - n) else n in
-			success rem (Term.lit (Literal.num value suffix)),
+			success rem (pt_lit  (ParseLiteral.num value suffix)),
 		fail e => fail e
 	}

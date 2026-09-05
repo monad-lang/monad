@@ -108,11 +108,11 @@ def string_body_escape_char (run_start : String) (before_backslash : String) (ch
 
 /// Parse a string literal and return it as a Term.
 #[partial]
-def string_parse (input: String) : ParseResult Term :=
+def string_parse (input: String) : ParseResult ParseTerm :=
 	match tag "\"" input {
 		success rem _ =>
 			match string_body rem {
-				success rem2 content => success rem2 (Term.lit (Literal.str content)),
+				success rem2 content => success rem2 (pt_lit  (ParseLiteral.str content)),
 				fail e => fail e
 			},
 		fail e => fail e
@@ -134,7 +134,7 @@ def string_parse (input: String) : ParseResult Term :=
 /// through to the identifier parser) when the input does not begin with
 /// `r"` or `r#"`.
 #[partial]
-def raw_string_parse (input : String) : ParseResult Term :=
+def raw_string_parse (input : String) : ParseResult ParseTerm :=
 	match tag "r" input {
 		success after_r _ => raw_string_after_r after_r,
 		fail e => fail e
@@ -145,7 +145,7 @@ def raw_string_parse (input : String) : ParseResult Term :=
 /// hashes does not start with `"`, this is not a raw-string opener (e.g.
 /// `r#x`) and we fail so the identifier parser handles the leading `r`.
 #[partial]
-def raw_string_after_r (input : String) : ParseResult Term :=
+def raw_string_after_r (input : String) : ParseResult ParseTerm :=
 	match take_while (fn c => String.beq c "#") input {
 		success after_hashes hashes =>
 			match tag "\"" after_hashes {
@@ -163,7 +163,7 @@ def raw_string_after_r (input : String) : ParseResult Term :=
 /// remainder being scanned. Steps by `utf8_char_width` so a multi-byte
 /// character in the body advances correctly instead of landing mid-codepoint.
 #[partial]
-def raw_string_body (n : I64) (orig : String) (input : String) : ParseResult Term :=
+def raw_string_body (n : I64) (orig : String) (input : String) : ParseResult ParseTerm :=
 	if is_empty input
 	then fail (ParseError.custom "unterminated raw string literal" input)
 	else
@@ -184,11 +184,11 @@ def raw_string_body (n : I64) (orig : String) (input : String) : ParseResult Ter
 /// For `n = 0`, `cnt` starts at `0 == n` so the very first call returns the
 /// closer immediately — any `"` closes a zero-hash raw string.
 #[partial]
-def raw_string_count_hashes (n : I64) (cnt : I64) (orig : String) (at_quote : String) (input : String) : ParseResult Term :=
+def raw_string_count_hashes (n : I64) (cnt : I64) (orig : String) (at_quote : String) (input : String) : ParseResult ParseTerm :=
 	if I64.beq cnt n
 	then
 		let consumed : I64 := String.length orig - String.length at_quote in
-		success input (Term.lit (Literal.str (String.slice orig 0 consumed)))
+		success input (pt_lit  (ParseLiteral.str (String.slice orig 0 consumed)))
 	else
 		if is_empty input
 		then fail (ParseError.custom "unterminated raw string literal" input)

@@ -225,6 +225,14 @@ type Param {
 
 /// Create a canonical Param with multiplicity=Many, no default value, and
 /// no attributes.
+def parse_param_many (name: Identifier) (type_: ParseTerm) : ParseParam :=
+    let none : Option ParseTerm := Option.none in
+    let no_attrs : List Attribute := List.empty in
+    ParseParam.mk name type_ Multiplicity.many none no_attrs
+
+/// Canonical sibling of `parse_param_many`, for code that already holds
+/// a lowered `Term`.
+#[partial]
 def param_many (name: Identifier) (type_: Term) : Param :=
     let none : Option Term := Option.none in
     let no_attrs : List Attribute := List.empty in
@@ -305,9 +313,11 @@ type FieldPatternEntry {
 /// inspects the `FieldPattern` half, to wrap the body in one extra
 /// `match` per `destructured` param before building the final `Term.lam`
 /// chain.
+/// A parameter as WRITTEN, before lowering -- parse-stage, so it holds
+/// `ParseParam`. Used only by `lang/parser.mo`.
 type ParsedParam {
-    plain (param: Param),
-    destructured (param: Param) (fp: FieldPattern),
+    plain (param: ParseParam),
+    destructured (param: ParseParam) (fp: FieldPattern),
 }
 
 type NumSuffix {
@@ -538,6 +548,9 @@ def pt_type_ (u : I64) : ParseTerm := pt_ (ParseTermKind.type_ u)
 #[partial]
 def pt_quote_ (t : ParseTerm) : ParseTerm := pt_ (ParseTermKind.quote_ t)
 
+#[partial]
+def pt_do (stmts : List ParseDoStmt) : ParseTerm := pt_ (ParseTermKind.do_ stmts)
+
 def pt_hole : ParseTerm := pt_ ParseTermKind.hole
 
 
@@ -656,6 +669,54 @@ def pd_ (k : ParseDeclKind) : ParseDecl :=
 def pd_at (input : String) (rem : String) (k : ParseDeclKind) : ParseDecl :=
     { span := { start_rem := String.length input, end_rem := String.length rem }, kind := k }
 
+
+// Same-arity constructors per declaration kind, for the same reason the
+// `pt_*` family exists: a grammar site converts by renaming
+// `Decl.def_d` -> `pd_def_d` rather than by a wrap that would have to
+// re-parenthesise its argument. Span is the placeholder.
+
+#[partial]
+def pd_def_d (d : ParseDef) : ParseDecl := pd_ (ParseDeclKind.def_d d)
+
+#[partial]
+def pd_inductive_d (i : ParseInductive) : ParseDecl := pd_ (ParseDeclKind.inductive_d i)
+
+#[partial]
+def pd_struct_d (s : ParseStruct) : ParseDecl := pd_ (ParseDeclKind.struct_d s)
+
+#[partial]
+def pd_class_d (c : ParseClass) : ParseDecl := pd_ (ParseDeclKind.class_d c)
+
+#[partial]
+def pd_instance_d (i : ParseInstance) : ParseDecl := pd_ (ParseDeclKind.instance_d i)
+
+#[partial]
+def pd_infix_d (op : Operator) (path : ModulePath) (vis : Visibility) : ParseDecl :=
+    pd_ (ParseDeclKind.infix_d op path vis)
+
+#[partial]
+def pd_use_d (path : ModulePath) (filter : UseFilter) (public : Bool) : ParseDecl :=
+    pd_ (ParseDeclKind.use_d path filter public)
+
+#[partial]
+def pd_open_d (path : ModulePath) (filter : OpenFilter) : ParseDecl :=
+    pd_ (ParseDeclKind.open_d path filter)
+
+#[partial]
+def pd_scoped_open_d (path : ModulePath) (filter : OpenFilter) (inner : ParseDecl) : ParseDecl :=
+    pd_ (ParseDeclKind.scoped_open_d path filter inner)
+
+#[partial]
+def pd_def_macro_d (d : ParseDef) : ParseDecl := pd_ (ParseDeclKind.def_macro_d d)
+
+#[partial]
+def pd_decl_gen_d (name : ModulePath) (params : List ParseParam) (decl_list : List ParseDecl) (attrs : List Attribute) : ParseDecl :=
+    pd_ (ParseDeclKind.decl_gen_d name params decl_list attrs)
+
+#[partial]
+def pd_macro_call_d (name : Identifier) (args : List ParseTerm) : ParseDecl :=
+    pd_ (ParseDeclKind.macro_call_d name args)
+
 type ParseTermKind {
     var (name: NameRef),
     /// Term-position `name!`. Kept a separate variant rather than a
@@ -671,6 +732,12 @@ type ParseTermKind {
     con (c: ParseCon),
     type_ (universe: I64),
     quote_ (term: ParseTerm),
+    /// A `do { }` block, kept as STATEMENTS rather than desugared during
+    /// parsing. Do-notation is syntax, so it belongs in the parse AST;
+    /// `lower_parse_do` runs the existing `desugar_do` once the binder
+    /// context is known. The grammar used to desugar inline, which is
+    /// only possible while it also threads `ctx`.
+    do_ (stmts: List ParseDoStmt),
     hole,
 }
 
