@@ -64,9 +64,6 @@ struct CtxStrPair {
     str : String,
 }
 
-#[partial]
-def empty_bindings : List LocalBinding := List.empty
-
 /// `arities` -- see `CodegenCtx`'s own doc comment. Callers with a real
 /// `List Def` in scope should build one via `build_arity_table` instead
 /// of passing `empty_arities` (an empty table just means every bare
@@ -74,7 +71,7 @@ def empty_bindings : List LocalBinding := List.empty
 /// correct only for genuinely 0-arity defs).
 #[partial]
 def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (debug_locs : HashMap String Location) : CodegenCtx :=
-    { locals := empty_bindings, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, debug_locs := debug_locs }
+    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, debug_locs := debug_locs }
 
 /// Look up `fn_name`'s captured source location (see `CodegenCtx.
 /// debug_locs`'s own doc comment) and convert it to the minimal
@@ -153,7 +150,7 @@ def ctx_lookup_ctor_arity (c : CodegenCtx) (name : String) : Option I64 := str_m
 /// for). Only the lambda's own param and its explicitly rebuilt
 /// captures (`build_get_env_instrs`) should be visible inside.
 #[partial]
-def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := { c with locals := empty_bindings }
+def ctx_reset_locals (c : CodegenCtx) : CodegenCtx := { c with locals := List.empty }
 
 /// The other half of `ctx_reset_locals`: after compiling a lifted
 /// function's own body (`compile_db_lam_ir`) with a reset-and-rebuilt

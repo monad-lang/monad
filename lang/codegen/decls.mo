@@ -12,10 +12,10 @@
 /// names nothing, and a wrapper supplying it would quietly return an
 /// empty closure.
 use lang.types {Decl, Def, Inductive, Term}
-use lang.module {ModuleInfo, get_module_info_decls}
+use lang.module {ModuleInfo}
 use lang.codegen.symbols {def_symbol_name}
 use lang.codegen.free_names {collect_referenced_names}
-use lang.codegen.util {append_decls_list, str_map_empty, str_map_insert, str_map_lookup}
+use lang.codegen.util {str_map_empty, str_map_insert, str_map_lookup}
 use std.map {}
 
 /// Extract def_d entries from a list of Decl. A def wrapped in
@@ -149,6 +149,6 @@ def reachable_defs_from (defs_map : HashMap String Def) (worklist : List String)
 def collect_all_decls_from_modules (modules : List ModuleInfo) (acc : List Decl) : List Decl := match modules {
     List.empty => acc,
     List.cons mod_ rest => 
-        let mod_decls := get_module_info_decls mod_ in
-        collect_all_decls_from_modules rest (append_decls_list mod_decls acc),
+        let mod_decls := mod_.decl_list in
+        collect_all_decls_from_modules rest (List.append mod_decls acc),
 }

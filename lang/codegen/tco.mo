@@ -16,8 +16,8 @@ use lang.codegen.ir {
 }
 use lang.codegen.ctx {CodegenCtx, CtxStrPair, fresh_label, fresh_temp}
 use lang.codegen.util {
-  append_instrs, cons_block, cons_instr, drop_last_instr, empty_blocks,
-  empty_instrs, str_map_empty, str_map_insert, str_map_lookup,
+  drop_last_instr,
+  str_map_empty, str_map_insert, str_map_lookup,
 }
 use std.map {}
 
@@ -525,7 +525,7 @@ def strip_one_tailcall_site (blocks : List LLVMBasicBlock) (site : SelfTailCallS
 def strip_tailcall_site (instrs : List LLVMInstruction) (ret_temp : String) (header_label : String) : List LLVMInstruction :=
     let without_call := remove_assign_of instrs ret_temp in
     let without_term := drop_last_instr without_call in
-    append_instrs without_term (cons_instr (LLVMInstruction.jump header_label) empty_instrs)
+    List.append without_term (List.cons (LLVMInstruction.jump header_label) List.empty)
 
 #[partial]
 def remove_assign_of (instrs : List LLVMInstruction) (target : String) : List LLVMInstruction := match instrs {
@@ -670,9 +670,9 @@ def split_entry_for_tco (blocks : List LLVMBasicBlock) (header_label : String) (
             match entry_block {
                 LLVMBasicBlock.mk _label entry_instrs =>
                     let header_phis := build_tco_header_phis arity "entry" loop_names sites in
-                    let header_instrs := append_instrs header_phis entry_instrs in
+                    let header_instrs := List.append header_phis entry_instrs in
                     let header_block := LLVMBasicBlock.mk header_label header_instrs in
-                    let new_entry := LLVMBasicBlock.mk "entry" (cons_instr (LLVMInstruction.jump header_label) empty_instrs) in
+                    let new_entry := LLVMBasicBlock.mk "entry" (List.cons (LLVMInstruction.jump header_label) List.empty) in
                     Option.some (List.cons new_entry (List.cons header_block (remove_block "entry" blocks))),
             },
         Option.none => Option.none,

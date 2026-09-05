@@ -21,8 +21,7 @@ open TypeError {not_a_type, unknown_var}
 // --- Test scope setup: empty decl_list with builtins (Type, Prop) ---
 
 def empty_path : ModulePath := ModulePath.mp List.empty
-def empty_decls : List Decl := List.empty
-def test_sd : ScopeData := build_scope_from_decls empty_path empty_decls
+def test_sd : ScopeData := build_scope_from_decls empty_path List.empty
 def test_scope : Scope := {
     module_id := empty_path,
     scope := test_sd,

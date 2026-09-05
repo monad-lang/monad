@@ -40,7 +40,7 @@ use lang.codegen.emit {
 use lang.codegen.ir {LLVMModule}
 use lang.module {
   elaborate_module_decls_best_effort,
-  get_loaded_all, get_loaded_main, get_module_info_decls, resolve_open_aliases_in_modules,
+  get_loaded_all, get_loaded_main, resolve_open_aliases_in_modules,
   try_parse_decls,
 }
 use lang.scope {
@@ -65,7 +65,7 @@ def is_test_def (d : Def) : Bool :=
 /// attribute. Mirrors the Rust reference's own discovery precedent
 /// (`core/src/lib.rs:886-892`, `module.defs().filter(has_test_attr)`)
 /// — scoped to the given decl list only. Callers should pass the
-/// TARGET FILE's own unprefixed decls (`get_module_info_decls
+/// TARGET FILE's own unprefixed decls (`.decl_list`
 /// (get_loaded_main loaded)`), not its transitive `use` dependencies'
 /// decls, matching that same precedent — a dependency's own tests
 /// aren't this file's tests.
@@ -219,7 +219,7 @@ def synthesize_test_driver_source (names : List String) : String :=
 /// find, so this builds one first.
 ///
 /// Test discovery runs over the TARGET FILE's own decls only
-/// (`get_module_info_decls (get_loaded_main loaded)`) -- matches the
+/// (the main `ModuleInfo`'s own `.decl_list`) -- matches the
 /// Rust reference's own precedent (`core/src/lib.rs`,
 /// `module.defs().filter(has_test_attr)`, that module's own defs only,
 /// not transitive `use` deps) -- while compilation still uses the FULL
@@ -228,7 +228,8 @@ def synthesize_test_driver_source (names : List String) : String :=
 /// themselves call, transitively, the normal way.
 #[partial]
 def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result String LLVMModule) := do {
-    let target_decls := get_module_info_decls (get_loaded_main loaded);
+    let target_mi : ModuleInfo := get_loaded_main loaded;
+    let target_decls := target_mi.decl_list;
     if has_top_level_main target_decls then do {
         return Result.err "cannot run tests -- file already defines a top-level `main`"
     } else do {

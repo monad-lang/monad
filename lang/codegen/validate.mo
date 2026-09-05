@@ -263,7 +263,7 @@ def reserved_runtime_symbol (sym : String) : Bool :=
 #[partial]
 def runtime_func_name_matches (funcs : List LLVMFunction) (sym : String) : Bool := match funcs {
     List.empty => false,
-    List.cons f rest => if String.beq (llvm_func_name f) sym then true else runtime_func_name_matches rest sym,
+    List.cons f rest => if String.beq (f.name) sym then true else runtime_func_name_matches rest sym,
 }
 
 #[partial]
@@ -285,18 +285,8 @@ def collect_call_targets (funcs : List LLVMFunction) : List String := match func
     List.cons f rest =>
         match f {
             LLVMFunction.mk _name _params _ret _blocks _cc _dbg =>
-                List.append (call_targets_in_blocks (llvm_func_blocks f)) (collect_call_targets rest),
+                List.append (call_targets_in_blocks (f.blocks)) (collect_call_targets rest),
         },
-}
-
-#[partial]
-def llvm_func_blocks (f : LLVMFunction) : List LLVMBasicBlock := match f {
-    LLVMFunction.mk _name _params _ret blocks _cc _dbg => blocks,
-}
-
-#[partial]
-def llvm_func_name (f : LLVMFunction) : String := match f {
-    LLVMFunction.mk name _params _ret _blocks _cc _dbg => name,
 }
 
 #[partial]
@@ -415,7 +405,7 @@ def build_defined_symbol_set (funcs : List LLVMFunction) (decls : List LLVMDecla
 #[partial]
 def add_func_symbols (funcs : List LLVMFunction) (acc : HashMap String Bool) : HashMap String Bool := match funcs {
     List.empty => acc,
-    List.cons f rest => add_func_symbols rest (str_map_insert (llvm_func_name f) true acc),
+    List.cons f rest => add_func_symbols rest (str_map_insert (f.name) true acc),
 }
 
 #[partial]

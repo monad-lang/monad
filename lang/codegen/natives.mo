@@ -13,7 +13,7 @@
 use lang.types {AttrArg, Attribute}
 use lang.codegen.ir {LLVMDeclaration, NativeOp, mk}
 use lang.codegen.symbols {extract_base_name, replace_dots_with_underscores, unqualify_def_name}
-use lang.codegen.util {cons_str, empty_strs, str_map_empty, str_map_insert, str_map_lookup}
+use lang.codegen.util {str_map_empty, str_map_insert, str_map_lookup}
 use std.map {}
 
 #[partial]
@@ -338,33 +338,33 @@ def runtime_declarations : List LLVMDeclaration :=
     // assembly; the v28 binary built and ran with dozens of them), but
     // it is malformed IR per the spec and a stricter parser could
     // reject it. `test_runtime_decls_i64_convention` pins this.
-    let d1 := mk_decl "monad_alloc" (cons_str "i64" empty_strs) "i64" in
-    let d2 := mk_decl "monad_retain" (cons_str "i64" empty_strs) "void" in
-    let d3 := mk_decl "monad_release" (cons_str "i64" empty_strs) "void" in
-    let d4 := mk_decl "monad_print_str" (cons_str "i64" empty_strs) "void" in
-    let d5 := mk_decl "monad_read_file" (cons_str "i64" empty_strs) "i64" in
-    let d6 := mk_decl "monad_write_file" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "void" in
-    let d7 := mk_decl "monad_file_exists" (cons_str "i64" empty_strs) "i64" in
-    let d7b := mk_decl "monad_is_dir" (cons_str "i64" empty_strs) "i64" in
-    let d7c := mk_decl "monad_string_hash" (cons_str "i64" empty_strs) "i64" in
-    let d8 := mk_decl "alloc_closure" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "i64" in
-    let d9 := mk_decl "alloc_constructor" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
-    let d10 := mk_decl "alloc_string" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d1 := mk_decl "monad_alloc" (List.cons "i64" List.empty) "i64" in
+    let d2 := mk_decl "monad_retain" (List.cons "i64" List.empty) "void" in
+    let d3 := mk_decl "monad_release" (List.cons "i64" List.empty) "void" in
+    let d4 := mk_decl "monad_print_str" (List.cons "i64" List.empty) "void" in
+    let d5 := mk_decl "monad_read_file" (List.cons "i64" List.empty) "i64" in
+    let d6 := mk_decl "monad_write_file" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "void" in
+    let d7 := mk_decl "monad_file_exists" (List.cons "i64" List.empty) "i64" in
+    let d7b := mk_decl "monad_is_dir" (List.cons "i64" List.empty) "i64" in
+    let d7c := mk_decl "monad_string_hash" (List.cons "i64" List.empty) "i64" in
+    let d8 := mk_decl "alloc_closure" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
+    let d9 := mk_decl "alloc_constructor" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d10 := mk_decl "alloc_string" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // Tag/field accessors for match dispatch (compile_match_ir) --
     // there's no other way to read back what an already-allocated value
     // was tagged/constructed with.
-    let d11 := mk_decl "monad_get_tag" (cons_str "i64" empty_strs) "i64" in
-    let d12 := mk_decl "monad_get_field" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d11 := mk_decl "monad_get_tag" (List.cons "i64" List.empty) "i64" in
+    let d12 := mk_decl "monad_get_field" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // Writes a constructor's field at allocation time (compile_con_ir) --
     // alloc_constructor only ever allocates space, it has no way to
     // accept field values itself.
-    let d13 := mk_decl "monad_set_field" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "void" in
+    let d13 := mk_decl "monad_set_field" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "void" in
     // Fixed-arity indirect-call trampolines for a boxed, zero-capture
     // closure value (runtime.c's apply_closureN family) -- see that
     // file's own doc comment on the family. Used by
     // compile_general_db_call's callee dispatch whenever the callee is a
     // computed value rather than a statically-known global name.
-    let d14 := mk_decl "apply_closure1" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d14 := mk_decl "apply_closure1" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d15 := mk_decl "apply_closure2" (apply_closure_arg_types 2) "i64" in
     let d16 := mk_decl "apply_closure3" (apply_closure_arg_types 3) "i64" in
     let d17 := mk_decl "apply_closure4" (apply_closure_arg_types 4) "i64" in
@@ -386,7 +386,7 @@ def runtime_declarations : List LLVMDeclaration :=
     // i64, not the C header's `char*` -- see the CONVENTION comment at
     // the head of this list (the returned char* IS the String value,
     // held as i64, and every call site types it i64).
-    let d22 := mk_decl "monad_i64_to_string" (cons_str "i64" empty_strs) "i64" in
+    let d22 := mk_decl "monad_i64_to_string" (List.cons "i64" List.empty) "i64" in
     // `Term.ntv`/`compile_ntv_ir`'s generic native-call mechanism (used
     // for every `#[native ...]`-attributed def, e.g. `String.length`)
     // emits a bare `call i64 @monad_<name>(...)` with no accompanying
@@ -399,31 +399,31 @@ def runtime_declarations : List LLVMDeclaration :=
     // native this module ever calls needs its own entry here regardless
     // of which of the two parallel native-dispatch mechanisms
     // (`lookup_native_any` vs. `Term.ntv`) it goes through.
-    let d23 := mk_decl "monad_string_length" (cons_str "i64" empty_strs) "i64" in
+    let d23 := mk_decl "monad_string_length" (List.cons "i64" List.empty) "i64" in
     // Same requirement as `monad_string_length` just above --
     // `compile_native_def_wrapper_ir`'s own `call` (the "native def
     // compiles to a real wrapper" fix) hits the identical "no implicit
     // declare" gap.
-    let d24 := mk_decl "monad_string_concat" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
-    let d25 := mk_decl "monad_string_eq" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d24 := mk_decl "monad_string_concat" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d25 := mk_decl "monad_string_eq" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // Closure free-variable capture (see `monad_closure_get_env`/
     // `monad_closure_set_env`, `runtime.c`, and `compile_db_lam_ir`'s
     // own doc comment above).
-    let d26 := mk_decl "monad_closure_get_env" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
-    let d27 := mk_decl "monad_closure_set_env" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "void" in
+    let d26 := mk_decl "monad_closure_get_env" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d27 := mk_decl "monad_closure_set_env" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "void" in
     // Same "no implicit declare" requirement as every other native above
     // -- `monad_string_slice`/`monad_string_drop` (runtime.c) were added
     // together with their own `native_runtime_fn_name` wiring, see that
     // wiring's own doc comment.
-    let d28 := mk_decl "monad_string_slice" (cons_str "i64" (cons_str "i64" (cons_str "i64" empty_strs))) "i64" in
-    let d29 := mk_decl "monad_string_drop" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d28 := mk_decl "monad_string_slice" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
+    let d29 := mk_decl "monad_string_drop" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // Same "no implicit declare" requirement as every other native above
     // -- `monad_string_lt`/`monad_string_gt` (runtime.c) were added
     // together with their own `native_runtime_fn_name` wiring, see that
     // wiring's own doc comment. Same signature shape as `monad_string_eq`
     // just above (two boxed-string i64s in, a raw 0/1 i64 out).
-    let d30 := mk_decl "monad_string_lt" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
-    let d31 := mk_decl "monad_string_gt" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
+    let d30 := mk_decl "monad_string_lt" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d31 := mk_decl "monad_string_gt" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // The remaining genuinely-C-shaped natives (`runtime.c`): they need
     // libc (fork/exec, opendir, qsort) or growable buffers, which the
     // GENERATED natives (`lang/codegen/runtime.mo`) have no way to
@@ -431,16 +431,16 @@ def runtime_declarations : List LLVMDeclaration :=
     // a generated native is `define`d in this same module, and a
     // `declare` alongside a `define` of one name is an invalid
     // redefinition `llc` rejects outright.
-    let d32 := mk_decl "monad_string_to_lowercase" (cons_str "i64" empty_strs) "i64" in
-    let d33 := mk_decl "monad_string_from_list" (cons_str "i64" empty_strs) "i64" in
+    let d32 := mk_decl "monad_string_to_lowercase" (List.cons "i64" List.empty) "i64" in
+    let d33 := mk_decl "monad_string_from_list" (List.cons "i64" List.empty) "i64" in
     // Same i64-not-`char*` convention as `monad_i64_to_string` (d22) --
     // the CONVENTION comment at the head of this list.
-    let d34 := mk_decl "monad_i32_to_string" (cons_str "i64" empty_strs) "i64" in
-    let d35 := mk_decl "monad_exec_cmd" (cons_str "i64" (cons_str "i64" empty_strs)) "i64" in
-    let d36 := mk_decl "monad_list_dir" (cons_str "i64" empty_strs) "i64" in
-    let d37 := mk_decl "monad_u8_to_string" (cons_str "i64" empty_strs) "i64" in
-    let d38 := mk_decl "monad_u64_to_string" (cons_str "i64" empty_strs) "i64" in
-    let d39 := mk_decl "monad_process_id" empty_strs "i64" in
+    let d34 := mk_decl "monad_i32_to_string" (List.cons "i64" List.empty) "i64" in
+    let d35 := mk_decl "monad_exec_cmd" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d36 := mk_decl "monad_list_dir" (List.cons "i64" List.empty) "i64" in
+    let d37 := mk_decl "monad_u8_to_string" (List.cons "i64" List.empty) "i64" in
+    let d38 := mk_decl "monad_u64_to_string" (List.cons "i64" List.empty) "i64" in
+    let d39 := mk_decl "monad_process_id" List.empty "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39]
@@ -451,8 +451,8 @@ def runtime_declarations : List LLVMDeclaration :=
 /// always produces `n + 1` total "i64" strings.
 #[partial]
 def apply_closure_arg_types (n : I64) : List String :=
-    cons_str "i64" (repeat_str "i64" n)
+    List.cons "i64" (repeat_str "i64" n)
 
 #[partial]
 def repeat_str (s : String) (n : I64) : List String :=
-    if I64.beq n 0 then empty_strs else cons_str s (repeat_str s (n - 1))
+    if I64.beq n 0 then List.empty else List.cons s (repeat_str s (n - 1))

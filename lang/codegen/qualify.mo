@@ -16,7 +16,7 @@ use lang.types {
   Decl, Def, Identifier, ModulePath, StructField, TypeConstraint,
   sentinel, show_identifier, show_module_path,
 }
-use lang.module {ModuleInfo, get_module_info_decls, mk}
+use lang.module {ModuleInfo, mk}
 use lang.scope {
   OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
   collect_open_aliases, modpath_eq, resolve_open_alias_decls,
@@ -55,13 +55,8 @@ def collect_def_owners (modules : List ModuleInfo) (acc : HashMap String (List M
     match modules {
         List.empty => acc,
         List.cons m rest =>
-            collect_def_owners rest (collect_def_owners_decls (module_info_path m) (get_module_info_decls m) acc),
+            collect_def_owners rest (collect_def_owners_decls (m.path) (m.decl_list) acc),
     }
-
-#[partial]
-def module_info_path (mi : ModuleInfo) : ModulePath := match mi {
-    ModuleInfo.mk path _file_path _decl_list => path,
-}
 
 #[partial]
 def collect_def_owners_decls (path : ModulePath) (decls : List Decl) (acc : HashMap String (List ModulePath)) : HashMap String (List ModulePath) :=
@@ -270,7 +265,7 @@ def all_declared_names_go (modules : List ModuleInfo) (seen : HashMap String Boo
     match modules {
         List.empty => List.empty,
         List.cons m rest =>
-            match declared_names_in_decls (get_module_info_decls m) seen {
+            match declared_names_in_decls (m.decl_list) seen {
                 Pair.pair here seen2 => List.append here (all_declared_names_go rest seen2),
             },
     }
@@ -590,8 +585,8 @@ def collect_qualify_errors (modules : List ModuleInfo) (owners_map : HashMap Str
     match modules {
         List.empty => List.empty,
         List.cons m rest =>
-            let decls := get_module_info_decls m in
-            let here := unresolved_refs_in_module (module_info_path m) (collect_open_aliases decls)
+            let decls := m.decl_list in
+            let here := unresolved_refs_in_module (m.path) (collect_open_aliases decls)
                 (module_import_paths decls) owners_map ambig decls in
             List.append here (collect_qualify_errors rest owners_map ambig),
     }
@@ -636,7 +631,7 @@ def qtest_def (name : String) (body_ref : String) : Decl :=
 def qtest_def_names (modules : List ModuleInfo) : List String :=
     match modules {
         List.empty => List.empty,
-        List.cons m rest => List.append (qtest_names_of_decls (get_module_info_decls m)) (qtest_def_names rest),
+        List.cons m rest => List.append (qtest_names_of_decls (m.decl_list)) (qtest_def_names rest),
     }
 
 #[partial]
@@ -653,7 +648,7 @@ def qtest_names_of_decls (decls : List Decl) : List String := match decls {
 def qtest_body_refs (modules : List ModuleInfo) : List String :=
     match modules {
         List.empty => List.empty,
-        List.cons m rest => List.append (qtest_refs_of_decls (get_module_info_decls m)) (qtest_body_refs rest),
+        List.cons m rest => List.append (qtest_refs_of_decls (m.decl_list)) (qtest_body_refs rest),
     }
 
 #[partial]
@@ -757,7 +752,7 @@ def test_qualify_rewrites_struct_field_defaults : Bool :=
 def struct_default_refs (modules : List ModuleInfo) : List String :=
     match modules {
         List.empty => List.empty,
-        List.cons m rest => List.append (struct_default_refs_of_decls (get_module_info_decls m)) (struct_default_refs rest),
+        List.cons m rest => List.append (struct_default_refs_of_decls (m.decl_list)) (struct_default_refs rest),
     }
 
 #[partial]

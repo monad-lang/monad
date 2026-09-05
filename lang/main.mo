@@ -5,7 +5,7 @@ use std.bench {now, report}
 use lang.types {Decl, Location, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {build_debug_locs, compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, get_loaded_all, get_module_info_decls, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
+use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, get_loaded_all, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
 use std.map {}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
@@ -697,7 +697,7 @@ def main (args : List String) : IO I64 {
             // Prints the TARGET FILE's own declarations, pretty-printed
             // back to source text via `lang.pretty.show_decls`. Only
             // `file_path`'s own decls are shown (not its transitive `use`
-            // dependencies), matching `get_module_info_decls`'s existing
+            // dependencies), matching `ModuleInfo.decl_list`'s existing
             // "this module's own decls only" convention (see
             // `lang/codegen/test_driver.mo`'s `discover_test_defs` for the
             // same convention elsewhere) — so this loads just the ONE
@@ -712,7 +712,7 @@ def main (args : List String) : IO I64 {
             let module_opt : Option ModuleInfo <- load_module_with_info base_dir mp;
             match module_opt {
                 Option.some mi => do {
-                    let decls := get_module_info_decls mi;
+                    let decls := mi.decl_list;
                     println (show_decls decls);
                     return 0
                 },

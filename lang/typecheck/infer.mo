@@ -90,14 +90,6 @@ def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types
 def mk_typed (a : Term) (b : Term) : TypedTerm :=
     { term := a, typ := b }
 
-/// Get the term field from a TypedTerm.
-def tt_term (tt : TypedTerm) : Term :=
-    tt.term
-
-/// Get the type field from a TypedTerm.
-def tt_typ (tt : TypedTerm) : Term :=
-    tt.typ
-
 // --- Instance resolution helpers ---
 //
 // `derive_instance_key` (a `class_def`/`expected_type` -> `InstanceKey`
@@ -361,14 +353,14 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
     let bool_typ : Term := Term.type_ 1 in
     match type_check one bool_typ scope local_types locals {
         ok cond_tt =>
-            let cond_term : Term := tt_term cond_tt in
+            let cond_term : Term := cond_tt.term in
             match type_check two expected_type scope local_types locals {
                 ok then_tt =>
-                    let then_term : Term := tt_term then_tt in
-                    let then_typ : Term := tt_typ then_tt in
+                    let then_term : Term := then_tt.term in
+                    let then_typ : Term := then_tt.typ in
                     match type_check three then_typ scope local_types locals {
                         ok els_tt =>
-                            let els_term : Term := tt_term els_tt in
+                            let els_term : Term := els_tt.term in
                             let lit_val : Literal := Literal.if_ cond_term then_term els_term in
                             ok (mk_typed (Term.lit lit_val) then_typ),
                         err e => err e,
@@ -383,8 +375,8 @@ def type_check_if (one : Term) (two : Term) (three : Term) (expected_type : Term
 def type_check_match (value_ : Term) (cases : List MatchCase) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match type_check value_ Term.hole scope local_types locals {
         ok sc_tt =>
-            let sc_term : Term := tt_term sc_tt in
-            let sc_typ : Term := tt_typ sc_tt in
+            let sc_term : Term := sc_tt.term in
+            let sc_typ : Term := sc_tt.typ in
             match validate_match_constructors cases sc_term sc_typ scope {
                 err e => err e,
                 ok maybe_ind => type_check_cases cases sc_term sc_typ maybe_ind expected_type scope local_types locals,
@@ -1279,8 +1271,8 @@ def rec_prepend_typed_local_vars (args : List Identifier) (arg_types : List Term
 def type_check_case_body_checked (name : Identifier) (args : List Identifier) (body : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError CheckedCase :=
     match type_check body expected_type scope local_types locals {
         ok body_tt =>
-            let body_term : Term := tt_term body_tt in
-            let body_typ : Term := tt_typ body_tt in
+            let body_term : Term := body_tt.term in
+            let body_typ : Term := body_tt.typ in
             let no_fp : Option FieldPattern := Option.none in
             let new_case : MatchCase := MatchCase.mc name args body_term no_fp in
             // Annotated local first -- see the matching comment in
@@ -1693,7 +1685,7 @@ def type_check_lam (dbg : DebugName) (t : Term) (body : Term) (expected_type : T
             let extended_locals : LocalScope := scope_push_local lv locals in
             match type_check body ret_typ scope extended_types extended_locals {
                 ok body_tt =>
-                    let checked_body : Term := tt_term body_tt in
+                    let checked_body : Term := body_tt.term in
                     let lam_term : Term := Term.lam dbg bound_typ checked_body in
                     ok (mk_typed lam_term expected_type),
                 err e => err e,
@@ -1701,7 +1693,7 @@ def type_check_lam (dbg : DebugName) (t : Term) (body : Term) (expected_type : T
         _ =>
             match type_check t Term.hole scope local_types locals {
                 ok t_tt =>
-                    let inferred_typ : Term := tt_typ t_tt in
+                    let inferred_typ : Term := t_tt.typ in
                     let extended_types : List Term := List.cons t local_types in
                     let lv : LocalVar := {
                         name := debug_name_to_id dbg,
@@ -1711,8 +1703,8 @@ def type_check_lam (dbg : DebugName) (t : Term) (body : Term) (expected_type : T
                     let extended_locals : LocalScope := scope_push_local lv locals in
                     match type_check body Term.hole scope extended_types extended_locals {
                         ok body_tt =>
-                            let checked_body : Term := tt_term body_tt in
-                            let body_typ : Term := tt_typ body_tt in
+                            let checked_body : Term := body_tt.term in
+                            let body_typ : Term := body_tt.typ in
                             let pi_typ : Term := Term.pi t body_typ in
                             let lam_term : Term := Term.lam dbg t checked_body in
                             ok (mk_typed lam_term pi_typ),
@@ -1970,14 +1962,14 @@ def def_call_check_args (args : List Term) (params : List Term) (subst : List (P
 /// recurse for the remaining arguments.
 #[partial]
 def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : List Term) (rest_params : List Term) (subst : List (Pair Identifier Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError DccPair :=
-    let a_typ : Term := tt_typ a_tt in
+    let a_typ : Term := a_tt.typ in
     let next_subst : List (Pair Identifier Term) := solve_typevars scope param_ty a_typ subst in
     match def_call_check_args rest rest_params next_subst scope local_types locals {
         err e => err e,
         ok pair =>
             match pair {
                 DccPair.mk rest_elab rest_subst =>
-                    ok (DccPair.mk (List.cons (tt_term a_tt) rest_elab) rest_subst),
+                    ok (DccPair.mk (List.cons (a_tt.term) rest_elab) rest_subst),
             },
     }
 
@@ -2050,8 +2042,8 @@ def solve_typevars (scope : Scope) (param : Term) (actual : Term) (subst : List 
                         // `idx == sentinel` (concrete type names like
                         // `ParamPair` included -- there is no `forall`
                         // wrapper distinguishing typevars from them at
-                        // this point), so `cons_pair (ParamPair.mk ...)
-                        // empty_pairs` solved `ParamPair := Term.hole`
+                        // this point), so `List.cons (ParamPair.mk ...)
+                        // List.empty` solved `ParamPair := Term.hole`
                         // from the hole-typed ctor arg and rewrote the
                         // monomorphic `List ParamPair` return into
                         // `(List _)` -- confirmed live via a minimal
@@ -2224,13 +2216,13 @@ def type_check_app (f : Term) (a : Term) (expected_type : Term) (scope : Scope) 
 /// literal declined to become a named call -- share it verbatim
 /// instead of duplicating the sequence.
 def type_check_app_ordinary (a_tt : TypedTerm) (f : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
-            let a_term : Term := tt_term a_tt in
-            let a_typ : Term := tt_typ a_tt in
+            let a_term : Term := a_tt.term in
+            let a_typ : Term := a_tt.typ in
             let f_expected : Term := Term.pi a_typ expected_type in
             match type_check f f_expected scope local_types locals {
                 ok f_tt =>
-                    let f_term : Term := tt_term f_tt in
-                    let f_typ : Term := tt_typ f_tt in
+                    let f_term : Term := f_tt.term in
+                    let f_typ : Term := f_tt.typ in
                     extract_pi_ret f_term a_term f_typ a_typ expected_type scope local_types locals,
                 err e => err e,
             }
@@ -2983,7 +2975,7 @@ def named_call_def_check_args (args : List (Pair Term Term)) (scope : Scope) (lo
                         // ordinary def target.
                         ok checked =>
                             match named_call_def_check_args rest scope local_types locals {
-                                ok rest_terms => ok (List.cons (tt_term checked) rest_terms),
+                                ok rest_terms => ok (List.cons (checked.term) rest_terms),
                                 err e => err e,
                             },
                         err e => err e,
@@ -3031,8 +3023,8 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
     match type_check base Term.hole scope local_types locals {
         err e => err e,
         ok base_tt =>
-            let base_term : Term := tt_term base_tt in
-            let base_typ : Term := tt_typ base_tt in
+            let base_term : Term := base_tt.term in
+            let base_typ : Term := base_tt.typ in
             match type_head_name base_typ {
                 Option.none => struct_update_fallback base_term fields base_typ,
                 Option.some sname =>
@@ -3182,7 +3174,7 @@ def check_con_args_untyped (args : List (Option Term)) (scope : Scope) (local_ty
                         ok tt =>
                             match check_con_args_untyped rest scope local_types locals {
                                 err e => err e,
-                                ok rest_elab => ok (List.cons (Option.some (tt_term tt)) rest_elab),
+                                ok rest_elab => ok (List.cons (Option.some (tt.term)) rest_elab),
                             },
                     }
             }
@@ -3218,7 +3210,7 @@ def check_con_args_against_params (args : List (Option Term)) (params : List Par
                                         ok tt =>
                                             match check_con_args_against_params rest prest scope local_types locals {
                                                 err e => err e,
-                                                ok rest_elab => ok (List.cons (Option.some (tt_term tt)) rest_elab),
+                                                ok rest_elab => ok (List.cons (Option.some (tt.term)) rest_elab),
                                             },
                                     }
                             }
@@ -3692,7 +3684,7 @@ def test_type_check_struct_update_ok : Bool :=
 def test_type_check_struct_update_result_type_is_base_type : Bool :=
     let fields : List StructLitField := List.empty in
     match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
-        ok tt => match type_head_name (tt_typ tt) {
+        ok tt => match type_head_name (tt.typ) {
             Option.some id => id_eq id (Identifier.id "Point"),
             Option.none => false,
         },
@@ -3723,7 +3715,7 @@ def test_type_check_struct_update_desugars_to_con : Bool :=
     let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
     let fields : List StructLitField := List.cons f1 List.empty in
     match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
-        ok tt => match tt_term tt {
+        ok tt => match tt.term {
             Term.con _ => true,
             _ => false,
         },
@@ -3739,7 +3731,7 @@ def test_type_check_struct_update_unchanged_field_is_projection : Bool :=
     let f1 : StructLitField := StructLitField.mk (Identifier.id "x") (Term.type_ 1) in
     let fields : List StructLitField := List.cons f1 List.empty in
     match type_check_struct_update point_var fields Term.hole point_scope point_local_types empty_locals {
-        ok tt => match tt_term tt {
+        ok tt => match tt.term {
             Term.con c => match c {
                 Con.mk _name _typ_name _arity args => match args {
                     List.cons x_arg rest => match rest {
@@ -3782,7 +3774,7 @@ def test_type_check_struct_update_unresolvable_base_falls_back : Bool :=
     let unresolvable_base : Term := Term.hole in
     let fields : List StructLitField := List.empty in
     match type_check_struct_update unresolvable_base fields Term.hole point_scope empty_local_types empty_locals {
-        ok tt => match tt_term tt {
+        ok tt => match tt.term {
             Term.lit l => match l { Literal.struct_update _ _ => true, _ => false },
             _ => false,
         },

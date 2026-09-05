@@ -19,8 +19,8 @@ use lang.scope {
 def test_build_empty_scope : Bool :=
     let empty_id_list : List Identifier := List.empty in
     let empty_path : ModulePath := ModulePath.mp empty_id_list in
-    let empty_decls : List Decl := List.empty in
-    let empty_scope : ScopeData := build_scope_from_decls empty_path empty_decls in
+    let no_decls : List Decl := List.empty in
+    let empty_scope : ScopeData := build_scope_from_decls empty_path no_decls in
     true
 
 // --- Build scope with a def declaration ---
@@ -267,8 +267,8 @@ def test_scope_resolve_name_not_found : Bool :=
 def test_builtin_type_resolves : Bool :=
     let empty_id_list : List Identifier := List.empty in
     let empty_path : ModulePath := ModulePath.mp empty_id_list in
-    let empty_decls : List Decl := List.empty in
-    let sd : ScopeData := build_scope_from_decls empty_path empty_decls in
+    let no_decls : List Decl := List.empty in
+    let sd : ScopeData := build_scope_from_decls empty_path no_decls in
     let s : Scope := {
         module_id := empty_path,
         scope := sd,
@@ -287,8 +287,8 @@ def test_builtin_type_resolves : Bool :=
 def test_builtin_type_inductive : Bool :=
     let empty_id_list : List Identifier := List.empty in
     let empty_path : ModulePath := ModulePath.mp empty_id_list in
-    let empty_decls : List Decl := List.empty in
-    let sd : ScopeData := build_scope_from_decls empty_path empty_decls in
+    let no_decls : List Decl := List.empty in
+    let sd : ScopeData := build_scope_from_decls empty_path no_decls in
     let s : Scope := {
         module_id := empty_path,
         scope := sd,

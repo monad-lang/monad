@@ -40,7 +40,7 @@ use lang.scope {
   validate_no_unresolved_class_calls,
 }
 use lang.typecheck.diagnostic {render_type_error}
-use lang.typecheck.infer {empty_local_types, empty_locals, mk, tt_term, type_check}
+use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
 use std.list {Show, all, length}
 use std.show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
@@ -530,7 +530,7 @@ def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (v
                 match loaded.info {
                     Option.some info => do {
                         let new_base_dir : String := extract_directory info.file_path;
-                        let dep_decls : List Decl := get_module_info_decls info;
+                        let dep_decls : List Decl := info.decl_list;
                         let dep_deps : List ModulePath := extract_use_decls dep_decls;
                         let new_to_visit : List ModulePath := List.append dep_deps tail;
                         collect_dep_module_infos new_base_dir new_to_visit new_visiting (List.cons info visited) loaded.cache
@@ -1195,7 +1195,7 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
     else
         let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
         match type_check body typ scope empty_local_types locals_ {
-            Result.ok tt => Result.ok (Def.mk name typ (tt_term tt) constraints attrs vis),
+            Result.ok tt => Result.ok (Def.mk name typ (tt.term) constraints attrs vis),
             Result.err e => Result.err (render_type_error (module_path_to_string name) Option.none e),
         }
 
@@ -1822,11 +1822,6 @@ def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
         LoadedModules.mk main_module all_modules => all_modules
     }
 
-def get_module_info_decls (mi : ModuleInfo) : List Decl :=
-    match mi {
-        ModuleInfo.mk path file_path decl_list => decl_list
-    }
-
 /// Resolves every bare `open`/`use`-imported name inside ONE module's
 /// own `decl_list` to its real, fully qualified target -- see
 /// `lang.scope`'s own `OpenAlias`/`collect_open_aliases`/`resolve_open_
@@ -1866,7 +1861,7 @@ def resolve_open_aliases_in_module_info (known_names : List String) (root_aliase
 def all_module_decl_names (modules : List ModuleInfo) : List String :=
     match modules {
         List.empty => List.empty,
-        List.cons m rest => list_append (collect_def_names (get_module_info_decls m)) (all_module_decl_names rest),
+        List.cons m rest => list_append (collect_def_names (m.decl_list)) (all_module_decl_names rest),
     }
 
 #[partial]
@@ -1906,7 +1901,7 @@ def collect_root_aliases_go (modules : List ModuleInfo) (roots : List ModulePath
         List.cons r rest =>
             let this_root_aliases :=
                 match find_module_by_path modules r {
-                    Option.some mi => filter_valid_open_aliases known_names (collect_open_aliases (get_module_info_decls mi)),
+                    Option.some mi => filter_valid_open_aliases known_names (collect_open_aliases (mi.decl_list)),
                     Option.none => List.empty,
                 } in
             list_append this_root_aliases (collect_root_aliases_go modules rest known_names),
@@ -2113,7 +2108,7 @@ struct ElaboratedAndCache {
 /// list -- mirrors `lang.codegen.emit`'s own `collect_all_decls_from_modules`
 /// exactly, but can't be imported from there: `lang.codegen.emit` already
 /// `use`s `lang.module` (for `get_loaded_all`/`get_loaded_main`/
-/// `get_module_info_decls`/`try_parse_decls`), so importing back would be
+/// `.decl_list`/`try_parse_decls`), so importing back would be
 /// a module cycle. Same dodge as `lang.typecheck.infer`'s own documented
 /// small-helper duplications elsewhere in this codebase.
 #[partial]
@@ -2121,7 +2116,7 @@ def flatten_module_decls (modules : List ModuleInfo) (acc : List Decl) : List De
     match modules {
         List.empty => acc,
         List.cons mod_ rest =>
-            flatten_module_decls rest (list_append (get_module_info_decls mod_) acc),
+            flatten_module_decls rest (list_append (mod_.decl_list) acc),
     }
 
 /// Forall-wrap each `def_d`'s declared type via `elaborate_def`
@@ -2403,7 +2398,7 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
             let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none } in
             // `target_decls` must go through the SAME infix-resolution/
             // promotion/dict-param passes as the whole graph above -- the
-            // raw `get_module_info_decls main_module` still has bare
+            // raw `main_module.decl_list` still has bare
             // placeholder operator vars (`Term.var (DebugName.named "+")`
             // etc, from the self-hosted parser -- see `resolve_infix_
             // decls`'s own doc comment, `lang/scope.mo`), which `scope`
@@ -2417,7 +2412,7 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
             // `main_module` too, see `load_file_modules`), so reuse it
             // directly instead of redundantly re-running the same three
             // passes on just the main module's own raw decls again.
-            let target_decls_raw : List Decl := get_module_info_decls main_module in
+            let target_decls_raw : List Decl := main_module.decl_list in
             let target_decls_pre : List Decl :=
                 if check_deps then
                     dict_paramed
