@@ -8,7 +8,7 @@ use lang.scope {
 use lang.types {
   AttrArg, Attribute, Con, Decl, Def, DebugName, Identifier, Inductive,
   InductConstructor, Literal, MatchCase, ModulePath, Native, Scope, ScopeDef,
-  Term, id_eq,
+  Term, id_eq, sentinel,
 }
 use lang.typecheck.infer {empty_locals, last_dotted_segment}
 
@@ -200,8 +200,6 @@ def lower_then
   }
 
 // ─── Free-variable / global resolution ──────────────────────────────
-
-def sentinel : I64 := -1
 
 def lower_resolved_name (sdef : ScopeDef) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
   match sdef {

@@ -28,6 +28,7 @@ use lang.scope {
   collect_classes, collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
   filter_valid_open_aliases,
   list_append, modpath_eq, param_names, promote_instance_defs,
+  alias_map_empty, build_alias_map,
   resolve_class_calls_decls, resolve_infix_decls, resolve_open_alias_decls,
   scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
   scope_find_inductive, scope_push_local, scope_resolve_name,
@@ -996,7 +997,28 @@ def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : Lo
 /// `instance_d` bodies (`module.mo`'s own documented gap, just below).
 #[partial]
 def is_dict_value_def (df : Def) : Bool :=
-    String.starts_with "__Dict_" (module_path_to_string df.name)
+    // On the name AFTER its module qualifier: a dictionary minted by
+    // `promote_instance_defs` is now `lang.types::__Dict_Similar_Identifier`,
+    // which does not START with `__Dict_`. Missing that would put dict
+    // values back through the type checker, and they carry a deliberate
+    // `Term.var 0` sentinel convention that does not survive it.
+    String.starts_with "__Dict_" (unqualify_instance_name (module_path_to_string df.name))
+
+/// The part of a synthesized name after its `module::` qualifier, or the
+/// whole name when it has none. Mirrors `lang.codegen.emit`'s own
+/// `unqualify_def_name`; kept here rather than imported because
+/// `lang.module` is a DEPENDENCY of `lang.codegen.emit`, not the other
+/// way round.
+#[partial]
+def unqualify_instance_name (s : String) : String :=
+    let idx := find_instance_qualifier_sep s 0 (String.length s) in
+    if I64.beq idx (0 - 1) then s else String.slice s (idx + 2) (String.length s - idx - 2)
+
+#[partial]
+def find_instance_qualifier_sep (s : String) (i : I64) (n : I64) : I64 :=
+    if I64.gt (i + 2) n then (0 - 1)
+    else if String.beq (String.slice s i 2) "::" then i
+    else find_instance_qualifier_sep s (i + 1) n
 
 /// `use_d`/`open_d`/`infix_d` genuinely have nothing to type-check (no
 /// term/type of their own) — the `_ => List.empty` catch-all is correct
@@ -1827,7 +1849,12 @@ def resolve_open_aliases_in_module_info (known_names : List String) (root_aliase
             let candidates := collect_open_aliases decl_list in
             let own_aliases := filter_valid_open_aliases known_names candidates in
             let aliases := list_append own_aliases root_aliases in
-            ModuleInfo.mk path file_path (resolve_open_alias_decls aliases decl_list)
+            // Own aliases FIRST: `build_alias_map` keeps the first entry
+            // for a bare name, so a module's own `use`/`open` shadows the
+            // ambient prelude/init/std ones -- the same precedence the
+            // linear scan this replaced gave for free.
+            let alias_names := build_alias_map aliases alias_map_empty in
+            ModuleInfo.mk path file_path (resolve_open_alias_decls alias_names decl_list)
     }
 
 #[partial]

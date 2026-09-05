@@ -367,6 +367,23 @@ type DebugName {
     unnamed,
 }
 
+/// Free-variable sentinel de Bruijn index: `>= 0` means bound, `-1`
+/// means free/unresolved. The parser emits it for every not-yet-
+/// resolved `Term.var`, and `lang.scope`/`lang.typecheck` compare
+/// against it to decide whether a variable still needs resolving.
+///
+/// Declared here, in the module that owns `Term`/`DebugName`, because
+/// it is part of that representation's contract rather than any one
+/// pass's private constant. It previously existed as five byte-
+/// identical copies (`lang/parser.mo`, `lang/elaborate.mo`,
+/// `lang/lower_core_ir.mo`, `lang/typecheck/infer.mo`,
+/// `lang/typecheck/meta_reflect.mo`); since codegen mangles a top-
+/// level def to its BARE name, those five were five definitions of
+/// one LLVM symbol `@sentinel`, of which the emitted binary silently
+/// kept one -- see `validate_no_colliding_def_symbols`
+/// (`lang/codegen/emit.mo`), which now rejects that shape outright.
+def sentinel : I64 := -1
+
 /// Visibility of a declaration. Mirrors the Rust reference's
 /// `core::term::Visibility` exactly: `priv` is enforced immediately
 /// (module boundaries already exist), `pub` vs. the default

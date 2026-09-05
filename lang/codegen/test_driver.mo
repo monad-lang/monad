@@ -32,7 +32,11 @@ use lang.types {
   Attribute, Decl, Def, LoadedModules, LocalScope, ModulePath, Scope, ScopeData,
   has_attr,
 }
-use lang.codegen.emit {collect_all_decls_from_modules, compile_db_module, filter_reachable_decls, module_path_to_str}
+use lang.codegen.emit {
+  bare_modpath, collect_all_decls_from_modules, compile_db_module,
+  filter_reachable_decls, module_path_to_str,
+  qualified_def_name_str, qualify_modules,
+}
 use lang.codegen.ir {LLVMModule}
 use lang.module {
   elaborate_module_decls_best_effort,
@@ -246,8 +250,26 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     // synthesized `driver_decls` need no resolution here
                     // -- generated source, no `use`/`open` of its own.
                     let aliased_mods := resolve_open_aliases_in_modules (get_loaded_all loaded);
-                    let all_decls := collect_all_decls_from_modules aliased_mods List.empty;
-                    let spliced := List.append driver_decls all_decls;
+                    // The synthesized driver joins the program as its own
+                    // module so that `qualify_modules` sees it: its body
+                    // calls real library defs (`I64.to_string`, `++`) by
+                    // bare name, and those names are about to become
+                    // module-qualified. Left outside the pass, every one
+                    // of those calls would name a symbol that no longer
+                    // exists.
+                    let driver_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "__test_driver") List.empty);
+                    let driver_mod : ModuleInfo := ModuleInfo.mk driver_mp "" driver_decls;
+                    let with_driver := List.append aliased_mods (List.cons driver_mod List.empty);
+                    let qualify_result := qualify_modules with_driver;
+                    let qualified_mods := match qualify_result {
+                        Result.ok ms => ms,
+                        // Keep the pre-qualification modules on failure:
+                        // this driver's job is to RUN tests, and a
+                        // qualification error is reported by the real
+                        // compile path with a proper message.
+                        Result.err _ => with_driver,
+                    };
+                    let spliced := collect_all_decls_from_modules qualified_mods List.empty;
                     // See lang.codegen.emit's own `compile_loaded_modules_to_ir`
                     // for why this must resolve infixes BEFORE reachability
                     // filtering, not after (an unresolved operator var
@@ -257,7 +279,7 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     // `synth_sum_expr` uses `+` (this file's own doc
                     // comment above), so this is what makes `monad test`
                     // actually compile at all.
-                    let infixes := collect_infixes all_decls;
+                    let infixes := collect_infixes spliced;
                     let resolved_spliced := resolve_infix_decls infixes spliced;
                     // Dictionary-passing typeclass dispatch (see
                     // lang.codegen.emit's own compile_loaded_modules_to_ir
@@ -289,7 +311,8 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                     let elaborated := elaborate_module_decls_best_effort scope dict_param_spliced empty_locs;
                     let dispatched_spliced := resolve_class_calls_decls elaborated;
-                    let reachable := filter_reachable_decls dispatched_spliced;
+                    let driver_root : String := qualified_def_name_str driver_mp (bare_modpath "main");
+                    let reachable := filter_reachable_decls driver_root dispatched_spliced;
                     // Validate the REACHABLE decls, not the full spliced
                     // graph -- see `lang.codegen.emit`'s own
                     // `compile_loaded_modules_to_ir` / `validate_no_

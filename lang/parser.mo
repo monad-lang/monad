@@ -7,9 +7,9 @@ use lang.types {
   bind_s, class_d, con, ctx, custom, def_d, desugar_do, expr_s, forall, hole,
   id, if_, inductive_d, infix_d, instance_d, lam, let_s, list_reverse, lit,
   match_, mc, mk, mp, name, named, nid, nmp, nop, ntv, open_all, open_d,
-  open_only, operator, param_many, pi, ret_s, scoped_open_d, show_identifier,
-  show_operator, struct_d, type_, unnamed, use_bare, use_d, use_glob, use_items,
-  use_name, use_rename, use_sub, use_sub_rename, var,
+  open_only, operator, param_many, pi, ret_s, scoped_open_d, sentinel,
+  show_identifier, show_operator, struct_d, type_, unnamed, use_bare, use_d,
+  use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename, var,
 }
 use std.list {filter, intercalate, length}
 use lang.parser.core {
@@ -4370,8 +4370,6 @@ def test_span_fragment_after_consume : Bool :=
 	let next : LocatedSpan := consume_span span 6 in
 	let rest : String := span_fragment next in
 	String.beq rest "world"
-
-def sentinel : I64 := -1
 
 #[partial]
 def ident_str (id: Identifier) : String :=

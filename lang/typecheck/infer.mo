@@ -5,14 +5,15 @@ use lang.types {
   StructLitField, Term, TypeConstraint, TypeError,
   app, con, custom, forall, hole, id, id_eq, if_, lam, list_rev_loop,
   list_reverse, lit, many, match_, mc, mk, mp, name, named, nid, not_a_type,
-  ntv, num, pi, show_identifier, show_module_path, str, type_,
+  ntv, num, pi, sentinel, show_identifier, show_module_path, str, type_,
   unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
 use lang.scope {
   DictBinding, build_dict_field_projection_checked, build_scope_def,
   dict_binding_class_of, dict_param_name, find_constructor_in_inductive,
   find_matching_instance, flatten_call_spine, inductive_has_constructor, list_append,
-  mangle_instance_method_name, mangled_to_identifier, rebuild_call,
+  instance_module_prefix, mangle_instance_method_name, mangled_to_identifier,
+  rebuild_call,
   resolve_dict_args, scope_data_add_inductive, scope_data_classes,
   scope_data_empty, scope_find_all_inductives_by_constructor, scope_find_class,
   scope_find_class_def_by_name, scope_find_def_params, scope_find_def_return_type,
@@ -44,9 +45,6 @@ struct CaseAcc {
     body_typ : Term,
     cases : List MatchCase,
 }
-
-/// Free variable sentinel from parser (matches elaborate.mo).
-def sentinel : I64 := -1
 
 /// Empty local scope (no local bindings).
 def empty_locals : LocalScope := {
@@ -231,11 +229,11 @@ def strip_n_pis (typ : Term) (n : I64) : Term :=
         }
 
 def resolve_class_method_d4
-    (ins_cls_name : ModulePath) (method_name : Identifier)
+    (prefix : String) (ins_cls_name : ModulePath) (method_name : Identifier)
     (ins_constraints : List TypeConstraint) (ins_args : List Term) (carrier : Term)
     (expected_type : Term) (scope : Scope) (locals : LocalScope)
     : Result TypeError TypedTerm :=
-    let mangled := mangle_instance_method_name ins_cls_name ins_args method_name in
+    let mangled := mangle_instance_method_name prefix ins_cls_name ins_args method_name in
     let mangled_id := mangled_to_identifier mangled in
     match scope_resolve_name (NameRef.nid mangled_id) scope locals {
         err _ => err (TypeError.custom "instance is missing its promoted method"),
@@ -300,7 +298,7 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                             match find_matching_instance candidates class_name carrier {
                                 Option.none => err (TypeError.custom "no matching instance found"),
                                 Option.some ins =>
-                                    resolve_class_method_d4 ins.cls method_name ins.constraints ins.args carrier expected_type scope locals,
+                                    resolve_class_method_d4 (instance_module_prefix ins.name) ins.cls method_name ins.constraints ins.args carrier expected_type scope locals,
                             },
                     },
             },

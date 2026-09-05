@@ -227,6 +227,69 @@ def join_types (types : List LLVMType) : String :=
 def show_args_typed (args : List LLVMValue) : String :=
     List.intercalate ", " (List.map show_llvm_value_typed args)
 
+/// Every `@`-prefixed LLVM global/function reference this module emits,
+/// in one place -- quoted only when the name actually needs it.
+///
+/// A symbol here is now the def's fully qualified source name
+/// (`lang.typecheck.infer.foo`, `init.string.String.beq`), emitted
+/// VERBATIM rather than mangled -- see `def_symbol_name`
+/// (`lang.codegen.emit`) for why flattening `.` to `_` was itself a bug
+/// (it made `String.a` and `String_a` the same symbol). LLVM's unquoted
+/// identifier grammar already admits `.`, so those names need no
+/// quoting at all and the emitted IR stays readable; quoting is the
+/// fallback for anything outside that grammar (a primed `foo'`, say),
+/// which would otherwise render as silently invalid IR.
+#[partial]
+def llvm_symbol_ref (name : String) : String :=
+    if llvm_name_is_bare_safe name
+    then String.concat "@" name
+    else String.concat "@\"" (String.concat name "\"")
+
+/// LLVM's unquoted identifier grammar, verbatim from the LangRef:
+/// `[-a-zA-Z$._][-a-zA-Z$._0-9]*` -- note a digit is legal after the
+/// first position but not in it, and the empty string is never safe.
+#[partial]
+def llvm_name_is_bare_safe (s : String) : Bool :=
+    let n := String.length s in
+    if I64.beq n 0 then false else llvm_name_is_bare_safe_go s 0 n
+
+#[partial]
+def llvm_name_is_bare_safe_go (s : String) (i : I64) (n : I64) : Bool :=
+    if I64.beq i n then true
+    else match String.get s i {
+        Option.some b =>
+            if llvm_name_byte_ok b (I64.beq i 0)
+            then llvm_name_is_bare_safe_go s (I64.add i 1) n
+            else false,
+        Option.none => false,
+    }
+
+#[partial]
+def llvm_name_byte_ok (b : U8) (first : Bool) : Bool :=
+    if llvm_name_alpha_or_punct b then true
+    else if first then false
+    else llvm_name_digit b
+
+/// `A`-`Z` (65-90), `a`-`z` (97-122), and the four punctuation bytes
+/// LLVM allows anywhere in a bare identifier: `-` (45), `$` (36),
+/// `.` (46), `_` (95).
+#[partial]
+def llvm_name_alpha_or_punct (b : U8) : Bool :=
+    if U8.beq b 45u8 then true
+    else if U8.beq b 36u8 then true
+    else if U8.beq b 46u8 then true
+    else if U8.beq b 95u8 then true
+    else if U8.lt b 65u8 then false
+    else if Bool.not (U8.gt b 90u8) then true
+    else if U8.lt b 97u8 then false
+    else Bool.not (U8.gt b 122u8)
+
+/// `0`-`9` (48-57).
+#[partial]
+def llvm_name_digit (b : U8) : Bool :=
+    if U8.lt b 48u8 then false
+    else Bool.not (U8.gt b 57u8)
+
 #[partial]
 def show_llvm_value (val : LLVMValue) : String := match val {
     int_ n => I64.to_string n,
@@ -235,8 +298,8 @@ def show_llvm_value (val : LLVMValue) : String := match val {
     void_val => "void",
     var_ name => String.concat "%" name,
     parm_ idx => String.concat "%p" (I64.to_string idx),
-    global_ name => String.concat "@" name,
-    fn_ref name => String.concat "@" name,
+    global_ name => llvm_symbol_ref name,
+    fn_ref name => llvm_symbol_ref name,
     call fn_name ret_ty args tail => show_call fn_name ret_ty args tail,
     add lhs rhs => show_arith "add" lhs rhs,
     sub lhs rhs => show_arith "sub" lhs rhs,
@@ -352,7 +415,7 @@ def show_llvm_value_typed (val : LLVMValue) : String :=
 def show_call (fn_name : String) (ret_ty : LLVMType) (args : List LLVMValue) (tail : Bool) : String :=
     let prefix := if tail then "tail call " else "call " in
     let sig := String.concat prefix
-        (String.concat (show_llvm_type ret_ty) (String.concat " @" fn_name)) in
+        (String.concat (show_llvm_type ret_ty) (String.concat " " (llvm_symbol_ref fn_name))) in
     let args_str := show_args_typed args in
     String.concat sig (String.concat "(" (String.concat args_str ")"))
 
@@ -499,7 +562,7 @@ def emit_function (func : LLVMFunction) (dbg_refs : List (Pair String DbgFuncRef
         let prefix := String.concat "\n; Function: " (String.concat name "\n") in
         let sig := String.concat "define" (String.concat cc
             (String.concat " " (String.concat (show_llvm_type ret_ty)
-            (String.concat " @" (String.concat name "("))))) in
+            (String.concat " " (String.concat (llvm_symbol_ref name) "("))))) in
         let refs := find_dbg_refs name dbg_refs in
         let sig2 := String.concat sig (String.concat (join_params params) (String.concat ")" (String.concat refs.define_suffix " {"))) in
         let body := emit_blocks blocks refs.instr_suffix in
@@ -622,10 +685,10 @@ def llvm_escape_string (s : String) : String :=
 def show_llvm_global (g : LLVMGlobal) : String := match g {
     LLVMGlobal.mk name value byte_len constant =>
         if constant
-        then String.concat "@" (String.concat name
+        then String.concat (llvm_symbol_ref name)
             (String.concat " = constant [" (String.concat (I64.to_string byte_len)
-            (String.concat " x i8] c\"" (String.concat (llvm_escape_string value) "\\00\"")))))
-        else String.concat "@" (String.concat name (String.concat " = global " value)),
+            (String.concat " x i8] c\"" (String.concat (llvm_escape_string value) "\\00\""))))
+        else String.concat (llvm_symbol_ref name) (String.concat " = global " value),
 }
 
 #[partial]
@@ -637,8 +700,8 @@ def emit_decls (ds : List LLVMDeclaration) : String := match ds {
 #[partial]
 def show_llvm_decl (d : LLVMDeclaration) : String := match d {
     LLVMDeclaration.mk name params ret_ty =>
-        String.concat "declare " (String.concat ret_ty (String.concat " @"
-            (String.concat name (String.concat "(" (String.concat (join_strs params) ")"))))),
+        String.concat "declare " (String.concat ret_ty (String.concat " "
+            (String.concat (llvm_symbol_ref name) (String.concat "(" (String.concat (join_strs params) ")"))))),
 }
 
 #[partial]

@@ -3,12 +3,9 @@ use lang.types {
   Instance, MatchCase, ModulePath, Param, Struct, Term, TypeConstraint,
   app, class_d, con, def_d, forall, hole, id, id_eq, id_member, if_, inductive_d,
   infix_d, instance_d, lam, lit, match_, mc, mk, mp, name, named, ntv, num, open_d,
-  pi, scoped_open_d, str, struct_d, type_, union_ids, unnamed, use_d, var,
+  pi, scoped_open_d, sentinel, str, struct_d, type_, union_ids, unnamed,
+  use_d, var,
 }
-
-/// Free variable sentinel index from parser (sentinel = -1).
-/// de Bruijn index >= 0 means bound; -1 means free/unknown.
-def sentinel : I64 := -1
 
 
 /// Collect all free type variables from a Term.

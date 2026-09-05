@@ -40,10 +40,8 @@ use lang.scope {struct_fields_to_params}
 use lang.types {
   Attribute, Decl, Def, Identifier, InductConstructor,
   Inductive, MatchCase, ModulePath, Param, Struct,
-  Term, TypeConstraint, show_module_path,
+  Term, TypeConstraint, sentinel, show_module_path,
 }
-
-def sentinel : I64 := -1
 
 // ─── Value-construction helpers (host -> Value, the INPUT side) ────────
 

@@ -13,7 +13,8 @@ use std.list {intercalate}
 use lang.types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
   LoadedModules, LocalScope, Location, MatchCase, ModulePath, Native, Operator,
-  Param, Scope, ScopeData, StructLitField, Term,
+  Param, Scope, ScopeData, StructLitField, Term, TypeConstraint, sentinel,
+  show_identifier, show_module_path,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, lam,
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
   param_many, pi, str, type_, unnamed, var,
@@ -23,7 +24,8 @@ use lang.codegen.ir {
   LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair, PhiPair, add, alloc_closure,
   alloc_constructor, assign, bitcast, bool_, branch, call, comment, emit_module,
   fn_, gep, global_, i64_, i8_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_,
-  jump, load, mk, mul, native_op, op_add, op_eq, op_file_exists, op_gt, op_lt,
+  jump, llvm_symbol_ref, load, mk, mul, native_op, op_add, op_eq,
+  op_file_exists, op_gt, op_lt,
   op_mul, op_ne, op_print_str, op_read_file, op_sdiv, op_sub, op_write_file,
   parm_, phi, ptr, ptrtoint, ret, sdiv, show_llvm_type, sub, trunc, var_, void_val, zext,
 }
@@ -33,7 +35,10 @@ use lang.module {
   get_loaded_main, get_module_info_decls, mk, resolve_open_aliases_in_modules,
 }
 use lang.scope {
-  add_constraint_dict_params_decls, build_scope_from_decls, collect_classes,
+  add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
+  alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
+  modpath_eq,
+  resolve_open_alias_decls,
   collect_infixes, promote_instance_defs, resolve_class_calls_decls,
   resolve_infix_decls, strip_all_leading_binders,
   validate_no_unresolved_class_calls,
@@ -59,7 +64,7 @@ struct CodegenCtx {
     /// Each top-level def's own known arity (its param count, i.e. the
     /// number of leading `Term.lam`s in its body) keyed by the SAME
     /// `llvm_name` a bare `Term.var` reference to it would compute
-    /// (`replace_dots_with_underscores` of its module path) -- built once
+    /// (`def_symbol_name` of its module-qualified name) -- built once
     /// per module compile (`build_arity_table`) so `Term.var`'s
     /// value-position case (Phase 0 of the dictionary-passing plan, see
     /// plans/bootstrapping/self-hosted-compiler.md) can tell an arity-0
@@ -78,7 +83,7 @@ struct CodegenCtx {
     ctor_arities : HashMap String I64,
     /// DWARF debug info (v1: one location per top-level def --
     /// plans/bootstrapping/debug-info.md). Keyed exactly like `arities`
-    /// (`replace_dots_with_underscores` of the def's module path),
+    /// (`def_symbol_name` of the def's module-qualified name),
     /// built once by `lang.parser`'s `decls_parser_with_locs` at parse
     /// time and threaded in unchanged. `str_map_empty` when debug info
     /// is off or the location table wasn't threaded through -- a miss
@@ -217,8 +222,8 @@ def ctx_lookup_arity (c : CodegenCtx) (llvm_name : String) : Option I64 := str_m
 
 /// Builds the arity table `empty_ctx` needs from a module's own `List
 /// Def`, keyed by the exact same `llvm_name` `compile_db_def_ir` gives
-/// each def's own compiled LLVM function (`replace_dots_with_underscores`
-/// of its module path) -- callers (`compile_db_decls_ir`/
+/// each def's own compiled LLVM function (`def_symbol_name` of its
+/// module-qualified name) -- callers (`compile_db_decls_ir`/
 /// `compile_db_module`) always have the full `List Def` in scope before
 /// compiling any of them, so this runs once per module compile, not per
 /// reference.
@@ -231,7 +236,7 @@ def build_arity_table_go (defs : List Def) (acc : HashMap String I64) : HashMap 
     List.cons d rest =>
         match d {
             Def.mk name typ term_ constraints attrs _vis =>
-                let llvm_name := replace_dots_with_underscores (module_path_to_str name) in
+                let llvm_name := def_symbol_name name in
                 let arity := List.length (collect_db_params term_) in
                 build_arity_table_go rest (str_map_insert llvm_name arity acc),
         },
@@ -241,7 +246,7 @@ def build_arity_table_go (defs : List Def) (acc : HashMap String I64) : HashMap 
 /// needs, from the PRE-expansion `(Decl, Location)` pairs `lang.module`'s
 /// `try_parse_decls_with_locs` returns (plans/bootstrapping/
 /// debug-info.md, v1: one location per top-level def). Keyed exactly
-/// like `build_arity_table` (`replace_dots_with_underscores` of the
+/// like `build_arity_table` (`def_symbol_name` of the
 /// def's module path) -- non-`def_d` declarations (type/struct/class/
 /// instance/...) are skipped, they never become an `LLVMFunction`. A
 /// `Def` whose FINAL compiled name doesn't match anything here (macro-
@@ -264,7 +269,7 @@ def build_debug_locs_go_step (decl : Decl) (loc : Location) (rest : List (Pair D
     Decl.def_d def_ =>
         match def_ {
             Def.mk name _typ _term _constraints _attrs _vis =>
-                let llvm_name := replace_dots_with_underscores (module_path_to_str name) in
+                let llvm_name := def_symbol_name name in
                 build_debug_locs_go rest (str_map_insert llvm_name loc acc),
         },
     _ => build_debug_locs_go rest acc,
@@ -281,7 +286,7 @@ def build_debug_locs_go_step (decl : Decl) (loc : Location) (rest : List (Pair D
 def global_fn_ptr_text (llvm_name : String) (arity : I64) : String :=
     let fn_ty := LLVMType.fn_ (repeat_type LLVMType.i64_ arity) LLVMType.i64_ in
     String.concat "bitcast (" (String.concat (show_llvm_type fn_ty)
-        (String.concat "* @" (String.concat llvm_name " to i8*)")))
+        (String.concat "* " (String.concat (llvm_symbol_ref llvm_name) " to i8*)")))
 
 #[partial]
 def repeat_type (ty : LLVMType) (n : I64) : List LLVMType :=
@@ -924,7 +929,7 @@ def native_op_table : HashMap String NativeOp :=
 /// `lookup_native` needs its match arms in two different forms depending
 /// on caller: dotted arithmetic ops (`I64.add`) are only registered
 /// under their fully-qualified, underscore-mangled form ("I64_add", to
-/// agree with `compile_db_def_ir`'s own `replace_dots_with_underscores`
+/// agree with `compile_db_def_ir`'s own `def_symbol_name`
 /// naming for the real global -- not that this global is ever actually
 /// called when this fast path fires, but the table's naming convention
 /// still has to agree with it), while the IO natives are registered
@@ -944,11 +949,18 @@ def native_op_table : HashMap String NativeOp :=
 /// returned a garbage heap pointer instead of computing anything. Try
 /// the underscore-mangled form first (covers arithmetic), then the
 /// bare-extracted form (covers IO), so both naming conventions work.
+///
+/// `native_op_table` is keyed on what the SOURCE wrote (`I64.add`,
+/// mangled to `I64_add`), but every name reaching codegen now carries
+/// its module (`init.number::I64.add`), so strip the qualifier first --
+/// `unqualify_def_name` is exact, not a guess, because `::` cannot
+/// appear in either half of a qualified name.
 #[partial]
 def lookup_native_any (name : String) : Option NativeOp :=
-    match lookup_native (replace_dots_with_underscores name) {
+    let src := unqualify_def_name name in
+    match lookup_native (replace_dots_with_underscores src) {
         Option.some op => Option.some op,
-        Option.none => lookup_native (extract_base_name name),
+        Option.none => lookup_native (extract_base_name src),
     }
 
 #[partial]
@@ -2646,7 +2658,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                         // is never ALSO a real def, so this cannot
                         // false-negative on any real constructor.
                         let name := symbol_identifier id in
-                        let llvm_name := replace_dots_with_underscores name in
+                        let llvm_name := ref_symbol_name id in
                         let also_a_real_fn := match ctx_lookup_arity c llvm_name {
                             Option.some _ => true,
                             Option.none => false,
@@ -3006,7 +3018,7 @@ def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : 
                     match dbg {
                         DebugName.named id =>
                             let name := symbol_identifier id in
-                            let llvm_name := replace_dots_with_underscores name in
+                            let llvm_name := ref_symbol_name id in
                             let looks_like_ctor := is_constructor_var c name in
                             let also_a_real_fn := match ctx_lookup_arity c llvm_name {
                                 Option.some _ => true,
@@ -3499,7 +3511,7 @@ def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
                         Option.some _ => compile_db_term_ir c head,
                         Option.none =>
                             let name := symbol_identifier id in
-                            let llvm_name := replace_dots_with_underscores name in
+                            let llvm_name := ref_symbol_name id in
                             // IS reachable: `try_compile_constructor_app_
                             // db` bails out to `Option.none` (falling
                             // through to here, via `compile_general_db_
@@ -3939,6 +3951,31 @@ def module_path_to_str (mp : ModulePath) : String := match mp {
 #[partial]
 def mangle_identifiers (ids : List Identifier) : String :=
     List.intercalate "__" (List.map symbol_identifier ids)
+
+/// The LLVM symbol a top-level `def` is emitted under, and the symbol a
+/// REFERENCE to one compiles a call to. These two must agree exactly --
+/// `compile_db_def_ir`'s own comment records the link failure from the
+/// last time they diverged (a dotted name like `Option.get_or_default`
+/// defining itself one way while every call site spelled it another).
+/// Keeping them as a pair, in one place, is the guard against a repeat:
+/// there is no second spelling of this derivation anywhere.
+/// The symbol is the source name VERBATIM -- no flattening of `.` to
+/// `_`, which was itself lossy: it made `String.a` and `String_a` the
+/// same symbol, and `mangle_identifiers`' `__` join likewise conflates
+/// `mp [a, b]` with `mp [a__b]`. Neither pair collides in today's
+/// corpus (4271 distinct def names, checked), but qualifying every def
+/// with its module path multiplies the opportunities, and conflating
+/// two distinct names is precisely the bug class this whole change
+/// exists to remove. `lang.codegen.ir`'s `llvm_symbol_ref` quotes every
+/// emitted `@` reference so a dotted name needs no escaping.
+#[partial]
+def def_symbol_name (name : ModulePath) : String :=
+    show_module_path name
+
+/// Reference-side counterpart to `def_symbol_name` -- see there.
+#[partial]
+def ref_symbol_name (id : Identifier) : String :=
+    symbol_identifier id
 
 struct DefResult {
     ctx : CodegenCtx,
@@ -5113,7 +5150,7 @@ def find_unwired_native_defs (defs : List Def) : List String :=
                                     match native_runtime_fn_name attrs {
                                         Option.some _ => rest_msgs,
                                         Option.none =>
-                                            match lookup_native_any (module_path_to_str name) {
+                                            match lookup_native_any (def_symbol_name name) {
                                                 Option.some _ => rest_msgs,
                                                 Option.none =>
                                                     let def_name := module_path_to_str name in
@@ -5374,15 +5411,16 @@ def parm_values_for_go (params : List Param) (idx : I64) : List LLVMValue :=
 #[partial]
 def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
     Def.mk name typ term_ constraints attrs _vis =>
-        // Must match Term.var's call-site naming exactly (its "not a
-        // local, not a constructor" fallback also runs the referenced
-        // name through replace_dots_with_underscores before emitting a
-        // call) -- a dotted top-level name like "Option.get_or_default"
-        // previously defined itself as literal LLVM function
-        // "Option.get_or_default" while every CALL to it emitted
-        // "Option_get_or_default", an "undefined value" link error the
-        // first time any real program actually called a dotted def name.
-        let fn_name := replace_dots_with_underscores (module_path_to_str name) in
+        // Must match Term.var's call-site naming exactly -- both ends go
+        // through the `def_symbol_name`/`ref_symbol_name` pair for
+        // exactly that reason. The last time they diverged, a dotted
+        // top-level name like "Option.get_or_default" defined itself as
+        // LLVM function "Option.get_or_default" while every CALL to it
+        // emitted "Option_get_or_default": an "undefined value" link
+        // error the first time a real program called a dotted def name.
+        // `validate_all_call_targets_defined` now catches that class
+        // before `llc` ever sees it.
+        let fn_name := def_symbol_name name in
         let params := collect_db_params term_ in
         let llvm_params := build_llvm_params_db params in
         match native_runtime_fn_name attrs {
@@ -6122,6 +6160,261 @@ def dedup_funcs_by_name_go (funcs : List LLVMFunction) (seen : List String) : Li
         },
 }
 
+// --- Gate: no two definitions may share one LLVM symbol -------------
+//
+// `dedup_funcs_by_name` (below) exists to collapse byte-identical
+// closure shims, and it cannot tell one of those from two genuinely
+// different defs -- it keeps the first and drops the rest, silently.
+// `build_def_name_map` does the same thing one stage earlier, keeping
+// the last. Qualification makes a collision between two SOURCE defs
+// impossible; this gate is what makes that a checked property rather
+// than an argument, and it also catches the cases qualification does
+// not cover on its own: a synthesized name clashing with a source one,
+// or either clashing with a runtime symbol.
+//
+// Structurally identical definitions are rejected too. One of them is
+// still being dropped, and "identical today" is not a property anything
+// maintains.
+
+/// One message per LLVM symbol claimed by two or more reachable defs.
+#[partial]
+def validate_no_colliding_def_symbols (decl_list : List Decl) : Result String (List Decl) :=
+    let msgs := colliding_def_symbol_msgs (extract_defs decl_list) str_map_empty in
+    match msgs {
+        List.empty => Result.ok decl_list,
+        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
+    }
+
+#[partial]
+def colliding_def_symbol_msgs (defs : List Def) (seen : HashMap String Bool) : List String :=
+    match defs {
+        List.empty => List.empty,
+        List.cons d rest =>
+            let sym := def_name_str d in
+            match str_map_lookup sym seen {
+                Option.some _ =>
+                    List.cons (String.concat "two definitions share the LLVM symbol `" (String.concat sym
+                        "` -- one of them would be silently dropped; give them distinct names or distinct modules"))
+                        (colliding_def_symbol_msgs rest seen),
+                Option.none =>
+                    if reserved_runtime_symbol sym
+                    then List.cons (String.concat "def `" (String.concat sym
+                            "` collides with a runtime symbol of the same name -- rename the def"))
+                            (colliding_def_symbol_msgs rest (str_map_insert sym true seen))
+                    else colliding_def_symbol_msgs rest (str_map_insert sym true seen),
+            },
+    }
+
+/// The symbols the C runtime and the generated runtime natives already
+/// own. A def landing on one of these is dropped by `dedup_funcs_by_name`
+/// exactly like a def-vs-def collision -- `compile_db_module_with_debug`
+/// concatenates `runtime_native_functions` ahead of the compiled defs,
+/// so the runtime one wins and the real def vanishes.
+#[partial]
+def reserved_runtime_symbol (sym : String) : Bool :=
+    if runtime_func_name_matches runtime_native_functions sym then true
+    else runtime_decl_name_matches runtime_declarations sym
+
+#[partial]
+def runtime_func_name_matches (funcs : List LLVMFunction) (sym : String) : Bool := match funcs {
+    List.empty => false,
+    List.cons f rest => if String.beq (llvm_func_name f) sym then true else runtime_func_name_matches rest sym,
+}
+
+#[partial]
+def runtime_decl_name_matches (decls : List LLVMDeclaration) (sym : String) : Bool := match decls {
+    List.empty => false,
+    List.cons d rest =>
+        match d {
+            LLVMDeclaration.mk name _params _ret =>
+                if String.beq name sym then true else runtime_decl_name_matches rest sym,
+        },
+}
+
+// --- Gate: every called symbol must actually exist -----------------
+//
+// A reference that resolves to no `define`/`declare` is not caught
+// anywhere in this pipeline: it renders happily into the `.ll` and dies
+// at `llc` with `undefined value '@x'` -- at the END of a 15-25 minute
+// self-compile, naming one symbol and no call site. Since every name
+// this backend emits now goes through `def_symbol_name`/`ref_symbol_
+// name`, a single mismatch between those two ends does exactly that,
+// which makes this the difference between a seconds-long iteration and
+// a half-hour one.
+
+/// Every function symbol reachable from `funcs` as a CALL TARGET -- the
+/// `fn_name` of every `call`, plus every `fn_ref` (a callee named
+/// directly by symbol rather than through a register).
+#[partial]
+def collect_call_targets (funcs : List LLVMFunction) : List String := match funcs {
+    List.empty => List.empty,
+    List.cons f rest =>
+        match f {
+            LLVMFunction.mk _name _params _ret _blocks _cc _dbg =>
+                List.append (call_targets_in_blocks (llvm_func_blocks f)) (collect_call_targets rest),
+        },
+}
+
+#[partial]
+def llvm_func_blocks (f : LLVMFunction) : List LLVMBasicBlock := match f {
+    LLVMFunction.mk _name _params _ret blocks _cc _dbg => blocks,
+}
+
+#[partial]
+def llvm_func_name (f : LLVMFunction) : String := match f {
+    LLVMFunction.mk name _params _ret _blocks _cc _dbg => name,
+}
+
+#[partial]
+def call_targets_in_blocks (bs : List LLVMBasicBlock) : List String := match bs {
+    List.empty => List.empty,
+    List.cons b rest =>
+        match b {
+            LLVMBasicBlock.mk _label instrs =>
+                List.append (call_targets_in_instrs instrs) (call_targets_in_blocks rest),
+        },
+}
+
+#[partial]
+def call_targets_in_instrs (is_ : List LLVMInstruction) : List String := match is_ {
+    List.empty => List.empty,
+    List.cons i rest => List.append (call_targets_in_instr i) (call_targets_in_instrs rest),
+}
+
+#[partial]
+def call_targets_in_instr (i : LLVMInstruction) : List String := match i {
+    LLVMInstruction.assign _t v => call_targets_in_value v,
+    LLVMInstruction.ret v => call_targets_in_value v,
+    LLVMInstruction.branch c _t _e => call_targets_in_value c,
+    LLVMInstruction.store v _pty p => List.append (call_targets_in_value v) (call_targets_in_value p),
+    LLVMInstruction.jump _l => List.empty,
+    LLVMInstruction.comment _t => List.empty,
+}
+
+/// Total walk over `LLVMValue`. Every arm is spelled out rather than
+/// falling through a wildcard: a new value constructor that can carry a
+/// callee must fail to compile here rather than silently escape the
+/// gate.
+#[partial]
+def call_targets_in_value (v : LLVMValue) : List String := match v {
+    LLVMValue.call fn_name _rt args _tail => List.cons fn_name (call_targets_in_values args),
+    LLVMValue.fn_ref name => List.cons name List.empty,
+    LLVMValue.add a b => call_targets_in_pair a b,
+    LLVMValue.sub a b => call_targets_in_pair a b,
+    LLVMValue.mul a b => call_targets_in_pair a b,
+    LLVMValue.sdiv a b => call_targets_in_pair a b,
+    LLVMValue.udiv a b => call_targets_in_pair a b,
+    LLVMValue.urem a b => call_targets_in_pair a b,
+    LLVMValue.icmp_eq a b => call_targets_in_pair a b,
+    LLVMValue.icmp_ne a b => call_targets_in_pair a b,
+    LLVMValue.icmp_slt a b => call_targets_in_pair a b,
+    LLVMValue.icmp_sgt a b => call_targets_in_pair a b,
+    LLVMValue.icmp_ult a b => call_targets_in_pair a b,
+    LLVMValue.icmp_ugt a b => call_targets_in_pair a b,
+    LLVMValue.zext v2 _f _t => call_targets_in_value v2,
+    LLVMValue.trunc v2 _f _t => call_targets_in_value v2,
+    LLVMValue.ptrtoint v2 _f _t => call_targets_in_value v2,
+    LLVMValue.inttoptr v2 _f _t => call_targets_in_value v2,
+    LLVMValue.bitcast v2 _t => call_targets_in_value v2,
+    LLVMValue.gep base _idxs => call_targets_in_value base,
+    LLVMValue.load _ty _pty p => call_targets_in_value p,
+    // `entry` is an already-rendered text fragment (`global_fn_ptr_text`'s
+    // `bitcast (... @"name" to i8*)`), not a bare symbol, so the callee
+    // it names is not extractable here without re-parsing it. It is
+    // always a shim emitted into this same function list by the site
+    // that built it, so it cannot dangle -- the env values still get
+    // walked.
+    LLVMValue.alloc_closure _entry _arity env => call_targets_in_values env,
+    LLVMValue.alloc_constructor _tag fields => call_targets_in_values fields,
+    LLVMValue.native_op _op args => call_targets_in_values args,
+    LLVMValue.phi pairs => call_targets_in_phis pairs,
+    LLVMValue.int_ _n => List.empty,
+    LLVMValue.int32_ _n => List.empty,
+    LLVMValue.bool_ _b => List.empty,
+    LLVMValue.void_val => List.empty,
+    LLVMValue.var_ _n => List.empty,
+    LLVMValue.parm_ _i => List.empty,
+    LLVMValue.global_ _n => List.empty,
+}
+
+#[partial]
+def call_targets_in_pair (a : LLVMValue) (b : LLVMValue) : List String :=
+    List.append (call_targets_in_value a) (call_targets_in_value b)
+
+#[partial]
+def call_targets_in_values (vs : List LLVMValue) : List String := match vs {
+    List.empty => List.empty,
+    List.cons v rest => List.append (call_targets_in_value v) (call_targets_in_values rest),
+}
+
+#[partial]
+def call_targets_in_phis (ps : List PhiPair) : List String := match ps {
+    List.empty => List.empty,
+    List.cons p rest =>
+        match p {
+            PhiPair.mk v _label => List.append (call_targets_in_value v) (call_targets_in_phis rest),
+        },
+}
+
+/// Fail with every call target that has no matching `define` or
+/// `declare`, deduplicated (one missing symbol called fifty times is
+/// one message, not fifty).
+#[partial]
+def validate_all_call_targets_defined (m : LLVMModule) : Result String LLVMModule :=
+    match m {
+        LLVMModule.mk _triple _globals funcs decls _src =>
+            let defined := build_defined_symbol_set funcs decls in
+            let missing := dedup_strs (missing_call_targets (collect_call_targets funcs) defined) in
+            match missing {
+                List.empty => Result.ok m,
+                List.cons _ _ =>
+                    Result.err (String.concat "call to undefined symbol(s): "
+                        (String.concat (join_semicolon_msgs missing "")
+                            " -- a reference resolved to a name nothing defines; def_symbol_name and ref_symbol_name must agree")),
+            },
+    }
+
+#[partial]
+def build_defined_symbol_set (funcs : List LLVMFunction) (decls : List LLVMDeclaration) : HashMap String Bool :=
+    add_decl_symbols decls (add_func_symbols funcs str_map_empty)
+
+#[partial]
+def add_func_symbols (funcs : List LLVMFunction) (acc : HashMap String Bool) : HashMap String Bool := match funcs {
+    List.empty => acc,
+    List.cons f rest => add_func_symbols rest (str_map_insert (llvm_func_name f) true acc),
+}
+
+#[partial]
+def add_decl_symbols (decls : List LLVMDeclaration) (acc : HashMap String Bool) : HashMap String Bool := match decls {
+    List.empty => acc,
+    List.cons d rest =>
+        match d {
+            LLVMDeclaration.mk name _params _ret => add_decl_symbols rest (str_map_insert name true acc),
+        },
+}
+
+#[partial]
+def missing_call_targets (targets : List String) (defined : HashMap String Bool) : List String := match targets {
+    List.empty => List.empty,
+    List.cons t rest =>
+        match str_map_lookup t defined {
+            Option.some _ => missing_call_targets rest defined,
+            Option.none => List.cons t (missing_call_targets rest defined),
+        },
+}
+
+#[partial]
+def dedup_strs (xs : List String) : List String := dedup_strs_go xs List.empty
+
+#[partial]
+def dedup_strs_go (xs : List String) (seen : List String) : List String := match xs {
+    List.empty => List.empty,
+    List.cons x rest =>
+        if list_contains_str seen x
+        then dedup_strs_go rest seen
+        else List.cons x (dedup_strs_go rest (List.cons x seen)),
+}
+
 /// When the user's main has no params, add an `args` param so the C runtime
 /// can pass the command-line argument list. If main already has params (e.g.,
 /// `def main (args : List String) : I64`), keep them as-is.
@@ -6517,10 +6810,13 @@ def replace_dots_loop (s : String) (acc : String) : String :=
 
 /// Check if a function name is a main function (handles both "main" and module_main)
 #[partial]
-def ends_with_main (name : String) : Bool := 
-    if String.beq name "main" then true
-    else if String.length name > 3 then
-        let suffix := String.slice name (String.length name - 3) (String.length name) in
+def ends_with_main (name : String) : Bool :=
+    // On the UNQUALIFIED tail: a symbol is `lang.main::main` now, which
+    // ends in neither `main`-the-whole-string nor `_main`.
+    let src := unqualify_def_name name in
+    if String.beq src "main" then true
+    else if String.length src > 3 then
+        let suffix := String.slice src (String.length src - 3) (String.length src) in
         String.beq suffix "_main"
     else false
 
@@ -6574,9 +6870,26 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
         return unit
     } else return unit;
 
-    // Stage 1: collect all declarations without module prefixes
+    // Stage 0c: give every source def its module-qualified name and
+    // re-point every reference at the module that owns it. MUST run
+    // here, before Stage 1 -- `ModuleInfo.path` is the only record of
+    // which module a decl came from, and flattening discards it.
+    let t_qualify := Bench.now;
+    match qualify_modules aliased_mods {
+      Result.err e => do {
+        if verbose then println ("FAILED at stage: qualify_modules (" ++ e ++ ")") else return unit;
+        return (Result.err e)
+      },
+      Result.ok qualified_mods => do {
+    if verbose then do {
+        let _ := Bench.report "qualify_modules" (I64.sub Bench.now t_qualify);
+        return unit
+    } else return unit;
+
+    // Stage 1: collect all declarations (now each already carrying its
+    // own module path, so the flat list is still collision-free)
     let t_collect := Bench.now;
-    let all_decls := collect_all_decls_from_modules aliased_mods List.empty;
+    let all_decls := collect_all_decls_from_modules qualified_mods List.empty;
     if verbose then do {
         let def_count := List.length all_decls;
         let _ := Bench.report "collect_decls" (I64.sub Bench.now t_collect);
@@ -6660,7 +6973,8 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // not, blocked compiling any program at all. See
     // filter_reachable_decls's own doc comment.
     let t_reach := Bench.now;
-    let reachable_decls := filter_reachable_decls dispatched_decls;
+    let main_root : String := qualified_def_name_str (module_info_path (get_loaded_main loaded)) (bare_modpath "main");
+    let reachable_decls := filter_reachable_decls main_root dispatched_decls;
     if verbose then do {
         let reachable_count := List.length reachable_decls;
         let _ := Bench.report "filter_reachable" (I64.sub Bench.now t_reach);
@@ -6703,7 +7017,16 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                         if verbose then println ("FAILED at stage: validate_no_undesugared_struct_lits (" ++ e ++ ")") else return unit;
                         return (Result.err e)
                     },
-                    Result.ok _ => do {
+                    Result.ok _ =>
+                      // And the collision gate: after qualification no two
+                      // SOURCE defs can share a symbol, so anything this
+                      // finds is a synthesized or runtime-symbol clash.
+                      match validate_no_colliding_def_symbols reachable_decls {
+                        Result.err e => do {
+                            if verbose then println ("FAILED at stage: validate_no_colliding_def_symbols (" ++ e ++ ")") else return unit;
+                            return (Result.err e)
+                        },
+                        Result.ok _ => do {
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                     let t_llvm := Bench.now;
                     let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
@@ -6713,10 +7036,19 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                         return unit
                     } else return unit;
 
-                    return (Result.ok mod_)
+                    // Stage 7: the emitted module must not call a symbol
+                    // nothing defines. Nothing else in this pipeline
+                    // catches that -- it renders happily into the `.ll`
+                    // and dies at `llc` as `undefined value '@x'`, at the
+                    // END of a 15-25 minute self-compile, naming one
+                    // symbol and no call site.
+                    return (validate_all_call_targets_defined mod_)
                         },
+                      },
                   },
             },
+    }
+      },
     }
 }
 
@@ -6732,8 +7064,15 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
 /// being compiled actually calls into any of it, so a codegen bug in
 /// ANY of those 264 defs (even ones with zero callers from the actual
 /// program) blocked compiling ANYTHING.
+///
+/// `root` is the entry point's own qualified symbol. There is no
+/// sensible default any more: every def carries its module
+/// (`lang.main::main`), so the literal `"main"` this used to root at
+/// names nothing at all, and a wrapper supplying it would silently
+/// return the empty closure. The caller knows which module is the
+/// program's entry point (`get_loaded_main`) and has to say.
 #[partial]
-def filter_reachable_decls (decl_list : List Decl) : List Decl :=
+def filter_reachable_decls (root : String) (decl_list : List Decl) : List Decl :=
     let all_defs := extract_defs decl_list in
     let all_inds := extract_inductives decl_list in
     // O(total) once, instead of `reachable_defs_from` re-scanning
@@ -6745,7 +7084,7 @@ def filter_reachable_decls (decl_list : List Decl) : List Decl :=
     // calling `Map.insert`/`Map.lookup` -- same latent-bug workaround
     // `lang/scope.mo`'s `modpath_map_*` already uses.
     let defs_map := build_def_name_map all_defs str_map_empty in
-    let reachable := reachable_defs_from defs_map (List.cons "main" List.empty) str_map_empty List.empty in
+    let reachable := reachable_defs_from defs_map (List.cons root List.empty) str_map_empty List.empty in
     List.append (map_inductive_decl all_inds) (map_def_decl reachable)
 
 /// A `String`-keyed `HashMap` (preferred over `BTreeMap` here for
@@ -6810,9 +7149,13 @@ def map_inductive_decl (inds : List Inductive) : List Decl := match inds {
     List.cons i rest => List.cons (Decl.inductive_d i) (map_inductive_decl rest),
 }
 
+/// Reachability works in the same name space the emitted symbols do --
+/// `collect_referenced_names` collects a reference's `symbol_identifier`
+/// verbatim, so the def side has to spell its name the same way or the
+/// walk from `main` finds nothing.
 #[partial]
 def def_name_str (d : Def) : String := match d {
-    Def.mk name _typ _term _constraints _attrs _vis => module_path_to_str name,
+    Def.mk name _typ _term _constraints _attrs _vis => def_symbol_name name,
 }
 
 #[partial]
@@ -6939,6 +7282,714 @@ def collect_referenced_names_opt_list (args : List (Option Term)) (acc : List St
             Option.none => collect_referenced_names_opt_list rest acc,
         },
 }
+
+// ─── Module-qualified symbols ────────────────────────────────────────
+//
+// Every top-level `def` is emitted under its module-qualified name
+// (`lang.typecheck.infer.inductive_bare_name`), and every reference to
+// one is re-pointed at the module that actually owns it.
+//
+// Without this the whole program is a single flat namespace -- Stage 1
+// below flattens every module's decls with no prefixing, and both
+// `build_def_name_map` (reachability) and `dedup_funcs_by_name` (shim
+// collapsing) then silently keep exactly ONE of any same-named pair.
+// 19 top-level names are declared by two or more non-test modules in
+// this corpus; 16 are live in `lang/main.mo`'s own closure. One of them
+// crashed the self-compiled compiler: `inductive_bare_name` exists in
+// both `lang/typecheck/meta_reflect.mo` (`-> String`) and
+// `lang/typecheck/infer.mo` (`-> Identifier`), the String one won, and
+// `con_result_type` stored a raw `char*` into a `DebugName.named`
+// slot -- read back later as an `Identifier` by
+// `Similar_Identifier_similar`, whose single-constructor match reads
+// field 0 with no tag check, giving `strcmp("List", 0x1)`.
+// See AGENTS.md items 18/19, which name this exact fix as the
+// principled one.
+
+/// A decl's own declared def name, if it is a `Decl.def_d`. The name may
+/// itself contain dots (`def String.beq` parses as a SINGLE-segment
+/// `ModulePath` whose Identifier is the literal text `"String.beq"` --
+/// see `dotted_def_name` in `lang/parser.mo`), so this deliberately does
+/// not care how many dots are in it: what matters is that the name is
+/// the whole of what the source declared, and qualification prepends the
+/// module path to it wholesale.
+#[partial]
+def decl_def_name (d : Decl) : Option ModulePath := match d {
+    Decl.def_d dd =>
+        match dd {
+            Def.mk name _typ _term _constraints _attrs _vis => Option.some name,
+        },
+    _ => Option.none,
+}
+
+/// `declared name -> every module path that declares it`. One pass over
+/// every loaded module; `str_map_*`-backed for the same reason
+/// `build_def_name_map` is (a linear scan per lookup is the measured
+/// dominant cost at this corpus size).
+#[partial]
+def collect_def_owners (modules : List ModuleInfo) (acc : HashMap String (List ModulePath)) : HashMap String (List ModulePath) :=
+    match modules {
+        List.empty => acc,
+        List.cons m rest =>
+            collect_def_owners rest (collect_def_owners_decls (module_info_path m) (get_module_info_decls m) acc),
+    }
+
+#[partial]
+def module_info_path (mi : ModuleInfo) : ModulePath := match mi {
+    ModuleInfo.mk path _file_path _decl_list => path,
+}
+
+#[partial]
+def collect_def_owners_decls (path : ModulePath) (decls : List Decl) (acc : HashMap String (List ModulePath)) : HashMap String (List ModulePath) :=
+    match decls {
+        List.empty => acc,
+        List.cons d rest =>
+            collect_def_owners_decls path rest (add_def_owner (decl_def_name d) path acc),
+    }
+
+#[partial]
+def add_def_owner (name : Option ModulePath) (path : ModulePath) (acc : HashMap String (List ModulePath)) : HashMap String (List ModulePath) :=
+    match name {
+        Option.none => acc,
+        Option.some n =>
+            let key := show_module_path n in
+            let prev := match str_map_lookup key acc {
+                Option.some ps => ps,
+                Option.none => List.empty,
+            } in
+            // Deduplicated by module, not by declaration: a module that
+            // declares one name twice is its own (pre-existing) problem,
+            // but it must not read here as an AMBIGUOUS name.
+            if modpath_list_contains prev path
+            then acc
+            else str_map_insert key (List.cons path prev) acc,
+    }
+
+#[partial]
+def modpath_list_contains (ps : List ModulePath) (p : ModulePath) : Bool := match ps {
+    List.empty => false,
+    List.cons hd rest => if modpath_eq hd p then true else modpath_list_contains rest p,
+}
+
+/// The name `n`, declared in module `M`, is emitted under: `M::n`.
+///
+/// `::` and not `.`: a def name may itself contain dots (`def
+/// String.beq`), and a module path is dotted too, so a dot separator
+/// would not say where one ends and the other begins -- `init.string`
+/// + `String.beq` and `init.string.String` + `beq` would both read as
+/// `init.string.String.beq`. `::` cannot occur in either half, so the
+/// encoding is injective by construction and the original source name
+/// is recoverable with `unqualify_def_name` below (which the native
+/// tables need, since they are keyed on what the source wrote).
+///
+/// The result stays a SINGLE-segment `ModulePath`, exactly the shape a
+/// def name already had -- `show_module_path`/`module_path_to_str` are
+/// the identity on it, so nothing downstream sees a new shape.
+#[partial]
+def qualified_def_name (modpath : ModulePath) (n : ModulePath) : ModulePath :=
+    bare_modpath (qualified_def_name_str modpath n)
+
+#[partial]
+def qualified_def_name_str (modpath : ModulePath) (n : ModulePath) : String :=
+    String.concat (show_module_path modpath) (String.concat "::" (show_module_path n))
+
+/// The source name inside a qualified symbol -- `init.string::String.beq`
+/// back to `String.beq`. A name that was never qualified (a synthesized
+/// or already-flat one) comes back unchanged, so this is safe to apply
+/// anywhere a source-level name is wanted.
+#[partial]
+def unqualify_def_name (s : String) : String :=
+    let idx := string_find_qualifier_sep s 0 (String.length s) in
+    if I64.beq idx (0 - 1) then s else String.slice s (idx + 2) (String.length s - idx - 2)
+
+#[partial]
+def string_find_qualifier_sep (s : String) (i : I64) (n : I64) : I64 :=
+    if I64.gt (i + 2) n then (0 - 1)
+    else if String.beq (String.slice s i 2) "::" then i
+    else string_find_qualifier_sep s (i + 1) n
+
+/// The module paths a module imports, in any form (`use x {..}`,
+/// `use x {}`, `open X {..}`, and the inner decl of a `scoped_open_d`).
+/// Used only to disambiguate a name several modules declare; a name with
+/// exactly one declarer never consults this.
+#[partial]
+def module_import_paths (decls : List Decl) : List ModulePath := match decls {
+    List.empty => List.empty,
+    List.cons d rest => List.append (import_paths_of_decl d) (module_import_paths rest),
+}
+
+#[partial]
+def import_paths_of_decl (d : Decl) : List ModulePath := match d {
+    Decl.use_d path _filter _public => List.cons path List.empty,
+    Decl.open_d path _filter => List.cons path List.empty,
+    Decl.scoped_open_d path _filter inner => List.cons path (import_paths_of_decl inner),
+    _ => List.empty,
+}
+
+/// Owners of `name` that `M` explicitly named in a `use`/`open` ITEM
+/// list -- the strongest disambiguation signal, because the source says
+/// outright which module the name was taken from. `collect_open_aliases`
+/// already reconstructs each item as `path ++ "." ++ bare`, which is
+/// exactly the qualified name this pass mints, so the two agree by
+/// construction. (That reconstruction is documented as usually WRONG in
+/// `filter_valid_open_aliases`, because today's defs register under
+/// plain undotted names -- qualifying them is what makes it right.)
+#[partial]
+def explicit_import_owners (own_aliases : List OpenAlias) (name : String) (owners : List ModulePath) : List ModulePath :=
+    match owners {
+        List.empty => List.empty,
+        List.cons o rest =>
+            let rest_hits := explicit_import_owners own_aliases name rest in
+            if alias_list_names own_aliases name (qualified_def_name_str o (bare_modpath name))
+            then List.cons o rest_hits
+            else rest_hits,
+    }
+
+#[partial]
+def bare_modpath (name : String) : ModulePath :=
+    ModulePath.mp (List.cons (Identifier.id name) List.empty)
+
+#[partial]
+def alias_list_names (aliases : List OpenAlias) (bare : String) (qualified : String) : Bool :=
+    match aliases {
+        List.empty => false,
+        List.cons a rest =>
+            match a {
+                { bare_name := b, qualified_name := q } =>
+                    if String.beq b bare && String.beq q qualified
+                    then true
+                    else alias_list_names rest bare qualified,
+            },
+    }
+
+#[partial]
+def modpath_list_intersect (a : List ModulePath) (b : List ModulePath) : List ModulePath :=
+    match a {
+        List.empty => List.empty,
+        List.cons hd rest =>
+            let rest_hits := modpath_list_intersect rest b in
+            if modpath_list_contains b hd then List.cons hd rest_hits else rest_hits,
+    }
+
+/// Which module owns `name`, as seen from module `mpath`:
+///
+///   1. `mpath` declares it        -> `mpath`   (a local definition wins)
+///   2. an explicit `use`/`open X {name}` names a declarer -> `X`
+///   3. exactly one module declares it -> that module
+///   4. otherwise                  -> error, listing every candidate
+///
+/// Rule 3 carries the corpus: a bare cross-module call to a uniquely
+/// named def is the dominant style here, and routinely has no import at
+/// all (`lang/module.mo` calls `std/path.mo`'s `raw_path_join` with no
+/// `use std.path`; `lang/scope.mo` calls `show_module_path` without
+/// importing it). Rules 1/2/4 exist only for the ~19 names two or more
+/// modules declare.
+#[partial]
+def resolve_owner (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (name : String) (owners : List ModulePath) : Result String ModulePath :=
+    let explicit := explicit_import_owners own_aliases name owners in
+    if modpath_list_contains owners mpath
+    then
+        // Declaring a name AND explicitly importing the same name from
+        // another declarer is contradictory source, and today which one
+        // wins is decided by registration order. `lang/module.mo` does
+        // exactly this with `list_append` -- and AGENTS.md item 19
+        // records that its own copy and `lang/scope.mo`'s are
+        // deliberately NOT interchangeable (different generic binders,
+        // both on `merge_scope_data`'s measured hot path). Silently
+        // picking a side would move a hot path with no signal, so say so.
+        match explicit {
+            List.empty => Result.ok mpath,
+            List.cons e _ =>
+                Result.err (String.concat "module " (String.concat (show_module_path mpath)
+                    (String.concat " both declares `" (String.concat name
+                    (String.concat "` and imports it from " (String.concat (show_module_path e)
+                    " -- drop one, they are not interchangeable")))))),
+        }
+    else match explicit {
+        List.cons e erest =>
+            match erest {
+                List.empty => Result.ok e,
+                List.cons _ _ => Result.err (ambiguous_owner_msg mpath name explicit),
+            },
+        List.empty =>
+            match owners {
+                List.cons o orest =>
+                    match orest {
+                        List.empty => Result.ok o,
+                        List.cons _ _ =>
+                            // Several declarers and no explicit item
+                            // naming one: fall back to the modules this
+                            // one imports at all, which is still a real
+                            // narrowing.
+                            let imported := modpath_list_intersect owners imports in
+                            match imported {
+                                List.cons i irest =>
+                                    match irest {
+                                        List.empty => Result.ok i,
+                                        List.cons _ _ => Result.err (ambiguous_owner_msg mpath name imported),
+                                    },
+                                List.empty => Result.err (ambiguous_owner_msg mpath name owners),
+                            },
+                    },
+                List.empty => Result.err (String.concat "no module declares `" (String.concat name "`")),
+            },
+    }
+
+#[partial]
+def ambiguous_owner_msg (mpath : ModulePath) (name : String) (candidates : List ModulePath) : String :=
+    String.concat "`" (String.concat name
+        (String.concat "` is referenced from " (String.concat (show_module_path mpath)
+        (String.concat " but declared in " (String.concat (join_modpaths candidates)
+        " -- add an explicit `use <module> {"
+        )))))
+        ++ name ++ "}` to say which"
+
+#[partial]
+def join_modpaths (ps : List ModulePath) : String :=
+    List.intercalate ", " (List.map show_module_path ps)
+
+/// Every declared def name across the whole program, deduplicated.
+#[partial]
+def all_declared_names (modules : List ModuleInfo) : List String :=
+    all_declared_names_go modules str_map_empty
+
+#[partial]
+def all_declared_names_go (modules : List ModuleInfo) (seen : HashMap String Bool) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest =>
+            match declared_names_in_decls (get_module_info_decls m) seen {
+                Pair.pair here seen2 => List.append here (all_declared_names_go rest seen2),
+            },
+    }
+
+#[partial]
+def declared_names_in_decls (decls : List Decl) (seen : HashMap String Bool) : Pair (List String) (HashMap String Bool) :=
+    match decls {
+        List.empty => Pair.pair List.empty seen,
+        List.cons d rest =>
+            match decl_def_name d {
+                Option.none => declared_names_in_decls rest seen,
+                Option.some n =>
+                    let key := show_module_path n in
+                    match str_map_lookup key seen {
+                        Option.some _ => declared_names_in_decls rest seen,
+                        Option.none =>
+                            match declared_names_in_decls rest (str_map_insert key true seen) {
+                                Pair.pair tail seen2 => Pair.pair (List.cons key tail) seen2,
+                            },
+                    },
+            },
+    }
+
+/// `name -> qualified name` for every name exactly ONE module declares.
+/// Computed once for the whole program rather than per module, because
+/// the answer cannot differ between modules -- which is also what keeps
+/// this pass linear: only the handful of genuinely ambiguous names ever
+/// need per-module work.
+#[partial]
+def build_global_rename_map (names : List String) (owners_map : HashMap String (List ModulePath)) (acc : HashMap String String) : HashMap String String :=
+    match names {
+        List.empty => acc,
+        List.cons n rest =>
+            match owners_for n owners_map {
+                List.cons o orest =>
+                    match orest {
+                        List.empty => build_global_rename_map rest owners_map (alias_map_insert n (qualified_def_name_str o (bare_modpath n)) acc),
+                        List.cons _ _ => build_global_rename_map rest owners_map acc,
+                    },
+                List.empty => build_global_rename_map rest owners_map acc,
+            },
+    }
+
+#[partial]
+def owners_for (name : String) (owners_map : HashMap String (List ModulePath)) : List ModulePath :=
+    match str_map_lookup name owners_map {
+        Option.some ps => ps,
+        Option.none => List.empty,
+    }
+
+/// The names two or more modules declare -- the only ones whose rewrite
+/// target depends on which module is doing the referencing.
+#[partial]
+def ambiguous_declared_names (names : List String) (owners_map : HashMap String (List ModulePath)) : List String :=
+    match names {
+        List.empty => List.empty,
+        List.cons n rest =>
+            let tail := ambiguous_declared_names rest owners_map in
+            match owners_for n owners_map {
+                List.cons _ orest =>
+                    match orest {
+                        List.empty => tail,
+                        List.cons _ _ => List.cons n tail,
+                    },
+                List.empty => tail,
+            },
+    }
+
+/// Rename every `Decl.def_d` in `decls` to its module-qualified name.
+/// Definitions only -- references are rewritten separately, through the
+/// existing alias rewriter.
+#[partial]
+def qualify_decl_names (mpath : ModulePath) (renames : HashMap String String) (decls : List Decl) : List Decl := match decls {
+    List.empty => List.empty,
+    List.cons d rest => List.cons (qualify_one_decl_name mpath renames d) (qualify_decl_names mpath renames rest),
+}
+
+#[partial]
+def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String) (d : Decl) : Decl := match d {
+    Decl.def_d dd =>
+        match dd {
+            Def.mk name typ term_ constraints attrs vis =>
+                Decl.def_d (Def.mk (qualified_def_name mpath name) typ term_ constraints attrs vis),
+        },
+    // An instance carries the module it was declared in via its own
+    // name, so `promote_instance_defs` (Stage 3, on the already-flat
+    // decl list, where module identity is gone) can still qualify the
+    // methods and dictionary it mints -- see `mangle_instance_method_
+    // name`/`instance_module_prefix` in `lang.scope`.
+    Decl.instance_d ins =>
+        match ins {
+            Instance.mk insname cls constraints args vis implicit_params defs =>
+                Decl.instance_d (Instance.mk (Identifier.id (qualified_def_name_str mpath (bare_modpath (show_identifier insname))))
+                    cls constraints args vis implicit_params defs),
+        },
+    // An `infix (+) := I64.add` names its target by the SOURCE name, and
+    // `resolve_infix_decls` (Stage 2) splices that name into every
+    // operator call site -- AFTER this pass has run, so it would splice
+    // a name nothing defines any more. Map the target here, through the
+    // declaring module's own rename table, so the splice lands on the
+    // real symbol.
+    Decl.infix_d op path vis => Decl.infix_d op (rename_modpath renames path) vis,
+    _ => d,
+}
+
+#[partial]
+def rename_modpath (renames : HashMap String String) (p : ModulePath) : ModulePath :=
+    match alias_map_lookup (show_module_path p) renames {
+        Option.some q => bare_modpath q,
+        Option.none => p,
+    }
+
+/// One module's rename table: the whole-program map for uniquely-owned
+/// names, overlaid with this module's own answer for each ambiguous one.
+/// `alias_map_insert` overwrites, so the overlay wins.
+#[partial]
+def module_rename_map (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (owners_map : HashMap String (List ModulePath)) (ambig : List String) (acc : HashMap String String) : HashMap String String :=
+    match ambig {
+        List.empty => acc,
+        List.cons n rest =>
+            match resolve_owner mpath own_aliases imports n (owners_for n owners_map) {
+                Result.ok o => module_rename_map mpath own_aliases imports owners_map rest (alias_map_insert n (qualified_def_name_str o (bare_modpath n)) acc),
+                // Unresolvable here. Leave the name out of the table
+                // rather than guessing; `unresolved_refs_in_module`
+                // decides whether this module actually cares.
+                Result.err _ => module_rename_map mpath own_aliases imports owners_map rest acc,
+            },
+    }
+
+/// The ambiguous names this module leaves unresolved AND actually
+/// references. Only computed when something was unresolvable, so the
+/// common module pays nothing for it.
+#[partial]
+def unresolved_refs_in_module (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (owners_map : HashMap String (List ModulePath)) (ambig : List String) (decls : List Decl) : List String :=
+    let unresolved := unresolvable_names mpath own_aliases imports owners_map ambig in
+    match unresolved {
+        List.empty => List.empty,
+        List.cons _ _ =>
+            let referenced := decls_referenced_names decls in
+            unresolved_messages mpath own_aliases imports owners_map unresolved referenced,
+    }
+
+#[partial]
+def unresolvable_names (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (owners_map : HashMap String (List ModulePath)) (ambig : List String) : List String :=
+    match ambig {
+        List.empty => List.empty,
+        List.cons n rest =>
+            let tail := unresolvable_names mpath own_aliases imports owners_map rest in
+            match resolve_owner mpath own_aliases imports n (owners_for n owners_map) {
+                Result.ok _ => tail,
+                Result.err _ => List.cons n tail,
+            },
+    }
+
+#[partial]
+def unresolved_messages (mpath : ModulePath) (own_aliases : List OpenAlias) (imports : List ModulePath) (owners_map : HashMap String (List ModulePath)) (unresolved : List String) (referenced : HashMap String Bool) : List String :=
+    match unresolved {
+        List.empty => List.empty,
+        List.cons n rest =>
+            let tail := unresolved_messages mpath own_aliases imports owners_map rest referenced in
+            match str_map_lookup n referenced {
+                Option.none => tail,
+                Option.some _ =>
+                    match resolve_owner mpath own_aliases imports n (owners_for n owners_map) {
+                        Result.ok _ => tail,
+                        Result.err msg => List.cons msg tail,
+                    },
+            },
+    }
+
+/// Every name referenced from any `Def`/`Instance` body in `decls`.
+#[partial]
+def decls_referenced_names (decls : List Decl) : HashMap String Bool :=
+    decls_referenced_names_go decls str_map_empty
+
+#[partial]
+def decls_referenced_names_go (decls : List Decl) (acc : HashMap String Bool) : HashMap String Bool :=
+    match decls {
+        List.empty => acc,
+        List.cons d rest => decls_referenced_names_go rest (decl_referenced_names d acc),
+    }
+
+#[partial]
+def decl_referenced_names (d : Decl) (acc : HashMap String Bool) : HashMap String Bool := match d {
+    Decl.def_d dd =>
+        match dd {
+            Def.mk _name _typ term_ _c _a _v => insert_all_names (collect_referenced_names term_ List.empty) acc,
+        },
+    Decl.instance_d ins =>
+        match ins {
+            Instance.mk _n _cls _c _args _v _ip defs => instance_defs_referenced_names defs acc,
+        },
+    Decl.scoped_open_d _p _f inner => decl_referenced_names inner acc,
+    _ => acc,
+}
+
+#[partial]
+def instance_defs_referenced_names (defs : List Def) (acc : HashMap String Bool) : HashMap String Bool :=
+    match defs {
+        List.empty => acc,
+        List.cons d rest =>
+            match d {
+                Def.mk _name _typ term_ _c _a _v =>
+                    instance_defs_referenced_names rest (insert_all_names (collect_referenced_names term_ List.empty) acc),
+            },
+    }
+
+#[partial]
+def insert_all_names (names : List String) (acc : HashMap String Bool) : HashMap String Bool :=
+    match names {
+        List.empty => acc,
+        List.cons n rest => insert_all_names rest (str_map_insert n true acc),
+    }
+
+/// Stage 0c: qualify every source def with its module path, and
+/// re-point every reference at the module that owns it.
+///
+/// Runs per module, before Stage 1 flattens -- `ModuleInfo.path` is the
+/// only place the owning module is recorded, and it is gone the moment
+/// the decls are concatenated.
+#[partial]
+def qualify_modules (modules : List ModuleInfo) : Result String (List ModuleInfo) :=
+    let owners_map := collect_def_owners modules str_map_empty in
+    let names := all_declared_names modules in
+    let global_map := build_global_rename_map names owners_map alias_map_empty in
+    let ambig := ambiguous_declared_names names owners_map in
+    let msgs := collect_qualify_errors modules owners_map ambig in
+    match msgs {
+        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
+        List.empty => Result.ok (qualify_modules_go modules owners_map global_map ambig),
+    }
+
+#[partial]
+def collect_qualify_errors (modules : List ModuleInfo) (owners_map : HashMap String (List ModulePath)) (ambig : List String) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest =>
+            let decls := get_module_info_decls m in
+            let here := unresolved_refs_in_module (module_info_path m) (collect_open_aliases decls)
+                (module_import_paths decls) owners_map ambig decls in
+            List.append here (collect_qualify_errors rest owners_map ambig),
+    }
+
+#[partial]
+def qualify_modules_go (modules : List ModuleInfo) (owners_map : HashMap String (List ModulePath)) (global_map : HashMap String String) (ambig : List String) : List ModuleInfo :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest =>
+            List.cons (qualify_one_module m owners_map global_map ambig)
+                (qualify_modules_go rest owners_map global_map ambig),
+    }
+
+#[partial]
+def qualify_one_module (mi : ModuleInfo) (owners_map : HashMap String (List ModulePath)) (global_map : HashMap String String) (ambig : List String) : ModuleInfo :=
+    match mi {
+        ModuleInfo.mk mpath file_path decls =>
+            let renames := module_rename_map mpath (collect_open_aliases decls)
+                (module_import_paths decls) owners_map ambig global_map in
+            // References first, then definitions: the rewriter matches a
+            // reference by its BARE name, and renaming the definitions
+            // first would not change that (it only touches `Def.name`),
+            // but doing references first keeps the two steps independent
+            // of each other's output.
+            let rewritten := resolve_open_alias_decls renames decls in
+            ModuleInfo.mk mpath file_path (qualify_decl_names mpath renames rewritten),
+    }
+
+// ─── Tests: module-qualified symbols ────────────────────────────────
+//
+// These build `ModuleInfo`s by hand rather than going through the
+// loader, so they exercise exactly the qualification pass -- the shape
+// that matters is two modules and one shared name, which no real
+// fixture file can express as compactly.
+
+#[partial]
+def qtest_module (name : String) (decls : List Decl) : ModuleInfo :=
+    ModuleInfo.mk (bare_modpath name) "" decls
+
+/// `def <name> := <body_ref>` -- a def whose whole body is one bare
+/// reference, which is all these tests need to watch a reference move.
+#[partial]
+def qtest_def (name : String) (body_ref : String) : Decl :=
+    Decl.def_d (Def.mk (bare_modpath name) Term.hole
+        (Term.var sentinel (DebugName.named (Identifier.id body_ref)))
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private)
+
+#[partial]
+def qtest_def_names (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_names_of_decls (get_module_info_decls m)) (qtest_def_names rest),
+    }
+
+#[partial]
+def qtest_names_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match decl_def_name d {
+            Option.some n => List.cons (show_module_path n) (qtest_names_of_decls rest),
+            Option.none => qtest_names_of_decls rest,
+        },
+}
+
+#[partial]
+def qtest_body_refs (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (qtest_refs_of_decls (get_module_info_decls m)) (qtest_body_refs rest),
+    }
+
+#[partial]
+def qtest_refs_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.def_d dd =>
+                match dd {
+                    Def.mk _n _t term_ _c _a _v =>
+                        List.append (collect_referenced_names term_ List.empty) (qtest_refs_of_decls rest),
+                },
+            _ => qtest_refs_of_decls rest,
+        },
+}
+
+/// The collision that crashed the self-compiled compiler: one bare name,
+/// two modules. Both must survive, under distinct symbols.
+#[test]
+def test_qualify_same_name_in_two_modules_stays_distinct : Bool :=
+    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty) in
+    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty) in
+    match qualify_modules (List.cons a (List.cons b List.empty)) {
+        Result.err _ => false,
+        Result.ok ms =>
+            let names := qtest_def_names ms in
+            if list_contains_str names "a::shared"
+            then list_contains_str names "b::shared"
+            else false,
+    }
+
+/// A local definition wins: `a`'s own `shared` is what `a` calls, even
+/// though `b` declares the name too.
+#[test]
+def test_qualify_local_definition_wins : Bool :=
+    let a := qtest_module "a" (List.cons (qtest_def "shared" "z")
+        (List.cons (qtest_def "caller" "shared") List.empty)) in
+    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty) in
+    match qualify_modules (List.cons a (List.cons b List.empty)) {
+        Result.err _ => false,
+        Result.ok ms => list_contains_str (qtest_body_refs ms) "a::shared",
+    }
+
+/// The dominant corpus shape: a bare cross-module call to a uniquely
+/// named def, with no `use`/`open` naming it at all.
+#[test]
+def test_qualify_unique_owner_resolves_without_any_import : Bool :=
+    let a := qtest_module "a" (List.cons (qtest_def "only_here" "w") List.empty) in
+    let b := qtest_module "b" (List.cons (qtest_def "caller" "only_here") List.empty) in
+    match qualify_modules (List.cons a (List.cons b List.empty)) {
+        Result.err _ => false,
+        Result.ok ms => list_contains_str (qtest_body_refs ms) "a::only_here",
+    }
+
+/// Two declarers and no import saying which: refusing to guess is the
+/// whole point -- silently picking one is what the old flat namespace
+/// did, and what crashed the compiler.
+#[test]
+def test_qualify_ambiguous_reference_is_an_error : Bool :=
+    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty) in
+    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty) in
+    let c := qtest_module "c" (List.cons (qtest_def "caller" "shared") List.empty) in
+    match qualify_modules (List.cons a (List.cons b (List.cons c List.empty))) {
+        Result.err _ => true,
+        Result.ok _ => false,
+    }
+
+/// `String.a` and `String_a` must not become one symbol. They did under
+/// the old `replace_dots_with_underscores` mangling, which is why the
+/// symbol is now the source name verbatim.
+#[test]
+def test_qualify_dotted_and_underscored_names_stay_distinct : Bool :=
+    let a := qtest_module "m" (List.cons (qtest_def "String.a" "x")
+        (List.cons (qtest_def "String_a" "y") List.empty)) in
+    match qualify_modules (List.cons a List.empty) {
+        Result.err _ => false,
+        Result.ok ms =>
+            let names := qtest_def_names ms in
+            if list_contains_str names "m::String.a"
+            then list_contains_str names "m::String_a"
+            else false,
+    }
+
+/// `::` separates the module from the name, so the source name is
+/// recoverable exactly -- which is what the native tables, keyed on what
+/// the source wrote, depend on.
+#[test]
+def test_unqualify_recovers_the_source_name : Bool :=
+    if String.beq (unqualify_def_name "init.string::String.beq") "String.beq"
+    then if String.beq (unqualify_def_name "plain_name") "plain_name"
+        then String.beq (unqualify_def_name "lang.main::main") "main"
+        else false
+    else false
+
+/// The gate behind the qualification: two defs on one symbol must fail
+/// the build, not silently lose one.
+#[test]
+def test_collision_gate_rejects_two_defs_on_one_symbol : Bool :=
+    let d1 := qtest_def "dup" "x" in
+    let d2 := qtest_def "dup" "y" in
+    match validate_no_colliding_def_symbols (List.cons d1 (List.cons d2 List.empty)) {
+        Result.err _ => true,
+        Result.ok _ => false,
+    }
+
+/// ...and it must not fire on a program that is actually fine.
+#[test]
+def test_collision_gate_accepts_distinct_symbols : Bool :=
+    let d1 := qtest_def "a::dup" "x" in
+    let d2 := qtest_def "b::dup" "y" in
+    match validate_no_colliding_def_symbols (List.cons d1 (List.cons d2 List.empty)) {
+        Result.err _ => false,
+        Result.ok _ => true,
+    }
+
+/// A def landing on a runtime symbol is the same silent drop --
+/// `compile_db_module_with_debug` puts the runtime natives FIRST, so the
+/// runtime one wins and the real def disappears.
+#[test]
+def test_collision_gate_rejects_runtime_symbol_clash : Bool :=
+    match validate_no_colliding_def_symbols (List.cons (qtest_def "monad_string_to_list" "x") List.empty) {
+        Result.err _ => true,
+        Result.ok _ => false,
+    }
 
 #[partial]
 def collect_all_decls_from_modules (modules : List ModuleInfo) (acc : List Decl) : List Decl := match modules {

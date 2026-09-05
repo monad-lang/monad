@@ -85,6 +85,55 @@ def modpath_map_lookup {V : Type} (key : ModulePath) (m : HashMap ModulePath V) 
             HashMap.bucket_lookup_eq modpath_str_eq key bucket
     }
 
+/// String-keyed map for the bare-name -> qualified-name rewrite tables
+/// `resolve_open_alias_decls` drives. Mirrors `modpath_map_*` just
+/// above (and `lang.codegen.emit`'s `str_map_*`) in bypassing `Map`'s
+/// typeclass dispatch for direct `HashMap` bucket calls.
+///
+/// Deliberately NOT called `str_map_*`: `lang.codegen.emit` already
+/// exports helpers by that name, and until every def carries its module
+/// path those two would have been one LLVM symbol with one surviving
+/// body -- the exact failure this whole change exists to remove. Named
+/// apart so the gate never has to catch it.
+def alias_map_empty : HashMap String String :=
+    HashMap.map HashMap.empty_buckets
+
+def alias_map_insert (key : String) (val : String) (m : HashMap String String) : HashMap String String :=
+    match m {
+        HashMap.map buckets =>
+            let idx := HashMap.bucket_of (String.hash key) in
+            let bucket := HashMap.get_bucket buckets idx in
+            let new_bucket := HashMap.bucket_insert_eq String.beq key val bucket in
+            HashMap.map (HashMap.set_bucket buckets idx new_bucket)
+    }
+
+def alias_map_lookup (key : String) (m : HashMap String String) : Option String :=
+    match m {
+        HashMap.map buckets =>
+            let idx := HashMap.bucket_of (String.hash key) in
+            let bucket := HashMap.get_bucket buckets idx in
+            HashMap.bucket_lookup_eq String.beq key bucket
+    }
+
+#[partial]
+def build_alias_map (aliases : List OpenAlias) (acc : HashMap String String) : HashMap String String :=
+    match aliases {
+        List.empty => acc,
+        List.cons a rest =>
+            match a {
+                { bare_name := b, qualified_name := q } =>
+                    // FIRST wins, matching `lookup_open_alias`'s own
+                    // linear-scan semantics -- `resolve_open_aliases_in_
+                    // module_info` relies on it, putting a module's own
+                    // names ahead of the ambient root ones so they
+                    // shadow.
+                    match alias_map_lookup b acc {
+                        Option.some _ => build_alias_map rest acc,
+                        Option.none => build_alias_map rest (alias_map_insert b q acc),
+                    },
+            },
+    }
+
 // --- Helper: empty ScopeData ---
 
 def scope_data_empty : ScopeData := {
@@ -128,10 +177,10 @@ def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
 // real `def`/`type`/`class`/`instance`/`infix` declaration exactly as
 // before, `use_d`/`open_d` still no-ops there. Pass 2 (`alias_decls_in_scope`,
 // below) re-walks the SAME decl_list' `use_d`/`open_d`/`scoped_open_d` against
-// the now-complete pass-1 result, registering BARE (or renamed) aliases
+// the now-complete pass-1 result, registering BARE (or renamed) names
 // for the real qualified names they bring in -- this has to be a separate
 // pass, not folded into pass 1's single left-to-right walk, because an
-// `open`/`use` very commonly appears BEFORE the def(s) it aliases (e.g.
+// `open`/`use` very commonly appears BEFORE the def(s) it names (e.g.
 // `init/prelude.mo`'s `open Bool {and, false, not, or, true}` precedes
 // `def Bool.not` itself) and pass 1's fold can't see forward.
 //
@@ -1353,17 +1402,6 @@ def mk_open_alias (bare : String) (qualified : String) : OpenAlias :=
     { bare_name := bare, qualified_name := qualified }
 
 #[partial]
-def lookup_open_alias (aliases : List OpenAlias) (name : String) : Option String :=
-    match aliases {
-        List.empty => Option.none,
-        List.cons a rest =>
-            match a {
-                { bare_name := b, qualified_name := q } =>
-                    if String.beq b name then Option.some q else lookup_open_alias rest name,
-            },
-    }
-
-#[partial]
 def append_open_aliases (a : List OpenAlias) (b : List OpenAlias) : List OpenAlias :=
     match a {
         List.empty => b,
@@ -1523,8 +1561,8 @@ def filter_valid_open_aliases (known_names : List String) (aliases : List OpenAl
 /// shadowing an unrelated local variable of the same bare name in a
 /// DIFFERENT function within the very same module.
 #[partial]
-def resolve_open_alias_term (aliases : List OpenAlias) (t : Term) : Term :=
-    resolve_open_alias_term_scoped aliases List.empty t
+def resolve_open_alias_term (names : HashMap String String) (t : Term) : Term :=
+    resolve_open_alias_term_scoped names List.empty t
 
 #[partial]
 def str_list_contains (xs : List String) (x : String) : Bool := match xs {
@@ -1566,7 +1604,7 @@ def push_bound_field_entries (bound : List String) (entries : List FieldPatternE
     }
 
 #[partial]
-def resolve_open_alias_term_scoped (aliases : List OpenAlias) (bound : List String) (t : Term) : Term :=
+def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List String) (t : Term) : Term :=
     match t {
         Term.var idx dbg =>
             match dbg {
@@ -1574,118 +1612,118 @@ def resolve_open_alias_term_scoped (aliases : List OpenAlias) (bound : List Stri
                     let name := show_identifier id in
                     if str_list_contains bound name
                     then t
-                    else match lookup_open_alias aliases name {
+                    else match alias_map_lookup name names {
                         Option.some qualified => Term.var idx (DebugName.named (Identifier.id qualified)),
                         Option.none => t,
                     },
                 DebugName.unnamed => t,
             },
         Term.lam dbg typ body =>
-            Term.lam dbg (resolve_open_alias_term_scoped aliases bound typ) (resolve_open_alias_term_scoped aliases (push_bound_dbg bound dbg) body),
+            Term.lam dbg (resolve_open_alias_term_scoped names bound typ) (resolve_open_alias_term_scoped names (push_bound_dbg bound dbg) body),
         Term.forall dbg kind body =>
-            Term.forall dbg (resolve_open_alias_term_scoped aliases bound kind) (resolve_open_alias_term_scoped aliases (push_bound_dbg bound dbg) body),
+            Term.forall dbg (resolve_open_alias_term_scoped names bound kind) (resolve_open_alias_term_scoped names (push_bound_dbg bound dbg) body),
         Term.pi arg ret =>
-            Term.pi (resolve_open_alias_term_scoped aliases bound arg) (resolve_open_alias_term_scoped aliases bound ret),
+            Term.pi (resolve_open_alias_term_scoped names bound arg) (resolve_open_alias_term_scoped names bound ret),
         Term.app fun_ arg =>
-            Term.app (resolve_open_alias_term_scoped aliases bound fun_) (resolve_open_alias_term_scoped aliases bound arg),
-        Term.lit value => Term.lit (resolve_open_alias_literal_scoped aliases bound value),
-        Term.ntv n => Term.ntv (native_map_children (resolve_open_alias_term_scoped aliases bound) n),
-        Term.con c => Term.con (con_map_children (resolve_open_alias_term_scoped aliases bound) c),
+            Term.app (resolve_open_alias_term_scoped names bound fun_) (resolve_open_alias_term_scoped names bound arg),
+        Term.lit value => Term.lit (resolve_open_alias_literal_scoped names bound value),
+        Term.ntv n => Term.ntv (native_map_children (resolve_open_alias_term_scoped names bound) n),
+        Term.con c => Term.con (con_map_children (resolve_open_alias_term_scoped names bound) c),
         Term.type_ u => Term.type_ u,
         Term.hole => Term.hole,
-        Term.quote_ inner => Term.quote_ (resolve_open_alias_term_scoped aliases bound inner),
+        Term.quote_ inner => Term.quote_ (resolve_open_alias_term_scoped names bound inner),
         Term.var_macro idx dbg => Term.var_macro idx dbg,
     }
 
 #[partial]
-def resolve_open_alias_literal_scoped (aliases : List OpenAlias) (bound : List String) (l : Literal) : Literal :=
+def resolve_open_alias_literal_scoped (names : HashMap String String) (bound : List String) (l : Literal) : Literal :=
     match l {
         Literal.str v => Literal.str v,
         Literal.num n suf => Literal.num n suf,
         Literal.flt txt suf => Literal.flt txt suf,
         Literal.if_ a b c =>
-            Literal.if_ (resolve_open_alias_term_scoped aliases bound a) (resolve_open_alias_term_scoped aliases bound b) (resolve_open_alias_term_scoped aliases bound c),
+            Literal.if_ (resolve_open_alias_term_scoped names bound a) (resolve_open_alias_term_scoped names bound b) (resolve_open_alias_term_scoped names bound c),
         Literal.match_ scrut cases =>
-            Literal.match_ (resolve_open_alias_term_scoped aliases bound scrut) (resolve_open_alias_match_cases aliases bound cases),
+            Literal.match_ (resolve_open_alias_term_scoped names bound scrut) (resolve_open_alias_match_cases names bound cases),
         Literal.struct_lit fields type_name =>
-            Literal.struct_lit (resolve_open_alias_struct_lit_fields aliases bound fields) (resolve_open_alias_opt_term_scoped aliases bound type_name),
+            Literal.struct_lit (resolve_open_alias_struct_lit_fields names bound fields) (resolve_open_alias_opt_term_scoped names bound type_name),
         Literal.struct_update base fields =>
-            Literal.struct_update (resolve_open_alias_term_scoped aliases bound base) (resolve_open_alias_struct_lit_fields aliases bound fields),
+            Literal.struct_update (resolve_open_alias_term_scoped names bound base) (resolve_open_alias_struct_lit_fields names bound fields),
     }
 
 #[partial]
-def resolve_open_alias_opt_term_scoped (aliases : List OpenAlias) (bound : List String) (t : Option Term) : Option Term :=
+def resolve_open_alias_opt_term_scoped (names : HashMap String String) (bound : List String) (t : Option Term) : Option Term :=
     match t {
-        Option.some x => Option.some (resolve_open_alias_term_scoped aliases bound x),
+        Option.some x => Option.some (resolve_open_alias_term_scoped names bound x),
         Option.none => Option.none,
     }
 
 #[partial]
-def resolve_open_alias_struct_lit_fields (aliases : List OpenAlias) (bound : List String) (fields : List StructLitField) : List StructLitField :=
+def resolve_open_alias_struct_lit_fields (names : HashMap String String) (bound : List String) (fields : List StructLitField) : List StructLitField :=
     match fields {
         List.empty => List.empty,
         List.cons f rest =>
             match f {
                 StructLitField.mk name value =>
-                    List.cons (StructLitField.mk name (resolve_open_alias_term_scoped aliases bound value)) (resolve_open_alias_struct_lit_fields aliases bound rest),
+                    List.cons (StructLitField.mk name (resolve_open_alias_term_scoped names bound value)) (resolve_open_alias_struct_lit_fields names bound rest),
             },
     }
 
 #[partial]
-def resolve_open_alias_match_cases (aliases : List OpenAlias) (bound : List String) (cases : List MatchCase) : List MatchCase :=
+def resolve_open_alias_match_cases (names : HashMap String String) (bound : List String) (cases : List MatchCase) : List MatchCase :=
     match cases {
         List.empty => List.empty,
-        List.cons c rest => List.cons (resolve_open_alias_match_case aliases bound c) (resolve_open_alias_match_cases aliases bound rest),
+        List.cons c rest => List.cons (resolve_open_alias_match_case names bound c) (resolve_open_alias_match_cases names bound rest),
     }
 
 #[partial]
-def resolve_open_alias_match_case (aliases : List OpenAlias) (bound : List String) (c : MatchCase) : MatchCase :=
+def resolve_open_alias_match_case (names : HashMap String String) (bound : List String) (c : MatchCase) : MatchCase :=
     match c {
         MatchCase.mc name args body fp =>
             let bound1 := push_bound_names bound args in
             let bound2 := push_bound_field_pattern bound1 fp in
-            MatchCase.mc name args (resolve_open_alias_term_scoped aliases bound2 body) fp,
+            MatchCase.mc name args (resolve_open_alias_term_scoped names bound2 body) fp,
     }
 
 #[partial]
-def resolve_open_alias_def (aliases : List OpenAlias) (d : Def) : Def :=
+def resolve_open_alias_def (names : HashMap String String) (d : Def) : Def :=
     match d {
         Def.mk dname typ term constraints attrs vis =>
-            Def.mk dname typ (resolve_open_alias_term aliases term) constraints attrs vis,
+            Def.mk dname typ (resolve_open_alias_term names term) constraints attrs vis,
     }
 
 #[partial]
-def resolve_open_alias_defs_list (aliases : List OpenAlias) (defs : List Def) : List Def :=
+def resolve_open_alias_defs_list (names : HashMap String String) (defs : List Def) : List Def :=
     match defs {
         List.empty => List.empty,
-        List.cons d rest => List.cons (resolve_open_alias_def aliases d) (resolve_open_alias_defs_list aliases rest),
+        List.cons d rest => List.cons (resolve_open_alias_def names d) (resolve_open_alias_defs_list names rest),
     }
 
 #[partial]
-def resolve_open_alias_instance (aliases : List OpenAlias) (ins : Instance) : Instance :=
+def resolve_open_alias_instance (names : HashMap String String) (ins : Instance) : Instance :=
     match ins {
         Instance.mk insname cls constraints args vis implicit_params defs =>
-            Instance.mk insname cls constraints args vis implicit_params (resolve_open_alias_defs_list aliases defs),
+            Instance.mk insname cls constraints args vis implicit_params (resolve_open_alias_defs_list names defs),
     }
 
 #[partial]
-def resolve_open_alias_decl (aliases : List OpenAlias) (d : Decl) : Decl :=
+def resolve_open_alias_decl (names : HashMap String String) (d : Decl) : Decl :=
     match d {
-        Decl.def_d d_val => Decl.def_d (resolve_open_alias_def aliases d_val),
-        Decl.instance_d ins => Decl.instance_d (resolve_open_alias_instance aliases ins),
-        Decl.scoped_open_d path filter inner => Decl.scoped_open_d path filter (resolve_open_alias_decl aliases inner),
+        Decl.def_d d_val => Decl.def_d (resolve_open_alias_def names d_val),
+        Decl.instance_d ins => Decl.instance_d (resolve_open_alias_instance names ins),
+        Decl.scoped_open_d path filter inner => Decl.scoped_open_d path filter (resolve_open_alias_decl names inner),
         _ => d,
     }
 
-/// Resolves open/use aliases across a whole decl_list at once --
+/// Resolves open/use names across a whole decl_list at once --
 /// `resolve_open_alias_decl` applied to every entry. Wired in right
 /// alongside `resolve_infix_decls` (`lang.codegen.emit`'s
 /// `compile_loaded_modules_to_ir`).
 #[partial]
-def resolve_open_alias_decls (aliases : List OpenAlias) (decl_list : List Decl) : List Decl :=
+def resolve_open_alias_decls (names : HashMap String String) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
-        List.cons d rest => List.cons (resolve_open_alias_decl aliases d) (resolve_open_alias_decls aliases rest),
+        List.cons d rest => List.cons (resolve_open_alias_decl names d) (resolve_open_alias_decls names rest),
     }
 
 // --- Phase 2 (dictionary-passing plan, see
@@ -1837,14 +1875,46 @@ def terms_to_slug (args : List Term) : String :=
             },
     }
 
+/// The module an instance was declared in, taken from its own
+/// (qualified) name -- `""` when the instance carries no qualifier,
+/// which is the case for one synthesized in a test fixture.
+#[partial]
+def instance_module_prefix (insname : Identifier) : String :=
+    let s := show_identifier insname in
+    let idx := find_qualifier_sep s 0 (String.length s) in
+    if I64.beq idx (0 - 1) then "" else String.slice s 0 idx
+
+#[partial]
+def find_qualifier_sep (s : String) (i : I64) (n : I64) : I64 :=
+    if I64.gt (i + 2) n then (0 - 1)
+    else if String.beq (String.slice s i 2) "::" then i
+    else find_qualifier_sep s (i + 1) n
+
+/// Prepend an instance's declaring module to a synthesized name, in the
+/// same `module::name` form `lang.codegen.emit`'s `qualified_def_name`
+/// uses for source defs.
+///
+/// Needed because the slug is built from the instance's type ARGS by
+/// their bare names: two modules each declaring `instance Show MyType`
+/// for their OWN distinct `MyType` both mint `Show_MyType_show`, and
+/// one of them is then silently dropped. The class+type pair is only
+/// unique per module, not program-wide.
+#[partial]
+def with_module_prefix (prefix : String) (full : String) : String :=
+    if String.is_empty prefix then full else String.concat prefix (String.concat "::" full)
+
 /// The mangled top-level name a promoted instance method gets. A
 /// single-segment `ModulePath` (not dotted) -- `filter_reachable_decls`/
 /// reachability matching is a string-based walk over already-flat
 /// names, so single-segment sidesteps any dot-vs-underscore ambiguity
 /// there, the same reasoning `28d98dc`'s infix-resolution pass already
 /// established for its own resolved names.
+///
+/// The name is additionally prefixed with the instance's declaring
+/// module (`instance_module_prefix`) -- see `with_module_prefix` for
+/// why the class+type pair alone is not unique program-wide.
 #[partial]
-def mangle_instance_method_name (cls_name : ModulePath) (ins_args : List Term) (method_name : Identifier) : ModulePath :=
+def mangle_instance_method_name (prefix : String) (cls_name : ModulePath) (ins_args : List Term) (method_name : Identifier) : ModulePath :=
     let cls_str := show_module_path cls_name in
     let args_str := terms_to_slug ins_args in
     let sep_args := if String.is_empty args_str then "" else "_" ++ args_str in
@@ -1860,17 +1930,17 @@ def mangle_instance_method_name (cls_name : ModulePath) (ins_args : List Term) (
     // not bare local vars). `String.concat` is the same idiom already
     // used elsewhere to sidestep this class of gap entirely.
     let full := String.concat (String.concat cls_str sep_args) (String.concat "_" (show_identifier method_name)) in
-    ModulePath.mp (List.cons (Identifier.id full) List.empty)
+    ModulePath.mp (List.cons (Identifier.id (with_module_prefix prefix full)) List.empty)
 
 /// The mangled top-level name an instance's own dictionary VALUE def
 /// gets (distinct from any of its promoted methods' own names above).
 #[partial]
-def mangle_instance_dict_name (cls_name : ModulePath) (ins_args : List Term) : ModulePath :=
+def mangle_instance_dict_name (prefix : String) (cls_name : ModulePath) (ins_args : List Term) : ModulePath :=
     let cls_str := show_module_path cls_name in
     let args_str := terms_to_slug ins_args in
     let sep_args := if String.is_empty args_str then "" else "_" ++ args_str in
     let full := String.concat (String.concat "__Dict_" cls_str) sep_args in
-    ModulePath.mp (List.cons (Identifier.id full) List.empty)
+    ModulePath.mp (List.cons (Identifier.id (with_module_prefix prefix full)) List.empty)
 
 /// Builds one instance's promoted method Decls (real top-level defs,
 /// renamed via `mangle_instance_method_name`) plus its own dictionary
@@ -1884,9 +1954,10 @@ def mangle_instance_dict_name (cls_name : ModulePath) (ins_args : List Term) : M
 #[partial]
 def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
     match ins {
-        Instance.mk _ cls_name ins_constraints ins_args _ _ defs =>
+        Instance.mk insname cls_name ins_constraints ins_args _ _ defs =>
             let method_names := class_method_names cls in
-            match build_dict_fields cls_name ins_args defs method_names {
+            let prefix := instance_module_prefix insname in
+            match build_dict_fields prefix cls_name ins_args defs method_names {
                 Option.some field_terms =>
                     // `ins_constraints` (the instance's own `[Add A]` in
                     // e.g. `instance [Add A] HAdd A A A { ... }`) is
@@ -1902,8 +1973,8 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
                     // instance-forwarding case (this exact HAdd/Add
                     // shape) would never gain the dict param its own
                     // body (`Add.add a b`) needs.
-                    let method_decls := promote_methods cls_name ins_args ins_constraints defs method_names in
-                    let dict_name := mangle_instance_dict_name cls_name ins_args in
+                    let method_decls := promote_methods prefix cls_name ins_args ins_constraints defs method_names in
+                    let dict_name := mangle_instance_dict_name prefix cls_name ins_args in
                     let dict_con := Con.mk (Identifier.id "mk") dict_name (List.length field_terms) (options_of field_terms) in
                     let dict_def := Def.mk dict_name (Term.type_ 1) (Term.con dict_con)
                         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private in
@@ -1918,7 +1989,7 @@ def promote_instance (cls : Class) (ins : Instance) : Option (List Decl) :=
 /// unchanged, mirroring how `28d98dc`'s infix-resolution pass and
 /// Phase 0's own boxing both leave a Def's own shape otherwise alone.
 #[partial]
-def promote_methods (cls_name : ModulePath) (ins_args : List Term) (ins_constraints : List TypeConstraint) (defs : List Def) (method_names : List Identifier) : List Decl :=
+def promote_methods (prefix : String) (cls_name : ModulePath) (ins_args : List Term) (ins_constraints : List TypeConstraint) (defs : List Def) (method_names : List Identifier) : List Decl :=
     match method_names {
         List.empty => List.empty,
         List.cons mname rest =>
@@ -1926,16 +1997,16 @@ def promote_methods (cls_name : ModulePath) (ins_args : List Term) (ins_constrai
                 Option.some d =>
                     match d {
                         Def.mk _ typ term_ own_constraints attrs vis =>
-                            let new_name := mangle_instance_method_name cls_name ins_args mname in
+                            let new_name := mangle_instance_method_name prefix cls_name ins_args mname in
                             // `ins_constraints` prepended ahead of the
                             // method's own (usually empty) constraints --
                             // see promote_instance's own doc comment on
                             // why this is here.
                             let all_constraints := List.append ins_constraints own_constraints in
                             let renamed := Def.mk new_name typ term_ all_constraints attrs vis in
-                            List.cons (Decl.def_d renamed) (promote_methods cls_name ins_args ins_constraints defs rest),
+                            List.cons (Decl.def_d renamed) (promote_methods prefix cls_name ins_args ins_constraints defs rest),
                     },
-                Option.none => promote_methods cls_name ins_args ins_constraints defs rest,
+                Option.none => promote_methods prefix cls_name ins_args ins_constraints defs rest,
             },
     }
 
@@ -1945,17 +2016,17 @@ def promote_methods (cls_name : ModulePath) (ins_args : List Term) (ins_constrai
 /// mangled name. `Option.none` (propagated by the caller as a hard
 /// failure) the moment any declared method is missing from `defs`.
 #[partial]
-def build_dict_fields (cls_name : ModulePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : Option (List Term) :=
+def build_dict_fields (prefix : String) (cls_name : ModulePath) (ins_args : List Term) (defs : List Def) (method_names : List Identifier) : Option (List Term) :=
     match method_names {
         List.empty => Option.some List.empty,
         List.cons mname rest =>
             match find_instance_method defs mname {
                 Option.none => Option.none,
                 Option.some _ =>
-                    match build_dict_fields cls_name ins_args defs rest {
+                    match build_dict_fields prefix cls_name ins_args defs rest {
                         Option.none => Option.none,
                         Option.some rest_terms =>
-                            let mangled := mangle_instance_method_name cls_name ins_args mname in
+                            let mangled := mangle_instance_method_name prefix cls_name ins_args mname in
                             // Sentinel (`-1`), not `Term.var 0` -- `mangled`
                             // is always a globally-unique mangled name,
                             // NEVER a real local binding at whatever depth
@@ -3158,13 +3229,13 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
                     match found {
                         Option.some ins =>
                             match ins {
-                                Instance.mk _ _ _ ins_args _ _ _ =>
+                                Instance.mk found_insname _ _ ins_args _ _ _ =>
                                     // Sentinel, not `Term.var 0` -- a
                                     // mangled dict-VALUE name is never a
                                     // real local either; see
                                     // `build_dict_fields`'s own doc comment
                                     // just above for the full rationale.
-                                    Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name cls_name ins_args)))),
+                                    Option.some (Term.var (0 - 1) (DebugName.named (mangled_to_identifier (mangle_instance_dict_name (instance_module_prefix found_insname) cls_name ins_args)))),
                             },
                         Option.none => Option.none,
                     },
@@ -3562,16 +3633,16 @@ def resolve_class_method_call_with_carrier (classes : List Class) (instances : L
 #[partial]
 def resolve_class_method_call_with_instance (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins : Instance) (extra_carriers : List Term) : Term :=
     match ins {
-        Instance.mk _ ins_cls_name ins_constraints ins_args _ _ _ =>
-            resolve_class_method_call_with_dict_args classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier ins_constraints ins_args extra_carriers,
+        Instance.mk insname ins_cls_name ins_constraints ins_args _ _ _ =>
+            resolve_class_method_call_with_dict_args (instance_module_prefix insname) classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier ins_constraints ins_args extra_carriers,
     }
 
 #[partial]
-def resolve_class_method_call_with_dict_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins_constraints : List TypeConstraint) (ins_args : List Term) (extra_carriers : List Term) : Term :=
+def resolve_class_method_call_with_dict_args (prefix : String) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins_constraints : List TypeConstraint) (ins_args : List Term) (extra_carriers : List Term) : Term :=
     match resolve_dict_args classes instances dict_env carrier extra_carriers ins_constraints {
         Option.none => rebuild_call orig_head resolved_args,
         Option.some dict_args =>
-            let mangled := mangle_instance_method_name cls_name ins_args method_name in
+            let mangled := mangle_instance_method_name prefix cls_name ins_args method_name in
             // Sentinel, not `Term.var 0` -- same rationale as
             // `build_dict_fields`'s own mangled-method reference just
             // above: a mangled instance-method name is never a real

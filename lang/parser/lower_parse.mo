@@ -37,6 +37,7 @@ use lang.types {
   Con, DebugName, Identifier, Literal, MatchCase, ModulePath, NameRef, Native,
   ParseCon, ParseLiteral, ParseMatchCase, ParseNative,
   ParseStructLitField, ParseTerm, ParseTermKind, StructLitField, Term,
+  sentinel,
 }
 // Imported, NOT redefined. An earlier revision of this file copied these
 // six in and claimed in its own comment to have moved them -- which armed
@@ -47,7 +48,7 @@ use lang.types {
 // and is resolved when the grammar is wired to this pass: at that point
 // these move here for real and `lang/parser.mo` imports them back.
 use lang.parser {
-  field_access_chain, find_index, name_ref_to_string, sentinel,
+  field_access_chain, find_index, name_ref_to_string,
 }
 
 
