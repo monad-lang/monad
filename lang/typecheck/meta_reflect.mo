@@ -664,7 +664,6 @@ def build_lam_chain (ps : List (Pair String Term)) (body : Term) : Term :=
     }
 
 def no_constraints : List TypeConstraint := List.empty
-def no_attrs : List Attribute := List.empty
 
 /// `Decl.d_def name params ret_typ body` (tag 0) -> a real `Def`. Body
 /// is reified with `params`'s own names already pushed onto `locals`

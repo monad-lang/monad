@@ -261,6 +261,10 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     let driver_mod : ModuleInfo := ModuleInfo.mk driver_mp "" driver_decls;
                     let with_driver := List.append aliased_mods (List.cons driver_mod List.empty);
                     let qualify_result := qualify_modules with_driver;
+                    let qualified_ok : Bool := match qualify_result {
+                        Result.ok _ => true,
+                        Result.err _ => false,
+                    };
                     let qualified_mods := match qualify_result {
                         Result.ok ms => ms,
                         // Keep the pre-qualification modules on failure:
@@ -311,7 +315,15 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
                     let elaborated := elaborate_module_decls_best_effort scope dict_param_spliced empty_locs;
                     let dispatched_spliced := resolve_class_calls_decls elaborated;
-                    let driver_root : String := qualified_def_name_str driver_mp (bare_modpath "main");
+                    // The root has to match the branch actually taken
+                    // above: on the fallback the decls are still
+                    // UNqualified, and rooting at `__test_driver::main`
+                    // would match nothing at all, quietly compiling an
+                    // empty program instead of surfacing the failure.
+                    let driver_root : String :=
+                        if qualified_ok
+                        then qualified_def_name_str driver_mp (bare_modpath "main")
+                        else "main";
                     let reachable := filter_reachable_decls driver_root dispatched_spliced;
                     // Validate the REACHABLE decls, not the full spliced
                     // graph -- see `lang.codegen.emit`'s own
@@ -342,7 +354,6 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
 // exercised here — pure discovery-function unit tests.
 
 def test_attr : List Attribute := List.cons (Attribute.mk (Identifier.id "test") List.empty) List.empty
-def no_attrs : List Attribute := List.empty
 def dummy_path (name : String) : ModulePath := ModulePath.mp (List.cons (Identifier.id name) List.empty)
 
 def dummy_def (name : String) (attrs : List Attribute) : Def :=

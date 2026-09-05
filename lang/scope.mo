@@ -1712,7 +1712,61 @@ def resolve_open_alias_decl (names : HashMap String String) (d : Decl) : Decl :=
         Decl.def_d d_val => Decl.def_d (resolve_open_alias_def names d_val),
         Decl.instance_d ins => Decl.instance_d (resolve_open_alias_instance names ins),
         Decl.scoped_open_d path filter inner => Decl.scoped_open_d path filter (resolve_open_alias_decl names inner),
+        // A struct field's DEFAULT and a class method's DEFAULT are
+        // executable terms that reach codegen like any other body: the
+        // checker splices a field default into every struct literal that
+        // omits that field. `lang/types.mo`'s `ScopeData.def_params`
+        // defaults to `HashMap.map HashMap.empty_buckets`, so leaving it
+        // alone while `HashMap.empty_buckets` was renamed made every
+        // `ScopeData` literal fail to elaborate with "unknown variable"
+        // -- and, because codegen elaboration is best-effort, that
+        // surfaced only as `scope_data_empty` tripping the
+        // undesugared-struct-literal gate, several stages later.
+        //
+        // Only the DEFAULTS are walked. A field's/method's `typ` stays
+        // untouched for the same reason `resolve_open_alias_def` skips
+        // `Def.typ` -- see this module's own note about
+        // `emit_type_head_is_io`'s literal `"IO"` match.
+        Decl.struct_d st => Decl.struct_d (resolve_open_alias_struct names st),
+        Decl.class_d cls => Decl.class_d (resolve_open_alias_class names cls),
         _ => d,
+    }
+
+#[partial]
+def resolve_open_alias_struct (names : HashMap String String) (st : Struct) : Struct :=
+    match st {
+        Struct.mk name fields vis => Struct.mk name (resolve_open_alias_struct_field_defaults names fields) vis,
+    }
+
+#[partial]
+def resolve_open_alias_struct_field_defaults (names : HashMap String String) (fields : List StructField) : List StructField :=
+    match fields {
+        List.empty => List.empty,
+        List.cons f rest =>
+            match f {
+                StructField.mk fname typ default mult =>
+                    List.cons (StructField.mk fname typ (resolve_open_alias_opt_term_scoped names List.empty default) mult)
+                        (resolve_open_alias_struct_field_defaults names rest),
+            },
+    }
+
+#[partial]
+def resolve_open_alias_class (names : HashMap String String) (cls : Class) : Class :=
+    match cls {
+        Class.mk name params constraints methods vis =>
+            Class.mk name params constraints (resolve_open_alias_class_defs names methods) vis,
+    }
+
+#[partial]
+def resolve_open_alias_class_defs (names : HashMap String String) (methods : List ClassDef) : List ClassDef :=
+    match methods {
+        List.empty => List.empty,
+        List.cons m rest =>
+            match m {
+                ClassDef.mk mname typ default =>
+                    List.cons (ClassDef.mk mname typ (resolve_open_alias_opt_term_scoped names List.empty default))
+                        (resolve_open_alias_class_defs names rest),
+            },
     }
 
 /// Resolves open/use names across a whole decl_list at once --

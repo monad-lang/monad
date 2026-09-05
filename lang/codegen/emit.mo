@@ -13,7 +13,8 @@ use std.list {intercalate}
 use lang.types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
   LoadedModules, LocalScope, Location, MatchCase, ModulePath, Native, Operator,
-  Param, Scope, ScopeData, StructLitField, Term, TypeConstraint, sentinel,
+  Multiplicity, Param, Scope, ScopeData, Struct, StructField, StructLitField,
+  Term, TypeConstraint, UseFilter, UseItem, Visibility, sentinel,
   show_identifier, show_module_path,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, lam,
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
@@ -121,15 +122,31 @@ def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (c
 /// `lang.codegen.ir.DbgLoc` shape `LLVMFunction.dbg_loc` expects --
 /// `Option.none` on a miss (debug info off, or no location known for
 /// this name).
+///
+/// Falls back to the UNqualified name on a miss. `debug_locs` is built
+/// by `lang/main.mo` from a single file's own pre-expansion parse, which
+/// happens before `qualify_modules` runs, so its keys are the source
+/// names (`main`, `foo`) while `fn_name` here is the emitted symbol
+/// (`lang.main::main`). Without the fallback every lookup misses and
+/// `--debug` silently emits no line information at all.
 #[partial]
 def dbg_loc_for (c : CodegenCtx) (fn_name : String) : Option DbgLoc :=
     match str_map_lookup fn_name c.debug_locs {
-        Option.some loc =>
-            match loc {
-                Location.mk _offset line column => Option.some (DbgLoc.mk line column),
-            },
+        Option.some loc => dbg_loc_of_location loc,
+        Option.none => dbg_loc_for_unqualified c fn_name,
+    }
+
+#[partial]
+def dbg_loc_for_unqualified (c : CodegenCtx) (fn_name : String) : Option DbgLoc :=
+    match str_map_lookup (unqualify_def_name fn_name) c.debug_locs {
+        Option.some loc => dbg_loc_of_location loc,
         Option.none => Option.none,
     }
+
+#[partial]
+def dbg_loc_of_location (loc : Location) : Option DbgLoc := match loc {
+    Location.mk _offset line column => Option.some (DbgLoc.mk line column),
+}
 
 #[partial]
 def fresh_temp (c : CodegenCtx) : CtxStrPair :=
@@ -6778,9 +6795,6 @@ def test_compile_db_decls_ir_default_has_no_debug_info : Bool :=
 def empty_params_list : List Param := List.empty
 
 #[partial]
-def empty_attrs : List Attribute := List.empty
-
-#[partial]
 def check_contains (text : String) (needle : String) : Bool :=
     if String.beq text "" then false
     else if String.beq (String.slice text 0 (String.length needle)) needle then true
@@ -7439,7 +7453,14 @@ def explicit_import_owners (own_aliases : List OpenAlias) (name : String) (owner
         List.empty => List.empty,
         List.cons o rest =>
             let rest_hits := explicit_import_owners own_aliases name rest in
-            if alias_list_names own_aliases name (qualified_def_name_str o (bare_modpath name))
+            // The alias's `qualified_name` is DOT-joined (`open_aliases_
+            // from_names` builds `show_module_path (path_extend path n)`),
+            // while an emitted symbol is `::`-joined. Compare in the
+            // alias's own space -- comparing the two forms directly made
+            // this whole rule dead code, and nothing noticed because the
+            // import-set fallback below happened to answer correctly for
+            // every ambiguous name then in the corpus.
+            if alias_list_names own_aliases name (String.concat (show_module_path o) (String.concat "." name))
             then List.cons o rest_hits
             else rest_hits,
     }
@@ -7740,11 +7761,18 @@ def decls_referenced_names_go (decls : List Decl) (acc : HashMap String Bool) : 
         List.cons d rest => decls_referenced_names_go rest (decl_referenced_names d acc),
     }
 
+/// Binder-AWARE, unlike `collect_referenced_names` (which over-collects
+/// on purpose, because reachability may safely over-approximate). Here
+/// it may not: `lang/codegen/ir.mo` binds a match field named
+/// `param_name`, and two unrelated modules happen to declare a def by
+/// that name -- counting the binder as a reference reported an
+/// ambiguity that does not exist and failed the whole compile. The
+/// rewrite itself was always correct; only this report was over-eager.
 #[partial]
 def decl_referenced_names (d : Decl) (acc : HashMap String Bool) : HashMap String Bool := match d {
     Decl.def_d dd =>
         match dd {
-            Def.mk _name _typ term_ _c _a _v => insert_all_names (collect_referenced_names term_ List.empty) acc,
+            Def.mk _name _typ term_ _c _a _v => insert_all_names (identifier_names (free_names_of_term List.empty term_)) acc,
         },
     Decl.instance_d ins =>
         match ins {
@@ -7761,9 +7789,15 @@ def instance_defs_referenced_names (defs : List Def) (acc : HashMap String Bool)
         List.cons d rest =>
             match d {
                 Def.mk _name _typ term_ _c _a _v =>
-                    instance_defs_referenced_names rest (insert_all_names (collect_referenced_names term_ List.empty) acc),
+                    instance_defs_referenced_names rest (insert_all_names (identifier_names (free_names_of_term List.empty term_)) acc),
             },
     }
+
+#[partial]
+def identifier_names (ids : List Identifier) : List String := match ids {
+    List.empty => List.empty,
+    List.cons i rest => List.cons (symbol_identifier i) (identifier_names rest),
+}
 
 #[partial]
 def insert_all_names (names : List String) (acc : HashMap String Bool) : HashMap String Bool :=
@@ -7779,7 +7813,8 @@ def insert_all_names (names : List String) (acc : HashMap String Bool) : HashMap
 /// only place the owning module is recorded, and it is gone the moment
 /// the decls are concatenated.
 #[partial]
-def qualify_modules (modules : List ModuleInfo) : Result String (List ModuleInfo) :=
+def qualify_modules (all_modules : List ModuleInfo) : Result String (List ModuleInfo) :=
+    let modules := dedup_modules_by_file all_modules in
     let owners_map := collect_def_owners modules str_map_empty in
     let names := all_declared_names modules in
     let global_map := build_global_rename_map names owners_map alias_map_empty in
@@ -7788,6 +7823,74 @@ def qualify_modules (modules : List ModuleInfo) : Result String (List ModuleInfo
     match msgs {
         List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
         List.empty => Result.ok (qualify_modules_go modules owners_map global_map ambig),
+    }
+
+/// One `ModuleInfo` per source FILE.
+///
+/// The loader can register the same file under more than one module
+/// path -- `init/string.mo` arrives as both `string` and `init.string`,
+/// because `init/lib.mo`'s `pub use string {*}` names it relative to
+/// its own directory. Under the old flat namespace that was invisible:
+/// both copies declared the same bare `String.beq`, and
+/// `build_def_name_map`/`dedup_funcs_by_name` silently collapsed them.
+/// Qualification makes it visible and, left alone, wrong twice over --
+/// every `String.*` would look ambiguous, and both copies would compile
+/// under different symbols.
+///
+/// The longest path wins (`init.string` over `string`): it is the one
+/// that actually describes where the file lives, and it is stable
+/// regardless of which importer the loader happened to reach first.
+/// A module with no file path (the synthesized test driver) is never
+/// deduplicated -- it has no file to be the same as.
+#[partial]
+def dedup_modules_by_file (modules : List ModuleInfo) : List ModuleInfo :=
+    let best := best_path_per_file modules str_map_empty in
+    keep_canonical_modules modules best str_map_empty
+
+#[partial]
+def best_path_per_file (modules : List ModuleInfo) (acc : HashMap String String) : HashMap String String :=
+    match modules {
+        List.empty => acc,
+        List.cons m rest =>
+            match m {
+                ModuleInfo.mk path file_path _decls =>
+                    if String.beq file_path ""
+                    then best_path_per_file rest acc
+                    else
+                        let candidate := show_module_path path in
+                        let next := match str_map_lookup file_path acc {
+                            Option.none => str_map_insert file_path candidate acc,
+                            Option.some current =>
+                                if I64.gt (String.length candidate) (String.length current)
+                                then str_map_insert file_path candidate acc
+                                else acc,
+                        } in
+                        best_path_per_file rest next,
+            },
+    }
+
+#[partial]
+def keep_canonical_modules (modules : List ModuleInfo) (best : HashMap String String) (seen : HashMap String Bool) : List ModuleInfo :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest =>
+            match m {
+                ModuleInfo.mk path file_path _decls =>
+                    if String.beq file_path ""
+                    then List.cons m (keep_canonical_modules rest best seen)
+                    else
+                        let is_best := match str_map_lookup file_path best {
+                            Option.some b => String.beq b (show_module_path path),
+                            Option.none => true,
+                        } in
+                        let already := match str_map_lookup file_path seen {
+                            Option.some _ => true,
+                            Option.none => false,
+                        } in
+                        if is_best && Bool.not already
+                        then List.cons m (keep_canonical_modules rest best (str_map_insert file_path true seen))
+                        else keep_canonical_modules rest best seen,
+            },
     }
 
 #[partial]
@@ -7918,6 +8021,101 @@ def test_qualify_unique_owner_resolves_without_any_import : Bool :=
     match qualify_modules (List.cons a (List.cons b List.empty)) {
         Result.err _ => false,
         Result.ok ms => list_contains_str (qtest_body_refs ms) "a::only_here",
+    }
+
+/// An explicit `use X {n}` picks a winner when two modules declare `n`.
+///
+/// This test exists because that rule shipped DEAD: the alias's own
+/// `qualified_name` is dot-joined (`b.shared`) while an emitted symbol
+/// is `::`-joined (`b::shared`), and the comparison used the second
+/// form, so it never matched anything. Nothing caught it, because the
+/// import-set fallback happened to answer correctly for every ambiguous
+/// name then in the corpus.
+#[test]
+def test_qualify_explicit_import_picks_the_declarer : Bool :=
+    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty) in
+    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty) in
+    // `c` imports BOTH declarers, so the import-set fallback cannot
+    // narrow it -- only the explicit `{shared}` item on `b` can. An
+    // earlier version of this test imported `b` alone and passed even
+    // with the rule reverted, which is exactly how the bug shipped.
+    let use_a := Decl.use_d (bare_modpath "a") (UseFilter.use_items List.empty) false in
+    let use_b := Decl.use_d (bare_modpath "b")
+        (UseFilter.use_items (List.cons (UseItem.use_name (Identifier.id "shared")) List.empty)) false in
+    let c := qtest_module "c" (List.cons use_a (List.cons use_b (List.cons (qtest_def "caller" "shared") List.empty))) in
+    match qualify_modules (List.cons a (List.cons b (List.cons c List.empty))) {
+        Result.err _ => false,
+        Result.ok ms => list_contains_str (qtest_body_refs ms) "b::shared",
+    }
+
+/// A struct field's DEFAULT is an executable term and must be qualified
+/// like any body. The checker splices it into every struct literal that
+/// omits the field, so leaving it bare while its target is renamed makes
+/// those literals fail to elaborate -- and because codegen elaboration
+/// is best-effort, that surfaces several stages later as an unrelated
+/// gate firing. `lang/types.mo`'s `ScopeData.def_params` (defaulting to
+/// `HashMap.map HashMap.empty_buckets`) is the real instance of this.
+#[test]
+def test_qualify_rewrites_struct_field_defaults : Bool :=
+    let helper := qtest_def "make_empty" "z" in
+    let fld := StructField.mk (Identifier.id "f") Term.hole
+        (Option.some (Term.var sentinel (DebugName.named (Identifier.id "make_empty"))))
+        Multiplicity.many in
+    let st := Decl.struct_d (Struct.mk (Identifier.id "Holder") (List.cons fld List.empty) Visibility.package_private) in
+    let a := qtest_module "a" (List.cons helper (List.cons st List.empty)) in
+    match qualify_modules (List.cons a List.empty) {
+        Result.err _ => false,
+        Result.ok ms => list_contains_str (struct_default_refs ms) "a::make_empty",
+    }
+
+#[partial]
+def struct_default_refs (modules : List ModuleInfo) : List String :=
+    match modules {
+        List.empty => List.empty,
+        List.cons m rest => List.append (struct_default_refs_of_decls (get_module_info_decls m)) (struct_default_refs rest),
+    }
+
+#[partial]
+def struct_default_refs_of_decls (decls : List Decl) : List String := match decls {
+    List.empty => List.empty,
+    List.cons d rest =>
+        match d {
+            Decl.struct_d st =>
+                match st {
+                    Struct.mk _n fields _v => List.append (struct_field_default_refs fields) (struct_default_refs_of_decls rest),
+                },
+            _ => struct_default_refs_of_decls rest,
+        },
+}
+
+#[partial]
+def struct_field_default_refs (fields : List StructField) : List String := match fields {
+    List.empty => List.empty,
+    List.cons f rest =>
+        match f {
+            StructField.mk _n _t default _m =>
+                match default {
+                    Option.some t => List.append (identifier_names (free_names_of_term List.empty t)) (struct_field_default_refs rest),
+                    Option.none => struct_field_default_refs rest,
+                },
+        },
+}
+
+/// One FILE registered under two module paths is not an ambiguity --
+/// `init/string.mo` arrives as both `string` and `init.string`, and
+/// treating those as rival declarers made every `String.*` reference in
+/// the corpus unresolvable.
+#[test]
+def test_qualify_same_file_under_two_paths_is_not_ambiguous : Bool :=
+    let decls := List.cons (qtest_def "shared" "x") List.empty in
+    let short_ := ModuleInfo.mk (bare_modpath "string") "init/string.mo" decls in
+    let long_ := ModuleInfo.mk (bare_modpath "init.string") "init/string.mo" decls in
+    let caller := qtest_module "user" (List.cons (qtest_def "caller" "shared") List.empty) in
+    match qualify_modules (List.cons short_ (List.cons long_ (List.cons caller List.empty))) {
+        Result.err _ => false,
+        // The longer path wins, and the duplicate module is dropped
+        // rather than compiled twice under two symbols.
+        Result.ok ms => list_contains_str (qtest_body_refs ms) "init.string::shared",
     }
 
 /// Two declarers and no import saying which: refusing to guess is the

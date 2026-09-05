@@ -1061,12 +1061,6 @@ def params_all_named (params : List Param) : Bool :=
             match p { Param.mk pname _ _ _ _ => Bool.not (String.beq (show_identifier pname) "") && params_all_named rest },
     }
 
-def param_names (params : List Param) : List Identifier :=
-    match params {
-        List.empty => List.empty,
-        List.cons p rest => match p { Param.mk pname _ _ _ _ => List.cons pname (param_names rest) },
-    }
-
 /// For each written entry (in order), find its declared position --
 /// unknown-field and duplicate-field are both real errors here.
 def resolve_entries_against_params (entries : List FieldPatternEntry) (declared_names : List Identifier) : Result TypeError (List I64) :=

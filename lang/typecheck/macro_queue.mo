@@ -328,7 +328,6 @@ def term_type_level (t : Term) : I64 :=
     match t { Term.type_ u => u }
 
 def empty_constraints : List TypeConstraint := List.empty
-def empty_attrs : List Attribute := List.empty
 def dummy_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "dummy") List.empty)
 
 #[test]

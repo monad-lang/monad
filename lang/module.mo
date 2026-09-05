@@ -22,12 +22,17 @@ use lang.typecheck.meta_reflect {
   build_type_info_value, collect_inductives, find_inductive_by_bare_name,
   reify_decls_value_to_decls, term_free_var_name,
 }
+// Deliberately does NOT import `list_append`: this module declares its
+// own (see the comment above it), and AGENTS.md item 19 records that the
+// two are not interchangeable -- scope's takes an explicit `{A : Type}`
+// binder, and both sit on `merge_scope_data`'s measured hot path.
+// Importing it here as well made which one won a coin flip.
 use lang.scope {
   OpenAlias,
   add_constraint_dict_params_decls, build_scope_from_decls,
   collect_classes, collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
   filter_valid_open_aliases,
-  list_append, modpath_eq, param_names, promote_instance_defs,
+  modpath_eq, param_names, promote_instance_defs,
   alias_map_empty, build_alias_map,
   resolve_class_calls_decls, resolve_infix_decls, resolve_open_alias_decls,
   scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,

@@ -75,6 +75,21 @@ struct Attribute {
     args: List AttrArg,
 }
 
+/// The empty attribute list, under both names the corpus already uses
+/// for it. Declared here, beside `Attribute` itself, because each was
+/// previously declared TWICE -- `empty_attrs` in
+/// `lang/typecheck/macro_queue.mo` and `lang/codegen/emit.mo`,
+/// `no_attrs` in `lang/codegen/test_driver.mo` and
+/// `lang/typecheck/meta_reflect.mo` -- so each was two definitions of
+/// one LLVM symbol, of which the emitted binary silently kept one.
+/// Both spellings are kept rather than picking a winner: the two names
+/// read differently at their call sites (`no_attrs` for a synthesized
+/// decl that HAS no attributes, `empty_attrs` for an accumulator's
+/// zero) and unifying them is a rename sweep with no correctness value.
+def empty_attrs : List Attribute := List.empty
+
+def no_attrs : List Attribute := List.empty
+
 /// Structural equality by name and args.
 def attr_eq (a : Attribute) (b : Attribute) : Bool :=
     match a { Attribute.mk an aargs => match b { Attribute.mk bn bargs =>
