@@ -2904,8 +2904,8 @@ def type_check_named_call_def_target (f : Term) (params : List (Pair Identifier 
                 ok arg_pairs =>
                     match named_call_def_check_args arg_pairs scope local_types locals {
                         err e => err e,
-                        ok _ =>
-                            let app_term : Term := named_call_def_fold_app f arg_pairs in
+                        ok elab_args =>
+                            let app_term : Term := named_call_def_fold_app f elab_args in
                             ok (Option.some (mk_typed app_term expected_type)),
                     }
             }
@@ -2963,27 +2963,39 @@ def named_call_def_pair_args (params : List (Pair Identifier Term)) (fields : Li
     }
 
 #[terminating]
-def named_call_def_check_args (args : List (Pair Term Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError Bool :=
+def named_call_def_check_args (args : List (Pair Term Term)) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError (List Term) :=
     match args {
-        List.empty => ok true,
+        List.empty => ok List.empty,
         List.cons a rest =>
             match a {
                 Pair.pair value ptyp =>
                     match type_check value ptyp scope local_types locals {
-                        ok _ => named_call_def_check_args rest scope local_types locals,
+                        // The ELABORATED term, not `value`. Checking an
+                        // argument is also what RESOLVES it -- a field
+                        // access `f.d` only becomes a projection at its
+                        // real field index here. Discarding this and
+                        // folding the raw `value` back into the call (as
+                        // this did) shipped the unresolved access to
+                        // codegen, which compiled every one of them to
+                        // field 0: `take_two { x := f.d }` read `f.a`.
+                        // The constructor-target path just above always
+                        // used its own `elab_args`; this is that, for an
+                        // ordinary def target.
+                        ok checked =>
+                            match named_call_def_check_args rest scope local_types locals {
+                                ok rest_terms => ok (List.cons (tt_term checked) rest_terms),
+                                err e => err e,
+                            },
                         err e => err e,
                     }
             }
     }
 
 #[terminating]
-def named_call_def_fold_app (f : Term) (args : List (Pair Term Term)) : Term :=
+def named_call_def_fold_app (f : Term) (args : List Term) : Term :=
     match args {
         List.empty => f,
-        List.cons a rest =>
-            match a {
-                Pair.pair value _ => named_call_def_fold_app (Term.app f value) rest,
-            }
+        List.cons value rest => named_call_def_fold_app (Term.app f value) rest,
     }
 
 /// Type check a struct-update expression (`{ base with field := value,
