@@ -192,3 +192,231 @@ def location_of_remaining_len (original : String) (remaining_len : I64) : Locati
 	let consumed_len : I64 := String.length original - remaining_len in
 	let consumed : String := String.slice original 0 consumed_len in
 	advance_location (Location.mk 0 1 1) consumed
+
+
+// --- Bulk offset resolution ------------------------------------------
+//
+// `location_of_remaining_len` above answers ONE position by scanning the
+// whole consumed prefix. Per top-level declaration that is fine -- a few
+// hundred calls per file. Per TERM it is quadratic: tens of thousands of
+// calls, each scanning up to the whole file.
+//
+// So resolve every position in a single pass instead. The parser records
+// spans as remaining-input lengths, and a pre-order left-to-right walk of
+// the parse tree visits nodes in non-decreasing absolute offset -- so the
+// offsets arrive already sorted and nothing needs a sort (`std/list.mo`
+// has none) or an index (there is no `Array`, and no `Hashable I64` for a
+// map keyed by offset).
+//
+// The divide-and-conquer split is kept for the same reason
+// `line_col_scan` has it: the interpreter overflows its stack somewhere
+// around 1000-1500 frames, and a whole-file linear walk is one frame per
+// character. But unlike `line_col_scan` this needs no `combine` step --
+// threading the running `Location` left-to-right through the halves means
+// the right half simply starts where the left one ended.
+
+/// A bulk resolution in progress.
+struct ResolveState {
+    /// Position at the start of the not-yet-scanned remainder. `offset`
+    /// is absolute within the whole file, which is what `pending` is
+    /// measured against.
+    loc : Location,
+    /// Offsets still to resolve, ascending. Consumed from the head as the
+    /// walk passes each one.
+    pending : List I64,
+    /// Resolved pairs, in reverse order of resolution.
+    out : List (Pair I64 Location),
+}
+
+/// Emit every pending offset the walk has now reached or passed.
+///
+/// `>=` rather than `==` deliberately: an offset that does not land on a
+/// character boundary (which a real span always does, but a corrupted or
+/// synthesized one might not) must still be consumed, or it would block
+/// every later offset behind it and silently lose the rest of the file.
+#[partial]
+def resolve_emit_reached (st : ResolveState) : ResolveState := match st.pending {
+    List.empty => st,
+    List.cons off rest =>
+        if I64.lt st.loc.offset off
+        then st
+        else resolve_emit_reached
+                { loc := st.loc,
+                  pending := rest,
+                  out := List.cons (Pair.pair off st.loc) st.out },
+}
+
+/// Advance one character. Mirrors `line_col_scan_direct`'s stepping
+/// exactly -- byte offset by the character's WIDTH, column by one
+/// character -- which is the distinction that makes a column after a
+/// multi-byte character correct.
+#[partial]
+def resolve_step_loc (loc : Location) (ch : String) (width : I64) : Location :=
+    if String.beq "\n" ch
+    then Location.mk (I64.add loc.offset width) (I64.add loc.line 1) 1
+    else Location.mk (I64.add loc.offset width) loc.line (I64.add loc.column 1)
+
+/// Walk a chunk one character at a time, resolving offsets as it passes
+/// them. Only ever called on chunks already under `dc_threshold`, so the
+/// recursion stays well inside the interpreter's frame ceiling.
+#[partial]
+def resolve_direct (s : String) (st : ResolveState) : ResolveState :=
+    if String.is_empty s
+    then st
+    else
+        let st1 : ResolveState := resolve_emit_reached st in
+        let width : I64 := utf8_char_width s in
+        let ch : String := String.slice s 0 width in
+        resolve_direct (String.drop width s)
+            { loc := resolve_step_loc st1.loc ch width, pending := st1.pending, out := st1.out }
+
+/// Resolve every pending offset falling inside `s`, threading the running
+/// position left to right. O(n) total work, O(log n) recursion depth.
+#[partial]
+def resolve_offsets (s : String) (st : ResolveState) : ResolveState :=
+    if I64.lt (String.length s) dc_threshold
+    then resolve_direct s st
+    else
+        let mid : I64 := safe_split_offset s (I64.div (String.length s) 2) in
+        // Left first, then right from wherever left ended -- this
+        // sequencing is what replaces `combine_line_col_scan`.
+        resolve_offsets (String.drop mid s) (resolve_offsets (String.slice s 0 mid) st)
+
+/// Resolve `offsets` (ascending, absolute byte offsets) against `source`.
+///
+/// Offsets at or past end-of-file resolve to the file's final position
+/// rather than being dropped: end-of-input is a real position, and a
+/// dropped entry would leave a term with no location for no visible
+/// reason.
+#[partial]
+def resolve_offsets_in_file (source : String) (offsets : List I64) : List (Pair I64 Location) :=
+    let done : ResolveState :=
+        resolve_offsets source { loc := Location.mk 0 1 1, pending := offsets, out := List.empty } in
+    // `resolve_emit_reached` cannot fire for an offset past the end during
+    // the walk (the walk stops at EOF), so flush them here.
+    let flushed : ResolveState := resolve_flush done in
+    list_reverse_pairs flushed.out List.empty
+
+#[partial]
+def resolve_flush (st : ResolveState) : ResolveState := match st.pending {
+    List.empty => st,
+    List.cons off rest =>
+        resolve_flush { loc := st.loc, pending := rest, out := List.cons (Pair.pair off st.loc) st.out },
+}
+
+#[partial]
+def list_reverse_pairs (xs : List (Pair I64 Location)) (acc : List (Pair I64 Location)) : List (Pair I64 Location) :=
+    match xs {
+        List.empty => acc,
+        List.cons x rest => list_reverse_pairs rest (List.cons x acc),
+    }
+
+
+// --- Tests -----------------------------------------------------------
+//
+// The oracle for bulk resolution is the single-offset path it replaces:
+// for any offset, `resolve_offsets_in_file` must return exactly what
+// `location_of_remaining_len` would have. That is a real equivalence
+// check, not a restatement of the implementation.
+
+/// Look one offset up in a resolved table.
+#[partial]
+def lookup_resolved (pairs : List (Pair I64 Location)) (off : I64) : Option Location :=
+    match pairs {
+        List.empty => Option.none,
+        List.cons p rest => lookup_resolved_step p rest off,
+    }
+
+#[partial]
+def lookup_resolved_step (p : Pair I64 Location) (rest : List (Pair I64 Location)) (off : I64) : Option Location :=
+    match p {
+        Pair.pair k v => if I64.beq k off then Option.some v else lookup_resolved rest off,
+    }
+
+/// `location_of_remaining_len` takes a REMAINING length; the bulk path
+/// takes an absolute offset. This converts, so both sides of the
+/// comparison below describe the same point.
+#[partial]
+def single_location_at (source : String) (off : I64) : Location :=
+    location_of_remaining_len source (I64.sub (String.length source) off)
+
+#[partial]
+def agrees_at (source : String) (pairs : List (Pair I64 Location)) (off : I64) : Bool :=
+    match lookup_resolved pairs off {
+        Option.some got => location_beq got (single_location_at source off),
+        Option.none => false,
+    }
+
+#[partial]
+def location_beq (a : Location) (b : Location) : Bool :=
+    I64.beq a.offset b.offset && I64.beq a.line b.line && I64.beq a.column b.column
+
+#[partial]
+def agrees_at_all (source : String) (pairs : List (Pair I64 Location)) (offs : List I64) : Bool :=
+    match offs {
+        List.empty => true,
+        List.cons o rest =>
+            if agrees_at source pairs o then agrees_at_all source pairs rest else false,
+    }
+
+/// Every offset in a multi-line source must resolve exactly as the
+/// single-offset scanner would.
+#[test]
+def test_resolve_offsets_agrees_with_single : Bool :=
+    let src : String := "def a : I64 := 1\ndef b : I64 := 2\n\ndef c : I64 := 3\n" in
+    let offs : List I64 := [0, 4, 16, 17, 21, 34, 35, 39] in
+    agrees_at_all src (resolve_offsets_in_file src offs) offs
+
+/// The multi-byte case, which is where a byte-offset/character-column mix-up
+/// shows up: the em dash occupies bytes 3-5 but advances the column by one.
+///
+/// Every offset here is a real character BOUNDARY, which is the only kind a
+/// span ever holds -- every scanner in the parser steps by
+/// `utf8_char_width` or by byte predicates that no UTF-8 lead or
+/// continuation byte satisfies. The two paths deliberately differ on a
+/// non-boundary offset: this one advances to the next boundary, while
+/// `location_of_remaining_len` slices mid-character. Neither is meaningful
+/// there, and consuming the offset is the safer of the two -- blocking on
+/// it would stall every later offset behind it.
+#[test]
+def test_resolve_offsets_agrees_over_utf8 : Bool :=
+    let src : String := "// — x\ndef y : I64 := 1\n" in
+    let offs : List I64 := [0, 3, 6, 7, 9, 12] in
+    agrees_at_all src (resolve_offsets_in_file src offs) offs
+
+/// The em dash advances the column by one, not three -- pinned directly
+/// rather than only via agreement, since agreement would also hold if both
+/// paths were wrong the same way.
+#[test]
+def test_resolve_offsets_column_counts_characters : Bool :=
+    let src : String := "// — x\ndef y : I64 := 1\n" in
+    match lookup_resolved (resolve_offsets_in_file src [7]) 7 {
+        // `/`, `/`, ` `, `—`, ` ` are 5 characters (7 bytes), so `x` is at
+        // column 6 -- not the byte-derived 8.
+        Option.some loc => I64.beq loc.line 1 && I64.beq loc.column 6 && I64.beq loc.offset 7,
+        Option.none => false,
+    }
+
+/// Long enough to force the divide-and-conquer split (`dc_threshold` is
+/// 400 bytes), so the split path is exercised rather than only the direct
+/// walk -- and so a wrong split would show up as a wrong line.
+#[test]
+def test_resolve_offsets_across_split : Bool :=
+    let line : String := "def padding_definition_for_length : I64 := 1234567890\n" in
+    let src : String := repeat_str line 12 in
+    let offs : List I64 := [0, 54, 108, 300, 540, 594] in
+    agrees_at_all src (resolve_offsets_in_file src offs) offs
+
+#[partial]
+def repeat_str (s : String) (n : I64) : String :=
+    if I64.lt n 1 then "" else String.concat s (repeat_str s (n - 1))
+
+/// An offset at or past end-of-file resolves to the final position rather
+/// than vanishing from the table.
+#[test]
+def test_resolve_offsets_past_eof : Bool :=
+    let src : String := "abc\n" in
+    match lookup_resolved (resolve_offsets_in_file src [4, 99]) 99 {
+        Option.some loc => I64.beq loc.line 2,
+        Option.none => false,
+    }

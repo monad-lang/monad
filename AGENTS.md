@@ -2461,6 +2461,45 @@ Key patterns when writing self-hosted Monad code:
     (`i.args`, `i.defs`) removes the arity coupling entirely and is
     shorter. Do both, not just the first.
 
+34. **Resolving N source positions needs one pass, not N scans
+    (2026-09-06).** `location_of_remaining_len` (`lang/parser/position.mo`)
+    answers ONE position by scanning the consumed prefix. Per top-level
+    declaration that is fine. Per TERM it is quadratic, and measurably so
+    -- both paths in one process, same answers asserted equal:
+
+    | input | bulk, one pass | per-offset |
+    |---|---|---|
+    | 100 lines / 100 offsets | 53 ms | 1122 ms |
+    | 400 lines / 400 offsets | 213 ms | 22244 ms |
+
+    4x the input costs the bulk path **4.0x** and the per-offset path
+    **19.8x** (~4^2). Not a constant-factor difference -- a different
+    exponent.
+    Three things made the one-pass version simple, and each was a fact
+    about this codebase rather than a general technique:
+    - **The offsets arrive sorted for free.** `ParseSpan` stores REMAINING
+      input length, so larger = earlier, and a pre-order left-to-right walk
+      of the parse tree visits nodes in non-decreasing absolute offset. No
+      sort is needed -- which matters, because `std/list.mo` has none.
+    - **No index is possible anyway.** There is no `Array` in `std/` (no
+      O(1) indexing) and no `Hashable I64`, so the obvious "binary-search a
+      line-start table" is not available. Check what the standard library
+      actually has before designing around it.
+    - **Threading the running `Location` replaces the combine step.**
+      `line_col_scan` needs `combine_line_col_scan` because its halves are
+      independent. Resolving offsets does not: run the left half, then the
+      right half FROM WHERE THE LEFT ENDED. The divide-and-conquer split is
+      still required -- for recursion DEPTH, since the interpreter
+      overflows around 1000-1500 frames and a linear walk is one frame per
+      character -- but no monoid is.
+    The oracle is the single-offset path it replaces: for any offset the
+    two must agree exactly. They deliberately differ on an offset that is
+    not a character boundary (bulk advances to the next one; single slices
+    mid-character), which no real span ever is -- every scanner in the
+    parser steps by `utf8_char_width` or by byte predicates that no UTF-8
+    lead or continuation byte satisfies. A test that used a mid-character
+    offset failed and was wrong, not the code.
+
 ## Committing Changes
 
 ### Commit Message Format
