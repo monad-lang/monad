@@ -21,26 +21,43 @@ use std.map {}
 /// Extract def_d entries from a list of Decl. A def wrapped in
 /// Decl.scoped_open_d is intentionally invisible to codegen for now
 /// (deliberate gap — see Decl.scoped_open_d's doc comment).
+///
+/// Accumulator-passing, like every list builder in this module. These
+/// run over the WHOLE program's flattened declarations -- 3,817 defs for
+/// the compiler itself -- and the natural `List.cons x (recurse rest)`
+/// shape holds one native frame per declaration. A `gdb` sample of a
+/// self-compile sitting in `filter_reachable` caught exactly that:
+/// thousands of stacked `extract_defs` frames with `alloc_constructor ->
+/// GC_malloc_kind -> GC_collect_or_expand -> GC_mark_from` on top.
+/// Boehm marks conservatively from the whole stack at every collection,
+/// so depth here is paid again on each of the hundreds of collections
+/// these allocations trigger.
 #[partial]
-def extract_defs (decl_list : List Decl) : List Def := match decl_list {
-    List.empty => List.empty,
+def extract_defs (decl_list : List Decl) : List Def :=
+    List.reverse (extract_defs_go decl_list List.empty)
+
+#[partial]
+def extract_defs_go (decl_list : List Decl) (acc : List Def) : List Def := match decl_list {
+    List.empty => acc,
     List.cons d rest =>
-        let rest_defs := extract_defs rest in
         match d {
-            Decl.def_d def_ => List.cons def_ rest_defs,
-            _ => rest_defs,
+            Decl.def_d def_ => extract_defs_go rest (List.cons def_ acc),
+            _ => extract_defs_go rest acc,
         }
 }
 
 /// Extract inductive_d entries from a list of Decl.
 #[partial]
-def extract_inductives (decl_list : List Decl) : List Inductive := match decl_list {
-    List.empty => List.empty,
+def extract_inductives (decl_list : List Decl) : List Inductive :=
+    List.reverse (extract_inductives_go decl_list List.empty)
+
+#[partial]
+def extract_inductives_go (decl_list : List Decl) (acc : List Inductive) : List Inductive := match decl_list {
+    List.empty => acc,
     List.cons d rest =>
-        let rest_inds := extract_inductives rest in
         match d {
-            Decl.inductive_d ind => List.cons ind rest_inds,
-            _ => rest_inds,
+            Decl.inductive_d ind => extract_inductives_go rest (List.cons ind acc),
+            _ => extract_inductives_go rest acc,
         }
 }
 
@@ -86,15 +103,23 @@ def build_def_name_map (defs : List Def) (acc : HashMap String Def) : HashMap St
 }
 
 #[partial]
-def map_def_decl (defs : List Def) : List Decl := match defs {
-    List.empty => List.empty,
-    List.cons d rest => List.cons (Decl.def_d d) (map_def_decl rest),
+def map_def_decl (defs : List Def) : List Decl :=
+    List.reverse (map_def_decl_go defs List.empty)
+
+#[partial]
+def map_def_decl_go (defs : List Def) (acc : List Decl) : List Decl := match defs {
+    List.empty => acc,
+    List.cons d rest => map_def_decl_go rest (List.cons (Decl.def_d d) acc),
 }
 
 #[partial]
-def map_inductive_decl (inds : List Inductive) : List Decl := match inds {
-    List.empty => List.empty,
-    List.cons i rest => List.cons (Decl.inductive_d i) (map_inductive_decl rest),
+def map_inductive_decl (inds : List Inductive) : List Decl :=
+    List.reverse (map_inductive_decl_go inds List.empty)
+
+#[partial]
+def map_inductive_decl_go (inds : List Inductive) (acc : List Decl) : List Decl := match inds {
+    List.empty => acc,
+    List.cons i rest => map_inductive_decl_go rest (List.cons (Decl.inductive_d i) acc),
 }
 
 /// Reachability works in the same name space the emitted symbols do --
