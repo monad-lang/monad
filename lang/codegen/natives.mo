@@ -204,7 +204,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // compiled `IO_is_dir_native` global was the bogus Unit
             // stub, called for real from `IO_is_dir`'s own compiled body.
             else if String.beq target "string_hash" then Option.some (NativeWrapKind.passthrough "monad_string_hash")
-            else if String.beq target "bench_now" then Option.some (NativeWrapKind.passthrough "monad_bench_now")
+            else if String.beq target "current_time" then Option.some (NativeWrapKind.io_passthrough "monad_current_time")
             // `String.lt`/`String.gt` (`init/string.mo`, `instance BOrd
             // String`'s own backing natives) -- same previously-unwired
             // gap as `string_length`/`string_hash` above (a `#[native]`
@@ -276,7 +276,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // the compiled runtime has no clock wired yet -- a typed
             // zero keeps `--verbose` compiles from crashing on a Unit
             // stub. Real timing is a later self-hosted-runtime phase.
-            else if String.beq target "bench_now" then Option.some (NativeWrapKind.passthrough "monad_bench_now")
+            else if String.beq target "current_time" then Option.some (NativeWrapKind.io_passthrough "monad_current_time")
             else if String.beq target "bench_report" then Option.some (NativeWrapKind.bool_result "monad_bench_report")
             else if String.beq target "process_id" then Option.some (NativeWrapKind.passthrough "monad_process_id")
             // C: libc-shaped or growable-buffer-shaped.
@@ -350,7 +350,7 @@ def runtime_declarations : List LLVMDeclaration :=
     let d7 := mk_decl "monad_file_exists" (List.cons "i64" List.empty) "i64" in
     let d7b := mk_decl "monad_is_dir" (List.cons "i64" List.empty) "i64" in
     let d7c := mk_decl "monad_string_hash" (List.cons "i64" List.empty) "i64" in
-    let d7d := mk_decl "monad_bench_now" List.empty "i64" in
+    let d7d := mk_decl "monad_current_time" List.empty "i64" in
     let d8 := mk_decl "alloc_closure" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d9 := mk_decl "alloc_constructor" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d10 := mk_decl "alloc_string" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in

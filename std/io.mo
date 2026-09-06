@@ -35,6 +35,17 @@ def IO.list_dir_native (path : String) : IO (List String)
 #[native "get_env"]
 def IO.get_env (s : String) : IO (Option String)
 
+// Milliseconds from an arbitrary fixed origin (CLOCK_MONOTONIC). Only
+// DIFFERENCES between two readings mean anything -- the origin is not an
+// epoch and is not comparable across processes.
+//
+// `IO` because reading a clock is a side effect in the same sense
+// reading a file is: two calls in one expression may legitimately differ,
+// so it must not be something the evaluator can duplicate, reorder or
+// share. `std/bench.mo`'s `Bench.now` is the name callers use.
+#[native current_time]
+def IO.current_time : IO I64
+
 def IO.write_file (path : Path) (content : String) : IO Unit :=
     IO.write_file_native (Path.to_string path) content
 

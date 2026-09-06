@@ -143,7 +143,7 @@ const PURE_NATIVES: &[&str] = &[
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
 /// `is_pure_native` — the allowlist above is authoritative): `print_str`
-/// (IO), `bench_now`/`bench_report` (non-deterministic timing),
+/// (IO), `current_time`/`bench_report` (non-deterministic timing),
 /// `read_file`/`write_file`/`file_exists`/`is_dir`/`list_dir`/`get_env`/
 /// `exec_cmd` (filesystem/process IO), `fork_io`/`cancel_fiber`/
 /// `sleep_io`/`scope_new`/`scope_fork`/`scope_drop`/`await_fiber`
@@ -244,7 +244,7 @@ pub fn exec_native(
     "string_get_char" => string_get_char(args, natives),
     "string_to_list" => string_to_list(args, natives),
     "string_from_list" => string_from_list(args, natives),
-    "bench_now" => bench_now(),
+    "current_time" => current_time(natives),
     "bench_report" => bench_report(args, natives),
     "read_file" => read_file(args, natives),
     "write_file" => write_file(args, natives),
@@ -987,12 +987,18 @@ fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   io_wrap(natives, Value::Lit(IrLit::Num(exit_code, NumSuffix::I64)))
 }
 
-fn bench_now() -> Result<Value, CoreEvalError> {
+/// `IO.current_time` (std/io.mo). `IO.io`-wrapped, like every other
+/// native whose declared type is `IO _`: `Monad.bind`'s `IO` instance
+/// pattern-matches with `match a { io a => f a }`, so a bare number here
+/// fails as "value is not a constructor" the moment anything binds it
+/// with `<-`. This used to be `bench_now : I64` -- pure, unwrapped, and
+/// correct for that type.
+fn current_time(natives: &NativeTable) -> Result<Value, CoreEvalError> {
   let now = std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap_or_default()
     .as_millis() as i64;
-  Ok(Value::Lit(IrLit::Num(now, NumSuffix::I64)))
+  io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
 }
 
 fn process_id() -> Result<Value, CoreEvalError> {

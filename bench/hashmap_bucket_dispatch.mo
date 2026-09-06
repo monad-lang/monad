@@ -17,7 +17,7 @@
 /// isolating per-call dispatch cost from the one-time overhead of a
 /// smaller test.
 use std.map {}
-use std.bench {now, report}
+use std.bench {now, report, since}
 use std.list {length}
 
 #[terminating]
@@ -37,14 +37,14 @@ def get_loop (i : I64) (n : I64) (idx : U64) (b : Bucket16 (Bucket16 (List (Pair
 
 def run_bench (n : I64) (label : String) : IO Bool := do {
     let empty : Bucket16 (Bucket16 (List (Pair I64 I64))) := HashMap.empty_buckets;
-    let set_start := Bench.now;
+    let set_start : I64 <- Bench.now;
     let b := set_loop 0 n 0u64 empty;
-    let set_elapsed := I64.sub Bench.now set_start;
-    let _ <- Bench.report (String.concat "set_bucket " label) set_elapsed;
-    let get_start := Bench.now;
+    let set_elapsed : I64 <- Bench.since set_start;
+    Bench.report (String.concat "set_bucket " label) set_elapsed;
+    let get_start : I64 <- Bench.now;
     let total := get_loop 0 n 0u64 b 0;
-    let get_elapsed := I64.sub Bench.now get_start;
-    let _ <- Bench.report (String.concat "get_bucket " label) get_elapsed;
+    let get_elapsed : I64 <- Bench.since get_start;
+    Bench.report (String.concat "get_bucket " label) get_elapsed;
     // `total` just needs to be deterministic and non-degenerate (proof
     // the loop actually ran and touched real bucket content), not a
     // specific value -- every bucket holds exactly one 1-element list

@@ -139,7 +139,7 @@ def unwrap (w : Wide) : I64 :=
 def main (args : List String) : IO I64 :=
     return (if unwrap build == 6 then 7 else 1)
 "#;
-    let _ <- exec_cmd "mkdir" ["-p", output_dir];
+    exec_cmd "mkdir" ["-p", output_dir];
     IO.write_file (Path.path src_path) source;
 
     let loaded_result : Result String LoadedModules <- load_file_modules src_path;
@@ -150,7 +150,7 @@ def main (args : List String) : IO I64 :=
         },
         Result.ok loaded => do {
             let mod_result <- compile_loaded_modules_to_ir loaded false;
-            let _ <- exec_cmd "rm" ["-f", src_path];
+            exec_cmd "rm" ["-f", src_path];
             match mod_result {
                 Result.err e => do {
                     println ("test_user_ctor_shadowing_builtin_name: compile failed: " ++ e);

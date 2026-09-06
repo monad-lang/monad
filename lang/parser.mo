@@ -3850,7 +3850,7 @@ def test_numeric_literal_hex_negative : Bool :=
 		success rem out =>
 			String.beq rem "" && (match out {
 				Term.lit lit_val => match lit_val {
-					Literal.num n suffix => I64.beq n (I64.sub 0 16) && (match suffix {
+					Literal.num n suffix => I64.beq n (0 - 16) && (match suffix {
 						NumSuffix.i64 => true,
 						_ => false
 					}),

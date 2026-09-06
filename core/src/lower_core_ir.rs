@@ -811,8 +811,10 @@ pub struct WellKnownCtors {
   pub list_cons: Option<CtorTag>,
   pub list_empty: Option<CtorTag>,
   /// `IO A`'s sole constructor (`init/io.mo`'s `type IO A { io A }`) —
-  /// not needed by any native today, but needed to interpret a forced
-  /// test def's result `Value` the same way the tree-walker's own
+  /// required by every native whose declared type is `IO _` (they wrap
+  /// their result through `io_wrap`, since `Monad.bind`'s `IO` instance
+  /// matches `match a { io a => f a }`), and needed to interpret a
+  /// forced test def's result `Value` the same way the tree-walker's own
   /// `detect_test_result` (`lib.rs`) unwraps an `IO`-wrapped `Bool`/
   /// `Result` before judging pass/fail — see `core_parity.rs`.
   ///

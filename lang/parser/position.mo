@@ -178,6 +178,6 @@ def consume_span (span : LocatedSpan) (n : I64) : LocatedSpan :=
 /// byte), so the byte-length diff below always lands on one too.
 #[partial]
 def location_of_remaining (original : String) (remaining : String) : Location :=
-	let consumed_len : I64 := I64.sub (String.length original) (String.length remaining) in
+	let consumed_len : I64 := String.length original - String.length remaining in
 	let consumed : String := String.slice original 0 consumed_len in
 	advance_location (Location.mk 0 1 1) consumed

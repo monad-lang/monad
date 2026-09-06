@@ -63,7 +63,8 @@ def rt_tag_list_cons : I64 := 6
 /// emitted (an unreferenced internal define is dead code `llc` drops
 /// happily); trimming to the referenced set is a later
 /// self-hosted-runtime phase, not a PoC concern.
-/// `Bench.now` is a real C function (`monad_bench_now`, runtime.c) and
+/// `IO.current_time` is a real C function (`monad_current_time`,
+/// runtime.c) and
 /// `Bench.report` is ordinary Monad (`std/bench.mo`), so neither needs a
 /// generated stub any more -- the pair used to return 0/1 and print
 /// nothing, which silently disabled every `--verbose` timing in a

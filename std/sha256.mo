@@ -139,13 +139,13 @@ def Sha256.unpack_word (w : U32) : List U8 :=
 // smallest k >= 0 with (msg_len_bytes + 1 + k) mod 64 == 56
 def Sha256.pad_zeros_needed (msg_len_bytes : I64) : I64 :=
   let total := I64.add msg_len_bytes 1 in
-  let rem := I64.sub total (I64.mul 64 (I64.div total 64)) in
-  if I64.lt rem 57 then I64.sub 56 rem else I64.sub 120 rem
+  let rem := total - I64.mul 64 (I64.div total 64) in
+  if I64.lt rem 57 then (56 - rem) else (120 - rem)
 
 #[terminating] // decreasing I64 counter, same idiom as String.repeat
 def Sha256.zero_bytes (n : I64) : List U8 :=
   if I64.beq n 0 then List.empty
-  else List.cons 0u8 (Sha256.zero_bytes (I64.sub n 1))
+  else List.cons 0u8 (Sha256.zero_bytes (n - 1))
 
 def Sha256.pad (bytes : List U8) (msg_len_bytes : I64) : List U8 :=
   let bit_len := I64.mul msg_len_bytes 8 in
@@ -178,7 +178,7 @@ def Sha256.expand_loop (rev_words : List U32) (remaining : I64) : List U32 :=
     let w15 := Sha256.at_or_zero rev_words 14 in
     let w16 := Sha256.at_or_zero rev_words 15 in
     let new_w := U32.add (U32.add (Sha256.sigma1 w2) w7) (U32.add (Sha256.sigma0 w15) w16) in
-    Sha256.expand_loop (List.cons new_w rev_words) (I64.sub remaining 1)
+    Sha256.expand_loop (List.cons new_w rev_words) (remaining - 1)
 
 def Sha256.schedule (block16 : List U32) : List U32 :=
   List.reverse (Sha256.expand_loop (List.reverse block16) 48)
@@ -225,7 +225,7 @@ def Sha256.take_n (n : I64) (bytes : List U8) : List U8 :=
   if I64.beq n 0 then List.empty
   else match bytes {
     empty => List.empty,
-    cons b rest => List.cons b (Sha256.take_n (I64.sub n 1) rest)
+    cons b rest => List.cons b (Sha256.take_n (n - 1) rest)
   }
 
 #[terminating]
@@ -233,7 +233,7 @@ def Sha256.drop_n (n : I64) (bytes : List U8) : List U8 :=
   if I64.beq n 0 then bytes
   else match bytes {
     empty => List.empty,
-    cons _ rest => Sha256.drop_n (I64.sub n 1) rest
+    cons _ rest => Sha256.drop_n (n - 1) rest
   }
 
 #[terminating] // list shrinks by 64 each call via a helper, not a

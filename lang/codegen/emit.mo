@@ -1,5 +1,5 @@
 use io {IO}
-use std.bench {now, report}
+use std.bench {now, report, report_since, since}
 // `str_map_*` below is a `std.map` `HashMap String V`. Empty import:
 // naming any of `std.map`'s `Map`-class-instance exports explicitly hits
 // a pre-existing latent instance/dictionary-resolution bug (same
@@ -48,9 +48,7 @@ use lang.codegen.decls {
   extract_inductives, filter_reachable_decls, reachable_defs_from,
 }
 use lang.codegen.tco {apply_self_tco}
-use lang.codegen.qualify {
-  qtest_def, qualified_def_name_str, qualify_modules_timed, qualify_result, qualify_spans,
-}
+use lang.codegen.qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lang.codegen.free_names {collect_referenced_names, free_names_of_term}
 use lang.codegen.ctx {
   CodegenCtx, CtxStrPair, LocalBinding, build_arity_table, build_debug_locs,
@@ -4215,16 +4213,6 @@ def check_contains (text : String) (needle : String) : Bool :=
 
 // === Multi-module compilation ===
 
-/// Print each line in order. `List.map println` would build a list of
-/// unrun `IO` actions and discard it.
-def println_lines (lines : List String) : IO Unit := match lines {
-    List.empty => return unit,
-    List.cons l rest => do {
-        let _ <- println l;
-        println_lines rest
-    },
-}
-
 /// Compile all loaded modules to a single LLVM module.
 /// All declarations from all modules are compiled together with fully qualified names.
 ///
@@ -4249,7 +4237,7 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
 /// change for a feature they don't exercise.
 #[partial]
 def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) (debug_locs : HashMap String Location) : IO (Result String LLVMModule) := do {
-    let total_start := Bench.now;
+    let total_start : I64 <- Bench.now;
 
     let all_mods := get_loaded_all loaded;
 
@@ -4268,10 +4256,10 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // `resolve_open_aliases_in_module_info` doc comment for the
     // confirmed regression (`Reachable decl_list` collapsing from 1925
     // to 181) this fixes.
-    let t_open_alias := Bench.now;
+    let t_open_alias : I64 <- Bench.now;
     let aliased_mods := resolve_open_aliases_in_modules all_mods;
     if verbose then do {
-        let _ <- Bench.report "open_alias_resolve" (I64.sub Bench.now t_open_alias);
+        Bench.report_since "open_alias_resolve" t_open_alias;
         return unit
     } else return unit;
 
@@ -4279,29 +4267,25 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // re-point every reference at the module that owns it. MUST run
     // here, before Stage 1 -- `ModuleInfo.path` is the only record of
     // which module a decl came from, and flattening discards it.
-    let t_qualify := Bench.now;
-    let qualified := qualify_modules_timed aliased_mods;
-    // `--verbose` reports Stage 0c phase-by-phase, not just as a total:
-    // it dominates a self-compile, and its cost is not spread evenly.
-    if verbose then println_lines (qualify_spans qualified) else return unit;
-    match qualify_result qualified {
+    let t_qualify : I64 <- Bench.now;
+    match qualify_modules aliased_mods {
       Result.err e => do {
         if verbose then println ("FAILED at stage: qualify_modules (" ++ e ++ ")") else return unit;
         return (Result.err e)
       },
       Result.ok qualified_mods => do {
     if verbose then do {
-        let _ <- Bench.report "qualify_modules" (I64.sub Bench.now t_qualify);
+        Bench.report_since "qualify_modules" t_qualify;
         return unit
     } else return unit;
 
     // Stage 1: collect all declarations (now each already carrying its
     // own module path, so the flat list is still collision-free)
-    let t_collect := Bench.now;
+    let t_collect : I64 <- Bench.now;
     let all_decls := collect_all_decls_from_modules qualified_mods List.empty;
     if verbose then do {
         let def_count := List.length all_decls;
-        let _ <- Bench.report "collect_decls" (I64.sub Bench.now t_collect);
+        Bench.report_since "collect_decls" t_collect;
         println ("Total defs collected: " ++ I64.to_string def_count)
     } else return unit;
 
@@ -4318,11 +4302,11 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // a function that was never compiled into the module ("undefined
     // value '@Bool_and'" at link time) -- confirmed as a real bug via
     // a direct repro (`helper (true && false)`) while wiring this in.
-    let t_infix := Bench.now;
+    let t_infix : I64 <- Bench.now;
     let infixes := collect_infixes all_decls;
     let resolved_decls := resolve_infix_decls infixes all_decls;
     if verbose then do {
-        let _ <- Bench.report "infix_resolve" (I64.sub Bench.now t_infix);
+        Bench.report_since "infix_resolve" t_infix;
         return unit
     } else return unit;
 
@@ -4340,11 +4324,11 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // which Phase 2 threads in from its owning Instance), Phase 3
     // before 4 (Phase 4 needs the dict PARAMETERS Phase 3 adds already
     // in place to know which locals are bound dicts).
-    let t_dict := Bench.now;
+    let t_dict : I64 <- Bench.now;
     let promoted_decls := promote_instance_defs resolved_decls;
     let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
     if verbose then do {
-        let _ <- Bench.report "dict_dispatch" (I64.sub Bench.now t_dict);
+        Bench.report_since "dict_dispatch" t_dict;
         return unit
     } else return unit;
 
@@ -4364,7 +4348,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // program actually being compiled), fall back to the original,
     // unelaborated decls -- this must never newly break a compile that
     // worked before this pass existed.
-    let t_elab := Bench.now;
+    let t_elab : I64 <- Bench.now;
     let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
     let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_decls;
     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
@@ -4372,7 +4356,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let elaborated := elaborate_module_decls_best_effort scope dict_param_decls empty_locs;
     let dispatched_decls := resolve_class_calls_decls elaborated;
     if verbose then do {
-        let _ <- Bench.report "elaborate_class" (I64.sub Bench.now t_elab);
+        Bench.report_since "elaborate_class" t_elab;
         return unit
     } else return unit;
 
@@ -4381,7 +4365,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // codegen bug anywhere in the whole standard library, reached or
     // not, blocked compiling any program at all. See
     // filter_reachable_decls's own doc comment.
-    let t_reach := Bench.now;
+    let t_reach : I64 <- Bench.now;
     // Bound to a local first: field access lowers only on a plain
     // identifier, not on a parenthesised call result.
     let main_mi : ModuleInfo := get_loaded_main loaded;
@@ -4389,7 +4373,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let reachable_decls := filter_reachable_decls main_root dispatched_decls;
     if verbose then do {
         let reachable_count := List.length reachable_decls;
-        let _ <- Bench.report "filter_reachable" (I64.sub Bench.now t_reach);
+        Bench.report_since "filter_reachable" t_reach;
         println ("Reachable decl_list: " ++ I64.to_string reachable_count)
     } else return unit;
 
@@ -4440,11 +4424,11 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                         },
                         Result.ok _ => do {
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
-                    let t_llvm := Bench.now;
+                    let t_llvm : I64 <- Bench.now;
                     let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
                     if verbose then do {
-                        let _ <- Bench.report "compile_db_module" (I64.sub Bench.now t_llvm);
-                        let _ <- Bench.report "compile_loaded_modules_to_ir total" (I64.sub Bench.now total_start);
+                        Bench.report_since "compile_db_module" t_llvm;
+                        Bench.report_since "compile_loaded_modules_to_ir total" total_start;
                         return unit
                     } else return unit;
 

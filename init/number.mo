@@ -208,6 +208,8 @@ instance Add I64 {
 }
 
 instance Sub I64 {
+	// `I64.sub`, NOT `a - b`: `infix (-) := Sub.sub` (init/prelude.mo), so
+	// spelling this with the operator makes it call itself.
 	def sub (a b : I64) : I64 := I64.sub a b
 }
 

@@ -430,7 +430,7 @@ def take_while_loop (pred : String -> Bool) (original : String) (input : String)
 
 #[partial]
 def take_while_done (original : String) (remaining : String) : ParseResult String :=
-	let consumed : I64 := I64.sub (String.length original) (String.length remaining) in
+	let consumed : I64 := String.length original - String.length remaining in
 	success remaining (String.slice original 0 consumed)
 
 

@@ -85,7 +85,7 @@ def newline_byte : U8 := 10u8
 /// it (or 0 if none exists, i.e. `pos` is on the first line).
 #[partial]
 def line_start_before (s : String) (pos : I64) : I64 :=
-	line_start_before_go s (I64.sub pos 1)
+	line_start_before_go s (pos - 1)
 
 #[partial]
 def line_start_before_go (s : String) (pos : I64) : I64 :=
@@ -95,7 +95,7 @@ def line_start_before_go (s : String) (pos : I64) : I64 :=
 		Option.some byte =>
 			if U8.beq byte newline_byte
 			then I64.add pos 1
-			else line_start_before_go s (I64.sub pos 1),
+			else line_start_before_go s (pos - 1),
 		Option.none => 0
 	}
 
@@ -142,7 +142,7 @@ def pad_line_num_loop (width : I64) (s : String) : String :=
 #[partial]
 def spaces (n : I64) : String :=
 	if I64.gt n 0
-	then String.concat " " (spaces (I64.sub n 1))
+	then String.concat " " (spaces (n - 1))
 	else ""
 
 /// Every displayed line — error line and context neighbors alike — uses
@@ -161,7 +161,7 @@ def render_context_line (width : I64) (line_num : I64) (content : String) (is_er
 #[partial]
 def render_caret (width : I64) (col : I64) : String :=
 	if I64.gt col 0
-	then String.concat (spaces (I64.add width 3)) (String.concat (spaces (I64.sub col 1)) "^---\n")
+	then String.concat (spaces (I64.add width 3)) (String.concat (spaces (col - 1)) "^---\n")
 	else ""
 
 /// Number of decimal digits in a non-negative line number.
@@ -185,7 +185,7 @@ def render_source_context (source : String) (line : I64) (col : I64) (offset : I
 	else
 		let cur_start : I64 := line_start_before source offset in
 		let cur_end : I64 := line_end_after source offset in
-		let cur_content : String := String.slice source cur_start (I64.sub cur_end cur_start) in
+		let cur_content : String := String.slice source cur_start (cur_end - cur_start) in
 		let has_next : Bool := I64.lt cur_end (String.length source) in
 		// The gutter width is shared across the whole 3-line window, based
 		// on the widest line number actually shown (mirrors `diag.rs`'s
@@ -195,10 +195,10 @@ def render_source_context (source : String) (line : I64) (col : I64) (offset : I
 		let prev_str : String :=
 			if I64.gt line 1
 			then
-				let prev_end : I64 := I64.sub cur_start 1 in
+				let prev_end : I64 := (cur_start - 1) in
 				let prev_start : I64 := line_start_before source prev_end in
-				let prev_content : String := String.slice source prev_start (I64.sub prev_end prev_start) in
-				render_context_line width (I64.sub line 1) prev_content false 0
+				let prev_content : String := String.slice source prev_start (prev_end - prev_start) in
+				render_context_line width (line - 1) prev_content false 0
 			else ""
 		in
 		let cur_str : String := render_context_line width line cur_content true col in
@@ -207,7 +207,7 @@ def render_source_context (source : String) (line : I64) (col : I64) (offset : I
 			then
 				let next_start : I64 := I64.add cur_end 1 in
 				let next_end : I64 := line_end_after source next_start in
-				let next_content : String := String.slice source next_start (I64.sub next_end next_start) in
+				let next_content : String := String.slice source next_start (next_end - next_start) in
 				render_context_line width (I64.add line 1) next_content false 0
 			else ""
 		in
@@ -342,10 +342,10 @@ def repeat_line (line : String) (n : I64) : String :=
 	then repeat_line_direct line n
 	else
 		let half : I64 := I64.div n 2 in
-		String.concat (repeat_line line half) (repeat_line line (I64.sub n half))
+		String.concat (repeat_line line half) (repeat_line line (n - half))
 
 #[partial]
 def repeat_line_direct (line : String) (n : I64) : String :=
 	if I64.beq n 0
 	then ""
-	else String.concat line (repeat_line_direct line (I64.sub n 1))
+	else String.concat line (repeat_line_direct line (n - 1))

@@ -138,11 +138,11 @@ def test_c_list_dir_sorted : IO Bool :=
 use std.process {exec_cmd}
 def main (args : List String) : IO I64 := do {
     let dir := ""# ++ dir ++ r#"";
-    let _ <- exec_cmd "rm" ["-rf", dir];
-    let _ <- exec_cmd "mkdir" ["-p", dir];
-    let _ <- exec_cmd "touch" [dir ++ "/zeta", dir ++ "/alpha", dir ++ "/mid"];
+    exec_cmd "rm" ["-rf", dir];
+    exec_cmd "mkdir" ["-p", dir];
+    exec_cmd "touch" [dir ++ "/zeta", dir ++ "/alpha", dir ++ "/mid"];
     let entries <- IO.list_dir (Path.path dir);
-    let _ <- exec_cmd "rm" ["-rf", dir];
+    exec_cmd "rm" ["-rf", dir];
     let at := \i => match List.get i entries { Option.some e => e, Option.none => "<missing>" };
     // Index 3 must be absent -- that plus the three names below pins
     // both the contents and the sort order, without `List.length`

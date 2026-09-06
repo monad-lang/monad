@@ -46,13 +46,13 @@ def main : IO I64 {
     IO.write_file (Path.path ir_path) ir_text;
 
     let llc_args := args4 "-filetype=obj" ir_path "-o" obj_path;
-    let _ <- exec_cmd "llc" llc_args;
+    exec_cmd "llc" llc_args;
 
     let rt_args := args4 "-c" "lang/codegen/runtime.c" "-o" runtime_obj;
-    let _ <- exec_cmd "clang" rt_args;
+    exec_cmd "clang" rt_args;
 
     let ld_args := List.cons obj_path (List.cons runtime_obj (List.cons "-lgc" (List.cons "-o" (List.cons output_path List.empty))));
-    let _ <- exec_cmd "clang" ld_args;
+    exec_cmd "clang" ld_args;
 
     let bin_args := List.empty;
     let exit_code <- exec_cmd output_path bin_args;

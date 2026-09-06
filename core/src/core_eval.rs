@@ -724,7 +724,7 @@ mod tests {
   #[test]
   fn test_zero_arity_native_global_is_not_memoized() {
     // Unlike `test_global_resolves_and_memoizes` above: a zero-arity
-    // native-attributed def (`Bench.now`/`scope_new` — always
+    // native-attributed def (`IO.current_time`/`scope_new` — always
     // side-effecting, that's the whole reason they're natives rather
     // than ordinary `def`s) must be re-run on every reference, never
     // cached — see `force_global`'s own doc comment for the real bug
@@ -735,10 +735,16 @@ mod tests {
       native_id: 0,
       arity: 0,
     }]);
+    // `current_time` is `IO I64`, so it wraps its result in `IO.io` --
+    // that constructor has to be known here or the native fails before
+    // memoization is ever exercised.
     let natives = NativeTable::new(
-      vec![crate::term::id("bench_now")],
+      vec![crate::term::id("current_time")],
       vec![0],
-      Default::default(),
+      crate::lower_core_ir::WellKnownCtors {
+        io_io: Some(crate::lower_core_ir::CtorTag { tag: 0, arity: 1 }),
+        ..Default::default()
+      },
     );
     let mut cache = GlobalCache::new(1);
     force_global(0, &globals, &natives, &mut cache).unwrap();

@@ -6,16 +6,16 @@
 /// (pack/rotr/sigma/ch/maj) x64 rounds x N blocks, so don't reach for
 /// NIST-scale stress inputs here.
 
-use std.bench {now, report}
+use std.bench {now, report, since}
 use std.sha256 {}
 
 #[test]
 def bench_sha256_short : IO Bool := do {
   let input := "The quick brown fox jumps over the lazy dog";
-  let start := Bench.now;
+  let start : I64 <- Bench.now;
   let ignored := Sha256.hash input;
-  let elapsed := I64.sub Bench.now start;
-  let _ <- Bench.report "sha256 44 bytes (1 block)" elapsed;
+  let elapsed : I64 <- Bench.since start;
+  Bench.report "sha256 44 bytes (1 block)" elapsed;
   return true
 }
 
@@ -23,9 +23,9 @@ def bench_sha256_short : IO Bool := do {
 def bench_sha256_medium : IO Bool := do {
   // 1000 bytes, ~16 blocks
   let input := String.repeat "0123456789" 100;
-  let start := Bench.now;
+  let start : I64 <- Bench.now;
   let ignored := Sha256.hash input;
-  let elapsed := I64.sub Bench.now start;
-  let _ <- Bench.report "sha256 1000 bytes (~16 blocks)" elapsed;
+  let elapsed : I64 <- Bench.since start;
+  Bench.report "sha256 1000 bytes (~16 blocks)" elapsed;
   return true
 }

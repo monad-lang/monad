@@ -3,7 +3,7 @@
 
 use io {IO}
 use std.io {file_exists, is_dir, list_dir, println, read_file}
-use std.bench {now, report}
+use std.bench {now, report, report_since, since}
 use lang.elaborate {free_vars, names_of_decls, elaborate_def}
 use lang.types {
   Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
@@ -342,8 +342,8 @@ def load_module_decls (base_dir : String) (mp : ModulePath) : IO (Option (List D
                     if String.is_empty rem
                     then do { return Option.some decl_list }
                     else do {
-                        let _ <- println (String.concat "parse error: " (String.concat (module_path_to_string mp) " did not fully parse (stopped before end of file) -- remaining text starts:"));
-                        let _ <- println (String.slice rem 0 (if I64.gt (String.length rem) 300 then 300 else String.length rem));
+                        println (String.concat "parse error: " (String.concat (module_path_to_string mp) " did not fully parse (stopped before end of file) -- remaining text starts:"));
+                        println (String.slice rem 0 (if I64.gt (String.length rem) 300 then 300 else String.length rem));
                         return Option.none
                     },
                 ParseResult.fail _ => do { return Option.none }
@@ -2067,9 +2067,9 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) :=
 #[partial]
 def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : IO I64 :=
     if verbose then do {
-        let _ <- Bench.report label (I64.sub Bench.now t0);
-        return Bench.now
-    } else return Bench.now
+        Bench.report_since label t0;
+        Bench.now
+    } else Bench.now
 
 // --- elaborate_loaded_modules: THE unified check/compile/test front end ---
 //
@@ -2370,7 +2370,7 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
 ///     file also verifies what it depends on.
 #[partial]
 def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) (verbose : Bool) : IO ElaboratedAndCache := do {
-    let t_load : I64 := Bench.now;
+    let t_load : I64 <- Bench.now;
     let lc : LoadedAndCache <- load_file_modules_cached file_path cache;
     let loaded_result : Result String LoadedModules := lc.loaded;
     let out_cache : ModuleInfoCache := lc.cache;
@@ -2380,7 +2380,7 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
     let elaborated_result : Result String ElaboratedModules <- match loaded_result {
         Result.err e => return (Result.err e),
         Result.ok loaded => do {
-            let t0 : I64 := Bench.now;
+            let t0 : I64 <- Bench.now;
             let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty;
             let t_flat : I64 <- bench_step verbose "  elab: flatten_module_decls" t0 (List.length all_decls);
             let infixes : List Infix := collect_infixes all_decls;

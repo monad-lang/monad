@@ -28,7 +28,7 @@ pub def compile_source_run_expect (source : String) (basename : String) (expecte
     let runtime_obj := output_dir ++ "/" ++ basename ++ "_runtime.o";
     let output_path := output_dir ++ "/" ++ basename;
 
-    let _ <- exec_cmd "mkdir" ["-p", output_dir];
+    exec_cmd "mkdir" ["-p", output_dir];
     IO.write_file (Path.path src_path) source;
 
     let loaded_result : Result String LoadedModules <- load_file_modules src_path;
@@ -65,7 +65,7 @@ pub def compile_source_run_expect (source : String) (basename : String) (expecte
                                 return false
                             } else do {
                                 let exec_result <- exec_cmd output_path [];
-                                let _ <- exec_cmd "rm" ["-f", src_path, ir_path, obj_path, runtime_obj, output_path];
+                                exec_cmd "rm" ["-f", src_path, ir_path, obj_path, runtime_obj, output_path];
                                 println (basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result);
                                 return (exec_result == expected)
                             }

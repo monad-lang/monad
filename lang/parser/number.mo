@@ -317,7 +317,7 @@ def numeric_literal_hex_digits_done (r : ParseResult I64) (negative : Bool) : Pa
 def numeric_literal_hex_int_suffix (input : String) (n : I64) (negative : Bool) : ParseResult Term :=
 	match int_suffix_parser input {
 		success rem suffix =>
-			let value : I64 := if negative then I64.sub 0 n else n in
+			let value : I64 := if negative then (0 - n) else n in
 			success rem (Term.lit (Literal.num value suffix)),
 		fail e => fail e
 	}
@@ -359,7 +359,7 @@ def numeric_literal_float_suffix (input : String) (text : String) : ParseResult 
 def numeric_literal_int_suffix (input : String) (n : I64) (negative : Bool) : ParseResult Term :=
 	match int_suffix_parser input {
 		success rem suffix =>
-			let value : I64 := if negative then I64.sub 0 n else n in
+			let value : I64 := if negative then (0 - n) else n in
 			success rem (Term.lit (Literal.num value suffix)),
 		fail e => fail e
 	}

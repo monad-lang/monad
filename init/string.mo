@@ -209,7 +209,7 @@ def String.ends_with (s : String) (suffix : String) : Bool :=
 def String.repeat (s : String) (n : I64) : String :=
 	if I64.beq n 0
 	then ""
-	else String.concat s (String.repeat s (I64.sub n 1))
+	else String.concat s (String.repeat s (n - 1))
 
 // ── Reverse ──
 

@@ -16,7 +16,6 @@ use lang.types {
   Decl, Def, Identifier, ModulePath, StructField, TypeConstraint,
   sentinel, show_identifier, show_module_path,
 }
-use std.bench {now}
 use lang.module {ModuleInfo, mk}
 use lang.scope {
   OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
@@ -517,87 +516,16 @@ def insert_all_names (names : List String) (acc : HashMap String Bool) : HashMap
 /// the decls are concatenated.
 #[partial]
 def qualify_modules (all_modules : List ModuleInfo) : Result String (List ModuleInfo) :=
-    match qualify_modules_timed all_modules {
-        Pair.pair _ r => r,
-    }
-
-/// `qualify_modules`, paired with a per-phase timing breakdown.
-///
-/// This pass is where a self-compile spends most of its time, and the
-/// interesting number is a RATIO: the compiled compiler is ~4x slower
-/// than the Rust host interpreting it (rung 2: 3.3s -> 12.2s), but this
-/// pass measured ~30s on the host against >44min compiled -- a ~20x
-/// anomaly specific to it. These spans say WHICH phase carries that,
-/// from inside a compiled binary, which only became possible once
-/// `Bench.report` stopped being a generated stub.
-///
-/// The timings are returned rather than printed so this stays PURE:
-/// `qualify_modules` and its eight tests keep their signatures, and
-/// `emit.mo` -- the only caller that wants them -- prints them under
-/// `--verbose`. `Bench.now` is a plain `I64` read, so measuring
-/// unconditionally costs seven native calls for the whole pass.
-///
-/// Each phase's span ends with a `List.length` of that phase's own
-/// result. That force is load-bearing: these are `let`-bound in a lazy
-/// position, and without it a phase's real work would be attributed to
-/// whichever later phase first demanded the value.
-def qualify_modules_timed (all_modules : List ModuleInfo) : Pair (List String) (Result String (List ModuleInfo)) :=
-    let t0 : I64 := Bench.now in
     let modules := dedup_modules_by_file all_modules in
-    let s1 := qspan "dedup_modules_by_file" t0 (List.length modules) in
     let owners_map := collect_def_owners modules str_map_empty in
-    let s2 := qspan "collect_def_owners" (qspan_end s1) 0 in
     let names := all_declared_names modules in
-    let s3 := qspan "all_declared_names" (qspan_end s2) (List.length names) in
     let global_map := build_global_rename_map names owners_map alias_map_empty in
-    let s4 := qspan "build_global_rename_map" (qspan_end s3) 0 in
     let ambig := ambiguous_declared_names names owners_map in
-    let s5 := qspan "ambiguous_declared_names" (qspan_end s4) (List.length ambig) in
     let msgs := collect_qualify_errors modules owners_map ambig in
-    let s6 := qspan "collect_qualify_errors" (qspan_end s5) (List.length msgs) in
     match msgs {
-        List.cons _ _ =>
-            Pair.pair (qspan_lines [s1, s2, s3, s4, s5, s6])
-                (Result.err (join_semicolon_msgs msgs "")),
-        List.empty =>
-            let out := qualify_modules_go modules owners_map global_map ambig in
-            let s7 := qspan "qualify_modules_go" (qspan_end s6) (List.length out) in
-            Pair.pair (qspan_lines [s1, s2, s3, s4, s5, s6, s7]) (Result.ok out),
+        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
+        List.empty => Result.ok (qualify_modules_go modules owners_map global_map ambig),
     }
-
-/// One measured phase: its label, when it ended, and how long it took.
-struct QSpan {
-    label : String,
-    end_ms : I64,
-    dur_ms : I64,
-}
-
-/// Close a span that started at `t0`. `forced` is the phase's own result,
-/// demanded here so the work is inside the span -- see
-/// `qualify_modules_timed`.
-#[partial]
-def qspan (label : String) (t0 : I64) (forced : I64) : QSpan :=
-    // Scrutinising `forced` -- the phase's own result -- BEFORE reading
-    // the clock is the whole point: it drags the phase's work inside the
-    // span. Reading `Bench.now` first would time nothing. The branch is
-    // unreachable for a `List.length`, but the evaluator cannot know
-    // that, so the comparison still forces the value.
-    if I64.lt forced 0 then QSpan.mk label t0 0
-    else let now : I64 := Bench.now in QSpan.mk label now (I64.sub now t0)
-
-#[partial]
-def qspan_end (s : QSpan) : I64 := match s { QSpan.mk _ e _ => e }
-
-#[partial]
-def qspan_lines (spans : List QSpan) : List String := match spans {
-    List.empty => List.empty,
-    List.cons s rest => match s {
-        QSpan.mk label _ dur =>
-            List.cons (String.concat "    q: " (String.concat label
-                          (String.concat " " (String.concat (I64.to_string dur) "ms"))))
-                (qspan_lines rest),
-    },
-}
 
 /// One `ModuleInfo` per source FILE.
 ///
@@ -924,12 +852,3 @@ def test_unqualify_recovers_the_source_name : Bool :=
         then String.beq (unqualify_def_name "lang.main::main") "main"
         else false
     else false
-/// Projections out of `qualify_modules_timed`'s pair, so callers need no
-/// `match` just to reach one half.
-#[partial]
-def qualify_spans (r : Pair (List String) (Result String (List ModuleInfo))) : List String :=
-    match r { Pair.pair spans _ => spans }
-
-#[partial]
-def qualify_result (r : Pair (List String) (Result String (List ModuleInfo))) : Result String (List ModuleInfo) :=
-    match r { Pair.pair _ res => res }

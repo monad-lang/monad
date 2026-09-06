@@ -35,7 +35,7 @@ def test_compile_42 : IO Bool := do {
     let runtime_obj := String.concat output_dir "/monad_runtime.o";
     let output_path := String.concat output_dir "/test_42";
 
-    let _ <- exec_cmd "mkdir" ["-p", output_dir];
+    exec_cmd "mkdir" ["-p", output_dir];
 
     let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
     let ir_text := lang.codegen.ir.emit_module mod_;
@@ -64,7 +64,7 @@ def test_compile_42 : IO Bool := do {
             } else do {
                 let exec_result <- exec_cmd output_path [];
 
-                let _ <- exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
+                exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
 
                 return (exec_result == 42)
             }
@@ -90,7 +90,7 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
     let runtime_obj := output_dir ++ "/" ++ basename ++ "_runtime.o";
     let output_path := output_dir ++ "/" ++ basename;
 
-    let _ <- exec_cmd "mkdir" ["-p", output_dir];
+    exec_cmd "mkdir" ["-p", output_dir];
 
     let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
     let ir_text := lang.codegen.ir.emit_module mod_;
@@ -114,7 +114,7 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
                 return false
             } else do {
                 let exec_result <- exec_cmd output_path [];
-                let _ <- exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
+                exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
                 println <| basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result;
                 return (exec_result == expected)
             }
@@ -354,7 +354,7 @@ def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (e
     let runtime_obj := output_dir ++ "/" ++ basename ++ "_runtime.o";
     let output_path := output_dir ++ "/" ++ basename;
 
-    let _ <- exec_cmd "mkdir" ["-p", output_dir];
+    exec_cmd "mkdir" ["-p", output_dir];
 
     let mod_ := lang.codegen.emit.compile_db_module decl_list;
     let ir_text := lang.codegen.ir.emit_module mod_;
@@ -378,7 +378,7 @@ def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (e
                 return false
             } else do {
                 let exec_result <- exec_cmd output_path [];
-                let _ <- exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
+                exec_cmd "rm" ["-f", ir_path, obj_path, runtime_obj, output_path];
                 println <| basename ++ ": expected " ++ I64.to_string expected ++ ", got " ++ I64.to_string exec_result;
                 return (exec_result == expected)
             }

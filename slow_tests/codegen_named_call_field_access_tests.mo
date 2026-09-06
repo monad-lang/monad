@@ -87,7 +87,7 @@ struct Two {
     lo : I64,
     hi : I64,
 }
-def sub_them (x : I64) (y : I64) : I64 := I64.sub x y
+def sub_them (x : I64) (y : I64) : I64 := (x - y)
 def main (args : List String) : IO I64 := do {
     let t : Two := { lo := 5, hi := 105 };
     return (sub_them { y := t.lo, x := t.hi })

@@ -49,12 +49,13 @@ typedef struct {
    so nothing was ever freed. Measured on `check lang/main.mo`, that
    meant 5.99 GiB allocated of which 98.24% was garbage, and `compile
    lang/main.mo` was OOM-killed at 29.7 GB. */
-/* `#[native bench_now]` (std/bench.mo's `Bench.now`) -- milliseconds
+/* `#[native "current_time"]` (std/io.mo's `IO.current_time`, which
+   std/bench.mo's `Bench.now` defers to) -- milliseconds
    from an arbitrary fixed origin, monotonic so a span is never negative
    across a wall-clock adjustment. Previously a GENERATED stub that
    returned 0 (`emit_bench_now`, lang/codegen/runtime.mo), which made
    every `--verbose` timing in a compiled binary read "0ms". */
-int64_t monad_bench_now(void) {
+int64_t monad_current_time(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
@@ -812,7 +813,7 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
 
 /* `#[native "process_id"]` (std/process.mo's `process_id : I64`) -- returns
    the OS process ID, used to build unique /tmp paths for parallel test
-   isolation. Pure (no IO), returns a plain i64, matching `monad_bench_now`'s
+   isolation. Pure (no IO), returns a plain i64, matching `monad_current_time`'s
    own convention. */
 int64_t monad_process_id(void) {
     return (int64_t)getpid();

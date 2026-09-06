@@ -31,7 +31,7 @@ def cancel_i64 (fibers : List (Fiber I64)) : IO Unit :=
   match fibers {
     List.empty => IO.io Unit.unit,
     List.cons f rest => do {
-      let _ <- cancel_fiber f;
+      cancel_fiber f;
       cancel_i64 rest
     }
   }
@@ -39,7 +39,7 @@ def cancel_i64 (fibers : List (Fiber I64)) : IO Unit :=
 def race_i64 (fibers : List (Fiber I64)) : IO I64 :=
   match fibers {
     List.cons f rest => do {
-      let _ <- cancel_i64 rest;
+      cancel_i64 rest;
       await_fiber f
     }
   }
@@ -108,7 +108,7 @@ def test_cancel_all_smoke : IO Bool {
   let f1 <- forkIO io_10_action;
   let f2 <- forkIO io_20_action;
   let fibers := List.cons f1 (List.cons f2 List.empty);
-  let _ <- cancel_i64 fibers;
+  cancel_i64 fibers;
   return true
 }
 
@@ -129,7 +129,7 @@ def test_scoped_runs_action : IO Bool {
 
 // scoped: auto-cancels on exit (callback returns without awaiting)
 def scoped_forget (s : Scope) : IO I64 := do {
-  let _ <- scope_fork s io_42_action;
+  scope_fork s io_42_action;
   return 0
 }
 
@@ -143,6 +143,6 @@ def test_scoped_cancels : IO Bool {
 
 #[test]
 def test_sleepIO_smoke : IO Bool {
-  let _ <- sleepIO 10;
+  sleepIO 10;
   return true
 }

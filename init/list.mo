@@ -15,6 +15,6 @@ def List.get (index : I64) (l : List A) : Option A :=
 	if b2
 	then match l {
 		empty => none,
-		cons a tail => List.get (I64.sub index 1) tail
+		cons a tail => List.get (index - 1) tail
 	}
 	else none)

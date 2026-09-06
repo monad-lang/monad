@@ -18,7 +18,7 @@ def test_fork_and_await : IO Bool {
 
 #[test]
 def test_fork_returns_io_fiber : IO Bool {
-    let _ <- forkIO io_true_action;
+    forkIO io_true_action;
     return true
 }
 

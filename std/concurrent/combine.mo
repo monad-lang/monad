@@ -40,7 +40,7 @@ def cancel_all (fibers : List (Fiber A)) : IO Unit :=
   match fibers {
     List.empty => IO.io Unit.unit,
     List.cons f rest => do {
-      let _ <- cancel_fiber f;
+      cancel_fiber f;
       cancel_all rest
     }
   }
@@ -50,7 +50,7 @@ def cancel_all (fibers : List (Fiber A)) : IO Unit :=
 pub def race (fibers : List (Fiber A)) : IO A :=
   match fibers {
     List.cons f rest => do {
-      let _ <- cancel_all rest;
+      cancel_all rest;
       await_fiber f
     }
   }
@@ -60,6 +60,6 @@ pub def race (fibers : List (Fiber A)) : IO A :=
 def scoped (f : Scope -> IO A) : IO A := do {
   let scope <- scope_new;
   let result <- f scope;
-  let _ <- scope_drop scope;
+  scope_drop scope;
   return result
 }

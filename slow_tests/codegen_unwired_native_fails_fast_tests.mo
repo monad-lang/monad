@@ -41,7 +41,7 @@ def main (args : List String) : IO I64 := do {
     return 0
 }
 "#;
-    let _ <- exec_cmd "mkdir" ["-p", output_dir];
+    exec_cmd "mkdir" ["-p", output_dir];
     IO.write_file (Path.path src_path) source;
 
     let loaded_result : Result String LoadedModules <- load_file_modules src_path;
@@ -52,7 +52,7 @@ def main (args : List String) : IO I64 := do {
         },
         Result.ok loaded => do {
             let mod_result <- compile_loaded_modules_to_ir loaded false;
-            let _ <- exec_cmd "rm" ["-f", src_path];
+            exec_cmd "rm" ["-f", src_path];
             match mod_result {
                 Result.err msg => do {
                     let names_native := String.contains msg "definitely_not_a_real_native";

@@ -40,7 +40,7 @@
 /// but `lang/parser/position.mo`'s own note records that scanning a
 /// whole large file in one call used to blow the stack, so this
 /// benchmark does not try to.
-use std.bench {now, report}
+use std.bench {now, report_since}
 use lang.parser.core {ParseResult}
 use lang.parser.combinators {take_while, take_while_byte}
 use lang.parser.char_preds {is_ident_char, is_ident_char_byte, is_space, is_space_byte}
@@ -101,43 +101,40 @@ def scan_idents_byte (i : I64) (n : I64) (input : String) (acc : I64) : I64 :=
 
 /// `calls` * `run_len` characters scanned by each predicate, so the two
 /// shapes below are directly comparable per character.
-def run_bench (calls : I64) (run_len : I64) (label : String) : Bool :=
-    let spaces : String := grow_to " " run_len in
-    let idents : String := grow_to "a" run_len in
-    let sp_start := Bench.now in
-    let sp_total := scan_spaces 0 calls spaces 0 in
-    let sp_elapsed := I64.sub Bench.now sp_start in
-    let logged_sp := Bench.report (String.concat "take_while is_space      " label) sp_elapsed in
-    let id_start := Bench.now in
-    let id_total := scan_idents 0 calls idents 0 in
-    let id_elapsed := I64.sub Bench.now id_start in
-    let logged_id := Bench.report (String.concat "take_while is_ident_char " label) id_elapsed in
-    let spb_start := Bench.now in
-    let spb_total := scan_spaces_byte 0 calls spaces 0 in
-    let spb_elapsed := I64.sub Bench.now spb_start in
-    let logged_spb := Bench.report (String.concat "  BYTE is_space_byte     " label) spb_elapsed in
-    let idb_start := Bench.now in
-    let idb_total := scan_idents_byte 0 calls idents 0 in
-    let idb_elapsed := I64.sub Bench.now idb_start in
-    let logged_idb := Bench.report (String.concat "  BYTE is_ident_char_byte " label) idb_elapsed in
+def run_bench (calls : I64) (run_len : I64) (label : String) : IO Bool := do {
+    let spaces : String := grow_to " " run_len;
+    let idents : String := grow_to "a" run_len;
+    let sp_start : I64 <- Bench.now;
+    let sp_total := scan_spaces 0 calls spaces 0;
+    Bench.report_since (String.concat "take_while is_space      " label) sp_start;
+    let id_start : I64 <- Bench.now;
+    let id_total := scan_idents 0 calls idents 0;
+    Bench.report_since (String.concat "take_while is_ident_char " label) id_start;
+    let spb_start : I64 <- Bench.now;
+    let spb_total := scan_spaces_byte 0 calls spaces 0;
+    Bench.report_since (String.concat "  BYTE is_space_byte     " label) spb_start;
+    let idb_start : I64 <- Bench.now;
+    let idb_total := scan_idents_byte 0 calls idents 0;
+    Bench.report_since (String.concat "  BYTE is_ident_char_byte " label) idb_start;
     // All four totals are `calls * consumed-per-call` and must be
-    // positive — proof the loops actually ran and the predicates
+    // positive -- proof the loops actually ran and the predicates
     // actually matched. The byte totals must EQUAL their string
     // counterparts: the two scanners are required to consume exactly the
     // same input, and a byte scan that stopped early would show up here
     // rather than as a silently faster wrong answer.
-    I64.gt sp_total 0 && I64.gt id_total 0
-        && I64.beq spb_total sp_total && I64.beq idb_total id_total
+    return (I64.gt sp_total 0 && I64.gt id_total 0
+        && I64.beq spb_total sp_total && I64.beq idb_total id_total)
+}
 
 
 /// Token-shaped: short runs, high call volume. `grow_to` rounds up to a
 /// power of two, so this is 8 characters per call.
 #[test]
-def bench_take_while_short_runs : Bool := run_bench 4000 8 "short (4000 calls x 8 chars)"
+def bench_take_while_short_runs : IO Bool := run_bench 4000 8 "short (4000 calls x 8 chars)"
 
 
 /// Character-cost-shaped: long runs, low call volume. Same total
 /// characters scanned as the short case (32000), so the two numbers
 /// differ only by per-call overhead.
 #[test]
-def bench_take_while_long_runs : Bool := run_bench 16 2048 "long  (16 calls x 2048 chars)"
+def bench_take_while_long_runs : IO Bool := run_bench 16 2048 "long  (16 calls x 2048 chars)"

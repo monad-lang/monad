@@ -45,7 +45,7 @@ def test_string_literal_if_phi_merge : IO Bool :=
     let source := r#"use io {IO}
 def spaces (n : I64) : String :=
     if I64.gt n 0
-    then String.concat " " (spaces (I64.sub n 1))
+    then String.concat " " (spaces (n - 1))
     else ""
 def main (args : List String) : IO I64 :=
     IO.io (String.length (spaces 3))

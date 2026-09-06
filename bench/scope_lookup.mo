@@ -34,7 +34,7 @@
 /// that lets any top-level type/def resolve without being explicitly
 /// `use`d.
 use std.map {}
-use std.bench {now, report}
+use std.bench {now, report_since}
 
 // --- List: build via repeated cons (matches `scope_data_add_def`'s
 // real access pattern), lookup via linear scan (matches
@@ -106,41 +106,38 @@ def hashmap_lookup_range (i : I64) (n : I64) (m : HashMap I64 I64) (hits : I64) 
 // --- Benchmarks: build N entries, then look up all N of them once
 // (a full-range pass, not just repeatedly hitting the same key) ---
 
-def run_list_bench (n : I64) (label : String) : Bool :=
-    let empty : List (Pair I64 I64) := List.empty in
-    let build_start := Bench.now in
-    let xs := list_build 0 n empty in
-    let build_elapsed := I64.sub Bench.now build_start in
-    let logged_build := Bench.report (String.concat "list build  " label) build_elapsed in
-    let lookup_start := Bench.now in
-    let hits := list_lookup_range 0 n xs 0 in
-    let lookup_elapsed := I64.sub Bench.now lookup_start in
-    let logged_lookup := Bench.report (String.concat "list lookup " label) lookup_elapsed in
-    I64.beq hits n
+def run_list_bench (n : I64) (label : String) : IO Bool := do {
+    let empty : List (Pair I64 I64) := List.empty;
+    let build_start : I64 <- Bench.now;
+    let xs := list_build 0 n empty;
+    Bench.report_since (String.concat "list build  " label) build_start;
+    let lookup_start : I64 <- Bench.now;
+    let hits := list_lookup_range 0 n xs 0;
+    Bench.report_since (String.concat "list lookup " label) lookup_start;
+    return (I64.beq hits n)
+}
 
-def run_map_bench (n : I64) (label : String) : Bool :=
-    let empty : BTreeMap I64 I64 := Map.empty in
-    let build_start := Bench.now in
-    let m := map_build 0 n empty in
-    let build_elapsed := I64.sub Bench.now build_start in
-    let logged_build := Bench.report (String.concat "btree build " label) build_elapsed in
-    let lookup_start := Bench.now in
-    let hits := map_lookup_range 0 n m 0 in
-    let lookup_elapsed := I64.sub Bench.now lookup_start in
-    let logged_lookup := Bench.report (String.concat "btree lookup " label) lookup_elapsed in
-    I64.beq hits n
+def run_map_bench (n : I64) (label : String) : IO Bool := do {
+    let empty : BTreeMap I64 I64 := Map.empty;
+    let build_start : I64 <- Bench.now;
+    let xs := map_build 0 n empty;
+    Bench.report_since (String.concat "map build   " label) build_start;
+    let lookup_start : I64 <- Bench.now;
+    let hits := map_lookup_range 0 n xs 0;
+    Bench.report_since (String.concat "map lookup  " label) lookup_start;
+    return (I64.beq hits n)
+}
 
-def run_hashmap_bench (n : I64) (label : String) : Bool :=
-    let empty : HashMap I64 I64 := Map.empty in
-    let build_start := Bench.now in
-    let m := hashmap_build 0 n empty in
-    let build_elapsed := I64.sub Bench.now build_start in
-    let logged_build := Bench.report (String.concat "hash  build " label) build_elapsed in
-    let lookup_start := Bench.now in
-    let hits := hashmap_lookup_range 0 n m 0 in
-    let lookup_elapsed := I64.sub Bench.now lookup_start in
-    let logged_lookup := Bench.report (String.concat "hash  lookup " label) lookup_elapsed in
-    I64.beq hits n
+def run_hashmap_bench (n : I64) (label : String) : IO Bool := do {
+    let empty : HashMap I64 I64 := Map.empty;
+    let build_start : I64 <- Bench.now;
+    let xs := hashmap_build 0 n empty;
+    Bench.report_since (String.concat "hmap build  " label) build_start;
+    let lookup_start : I64 <- Bench.now;
+    let hits := hashmap_lookup_range 0 n xs 0;
+    Bench.report_since (String.concat "hmap lookup " label) lookup_start;
+    return (I64.beq hits n)
+}
 
 // Sizes originally kept modest: even a few hundred levels of
 // self-hosted-interpreted recursion (`list_build`/`map_build`/
@@ -154,37 +151,37 @@ def run_hashmap_bench (n : I64) (label : String) : Bool :=
 // this shape of recursion — the n=1000 tier below is the concrete proof:
 // it now runs to completion (previously did not, at any stack size).
 #[test]
-def bench_list_50 : Bool := run_list_bench 50 "n=50"
+def bench_list_50 : IO Bool := run_list_bench 50 "n=50"
 
 #[test]
-def bench_map_50 : Bool := run_map_bench 50 "n=50"
+def bench_map_50 : IO Bool := run_map_bench 50 "n=50"
 
 #[test]
-def bench_hashmap_50 : Bool := run_hashmap_bench 50 "n=50"
+def bench_hashmap_50 : IO Bool := run_hashmap_bench 50 "n=50"
 
 #[test]
-def bench_list_100 : Bool := run_list_bench 100 "n=100"
+def bench_list_100 : IO Bool := run_list_bench 100 "n=100"
 
 #[test]
-def bench_map_100 : Bool := run_map_bench 100 "n=100"
+def bench_map_100 : IO Bool := run_map_bench 100 "n=100"
 
 #[test]
-def bench_hashmap_100 : Bool := run_hashmap_bench 100 "n=100"
+def bench_hashmap_100 : IO Bool := run_hashmap_bench 100 "n=100"
 
 #[test]
-def bench_list_200 : Bool := run_list_bench 200 "n=200"
+def bench_list_200 : IO Bool := run_list_bench 200 "n=200"
 
 #[test]
-def bench_map_200 : Bool := run_map_bench 200 "n=200"
+def bench_map_200 : IO Bool := run_map_bench 200 "n=200"
 
 #[test]
-def bench_hashmap_200 : Bool := run_hashmap_bench 200 "n=200"
+def bench_hashmap_200 : IO Bool := run_hashmap_bench 200 "n=200"
 
 #[test]
-def bench_list_1000 : Bool := run_list_bench 1000 "n=1000"
+def bench_list_1000 : IO Bool := run_list_bench 1000 "n=1000"
 
 #[test]
-def bench_map_1000 : Bool := run_map_bench 1000 "n=1000"
+def bench_map_1000 : IO Bool := run_map_bench 1000 "n=1000"
 
 #[test]
-def bench_hashmap_1000 : Bool := run_hashmap_bench 1000 "n=1000"
+def bench_hashmap_1000 : IO Bool := run_hashmap_bench 1000 "n=1000"

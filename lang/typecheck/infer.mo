@@ -3120,7 +3120,7 @@ def struct_update_build_args (params : List Param) (fields : List StructLitField
 /// `lang/scope.mo`'s `add_constructors_go`).
 def struct_update_project_field (base : Term) (con_name : ModulePath) (all_names : List Identifier) (total : I64) (idx : I64) (pname : Identifier) : Term :=
     let bare_name : Identifier := struct_lit_con_name con_name in
-    let db_idx : I64 := I64.sub (I64.sub total 1) idx in
+    let db_idx : I64 := (total - 1) - idx in
     let no_fp : Option FieldPattern := Option.none in
     let case_ : MatchCase := MatchCase.mc bare_name all_names (Term.var db_idx (DebugName.named pname)) no_fp in
     Term.lit (Literal.match_ base (List.cons case_ List.empty))

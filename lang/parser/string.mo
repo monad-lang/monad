@@ -76,7 +76,7 @@ def string_body_char (run_start : String) (input : String) (ch : String) (rest :
 
 /// The unescaped run from `run_start` up to (not including) `input`.
 def string_body_run_text (run_start : String) (input : String) : String :=
-	let consumed : I64 := I64.sub (String.length run_start) (String.length input) in
+	let consumed : I64 := String.length run_start - String.length input in
 	String.slice run_start 0 consumed
 
 /// A `\` was just consumed — the next character selects the escape.
@@ -187,7 +187,7 @@ def raw_string_body (n : I64) (orig : String) (input : String) : ParseResult Ter
 def raw_string_count_hashes (n : I64) (cnt : I64) (orig : String) (at_quote : String) (input : String) : ParseResult Term :=
 	if I64.beq cnt n
 	then
-		let consumed : I64 := I64.sub (String.length orig) (String.length at_quote) in
+		let consumed : I64 := String.length orig - String.length at_quote in
 		success input (Term.lit (Literal.str (String.slice orig 0 consumed)))
 	else
 		if is_empty input
