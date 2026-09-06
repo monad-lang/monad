@@ -1,7 +1,7 @@
 /// Self-hosted Monad grammar parser.
 /// Split into modules for maintainability.
 use lang.types {
-  Decl, DoStmt, Identifier, InductConstructor, LocatedSpan, Location, ModulePath,
+  Decl, DoStmt, term_loc, Identifier, InductConstructor, LocatedSpan, Location, ModulePath,
   NameRef, OpenFilter, Param, Term, TypeConstraint, UseFilter, UseItem, app,
   bind_s, class_d, con, custom, def_d, expr_s, forall, hole, id, if_,
   inductive_d, infix_d, instance_d, lam, let_s, list_reverse, lit, match_,
@@ -11,9 +11,14 @@ use lang.types {
   use_rename, use_sub, use_sub_rename, var,
 }
 use std.list {filter, intercalate, length}
+// For `HashMap` (the located parser's position table) and the monomorphic
+// helpers over it -- never `Map.insert`/`Map.lookup`, whose generic
+// dispatch can resolve to the wrong instance.
+use std.map {}
+use lang.codegen.strmap {str_map_empty, str_map_insert}
 use lang.parser.lower_parse {
-  lower_ctx_bare, lower_ctx_bind_all, lower_parse_decl, lower_parse_decls,
-  lower_parse_term, name_ref_to_string,
+  collect_decl_rems, lower_ctx_bare, lower_ctx_bind_all, lower_ctx_locating,
+  lower_parse_decl, lower_parse_decls, lower_parse_term, name_ref_to_string,
 }
 use lang.parser.core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
@@ -26,7 +31,7 @@ use lang.parser.combinators {
 }
 use lang.parser.number {number, numeric_literal}
 use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
-use lang.parser.position {consume_span, location_of_remaining, location_of_remaining_len, new_span, span_fragment, span_location}
+use lang.parser.position {consume_span, location_of_remaining, location_of_remaining_len, new_span, resolve_offsets_in_file, span_fragment, span_location}
 use lang.parser.identifier {identifier}
 use lang.parser.string {raw_string_parse, string_parse}
 use lang.parser.diagnostic {render_parse_error}
@@ -3570,6 +3575,66 @@ def lower_decls_result (r : ParseResult (List ParseDecl)) : ParseResult (List De
 def decls_parser (input : String) : ParseResult (List Decl) :=
 	lower_decls_result (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
 
+
+// ─── The located parser ────────────────────────────────────────────────
+//
+// `decls_parser`'s twin, and the ONLY entry point that builds location
+// wrappers. Everything else -- `check`, `test`, a non-debug `compile` --
+// goes through the plain one and produces byte-identical terms, which is
+// what keeps the 67%-of-elaboration parse phase (AGENTS.md item 27) out of
+// this feature's way.
+//
+// Three linear passes, not one scan per term: collect the spans, resolve
+// them all at once (`resolve_offsets_in_file`, which is O(n) where the
+// per-position path is O(n^2) -- AGENTS.md item 34), then lower with O(1)
+// lookups.
+
+#[partial]
+def decls_parser_located (input : String) : ParseResult (List Decl) :=
+	locate_and_lower input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
+
+#[partial]
+def locate_and_lower (whole_file : String) (r : ParseResult (List ParseDecl)) : ParseResult (List Decl) :=
+	match r {
+		success rem ds =>
+			success rem (lower_parse_decls (lower_ctx_locating (build_loc_table whole_file ds)) ds),
+		fail e => fail e,
+	}
+
+/// Resolve every span in the parse tree to a position, keyed back by
+/// `start_rem` so lowering needs no arithmetic per node.
+///
+/// `resolve_offsets_in_file` wants ASCENDING absolute offsets. A span's
+/// `start_rem` is a remaining length, so larger means earlier: collecting
+/// in pre-order left-to-right yields DESCENDING `start_rem`, which is
+/// ascending offset. No sort is needed, and none is available.
+#[partial]
+def build_loc_table (whole_file : String) (ds : List ParseDecl) : HashMap String Location :=
+	let total : I64 := String.length whole_file in
+	let rems : List I64 := list_reverse (collect_decl_rems ds List.empty) in
+	let resolved : List (Pair I64 Location) :=
+		resolve_offsets_in_file whole_file (rems_to_offsets total rems List.empty) in
+	rekey_by_rem total resolved str_map_empty
+
+#[partial]
+def rems_to_offsets (total : I64) (rems : List I64) (acc : List I64) : List I64 := match rems {
+	List.empty => list_reverse acc,
+	List.cons r rest => rems_to_offsets total rest (List.cons (total - r) acc),
+}
+
+#[partial]
+def rekey_by_rem (total : I64) (pairs : List (Pair I64 Location)) (acc : HashMap String Location) : HashMap String Location :=
+	match pairs {
+		List.empty => acc,
+		List.cons p rest => rekey_by_rem total rest (rekey_one total p acc),
+	}
+
+#[partial]
+def rekey_one (total : I64) (p : Pair I64 Location) (acc : HashMap String Location) : HashMap String Location :=
+	match p {
+		Pair.pair off loc => str_map_insert (I64.to_string (total - off)) loc acc,
+	}
+
 #[partial]
 def decls_skip (input : String) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
 	decls_try (decl_parser input) input acc
@@ -4385,6 +4450,70 @@ def test_span_after_multibyte_char : Bool :=
 	// remainders are suffixes of the same string, so the byte arithmetic
 	// has to survive the 3-byte em dash sitting in the skipped part.
 	String.beq (span_text_of_term (expression (skip_docstrings (skip_spaces src))) src) "foo"
+
+// --- The located parser -----------------------------------------------
+//
+// `decls_parser_located` is the only entry point that builds `Term.ctx`
+// wrappers. These assert its contract directly, because the end-to-end
+// signal (a DWARF line table) does not move until codegen consumes them --
+// so without these, "wrappers are being built" and "wrappers are silently
+// not being built" look identical.
+
+/// A def body lowered through the located parser carries a position, and
+/// it is the position of the BODY, not of the `def` line.
+#[test]
+def test_located_parser_records_a_position : Bool :=
+	// `1` sits on line 2, column 5; `def` is on line 1.
+	match decls_parser_located "def f : I64 :=\n    1\n" {
+		success _ ds => first_def_body_at ds 2,
+		fail _ => false,
+	}
+
+/// The plain parser records nothing -- the `--debug` gate is structural,
+/// and this is what says so.
+#[test]
+def test_plain_parser_records_nothing : Bool :=
+	match decls_parser "def f : I64 :=\n    1\n" {
+		success _ ds => first_def_body_unlocated ds,
+		fail _ => false,
+	}
+
+#[partial]
+def first_def_body_at (ds : List Decl) (want_line : I64) : Bool := match ds {
+	List.empty => false,
+	List.cons d _ => decl_body_line_is d want_line,
+}
+
+#[partial]
+def decl_body_line_is (d : Decl) (want_line : I64) : Bool := match d {
+	Decl.def_d def_ => term_loc_line_is def_.term want_line,
+	_ => false,
+}
+
+#[partial]
+def term_loc_line_is (t : Term) (want_line : I64) : Bool := match term_loc t {
+	Option.some loc => I64.beq loc.line want_line,
+	Option.none => false,
+}
+
+#[partial]
+def first_def_body_unlocated (ds : List Decl) : Bool := match ds {
+	List.empty => false,
+	List.cons d _ => decl_body_unlocated d,
+}
+
+#[partial]
+def decl_body_unlocated (d : Decl) : Bool := match d {
+	Decl.def_d def_ => term_is_unlocated def_.term,
+	_ => false,
+}
+
+#[partial]
+def term_is_unlocated (t : Term) : Bool := match term_loc t {
+	Option.some _ => false,
+	Option.none => true,
+}
+
 
 /// `(n : I64) -> Vec n` BINDS `n` over its body. This is the only arrow
 /// in the grammar that binds, and `Term.pi` has no field to carry the

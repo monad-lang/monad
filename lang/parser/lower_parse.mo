@@ -50,7 +50,12 @@ use lang.types {
 // the duplicate-top-level-name collision item 18 records). The grammar no
 // longer resolves names at all, so nothing flows the other way: it
 // imports `lower_parse_do` from here and that is the only edge.
-use lang.types {FieldPattern, FieldPatternEntry, show_operator}
+use lang.types {FieldPattern, FieldPatternEntry, Location, ParseSpan, parse_span_is_unknown, show_operator}
+// The monomorphic string map, from the leaf module -- never `Map.lookup`,
+// whose generic dispatch can resolve to the wrong instance
+// (`lang/codegen/util.mo` documents the live bug).
+use lang.codegen.strmap {str_map_lookup}
+use std.map {}
 
 
 /// What lowering carries down the tree.
@@ -77,6 +82,18 @@ struct ParseLowerCtx {
     /// `resolve_offsets_in_file` (`lang/parser/position.mo`).
     locs : Option (HashMap String Location),
 }
+
+/// A context that records positions from a prepared table.
+///
+/// The table is keyed by `ParseSpan.start_rem` -- the REMAINING-input
+/// length at a construct's start, which is what a span actually stores --
+/// rather than by absolute offset. The conversion needs the file's total
+/// length and so can only happen where the whole file is in hand; doing it
+/// once when the table is built beats doing it at each of the ~10^4
+/// lookups.
+#[partial]
+def lower_ctx_locating (table : HashMap String Location) : ParseLowerCtx :=
+    { binders := List.empty, locs := Option.some table }
 
 /// A context that records no positions -- what every non-debug caller uses.
 #[partial]
@@ -238,9 +255,238 @@ def field_access_chain (scrutinee : Term) (fields : List Identifier) : Term :=
 
 // --- The lowering itself --------------------------------------------
 
+// --- Span collection -------------------------------------------------
+//
+// Gathers every `start_rem` the lowering will later look up, so they can
+// all be resolved in one pass instead of one scan each. Visits in the same
+// pre-order the lowering does, which is what makes the result ascending in
+// absolute offset (a larger `start_rem` is EARLIER in the file) and so
+// eligible for `resolve_offsets_in_file`'s linear path.
+//
+// Collected into a reversed accumulator, so callers reverse once.
+//
+// Only the kinds `kind_wants_loc` accepts are collected: resolving a span
+// nothing will look up is wasted work, and the two must agree or the
+// lookup misses and the term is silently left unlocated.
+
+#[partial]
+def collect_decl_rems (ds : List ParseDecl) (acc : List I64) : List I64 := match ds {
+    List.empty => acc,
+    List.cons d rest => collect_decl_rems rest (collect_decl_kind_rems d.kind acc),
+}
+
+#[partial]
+def collect_decl_kind_rems (k : ParseDeclKind) (acc : List I64) : List I64 := match k {
+    ParseDeclKind.def_d d => collect_def_rems d acc,
+    ParseDeclKind.def_macro_d d => collect_def_rems d acc,
+    ParseDeclKind.inductive_d i => collect_ctor_rems i.constructors (collect_param_rems i.params acc),
+    ParseDeclKind.struct_d st => collect_field_rems st.fields acc,
+    ParseDeclKind.class_d c => collect_classdef_rems c.methods (collect_param_rems c.params acc),
+    ParseDeclKind.instance_d i => collect_def_list_rems i.defs (collect_param_rems i.implicit_params acc),
+    ParseDeclKind.scoped_open_d _p _f inner => collect_decl_kind_rems inner.kind acc,
+    ParseDeclKind.decl_gen_d _n params decls _a => collect_decl_rems decls (collect_param_rems params acc),
+    ParseDeclKind.macro_call_d _n args => collect_term_list_rems args acc,
+    ParseDeclKind.infix_d _o _p _v => acc,
+    ParseDeclKind.use_d _p _f _pub => acc,
+    ParseDeclKind.open_d _p _f => acc,
+}
+
+#[partial]
+def collect_def_rems (d : ParseDef) (acc : List I64) : List I64 :=
+    // `d.typ` is a type (R1) and carries no wrapper, so it is not collected.
+    collect_term_rems d.term acc
+
+#[partial]
+def collect_def_list_rems (ds : List ParseDef) (acc : List I64) : List I64 := match ds {
+    List.empty => acc,
+    List.cons d rest => collect_def_list_rems rest (collect_def_rems d acc),
+}
+
+#[partial]
+def collect_param_rems (ps : List ParseParam) (acc : List I64) : List I64 := match ps {
+    List.empty => acc,
+    // A parameter's type is R1; only its default value is a value.
+    List.cons p rest => collect_param_rems rest (collect_opt_rems p.default acc),
+}
+
+#[partial]
+def collect_field_rems (fs : List ParseStructField) (acc : List I64) : List I64 := match fs {
+    List.empty => acc,
+    List.cons f rest => collect_field_rems rest (collect_opt_rems f.default acc),
+}
+
+#[partial]
+def collect_ctor_rems (cs : List ParseInductConstructor) (acc : List I64) : List I64 := match cs {
+    List.empty => acc,
+    List.cons c rest => collect_ctor_rems rest (collect_param_rems c.params acc),
+}
+
+#[partial]
+def collect_classdef_rems (ms : List ParseClassDef) (acc : List I64) : List I64 := match ms {
+    List.empty => acc,
+    List.cons m rest => collect_classdef_rems rest (collect_opt_rems m.default acc),
+}
+
+#[partial]
+def collect_opt_rems (o : Option ParseTerm) (acc : List I64) : List I64 := match o {
+    Option.none => acc,
+    Option.some t => collect_term_rems t acc,
+}
+
+#[partial]
+def collect_term_list_rems (ts : List ParseTerm) (acc : List I64) : List I64 := match ts {
+    List.empty => acc,
+    List.cons t rest => collect_term_list_rems rest (collect_term_rems t acc),
+}
+
+/// This node first (pre-order), then its children left to right.
+#[partial]
+def collect_term_rems (pt : ParseTerm) (acc : List I64) : List I64 :=
+    let acc1 : List I64 :=
+        if kind_wants_loc pt.kind && (parse_span_is_unknown pt.span == false)
+        then List.cons pt.span.start_rem acc
+        else acc in
+    collect_kind_rems pt.kind acc1
+
+#[partial]
+def collect_kind_rems (k : ParseTermKind) (acc : List I64) : List I64 := match k {
+    ParseTermKind.app f a => collect_term_rems a (collect_term_rems f acc),
+    ParseTermKind.lam _n _t body => collect_term_rems body acc,
+    ParseTermKind.forall _n _t body => collect_term_rems body acc,
+    ParseTermKind.quote_ inner => collect_term_rems inner acc,
+    ParseTermKind.lit l => collect_lit_rems l acc,
+    ParseTermKind.do_ stmts => collect_do_rems stmts acc,
+    // R1: a pi is entirely type-level, so nothing under it is located.
+    ParseTermKind.pi _n _a _r => acc,
+    ParseTermKind.var _ => acc,
+    ParseTermKind.var_macro _ => acc,
+    ParseTermKind.con _ => acc,
+    ParseTermKind.ntv _ => acc,
+    ParseTermKind.type_ _ => acc,
+    ParseTermKind.hole => acc,
+}
+
+#[partial]
+def collect_lit_rems (l : ParseLiteral) (acc : List I64) : List I64 := match l {
+    ParseLiteral.if_ c t e => collect_term_rems e (collect_term_rems t (collect_term_rems c acc)),
+    ParseLiteral.match_ scrut cases => collect_case_rems cases (collect_term_rems scrut acc),
+    ParseLiteral.struct_lit fields _tn => collect_litfield_rems fields acc,
+    ParseLiteral.struct_update base fields => collect_litfield_rems fields (collect_term_rems base acc),
+    ParseLiteral.str _ => acc,
+    ParseLiteral.num _ _ => acc,
+    ParseLiteral.flt _ _ => acc,
+}
+
+#[partial]
+def collect_case_rems (cs : List ParseMatchCase) (acc : List I64) : List I64 := match cs {
+    List.empty => acc,
+    List.cons c rest => collect_case_rems rest (collect_term_rems c.body acc),
+}
+
+#[partial]
+def collect_litfield_rems (fs : List ParseStructLitField) (acc : List I64) : List I64 := match fs {
+    List.empty => acc,
+    List.cons f rest => collect_litfield_rems rest (collect_litfield_one f acc),
+}
+
+#[partial]
+def collect_litfield_one (f : ParseStructLitField) (acc : List I64) : List I64 := match f {
+    ParseStructLitField.mk _name value => collect_term_rems value acc,
+}
+
+#[partial]
+def collect_do_rems (stmts : List DoStmt) (acc : List I64) : List I64 := match stmts {
+    List.empty => acc,
+    List.cons s rest => collect_do_rems rest (collect_do_stmt_rems s acc),
+}
+
+#[partial]
+def collect_do_stmt_rems (s : DoStmt) (acc : List I64) : List I64 := match s {
+    DoStmt.bind_s _n _t expr => collect_term_rems expr acc,
+    DoStmt.let_s _n _t expr => collect_term_rems expr acc,
+    DoStmt.ret_s expr => collect_term_rems expr acc,
+    DoStmt.expr_s expr => collect_term_rems expr acc,
+}
+
+
+/// Does a term of this shape deserve a recorded position?
+///
+/// The "instruction-shaped" granularity: the forms that become LLVM
+/// instructions and so deserve a distinct line. Not lambdas, not
+/// type-level forms, not a hole.
+///
+/// Expressing this as a property of the KIND rather than of the call site
+/// is what implements placement rule R2 -- never wrap a `lam` or its
+/// direct body. A caller-based rule would break at every function, because
+/// a def body's outermost node IS a lam; and a wrapper between two lams
+/// truncates `collect_db_params` (`lang/codegen/ctx.mo`), which counts
+/// them to derive a compiled function's parameter count.
+///
+/// `quote_` is excluded because its body is syntax-as-data, not code.
+#[partial]
+def kind_wants_loc (k : ParseTermKind) : Bool := match k {
+    ParseTermKind.var _ => true,
+    ParseTermKind.var_macro _ => true,
+    ParseTermKind.lit _ => true,
+    ParseTermKind.app _ _ => true,
+    ParseTermKind.con _ => true,
+    ParseTermKind.ntv _ => true,
+    ParseTermKind.do_ _ => true,
+    ParseTermKind.lam _ _ _ => false,
+    ParseTermKind.forall _ _ _ => false,
+    ParseTermKind.pi _ _ _ => false,
+    ParseTermKind.type_ _ => false,
+    ParseTermKind.quote_ _ => false,
+    ParseTermKind.hole => false,
+}
+
+/// Lower a term in VALUE position, recording its position when there is
+/// one to record.
 #[partial]
 def lower_parse_term (ctx : ParseLowerCtx) (pt : ParseTerm) : Term :=
+    let inner : Term := lower_parse_kind ctx pt.kind in
+    if kind_wants_loc pt.kind then locate_term ctx pt.span inner else inner
+
+/// Lower a term WITHOUT recording a position.
+///
+/// Used at the two positions where a wrapper would be read as structure
+/// rather than annotation:
+///
+///   - **R1, type position.** `type_head_name` (`lang/typecheck/infer.mo`),
+///     `type_head_name_local` (`lang/scope.mo`), `con_spine_result_typ`,
+///     `solve_typevars` and `term_matches_carrier` all probe the shape of
+///     a type. A wrapper there does not crash them; it makes them stop
+///     matching, and an instance quietly fails to resolve.
+///   - **R3, application head position.** Only a spine's OUTERMOST `app`
+///     is located, plus each argument. That protects `class_method_ref`
+///     (`lang/scope.mo`) and `spine_head`, and it is also the right
+///     granularity for codegen: a call spine emits one call, so it wants
+///     one position.
+#[partial]
+def lower_parse_term_bare (ctx : ParseLowerCtx) (pt : ParseTerm) : Term :=
     lower_parse_kind ctx pt.kind
+
+/// Wrap with the position this span resolves to, if the context is
+/// recording positions and the span is a real one. Synthesized terms
+/// (`pt_hole` for an omitted annotation, `build_list_literal`'s cons
+/// cells) carry `parse_span_unknown` and are left bare -- they were never
+/// written anywhere, so there is no position to claim.
+#[partial]
+def locate_term (ctx : ParseLowerCtx) (span : ParseSpan) (inner : Term) : Term :=
+    match ctx.locs {
+        Option.none => inner,
+        Option.some table => locate_term_from table span inner,
+    }
+
+#[partial]
+def locate_term_from (table : HashMap String Location) (span : ParseSpan) (inner : Term) : Term :=
+    if parse_span_is_unknown span
+    then inner
+    else
+        match str_map_lookup (I64.to_string span.start_rem) table {
+            Option.some loc => Term.ctx loc inner,
+            Option.none => inner,
+        }
 
 
 #[partial]
@@ -259,11 +505,11 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         // own type/argument -- the type is lowered in the OUTER ctx.
         ParseTermKind.lam name typ body =>
             Term.lam (DebugName.named name)
-                     (lower_parse_term ctx typ)
+                     (lower_parse_term_bare ctx typ)
                      (lower_parse_term (lower_ctx_bind name ctx) body),
         ParseTermKind.forall name typ body =>
             Term.forall (DebugName.named name)
-                        (lower_parse_term ctx typ)
+                        (lower_parse_term_bare ctx typ)
                         (lower_parse_term (lower_ctx_bind name ctx) body),
         // A `pi` binds only when the source wrote a name: `(n : T) ->
         // body` puts `n` in scope over `body`, which is what
@@ -284,11 +530,15 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         // producer/consumer inconsistency. Matching the PRODUCER is what
         // preserves behaviour; it is a separate question from this
         // refactor.
+        // R1 on both sides: a pi is entirely type-level.
         ParseTermKind.pi arg_name arg ret =>
-            Term.pi (lower_parse_term ctx arg)
-                    (lower_parse_term (pi_ret_ctx arg_name ctx) ret),
+            Term.pi (lower_parse_term_bare ctx arg)
+                    (lower_parse_term_bare (pi_ret_ctx arg_name ctx) ret),
+        // R3: the callee is bare so a spine's inner `app`s stay visible to
+        // `flatten_call_spine`; only the outermost `app` (located by
+        // `lower_parse_term` on the way in) and each argument carry one.
         ParseTermKind.app f a =>
-            Term.app (lower_parse_term ctx f) (lower_parse_term ctx a),
+            Term.app (lower_parse_term_bare ctx f) (lower_parse_term ctx a),
         ParseTermKind.lit l => Term.lit (lower_parse_literal ctx l),
         ParseTermKind.ntv n => Term.ntv (lower_parse_native ctx n),
         ParseTermKind.con c => Term.con (lower_parse_con ctx c),
@@ -405,7 +655,7 @@ def lower_parse_native (ctx : ParseLowerCtx) (n : ParseNative) : Native :=
 
 #[partial]
 def lower_parse_param (ctx : ParseLowerCtx) (p : ParseParam) : Param :=
-    Param.mk p.name (lower_parse_term ctx p.type_) p.mult (lower_parse_opt ctx p.default) p.attrs
+    Param.mk p.name (lower_parse_term_bare ctx p.type_) p.mult (lower_parse_opt ctx p.default) p.attrs
 
 
 #[partial]
@@ -482,11 +732,11 @@ def lower_parse_do_stmt (ctx : ParseLowerCtx) (s : DoStmt) (ss : List DoStmt) (r
         DoStmt.bind_s name typ expr =>
             Term.app (Term.app monad_bind_term (lower_parse_term ctx expr))
                      (Term.lam (DebugName.named name)
-                               (lower_parse_term ctx typ)
+                               (lower_parse_term_bare ctx typ)
                                (lower_parse_do_inner (lower_ctx_bind name ctx) ss rest)),
         DoStmt.let_s name typ expr =>
             Term.app (Term.lam (DebugName.named name)
-                               (lower_parse_term ctx typ)
+                               (lower_parse_term_bare ctx typ)
                                (lower_parse_do_inner (lower_ctx_bind name ctx) ss rest))
                      (lower_parse_term ctx expr),
         // `ret_s` DISCARDS the accumulated continuation, matching the
@@ -540,7 +790,7 @@ def lower_parse_do_expr_stmt (ctx : ParseLowerCtx) (expr : ParseTerm) (ss : List
 
 #[partial]
 def lower_parse_struct_field (ctx : ParseLowerCtx) (f : ParseStructField) : StructField :=
-    StructField.mk f.name (lower_parse_term ctx f.typ) (lower_parse_opt ctx f.default) f.mult
+    StructField.mk f.name (lower_parse_term_bare ctx f.typ) (lower_parse_opt ctx f.default) f.mult
 
 
 #[partial]
@@ -554,7 +804,7 @@ def lower_parse_struct_decl_fields (ctx : ParseLowerCtx) (fs : List ParseStructF
 
 #[partial]
 def lower_parse_induct_ctor (ctx : ParseLowerCtx) (c : ParseInductConstructor) : InductConstructor :=
-    InductConstructor.mk c.name (lower_parse_params ctx c.params) (lower_parse_term ctx c.typ)
+    InductConstructor.mk c.name (lower_parse_params ctx c.params) (lower_parse_term_bare ctx c.typ)
 
 
 #[partial]
@@ -568,7 +818,7 @@ def lower_parse_induct_ctors (ctx : ParseLowerCtx) (cs : List ParseInductConstru
 
 #[partial]
 def lower_parse_class_def (ctx : ParseLowerCtx) (m : ParseClassDef) : ClassDef :=
-    ClassDef.mk m.name (lower_parse_term ctx m.typ) (lower_parse_opt ctx m.default)
+    ClassDef.mk m.name (lower_parse_term_bare ctx m.typ) (lower_parse_opt ctx m.default)
 
 
 #[partial]
@@ -583,7 +833,7 @@ def lower_parse_class_defs (ctx : ParseLowerCtx) (ms : List ParseClassDef) : Lis
 #[partial]
 def lower_parse_def (ctx : ParseLowerCtx) (d : ParseDef) : Def :=
     { name := d.name,
-      typ := lower_parse_term ctx d.typ,
+      typ := lower_parse_term_bare ctx d.typ,
       term := lower_parse_term ctx d.term,
       constraints := d.constraints,
       attrs := d.attrs,
@@ -612,9 +862,18 @@ def lower_parse_class (ctx : ParseLowerCtx) (c : ParseClass) : Class :=
 
 #[partial]
 def lower_parse_instance (ctx : ParseLowerCtx) (i : ParseInstance) : Instance :=
-    Instance.mk i.name i.cls i.constraints (lower_parse_terms ctx i.args) i.vis
+    Instance.mk i.name i.cls i.constraints (lower_parse_terms_bare ctx i.args) i.vis
                 (lower_parse_params ctx i.implicit_params) (lower_parse_defs ctx i.defs)
 
+
+/// Terms in TYPE position (R1) -- an instance's class arguments, which
+/// `term_matches_carrier` (`lang/scope.mo`) probes structurally.
+#[partial]
+def lower_parse_terms_bare (ctx : ParseLowerCtx) (ts : List ParseTerm) : List Term :=
+    match ts {
+        List.empty => List.empty,
+        List.cons t rest => List.cons (lower_parse_term_bare ctx t) (lower_parse_terms_bare ctx rest),
+    }
 
 #[partial]
 def lower_parse_terms (ctx : ParseLowerCtx) (ts : List ParseTerm) : List Term :=

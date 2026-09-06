@@ -290,6 +290,42 @@ def resolve_offsets (s : String) (st : ResolveState) : ResolveState :=
 /// reason.
 #[partial]
 def resolve_offsets_in_file (source : String) (offsets : List I64) : List (Pair I64 Location) :=
+    // The single-pass walk consumes `pending` from the head and never goes
+    // back, so a non-ascending list would resolve everything after the
+    // first inversion to whatever position the walk had already reached --
+    // silently wrong positions, not a crash. Callers are expected to
+    // collect in tree order (which IS ascending, since `ParseSpan` stores a
+    // remaining length and a pre-order walk visits nodes left to right),
+    // but "expected" is not "checked", so check.
+    if is_ascending offsets
+    then resolve_ascending source offsets
+    else resolve_one_by_one source offsets
+
+/// The correct-but-quadratic path, for input the fast path cannot take.
+/// Slow beats wrong.
+#[partial]
+def resolve_one_by_one (source : String) (offsets : List I64) : List (Pair I64 Location) :=
+    match offsets {
+        List.empty => List.empty,
+        List.cons off rest =>
+            List.cons (Pair.pair off (location_of_remaining_len source (String.length source - off)))
+                      (resolve_one_by_one source rest),
+    }
+
+#[partial]
+def is_ascending (offsets : List I64) : Bool := match offsets {
+    List.empty => true,
+    List.cons a rest => is_ascending_from a rest,
+}
+
+#[partial]
+def is_ascending_from (prev : I64) (offsets : List I64) : Bool := match offsets {
+    List.empty => true,
+    List.cons b rest => if I64.lt b prev then false else is_ascending_from b rest,
+}
+
+#[partial]
+def resolve_ascending (source : String) (offsets : List I64) : List (Pair I64 Location) :=
     let done : ResolveState :=
         resolve_offsets source { loc := Location.mk 0 1 1, pending := offsets, out := List.empty } in
     // `resolve_emit_reached` cannot fire for an offset past the end during
@@ -410,6 +446,15 @@ def test_resolve_offsets_across_split : Bool :=
 #[partial]
 def repeat_str (s : String) (n : I64) : String :=
     if I64.lt n 1 then "" else String.concat s (repeat_str s (n - 1))
+
+/// A non-ascending list still resolves correctly -- via the slow path.
+/// Without the guard this returned silently wrong positions for everything
+/// after the first inversion.
+#[test]
+def test_resolve_offsets_unsorted_still_correct : Bool :=
+    let src : String := "def a : I64 := 1\ndef b : I64 := 2\n\ndef c : I64 := 3\n" in
+    let offs : List I64 := [34, 0, 17] in
+    agrees_at_all src (resolve_offsets_in_file src offs) offs
 
 /// An offset at or past end-of-file resolves to the final position rather
 /// than vanishing from the table.

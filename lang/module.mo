@@ -11,7 +11,7 @@ use lang.types {
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id, id_eq,
   inductive_d, list_reverse, mk, mp, name, nid, to_name, union_ids, use_d,
 }
-use lang.parser {decls_parser, decls_parser_strict, decls_parser_with_locs, module_path_to_string}
+use lang.parser {decls_parser, decls_parser_located, decls_parser_strict, decls_parser_with_locs, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
 use lang.pretty {show_term}
@@ -79,6 +79,20 @@ def try_parse_decls (input : String) : Option (List Decl) :=
     let result : ParseResult (List Decl) := parse_all_decls input in
     match result {
         ParseResult.success _ decl_list => Option.some decl_list,
+        ParseResult.fail _ => Option.none,
+    }
+
+/// `try_parse_decls`'s twin that RECORDS SOURCE POSITIONS on the terms it
+/// returns, for `compile --debug`.
+///
+/// Runs the same `expand_decls` as the plain path, so the two differ only
+/// by the `Term.ctx` wrappers -- which is what lets `compile_file_codegen`
+/// swap this result in for the target module's decls and change nothing
+/// else. `tools/debug_transparency_oracle.sh` enforces exactly that.
+#[partial]
+def try_parse_decls_located (input : String) : Option (List Decl) :=
+    match decls_parser_located input {
+        ParseResult.success _ decl_list => Option.some (expand_decls decl_list),
         ParseResult.fail _ => Option.none,
     }
 

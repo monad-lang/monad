@@ -176,6 +176,48 @@ def debug_info_for_source (file_path : String) (source : String) : Pair (Option 
         Option.none => Pair.pair (Option.some file_path) str_map_empty,
     }
 
+/// Replace the target module's decls with ones carrying source positions.
+///
+/// The located and plain parses run the same grammar and the same
+/// `expand_decls`, so the two decl lists differ ONLY by `Term.ctx`
+/// wrappers. Swapping one for the other is therefore invisible to
+/// everything downstream except the debug metadata -- which is precisely
+/// what `tools/debug_transparency_oracle.sh` checks, by stripping `!dbg`
+/// from a `--debug` build and requiring byte-identity with a plain one.
+///
+/// On any failure the plain decls stand: a compile must never fail because
+/// its debug side-channel did.
+#[partial]
+def with_located_decls (loaded : LoadedModules) (source : String) : LoadedModules :=
+    match try_parse_decls_located source {
+        Option.none => loaded,
+        Option.some located => swap_main_decls loaded located,
+    }
+
+#[partial]
+def swap_main_decls (loaded : LoadedModules) (located : List Decl) : LoadedModules :=
+    let main_path : ModulePath := loaded.main_module.path in
+    let new_main : ModuleInfo :=
+        { path := main_path, file_path := loaded.main_module.file_path, decl_list := located } in
+    { main_module := new_main,
+      all_modules := replace_module_decls loaded.all_modules main_path located }
+
+/// The target module appears in `all_modules` too, and codegen reads that
+/// list -- swapping only `main_module` would locate nothing.
+#[partial]
+def replace_module_decls (mods : List ModuleInfo) (target : ModulePath) (located : List Decl) : List ModuleInfo :=
+    match mods {
+        List.empty => List.empty,
+        List.cons m rest => List.cons (replace_one_module m target located)
+                                      (replace_module_decls rest target located),
+    }
+
+#[partial]
+def replace_one_module (m : ModuleInfo) (target : ModulePath) (located : List Decl) : ModuleInfo :=
+    if String.beq (show_module_path m.path) (show_module_path target)
+    then { path := m.path, file_path := m.file_path, decl_list := located }
+    else m
+
 /// Parse a source file and compile + run it via LLVM. Stage 3 of
 /// `bootstrapping/unify-check-compile-test-elaboration.md`: gates on the
 /// target file itself actually type-checking cleanly (via
@@ -288,6 +330,14 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
                     let source <- IO.read_file (Path.path file_path);
                     return (debug_info_for_source file_path source)
                 } else return no_debug_info;
+            // Under `--debug` the target module is re-parsed with positions
+            // recorded, and its decls replace the plain ones. Same grammar,
+            // same expansion -- the only difference is `Term.ctx` wrappers.
+            let loaded : LoadedModules <-
+                if debug then do {
+                    let src2 <- IO.read_file (Path.path file_path);
+                    return (with_located_decls loaded src2)
+                } else return loaded;
             match dbg_info {
                 Pair.pair source_path debug_locs => do {
                     // `verbose` thread-through: previously this branch dumped the
