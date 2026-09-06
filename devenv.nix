@@ -64,9 +64,9 @@
   # runner this devenv's git-hooks.nix installs) so there's a single source
   # of truth, then adds slow_tests/ -- deliberately excluded from the hooks'
   # own sweep since it's ~91% of total test runtime, but something CI should
-  # still cover on every push. `tasks."monad:bootstrap-compile"` below is a
-  # separate, currently-opt-in self-hosted self-compile smoke test -- see
-  # its own comment for why it isn't wired to run automatically here yet.
+  # still cover on every push. `tasks."monad:bootstrap-compile"` below is
+  # the self-hosted self-compile, run from `.github/workflows/ci.yml`
+  # alongside this one.
   #
   # slow_tests/ now passes (107/107 as of the self-hosted parser fixes that
   # unblocked `test_typecheck_lang_main`), so it runs unwrapped here and a
@@ -76,22 +76,31 @@
       ${config.devenv.root}/scripts/check-monad-tests.sh
     '';
   };
-  # Still known-broken as of 2026-08-29 -- non-blocking (`|| { ...; true; }`)
-  # until it compiles+links+runs cleanly AND the resulting binary is
-  # verified correct (not just that llc/clang succeed). Five bugs fixed
-  # chasing this exact command this session (write_file's 2-arg native
-  # dispatch panic, IO.read_file/file_exists missing IO-wrap, an
-  # indirect-call callee materialization gap, `Append_append` --
-  # `List.append` instead of `++` -- and a parser bug mis-recognizing any
-  # `return_`-prefixed identifier as the `return` keyword) got the
-  # self-compile past `compile_db_module` entirely and progressively
-  # further into `llc`; current frontier is `Show.show` unresolved inside
-  # a nested match arm, see
-  # `plans/implementations/2026-08-29-show-show-unresolved-carrier-in-
-  # nested-match-arm.md`.
+  # The self-hosted compiler compiles ITSELF, and then the binary that
+  # falls out has to do the job it was built for.
+  #
+  # The second step is the one with teeth. `compile` succeeding only says
+  # llc and clang were happy with the emitted IR; it says nothing about
+  # whether the binary works, and a compiler that builds but miscompiles
+  # is worse than one that fails to build. Running `check lang/main.mo`
+  # through it costs ~12s and exercises the whole front end -- parser,
+  # scope, elaboration, typechecker -- on the largest input in the tree.
+  #
+  # What this deliberately does NOT check is the fixpoint: that the `.ll`
+  # this binary produces from the same source is byte-identical to the one
+  # the host produced (it is, and all three stages agree bit-for-bit), and
+  # that the same holds one more turn out. That is the stronger property
+  # and the one that would regress silently, but it costs another full
+  # self-compile per turn, which is more than this job should carry today.
+  # Verified by hand at 56e5e33; if this gets cheap enough, add it here.
   tasks."monad:bootstrap-compile" = {
     exec = ''
-      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo monad --verbose
+      set -euo pipefail
+      out="''${TMPDIR:-/tmp}/monad-bootstrap-ci"
+      rm -rf "$out"; mkdir -p "$out"
+      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo -o "$out/monad" --verbose
+      test -x "$out/monad"
+      "$out/monad" check lang/main.mo
     '';
   };
 
