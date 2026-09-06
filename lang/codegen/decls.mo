@@ -152,22 +152,46 @@ def def_body_term (d : Def) : Term := match d {
 /// O(reachable x total) + O(reachable^2) respectively) -- confirmed via
 /// `--verbose` stage timing as the single largest cost of a full
 /// self-compile (~453s of ~944s, bigger than `elaborate_class`).
+/// Shaped so the self-tail-call rewrite can actually fire: the whole
+/// body reaches exactly ONE self-recursive call, in tail position.
+///
+/// The obvious spelling -- a recursive call in each arm of the `visited`
+/// and `defs_map` lookups -- reads better and does not work. `tco.mo`
+/// bails out (returns the blocks unchanged) if pruning a merge phi would
+/// leave it with zero incoming pairs, which is its guard against a
+/// function with no reachable base case. When BOTH arms of an inner
+/// match are self-recursive, that inner merge trips the guard and the
+/// whole function loses the rewrite, not just that merge. The result was
+/// one native frame per worklist item: a `gdb` sample of a self-compile
+/// at the default 8 MB stack showed 20,822 frames of this function and a
+/// SIGSEGV in `filter_reachable`.
+///
+/// So each branch computes the NEXT state as a value and the call
+/// happens once, after. Same three transitions as before: an
+/// already-visited name advances the worklist and changes nothing else;
+/// an unvisited name that names a Def pushes its referenced names and
+/// keeps the Def; an unvisited name that matches no Def is marked
+/// visited and skipped.
 #[partial]
 def reachable_defs_from (defs_map : HashMap String Def) (worklist : List String) (visited : HashMap String Bool) (acc : List Def) : List Def :=
     match worklist {
         List.empty => acc,
         List.cons name rest =>
-            match str_map_lookup name visited {
-                Option.some _ => reachable_defs_from defs_map rest visited acc,
-                Option.none =>
-                    match str_map_lookup name defs_map {
-                        Option.some d =>
-                            let referenced := collect_referenced_names (def_body_term d) List.empty in
-                            reachable_defs_from defs_map (List.append referenced rest) (str_map_insert name true visited) (List.cons d acc),
-                        Option.none =>
-                            reachable_defs_from defs_map rest (str_map_insert name true visited) acc,
-                    },
-            },
+            let seen := match str_map_lookup name visited {
+                Option.some _ => true,
+                Option.none => false,
+            } in
+            let found := if seen then Option.none else str_map_lookup name defs_map in
+            let next_work := match found {
+                Option.some d => List.append (collect_referenced_names (def_body_term d) List.empty) rest,
+                Option.none => rest,
+            } in
+            let next_acc := match found {
+                Option.some d => List.cons d acc,
+                Option.none => acc,
+            } in
+            let next_visited := if seen then visited else str_map_insert name true visited in
+            reachable_defs_from defs_map next_work next_visited next_acc,
     }
 
 #[partial]
