@@ -1,8 +1,8 @@
 use lang.types {
-  DoStmt, Identifier, InductConstructor, Inductive, Infix, InstanceKey,
+  Identifier, InductConstructor, Inductive, Infix, InstanceKey,
   LocalVar, Module, ModulePath, ModuleRegistry, Multiplicity, Operator, Param,
   Scope, ScopeClassDef, ScopeConflict, ScopeData, ScopeDef, ScopeError,
-  ScopeInstance, Similar, Term, desugar_do, hole, id, many, mk, mp,
+  ScopeInstance, Similar, Term, hole, id, many, mk, mp,
   name_not_found, nid, nmp, nop, operator, type_,
 }
 use lang.scope {scope_data_add_def, scope_data_add_inductive, scope_data_empty}
@@ -291,43 +291,4 @@ def test_scope_error_construct : Bool :=
             NameRef.nop _ => false
         },
         _ => false
-    }
-
-// --- do-notation desugaring order regression (gap 7, tests half) ---
-
-/// `desugar_do` folds in SOURCE order: the FIRST `let x <- e1` is the
-/// OUTERMOST `bind`, statements that follow it sit inside its lambda.
-/// de Bruijn indices are assigned at parse time relative to the
-/// do-block's binder context (innermost/last-bound = lowest index), so
-/// this is the only ordering that keeps a later statement's reference
-/// to an earlier `bind_s` variable INSIDE that variable's binder.
-/// Reversing the fold (an earlier bug) put the LAST statement outermost,
-/// which left `x`'s own `var 0` reference OUTSIDE `x`'s binder -- a
-/// spurious out-of-range `bound_var` (the `test_do_bind_with_match`
-/// self-hosted-check gap). Here the FIRST statement's `e1` is a FREE
-/// var (sentinel, idx -1) and the SECOND statement references `x`
-/// (`var 0`); the outermost bind's value must be the free `e1` (idx -1),
-/// NOT the bound `var 0`.
-#[test]
-def test_desugar_do_source_order : Bool :=
-    let e1 : Term := Term.var (-1) (DebugName.named (Identifier.id "e1")) in
-    let x_ref : Term := Term.var 0 (DebugName.named (Identifier.id "x")) in
-    let stmts : List DoStmt :=
-        List.cons (DoStmt.bind_s (Identifier.id "x") Term.hole e1)
-            (List.cons (DoStmt.expr_s x_ref) List.empty) in
-    match desugar_do stmts {
-        Term.app bind_app lam_term =>
-            match bind_app {
-                Term.app bind_head outer_val =>
-                    match lam_term {
-                        Term.lam x_dbg x_typ inner =>
-                            match outer_val {
-                                Term.var idx xref_dbg => idx == (-1),
-                                _ => false,
-                            },
-                        _ => false,
-                    },
-                _ => false,
-            },
-        _ => false,
     }

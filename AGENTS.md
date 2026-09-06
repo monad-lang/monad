@@ -2390,6 +2390,13 @@ Key patterns when writing self-hosted Monad code:
     floor in magnitude, but B was slower in 4/4 paired rounds, so the
     sign is real and the honest number is "about a quarter of a percent",
     not "free". Set against item 28's -30% on the same phase.
+    **A byte-identical IR oracle is narrower than it looks.** This one
+    covered every representational change in the parse stage and stayed
+    identical throughout -- including across a commit that silently
+    dropped a de Bruijn binder. `examples/hello.mo` contains no dependent
+    arrow, so the one construct that regressed was never compiled. An IR
+    diff is strong evidence of a bug; IR equality is only evidence about
+    the constructs the compiled file actually contains.
     **Equivalence oracle: LLVM IR for `compile examples/hello.mo`
     byte-identical** to the pre-parse-stage baseline, as it was after the
     two commits before this. Spans are pure addition; any IR diff would
@@ -2397,6 +2404,62 @@ Key patterns when writing self-hosted Monad code:
     each checking the exact substring a construct claims via `span_text`),
     1420/1420 overall, corpus 113 files / 0 errors.
 
+
+31. **A `ctx`-threading removal has to be read call site by call site
+    (2026-09-06).** Deleting the parser's de Bruijn `ctx` moved 371 call
+    arguments. All but one were mechanical. The exception:
+    `type_dep_arrow_tag` parsed its body under
+    `type_expression (List.cons (Identifier.id name) ctx) ...` -- the one
+    arrow in the grammar that BINDS -- so dropping the argument dropped
+    the binder, and every use of `n` inside `(n : T) -> ... n ...`
+    resolved to `sentinel`. `init/prelude.mo`'s `Eq.rec` is a live
+    instance.
+    **Every oracle stayed green.** The parser tests assert parse SUCCESS
+    and the term parses fine with its binder unbound; `check` reports 0
+    errors either way; the hello.mo IR stayed byte-identical because that
+    file has no dependent arrow. A green suite is not evidence that a
+    binder survived -- only reading the deleted sites is.
+    The fix is `ParseTermKind.pi`'s `arg_name : Option Identifier`,
+    mirroring the Rust reference's `Term::Pi { arg_name: Option<Name> }`
+    (`core/src/term.rs`), whose `lower_core.rs` arm likewise pushes the
+    name into scope only when it is `Some`. A nameless `pi` still does
+    not extend `ctx`, matching `build_pi_chain`'s non-dependent fold --
+    see item 27's note on the producer/consumer disagreement with
+    `traverse.mo`.
+
+32. **`do { }` is syntax, so `DoStmt` holds `ParseTerm` and desugars
+    during lowering (2026-09-06).** There was briefly a `ParseDoStmt`
+    (holding `ParseTerm`) lowered to a `DoStmt` (holding `Term`) and then
+    handed to a separate `desugar_do`. Two types and two passes for a
+    construct that does not survive lowering at all -- nothing downstream
+    of the parser has ever seen a `DoStmt`.
+    Merged to one type and one traversal in
+    `lang/parser/lower_parse.mo`. The two jobs could not be cleanly
+    separated anyway: each binder a statement introduces is in scope for
+    the statements that FOLLOW it, so the desugaring's own `Term.lam`s
+    ARE the context accumulation. Fusing them puts the `ctx` extension on
+    the same line as the lambda that justifies it, instead of restating
+    it in a parallel `do_stmt_extend_ctx` a reader has to keep in sync --
+    which is exactly where the `expr_s` off-by-one used to live. The
+    fused form also drops the extension in the case where no lambda is
+    built (a trailing bare expression), which the parallel version
+    over-extended harmlessly.
+
+33. **Convert a single-constructor `type` to a `struct`, then stop
+    matching it positionally (2026-09-06).** Item 1 of the style rules
+    says every single-constructor type should be a `struct`. Eight
+    `Parse*` types were converted; because a `struct` keeps both
+    `X.mk a b` construction and `X.mk a b =>` patterns, the declaration
+    change alone is call-site-free, and the `MatchTraversalMismatch`
+    hazard did not fire (1436/1436).
+    The conversion is only half the value. A positional pattern like
+    `ParseInstance.mk name cls constraints args vis implicit_params defs`
+    binds one variable per field and silently goes out of date: add a
+    field and it still typechecks, then aborts at RUNTIME with `expected
+    7 constructor fields, got 8`, with no location and no def name.
+    Rewriting the eight lowering functions to read fields by name
+    (`i.args`, `i.defs`) removes the arity coupling entirely and is
+    shorter. Do both, not just the first.
 
 ## Committing Changes
 

@@ -1,7 +1,7 @@
 /// Self-hosted Monad grammar parser.
 /// Split into modules for maintainability.
 use lang.types {
-  Decl, Identifier, InductConstructor, LocatedSpan, Location, ModulePath,
+  Decl, DoStmt, Identifier, InductConstructor, LocatedSpan, Location, ModulePath,
   NameRef, OpenFilter, Param, Term, TypeConstraint, UseFilter, UseItem, app,
   bind_s, class_d, con, custom, def_d, expr_s, forall, hole, id, if_,
   inductive_d, infix_d, instance_d, lam, let_s, list_reverse, lit, match_,
@@ -131,57 +131,57 @@ def do_stmts_tail_semi (r : ParseResult String) (after_sp : String) (orig : Stri
 // left as if it were a separate expression) -- see `tag_keyword`'s own
 // doc comment for the confirmed real bug this caused.
 #[partial]
-def do_stmt_return (input: String) : ParseResult ParseDoStmt :=
+def do_stmt_return (input: String) : ParseResult DoStmt :=
     do_stmt_ret_kw (tag_keyword "return" input) input
 
 #[partial]
-def do_stmt_ret_kw (r: ParseResult String) (orig: String) : ParseResult ParseDoStmt :=
+def do_stmt_ret_kw (r: ParseResult String) (orig: String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_ret_expr (expression (skip_docstrings (skip_spaces rem))),
         fail _ => do_stmt_try_let (tag "let" (skip_spaces orig)) orig
     }
 
 #[partial]
-def do_stmt_ret_expr (r: ParseResult ParseTerm) : ParseResult ParseDoStmt :=
+def do_stmt_ret_expr (r: ParseResult ParseTerm) : ParseResult DoStmt :=
     match r {
-        success rem value => success rem (ParseDoStmt.ret_s value),
+        success rem value => success rem (DoStmt.ret_s value),
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_try_let (r: ParseResult String) (orig: String) : ParseResult ParseDoStmt :=
+def do_stmt_try_let (r: ParseResult String) (orig: String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_let_name (identifier (skip_spaces rem)),
         fail _ => do_stmt_expr (expression (skip_docstrings (skip_spaces orig)))
     }
 
 #[partial]
-def do_stmt_let_name (r: ParseResult String) : ParseResult ParseDoStmt :=
+def do_stmt_let_name (r: ParseResult String) : ParseResult DoStmt :=
     match r {
         success rem name => do_stmt_let_kind rem (Identifier.id name),
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_let_kind (input: String) (name: Identifier) : ParseResult ParseDoStmt :=
+def do_stmt_let_kind (input: String) (name: Identifier) : ParseResult DoStmt :=
     do_stmt_let_kind_try (tag ":=" (skip_spaces input)) name input
 
 #[partial]
-def do_stmt_let_kind_try (r: ParseResult String) (name: Identifier) (orig: String) : ParseResult ParseDoStmt :=
+def do_stmt_let_kind_try (r: ParseResult String) (name: Identifier) (orig: String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_let_value (expression (skip_docstrings (skip_spaces rem))) name pt_hole ,
         fail _ => do_stmt_bind_arrow (tag "<-" (skip_spaces orig)) name orig
     }
 
 #[partial]
-def do_stmt_let_value (r: ParseResult ParseTerm) (name: Identifier) (typ: ParseTerm) : ParseResult ParseDoStmt :=
+def do_stmt_let_value (r: ParseResult ParseTerm) (name: Identifier) (typ: ParseTerm) : ParseResult DoStmt :=
     match r {
-        success rem value => success rem (ParseDoStmt.let_s name typ value),
+        success rem value => success rem (DoStmt.let_s name typ value),
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_bind_arrow (r: ParseResult String) (name: Identifier) (orig: String) : ParseResult ParseDoStmt :=
+def do_stmt_bind_arrow (r: ParseResult String) (name: Identifier) (orig: String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_bind_value (expression (skip_docstrings (skip_spaces rem))) name pt_hole ,
         fail _ => do_stmt_let_try_type (tag ":" (skip_spaces orig)) name orig
@@ -194,69 +194,69 @@ def do_stmt_bind_arrow (r: ParseResult String) (name: Identifier) (orig: String)
 // own type (`Term.hole` when unannotated -- the two call sites above --
 // or the real parsed type here). `desugar_do_inner` uses it directly.
 #[partial]
-def do_stmt_let_try_type (r: ParseResult String) (name: Identifier) (orig: String) : ParseResult ParseDoStmt :=
+def do_stmt_let_try_type (r: ParseResult String) (name: Identifier) (orig: String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_let_typed (type_expression rem) name orig,
         fail _ => fail (ParseError.custom "expected := or <- after let in do block" orig)
     }
 
 #[partial]
-def do_stmt_let_typed (r: ParseResult ParseTerm) (name: Identifier) (orig: String) : ParseResult ParseDoStmt :=
+def do_stmt_let_typed (r: ParseResult ParseTerm) (name: Identifier) (orig: String) : ParseResult DoStmt :=
     match r {
         success rem typ => do_stmt_let_typed_kind (tag ":=" (skip_spaces rem)) name typ rem,
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_let_typed_kind (r: ParseResult String) (name: Identifier) (typ: ParseTerm) (orig: String) : ParseResult ParseDoStmt :=
+def do_stmt_let_typed_kind (r: ParseResult String) (name: Identifier) (typ: ParseTerm) (orig: String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_let_value (expression (skip_docstrings (skip_spaces rem))) name typ,
         fail _ => do_stmt_let_typed_bind (tag "<-" (skip_spaces orig)) name typ orig
     }
 
 #[partial]
-def do_stmt_let_typed_bind (r: ParseResult String) (name: Identifier) (typ: ParseTerm) (orig: String) : ParseResult ParseDoStmt :=
+def do_stmt_let_typed_bind (r: ParseResult String) (name: Identifier) (typ: ParseTerm) (orig: String) : ParseResult DoStmt :=
     match r {
         success rem _ => do_stmt_bind_value (expression (skip_docstrings (skip_spaces rem))) name typ,
         fail _ => fail (ParseError.custom "expected := or <- after let in do block" orig)
     }
 
 #[partial]
-def do_stmt_bind_value (r: ParseResult ParseTerm) (name: Identifier) (typ: ParseTerm) : ParseResult ParseDoStmt :=
+def do_stmt_bind_value (r: ParseResult ParseTerm) (name: Identifier) (typ: ParseTerm) : ParseResult DoStmt :=
     match r {
-        success rem value => success rem (ParseDoStmt.bind_s name typ value),
+        success rem value => success rem (DoStmt.bind_s name typ value),
         fail e => fail e
     }
 
 #[partial]
-def do_stmt_expr (r: ParseResult ParseTerm) : ParseResult ParseDoStmt :=
+def do_stmt_expr (r: ParseResult ParseTerm) : ParseResult DoStmt :=
     match r {
-        success rem value => success rem (ParseDoStmt.expr_s value),
+        success rem value => success rem (DoStmt.expr_s value),
         fail e => fail e
     }
 
 #[partial]
-def do_stmts (input: String) : ParseResult (List ParseDoStmt) :=
+def do_stmts (input: String) : ParseResult (List DoStmt) :=
     do_stmts_check_end (tag "}" (skip_docstrings (skip_spaces input))) input
 
 #[partial]
-def do_stmts_check_end (r: ParseResult String) (orig: String) : ParseResult (List ParseDoStmt) :=
+def do_stmts_check_end (r: ParseResult String) (orig: String) : ParseResult (List DoStmt) :=
     match r {
         success rem _ =>
-            let empty : List ParseDoStmt := List.empty in
+            let empty : List DoStmt := List.empty in
             success rem empty,
         fail _ => do_stmts_first (do_stmt_return (skip_docstrings (skip_spaces orig))) (skip_docstrings (skip_spaces orig))
     }
 
 #[partial]
-def do_stmts_first (r: ParseResult ParseDoStmt) (orig: String) : ParseResult (List ParseDoStmt) :=
+def do_stmts_first (r: ParseResult DoStmt) (orig: String) : ParseResult (List DoStmt) :=
     match r {
         success rem stmt => do_stmts_next2 (do_stmts (do_stmts_tail rem)) stmt,
         fail e => fail e
     }
 
 #[partial]
-def do_stmts_next2 (r: ParseResult (List ParseDoStmt)) (first: ParseDoStmt) : ParseResult (List ParseDoStmt) :=
+def do_stmts_next2 (r: ParseResult (List DoStmt)) (first: DoStmt) : ParseResult (List DoStmt) :=
     match r {
         success rem rest => success rem (List.cons first rest),
         fail e => fail e
@@ -281,14 +281,14 @@ def do_parser_open (r: ParseResult String) : ParseResult ParseTerm :=
     }
 
 #[partial]
-def do_parser_stmts (r: ParseResult (List ParseDoStmt)) : ParseResult ParseTerm :=
+def do_parser_stmts (r: ParseResult (List DoStmt)) : ParseResult ParseTerm :=
     match r {
         success rem stmts => do_parser_desugar rem stmts,
         fail e => fail e
     }
 
 #[partial]
-def do_parser_desugar (rem: String) (stmts: List ParseDoStmt) : ParseResult ParseTerm :=
+def do_parser_desugar (rem: String) (stmts: List DoStmt) : ParseResult ParseTerm :=
     success rem (pt_do stmts)
 
 // ─── `return term` -- shorthand for `do { return term }` ───────────────
@@ -338,7 +338,7 @@ def return_shorthand_kw (r: ParseResult String) : ParseResult ParseTerm :=
 #[partial]
 def return_shorthand_value (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
     match r {
-        success rem value => success rem (pt_do (List.cons (ParseDoStmt.ret_s value) List.empty)),
+        success rem value => success rem (pt_do (List.cons (DoStmt.ret_s value) List.empty)),
         fail e => fail e
     }
 
@@ -2290,7 +2290,7 @@ def def_body_expr (r : ParseResult ParseTerm) (name : Identifier) (params : List
 	}
 
 #[partial]
-def def_body_do (r : ParseResult (List ParseDoStmt)) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
+def def_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params : List ParsedParam) (typ : ParseTerm) (vis : Visibility) : ParseResult ParseDecl :=
 	match r {
 		success rem stmts => success rem (def_to_decl (lam_parsed_params params (pt_do stmts)) name (build_param_pi_chain (parsed_params_as_params params) typ) vis),
 		fail e => fail e
@@ -3189,7 +3189,7 @@ def instance_method_try_block (r : ParseResult String) (orig : String) (name : I
 	}
 
 #[partial]
-def instance_method_body_do (r : ParseResult (List ParseDoStmt)) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (cls : ModulePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
+def instance_method_body_do (r : ParseResult (List DoStmt)) (name : Identifier) (params : List ParsedParam) (ret_typ : ParseTerm) (cls : ModulePath) (args : List ParseTerm) (methods : List ParseDef) : ParseResult ParseDecl :=
 	match r {
 		success rem stmts => instance_method_finish rem name params ret_typ (pt_do stmts) cls args methods,
 		fail e => fail e
@@ -4384,6 +4384,120 @@ def test_span_after_multibyte_char : Bool :=
 	// remainders are suffixes of the same string, so the byte arithmetic
 	// has to survive the 3-byte em dash sitting in the skipped part.
 	String.beq (span_text_of_term (expression (skip_docstrings (skip_spaces src))) src) "foo"
+
+/// `(n : I64) -> Vec n` BINDS `n` over its body. This is the only arrow
+/// in the grammar that binds, and `Term.pi` has no field to carry the
+/// name, so the parse stage has to record it (`ParseTermKind.pi`'s `arg_name`)
+/// for lowering to resolve `n` to index 0 rather than `sentinel`.
+///
+/// Regression test in the literal sense: this branch shipped without it
+/// and dropped the binder. Nothing else caught that -- the 251 parser
+/// tests and `slow_tests/parser_file_tests.mo` assert parse SUCCESS, and
+/// the term still parses fine with `n` silently unbound. The corpus hit
+/// is real: `init/prelude.mo`'s `Eq.rec (A : Sort 1) (a : A)
+/// (P : (b : A) -> Eq A a b -> Sort 1)` loses `b`.
+// --- do-notation desugaring order regression -------------------------
+//
+// Moved here from `lang/tests/types_tests.mo` when desugaring moved into
+// lowering, and strengthened on the way: it used to hand-build a
+// `List DoStmt` of ready-made `Term`s, which could only check the SHAPE
+// of the fold. Driving it from source text checks the thing that
+// actually broke -- the de Bruijn indices the fold produces.
+
+/// Desugaring folds in SOURCE order: the first `let x <- e1` is the
+/// OUTERMOST `bind`, and the statements after it sit inside its lambda.
+/// That is the only ordering that keeps a later statement's reference to
+/// an earlier binding INSIDE that binding's binder. Reversing the fold
+/// (a real past bug) put the last statement outermost and left `x`'s own
+/// reference outside `x`'s binder -- a spurious out-of-range `bound_var`.
+///
+/// Here `e1` is free (`sentinel`) and the second statement references
+/// `x`, so the outermost bind's value must be the FREE `e1`, never the
+/// bound `x`.
+#[test]
+def test_do_desugars_in_source_order : Bool :=
+	match do_parser "do { let x <- e1; x }" {
+		success _ out => do_outer_bind_value_is_free (lower_parse_term List.empty out),
+		fail _ => false,
+	}
+
+/// The continuation's own reference to `x` must resolve to index 0: it
+/// sits directly under the lambda the `bind` introduces. This is the
+/// half that a shape-only assertion could not see.
+#[test]
+def test_do_bound_name_resolves_in_continuation : Bool :=
+	match do_parser "do { let x <- e1; x }" {
+		success _ out => do_continuation_var_idx (lower_parse_term List.empty out) 0,
+		fail _ => false,
+	}
+
+#[partial]
+def do_outer_bind_value_is_free (t : Term) : Bool :=
+	match t {
+		Term.app bind_app _lam => do_bind_app_value_is_free bind_app,
+		_ => false,
+	}
+
+#[partial]
+def do_bind_app_value_is_free (bind_app : Term) : Bool :=
+	match bind_app {
+		Term.app _head value => dep_pi_var_idx value sentinel,
+		_ => false,
+	}
+
+#[partial]
+def do_continuation_var_idx (t : Term) (want : I64) : Bool :=
+	match t {
+		Term.app _bind_app lam_term => do_lam_body_var_idx lam_term want,
+		_ => false,
+	}
+
+#[partial]
+def do_lam_body_var_idx (lam_term : Term) (want : I64) : Bool :=
+	match lam_term {
+		Term.lam _dbg _typ body => dep_pi_var_idx body want,
+		_ => false,
+	}
+
+
+#[test]
+def test_dep_pi_binds_its_own_name : Bool :=
+	match type_expression "(n : I64) -> Vec n" {
+		success _ out => dep_pi_body_arg_idx (lower_parse_term List.empty out) 0,
+		fail _ => false,
+	}
+
+/// The de Bruijn index of the argument in a pi body of the shape
+/// `Term.pi _ (Term.app _ (Term.var i _))`. Nested patterns are not
+/// supported, hence the ladder.
+#[partial]
+def dep_pi_body_arg_idx (t : Term) (want : I64) : Bool :=
+	match t {
+		Term.pi _arg ret => dep_pi_app_arg_idx ret want,
+		_ => false,
+	}
+
+#[partial]
+def dep_pi_app_arg_idx (ret : Term) (want : I64) : Bool :=
+	match ret {
+		Term.app _f a => dep_pi_var_idx a want,
+		_ => false,
+	}
+
+#[partial]
+def dep_pi_var_idx (a : Term) (want : I64) : Bool :=
+	match a {
+		Term.var i _ => I64.beq i want,
+		_ => false,
+	}
+
+/// The dependent arrow's span must start at its own `(`, not at the
+/// inner type after `(n : `. A span that starts mid-construct is not
+/// reported as unknown, so a consumer cannot tell it from a real one.
+#[test]
+def test_dep_pi_span_starts_at_the_paren : Bool :=
+	let src : String := "(n : I64) -> Vec n" in
+	String.beq (span_text_of_term (type_expression src) src) src
 
 #[test]
 def test_decl_span_covers_declaration : Bool :=
@@ -5992,15 +6106,15 @@ def type_dep_arrow_tag (r: ParseResult String) (input: String) (rem: String) (na
 
 /// `name` reaches here rather than being dropped after the `->`: this
 /// is the one arrow in the grammar that BINDS, and `Term.pi` has no
-/// field to carry a binder name, so `ParseTermKind.pi_dep` must record
-/// it for `lower_parse_kind` to put `name` in scope over `body`.
-/// Dropping it (which this branch did, until review caught it) makes
-/// every use of `name` inside `body` resolve to `sentinel`.
+/// field to carry a binder name, so `ParseTermKind.pi`'s `arg_name` has
+/// to record it for `lower_parse_kind` to put `name` in scope over
+/// `body`. Dropping it (which this branch did, until review caught it)
+/// makes every use of `name` inside `body` resolve to `sentinel`.
 #[partial]
 def type_dep_body (r: ParseResult ParseTerm) (input: String) (name: String) (typ: ParseTerm) : ParseResult ParseTerm :=
     match r {
         success rem body =>
-            success rem (pt_from typ rem (ParseTermKind.pi_dep (Identifier.id name) typ body)),
+            success rem (pt_at input rem (ParseTermKind.pi (Option.some (Identifier.id name)) typ body)),
         fail e => fail e
     }
 
@@ -6040,7 +6154,7 @@ def type_arrow_tag (r: ParseResult String) (input: String) (lhs: ParseTerm) : Pa
 #[partial]
 def type_arrow_rhs (lhs: ParseTerm) (r: ParseResult ParseTerm) : ParseResult ParseTerm :=
     match r {
-        success rem rhs => success rem (pt_from lhs rem (ParseTermKind.pi lhs rhs)),
+        success rem rhs => success rem (pt_from lhs rem (ParseTermKind.pi Option.none lhs rhs)),
         fail e => fail e
     }
 
@@ -6775,13 +6889,13 @@ def test_t_lambda_identity : Bool :=
 					match typ.kind {
 						ParseTermKind.type_ u => I64.beq u 1 && String.beq rem "",
 						ParseTermKind.var _ => false, ParseTermKind.lam _ _ _ => false,
-						ParseTermKind.forall _ _ _ => false, ParseTermKind.pi _ _ => false,
+						ParseTermKind.forall _ _ _ => false, ParseTermKind.pi _ _ _ => false,
 						ParseTermKind.app _ _ => false, ParseTermKind.lit _ => false,
 						ParseTermKind.ntv _ => false, ParseTermKind.con _ => false,
 						ParseTermKind.hole => false
 					},
 				ParseTermKind.var _ => false, ParseTermKind.forall _ _ _ => false,
-				ParseTermKind.pi _ _ => false, ParseTermKind.app _ _ => false,
+				ParseTermKind.pi _ _ _ => false, ParseTermKind.app _ _ => false,
 				ParseTermKind.lit _ => false, ParseTermKind.ntv _ => false,
 				ParseTermKind.con _ => false, ParseTermKind.type_ _ => false, ParseTermKind.hole => false
 			},
@@ -8748,7 +8862,7 @@ def test_instance_parser_typed_method_signature : Bool :=
                                                 ParseDef.mk name typ _ _ _ _ =>
                                                     String.beq (module_path_to_string name) "beq" &&
                                                     match typ.kind {
-                                                        ParseTermKind.pi _ _ => true,
+                                                        ParseTermKind.pi _ _ _ => true,
                                                         _ => false,
                                                     },
                                             },

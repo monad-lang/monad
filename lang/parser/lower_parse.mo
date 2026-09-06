@@ -43,7 +43,7 @@ use lang.types {
   ParseDeclKind, ParseDef, ParseDoStmt, ParseInductConstructor, ParseInductive,
   ParseInstance, ParseLiteral, ParseMatchCase, ParseNative, ParseParam,
   ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind,
-  Struct, StructField, StructLitField, Term, desugar_do, sentinel,
+  Struct, StructField, StructLitField, Term, sentinel,
 }
 // Name resolution lives HERE now, moved out of `lang/parser.mo` for real
 // (an earlier revision copied it while claiming to have moved it, arming
@@ -51,6 +51,18 @@ use lang.types {
 // longer resolves names at all, so nothing flows the other way: it
 // imports `lower_parse_do` from here and that is the only edge.
 use lang.types {FieldPattern, FieldPatternEntry, show_operator}
+
+
+/// The context a `Term.pi`'s return type is lowered under: extended by
+/// the arrow's own binder when the source named one, unchanged when it
+/// did not. Split out so both halves of that rule sit in one place
+/// rather than being re-derived at the match arm.
+#[partial]
+def pi_ret_ctx (arg_name : Option Identifier) (ctx : List Identifier) : List Identifier :=
+    match arg_name {
+        Option.some n => List.cons n ctx,
+        Option.none => ctx,
+    }
 
 
 /// Extend `ctx` with a binder group. Each name is consed in order, so the
@@ -213,31 +225,28 @@ def lower_parse_kind (ctx : List Identifier) (k : ParseTermKind) : Term :=
             Term.forall (DebugName.named name)
                         (lower_parse_term ctx typ)
                         (lower_parse_term (List.cons name ctx) body),
-        // `pi` does NOT extend `ctx` here, deliberately, because the
-        // grammar it replaces does not: `build_pi_chain`/
-        // `build_param_pi_chain` (`lang/parser.mo`) fold a "non-dependent
-        // Pi chain" (their own words) with the return type at the SAME
-        // depth as the argument. Note this disagrees with
-        // `lang/typecheck/traverse.mo`, whose depth-aware walker treats
-        // `Term.pi`'s `ret` as sitting under one binder (`f 1 ret`) --
-        // a real pre-existing inconsistency between producer and
-        // consumer. Matching the PRODUCER is what preserves behaviour;
-        // extending `ctx` here would shift every free index in a return
-        // type by one. Left as-is rather than silently changed: it is a
-        // separate question from this refactor.
-        ParseTermKind.pi arg ret =>
-            Term.pi (lower_parse_term ctx arg) (lower_parse_term ctx ret),
-        // `pi_dep` is the ONE arrow that binds: `(n : T) -> body` puts `n`
-        // in scope over `body`, which is what `type_dep_arrow_tag`
-        // (`lang/parser.mo`) used to do inline before the grammar stopped
-        // resolving names. `Term.pi` has no field to carry `n`, so if the
-        // name is not consumed HERE it is lost -- every use of `n` inside
-        // `body` resolves to `sentinel` and becomes an unbound global.
-        // Caught by review after exactly that regression shipped in this
-        // branch; `test_dep_pi_binds_its_own_name` pins it.
-        ParseTermKind.pi_dep name arg ret =>
+        // A `pi` binds only when the source wrote a name: `(n : T) ->
+        // body` puts `n` in scope over `body`, which is what
+        // `type_dep_arrow_tag` (`lang/parser.mo`) used to do inline
+        // before the grammar stopped resolving names. `Term.pi` has no
+        // field to carry `n`, so a name not consumed HERE is lost and
+        // every use of it inside `body` resolves to `sentinel` -- a
+        // regression this branch shipped once, now pinned by
+        // `test_dep_pi_binds_its_own_name`.
+        //
+        // A NAMELESS `pi` deliberately does not extend, because the
+        // grammar that produces one does not: `build_pi_chain`/
+        // `build_param_pi_chain` fold a "non-dependent Pi chain" (their
+        // own words) with the return type at the SAME depth as the
+        // argument. Note this disagrees with `lang/typecheck/traverse.mo`,
+        // whose depth-aware walker treats every `Term.pi`'s `ret` as
+        // sitting under one binder (`f 1 ret`) -- a real pre-existing
+        // producer/consumer inconsistency. Matching the PRODUCER is what
+        // preserves behaviour; it is a separate question from this
+        // refactor.
+        ParseTermKind.pi arg_name arg ret =>
             Term.pi (lower_parse_term ctx arg)
-                    (lower_parse_term (List.cons name ctx) ret),
+                    (lower_parse_term (pi_ret_ctx arg_name ctx) ret),
         ParseTermKind.app f a =>
             Term.app (lower_parse_term ctx f) (lower_parse_term ctx a),
         ParseTermKind.lit l => Term.lit (lower_parse_literal ctx l),
@@ -356,10 +365,7 @@ def lower_parse_native (ctx : List Identifier) (n : ParseNative) : Native :=
 
 #[partial]
 def lower_parse_param (ctx : List Identifier) (p : ParseParam) : Param :=
-    match p {
-        ParseParam.mk name type_ mult default attrs =>
-            Param.mk name (lower_parse_term ctx type_) mult (lower_parse_opt ctx default) attrs,
-    }
+    Param.mk p.name (lower_parse_term ctx p.type_) p.mult (lower_parse_opt ctx p.default) p.attrs
 
 
 #[partial]
@@ -377,64 +383,124 @@ def lower_parse_params (ctx : List Identifier) (ps : List ParseParam) : List Par
 // unchanged, and still the only place do-notation is desugared.
 //
 // The accumulation rule is copied exactly from the grammar's own
-// `do_stmts_extend_ctx`, including the part that is easy to miss and
-// expensive to get wrong: `expr_s` extends the context with an
-// EMPTY-IDENTIFIER PLACEHOLDER. A bare-expression statement desugars to
-// `bind expr (lam unnamed hole rest)`, so the continuation sits under one
-// real binder and every later statement is de Bruijn-shifted by one.
-// Without the placeholder, a do-block that references an OUTER variable
-// after a bare-expression statement resolves it to the wrong binder --
-// a documented off-by-one, and one that no type error would catch.
-// The empty identifier is never produced by `identifier`, so
-// `find_index`'s comparison can never match it.
+// A `do { ... }` block is desugared HERE, into `Monad.bind`/`Monad.pure`
+// applications, rather than by a separate pass over an already-lowered
+// statement list. The two jobs cannot be separated cleanly: each binder a
+// statement introduces is in scope for the statements that FOLLOW it, so
+// the desugaring's own lambdas ARE the context accumulation. Fusing them
+// means the `ctx` extension sits on the same line as the `Term.lam` that
+// justifies it, instead of being restated in a parallel
+// `do_stmt_extend_ctx` that a reader has to keep in sync by hand -- which
+// is where the documented `expr_s` off-by-one used to live.
+
+/// `Monad.bind`/`Monad.pure` as NAMED free variables, not
+/// `DebugName.unnamed` ones, so a desugared do-block flows through the
+/// same class-method-call resolution (`resolve_class_call_term`,
+/// `lang/scope.mo`) every other class method gets. That function's
+/// `DebugName.unnamed` arm deliberately leaves an unnamed call head
+/// alone -- it has no name to resolve a class or instance from -- so an
+/// unnamed sentinel reached codegen unresolved and produced a bogus
+/// `void`-typed call argument. Mirrors the Rust reference's own
+/// `desugar_do_statements` (`core/src/parser.rs`), which likewise
+/// desugars to a real dotted `Monad.bind`/`Monad.pure`.
+def monad_bind_term : Term :=
+    Term.var sentinel (DebugName.named (Identifier.id "Monad.bind"))
+
+def monad_pure_term : Term :=
+    Term.var sentinel (DebugName.named (Identifier.id "Monad.pure"))
+
+
+/// Desugar and lower a whole `do { }` block in one traversal.
+///
+/// Folds in SOURCE order -- the first statement is the OUTERMOST wrap,
+/// each statement wrapping the desugaring of those that follow it, with
+/// the trailing `Monad.pure hole` innermost. Mirrors the Rust
+/// reference's `desugar_do_statements` (`core/src/parser.rs`).
+/// Reversing the list (a real past bug) puts the LAST statement
+/// outermost, which both inverts monadic evaluation order and places a
+/// later statement's reference to an earlier binding OUTSIDE that
+/// binding's binder -- a spurious out-of-range `bound_var`.
+#[partial]
+def lower_parse_do (ctx : List Identifier) (stmts : List DoStmt) : Term :=
+    lower_parse_do_inner ctx stmts (Term.app monad_pure_term Term.hole)
+
 
 #[partial]
-def do_stmt_extend_ctx (stmt : ParseDoStmt) (ctx : List Identifier) : List Identifier :=
-    match stmt {
-        ParseDoStmt.bind_s name _ _ => List.cons name ctx,
-        ParseDoStmt.let_s name _ _ => List.cons name ctx,
-        ParseDoStmt.ret_s _ => ctx,
-        ParseDoStmt.expr_s _ => List.cons (Identifier.id "") ctx,
-    }
-
-
-#[partial]
-def lower_parse_do_stmt (ctx : List Identifier) (stmt : ParseDoStmt) : DoStmt :=
-    match stmt {
-        ParseDoStmt.bind_s name typ expr =>
-            DoStmt.bind_s name (lower_parse_term ctx typ) (lower_parse_term ctx expr),
-        ParseDoStmt.let_s name typ expr =>
-            DoStmt.let_s name (lower_parse_term ctx typ) (lower_parse_term ctx expr),
-        ParseDoStmt.ret_s expr => DoStmt.ret_s (lower_parse_term ctx expr),
-        ParseDoStmt.expr_s expr => DoStmt.expr_s (lower_parse_term ctx expr),
-    }
-
-
-#[partial]
-def lower_parse_do_stmts (ctx : List Identifier) (stmts : List ParseDoStmt) : List DoStmt :=
+def lower_parse_do_inner (ctx : List Identifier) (stmts : List DoStmt) (rest : Term) : Term :=
     match stmts {
-        List.empty => List.empty,
-        List.cons s rest =>
-            List.cons (lower_parse_do_stmt ctx s)
-                      (lower_parse_do_stmts (do_stmt_extend_ctx s ctx) rest),
+        List.cons s ss => lower_parse_do_stmt ctx s ss rest,
+        List.empty => rest,
     }
 
 
-/// A whole `do { }` block: lower the statements under accumulating
-/// context, then desugar exactly as the grammar does today.
 #[partial]
-def lower_parse_do (ctx : List Identifier) (stmts : List ParseDoStmt) : Term :=
-    desugar_do (lower_parse_do_stmts ctx stmts)
+def lower_parse_do_stmt (ctx : List Identifier) (s : DoStmt) (ss : List DoStmt) (rest : Term) : Term :=
+    match s {
+        // `expr` is lowered in the OUTER ctx -- a statement's own value
+        // cannot refer to the variable it binds -- while the
+        // continuation is lowered one binder deeper.
+        DoStmt.bind_s name typ expr =>
+            Term.app (Term.app monad_bind_term (lower_parse_term ctx expr))
+                     (Term.lam (DebugName.named name)
+                               (lower_parse_term ctx typ)
+                               (lower_parse_do_inner (List.cons name ctx) ss rest)),
+        DoStmt.let_s name typ expr =>
+            Term.app (Term.lam (DebugName.named name)
+                               (lower_parse_term ctx typ)
+                               (lower_parse_do_inner (List.cons name ctx) ss rest))
+                     (lower_parse_term ctx expr),
+        // `ret_s` DISCARDS the accumulated continuation, matching the
+        // reference's `Return`.
+        DoStmt.ret_s expr => Term.app monad_pure_term (lower_parse_term ctx expr),
+        DoStmt.expr_s expr => lower_parse_do_expr_stmt ctx expr ss rest,
+    }
+
+
+/// A bare-expression statement.
+///
+/// With nothing following it, it IS the block's value and is used
+/// directly -- not bound via `Monad.bind` to a discarding continuation,
+/// which would silently replace it with the block's default
+/// `Monad.pure hole`. Mirrors the reference's `DoStatement::Expr { value
+/// } => value` for the last statement. Confirmed as a real bug through
+/// the full `lang/main.mo` self-compile: a do-block ending in a bare
+/// `match`/`if` containing its own `return`s had its value replaced by
+/// Unit.
+///
+/// With statements following, it binds through a lambda whose binder is
+/// UNNAMED but real, so `ctx` is extended by an empty-identifier
+/// placeholder: the continuation sits one binder deeper and every later
+/// statement is de Bruijn-shifted by one. Without it, a reference to an
+/// OUTER variable after a bare-expression statement resolves to the
+/// wrong binder -- an off-by-one no type error would catch. The empty
+/// identifier can never collide with a real name because `identifier`
+/// never produces one.
+#[partial]
+def lower_parse_do_expr_stmt (ctx : List Identifier) (expr : ParseTerm) (ss : List DoStmt) (rest : Term) : Term :=
+    match ss {
+        List.empty => lower_parse_term ctx expr,
+        List.cons _ _ =>
+            Term.app (Term.app monad_bind_term (lower_parse_term ctx expr))
+                     (Term.lam DebugName.unnamed
+                               Term.hole
+                               (lower_parse_do_inner (List.cons (Identifier.id "") ctx) ss rest)),
+    }
 
 
 // --- declarations -----------------------------------------------------
+//
+// Each of these reads its source by FIELD, not by a positional
+// `Parse*.mk a b c d e f g` pattern. The positional form binds one
+// variable per field and silently goes out of date: add a field to the
+// struct and every such pattern still typechecks, then aborts at runtime
+// with `expected 7 constructor fields, got 8` -- no location, no def
+// name (AGENTS.md's note on adding a field to a struct). Field access
+// has no arity to get wrong, and names each value at the point it is
+// used.
 
 #[partial]
 def lower_parse_struct_field (ctx : List Identifier) (f : ParseStructField) : StructField :=
-    match f {
-        ParseStructField.mk name typ default mult =>
-            StructField.mk name (lower_parse_term ctx typ) (lower_parse_opt ctx default) mult,
-    }
+    StructField.mk f.name (lower_parse_term ctx f.typ) (lower_parse_opt ctx f.default) f.mult
 
 
 #[partial]
@@ -448,10 +514,7 @@ def lower_parse_struct_decl_fields (ctx : List Identifier) (fs : List ParseStruc
 
 #[partial]
 def lower_parse_induct_ctor (ctx : List Identifier) (c : ParseInductConstructor) : InductConstructor :=
-    match c {
-        ParseInductConstructor.mk name params typ =>
-            InductConstructor.mk name (lower_parse_params ctx params) (lower_parse_term ctx typ),
-    }
+    InductConstructor.mk c.name (lower_parse_params ctx c.params) (lower_parse_term ctx c.typ)
 
 
 #[partial]
@@ -465,10 +528,7 @@ def lower_parse_induct_ctors (ctx : List Identifier) (cs : List ParseInductConst
 
 #[partial]
 def lower_parse_class_def (ctx : List Identifier) (m : ParseClassDef) : ClassDef :=
-    match m {
-        ParseClassDef.mk name typ default =>
-            ClassDef.mk name (lower_parse_term ctx typ) (lower_parse_opt ctx default),
-    }
+    ClassDef.mk m.name (lower_parse_term ctx m.typ) (lower_parse_opt ctx m.default)
 
 
 #[partial]
@@ -500,29 +560,20 @@ def lower_parse_defs (ctx : List Identifier) (ds : List ParseDef) : List Def :=
 
 #[partial]
 def lower_parse_inductive (ctx : List Identifier) (i : ParseInductive) : Inductive :=
-    match i {
-        ParseInductive.mk name params typ ctors attrs vis =>
-            Inductive.mk name (lower_parse_params ctx params) (lower_parse_term ctx typ)
-                         (lower_parse_induct_ctors ctx ctors) attrs vis,
-    }
+    Inductive.mk i.name (lower_parse_params ctx i.params) (lower_parse_term ctx i.typ)
+                 (lower_parse_induct_ctors ctx i.constructors) i.attrs i.vis
 
 
 #[partial]
 def lower_parse_class (ctx : List Identifier) (c : ParseClass) : Class :=
-    match c {
-        ParseClass.mk name params constraints methods vis =>
-            Class.mk name (lower_parse_params ctx params) constraints
-                     (lower_parse_class_defs ctx methods) vis,
-    }
+    Class.mk c.name (lower_parse_params ctx c.params) c.constraints
+             (lower_parse_class_defs ctx c.methods) c.vis
 
 
 #[partial]
 def lower_parse_instance (ctx : List Identifier) (i : ParseInstance) : Instance :=
-    match i {
-        ParseInstance.mk name cls constraints args vis implicit_params defs =>
-            Instance.mk name cls constraints (lower_parse_terms ctx args) vis
-                        (lower_parse_params ctx implicit_params) (lower_parse_defs ctx defs),
-    }
+    Instance.mk i.name i.cls i.constraints (lower_parse_terms ctx i.args) i.vis
+                (lower_parse_params ctx i.implicit_params) (lower_parse_defs ctx i.defs)
 
 
 #[partial]
@@ -535,10 +586,7 @@ def lower_parse_terms (ctx : List Identifier) (ts : List ParseTerm) : List Term 
 
 #[partial]
 def lower_parse_struct (ctx : List Identifier) (s : ParseStruct) : Struct :=
-    match s {
-        ParseStruct.mk name fields vis =>
-            Struct.mk name (lower_parse_struct_decl_fields ctx fields) vis,
-    }
+    Struct.mk s.name (lower_parse_struct_decl_fields ctx s.fields) s.vis
 
 
 #[partial]

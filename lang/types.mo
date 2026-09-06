@@ -552,11 +552,8 @@ def pt_lam (name : Identifier) (typ : ParseTerm) (body : ParseTerm) : ParseTerm 
     pt_ (ParseTermKind.lam name typ body)
 
 #[partial]
-def pt_forall (name : Identifier) (typ : ParseTerm) (body : ParseTerm) : ParseTerm :=
-    pt_ (ParseTermKind.forall name typ body)
-
-#[partial]
-def pt_pi (arg : ParseTerm) (ret : ParseTerm) : ParseTerm := pt_ (ParseTermKind.pi arg ret)
+def pt_pi (arg : ParseTerm) (ret : ParseTerm) : ParseTerm :=
+    pt_ (ParseTermKind.pi Option.none arg ret)
 
 #[partial]
 def pt_app (f : ParseTerm) (a : ParseTerm) : ParseTerm := pt_ (ParseTermKind.app f a)
@@ -565,19 +562,13 @@ def pt_app (f : ParseTerm) (a : ParseTerm) : ParseTerm := pt_ (ParseTermKind.app
 def pt_lit (l : ParseLiteral) : ParseTerm := pt_ (ParseTermKind.lit l)
 
 #[partial]
-def pt_ntv (n : ParseNative) : ParseTerm := pt_ (ParseTermKind.ntv n)
-
-#[partial]
-def pt_con (c : ParseCon) : ParseTerm := pt_ (ParseTermKind.con c)
-
-#[partial]
 def pt_type_ (u : I64) : ParseTerm := pt_ (ParseTermKind.type_ u)
 
 #[partial]
 def pt_quote_ (t : ParseTerm) : ParseTerm := pt_ (ParseTermKind.quote_ t)
 
 #[partial]
-def pt_do (stmts : List ParseDoStmt) : ParseTerm := pt_ (ParseTermKind.do_ stmts)
+def pt_do (stmts : List DoStmt) : ParseTerm := pt_ (ParseTermKind.do_ stmts)
 
 def pt_hole : ParseTerm := pt_ ParseTermKind.hole
 
@@ -595,7 +586,7 @@ def pt_hole : ParseTerm := pt_ ParseTermKind.hole
 // `Term` and the change stays inside the expression parsers -- and it
 // does not: `DoStmt`, `Param`, `StructField`, `InductConstructor`,
 // `ClassDef`, `Def` and `Inductive` all embed `Term` and sit BETWEEN
-// expressions and declarations. `ParseDoStmt` is the clearest case: it
+// expressions and declarations. `DoStmt` is the clearest case: it
 // holds a term per statement and its binder context accumulates across
 // statements, so there is no point at which one can be lowered without
 // already having the `ctx` threading this whole change exists to remove.
@@ -604,31 +595,31 @@ def pt_hole : ParseTerm := pt_ ParseTermKind.hole
 // `ModulePath` and `Identifier`s), `Attribute`/`AttrArg` (no `Term`
 // anywhere), `Operator`, `UseFilter`, `OpenFilter`, `Visibility`.
 
-type ParseParam {
-    mk (name: Identifier) (type_: ParseTerm) (mult: Multiplicity) (default: Option ParseTerm) (attrs: List Attribute)
+struct ParseParam {
+    name : Identifier,
+    type_ : ParseTerm,
+    mult : Multiplicity,
+    default : Option ParseTerm,
+    attrs : List Attribute,
 }
 
-/// Parse-stage `DoStmt`. Lowered to the canonical `DoStmt` and then
-/// handed to the existing `desugar_do` below -- `DoStmt` is
-/// parser-internal (only `desugar_do` and one test consume it), so
-/// nothing downstream sees this type.
-type ParseDoStmt {
-    bind_s (name: Identifier) (typ: ParseTerm) (expr: ParseTerm),
-    let_s (name: Identifier) (typ: ParseTerm) (expr: ParseTerm),
-    ret_s (expr: ParseTerm),
-    expr_s (expr: ParseTerm),
+struct ParseStructField {
+    name : Identifier,
+    typ : ParseTerm,
+    default : Option ParseTerm,
+    mult : Multiplicity,
 }
 
-type ParseStructField {
-    mk (name: Identifier) (typ: ParseTerm) (default: Option ParseTerm) (mult: Multiplicity)
+struct ParseInductConstructor {
+    name : ModulePath,
+    params : List ParseParam,
+    typ : ParseTerm,
 }
 
-type ParseInductConstructor {
-    mk (name: ModulePath) (params: List ParseParam) (typ: ParseTerm)
-}
-
-type ParseClassDef {
-    mk (name: Identifier) (typ: ParseTerm) (default: Option ParseTerm)
+struct ParseClassDef {
+    name : Identifier,
+    typ : ParseTerm,
+    default : Option ParseTerm,
 }
 
 struct ParseDef {
@@ -640,20 +631,37 @@ struct ParseDef {
     vis: Visibility
 }
 
-type ParseInductive {
-    mk (name: ModulePath) (params: List ParseParam) (typ: ParseTerm) (constructors: List ParseInductConstructor) (attrs: List Attribute) (vis: Visibility)
+struct ParseInductive {
+    name : ModulePath,
+    params : List ParseParam,
+    typ : ParseTerm,
+    constructors : List ParseInductConstructor,
+    attrs : List Attribute,
+    vis : Visibility,
 }
 
-type ParseClass {
-    mk (name: Identifier) (params: List ParseParam) (constraints: List TypeConstraint) (methods: List ParseClassDef) (vis: Visibility)
+struct ParseClass {
+    name : Identifier,
+    params : List ParseParam,
+    constraints : List TypeConstraint,
+    methods : List ParseClassDef,
+    vis : Visibility,
 }
 
-type ParseInstance {
-    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List ParseTerm) (vis: Visibility) (implicit_params: List ParseParam) (defs: List ParseDef)
+struct ParseInstance {
+    name : Identifier,
+    cls : ModulePath,
+    constraints : List TypeConstraint,
+    args : List ParseTerm,
+    vis : Visibility,
+    implicit_params : List ParseParam,
+    defs : List ParseDef,
 }
 
-type ParseStruct {
-    mk (name: Identifier) (fields: List ParseStructField) (vis: Visibility)
+struct ParseStruct {
+    name : Identifier,
+    fields : List ParseStructField,
+    vis : Visibility,
 }
 
 /// A declaration plus the span it was parsed from.
@@ -757,28 +765,37 @@ type ParseTermKind {
     var_macro (name: NameRef),
     lam (name: Identifier) (typ: ParseTerm) (body: ParseTerm),
     forall (name: Identifier) (typ: ParseTerm) (body: ParseTerm),
-    pi (arg: ParseTerm) (ret: ParseTerm),
-    /// A `(name : T) -> body` arrow, which DOES bind `name` over `body`
-    /// -- unlike plain `pi`, which the grammar only ever folds into a
-    /// non-dependent chain. Kept a separate variant rather than an
-    /// optional name on `pi` so the two cannot be confused at a lowering
-    /// site: `Term.pi` carries no binder name, so once the two shapes
-    /// are merged here the information needed to resolve `name` inside
-    /// `body` is gone for good. That is exactly the regression this
-    /// variant exists to prevent -- see `lower_parse_kind`'s two arms.
-    pi_dep (name: Identifier) (arg: ParseTerm) (ret: ParseTerm),
+    /// `arg_name` is `some` only for a written dependent arrow
+    /// (`(n : T) -> body`, which binds `n` over `body`) and `none` for
+    /// the non-dependent chains `build_pi_chain`/`build_param_pi_chain`
+    /// fold. Mirrors the Rust reference's `Term::Pi { arg_name:
+    /// Option<Name>, .. }` (`core/src/term.rs`), whose `lower_core.rs`
+    /// arm likewise pushes `arg_name` into scope only when it is `Some`.
+    ///
+    /// The distinction is load-bearing, not cosmetic: `Term.pi` has no
+    /// field to carry a binder name, so a name dropped here is gone for
+    /// good and every use of it inside `ret` resolves to `sentinel`.
+    /// This branch shipped exactly that regression once.
+    pi (arg_name: Option Identifier) (arg: ParseTerm) (ret: ParseTerm),
     app (fun: ParseTerm) (arg: ParseTerm),
     lit (value: ParseLiteral),
+    // `forall`, `ntv` and `con` mirror `Term` for completeness but no
+    // syntax produces one: there is no `forall` keyword in the grammar,
+    // natives arrive through an attribute rather than a term, and the
+    // parser has never built a `Term.con` (constructor applications are
+    // ordinary `app`s of a `var` until the type checker resolves them).
+    // They carry no `pt_*` smart constructor for that reason -- only the
+    // lowering arms and exhaustive matches name them.
     ntv (native: ParseNative),
     con (c: ParseCon),
     type_ (universe: I64),
     quote_ (term: ParseTerm),
     /// A `do { }` block, kept as STATEMENTS rather than desugared during
     /// parsing. Do-notation is syntax, so it belongs in the parse AST;
-    /// `lower_parse_do` runs the existing `desugar_do` once the binder
-    /// context is known. The grammar used to desugar inline, which is
-    /// only possible while it also threads `ctx`.
-    do_ (stmts: List ParseDoStmt),
+    /// Preserved as syntax and desugared by `lower_parse_do` once the
+    /// binder context is known. The grammar used to desugar inline,
+    /// which is only possible while it also threads `ctx`.
+    do_ (stmts: List DoStmt),
     hole,
 }
 
@@ -1032,105 +1049,32 @@ type Instance {
     mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term) (vis: Visibility) (implicit_params: List Param) (defs: List Def)
 }
 
-// --- Do-notation desugaring ---
-
-// --- Do-notation desugaring ---
-// Canonical DoStmt uses de Bruijn Term. DoStmtV0 is the legacy V0 variant.
-
-
-// `bind_s`/`let_s` carry the statement's own declared type (`Term.hole`
-// when unannotated, e.g. `let x <- expr;`/`let x := expr;`) -- without
-// it, `desugar_do_inner` had no way to give the desugared binder a real
-// type even when the source explicitly wrote one (`let x : T <- expr;`),
-// which broke downstream typecheck precision for that binding (e.g.
-// match-case validation on a do-block-bound value whose real type WAS
-// written down, just never threaded through -- see
-// plans/bootstrapping/self-hosted-compiler.md's changelog for the
-// lang/main.mo `main` repro this was found from).
+// --- Do-notation ---
+//
+// `do { ... }` is SYNTAX, not a term: nothing survives lowering, which
+// desugars it into `Monad.bind`/`Monad.pure` applications. So `DoStmt`
+// holds `ParseTerm` and belongs to the parse stage -- there is no
+// canonical `Term`-carrying twin, and the desugaring itself lives in
+// `lang/parser/lower_parse.mo` (`lower_parse_do`) rather than here,
+// because it has to interleave with de Bruijn resolution: each binder a
+// statement introduces is in scope for the statements that FOLLOW it, so
+// desugaring and context accumulation are one traversal, not two.
+//
+// `bind_s`/`let_s` carry the statement's own declared type (`hole` when
+// unannotated, e.g. `let x <- expr;`/`let x := expr;`) -- without it the
+// desugaring had no way to give the bound variable a real type even when
+// the source explicitly wrote one (`let x : T <- expr;`), which broke
+// downstream typecheck precision for that binding (e.g. match-case
+// validation on a do-block-bound value whose real type WAS written down,
+// just never threaded through -- see plans/bootstrapping/
+// self-hosted-compiler.md's changelog for the lang/main.mo `main` repro
+// this was found from).
 type DoStmt {
-    bind_s (name: Identifier) (typ: Term) (expr: Term),
-    let_s (name: Identifier) (typ: Term) (expr: Term),
-    ret_s (expr: Term),
-    expr_s (expr: Term),
+    bind_s (name: Identifier) (typ: ParseTerm) (expr: ParseTerm),
+    let_s (name: Identifier) (typ: ParseTerm) (expr: ParseTerm),
+    ret_s (expr: ParseTerm),
+    expr_s (expr: ParseTerm),
 }
-
-// Named (not `DebugName.unnamed`) so this flows through the SAME
-// class-method-call resolution `lang/scope.mo`'s `resolve_class_call_term`
-// already gives every other class method (`Show.show`, `I64.add`, ...) --
-// that function's own `DebugName.unnamed` arm deliberately leaves an
-// unnamed call head untouched (it has no name to resolve a class/instance
-// from), so an unnamed bind/pure sentinel reached codegen unresolved,
-// producing a bogus `void`-typed call argument (`compile_db_term_ir`'s
-// `Term.var`/`DebugName.unnamed` case has nothing better to emit).
-// Mirrors the Rust reference's own `desugar_do_statements`
-// (core/parser.rs), which desugars to `pvar(vec!["Monad", "bind"])`/
-// `pvar(vec!["Monad", "pure"])` -- a real, dotted, class-qualified
-// identifier -- rather than a free/unnamed variable.
-def monad_bind_term : Term :=
-    Term.var (-1) (DebugName.named (Identifier.id "Monad.bind"))
-
-def monad_pure_term : Term :=
-    Term.var (-1) (DebugName.named (Identifier.id "Monad.pure"))
-
-// Fold in SOURCE order (first statement outermost), mirroring the
-// Rust reference's `desugar_do_statements` (`core/parser.rs`): each
-// statement wraps the desugaring of the statements that FOLLOW it, so
-// the first `let x <- e1` becomes the outermost `bind`, the last
-// statement sits innermost (its continuation is the trailing
-// `pure hole`). `desugar_do_inner`'s head is the outermost wrap, so the
-// list MUST be passed in source order -- reversing it (an earlier bug)
-// put the LAST statement outermost, which both inverted monadic
-// evaluation order AND, because de Bruijn indices are assigned at parse
-// time relative to the do-block's binder context (innermost/last-bound
-// = lowest index), placed a later statement's reference to an earlier
-// `bind_s` variable OUTSIDE that variable's binder -- a spurious
-// out-of-range `bound_var` (the `test_do_bind_with_match` self-hosted-
-// check gap). `ret_s` discards `ss`/`rest`, matching the reference's
-// `Return` (which replaces the accumulated continuation).
-def desugar_do (stmts : List DoStmt) : Term :=
-    desugar_do_inner stmts (Term.app monad_pure_term Term.hole)
-
-def desugar_do_inner (stmts : List DoStmt) (rest : Term) : Term :=
-    match stmts {
-        List.cons s ss =>
-            match s {
-                bind_s name typ expr =>
-                    Term.app (Term.app monad_bind_term expr)
-                        (Term.lam (DebugName.named name) typ (desugar_do_inner ss rest)),
-                let_s name typ expr =>
-                    Term.app (Term.lam (DebugName.named name) typ (desugar_do_inner ss rest)) expr,
-                ret_s expr => Term.app monad_pure_term expr,
-                // A bare-expression statement with nothing following it
-                // (`ss` empty) IS the do-block's own final value -- used
-                // DIRECTLY, exactly like `ret_s` already does, not bound
-                // via `Monad.bind` to a discarding continuation (which
-                // silently replaces its real value with the block's own
-                // default `rest`, `Monad.pure ()`). Mirrors the Rust
-                // reference's own `desugar_do_statements` (core/src/
-                // parser.rs): `DoStatement::Expr { value } => value` when
-                // it's the LAST statement (processed first, iterating in
-                // reverse) -- no bind at all. This self-hosted port never
-                // special-cased that. Confirmed as a real, previously-
-                // masked bug via the full `lang/main.mo` self-compile: a
-                // do-block whose only/last statement is a bare `match`/
-                // `if` containing its own internal `return`s (`do { let
-                // xs := ...; match xs { ... => return x, ... } }`) had
-                // its real value silently discarded and replaced with
-                // Unit -- masked until now by a DIFFERENT, now-fixed
-                // codegen bug (a branching case body's own deepest block
-                // used to `ret` directly instead of continuing to this
-                // bind at all, `retarget_terminal_ret`), which
-                // accidentally bypassed this one.
-                expr_s expr =>
-                    match ss {
-                        List.empty => expr,
-                        List.cons _ _ =>
-                            Term.app (Term.app monad_bind_term expr)
-                                (Term.lam (DebugName.unnamed) Term.hole (desugar_do_inner ss rest)),
-                    }
-            },
-        List.empty => rest
-    }
 
 def list_rev_loop {A : Type} (xs : List A) (acc : List A) : List A :=
     match xs {
