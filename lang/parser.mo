@@ -12,7 +12,8 @@ use lang.types {
 }
 use std.list {filter, intercalate, length}
 use lang.parser.lower_parse {
-  extend_ctx, lower_parse_decl, lower_parse_decls, lower_parse_term, name_ref_to_string,
+  lower_ctx_bare, lower_ctx_bind_all, lower_parse_decl, lower_parse_decls,
+  lower_parse_term, name_ref_to_string,
 }
 use lang.parser.core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
@@ -3560,7 +3561,7 @@ def decl_fail_to_unknown (r : ParseResult ParseDecl) (input : String) : ParseRes
 #[partial]
 def lower_decls_result (r : ParseResult (List ParseDecl)) : ParseResult (List Decl) :=
 	match r {
-		success rem ds => success rem (lower_parse_decls List.empty ds),
+		success rem ds => success rem (lower_parse_decls lower_ctx_bare ds),
 		fail e => fail e,
 	}
 
@@ -3604,7 +3605,7 @@ def locate_decls (whole_file : String) (ds : List ParseDecl) : List (Pair Decl L
 		List.empty => List.empty,
 		List.cons d rest =>
 			List.cons
-				(Pair.pair (lower_parse_decl List.empty d) (location_of_span whole_file d.span))
+				(Pair.pair (lower_parse_decl lower_ctx_bare d) (location_of_span whole_file d.span))
 				(locate_decls whole_file rest),
 	}
 
@@ -3982,7 +3983,7 @@ def test_do_desugar_structure : Bool :=
         success rem out =>
             // `do` is preserved as syntax now, so assert on the DESUGARED
             // form -- which is what this test was always about.
-            match (lower_parse_term List.empty out) {
+            match (lower_parse_term lower_ctx_bare out) {
                 Term.app f a => String.beq rem "",
                 _ => false
             },
@@ -4417,7 +4418,7 @@ def test_span_after_multibyte_char : Bool :=
 #[test]
 def test_do_desugars_in_source_order : Bool :=
 	match do_parser "do { let x <- e1; x }" {
-		success _ out => do_outer_bind_value_is_free (lower_parse_term List.empty out),
+		success _ out => do_outer_bind_value_is_free (lower_parse_term lower_ctx_bare out),
 		fail _ => false,
 	}
 
@@ -4427,7 +4428,7 @@ def test_do_desugars_in_source_order : Bool :=
 #[test]
 def test_do_bound_name_resolves_in_continuation : Bool :=
 	match do_parser "do { let x <- e1; x }" {
-		success _ out => do_continuation_var_idx (lower_parse_term List.empty out) 0,
+		success _ out => do_continuation_var_idx (lower_parse_term lower_ctx_bare out) 0,
 		fail _ => false,
 	}
 
@@ -4463,7 +4464,7 @@ def do_lam_body_var_idx (lam_term : Term) (want : I64) : Bool :=
 #[test]
 def test_dep_pi_binds_its_own_name : Bool :=
 	match type_expression "(n : I64) -> Vec n" {
-		success _ out => dep_pi_body_arg_idx (lower_parse_term List.empty out) 0,
+		success _ out => dep_pi_body_arg_idx (lower_parse_term lower_ctx_bare out) 0,
 		fail _ => false,
 	}
 
@@ -6456,7 +6457,7 @@ def test_type_cons_brace_form_matches_paren_form : Bool :=
 	match type_parser "type Shape { circle { radius : F64, border : Bool }, rectangle { width : F64, height : F64 }, }" {
 		success _ brace_out =>
 			match type_parser "type Shape { circle (radius : F64) (border : Bool), rectangle (width : F64) (height : F64), }" {
-				success _ paren_out => decl_cons_params_similar (lower_parse_decl List.empty brace_out) (lower_parse_decl List.empty paren_out),
+				success _ paren_out => decl_cons_params_similar (lower_parse_decl lower_ctx_bare brace_out) (lower_parse_decl lower_ctx_bare paren_out),
 				fail _ => false,
 			},
 		fail _ => false,
@@ -6831,7 +6832,7 @@ def parse_nref_named (nref : NameRef) (expected : String) : Bool :=
 
 #[test]
 def test_t_var_bound : Bool :=
-	let ctx : List Identifier := List.cons (Identifier.id "x") List.empty in
+	let ctx : ParseLowerCtx := { binders := List.cons (Identifier.id "x") List.empty, locs := Option.none } in
 	match expression "x" {
 		success rem out =>
 			match (lower_parse_term ctx out) {
@@ -6849,7 +6850,7 @@ def test_t_var_bound : Bool :=
 def test_t_var_unbound : Bool :=
 	match expression "y" {
 		success rem out =>
-			match (lower_parse_term List.empty out) {
+			match (lower_parse_term lower_ctx_bare out) {
 				Term.var idx dbg =>
 					I64.beq idx sentinel && String.beq rem "",
 				Term.lam _ _ _ => false, Term.forall _ _ _ => false,
@@ -6865,7 +6866,7 @@ def test_t_var_shadow : Bool :=
 	// In [x, y, x] (outer x first), the inner x should be index 0
 	let x : Identifier := Identifier.id "x" in
 	let y : Identifier := Identifier.id "y" in
-	let ctx : List Identifier := List.cons y (List.cons x (List.cons x List.empty)) in
+	let ctx : ParseLowerCtx := { binders := List.cons y (List.cons x (List.cons x List.empty)), locs := Option.none } in
 	match expression "x" {
 		success rem out =>
 			match (lower_parse_term ctx out) {
@@ -7158,7 +7159,7 @@ def match_case_body_var_is_bound (mc : ParseMatchCase) : Bool :=
         ParseMatchCase.mk _name args body _fp =>
             // A name-resolution assertion: lower under the arm's own
             // pattern binders, exactly as `lower_parse_match_case` does.
-            match (lower_parse_term (extend_ctx args List.empty) body) {
+            match (lower_parse_term (lower_ctx_bind_all args lower_ctx_bare) body) {
                 Term.var idx _dbg => Bool.not (I64.beq idx sentinel),
                 _ => false
             }
@@ -7366,7 +7367,7 @@ def test_def_param_destructured_written_order_binds_correctly_reversed : Bool :=
 def def_param_destructured_body_var_is (_expected_name : Identifier) (expected_idx : I64) (d : ParseDecl) : Bool :=
     // Asserts a de Bruijn index, so it lowers first and walks the
     // canonical tree -- the parse AST has no indices to check.
-    match (lower_parse_decl List.empty d) {
+    match (lower_parse_decl lower_ctx_bare d) {
         Decl.def_d def_ =>
             match def_ {
                 Def.mk _name _typ term _constraints _attrs _vis =>
@@ -7429,7 +7430,7 @@ def test_if_nested : Bool :=
 #[test]
 def test_if_bound_var : Bool :=
     let x : Identifier := Identifier.id "x" in
-    let ctx : List Identifier := List.cons x List.empty in
+    let ctx : ParseLowerCtx := { binders := List.cons x List.empty, locs := Option.none } in
     match if_parser "if x then 1 else x" {
         success rem out =>
             match out.kind {
@@ -7613,7 +7614,7 @@ def test_struct_lit_as_application_argument : Bool :=
 #[test]
 def test_struct_update_basic : Bool :=
     let x : Identifier := Identifier.id "p1" in
-    let ctx : List Identifier := List.cons x List.empty in
+    let ctx : ParseLowerCtx := { binders := List.cons x List.empty, locs := Option.none } in
     match expression "{ p1 with x := 10 }" {
         success rem out =>
             String.beq rem "" &&
@@ -7885,7 +7886,7 @@ def test_quote_term_basic : Bool :=
 #[test]
 def test_quote_term_application_body : Bool :=
     let f_id : Identifier := Identifier.id "f" in
-    let ctx : List Identifier := List.cons f_id List.empty in
+    let ctx : ParseLowerCtx := { binders := List.cons f_id List.empty, locs := Option.none } in
     match expression "quote { f 1 }" {
         success rem out =>
             String.beq rem "" &&
@@ -7954,7 +7955,7 @@ def test_macro_call_term_with_args : Bool :=
 #[test]
 def test_macro_call_term_absent_falls_through_to_variable : Bool :=
     let x_id : Identifier := Identifier.id "x" in
-    let ctx : List Identifier := List.cons x_id List.empty in
+    let ctx : ParseLowerCtx := { binders := List.cons x_id List.empty, locs := Option.none } in
     match expression "x" {
         success rem out =>
             String.beq rem "" &&
@@ -8177,7 +8178,7 @@ def test_def_param_multi_name_group_with_attribute : Bool :=
 #[test]
 def test_match_bound_var : Bool :=
     let x : Identifier := Identifier.id "x" in
-    let ctx : List Identifier := List.cons x List.empty in
+    let ctx : ParseLowerCtx := { binders := List.cons x List.empty, locs := Option.none } in
     match match_parser "match x { none => 0 }" {
         success rem out =>
             match out.kind {
@@ -8733,7 +8734,7 @@ def test_def_do_block : Bool :=
 /// (see `desugar_do_inner`'s `ret_s` case, lang/types.mo).
 #[partial]
 def return_shorthand_is_pure_of_num (t : ParseTerm) (n : I64) : Bool :=
-    match (lower_parse_term List.empty t) {
+    match (lower_parse_term lower_ctx_bare t) {
         Term.app head arg =>
             match head {
                 Term.var idx _ => I64.beq idx (-1) &&

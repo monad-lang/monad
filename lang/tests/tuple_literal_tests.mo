@@ -5,7 +5,7 @@
 
 use lang.types {Identifier, ParseTerm}
 use lang.parser {expression}
-use lang.parser.lower_parse {lower_parse_term}
+use lang.parser.lower_parse {lower_parse_term, lower_ctx_bare}
 use lang.parser.core {ParseResult}
 use lang.pretty {show_term}
 
@@ -20,7 +20,7 @@ def parse_full (r : ParseResult ParseTerm) (input : String) : Bool :=
             // Accept a trailing-whitespace-only remainder.
             String.trim rem == "" &&
             // `out`'s show must be non-empty (sanity: actually parsed something).
-            String.length (show_term (lower_parse_term List.empty out)) > 0,
+            String.length (show_term (lower_parse_term lower_ctx_bare out)) > 0,
         fail _ => false
     }
 
@@ -28,7 +28,7 @@ def parse_full (r : ParseResult ParseTerm) (input : String) : Bool :=
 def test_parse_tuple_two : Bool :=
     // (x, y)  ->  Pair.pair x y  ->  show "((Pair.pair x) y)"
     match expression "(x, y)" {
-        success _ out => show_term (lower_parse_term List.empty out) == "((Pair.pair x) y)",
+        success _ out => show_term (lower_parse_term lower_ctx_bare out) == "((Pair.pair x) y)",
         fail _ => false
     }
 
@@ -36,7 +36,7 @@ def test_parse_tuple_two : Bool :=
 def test_parse_tuple_three : Bool :=
     // (x, y, z)  ->  Pair.pair x (Pair.pair y z)  ->  "((Pair.pair x) ((Pair.pair y) z))"
     match expression "(x, y, z)" {
-        success _ out => show_term (lower_parse_term List.empty out) == "((Pair.pair x) ((Pair.pair y) z))",
+        success _ out => show_term (lower_parse_term lower_ctx_bare out) == "((Pair.pair x) ((Pair.pair y) z))",
         fail _ => false
     }
 
@@ -44,7 +44,7 @@ def test_parse_tuple_three : Bool :=
 def test_parse_tuple_single_trailing_comma : Bool :=
     // (x,)  ->  just x  (matches the reference's desugar_tuple_literal([x]))
     match expression "(x,)" {
-        success _ out => show_term (lower_parse_term List.empty out) == "x",
+        success _ out => show_term (lower_parse_term lower_ctx_bare out) == "x",
         fail _ => false
     }
 
@@ -52,7 +52,7 @@ def test_parse_tuple_single_trailing_comma : Bool :=
 def test_parse_parens_no_comma : Bool :=
     // (x)  ->  just x  (unchanged single-element paren behaviour)
     match expression "(x)" {
-        success _ out => show_term (lower_parse_term List.empty out) == "x",
+        success _ out => show_term (lower_parse_term lower_ctx_bare out) == "x",
         fail _ => false
     }
 
@@ -60,7 +60,7 @@ def test_parse_parens_no_comma : Bool :=
 def test_parse_tuple_trailing_comma : Bool :=
     // (x, y,)  ->  Pair.pair x y  (trailing comma optional)
     match expression "(x, y,)" {
-        success _ out => show_term (lower_parse_term List.empty out) == "((Pair.pair x) y)",
+        success _ out => show_term (lower_parse_term lower_ctx_bare out) == "((Pair.pair x) y)",
         fail _ => false
     }
 
