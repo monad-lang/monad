@@ -597,8 +597,8 @@ def show_one_param (p : ParamPair) : String := match p {
 ///
 /// `String.concat a (recurse rest)` recopies the whole accumulated tail
 /// at every step, so rendering a module this way costs time quadratic in
-/// its output -- 3.8 MB of it for the compiler itself. `String.join`
-/// measures and copies in one pass. The same rewrite applies to
+/// its output -- 3.8 MB of it for the compiler itself.
+/// `String.concat_list` measures and copies in one pass. The same rewrite applies to
 /// `emit_globals`/`emit_decls`/`emit_functions` below.
 #[partial]
 def emit_blocks (blocks : List LLVMBasicBlock) (dbg_suffix : String) : String :=

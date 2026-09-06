@@ -243,6 +243,18 @@ def force_global
       },
   }
 
+/// NOTE: every `gd_def` here is memoized unconditionally, with none of
+/// the effect carve-out the Rust evaluator's own `force_global` has
+/// (`core/src/core_eval.rs`, `GlobalDef::Effect` /
+/// `Native { arity: 0 }`). That is safe ONLY because this evaluator's
+/// native table is `basic_native_table` -- five I64 ops and three String
+/// ops, all pure. Nothing it can evaluate has an effect to repeat.
+///
+/// Adding an effectful native here would need that carve-out first.
+/// Without it a zero-arity `def x : IO A` performs its effect once per
+/// process and every later reference replays the cached result --
+/// exactly how every `--verbose` timing in the compiler came to print
+/// one frozen constant.
 #[partial]
 def force_global_def
     (idx : I64) (gd : GlobalDef) (globals : GlobalTable) (natives : NativeTable)

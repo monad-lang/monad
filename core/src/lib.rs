@@ -455,18 +455,22 @@ pub fn eval_core_program(path: &ModulePath, source: &str) -> Result<core_value::
 
 /// A program's own exit code, from the value `main` evaluated to.
 ///
-/// `main : IO I64` forces to the `I64` itself here (the IO action has
-/// already been performed by the time this sees it), so a plain numeric
-/// literal is the code. Anything else -- `IO Unit`, a constructor, a
-/// closure -- has no meaningful code and reports success.
-fn exit_code_of(v: &core_value::Value) -> i64 {
+/// `main : IO I64` forces to its payload still wrapped in `IO.io`, so
+/// that one constructor is unwrapped to reach the number. Only that one:
+/// unwrapping any single-argument constructor would make
+/// `main : IO (Option I64)` returning `some 3` exit 3, which is a
+/// coincidence of representation rather than anything the program said.
+///
+/// Anything else -- `IO Unit`, a closure, a multi-field constructor --
+/// has no exit code and reports success.
+fn exit_code_of(v: &core_value::Value, well_known: &lower_core_ir::WellKnownCtors) -> i64 {
   match v {
     core_value::Value::Lit(crate::core_ir::IrLit::Num(n, _)) => *n,
-    // `main : IO I64` forces to the IO constructor still wrapping its
-    // payload (`Con { args: [Lit(Num(..))] }`), so unwrap single-argument
-    // constructors to reach it. Anything else -- `IO Unit`, a closure --
-    // has no meaningful code and reports success.
-    core_value::Value::Con { args, .. } if args.len() == 1 => exit_code_of(&args[0]),
+    core_value::Value::Con { tag, args }
+      if args.len() == 1 && well_known.io_io.is_some_and(|io| io.tag == *tag) =>
+    {
+      exit_code_of(&args[0], well_known)
+    }
     _ => 0,
   }
 }
@@ -566,7 +570,7 @@ pub fn run(
       if options.debug {
         println!("Eval result {result:?}");
       }
-      Ok(exit_code_of(&result))
+      Ok(exit_code_of(&result, &natives.well_known))
     })
     .map_err(|e| format!("failed to spawn eval thread: {e}"))?
     .join()

@@ -204,7 +204,7 @@ fn phase2_lowers_whole_program_to_ir() {
     .globals
     .iter()
     .filter_map(|g| match g {
-      GlobalDef::Def(ir) => Some(ir.as_ref()),
+      GlobalDef::Def(ir) | GlobalDef::Effect(ir) => Some(ir.as_ref()),
       GlobalDef::Constructor { .. } | GlobalDef::Native { .. } | GlobalDef::Unresolved(_) => None,
     })
     .collect();
@@ -283,6 +283,7 @@ fn phase2_lowers_whole_program_to_ir() {
       .iter()
       .map(|g| match g {
         GlobalDef::Def(ir) => ir.to_string(),
+        GlobalDef::Effect(ir) => format!("<effect {ir}>"),
         GlobalDef::Constructor { tag, arity } => format!("<ctor #{tag}/{arity}>"),
         GlobalDef::Native { native_id, arity } => format!("<native #{native_id}/{arity}>"),
         GlobalDef::Unresolved(path) => format!("<unresolved {path}>"),

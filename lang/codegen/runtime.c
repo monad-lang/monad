@@ -49,18 +49,6 @@ typedef struct {
    so nothing was ever freed. Measured on `check lang/main.mo`, that
    meant 5.99 GiB allocated of which 98.24% was garbage, and `compile
    lang/main.mo` was OOM-killed at 29.7 GB. */
-/* `#[native "current_time"]` (std/io.mo's `IO.current_time`, which
-   std/bench.mo's `Bench.now` defers to) -- milliseconds
-   from an arbitrary fixed origin, monotonic so a span is never negative
-   across a wall-clock adjustment. Previously a GENERATED stub that
-   returned 0 (`emit_bench_now`, lang/codegen/runtime.mo), which made
-   every `--verbose` timing in a compiled binary read "0ms". */
-int64_t monad_current_time(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
-}
-
 void* monad_alloc(size_t size) {
     void* ptr = GC_malloc(size);
     if (ptr) {
@@ -673,11 +661,9 @@ int64_t monad_string_hash(char* s) {
    generated-IR emitters have no way to express. */
 char* monad_string_concat_list(void* parts) {
     size_t total = 0;
-    int64_t count = 0;
     for (void* n = parts; n && monad_get_tag(n) == 6; n = monad_get_field(n, 1)) {
         char* piece = (char*)monad_get_field(n, 0);
         if (piece) total += strlen(piece);
-        count++;
     }
 
     char* out = (char*)monad_alloc_atomic(total + 1);
@@ -811,10 +797,27 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
     return WIFEXITED(status) ? (int64_t)WEXITSTATUS(status) : -1;
 }
 
+/* `#[native "current_time"]` (std/io.mo's `IO.current_time`, which
+   std/bench.mo's `Bench.now` defers to) -- milliseconds from an
+   arbitrary fixed origin. CLOCK_MONOTONIC, so a span is never negative
+   across a wall-clock adjustment; only DIFFERENCES between two readings
+   mean anything.
+
+   Every `--verbose` timing a compiled binary prints comes from here.
+   They used to read "0ms" throughout, when this was a generated stub
+   that ignored its arguments and returned a constant. */
+int64_t monad_current_time(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
 /* `#[native "process_id"]` (std/process.mo's `process_id : I64`) -- returns
    the OS process ID, used to build unique /tmp paths for parallel test
-   isolation. Pure (no IO), returns a plain i64, matching `monad_current_time`'s
-   own convention. */
+   isolation. Declared pure (no `IO`) on the Monad side, unlike
+   `IO.current_time` just above; both are plain `int64_t` here, since the
+   `IO` wrapping a native needs is emitted by its generated IR wrapper,
+   not by the C function. */
 int64_t monad_process_id(void) {
     return (int64_t)getpid();
 }

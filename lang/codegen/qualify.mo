@@ -270,21 +270,36 @@ def all_declared_names_go (modules : List ModuleInfo) (seen : HashMap String Boo
             },
     }
 
+/// Accumulator-passing for the same reason `ambiguous_declared_names`
+/// is: `List.cons key (recurse rest)` holds one native frame per
+/// declaration, and the largest module here declares ~318 defs. Depth
+/// like that is not just an overflow risk — Boehm scans the whole stack
+/// conservatively at every collection, so it makes each allocation
+/// underneath it slower too.
+///
+/// The accumulator reverses, so the result is reversed once at the end
+/// to keep declaration order. That order is load-bearing: it is the
+/// order `all_declared_names` hands to `build_global_rename_map` and
+/// `ambiguous_declared_names`.
 #[partial]
 def declared_names_in_decls (decls : List Decl) (seen : HashMap String Bool) : Pair (List String) (HashMap String Bool) :=
+    match declared_names_in_decls_go decls seen List.empty {
+        Pair.pair rev seen2 => Pair.pair (List.reverse rev) seen2,
+    }
+
+#[partial]
+def declared_names_in_decls_go (decls : List Decl) (seen : HashMap String Bool) (acc : List String) : Pair (List String) (HashMap String Bool) :=
     match decls {
-        List.empty => Pair.pair List.empty seen,
+        List.empty => Pair.pair acc seen,
         List.cons d rest =>
             match decl_def_name d {
-                Option.none => declared_names_in_decls rest seen,
+                Option.none => declared_names_in_decls_go rest seen acc,
                 Option.some n =>
                     let key := show_module_path n in
                     match str_map_lookup key seen {
-                        Option.some _ => declared_names_in_decls rest seen,
+                        Option.some _ => declared_names_in_decls_go rest seen acc,
                         Option.none =>
-                            match declared_names_in_decls rest (str_map_insert key true seen) {
-                                Pair.pair tail seen2 => Pair.pair (List.cons key tail) seen2,
-                            },
+                            declared_names_in_decls_go rest (str_map_insert key true seen) (List.cons key acc),
                     },
             },
     }

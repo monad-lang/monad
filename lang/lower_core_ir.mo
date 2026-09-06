@@ -8,7 +8,7 @@ use lang.scope {
 use lang.types {
   AttrArg, Attribute, Con, Decl, Def, DebugName, Identifier, Inductive,
   InductConstructor, Literal, MatchCase, ModulePath, Native, Scope, ScopeDef,
-  Term, id_eq, sentinel,
+  Term, id_eq, sentinel, show_module_path,
 }
 use lang.typecheck.infer {empty_locals, last_dotted_segment}
 
@@ -334,12 +334,25 @@ def scope_all_inductives (s : Scope) : List Inductive :=
   let sd : ScopeData := scope_globals s in
   inductive_pairs_values (HashMap.to_list sd.inductives)
 
+/// Accumulator-passing: this runs over every inductive in the program,
+/// and `List.cons ind (recurse rest)` holds a native frame per entry.
+///
+/// The `List.reverse` is NOT cosmetic. `find_inductive_by_case_name`
+/// scans this list and takes the FIRST inductive owning a constructor of
+/// the given name, so reversing it would silently change which inductive
+/// an ambiguous constructor resolves to — a miscompile, not a slower
+/// build.
+#[partial]
 def inductive_pairs_values (pairs : List (Pair ModulePath Inductive)) : List Inductive :=
+  List.reverse (inductive_pairs_values_go pairs List.empty)
+
+#[partial]
+def inductive_pairs_values_go (pairs : List (Pair ModulePath Inductive)) (acc : List Inductive) : List Inductive :=
   match pairs {
-    List.empty => List.empty,
+    List.empty => acc,
     List.cons p rest =>
       match p {
-        Pair.pair _ ind => List.cons ind (inductive_pairs_values rest),
+        Pair.pair _ ind => inductive_pairs_values_go rest (List.cons ind acc),
       },
   }
 
@@ -361,15 +374,57 @@ def inductive_has_constructor_named (ind : Inductive) (name : Identifier) : Bool
     Inductive.mk _ _ _ constructors _ _ => list_has_constructor_named constructors name,
   }
 
+/// The inductive owning a constructor named `name`.
+///
+/// When SEVERAL own one, this takes the lowest-sorting inductive path
+/// rather than whichever the caller's list happens to put first. That
+/// matters because the list comes from `HashMap.to_list`
+/// (`scope_all_inductives`), whose order is a function of the hash and
+/// the bucket count: changing `HashMap.bucket_of` from 16 to 256 buckets
+/// reshuffled it, and with it which inductive an ambiguous constructor
+/// resolved to. Nothing misresolved, but nothing would have said so
+/// either. Deterministic selection turns that class of change into a
+/// test failure instead of a silent difference in emitted code.
+///
+/// Ambiguity here is not rare: 29 constructor names in this tree are
+/// owned by more than one inductive, and `mk` by 36 of them, since every
+/// `struct` declares one.
+///
+/// The real fix is upstream and much larger. `match_case_name`
+/// (`lang/parser.mo`) reduces a written `Decl.def_d` to its last segment
+/// with `list_last_or`, discarding the qualifier that would settle this
+/// outright. Restoring it means changing what `MatchCase` stores for a
+/// name — 89 call sites across 18 files — so it is deliberately not
+/// attempted here.
 #[partial]
 def find_inductive_by_case_name (inds : List Inductive) (name : Identifier) : Option Inductive :=
+  find_inductive_by_case_name_go inds name Option.none
+
+#[partial]
+def find_inductive_by_case_name_go (inds : List Inductive) (name : Identifier) (best : Option Inductive) : Option Inductive :=
   match inds {
-    List.empty => Option.none,
+    List.empty => best,
     List.cons ind rest =>
       if inductive_has_constructor_named ind name
-      then Option.some ind
-      else find_inductive_by_case_name rest name,
+      then find_inductive_by_case_name_go rest name (lower_inductive_path_of best ind)
+      else find_inductive_by_case_name_go rest name best,
   }
+
+/// Keep whichever of the two inductives has the lower path, so the
+/// choice does not depend on visit order.
+#[partial]
+def lower_inductive_path_of (best : Option Inductive) (candidate : Inductive) : Option Inductive :=
+  match best {
+    Option.none => Option.some candidate,
+    Option.some current =>
+      if String.lt (inductive_path_str candidate) (inductive_path_str current)
+      then Option.some candidate
+      else Option.some current,
+  }
+
+#[partial]
+def inductive_path_str (ind : Inductive) : String :=
+  match ind { Inductive.mk ind_name _ _ _ _ _ => show_module_path ind_name }
 
 /// A `match`'s `MatchCase`s don't carry the scrutinee's inductive path
 /// directly (`MatchCase.mc`'s `name` is a bare `Identifier`, per

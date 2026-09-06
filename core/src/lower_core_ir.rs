@@ -723,10 +723,55 @@ pub enum GlobalDef {
   /// straight to a synthesized, empty `Value::PartialNtv { native_id,
   /// args: vec![] }`, filled left-to-right by ordinary application.
   Native { native_id: u32, arity: u32 },
+  /// A zero-arity def whose declared type is `IO A` — an *effect*, not a
+  /// value, and so never memoized. Forcing this slot performs the effect
+  /// and must keep performing it: `Bench.now` returning the same
+  /// millisecond forever, or two `#[test]` defs sharing one `scope_new`
+  /// handle, are the same bug wearing different clothes.
+  ///
+  /// `Native { arity: 0 }` below covers the case where the def IS the
+  /// native (`#[native current_time] def IO.current_time : IO I64`,
+  /// bodyless, routed through `point_free_native_shape`). This variant
+  /// covers the case where a def *wraps* one — `def Bench.now : IO I64
+  /// := current_time` has a body, so it lowered to `Def` and was
+  /// memoized, which froze every `--verbose` timing in the compiler to a
+  /// single constant. One level of indirection defeated the carve-out;
+  /// the fix keys on the TYPE, which indirection cannot launder away.
+  Effect(core_ir::IrRef),
   /// A def that failed to lower for a known, already-diagnosed reason
   /// (see `LoweredProgram::skipped`) — forcing this slot at evaluation
   /// time should error clearly, not silently produce a wrong value.
   Unresolved(ModulePath),
+}
+
+/// Is this def an *effect* — zero-arity with declared type `IO A`?
+///
+/// Zero-arity because a global with parameters is only forced to a
+/// closure, and closures are values: applying one runs the effect at the
+/// call site, where nothing is cached. `IO`-headed because that is the
+/// language's own marker for "performing this does something", and it is
+/// the one property that survives an arbitrary chain of wrapper defs.
+///
+/// `Pi` (an explicit parameter) and `Forall` (an implicit type
+/// parameter) both disqualify: those are applied before anything is
+/// performed. Everything else walks the application spine down to its
+/// head and asks whether that head's atom resolves to `IO`.
+fn is_effect_type(typ: &CoreTerm, atom_paths: &crate::AtomPathMap) -> bool {
+  let mut head = typ.strip_ctx();
+  match head {
+    CoreTerm::Pi { .. } | CoreTerm::Forall { .. } => return false,
+    _ => {}
+  }
+  // `IO I64` is `App { fun: Free(io_atom), arg: I64 }`; walk to `fun`.
+  while let CoreTerm::App { fun, .. } = head {
+    head = fun.strip_ctx();
+  }
+  match head {
+    CoreTerm::Free(atom) => atom_paths
+      .get(atom)
+      .is_some_and(|path| !path.is_empty() && path.last().as_str() == "IO"),
+    _ => false,
+  }
 }
 
 /// A specific, by-name-resolved constructor's tag + arity within its
@@ -914,6 +959,9 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
   let mut native_arities: Vec<u32> = Vec::new();
 
   let mut lowered_defs: Map<ModulePath, CoreIr> = Map::new();
+  // Paths whose slot must be `GlobalDef::Effect` rather than `Def` — see
+  // `is_effect_type`.
+  let mut effect_defs: std::collections::BTreeSet<ModulePath> = std::collections::BTreeSet::new();
   let mut native_defs: Map<ModulePath, (u32, u32)> = Map::new();
   let mut skipped: Vec<(ModulePath, LowerCoreIrError)> = Vec::new();
   for (path, checked) in &program.defs {
@@ -954,6 +1002,9 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
     match lower_term(&mut ctx, &checked.term) {
       Ok(ir) => {
         ctx.interner.intern(path.clone());
+        if is_effect_type(&checked.typ, &checked.atom_paths) {
+          effect_defs.insert(path.clone());
+        }
         lowered_defs.insert(path.clone(), ir);
       }
       Err(LowerCoreIrError::UnexpectedTypeLevelTerm(_)) => {}
@@ -1014,7 +1065,12 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
   let mut globals = Vec::with_capacity(paths.len());
   for path in &paths {
     if let Some(ir) = lowered_defs.get(path) {
-      globals.push(GlobalDef::Def(std::sync::Arc::new(ir.clone())));
+      let ir = std::sync::Arc::new(ir.clone());
+      globals.push(if effect_defs.contains(path) {
+        GlobalDef::Effect(ir)
+      } else {
+        GlobalDef::Def(ir)
+      });
     } else if let Some(&(native_id, arity)) = native_defs.get(path) {
       globals.push(GlobalDef::Native { native_id, arity });
     } else if let Some(info) = program.instances.get(path) {

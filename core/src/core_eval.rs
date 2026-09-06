@@ -414,32 +414,56 @@ pub fn force_global(
   natives: &NativeTable,
   cache: &mut GlobalCache,
 ) -> Result<Value, CoreEvalError> {
-  // A zero-arity native-attributed def (`Bench.now`/`scope_new`, both
-  // side-effecting — see `GlobalDef::Native`'s doc comment) is executed
-  // for its EFFECT, not just its value, unlike every other kind of
-  // global (an ordinary `def`'s body, a constructor), which is pure and
-  // safe to memoize once per `cache` — the whole point of the caching
-  // below. Bypassing the cache entirely for this one case (never reading
-  // a previous call's result, never storing this one) is what lets a
-  // second textual reference to the same native observe a fresh result
-  // rather than the first call's memoized one. Without this, `scope_new`
-  // called from two different `#[test]` defs sharing one `GlobalCache`
-  // (`run_tests`' own, e.g.) returns the SAME registry handle to both —
-  // the second test's `scope_drop`/`scope_fork` then fails with "scope
-  // <id> not found", since the first test's own `scope_drop` already
-  // removed it. A real bug this fixes, not a hypothetical one.
-  if let Some(GlobalDef::Native {
-    native_id,
-    arity: 0,
-  }) = globals.get(idx)
-  {
-    return fire_or_accumulate(
-      *native_id,
-      Arc::new(Vec::new().into()),
-      globals,
-      natives,
-      cache,
-    );
+  // Some globals are an EFFECT, not a value: forcing one performs
+  // something, so it must be performed again on the next reference
+  // rather than answered from `cache`. Everything else here (an ordinary
+  // def's body, a constructor, an instance dictionary) is pure and
+  // memoizes safely — which is the entire point of the caching below.
+  //
+  // Bypassing the cache means both halves: never reading a previous
+  // force's result, and never storing this one. That is what lets a
+  // second textual reference observe a fresh result.
+  //
+  // Two shapes qualify, and BOTH are needed — they are the same bug at
+  // different levels of indirection:
+  //
+  //   `Native { arity: 0 }`  the def IS the native, bodyless
+  //                          (`#[native current_time] def
+  //                          IO.current_time : IO I64`). Without this,
+  //                          `scope_new` called from two `#[test]` defs
+  //                          sharing one `GlobalCache` hands both the
+  //                          SAME registry handle, and the second test's
+  //                          `scope_drop`/`scope_fork` fails with "scope
+  //                          <id> not found" because the first already
+  //                          removed it.
+  //
+  //   `Effect(..)`           the def WRAPS one (`def Bench.now : IO I64
+  //                          := current_time`). Having a body made it
+  //                          lower to `Def`, which the native-only check
+  //                          above never saw, so it memoized — freezing
+  //                          every `--verbose` stage timing in the
+  //                          compiler to one constant. Keyed on the
+  //                          declared type (`lower_core_ir`'s
+  //                          `is_effect_type`), which no amount of
+  //                          wrapping can launder away.
+  match globals.get(idx) {
+    Some(GlobalDef::Native {
+      native_id,
+      arity: 0,
+    }) => {
+      return fire_or_accumulate(
+        *native_id,
+        Arc::new(Vec::new().into()),
+        globals,
+        natives,
+        cache,
+      );
+    }
+    Some(GlobalDef::Effect(ir)) => {
+      let ir = ir.clone();
+      return eval(&ir, &Env::nil(), globals, natives, cache);
+    }
+    _ => {}
   }
   if let Some(v) = cache.get(idx) {
     return Ok(v.clone());
@@ -460,6 +484,11 @@ pub fn force_global(
         .ok_or_else(|| CoreEvalError::UnknownGlobal(idx))?
       {
         GlobalDef::Def(ir) => eval(ir, &Env::nil(), globals, natives, cache)?,
+        // Unreachable: the early return above takes every `Effect` slot
+        // before the cache is ever consulted. Spelled out rather than
+        // folded into a catch-all so that adding a variant here stays a
+        // compile error.
+        GlobalDef::Effect(ir) => eval(ir, &Env::nil(), globals, natives, cache)?,
         // A constructor referenced point-free (no CoreIr body -- see
         // GlobalDef::Constructor's doc comment) resolves straight to an
         // empty, ready-to-fill constructor value; ordinary `apply` fills it
@@ -755,6 +784,46 @@ mod tests {
     // stale cached value.
     assert!(cache.get(0).is_none());
     force_global(0, &globals, &natives, &mut cache).unwrap();
+  }
+
+  /// The sibling of the test above, for the shape that actually
+  /// regressed. `def Bench.now : IO I64 := current_time` has a BODY, so
+  /// it lowers to a `Def`-like slot rather than `Native` — the
+  /// native-only check above never sees it, and it memoized. Every
+  /// `--verbose` stage timing the compiler printed collapsed to one
+  /// constant, because each `Bench.now` answered from cache.
+  ///
+  /// The test above cannot catch this: it hand-builds a
+  /// `GlobalDef::Native` table, which is precisely the case that was
+  /// already handled. This one wraps the native in a slot with a real
+  /// body, exactly as `lower_program` does for an `IO`-typed zero-arity
+  /// def.
+  #[test]
+  fn test_zero_arity_io_def_wrapping_a_native_is_not_memoized() {
+    // Slot 0: the effectful wrapper, body = `global 1`. Slot 1: the
+    // bodyless native it defers to.
+    let globals = GlobalTable::new(vec![
+      GlobalDef::Effect(std::sync::Arc::new(core_ir::global(1))),
+      GlobalDef::Native {
+        native_id: 0,
+        arity: 0,
+      },
+    ]);
+    let natives = NativeTable::new(
+      vec![crate::term::id("current_time")],
+      vec![0],
+      crate::lower_core_ir::WellKnownCtors {
+        io_io: Some(crate::lower_core_ir::CtorTag { tag: 0, arity: 1 }),
+        ..Default::default()
+      },
+    );
+    let mut cache = GlobalCache::new(2);
+    force_global(0, &globals, &natives, &mut cache).unwrap();
+    // The whole point: the wrapper's slot must stay empty, so the next
+    // reference performs the effect again instead of replaying this one.
+    assert!(cache.get(0).is_none());
+    force_global(0, &globals, &natives, &mut cache).unwrap();
+    assert!(cache.get(0).is_none());
   }
 
   #[test]

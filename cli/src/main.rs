@@ -959,7 +959,13 @@ fn execute(command: Commands) -> Result<(), String> {
         // exited 0 and read as success to any caller.
         Ok(code) => {
           if code != 0 {
-            std::process::exit(code as i32);
+            // POSIX keeps only the low 8 bits of an exit status, so a
+            // code that is nonzero but ≡ 0 mod 256 (or does not survive
+            // the i32 narrowing) would report SUCCESS -- the exact
+            // failure-reads-as-success this exit code exists to prevent.
+            // Anything unrepresentable becomes a plain 1.
+            let status = i32::try_from(code).ok().filter(|c| c % 256 != 0);
+            std::process::exit(status.unwrap_or(1));
           }
           Ok(())
         }
