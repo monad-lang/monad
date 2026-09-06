@@ -1633,6 +1633,9 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
         Term.hole => Term.hole,
         Term.quote_ inner => Term.quote_ (resolve_open_alias_term_scoped names bound inner),
         Term.var_macro idx dbg => Term.var_macro idx dbg,
+        // Preserving: this rewrites names in place and must not drop a
+        // position while doing it.
+        Term.ctx loc inner => Term.ctx loc (resolve_open_alias_term_scoped names bound inner),
     }
 
 #[partial]
@@ -2232,6 +2235,7 @@ def def_references_class (cls_str : String) (t : Term) : Bool :=
         Term.type_ _ => false,
         Term.hole => false,
         Term.quote_ inner => def_references_class cls_str inner,
+        Term.ctx _loc inner => def_references_class cls_str inner,
     }
 
 #[partial]
@@ -3158,9 +3162,14 @@ def flatten_call_spine (t : Term) : CallSpine :=
 
 #[partial]
 def flatten_call_spine_go (t : Term) (acc : List Term) : CallSpine :=
-    match t {
+    // Peels. A wrapper between two `app`s of a spine would end the flatten
+    // early, and the head this returns would be an `app` rather than the
+    // `var` `class_method_ref` needs -- so the class call silently fails to
+    // resolve and the link fails with `undefined @Monad_bind`. Placement
+    // rule R3 keeps wrappers out of head position; this covers the rest.
+    match term_peel t {
         Term.app f a => flatten_call_spine_go f (List.cons a acc),
-        _ => CallSpine.mk t acc,
+        _ => CallSpine.mk (term_peel t) acc,
     }
 
 #[partial]
@@ -3894,6 +3903,9 @@ def find_unresolved_class_calls_term (classes : List Class) (t : Term) (acc : Li
     Term.lit lit_ => find_unresolved_class_calls_lit classes lit_ acc,
     Term.type_ _universe => acc,
     Term.hole => acc,
+    // Must recurse: an unresolved class call under a located term is still
+    // unresolved, and this is what reports it.
+    Term.ctx _loc inner => find_unresolved_class_calls_term classes inner acc,
 }
 
 #[partial]

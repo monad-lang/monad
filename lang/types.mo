@@ -878,6 +878,55 @@ type Term {
     /// since `DebugName` is matched exhaustively in several real
     /// hot-path files).
     var_macro (idx: I64) (dbg: DebugName),
+    /// A source position attached to the term it wraps. Mirrors the Rust
+    /// reference's `Term::Ctx { loc, module, term }` (`core/src/term.rs`),
+    /// minus the module -- DWARF needs a point, and the file is known at
+    /// emission.
+    ///
+    /// A WRAPPER rather than a field on each variant: a field changes all
+    /// twelve constructor arities, and every positional match on them
+    /// breaks at RUNTIME with `expected N constructor fields, got N+1`,
+    /// no location, across ~2262 occurrence sites. A wrapper leaves every
+    /// existing pattern working.
+    ///
+    /// It is also NOT a side table, which would be the cheaper-looking
+    /// option: `Term` has no node identity to key one by. `var.idx` is
+    /// positional and rewritten by `term_shift`/`term_permute`, and
+    /// `DebugName` is documented as explicitly not identity and is
+    /// rewritten by `resolve_infix_term`, `qualify_modules` and
+    /// `infer.mo`'s mangling. Nothing stable exists to point at.
+    ///
+    /// **Semantically transparent.** A wrapper may change what the
+    /// compiler ANNOTATES and must never change what it DECIDES, so every
+    /// site that inspects a term's SHAPE peels first (`term_peel`), and
+    /// every site that rebuilds preserves (`Term.ctx loc (f inner)`).
+    /// `tools/debug_transparency_oracle.sh` is what enforces this: strip
+    /// `!dbg` from a `--debug` build and it must be byte-identical to the
+    /// non-debug build.
+    ///
+    /// Constructed ONLY by the located parser entry point, so `check`,
+    /// `test` and a non-debug `compile` never see one.
+    ctx (loc: Location) (term: Term),
+}
+
+/// Strip location wrappers, exposing the term a shape test wants.
+///
+/// Call this at the ENTRY of anything that matches on a term's shape --
+/// `flatten_call_spine`, `class_method_ref`, `collect_db_params`,
+/// `term_has_struct_lit` -- rather than adding a `ctx` arm to each. A
+/// shape probe that forgets does not fail loudly; it silently stops
+/// matching, and the call it was meant to resolve quietly does not.
+#[partial]
+def term_peel (t : Term) : Term := match t {
+    Term.ctx _loc inner => term_peel inner,
+    _ => t,
+}
+
+/// The innermost recorded position of a term, if it carries one.
+#[partial]
+def term_loc (t : Term) : Option Location := match t {
+    Term.ctx loc _inner => Option.some loc,
+    _ => Option.none,
 }
 
 /// Canonical TypeError uses de Bruijn Term. TypeErrorV0 is the legacy V0 variant.
@@ -1384,7 +1433,25 @@ instance Similar DebugName {
 }
 
 instance Similar Term {
+    /// Peels BOTH sides before comparing, so a location wrapper never
+    /// makes two otherwise-identical terms compare unequal. Without this,
+    /// `--debug` would change what the type checker decides, not just what
+    /// it annotates -- and `term_matches_carrier` (`lang/scope.mo`) reaches
+    /// here on instance-carrier matching, so the effect would be a
+    /// silently unresolved instance.
+    ///
+    /// Peeling also fixes a pre-existing gap: `similar_go`'s inner matches
+    /// below enumerate ten variants, omitting `quote_` and `var_macro`, so
+    /// comparing either was already a non-exhaustive-match crash waiting
+    /// on a caller that constructs one. Adding a thirteenth variant would
+    /// have made that live; routing through one entry point that peels
+    /// first keeps the arm count where it is.
     def similar (a : Term) (b : Term) : Bool :=
+        similar_term_go (term_peel a) (term_peel b)
+}
+
+#[partial]
+def similar_term_go (a : Term) (b : Term) : Bool :=
         match a {
             var i1 d1 => match b {
                 var i2 d2 => I64.beq i1 i2 && Similar.similar d1 d2,
@@ -1447,7 +1514,6 @@ instance Similar Term {
                 ntv _ => false, con _ => false, type_ _ => false
             }
         }
-}
 
 // ─── Term construction tests (Phase 0) ─────────────────────────────
 

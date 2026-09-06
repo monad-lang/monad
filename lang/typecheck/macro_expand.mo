@@ -26,16 +26,18 @@ use lang.typecheck.traverse {con_map_children, literal_map_children, match_case_
 // App-chain's own left spine to find what's at the bottom and what
 // was applied along the way, in left-to-right supplied order.
 
+// Peels: a macro call's head must be visible as a `var_macro` through any
+// location wrapper.
 #[partial]
 def spine_head (t : Term) : Term :=
-    match t {
+    match term_peel t {
         Term.app callee _ => spine_head callee,
-        _ => t,
+        _ => term_peel t,
     }
 
 #[partial]
 def spine_args (t : Term) (acc : List Term) : List Term :=
-    match t {
+    match term_peel t {
         Term.app callee arg => spine_args callee (List.cons arg acc),
         _ => acc,
     }

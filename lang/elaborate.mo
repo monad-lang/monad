@@ -65,6 +65,9 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
         Term.ntv _ => List.empty,
         Term.type_ _ => List.empty,
         Term.hole => List.empty,
+        // A location binds nothing, so the names free under it are the
+        // names free in it.
+        Term.ctx _loc inner => free_vars inner known_names,
     }
 
 /// Collect free vars from match case bodies.

@@ -698,6 +698,9 @@ def lower_term (ctx : LowerCtx) (t : Term) (acc : LowerAcc) : Pair (Result Lower
     Term.pi _ _ => lower_err LowerError.le_type_level_term acc,
     Term.type_ _ => lower_err LowerError.le_type_level_term acc,
     Term.hole => lower_err LowerError.le_type_level_term acc,
+    // Transparent. This is the meta-eval lowering, not codegen; positions
+    // are of no use to it, so it lowers straight through.
+    Term.ctx _loc inner => lower_term ctx inner acc,
   }
 
 // ─── Whole-program global table: the worklist pass ──────────────────

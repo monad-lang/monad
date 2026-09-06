@@ -762,6 +762,9 @@ def is_term_hole (t : Term) : Bool :=
     match t {
         Term.hole => true,
         Term.lam _dbg _typ body => is_term_hole body,
+        // Look through: this decides whether a def is bodyless, and a
+        // located hole is still a hole.
+        Term.ctx _loc inner => is_term_hole inner,
         _ => false
     }
 

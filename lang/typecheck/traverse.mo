@@ -41,6 +41,12 @@ def term_map_children (f : Term -> Term) (t : Term) : Term :=
         Term.type_ u => Term.type_ u,
         Term.hole => Term.hole,
         Term.quote_ inner => Term.quote_ (f inner),
+        // PRESERVING, not transparent. This is the generic rebuild every
+        // pass-through pass routes through, so dropping the wrapper here
+        // would erase every source position the moment any pass walked a
+        // term -- which is most of them. `loc` is data, not a child, so
+        // `f` is not applied to it.
+        Term.ctx loc inner => Term.ctx loc (f inner),
     }
 
 #[partial]
@@ -136,6 +142,10 @@ def term_map_children_at_depth (f : I64 -> Term -> Term) (t : Term) : Term :=
         Term.type_ u => Term.type_ u,
         Term.hole => Term.hole,
         Term.quote_ inner => Term.quote_ (f 0 inner),
+        // Depth 0: a wrapper introduces no binder, so the term inside it
+        // sits at exactly the depth the wrapper does. Passing 1 here would
+        // shift every free index under a located term by one.
+        Term.ctx loc inner => Term.ctx loc (f 0 inner),
     }
 
 #[partial]

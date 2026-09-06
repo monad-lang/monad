@@ -262,8 +262,14 @@ def lookup_binding (bindings : List LocalBinding) (name : Identifier) : Option L
 
 /// Collect lambda params from a de Bruijn Term body.
 /// Strips `Term.lam` prefixes and returns Param for each.
+// Peels. This walk derives a compiled function's PARAMETER COUNT by
+// counting `Term.lam`s, so a location wrapper interposed between two lams
+// truncates the list and emits a function with the wrong arity -- which
+// `llc` accepts and the linker does not. Placement rule R2 says a wrapper
+// never lands here; this peels anyway, because one call is cheap and the
+// failure is not.
 #[partial]
-def collect_db_params (term_ : Term) : List Param := match term_ {
+def collect_db_params (term_ : Term) : List Param := match term_peel term_ {
     Term.lam dbg typ body =>
         let name : Identifier := match dbg {
             DebugName.named id => id,

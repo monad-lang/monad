@@ -39,6 +39,8 @@ def free_names_of_term (bound : List Identifier) (t : Term) : List Identifier :=
     Term.type_ _universe => List.empty,
     Term.hole => List.empty,
     Term.quote_ inner => free_names_of_term bound inner,
+    // Transparent: a location binds nothing and references nothing.
+    Term.ctx _loc inner => free_names_of_term bound inner,
 }
 
 #[partial]
@@ -158,6 +160,10 @@ def collect_referenced_names (t : Term) (acc : List String) : List String := mat
     Term.lit lit_ => collect_referenced_names_lit lit_ acc,
     Term.type_ _universe => acc,
     Term.hole => acc,
+    // MUST recurse. Missing this arm makes `filter_reachable_decls` blind
+    // to everything under a located term: the def count silently drops and
+    // the link fails later with `undefined @X`, far from the cause.
+    Term.ctx _loc inner => collect_referenced_names inner acc,
 }
 
 /// Now total (no `#[partial]`) — `struct_lit`/`struct_update` are

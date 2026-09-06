@@ -84,6 +84,21 @@ def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types
         Term.hole => ok (mk_typed expected_type expected_type),
         Term.quote_ _ => err (TypeError.custom "unresolved quote reached the type checker (macro expansion should have resolved it first)"),
         Term.var_macro _ _ => err (TypeError.custom "unresolved macro-template variable reached the type checker (macro expansion should have resolved it first)"),
+        // PRESERVING. `elaborate_decl_with_scope` (`lang/module.mo`) writes
+        // the checker's rewritten `TypedTerm.term` back into the `Def`, and
+        // elaboration runs on the compile path -- so dropping the wrapper
+        // here would erase every source position before codegen ever sees
+        // one, and the whole feature would silently do nothing.
+        Term.ctx loc inner => type_check_located loc inner expected_type scope local_types locals,
+    }
+
+/// Re-wrap a located term's checked result. Split out because the rewrap
+/// needs the `ok`/`err` split and nested patterns are unsupported.
+#[partial]
+def type_check_located (loc : Location) (inner : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+    match type_check inner expected_type scope local_types locals {
+        ok tt => ok (mk_typed (Term.ctx loc tt.term) tt.typ),
+        err e => err e,
     }
 
 /// Build a TypedTerm from term and type.

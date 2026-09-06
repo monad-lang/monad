@@ -2093,6 +2093,10 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
     Term.pi arg ret => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.type_ universe => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.hole => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
+    // Stage 3c replaces this with the arm that records the position and
+    // emits a `loc_marker`. Compiling straight through until then keeps
+    // this commit a no-op, which is the point of splitting 3a out.
+    Term.ctx _loc inner => compile_db_term_ir c inner,
 }
 
 #[partial]
@@ -2674,9 +2678,11 @@ def flatten_app_spine (t : Term) : AppSpine :=
 
 #[partial]
 def flatten_app_spine_go (t : Term) (acc : List Term) : AppSpine :=
-    match t {
+    // Peels, for the same reason `flatten_call_spine_go` (`lang/scope.mo`)
+    // does: an early-terminated spine emits the wrong call shape.
+    match term_peel t {
         Term.app fun_ arg_ => flatten_app_spine_go fun_ (List.cons arg_ acc),
-        _ => { head := t, args := acc },
+        _ => { head := term_peel t, args := acc },
     }
 
 /// `last_val` is the running "last-known value" from `compose_seq`'s

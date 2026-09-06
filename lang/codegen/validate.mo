@@ -185,6 +185,9 @@ def term_has_struct_lit (t : Term) : Bool := match t {
     Term.lit lit_ => lit_has_struct_lit lit_,
     Term.type_ _universe => false,
     Term.hole => false,
+    // Must recurse, or a struct literal under a located term passes the
+    // gate and later compiles to a `void_val` placeholder.
+    Term.ctx _loc inner => term_has_struct_lit inner,
 }
 
 def lit_has_struct_lit (l : Literal) : Bool := match l {
@@ -439,9 +442,13 @@ def missing_call_targets (targets : List String) (defined : HashMap String Bool)
 }
 
 /// Strip lambda/forall prefixes from a de Bruijn Term body.
+// Peels, for the same reason `collect_db_params` does: this decides
+// whether a def is a BODYLESS native by stripping lams and testing for
+// `Term.hole`, and a wrapper around the hole makes a real native look
+// bodied -- silently skipping the unwired-native gate.
 #[partial]
-def strip_db_lams (term_ : Term) : Term := match term_ {
+def strip_db_lams (term_ : Term) : Term := match term_peel term_ {
     Term.lam dbg typ body => strip_db_lams body,
     Term.forall dbg kind body => strip_db_lams body,
-    _ => term_,
+    _ => term_peel term_,
 }

@@ -110,6 +110,9 @@ def show_term (t : Term) : String := match t {
     con c => show_con c,
     type_ universe => show_universe universe,
     hole => "_",
+    // Transparent: a position is not part of what a term IS, and printing
+    // one would break every `show_term` assertion in the test suite.
+    ctx _loc inner => show_term inner,
 }
 
 #[partial]
