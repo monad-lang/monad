@@ -109,7 +109,7 @@ def str_map_insert {V : Type} (key : String) (val : V) (m : HashMap String V) : 
         HashMap.map buckets =>
             let idx := HashMap.bucket_of (String.hash key) in
             let bucket := HashMap.get_bucket buckets idx in
-            let new_bucket := HashMap.bucket_insert_eq String.beq key val bucket in
+            let new_bucket := HashMap.bucket_insert_str key val bucket in
             HashMap.map (HashMap.set_bucket buckets idx new_bucket)
     }
 
@@ -119,7 +119,7 @@ def str_map_lookup {V : Type} (key : String) (m : HashMap String V) : Option V :
         HashMap.map buckets =>
             let idx := HashMap.bucket_of (String.hash key) in
             let bucket := HashMap.get_bucket buckets idx in
-            HashMap.bucket_lookup_eq String.beq key bucket
+            HashMap.bucket_lookup_str key bucket
     }
 
 #[partial]

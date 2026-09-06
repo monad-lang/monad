@@ -475,6 +475,48 @@ def HashMap.bucket_lookup_eq {K V : Type} (eq: K -> K -> Bool) (key: K) (bucket:
       }
   }
 
+/// `bucket_lookup_eq`/`bucket_insert_eq` specialised to `String` keys,
+/// calling `String.beq` directly instead of taking it as a parameter.
+///
+/// Passing a comparator is what a compiled binary pays dearly for. A
+/// `gdb` backtrace from a self-compile stuck in Stage 0c showed every
+/// single map probe going
+/// `str_map_lookup -> alloc_closure -> GC_malloc_kind -> GC_clear_stack`
+/// to build the `String.beq` closure, then reaching the comparison
+/// itself through `apply_closure2 -> apply_closure_dispatch ->
+/// String.beq_closure_shim` -- one GC allocation and an indirect call
+/// per bucket entry, for a function whose identity is known statically.
+/// The Rust host pays none of this, which is most of why that pass ran
+/// ~20x worse compiled than interpreted rather than the usual ~4x.
+///
+/// `String` because that is what every hot map in the compiler is keyed
+/// by: `lang/codegen/util.mo`'s `str_map_*` and `lang/scope.mo`'s
+/// `alias_map_*`.
+#[terminating]
+def HashMap.bucket_lookup_str {V : Type} (key: String) (bucket: List (Pair String V)) : Option V :=
+  match bucket {
+    List.empty => Option.none,
+    List.cons pair rest =>
+      match pair {
+        Pair.pair k v =>
+          if String.beq key k then Option.some v
+          else HashMap.bucket_lookup_str key rest
+      }
+  }
+
+#[terminating]
+def HashMap.bucket_insert_str {V : Type} (key: String) (val: V) (bucket: List (Pair String V)) : List (Pair String V) :=
+  match bucket {
+    List.empty => List.cons (Pair.pair key val) List.empty,
+    List.cons pair rest =>
+      match pair {
+        Pair.pair k v =>
+          if String.beq key k
+          then List.cons (Pair.pair key val) rest
+          else List.cons pair (HashMap.bucket_insert_str key val rest)
+      }
+  }
+
 /// Look up a key in a single bucket.
 #[terminating]
 def HashMap.bucket_lookup {K V : Type} (lt: K -> K -> Bool) (gt: K -> K -> Bool) (key: K) (bucket: List (Pair K V)) : Option V :=

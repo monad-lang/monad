@@ -320,18 +320,33 @@ def owners_for (name : String) (owners_map : HashMap String (List ModulePath)) :
 /// The names two or more modules declare -- the only ones whose rewrite
 /// target depends on which module is doing the referencing.
 #[partial]
+/// Accumulator-passing so the self-tail-call rewrite turns this into a
+/// loop. It scans every declared name in the program -- 3,172 of them --
+/// and the natural `List.cons n (recurse rest)` shape held one native
+/// frame per name: a `gdb` backtrace from a stuck self-compile showed
+/// 3,195 frames, nearly all of them this function. Depth that large is
+/// not just a stack-overflow risk, it makes every allocation underneath
+/// it slower, because Boehm scans the whole stack conservatively on each
+/// collection and `GC_clear_stack` runs on the way out of each
+/// `GC_malloc`.
+///
+/// The accumulator reverses, so the result is reversed once at the end
+/// to keep the original declaration order.
 def ambiguous_declared_names (names : List String) (owners_map : HashMap String (List ModulePath)) : List String :=
+    List.reverse (ambiguous_declared_names_go names owners_map List.empty)
+
+#[partial]
+def ambiguous_declared_names_go (names : List String) (owners_map : HashMap String (List ModulePath)) (acc : List String) : List String :=
     match names {
-        List.empty => List.empty,
+        List.empty => acc,
         List.cons n rest =>
-            let tail := ambiguous_declared_names rest owners_map in
             match owners_for n owners_map {
                 List.cons _ orest =>
                     match orest {
-                        List.empty => tail,
-                        List.cons _ _ => List.cons n tail,
+                        List.empty => ambiguous_declared_names_go rest owners_map acc,
+                        List.cons _ _ => ambiguous_declared_names_go rest owners_map (List.cons n acc),
                     },
-                List.empty => tail,
+                List.empty => ambiguous_declared_names_go rest owners_map acc,
             },
     }
 
