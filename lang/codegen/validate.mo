@@ -73,10 +73,13 @@ def validate_no_unwired_natives (decl_list : List Decl) : Result String (List De
 /// real-bodied def compiles a real function whatever its attributes.
 #[partial]
 def find_unwired_native_defs (defs : List Def) : List String :=
+    List.reverse (find_unwired_native_defs_go defs List.empty)
+
+#[partial]
+def find_unwired_native_defs_go (defs : List Def) (acc : List String) : List String :=
     match defs {
-        List.empty => List.empty,
+        List.empty => acc,
         List.cons d rest =>
-            let rest_msgs := find_unwired_native_defs rest in
             match d {
                 Def.mk name _typ term_ _constraints attrs _vis =>
                     match strip_db_lams term_ {
@@ -84,20 +87,21 @@ def find_unwired_native_defs (defs : List Def) : List String :=
                             match native_attr_target_name attrs {
                                 Option.some target =>
                                     match native_runtime_fn_name attrs {
-                                        Option.some _ => rest_msgs,
+                                        Option.some _ => find_unwired_native_defs_go rest acc,
                                         Option.none =>
                                             match lookup_native_any (def_symbol_name name) {
-                                                Option.some _ => rest_msgs,
+                                                Option.some _ => find_unwired_native_defs_go rest acc,
                                                 Option.none =>
                                                     let def_name := module_path_to_str name in
                                                     let head := String.concat "native `" (String.concat target "`") in
                                                     let mid := String.concat " (needed by def `" (String.concat def_name "`)") in
-                                                    List.cons (String.concat head (String.concat mid " is not wired into the native backend -- it would silently compile to a 'return Unit' stub; add a monad_* runtime function + native_runtime_fn_name entry, or an inline native_op_table key")) rest_msgs,
+                                                    let msg := String.concat head (String.concat mid " is not wired into the native backend -- it would silently compile to a 'return Unit' stub; add a monad_* runtime function + native_runtime_fn_name entry, or an inline native_op_table key") in
+                                                    find_unwired_native_defs_go rest (List.cons msg acc),
                                             },
                                     },
-                                Option.none => rest_msgs,
+                                Option.none => find_unwired_native_defs_go rest acc,
                             },
-                        _ => rest_msgs,
+                        _ => find_unwired_native_defs_go rest acc,
                     },
             },
     }
@@ -149,18 +153,22 @@ def validate_no_undesugared_struct_lits (decl_list : List Decl) : Result String 
 /// `validate_no_undesugared_struct_lits`'s own doc comment.
 #[partial]
 def find_undesugared_struct_lit_defs (defs : List Def) : List String :=
+    List.reverse (find_undesugared_struct_lit_defs_go defs List.empty)
+
+#[partial]
+def find_undesugared_struct_lit_defs_go (defs : List Def) (acc : List String) : List String :=
     match defs {
-        List.empty => List.empty,
+        List.empty => acc,
         List.cons d rest =>
-            let rest_msgs := find_undesugared_struct_lit_defs rest in
             match d {
                 Def.mk name _typ term_ _constraints _attrs _vis =>
                     if term_has_struct_lit term_
                     then
                         let def_name := module_path_to_str name in
                         let head := String.concat "def `" (String.concat def_name "`") in
-                        List.cons (String.concat head " contains a struct literal that never desugared to a constructor -- it would silently compile to a void placeholder; give the literal an explicit `: StructName` annotation, or bind it to an annotated local before passing it") rest_msgs
-                    else rest_msgs,
+                        let msg := String.concat head " contains a struct literal that never desugared to a constructor -- it would silently compile to a void placeholder; give the literal an explicit `: StructName` annotation, or bind it to an annotated local before passing it" in
+                        find_undesugared_struct_lit_defs_go rest (List.cons msg acc)
+                    else find_undesugared_struct_lit_defs_go rest acc,
             },
     }
 

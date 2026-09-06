@@ -270,3 +270,20 @@ def String.concat_all (ss : List String) : String :=
 		empty => "",
 		cons hd tl => String.concat hd (String.concat_all tl)
 	}
+
+/// Concatenate every piece in ONE allocation.
+///
+/// `String.concat` copies both sides, so the fold `String.concat_all`
+/// does recopies the accumulated tail at every step, costing time
+/// quadratic in the total length. At the size the compiler's own LLVM
+/// emitters work with -- a 3.8 MB module assembled from thousands of
+/// pieces -- that is the difference between seconds and hours. This
+/// measures the total once, allocates once, and copies each piece once.
+///
+/// A separate name rather than replacing `concat_all`'s body because
+/// `concat_all` is reachable from macro expansion, which runs in the
+/// self-hosted meta-evaluator's deliberately small fixed native table
+/// (`lang/core_eval.mo`); a codegen performance fix should not widen
+/// that sandbox.
+#[native string_concat_list]
+def String.concat_list (ss : List String) : String

@@ -179,6 +179,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
         Option.none => Option.none,
         Option.some target =>
             if String.beq target "string_concat" then Option.some (NativeWrapKind.passthrough "monad_string_concat")
+            else if String.beq target "string_concat_list" then Option.some (NativeWrapKind.passthrough "monad_string_concat_list")
             else if String.beq target "string_eq" then Option.some (NativeWrapKind.bool_result "monad_string_eq")
             // `String.length` (std/string.mo) had no entry here either --
             // same "confirmed as a real gap" shape as `string_concat`'s
@@ -408,6 +409,7 @@ def runtime_declarations : List LLVMDeclaration :=
     // compiles to a real wrapper" fix) hits the identical "no implicit
     // declare" gap.
     let d24 := mk_decl "monad_string_concat" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d24b := mk_decl "monad_string_concat_list" (List.cons "i64" List.empty) "i64" in
     let d25 := mk_decl "monad_string_eq" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // Closure free-variable capture (see `monad_closure_get_env`/
     // `monad_closure_set_env`, `runtime.c`, and `compile_db_lam_ir`'s
@@ -445,7 +447,7 @@ def runtime_declarations : List LLVMDeclaration :=
     let d38 := mk_decl "monad_u64_to_string" (List.cons "i64" List.empty) "i64" in
     let d39 := mk_decl "monad_process_id" List.empty "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d8, d9, d10, d11, d12, d13,
-     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31,
+     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39]
 
 /// `apply_closureN`'s own declared param list: the closure value itself

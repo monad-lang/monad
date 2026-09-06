@@ -646,6 +646,54 @@ int64_t monad_string_hash(char* s) {
    table (List.empty 5, List.cons 6) that emit.mo's builtin_ctor_tags
    is the single source of truth for. */
 
+/* `#[native string_concat_list]` (init/string.mo's `String.concat_list`).
+
+   Concatenating a list of strings pairwise is quadratic: every
+   `String.concat` copies BOTH sides, so folding one over N pieces
+   recopies the accumulated prefix N times. The backend's own emitters
+   (`emit_functions`/`emit_blocks`/`emit_globals`/`emit_decls`,
+   lang/codegen/ir.mo) build a 3.8 MB module that way, which is the
+   difference between seconds and hours at this size.
+
+   Deliberately separate from `String.concat_all`, which stays ordinary
+   Monad code: `concat_all` is reachable from macro expansion, and that
+   runs in the self-hosted meta-evaluator's small fixed native table
+   (lang/core_eval.mo) whose constructor tags are the program's own, not
+   this file's fixed List.empty 5 / List.cons 6. Widening that sandbox
+   for the code generator's performance would be the wrong trade.
+
+   Two passes, one allocation: measure, then copy. `parts` is a
+   `List String` in the usual convention (List.empty 5, List.cons 6,
+   fields head/tail), and each head is a raw NUL-terminated char* like
+   every other String here -- NOT a boxed StringObj.
+
+   C rather than generated Monad IR for the same reason the rest of this
+   section is: it needs a real buffer built in one shot, which the
+   generated-IR emitters have no way to express. */
+char* monad_string_concat_list(void* parts) {
+    size_t total = 0;
+    int64_t count = 0;
+    for (void* n = parts; n && monad_get_tag(n) == 6; n = monad_get_field(n, 1)) {
+        char* piece = (char*)monad_get_field(n, 0);
+        if (piece) total += strlen(piece);
+        count++;
+    }
+
+    char* out = (char*)monad_alloc_atomic(total + 1);
+    if (!out) return NULL;
+    size_t at = 0;
+    for (void* n = parts; n && monad_get_tag(n) == 6; n = monad_get_field(n, 1)) {
+        char* piece = (char*)monad_get_field(n, 0);
+        if (piece) {
+            size_t len = strlen(piece);
+            memcpy(out + at, piece, len);
+            at += len;
+        }
+    }
+    out[at] = '\0';
+    return out;
+}
+
 /* `#[native string_to_lowercase]` (init/string.mo). ASCII-only, matching
    what every caller in the compiler's own closure needs (identifier and
    keyword folding); the reference's Rust `to_lowercase` is full Unicode,

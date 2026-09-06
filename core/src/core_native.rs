@@ -129,6 +129,7 @@ const PURE_NATIVES: &[&str] = &[
   "f64_to_string",
   "string_eq",
   "string_concat",
+  "string_concat_list",
   "string_length",
   "string_starts_with",
   "string_slice",
@@ -232,6 +233,7 @@ pub fn exec_native(
     "string_gt" => string_gt(args, natives),
     "string_hash" => string_hash(args),
     "string_concat" => string_concat(args),
+    "string_concat_list" => string_concat_list(args, natives),
     "string_length" => string_length(args),
     "string_to_lowercase" => string_to_lowercase(args),
     "string_starts_with" => string_starts_with(args, natives),
@@ -576,6 +578,32 @@ fn string_concat(args: &[Value]) -> Result<Value, CoreEvalError> {
   let a = extract_string(&args[0])?;
   let b = extract_string(&args[1])?;
   Ok(Value::Lit(IrLit::Str((a.to_string() + b).into())))
+}
+
+/// `String.concat_list` (init/string.mo). Concatenates a `List String`
+/// in one pass instead of folding `String.concat`, which is quadratic in
+/// the total length. The host needs it as much as the compiled runtime
+/// does: building v31 means this evaluator interprets the compiler's own
+/// LLVM emitters.
+fn string_concat_list(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "string_concat_list needs 1 arg".into(),
+    ));
+  }
+  let cons = require_ctor(natives.well_known.list_cons, "List.cons")?;
+  let mut out = String::new();
+  let mut node = &args[0];
+  loop {
+    match node {
+      Value::Con { tag, args: fields } if *tag == cons.tag && fields.len() == 2 => {
+        out.push_str(extract_string(&fields[0])?);
+        node = &fields[1];
+      }
+      _ => break,
+    }
+  }
+  Ok(Value::Lit(IrLit::Str(out.into())))
 }
 
 fn string_length(args: &[Value]) -> Result<Value, CoreEvalError> {

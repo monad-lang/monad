@@ -593,16 +593,31 @@ def show_one_param (p : ParamPair) : String := match p {
         String.concat (show_llvm_type param_ty) (String.concat " %" param_name),
 }
 
+/// Collect the pieces, then join once.
+///
+/// `String.concat a (recurse rest)` recopies the whole accumulated tail
+/// at every step, so rendering a module this way costs time quadratic in
+/// its output -- 3.8 MB of it for the compiler itself. `String.join`
+/// measures and copies in one pass. The same rewrite applies to
+/// `emit_globals`/`emit_decls`/`emit_functions` below.
 #[partial]
-def emit_blocks (blocks : List LLVMBasicBlock) (dbg_suffix : String) : String := match blocks {
-    List.empty => "",
-    List.cons b rest => String.concat (emit_block b dbg_suffix) (emit_blocks rest dbg_suffix),
+def emit_blocks (blocks : List LLVMBasicBlock) (dbg_suffix : String) : String :=
+    String.concat_list (List.reverse (emit_blocks_go blocks dbg_suffix List.empty))
+
+#[partial]
+def emit_blocks_go (blocks : List LLVMBasicBlock) (dbg_suffix : String) (acc : List String) : List String := match blocks {
+    List.empty => acc,
+    List.cons b rest => emit_blocks_go rest dbg_suffix (List.cons (emit_block b dbg_suffix) acc),
 }
 
 #[partial]
-def emit_globals (gs : List LLVMGlobal) : String := match gs {
-    List.empty => "",
-    List.cons g rest => String.concat (show_llvm_global g) (String.concat "\n" (emit_globals rest)),
+def emit_globals (gs : List LLVMGlobal) : String :=
+    String.concat_list (List.reverse (emit_globals_go gs List.empty))
+
+#[partial]
+def emit_globals_go (gs : List LLVMGlobal) (acc : List String) : List String := match gs {
+    List.empty => acc,
+    List.cons g rest => emit_globals_go rest (List.cons (String.concat (show_llvm_global g) "\n") acc),
 }
 
 /// One hex digit (uppercase, matching LLVM's own convention) for a
@@ -692,9 +707,13 @@ def show_llvm_global (g : LLVMGlobal) : String := match g {
 }
 
 #[partial]
-def emit_decls (ds : List LLVMDeclaration) : String := match ds {
-    List.empty => "",
-    List.cons d rest => String.concat (show_llvm_decl d) (String.concat "\n" (emit_decls rest)),
+def emit_decls (ds : List LLVMDeclaration) : String :=
+    String.concat_list (List.reverse (emit_decls_go ds List.empty))
+
+#[partial]
+def emit_decls_go (ds : List LLVMDeclaration) (acc : List String) : List String := match ds {
+    List.empty => acc,
+    List.cons d rest => emit_decls_go rest (List.cons (String.concat (show_llvm_decl d) "\n") acc),
 }
 
 #[partial]
@@ -709,9 +728,13 @@ def join_strs (xs : List String) : String :=
     List.intercalate ", " xs
 
 #[partial]
-def emit_functions (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String := match fs {
-    List.empty => "",
-    List.cons f rest => String.concat (emit_function f dbg_refs) (String.concat "\n" (emit_functions rest dbg_refs)),
+def emit_functions (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) : String :=
+    String.concat_list (List.reverse (emit_functions_go fs dbg_refs List.empty))
+
+#[partial]
+def emit_functions_go (fs : List LLVMFunction) (dbg_refs : List (Pair String DbgFuncRefs)) (acc : List String) : List String := match fs {
+    List.empty => acc,
+    List.cons f rest => emit_functions_go rest dbg_refs (List.cons (String.concat (emit_function f dbg_refs) "\n") acc),
 }
 
 // --- DWARF debug info (v1: one location per top-level def) ---
