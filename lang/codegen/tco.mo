@@ -138,6 +138,8 @@ def build_ssa_def_map_instrs (instrs : List LLVMInstruction) (acc : HashMap Stri
             LLVMInstruction.ret _val => build_ssa_def_map_instrs rest acc,
             LLVMInstruction.store _val _pty _ptr => build_ssa_def_map_instrs rest acc,
             LLVMInstruction.comment _text => build_ssa_def_map_instrs rest acc,
+            // Defines no SSA name, exactly like a comment.
+            LLVMInstruction.loc_marker _loc => build_ssa_def_map_instrs rest acc,
         },
 }
 
@@ -169,6 +171,7 @@ def find_sites_in_block (fn_name : String) (arity : I64) (defs : HashMap String 
                     LLVMInstruction.jump _l => List.empty,
                     LLVMInstruction.store _v _pty _p => List.empty,
                     LLVMInstruction.comment _t => List.empty,
+                    LLVMInstruction.loc_marker _loc => List.empty,
                 },
             Option.none => List.empty,
         },
@@ -462,6 +465,8 @@ def rewrite_parm_in_instr (i : LLVMInstruction) (loop_names : List String) : LLV
     LLVMInstruction.ret val => LLVMInstruction.ret (rewrite_parm_to_loopvar val loop_names),
     LLVMInstruction.store val pty ptr_ => LLVMInstruction.store (rewrite_parm_to_loopvar val loop_names) pty (rewrite_parm_to_loopvar ptr_ loop_names),
     LLVMInstruction.comment text => LLVMInstruction.comment text,
+    // No `LLVMValue` inside, so nothing to rewrite.
+    LLVMInstruction.loc_marker loc => LLVMInstruction.loc_marker loc,
 }
 
 #[partial]
@@ -541,6 +546,7 @@ def remove_assign_of (instrs : List LLVMInstruction) (target : String) : List LL
             LLVMInstruction.ret _v => List.cons i (remove_assign_of rest target),
             LLVMInstruction.store _val _pty _ptr => List.cons i (remove_assign_of rest target),
             LLVMInstruction.comment _t => List.cons i (remove_assign_of rest target),
+            LLVMInstruction.loc_marker _loc => List.cons i (remove_assign_of rest target),
         },
 }
 
@@ -631,6 +637,7 @@ def prune_phi_in_instrs (instrs : List LLVMInstruction) (stale_label : String) :
             LLVMInstruction.ret _v => prune_phi_in_instrs_rest i rest stale_label,
             LLVMInstruction.store _val _pty _ptr => prune_phi_in_instrs_rest i rest stale_label,
             LLVMInstruction.comment _t => prune_phi_in_instrs_rest i rest stale_label,
+            LLVMInstruction.loc_marker _loc => prune_phi_in_instrs_rest i rest stale_label,
         },
 }
 

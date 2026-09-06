@@ -321,6 +321,9 @@ def call_targets_in_instr (i : LLVMInstruction) : List String := match i {
     LLVMInstruction.store v _pty p => List.append (call_targets_in_value v) (call_targets_in_value p),
     LLVMInstruction.jump _l => List.empty,
     LLVMInstruction.comment _t => List.empty,
+    // Calls no one -- must stay empty, or reachability would keep a def alive
+    // that nothing actually references.
+    LLVMInstruction.loc_marker _loc => List.empty,
 }
 
 /// Total walk over `LLVMValue`. Every arm is spelled out rather than

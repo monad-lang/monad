@@ -1,4 +1,9 @@
 use std.list {intercalate}
+// The leaf string-map module, NOT `lang.codegen.util` -- that file imports
+// this one, so the dependency cannot run both ways. See `strmap.mo`'s head.
+use lang.codegen.strmap {str_map_empty, str_map_insert, str_map_lookup}
+// For the `HashMap` type itself, which the `loc_suffixes` field names.
+use std.map {}
 
 type LLVMType {
     void,
@@ -123,6 +128,29 @@ type LLVMInstruction {
     /// already at that width (e.g. `trunc` for an `i8*` store).
     store (val : LLVMValue) (ptr_ty : LLVMType) (ptr : LLVMValue),
     comment (text : String),
+    /// Zero-width marker: "every instruction from here on belongs to this
+    /// source position, until the next marker." Renders to nothing.
+    ///
+    /// A marker rather than a `dbg` FIELD on each variant, because a field
+    /// changes six constructor arities and every positional match on them
+    /// breaks at RUNTIME with `expected N constructor fields, got N+1`, no
+    /// location. And a marker rather than a parallel `List (Option DbgLoc)`
+    /// alongside `LLVMBasicBlock`'s instructions, because instruction lists
+    /// are spliced, truncated and rewritten all over -- `compose_seq`,
+    /// `drop_last_instr` (`lang/codegen/util.mo`), `unwrap_io_return_blocks`,
+    /// and `apply_self_tco`, which rewrites whole blocks
+    /// (`rewrite_parm_in_instrs`, `remove_assign_of`, `prune_phi_in_instrs`).
+    /// A parallel list desynchronizes at every one of those, and the symptom
+    /// is line numbers silently drifting by k with nothing to catch it. A
+    /// marker travels WITH the stream, so it cannot desync.
+    ///
+    /// Two hazards, both `--debug`-only since nothing else constructs one:
+    /// `ends_with_terminator` (`lang/codegen/emit.mo`) inspects the LAST
+    /// element of a list and `drop_last_instr` drops it blindly, so a marker
+    /// must never be emitted at the end of an instruction list. Held by
+    /// construction -- markers are only ever prepended to a compiled
+    /// sub-term's own instructions.
+    loc_marker (loc : DbgLoc),
 }
 
 type LLVMBasicBlock {
@@ -490,6 +518,11 @@ def show_instruction (instr : LLVMInstruction) (dbg_suffix : String) : String :=
     ret val => String.concat (show_ret_instr val) dbg_suffix,
     comment text =>
         String.concat "  ; " text,
+    // Unreachable: `emit_instrs` consumes a marker to update the current
+    // suffix and never renders it. The arm exists because this match is
+    // exhaustive, and a marker that DID reach here must produce no line
+    // rather than a stray one.
+    loc_marker _loc => "",
 }
 
 // Every non-`void_val` `LLVMValue` renders the same way here (`"  ret "
@@ -518,18 +551,35 @@ def show_ret_instr (val : LLVMValue) : String := match val {
     _ => "  ret " ++ show_llvm_value_typed val,
 }
 
+/// Each block starts back at the function's own location rather than
+/// inheriting whatever the previous block ended on. Blocks are control-flow
+/// joins -- an instruction's position should not depend on which predecessor
+/// happened to be emitted before it in the text. Every construct that
+/// creates blocks (`if`, `match`) marks its own position on entry anyway.
 #[partial]
-def emit_block (block : LLVMBasicBlock) (dbg_suffix : String) : String := match block {
+def emit_block (block : LLVMBasicBlock) (refs : DbgFuncRefs) : String := match block {
     LLVMBasicBlock.mk label instructions =>
-        String.concat "\n" (String.concat label (String.concat ":" (emit_instrs instructions dbg_suffix))),
+        String.concat "\n" (String.concat label (String.concat ":" (emit_instrs instructions refs refs.instr_suffix))),
 }
 
+/// `current` is the suffix in force, updated by each `loc_marker` and
+/// applied to every instruction after it -- the same "position holds until
+/// changed" model an assembler's `.loc` directive uses.
 #[partial]
-def emit_instrs (instructions : List LLVMInstruction) (dbg_suffix : String) : String := match instructions {
+def emit_instrs (instructions : List LLVMInstruction) (refs : DbgFuncRefs) (current : String) : String := match instructions {
     List.empty => "",
-    List.cons i rest =>
-        String.concat "\n" (String.concat (show_instruction i dbg_suffix) (emit_instrs rest dbg_suffix)),
+    List.cons i rest => emit_instrs_step i rest refs current,
 }
+
+/// Split out because a marker CONSUMES itself: it renders no line and
+/// changes the suffix for everything after it, so it cannot be handled
+/// inside the `String.concat` the other instructions take.
+#[partial]
+def emit_instrs_step (i : LLVMInstruction) (rest : List LLVMInstruction) (refs : DbgFuncRefs) (current : String) : String :=
+    match i {
+        LLVMInstruction.loc_marker loc => emit_instrs rest refs (dbg_suffix_for refs loc),
+        _ => String.concat "\n" (String.concat (show_instruction i current) (emit_instrs rest refs current)),
+    }
 
 /// A function's own two `!dbg` attachment forms -- LLVM needs BOTH, not
 /// just one, for `llc` to actually emit a real `.debug_line`/
@@ -545,11 +595,39 @@ def emit_instrs (instructions : List LLVMInstruction) (dbg_suffix : String) : St
 /// `.debug_line` entries despite `llc` exiting 0.
 struct DbgFuncRefs {
     define_suffix : String,
+    /// The function's own location -- what an instruction gets when no
+    /// `loc_marker` has been seen yet, and the whole of v1's behaviour.
     instr_suffix : String,
+    /// `"line:col"` -> `", !dbg !M"`, one entry per DISTINCT location
+    /// marked inside this function. Interned per function, never shared
+    /// across functions: a `!DILocation` carries `scope: !N` pointing at
+    /// its own `!DISubprogram`, so the same line in two functions is two
+    /// nodes. Deduping WITHIN a function is where the win is -- many
+    /// instructions share one line.
+    loc_suffixes : HashMap String String,
 }
 
+/// A location's key in `loc_suffixes`. Line and column together, because
+/// two constructs on one line are two positions.
 #[partial]
-def empty_dbg_func_refs : DbgFuncRefs := { define_suffix := "", instr_suffix := "" }
+def dbg_loc_key (loc : DbgLoc) : String :=
+    String.concat (I64.to_string loc.line) (String.concat ":" (I64.to_string loc.column))
+
+/// The `!dbg` suffix for a marked location, falling back to the
+/// function's own. A miss is not an error: a function may carry markers
+/// for positions that were interned under a different function, and
+/// attributing such an instruction to the enclosing function is better
+/// than emitting no location at all.
+#[partial]
+def dbg_suffix_for (refs : DbgFuncRefs) (loc : DbgLoc) : String :=
+    match str_map_lookup (dbg_loc_key loc) refs.loc_suffixes {
+        Option.some suffix => suffix,
+        Option.none => refs.instr_suffix,
+    }
+
+#[partial]
+def empty_dbg_func_refs : DbgFuncRefs :=
+    { define_suffix := "", instr_suffix := "", loc_suffixes := str_map_empty }
 
 /// `dbg_refs` is the module-wide `(function name -> DbgFuncRefs)` table
 /// built once by `emit_debug_metadata` -- `List.empty` when debug info
@@ -565,7 +643,7 @@ def emit_function (func : LLVMFunction) (dbg_refs : List (Pair String DbgFuncRef
             (String.concat " " (String.concat (llvm_symbol_ref name) "("))))) in
         let refs := find_dbg_refs name dbg_refs in
         let sig2 := String.concat sig (String.concat (join_params params) (String.concat ")" (String.concat refs.define_suffix " {"))) in
-        let body := emit_blocks blocks refs.instr_suffix in
+        let body := emit_blocks blocks refs in
         String.concat prefix (String.concat sig2 (String.concat body "\n}")),
 }
 
@@ -601,13 +679,13 @@ def show_one_param (p : ParamPair) : String := match p {
 /// `String.concat_list` measures and copies in one pass. The same rewrite applies to
 /// `emit_globals`/`emit_decls`/`emit_functions` below.
 #[partial]
-def emit_blocks (blocks : List LLVMBasicBlock) (dbg_suffix : String) : String :=
-    String.concat_list (List.reverse (emit_blocks_go blocks dbg_suffix List.empty))
+def emit_blocks (blocks : List LLVMBasicBlock) (refs : DbgFuncRefs) : String :=
+    String.concat_list (List.reverse (emit_blocks_go blocks refs List.empty))
 
 #[partial]
-def emit_blocks_go (blocks : List LLVMBasicBlock) (dbg_suffix : String) (acc : List String) : List String := match blocks {
+def emit_blocks_go (blocks : List LLVMBasicBlock) (refs : DbgFuncRefs) (acc : List String) : List String := match blocks {
     List.empty => acc,
-    List.cons b rest => emit_blocks_go rest dbg_suffix (List.cons (emit_block b dbg_suffix) acc),
+    List.cons b rest => emit_blocks_go rest refs (List.cons (emit_block b refs) acc),
 }
 
 #[partial]
@@ -809,10 +887,69 @@ def show_dilocation (id : I64) (line : I64) (column : I64) (scope_ref : I64) : S
     let with_col := String.concat with_line (String.concat (I64.to_string column) ", scope: !") in
     String.concat with_col (String.concat (I64.to_string scope_ref) ")")
 
+// --- Per-function location interning ---------------------------------
+//
+// A `!DILocation` names its enclosing `!DISubprogram` in `scope:`, so a
+// location CANNOT be shared between two functions -- the same source line
+// reached from two functions is two metadata nodes. Interning is therefore
+// per function, and the dedup that matters is within one: a function body
+// typically marks a handful of distinct positions and then emits many
+// instructions against each.
+
+/// Distinct `loc_marker` locations in one function's blocks, in encounter
+/// order. Order is what makes ID assignment reproducible run to run.
+#[partial]
+def collect_marker_locs (blocks : List LLVMBasicBlock) (acc : List DbgLoc) : List DbgLoc := match blocks {
+    List.empty => acc,
+    List.cons b rest => collect_marker_locs rest (collect_marker_locs_block b acc),
+}
+
+#[partial]
+def collect_marker_locs_block (b : LLVMBasicBlock) (acc : List DbgLoc) : List DbgLoc := match b {
+    LLVMBasicBlock.mk _label instrs => collect_marker_locs_instrs instrs acc,
+}
+
+#[partial]
+def collect_marker_locs_instrs (instrs : List LLVMInstruction) (acc : List DbgLoc) : List DbgLoc := match instrs {
+    List.empty => acc,
+    List.cons i rest => collect_marker_locs_instrs rest (collect_marker_loc i acc),
+}
+
+#[partial]
+def collect_marker_loc (i : LLVMInstruction) (acc : List DbgLoc) : List DbgLoc := match i {
+    LLVMInstruction.loc_marker loc =>
+        if dbg_loc_list_has acc loc then acc else List.append acc (List.cons loc List.empty),
+    _ => acc,
+}
+
+#[partial]
+def dbg_loc_list_has (locs : List DbgLoc) (loc : DbgLoc) : Bool := match locs {
+    List.empty => false,
+    List.cons l rest =>
+        if String.beq (dbg_loc_key l) (dbg_loc_key loc) then true else dbg_loc_list_has rest loc,
+}
+
+/// Assign one `!DILocation` ID per distinct location, all scoped to this
+/// function's own `!DISubprogram`, returning the suffix table and the
+/// rendered nodes together -- same "built in one pass so they cannot
+/// drift" property `build_dbg_refs` has.
+#[partial]
+def build_loc_nodes (locs : List DbgLoc) (next_id : I64) (scope_ref : I64) (acc : HashMap String String) : Pair (HashMap String String) String :=
+    match locs {
+        List.empty => Pair.pair acc "",
+        List.cons loc rest =>
+            let suffix := String.concat ", !dbg !" (I64.to_string next_id) in
+            let text := String.concat (show_dilocation next_id loc.line loc.column scope_ref) "\n" in
+            match build_loc_nodes rest (next_id + 1) scope_ref (str_map_insert (dbg_loc_key loc) suffix acc) {
+                Pair.pair final_map rest_text => Pair.pair final_map (String.concat text rest_text),
+            }
+    }
+
 /// Walk `functions` once, in module order, assigning each function
-/// with a known `dbg_loc` the next pair of free metadata IDs (`!N` =
-/// its `!DISubprogram`, `!N+1` = its `!DILocation`) -- `next_id` starts
-/// at 6 (0-5 are the fixed preamble from `show_debug_preamble`).
+/// with a known `dbg_loc` the next free metadata IDs -- `!N` = its
+/// `!DISubprogram`, `!N+1` = its own `!DILocation`, then one more per
+/// distinct location marked inside it. `next_id` starts at 6 (0-5 are the
+/// fixed preamble from `show_debug_preamble`).
 /// Returns BOTH the `(function name -> DbgFuncRefs)` assoc list AND the
 /// rendered `!N = ...` text for every node just assigned, built
 /// together in one pass so the two can never drift apart.
@@ -820,31 +957,34 @@ def show_dilocation (id : I64) (line : I64) (column : I64) (scope_ref : I64) : S
 def build_dbg_refs (functions : List LLVMFunction) (next_id : I64) : Pair (List (Pair String DbgFuncRefs)) String := match functions {
     List.empty => Pair.pair List.empty "",
     List.cons f rest =>
-        match f {
-            LLVMFunction.mk name _ _ _ _ dbg_loc =>
-                match dbg_loc {
-                    Option.none => build_dbg_refs rest next_id,
-                    Option.some loc =>
-                        match loc {
-                            DbgLoc.mk line column =>
-                                let sp_ref := next_id in
-                                let loc_ref := next_id + 1 in
-                                let sp_text := show_disubprogram sp_ref name line in
-                                let loc_text := show_dilocation loc_ref line column sp_ref in
-                                match build_dbg_refs rest (next_id + 2) {
-                                    Pair.pair rest_refs rest_text =>
-                                        let define_suffix := String.concat " !dbg !" (I64.to_string sp_ref) in
-                                        let instr_suffix := String.concat ", !dbg !" (I64.to_string loc_ref) in
-                                        let refs : DbgFuncRefs := { define_suffix := define_suffix, instr_suffix := instr_suffix } in
-                                        let this_text := String.concat sp_text (String.concat "\n" (String.concat loc_text "\n")) in
-                                        Pair.pair
-                                            (List.cons (Pair.pair name refs) rest_refs)
-                                            (String.concat this_text rest_text),
-                                },
-                        },
-                },
+        match f.dbg_loc {
+            Option.none => build_dbg_refs rest next_id,
+            Option.some loc => build_dbg_refs_one f loc rest next_id,
         },
 }
+
+#[partial]
+def build_dbg_refs_one (f : LLVMFunction) (loc : DbgLoc) (rest : List LLVMFunction) (next_id : I64) : Pair (List (Pair String DbgFuncRefs)) String :=
+    let sp_ref := next_id in
+    let loc_ref := next_id + 1 in
+    let marks := collect_marker_locs f.blocks List.empty in
+    let sp_text := show_disubprogram sp_ref f.name loc.line in
+    let loc_text := show_dilocation loc_ref loc.line loc.column sp_ref in
+    match build_loc_nodes marks (next_id + 2) sp_ref str_map_empty {
+        Pair.pair loc_map marks_text =>
+            match build_dbg_refs rest (next_id + 2 + List.length marks) {
+                Pair.pair rest_refs rest_text =>
+                    let refs : DbgFuncRefs := {
+                        define_suffix := String.concat " !dbg !" (I64.to_string sp_ref),
+                        instr_suffix := String.concat ", !dbg !" (I64.to_string loc_ref),
+                        loc_suffixes := loc_map,
+                    } in
+                    let this_text := String.concat sp_text (String.concat "\n" (String.concat loc_text (String.concat "\n" marks_text))) in
+                    Pair.pair
+                        (List.cons (Pair.pair f.name refs) rest_refs)
+                        (String.concat this_text rest_text),
+            },
+    }
 
 /// Build both the per-function `DbgFuncRefs` table and the trailing
 /// debug-metadata block for a module, together (see `build_dbg_refs`).
@@ -974,6 +1114,77 @@ def test_instruction_ret_int : Bool :=
 def test_instruction_assign_with_dbg_suffix : Bool :=
     let instr := assign "t0" (add (parm_ 0) (parm_ 1)) in
     String.beq (show_instruction instr ", !dbg !7") "  %t0 = add i64 %p0, %p1, !dbg !7"
+
+// --- loc_marker: distinct locations within one function ---------------
+
+/// A `loc_marker` renders to NOTHING and changes the suffix for everything
+/// after it. This is the whole mechanism that lets one function's
+/// instructions carry different lines, so it is asserted directly on the
+/// emitted text rather than only through a full compile.
+#[test]
+def test_loc_marker_switches_suffix_mid_block : Bool :=
+    let refs : DbgFuncRefs := {
+        define_suffix := " !dbg !6",
+        instr_suffix := ", !dbg !7",
+        loc_suffixes := str_map_insert "9:5" ", !dbg !8" str_map_empty,
+    } in
+    let instrs : List LLVMInstruction :=
+        [LLVMInstruction.assign "t0" (add (parm_ 0) (parm_ 1)),
+         LLVMInstruction.loc_marker (DbgLoc.mk 9 5),
+         LLVMInstruction.assign "t1" (add (parm_ 0) (parm_ 1))] in
+    // `t0` before the marker takes the function's own location; `t1` after
+    // it takes the marked one; the marker itself occupies no line.
+    String.beq (emit_instrs instrs refs refs.instr_suffix)
+        "\n  %t0 = add i64 %p0, %p1, !dbg !7\n  %t1 = add i64 %p0, %p1, !dbg !8"
+
+/// An unknown marker falls back to the function's own location rather than
+/// emitting none -- a wrong-but-enclosing line beats no line at all.
+#[test]
+def test_loc_marker_unknown_falls_back : Bool :=
+    let refs : DbgFuncRefs := {
+        define_suffix := " !dbg !6",
+        instr_suffix := ", !dbg !7",
+        loc_suffixes := str_map_empty,
+    } in
+    let instrs : List LLVMInstruction :=
+        [LLVMInstruction.loc_marker (DbgLoc.mk 42 1),
+         LLVMInstruction.assign "t0" (add (parm_ 0) (parm_ 1))] in
+    String.beq (emit_instrs instrs refs refs.instr_suffix)
+        "\n  %t0 = add i64 %p0, %p1, !dbg !7"
+
+/// Distinct locations are interned once each, deduped by line:column, and
+/// numbered after the function's own two nodes (subprogram, own location).
+#[test]
+def test_build_loc_nodes_dedups_and_numbers : Bool :=
+    let marks : List DbgLoc := [DbgLoc.mk 5 9, DbgLoc.mk 6 5] in
+    match build_loc_nodes marks 8 6 str_map_empty {
+        Pair.pair m text =>
+            match str_map_lookup "5:9" m {
+                Option.some s1 =>
+                    match str_map_lookup "6:5" m {
+                        Option.some s2 =>
+                            // Exact text, not a substring check: `check_contains`
+                            // lives in `emit.mo`, which imports this file, and
+                            // the full rendering is knowable anyway.
+                            String.beq s1 ", !dbg !8" && String.beq s2 ", !dbg !9"
+                                && String.beq text
+                                     "!8 = !DILocation(line: 5, column: 9, scope: !6)\n!9 = !DILocation(line: 6, column: 5, scope: !6)\n",
+                        Option.none => false,
+                    },
+                Option.none => false,
+            },
+    }
+
+/// The same position marked twice is one metadata node, not two. Without
+/// this, a loop body would mint a node per instruction.
+#[test]
+def test_collect_marker_locs_dedups : Bool :=
+    let b : LLVMBasicBlock := LLVMBasicBlock.mk "entry"
+        [LLVMInstruction.loc_marker (DbgLoc.mk 5 9),
+         LLVMInstruction.assign "t0" (parm_ 0),
+         LLVMInstruction.loc_marker (DbgLoc.mk 5 9),
+         LLVMInstruction.loc_marker (DbgLoc.mk 6 5)] in
+    I64.beq (List.length (collect_marker_locs [b] List.empty)) 2
 
 /// The `lang/runtime.mo` generated-IR natives' byte-access shape: an
 /// i64-held address becomes a loadable pointer via `inttoptr`, then a

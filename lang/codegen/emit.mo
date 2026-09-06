@@ -1125,6 +1125,9 @@ def is_terminator_instr (instr : LLVMInstruction) : Bool := match instr {
     LLVMInstruction.assign a b => false,
     LLVMInstruction.store _a _pty _b => false,
     LLVMInstruction.comment a => false,
+    // NOT a terminator. Also why a marker must never sit last in a list:
+    // `ends_with_terminator` reads only the final element.
+    LLVMInstruction.loc_marker _loc => false,
 }
 
 // ─── Safe sequential composition (fixes a real "dropped continuation"
@@ -1291,6 +1294,7 @@ def instr_is_ret_of (i : LLVMInstruction) (target_val : LLVMValue) : Bool := mat
     LLVMInstruction.assign a b => false,
     LLVMInstruction.store _a _pty _b => false,
     LLVMInstruction.comment a => false,
+    LLVMInstruction.loc_marker _loc => false,
 }
 
 /// Structural equality over every ATOMIC `LLVMValue` variant that
