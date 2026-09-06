@@ -905,6 +905,20 @@ int64_t monad_process_id(void) {
     return (int64_t)getpid();
 }
 
+/* `#[native "build_commit"]` (lang/main.mo's `build_commit : String`) --
+   returns the git commit hash this binary was compiled from, baked in
+   at build time via -DMONAD_BUILD_COMMIT. "unknown" if git was
+   unavailable or the build wasn't from a repo. Pure (no `IO`), zero
+   args, returns a `String` (char* = i64 in this backend's convention,
+   same as `monad_process_id`). */
+const char* monad_build_commit(void) {
+#ifdef MONAD_BUILD_COMMIT
+    return MONAD_BUILD_COMMIT;
+#else
+    return "unknown";
+#endif
+}
+
 /* `#[native "list_dir"]` (std/io.mo's IO.list_dir_native): bare entry
    names, one directory level, SORTED -- the sort is load-bearing, not
    cosmetic: readdir order is filesystem-dependent, and the reference

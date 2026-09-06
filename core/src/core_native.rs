@@ -279,6 +279,7 @@ pub fn exec_native(
     "scope_fork" => scope_fork(args, natives),
     "scope_drop" => scope_drop(args, natives),
     "process_id" => process_id(),
+    "build_commit" => build_commit(),
     // `CoreEvalError::UnknownNative` is keyed by id everywhere else (the
     // evaluator, which has the id on hand when the id itself is out of
     // `NativeTable`'s range); this is the one call site that only has the
@@ -1181,6 +1182,14 @@ fn process_id() -> Result<Value, CoreEvalError> {
   Ok(Value::Lit(IrLit::Num(
     std::process::id() as i64,
     NumSuffix::I64,
+  )))
+}
+
+fn build_commit() -> Result<Value, CoreEvalError> {
+  Ok(Value::Lit(IrLit::Str(
+    option_env!("MONAD_BUILD_COMMIT")
+      .unwrap_or("unknown")
+      .into(),
   )))
 }
 

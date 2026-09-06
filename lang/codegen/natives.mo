@@ -296,6 +296,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "current_time" then Option.some (NativeWrapKind.io_passthrough "monad_current_time")
             else if String.beq target "bench_report" then Option.some (NativeWrapKind.bool_result "monad_bench_report")
             else if String.beq target "process_id" then Option.some (NativeWrapKind.passthrough "monad_process_id")
+            else if String.beq target "build_commit" then Option.some (NativeWrapKind.passthrough "monad_build_commit")
             // C: libc-shaped or growable-buffer-shaped.
             else if String.beq target "string_to_lowercase" then Option.some (NativeWrapKind.passthrough "monad_string_to_lowercase")
             else if String.beq target "string_from_list" then Option.some (NativeWrapKind.passthrough "monad_string_from_list")
@@ -463,6 +464,7 @@ def runtime_declarations : List LLVMDeclaration :=
     let d37 := mk_decl "monad_u8_to_string" (List.cons "i64" List.empty) "i64" in
     let d38 := mk_decl "monad_u64_to_string" (List.cons "i64" List.empty) "i64" in
     let d39 := mk_decl "monad_process_id" List.empty "i64" in
+    let d40 := mk_decl "monad_build_commit" List.empty "i64" in
     // `std/array.mo`'s six (runtime.c). Same "no implicit declare"
     // requirement as every native above -- without these,
     // `validate_all_call_targets_defined` rejects the module with
@@ -475,7 +477,7 @@ def runtime_declarations : List LLVMDeclaration :=
     let d46 := mk_decl "monad_array_freeze" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-     d32, d33, d34, d35, d36, d37, d38, d39, d41, d42, d43, d44, d45, d46]
+     d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

@@ -1,0 +1,61 @@
+name: Nightly release
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    if: github.repository == 'monad-lang/monad'
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Bootstrap-compile the monad binary
+        run: |
+          mkdir -p dist
+          nix develop --no-pure-eval --accept-flake-config -c \
+            cargo run --release -- run lang/main.mo compile lang/main.mo \
+              "$(pwd)/dist/monad-nightly-x86_64-linux" --verbose
+
+      - name: Verify binary and record commit
+        run: |
+          file dist/monad-nightly-x86_64-linux
+          chmod +x dist/monad-nightly-x86_64-linux
+          ./dist/monad-nightly-x86_64-linux version > dist/commit.txt
+          cat dist/commit.txt
+
+      - name: Compute nightly tag
+        id: tag
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          echo "tag=nightly-${DATE}" >> "$GITHUB_OUTPUT"
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+
+      - name: Create nightly prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Nightly ${{ steps.tag.outputs.date }}
+          body: |
+            Automated nightly build of the bootstrapped `monad` binary from `main`.
+
+            Commit: ${{ github.sha }}
+
+            This binary is produced by the self-hosted compiler
+            (`lang/main.mo`) compiling itself, run through the Rust
+            `monad-rs` reference interpreter. Built on a self-hosted
+            Linux x86_64 runner with Nix devenv.
+          prerelease: true
+          make_latest: false
+          files: |
+            dist/monad-nightly-x86_64-linux
+            dist/commit.txt

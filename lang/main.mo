@@ -11,6 +11,8 @@ use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
 
+#[native "build_commit"]
+def build_commit : String
 /// The default output directory for `compile`/`test` when no `--output`/
 /// positional name supplies an absolute one. Includes the process ID so
 /// parallel invocations (e.g. two `bootstrap test` runs, or `cargo test`
@@ -82,7 +84,19 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
         return 1
     } else do {
         let t_rtc : I64 <- Bench.now;
-        let result <- exec_cmd "clang" (List.append [ "-c", "lang/codegen/runtime.c", "-o", runtime_obj_s] (if verbose then ["-v"] else [""]));
+        // Get the git commit hash to bake into the binary as a build-time
+        // constant. exec_cmd doesn't capture stdout, so redirect to a temp
+        // file and read it.
+        let hash_path := "/tmp/monad_build_hash_" ++ I64.to_string process_id;
+        let _ <- exec_cmd "sh" ["-c", "git rev-parse --short HEAD 2>/dev/null > " ++ hash_path];
+        let hash_exists <- IO.file_exists (Path.path hash_path);
+        let build_hash <- if hash_exists then do {
+            let raw <- IO.read_file (Path.path hash_path);
+            let _ <- exec_cmd "rm" ["-f", hash_path];
+            return (String.trim raw)
+        } else return "unknown";
+        let commit_flag := "-DMONAD_BUILD_COMMIT=\"" ++ build_hash ++ "\"";
+        let result <- exec_cmd "clang" (List.append [ "-c", "lang/codegen/runtime.c", commit_flag, "-o", runtime_obj_s] (if verbose then ["-v"] else [""]));
         if verbose then do {
             Bench.report_since "link_ir: clang runtime.c" t_rtc;
             return unit
@@ -646,6 +660,7 @@ type Command {
     pretty (file: String),
     check (files: List String) (verbose: Bool),
     test (files: List String) (verbose: Bool),
+    version,
     help
 }
 
@@ -729,6 +744,8 @@ def Command.from_args (args : List String) : Command :=
                     Cli.FlagResult.flag_result verbose rest1 =>
                         if List.is_empty rest1 then Command.help else Command.test rest1 verbose,
                 }
+            else if cmd == "version" then
+                Command.version
             else
                 Command.help,
         List.empty => Command.help,
@@ -776,6 +793,10 @@ def main (args : List String) : IO I64 {
         test files verbose => do {
             run_test files (Path.to_string default_output_dir) verbose
         },
+        version => do {
+            println build_commit;
+            return 0
+        },
         help => do {
             print_help
         }
@@ -784,6 +805,9 @@ def main (args : List String) : IO I64 {
 
 #[partial]
 def print_help : IO I64 {
+    println "Monad is in alpha mode and under heavy development.";
+    println "Expect breaking changes, bugs, and incomplete features.";
+    println "";
     println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v] [--debug/-g] [--release]";
     println "         Parse and compile a .mo source file";
     println "         --debug/-g emits DWARF debug info (one source location per top-level def)";
@@ -794,5 +818,6 @@ def print_help : IO I64 {
     println "       monad test <path>... [--verbose/-v]  Compile and run each file's own #[test] defs as a native binary";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";
     println "         A file with no #[test]s (or that already defines its own main) is skipped, not failed";
+    println "       monad version  Print the git commit this binary was built from";
     return 0
 }
