@@ -48,7 +48,9 @@ use lang.codegen.decls {
   extract_inductives, filter_reachable_decls, reachable_defs_from,
 }
 use lang.codegen.tco {apply_self_tco}
-use lang.codegen.qualify {qtest_def, qualified_def_name_str, qualify_modules}
+use lang.codegen.qualify {
+  qtest_def, qualified_def_name_str, qualify_modules_timed, qualify_result, qualify_spans,
+}
 use lang.codegen.free_names {collect_referenced_names, free_names_of_term}
 use lang.codegen.ctx {
   CodegenCtx, CtxStrPair, LocalBinding, build_arity_table, build_debug_locs,
@@ -4213,6 +4215,16 @@ def check_contains (text : String) (needle : String) : Bool :=
 
 // === Multi-module compilation ===
 
+/// Print each line in order. `List.map println` would build a list of
+/// unrun `IO` actions and discard it.
+def println_lines (lines : List String) : IO Unit := match lines {
+    List.empty => return unit,
+    List.cons l rest => do {
+        let _ <- println l;
+        println_lines rest
+    },
+}
+
 /// Compile all loaded modules to a single LLVM module.
 /// All declarations from all modules are compiled together with fully qualified names.
 ///
@@ -4268,7 +4280,11 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // here, before Stage 1 -- `ModuleInfo.path` is the only record of
     // which module a decl came from, and flattening discards it.
     let t_qualify := Bench.now;
-    match qualify_modules aliased_mods {
+    let qualified := qualify_modules_timed aliased_mods;
+    // `--verbose` reports Stage 0c phase-by-phase, not just as a total:
+    // it dominates a self-compile, and its cost is not spread evenly.
+    if verbose then println_lines (qualify_spans qualified) else return unit;
+    match qualify_result qualified {
       Result.err e => do {
         if verbose then println ("FAILED at stage: qualify_modules (" ++ e ++ ")") else return unit;
         return (Result.err e)
