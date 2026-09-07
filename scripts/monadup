@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+#
+# monadup — manage monad nightly builds from GitHub releases.
+#
+# Subcommands:
+#   install [nightly-YYYY-MM-DD]  Download and install a nightly (latest if no tag)
+#   list                         List installed nightlies (* marks active)
+#   use nightly-YYYY-MM-DD       Switch the active nightly (updates symlink)
+#   default                      Install latest and set it as active
+#   uninstall nightly-YYYY-MM-DD Remove a downloaded nightly
+#   update                       Download latest, remove all older ones
+#   self-install                 Copy this script into ~/.monad/bin/monadup
+#   upgrade                      Re-download the latest monadup script and replace itself
+#
+# Environment:
+#   MONAD_HOME  Installation root (default: $HOME/.monad)
+#
+# Both `monad` (the nightly binary) and `monadup` (this script) live in
+# ~/.monad/bin, so adding that one directory to PATH gives access to both.
+
+set -euo pipefail
+
+REPO="monad-lang/monad"
+ASSET_NAME="monad-nightly-x86_64-linux"
+API_URL="https://api.github.com/repos/${REPO}/releases"
+RAW_BASE="https://raw.githubusercontent.com/${REPO}/main/scripts/monadup"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+monad_home() {
+  echo "${MONAD_HOME:-$HOME/.monad}"
+}
+
+err() {
+  echo "monadup: error: $*" >&2
+  exit 1
+}
+
+# Resolve the latest nightly-* tag from the GitHub releases API.
+# Sets global LATEST_TAG and LATEST_URL.
+fetch_latest_nightly() {
+  local json
+  json=$(curl -fsSL "$API_URL") || err "failed to query GitHub API (network or rate limit)"
+  parse_release_json "$json" ""
+}
+
+# Fetch a specific release by tag. Sets global LATEST_TAG and LATEST_URL.
+fetch_specific_release() {
+  local tag="$1"
+  local json
+  json=$(curl -fsSL "${API_URL}/tags/${tag}") || err "failed to fetch release '${tag}'"
+  parse_release_json "$json" "$tag"
+}
+
+# Parse the releases JSON and extract the nightly tag + binary download URL.
+# Arguments: json, optional expected tag (empty = find latest nightly-*)
+parse_release_json() {
+  local json="$1"
+  local expected="$2"
+  local tag url
+
+  if command -v jq >/dev/null 2>&1; then
+    if [[ -n "$expected" ]]; then
+      tag=$(echo "$json" | jq -r '.tag_name')
+      url=$(echo "$json" | jq -r ".assets[] | select(.name == \"${ASSET_NAME}\") | .browser_download_url")
+    else
+      tag=$(echo "$json" | jq -r '.[] | select(.tag_name | startswith("nightly-")) | .tag_name' | head -1)
+      url=$(echo "$json" | jq -r ".[] | select(.tag_name == \"${tag}\") | .assets[] | select(.name == \"${ASSET_NAME}\") | .browser_download_url")
+    fi
+  elif command -v python3 >/dev/null 2>&1; then
+    if [[ -n "$expected" ]]; then
+      tag=$(python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(d['tag_name'])
+" <<< "$json")
+      url=$(python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+for a in d.get('assets', []):
+    if a['name'] == '${ASSET_NAME}':
+        print(a['browser_download_url'])
+" <<< "$json")
+    else
+      tag=$(python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for r in data:
+    if r['tag_name'].startswith('nightly-'):
+        print(r['tag_name'])
+        break
+" <<< "$json")
+      url=$(python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for r in data:
+    if r['tag_name'] == '${tag}':
+        for a in r.get('assets', []):
+            if a['name'] == '${ASSET_NAME}':
+                print(a['browser_download_url'])
+" <<< "$json")
+    fi
+  else
+    err "neither jq nor python3 is available (need one for JSON parsing)"
+  fi
+
+  [[ -n "$tag" ]] || err "no nightly release found"
+  [[ -n "$url" ]] || err "no asset '${ASSET_NAME}' found in release '${tag}'"
+
+  LATEST_TAG="$tag"
+  LATEST_URL="$url"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+# Download (if needed) the nightly identified by the already-resolved
+# LATEST_TAG/LATEST_URL globals.  Used by cmd_install, cmd_default,
+# and cmd_update so none of them re-query the API.
+do_install() {
+  local home_dir="$1"
+  local dl_dir="${home_dir}/downloads"
+  local target_dir="${dl_dir}/${LATEST_TAG}"
+  local binary="${target_dir}/${ASSET_NAME}"
+
+  if [[ -x "$binary" ]]; then
+    echo "monadup: ${LATEST_TAG} already installed"
+  else
+    mkdir -p "$target_dir"
+    echo "monadup: downloading ${LATEST_TAG}..."
+    curl -fsSL -o "$binary" "$LATEST_URL" || err "failed to download binary"
+    curl -fsSL -o "${target_dir}/commit.txt" \
+      "${LATEST_URL%/"${ASSET_NAME}"}/commit.txt" \
+      || err "failed to download commit.txt"
+    chmod +x "$binary"
+    echo "monadup: installed ${LATEST_TAG}"
+  fi
+
+  # If no active nightly yet, set this as active.
+  local active_file="${home_dir}/active"
+  if [[ ! -f "$active_file" ]]; then
+    do_use "$home_dir" "$LATEST_TAG"
+  fi
+
+  # Print version (may fail on non-Nix systems).
+  if [[ -x "$binary" ]]; then
+    "$binary" version 2>/dev/null \
+      || echo "monadup: note: binary requires Nix to run (known limitation)"
+  fi
+}
+
+cmd_install() {
+  local home_dir
+  home_dir=$(monad_home)
+  local tag="${1:-}"
+
+  if [[ -n "$tag" ]]; then
+    fetch_specific_release "$tag"
+  else
+    fetch_latest_nightly
+  fi
+
+  do_install "$home_dir"
+}
+
+cmd_list() {
+  local home_dir
+  home_dir=$(monad_home)
+  local dl_dir="${home_dir}/downloads"
+  local active_tag=""
+
+  if [[ -f "${home_dir}/active" ]]; then
+    active_tag=$(cat "${home_dir}/active")
+  fi
+
+  if [[ ! -d "$dl_dir" ]]; then
+    echo "monadup: no nightlies installed"
+    return
+  fi
+
+  local found=0
+  for dir in "$dl_dir"/nightly-*; do
+    [[ -d "$dir" ]] || continue
+    found=1
+    local name
+    name=$(basename "$dir")
+    local marker=" "
+    [[ "$name" == "$active_tag" ]] && marker="*"
+    local commit=""
+    if [[ -f "${dir}/commit.txt" ]]; then
+      commit=$(cat "${dir}/commit.txt")
+    fi
+    echo "${marker} ${name}  ${commit}"
+  done
+
+  [[ "$found" -eq 1 ]] || echo "monadup: no nightlies installed"
+}
+
+do_use() {
+  local home_dir="$1"
+  local tag="$2"
+  local target_dir="${home_dir}/downloads/${tag}"
+  local binary="${target_dir}/${ASSET_NAME}"
+  local bin_dir="${home_dir}/bin"
+  local link="${bin_dir}/monad"
+  local active_file="${home_dir}/active"
+
+  [[ -d "$target_dir" ]] || err "nightly '${tag}' is not installed"
+  [[ -x "$binary" ]] || err "binary missing in '${tag}'"
+
+  mkdir -p "$bin_dir"
+  ln -sfn "../downloads/${tag}/${ASSET_NAME}" "$link"
+  echo "$tag" > "$active_file"
+}
+
+cmd_use() {
+  local home_dir
+  home_dir=$(monad_home)
+  local tag="${1:-}"
+  [[ -n "$tag" ]] || err "usage: monadup use <nightly-YYYY-MM-DD>"
+  do_use "$home_dir" "$tag"
+  echo "monadup: switched to ${tag}"
+}
+
+cmd_default() {
+  local home_dir
+  home_dir=$(monad_home)
+  fetch_latest_nightly
+  do_install "$home_dir"
+  do_use "$home_dir" "$LATEST_TAG"
+  echo "monadup: default set to ${LATEST_TAG}"
+}
+
+cmd_uninstall() {
+  local home_dir
+  home_dir=$(monad_home)
+  local tag="${1:-}"
+  [[ -n "$tag" ]] || err "usage: monadup uninstall <nightly-YYYY-MM-DD>"
+
+  local target_dir="${home_dir}/downloads/${tag}"
+  [[ -d "$target_dir" ]] || err "nightly '${tag}' is not installed"
+
+  local active_tag=""
+  if [[ -f "${home_dir}/active" ]]; then
+    active_tag=$(cat "${home_dir}/active")
+  fi
+  [[ "$tag" != "$active_tag" ]] || err "cannot uninstall active nightly, switch first"
+
+  rm -rf "$target_dir"
+  echo "monadup: removed ${tag}"
+}
+
+cmd_update() {
+  local home_dir
+  home_dir=$(monad_home)
+  local dl_dir="${home_dir}/downloads"
+
+  fetch_latest_nightly
+  do_install "$home_dir"
+
+  local active_tag=""
+  if [[ -f "${home_dir}/active" ]]; then
+    active_tag=$(cat "${home_dir}/active")
+  fi
+
+  if [[ -d "$dl_dir" ]]; then
+    for dir in "$dl_dir"/nightly-*; do
+      [[ -d "$dir" ]] || continue
+      local name
+      name=$(basename "$dir")
+      [[ "$name" != "$LATEST_TAG" ]] || continue
+      [[ "$name" != "$active_tag" ]] || continue
+      rm -rf "$dir"
+      echo "monadup: pruned ${name}"
+    done
+  fi
+}
+
+cmd_self_install() {
+  local home_dir
+  home_dir=$(monad_home)
+  local bin_dir="${home_dir}/bin"
+  mkdir -p "$bin_dir"
+
+  # Use cp so the installed copy is independent of where we were invoked from.
+  cp "$0" "${bin_dir}/monadup"
+  chmod +x "${bin_dir}/monadup"
+  echo "monadup: installed to ${bin_dir}/monadup"
+  echo "Add ~/.monad/bin to your PATH:"
+  echo "  export PATH=\"\$HOME/.monad/bin:\$PATH\""
+  echo "Add that line to your ~/.bashrc or ~/.zshrc to make it permanent."
+}
+
+cmd_upgrade() {
+  local home_dir
+  home_dir=$(monad_home)
+  local installed="${home_dir}/bin/monadup"
+
+  if [[ ! -f "$installed" ]]; then
+    echo "monadup: not self-installed yet; run 'monadup self-install' first" >&2
+    exit 1
+  fi
+
+  local tmp
+  tmp=$(mktemp)
+  curl -fsSL -o "$tmp" "$RAW_BASE" || err "failed to download latest monadup"
+  chmod +x "$tmp"
+  mv "$tmp" "$installed"
+  echo "monadup: upgraded to latest version"
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+usage() {
+  cat <<EOF
+monadup — manage monad nightly builds
+
+Usage: monadup <command> [args]
+
+Commands:
+  install [nightly-YYYY-MM-DD]  Download and install a nightly (latest if no tag)
+  list                          List installed nightlies (* marks active)
+  use nightly-YYYY-MM-DD         Switch the active nightly
+  default                       Install latest and set it as active
+  uninstall nightly-YYYY-MM-DD   Remove a downloaded nightly
+  update                        Download latest, remove all older ones
+  self-install                  Copy this script into ~/.monad/bin/monadup
+  upgrade                       Re-download the latest monadup and replace itself
+
+Environment:
+  MONAD_HOME  Installation root (default: \$HOME/.monad)
+EOF
+}
+
+main() {
+  local subcmd="${1:-}"
+  shift || true
+  case "$subcmd" in
+    install)   cmd_install "$@" ;;
+    list)      cmd_list "$@" ;;
+    use)       cmd_use "$@" ;;
+    default)   cmd_default "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
+    update)    cmd_update "$@" ;;
+    self-install) cmd_self_install "$@" ;;
+    upgrade)   cmd_upgrade "$@" ;;
+    help|-h|--help) usage; exit 0 ;;
+    "") usage; exit 1 ;;
+    *) err "unknown command '${subcmd}'" ;;
+  esac
+}
+
+main "$@"

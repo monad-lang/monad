@@ -10,6 +10,7 @@
 
   # https://devenv.sh/packages/
   packages = with pkgs; [
+    shellcheck
     wasm-pack
     lld
     llvm
@@ -138,6 +139,12 @@
       '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";
+    };
+    shellcheck = {
+      enable = true;
+      entry = "shellcheck";
+      files = "^scripts/.*\\.sh$|^scripts/monadup$";
+      pass_filenames = true;
     };
   };
 
