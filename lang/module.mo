@@ -2385,6 +2385,15 @@ def expand_decls_graph (scope : Scope) (whole_graph_decls : List Decl) (target :
 ///     (checks everything reachable, once per call), but the check
 ///     actually named "check"/"compile"/"test" should mean: verifying a
 ///     file also verifies what it depends on.
+/// The post-expansion scope, as its own def so the struct literal has a
+/// declared return type to desugar against -- see the call site for why
+/// neither an inline literal nor an annotated `let` inside the branch
+/// works there.
+#[partial]
+def rebuild_target_scope (target_mp : ModulePath) (decls : List Decl) : Scope :=
+    { module_id := target_mp, scope := build_scope_from_decls target_mp decls, parent := Option.none }
+
+
 #[partial]
 def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) (verbose : Bool) : IO ElaboratedAndCache := do {
     let t_load : I64 <- Bench.now;
@@ -2476,11 +2485,43 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                     // found Type"), which -- because codegen elaboration
                     // is best-effort -- silently left the ENTIRE body
                     // unelaborated.
-                    let rebuilt_scope : Scope :=
-                        { module_id := target_mp, scope := build_scope_from_decls target_mp dict_paramed2, parent := Option.none };
+                    // The rebuild is INSIDE the branch, not bound by a `let`
+                    // above it. This evaluator is strict (AGENTS.md item 25),
+                    // so `let rebuilt_scope := build_scope_from_decls ...`
+                    // ran the rebuild unconditionally and the `if` only chose
+                    // which already-computed scope to keep. `if` is the one
+                    // form that does not evaluate the branch it does not take,
+                    // so this is what makes the guard real.
+                    //
+                    // It was not a small waste: `build_scope_from_decls` is
+                    // the single most expensive phase, and a self-hosted
+                    // `check lang/main.mo` spent 83.9s of 232s here -- 36% of
+                    // the run -- duplicating the 81.9s the first build had
+                    // already done, for a graph that had not changed.
+                    // The annotated local moves INSIDE the branch rather
+                    // than being dropped. It was load-bearing twice over:
+                    // outside the branch it forced the rebuild eagerly (the
+                    // bug above), but the literal also needs an expected type
+                    // to desugar against, and a bare `{ ... }` in the branch
+                    // has none -- it survives to codegen as a
+                    // `Literal.struct_lit` and compiles to a void
+                    // placeholder, which `validate_no_undesugared_struct_lits`
+                    // rejects. An annotated `let ... in` INSIDE the branch
+                    // does not help either: the annotation does not reach the
+                    // literal from there.
+                    //
+                    // `rebuild_target_scope`'s declared return type is what
+                    // gives it one, and calling it inside the branch keeps the
+                    // laziness. Same shape the rest of the codebase uses when
+                    // a literal needs a type it cannot get from its position.
+                    // `did_change` keeps its own annotated binding: the
+                    // condition is a field access, and inlining it into the
+                    // `if` is the other half of what made this def fail to
+                    // elaborate as "expected Bool, found Type".
                     let did_change : Bool := expansion.changed;
                     let scope2 : Scope :=
-                        if did_change then rebuilt_scope
+                        if did_change
+                        then rebuild_target_scope target_mp dict_paramed2
                         else scope;
                     // Timed separately from `names_of_decls` below: when
                     // `expansion.changed` this is a SECOND whole-graph
