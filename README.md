@@ -54,38 +54,59 @@ If you prefer a manual setup, install:
 cargo build
 ```
 
-### Run a Monad program (interpreted)
+### Build the self-hosted compiler
+
+The compiler is written in Monad and compiles itself. The Rust crate is the
+**bootstrap host** that produces the first binary:
+
+```bash
+cargo run --release -- run lang/main.mo compile lang/main.mo -o "$PWD/monad" --release
+```
+
+The `-o` must be **absolute**: a relative output name is resolved against the
+compiler's own scratch directory, `/tmp/monad_out_<pid>`. The trailing
+`--release` turns off DWARF debug info, which is on by default.
+
+Prebuilt nightlies are published on every push to `main` and installed with
+`scripts/monadup` (`monadup self-install`, then `monadup default`). They are
+Linux x86_64 and are built inside the Nix devenv, so they link store paths and
+will not run on a machine without them -- building from source is the portable
+route. See [Compiling and Running](docs/src/compiling.md#getting-a-compiler).
+
+### Compile and run a program
+
+```bash
+cat > /tmp/main.mo << 'EOF'
+def main : I64 := 42
+EOF
+
+./monad compile /tmp/main.mo -o /tmp/monad_binary
+/tmp/monad_binary
+echo $?   # prints 42
+```
+
+`monad run /tmp/main.mo` does both steps in one go. (There is also `monad eval`,
+an interpreter, but only eight pure natives are wired into it -- it cannot print.)
+A program is always compiled to a native binary. `def main (args : List String) :
+I64` works too: the C runtime converts `argc`/`argv` to a `List String` and
+passes it to `main_monad`.
+
+The backend wires a subset of the natives (no concurrency yet), and says so at
+compile time rather than emitting a broken binary. See
+[Compiling and Running](docs/src/compiling.md) for the full pipeline, the
+fail-fast validation gates, and how memory is managed.
+
+### Run a program with the bootstrap host
+
+Faster to iterate with, since it skips `llc` and `clang`:
 
 ```bash
 cargo run -- run examples/hello.mo
 ```
 
-### Compile to a native binary
-
-Native compilation lives in the **self-hosted** compiler (`lang/`), not in
-`monad-rs` -- the Rust CLI interprets and type-checks, it does not compile.
-The backend wires a subset of the natives (no concurrency yet), and says so at
-compile time rather than emitting a broken binary.
-
-```bash
-# Write the program
-cat > /tmp/main.mo << 'EOF'
-def main : I64 := 42
-EOF
-
-# Compile it with the self-hosted compiler, run under the interpreter
-cargo run --release -- run lang/main.mo compile /tmp/main.mo -o /tmp/monad_binary
-
-# Run and verify the exit code
-/tmp/monad_binary
-echo $?   # prints 42
-```
-
-`def main (args : List String) : I64` works too: the C runtime converts
-`argc`/`argv` to a `List String` and passes it to `main_monad`.
-
-See [Compiling to Native](docs/src/compiling.md) for the full pipeline, the
-fail-fast validation gates, and how memory is managed in compiled binaries.
+The host also carries the LSP and MCP servers, the REPL, and the package system
+-- and it differs from the self-hosted compiler in a handful of places. See
+[The Bootstrap Host](docs/src/bootstrap-host.md).
 
 ### Run the test suites
 
@@ -96,7 +117,8 @@ cargo test
 # Monad standard library tests
 cargo run -- test init std
 
-# Self-hosted compiler tests
+# Self-hosted compiler tests (via the bootstrap host -- `monad test` cannot
+# yet handle more than one #[test] per file)
 cargo run -- test lang
 
 # Type-check without running
@@ -106,21 +128,20 @@ cargo run -- check init std examples lang
 scripts/check-docs.sh
 ```
 
-### Bootstrap the compiler
+### Bootstrap fixpoint
 
-The self-hosted compiler compiles itself, and the binary that falls out does
-the job it was built for. CI runs exactly this on every push.
+Once built, the compiler builds its own successor, and the binary that falls out
+does the job it was built for. CI runs exactly this on every push.
 
 ```bash
-# Compile the compiler with itself (requires llc + clang)
-cargo run --release -- run lang/main.mo compile lang/main.mo -o /tmp/monad
+./monad compile lang/main.mo -o "$PWD/monad-next" --release
 
 # Then make the result type-check the compiler's own source
-/tmp/monad check lang/main.mo
+./monad-next check lang/main.mo
 ```
 
-The self-hosted compiler's own subcommands are `compile`, `check`, `test`, and
-`pretty` -- run it with no arguments for usage.
+The self-hosted compiler's own subcommands are `compile`, `run`, `eval`,
+`check`, `test`, `pretty`, and `version` -- run it with no arguments for usage.
 
 ### Architecture
 

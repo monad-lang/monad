@@ -1,15 +1,20 @@
 # Reference
 
-This chapter provides a quick reference for Monad syntax and built-in features.
+A quick reference for Monad syntax and built-in features. Anything marked
+**not implemented** parses in some form but does not work — see the
+[Maturity Matrix](./maturity.md).
 
 ## Keywords
 
-```
-def, let, in, use, open, class, struct, instance, type, fn, ꟛ, match,
-if, then, else, infix, return, for, do
+```text
+def, defmacro, let, in, use, open, class, struct, instance, type,
+fn, ꟛ, match, if, then, else, infix, return, for, do, quote, with,
+pub, priv
 ```
 
-Reserved names: `Type`, `Pred`
+Reserved names: `Type`, `Prop`, `Pred`, `Sort`.
+
+`for` is reserved but has no grammar rule — there is no loop syntax.
 
 ## Comments
 
@@ -18,222 +23,382 @@ Reserved names: `Type`, `Pred`
 
 /* Multi-line
    comment */
+
+def answer : I64 := 42
 ```
 
 ## Docstrings
 
 ```monad
 /// Documentation for the following declaration
-def greet (name : String) : IO Unit := println name
-
-/// Module-level documentation (at top of file)
+def greet (name : String) : String := "Hello, " ++ name
 ```
 
-Docstrings are parsed and stored on declarations, retained through module loading for tooling and inspection.
+Docstrings are stored on declarations and retained through module loading, so
+the [bootstrap host](./bootstrap-host.md)'s LSP server can surface them.
+
+## Definitions
+
+**Every `def` requires a type annotation.** There is no top-level inference.
+
+```monad
+use io {}
+open IO {println}
+
+// Basic function
+def add (a : I64) (b : I64) : I64 := a + b
+
+// Shared annotation for same-typed parameters
+def mul (a b : I64) : I64 := a * b
+
+// Implicit parameters
+def identity {A : Type} (x : A) : A := x
+
+// Class constraints
+def twice [Add A] (x : A) : A := Add.add x x
+
+// Field destructuring in a parameter
+struct Coord { fst : I64, snd : I64 }
+def sum_coord ({fst, snd} : Coord) : I64 := fst + snd
+
+// Do-block body (alternative to `:=`)
+def steps : IO Unit {
+    println "one";
+    println "two"
+}
+```
+
+A parameter list can also be written as one brace block, which is the only
+spelling that allows defaults:
+
+```monad
+def scale {factor : I64 := 2, p : I64} : I64 := factor * p
+```
+
+The block is all-or-nothing: no further `(…)` groups may follow it, and it takes
+no multiplicity prefixes. A one-parameter block needs the `:=` default or a
+trailing comma — `def f {x : I64} : I64 := x` is read as an implicit *type*
+binder clause instead.
+
+> **The default is applied by the bootstrap host only.** The self-hosted compiler
+> parses the declaration but rejects a call that omits the parameter, with
+> `named call: missing required field`. Pass every argument, or use positional
+> parameters. See [The Bootstrap Host](./bootstrap-host.md).
+
+## Visibility
+
+```monad
+pub def exported : I64 := 1
+priv def internal : I64 := 2
+def package_private : I64 := 3
+```
+
+Package-private is the default. `pub use module {*}` re-exports an import.
 
 ## Lambda Expressions
 
-Three equivalent syntaxes:
+Three equivalent spellings:
 
 ```monad
-fn x => x + 1
-\ x => x + 1
-ꟛ x => x + 1
+def a : I64 -> I64 := fn x => x + 1
+def b : I64 -> I64 := \ x => x + 1
+def c : I64 -> I64 := ꟛ x => x + 1
 ```
 
-## Backtick Operators
+A lambda gets its parameter type from the definition's signature, or from an
+explicit parenthesised annotation:
 
 ```monad
-x `f` y   // Equivalent to f x y
+def d : I64 -> I64 := fn (x : I64) => x + 1
 ```
 
-Identifiers in backticks are treated as infix operators (like Haskell).
+## Backtick Operators — not implemented
+
+```monad,ignore
+x `f` y   // intended: f x y
+```
+
+The parser recognises the backtick form, but the expression parser only reduces
+symbolic operators, so this never becomes an application. Write `f x y`.
 
 ## Let Expressions
 
-```monad
-// Inline style
-let x := 10 in x + 1
-
-// Semicolon style
-let x := 10;
-let y := 20;
-in x + y
-
-// With type annotation
-let x : I64 := 10 in x + 1
-```
-
-## Numeric Literals
+One `let` binds one name; chain them for several:
 
 ```monad
-42        // I64 (default)
-42i8      // I8
-42i16     // I16
-42i32     // I32
-42i64     // I64
-42u8      // U8
-42u16     // U16
-42u32     // U32
-42u64     // U64
-3.14      // F64 (default)
-3.14f32   // F32
-3.14f64   // F64
-0xFF      // I64, hex notation
-0xFFu32   // U32, hex notation
+def one : I64 := let x := 10 in x + 1
+
+def two : I64 :=
+    let x := 10 in
+    let y := 20 in
+    x + y
+
+def three : I64 := let x : I64 := 10 in x + 1
 ```
+
+Several bindings may share one `let`, separated by `;`. Each may carry its own
+annotation, and each sees the bindings before it:
+
+```monad
+def multi : I64 := let x := 10; y : I64 := 20 in x + y
+```
+
+The `;` is required here; the bootstrap host also accepts it omitted. The form
+desugars to nested lambdas, so the bindings are sequential and non-recursive.
+
+## Literals
+
+### Numeric
+
+```monad
+def a : I64 := 42        // I64 (default)
+def b : I8 := 42i8
+def c : I16 := 42i16
+def d : I32 := 42i32
+def e : U8 := 42u8
+def f : U32 := 42u32
+def g : U64 := 42u64
+def h : F64 := 3.14      // F64 (default)
+def i : F32 := 3.14f32
+def j : I64 := 0xFF      // hex
+def k : U32 := 0xFFu32   // hex with suffix
+```
+
+There are **no** binary or octal literals, and **no** `_` digit separators.
+
+### Strings and characters
+
+```monad
+def s : String := "hello\n"
+def raw : String := r"C:\Users\monad\main.mo"
+def raw_hash : String := r#"{"name": "monad"}"#
+def raw_hash3 : String := r###"a "## b"###
+```
+
+```monad
+def c : Char := 'M'
+def nl : Char := '\n'
+def lam : Char := 'λ'
+```
+
+A char literal holds exactly one Unicode codepoint and takes the same escapes as
+a string (`\n \r \t \b \f \\ \/ \" \'`). **`\u{XXXX}` is not accepted
+self-hosted** — write the character itself; the bootstrap host does accept it.
+
+`Char` has no operations of any kind — no equality, no `ToString`, no `Char.*`
+functions — so a `Char` can be written, typed and passed, but not inspected.
+
+Raw strings take their body verbatim — no `\` escape processing. The closing
+delimiter is `"` followed by the same number of `#` as the opener, so escalating
+the hash count lets any content be embedded.
+
+Escapes in ordinary strings: `\n \r \t \b \f \\ \/ \" \' \u{XXXX}`, plus
+backslash-newline line continuation. There are no octal escapes.
+
+### Lists and tuples
+
+```monad
+def xs : List I64 := [1, 2, 3]
+def pair : Pair I64 String := (1, "two")
+```
+
+List literals desugar through `FromListLiteral`; tuples desugar to right-nested
+`Pair.pair`.
 
 ## Type Annotations
 
-```monad
-(expr : Type)
-```
-
-Any term can be annotated with its type using `(term : Type)` syntax.
-
-## Method Call Syntax
+Any term can be annotated:
 
 ```monad
-x.fun        // Desugared to A.fun x (where A is the type of x)
-x.fun args   // Desugared to A.fun args x
+def x : I64 := (42 : I64)
+def y : I64 := (42 : _)
 ```
 
-Method calls are desugared in the type checker. The receiver type is extracted and prepended to the method name.
+## Field Access
+
+```monad
+struct Inner { v : I64 }
+struct Outer { inner : Inner }
+
+def get (o : Outer) : I64 := o.inner.v
+```
+
+Dot notation on a value is **field access only**. There is no UFCS method
+dispatch: `s.length` does not mean `String.length s`, and naming something that
+is not a declared field is an error. Use the qualified name.
 
 ## Match Expressions
 
 ```monad
-match value {
-    constructor args => body,
-    constructor => body
+type Shape {
+    circle (radius : I64),
+    rectangle (width : I64) (height : I64)
 }
+
+def area (s : Shape) : I64 :=
+    match s {
+        circle r => r * r,
+        rectangle w h => w * h
+    }
+```
+
+Patterns are one constructor deep. `_` is a wildcard. **Not supported**: nested
+constructor patterns, literal patterns, guards, or-patterns, and exhaustiveness
+checking.
+
+Struct values also match on field names:
+
+```monad
+struct Point3 { x : I64, y : I64, z : I64 }
+
+def xy (p : Point3) : I64 :=
+    match p {
+        {x, y, ..} => x + y
+    }
 ```
 
 ## If Expressions
 
 ```monad
-if condition then thenBranch else elseBranch
+def sign (n : I64) : I64 := if n < 0 then 0 - 1 else 1
 ```
 
 ## Do Notation
 
-Two equivalent syntaxes are available:
-
 ```monad
-// Standard syntax
-def example : IO Unit := do {
-    let name <- action;
-    let x := value;
-    return value
+use io {}
+open IO {println}
+
+def a : IO Unit := do {
+    println "one";
+    println "two"
 }
 
-// Inline do block (equivalent)
-def example : IO Unit {
-    let name <- action;
-    let x := value;
-    return value
+def b : IO Unit {
+    println "one";
+    println "two"
 }
 ```
 
-### Statement Types
-
-| Statement | Syntax | Desugars To |
+| Statement | Syntax | Desugars to |
 |-----------|--------|-------------|
 | Bind | `let x <- action` | `Monad.bind action (fn x => ...)` |
 | Let | `let x := value` | `let x := value in ...` |
 | Return | `return value` | `Monad.pure value` |
 | Expression | `expr` | `Monad.bind expr (fn _ => ...)` |
 
-Multiple statements are separated by semicolons.
+Separate statements with `;`.
 
 ## Struct Values
 
 ```monad
-struct Point {
-    x : I64,
-    y : I64
-}
+struct Point { x : I64, y : I64, z : I64 := 0 }
 
-def p := { x := 3, y := 4 }
+def p : Point := { x := 3, y := 4 }
+def q : Point := { p with x := 10 }
 ```
+
+Struct literals are not inferrable on their own — they need a type from context.
 
 ## Attributes
 
-Declarations can be annotated with `#[...]` attributes:
+Attributes are written `#[name arg1 arg2]` — **space-separated arguments, no
+parentheses or commas**:
 
-```monad
-#[native "function_name"]   // Declare a Rust-native function
-#[test]                     // Mark as a test (run via `cargo run -- test <file>`)
+```monad,ignore
+#[native print_str]         // implemented in Rust; no body follows
+#[test]                     // a test, run by `monad test`
+#[terminating]              // assert well-foundedness; skip the termination check
+#[partial]                  // this definition may not terminate
+#[derive BEq BOrd Debug]    // generate instances via macros
+#[derive_cli]               // generate an argv parser
+#[cfg ...]                  // conditional compilation
 ```
 
-Attributes come before visibility: `#[test] pub def ...`, not `pub #[test] def ...`.
+Attributes come before visibility: `#[test] pub def ...`, not
+`pub #[test] def ...`.
 
 ## Native Functions
 
-Mark functions as implemented in Rust:
-
-```monad
-#[native nativeName]
-def functionName (params) : ReturnType
-```
-
-Example from the standard library:
-
-```monad
-#[native println]
+```monad,ignore
+#[native print_str]
 def IO.println (s : String) : IO Unit
 
-#[native num_add]
+#[native "num_add"]
 def I64.add (a b : I64) : I64
 ```
 
+A native has no body. The attribute's argument is the runtime's identifier,
+which need not match the Monad-side name.
+
 ## Infix Operators
 
-```monad
+```monad,ignore
 infix (operator) := functionName
 ```
 
 ### Built-in Operators
 
-| Operator | Precedence | Associativity | Function |
+| Operator | Precedence | Associativity | Bound to |
 |----------|------------|---------------|----------|
 | `\|>` | 5 | Left | `apply_fun` |
 | `<\|` | 5 | Right | `fun_apply` |
 | `>>=` | 10 | Right | `Monad.bind` |
-| `.` | 12 | Right | Dot macro (path) |
-| `<*>` | 15 | Left | `Applicative.apply` |
-| `<\|>` | 20 | Left | - |
+| `.` | 12 | Right | path / field access (not bindable) |
+| `<*>` | 15 | Left | — |
+| `<\|>` | 20 | Left | — |
 | `\|\|` | 25 | Right | `Bool.or` |
 | `&&` | 30 | Right | `Bool.and` |
-| `==`, `!=` | 40 | Left | - |
-| `++` | 50 | Right | `List.append` |
-| `>>`, `<<` | 60 | Left | - |
-| `+`, `-` | 65 | Left | `I64.add` |
-| `*`, `/` | 70 | Left | `HMul.mul` |
+| `==` | 40 | Left | `BEq.beq` |
+| `<` | 40 | Left | `BOrd.lt` |
+| `>` | 40 | Left | `BOrd.gt` |
+| `!=`, `=`, `<=`, `>=` | 40 | Left | — |
+| `++` | 50 | Right | `Append.append` |
+| `@` | 50 | Right | — |
+| `>>`, `<<` | 60 | Left | — |
+| `+` | 65 | Left | `HAdd.add` |
+| `-` | 65 | Left | `Sub.sub` |
+| `*` | 70 | Left | `HMul.mul` |
+| `/` | 70 | Left | `Div.div` |
+
+Operators marked — have a precedence but no binding in the prelude, so using
+them is an error until you bind one yourself. `!=`, `<=`, and `>=` are commented
+out in `init/prelude.mo` pending default-method support on `BEq`/`BOrd`.
+
+`@` is deliberately left free for libraries to claim.
+
+Note that `init/lib.mo` rebinds `infix (+) := I64.add`, shadowing the prelude's
+class-based `HAdd.add` where `init` is in scope.
 
 ## Type Definitions
 
 ```monad
-// Simple type
-type Bool {
-    true,
-    false
+type Colour {
+    red,
+    green,
+    blue
 }
 
-// Type with parameters
-type Result E A {
-    ok (a : A),
-    err (e : E)
+type Shape {
+    circle (radius : I64),
+    rectangle (width : I64) (height : I64)
 }
 
-// Type with constructors carrying data
-type Option A {
-    some (a : A),
-    none
+type Tree A {
+    leaf,
+    node (left : Tree A) (value : A) (right : Tree A)
 }
 
-// Empty type
-type Void {}
+type Empty {}
+```
+
+A type can be placed in a universe explicitly, which is how propositions are
+declared:
+
+```monad
+type Truthy : Prop {
+    yes
+}
 ```
 
 ## Struct Definitions
@@ -242,186 +407,152 @@ type Void {}
 struct Point {
     x : I64,
     y : I64,
-    z : I64 := 0,   // default value
-    !name : String  // linear field (!) or affine (?)
+    z : I64 := 0,     // default value
+    !name : String,   // linear field (`!`) or affine (`?`)
+    ?tag : String
 }
 ```
+
+Multiplicity annotations are not enforced — see [Linear Types](./linear-types.md).
 
 ## Class Definitions
 
 ```monad
-// Simple class
-class Functor (F : Type -> Type) {
-    def map (f : A -> B) : (F A) -> F B
+class Container (F : Type -> Type) {
+    def wrap : A -> F A
+    def size (fa : F A) : I64
 }
 
-// Class with constraints
-class [Functor F] Applicative (F : Type -> Type) {
-    def pure : A -> F A
-    def apply : F (A -> B) -> F A -> F B
+class [Container F] Sized (F : Type -> Type) {
+    def is_empty (fa : F A) : Bool
+}
+
+class Convert A B {
+    def convert : A -> B
 }
 ```
+
+A class parameter may have a default (`class FromListLiteral (L : Type -> Type := List)`).
+Methods may have default bodies, but an instance still has to list every method
+it wants — empty instance bodies do not parse.
 
 ## Instance Definitions
 
 ```monad
-// Simple instance
-instance FromListLiteral List {
-    def cons (a : A) (l : List A) : List A := List.cons a l
-    def empty : List A := List.empty
+type Colour { red, green, blue }
+
+instance ToString Colour {
+    def to_string (c : Colour) : String :=
+        match c {
+            red => "red",
+            green => "green",
+            blue => "blue"
+        }
 }
 
-// Instance with constraints
-instance [Add A] Add (List A) {
-    def add (a b : List A) : List A := List.append a b
+instance {A : Type} Append (List A) {
+    def append (a b : List A) : List A := List.append a b
 }
 ```
 
-## Function Definitions
+Instances may be named — one bare identifier self-hosted, a dotted path on the
+bootstrap host:
 
 ```monad
-// Basic function
-def add (a : I64) (b : I64) : I64 := a + b
+type Colour2 { red2, green2 }
 
-// With implicit parameters
-def identity {A : Type} (x : A) : A := x
-
-// With constraints
-def double [Add A] (x : A) : A := HAdd.add x x
-
-// Do block syntax (alternative to :=)
-def greet (name : String) : IO Unit {
-    println name
+instance ColourEq : BEq Colour2 {
+    def beq (a b : Colour2) : Bool := true
 }
-
-// Do block with multiple statements
-def multiStep : IO Unit {
-    println "Step 1";
-    println "Step 2"
-}
-
-// Native function
-#[native println]
-def IO.println (s : String) : IO Unit
 ```
+
+The name is recorded and nothing reads it: no syntax selects an instance by name
+in either implementation.
+
+## Multiplicities
+
+Struct fields accept `!` (linear), `?` (affine) and `%` (erased) in both
+implementations:
+
+```monad
+struct Res { !handle : String, ?tag : String, size : I64 }
+```
+
+Parameters accept them too — on definitions and on typed lambda parameters:
+
+```monad
+def f (!linear : I64) (?affine : I64) (%erased : I64) (many : I64) : I64 :=
+    linear + affine + erased + many
+
+def g : I64 -> I64 := fn (!x : I64) => x
+```
+
+The prefix applies to the whole group, so `(!x y : I64)` makes *both* names
+linear. A destructured parameter takes one as well — `(!{fst, snd} : Coord)` —
+though that spelling is self-hosted only; the bootstrap host rejects it.
+
+> **Nothing enforces multiplicities in either implementation.** Lowering drops
+> the annotation and every binder becomes `Many` — see
+> [Linear Types](./linear-types.md).
 
 ## Modules
 
 ```monad
-// Import module, listing exactly the names needed
-use io {IO}
-
-// Open module (no prefix needed), same explicit-names convention
-open IO {println}
-
-// Access by path — always works, whether or not a name is also open'd
-IO.println "hello"
+use io {IO}          // import, naming what you need
+use io {*}           // import everything
+use io {}            // load for qualified access and instances only
+open IO {println}    // drop the prefix for these names
 ```
 
-`{*}` imports/opens everything; a bare `use`/`open` with no braces at all still parses but is deprecated in favor of an explicit filter.
+A bare `use io` with no braces parses but is deprecated. See
+[Modules and Imports](./modules.md).
 
 ## Dot Macro
 
-The `.` operator (`x.y.z`) is treated as a compile-time macro that concatenates module paths into a single variable reference. This is how module paths like `List.append` work.
+`x.y.z` is resolved at compile time. If `x` is a module path it becomes a single
+qualified name (`List.append`); if `x` is a local value it becomes struct field
+access. The disambiguation happens during lowering.
+
+## Macros
+
+`defmacro`, `quote { ... }`, macro calls (`name! args`), and compile-time
+reflection are real and are how `#[derive]` is implemented. See
+[Macros and Derive](./macros.md).
 
 ## Constraint Solver
 
-Recursive instance constraints (e.g., `instance [Show A] Show (List A) { ... }`) are handled by the constraint solver. It uses a visiting set to detect and resolve cyclic constraint dependencies during instance resolution.
+Recursive instance constraints (e.g. `instance [Show A] Show (List A) { ... }`)
+are handled by a constraint solver that uses a visiting set to detect cyclic
+constraint dependencies. Resolution happens at evaluation time, so an
+unsatisfiable constraint surfaces as a run-time `unresolved global:` error
+rather than a check failure.
 
-## Standard Library Types
+## Standard Library
 
-| Type | Constructors | Description |
-|------|-------------|-------------|
-| `Unit` | `unit` | Single value |
-| `Bool` | `true`, `false` | Boolean |
-| `I64` | (primitive) | 64-bit signed int |
-| `I32` | (primitive) | 32-bit signed int |
-| `U64` | (primitive) | 64-bit unsigned int |
-| `U32` | (primitive) | 32-bit unsigned int |
-| `U16` | (primitive) | 16-bit unsigned int |
-| `U8` | (primitive) | 8-bit unsigned int |
-| `String` | `of_bytes` | UTF-8 string |
-| `Nat` | `zero`, `succ` | Natural numbers |
-| `List A` | `empty`, `cons` | Linked list |
-| `Option A` | `some`, `none` | Optional value |
-| `Result E A` | `ok`, `err` | Success or error |
-| `Void` | (none) | Empty type |
-| `Any` | `any` | Existential type |
-| `IO A` | `io` | IO monad |
+The prelude types and classes are listed in [Types](./inductive-types.md#built-in-types)
+and [Type Classes](./type-classes.md#the-standard-classes). For the module map
+and each module's contents, see [The Standard Library](./stdlib.md).
 
-## Standard Library Classes
+For scale: the standard library is about 440 public definitions, 35 classes, and
+132 instances across `init/` and `std/`, excluding their test modules.
 
-| Class | Parameters | Description |
-|-------|-----------|-------------|
-| `Functor` | `F : Type -> Type` | Mapping over containers |
-| `Applicative` | `F : Type -> Type` | Applicative functors |
-| `Monad` | `M : Type -> Type` | Monadic binding |
-| `FromListLiteral` | `L : Type -> Type` | List literal desugaring |
-| `HAdd` | `A, B, C` | Heterogeneous addition |
-| `Add` | `A` | Homogeneous addition |
-| `Sub` | `A` | Subtraction |
-| `Mul` | `A` | Homogeneous multiplication |
-| `Div` | `A` | Division |
-| `HMul` | `A, B, C` | Heterogeneous multiplication |
-| `BEq` | `A` | Boolean equality |
-| `BOrd` | `A` | Ordering |
-| `Show` | `A` | String conversion |
-| `Append` | `A` | Append/concatenation |
-| `From` | `T, A` | Type conversion |
-| `DefaultValue` | `A` | Default/empty value |
-
-## Standard Library Functions
-
-### Bool
-
-- `Bool.not (b : Bool) : Bool`
-- `Bool.and (a b : Bool) : Bool`
-- `Bool.or (a b : Bool) : Bool`
-
-### Option
-
-- `Option.get_or_default (default : A) (self : Option A) : A`
-
-### List
-
-- `List.is_empty (self : List A) : Bool`
-- `List.append (a b : List A) : List A`
-- `List.first (self : List A) : Option A`
-- `List.last (self : List A) : Option A`
-- `List.flatten (self : List (List A)) : List A`
-- `List.tail (l : List A) : List A`
-
-### IO
-
-- `IO.println (s : String) : IO Unit`
-
-### I64
-
-- `I64.add (a b : I64) : I64`
-
-### Pipeline
-
-- `fun_apply (f : A -> B) (a : A) : B` — `f <| a`
-- `apply_fun (a : A) (f : A -> B) : B` — `a |> f`
-
-## CLI Usage
+## CLI
 
 ```bash
-# Build the compiler
-cargo build --package monad-core
-
-# Run a Monad file
-cargo run -- run file.mo
-
-# Run with debug output
-cargo run -- run file.mo -- --debug
-
-# Run #[test] annotated definitions
-cargo run -- test file.mo
-
-# Compile to native binary (requires llvm feature)
-cargo run -- compile file.mo
-
-# Start the REPL (requires repl feature)
-cargo run -- repl
+monad compile file.mo -o "$PWD/out"  # compile to a native binary
+monad run file.mo                    # compile and execute
+monad eval file.mo                   # interpret (pure programs only)
+monad check file.mo                  # type-check, no execution
+monad check init std lang            # directories are expanded recursively
+monad test file.mo                   # compile and run this file's #[test] defs
+monad pretty file.mo                 # parse and pretty-print
+monad version                        # the git commit this binary was built from
 ```
+
+`compile` and `run` take `--verbose`/`-v`, `--debug`/`-g` and `--release`;
+`eval`, `check` and `test` take `--verbose`/`-v`. Debug info is on unless you
+pass `--release`. Flags may go before or after the paths, `--output=NAME` is not
+recognised (use a space), and a **relative** output name lands in
+`/tmp/monad_out_<pid>`. See [Compiling and Running](./compiling.md), and
+[The Bootstrap Host](./bootstrap-host.md) for the Rust implementation's
+additional commands.

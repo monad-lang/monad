@@ -644,7 +644,7 @@ Recursive instance constraints (e.g., `instance [Show A] Show (List A) { ... }`)
 
 2. **Type Classes**: Like Haskell, with automatic instance resolution
 
-3. **Linear Types**: Compile-time enforcement via `!` (linear) and `?` (affine) multiplicity annotations on parameters
+3. **Linear Types**: Compile-time enforcement via `!` (linear) and `?` (affine) multiplicity annotations on parameters (the syntax parses everywhere -- struct fields, def/lambda/destructured params -- and is dropped at lowering; nothing is enforced yet)
 
 ## Modifying the Compiler
 
@@ -2359,6 +2359,13 @@ Key patterns when writing self-hosted Monad code:
     Left in place rather than removed (two tests use `get_char`, and it
     is declared API), with warning doc comments on all three natives
     pointing here.
+    **Update (2026-09-13).** `'c'` char LITERALS now parse, type-check and
+    compile self-hosted (`lang/parser/string.mo`'s `char_literal`), and
+    `Literal.char` carries a real `Char` rather than the source text. None
+    of that changes the four reasons above: the type still has zero
+    operations, so a literal is something you can write, type and pass, and
+    still not inspect. Do not read "char literals landed" as "`Char` is
+    usable now".
 
 30. **Record a source span at the parser's choke points, never at the
     construction sites (2026-09-05).** The parse stage's fourth and last

@@ -24,6 +24,12 @@
     # DELIBERATELY TEMPORARY -- see
     # plans/bootstrapping/linear-types-memory.md.
     boehmgc
+
+    # The docs/ book. `.github/workflows/mdbook.yml` installs its own copy
+    # to publish monad-lang.org; this is so a docs change can be previewed
+    # locally (`docs-serve`) before it ships, and so `mdbook build` is
+    # available to check that SUMMARY.md still resolves.
+    mdbook
   ];
 
   # https://devenv.sh/languages/
@@ -41,6 +47,10 @@
     wasm-pack build --target web || exit
     cd ../pkg
     npx serve . 
+  '';
+
+  scripts.docs-serve.exec = ''
+    mdbook serve ${config.devenv.root}/docs --open
   '';
 
   scripts.bootstrap.exec = ''
@@ -201,6 +211,22 @@
       entry = "shellcheck";
       files = "^scripts/.*\\.sh$|^scripts/monadup$";
       pass_filenames = true;
+    };
+    # `mdbook build` only RENDERS the book -- it never compiles the Monad
+    # inside it, which is how docs/src drifted far enough from the compiler
+    # that most of its samples had stopped parsing. This extracts every
+    # ```monad block and type-checks it, so a language change that breaks
+    # a documented example fails here instead of shipping to
+    # monad-lang.org. Runs on .md too (a doc edit can break a block on its
+    # own) and takes ~3s once the release binary is warm. Blocks tagged
+    # ```monad,ignore are deliberately skipped -- see the script's header.
+    docs-check = {
+      enable = true;
+      entry = ''
+        ${config.devenv.root}/scripts/check-docs.sh
+      '';
+      pass_filenames = false;
+      files = "\\.(md|mo|rs)$";
     };
   };
 
