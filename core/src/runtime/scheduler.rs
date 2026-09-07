@@ -272,17 +272,30 @@ mod tests {
     assert_eq!(results, expected);
   }
 
+  /// The scheduler really does spread work across its workers.
+  ///
+  /// Each fiber holds its worker long enough that a single worker cannot
+  /// plausibly drain the whole queue before the OS schedules the others.
+  /// At 50us x 100 fibers the batch was ~5ms of work, which is well inside
+  /// the noise of starting four threads on a loaded machine -- so this
+  /// failed intermittently, and only ever inside the full suite, where
+  /// `cargo test`'s own parallelism saturates the box. In isolation it
+  /// passed in 0.01s every time, which is exactly the shape of a test whose
+  /// margin is too thin rather than one finding a real defect.
+  ///
+  /// Deliberately NOT a barrier or a "wait until 2 threads arrive" handshake:
+  /// those turn a serial scheduler from a failing assertion into a hang.
   #[test]
   fn test_scheduler_parallel_execution() {
     let sched = Scheduler::with_workers(4);
     let thread_ids = Arc::new(Mutex::new(HashSet::new()));
 
     let mut fibers = Vec::new();
-    for _ in 0..100 {
+    for _ in 0..40 {
       let ids = Arc::clone(&thread_ids);
       fibers.push(sched.spawn(move || {
-        thread::sleep(Duration::from_micros(50));
         ids.lock().unwrap().insert(thread::current().id());
+        thread::sleep(Duration::from_millis(5));
       }));
     }
 
