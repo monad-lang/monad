@@ -26,7 +26,10 @@ norm() { awk 'BEGIN{n=0}{l[n++]=$0}END{while(n>0&&l[n-1]=="")n--;for(i=0;i<n;i++
 pass=0; fail=0; skip=0
 for f in "$@"; do
   b=$(basename "$f" .mo)
-  ./target/release/monad-rs run lang/main.mo -- compile "$f" -o "$SP/o_$b.ll" >/dev/null 2>&1
+  # `--release`, not a bare compile: debug info is ON by default since
+  # stage 5, so a bare compile is itself a --debug build and comparing
+  # it to `--debug` passes vacuously.
+  ./target/release/monad-rs run lang/main.mo -- compile "$f" --release -o "$SP/o_$b.ll" >/dev/null 2>&1
   ./target/release/monad-rs run lang/main.mo -- compile "$f" --debug -o "$SP/d_$b.ll" >/dev/null 2>&1
   if [ ! -f "$SP/o_$b.ll.ll" ] || [ ! -f "$SP/d_$b.ll.ll" ]; then
     echo "SKIP  $f (did not compile)"; skip=$((skip+1)); continue

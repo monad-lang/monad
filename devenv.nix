@@ -98,7 +98,10 @@
       set -euo pipefail
       out="''${TMPDIR:-/tmp}/monad-bootstrap-ci"
       rm -rf "$out"; mkdir -p "$out"
-      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo -o "$out/monad" --verbose
+      # --release: debug info is on by default since stage 5, and this job
+      # already runs at 1176s of a 1200s timeout with it off — the wrapper
+      # cost would push a slower CI machine past the line.
+      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo -o "$out/monad" --verbose --release
       test -x "$out/monad"
       "$out/monad" check lang/main.mo
     '';

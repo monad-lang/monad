@@ -296,11 +296,11 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
 /// failed, in which case this redundant re-attempt produces the same
 /// real, rendered diagnostic the old code already did via its own
 /// fallback path below, rather than a bare "gate failed").
-/// `debug` (from `--debug`/`-g`, `Command.compile`'s own field) gates
-/// DWARF debug info (plans/bootstrapping/debug-info.md, v1: one
-/// location per top-level def) -- off by default, same rationale as the
-/// plan's own "off by default for `monad compile`" decision (binary
-/// size / compile time cost). When on, this re-reads and re-parses
+/// `debug` (from `Command.compile`'s own field -- on by default since
+/// stage 5, `--release` opts out, `--debug`/`-g` opts back in) gates
+/// DWARF debug info (plans/bootstrapping/debug-info.md: one location
+/// per def, plus per-term locations from stage 3). When on, this
+/// re-reads and re-parses
 /// `file_path` (via `debug_info_for_source`) purely to recover each
 /// top-level def's own source location -- independent of, and
 /// redundant with, `load_file_modules`'s own internal parsing, but a
@@ -665,11 +665,16 @@ type Command {
 }
 
 /// `compile <path> [name]` (original positional form) and `compile <path>
-/// [--output/-o <name>] [--verbose/-v] [--debug/-g]` (flag form) both
-/// work; an explicit `--output`/`-o` wins over a positional name if both
-/// are given. `--debug`/`-g` enables DWARF debug info (plans/
-/// bootstrapping/debug-info.md, v1: one location per top-level def) --
-/// off by default, same as `--verbose`.
+/// [--output/-o <name>] [--verbose/-v] [--debug/-g] [--release]` (flag
+/// form) both work; an explicit `--output`/`-o` wins over a positional
+/// name if both are given. DWARF debug info (plans/bootstrapping/
+/// debug-info.md: one location per def, plus per-term locations once
+/// stage 3 landed) is ON BY DEFAULT, like rustc's dev profile: a debug
+/// build is what you want from a compile unless you asked for a release
+/// one, and the flag is how you ask. `--release` opts out;
+/// `--debug`/`-g` stays accepted as an explicit opt-in and wins over
+/// `--release` if both are given (asking twice, with the more specific
+/// request, is not an error).
 def Command.from_args (args : List String) : Command :=
     match args {
         List.cons cmd rest =>
@@ -677,8 +682,15 @@ def Command.from_args (args : List String) : Command :=
                 match Cli.take_flag "verbose" "v" rest {
                     Cli.FlagResult.flag_result verbose rest1 =>
                         match Cli.take_flag "debug" "g" rest1 {
-                            Cli.FlagResult.flag_result debug rest1b =>
-                                match Cli.take_opt "output" "o" "" rest1b {
+                            Cli.FlagResult.flag_result debug_explicit rest1a =>
+                                match Cli.take_flag "release" "" rest1a {
+                                    Cli.FlagResult.flag_result release rest1b =>
+                                        // Debug info defaults ON (rustc's own
+                                        // dev-profile default): `--release`
+                                        // opts out, an explicit `--debug`/
+                                        // `-g` opts back in over it.
+                                        let debug := if debug_explicit then true else not release in
+                                        match Cli.take_opt "output" "o" "" rest1b {
                                     Cli.OptResult.opt_result opt_out_name rest2 =>
                                         match Cli.take_positional rest2 {
                                             Cli.PosResult.pos_result path_opt rest3 =>
@@ -712,6 +724,7 @@ def Command.from_args (args : List String) : Command :=
                                         },
                                 },
                         },
+                },
                 }
             else if cmd == "pretty" then
                 match Cli.take_positional rest {
@@ -786,7 +799,7 @@ def main (args : List String) : IO I64 {
 
 #[partial]
 def print_help : IO I64 {
-    println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v] [--debug/-g]";
+    println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v] [--debug/-g] [--release]";
     println "         Parse and compile a .mo source file";
     println "         --debug/-g emits DWARF debug info (one source location per top-level def)";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";

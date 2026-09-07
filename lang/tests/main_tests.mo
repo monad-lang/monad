@@ -14,7 +14,7 @@ use lang.main {*}
 def test_from_args_compile_positional_name : Bool :=
     match Command.from_args ["compile", "a.mo", "myname"] {
         Command.compile path out_name verbose debug =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "myname" && verbose == false && debug == false,
+            Path.to_string path == "a.mo" && Path.to_string out_name == "myname" && verbose == false && debug == true,
         _ => false,
     }
 
@@ -22,7 +22,7 @@ def test_from_args_compile_positional_name : Bool :=
 def test_from_args_compile_default_name : Bool :=
     match Command.from_args ["compile", "a.mo"] {
         Command.compile path out_name verbose debug =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "source" && verbose == false && debug == false,
+            Path.to_string path == "a.mo" && Path.to_string out_name == "source" && verbose == false && debug == true,
         _ => false,
     }
 
@@ -30,7 +30,7 @@ def test_from_args_compile_default_name : Bool :=
 def test_from_args_compile_output_flag : Bool :=
     match Command.from_args ["compile", "a.mo", "--output", "out", "--verbose"] {
         Command.compile path out_name verbose debug =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true && debug == false,
+            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true && debug == true,
         _ => false,
     }
 
@@ -38,7 +38,7 @@ def test_from_args_compile_output_flag : Bool :=
 def test_from_args_compile_short_flags : Bool :=
     match Command.from_args ["compile", "a.mo", "-o", "out", "-v"] {
         Command.compile path out_name verbose debug =>
-            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true && debug == false,
+            Path.to_string path == "a.mo" && Path.to_string out_name == "out" && verbose == true && debug == true,
         _ => false,
     }
 
@@ -55,6 +55,26 @@ def test_from_args_compile_debug_short_flag : Bool :=
     match Command.from_args ["compile", "a.mo", "-g", "-v"] {
         Command.compile path out_name verbose debug =>
             Path.to_string path == "a.mo" && verbose == true && debug == true,
+        _ => false,
+    }
+
+/// Debug info is ON by default (rustc's own dev-profile default);
+/// `--release` is how you opt out.
+#[test]
+def test_from_args_compile_release_opts_out_of_debug : Bool :=
+    match Command.from_args ["compile", "a.mo", "--release"] {
+        Command.compile path out_name verbose debug =>
+            Path.to_string path == "a.mo" && verbose == false && debug == false,
+        _ => false,
+    }
+
+/// An explicit `--debug` wins over `--release` -- asking twice, with
+/// the more specific request, is not an error.
+#[test]
+def test_from_args_compile_debug_beats_release : Bool :=
+    match Command.from_args ["compile", "a.mo", "--release", "--debug"] {
+        Command.compile path out_name verbose debug =>
+            Path.to_string path == "a.mo" && verbose == false && debug == true,
         _ => false,
     }
 
