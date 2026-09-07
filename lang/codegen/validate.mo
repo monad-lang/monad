@@ -450,5 +450,10 @@ def missing_call_targets (targets : List String) (defined : HashMap String Bool)
 def strip_db_lams (term_ : Term) : Term := match term_peel term_ {
     Term.lam dbg typ body => strip_db_lams body,
     Term.forall dbg kind body => strip_db_lams body,
-    _ => term_peel term_,
+    // Returns the term WITH its wrapper, not the peeled one. Peeling is
+    // only needed to see THROUGH a wrapper to a binder; the term this
+    // finally lands on is the def's body, and its position is the one a
+    // function most wants -- `compile_db_def_ir_body` compiles exactly
+    // this, so peeling here would silently discard it.
+    _ => term_,
 }

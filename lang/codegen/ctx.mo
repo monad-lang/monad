@@ -57,6 +57,14 @@ struct CodegenCtx {
     /// (macro-expanded/lambda-lifted/renamed name) just means that one
     /// function gets no debug info, not a compile error.
     debug_locs : HashMap String Location,
+    /// The position in force while compiling a term, set when
+    /// `compile_db_term_ir` enters a `Term.ctx` and restored on the way
+    /// out. `none` whenever locations are off, and whenever a term
+    /// carries none -- a synthesized node, or one under a placement rule
+    /// that keeps wrappers away (R1/R2/R3, see `lower_parse.mo`).
+    ///
+    /// Read at instruction emission, where it becomes a `loc_marker`.
+    current_loc : Option DbgLoc,
 }
 
 struct CtxStrPair {
@@ -71,7 +79,7 @@ struct CtxStrPair {
 /// correct only for genuinely 0-arity defs).
 #[partial]
 def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (debug_locs : HashMap String Location) : CodegenCtx :=
-    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, debug_locs := debug_locs }
+    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, debug_locs := debug_locs, current_loc := Option.none }
 
 /// Look up `fn_name`'s captured source location (see `CodegenCtx.
 /// debug_locs`'s own doc comment) and convert it to the minimal

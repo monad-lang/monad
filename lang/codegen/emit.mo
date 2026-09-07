@@ -1539,6 +1539,45 @@ def build_set_env_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : I6
 /// INSTANCE it's running as (`apply_closureN`, `runtime.c`, now
 /// uniformly passes it) -- the lambda's own real parameter shifts to
 /// `p1`.
+/// Compile a located term: record the position, compile the term under it,
+/// and PREPEND a marker so every instruction the term produced carries it.
+///
+/// Prepend, never append. `ends_with_terminator` inspects an instruction
+/// list's LAST element and `drop_last_instr` (`lang/codegen/util.mo`) drops
+/// it blindly, so a marker sitting at the end of a list would be read as a
+/// terminator or silently discarded. Prepending holds that invariant by
+/// construction rather than by remembering it.
+///
+/// `current_loc` is restored to the caller's on the way out: a location is
+/// scoped to the term it was written on, and leaking it outward would
+/// attribute a sibling's instructions to this term's line.
+#[partial]
+def compile_located_term_ir (c : CodegenCtx) (loc : Location) (inner : Term) : CompileResult :=
+    match compile_db_term_ir { c with current_loc := dbg_loc_of_location loc } inner {
+        CompileResult.ok c2 instrs val blocks funcs globals =>
+            CompileResult.ok { c2 with current_loc := c.current_loc }
+                (prepend_loc_marker loc instrs)
+                val blocks funcs globals,
+    }
+
+/// A marker is only worth emitting if the term produced instructions to
+/// attribute to it -- one before an empty list would end up at the END of
+/// whatever list it is spliced into, which is the shape the prepend rule
+/// exists to avoid.
+#[partial]
+def prepend_loc_marker (loc : Location) (instrs : List LLVMInstruction) : List LLVMInstruction :=
+    match instrs {
+        List.empty => List.empty,
+        List.cons _ _ => prepend_loc_marker_go (dbg_loc_of_location loc) instrs,
+    }
+
+#[partial]
+def prepend_loc_marker_go (d : Option DbgLoc) (instrs : List LLVMInstruction) : List LLVMInstruction :=
+    match d {
+        Option.some dl => List.cons (LLVMInstruction.loc_marker dl) instrs,
+        Option.none => instrs,
+    }
+
 #[partial]
 def compile_db_lam_ir (c : CodegenCtx) (dbg : DebugName) (typ : Term) (body : Term) : CompileResult :=
     match fresh_label c "lambda" {
@@ -2093,10 +2132,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
     Term.pi arg ret => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.type_ universe => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.hole => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
-    // Stage 3c replaces this with the arm that records the position and
-    // emits a `loc_marker`. Compiling straight through until then keeps
-    // this commit a no-op, which is the point of splitting 3a out.
-    Term.ctx _loc inner => compile_db_term_ir c inner,
+    Term.ctx loc inner => compile_located_term_ir c loc inner,
 }
 
 #[partial]
@@ -3491,6 +3527,60 @@ def parm_values_for_go (params : List Param) (idx : I64) : List LLVMValue :=
         List.cons _ rest => List.cons (LLVMValue.parm_ idx) (parm_values_for_go rest (idx + 1)),
     }
 
+struct TerminalBlocks {
+    ctx : CodegenCtx,
+    blocks : List LLVMBasicBlock,
+}
+
+/// A def body whose final value lives inside its own merge/case block
+/// (the `compose_seq` convention: a branching sub-term's LAST appended
+/// block is closed with `ret <its own reported val>`) never reaches the
+/// boxing `materialize_branch_val` gives the plain-`ret` path -- with the
+/// entry instruction list already ending in a terminator,
+/// `compile_db_def_ir_body` keeps the blocks as-is and that block's own
+/// `ret` is the function's REAL return. When the body is a native Bool
+/// comparison (`I64.beq`/`.lt`/...) composed after a BRANCHING operand --
+/// a struct field access: `lang.types::parse_span_is_unknown :=
+/// I64.beq sp.start_rem -1` is the live self-compile case, its field
+/// access building the `entry`/`check`/`merge` block chain -- the
+/// comparison's `icmp` was spliced into that very block and it re-closed
+/// with `ret <raw i1>`, the ONE value position
+/// `materialize_native_bool_arg` never sees. `llc` rejects the function:
+/// `'%tN' defined with type 'i1' but expected 'i64'` (same class as the
+/// call-argument hole documented at `materialize_native_bool_arg` above;
+/// that fix's own repro had a PURE operand, so it missed this
+/// branching-operand combination).
+///
+/// Fix: when `already_terminated`, box the tail exactly as call arguments
+/// and phi operands already are, splicing the boxing into the terminal
+/// block so its own `ret` closes with the boxed Bool constructor instead.
+/// A total no-op (ctx/blocks returned unchanged) whenever the body is not
+/// a native comparison, and a safe fallback too when no block ends in
+/// `ret <val>` (that would violate `compile_db_if_ir`/`compile_match_ir`'s
+/// own closing invariant; kept non-crashing to match `compose_seq`'s
+/// stance on the same impossibility).
+///
+/// Residual gap, noted not fixed: a body shaped
+/// `let x := <branching> in I64.beq ...` reaches the same hole with a
+/// let-shaped body `term_is_native_bool_op` answers `false` to. Nothing
+/// in the corpus hits it today; fixing blind would mean guessing.
+#[partial]
+def materialize_terminal_ret (already_terminated : Bool) (ctx : CodegenCtx) (term_ : Term) (val : LLVMValue) (blocks : List LLVMBasicBlock) : TerminalBlocks :=
+    if not already_terminated
+    then { ctx := ctx, blocks := blocks }
+    else
+        match materialize_native_bool_arg ctx term_ val {
+            { ctx := ctx1, instrs := box_instrs, val := boxed } =>
+                match box_instrs {
+                    List.empty => { ctx := ctx, blocks := blocks },
+                    List.cons _ _ =>
+                        match splice_into_terminal_block blocks val box_instrs boxed {
+                            Option.some rewritten => { ctx := ctx1, blocks := rewritten },
+                            Option.none => { ctx := ctx, blocks := blocks },
+                        },
+                },
+        }
+
 /// Compile a canonical Def (de Bruijn Term) to LLVM IR.
 #[partial]
 def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
@@ -3588,13 +3678,19 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                         // 'i64'` at the `ret i64 %tN` itself.
                         let already_terminated := ends_with_terminator instrs_r in
                         let bmr := materialize_branch_val ctx_r body instrs_r val_r in
+                        // With the value living in a terminal block,
+                        // `materialize_branch_val` above short-circuited
+                        // and never boxed -- box that block's own `ret`
+                        // instead (see `materialize_terminal_ret`'s doc
+                        // comment for the raw-i1 hole this closes).
+                        let tb := materialize_terminal_ret already_terminated bmr.ctx body val_r blocks_r in
                         let entry_instrs :=
                             if already_terminated
                             then instrs_r
                             else List.append bmr.instrs (List.cons (LLVMInstruction.ret bmr.val) List.empty) in
                         let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
-                        let all_blocks_raw := append_blocks (List.cons entry_block List.empty) blocks_r in
-                        let tco := apply_self_tco bmr.ctx fn_name (List.length llvm_params) all_blocks_raw in
+                        let all_blocks_raw := append_blocks (List.cons entry_block List.empty) tb.blocks in
+                        let tco := apply_self_tco tb.ctx fn_name (List.length llvm_params) all_blocks_raw in
                         // See the `void_val` arm above for why `tco.ctx`/
                         // `tco.blocks` are bound once here rather than
                         // inlined into each `if`/else arm.
@@ -4167,6 +4263,32 @@ def debug_fixture_def : Def :=
     Def.mk (ModulePath.mp (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
         (Term.lit (Literal.num 42 NumSuffix.i64)) List.empty empty_attrs Visibility.package_private
 
+/// A def with a source position on an INNER term, as
+/// `decls_parser_located` produces.
+///
+/// Two things this fixture's shape is deliberate about, both learned by
+/// getting them wrong first:
+///
+///   - **The wrapper is on the body, and `strip_db_lams` must keep it.**
+///     That helper peels wrappers to see THROUGH them to a binder, but
+///     returns the final term wrapped -- `compile_db_def_ir_body` compiles
+///     exactly that term, so peeling it there would silently discard the
+///     body's own position. Getting this wrong is invisible: the def still
+///     compiles and still carries the function-level location.
+///   - **The located term is an `if`, not a literal.** A literal compiles to
+///     a VALUE and emits no instructions, so there is nothing to attach a
+///     position to and `prepend_loc_marker` correctly emits no marker. That
+///     is exactly why `factorial`'s `then 1` produces no line-6 entry: the
+///     constant is folded into a phi operand.
+#[partial]
+def located_fixture_def : Def :=
+    Def.mk (ModulePath.mp (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
+        (Term.ctx (Location.mk 40 9 7)
+            (Term.lit (Literal.if_ (Term.lit (Literal.num 1 NumSuffix.i64))
+                                   (Term.lit (Literal.num 2 NumSuffix.i64))
+                                   (Term.lit (Literal.num 3 NumSuffix.i64)))))
+        List.empty empty_attrs Visibility.package_private
+
 #[test]
 def test_build_debug_locs_keys_by_flat_name : Bool :=
     let loc := Location.mk 5 2 3 in
@@ -4205,6 +4327,38 @@ def test_compile_db_decls_ir_with_debug_exact_content : Bool :=
         else false)
     else false
 
+/// A located term emits a DISTINCT `!DILocation` and attaches it to the
+/// instructions it produced, instead of everything sharing the function's
+/// one location.
+///
+/// This is the assertion that separates "locations work" from "locations
+/// are transparently doing nothing" -- the transparency oracle passes
+/// either way, so it cannot be the only check.
+#[test]
+def test_located_term_emits_its_own_dilocation : Bool :=
+    let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
+    let located : Def := located_fixture_def in
+    let mod_ := compile_db_decls_ir_with_debug (List.cons located List.empty) (Option.some "hello.mo") locs in
+    let text := emit_module mod_ in
+    // The def's own location (line 2) AND the body's (line 9) must both be
+    // present -- one node each, not one shared.
+    if check_contains text "!DILocation(line: 2, column: 3, scope: !6)"
+    then check_contains text "!DILocation(line: 9, column: 7, scope: !6)"
+    else false
+
+/// A location wrapped around a term that emits NO instructions must emit
+/// no marker: one prepended to an empty list ends up at the END of
+/// whatever list it is spliced into, where `ends_with_terminator` would
+/// read it as a terminator and `drop_last_instr` would silently drop it.
+#[test]
+def test_located_empty_term_emits_no_marker : Bool :=
+    let d : DbgLoc := DbgLoc.mk 9 7 in
+    // `Term.hole` compiles to no instructions at all.
+    match prepend_loc_marker (Location.mk 40 9 7) List.empty {
+        List.empty => true,
+        List.cons _ _ => false,
+    }
+
 /// The plain (non-`_with_debug`) entry point must emit BYTE-IDENTICAL
 /// text (no debug metadata at all) whether or not this feature exists --
 /// it always passes `Option.none`/`str_map_empty` through, so this is a
@@ -4214,6 +4368,44 @@ def test_compile_db_decls_ir_default_has_no_debug_info : Bool :=
     let mod_ := compile_db_decls_ir (List.cons debug_fixture_def List.empty) in
     let text := emit_module mod_ in
     not (check_contains text "!DICompileUnit")
+
+/// A def whose body is a native Bool comparison over a BRANCHING
+/// operand -- `I64.beq (if b then x else y) (-1)` -- the exact shape
+/// that ended the bootstrap at `llc` (`lang.types::parse_span_is_unknown`,
+/// whose real operand is a struct field access: that compiles as a
+/// single-case match with the same entry/check/merge block chain this
+/// `if` produces). The comparison's `icmp` gets spliced into the
+/// operand's merge block, which `compose_seq` re-closes with
+/// `ret <raw i1>`; the def's own entry list ends in the operand's
+/// branch, so `already_terminated` is true and the plain-ret boxing
+/// (`materialize_branch_val`) never runs.
+#[partial]
+def native_bool_over_branching_fixture_def : Def :=
+    Def.mk (ModulePath.mp (List.cons (Identifier.id "spbeq") List.empty)) (Term.type_ 1)
+        (Term.lam (DebugName.named (Identifier.id "b")) (Term.type_ 1)
+            (Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1)
+                (Term.lam (DebugName.named (Identifier.id "y")) (Term.type_ 1)
+                    (Term.app
+                        (Term.app (Term.var 3 (DebugName.named (Identifier.id "I64.beq")))
+                            (Term.lit (Literal.if_
+                                (Term.var 2 (DebugName.named (Identifier.id "b")))
+                                (Term.var 1 (DebugName.named (Identifier.id "x")))
+                                (Term.var 0 (DebugName.named (Identifier.id "y"))))))
+                        (Term.lit (Literal.num (-1) NumSuffix.i64))))))
+        List.empty empty_attrs Visibility.package_private
+
+/// Regression: a Bool-returning def whose body is a native comparison
+/// over a BRANCHING operand must box its tail value inside the terminal
+/// block before that block's own `ret` -- otherwise the raw `i1` becomes
+/// the function's real return and `llc` rejects the module
+/// (`'%tN' defined with type 'i1' but expected 'i64'`, the live
+/// self-compile failure). The `zext i1 ... to i64` is the boxing's first
+/// instruction; without the fix the emitted module contains none at all.
+#[test]
+def test_native_bool_branching_tail_boxes_ret : Bool :=
+    let mod_ := compile_db_decls_ir (List.cons native_bool_over_branching_fixture_def List.empty) in
+    let text := emit_module mod_ in
+    check_contains text "zext i1"
 
 #[partial]
 def check_contains (text : String) (needle : String) : Bool :=
