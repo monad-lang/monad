@@ -2500,6 +2500,55 @@ Key patterns when writing self-hosted Monad code:
     lead or continuation byte satisfies. A test that used a mid-character
     offset failed and was wrong, not the code.
 
+35. **A `let` in front of an `if` is not a guard — this evaluator is
+    strict (2026-09-07).** `lang/module.mo` had:
+
+        let rebuilt_scope : Scope := { ... build_scope_from_decls ... };
+        let did_change : Bool := expansion.changed;
+        let scope2 := if did_change then rebuilt_scope else scope;
+
+    which READS as conditional and is not. `let` binds eagerly, so the
+    rebuild ran on every elaboration and the `if` only chose which
+    already-computed scope to keep. Cost: **83.9s of a 232s self-hosted
+    `check lang/main.mo`** -- 36% of the run -- duplicating a
+    `build_scope_from_decls` that had just done the same work.
+    `if` is the one form that does not evaluate the branch it does not
+    take, so the fix is to move the call inside the branch.
+    **The tell was in `--verbose` the whole time**: two adjacent phases
+    costing almost exactly the same (81.9s `build_scope_from_decls`, 83.9s
+    "post-expansion scope rebuild"), one of them named *rebuild*. Two
+    phases with the same cost where one is supposed to be conditional is
+    the signature. Look for it before reaching for a profiler.
+    **But the annotated local was load-bearing for a second reason**, and
+    removing it swapped one bug for another: a bare `{ ... }` inside the
+    branch has no expected type to desugar against, survives to codegen as
+    a `Literal.struct_lit`, and compiles to a void placeholder.
+    `validate_no_undesugared_struct_lits` rejected it -- but only on a full
+    self-compile, since the offending def was in `lang/module.mo`. The
+    shape that satisfies both is NOT an annotated `let ... in` inside the
+    branch -- the annotation does not reach the literal from there and the
+    validator still rejects (verified: two full self-compiles, same error).
+    What works is a small def whose DECLARED RETURN TYPE gives the literal
+    an expected type, called from inside the branch: lazy because it is a
+    call in a branch, desugared because the return type is the expected
+    type. Same shape as `empty_loc_suffixes` (`lang/codegen/ir.mo`), where
+    a `let` annotation likewise failed to resolve a generic and a def's
+    return annotation did.
+    Corollary for perf work here: **attribute before fixing.** This looked
+    like a regression from in-flight parser work; an interleaved A/B of
+    branch vs `main` showed every phase identical within noise, including
+    this one. The earlier 0ms reading that made it look new simply predated
+    a rebase.
+
+36. **`module cache: 0 hit(s), N miss(es)` on a single-file check is
+    correct, not a bug (2026-09-07).** `collect_dep_module_infos`
+    (`lang/module.mo`) skips anything already in `visited`, so within one
+    file's dependency walk each module loads exactly once and the
+    cross-file `ModuleInfoCache` has nothing to hit BY CONSTRUCTION. It
+    exists for runs over many files, where the same dependency is reached
+    from each: `check` over three examples reports 24 hits / 12 misses.
+    Do not "fix" the zero.
+
 ## Committing Changes
 
 ### Commit Message Format
