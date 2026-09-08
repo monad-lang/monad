@@ -897,7 +897,24 @@ at that exact point — two confirmed shapes:
     (`elaborate_module_decls_best_effort`) silently keeps the
     un-desugared decl and `compile_lit_ir` compiles the literal to a
     `void_val` placeholder. Same fix: bind each level to a local with an
-    explicit type annotation first.
+    explicit type annotation first, or -- when the literal is the whole
+    result -- move it into its own `def` with a DECLARED return type,
+    which is what gives it an expected type (`mk_loaded_modules`/
+    `mk_module_info` in `lang/main.mo`, `rebuild_target_scope` in
+    `lang/module.mo`).
+
+    **TODO: the self-hosted checker should support a struct literal in
+    return position.** Every workaround above exists only because it
+    cannot infer the type there. `return`'s expected type IS known --
+    it is the enclosing `do` block's `IO A` payload, the same
+    information a `let x : T := {...}` annotation supplies by hand --
+    so the inference is available, just not threaded to the struct-
+    literal case. Until it is, the workarounds are mandatory: the trap
+    is silent in a dependency module (see above) and cost a bootstrap
+    run as recently as the stage-6 DWARF work
+    (`with_located_decls`/`locate_module_info`, caught only by
+    `devenv tasks run monad:bootstrap-compile`, since the Rust host
+    accepts what the self-hosted checker rejects).
 
 **Adding a field to a `struct` breaks every POSITIONAL match on it, and
 nothing catches it statically.** A pattern like `mk _ _ _ inds _ _ _ _ _`
