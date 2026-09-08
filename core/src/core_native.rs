@@ -139,6 +139,15 @@ const PURE_NATIVES: &[&str] = &[
   "string_to_list",
   "string_from_list",
   "string_to_lowercase",
+  // `std/array.mo`. Pure by construction: `array_new`/`array_with`
+  // allocate a FRESH `Con` rather than writing through an existing one,
+  // and `array_len`/`array_get` only read. `array_set_in_place` and
+  // `array_freeze` are deliberately absent -- they are `IO`-typed, and
+  // belong with `read_file`/`write_file` in the excluded set below.
+  "array_new",
+  "array_len",
+  "array_get",
+  "array_with",
 ];
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
@@ -240,6 +249,12 @@ pub fn exec_native(
     "string_slice" => string_slice(args),
     "string_drop" => string_drop(args),
     "print_str" => print_str(args, natives),
+    "array_new" => array_new(args, natives),
+    "array_len" => array_len(args),
+    "array_get" => array_get(args, natives),
+    "array_with" => array_with(args, natives),
+    "array_set_in_place" => array_set_in_place(args, natives),
+    "array_freeze" => array_freeze(args, natives),
     "string_get" => string_get(args, natives),
     "string_get_char" => string_get_char(args, natives),
     "string_to_list" => string_to_list(args, natives),
@@ -708,6 +723,167 @@ fn print_str(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErr
   // own runtime shape still doesn't matter (never pattern-matched), so
   // any inner value works -- kept as the string for minimal disruption.
   io_wrap(natives, Value::Lit(IrLit::Str(s.to_string().into())))
+}
+
+// --- `std/array.mo` -------------------------------------------------
+//
+// An `Array A` value IS a `Value::Con` tagged `Array.mk` whose `args`
+// are its elements: the length is the arg count, indexing is an arg
+// index, and elements need no type information because `Value` carries
+// none. The compiled backend's `Constructor` (`{header, tag,
+// field_count, fields[]}`, runtime.c) has exactly the same shape, which
+// is what lets one set of natives serve both runtimes.
+//
+// **`array_set_in_place` is O(1) COMPILED and O(n) INTERPRETED**, and
+// that difference is inherent rather than an implementation shortcut:
+// `Value::Con`'s `args` is an `Arc<ConArgs>` shared with whatever
+// environment slot or global-cache entry the builder was read out of, so
+// `Arc::make_mut` copies on every write here (see `Value::Con`'s own doc
+// comment in `core_value.rs` -- the aliased case is the normal one).
+// `monad_set_field` on the compiled side writes the real object. Both
+// are CORRECT; only the cost differs. Anything building a large array
+// under the interpreter should therefore prefer `array_new` +
+// `array_with` folds or go through the compiled backend.
+
+/// `array_new (n : I64) (fill : A) : Array A`.
+fn array_new(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "array_new needs 2 args".into(),
+    ));
+  }
+  let n = extract_int(&args[0])?;
+  let mk = require_ctor(natives.well_known.array_mk, "Array.mk")?;
+  let len = if n < 0 { 0 } else { n as usize };
+  Ok(Value::Con {
+    tag: mk.tag,
+    args: std::sync::Arc::new(vec![args[1].clone(); len].into()),
+  })
+}
+
+/// The elements of an `Array` value, or an error naming what came
+/// instead -- shared by every `array_*` native below.
+fn array_elems(v: &Value) -> Result<&[Value], CoreEvalError> {
+  match v {
+    Value::Con { args, .. } => Ok(args.as_ref().as_ref()),
+    other => Err(CoreEvalError::NativeArgError(format!(
+      "expected an Array, got {other:?}"
+    ))),
+  }
+}
+
+/// `array_len (a : Array A) : I64` -- O(1).
+fn array_len(args: &[Value]) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "array_len needs 1 arg".into(),
+    ));
+  }
+  let elems = array_elems(&args[0])?;
+  Ok(Value::Lit(IrLit::Num(elems.len() as i64, NumSuffix::I64)))
+}
+
+/// `array_get (a : Array A) (i : I64) : Option A` -- `Option`, not a
+/// panic, for the same reason `String.get` returns one: an
+/// out-of-range read must not be undefined behaviour in the compiled
+/// backend.
+fn array_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "array_get needs 2 args".into(),
+    ));
+  }
+  let elems = array_elems(&args[0])?;
+  let idx = extract_int(&args[1])?;
+  if idx < 0 || idx as usize >= elems.len() {
+    let none = require_ctor(natives.well_known.option_none, "Option.none")?;
+    return Ok(Value::Con {
+      tag: none.tag,
+      args: std::sync::Arc::new(Vec::new().into()),
+    });
+  }
+  let some = require_ctor(natives.well_known.option_some, "Option.some")?;
+  Ok(Value::Con {
+    tag: some.tag,
+    args: std::sync::Arc::new(vec![elems[idx as usize].clone()].into()),
+  })
+}
+
+/// `array_with (a : Array A) (i : I64) (v : A) : Array A` -- the
+/// persistent `set`: copy, then write, so the input is untouched. O(n)
+/// by design; bulk construction is what the builder is for.
+/// An out-of-range index returns the array unchanged (the total
+/// counterpart of `array_get`'s `Option.none`).
+fn array_with(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 3 {
+    return Err(CoreEvalError::NativeArgError(
+      "array_with needs 3 args".into(),
+    ));
+  }
+  let elems = array_elems(&args[0])?;
+  let idx = extract_int(&args[1])?;
+  if idx < 0 || idx as usize >= elems.len() {
+    return Ok(args[0].clone());
+  }
+  let mk = require_ctor(natives.well_known.array_mk, "Array.mk")?;
+  let mut next = elems.to_vec();
+  next[idx as usize] = args[2].clone();
+  Ok(Value::Con {
+    tag: mk.tag,
+    args: std::sync::Arc::new(next.into()),
+  })
+}
+
+/// `array_set_in_place (b : ArrayBuilder A) (i : I64) (v : A) : IO Unit`.
+/// See the section comment above for why this is O(n) here and O(1)
+/// compiled. Returns `IO Unit`, so the mutated builder is reached
+/// through the caller's own binding -- which, under the copying
+/// semantics this runtime forces, is why `std/array.mo` builds through
+/// `array_with` on the host path rather than relying on the write
+/// being observable through an alias.
+fn array_set_in_place(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.len() < 3 {
+    return Err(CoreEvalError::NativeArgError(
+      "array_set_in_place needs 3 args".into(),
+    ));
+  }
+  // Validate the shape and bounds so a bad index fails the same way on
+  // both runtimes rather than silently doing nothing on one.
+  let elems = array_elems(&args[0])?;
+  let idx = extract_int(&args[1])?;
+  if idx < 0 || idx as usize >= elems.len() {
+    return Err(CoreEvalError::NativeArgError(format!(
+      "array_set_in_place index {idx} out of range for length {}",
+      elems.len()
+    )));
+  }
+  // `IO Unit`'s payload, spelled the way `write_file` (the other
+  // `IO Unit` native) already spells it: an empty string, never
+  // inspected -- `Unit` is not in `WellKnownCtors` and nothing reads
+  // this value.
+  io_wrap(natives, Value::Lit(IrLit::Str(String::new().into())))
+}
+
+/// `array_freeze (b : ArrayBuilder A) : IO (Array A)` -- COPIES rather
+/// than casting. A cast would leave the builder aliasing a value pure
+/// code believes is immutable, and a later `array_set_in_place` would
+/// mutate it: the one way this design can produce a wrong answer rather
+/// than a slow one.
+fn array_freeze(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "array_freeze needs 1 arg".into(),
+    ));
+  }
+  let elems = array_elems(&args[0])?;
+  let mk = require_ctor(natives.well_known.array_mk, "Array.mk")?;
+  io_wrap(
+    natives,
+    Value::Con {
+      tag: mk.tag,
+      args: std::sync::Arc::new(elems.to_vec().into()),
+    },
+  )
 }
 
 fn string_get(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {
@@ -1237,6 +1413,10 @@ mod tests {
         io_io: None,
         result_ok: None,
         result_err: None,
+        // Deliberately NOT tag 0: same rationale as the scrambled tags
+        // above -- a native that hardcoded a literal instead of reading
+        // `well_known` would still pass with the real numbering.
+        array_mk: Some(CtorTag { tag: 9, arity: 0 }),
       },
     )
   }

@@ -189,6 +189,23 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // repro (`println (I64.to_string (String.length "abc"))`
             // printed a garbage heap address instead of `3`).
             else if String.beq target "string_length" then Option.some (NativeWrapKind.passthrough "monad_string_length")
+            // `std/array.mo`. Plain passthroughs: every value in this
+            // backend is one machine word (a `Constructor*`, a `char*`,
+            // or an unboxed i64), so an array's elements need no
+            // per-type treatment and these return exactly the
+            // representation their Monad-level type expects.
+            // `array_get` returns a real `Option` Constructor built in
+            // `runtime.c`, so it needs no `bool_result`-style
+            // materialisation either.
+            else if String.beq target "array_new" then Option.some (NativeWrapKind.passthrough "monad_array_new")
+            else if String.beq target "array_len" then Option.some (NativeWrapKind.passthrough "monad_array_len")
+            else if String.beq target "array_get" then Option.some (NativeWrapKind.passthrough "monad_array_get")
+            else if String.beq target "array_with" then Option.some (NativeWrapKind.passthrough "monad_array_with")
+            // The two `IO`-typed ones: `io_passthrough` wraps the raw
+            // result as `IO.io raw`, which is what `Monad.bind`'s `IO`
+            // instance destructures.
+            else if String.beq target "array_set_in_place" then Option.some (NativeWrapKind.io_passthrough "monad_array_set_in_place")
+            else if String.beq target "array_freeze" then Option.some (NativeWrapKind.io_passthrough "monad_array_freeze")
             // `String.hash`'s `#[native string_hash]` -- pure `U64`
             // result, same shape as `string_length`. `IO.write_file`/
             // `read_file`/`file_exists`/`is_dir` (`std/io.mo`, `#[native
@@ -446,9 +463,19 @@ def runtime_declarations : List LLVMDeclaration :=
     let d37 := mk_decl "monad_u8_to_string" (List.cons "i64" List.empty) "i64" in
     let d38 := mk_decl "monad_u64_to_string" (List.cons "i64" List.empty) "i64" in
     let d39 := mk_decl "monad_process_id" List.empty "i64" in
+    // `std/array.mo`'s six (runtime.c). Same "no implicit declare"
+    // requirement as every native above -- without these,
+    // `validate_all_call_targets_defined` rejects the module with
+    // "call to undefined symbol(s): monad_array_new".
+    let d41 := mk_decl "monad_array_new" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d42 := mk_decl "monad_array_len" (List.cons "i64" List.empty) "i64" in
+    let d43 := mk_decl "monad_array_get" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d44 := mk_decl "monad_array_with" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
+    let d45 := mk_decl "monad_array_set_in_place" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
+    let d46 := mk_decl "monad_array_freeze" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-     d32, d33, d34, d35, d36, d37, d38, d39]
+     d32, d33, d34, d35, d36, d37, d38, d39, d41, d42, d43, d44, d45, d46]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

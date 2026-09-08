@@ -872,6 +872,15 @@ pub struct WellKnownCtors {
   /// `Result E A`'s two constructors (`init/prelude.mo`) — same reason.
   pub result_ok: Option<CtorTag>,
   pub result_err: Option<CtorTag>,
+  /// `Array A`'s sole constructor (`std/array.mo`'s `type Array A { mk }`).
+  /// The `array_*` natives build and read it directly: an `Array` value
+  /// IS a `Con` with this tag whose `args` are its elements, so its
+  /// length is the arg count and indexing is an arg index. Unlike every
+  /// other entry here the declaring module is not in `init/`, so this
+  /// resolves to `None` for a program that never imports `std.array` —
+  /// which is correct and harmless, since nothing can then call an
+  /// `array_*` native either.
+  pub array_mk: Option<CtorTag>,
 }
 
 impl WellKnownCtors {
@@ -881,6 +890,7 @@ impl WellKnownCtors {
     let list_path = mpt("List");
     let io_path = mpt("IO");
     let result_path = mpt("Result");
+    let array_path = mpt("Array");
     WellKnownCtors {
       bool_true: find_ctor(program, &bool_path, "true"),
       bool_false: find_ctor(program, &bool_path, "false"),
@@ -891,6 +901,7 @@ impl WellKnownCtors {
       io_io: find_ctor(program, &io_path, "io"),
       result_ok: find_ctor(program, &result_path, "ok"),
       result_err: find_ctor(program, &result_path, "err"),
+      array_mk: find_ctor(program, &array_path, "mk"),
     }
   }
 }

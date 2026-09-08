@@ -153,3 +153,112 @@ def main (args : List String) : IO I64 := do {
 }
 "# in
     compile_source_run_expect source "c_list_dir" 7
+
+// --- `std/array.mo`'s six natives -----------------------------------
+//
+// The COMPILED half of what `std/array.mo`'s own `#[test]`s cover on
+// the Rust host. That split is the point: a native that passes every
+// host test can still be wired nowhere in codegen (the failure mode
+// `validate_no_unwired_natives` exists for), and only running a real
+// binary proves otherwise.
+
+/// `array_new` + `array_len` + `array_get`: allocation with a fill,
+/// the O(1) length, and an in-range read.
+#[test]
+def test_array_new_len_get : IO Bool :=
+    let source := r#"use std.array {Array}
+def main (args : List String) : IO I64 := do {
+    let a : Array I64 := Array.new 3 7;
+    let len_ok := I64.beq (Array.length a) 3;
+    let fill_ok := I64.beq (Array.get_or a 2 0) 7;
+    return (if len_ok && fill_ok then 7 else 1)
+}
+"# in
+    compile_source_run_expect source "array_new_len_get" 7
+
+/// Every out-of-range read is `Option.none` -- below zero, at `len`,
+/// and past it. In the compiled backend this is the difference between
+/// a bounds check and reading past the end of a heap object.
+#[test]
+def test_array_get_bounds : IO Bool :=
+    let source := r#"use std.array {Array}
+def main (args : List String) : IO I64 := do {
+    let a : Array I64 := Array.new 2 5;
+    let below := I64.beq (Array.get_or a (0 - 1) 99) 99;
+    let at_len := I64.beq (Array.get_or a 2 99) 99;
+    let past := I64.beq (Array.get_or a 77 99) 99;
+    return (if below && at_len && past then 7 else 1)
+}
+"# in
+    compile_source_run_expect source "array_get_bounds" 7
+
+/// `array_with` is PERSISTENT: the result carries the new value and
+/// the INPUT IS UNCHANGED. Without the second half, an implementation
+/// that writes through and returns the same object passes everything
+/// else -- and that implementation is exactly the cheaper wrong one.
+#[test]
+def test_array_set_is_persistent : IO Bool :=
+    let source := r#"use std.array {Array}
+def main (args : List String) : IO I64 := do {
+    let a : Array I64 := Array.new 3 0;
+    let b : Array I64 := Array.set a 1 42;
+    let wrote := I64.beq (Array.get_or b 1 0) 42;
+    let input_untouched := I64.beq (Array.get_or a 1 0) 0;
+    return (if wrote && input_untouched then 7 else 1)
+}
+"# in
+    compile_source_run_expect source "array_set_persistent" 7
+
+/// Elements are one machine word whatever their type, so the same
+/// natives serve `Array String` -- the polymorphism the design rests
+/// on, asserted in the backend where a wrong assumption would be a
+/// wild pointer rather than a type error.
+#[test]
+def test_array_holds_strings : IO Bool :=
+    let source := r#"use std.array {Array}
+def main (args : List String) : IO I64 := do {
+    let a : Array String := Array.new 2 "x";
+    let b : Array String := Array.set a 0 "hello";
+    let wrote := String.beq (Array.get_or b 0 "none") "hello";
+    let other := String.beq (Array.get_or b 1 "none") "x";
+    return (if wrote && other then 7 else 1)
+}
+"# in
+    compile_source_run_expect source "array_strings" 7
+
+/// `from_list`/`to_list` round trip with order preserved, which
+/// exercises the `set`-fold that builds an array from a list.
+#[test]
+def test_array_from_list_round_trip : IO Bool :=
+    let source := r#"use std.array {Array}
+def main (args : List String) : IO I64 := do {
+    let xs : List I64 := List.cons 10 (List.cons 20 (List.cons 30 List.empty));
+    let a : Array I64 := Array.from_list xs;
+    let len_ok := I64.beq (Array.length a) 3;
+    let first := I64.beq (Array.get_or a 0 0) 10;
+    let last := I64.beq (Array.get_or a 2 0) 30;
+    let back := I64.beq (List.length (Array.to_list a)) 3;
+    return (if len_ok && first && last && back then 7 else 1)
+}
+"# in
+    compile_source_run_expect source "array_from_list" 7
+
+/// The mutable half: `set_in_place` writes through (genuinely O(1)
+/// here, unlike the interpreter's copy-on-write), and `freeze` COPIES
+/// -- so mutating the builder AFTER freezing must not disturb the
+/// frozen array. That aliasing assertion is the one that fails if
+/// `freeze` is ever "optimised" into a cast.
+#[test]
+def test_array_builder_freeze_does_not_alias : IO Bool :=
+    let source := r#"use std.array {Array, ArrayBuilder}
+def main (args : List String) : IO I64 := do {
+    let b : ArrayBuilder I64 := Array.builder 3 0;
+    Array.set_in_place b 1 42;
+    let frozen : Array I64 <- Array.freeze b;
+    let saw_write := I64.beq (Array.get_or frozen 1 0) 42;
+    Array.set_in_place b 1 99;
+    let frozen_unchanged := I64.beq (Array.get_or frozen 1 0) 42;
+    return (if saw_write && frozen_unchanged then 7 else 1)
+}
+"# in
+    compile_source_run_expect source "array_builder_freeze" 7

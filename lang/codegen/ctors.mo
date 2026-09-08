@@ -51,6 +51,21 @@ def builtin_ctor_tags : HashMap String I64 :=
     let m := str_map_insert "succ" 13 m in
     let m := str_map_insert "nil" 14 m in
     let m := str_map_insert "pair" 15 m in
+    // `std/array.mo`'s `Array.mk`/`ArrayBuilder.mk`. A builtin tag,
+    // even though the type is declared in `std/` rather than `init/`,
+    // because `runtime.c`'s `monad_array_*` ALLOCATE one directly and
+    // a C function cannot consult the per-program constructor
+    // numbering. The two share a tag deliberately: they are the same
+    // representation (`std/array.mo`'s own doc comment), and
+    // `array_freeze` converts between them by copying, never by
+    // re-tagging.
+    //
+    // NOTE the arity subtlety: unlike every other entry here, an
+    // `Array`'s field count is its LENGTH, not a fixed number, so
+    // `builtin_ctor_arities` records 0 -- the arity a bare, unapplied
+    // `Array.mk` really has. Only the natives allocate longer ones.
+    let m := str_map_insert "Array.mk" 16 m in
+    let m := str_map_insert "ArrayBuilder.mk" 16 m in
     m
 
 /// Field counts for the same builtin constructors `builtin_ctor_tags`
@@ -85,6 +100,11 @@ def builtin_ctor_arities : HashMap String I64 :=
     let m := str_map_insert "succ" 1 m in
     let m := str_map_insert "nil" 0 m in
     let m := str_map_insert "pair" 2 m in
+    // See `builtin_ctor_tags`' note: 0 is the arity of a bare
+    // `Array.mk`, which is also the empty array. A populated one's
+    // field count comes from `alloc_constructor`, not from here.
+    let m := str_map_insert "Array.mk" 0 m in
+    let m := str_map_insert "ArrayBuilder.mk" 0 m in
     m
 
 /// Falls back to `c`'s own dynamically-built `ctor_tags` table

@@ -372,6 +372,89 @@ void monad_set_field(void* ptr, int64_t idx, void* value) {
     ((Constructor*)ptr)->fields[idx] = value;
 }
 
+/* --- `std/array.mo` ------------------------------------------------
+
+   An `Array A` value IS a Constructor: `alloc_constructor(tag, n)`
+   already gives a GC-managed, indexable vector of n boxed elements
+   (`fields[]`), with the length recorded in `field_count`. That is
+   exactly an array, so these natives need no new heap shape -- and
+   because `fields[]` is `void*`, they need no element type either,
+   which is what makes them generic in `A`.
+
+   `Array.mk`'s tag is 16, registered in `builtin_ctor_tags`
+   (lang/codegen/ctors.mo) alongside Option's 3/4 and List's 5/6. It has
+   to be a builtin precisely because these C functions allocate one: a C
+   function cannot consult the per-program constructor numbering a
+   non-builtin type would get. */
+#define MONAD_ARRAY_TAG 16
+
+void* monad_array_new(int64_t n, void* fill) {
+    int64_t len = n < 0 ? 0 : n;
+    void* a = alloc_constructor(MONAD_ARRAY_TAG, len);
+    for (int64_t i = 0; i < len; i++) {
+        monad_set_field(a, i, fill);
+    }
+    return a;
+}
+
+int64_t monad_array_len(void* a) {
+    if (!a) return 0;
+    return ((Constructor*)a)->field_count;
+}
+
+/* Bounds-checked: an out-of-range read must not be undefined behaviour,
+   so this returns `Option.none` (tag 3) rather than reading past the
+   end. `Option` IS a builtin, so its tags are the fixed ones
+   (`builtin_ctor_tags`, lang/codegen/ctors.mo). */
+void* monad_array_get(void* a, int64_t i) {
+    int64_t len = monad_array_len(a);
+    if (i < 0 || i >= len) {
+        return alloc_constructor(3, 0);
+    }
+    void* some = alloc_constructor(4, 1);
+    monad_set_field(some, 0, monad_get_field(a, i));
+    return some;
+}
+
+/* The persistent `set`: allocate a fresh Constructor, copy, then write.
+   The input is untouched -- that is the whole contract, and the reason
+   this is O(n) while `set_in_place` is O(1). An out-of-range index
+   returns the array unchanged. */
+void* monad_array_with(void* a, int64_t i, void* v) {
+    int64_t len = monad_array_len(a);
+    if (i < 0 || i >= len) return a;
+    void* copy = alloc_constructor(MONAD_ARRAY_TAG, len);
+    for (int64_t k = 0; k < len; k++) {
+        monad_set_field(copy, k, monad_get_field(a, k));
+    }
+    monad_set_field(copy, i, v);
+    return copy;
+}
+
+/* Genuinely O(1) here, unlike the interpreter's copy-on-write (see
+   `std/array.mo`'s own doc comment for why the two differ). Returns
+   `IO Unit` -- the payload is never inspected, matching
+   `monad_write_file`'s own convention. */
+void* monad_array_set_in_place(void* a, int64_t i, void* v) {
+    int64_t len = monad_array_len(a);
+    if (i >= 0 && i < len) {
+        monad_set_field(a, i, v);
+    }
+    return alloc_constructor(0, 0);
+}
+
+/* COPIES rather than casting: a cast would leave the builder aliasing a
+   value pure code believes is frozen, and a later `set_in_place` would
+   mutate it. */
+void* monad_array_freeze(void* b) {
+    int64_t len = monad_array_len(b);
+    void* frozen = alloc_constructor(MONAD_ARRAY_TAG, len);
+    for (int64_t k = 0; k < len; k++) {
+        monad_set_field(frozen, k, monad_get_field(b, k));
+    }
+    return frozen;
+}
+
 void monad_print_str(char* s) {
     if (s) printf("%s\n", s);
 }
