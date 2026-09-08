@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-rust:
     runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v5
@@ -27,7 +27,7 @@ jobs:
         run: nix develop --no-pure-eval --accept-flake-config -c cargo build --release --workspace
 
   pre-commit-checks:
-    needs: build
+    needs: build-rust
     runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v5
@@ -36,7 +36,7 @@ jobs:
         run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run devenv:git-hooks
 
   test:
-    needs: build
+    needs: build-rust
     runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v5
@@ -45,7 +45,7 @@ jobs:
         run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run monad:test
 
   bootstrap:
-    needs: build
+    needs: build-rust
     runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v5
