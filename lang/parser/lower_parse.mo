@@ -236,6 +236,17 @@ def lower_parse_kind (ctx : List Identifier) (k : ParseTermKind) : Term :=
         // separate question from this refactor.
         ParseTermKind.pi arg ret =>
             Term.pi (lower_parse_term ctx arg) (lower_parse_term ctx ret),
+        // `pi_dep` is the ONE arrow that binds: `(n : T) -> body` puts `n`
+        // in scope over `body`, which is what `type_dep_arrow_tag`
+        // (`lang/parser.mo`) used to do inline before the grammar stopped
+        // resolving names. `Term.pi` has no field to carry `n`, so if the
+        // name is not consumed HERE it is lost -- every use of `n` inside
+        // `body` resolves to `sentinel` and becomes an unbound global.
+        // Caught by review after exactly that regression shipped in this
+        // branch; `test_dep_pi_binds_its_own_name` pins it.
+        ParseTermKind.pi_dep name arg ret =>
+            Term.pi (lower_parse_term ctx arg)
+                    (lower_parse_term (List.cons name ctx) ret),
         ParseTermKind.app f a =>
             Term.app (lower_parse_term ctx f) (lower_parse_term ctx a),
         ParseTermKind.lit l => Term.lit (lower_parse_literal ctx l),

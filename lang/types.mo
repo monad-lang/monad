@@ -726,6 +726,15 @@ type ParseTermKind {
     lam (name: Identifier) (typ: ParseTerm) (body: ParseTerm),
     forall (name: Identifier) (typ: ParseTerm) (body: ParseTerm),
     pi (arg: ParseTerm) (ret: ParseTerm),
+    /// A `(name : T) -> body` arrow, which DOES bind `name` over `body`
+    /// -- unlike plain `pi`, which the grammar only ever folds into a
+    /// non-dependent chain. Kept a separate variant rather than an
+    /// optional name on `pi` so the two cannot be confused at a lowering
+    /// site: `Term.pi` carries no binder name, so once the two shapes
+    /// are merged here the information needed to resolve `name` inside
+    /// `body` is gone for good. That is exactly the regression this
+    /// variant exists to prevent -- see `lower_parse_kind`'s two arms.
+    pi_dep (name: Identifier) (arg: ParseTerm) (ret: ParseTerm),
     app (fun: ParseTerm) (arg: ParseTerm),
     lit (value: ParseLiteral),
     ntv (native: ParseNative),
