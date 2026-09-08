@@ -1774,8 +1774,16 @@ def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (blocks : Li
 /// (`if I64.lt (String.length ...) (String.length ...) then ...`),
 /// which blocked `bootstrap compile lang/main.mo monad`'s own
 /// self-compile (`lang/main.mo` depends on the parser).
+/// `term_peel` at the entry, not a shape match on `t` directly: since
+/// stage 6 locates EVERY module's decls under debug, a dep module's
+/// def body is routinely `Term.ctx _ (I64.beq a b)` -- e.g.
+/// `number::BEq_I64_beq`, whose unboxed tail this probe exists to
+/// catch. Matching the wrapper silently answered `false` and shipped a
+/// raw `i1` `ret` (`llc: '%t11' defined with type 'i1' but expected
+/// 'i64'`), which is exactly the silent-stop-matching failure mode
+/// `term_peel`'s own doc comment warns about.
 #[partial]
-def term_is_native_bool_op (t : Term) : Bool := match t {
+def term_is_native_bool_op (t : Term) : Bool := match term_peel t {
     Term.app fun_ _arg =>
         match fun_ {
             Term.app fun2 _arg2 =>
@@ -3744,7 +3752,7 @@ def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match 
 /// Compile a list of canonical Defs to a complete LLVM module.
 #[partial]
 def compile_db_decls_ir (defs : List Def) : LLVMModule :=
-    compile_db_decls_ir_with_debug defs Option.none str_map_empty
+    compile_db_decls_ir_with_debug defs Option.none str_map_empty List.empty
 
 /// `compile_db_decls_ir`, with DWARF debug info (v1: one location per
 /// top-level def -- plans/bootstrapping/debug-info.md). A sibling
@@ -3754,27 +3762,29 @@ def compile_db_decls_ir (defs : List Def) : LLVMModule :=
 /// don't exercise. `source_path` is the `.mo` file debug info is being
 /// generated for (`Option.none` disables debug info entirely, matching
 /// plain `compile_db_decls_ir` exactly); `debug_locs` is the def-name ->
-/// `Location` table built by `lang.parser`'s `decls_parser_with_locs`.
+/// `Location` table built by `lang.parser`'s `decls_parser_with_locs`;
+/// `debug_files` is the per-module file table for `!DIFile` attribution
+/// (`LLVMModule.debug_files`).
 #[partial]
-def compile_db_decls_ir_with_debug (defs : List Def) (source_path : Option String) (debug_locs : HashMap String Location) : LLVMModule :=
+def compile_db_decls_ir_with_debug (defs : List Def) (source_path : Option String) (debug_locs : HashMap String Location) (debug_files : List (Pair String String)) : LLVMModule :=
     let arities := build_arity_table defs in
     match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty debug_locs) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
             let funcs := ren_main_and_wrap compiled_funcs in
-            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path,
+            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path debug_files,
     }
 
 /// Compile a list of Decl to a complete LLVM module.
 /// Extracts def_d and inductive_d entries, compiles constructors and defs.
 #[partial]
 def compile_db_module (decl_list : List Decl) : LLVMModule :=
-    compile_db_module_with_debug decl_list Option.none str_map_empty
+    compile_db_module_with_debug decl_list Option.none str_map_empty List.empty
 
 /// `compile_db_module`, with DWARF debug info -- see
 /// `compile_db_decls_ir_with_debug`'s own doc comment for why this is a
 /// sibling function rather than new params on `compile_db_module`.
 #[partial]
-def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_locs : HashMap String Location) : LLVMModule :=
+def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_locs : HashMap String Location) (debug_files : List (Pair String String)) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
     let ctor_tags := build_constructor_tag_map inds in
@@ -3791,7 +3801,7 @@ def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option S
             // error that would cause).
             let all_funcs := List.append runtime_native_functions (List.append ctor_funcs compiled_funcs) in
             let funcs := ren_main_and_wrap all_funcs in
-            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path,
+            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path debug_files,
     }
 
 /// Compile a list of canonical InductConstructors to LLVM constructor wrapper functions.
@@ -4099,9 +4109,9 @@ def strs_have_no_i8_star (ss : List String) : Bool :=
 #[test]
 def test_runtime_decls_i64_convention : Bool :=
     decls_have_no_i8_star runtime_declarations
-        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none)) "declare void @monad_print_str(i64)"
-        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none)) "declare i64 @monad_read_file(i64)"
-        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none)) "declare i64 @monad_i64_to_string(i64)"
+        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare void @monad_print_str(i64)"
+        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare i64 @monad_read_file(i64)"
+        && check_contains (emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty List.empty runtime_declarations Option.none List.empty)) "declare i64 @monad_i64_to_string(i64)"
 
 #[test]
 def test_module_emit_has_header : Bool :=
@@ -4112,7 +4122,7 @@ def test_module_emit_has_header : Bool :=
 #[test]
 def test_empty_decls_module : Bool :=
     match (compile_db_decls_ir List.empty) {
-        LLVMModule.mk triple globals funcs decl_list debug_source =>
+        LLVMModule.mk triple globals funcs decl_list debug_source _files =>
             String.beq triple "x86_64-unknown-linux-gnu",
     }
 
@@ -4126,7 +4136,7 @@ def test_compile_db_inductive_decls : Bool :=
     let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name List.empty (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let funcs := compile_db_inductive_decls (List.cons ind List.empty) str_map_empty in
-    let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none in
+    let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none List.empty in
     let text := emit_module mod_ in
     // Constructor function names are qualified with their enclosing
     // type ("Option_Some"/"Option_None"), not just the bare constructor
@@ -4231,7 +4241,7 @@ def native_def_fixture (name : String) (target : String) : Def :=
 def compile_native_def_fixture_text (name : String) (target : String) : String :=
     match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty str_map_empty) (native_def_fixture name target) {
         { ctx := _, funcs := funcs, globals := _ } =>
-            emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none),
+            emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none List.empty),
     }
 
 #[test]
@@ -4327,7 +4337,7 @@ def test_build_debug_locs_keys_by_flat_name : Bool :=
 #[test]
 def test_compile_db_decls_ir_with_debug_emits_dbg : Bool :=
     let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
-    let mod_ := compile_db_decls_ir_with_debug (List.cons debug_fixture_def List.empty) (Option.some "hello.mo") locs in
+    let mod_ := compile_db_decls_ir_with_debug (List.cons debug_fixture_def List.empty) (Option.some "hello.mo") locs List.empty in
     let text := emit_module mod_ in
     if check_contains text "!DICompileUnit"
     then (if check_contains text "!DISubprogram" then check_contains text "!dbg !" else false)
@@ -4340,7 +4350,7 @@ def test_compile_db_decls_ir_with_debug_emits_dbg : Bool :=
 #[test]
 def test_compile_db_decls_ir_with_debug_exact_content : Bool :=
     let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
-    let mod_ := compile_db_decls_ir_with_debug (List.cons debug_fixture_def List.empty) (Option.some "hello.mo") locs in
+    let mod_ := compile_db_decls_ir_with_debug (List.cons debug_fixture_def List.empty) (Option.some "hello.mo") locs List.empty in
     let text := emit_module mod_ in
     if check_contains text "!DIFile(filename: \"hello.mo\", directory: \".\")"
     then (if check_contains text "name: \"myfunc\""
@@ -4369,7 +4379,7 @@ def test_compile_db_decls_ir_with_debug_exact_content : Bool :=
 def test_located_term_emits_its_own_dilocation : Bool :=
     let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
     let located : Def := located_fixture_def in
-    let mod_ := compile_db_decls_ir_with_debug (List.cons located List.empty) (Option.some "hello.mo") locs in
+    let mod_ := compile_db_decls_ir_with_debug (List.cons located List.empty) (Option.some "hello.mo") locs List.empty in
     let text := emit_module mod_ in
     // The subprogram and its own location node both carry the BODY's
     // position, and the table's line-2 entry is absent entirely.
@@ -4461,6 +4471,18 @@ def check_contains (text : String) (needle : String) : Bool :=
 def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result String LLVMModule) :=
     compile_loaded_modules_to_ir_with_debug loaded verbose Option.none str_map_empty
 
+/// One `(module path string, file path)` pair per loaded module -- the
+/// `!DIFile` attribution table (`LLVMModule.debug_files`). Keyed by the
+/// same `show_module_path` string a function name's `<module>::<def>`
+/// prefix uses, which is what `lang.codegen.ir`'s `module_file_ref`
+/// looks up. Built in module order so `!DIFile` id assignment is
+/// reproducible run to run.
+#[partial]
+def module_file_pairs (mods : List ModuleInfo) (acc : List (Pair String String)) : List (Pair String String) := match mods {
+    List.empty => acc,
+    List.cons m rest => module_file_pairs rest (List.append acc (List.cons (Pair.pair (show_module_path m.path) m.file_path) List.empty)),
+}
+
 /// `compile_loaded_modules_to_ir`, with DWARF debug info (v1: one
 /// location per top-level def -- plans/bootstrapping/debug-info.md).
 /// `source_path` and `debug_locs` are passed straight through to
@@ -4475,6 +4497,13 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let total_start : I64 <- Bench.now;
 
     let all_mods := get_loaded_all loaded;
+
+    // Per-function `!DIFile` attribution: one pair per loaded module.
+    // Bound ONCE here, before the whole stage pipeline -- it only feeds
+    // the final `compile_db_module_with_debug` call, but computing it
+    // per-module list walk at the point of use would read structurally
+    // like it belongs to a stage it doesn't.
+    let debug_files : List (Pair String String) := module_file_pairs all_mods List.empty;
 
     // Debug: log loaded modules count
     let module_count := List.length all_mods;
@@ -4660,7 +4689,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                         Result.ok _ => do {
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                     let t_llvm : I64 <- Bench.now;
-                    let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs;
+                    let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs debug_files;
                     if verbose then do {
                         Bench.report_since "compile_db_module" t_llvm;
                         Bench.report_since "compile_loaded_modules_to_ir total" total_start;

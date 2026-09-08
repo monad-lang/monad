@@ -400,7 +400,7 @@ def call_targets_in_phis (ps : List PhiPair) : List String := match ps {
 #[partial]
 def validate_all_call_targets_defined (m : LLVMModule) : Result String LLVMModule :=
     match m {
-        LLVMModule.mk _triple _globals funcs decls _src =>
+        LLVMModule.mk _triple _globals funcs decls _src _files =>
             let defined := build_defined_symbol_set funcs decls in
             let missing := dedup_strs (missing_call_targets (collect_call_targets funcs) defined) in
             match missing {

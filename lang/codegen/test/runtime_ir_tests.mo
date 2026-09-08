@@ -22,7 +22,7 @@ use lang.codegen.runtime {runtime_native_functions}
 
 #[partial]
 def runtime_ir_text : String :=
-    emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" [] runtime_native_functions [] Option.none)
+    emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" [] runtime_native_functions [] Option.none [])
 
 /// The raw-`char*` byte access every String native is built on:
 /// address arithmetic, `inttoptr` to a real pointer, then the typed

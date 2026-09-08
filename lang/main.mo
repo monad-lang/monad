@@ -149,7 +149,7 @@ def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : P
 /// exist on `llc`, unlike `clang`'s own C-source `-g`).
 #[partial]
 def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_name : Path) (verbose: Bool) (source_path : Option String) (debug_locs : HashMap String Location) : IO I64 {
-    let mod_ := compile_db_module_with_debug decl_list source_path debug_locs;
+    let mod_ := compile_db_module_with_debug decl_list source_path debug_locs List.empty;
     let ir_text := emit_module mod_;
     println <| "Writing LLVM IR to: " ++ Path.to_string (Path.with_suffix (Path.join output_dir output_name) ".ll");
     link_ir ir_text output_dir output_name verbose
@@ -176,47 +176,63 @@ def debug_info_for_source (file_path : String) (source : String) : Pair (Option 
         Option.none => Pair.pair (Option.some file_path) str_map_empty,
     }
 
-/// Replace the target module's decls with ones carrying source positions.
+/// Replace EVERY loaded module's decls with ones carrying source
+/// positions -- stage 6: a `--debug` compile locates the dependencies'
+/// defs too, not just the target's, so `std.list::map`'s `!DISubprogram`
+/// carries its own line in its own file instead of nothing (or, worse,
+/// the target's same-named def's line via the old unqualified fallback).
 ///
 /// The located and plain parses run the same grammar and the same
-/// `expand_decls`, so the two decl lists differ ONLY by `Term.ctx`
-/// wrappers. Swapping one for the other is therefore invisible to
-/// everything downstream except the debug metadata -- which is precisely
-/// what `tools/debug_transparency_oracle.sh` checks, by stripping `!dbg`
-/// from a `--debug` build and requiring byte-identity with a plain one.
+/// `expand_decls`, so for each module the two decl lists differ ONLY by
+/// `Term.ctx` wrappers. Swapping one for the other is therefore invisible
+/// to everything downstream except the debug metadata -- which is
+/// precisely what `tools/debug_transparency_oracle.sh` checks, by
+/// stripping `!dbg` from a `--debug` build and requiring byte-identity
+/// with a `--release` one (now covering the dep modules as well).
 ///
-/// On any failure the plain decls stand: a compile must never fail because
-/// its debug side-channel did.
+/// Per-module failure keeps that module's plain decls: a compile must
+/// never fail because its debug side-channel did.
 #[partial]
-def with_located_decls (loaded : LoadedModules) (source : String) : LoadedModules :=
-    match try_parse_decls_located source {
-        Option.none => loaded,
-        Option.some located => swap_main_decls loaded located,
+def with_located_decls (loaded : LoadedModules) : IO LoadedModules := do {
+    let main_located : ModuleInfo <- locate_module_info loaded.main_module;
+    let all_located : List ModuleInfo <- locate_module_infos loaded.all_modules List.empty;
+    return (mk_loaded_modules main_located all_located)
+}
+
+/// `LoadedModules`/`ModuleInfo` constructors as defs with DECLARED
+/// return types, not bare struct literals at the use site: the
+/// self-hosted checker cannot infer a struct literal's type from a
+/// `return`/argument position (`cannot infer struct type for struct
+/// literal`), and the self-hosted BACKEND miscompiles one there even
+/// where the Rust host accepts it. A def's declared return type is what
+/// gives the literal its expected type.
+#[partial]
+def mk_loaded_modules (main_module : ModuleInfo) (all_modules : List ModuleInfo) : LoadedModules :=
+    { main_module := main_module, all_modules := all_modules }
+
+#[partial]
+def mk_module_info (path : ModulePath) (file_path : String) (decl_list : List Decl) : ModuleInfo :=
+    { path := path, file_path := file_path, decl_list := decl_list }
+
+/// Read `m`'s own file and re-parse it with positions; on any failure
+/// the module stands unchanged.
+#[partial]
+def locate_module_info (m : ModuleInfo) : IO ModuleInfo := do {
+    let src <- IO.read_file (Path.path m.file_path);
+    match try_parse_decls_located src {
+        Option.none => return m,
+        Option.some located => return (mk_module_info m.path m.file_path located),
     }
+}
 
 #[partial]
-def swap_main_decls (loaded : LoadedModules) (located : List Decl) : LoadedModules :=
-    let main_path : ModulePath := loaded.main_module.path in
-    let new_main : ModuleInfo :=
-        { path := main_path, file_path := loaded.main_module.file_path, decl_list := located } in
-    { main_module := new_main,
-      all_modules := replace_module_decls loaded.all_modules main_path located }
-
-/// The target module appears in `all_modules` too, and codegen reads that
-/// list -- swapping only `main_module` would locate nothing.
-#[partial]
-def replace_module_decls (mods : List ModuleInfo) (target : ModulePath) (located : List Decl) : List ModuleInfo :=
-    match mods {
-        List.empty => List.empty,
-        List.cons m rest => List.cons (replace_one_module m target located)
-                                      (replace_module_decls rest target located),
-    }
-
-#[partial]
-def replace_one_module (m : ModuleInfo) (target : ModulePath) (located : List Decl) : ModuleInfo :=
-    if String.beq (show_module_path m.path) (show_module_path target)
-    then { path := m.path, file_path := m.file_path, decl_list := located }
-    else m
+def locate_module_infos (mods : List ModuleInfo) (acc : List ModuleInfo) : IO (List ModuleInfo) := match mods {
+    List.empty => return acc,
+    List.cons m rest => do {
+        let located : ModuleInfo <- locate_module_info m;
+        locate_module_infos rest (List.append acc (List.cons located List.empty))
+    },
+}
 
 /// Parse a source file and compile + run it via LLVM. Stage 3 of
 /// `bootstrapping/unify-check-compile-test-elaboration.md`: gates on the
@@ -330,14 +346,12 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
                     let source <- IO.read_file (Path.path file_path);
                     return (debug_info_for_source file_path source)
                 } else return no_debug_info;
-            // Under `--debug` the target module is re-parsed with positions
-            // recorded, and its decls replace the plain ones. Same grammar,
-            // same expansion -- the only difference is `Term.ctx` wrappers.
+            // Under `--debug` EVERY loaded module is re-parsed with
+            // positions recorded, and the located decls replace the plain
+            // ones. Same grammar, same expansion -- the only difference is
+            // `Term.ctx` wrappers.
             let loaded : LoadedModules <-
-                if debug then do {
-                    let src2 <- IO.read_file (Path.path file_path);
-                    return (with_located_decls loaded src2)
-                } else return loaded;
+                if debug then with_located_decls loaded else return loaded;
             match dbg_info {
                 Pair.pair source_path debug_locs => do {
                     // `verbose` thread-through: previously this branch dumped the

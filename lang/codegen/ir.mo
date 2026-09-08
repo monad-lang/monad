@@ -197,7 +197,16 @@ type LLVMModule {
        /// The `.mo` source path debug info was requested for -- `none`
        /// means debug info is off (the default), in which case
        /// `emit_module` emits exactly the same text it always has.
-       (debug_source : Option String),
+       (debug_source : Option String)
+       /// One `(module path string, file path)` pair per loaded module,
+       /// attributing each function's `!DISubprogram` to the `!DIFile` of
+       /// the file it was actually written in. Keyed by the same
+       /// `show_module_path` string a function name's `<module>::<def>`
+       /// prefix uses, so a function's file is recoverable from its name
+       /// alone. Empty means every function is attributed to the target
+       /// file (`!3`) -- v1's behavior, and still the fallback for any
+       /// name the table has no entry for.
+       (debug_files : List (Pair String String)),
 }
 
 open LLVMType {fn_, i1_, i32_, i64_, i8_, ptr, struct_, void}
@@ -872,12 +881,13 @@ def show_debug_preamble (filename : String) (directory : String) : String :=
     String.concat flags (String.concat f0 (String.concat f1 (String.concat cu (String.concat file_ (String.concat sub_ty retained)))))
 
 #[partial]
-def show_disubprogram (id : I64) (name : String) (line : I64) : String :=
+def show_disubprogram (id : I64) (name : String) (line : I64) (file_ref : I64) : String :=
     let line_s := I64.to_string line in
     let head := String.concat "!" (String.concat (I64.to_string id) " = distinct !DISubprogram(name: \"") in
     let with_name := String.concat head (String.concat name "\", linkageName: \"") in
-    let with_name2 := String.concat with_name (String.concat name "\", scope: !3, file: !3, line: ") in
-    let with_line := String.concat with_name2 (String.concat line_s ", type: !4, scopeLine: ") in
+    let with_scope := String.concat with_name (String.concat name "\", scope: !3, file: !") in
+    let with_file := String.concat with_scope (String.concat (I64.to_string file_ref) ", line: ") in
+    let with_line := String.concat with_file (String.concat line_s ", type: !4, scopeLine: ") in
     String.concat with_line (String.concat line_s ", unit: !2, retainedNodes: !5)")
 
 #[partial]
@@ -886,6 +896,85 @@ def show_dilocation (id : I64) (line : I64) (column : I64) (scope_ref : I64) : S
     let with_line := String.concat head (String.concat (I64.to_string line) ", column: ") in
     let with_col := String.concat with_line (String.concat (I64.to_string column) ", scope: !") in
     String.concat with_col (String.concat (I64.to_string scope_ref) ")")
+
+// --- Per-module !DIFile interning ------------------------------------
+//
+// One `!DIFile` per module, so a function's `!DISubprogram` names the
+// file it was actually written in instead of the target's. A function
+// name is `<module path>::<def name>` (module-qualified symbols,
+// `lang/codegen/symbols.mo`), so the module a function came from is
+// recoverable from its name alone: everything before the first `::`.
+
+/// Find the first `::` -- mirrors `lang.codegen.symbols`'s own
+/// `string_find_qualifier_sep`. This file deliberately imports nothing
+/// from that module (see the strmap import note at the top), so a small
+/// local copy avoids introducing one just for this, same as
+/// `ir_slash_byte`/`ir_find_last_slash` above.
+#[partial]
+def ir_find_qualifier_sep (s : String) (i : I64) (n : I64) : I64 :=
+    if I64.gt (i + 2) n then (0 - 1)
+    else if String.beq (String.slice s i 2) "::" then i
+    else ir_find_qualifier_sep s (i + 1) n
+
+/// The module path prefix of a `<module>::<def>` symbol -- `none` when
+/// the name was never qualified (a synthesized or already-flat one).
+#[partial]
+def module_prefix_of (fn_name : String) : Option String :=
+    let idx := ir_find_qualifier_sep fn_name 0 (String.length fn_name) in
+    if I64.beq idx (0 - 1) then Option.none else Option.some (String.slice fn_name 0 idx)
+
+/// The `!DIFile` id for the module a function name came from. A miss --
+/// a synthesized name, or a module the table has no pair for -- falls
+/// back to the target file (`!3`), which is what v1 attributed every
+/// function to.
+#[partial]
+def module_file_ref (file_refs : HashMap String I64) (fn_name : String) : I64 :=
+    match module_prefix_of fn_name {
+        Option.some prefix =>
+            match str_map_lookup prefix file_refs {
+                Option.some id => id,
+                Option.none => 3,
+            },
+        Option.none => 3,
+    }
+
+/// The interned per-module file table: the lookup map, the rendered
+/// `!N = !DIFile(...)` lines, and one past the last id assigned -- built
+/// in one pass so the three cannot drift apart, same property as
+/// `build_dbg_refs` below.
+struct ModuleFileTable {
+    refs : HashMap String I64,
+    text : String,
+    next_id : I64,
+}
+
+/// Intern one `!DIFile` per module: the target's own module maps to the
+/// preamble's `!3` (its file path is `source_path`); every other module
+/// takes the next free id, `6, 7, ...` in list order -- order is what
+/// makes id assignment reproducible run to run.
+#[partial]
+def intern_module_files (files : List (Pair String String)) (source_path : String) : ModuleFileTable :=
+    intern_module_files_go files source_path 6 str_map_empty ""
+
+#[partial]
+def intern_module_files_go (files : List (Pair String String)) (source_path : String) (next_id : I64) (refs : HashMap String I64) (text : String) : ModuleFileTable := match files {
+    List.empty => { refs := refs, text := text, next_id := next_id },
+    List.cons pair rest =>
+        match pair {
+            Pair.pair mod file_path =>
+                if String.beq file_path source_path
+                then intern_module_files_go rest source_path next_id (str_map_insert mod 3 refs) text
+                else
+                    match llvm_split_path file_path {
+                        Pair.pair directory filename =>
+                            let head := String.concat "!" (String.concat (I64.to_string next_id) " = !DIFile(filename: \"") in
+                            let mid := String.concat head (String.concat filename "\", directory: \"") in
+                            let line := String.concat (String.concat mid (String.concat directory "\")")) "\n" in
+                            intern_module_files_go rest source_path (next_id + 1)
+                                (str_map_insert mod next_id refs) (String.concat text line),
+                    },
+        },
+}
 
 // --- Per-function location interning ---------------------------------
 //
@@ -948,31 +1037,32 @@ def build_loc_nodes (locs : List DbgLoc) (next_id : I64) (scope_ref : I64) (acc 
 /// Walk `functions` once, in module order, assigning each function
 /// with a known `dbg_loc` the next free metadata IDs -- `!N` = its
 /// `!DISubprogram`, `!N+1` = its own `!DILocation`, then one more per
-/// distinct location marked inside it. `next_id` starts at 6 (0-5 are the
-/// fixed preamble from `show_debug_preamble`).
+/// distinct location marked inside it. `next_id` starts where
+/// `intern_module_files` left off (6 when there are no dep-file pairs:
+/// 0-5 are the fixed preamble from `show_debug_preamble`).
 /// Returns BOTH the `(function name -> DbgFuncRefs)` assoc list AND the
 /// rendered `!N = ...` text for every node just assigned, built
 /// together in one pass so the two can never drift apart.
 #[partial]
-def build_dbg_refs (functions : List LLVMFunction) (next_id : I64) : Pair (List (Pair String DbgFuncRefs)) String := match functions {
+def build_dbg_refs (functions : List LLVMFunction) (next_id : I64) (file_refs : HashMap String I64) : Pair (List (Pair String DbgFuncRefs)) String := match functions {
     List.empty => Pair.pair List.empty "",
     List.cons f rest =>
         match f.dbg_loc {
-            Option.none => build_dbg_refs rest next_id,
-            Option.some loc => build_dbg_refs_one f loc rest next_id,
+            Option.none => build_dbg_refs rest next_id file_refs,
+            Option.some loc => build_dbg_refs_one f loc rest next_id file_refs,
         },
 }
 
 #[partial]
-def build_dbg_refs_one (f : LLVMFunction) (loc : DbgLoc) (rest : List LLVMFunction) (next_id : I64) : Pair (List (Pair String DbgFuncRefs)) String :=
+def build_dbg_refs_one (f : LLVMFunction) (loc : DbgLoc) (rest : List LLVMFunction) (next_id : I64) (file_refs : HashMap String I64) : Pair (List (Pair String DbgFuncRefs)) String :=
     let sp_ref := next_id in
     let loc_ref := next_id + 1 in
     let marks := collect_marker_locs f.blocks List.empty in
-    let sp_text := show_disubprogram sp_ref f.name loc.line in
+    let sp_text := show_disubprogram sp_ref f.name loc.line (module_file_ref file_refs f.name) in
     let loc_text := show_dilocation loc_ref loc.line loc.column sp_ref in
     match build_loc_nodes marks (next_id + 2) sp_ref str_map_empty {
         Pair.pair loc_map marks_text =>
-            match build_dbg_refs rest (next_id + 2 + List.length marks) {
+            match build_dbg_refs rest (next_id + 2 + List.length marks) file_refs {
                 Pair.pair rest_refs rest_text =>
                     let refs : DbgFuncRefs := {
                         define_suffix := String.concat " !dbg !" (I64.to_string sp_ref),
@@ -989,18 +1079,21 @@ def build_dbg_refs_one (f : LLVMFunction) (loc : DbgLoc) (rest : List LLVMFuncti
 /// Build both the per-function `DbgFuncRefs` table and the trailing
 /// debug-metadata block for a module, together (see `build_dbg_refs`).
 #[partial]
-def emit_debug_metadata (source_path : String) (functions : List LLVMFunction) : Pair (List (Pair String DbgFuncRefs)) String :=
+def emit_debug_metadata (source_path : String) (files : List (Pair String String)) (functions : List LLVMFunction) : Pair (List (Pair String DbgFuncRefs)) String :=
     match llvm_split_path source_path {
         Pair.pair directory filename =>
             let preamble := show_debug_preamble filename directory in
-            match build_dbg_refs functions 6 {
-                Pair.pair refs body => Pair.pair refs (String.concat preamble body),
+            match intern_module_files files source_path {
+                { refs := file_refs, text := file_text, next_id := files_next } =>
+                    match build_dbg_refs functions files_next file_refs {
+                        Pair.pair refs body => Pair.pair refs (String.concat (String.concat preamble file_text) body),
+                    },
             },
     }
 
 #[partial]
 def emit_module (module_ : LLVMModule) : String := match module_ {
-    LLVMModule.mk target_triple globals functions declarations debug_source =>
+    LLVMModule.mk target_triple globals functions declarations debug_source debug_files =>
         let h1 := String.concat "; ModuleID = 'monad'\ntarget triple = \"" (String.concat target_triple "\"\n\n") in
         let h2 := String.concat h1 "; === Type Definitions ===\n%Header = type { i64, i16, i16 }\n%Closure = type { %Header, i8*, i64, i64, [0 x i8*] }\n%Constructor = type { %Header, i64, i64, [0 x i8*] }\n%StringObj = type { %Header, i64, [0 x i8] }\n\n" in
         let h3 := match declarations {
@@ -1021,7 +1114,7 @@ def emit_module (module_ : LLVMModule) : String := match module_ {
                         (emit_functions functions List.empty)),
                 },
             Option.some path =>
-                match emit_debug_metadata path functions {
+                match emit_debug_metadata path debug_files functions {
                     Pair.pair dbg_refs metadata_text =>
                         let h5 := match functions {
                             List.empty => h4,
