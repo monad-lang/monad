@@ -54,8 +54,8 @@ use lang.codegen.ctx {
   CodegenCtx, CtxStrPair, LocalBinding, build_arity_table, build_debug_locs,
   collect_db_params, ctx_bind_local, ctx_lookup_arity, ctx_lookup_ctor_arity,
   ctx_lookup_ctor_tag, ctx_lookup_local, ctx_reset_locals, ctx_restore_locals,
-  dbg_loc_for, empty_ctx, fresh_label, fresh_temp, lookup_binding,
-  mk,
+  dbg_loc_for, dbg_loc_of_location, empty_ctx, fresh_label, fresh_temp,
+  lookup_binding, mk,
 }
 use lang.codegen.symbols {
   bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
@@ -3603,6 +3603,29 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
         },
 }
 
+/// The def's OWN `!DISubprogram` location, from the position recorded on
+/// its body's outermost term -- NOT the name-keyed `debug_locs` table.
+///
+/// The table's entry for a def comes from `decl_parser`'s span, which
+/// starts at the declaration's ATTRIBUTES: `factorial` reported line 3
+/// (`#[terminating]`), not line 4 (`def factorial`). The body's wrapper
+/// position is the line a user actually wants to land on, and it skips
+/// the attributes for free. `strip_db_lams` (which produced `body`) keeps
+/// the wrapper on the term it lands on -- see its own comment in
+/// `lang/codegen/validate.mo` -- so this reads the position directly.
+///
+/// Fallback to the table (`dbg_loc_for`) when the body carries no
+/// wrapper: a body rewritten by best-effort elaboration, or a located
+/// parse that never happened for its module, keeps at least today's
+/// behavior. Nothing in the corpus is known to hit the fallback once
+/// stage 6's all-module located decls land; it goes away with the table.
+#[partial]
+def dbg_loc_of_body (c : CodegenCtx) (body : Term) (fn_name : String) : Option DbgLoc :=
+    match body {
+        Term.ctx loc _ => dbg_loc_of_location loc,
+        _ => dbg_loc_for c fn_name,
+    }
+
 #[partial]
 def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (term_ : Term) (params : List Param) (llvm_params : List ParamPair) : DefResult :=
         let body := strip_db_lams term_ in
@@ -3648,7 +3671,7 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                                 let tco_ctx := tco.ctx in
                                 let tco_blocks := tco.blocks in
                                 let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
-                                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_for c fn_name) in
+                                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_of_body c body fn_name) in
                                 { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r }
                         },
                     _ =>
@@ -3697,7 +3720,7 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                         let tco_ctx := tco.ctx in
                         let tco_blocks := tco.blocks in
                         let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
-                        let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_for c fn_name) in
+                        let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_of_body c body fn_name) in
                         { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r }
                 },
         }
@@ -4334,16 +4357,26 @@ def test_compile_db_decls_ir_with_debug_exact_content : Bool :=
 /// This is the assertion that separates "locations work" from "locations
 /// are transparently doing nothing" -- the transparency oracle passes
 /// either way, so it cannot be the only check.
+///
+/// The function's OWN location is the body wrapper's (line 9, column 7),
+/// NOT the `debug_locs` table's (line 2, column 3): the table's entry
+/// comes from the decl's span, which starts at the attributes, while the
+/// wrapper starts at the body -- `dbg_loc_of_body` prefers it, and the
+/// table entry must not appear at all. The table-fallback branch (a body
+/// with no wrapper) is `test_compile_db_decls_ir_with_debug_exact_content`
+/// just above, which still sees line 2.
 #[test]
 def test_located_term_emits_its_own_dilocation : Bool :=
     let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
     let located : Def := located_fixture_def in
     let mod_ := compile_db_decls_ir_with_debug (List.cons located List.empty) (Option.some "hello.mo") locs in
     let text := emit_module mod_ in
-    // The def's own location (line 2) AND the body's (line 9) must both be
-    // present -- one node each, not one shared.
-    if check_contains text "!DILocation(line: 2, column: 3, scope: !6)"
-    then check_contains text "!DILocation(line: 9, column: 7, scope: !6)"
+    // The subprogram and its own location node both carry the BODY's
+    // position, and the table's line-2 entry is absent entirely.
+    if check_contains text "line: 9, type: !4"
+    then (if check_contains text "!DILocation(line: 9, column: 7, scope: !6)"
+        then not (check_contains text "line: 2")
+        else false)
     else false
 
 /// A location wrapped around a term that emits NO instructions must emit
