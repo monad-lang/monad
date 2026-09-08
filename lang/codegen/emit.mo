@@ -51,10 +51,10 @@ use lang.codegen.tco {apply_self_tco}
 use lang.codegen.qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lang.codegen.free_names {collect_referenced_names, free_names_of_term}
 use lang.codegen.ctx {
-  CodegenCtx, CtxStrPair, LocalBinding, build_arity_table, build_debug_locs,
+  CodegenCtx, CtxStrPair, LocalBinding, build_arity_table,
   collect_db_params, ctx_bind_local, ctx_lookup_arity, ctx_lookup_ctor_arity,
   ctx_lookup_ctor_tag, ctx_lookup_local, ctx_reset_locals, ctx_restore_locals,
-  dbg_loc_for, dbg_loc_of_location, empty_ctx, fresh_label, fresh_temp,
+  dbg_loc_of_location, empty_ctx, fresh_label, fresh_temp,
   lookup_binding, mk,
 }
 use lang.codegen.symbols {
@@ -3612,26 +3612,26 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
 }
 
 /// The def's OWN `!DISubprogram` location, from the position recorded on
-/// its body's outermost term -- NOT the name-keyed `debug_locs` table.
+/// its body's outermost term.
 ///
-/// The table's entry for a def comes from `decl_parser`'s span, which
-/// starts at the declaration's ATTRIBUTES: `factorial` reported line 3
-/// (`#[terminating]`), not line 4 (`def factorial`). The body's wrapper
-/// position is the line a user actually wants to land on, and it skips
-/// the attributes for free. `strip_db_lams` (which produced `body`) keeps
-/// the wrapper on the term it lands on -- see its own comment in
+/// A decl-span entry would start at the declaration's ATTRIBUTES:
+/// `factorial` would report line 3 (`#[terminating]`), not line 4
+/// (`def factorial`). The body's wrapper position is the line a user
+/// actually wants to land on, and it skips the attributes for free.
+/// `strip_db_lams` (which produced `body`) keeps the wrapper on the
+/// term it lands on -- see its own comment in
 /// `lang/codegen/validate.mo` -- so this reads the position directly.
 ///
-/// Fallback to the table (`dbg_loc_for`) when the body carries no
-/// wrapper: a body rewritten by best-effort elaboration, or a located
-/// parse that never happened for its module, keeps at least today's
-/// behavior. Nothing in the corpus is known to hit the fallback once
-/// stage 6's all-module located decls land; it goes away with the table.
+/// `Option.none` when the body carries no wrapper -- only possible when
+/// its module's located parse failed outright (`locate_module_info`
+/// keeps the plain decls): the function then gets no line info, which
+/// is the same best-effort behavior the v1 name-keyed table's miss
+/// path had.
 #[partial]
-def dbg_loc_of_body (c : CodegenCtx) (body : Term) (fn_name : String) : Option DbgLoc :=
+def dbg_loc_of_body (body : Term) : Option DbgLoc :=
     match body {
         Term.ctx loc _ => dbg_loc_of_location loc,
-        _ => dbg_loc_for c fn_name,
+        _ => Option.none,
     }
 
 #[partial]
@@ -3679,7 +3679,7 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                                 let tco_ctx := tco.ctx in
                                 let tco_blocks := tco.blocks in
                                 let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
-                                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_of_body c body fn_name) in
+                                let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_of_body body) in
                                 { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r }
                         },
                     _ =>
@@ -3728,7 +3728,7 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                         let tco_ctx := tco.ctx in
                         let tco_blocks := tco.blocks in
                         let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
-                        let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_of_body c body fn_name) in
+                        let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_of_body body) in
                         { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r }
                 },
         }
@@ -3752,23 +3752,22 @@ def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match 
 /// Compile a list of canonical Defs to a complete LLVM module.
 #[partial]
 def compile_db_decls_ir (defs : List Def) : LLVMModule :=
-    compile_db_decls_ir_with_debug defs Option.none str_map_empty List.empty
+    compile_db_decls_ir_with_debug defs Option.none List.empty
 
-/// `compile_db_decls_ir`, with DWARF debug info (v1: one location per
-/// top-level def -- plans/bootstrapping/debug-info.md). A sibling
-/// function rather than new params on `compile_db_decls_ir` itself: that
-/// function has ~90 existing single-argument call sites across the test
-/// suite, all of which would otherwise need updating for a feature they
-/// don't exercise. `source_path` is the `.mo` file debug info is being
-/// generated for (`Option.none` disables debug info entirely, matching
-/// plain `compile_db_decls_ir` exactly); `debug_locs` is the def-name ->
-/// `Location` table built by `lang.parser`'s `decls_parser_with_locs`;
-/// `debug_files` is the per-module file table for `!DIFile` attribution
-/// (`LLVMModule.debug_files`).
+/// `compile_db_decls_ir`, with DWARF debug info (one location per
+/// top-level def, from the `Term.ctx` wrapper on its body -- see
+/// `dbg_loc_of_body`). A sibling function rather than new params on
+/// `compile_db_decls_ir` itself: that function has ~90 existing
+/// single-argument call sites across the test suite, all of which would
+/// otherwise need updating for a feature they don't exercise.
+/// `source_path` is the `.mo` file debug info is being generated for
+/// (`Option.none` disables debug info entirely, matching plain
+/// `compile_db_decls_ir` exactly); `debug_files` is the per-module file
+/// table for `!DIFile` attribution (`LLVMModule.debug_files`).
 #[partial]
-def compile_db_decls_ir_with_debug (defs : List Def) (source_path : Option String) (debug_locs : HashMap String Location) (debug_files : List (Pair String String)) : LLVMModule :=
+def compile_db_decls_ir_with_debug (defs : List Def) (source_path : Option String) (debug_files : List (Pair String String)) : LLVMModule :=
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty debug_locs) defs {
+    match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
             let funcs := ren_main_and_wrap compiled_funcs in
             LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path debug_files,
@@ -3778,20 +3777,20 @@ def compile_db_decls_ir_with_debug (defs : List Def) (source_path : Option Strin
 /// Extracts def_d and inductive_d entries, compiles constructors and defs.
 #[partial]
 def compile_db_module (decl_list : List Decl) : LLVMModule :=
-    compile_db_module_with_debug decl_list Option.none str_map_empty List.empty
+    compile_db_module_with_debug decl_list Option.none List.empty
 
 /// `compile_db_module`, with DWARF debug info -- see
 /// `compile_db_decls_ir_with_debug`'s own doc comment for why this is a
 /// sibling function rather than new params on `compile_db_module`.
 #[partial]
-def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_locs : HashMap String Location) (debug_files : List (Pair String String)) : LLVMModule :=
+def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_files : List (Pair String String)) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
     let ctor_tags := build_constructor_tag_map inds in
     let ctor_arities := build_constructor_arity_map inds in
     let ctor_funcs := compile_db_inductive_decls inds ctor_tags in
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities debug_locs) defs {
+    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities) defs {
         { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
             // Prepend the GENERATED runtime natives (`lang/codegen/
             // runtime.mo`) -- ordinary `define`s in this same module,
@@ -4168,7 +4167,7 @@ def test_ctor_tag_map_qualified_name_lookup : Bool :=
     let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name List.empty (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons ind List.empty) in
-    let c := empty_ctx empty_arities tag_map str_map_empty str_map_empty in
+    let c := empty_ctx empty_arities tag_map str_map_empty in
     is_constructor_var c "Option.Some" && is_constructor_var c "Option.None"
 
 /// A hand-built single-field Param -- the fixture shape for the
@@ -4202,7 +4201,7 @@ def test_ctor_tags_distinguish_same_name_differing_arity : Bool :=
         List.empty (Term.type_ 1) (List.cons wide_mk List.empty) empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim (List.cons wide List.empty)) in
     let arity_map := build_constructor_arity_map (List.cons slim (List.cons wide List.empty)) in
-    let c := empty_ctx empty_arities tag_map arity_map str_map_empty in
+    let c := empty_ctx empty_arities tag_map arity_map in
     let slim_at := constructor_tag_at c "mk" 1 in
     let wide_at := constructor_tag_at c "mk" 3 in
     Bool.not (I64.beq slim_at wide_at)
@@ -4239,7 +4238,7 @@ def native_def_fixture (name : String) (target : String) : Def :=
 
 #[partial]
 def compile_native_def_fixture_text (name : String) (target : String) : String :=
-    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty str_map_empty) (native_def_fixture name target) {
+    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty) (native_def_fixture name target) {
         { ctx := _, funcs := funcs, globals := _ } =>
             emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none List.empty),
     }
@@ -4289,8 +4288,8 @@ def test_native_unwhitelisted_native_still_gets_unit_stub : Bool :=
     then not (check_contains text "@monad_definitely_not_a_real_native")
     else false
 
-/// A single, unlocated `myfunc` fixture def -- shared by the
-/// `build_debug_locs`/`compile_db_decls_ir_with_debug` tests below.
+/// A single, unlocated `myfunc` fixture def -- used by the
+/// `compile_db_decls_ir_with_debug` tests below.
 #[partial]
 def debug_fixture_def : Def :=
     Def.mk (ModulePath.mp (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
@@ -4322,35 +4321,29 @@ def located_fixture_def : Def :=
                                    (Term.lit (Literal.num 3 NumSuffix.i64)))))
         List.empty empty_attrs Visibility.package_private
 
-#[test]
-def test_build_debug_locs_keys_by_flat_name : Bool :=
-    let loc := Location.mk 5 2 3 in
-    let pairs := List.cons (Pair.pair (Decl.def_d debug_fixture_def) loc) List.empty in
-    let locs := build_debug_locs pairs in
-    match str_map_lookup "myfunc" locs {
-        Option.some found => match found {
-            Location.mk _offset line column => I64.beq line 2 && I64.beq column 3,
-        },
-        Option.none => false,
-    }
+/// `debug_fixture_def` with the position a located parse puts on the
+/// body -- line 2, column 3, at offset 5.
+#[partial]
+def located_num_fixture_def : Def :=
+    Def.mk (ModulePath.mp (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
+        (Term.ctx (Location.mk 5 2 3) (Term.lit (Literal.num 42 NumSuffix.i64)))
+        List.empty empty_attrs Visibility.package_private
 
 #[test]
 def test_compile_db_decls_ir_with_debug_emits_dbg : Bool :=
-    let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
-    let mod_ := compile_db_decls_ir_with_debug (List.cons debug_fixture_def List.empty) (Option.some "hello.mo") locs List.empty in
+    let mod_ := compile_db_decls_ir_with_debug (List.cons located_fixture_def List.empty) (Option.some "hello.mo") List.empty in
     let text := emit_module mod_ in
     if check_contains text "!DICompileUnit"
     then (if check_contains text "!DISubprogram" then check_contains text "!dbg !" else false)
     else false
 
-/// Exact-content regression: the captured `Location.mk 5 2 3` (line 2,
-/// column 3) must land verbatim in the emitted `!DILocation`, the
-/// function name in `!DISubprogram`, and the source path (split into
-/// filename/directory by `llvm_split_path`) in `!DIFile`.
+/// Exact-content regression: the body wrapper's captured `Location.mk
+/// 5 2 3` (line 2, column 3) must land verbatim in the emitted
+/// `!DILocation`, the function name in `!DISubprogram`, and the source
+/// path (split into filename/directory by `llvm_split_path`) in `!DIFile`.
 #[test]
 def test_compile_db_decls_ir_with_debug_exact_content : Bool :=
-    let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
-    let mod_ := compile_db_decls_ir_with_debug (List.cons debug_fixture_def List.empty) (Option.some "hello.mo") locs List.empty in
+    let mod_ := compile_db_decls_ir_with_debug (List.cons located_num_fixture_def List.empty) (Option.some "hello.mo") List.empty in
     let text := emit_module mod_ in
     if check_contains text "!DIFile(filename: \"hello.mo\", directory: \".\")"
     then (if check_contains text "name: \"myfunc\""
@@ -4368,25 +4361,20 @@ def test_compile_db_decls_ir_with_debug_exact_content : Bool :=
 /// are transparently doing nothing" -- the transparency oracle passes
 /// either way, so it cannot be the only check.
 ///
-/// The function's OWN location is the body wrapper's (line 9, column 7),
-/// NOT the `debug_locs` table's (line 2, column 3): the table's entry
-/// comes from the decl's span, which starts at the attributes, while the
-/// wrapper starts at the body -- `dbg_loc_of_body` prefers it, and the
-/// table entry must not appear at all. The table-fallback branch (a body
-/// with no wrapper) is `test_compile_db_decls_ir_with_debug_exact_content`
-/// just above, which still sees line 2.
+/// The function's OWN location is the body wrapper's (line 9, column 7)
+/// -- a decl-span entry would start at the attributes, while the wrapper
+/// starts at the body -- and `dbg_loc_of_body` reads it directly. The
+/// wrapper on the body's INNER `if` additionally produces per-instruction
+/// markers, which is the distinct-location part this test asserts.
 #[test]
 def test_located_term_emits_its_own_dilocation : Bool :=
-    let locs := str_map_insert "myfunc" (Location.mk 5 2 3) str_map_empty in
     let located : Def := located_fixture_def in
-    let mod_ := compile_db_decls_ir_with_debug (List.cons located List.empty) (Option.some "hello.mo") locs List.empty in
+    let mod_ := compile_db_decls_ir_with_debug (List.cons located List.empty) (Option.some "hello.mo") List.empty in
     let text := emit_module mod_ in
     // The subprogram and its own location node both carry the BODY's
-    // position, and the table's line-2 entry is absent entirely.
+    // position.
     if check_contains text "line: 9, type: !4"
-    then (if check_contains text "!DILocation(line: 9, column: 7, scope: !6)"
-        then not (check_contains text "line: 2")
-        else false)
+    then check_contains text "!DILocation(line: 9, column: 7, scope: !6)"
     else false
 
 /// A location wrapped around a term that emits NO instructions must emit
@@ -4469,7 +4457,7 @@ def check_contains (text : String) (needle : String) : Bool :=
 /// the user's program output) in low-value noise.
 #[partial]
 def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result String LLVMModule) :=
-    compile_loaded_modules_to_ir_with_debug loaded verbose Option.none str_map_empty
+    compile_loaded_modules_to_ir_with_debug loaded verbose Option.none
 
 /// One `(module path string, file path)` pair per loaded module -- the
 /// `!DIFile` attribution table (`LLVMModule.debug_files`). Keyed by the
@@ -4483,9 +4471,9 @@ def module_file_pairs (mods : List ModuleInfo) (acc : List (Pair String String))
     List.cons m rest => module_file_pairs rest (List.append acc (List.cons (Pair.pair (show_module_path m.path) m.file_path) List.empty)),
 }
 
-/// `compile_loaded_modules_to_ir`, with DWARF debug info (v1: one
-/// location per top-level def -- plans/bootstrapping/debug-info.md).
-/// `source_path` and `debug_locs` are passed straight through to
+/// `compile_loaded_modules_to_ir`, with DWARF debug info (one location
+/// per top-level def, from the `Term.ctx` wrapper on its body).
+/// `source_path` is passed straight through to
 /// `compile_db_module_with_debug` at the very end of this function --
 /// everything else is identical to the plain version. A sibling
 /// function (like `compile_db_decls_ir_with_debug`) rather than new
@@ -4493,7 +4481,7 @@ def module_file_pairs (mods : List ModuleInfo) (acc : List (Pair String String))
 /// callers (`main.mo`, `test_closure_capture_e2e.mo`) don't need to
 /// change for a feature they don't exercise.
 #[partial]
-def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) (debug_locs : HashMap String Location) : IO (Result String LLVMModule) := do {
+def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) : IO (Result String LLVMModule) := do {
     let total_start : I64 <- Bench.now;
 
     let all_mods := get_loaded_all loaded;
@@ -4689,7 +4677,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                         Result.ok _ => do {
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                     let t_llvm : I64 <- Bench.now;
-                    let mod_ := compile_db_module_with_debug reachable_decls source_path debug_locs debug_files;
+                    let mod_ := compile_db_module_with_debug reachable_decls source_path debug_files;
                     if verbose then do {
                         Bench.report_since "compile_db_module" t_llvm;
                         Bench.report_since "compile_loaded_modules_to_ir total" total_start;

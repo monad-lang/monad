@@ -2,10 +2,10 @@ use io {IO}
 open IO {println, read_file, write_file}
 use std.process {exec_cmd, process_id}
 use std.bench {now, report, report_since, since}
-use lang.types {Decl, Location, LocalScope, ModulePath}
+use lang.types {Decl, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
-use lang.codegen.emit {build_debug_locs, compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, get_loaded_all, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict, try_parse_decls_with_locs}
+use lang.codegen.emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
+use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, get_loaded_all, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
 use std.map {}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
@@ -138,43 +138,28 @@ def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : P
         },
     }
 
-/// Parse a source file and compile + run it via LLVM. `source_path`/
-/// `debug_locs` are DWARF debug-info inputs (plans/bootstrapping/
-/// debug-info.md, v1: one location per top-level def) -- pass
-/// `Option.none`/`str_map_empty` (see `no_debug_info`) to disable, same
-/// as `compile_db_module_with_debug` itself. `link_ir` needs no
+/// Parse a source file and compile + run it via LLVM. `source_path` is
+/// the DWARF debug-info input (the `.mo` file debug info is being
+/// generated for, from the `Term.ctx` wrappers on each def's body) --
+/// pass `Option.none` to disable, same as
+/// `compile_db_module_with_debug` itself. `link_ir` needs no
 /// separate `--debug` flag of its own: `llc`/`clang` pick up whatever
 /// debug metadata `emit_module` already wrote into `ir_text` with no
 /// extra flag required (confirmed directly -- a `-g`-style flag doesn't
 /// exist on `llc`, unlike `clang`'s own C-source `-g`).
 #[partial]
-def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_name : Path) (verbose: Bool) (source_path : Option String) (debug_locs : HashMap String Location) : IO I64 {
-    let mod_ := compile_db_module_with_debug decl_list source_path debug_locs List.empty;
+def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_name : Path) (verbose: Bool) (source_path : Option String) : IO I64 {
+    let mod_ := compile_db_module_with_debug decl_list source_path List.empty;
     let ir_text := emit_module mod_;
     println <| "Writing LLVM IR to: " ++ Path.to_string (Path.with_suffix (Path.join output_dir output_name) ".ll");
     link_ir ir_text output_dir output_name verbose
 }
 
-/// `Option.none`/`str_map_empty` -- the "debug info off" inputs to
-/// `compile_parsed_decls`/`compile_loaded_modules_to_ir_with_debug`.
-#[partial]
-def no_debug_info : Pair (Option String) (HashMap String Location) := Pair.pair Option.none str_map_empty
-
-/// Build the `(source_path, debug_locs)` DWARF debug-info inputs from a
-/// file's own raw source text -- `no_debug_info` when parsing that text
-/// for locations fails, which should be rare here (the caller already
-/// knows the file parses, from a separate successful parse/typecheck
-/// attempt) but must stay total rather than block compilation on a
-/// best-effort side channel. See plans/bootstrapping/debug-info.md.
-#[partial]
-def debug_info_for_source (file_path : String) (source : String) : Pair (Option String) (HashMap String Location) :=
-    match try_parse_decls_with_locs source {
-        Option.some result =>
-            match result {
-                Pair.pair _decls decls_with_locs => Pair.pair (Option.some file_path) (build_debug_locs decls_with_locs),
-            },
-        Option.none => Pair.pair (Option.some file_path) str_map_empty,
-    }
+/// (The v1 per-def location table this section used to build --
+/// `no_debug_info`/`debug_info_for_source`, fed by a second read of the
+/// target file -- is gone: since stage 6 a function's own location is
+/// the `Term.ctx` wrapper on its body, which `with_located_decls`
+/// already put there for every loaded module.)
 
 /// Replace EVERY loaded module's decls with ones carrying source
 /// positions -- stage 6: a `--debug` compile locates the dependencies'
@@ -314,17 +299,12 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
 /// fallback path below, rather than a bare "gate failed").
 /// `debug` (from `Command.compile`'s own field -- on by default since
 /// stage 5, `--release` opts out, `--debug`/`-g` opts back in) gates
-/// DWARF debug info (plans/bootstrapping/debug-info.md: one location
-/// per def, plus per-term locations from stage 3). When on, this
-/// re-reads and re-parses
-/// `file_path` (via `debug_info_for_source`) purely to recover each
-/// top-level def's own source location -- independent of, and
-/// redundant with, `load_file_modules`'s own internal parsing, but a
-/// much smaller change than threading a location table through that
-/// whole module-loading pipeline. A `Def` whose final compiled name
-/// doesn't match this second, standalone parse (macro-expanded,
-/// renamed, lambda-lifted) just gets no debug info, not a compile
-/// error -- see `build_debug_locs`'s own doc comment.
+/// DWARF debug info (one location per def from the `Term.ctx` wrapper
+/// on its body, plus per-term locations from stage 3). When on, EVERY
+/// loaded module is re-parsed with positions recorded and the located
+/// decls replace the plain ones (`with_located_decls`) -- the term
+/// wrappers ARE the debug info, so there is no separate name-keyed
+/// location table and no second read of the target file.
 #[partial]
 def compile_file_codegen (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) (debug : Bool) (preloaded : Option LoadedModules) : IO I64 {
     // `preloaded` is the module set the typecheck gate already loaded, if
@@ -341,38 +321,32 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
         };
     match res {
         Result.ok loaded => do {
-            let dbg_info : Pair (Option String) (HashMap String Location) <-
-                if debug then do {
-                    let source <- IO.read_file (Path.path file_path);
-                    return (debug_info_for_source file_path source)
-                } else return no_debug_info;
             // Under `--debug` EVERY loaded module is re-parsed with
             // positions recorded, and the located decls replace the plain
             // ones. Same grammar, same expansion -- the only difference is
             // `Term.ctx` wrappers.
             let loaded : LoadedModules <-
                 if debug then with_located_decls loaded else return loaded;
-            match dbg_info {
-                Pair.pair source_path debug_locs => do {
-                    // `verbose` thread-through: previously this branch dumped the
-                    // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
-                    // walking every loaded module's full content) on every
-                    // successful compile -- pure noise on a working build AND a
-                    // real perf hit. Now we forward `verbose` to
-                    // `compile_loaded_modules_to_ir_with_debug` (which has its own
-                    // `--verbose`-gated per-stage printlns -- see its own doc
-                    // comment in `lang/codegen/emit.mo`) and emit only a single
-                    // one-line module-count summary, also gated on `verbose`.
-                    if verbose then do {
-                        let loaded_count : I64 := List.length (get_loaded_all loaded);
-                        println <| "loaded " ++ I64.to_string loaded_count ++ " modules";
-                        let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path debug_locs;
-                        link_compiled_module mod_result output_dir output_name verbose
-                    } else do {
-                        let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path debug_locs;
-                        link_compiled_module mod_result output_dir output_name verbose
-                    }
-                },
+            do {
+                let source_path : Option String := if debug then Option.some file_path else Option.none;
+                // `verbose` thread-through: previously this branch dumped the
+                // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
+                // walking every loaded module's full content) on every
+                // successful compile -- pure noise on a working build AND a
+                // real perf hit. Now we forward `verbose` to
+                // `compile_loaded_modules_to_ir_with_debug` (which has its own
+                // `--verbose`-gated per-stage printlns -- see its own doc
+                // comment in `lang/codegen/emit.mo`) and emit only a single
+                // one-line module-count summary, also gated on `verbose`.
+                if verbose then do {
+                    let loaded_count : I64 := List.length (get_loaded_all loaded);
+                    println <| "loaded " ++ I64.to_string loaded_count ++ " modules";
+                    let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path;
+                    link_compiled_module mod_result output_dir output_name verbose
+                } else do {
+                    let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path;
+                    link_compiled_module mod_result output_dir output_name verbose
+                }
             }
         },
         Result.err e => do {
@@ -384,11 +358,8 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
             let source <- IO.read_file (Path.path file_path);
             match try_parse_decls source {
                 Option.some decl_list => do {
-                    let dbg_info := if debug then debug_info_for_source file_path source else no_debug_info;
-                    match dbg_info {
-                        Pair.pair source_path debug_locs =>
-                            compile_parsed_decls decl_list output_dir output_name verbose source_path debug_locs,
-                    }
+                    let source_path : Option String := if debug then Option.some file_path else Option.none;
+                    compile_parsed_decls decl_list output_dir output_name verbose source_path
                 },
                 Option.none => do {
                     // `try_parse_decls` (leniently truncate-and-succeed) just

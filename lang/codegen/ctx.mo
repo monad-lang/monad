@@ -7,12 +7,12 @@
 /// `emit`'s term compiler would each need the other's names and could
 /// not be split at all.
 ///
-/// `arities` and `debug_locs` are keyed by `def_symbol_name`
+/// `arities` are keyed by `def_symbol_name`
 /// (`lang.codegen.symbols`); `ctor_tags`/`ctor_arities` are keyed in
 /// CONSTRUCTOR space, which is a different namespace -- see
 /// `constructor_tag` in `emit` for the three key shapes it uses.
 use lang.types {
-  Decl, DebugName, Def, Identifier, Location, ModulePath, Param, Term, param_many,
+  DebugName, Def, Identifier, Location, ModulePath, Param, Term, param_many,
 }
 use lang.codegen.ir {DbgLoc, LLVMValue}
 use lang.codegen.symbols {def_symbol_name}
@@ -48,15 +48,6 @@ struct CodegenCtx {
     /// tag -- see `constructor_arity`'s own doc comment for why this is
     /// needed.
     ctor_arities : HashMap String I64,
-    /// DWARF debug info (v1: one location per top-level def --
-    /// plans/bootstrapping/debug-info.md). Keyed exactly like `arities`
-    /// (`def_symbol_name` of the def's module-qualified name),
-    /// built once by `lang.parser`'s `decls_parser_with_locs` at parse
-    /// time and threaded in unchanged. `str_map_empty` when debug info
-    /// is off or the location table wasn't threaded through -- a miss
-    /// (macro-expanded/lambda-lifted/renamed name) just means that one
-    /// function gets no debug info, not a compile error.
-    debug_locs : HashMap String Location,
     /// The position in force while compiling a term, set when
     /// `compile_db_term_ir` enters a `Term.ctx` and restored on the way
     /// out. `none` whenever locations are off, and whenever a term
@@ -78,35 +69,15 @@ struct CtxStrPair {
 /// global reference falls back to today's eager-0-arg-call behavior --
 /// correct only for genuinely 0-arity defs).
 #[partial]
-def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (debug_locs : HashMap String Location) : CodegenCtx :=
-    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, debug_locs := debug_locs, current_loc := Option.none }
+def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) : CodegenCtx :=
+    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none }
 
-/// Look up `fn_name`'s captured source location (see `CodegenCtx.
-/// debug_locs`'s own doc comment) and convert it to the minimal
-/// `lang.codegen.ir.DbgLoc` shape `LLVMFunction.dbg_loc` expects --
-/// `Option.none` on a miss (debug info off, or no location known for
-/// this name).
-///
-/// Falls back to the UNqualified name on a miss. `debug_locs` is built
-/// by `lang/main.mo` from a single file's own pre-expansion parse, which
-/// happens before `qualify_modules` runs, so its keys are the source
-/// names (`main`, `foo`) while `fn_name` here is the emitted symbol
-/// (`lang.main::main`). Without the fallback every lookup misses and
-/// `--debug` silently emits no line information at all.
-#[partial]
-def dbg_loc_for (c : CodegenCtx) (fn_name : String) : Option DbgLoc :=
-    match str_map_lookup fn_name c.debug_locs {
-        Option.some loc => dbg_loc_of_location loc,
-        Option.none => dbg_loc_for_unqualified c fn_name,
-    }
-
-#[partial]
-def dbg_loc_for_unqualified (c : CodegenCtx) (fn_name : String) : Option DbgLoc :=
-    match str_map_lookup (unqualify_def_name fn_name) c.debug_locs {
-        Option.some loc => dbg_loc_of_location loc,
-        Option.none => Option.none,
-    }
-
+/// Convert a captured source position to the minimal
+/// `lang.codegen.ir.DbgLoc` shape `LLVMFunction.dbg_loc` expects.
+/// (The v1 name-keyed fallback table this used to serve --
+/// `dbg_loc_for`/`dbg_loc_for_unqualified`, keyed by bare source name
+/// -- is gone: since stage 6 a function's own location is the
+/// `Term.ctx` wrapper on its body, so there is no table to miss.)
 #[partial]
 def dbg_loc_of_location (loc : Location) : Option DbgLoc := match loc {
     Location.mk _offset line column => Option.some (DbgLoc.mk line column),
@@ -223,38 +194,10 @@ def build_arity_table_go (defs : List Def) (acc : HashMap String I64) : HashMap 
         },
 }
 
-/// Build the def-name -> `Location` table `CodegenCtx.debug_locs`
-/// needs, from the PRE-expansion `(Decl, Location)` pairs `lang.module`'s
-/// `try_parse_decls_with_locs` returns (plans/bootstrapping/
-/// debug-info.md, v1: one location per top-level def). Keyed exactly
-/// like `build_arity_table` (`def_symbol_name` of the
-/// def's module path) -- non-`def_d` declarations (type/struct/class/
-/// instance/...) are skipped, they never become an `LLVMFunction`. A
-/// `Def` whose FINAL compiled name doesn't match anything here (macro-
-/// expanded, renamed, lambda-lifted) is an accepted gap: it just gets
-/// no debug info (see `dbg_loc_for`'s own doc comment).
-#[partial]
-def build_debug_locs (pairs : List (Pair Decl Location)) : HashMap String Location := build_debug_locs_go pairs str_map_empty
-
-#[partial]
-def build_debug_locs_go (pairs : List (Pair Decl Location)) (acc : HashMap String Location) : HashMap String Location := match pairs {
-    List.empty => acc,
-    List.cons p rest =>
-        match p {
-            Pair.pair decl loc => build_debug_locs_go_step decl loc rest acc,
-        },
-}
-
-#[partial]
-def build_debug_locs_go_step (decl : Decl) (loc : Location) (rest : List (Pair Decl Location)) (acc : HashMap String Location) : HashMap String Location := match decl {
-    Decl.def_d def_ =>
-        match def_ {
-            Def.mk name _typ _term _constraints _attrs _vis =>
-                let llvm_name := def_symbol_name name in
-                build_debug_locs_go rest (str_map_insert llvm_name loc acc),
-        },
-    _ => build_debug_locs_go rest acc,
-}
+/// (The v1 def-name -> `Location` table built here -- `build_debug_locs`
+/// -- is gone: since stage 6 a function's own location is the `Term.ctx`
+/// wrapper on its body, which every located def carries by construction,
+/// so there is no table to build and no second file read to feed it.)
 
 #[partial]
 def lookup_binding (bindings : List LocalBinding) (name : Identifier) : Option LLVMValue := match bindings {
