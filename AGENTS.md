@@ -2566,6 +2566,54 @@ Key patterns when writing self-hosted Monad code:
     from each: `check` over three examples reports 24 hits / 12 misses.
     Do not "fix" the zero.
 
+37. **A profile taken on `examples/hello.mo` does not predict the
+    self-compile, and item 26's extrapolation was wrong (2026-09-09).**
+    Full self-compile 969811ms -> 281373ms (-71.0%), 16m01s -> 4m49s;
+    `devenv tasks run monad:bootstrap-compile` 1176s of its 1200s
+    timeout -> 320s.
+    Item 26 measured `elaborate_class` at hello.mo scale and found
+    `build_scope_from_decls` was 80% of it. Sub-timing the same phase at
+    self-compile scale (4,020 defs vs 349) gave a completely different
+    shape:
+      build_scope_from_decls              69306ms   11%
+      elaborate_module_decls_best_effort 165211ms   25%
+      resolve_class_calls_decls          424646ms   64%  (45% of ALL)
+    `resolve_class_calls_decls` had never been investigated, and at
+    hello.mo scale it is 81ms of 2399ms (3.4%) -- invisible. It grew
+    **5242x for an 11.5x larger input**. The rule: a candidate's SHARE at
+    small scale says nothing about its share at large scale; what matters
+    is how it SCALES. Profile the workload you actually care about, and
+    when you cannot, compare two sizes and look at the ratio.
+    The two fixes, both verified by byte-identical LLVM IR:
+    - **`lookup_def_type` (`lang/scope.mo`)** walked a `List
+      DefTypeEntry` linearly and fires on every `Term.app` node in the
+      graph -- ~4,020 steps per application node, each rendering a
+      `ModulePath` via `show_module_path`. Indexed into a `HashMap String
+      Term` (`lang/codegen/strmap.mo`'s `str_map_*` -- a leaf module, so
+      `scope.mo` can import it with no cycle). -94%.
+      Preserving the scan's exact answer is the delicate part: it matched
+      full-dotted-name OR bare-last-segment, FIRST entry in decl order
+      wins. So register each def under BOTH keys, earlier entries winning
+      (`def_type_insert_first` -- plain `str_map_insert` replaces, giving
+      last-wins, which is NOT the same function).
+    - **`modpath_map_*` (`lang/scope.mo`)** stored `ModulePath` keys, and
+      a `ModulePath` has no cheap hash or equality: both go through
+      `show_module_path` (`List.intercalate "." (List.map
+      show_identifier ids)`), rebuilt per call. `bucket_*_eq` invokes the
+      comparator once PER CHAIN STEP, so one insert over ~4,200 keys /
+      256 buckets rendered ~32 paths. Item 26 halved this (4 renders per
+      step -> 2) but could not remove it, because while the STORED key is
+      a `ModulePath` every comparison must re-derive it. Render once at
+      the boundary, store the string, drop to `bucket_insert_str`/
+      `bucket_lookup_str`. `check lang/main.mo` 140.7s -> 82.3s (-41.5%)
+      -- but only -3.7% on hello.mo, the same small-scale blindness.
+    Also landed, and worth knowing before profiling anything here: the
+    workspace had **no `[profile.release]` at all** (so `codegen-units =
+    16`, `lto = false`) and no `#[global_allocator]`. Adding `lto =
+    "fat"` / `codegen-units = 1` is -5.0% and mimalloc a further -22.6%
+    on interpreted workloads, -25.7% combined. Take any before/after
+    numbers older than 2026-09-09 as measured on the slower binary.
+
 ## Committing Changes
 
 ### Commit Message Format
