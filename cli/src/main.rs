@@ -1,6 +1,16 @@
 mod lsp;
 mod mcp;
 
+/// The default system allocator is the wrong fit for this binary's
+/// dominant workload. Interpreting `lang/main.mo` (the self-hosted
+/// compiler) is allocation-bound by construction: `core_value.rs`'s
+/// `Env::extend` allocates an `Arc` frame per beta reduction, and every
+/// constructor is an `Arc<ConArgs>` -- a callgrind profile put allocator
+/// churn at ~42% of eval time. Measured A/B before keeping (see
+/// `plans/implementations/2026-09-09-compiler-optimization.md`, item B1).
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};

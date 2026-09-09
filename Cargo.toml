@@ -19,6 +19,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 im = "15.1"
 
+# No `[profile.release]` section existed at all until now, so the host
+# compiler ran at cargo's defaults: `codegen-units = 16` and `lto =
+# false`. That matters more here than for a typical binary, because the
+# workload that actually hurts is the Rust evaluator interpreting
+# `lang/main.mo` -- a tight `core_eval.rs` dispatch loop calling into
+# `core_native.rs`, split across crate boundaries that `lto = false`
+# forbids inlining across. Measured A/B before keeping (see
+# `plans/implementations/2026-09-09-compiler-optimization.md`, item B1).
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
 # Cargo requires profile sections to live in the workspace root, not a
 # member crate's own Cargo.toml (a member-level `[profile.release]` is
 # silently ignored with a warning) — and `lto` specifically isn't a
