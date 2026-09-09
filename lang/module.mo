@@ -1714,7 +1714,7 @@ struct ModuleInfo {
 // `ScopeData`. An earlier `ModuleScopeCache` cached `ScopeData` instead
 // and has been removed.
 struct ModuleInfoCache {
-    entries : HashMap ModulePath ModuleInfo,
+    entries : HashMap String ModuleInfo,
     hits : I64,
     misses : I64,
 }

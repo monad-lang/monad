@@ -343,11 +343,11 @@ def scope_all_inductives (s : Scope) : List Inductive :=
 /// an ambiguous constructor resolves to — a miscompile, not a slower
 /// build.
 #[partial]
-def inductive_pairs_values (pairs : List (Pair ModulePath Inductive)) : List Inductive :=
+def inductive_pairs_values (pairs : List (Pair String Inductive)) : List Inductive :=
   List.reverse (inductive_pairs_values_go pairs List.empty)
 
 #[partial]
-def inductive_pairs_values_go (pairs : List (Pair ModulePath Inductive)) (acc : List Inductive) : List Inductive :=
+def inductive_pairs_values_go (pairs : List (Pair String Inductive)) (acc : List Inductive) : List Inductive :=
   match pairs {
     List.empty => acc,
     List.cons p rest =>

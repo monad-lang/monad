@@ -1660,7 +1660,7 @@ struct LocalVar {
 // struct literal) -- only POSITIONAL `mk`/pattern-match destructuring
 // sites need updating for the new arity.
 struct ScopeData {
-    def_refs : HashMap ModulePath ScopeDef,
+    def_refs : HashMap String ScopeDef,
     class_defs : List ScopeClassDef,
     instances : List ScopeInstance,
     // `HashMap`, not `List` -- mirrors `def_refs` (see bench/scope_lookup.mo):
@@ -1670,7 +1670,7 @@ struct ScopeData {
     // was pure waste. `classes`, the sibling field just below, stays a
     // `List` (by-name lookup is now `scope_find_class`, lower corpus
     // cardinality than inductives, no measured need for a HashMap yet).
-    inductives : HashMap ModulePath Inductive,
+    inductives : HashMap String Inductive,
     // Full `Class` values (params/constraints/ordered methods), not a
     // synthetic zero-method `Inductive` stand-in -- `build_scope_class`
     // used to throw the real `Class` away and register a `dummy_ind`
@@ -1688,7 +1688,7 @@ struct ScopeData {
     // an ordinary call site does (confirmed: `Map.empty` here fails at
     // evaluation with "unresolved global: Map.empty") -- `HashMap.map`/
     // `.empty_buckets` are ordinary functions, no dispatch needed.
-    def_params : HashMap ModulePath (List (Pair Identifier Term)) := HashMap.map HashMap.empty_buckets,
+    def_params : HashMap String (List (Pair Identifier Term)) := HashMap.map HashMap.empty_buckets,
     // A def's own DECLARED return type (the final non-`Pi`/`Forall` type
     // at the end of its signature's own Pi-chain, `Def.typ` -- NOT its
     // body's inferred type, and NOT `ScopeDef.sig`, which stays
@@ -1706,7 +1706,7 @@ struct ScopeData {
     // fail loudly. Mirrors `def_params`'s own precedent exactly (added
     // for the analogous "recover param types without touching the
     // load-bearing `sig`/`body` hole sentinel" need).
-    def_return_types : HashMap ModulePath Term := HashMap.map HashMap.empty_buckets,
+    def_return_types : HashMap String Term := HashMap.map HashMap.empty_buckets,
     // A def's own FULL declared signature (`Def.typ` itself, e.g.
     // `forall V. Pi (xs : List V) (Option V)` for `def get_first {V :
     // Type} ...`) -- unlike `def_return_types` just above (the Pi-chain
@@ -1718,7 +1718,7 @@ struct ScopeData {
     // `sig`-hole rule) as `def_params`/`def_return_types`; populated by
     // `build_scope_def`, consumed by `type_check_app`'s signature-driven
     // path (`lang/typecheck/infer.mo`).
-    def_sigs : HashMap ModulePath Term := HashMap.map HashMap.empty_buckets,
+    def_sigs : HashMap String Term := HashMap.map HashMap.empty_buckets,
 }
 
 // A scope node in the linked list.

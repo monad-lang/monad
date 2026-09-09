@@ -65,24 +65,50 @@ def modpath_gt (a : ModulePath) (b : ModulePath) : Bool :=
 def modpath_hash (mp : ModulePath) : U64 :=
     String.hash (show_module_path mp)
 
-def modpath_map_empty {V : Type} : HashMap ModulePath V :=
+// The stored key is the RENDERED path (`Foo.bar`), not the `ModulePath`
+// itself, while the caller-facing argument stays a `ModulePath`. That
+// one change is the whole point, and it is worth being explicit about
+// why.
+//
+// A `ModulePath` has no cheap hash or equality: `modpath_hash` is
+// `String.hash (show_module_path mp)` and `modpath_str_eq` is
+// `String.beq` of two `show_module_path`s, and `show_module_path`
+// (`lang/types.mo`) is `List.intercalate "." (List.map show_identifier
+// ids)` -- an interpreted `List.map` plus a `String.concat` chain, built
+// fresh every time. `bucket_insert_eq`/`bucket_lookup_eq` call the
+// equality once PER CHAIN STEP, so with ~4,200 def names over 256
+// buckets (~16 deep) a single insert rendered both sides ~16 times:
+// roughly 32 full path renders per map operation, 31 of them rebuilding
+// a string the table already had.
+//
+// AGENTS.md item 26 already halved this once -- `!lt && !gt` (four
+// renders per step) to a single `eq` (two) -- for a measured -41.5% on
+// `elaborate_class`. It did not remove the renders, because as long as
+// the STORED key is a `ModulePath` every comparison has to re-derive it.
+// Rendering once at the boundary and storing the result removes the
+// remainder, and lets these maps reuse `bucket_insert_str`/
+// `bucket_lookup_str` (plain native `String.beq`, no comparator value
+// passed at all) exactly as `alias_map_*` below already does.
+def modpath_map_empty {V : Type} : HashMap String V :=
     HashMap.map HashMap.empty_buckets
 
-def modpath_map_insert {V : Type} (key : ModulePath) (val : V) (m : HashMap ModulePath V) : HashMap ModulePath V :=
+def modpath_map_insert {V : Type} (key : ModulePath) (val : V) (m : HashMap String V) : HashMap String V :=
     match m {
         HashMap.map buckets =>
-            let idx := HashMap.bucket_of (modpath_hash key) in
+            let rendered : String := show_module_path key in
+            let idx := HashMap.bucket_of (String.hash rendered) in
             let bucket := HashMap.get_bucket buckets idx in
-            let new_bucket := HashMap.bucket_insert_eq modpath_str_eq key val bucket in
+            let new_bucket := HashMap.bucket_insert_str rendered val bucket in
             HashMap.map (HashMap.set_bucket buckets idx new_bucket)
     }
 
-def modpath_map_lookup {V : Type} (key : ModulePath) (m : HashMap ModulePath V) : Option V :=
+def modpath_map_lookup {V : Type} (key : ModulePath) (m : HashMap String V) : Option V :=
     match m {
         HashMap.map buckets =>
-            let idx := HashMap.bucket_of (modpath_hash key) in
+            let rendered : String := show_module_path key in
+            let idx := HashMap.bucket_of (String.hash rendered) in
             let bucket := HashMap.get_bucket buckets idx in
-            HashMap.bucket_lookup_eq modpath_str_eq key bucket
+            HashMap.bucket_lookup_str rendered bucket
     }
 
 /// String-keyed map for the bare-name -> qualified-name rewrite tables
@@ -630,7 +656,7 @@ def scope_find_inductive_by_constructor (con_name : ModulePath) (s : Scope) : Op
 def scope_data_find_inductive_by_constructor (sd : ScopeData) (con_name : ModulePath) : Option Inductive :=
     find_inductive_by_constructor_in_pairs (HashMap.to_list sd.inductives) con_name
 
-def find_inductive_by_constructor_in_pairs (pairs : List (Pair ModulePath Inductive)) (con_name : ModulePath) : Option Inductive :=
+def find_inductive_by_constructor_in_pairs (pairs : List (Pair String Inductive)) (con_name : ModulePath) : Option Inductive :=
     match pairs {
         List.empty => Option.none,
         List.cons p rest =>
@@ -669,7 +695,7 @@ def scope_find_all_inductives_by_constructor (con_name : ModulePath) (s : Scope)
     let g : ScopeData := scope_globals s in
     scope_data_find_all_inductives_by_constructor g con_name
 
-def find_all_inductives_by_constructor_in_pairs (pairs : List (Pair ModulePath Inductive)) (con_name : ModulePath) : List Inductive :=
+def find_all_inductives_by_constructor_in_pairs (pairs : List (Pair String Inductive)) (con_name : ModulePath) : List Inductive :=
     match pairs {
         List.empty => List.empty,
         List.cons p rest =>
