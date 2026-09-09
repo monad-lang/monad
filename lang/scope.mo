@@ -18,6 +18,7 @@ use lang.typecheck.traverse {con_map_children, native_map_children, term_map_chi
 // type/def resolve without being explicitly `use`d.
 use std.map {}
 use std.list {filter, filter_map}
+use lang.codegen.strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 // --- ModulePath-keyed HashMap ops, bypassing `Map`'s typeclass dispatch ---
 //
@@ -2465,18 +2466,61 @@ type DefTypeEntry {
     mk (name : ModulePath) (typ : Term),
 }
 
+/// The table `lookup_def_type` reads, built ONCE per
+/// `resolve_class_calls_decls` rather than scanned per call site.
+///
+/// This was a `List DefTypeEntry` walked linearly, and `lookup_def_type`
+/// fires on every `Term.app` node in the whole decl graph -- so at
+/// self-compile scale (4,020 defs) it was ~4,020 steps per application
+/// node, each step rendering a `ModulePath` via `show_module_path`.
+/// Measured: `resolve_class_calls_decls` was 424646ms of a 953084ms
+/// self-compile (45%), against 81ms of 2399ms (3.4%) for
+/// `examples/hello.mo`'s 349 defs -- a 5242x blow-up for an 11.5x input.
+/// Same disease and same cure as `filter_reachable_decls` (AGENTS.md,
+/// `2026-08-29-filter-reachable-perf.md`): index it.
+///
+/// **Keyed under BOTH forms, first-wins, to preserve the linear scan's
+/// exact answer.** The scan matched an entry when its full dotted name
+/// equalled the query OR its bare last segment did (see
+/// `lookup_def_type`'s own doc comment for why both are needed), and
+/// returned the FIRST such entry in decl order. Inserting each entry
+/// under both keys, earlier entries winning, reproduces that exactly: if
+/// entry 5 matches by last segment and entry 50 by full name, key
+/// "foo" still resolves to entry 5, as the scan did. Both predicates are
+/// plain string equality -- `Similar.similar` on `Identifier` is
+/// `String.beq` of the two strings (`lang/types.mo`), and
+/// `show_identifier` is a pass-through -- so no comparison semantics
+/// change, only how many times they run.
 #[partial]
-def collect_def_types (decl_list : List Decl) : List DefTypeEntry :=
+def collect_def_types (decl_list : List Decl) : HashMap String Term :=
+    collect_def_types_go decl_list str_map_empty
+
+/// First-wins insert: an existing key is left alone, matching the scan's
+/// "first entry in decl order that matches" semantics. `str_map_insert`
+/// on its own REPLACES, which would give last-wins.
+#[partial]
+def def_type_insert_first (key : String) (typ : Term) (m : HashMap String Term) : HashMap String Term :=
+    match str_map_lookup key m {
+        Option.some _ => m,
+        Option.none => str_map_insert key typ m,
+    }
+
+#[partial]
+def collect_def_types_go (decl_list : List Decl) (acc : HashMap String Term) : HashMap String Term :=
     match decl_list {
-        List.empty => List.empty,
+        List.empty => acc,
         List.cons d rest =>
             match d {
                 Decl.def_d def_ =>
                     match def_ {
                         Def.mk dname dtyp _ _ _ _ =>
-                            List.cons (DefTypeEntry.mk dname dtyp) (collect_def_types rest),
+                            let with_full : HashMap String Term :=
+                                def_type_insert_first (show_module_path dname) dtyp acc in
+                            let with_last : HashMap String Term :=
+                                def_type_insert_first (show_identifier (last_segment dname)) dtyp with_full in
+                            collect_def_types_go rest with_last,
                     },
-                _ => collect_def_types rest,
+                _ => collect_def_types_go rest acc,
             },
     }
 
@@ -2503,17 +2547,8 @@ def collect_def_types (decl_list : List Decl) : List DefTypeEntry :=
 /// establishes for the identical dotted-vs-bare ambiguity elsewhere in
 /// this file.
 #[partial]
-def lookup_def_type (entries : List DefTypeEntry) (name : Identifier) : Option Term :=
-    match entries {
-        List.empty => Option.none,
-        List.cons e rest =>
-            match e {
-                DefTypeEntry.mk ename etyp =>
-                    if String.beq (show_module_path ename) (show_identifier name) || Similar.similar (last_segment ename) name
-                    then Option.some etyp
-                    else lookup_def_type rest name,
-            },
-    }
+def lookup_def_type (entries : HashMap String Term) (name : Identifier) : Option Term :=
+    str_map_lookup (show_identifier name) entries
 
 /// Strip `n` leading `Term.pi` binders (skipping any leading `Term.forall`
 /// binders at each step -- they don't correspond to an applied value
@@ -2887,7 +2922,7 @@ def carrier_var (name : String) : Term :=
 /// that the same as "no matching instance", failing clean at link time
 /// rather than guessing.
 #[partial]
-def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : List DefTypeEntry) (t : Term) : Option Term :=
+def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (t : Term) : Option Term :=
     match t {
         // `Literal.if_`'s own two branches are the operand shape the
         // self-hosted test driver's own synthesized summary line
@@ -3440,7 +3475,7 @@ def build_dict_field_projection_checked (cls : Class) (dict_id : Identifier) (me
 /// still failed (`undefined @Monad_pure` at link time) -- exactly this
 /// gap.
 #[partial]
-def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
+def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
     match t {
         Term.lam dbg typ body =>
             match dbg {
@@ -3525,7 +3560,7 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
     }
 
 #[partial]
-def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (args : List Term) : List Term :=
+def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (args : List Term) : List Term :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
@@ -3533,7 +3568,7 @@ def resolve_class_call_terms (classes : List Class) (instances : List Instance) 
     }
 
 #[partial]
-def resolve_class_call_cases (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (cases : List MatchCase) : List MatchCase :=
+def resolve_class_call_cases (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (cases : List MatchCase) : List MatchCase :=
     match cases {
         List.empty => List.empty,
         List.cons c rest =>
@@ -3541,7 +3576,7 @@ def resolve_class_call_cases (classes : List Class) (instances : List Instance) 
     }
 
 #[partial]
-def resolve_class_call_case (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (c : MatchCase) : MatchCase :=
+def resolve_class_call_case (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (scrutinee : Term) (c : MatchCase) : MatchCase :=
     match c {
         MatchCase.mc name args body fp =>
             let new_env := match_arm_env ctor_field_types env scrutinee c in
@@ -3555,7 +3590,7 @@ def resolve_class_call_case (classes : List Class) (instances : List Instance) (
 /// resolved via ordinary recursion, per this pass's own "leave
 /// unresolved rather than guess" style, matching `resolve_infix_term`).
 #[partial]
-def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
+def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
     let cls_name := class_own_name cls in
     match lookup_dict_binding dict_env cls_name {
         Option.some dict_id => build_dict_field_projection cls dict_id method_name resolved_args,
@@ -3599,7 +3634,7 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
 /// and the call was left unresolved) even after `def_carrier` landed for
 /// `bind`.
 #[partial]
-def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
+def resolve_class_method_call_d4 (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
     if modpath_eq cls_name monad_class_name && String.beq (show_identifier method_name) "pure" then
         match def_carrier {
             Option.some carrier => resolve_class_method_call_with_carrier classes instances dict_env cls_name method_name resolved_args orig_head orig_args carrier extra_carriers,
@@ -3621,7 +3656,7 @@ def resolve_class_method_call_d4 (classes : List Class) (instances : List Instan
 /// name, and only the REAL `env` can say what type that name was
 /// declared with.
 #[partial]
-def resolve_class_method_call_d4_from_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : List DefTypeEntry) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
+def resolve_class_method_call_d4_from_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls_name : ModulePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (extra_carriers : List Term) : Term :=
     // Was `infer_carrier_from_args_go` (first arg that reveals ANY
     // carrier) feeding a single candidate into a "try it, else class
     // default" two-step -- sound when an arg's own type IS the class's
@@ -3768,7 +3803,7 @@ def resolve_class_method_call_with_dict_args (prefix : String) (classes : List C
 /// existing, already-correct behavior for the common "same type
 /// variable" case); this list is only consulted once that fails.
 #[partial]
-def infer_all_carriers_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : List DefTypeEntry) (args : List Term) : List Term :=
+def infer_all_carriers_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (args : List Term) : List Term :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
@@ -3779,7 +3814,7 @@ def infer_all_carriers_from_args_go (env : List LocalTypeBinding) (ctor_owners :
     }
 
 #[partial]
-def infer_carrier_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : List DefTypeEntry) (args : List Term) : Option Term :=
+def infer_carrier_from_args_go (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (args : List Term) : Option Term :=
     match args {
         List.empty => Option.none,
         List.cons a rest =>
@@ -4038,7 +4073,7 @@ def lookup_def_constraints (entries : List DefConstraintEntry) (name : ModulePat
 /// passes through completely unchanged -- this must never touch an
 /// ordinary, unconstrained call.
 #[partial]
-def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (id : Identifier) (head : Term) (resolved_args : List Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
+def resolve_ordinary_constrained_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (id : Identifier) (head : Term) (resolved_args : List Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
     match lookup_def_constraints def_constraints (ModulePath.mp (List.cons id List.empty)) {
         Option.none => rebuild_call head resolved_args,
         Option.some constraints =>
@@ -4053,7 +4088,7 @@ def resolve_ordinary_constrained_call (classes : List Class) (instances : List I
     }
 
 #[partial]
-def resolve_class_calls_decls_go (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (ctor_field_types : List CtorFieldTypes) (def_constraints : List DefConstraintEntry) (def_types : List DefTypeEntry) (decl_list : List Decl) : List Decl :=
+def resolve_class_calls_decls_go (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (ctor_field_types : List CtorFieldTypes) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (decl_list : List Decl) : List Decl :=
     match decl_list {
         List.empty => List.empty,
         List.cons d rest =>
@@ -4595,8 +4630,21 @@ def test_last_segment_leaves_undotted_single_segment_name_unchanged : Bool :=
 def test_lookup_def_type_finds_dotted_own_name_def_by_bare_query : Bool :=
     let println_typ := Term.pi (Term.var 0 (DebugName.named (Identifier.id "String")))
         (Term.app (Term.var 0 (DebugName.named (Identifier.id "IO"))) (Term.var 0 (DebugName.named (Identifier.id "Unit")))) in
-    let entry := DefTypeEntry.mk (ModulePath.mp (List.cons (Identifier.id "IO.println") List.empty)) println_typ in
-    match lookup_def_type (List.cons entry List.empty) (Identifier.id "println") {
+    let dname : ModulePath := ModulePath.mp (List.cons (Identifier.id "IO.println") List.empty) in
+    let d : Def := {
+        name := dname,
+        typ := println_typ,
+        term := Term.hole,
+        constraints := List.empty,
+        attrs := List.empty,
+        vis := Visibility.pub_,
+    } in
+    // Goes through `collect_def_types` rather than hand-building the
+    // table: the bare-query answer depends on the builder registering
+    // each def under its last segment as well as its full dotted name,
+    // so testing the pair together is what actually covers the
+    // behaviour this test is named for.
+    match lookup_def_type (collect_def_types (List.cons (Decl.def_d d) List.empty)) (Identifier.id "println") {
         Option.some _ => true,
         Option.none => false,
     }
@@ -4615,7 +4663,7 @@ def test_lookup_def_type_finds_dotted_own_name_def_by_bare_query : Bool :=
 def test_infer_carrier_type_recurses_into_if_branches : Bool :=
     let if_term := Term.lit (Literal.if_ (Term.var 0 (DebugName.named (Identifier.id "cond")))
         (Term.lit (Literal.num 1 NumSuffix.i64)) (Term.lit (Literal.num 0 NumSuffix.i64))) in
-    match infer_carrier_type List.empty List.empty List.empty if_term {
+    match infer_carrier_type List.empty List.empty str_map_empty if_term {
         Option.some _ => true,
         Option.none => false,
     }
@@ -4626,7 +4674,7 @@ def test_infer_carrier_type_if_branch_none_falls_through_to_else : Bool :=
     // carrier must still be found from the ELSE branch.
     let if_term := Term.lit (Literal.if_ (Term.var 0 (DebugName.named (Identifier.id "cond")))
         (Term.var 1 (DebugName.named (Identifier.id "uninformative"))) (Term.lit (Literal.str "x"))) in
-    match infer_carrier_type List.empty List.empty List.empty if_term {
+    match infer_carrier_type List.empty List.empty str_map_empty if_term {
         Option.some _ => true,
         Option.none => false,
     }
