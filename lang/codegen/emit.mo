@@ -69,8 +69,8 @@ use lang.codegen.util {
   list_contains_str, rev_vals, str_map_empty, str_map_insert, str_map_lookup,
 }
 use lang.module {
-  LoadedModules, ModuleInfo, elaborate_module_decls_best_effort, get_loaded_all,
-  get_loaded_main, mk, resolve_open_aliases_in_modules,
+  LoadedModules, ModuleInfo, bench_step, elaborate_module_decls_best_effort,
+  get_loaded_all, get_loaded_main, mk, resolve_open_aliases_in_modules,
 }
 use lang.scope {
   add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
@@ -4600,13 +4600,26 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // program actually being compiled), fall back to the original,
     // unelaborated decls -- this must never newly break a compile that
     // worked before this pass existed.
+    //
+    // Sub-timed with `bench_step` (`lang/module.mo`), the same helper
+    // `elaborate_loaded_modules_cached` threads through its own pure
+    // `let` chain. This phase was measured at 659182ms of a 969811ms
+    // self-compile -- 68% of the whole thing -- behind ONE opaque
+    // number, so which of these three operations owns it was unknown.
+    // `bench_step`'s `forced` argument consumes each step's result so
+    // the work lands inside its own span; the check that matters is
+    // arithmetic (AGENTS.md item 25): these three must sum to the
+    // `elaborate_class` total still printed below.
     let t_elab : I64 <- Bench.now;
     let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
     let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_decls;
+    let t_scope : I64 <- bench_step verbose "  elaborate_class: build_scope_from_decls" t_elab (List.length scope_data.classes);
     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
     let elaborated := elaborate_module_decls_best_effort scope dict_param_decls empty_locs;
+    let t_best_effort : I64 <- bench_step verbose "  elaborate_class: elaborate_module_decls_best_effort" t_scope (List.length elaborated);
     let dispatched_decls := resolve_class_calls_decls elaborated;
+    let _t_dispatch : I64 <- bench_step verbose "  elaborate_class: resolve_class_calls_decls" t_best_effort (List.length dispatched_decls);
     if verbose then do {
         Bench.report_since "elaborate_class" t_elab;
         return unit
