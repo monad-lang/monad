@@ -3,9 +3,14 @@ use lang.types {
   Instance, MatchCase, ModulePath, Param, Struct, Term, TypeConstraint,
   app, class_d, con, def_d, forall, hole, id, id_eq, id_member, if_, inductive_d,
   infix_d, instance_d, lam, lit, match_, mc, mk, mp, name, named, ntv, num, open_d,
-  pi, scoped_open_d, sentinel, str, struct_d, type_, union_ids, unnamed,
+  pi, scoped_open_d, sentinel, show_identifier, str, struct_d, type_, union_ids, unnamed,
   use_d, var,
 }
+// `HashMap` stays available via the same always-on mechanism scope.mo's
+// own `use std.map {}` relies on (see the comment there for why the
+// `Map`-class-instance exports must not be named explicitly).
+use std.map {}
+use lang.codegen.strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 
 /// Collect all free type variables from a Term.
@@ -298,13 +303,50 @@ def names_of_decl (decl : Decl) : List Identifier :=
     }
 
 /// Collect all names from a list of declarations.
+///
+/// One pass carrying a string-keyed seen-set. The previous fold called
+/// `union_ids` per decl, whose `id_member` rescanned the entire
+/// accumulated tail each time -- O(n^2) `String.beq` at the ~4000-def
+/// whole-graph call (`names_of_decls dict_paramed2`, lang/module.mo),
+/// which sat at 12.0s in the 2026-09-09 self-compile profile (AGENTS.md
+/// item 27 diagnosed the shape at hello.mo scale and correctly deferred
+/// it; item 37 is why it had to be re-measured at self-compile scale).
+///
+/// Output is unchanged from `union_ids`'s left bias: encounter order,
+/// first occurrence kept. `id_eq` is exactly `String.beq` of the two
+/// identifiers' strings, and `show_identifier` is exactly that string, so
+/// keying the set on `show_identifier` dedups identically to `id_member`.
+/// (`List.dedup_by`, std/list.mo, is no substitute: its own `seen` is a
+/// plain list scanned linearly -- the same O(n^2).)
 def names_of_decls (decl_list : List Decl) : List Identifier :=
+    names_of_decls_go decl_list str_map_empty
+
+// Mutually recursive through `keep_new_names`; each `keep_new_names`
+// step consumes one name and each `names_of_decls_go` step one decl, so
+// the pair always terminates -- the checker just can't see it across
+// the mutual edge.
+#[terminating]
+def names_of_decls_go (decl_list : List Decl) (seen : HashMap String Identifier) : List Identifier :=
     match decl_list {
-        List.cons hd rest =>
-            let hd_names := names_of_decl hd in
-            let rest_names := names_of_decls rest in
-            union_ids hd_names rest_names,
+        List.cons hd rest => keep_new_names (names_of_decl hd) seen rest,
         List.empty => List.empty,
+    }
+
+/// Consume one decl's freshly collected names (`names_of_decl` returns 0
+/// or 1 today, but this is written against the general list so a future
+/// multi-name arm cannot silently drop names), then continue with the
+/// rest of the decls and the updated seen-set.
+#[terminating]
+def keep_new_names (names : List Identifier) (seen : HashMap String Identifier) (rest : List Decl) : List Identifier :=
+    match names {
+        List.cons name more =>
+            let key : String := show_identifier name in
+            match str_map_lookup key seen {
+                Option.some _ => keep_new_names more seen rest,
+                Option.none =>
+                    List.cons name (keep_new_names more (str_map_insert key name seen) rest),
+            },
+        List.empty => names_of_decls_go rest seen,
     }
 
 /// Elaborate a single declaration.
