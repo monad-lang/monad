@@ -16,7 +16,7 @@ use lang.types {
   Decl, Def, Identifier, ModulePath, StructField, TypeConstraint,
   sentinel, show_identifier, show_module_path,
 }
-use lang.module {ModuleInfo, mk}
+use lang.module {ModuleInfo, bench_step, mk}
 use lang.scope {
   OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
   collect_open_aliases, modpath_eq, resolve_open_alias_decls,
@@ -530,17 +530,43 @@ def insert_all_names (names : List String) (acc : HashMap String Bool) : HashMap
 /// only place the owning module is recorded, and it is gone the moment
 /// the decls are concatenated.
 #[partial]
-def qualify_modules (all_modules : List ModuleInfo) : Result String (List ModuleInfo) :=
-    let modules := dedup_modules_by_file all_modules in
-    let owners_map := collect_def_owners modules str_map_empty in
-    let names := all_declared_names modules in
-    let global_map := build_global_rename_map names owners_map alias_map_empty in
-    let ambig := ambiguous_declared_names names owners_map in
-    let msgs := collect_qualify_errors modules owners_map ambig in
+/// Monadic only so each stage can be `bench_step`-timed -- the same
+/// instrumentation `elaborate_class` got (`lang/codegen/emit.mo`). The
+/// pass printed ONE number (`qualify_modules`: 29406ms of the 969811ms
+/// self-compile baseline, 24.9s at the 2026-09-09 re-profile) for six
+/// whole-graph stages plus the per-module rewrite, none of which had
+/// ever been measured separately. `bench_step`'s `forced` argument
+/// consumes each stage's result so the work lands inside its own span:
+/// a `List.length` where the result is a list, a one-key `str_map_lookup`
+/// probe where it is a map (a `HashMap` has no cheap size, and the probe
+/// itself forces the update chain without timing anything). The
+/// arithmetic check (AGENTS.md item 25): these sub-times must sum to the
+/// enclosing `qualify_modules` total `emit.mo` still prints.
+def qualify_modules (verbose : Bool) (all_modules : List ModuleInfo) : IO (Result String (List ModuleInfo)) := do {
+    let t0 : I64 <- Bench.now;
+    let modules := dedup_modules_by_file all_modules;
+    let t1 : I64 <- bench_step verbose "  qualify: dedup_modules_by_file" t0 (List.length modules);
+    let owners_map := collect_def_owners modules str_map_empty;
+    let oprobe : I64 := match str_map_lookup "" owners_map { Option.some _ => 1, Option.none => 0 };
+    let t2 : I64 <- bench_step verbose "  qualify: collect_def_owners" t1 oprobe;
+    let names := all_declared_names modules;
+    let t3 : I64 <- bench_step verbose "  qualify: all_declared_names" t2 (List.length names);
+    let global_map := build_global_rename_map names owners_map alias_map_empty;
+    let gprobe : I64 := match str_map_lookup "" global_map { Option.some _ => 1, Option.none => 0 };
+    let t4 : I64 <- bench_step verbose "  qualify: build_global_rename_map" t3 gprobe;
+    let ambig := ambiguous_declared_names names owners_map;
+    let t5 : I64 <- bench_step verbose "  qualify: ambiguous_declared_names" t4 (List.length ambig);
+    let msgs := collect_qualify_errors modules owners_map ambig;
+    let t6 : I64 <- bench_step verbose "  qualify: collect_qualify_errors" t5 (List.length msgs);
     match msgs {
-        List.cons _ _ => Result.err (join_semicolon_msgs msgs ""),
-        List.empty => Result.ok (qualify_modules_go modules owners_map global_map ambig),
+        List.cons _ _ => return (Result.err (join_semicolon_msgs msgs "")),
+        List.empty => do {
+            let qualified := qualify_modules_go modules owners_map global_map ambig;
+            let _t7 : I64 <- bench_step verbose "  qualify: qualify_modules_go" t6 (List.length qualified);
+            return (Result.ok qualified)
+        },
     }
+}
 
 /// One `ModuleInfo` per source FILE.
 ///
@@ -698,40 +724,47 @@ def qtest_refs_of_decls (decls : List Decl) : List String := match decls {
 /// The collision that crashed the self-compiled compiler: one bare name,
 /// two modules. Both must survive, under distinct symbols.
 #[test]
-def test_qualify_same_name_in_two_modules_stays_distinct : Bool :=
-    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty) in
-    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty) in
-    match qualify_modules (List.cons a (List.cons b List.empty)) {
-        Result.err _ => false,
-        Result.ok ms =>
-            let names := qtest_def_names ms in
-            if list_contains_str names "a::shared"
-            then list_contains_str names "b::shared"
-            else false,
+def test_qualify_same_name_in_two_modules_stays_distinct : IO Bool := do {
+    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty);
+    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty);
+    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => do {
+            let names := qtest_def_names ms;
+            return (if list_contains_str names "a::shared"
+                then list_contains_str names "b::shared"
+                else false)
+        },
     }
+}
 
 /// A local definition wins: `a`'s own `shared` is what `a` calls, even
 /// though `b` declares the name too.
 #[test]
-def test_qualify_local_definition_wins : Bool :=
+def test_qualify_local_definition_wins : IO Bool := do {
     let a := qtest_module "a" (List.cons (qtest_def "shared" "z")
-        (List.cons (qtest_def "caller" "shared") List.empty)) in
-    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty) in
-    match qualify_modules (List.cons a (List.cons b List.empty)) {
-        Result.err _ => false,
-        Result.ok ms => list_contains_str (qtest_body_refs ms) "a::shared",
+        (List.cons (qtest_def "caller" "shared") List.empty));
+    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty);
+    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => return (list_contains_str (qtest_body_refs ms) "a::shared"),
     }
+}
 
 /// The dominant corpus shape: a bare cross-module call to a uniquely
 /// named def, with no `use`/`open` naming it at all.
 #[test]
-def test_qualify_unique_owner_resolves_without_any_import : Bool :=
-    let a := qtest_module "a" (List.cons (qtest_def "only_here" "w") List.empty) in
-    let b := qtest_module "b" (List.cons (qtest_def "caller" "only_here") List.empty) in
-    match qualify_modules (List.cons a (List.cons b List.empty)) {
-        Result.err _ => false,
-        Result.ok ms => list_contains_str (qtest_body_refs ms) "a::only_here",
+def test_qualify_unique_owner_resolves_without_any_import : IO Bool := do {
+    let a := qtest_module "a" (List.cons (qtest_def "only_here" "w") List.empty);
+    let b := qtest_module "b" (List.cons (qtest_def "caller" "only_here") List.empty);
+    let r <- qualify_modules false (List.cons a (List.cons b List.empty));
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => return (list_contains_str (qtest_body_refs ms) "a::only_here"),
     }
+}
 
 /// An explicit `use X {n}` picks a winner when two modules declare `n`.
 ///
@@ -742,21 +775,23 @@ def test_qualify_unique_owner_resolves_without_any_import : Bool :=
 /// import-set fallback happened to answer correctly for every ambiguous
 /// name then in the corpus.
 #[test]
-def test_qualify_explicit_import_picks_the_declarer : Bool :=
-    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty) in
-    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty) in
+def test_qualify_explicit_import_picks_the_declarer : IO Bool := do {
+    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty);
+    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty);
     // `c` imports BOTH declarers, so the import-set fallback cannot
     // narrow it -- only the explicit `{shared}` item on `b` can. An
     // earlier version of this test imported `b` alone and passed even
     // with the rule reverted, which is exactly how the bug shipped.
-    let use_a := Decl.use_d (bare_modpath "a") (UseFilter.use_items List.empty) false in
+    let use_a := Decl.use_d (bare_modpath "a") (UseFilter.use_items List.empty) false;
     let use_b := Decl.use_d (bare_modpath "b")
-        (UseFilter.use_items (List.cons (UseItem.use_name (Identifier.id "shared")) List.empty)) false in
-    let c := qtest_module "c" (List.cons use_a (List.cons use_b (List.cons (qtest_def "caller" "shared") List.empty))) in
-    match qualify_modules (List.cons a (List.cons b (List.cons c List.empty))) {
-        Result.err _ => false,
-        Result.ok ms => list_contains_str (qtest_body_refs ms) "b::shared",
+        (UseFilter.use_items (List.cons (UseItem.use_name (Identifier.id "shared")) List.empty)) false;
+    let c := qtest_module "c" (List.cons use_a (List.cons use_b (List.cons (qtest_def "caller" "shared") List.empty)));
+    let r <- qualify_modules false (List.cons a (List.cons b (List.cons c List.empty)));
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => return (list_contains_str (qtest_body_refs ms) "b::shared"),
     }
+}
 
 /// A struct field's DEFAULT is an executable term and must be qualified
 /// like any body. The checker splices it into every struct literal that
@@ -766,17 +801,19 @@ def test_qualify_explicit_import_picks_the_declarer : Bool :=
 /// gate firing. `lang/types.mo`'s `ScopeData.def_params` (defaulting to
 /// `HashMap.map HashMap.empty_buckets`) is the real instance of this.
 #[test]
-def test_qualify_rewrites_struct_field_defaults : Bool :=
-    let helper := qtest_def "make_empty" "z" in
+def test_qualify_rewrites_struct_field_defaults : IO Bool := do {
+    let helper := qtest_def "make_empty" "z";
     let fld := StructField.mk (Identifier.id "f") Term.hole
         (Option.some (Term.var sentinel (DebugName.named (Identifier.id "make_empty"))))
-        Multiplicity.many in
-    let st := Decl.struct_d (Struct.mk (Identifier.id "Holder") (List.cons fld List.empty) Visibility.package_private) in
-    let a := qtest_module "a" (List.cons helper (List.cons st List.empty)) in
-    match qualify_modules (List.cons a List.empty) {
-        Result.err _ => false,
-        Result.ok ms => list_contains_str (struct_default_refs ms) "a::make_empty",
+        Multiplicity.many;
+    let st := Decl.struct_d (Struct.mk (Identifier.id "Holder") (List.cons fld List.empty) Visibility.package_private);
+    let a := qtest_module "a" (List.cons helper (List.cons st List.empty));
+    let r <- qualify_modules false (List.cons a List.empty);
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => return (list_contains_str (struct_default_refs ms) "a::make_empty"),
     }
+}
 
 #[partial]
 def struct_default_refs (modules : List ModuleInfo) : List String :=
@@ -816,46 +853,53 @@ def struct_field_default_refs (fields : List StructField) : List String := match
 /// treating those as rival declarers made every `String.*` reference in
 /// the corpus unresolvable.
 #[test]
-def test_qualify_same_file_under_two_paths_is_not_ambiguous : Bool :=
-    let decls := List.cons (qtest_def "shared" "x") List.empty in
-    let short_ := ModuleInfo.mk (bare_modpath "string") "init/string.mo" decls in
-    let long_ := ModuleInfo.mk (bare_modpath "init.string") "init/string.mo" decls in
-    let caller := qtest_module "user" (List.cons (qtest_def "caller" "shared") List.empty) in
-    match qualify_modules (List.cons short_ (List.cons long_ (List.cons caller List.empty))) {
-        Result.err _ => false,
+def test_qualify_same_file_under_two_paths_is_not_ambiguous : IO Bool := do {
+    let decls := List.cons (qtest_def "shared" "x") List.empty;
+    let short_ := ModuleInfo.mk (bare_modpath "string") "init/string.mo" decls;
+    let long_ := ModuleInfo.mk (bare_modpath "init.string") "init/string.mo" decls;
+    let caller := qtest_module "user" (List.cons (qtest_def "caller" "shared") List.empty);
+    let r <- qualify_modules false (List.cons short_ (List.cons long_ (List.cons caller List.empty)));
+    match r {
+        Result.err _ => return false,
         // The longer path wins, and the duplicate module is dropped
         // rather than compiled twice under two symbols.
-        Result.ok ms => list_contains_str (qtest_body_refs ms) "init.string::shared",
+        Result.ok ms => return (list_contains_str (qtest_body_refs ms) "init.string::shared"),
     }
+}
 
 /// Two declarers and no import saying which: refusing to guess is the
 /// whole point -- silently picking one is what the old flat namespace
 /// did, and what crashed the compiler.
 #[test]
-def test_qualify_ambiguous_reference_is_an_error : Bool :=
-    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty) in
-    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty) in
-    let c := qtest_module "c" (List.cons (qtest_def "caller" "shared") List.empty) in
-    match qualify_modules (List.cons a (List.cons b (List.cons c List.empty))) {
-        Result.err _ => true,
-        Result.ok _ => false,
+def test_qualify_ambiguous_reference_is_an_error : IO Bool := do {
+    let a := qtest_module "a" (List.cons (qtest_def "shared" "x") List.empty);
+    let b := qtest_module "b" (List.cons (qtest_def "shared" "y") List.empty);
+    let c := qtest_module "c" (List.cons (qtest_def "caller" "shared") List.empty);
+    let r <- qualify_modules false (List.cons a (List.cons b (List.cons c List.empty)));
+    match r {
+        Result.err _ => return true,
+        Result.ok _ => return false,
     }
+}
 
 /// `String.a` and `String_a` must not become one symbol. They did under
 /// the old `replace_dots_with_underscores` mangling, which is why the
 /// symbol is now the source name verbatim.
 #[test]
-def test_qualify_dotted_and_underscored_names_stay_distinct : Bool :=
+def test_qualify_dotted_and_underscored_names_stay_distinct : IO Bool := do {
     let a := qtest_module "m" (List.cons (qtest_def "String.a" "x")
-        (List.cons (qtest_def "String_a" "y") List.empty)) in
-    match qualify_modules (List.cons a List.empty) {
-        Result.err _ => false,
-        Result.ok ms =>
-            let names := qtest_def_names ms in
-            if list_contains_str names "m::String.a"
-            then list_contains_str names "m::String_a"
-            else false,
+        (List.cons (qtest_def "String_a" "y") List.empty));
+    let r <- qualify_modules false (List.cons a List.empty);
+    match r {
+        Result.err _ => return false,
+        Result.ok ms => do {
+            let names := qtest_def_names ms;
+            return (if list_contains_str names "m::String.a"
+                then list_contains_str names "m::String_a"
+                else false)
+        },
     }
+}
 
 /// `::` separates the module from the name, so the source name is
 /// recoverable exactly -- which is what the native tables, keyed on what

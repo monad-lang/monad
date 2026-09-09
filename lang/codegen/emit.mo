@@ -4520,7 +4520,12 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // here, before Stage 1 -- `ModuleInfo.path` is the only record of
     // which module a decl came from, and flattening discards it.
     let t_qualify : I64 <- Bench.now;
-    match qualify_modules aliased_mods {
+    // Bound before the match: `qualify_modules` is IO now (it carries the
+    // stage sub-timing), and matching the ACTION itself instead of its
+    // bound result typechecks fine -- no static exhaustiveness check --
+    // then dies at runtime on the uncovered `IO.io` constructor.
+    let qualify_result <- qualify_modules verbose aliased_mods;
+    match qualify_result {
       Result.err e => do {
         if verbose then println ("FAILED at stage: qualify_modules (" ++ e ++ ")") else return unit;
         return (Result.err e)

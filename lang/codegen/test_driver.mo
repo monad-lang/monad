@@ -239,7 +239,29 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
         } else do {
             let driver_source := synthesize_test_driver_source (test_def_names test_defs);
             match try_parse_decls driver_source {
-                Option.some driver_decls => do {
+                Option.some driver_decls => compile_test_driver_with loaded driver_decls,
+                Option.none => do {
+                    return Result.err "internal error: failed to parse synthesized test driver (this is a monad-test bug, not a problem with the target file)"
+                }
+            }
+        }
+    }
+}
+
+/// The parsed-driver continuation of `compile_loaded_modules_to_test_ir`
+/// above. Extracted into its own def, rather than the match arm it lived
+/// in, when `qualify_modules` became IO (it now carries the stage
+/// sub-timing): a `<-` bind nested inside a match-arm `do` block --
+/// itself inside `if`/`else do` blocks -- desugars to something
+/// `elaborate_decl_with_scope` rejects, which `elaborate_module_decls_
+/// best_effort` then falls back on SILENTLY, leaving this file's
+/// annotated struct literals un-desugared and tripping the
+/// `validate_no_undesugared_struct_lits` gate at a stage far from the
+/// real failure. At a def's top level the same bind elaborates fine --
+/// `lang.codegen.emit`'s `compile_loaded_modules_to_ir` has the identical
+/// call.
+#[partial]
+def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl) : IO (Result String LLVMModule) := do {
                     // Must run per-module, on each loaded module's own
                     // decl_list, BEFORE `collect_all_decls_from_modules`
                     // flattens everything -- see `lang.module`'s own
@@ -261,12 +283,21 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                     let driver_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "__test_driver") List.empty);
                     let driver_mod : ModuleInfo := ModuleInfo.mk driver_mp "" driver_decls;
                     let with_driver := List.append aliased_mods (List.cons driver_mod List.empty);
-                    let qualify_result := qualify_modules with_driver;
-                    let qualified_ok : Bool := match qualify_result {
+                    let qualify_result <- qualify_modules false with_driver;
+                    // Annotated rebinding: `qualify_result` arrives from a
+                    // do-notation bind -- an unannotated lambda binder
+                    // once desugared -- and the checker then cannot infer
+                    // a scrutinee type for the matches below, leaving `ok`
+                    // ambiguous between `Result` and emit.mo's own
+                    // `CompileResult`. The annotation pins it (the error's
+                    // own prescribed fix; emit.mo's call site matches the
+                    // bound value where its type is already resolvable).
+                    let qr : Result String (List ModuleInfo) := qualify_result;
+                    let qualified_ok : Bool := match qr {
                         Result.ok _ => true,
                         Result.err _ => false,
                     };
-                    let qualified_mods := match qualify_result {
+                    let qualified_mods := match qr {
                         Result.ok ms => ms,
                         // Keep the pre-qualification modules on failure:
                         // this driver's job is to RUN tests, and a
@@ -338,13 +369,6 @@ def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result Stri
                         Result.err e => return (Result.err e),
                         Result.ok _ => return (Result.ok (compile_db_module reachable)),
                     }
-                },
-                Option.none => do {
-                    return Result.err "internal error: failed to parse synthesized test driver (this is a monad-test bug, not a problem with the target file)"
-                }
-            }
-        }
-    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────
