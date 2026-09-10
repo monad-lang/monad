@@ -1,7 +1,7 @@
 /// String literal parser for the self-hosted parser
 /// Extracted from parser.mo as part of Phase C
 
-use lang.types {Term, lit, str}
+use lang.types {ParseLiteral, ParseTerm, Term, lit, pt_lit, str}
 use lang.parser.core {ParseResult, custom, fail, is_empty, success, tag}
 use lang.parser.combinators {tag, take_while, utf8_char_width}
 
@@ -197,3 +197,46 @@ def raw_string_count_hashes (n : I64) (cnt : I64) (orig : String) (at_quote : St
 			if String.beq ch "#"
 			then raw_string_count_hashes n (I64.add cnt 1) orig at_quote (String.drop 1 input)
 			else raw_string_body n orig input
+
+/// Parse a char literal: `'x'` or `'\n'` (single character, with escape
+/// support). Produces `ParseLiteral.char`, the parse-level sibling of
+/// `Literal.char`.  `Char` is a stub type (AGENTS.md item 29) — this
+/// gives it a literal form for parsing/parity, not runtime operations.
+#[partial]
+def char_literal (input : String) : ParseResult ParseTerm :=
+	match tag "'" input {
+		success rem _ =>
+			if is_empty rem
+			then fail (ParseError.custom "unterminated char literal" rem)
+			else
+				let width : I64 := utf8_char_width rem in
+				let ch : String := String.slice rem 0 width in
+				char_literal_after_char ch (String.drop width rem),
+		fail e => fail e
+	}
+
+#[partial]
+def char_literal_after_char (ch : String) (input : String) : ParseResult ParseTerm :=
+	if String.beq ch "\\"
+	then char_literal_escape input
+	else char_literal_close (tag "'" input) ch
+
+#[partial]
+def char_literal_escape (input : String) : ParseResult ParseTerm :=
+	if is_empty input
+	then fail (ParseError.custom "unterminated escape in char literal" input)
+	else
+		let width : I64 := utf8_char_width input in
+		let esc : String := String.slice input 0 width in
+		match escape_replacement esc {
+			Option.some replacement =>
+				char_literal_close (tag "'" (String.drop width input)) replacement,
+			Option.none => fail (ParseError.custom "unknown escape sequence" input)
+		}
+
+#[partial]
+def char_literal_close (r : ParseResult String) (value : String) : ParseResult ParseTerm :=
+	match r {
+		success rem _ => success rem (pt_lit  (ParseLiteral.char value)),
+		fail e => fail e
+	}

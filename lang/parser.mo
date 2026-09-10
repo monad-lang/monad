@@ -33,7 +33,7 @@ use lang.parser.number {number, numeric_literal}
 use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
 use lang.parser.position {consume_span, location_of_remaining, location_of_remaining_len, new_span, resolve_offsets_in_file, span_fragment, span_location}
 use lang.parser.identifier {identifier}
-use lang.parser.string {raw_string_parse, string_parse}
+use lang.parser.string {char_literal, raw_string_parse, string_parse}
 use lang.parser.diagnostic {render_parse_error}
 open lang.parser.core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
@@ -5311,7 +5311,7 @@ def atom_parsers : List (String -> ParseResult ParseTerm) :=
     // `plans/bootstrapping/self-hosted-compiler.md` for the corpus impact
     // this had (137 real `do {` usages across lang/main.mo and
     // lang/module.mo, all previously unparseable).
-    [raw_string_parse, quote_term_parser, macro_call_term, variable, literal_parser, match_parser, if_parser, do_parser, let_term_parser, list_literal_parser, struct_lit_parser]
+    [raw_string_parse, char_literal, quote_term_parser, macro_call_term, variable, literal_parser, match_parser, if_parser, do_parser, let_term_parser, list_literal_parser, struct_lit_parser]
 
 // ─── Field-pattern match-case grammar (`plans/implementations/
 // struct-field-destructuring.md`'s Phase 6) ─────────────────────────────
@@ -9270,5 +9270,37 @@ def test_def_param_linear_multi_name : Bool :=
 def test_lambda_typed_linear_prefix : Bool :=
     match expression "fn (!x : I64) => x" {
         success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+// --- Char literals (gap §2) ---
+
+#[test]
+def test_char_literal_simple : Bool :=
+    match expression "'M'" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+#[test]
+def test_char_literal_escape_newline : Bool :=
+    match expression "'\\n'" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+#[test]
+def test_char_literal_escape_quote : Bool :=
+    match expression "'\\''" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+#[test]
+def test_char_literal_in_def : Bool :=
+    match def_parser "def c : Char := 'M'" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind { ParseDeclKind.def_d _ => true, _ => false },
         fail _ => false
     }

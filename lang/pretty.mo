@@ -13,7 +13,7 @@ use lang.types {
 use std.list {intercalate}
 
 open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
-open Literal {flt, if_, match_, num, str}
+open Literal {char, flt, if_, match_, num, str}
 open Decl {
   class_d, def_d, inductive_d, infix_d, instance_d, open_d, scoped_open_d,
   struct_d, use_d,
@@ -120,6 +120,9 @@ def show_literal (lit : Literal) : String := match lit {
     str value =>
         let lhs := String.concat "\"" value in
         String.concat lhs "\"",
+    char value =>
+        let lhs := String.concat "'" value in
+        String.concat lhs "'",
     num value suffix =>
         let num_str := I64.to_string value in
         let suf_str := show_num_suffix suffix in

@@ -334,6 +334,7 @@ type NumSuffix {
 // Canonical Literal uses de Bruijn Term; `ParseLiteral` is the parser's.
 type Literal {
     str (value: String),
+    char (value: String),
     num (value: I64) (suffix: NumSuffix),
     /// A literal written with a decimal point (`3.0`, `3.14f32`). Kept as
     /// the exact source text rather than a numeric value: self-hosted
@@ -815,6 +816,7 @@ struct ParseMatchCase {
 
 type ParseLiteral {
     str (value: String),
+    char (value: String),
     num (value: I64) (suffix: NumSuffix),
     flt (text: String) (suffix: NumSuffix),
     if_ (one: ParseTerm) (two: ParseTerm) (three: ParseTerm),

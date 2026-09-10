@@ -555,6 +555,7 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
 def lower_parse_literal (ctx : ParseLowerCtx) (l : ParseLiteral) : Literal :=
     match l {
         ParseLiteral.str v => Literal.str v,
+        ParseLiteral.char v => Literal.char v,
         ParseLiteral.num n suf => Literal.num n suf,
         ParseLiteral.flt t suf => Literal.flt t suf,
         ParseLiteral.if_ a b c =>
