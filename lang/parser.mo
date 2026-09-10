@@ -2976,11 +2976,52 @@ def instance_apply_params (dr : ParseResult ParseDecl) (params : List ParseParam
 		fail e => fail e
 	}
 
+/// Try to parse a named instance prefix `Name :` before the class name.
+/// Returns the instance name (or `Identifier.id "_"` if unnamed) and the
+/// remaining input to parse the class name from.  The name is a single
+/// identifier — matching the Rust host's `def_name` (a `ModulePath`, but
+/// in practice always a single identifier for named instances).
+def instance_try_named (input : String) : Pair Identifier String :=
+	match identifier (skip_spaces input) {
+		success after_name name =>
+			match tag ":" (skip_spaces after_name) {
+				success after_colon _ => Pair.pair (Identifier.id name) after_colon,
+				fail _ => Pair.pair (Identifier.id "_") input
+			},
+		fail _ => Pair.pair (Identifier.id "_") input
+	}
+
+/// Patch the instance name onto a fully-parsed `ParseInstance`, same
+/// "parse with placeholder, patch later" pattern as `instance_apply_vis`.
+#[partial]
+def instance_apply_name (dr : ParseResult ParseDecl) (name : Identifier) : ParseResult ParseDecl :=
+	match dr {
+		success rem decl =>
+			match decl.kind {
+				instance_d inst =>
+					match inst {
+						ParseInstance.mk _ cls constraints args vis implicit_params defs =>
+							success rem (pd_instance_d  (ParseInstance.mk name cls constraints args vis implicit_params defs))
+					},
+				_ => success rem decl
+			},
+		fail e => fail e
+	}
+
 #[partial]
 def instance_try_constraints (r : ParseResult String) (orig : String) : ParseResult ParseDecl :=
 	match r {
 		success rem _ => instance_parse_bracket rem,
-		fail _ => instance_name (module_path_parser (skip_spaces orig))
+		fail _ => instance_name_with_named (skip_spaces orig)
+	}
+
+/// Parse the optional named-instance prefix (`Name :`) then the class name.
+/// `instance_try_named` returns the name (or `_`) and the remaining input;
+/// `instance_apply_name` patches the name onto the fully-parsed result.
+def instance_name_with_named (input : String) : ParseResult ParseDecl :=
+	match instance_try_named input {
+		Pair.pair name rem =>
+			instance_apply_name (instance_name (module_path_parser (skip_spaces rem))) name
 	}
 
 #[partial]
@@ -3009,7 +3050,7 @@ def instance_constraints_then_name (cr : ParseResult (List TypeConstraint)) (inp
 def instance_constraints_close_bracket (r : ParseResult String) (constraints : List TypeConstraint) : ParseResult ParseDecl :=
 	match r {
 		success rem _ =>
-			instance_set_constraints (instance_name (module_path_parser (skip_spaces rem))) constraints,
+			instance_set_constraints (instance_name_with_named (skip_spaces rem)) constraints,
 		fail e => fail (ParseError.custom "expected ] after instance constraint" (parse_error_remaining e))
 	}
 
@@ -9302,5 +9343,28 @@ def test_char_literal_in_def : Bool :=
         success rem out =>
             String.beq rem "" &&
             match out.kind { ParseDeclKind.def_d _ => true, _ => false },
+        fail _ => false
+    }
+
+// --- Named instances (gap §3) ---
+
+#[test]
+def test_named_instance : Bool :=
+    match instance_parser "instance MyEq : BEq I64 { def beq (a b : I64) : Bool := true }" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+#[test]
+def test_named_instance_with_constraints : Bool :=
+    match instance_parser "instance [Show A] MyShow : Show A { def show (a : A) : String := \"x\" }" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+#[test]
+def test_unnamed_instance_still_works : Bool :=
+    match instance_parser "instance BEq I64 { def beq (a b : I64) : Bool := true }" {
+        success rem out => String.beq rem "",
         fail _ => false
     }
