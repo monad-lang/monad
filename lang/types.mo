@@ -230,6 +230,13 @@ def parse_param_many (name: Identifier) (type_: ParseTerm) : ParseParam :=
     let no_attrs : List Attribute := List.empty in
     ParseParam.mk name type_ Multiplicity.many none no_attrs
 
+/// Like `parse_param_many` but with an explicit multiplicity — for
+/// `!`/`?`/`%` prefixes on def/lambda params.
+def parse_param_with_mult (name: Identifier) (type_: ParseTerm) (mult: Multiplicity) : ParseParam :=
+    let none : Option ParseTerm := Option.none in
+    let no_attrs : List Attribute := List.empty in
+    ParseParam.mk name type_ mult none no_attrs
+
 /// Canonical sibling of `parse_param_many`, for code that already holds
 /// a lowered `Term`.
 #[partial]
