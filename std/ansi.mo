@@ -78,11 +78,24 @@ def dim (s : String) : String :=
     escape (Modifier.style Style.dim) ++ s ++ escape Modifier.reset
 
 /// Bold red — for failure output.
-def fail (s : String) : String :=
+///
+/// Dotted on purpose (`Ansi.fail`, the `Bench.now` convention): a BARE
+/// `def fail` here poisons every program that loads this module.
+/// `qualify_modules`'s `resolve_owner` rule 3 resolves a bare reference
+/// to "exactly one module [that] declares it" -- the only DECLARER it
+/// knows is defs, not `open`d constructors, so once a bare `def fail`
+/// entered the loaded set, `lang/parser.mo`'s own bare `fail`
+/// (`open ParseResult {fail, success}` -- a CONSTRUCTOR, invisible to
+/// rule 3) was rewritten to `std.ansi::fail` in the self-compiled
+/// binary and SIGSEGV'd in `String.concat` on the first parse (a
+/// `fail`-of-the-parser call became a String style-wrap). `pass` is
+/// renamed for the same reason: it is exactly as common a word, and the
+/// next `open X {pass}` would walk into the same trap.
+def Ansi.fail (s : String) : String :=
     bold (red s)
 
-/// Bold green — for success output.
-def pass (s : String) : String :=
+/// Bold green — for success output. See `Ansi.fail` for the dotted name.
+def Ansi.pass (s : String) : String :=
     bold (green s)
 
 /// Yellow — for warning output.
@@ -165,11 +178,11 @@ def test_bold_wraps_and_resets : Bool :=
 
 #[test]
 def test_fail_is_bold_red : Bool :=
-    fail "x" == bold (red "x")
+    Ansi.fail "x" == bold (red "x")
 
 #[test]
 def test_pass_is_bold_green : Bool :=
-    pass "x" == bold (green "x")
+    Ansi.pass "x" == bold (green "x")
 
 #[test]
 def test_env_flag_set_some : Bool :=
