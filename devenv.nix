@@ -99,10 +99,17 @@
       set -euo pipefail
       out="''${TMPDIR:-/tmp}/monad-bootstrap-ci"
       rm -rf "$out"; mkdir -p "$out"
-      # --release: debug info is on by default since stage 5, and this job
-      # already runs at 1176s of a 1200s timeout with it off — the wrapper
-      # cost would push a slower CI machine past the line.
-      timeout 1200 cargo run --release -- run lang/main.mo compile lang/main.mo -o "$out/monad" --verbose --release
+      # No timeout, by design: the interpreted self-compile measured ~320s
+      # (2026-09-09) but stretches 2-4x when the runner's other jobs and
+      # local sessions share this 8-core machine, and `cargo run`'s own
+      # build phase is ~10 min cold (fat-LTO profile; CI's ephemeral job
+      # containers never have a warm target/). A fixed `timeout` here was
+      # killing healthy runs. Progress is visible instead: --verbose
+      # streams a per-module and per-stage trace (lang/log.mo), so a
+      # genuinely wedged run shows exactly which stage stalled.
+      # --release: debug info is on by default since stage 5; the wrapper
+      # cost is not worth it on this workload.
+      cargo run --release -- run lang/main.mo compile lang/main.mo -o "$out/monad" --verbose --release
       test -x "$out/monad"
       "$out/monad" check lang/main.mo
     '';

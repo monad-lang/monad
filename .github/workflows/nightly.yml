@@ -16,6 +16,10 @@ jobs:
   nightly:
     if: github.repository == 'monad-lang/monad'
     runs-on: [self-hosted, linux]
+    # Hang guard: the self-compile has no deadline of its own (the CI
+    # bootstrap task streams a --verbose stage trace instead), so this
+    # is the only thing that stops a wedged run from holding the runner.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 

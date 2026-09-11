@@ -16,13 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Populates the shared cargo/target cache once so the three jobs
-      # below (which all restore the SAME key) hit a warm cache instead
-      # of each independently doing a full `cargo build` from cold in
-      # parallel. `--workspace` builds every crate (including monad-wasm)
-      # so nothing downstream has to compile a crate this job skipped.
-      # No actions/cache needed — target/ and ~/.cargo persist on the
-      # self-hosted runner's filesystem between runs.
+      # Builds every crate once (`--workspace`, including monad-wasm) so
+      # the jobs below don't race to build the same crates in parallel.
+      # NOTE: this does NOT warm target/ for the other jobs — each job
+      # runs in its own ephemeral container on the self-hosted runner, so
+      # every job cold-builds what it needs (the fat-LTO release profile
+      # makes that ~10 min). That is expected wall time, not a failure:
+      # the bootstrap task deliberately has no compile deadline, only the
+      # job-level timeout-minutes hang guard below.
       - name: Build release binary
         run: nix develop --no-pure-eval --accept-flake-config -c cargo build --release --workspace
 
@@ -38,6 +39,8 @@ jobs:
   test:
     needs: build-rust
     runs-on: [self-hosted, linux]
+    # Hang guard, not a deadline: expected ~10 min cold build + test run.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
 
@@ -47,6 +50,11 @@ jobs:
   bootstrap:
     needs: build-rust
     runs-on: [self-hosted, linux]
+    # Hang guard, not a compile deadline: the interpreted self-compile is
+    # ~320s best case but stretches under load from the runner's own
+    # parallel jobs; ~10 min cold cargo build + a slow compile still fits
+    # far inside 90 min. A healthy run is never killed by this.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
