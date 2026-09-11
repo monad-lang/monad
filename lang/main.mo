@@ -5,11 +5,14 @@ use std.bench {now, report, report_since, since}
 use lang.types {Decl, LocalScope, ModulePath}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, get_loaded_all, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
 use std.map {}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
+// `--verbose` stage/module trace and the colored finish/failure lines
+// (`lang/log.mo` -- its own header documents the gating rules).
+use lang.log {debug_module_line, fail_line, ok_line, stage}
 
 #[native "build_commit"]
 def build_commit : String
@@ -73,6 +76,9 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
         return unit
     } else return unit;
 
+    // Stage trace (`lang.log`): each line prints BEFORE its `Bench.now`
+    // start, so a user watching a long stage sees life before it ends.
+    stage verbose "link: llc";
     let t_llc : I64 <- Bench.now;
     let result <- exec_cmd "llc" [ "-filetype=obj", ir_path_s, "-o", obj_path_s];
     if verbose then do {
@@ -80,9 +86,10 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
         return unit
     } else return unit;
     if not (result == 0) then do {
-        println <| (String.concat "Compiling ir " (String.concat ir_path_s " with llc failed"));
+        fail_line ("Compiling ir " ++ ir_path_s ++ " with llc failed");
         return 1
     } else do {
+        stage verbose "link: clang runtime.c";
         let t_rtc : I64 <- Bench.now;
         // Get the git commit hash to bake into the binary as a build-time
         // constant. exec_cmd doesn't capture stdout, so redirect to a temp
@@ -102,9 +109,10 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
             return unit
         } else return unit;
         if not (result == 0) then do {
-            println <| "compiling runtime failed";
+            fail_line "compiling runtime failed";
             return 1
         } else do {
+            stage verbose "link: clang link";
             let t_link : I64 <- Bench.now;
             // `-lgc`: the generated runtime's heap is collected (see
             // `monad_alloc` in lang/codegen/runtime.c, and
@@ -118,10 +126,10 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
                 return unit
             } else return unit;
             if not (result == 0) then do {
-                println <| "linking failed";
+                fail_line "linking failed";
                 return 1
             } else do {
-                println "Compilation finished";
+                ok_line "Compilation finished";
                 return 0
             }
         }
@@ -192,9 +200,9 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_nam
 /// Per-module failure keeps that module's plain decls: a compile must
 /// never fail because its debug side-channel did.
 #[partial]
-def with_located_decls (loaded : LoadedModules) : IO LoadedModules := do {
+def with_located_decls (loaded : LoadedModules) (verbose : Bool) : IO LoadedModules := do {
     let main_located : ModuleInfo <- locate_module_info loaded.main_module;
-    let all_located : List ModuleInfo <- locate_module_infos loaded.all_modules List.empty;
+    let all_located : List ModuleInfo <- locate_module_infos loaded.all_modules List.empty verbose;
     return (mk_loaded_modules main_located all_located)
 }
 
@@ -225,11 +233,14 @@ def locate_module_info (m : ModuleInfo) : IO ModuleInfo := do {
 }
 
 #[partial]
-def locate_module_infos (mods : List ModuleInfo) (acc : List ModuleInfo) : IO (List ModuleInfo) := match mods {
+def locate_module_infos (mods : List ModuleInfo) (acc : List ModuleInfo) (verbose : Bool) : IO (List ModuleInfo) := match mods {
     List.empty => return acc,
     List.cons m rest => do {
+        // Before the re-parse, like `module_line` before a first load: a
+        // slow debug pass then shows which module it is grinding through.
+        debug_module_line verbose m.file_path;
         let located : ModuleInfo <- locate_module_info m;
-        locate_module_infos rest (List.append acc (List.cons located List.empty))
+        locate_module_infos rest (List.append acc (List.cons located List.empty)) verbose
     },
 }
 
@@ -257,6 +268,7 @@ def locate_module_infos (mods : List ModuleInfo) (acc : List ModuleInfo) : IO (L
 def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) (debug : Bool) : IO I64 {
     let total_start : I64 <- Bench.now;
     println <| "compiling: " ++ file_path ++ " to " ++ Path.to_string (Path.join output_dir output_name);
+    stage verbose "load + elaborate modules";
     let t_elaborate : I64 <- Bench.now;
     let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules file_path false verbose;
     if verbose then do {
@@ -267,6 +279,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
         Result.ok em =>
             do {
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+                    stage verbose "typecheck target";
                     let t_check : I64 <- Bench.now;
                     let diags : List String <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
                     if verbose then do {
@@ -275,7 +288,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                     } else return unit;
                     match diags {
                         List.cons _ _ => do {
-                            println "FAILED at stage: typecheck (target file did not typecheck cleanly)";
+                            fail_line "FAILED at stage: typecheck (target file did not typecheck cleanly)";
                             print_diagnostics diags;
                             if verbose then do {
                                 Bench.report_since "compile_file total (failed at typecheck)" total_start;
@@ -284,6 +297,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                             return 1
                         },
                         List.empty => do {
+                            stage verbose "codegen + link";
                             let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug, preloaded := Option.some em.loaded };
                             if verbose then do {
                                 Bench.report_since "compile_file total" total_start;
@@ -294,7 +308,7 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
                     }
             },
         Result.err e => do {
-            println ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
+            fail_line ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
             let link_result <- compile_file_codegen { file_path := file_path, output_dir := output_dir, output_name := output_name, verbose := verbose, debug := debug, preloaded := Option.none };
             if verbose then do {
                 Bench.report_since "compile_file total" total_start;
@@ -331,7 +345,7 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
     let res : Result String LoadedModules <-
         match preloaded {
             Option.some already => do { return (Result.ok already) },
-            Option.none => load_file_modules file_path,
+            Option.none => load_file_modules file_path verbose,
         };
     match res {
         Result.ok loaded => do {
@@ -340,27 +354,21 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
             // ones. Same grammar, same expansion -- the only difference is
             // `Term.ctx` wrappers.
             let loaded : LoadedModules <-
-                if debug then with_located_decls loaded else return loaded;
+                if debug then with_located_decls loaded verbose else return loaded;
             do {
                 let source_path : Option String := if debug then Option.some file_path else Option.none;
                 // `verbose` thread-through: previously this branch dumped the
                 // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
                 // walking every loaded module's full content) on every
                 // successful compile -- pure noise on a working build AND a
-                // real perf hit. Now we forward `verbose` to
-                // `compile_loaded_modules_to_ir_with_debug` (which has its own
-                // `--verbose`-gated per-stage printlns -- see its own doc
-                // comment in `lang/codegen/emit.mo`) and emit only a single
-                // one-line module-count summary, also gated on `verbose`.
-                if verbose then do {
-                    let loaded_count : I64 := List.length (get_loaded_all loaded);
-                    println <| "loaded " ++ I64.to_string loaded_count ++ " modules";
-                    let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path;
-                    link_compiled_module mod_result output_dir output_name verbose
-                } else do {
-                    let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path;
-                    link_compiled_module mod_result output_dir output_name verbose
-                }
+                // real perf hit. Now `verbose` is forwarded to
+                // `compile_loaded_modules_to_ir_with_debug`, whose own
+                // `--verbose`-gated stage trace (its per-stage printlns, plus
+                // the `Loaded N modules` count it prints on entry) is the one
+                // place that progress is reported -- a count printed here too
+                // would duplicate it two calls later.
+                let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path;
+                link_compiled_module mod_result output_dir output_name verbose
             }
         },
         Result.err e => do {
@@ -603,7 +611,7 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
             let res : Result String LoadedModules <-
                 match preloaded {
                     Option.some already => do { return (Result.ok already) },
-                    Option.none => load_file_modules f,
+                    Option.none => load_file_modules f verbose,
                 };
             match res {
                 err e => do {
@@ -810,6 +818,7 @@ def print_help : IO I64 {
     println "";
     println "Usage: monad compile <path> [name] [--output/-o <name>] [--verbose/-v] [--debug/-g] [--release]";
     println "         Parse and compile a .mo source file";
+    println "         --verbose/-v prints each module as it loads and one line per pipeline stage";
     println "         --debug/-g emits DWARF debug info (one source location per top-level def)";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
     println "       monad check <path>... [--verbose/-v]  Parse and typecheck .mo source files (no execution)";

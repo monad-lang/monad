@@ -159,7 +159,7 @@ def main (args : List String) : IO I64 := do {
     exec_cmd "mkdir" ["-p", output_dir];
     IO.write_file (Path.path src_path) source;
 
-    let loaded_result : Result String LoadedModules <- load_file_modules src_path;
+    let loaded_result : Result String LoadedModules <- load_file_modules src_path false;
     match loaded_result {
         Result.err e => do {
             println ("test_bare_nested_struct_literal_fails_fast: failed to load: " ++ e);

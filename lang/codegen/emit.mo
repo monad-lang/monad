@@ -81,6 +81,10 @@ use lang.scope {
   resolve_infix_decls, strip_all_leading_binders,
   validate_no_unresolved_class_calls,
 }
+// `--verbose` stage-start trace + the red "FAILED at stage" lines
+// (`lang/log` -- helpers gate on `verbose` themselves; the fail lines
+// are ungated, printing in both modes as they did before).
+use lang.log {fail_line, stage}
 
 open IO {println}
 open LLVMType {i32_, i64_, i8_, ptr}
@@ -4508,6 +4512,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // `resolve_open_aliases_in_module_info` doc comment for the
     // confirmed regression (`Reachable decl_list` collapsing from 1925
     // to 181) this fixes.
+    stage verbose "resolve open aliases";
     let t_open_alias : I64 <- Bench.now;
     let aliased_mods := resolve_open_aliases_in_modules all_mods;
     if verbose then do {
@@ -4519,6 +4524,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // re-point every reference at the module that owns it. MUST run
     // here, before Stage 1 -- `ModuleInfo.path` is the only record of
     // which module a decl came from, and flattening discards it.
+    stage verbose "qualify modules";
     let t_qualify : I64 <- Bench.now;
     // Bound before the match: `qualify_modules` is IO now (it carries the
     // stage sub-timing), and matching the ACTION itself instead of its
@@ -4527,7 +4533,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let qualify_result <- qualify_modules verbose aliased_mods;
     match qualify_result {
       Result.err e => do {
-        if verbose then println ("FAILED at stage: qualify_modules (" ++ e ++ ")") else return unit;
+        if verbose then do { fail_line ("FAILED at stage: qualify_modules (" ++ e ++ ")"); return unit } else return unit;
         return (Result.err e)
       },
       Result.ok qualified_mods => do {
@@ -4538,6 +4544,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
 
     // Stage 1: collect all declarations (now each already carrying its
     // own module path, so the flat list is still collision-free)
+    stage verbose "collect decls";
     let t_collect : I64 <- Bench.now;
     let all_decls := collect_all_decls_from_modules qualified_mods List.empty;
     if verbose then do {
@@ -4559,6 +4566,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // a function that was never compiled into the module ("undefined
     // value '@Bool_and'" at link time) -- confirmed as a real bug via
     // a direct repro (`helper (true && false)`) while wiring this in.
+    stage verbose "resolve infix operators";
     let t_infix : I64 <- Bench.now;
     let infixes := collect_infixes all_decls;
     let resolved_decls := resolve_infix_decls infixes all_decls;
@@ -4581,6 +4589,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // which Phase 2 threads in from its owning Instance), Phase 3
     // before 4 (Phase 4 needs the dict PARAMETERS Phase 3 adds already
     // in place to know which locals are bound dicts).
+    stage verbose "dictionary dispatch";
     let t_dict : I64 <- Bench.now;
     let promoted_decls := promote_instance_defs resolved_decls;
     let dict_param_decls := add_constraint_dict_params_decls promoted_decls;
@@ -4615,6 +4624,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // the work lands inside its own span; the check that matters is
     // arithmetic (AGENTS.md item 25): these three must sum to the
     // `elaborate_class` total still printed below.
+    stage verbose "elaborate class dispatch";
     let t_elab : I64 <- Bench.now;
     let target_mp : ModulePath := match get_loaded_main loaded { ModuleInfo.mk mp_ _ _ => mp_ };
     let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_decls;
@@ -4635,6 +4645,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     // codegen bug anywhere in the whole standard library, reached or
     // not, blocked compiling any program at all. See
     // filter_reachable_decls's own doc comment.
+    stage verbose "filter reachable decls";
     let t_reach : I64 <- Bench.now;
     // Bound to a local first: field access lowers only on a plain
     // identifier, not on a parenthesised call result.
@@ -4658,7 +4669,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let dispatched_classes := collect_classes dispatched_decls;
     match validate_no_unresolved_class_calls dispatched_classes reachable_decls {
         Result.err e => do {
-            if verbose then println ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")") else return unit;
+            if verbose then do { fail_line ("FAILED at stage: resolve_class_calls_decls (" ++ e ++ ")"); return unit } else return unit;
             return (Result.err e)
         },
         Result.ok _ =>
@@ -4670,7 +4681,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
             // crash; see `validate_no_unwired_natives`'s own doc comment).
             match validate_no_unwired_natives reachable_decls {
                 Result.err e => do {
-                    if verbose then println ("FAILED at stage: validate_no_unwired_natives (" ++ e ++ ")") else return unit;
+                    if verbose then do { fail_line ("FAILED at stage: validate_no_unwired_natives (" ++ e ++ ")"); return unit } else return unit;
                     return (Result.err e)
                 },
                 Result.ok _ =>
@@ -4680,7 +4691,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                   // `void_val` (see `validate_no_undesugared_struct_lits`).
                   match validate_no_undesugared_struct_lits reachable_decls {
                     Result.err e => do {
-                        if verbose then println ("FAILED at stage: validate_no_undesugared_struct_lits (" ++ e ++ ")") else return unit;
+                        if verbose then do { fail_line ("FAILED at stage: validate_no_undesugared_struct_lits (" ++ e ++ ")"); return unit } else return unit;
                         return (Result.err e)
                     },
                     Result.ok _ =>
@@ -4689,11 +4700,12 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                       // finds is a synthesized or runtime-symbol clash.
                       match validate_no_colliding_def_symbols reachable_decls {
                         Result.err e => do {
-                            if verbose then println ("FAILED at stage: validate_no_colliding_def_symbols (" ++ e ++ ")") else return unit;
+                            if verbose then do { fail_line ("FAILED at stage: validate_no_colliding_def_symbols (" ++ e ++ ")"); return unit } else return unit;
                             return (Result.err e)
                         },
                         Result.ok _ => do {
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
+                    stage verbose "emit LLVM IR";
                     let t_llvm : I64 <- Bench.now;
                     let mod_ := compile_db_module_with_debug reachable_decls source_path debug_files;
                     if verbose then do {

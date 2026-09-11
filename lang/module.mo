@@ -41,6 +41,10 @@ use lang.scope {
 }
 use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
+// `--verbose` per-module/per-stage trace (see `lang/log.mo`'s own header
+// for why the helpers gate themselves and why `bench_step` below prints
+// through `timing_line`).
+use lang.log {module_line, timing_line}
 use std.list {Show, all, length}
 use std.show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
@@ -493,7 +497,7 @@ struct InfosAndCache {
 }
 
 #[partial]
-def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (visiting : List ModulePath) (visited : List ModuleInfo) (cache : ModuleInfoCache) : IO InfosAndCache :=
+def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (visiting : List ModulePath) (visited : List ModuleInfo) (cache : ModuleInfoCache) (verbose : Bool) : IO InfosAndCache :=
     match to_visit {
         List.empty => do {
             // Annotated local, never a bare literal in `return` position
@@ -508,12 +512,20 @@ def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (v
         List.cons head tail =>
             if list_contains visiting head then
                 // Circular dependency - skip to avoid infinite loop
-                collect_dep_module_infos base_dir tail visiting visited cache
+                collect_dep_module_infos base_dir tail visiting visited cache verbose
             else if list_contains_module_info visited head then
                 // Already loaded - skip
-                collect_dep_module_infos base_dir tail visiting visited cache
+                collect_dep_module_infos base_dir tail visiting visited cache verbose
             else do {
                 let new_visiting : List ModulePath := List.cons head visiting;
+                // Printed BEFORE the load, not after: the read + parse is
+                // the work being watched, and a hang inside a load leaves
+                // this line as the last thing on screen -- which names
+                // the culprit module. (`ModuleInfoCache` hits from a
+                // later importing file re-print; acceptable -- verbose
+                // output is already per-decl noisy in `check`, and it
+                // gives per-file progress there.)
+                module_line verbose (Show.show head);
                 // Cached: within one `check`/`compile` run the same
                 // dependency is reached once per importing file, and
                 // re-reading + re-parsing it each time is the dominant
@@ -525,11 +537,11 @@ def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (v
                         let dep_decls : List Decl := info.decl_list;
                         let dep_deps : List ModulePath := extract_use_decls dep_decls;
                         let new_to_visit : List ModulePath := List.append dep_deps tail;
-                        collect_dep_module_infos new_base_dir new_to_visit new_visiting (List.cons info visited) loaded.cache
+                        collect_dep_module_infos new_base_dir new_to_visit new_visiting (List.cons info visited) loaded.cache verbose
                     },
                     Option.none =>
                         // Module not found, skip but continue with tail
-                        collect_dep_module_infos base_dir tail new_visiting visited loaded.cache
+                        collect_dep_module_infos base_dir tail new_visiting visited loaded.cache verbose
                 }
             }
     }
@@ -1955,12 +1967,18 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option Mod
 /// run; the returned `LoadedAndCache` hands back the extended one so a
 /// multi-file caller (`run_check_loop`) can reuse it for the next file.
 /// Pass `module_info_cache_empty` for a standalone load.
+///
+/// `verbose` gates the per-module trace (`lang/log.mo`): the target
+/// module line here, and every dependency's line down in
+/// `collect_dep_module_infos`. This used to print the target
+/// unconditionally and nothing else -- the whole "only the main module
+/// is printed" problem the trace exists to fix.
 #[partial]
-def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) : IO LoadedAndCache {
+def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) (verbose : Bool) : IO LoadedAndCache {
     let base_dir : String := extract_directory file_path;
     let module_name : String := module_name_from_path file_path;
     let mp : ModulePath := ModulePath.mp [Identifier.id module_name];
-    println <| "loading module: " ++ module_name;
+    module_line verbose module_name;
     let module : Option ModuleInfo <- load_module_with_info base_dir mp;
     match module {
         Option.some main_module =>
@@ -2001,7 +2019,7 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) : IO
                     let direct_deps_with_prelude : List ModulePath := List.append [prelude_module_path, init_module_path, std_module_path] direct_deps;
                     let no_visited : List ModuleInfo := List.empty;
                     let no_visiting : List ModulePath := List.empty;
-                    let walked : InfosAndCache <- collect_dep_module_infos main_base_dir direct_deps_with_prelude no_visiting no_visited cache;
+                    let walked : InfosAndCache <- collect_dep_module_infos main_base_dir direct_deps_with_prelude no_visiting no_visited cache verbose;
                     let all_modules : List ModuleInfo := List.cons main_module walked.infos;
                     // Each level bound with an explicit annotation
                     // rather than inlined as `Result.ok { ... }` inside
@@ -2025,9 +2043,10 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) : IO
 
 /// Backwards-compatible wrapper: a standalone load with a fresh cache.
 /// Every caller that isn't threading a whole-run cache uses this.
+/// `verbose` forwards to the per-module trace (`lang/log.mo`).
 #[partial]
-def load_file_modules (file_path : String) : IO (Result String LoadedModules) := do {
-    let r : LoadedAndCache <- load_file_modules_cached file_path module_info_cache_empty;
+def load_file_modules (file_path : String) (verbose : Bool) : IO (Result String LoadedModules) := do {
+    let r : LoadedAndCache <- load_file_modules_cached file_path module_info_cache_empty verbose;
     return r.loaded
 }
 
@@ -2052,7 +2071,10 @@ def load_file_modules (file_path : String) : IO (Result String LoadedModules) :=
 #[partial]
 def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : IO I64 :=
     if verbose then do {
-        Bench.report_since label t0;
+        // `timing_line` (lang/log.mo): the same "<label> <ms>ms" content
+        // `Bench.report_since` printed, dim-colored so the sub-times
+        // group visually under their `stage` line.
+        timing_line label t0;
         Bench.now
     } else Bench.now
 
@@ -2365,7 +2387,7 @@ def rebuild_target_scope (target_mp : ModulePath) (decls : List Decl) : Scope :=
 #[partial]
 def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) (verbose : Bool) : IO ElaboratedAndCache := do {
     let t_load : I64 <- Bench.now;
-    let lc : LoadedAndCache <- load_file_modules_cached file_path cache;
+    let lc : LoadedAndCache <- load_file_modules_cached file_path cache verbose;
     let loaded_result : Result String LoadedModules := lc.loaded;
     let out_cache : ModuleInfoCache := lc.cache;
     let _t_load_done : I64 <- bench_step verbose "  elab: load_file_modules (read+parse)" t_load 0;

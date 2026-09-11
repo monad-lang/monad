@@ -31,7 +31,7 @@ pub def compile_source_run_expect (source : String) (basename : String) (expecte
     exec_cmd "mkdir" ["-p", output_dir];
     IO.write_file (Path.path src_path) source;
 
-    let loaded_result : Result String LoadedModules <- load_file_modules src_path;
+    let loaded_result : Result String LoadedModules <- load_file_modules src_path false;
     match loaded_result {
         Result.err e => do {
             println (basename ++ ": failed to load: " ++ e);
