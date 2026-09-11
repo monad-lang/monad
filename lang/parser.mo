@@ -2037,10 +2037,24 @@ def def_brace_colon (r : ParseResult String) (name : String) (params : List Pars
 #[partial]
 def def_brace_type (r : ParseResult ParseTerm) (name : String) (params : List ParseParam) : ParseResult (List ParseParam) :=
 	match r {
-		success rem typ =>
-			let new_params : List ParseParam := List.cons (parse_param_many (Identifier.id name) typ) params in
-			def_brace_sep (skip_spaces rem) new_params,
+		success rem typ => def_brace_try_default (tag ":=" (skip_spaces rem)) rem name typ params,
 		fail e => fail e
+	}
+
+#[partial]
+def def_brace_try_default (r : ParseResult String) (orig : String) (name : String) (typ : ParseTerm) (params : List ParseParam) : ParseResult (List ParseParam) :=
+	match r {
+		success rem _ =>
+			match expression (skip_spaces rem) {
+				success rem2 default_val =>
+					let no_attrs : List Attribute := List.empty in
+					let p : ParseParam := ParseParam.mk (Identifier.id name) typ Multiplicity.many (Option.some default_val) no_attrs in
+					def_brace_sep (skip_spaces rem2) (List.cons p params),
+				fail e => fail e
+			},
+		fail _ =>
+			let new_params : List ParseParam := List.cons (parse_param_many (Identifier.id name) typ) params in
+			def_brace_sep (skip_spaces orig) new_params
 	}
 
 #[partial]
@@ -6572,12 +6586,12 @@ def test_def_params_implicit_multi_name_form_still_unaffected : Bool :=
 	}
 
 #[test]
-def test_def_params_brace_block_default_is_a_parse_error : Bool :=
-	// No `:=` support in the brace-block form (unlike core/'s own Phase
-	// 3) -- `Term.lam` has no default slot to carry one to.
+def test_def_params_brace_block_default_now_accepted : Bool :=
+	// `:=` defaults in the brace-block form are now accepted (gap §5):
+	// parsed and stored on ParseParam.default, matching the Rust host.
 	match def_parser "def scale {factor : I64 := 1, p : I64} : I64 := factor * p" {
-		success _ _ => false,
-		fail _ => true
+		success rem _ => String.beq rem "",
+		fail _ => false
 	}
 
 // -------------------------------------------------------------------
@@ -9393,6 +9407,35 @@ def test_hole_not_var : Bool :=
 #[test]
 def test_hole_in_def_type : Bool :=
     match def_parser "def f (x : I64) : I64 := (x : _)" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind { ParseDeclKind.def_d _ => true, _ => false },
+        fail _ => false
+    }
+
+// --- Brace-form def params with defaults (gap §5) ---
+
+#[test]
+def test_brace_param_with_default : Bool :=
+    match def_parser "def scale {factor : I64 := 2, p : I64} : I64 := factor * p" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind { ParseDeclKind.def_d _ => true, _ => false },
+        fail _ => false
+    }
+
+#[test]
+def test_brace_param_with_default_last : Bool :=
+    match def_parser "def f {p : I64, factor : I64 := 2} : I64 := factor * p" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind { ParseDeclKind.def_d _ => true, _ => false },
+        fail _ => false
+    }
+
+#[test]
+def test_brace_param_no_default_still_works : Bool :=
+    match def_parser "def scale {factor : I64, p : I64} : I64 := factor * p" {
         success rem out =>
             String.beq rem "" &&
             match out.kind { ParseDeclKind.def_d _ => true, _ => false },
