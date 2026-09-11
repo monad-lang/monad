@@ -4721,7 +4721,10 @@ def variable_try_path (r: ParseResult NameRef) (input: String) : ParseResult Par
 #[partial]
 def variable_got (r: ParseResult String) : ParseResult ParseTerm :=
     match r {
-        success rem out => success rem (pt_var (NameRef.nid (Identifier.id out))),
+        success rem out =>
+            if String.beq out "_"
+            then success rem pt_hole
+            else success rem (pt_var (NameRef.nid (Identifier.id out))),
         fail e => fail e
     }
 
@@ -9366,5 +9369,32 @@ def test_named_instance_with_constraints : Bool :=
 def test_unnamed_instance_still_works : Bool :=
     match instance_parser "instance BEq I64 { def beq (a b : I64) : Bool := true }" {
         success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+// --- _ hole in term position (gap §4) ---
+
+#[test]
+def test_hole_in_type_annotation : Bool :=
+    match expression "(42 : _)" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+#[test]
+def test_hole_not_var : Bool :=
+    match expression "_" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind { ParseTermKind.hole => true, _ => false },
+        fail _ => false
+    }
+
+#[test]
+def test_hole_in_def_type : Bool :=
+    match def_parser "def f (x : I64) : I64 := (x : _)" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind { ParseDeclKind.def_d _ => true, _ => false },
         fail _ => false
     }
