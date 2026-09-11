@@ -970,6 +970,28 @@ void* monad_list_dir(char* path) {
     return list;
 }
 
+/* `#[native "get_env"]` (std/io.mo's IO.get_env): `IO (Option String)`.
+   Returns a real `Option` Constructor -- `some` tag 4 with the value as
+   its one field, `none` tag 3 -- the same fixed prelude-constructor tags
+   runtime.mo's `rt_tag_some`/`rt_tag_none` mirror (see `monad_list_dir`
+   above for the List equivalents of the same convention). Wired as
+   `io_passthrough` in natives.mo: the raw result is already a valid
+   backend value, so the emitted wrapper only IO.io-wraps it. The value
+   is COPIED (like list_dir copies entry names): getenv's storage is
+   owned by libc and can be invalidated by a later setenv/putenv, while
+   every other `String` here is an owned, GC-visible char*. */
+void* monad_get_env(char* name) {
+    const char* val = name ? getenv(name) : NULL;
+    if (!val) return (void*)alloc_constructor(3, 0);   /* Option.none */
+    size_t len = strlen(val);
+    char* copy = (char*)monad_alloc_atomic(len + 1);
+    if (!copy) return (void*)alloc_constructor(3, 0);  /* OOM -> none */
+    memcpy(copy, val, len + 1);
+    Constructor* some = (Constructor*)alloc_constructor(4, 1);
+    some->fields[0] = copy;
+    return some;
+}
+
 void* monad_build_args(int argc, char** argv) {
     void* list = alloc_constructor(5, 0);   /* List.empty */
     for (int i = argc - 1; i >= 0; i--) {

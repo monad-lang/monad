@@ -312,6 +312,16 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // its own `compile` command at all.
             else if String.beq target "exec_cmd" then Option.some (NativeWrapKind.io_passthrough "monad_exec_cmd")
             else if String.beq target "list_dir" then Option.some (NativeWrapKind.io_passthrough "monad_list_dir")
+            // `IO.get_env` (std/io.mo) -- `IO (Option String)`: the raw
+            // result is a real `Option` Constructor built in runtime.c
+            // (some=4/none=3, the same fixed tags `monad_array_get` and
+            // runtime.mo's `rt_tag_some`/`rt_tag_none` use), so plain
+            // `io_passthrough` (IO.io-wrap only) like `list_dir`. Wired
+            // because `std/ansi.mo`'s `colors_enabled` reads
+            // NO_COLOR/FORCE_COLOR/TERM through it, and the compiler's
+            // own `--verbose` stage trace (lang/log.mo) colorizes through
+            // that.
+            else if String.beq target "get_env" then Option.some (NativeWrapKind.io_passthrough "monad_get_env")
             else Option.none,
     }
 
@@ -475,9 +485,12 @@ def runtime_declarations : List LLVMDeclaration :=
     let d44 := mk_decl "monad_array_with" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d45 := mk_decl "monad_array_set_in_place" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d46 := mk_decl "monad_array_freeze" (List.cons "i64" List.empty) "i64" in
+    // `IO.get_env` (runtime.c) -- same "no implicit declare" requirement
+    // as every native above; see its `native_runtime_fn_name` entry.
+    let d47 := mk_decl "monad_get_env" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-     d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46]
+     d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform
