@@ -67,7 +67,7 @@ use lang.codegen.symbols {
 use lang.codegen.util {
   dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
   ident_in_list, identifier_eq, join_semicolon_msgs,
-  list_contains_str, rev_vals, str_map_empty, str_map_insert, str_map_lookup,
+  rev_vals, str_map_empty, str_map_insert, str_map_lookup,
 }
 use lang.module {
   LoadedModules, ModuleInfo, bench_step, elaborate_module_decls_best_effort,
@@ -4012,19 +4012,34 @@ def count_db_params (params : List Param) (n : I64) : I64 := match params {
 /// match it) -- the cost is a negligible amount of duplicate (never-
 /// emitted-to-`.ll`) shim generation during compilation; shims are
 /// single-block, 2-instruction functions, cheap to regenerate.
+/// `seen` is a `str_map` set, not a `List` scanned with
+/// `list_contains_str`. The list form was O(F^2) `String.beq` over the
+/// WHOLE module's function list, and F counts every shim, not just the
+/// 3004 functions that survive dedup in a self-compile. The comment above
+/// calls the cost negligible -- that judgement is about regenerating
+/// duplicate shims, which is cheap, not about finding them, which was not.
+/// Same shape and same cure as `names_of_decls` (`2c87e87`, -65%).
+///
+/// First occurrence still wins and order is still preserved, which is the
+/// property `validate_no_colliding_def_symbols` and `build_def_name_map`
+/// are reasoning about. `str_map_lookup`/`str_map_insert` compare with
+/// `bucket_lookup_str`'s native `String.beq`, exactly what
+/// `list_contains_str` used, so no comparison semantics change.
 #[partial]
 def dedup_funcs_by_name (funcs : List LLVMFunction) : List LLVMFunction :=
-    dedup_funcs_by_name_go funcs List.empty
+    dedup_funcs_by_name_go funcs str_map_empty
 
 #[partial]
-def dedup_funcs_by_name_go (funcs : List LLVMFunction) (seen : List String) : List LLVMFunction := match funcs {
+def dedup_funcs_by_name_go (funcs : List LLVMFunction) (seen : HashMap String Bool) : List LLVMFunction := match funcs {
     List.empty => List.empty,
     List.cons f rest =>
         match f {
             LLVMFunction.mk name params ret_ty blocks ghc_cc dbg_loc =>
-                if list_contains_str seen name
-                then dedup_funcs_by_name_go rest seen
-                else List.cons f (dedup_funcs_by_name_go rest (List.cons name seen)),
+                match str_map_lookup name seen {
+                    Option.some _ => dedup_funcs_by_name_go rest seen,
+                    Option.none =>
+                        List.cons f (dedup_funcs_by_name_go rest (str_map_insert name true seen)),
+                },
         },
 }
 
