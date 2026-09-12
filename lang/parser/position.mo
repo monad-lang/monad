@@ -288,28 +288,117 @@ def resolve_offsets (s : String) (st : ResolveState) : ResolveState :=
 /// rather than being dropped: end-of-input is a real position, and a
 /// dropped entry would leave a term with no location for no visible
 /// reason.
+/// The single-pass walk consumes `pending` from the head and never goes
+/// back, so it REQUIRES ascending input. This used to check `is_ascending`
+/// and fall back to a per-offset rescan of the whole file when it failed --
+/// "the correct-but-quadratic path. Slow beats wrong." Correct, and a trap:
+/// the fallback is silent, and callers do not in fact deliver ascending
+/// offsets.
+///
+/// `build_loc_table` (`lang/parser.mo`) collects spans in pre-order and
+/// argued that pre-order IS ascending. It is not, and the counterexample is
+/// every infix expression in the language: `a + b` parses to
+/// `app (app (+) a) b`, so a pre-order walk visits the operator node --
+/// whose span starts at the `+` -- BEFORE the operand `a` that precedes it
+/// in the source. Measured with `bench/parser_located.mo`:
+///
+///   init/id.mo      675 bytes,   30 spans  ascending YES   27ms ->    36ms
+///   lang/types.mo 73000 bytes, 1469 spans  ascending NO   1753ms -> 287766ms
+///
+/// 164x, with the first inversion at span index 244. That fallback is what
+/// made a `--verbose` self-compile WITHOUT `--release` take 28035824ms
+/// (7h48m) against 275424ms with it, ~99.4% of it in `with_located_decls`.
+/// Debug info is on by default, so that was the default `monad compile`.
+///
+/// So sort, and make the invariant hold rather than detecting that it does
+/// not. `is_ascending` is kept as the cheap skip for input that already is
+/// (the small-file case above) and as the executable statement of what the
+/// walk needs. The quadratic fallback is gone: an unreachable-by-hope slow
+/// path that nothing exercises is how this hid for as long as it did.
+///
+/// Sorting changes the ORDER of the returned pairs, not their content. The
+/// only consumer (`build_loc_table` -> `rekey_by_rem`) folds them into a
+/// `HashMap` keyed by offset, and this file's own tests look results up by
+/// offset via `lookup_resolved`, so no caller observes the order.
+///
+/// Offsets at or past end-of-file resolve to the file's final position
+/// rather than being dropped: end-of-input is a real position, and a
+/// dropped entry would leave a term with no location for no visible
+/// reason.
 #[partial]
 def resolve_offsets_in_file (source : String) (offsets : List I64) : List (Pair I64 Location) :=
-    // The single-pass walk consumes `pending` from the head and never goes
-    // back, so a non-ascending list would resolve everything after the
-    // first inversion to whatever position the walk had already reached --
-    // silently wrong positions, not a crash. Callers are expected to
-    // collect in tree order (which IS ascending, since `ParseSpan` stores a
-    // remaining length and a pre-order walk visits nodes left to right),
-    // but "expected" is not "checked", so check.
     if is_ascending offsets
     then resolve_ascending source offsets
-    else resolve_one_by_one source offsets
+    else resolve_ascending source (sort_offsets_asc offsets)
 
-/// The correct-but-quadratic path, for input the fast path cannot take.
-/// Slow beats wrong.
+/// Merge sort over absolute byte offsets. Local to this file and
+/// distinctively named on purpose: the self-hosted global name table is not
+/// module-scoped (AGENTS.md item 18), and there is no `List.sort` in `std/`
+/// to reuse.
+///
+/// Accumulator-passing in `merge_asc`, not `List.cons x (merge rest)`: the
+/// merge is the one part whose recursion depth is O(n) rather than O(log n),
+/// and `lang/codegen/decls.mo`'s own note explains why depth is expensive
+/// here beyond the stack (Boehm marks conservatively from the whole stack on
+/// every collection, so depth is paid again per collection).
 #[partial]
-def resolve_one_by_one (source : String) (offsets : List I64) : List (Pair I64 Location) :=
-    match offsets {
-        List.empty => List.empty,
-        List.cons off rest =>
-            List.cons (Pair.pair off (location_of_remaining_len source (String.length source - off)))
-                      (resolve_one_by_one source rest),
+def sort_offsets_asc (xs : List I64) : List I64 :=
+    match xs {
+        List.empty => xs,
+        List.cons _ rest =>
+            match rest {
+                // One element is already sorted; this is also the base case
+                // that stops the split recursion.
+                List.empty => xs,
+                List.cons _ _ =>
+                    match split_alternating xs List.empty List.empty true {
+                        Pair.pair l r =>
+                            merge_asc (sort_offsets_asc l) (sort_offsets_asc r),
+                    },
+            },
+    }
+
+/// Deal alternately into two halves. Both come out reversed, which a sort
+/// does not care about, and dealing avoids walking the list twice to find a
+/// midpoint.
+#[partial]
+def split_alternating (xs : List I64) (l : List I64) (r : List I64) (to_left : Bool) : Pair (List I64) (List I64) :=
+    match xs {
+        List.empty => Pair.pair l r,
+        List.cons x rest =>
+            if to_left
+            then split_alternating rest (List.cons x l) r false
+            else split_alternating rest l (List.cons x r) true,
+    }
+
+#[partial]
+def merge_asc (a : List I64) (b : List I64) : List I64 :=
+    reverse_offsets (merge_asc_go a b List.empty) List.empty
+
+/// Takes from `a` on a tie, so equal offsets keep their relative order --
+/// duplicates are real (two spans can start at the same byte) and both must
+/// survive to be keyed.
+#[partial]
+def merge_asc_go (a : List I64) (b : List I64) (acc : List I64) : List I64 :=
+    match a {
+        List.empty => reverse_offsets b acc,
+        List.cons x xs =>
+            match b {
+                List.empty => reverse_offsets a acc,
+                List.cons y ys =>
+                    if I64.lt y x
+                    then merge_asc_go a ys (List.cons y acc)
+                    else merge_asc_go xs b (List.cons x acc),
+            },
+    }
+
+/// `reverse_offsets xs acc` is `List.reverse xs ++ acc` -- both the final
+/// flip and the "one side ran out, tip the rest on" step want exactly this.
+#[partial]
+def reverse_offsets (xs : List I64) (acc : List I64) : List I64 :=
+    match xs {
+        List.empty => acc,
+        List.cons x rest => reverse_offsets rest (List.cons x acc),
     }
 
 #[partial]

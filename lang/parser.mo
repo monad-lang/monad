@@ -3668,10 +3668,19 @@ def locate_and_lower (whole_file : String) (r : ParseResult (List ParseDecl)) : 
 /// Resolve every span in the parse tree to a position, keyed back by
 /// `start_rem` so lowering needs no arithmetic per node.
 ///
-/// `resolve_offsets_in_file` wants ASCENDING absolute offsets. A span's
-/// `start_rem` is a remaining length, so larger means earlier: collecting
-/// in pre-order left-to-right yields DESCENDING `start_rem`, which is
-/// ascending offset. No sort is needed, and none is available.
+/// `resolve_offsets_in_file` wants ASCENDING absolute offsets, and this
+/// comment used to claim pre-order collection delivers them: a span's
+/// `start_rem` is a remaining length, so larger means earlier, and a
+/// pre-order walk visits nodes left to right. **That is wrong**, and the
+/// counterexample is every infix expression: `a + b` parses to
+/// `app (app (+) a) b`, so pre-order reaches the operator node -- whose span
+/// starts at the `+` -- before the operand `a` that precedes it in the
+/// source. `lang/types.mo` inverts at span index 244 of 1469.
+///
+/// It cost 164x on the located parse, because `resolve_offsets_in_file`
+/// silently fell back to rescanning the whole file per offset. That function
+/// now sorts instead; see its own doc comment for the measurements. Nothing
+/// here needs to change, but do not re-derive the false invariant.
 #[partial]
 def build_loc_table (whole_file : String) (ds : List ParseDecl) : HashMap String Location :=
 	let total : I64 := String.length whole_file in
