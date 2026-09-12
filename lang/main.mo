@@ -5,7 +5,7 @@ use std.bench {now, report_since}
 use lang.types {Decl, LocalScope, ModulePath, show_module_path, show_identifier}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, get_loaded_all, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
 use lang.scope {resolve_class_calls_decls}
 use std.map {}
 use lang.pretty {show_decls}
@@ -161,7 +161,16 @@ def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : P
             return 1
         },
         Result.ok mod_ => do {
-            let ir_text := emit_module mod_;
+            // `emit_module` -- rendering the whole `LLVMModule` to `.ll` text --
+            // was the largest untimed span in the pipeline: it sits between
+            // `compile_loaded_modules_to_ir`'s own total and `link_ir`'s first
+            // span, so a `--verbose` self-compile reported 52189ms of its
+            // 275424ms nowhere at all (19%). `String.length` forces the
+            // rendered text inside the span, the same `forced`-argument trick
+            // `bench_step`'s own doc comment describes.
+            let t_emit : I64 <- Bench.now;
+            let ir_text : String := emit_module mod_;
+            let _t_emit : I64 <- bench_step verbose "emit_module (render .ll)" t_emit (String.length ir_text);
             link_ir ir_text output_dir output_name verbose
         },
     }
@@ -496,8 +505,23 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
             // positions recorded, and the located decls replace the plain
             // ones. Same grammar, same expansion -- the only difference is
             // `Term.ctx` wrappers.
+            // Timed, because this was the single largest cost in the whole
+            // compiler and nothing measured it. A `--verbose` self-compile
+            // WITHOUT `--release` ran 28035824ms (7h48m) against 275424ms with
+            // it, every other phase within noise -- i.e. ~7h44m, 99.4% of the
+            // run, is this second read+parse of the whole dependency graph.
+            // The FIRST parse of the same 66 files (`load_file_modules`) is
+            // 45685ms, so this is ~615x slower for the same work.
+            // Gated on `debug` as well as `verbose`: with `--release` the span
+            // legitimately measures nothing, and a 0ms span is exactly what
+            // AGENTS.md item 25 says to treat as a broken span -- so don't
+            // print one rather than train a reader to ignore it.
+            let t_locate : I64 <- Bench.now;
             let loaded : LoadedModules <-
                 if debug then with_located_decls loaded verbose else return loaded;
+            let _t_locate : I64 <- bench_step (verbose && debug)
+                "with_located_decls (2nd read+parse, positions)" t_locate
+                (List.length (get_loaded_all loaded));
             do {
                 let source_path : Option String := if debug then Option.some file_path else Option.none;
                 // `verbose` thread-through: previously this branch dumped the

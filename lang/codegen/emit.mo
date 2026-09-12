@@ -32,6 +32,7 @@ use lang.codegen.ir {
 }
 use lang.codegen.runtime {runtime_native_functions}
 use lang.codegen.validate {
+  build_defined_symbol_set, collect_call_targets, missing_call_targets,
   validate_all_call_targets_defined, validate_no_colliding_def_symbols,
   validate_no_undesugared_struct_lits, validate_no_unwired_natives,
 }
@@ -4692,6 +4693,55 @@ def desugar_opt_terms (scope : Scope) (args : List (Option Term)) : List (Option
         },
 }
 
+/// `validate_all_call_targets_defined`'s verdict, from the `missing` list
+/// the sub-timed steps above already computed. Calling that function again
+/// here would re-walk the whole module and re-probe every target -- it ran
+/// the gate TWICE while the sub-timing was being read, which is visible in
+/// this plan's own numbers as a 314280ms self-compile.
+#[partial]
+def gate_result (missing : List String) (m : LLVMModule) : Result String LLVMModule :=
+    match missing {
+        List.empty => Result.ok m,
+        List.cons _ _ =>
+            Result.err (String.concat "call to undefined symbol(s): "
+                (String.concat (join_semicolon_msgs (dedup_strs missing) "")
+                    " -- a reference resolved to a name nothing defines; def_symbol_name and ref_symbol_name must agree")),
+    }
+
+/// Field accessors for the sub-timing of the call-target gate below --
+/// `LLVMModule` is matched positionally elsewhere in this file, and a
+/// `match` cannot be spliced into a `let` chain.
+#[partial]
+def module_funcs (m : LLVMModule) : List LLVMFunction := match m {
+    LLVMModule.mk _triple _globals funcs _decls _src _files => funcs,
+}
+
+#[partial]
+def module_decls (m : LLVMModule) : List LLVMDeclaration := match m {
+    LLVMModule.mk _triple _globals _funcs decls _src _files => decls,
+}
+
+/// A `HashMap` has no cheap size, so force it with a one-key probe -- the
+/// same trick `qualify_modules`' own sub-timing uses.
+#[partial]
+def gate_set_probe (m : HashMap String Bool) : I64 :=
+    match str_map_lookup "" m {
+        Option.some _ => 1,
+        Option.none => 0,
+    }
+
+/// Forces `validate_all_call_targets_defined`'s result inside its own
+/// `bench_step` span -- the `forced` argument's whole purpose (see
+/// `bench_step`, `lang/module.mo`). Its own declared parameter type is what
+/// pins `Result.ok`/`Result.err` here: this file also exports an `ok`
+/// (`CompileResult`), and a bare match on an un-annotated binder is exactly
+/// the ambiguity that bit `aa3c9b3`'s qualify sub-timing.
+#[partial]
+def call_target_gate_probe (r : Result String LLVMModule) : I64 := match r {
+    Result.err _ => 0,
+    Result.ok _ => 1,
+}
+
 /// `compile_loaded_modules_to_ir`, with DWARF debug info (one location
 /// per top-level def, from the `Term.ctx` wrapper on its body).
 /// `source_path` is passed straight through to
@@ -4929,7 +4979,6 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                     let mod_ := compile_db_module_with_debug reachable_decls source_path debug_files;
                     if verbose then do {
                         Bench.report_since "compile_db_module" t_llvm;
-                        Bench.report_since "compile_loaded_modules_to_ir total" total_start;
                         return unit
                     } else return unit;
 
@@ -4939,7 +4988,33 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                     // and dies at `llc` as `undefined value '@x'`, at the
                     // END of a 15-25 minute self-compile, naming one
                     // symbol and no call site.
-                    return (validate_all_call_targets_defined mod_)
+                    // Timed, and the enclosing total moved BELOW it: the
+                    // total used to print at the end of stage 6, so stage 7
+                    // fell outside both it and `link_ir`'s own spans -- part
+                    // of the 52189ms of a 275424ms self-compile (19%) that
+                    // was attributed nowhere. It walks every instruction in
+                    // the module, so it is not free by inspection.
+                    // Sub-timed in the two halves that could own it: the
+                    // total walk of every `LLVMValue` node in the module
+                    // (`collect_call_targets`), versus building the defined
+                    // set and probing it once per target. 47800ms of a
+                    // 266178ms compile (18%) is worth knowing the shape of
+                    // before deciding whether to make it cheap or to defer
+                    // it to llc's own failure path.
+                    let t_closed : I64 <- Bench.now;
+                    let gate_targets : List String := collect_call_targets (module_funcs mod_);
+                    let t_gate_walk : I64 <- bench_step verbose "  gate: collect_call_targets" t_closed (List.length gate_targets);
+                    let gate_defined : HashMap String Bool := build_defined_symbol_set (module_funcs mod_) (module_decls mod_);
+                    let t_gate_set : I64 <- bench_step verbose "  gate: build_defined_symbol_set" t_gate_walk (gate_set_probe gate_defined);
+                    let gate_missing : List String := missing_call_targets gate_targets gate_defined;
+                    let _t_gate_probe : I64 <- bench_step verbose "  gate: missing_call_targets" t_gate_set (List.length gate_missing);
+                    let closed : Result String LLVMModule := gate_result gate_missing mod_;
+                    let _t_closed : I64 <- bench_step verbose "validate_all_call_targets_defined" t_closed (call_target_gate_probe closed);
+                    if verbose then do {
+                        Bench.report_since "compile_loaded_modules_to_ir total" total_start;
+                        return unit
+                    } else return unit;
+                    return closed
                         },
                       },
                   },
