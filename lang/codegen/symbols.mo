@@ -54,9 +54,41 @@ def symbol_identifier (id : Identifier) : String := match id {
     Identifier.id s => remove_quotes_from_identifier s,
 }
 
+/// Almost no identifier contains a `'`, and `remove_quotes_loop` below
+/// rebuilds its argument one byte at a time -- a `String.slice s 1 ...` AND
+/// a `String.concat acc (String.slice s 0 1)` per character, so two
+/// allocations per character plus a quadratic accumulator, to return the
+/// string it was given. `symbol_identifier` is on essentially every name
+/// codegen touches (`def_symbol_name`, `collect_referenced_names`,
+/// qualification, reachability), so that is a lot of copying to produce no
+/// change.
+///
+/// So check first with a byte scan that allocates nothing, and only rebuild
+/// when there is actually something to strip. This is AGENTS.md item 28's
+/// rule applied one file over: `String.get` is a native returning `U8`;
+/// `String.slice` is a native that ALLOCATES.
+///
+/// Byte-wise scanning is correct here for the same reason it was correct
+/// there: `'` is 39, and every byte of a multi-byte UTF-8 character is
+/// >= 0x80, so a byte scan can neither miss a quote nor mistake part of a
+/// character for one.
 #[partial]
-def remove_quotes_from_identifier (s : String) : String := 
-    remove_quotes_loop s ""
+def remove_quotes_from_identifier (s : String) : String :=
+    if has_quote_byte s 0 (String.length s)
+    then remove_quotes_loop s ""
+    else s
+
+/// Does `s` contain a `'`? Scans a byte index; allocates nothing.
+#[partial]
+def has_quote_byte (s : String) (i : I64) (n : I64) : Bool :=
+    if I64.gt (i + 1) n then false
+    else
+        match String.get s i {
+            Option.some b => if U8.beq b 39u8 then true else has_quote_byte s (i + 1) n,
+            // `String.get` past the end -- cannot happen under the bound
+            // above, and "no quote found" is the right answer regardless.
+            Option.none => false,
+        }
 
 #[partial]
 def remove_quotes_loop (s : String) (acc : String) : String :=
