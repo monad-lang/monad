@@ -312,12 +312,22 @@ def emit_u8_mul : LLVMFunction :=
 /// already follow says match it exactly.
 def emit_u8_div : LLVMFunction := emit_guarded_native "monad_u8_div" (sdiv (parm_ 0) (parm_ 1))
 
-/// `monad_u64_mod(a, b)`: 0 when `b == 0`, else `a % b`. `urem`, not
-/// the reference's signed `wrapping_rem` -- for `String.hash`'s
-/// full-range u64-as-i64 values this buckets differently than the
-/// interpreter would, but bucketing is internal to `HashMap` and only
-/// self-consistency matters (`std/map.mo`'s own 0-15 bucket chain is
-/// simply never entered with a negative index).
+/// `monad_u64_mod(a, b)`: 0 when `b == 0`, else `a % b`. `urem`, which is
+/// what an unsigned mod should be, and since 2026-09-12 the reference
+/// interpreter agrees (`core/src/core_native.rs`'s `u64_mod` used the
+/// signed `wrapping_rem`; it now uses `uint_binop`).
+///
+/// This comment used to record the divergence and dismiss it: bucketing is
+/// internal to `HashMap`, only self-consistency matters, and "`std/map.mo`'s
+/// own 0-15 bucket chain is simply never entered with a negative index."
+/// The last clause is true and was the trap. The chain is not ENTERED with a
+/// negative index -- it FALLS THROUGH it, into the final `else` slot. So on
+/// the interpreter, every key whose `String.hash` had bit 63 set (djb2
+/// wraps, so about half of them) shared one bucket: 1612 of the compiler's
+/// own 3068 symbol names, against a worst bucket of 23 once the mod is
+/// unsigned. It cost 45443ms of a 266178ms self-compile in one validator.
+/// The compiled binary was always fine; only the interpreter paid, which is
+/// the runtime CI's self-compile actually uses.
 def emit_u64_mod : LLVMFunction := emit_guarded_native "monad_u64_mod" (urem (parm_ 0) (parm_ 1))
 
 /// `#[native u64_div]` (init/number.mo's `U64.div`). Guarded like

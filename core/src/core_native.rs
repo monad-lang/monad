@@ -181,10 +181,28 @@ pub fn exec_native(
     "i8_mul" | "i16_mul" | "i32_mul" | "i64_mul" | "u8_mul" | "u16_mul" | "u64_mul" => {
       int_binop(args, |a, b| a.wrapping_mul(b))
     }
-    "i8_div" | "i16_div" | "i32_div" | "i64_div" | "u8_div" | "u16_div" | "u64_div" => {
+    "i8_div" | "i16_div" | "i32_div" | "i64_div" | "u8_div" | "u16_div" => {
       int_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_div(b) })
     }
-    "u64_mod" => int_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_rem(b) }),
+    // `U64.div`/`U64.mod` are UNSIGNED, as their names say. They used to
+    // share the signed `int_binop` path, and the consequence was not a
+    // rounding subtlety -- it broke every `HashMap` in the self-hosted
+    // compiler.
+    //
+    // `String.hash` is djb2, which wraps, so ~half of all hashes have bit
+    // 63 set and read back as a negative `i64`. `HashMap.bucket_of`
+    // (`std/map.mo`) is `U64.mod hash 256u64`, and a signed remainder
+    // takes the sign of its dividend, so those keys got a NEGATIVE bucket
+    // index. `Bucket16.get`'s dispatch is `if U64.beq 0u64 idx then b0 else
+    // ... else b15`, which a negative index falls straight through -- so
+    // every one of them landed in the same fall-through slot.
+    //
+    // Measured on the compiler's own emitted module: of 3068 symbol names,
+    // 1618 hash negative and 1612 collapsed into ONE bucket, against a
+    // worst bucket of 23 with unsigned mod. `missing_call_targets` was
+    // 45443ms of a 266178ms self-compile purely from scanning that chain.
+    "u64_div" => uint_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_div(b) }),
+    "u64_mod" => uint_binop(args, |a, b| if b == 0 { 0 } else { a.wrapping_rem(b) }),
     "u64_xor" => int_binop(args, |a, b| a ^ b),
     "i8_eq" | "i16_eq" | "i32_eq" | "i64_eq" | "u8_eq" | "u16_eq" | "u64_eq" => {
       int_cmp(args, natives, |a, b| a == b)
@@ -348,6 +366,23 @@ fn make_bool(natives: &NativeTable, v: bool) -> Result<Value, CoreEvalError> {
     tag: ctor.tag,
     args: std::sync::Arc::new(Vec::new().into()),
   })
+}
+
+/// `int_binop` for operations whose operands are genuinely unsigned: the
+/// raw `i64` payload is reinterpreted as `u64`, the operation runs there,
+/// and the result is reinterpreted back. Only the operations where signedness
+/// changes the ANSWER need this -- `add`/`sub`/`mul`/`xor` are bit-identical
+/// either way, and `beq` compares bit patterns, which is why the `U64`
+/// variants of those can keep sharing `int_binop`.
+fn uint_binop(args: &[Value], op: fn(u64, u64) -> u64) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "uint binop needs 2 args".into(),
+    ));
+  }
+  let a = extract_int(&args[0])? as u64;
+  let b = extract_int(&args[1])? as u64;
+  Ok(Value::Lit(IrLit::Num(op(a, b) as i64, NumSuffix::U64)))
 }
 
 fn int_binop(args: &[Value], op: fn(i64, i64) -> i64) -> Result<Value, CoreEvalError> {
