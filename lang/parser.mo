@@ -4912,9 +4912,113 @@ def let_term_assign (r : ParseResult String) (name : Identifier) (typ : ParseTer
 #[partial]
 def let_term_value (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTerm) : ParseResult ParseTerm :=
     match r {
-        // `skip_docstrings (skip_spaces rem)` -- a comment can sit right
-        // before `in` too, not only after it.
-        success rem value => let_term_in (tag "in" (skip_docstrings (skip_spaces rem))) name typ value,
+        // Try `;` (multi-binding) before `in`: `let x := a; y := b in body`.
+        // On `;`, parse another `name [: Type] := value` binding (without the
+        // `let` keyword), then recurse. Each level wraps the body one
+        // `Lam`/`App` deeper, matching the Rust host's `lets()`.
+        success rem value =>
+            let_term_semi (tag ";" (skip_docstrings (skip_spaces rem))) name typ value,
+        fail e => fail e
+    }
+
+/// Try `;` for another binding; on failure, proceed to `in`.
+#[partial]
+def let_term_semi (r : ParseResult String) (name : Identifier) (typ : ParseTerm) (value : ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem _ =>
+            let_term_wrap_rest (let_rest_name (identifier (skip_spaces rem))) name typ value,
+        fail e =>
+            let_term_in (tag "in" (skip_docstrings (skip_spaces (parse_error_remaining e)))) name typ value
+    }
+
+/// Wrap a recursive binding-parse result: `App(Lam(name, inner), value)`.
+#[partial]
+def let_term_wrap_rest (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTerm) (value : ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem inner =>
+            let lam : ParseTerm := pt_lam name typ inner in
+            success rem (pt_app lam value),
+        fail e => fail e
+    }
+
+// ─── Subsequent let bindings (no `let` keyword) ───────────────────────
+// `let x := a; y := b; z := c in body` desugars to
+//   `App(Lam(x, App(Lam(y, App(Lam(z, body), c)), b)), a)`.
+// Each `;` triggers a recursive `let_rest_name`; the result is wrapped
+// by `let_term_wrap_rest` at each level.
+
+#[partial]
+def let_rest_name (r : ParseResult String) : ParseResult ParseTerm :=
+    match r {
+        success rem name =>
+            let_rest_assign (tag ":=" (skip_spaces rem)) rem (Identifier.id name),
+        fail e => fail e
+    }
+
+#[partial]
+def let_rest_assign (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult ParseTerm :=
+    match r {
+        success rem _ =>
+            let_rest_value (expression (skip_docstrings (skip_spaces rem))) name pt_hole,
+        fail _ => let_rest_type (tag ":" (skip_spaces orig)) orig name
+    }
+
+#[partial]
+def let_rest_type (r : ParseResult String) (orig : String) (name : Identifier) : ParseResult ParseTerm :=
+    match r {
+        success rem _ =>
+            let_rest_type_done (type_expression rem) name,
+        fail e => fail (ParseError.custom "expected ':' or ':=' in let expression" (parse_error_remaining e))
+    }
+
+#[partial]
+def let_rest_type_done (r : ParseResult ParseTerm) (name : Identifier) : ParseResult ParseTerm :=
+    match r {
+        success rem typ =>
+            let_rest_assign_typed (tag ":=" (skip_spaces rem)) name typ,
+        fail e => fail e
+    }
+
+#[partial]
+def let_rest_assign_typed (r : ParseResult String) (name : Identifier) (typ : ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem _ =>
+            let_rest_value (expression (skip_docstrings (skip_spaces rem))) name typ,
+        fail e => fail (ParseError.custom "expected := in let expression" (parse_error_remaining e))
+    }
+
+#[partial]
+def let_rest_value (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem value =>
+            let_rest_semi (tag ";" (skip_docstrings (skip_spaces rem))) name typ value,
+        fail e => fail e
+    }
+
+/// After a subsequent value, try `;` for another binding or `in` for the body.
+#[partial]
+def let_rest_semi (r : ParseResult String) (name : Identifier) (typ : ParseTerm) (value : ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem _ =>
+            let_term_wrap_rest (let_rest_name (identifier (skip_spaces rem))) name typ value,
+        fail e =>
+            let_rest_in (tag "in" (skip_docstrings (skip_spaces (parse_error_remaining e)))) name typ value
+    }
+
+#[partial]
+def let_rest_in (r : ParseResult String) (name : Identifier) (typ : ParseTerm) (value : ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem _ =>
+            let_rest_body (expression (skip_docstrings (skip_spaces rem))) name typ value,
+        fail e => fail (ParseError.custom "expected 'in' in let expression" (parse_error_remaining e))
+    }
+
+#[partial]
+def let_rest_body (r : ParseResult ParseTerm) (name : Identifier) (typ : ParseTerm) (value : ParseTerm) : ParseResult ParseTerm :=
+    match r {
+        success rem body =>
+            let lam : ParseTerm := pt_lam name typ body in
+            success rem (pt_app lam value),
         fail e => fail e
     }
 
@@ -7691,6 +7795,23 @@ def test_let_term_chained : Bool :=
 #[test]
 def test_let_term_inside_if_branch : Bool :=
     match def_parser "def f (x : I64) : I64 :=\n  if true\n  then x\n  else\n    let y := x in\n    y" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+/// Multi-binding `let x := a; y := b in body` — desugars to nested
+/// `App(Lam(x, App(Lam(y, body), b)), a)`, matching the Rust host's `lets()`.
+#[test]
+def test_multi_binding_let : Bool :=
+    match expression "let x := 10; y := 20 in x + y" {
+        success rem out => String.beq rem "",
+        fail _ => false
+    }
+
+/// Multi-binding `let` with a type annotation on the second binding.
+#[test]
+def test_multi_binding_let_typed : Bool :=
+    match expression "let x : I64 := 10; y : I64 := 20 in x + y" {
         success rem out => String.beq rem "",
         fail _ => false
     }
