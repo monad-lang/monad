@@ -2,10 +2,11 @@ use io {IO}
 open IO {println, read_file, write_file}
 use std.process {exec_cmd, process_id}
 use std.bench {now, report, report_since, since}
-use lang.types {Decl, LocalScope, ModulePath}
+use lang.types {Decl, LocalScope, ModulePath, Identifier, Term, show_module_path, show_identifier}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang.scope {resolve_class_calls_decls}
 use std.map {}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
@@ -13,6 +14,11 @@ use lang.cli {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`lang/log.mo` -- its own header documents the gating rules).
 use lang.log {debug_module_line, fail_line, ok_line, stage}
+use lang.lower_core_ir {lower_ctx_from_decls, lower_root, LowerError}
+use lang.core_ir {CoreIr}
+use lang.core_eval {eval, basic_native_table}
+use lang.core_value {Env, GlobalCache, GlobalTable, Value, global_cache_new, global_table_len}
+use lang.typecheck.meta_eval {show_value_debug, show_core_eval_error_debug}
 
 #[native "build_commit"]
 def build_commit : String
@@ -318,6 +324,142 @@ def compile_file (file_path : String) (output_dir : Path) (output_name : Path) (
         },
     }
 }
+
+/// Compile a source file and execute the resulting native binary.
+/// Mirrors the Rust host's `monad-rs run <file>` — compile through
+/// `compile_file` (which type-checks, generates LLVM IR, and links via
+/// llc+clang), then `exec_cmd` the binary. Returns the binary's exit
+/// code, or 1 if compilation failed.
+#[partial]
+def run_file (file_path : String) (output_dir : Path) (verbose : Bool) (debug : Bool) : IO I64 {
+    let out_name : Path := Path.path "run_out";
+    let compile_result <- compile_file file_path output_dir out_name verbose debug;
+    if not (compile_result == 0) then do {
+        println "run: compilation failed";
+        return 1
+    } else do {
+        let bin_path := Path.to_string (Path.join output_dir out_name);
+        let exit_code <- exec_cmd bin_path [];
+        return exit_code
+    }
+}
+
+/// Evaluate a source file using the self-hosted interpreter (lower to
+/// CoreIr + evaluate via `lang.core_eval`), without compiling to a
+/// native binary. Mirrors the Rust host's `monad-rs run <file>` for
+/// pure programs — loads the file's dependencies, elaborates, type-
+/// checks the target, lowers to CoreIr, and evaluates `main`. Only the
+/// 8 natives in `basic_native_table` are available (no IO/println);
+/// programs using other natives fail with `ce_unknown_native`.
+#[partial]
+def eval_file (file_path : String) (verbose : Bool) : IO I64 {
+    stage verbose "load + elaborate modules";
+    let elaborated_result : Result String ElaboratedModules <- elaborate_loaded_modules file_path false verbose;
+    match elaborated_result {
+        Result.err e => do {
+            fail_line ("FAILED at stage: load (could not load dependencies: " ++ e ++ ")");
+            return 1
+        },
+        Result.ok em => do {
+            let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+            stage verbose "typecheck target";
+            let diags : List String <- check_module_with_scope em.scope em.target_decls empty_locs (Option.some file_path) verbose;
+            match diags {
+                List.cons _ _ => do {
+                    fail_line "FAILED at stage: typecheck (target file did not typecheck cleanly)";
+                    print_diagnostics diags;
+                    return 1
+                },
+                List.empty => do {
+                    let eval_result <- eval_file_typechecked em verbose;
+                    return eval_result
+                },
+            }
+        },
+    }
+}
+
+/// The `-- eval` pipeline after the typecheck gate passes: lower the
+/// target's elaborated decls to CoreIr rooted at `main`, then hand the
+/// result to `eval_file_lowered`. Split out of `eval_file` so its own
+/// match/do nesting stays at the self-hosted parser's known-good depth
+/// (same shape as `compile_file` delegating to `compile_file_codegen`)
+/// -- the 4-deep bare-match chain this used to inline in one do-block
+/// arm is exactly the shape `lang/parser.mo` fails to parse.
+#[partial]
+def eval_file_typechecked (em : ElaboratedModules) (verbose : Bool) : IO I64 {
+    stage verbose "lower";
+    // Prepare the whole graph for real execution before lowering --
+    // the same "elaborate + dispatch" recipe the codegen pipeline and
+    // `meta_eval_invoke`'s callers use (`compile_loaded_modules_to_ir_`
+    // with_debug`/`expand_decls_graph`). `em.elaborated_decls` is the
+    // raw elaborated graph: its class-method calls (`*` on I64 is
+    // `HMul.mul` underneath) are still syntactic, and lowering them
+    // failed with `le_unresolved_name` before this.
+    let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
+    let dispatched := resolve_class_calls_decls (elaborate_module_decls_best_effort em.scope em.elaborated_decls empty_locs);
+    // `lower_root` roots at a DEF name, not a module name: the target
+    // file's `main` def. The graph above is from BEFORE codegen's
+    // `qualify_modules` stage, so def names are still bare -- rooting
+    // at `[module_name]` failed lower with "unresolved module path
+    // <module>".
+    let root_mp : ModulePath := ModulePath.mp [Identifier.id "main"];
+    let ctx := lower_ctx_from_decls root_mp dispatched;
+    match lower_root ctx root_mp {
+        Result.err e => do {
+            fail_line ("FAILED at stage: lower (" ++ show_lower_error e ++ ")");
+            return 1
+        },
+        Result.ok pr => do {
+            match pr {
+                Pair.pair ir globals => do {
+                    let eval_result <- eval_file_lowered ir globals;
+                    return eval_result
+                },
+            }
+        },
+    }
+}
+
+/// The tail of the `-- eval` pipeline: run the interpreter on lowered
+/// CoreIr + globals and print the result. `eval` threads a memoized
+/// global cache alongside the result; once the root value exists every
+/// global it forced is already in it, so the cache is simply discarded.
+#[partial]
+def eval_file_lowered (ir : CoreIr) (globals : GlobalTable) : IO I64 {
+    match eval ir Env.env_nil globals basic_native_table (global_cache_new (global_table_len globals)) {
+        Pair.pair r _ => do {
+            match r {
+                Result.ok v => do {
+                    println ("Eval result " ++ show_value_debug v);
+                    return 0
+                },
+                Result.err e => do {
+                    fail_line ("FAILED at stage: eval (" ++ show_core_eval_error_debug e ++ ")");
+                    return 1
+                },
+            }
+        },
+    }
+}
+
+/// Render a `LowerError` for the eval command's error output. Covers
+/// every variant: this is a `#[partial]` def, so a missing arm is not a
+/// compile error but a runtime "non-exhaustive match" crash exactly
+/// when the eval command needs its diagnosis most (that crash was the
+/// first bug the eval smoke test hit -- `le_unresolved_name`).
+#[partial]
+def show_lower_error (e : LowerError) : String :=
+    match e {
+        LowerError.le_unresolved_name name => String.concat "unresolved name " (show_identifier name),
+        LowerError.le_unresolved_module_path path => String.concat "unresolved module path " (show_module_path path),
+        LowerError.le_unknown_inductive path => String.concat "unknown inductive " (show_module_path path),
+        LowerError.le_unknown_constructor path => String.concat "unknown constructor " (show_module_path path),
+        LowerError.le_unknown_native name => String.concat "unknown native " (show_identifier name),
+        LowerError.le_type_level_term => "type-level term reached lowering",
+        LowerError.le_con_hole_before_filled_arg => "constructor hole before a filled arg",
+        LowerError.le_in_def path inner => String.concat "in def " (String.concat (show_module_path path) (String.concat ": " (show_lower_error inner))),
+    }
 
 /// The original `compile_file` body, unchanged -- codegen's own loading
 /// + compile pipeline, run only once the gate above has confirmed the
@@ -665,6 +807,8 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
 // primitives either way.
 type Command {
     compile (file: Path) (out_name: Path) (verbose: Bool) (debug: Bool),
+    run (file: Path) (verbose: Bool) (debug: Bool),
+    eval (file: Path) (verbose: Bool),
     pretty (file: String),
     check (files: List String) (verbose: Bool),
     test (files: List String) (verbose: Bool),
@@ -734,6 +878,43 @@ def Command.from_args (args : List String) : Command :=
                         },
                 },
                 }
+            else if cmd == "run" then
+                match Cli.take_flag "verbose" "v" rest {
+                    Cli.FlagResult.flag_result verbose rest1 =>
+                        match Cli.take_flag "debug" "g" rest1 {
+                            Cli.FlagResult.flag_result debug_explicit rest1a =>
+                                match Cli.take_flag "release" "" rest1a {
+                                    Cli.FlagResult.flag_result release rest1b =>
+                                        let debug := if debug_explicit then true else not release in
+                                        match Cli.take_positional rest1b {
+                                            Cli.PosResult.pos_result path_opt _ =>
+                                                match path_opt {
+                                                    Option.some path =>
+                                                        match Path.of path {
+                                                            err _ => Command.help,
+                                                            ok p => Command.run p verbose debug,
+                                                        },
+                                                    Option.none => Command.help,
+                                                },
+                                        },
+                                },
+                        },
+                }
+            else if cmd == "eval" then
+                match Cli.take_flag "verbose" "v" rest {
+                    Cli.FlagResult.flag_result verbose rest1 =>
+                        match Cli.take_positional rest1 {
+                            Cli.PosResult.pos_result path_opt _ =>
+                                match path_opt {
+                                    Option.some path =>
+                                        match Path.of path {
+                                                            err _ => Command.help,
+                                                            ok p => Command.eval p verbose,
+                                                        },
+                                    Option.none => Command.help,
+                                },
+                        },
+                }
             else if cmd == "pretty" then
                 match Cli.take_positional rest {
                     Cli.PosResult.pos_result path_opt _ =>
@@ -765,6 +946,12 @@ def main (args : List String) : IO I64 {
     match cmd {
         compile file_path out_name verbose debug => do {
             compile_file (Path.to_string file_path) default_output_dir out_name verbose debug
+        },
+        run file_path verbose debug => do {
+            run_file (Path.to_string file_path) default_output_dir verbose debug
+        },
+        eval file_path verbose => do {
+            eval_file (Path.to_string file_path) verbose
         },
         pretty file_path => do {
             // Prints the TARGET FILE's own declarations, pretty-printed
@@ -820,6 +1007,8 @@ def print_help : IO I64 {
     println "         Parse and compile a .mo source file";
     println "         --verbose/-v prints each module as it loads and one line per pipeline stage";
     println "         --debug/-g emits DWARF debug info (one source location per top-level def)";
+    println "       monad run <path> [--verbose/-v] [--debug/-g] [--release]  Compile and execute a .mo source file";
+    println "       monad eval <path> [--verbose/-v]  Evaluate a .mo source file using the built-in interpreter (pure programs only)";
     println "       monad pretty <path>  Parse and pretty print a .mo source file";
     println "       monad check <path>... [--verbose/-v]  Parse and typecheck .mo source files (no execution)";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";
