@@ -2613,6 +2613,124 @@ Key patterns when writing self-hosted Monad code:
     "fat"` / `codegen-units = 1` is -5.0% and mimalloc a further -22.6%
     on interpreted workloads, -25.7% combined. Take any before/after
     numbers older than 2026-09-09 as measured on the slower binary.
+38. **`U64.mod` was a SIGNED remainder, which collapsed half of every
+    `HashMap` in the self-hosted compiler into ONE bucket. Full
+    self-compile 275424ms -> 115193ms (-58.2%) from one line
+    (2026-09-12).**
+    `core/src/core_native.rs` had `"u64_mod" => int_binop(args, |a, b| ...
+    a.wrapping_rem(b))`, and `int_binop` computes on the raw `i64`
+    payload, so a signed remainder took the sign of its dividend.
+    `String.hash` is djb2, which wraps, so ~half of all hashes have bit 63
+    set and read back negative -- and `HashMap.bucket_of` (`std/map.mo`) is
+    `U64.mod hash 256u64`. `Bucket16.get`'s dispatch is
+    `if U64.beq 0u64 idx then b0 else ... else b15`, which does not REJECT
+    a negative index, it FALLS THROUGH it into the last slot. Over the
+    compiler's own 3,068 emitted symbol names: 1,618 hash negative and
+    1,612 shared one bucket, against a worst bucket of 23 once the mod is
+    unsigned. Fixed with a `uint_binop` path for `u64_div`/`u64_mod`;
+    `add`/`sub`/`mul`/`xor`/`beq` are bit-identical either way and still
+    share `int_binop`. Note `U64.lt`/`U64.gt` are STILL signed
+    (`int_cmp`), which is a latent bug for values >= 2^63 -- not needed by
+    `HashMap`, which compares bucket indices with `beq`, but do not assume
+    the `U64` family is unsigned just because this one now is.
+    **The code already recorded the divergence and dismissed it.**
+    `lang/codegen/runtime.mo`'s `emit_u64_mod` uses `urem`, and its comment
+    said bucketing is internal to `HashMap`, only self-consistency matters,
+    and "`std/map.mo`'s own 0-15 bucket chain is simply never entered with
+    a negative index". True, and the trap: not ENTERED, FALLEN THROUGH. So
+    the compiled binary was always fine and only the INTERPRETER paid --
+    which is the runtime CI's self-compile actually uses.
+    Every map-backed phase fell 55-97% and every phase touching no map was
+    unchanged, which is the diagnosis confirming itself:
+    `build_scope_from_decls` 12308 -> 1014, `names_of_decls` 4220 -> 272,
+    `qualify_modules` 25435 -> 5118, `elaborate_class` 71244 -> 26694,
+    `filter_reachable` 13083 -> 2616, `compile_db_module` 33002 -> 12780,
+    the call-target gate 47800 -> 1366; `load_file_modules` 45685 ->
+    45317, `open_alias_resolve` 5476 -> 5348, `emit_module` 3886 -> 3921,
+    `llc` 3184 -> 3225. `load_file_modules` is now 39% of the compile and
+    the dominator.
+    **The tell, and the transferable rule: a per-operation cost ~1000x its
+    plausible floor means the DATA STRUCTURE is broken, not the loop.**
+    One hashmap probe was costing 1.17ms (45443ms for ~38,800 probes of a
+    3,068-key map). That was only visible because the probe loop was
+    sub-timed separately from the whole-module walk wrapped around it --
+    the walk was 387ms, i.e. the part that looked expensive was not.
+    **Order-sensitivity this changes, covered but worth knowing:** bucket
+    assignment changes `HashMap.to_list` order, and `scope_all_inductives`
+    (`lang/lower_core_ir.mo`) feeds `find_inductive_by_case_name`, which
+    takes the FIRST inductive owning a constructor of a given name -- its
+    own comment calls reordering "a miscompile, not a slower build". That
+    order was ALREADY arbitrary hash order, so this re-rolls dice rather
+    than newly loading them, but it is why the oracle and the full corpus
+    (including `slow_tests`) are the gate for a bucketing change, not
+    reasoning.
+39. **Bytes copied does not predict wall time when the inner operation is a
+    native memcpy (2026-09-12).** `emit_instrs` (`lang/codegen/ir.mo`) was
+    the one function in its family still doing
+    `String.concat a (recurse rest)`, the shape `emit_blocks`' own comment
+    condemns. Quantified from the compiler's emitted module: 20,389 basic
+    blocks, 3.55 MB of instruction text, ~1.7 GB recopied (~3.4 GB counting
+    both concats per instruction) -- a ~500x amplification, and it was
+    ranked the top defect on that basis. Converted to the chunk-list +
+    `String.concat_list` form: worth about **0.5s**. `String.concat` is a
+    native `memcpy` and there were only ~200k calls. What costs time in
+    this interpreter is the NUMBER OF INTERPRETED STEPS and allocations,
+    not bytes moved -- which is why item 38's bucket-chain scan beat this
+    by two orders of magnitude. Keep the fix (it is strictly less work and
+    the output is identical by construction), but size a quadratic by the
+    count of interpreted operations it performs, not by the bytes it
+    touches.
+40. **Inserting a def between an attribute and its `def` -- or into the
+    middle of a doc comment -- derails the self-hosted parse of the WHOLE
+    file, and `monad-rs check <file>` reports 0 errors (2026-09-12).**
+    Same family as item 20 ("deleting a def can silently truncate the
+    self-hosted parse"), different trigger, and the diagnosis is much less
+    obvious because the file you broke is not the file that complains: it
+    surfaces as `unknown variable '<some other def in that file>'` in an
+    unrelated IMPORTING file. Landing a helper between `#[partial]` and
+    `def compile_loaded_modules_to_ir_with_debug` (`lang/codegen/emit.mo`)
+    produced `unknown variable 'compile_db_module_with_debug'` and
+    `'compile_loaded_modules_to_ir_with_debug'` in `lang/main.mo`, while
+    `monad-rs check lang/codegen/emit.mo` stayed clean -- the Rust host and
+    the self-hosted parser are different code paths.
+    **Fast reproducer: `monad-rs run lang/main.mo check lang/main.mo`
+    (~60s), not a self-compile.** The tell is the self-hosted checker
+    echoing your doc-comment lines back as content. When adding a def by
+    script, anchor above the whole doc-comment + attribute + `def` group,
+    never on the `def` line alone.
+41. **A `--release` profile says nothing about the DEFAULT path, and the
+    default path had a 164x pathology nobody had ever profiled
+    (2026-09-12).** Debug info is on by default (`--release` opts out,
+    `lang/main.mo`), but every recorded profile -- including CI's
+    `monad:bootstrap-compile` -- is a `--release` run. A `--verbose`
+    self-compile WITHOUT `--release` took **28035824ms (7h48m)** against
+    275424ms with it, every timed phase within noise, so ~7h44m (99.4%)
+    sat in the one untimed span: `with_located_decls` (`lang/main.mo`),
+    which re-reads and re-parses the whole dependency graph to attach
+    `Term.ctx` position wrappers. It then FAILED
+    (`no instance found for Append.append`), so the default path did not
+    even work -- unnoticed because nobody waits eight hours.
+    Root cause: `resolve_offsets_in_file` (`lang/parser/position.mo`)
+    checked `is_ascending offsets` and otherwise fell back to
+    `resolve_one_by_one`, its own doc comment calling it "the
+    correct-but-quadratic path" -- a whole-file rescan per offset, taken
+    silently. `build_loc_table` (`lang/parser.mo`) asserted pre-order
+    collection yields ascending offsets. **It does not, and the
+    counterexample is every infix expression in the language:** `a + b`
+    parses to `app (app (+) a) b`, so a pre-order walk reaches the operator
+    node -- whose span starts at the `+` -- before the operand `a` that
+    precedes it in the source. Measured with `bench/parser_located.mo`
+    (kept as the standing guard, and it runs in seconds rather than hours):
+      init/id.mo      675 B,   30 spans  ascending YES   27ms ->     36ms
+      lang/types.mo 73000 B, 1469 spans  ascending NO  1753ms -> 287766ms
+    first inversion at span index 244. Fixed by SORTING
+    (`sort_offsets_asc`, a local merge sort -- there is no `List.sort` in
+    `std/`) and **deleting the fallback**: located parse of `lang/types.mo`
+    287766ms -> 2012ms (-99.3%). An unreachable-by-hope slow path that
+    nothing exercises is how this hid. Two rules: profile the mode users
+    actually get, not only the one CI measures; and a "slow beats wrong"
+    fallback needs something that FAILS when it is taken, or it becomes the
+    fast path in the dark.
 
 ## Committing Changes
 
