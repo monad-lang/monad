@@ -14,6 +14,23 @@ open ParseResult {fail, success}
 /// self-hosted code (no such native is exposed anywhere in the
 /// standard library); deferred, and zero known corpus impact since no
 /// `\u{}` escape appears anywhere in the current corpus.
+///
+/// **That last clause is an INVARIANT, not an observation, and it fails
+/// late.** The Rust reference parser accepts `\u{XXXX}`, so a `.mo` file
+/// using one type-checks clean under `monad-rs check` and passes
+/// `monad-rs test` -- both go through the Rust host. Only the SELF-HOSTED
+/// parse rejects it, and it rejects the whole module, so the first
+/// symptom is a self-compile dying with `call to undefined symbol(s)`
+/// naming that module's defs. Cost one bootstrap cycle to find, 2026-09-13,
+/// on a single `"\u{00e9}"` in a test fixture in
+/// `lang/parser/position.mo`; the fix is to write the literal character.
+/// The fast reproducer, ~60s instead of a full self-compile:
+///
+///     monad-rs run lang/main.mo check <the file>
+///
+/// which reports `did not fully parse (stopped before end of file)` and
+/// prints the offending text, where plain `monad-rs check <the file>`
+/// reports 0 errors. Same shape as AGENTS.md item 40.
 #[partial]
 def escape_replacement (c : String) : Option String :=
 	if String.beq "n" c then Option.some "\n"
