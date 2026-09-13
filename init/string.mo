@@ -12,6 +12,34 @@ def String.concat (a b : String) : String
 #[native string_length]
 def String.length (s : String) : I64
 
+/// Number of `'\n'` bytes among the first `len` bytes of `s`.
+///
+/// Takes a LENGTH instead of a substring on purpose. The caller
+/// (`resolve_ascending`, lang/parser/position.mo) asks about one segment
+/// between two source spans and then moves on, so it would otherwise
+/// have to `String.slice` a fresh string per span -- and the compiled
+/// `monad_string_slice` (lang/codegen/runtime.c) does a `strlen` plus a
+/// malloc plus a memcpy per call, which would make that walk quadratic.
+/// Scanning in place keeps it O(len) on both runtimes and allocates
+/// nothing. `len` past the end of `s` is clamped, not an error.
+#[native string_count_newlines]
+def String.count_newlines (s : String) (len : I64) : I64
+
+/// Number of CHARACTERS after the last `'\n'` among the first `len`
+/// bytes of `s` -- or, if that range holds no newline, the character
+/// count of the whole range. Together with `String.count_newlines` this
+/// is enough to advance a line:column position across the range.
+///
+/// CHARACTERS, not bytes: a character is a byte that is not a UTF-8
+/// continuation byte, matching `is_utf8_continuation_byte`
+/// (lang/parser/position.mo). Counting bytes would put the column after
+/// a multi-byte character in the wrong place -- see
+/// `test_resolve_offsets_column_counts_characters`. Same length-not-
+/// substring convention, and for the same reason, as
+/// `String.count_newlines` above.
+#[native string_trailing_chars]
+def String.trailing_chars (s : String) (len : I64) : I64
+
 #[native string_to_lowercase]
 def String.to_lowercase (s : String) : String
 

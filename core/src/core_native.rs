@@ -131,6 +131,8 @@ const PURE_NATIVES: &[&str] = &[
   "string_concat",
   "string_concat_list",
   "string_length",
+  "string_count_newlines",
+  "string_trailing_chars",
   "string_starts_with",
   "string_slice",
   "string_drop",
@@ -262,6 +264,8 @@ pub fn exec_native(
     "string_concat" => string_concat(args),
     "string_concat_list" => string_concat_list(args, natives),
     "string_length" => string_length(args),
+    "string_count_newlines" => string_count_newlines(args),
+    "string_trailing_chars" => string_trailing_chars(args),
     "string_to_lowercase" => string_to_lowercase(args),
     "string_starts_with" => string_starts_with(args, natives),
     "string_slice" => string_slice(args),
@@ -665,6 +669,59 @@ fn string_length(args: &[Value]) -> Result<Value, CoreEvalError> {
   }
   let s = extract_string(&args[0])?;
   Ok(Value::Lit(IrLit::Num(s.len() as i64, NumSuffix::I64)))
+}
+
+/// The byte range `string_count_newlines`/`string_trailing_chars` look
+/// at: the first `len` bytes of `s`, clamped. Both take a LENGTH rather
+/// than a pre-sliced string so that `resolve_ascending`
+/// (`lang/parser/position.mo`) can ask about one segment per source span
+/// without materialising it -- see those natives' doc comments in
+/// `init/string.mo` for why a slice per span would be quadratic on the
+/// compiled runtime.
+fn prefix_bytes<'a>(s: &'a str, len: &Value) -> Result<&'a [u8], CoreEvalError> {
+  let n = extract_int(len)?;
+  let n = if n < 0 { 0 } else { n as usize };
+  let bytes = s.as_bytes();
+  Ok(&bytes[..n.min(bytes.len())])
+}
+
+fn string_count_newlines(args: &[Value]) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "string_count_newlines needs 2 args".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  let n = prefix_bytes(s, &args[1])?
+    .iter()
+    .filter(|b| **b == b'\n')
+    .count();
+  Ok(Value::Lit(IrLit::Num(n as i64, NumSuffix::I64)))
+}
+
+/// Characters (not bytes) after the last newline in the range, or across
+/// the whole range when it has none. A character is a byte that is not a
+/// UTF-8 continuation byte -- `(b & 0xC0) != 0x80`, the same 0x80-0xBF
+/// range `is_utf8_continuation_byte` (`lang/parser/position.mo`) tests
+/// for. `lang/codegen/runtime.c`'s `monad_string_trailing_chars` must
+/// agree with this byte for byte: a disagreement surfaces as the host and
+/// a self-compiled binary reporting different columns.
+fn string_trailing_chars(args: &[Value]) -> Result<Value, CoreEvalError> {
+  if args.len() < 2 {
+    return Err(CoreEvalError::NativeArgError(
+      "string_trailing_chars needs 2 args".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  let mut n: i64 = 0;
+  for b in prefix_bytes(s, &args[1])? {
+    if *b == b'\n' {
+      n = 0;
+    } else if (*b & 0xC0) != 0x80 {
+      n += 1;
+    }
+  }
+  Ok(Value::Lit(IrLit::Num(n, NumSuffix::I64)))
 }
 
 fn string_to_lowercase(args: &[Value]) -> Result<Value, CoreEvalError> {

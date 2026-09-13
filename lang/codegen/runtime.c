@@ -473,6 +473,55 @@ int64_t monad_string_length(char* s) {
     return s ? (int64_t)strlen(s) : 0;
 }
 
+/* `#[native string_count_newlines]` / `#[native string_trailing_chars]`
+   (init/string.mo) -- the two scans `lang/parser/position.mo`'s bulk
+   offset resolver needs in order to walk one step per SPAN rather than
+   one per character. Both look at the first `len` bytes of `s` IN PLACE
+   and return a count; neither allocates, and neither calls `strlen`.
+
+   Both of those properties are load-bearing, not tidiness. The resolver
+   threads a remainder forward and asks about the segment between two
+   consecutive spans, so it makes one call per span; a `strlen` (or a
+   `monad_string_slice`, which does a `strlen` AND a malloc AND a memcpy)
+   would make each call O(whole remaining file) and the walk quadratic
+   again -- exactly the shape `monad_string_drop`'s own comment above
+   describes paying for. Stopping early at NUL is what replaces the
+   bounds check a `strlen` would have provided, the same trick
+   `monad_string_drop` uses, so the cost stays O(min(len, strlen(s))).
+
+   `trailing_chars` counts CHARACTERS after the last '\n' (or across all
+   of the range, if it contains none) -- a character being a byte that is
+   not a UTF-8 continuation byte, `(b & 0xC0) != 0x80`, which is the same
+   0x80-0xBF range `is_utf8_continuation_byte` (lang/parser/position.mo)
+   tests for. Counting bytes here instead would put a column after a
+   multi-byte character in the wrong place, and
+   `test_resolve_offsets_column_counts_characters` is the test that says
+   so. `core/src/core_native.rs`'s two implementations must agree with
+   these byte for byte: a disagreement shows up as the host and a
+   self-compiled binary reporting different columns, which reads like a
+   codegen bug and is not one. */
+int64_t monad_string_count_newlines(char* s, int64_t len) {
+    if (!s || len <= 0) return 0;
+    int64_t n = 0;
+    for (int64_t i = 0; i < len; i++) {
+        if (s[i] == '\0') break;
+        if (s[i] == '\n') n++;
+    }
+    return n;
+}
+
+int64_t monad_string_trailing_chars(char* s, int64_t len) {
+    if (!s || len <= 0) return 0;
+    int64_t n = 0;
+    for (int64_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '\0') break;
+        if (c == '\n') n = 0;
+        else if ((c & 0xC0) != 0x80) n++;
+    }
+    return n;
+}
+
 /* `I64.to_string` (init/number.mo) had no backing implementation at
    all -- neither a Monad-level `:=` body nor a runtime primitive.
    Returns a plain malloc'd NUL-terminated buffer, matching this

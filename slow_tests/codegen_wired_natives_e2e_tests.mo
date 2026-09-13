@@ -262,3 +262,33 @@ def main (args : List String) : IO I64 := do {
 }
 "# in
     compile_source_run_expect source "array_builder_freeze" 7
+
+/// The C `monad_string_count_newlines`/`monad_string_trailing_chars`
+/// (runtime.c). These back `lang/parser/position.mo`'s bulk offset
+/// resolver, which the compiler compiles into ITSELF -- so an unwired
+/// native here is not a missing convenience, it is a self-compiled
+/// compiler that reports wrong line:column, or fails codegen outright
+/// with `call to undefined symbol(s): monad_string_...`.
+///
+/// Both halves of the contract are asserted, because the two runtimes
+/// have to agree byte for byte or host and compiled builds disagree
+/// about a column:
+///   * a LENGTH shorter than the string is honoured (nothing is sliced,
+///     so a native that ignored its second argument would still return
+///     the whole-string answer and pass a weaker test);
+///   * `trailing_chars` counts CHARACTERS, not bytes -- `"a—b"` is 5
+///     bytes and 3 characters -- and restarts at a newline.
+#[test]
+def test_c_newline_and_trailing_char_scans : IO Bool :=
+    let source := r#"def main (args : List String) : IO I64 := do {
+    let s := "ab\nc—d\nefg";
+    let all_nl := I64.beq (String.count_newlines s (String.length s)) 2;
+    let cut_nl := I64.beq (String.count_newlines s 3) 1;
+    let none_nl := I64.beq (String.count_newlines s 2) 0;
+    let tail := I64.beq (String.trailing_chars s (String.length s)) 3;
+    let chars := I64.beq (String.trailing_chars s 8) 3;
+    let whole := I64.beq (String.trailing_chars s 2) 2;
+    return (if all_nl && cut_nl && none_nl && tail && chars && whole then 7 else 1)
+}
+"# in
+    compile_source_run_expect source "string_newline_scans" 7

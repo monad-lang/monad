@@ -189,6 +189,17 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // repro (`println (I64.to_string (String.length "abc"))`
             // printed a garbage heap address instead of `3`).
             else if String.beq target "string_length" then Option.some (NativeWrapKind.passthrough "monad_string_length")
+            // `String.count_newlines`/`String.trailing_chars`
+            // (init/string.mo) -- plain `(char*, i64) -> i64` scans, the
+            // same passthrough shape as `string_length` just above. Both
+            // halves of this file matter for them: without the entry
+            // here the call compiles to the generic "return Unit" stub
+            // that silently discards its arguments, and without the
+            // `mk_decl` in `runtime_declarations` below it fails as
+            // `call to undefined symbol(s): monad_...` out of
+            // `validate_all_call_targets_defined`.
+            else if String.beq target "string_count_newlines" then Option.some (NativeWrapKind.passthrough "monad_string_count_newlines")
+            else if String.beq target "string_trailing_chars" then Option.some (NativeWrapKind.passthrough "monad_string_trailing_chars")
             // `std/array.mo`. Plain passthroughs: every value in this
             // backend is one machine word (a `Constructor*`, a `char*`,
             // or an unboxed i64), so an array's elements need no
@@ -432,6 +443,10 @@ def runtime_declarations : List LLVMDeclaration :=
     // of which of the two parallel native-dispatch mechanisms
     // (`lookup_native_any` vs. `Term.ntv`) it goes through.
     let d23 := mk_decl "monad_string_length" (List.cons "i64" List.empty) "i64" in
+    // `monad_string_count_newlines`/`monad_string_trailing_chars`
+    // (runtime.c) -- two args, same i64-not-`char*` convention as d23.
+    let d23a := mk_decl "monad_string_count_newlines" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d23b := mk_decl "monad_string_trailing_chars" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // Same requirement as `monad_string_length` just above --
     // `compile_native_def_wrapper_ir`'s own `call` (the "native def
     // compiles to a real wrapper" fix) hits the identical "no implicit
@@ -489,7 +504,7 @@ def runtime_declarations : List LLVMDeclaration :=
     // as every native above; see its `native_runtime_fn_name` entry.
     let d47 := mk_decl "monad_get_env" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d8, d9, d10, d11, d12, d13,
-     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
+     d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
