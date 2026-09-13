@@ -13,7 +13,7 @@ use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use lang.cli {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`lang/log.mo` -- its own header documents the gating rules).
-use lang.log {debug_module_line, fail_line, ok_line, stage}
+use lang.log {fail_line, ok_line, stage}
 use lang.lower_core_ir {lower_ctx_from_decls, lower_root, LowerError}
 use lang.core_ir {CoreIr}
 use lang.core_eval {eval, basic_native_table}
@@ -192,72 +192,19 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_nam
     link_ir ir_text output_dir output_name verbose
 }
 
-/// (The v1 per-def location table this section used to build --
-/// `no_debug_info`/`debug_info_for_source`, fed by a second read of the
-/// target file -- is gone: since stage 6 a function's own location is
-/// the `Term.ctx` wrapper on its body, which `with_located_decls`
-/// already put there for every loaded module.)
-
-/// Replace EVERY loaded module's decls with ones carrying source
-/// positions -- stage 6: a `--debug` compile locates the dependencies'
-/// defs too, not just the target's, so `std.list::map`'s `!DISubprogram`
-/// carries its own line in its own file instead of nothing (or, worse,
-/// the target's same-named def's line via the old unqualified fallback).
-///
-/// The located and plain parses run the same grammar and the same
-/// `expand_decls`, so for each module the two decl lists differ ONLY by
-/// `Term.ctx` wrappers. Swapping one for the other is therefore invisible
-/// to everything downstream except the debug metadata -- which is
-/// precisely what `tools/debug_transparency_oracle.sh` checks, by
-/// stripping `!dbg` from a `--debug` build and requiring byte-identity
-/// with a `--release` one (now covering the dep modules as well).
-///
-/// Per-module failure keeps that module's plain decls: a compile must
-/// never fail because its debug side-channel did.
-#[partial]
-def with_located_decls (loaded : LoadedModules) (verbose : Bool) : IO LoadedModules := do {
-    let main_located : ModuleInfo <- locate_module_info loaded.main_module;
-    let all_located : List ModuleInfo <- locate_module_infos loaded.all_modules List.empty verbose;
-    return (mk_loaded_modules main_located all_located)
-}
-
-/// `LoadedModules`/`ModuleInfo` constructors as defs with DECLARED
-/// return types, not bare struct literals at the use site: the
-/// self-hosted checker cannot infer a struct literal's type from a
-/// `return`/argument position (`cannot infer struct type for struct
-/// literal`), and the self-hosted BACKEND miscompiles one there even
-/// where the Rust host accepts it. A def's declared return type is what
-/// gives the literal its expected type.
-#[partial]
-def mk_loaded_modules (main_module : ModuleInfo) (all_modules : List ModuleInfo) : LoadedModules :=
-    { main_module := main_module, all_modules := all_modules }
-
-#[partial]
-def mk_module_info (path : ModulePath) (file_path : String) (decl_list : List Decl) : ModuleInfo :=
-    { path := path, file_path := file_path, decl_list := decl_list }
-
-/// Read `m`'s own file and re-parse it with positions; on any failure
-/// the module stands unchanged.
-#[partial]
-def locate_module_info (m : ModuleInfo) : IO ModuleInfo := do {
-    let src <- IO.read_file (Path.path m.file_path);
-    match try_parse_decls_located src {
-        Option.none => return m,
-        Option.some located => return (mk_module_info m.path m.file_path located),
-    }
-}
-
-#[partial]
-def locate_module_infos (mods : List ModuleInfo) (acc : List ModuleInfo) (verbose : Bool) : IO (List ModuleInfo) := match mods {
-    List.empty => return acc,
-    List.cons m rest => do {
-        // Before the re-parse, like `module_line` before a first load: a
-        // slow debug pass then shows which module it is grinding through.
-        debug_module_line verbose m.file_path;
-        let located : ModuleInfo <- locate_module_info m;
-        locate_module_infos rest (List.append acc (List.cons located List.empty)) verbose
-    },
-}
+// (The v1 per-def location table this section used to build --
+// `no_debug_info`/`debug_info_for_source`, fed by a second read of the
+// target file -- is gone: since stage 6 a function's own location is the
+// `Term.ctx` wrapper on its body.
+//
+// `with_located_decls`/`locate_module_info`/`locate_module_infos` are gone
+// too, along with `mk_loaded_modules`/`mk_module_info`, which existed only
+// to rebuild what they replaced. `parse_all_decls` (`lang/module.mo`) now
+// locates on EVERY path, so the wrappers are already there by the time any
+// command has a `LoadedModules` -- there is nothing left to swap in, and
+// `--debug` no longer re-reads and re-parses the whole dependency graph to
+// get them. That second parse was 76029ms of a 172143ms debug self-compile;
+// it is now simply absent.)
 
 /// Parse a source file and compile + run it via LLVM. Stage 3 of
 /// `bootstrapping/unify-check-compile-test-elaboration.md`: gates on the
@@ -477,14 +424,16 @@ def show_lower_error (e : LowerError) : String :=
 /// failed, in which case this redundant re-attempt produces the same
 /// real, rendered diagnostic the old code already did via its own
 /// fallback path below, rather than a bare "gate failed").
-/// `debug` (from `Command.compile`'s own field -- on by default since
-/// stage 5, `--release` opts out, `--debug`/`-g` opts back in) gates
-/// DWARF debug info (one location per def from the `Term.ctx` wrapper
-/// on its body, plus per-term locations from stage 3). When on, EVERY
-/// loaded module is re-parsed with positions recorded and the located
-/// decls replace the plain ones (`with_located_decls`) -- the term
-/// wrappers ARE the debug info, so there is no separate name-keyed
-/// location table and no second read of the target file.
+/// `debug` (from `Command.compile`'s own field -- on by default,
+/// `--release` opts out, `--debug`/`-g` opts back in) gates whether DWARF
+/// is EMITTED, and nothing else. It used to also decide the SHAPE of the
+/// term tree: the wrappers the debug info is built from were added by
+/// re-parsing every loaded module (`with_located_decls`), so `--release`
+/// and `--debug` ran the rest of the pipeline on structurally different
+/// trees. `parse_all_decls` (`lang/module.mo`) now locates on every path,
+/// so both modes see the same tree and this flag only reaches
+/// `source_path`/`debug_files` -- see `parse_all_decls`' own doc comment
+/// for the bug that divergence caused.
 #[partial]
 def compile_file_codegen (file_path : String) (output_dir : Path) (output_name : Path) (verbose : Bool) (debug : Bool) (preloaded : Option LoadedModules) : IO I64 {
     // `preloaded` is the module set the typecheck gate already loaded, if
@@ -516,12 +465,6 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
             // legitimately measures nothing, and a 0ms span is exactly what
             // AGENTS.md item 25 says to treat as a broken span -- so don't
             // print one rather than train a reader to ignore it.
-            let t_locate : I64 <- Bench.now;
-            let loaded : LoadedModules <-
-                if debug then with_located_decls loaded verbose else return loaded;
-            let _t_locate : I64 <- bench_step (verbose && debug)
-                "with_located_decls (2nd read+parse, positions)" t_locate
-                (List.length (get_loaded_all loaded));
             do {
                 let source_path : Option String := if debug then Option.some file_path else Option.none;
                 // `verbose` thread-through: previously this branch dumped the

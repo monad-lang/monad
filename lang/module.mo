@@ -63,7 +63,31 @@ def init_module_path : ModulePath := ModulePath.mp [Identifier.id "init"]
 def std_module_path : ModulePath := ModulePath.mp [Identifier.id "std"]
 
 /// Parse all declarations from source text.
-/// Uses decls_parser which properly handles docstrings.
+///
+/// Uses `decls_parser_located`, so every term carries its source position
+/// as a `Term.ctx` wrapper -- on EVERY path, not just `compile --debug`.
+///
+/// This is the one production parse site (`load_module_decls`/
+/// `parse_module` reach it, and through them `check`, `test`, `compile`
+/// and `pretty`), so locating here is what gives the whole compiler a
+/// single term shape. It used to use the plain `decls_parser`, and
+/// `compile --debug` then RE-READ and RE-PARSED the entire dependency
+/// graph through `with_located_decls` to add the wrappers afterwards.
+/// Two consequences, both bad:
+///   - two parses on the default path, one of them thrown away;
+///   - and, worse, a tree shape that only `compile --debug` ever saw.
+///     `Term.ctx` is supposed to be semantically transparent (see its own
+///     doc comment, `lang/types.mo`), but the ~180 sites that match on
+///     term SHAPE only actually stay transparent if something exercises
+///     them. Nothing did: CI compiles with `--release`, and `check`/
+///     `test` never built a wrapper at all. `infer_carrier_type`
+///     (`lang/scope.mo`) had no `Term.ctx` arm, so under `--debug` every
+///     `++` on a String failed to resolve its `Append` instance and
+///     `monad compile lang/main.mo` -- the DEFAULT invocation -- died at
+///     `no instance found for `Append.append``.
+/// With one shape, the 1467-test corpus exercises wrapper transparency
+/// continuously, and `--release`/`--debug` goes back to meaning what it
+/// should: whether DWARF is EMITTED, not what the compiler decides.
 ///
 /// Runs the result through `expand_decls` (macro expansion,
 /// `lang.typecheck.macro_queue`) before returning — this is the real
@@ -72,8 +96,11 @@ def std_module_path : ModulePath := ModulePath.mp [Identifier.id "std"]
 /// one of the two sites the macro-expansion plan calls out by name;
 /// its strict twin is `try_parse_decls_strict` below. `ParseResult`'s
 /// own `remaining` is untouched -- only the parsed payload changes.
+/// (`try_parse_decls_strict` is still on the PLAIN parser: it only feeds
+/// rendered parse-error diagnostics on a cold path, so it has no reason
+/// to build wrappers. Locating it would be harmless, not useful.)
 def parse_all_decls (input : String) : ParseResult (List Decl) :=
-    match decls_parser input {
+    match decls_parser_located input {
         ParseResult.success rem decl_list => ParseResult.success rem (expand_decls decl_list),
         ParseResult.fail e => ParseResult.fail e,
     }
@@ -83,20 +110,6 @@ def try_parse_decls (input : String) : Option (List Decl) :=
     let result : ParseResult (List Decl) := parse_all_decls input in
     match result {
         ParseResult.success _ decl_list => Option.some decl_list,
-        ParseResult.fail _ => Option.none,
-    }
-
-/// `try_parse_decls`'s twin that RECORDS SOURCE POSITIONS on the terms it
-/// returns, for `compile --debug`.
-///
-/// Runs the same `expand_decls` as the plain path, so the two differ only
-/// by the `Term.ctx` wrappers -- which is what lets `compile_file_codegen`
-/// swap this result in for the target module's decls and change nothing
-/// else. `tools/debug_transparency_oracle.sh` enforces exactly that.
-#[partial]
-def try_parse_decls_located (input : String) : Option (List Decl) :=
-    match decls_parser_located input {
-        ParseResult.success _ decl_list => Option.some (expand_decls decl_list),
         ParseResult.fail _ => Option.none,
     }
 
