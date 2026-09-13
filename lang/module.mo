@@ -1256,14 +1256,61 @@ def elaborate_module_decls (scope : Scope) (decl_list : List Decl) (locals : Loc
 /// possible.
 #[partial]
 def elaborate_module_decls_best_effort (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : List Decl :=
+    best_effort_decls (elaborate_module_decls_reporting scope decl_list locals)
+
+/// A decl's own name, for the `--verbose` report below. Only `Decl.def_d`
+/// carries a body that can fail to elaborate in a way worth naming; every
+/// other shape reports its kind, which is enough to say "not a def".
+#[partial]
+def decl_display_name (d : Decl) : String :=
+    match d {
+        Decl.def_d def_ => match def_ { Def.mk name _ _ _ _ _ => module_path_to_string name },
+        Decl.inductive_d i => match i { Inductive.mk name _ _ _ _ _ => module_path_to_string name },
+        _ => "<non-def decl>",
+    }
+
+/// What `elaborate_module_decls_best_effort` produced, plus the names of the
+/// decls it silently left unchanged.
+///
+/// The `failed` half exists because swallowing those errors is what made a
+/// whole class of bug invisible. A def that fails to elaborate keeps its
+/// un-elaborated body, and codegen's syntactic fallbacks then have to cover
+/// for it -- when one of THOSE has a gap too, the symptom surfaces stages
+/// later as `no instance found for `Append.append`` in a def whose real
+/// problem was that it never elaborated. Nothing printed anything in
+/// between. Now `--verbose` says how many decls this pass gave up on, and
+/// names the first few, so the next one starts with a location instead of a
+/// bisect.
+struct BestEffortElab {
+    decls : List Decl,
+    failed : List String,
+}
+
+#[partial]
+def best_effort_decls (r : BestEffortElab) : List Decl := r.decls
+
+#[partial]
+def best_effort_failed (r : BestEffortElab) : List String := r.failed
+
+/// Declared return type, not a bare literal at the use site -- the
+/// self-hosted checker cannot infer a struct literal's type in `return`/
+/// argument position and the self-hosted backend miscompiles one there.
+#[partial]
+def mk_best_effort_elab (decls : List Decl) (failed : List String) : BestEffortElab :=
+    { decls := decls, failed := failed }
+
+#[partial]
+def elaborate_module_decls_reporting (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : BestEffortElab :=
     match decl_list {
-        List.empty => List.empty,
+        List.empty => mk_best_effort_elab List.empty List.empty,
         List.cons d rest =>
-            let d_ := match elaborate_decl_with_scope d scope locals {
-                Result.ok d2 => d2,
-                Result.err _ => d,
-            } in
-            List.cons d_ (elaborate_module_decls_best_effort scope rest locals),
+            let tail : BestEffortElab := elaborate_module_decls_reporting scope rest locals in
+            match elaborate_decl_with_scope d scope locals {
+                Result.ok d2 => mk_best_effort_elab (List.cons d2 tail.decls) tail.failed,
+                Result.err _ =>
+                    mk_best_effort_elab (List.cons d tail.decls)
+                        (List.cons (decl_display_name d) tail.failed),
+            },
     }
 
 #[partial]

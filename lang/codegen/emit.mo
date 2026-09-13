@@ -70,7 +70,8 @@ use lang.codegen.util {
   rev_vals, str_map_empty, str_map_insert, str_map_lookup,
 }
 use lang.module {
-  LoadedModules, ModuleInfo, bench_step, elaborate_module_decls_best_effort,
+  LoadedModules, ModuleInfo, bench_step, best_effort_decls, best_effort_failed,
+  elaborate_module_decls_best_effort, elaborate_module_decls_reporting,
   get_loaded_all, get_loaded_main, mk, resolve_open_aliases_in_modules,
 }
 use lang.scope {
@@ -4723,6 +4724,29 @@ def gate_result (missing : List String) (m : LLVMModule) : Result String LLVMMod
                     " -- a reference resolved to a name nothing defines; def_symbol_name and ref_symbol_name must agree")),
     }
 
+/// One `--verbose` line naming how many decls best-effort elaboration left
+/// un-elaborated, plus the first few. Silent when there are none, so a clean
+/// graph adds no noise.
+#[partial]
+def report_elab_failures (failed : List String) : IO Unit :=
+    match failed {
+        List.empty => return unit,
+        List.cons _ _ =>
+            println (String.concat "  elaborate_class: "
+                (String.concat (I64.to_string (List.length failed))
+                    (String.concat " decl(s) did not elaborate (kept un-elaborated): "
+                        (List.intercalate ", " (take_first_n failed 5))))),
+    }
+
+/// First `n`, for a report that must not print 4000 names.
+#[partial]
+def take_first_n (xs : List String) (n : I64) : List String :=
+    if I64.lt n 1 then List.empty
+    else match xs {
+        List.empty => List.empty,
+        List.cons x rest => List.cons x (take_first_n rest (n - 1)),
+    }
+
 /// Field accessors for the sub-timing of the call-target gate below --
 /// `LLVMModule` is matched positionally elsewhere in this file, and a
 /// `match` cannot be spliced into a `let` chain.
@@ -4915,8 +4939,16 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
     let desugared_decls := desugar_struct_lits_decls scope dict_param_decls;
     let t_desugar : I64 <- bench_step verbose "  elaborate_class: desugar_struct_lits" t_scope (List.length desugared_decls);
-    let elaborated := elaborate_module_decls_best_effort scope desugared_decls empty_locs;
+    // The reporting variant, so `--verbose` says how many decls elaboration
+    // gave up on instead of nothing at all. A swallowed failure leaves a def
+    // un-elaborated and pushes the work onto codegen's syntactic fallbacks,
+    // and when one of those has a wrapper-transparency gap the symptom lands
+    // stages later in a def whose real problem was never printed -- which is
+    // how `no instance found for `Append.append`` stayed a mystery.
+    let elab_report := elaborate_module_decls_reporting scope desugared_decls empty_locs;
+    let elaborated := best_effort_decls elab_report;
     let t_best_effort : I64 <- bench_step verbose "  elaborate_class: elaborate_module_decls_best_effort" t_desugar (List.length elaborated);
+    if verbose then report_elab_failures (best_effort_failed elab_report) else return unit;
     let dispatched_decls := resolve_class_calls_decls elaborated;
     let _t_dispatch : I64 <- bench_step verbose "  elaborate_class: resolve_class_calls_decls" t_best_effort (List.length dispatched_decls);
     if verbose then do {
