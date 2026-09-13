@@ -495,7 +495,36 @@ def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_term
     match type_head_name scrutinee_typ {
         Option.some id =>
             match scope_find_inductive (ModulePath.mp (List.cons id List.empty)) scope {
-                ok ind => ok (Option.some ind),
+                // Cross-check the cases before committing, exactly as the
+                // `con_owner_name` path above already does -- `type_head_
+                // name` yields a BARE name and `scope_find_inductive` keys
+                // on bare names too, so in a whole-program scope (codegen's
+                // `build_scope_from_decls` over every loaded module at once,
+                // unlike `check`'s per-target scope) two modules declaring
+                // the same type name are indistinguishable here and the
+                // winner is decided by module load order.
+                //
+                // `lang/types.mo`'s `Decl` and `init/meta.mo`'s `Decl` are
+                // exactly such a pair. When the latter won, `lang/scope.mo`'s
+                // `infix_from_decl` -- `match d { Decl.infix_d ... }` --
+                // committed to an inductive whose constructors are `d_def`/
+                // `d_instance`/`d_error` and died on `validate_cases_against_
+                // inductive`'s "constructor not found in inductive", with
+                // `elaborate_module_decls_best_effort` then keeping the
+                // un-elaborated decl and `validate_no_undesugared_struct_
+                // lits` rejecting the struct literal it still contained.
+                // Which `Decl` won flipped purely on an unrelated `use` list
+                // change in `lang/main.mo`.
+                //
+                // Falling through instead reaches the constructor-name scan
+                // (`find_inductive_for_cases_by_constructor`), which keys on
+                // the cases' own constructors and so picks the inductive the
+                // match is actually about.
+                ok ind =>
+                    match validate_cases_against_inductive cases ind {
+                        ok _ => ok (Option.some ind),
+                        err _ => find_inductive_by_call_return_type_or_scan cases scrutinee_term scope,
+                    },
                 err _ => find_inductive_by_call_return_type_or_scan cases scrutinee_term scope,
             },
         Option.none => find_inductive_by_call_return_type_or_scan cases scrutinee_term scope,

@@ -767,3 +767,67 @@ def test_class_method_type : Bool :=
             match tt { mk _ typ => Similar.similar typ (Term.type_ 1) },
         err _ => false,
     }
+
+// --- Duplicate bare type names across modules (`find_inductive_by_type_
+// head_or_scan`) -------------------------------------------------------
+//
+// `type_head_name` yields a BARE name and `scope_find_inductive` keys on
+// bare names, so in codegen's whole-program scope (`build_scope_from_
+// decls` over every loaded module at once) two modules declaring the same
+// type name are indistinguishable and the winner is module load order.
+// `lang/types.mo`'s `Decl` and `init/meta.mo`'s `Decl` are such a pair.
+// Both orders are asserted so the fallback is exercised whichever wins.
+
+def dup_type_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Dup") List.empty)
+
+/// A `Dup` whose constructors do NOT cover the match below -- stands in
+/// for `init/meta.mo`'s `Decl` (`d_def`/`d_instance`/`d_error`).
+def dup_other_ind : Inductive :=
+    let p : Param := Param.mk (Identifier.id "p") (Term.type_ 1) Multiplicity.many Option.none List.empty in
+    let a_cn : InductConstructor := InductConstructor.mk
+        (ModulePath.mp (List.cons (Identifier.id "d_other_a") List.empty))
+        (List.cons p List.empty) (Term.type_ 1) in
+    let b_cn : InductConstructor := InductConstructor.mk
+        (ModulePath.mp (List.cons (Identifier.id "d_other_b") List.empty))
+        (List.cons p List.empty) (Term.type_ 1) in
+    let cns : List InductConstructor := List.cons a_cn (List.cons b_cn List.empty) in
+    let empty_params : List Param := List.empty in
+    let empty_attrs : List Attribute := List.empty in
+    Inductive.mk dup_type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private
+
+/// The `Dup` the match is actually about -- stands in for `lang/types.mo`'s
+/// `Decl` (the one carrying `infix_d`).
+def dup_wanted_ind : Inductive :=
+    let p : Param := Param.mk (Identifier.id "p") (Term.type_ 1) Multiplicity.many Option.none List.empty in
+    let w_cn : InductConstructor := InductConstructor.mk
+        (ModulePath.mp (List.cons (Identifier.id "d_wanted") List.empty))
+        (List.cons p List.empty) (Term.type_ 1) in
+    let cns : List InductConstructor := List.cons w_cn List.empty in
+    let empty_params : List Param := List.empty in
+    let empty_attrs : List Attribute := List.empty in
+    Inductive.mk dup_type_name empty_params (Term.type_ 1) cns empty_attrs Visibility.package_private
+
+/// `match (v : Dup) { d_wanted p => Type }` against a scope holding both
+/// `Dup`s in the given order.
+def dup_match_checks (decl_list : List Decl) : Bool :=
+    let mod_id : Identifier := Identifier.id "DupTest" in
+    let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
+    let sd : ScopeData := build_scope_from_decls mod_path decl_list in
+    let dup_scope : Scope := { module_id := mod_path, scope := sd, parent := Option.none } in
+    let scrutinee : Term := Term.var 0 DebugName.unnamed in
+    let types : List Term := List.cons (Term.var sentinel (DebugName.named (Identifier.id "Dup"))) List.empty in
+    let case_ : MatchCase := MatchCase.mc (Identifier.id "d_wanted") (List.cons (Identifier.id "p") List.empty) (Term.type_ 1) Option.none in
+    let cases : List MatchCase := List.cons case_ List.empty in
+    let t : Term := Term.lit (Literal.match_ scrutinee cases) in
+    match type_check t Term.hole dup_scope types empty_locals {
+        ok _ => true,
+        err _ => false,
+    }
+
+#[test]
+def test_dup_type_name_other_declared_first : Bool :=
+    dup_match_checks (List.cons (Decl.inductive_d dup_other_ind) (List.cons (Decl.inductive_d dup_wanted_ind) List.empty))
+
+#[test]
+def test_dup_type_name_wanted_declared_first : Bool :=
+    dup_match_checks (List.cons (Decl.inductive_d dup_wanted_ind) (List.cons (Decl.inductive_d dup_other_ind) List.empty))
