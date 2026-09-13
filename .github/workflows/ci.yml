@@ -60,3 +60,5 @@ jobs:
 
       - name: Bootstap compiler
         run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run monad:bootstrap-compile
+      - name: Debug transparency oracle
+        run: nix develop --no-pure-eval --accept-flake-config -c devenv tasks run monad:debug-oracle

@@ -107,11 +107,47 @@
       # killing healthy runs. Progress is visible instead: --verbose
       # streams a per-module and per-stage trace (lang/log.mo), so a
       # genuinely wedged run shows exactly which stage stalled.
-      # --release: debug info is on by default since stage 5; the wrapper
-      # cost is not worth it on this workload.
+      # --release: debug info is on by default; DWARF emission costs ~30s
+      # on this workload and the binary this job tests does not need it.
       cargo run --release -- run lang/main.mo compile lang/main.mo -o "$out/monad" --verbose --release
       test -x "$out/monad"
       "$out/monad" check lang/main.mo
+      # And again WITHOUT --release, which is the DEFAULT invocation and was
+      # broken for an unknown length of time precisely because nothing ran
+      # it: `monad compile lang/main.mo` died at `no instance found for
+      # `Append.append``, and the only signal was a self-compile nobody
+      # waited for (it took 7h48m before the located-parse fix).
+      #
+      # Both modes now share one term tree -- every term carries its source
+      # position on every path (`parse_all_decls`, lang/module.mo) -- so this
+      # run differs from the one above only in whether DWARF is EMITTED.
+      # That is exactly why it is worth running: it is the only gate for the
+      # carrier-inference shape probes in lang/scope.mo, which no
+      # small-file test can reach (see examples/located_terms.mo's own
+      # header for why, verified rather than assumed).
+      dbg="''${TMPDIR:-/tmp}/monad-bootstrap-ci-debug"
+      rm -rf "$dbg"; mkdir -p "$dbg"
+      cargo run --release -- run lang/main.mo compile lang/main.mo -o "$dbg/monad" --verbose
+      test -x "$dbg/monad"
+      "$dbg/monad" check lang/main.mo
+    '';
+  };
+
+  # The `Term.ctx` transparency oracle (tools/debug_transparency_oracle.sh).
+  #
+  # Source positions ride the AST as `Term.ctx` wrappers on every path, and
+  # ~180 sites match on term SHAPE. A wrapper interposed where one of those
+  # looks does not crash -- it silently stops matching, and a call quietly
+  # fails to resolve. This asserts the property that makes wrappers safe:
+  # `--debug` may add `!dbg` annotations and nothing else, so stripping them
+  # must reproduce the `--release` build byte for byte.
+  #
+  # It existed, unwired, while the bug it describes was live. Cheap: two
+  # compiles per example file.
+  tasks."monad:debug-oracle" = {
+    exec = ''
+      set -euo pipefail
+      ${config.devenv.root}/tools/debug_transparency_oracle.sh ${config.devenv.root}/examples/*.mo
     '';
   };
 
