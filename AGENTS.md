@@ -2732,6 +2732,82 @@ Key patterns when writing self-hosted Monad code:
     fallback needs something that FAILS when it is taken, or it becomes the
     fast path in the dark.
 
+42. **Placement rule R3 protects an application's HEAD, not its ARGUMENTS,
+    so argument-reading shape probes were the exposed `Term.ctx` surface --
+    and the fix was to delete the debug/release divergence, not to patch it
+    (2026-09-13).**
+    `monad compile lang/main.mo` WITHOUT `--release` -- the default
+    invocation -- failed with `no instance found for `Append.append``.
+    Mechanism: `a ++ b` lowers to `app (app (var "++") a) b` with a bare
+    callee and LOCATED operands, so recognition worked (`flatten_call_spine`
+    peels, `class_method_ref` takes an `Identifier`) but `infer_carrier_type`
+    (`lang/scope.mo`) -- which reads the ARGUMENTS to pick the instance --
+    had no `Term.ctx` arm, returned `Option.none` for every argument, and
+    the call was left unresolved. **It was a regression of a bug already
+    fixed once:** that function's `Term.app` arm says in its own comment it
+    is "the root cause of the `Append_append` self-compile bug", and the
+    wrapper made the arm unreachable.
+    The 2388-vs-2390 reachable-decl gap was the SAME cause, not a second
+    bug: an unresolved call keeps the name `Append.append`, which matches no
+    `Def`, so the promoted instance method and its dictionary never entered
+    the reachability worklist. Both symptoms closed together, and the two
+    modes now report an identical reachable count -- which is the check to
+    use, since it is independent of the error message.
+    **The fix was structural.** `parse_all_decls` (`lang/module.mo`) now
+    uses `decls_parser_located` on EVERY path, so `check`, `test` and
+    `compile` all see one term shape and `--release`/`--debug` gates only
+    whether DWARF is EMITTED. `with_located_decls`/`locate_module_info*`
+    are gone with it, and so is the second full parse the debug path used to
+    pay. One word at the one production parse site; everything else followed.
+    **Five probes needed `term_peel`, and the order they surfaced in is the
+    lesson** -- each was found by a different gate, and no single gate found
+    more than two:
+      `infer_carrier_type`, `term_matches_carrier`  (`lang/scope.mo`)
+          -- the SELF-COMPILE only. `term_matches_carrier` broke
+          `class FromListLiteral (L : Type := List)` (`init/prelude.mo`),
+          i.e. every list literal and `Map.empty`, because a class param's
+          `default` lowers as a VALUE and so is itself wrapped.
+      `scrutinee_type_args` (`lang/scope.mo`)      -- fixed pre-emptively.
+      `named_call_fields_of` (`lang/typecheck/infer.mo`)
+          -- `slow_tests/codegen_named_call_*_tests.mo`, 6 tests.
+      `con_owner_name` (`lang/typecheck/infer.mo`)
+          -- `slow_tests/typecheck_init_tests.mo`, as `ambiguous constructor
+          `cons`: could resolve to either `Vec` or `List`` on
+          `init/tests.mo`.
+    Peeling at entry (`match term_peel t {`) needs `#[terminating]` when the
+    function also recurses on a subterm: `f` is then a structural subterm of
+    `term_peel t`, not of `t`, and the checker cannot see through it.
+    **A small file CANNOT test the carrier-inference gaps, and this was
+    verified rather than assumed.** With the peel removed from
+    `infer_carrier_type` or `term_matches_carrier`, `examples/located_terms.mo`
+    -- written specifically to contain those shapes -- still compiles clean.
+    The type checker's own `resolve_class_method` is ctx-transparent for
+    them and runs first; `lang/scope.mo`'s syntactic pass is only
+    load-bearing for a def whose ELABORATION failed, which
+    `elaborate_module_decls_best_effort` swallows silently and which needs
+    self-compile scale to happen at all. So the self-compile in BOTH modes
+    is now a CI job (`monad:bootstrap-compile`), and
+    `tools/debug_transparency_oracle.sh` -- which existed, unwired, naming
+    `class_method_ref` in its own header while this bug was live -- is now
+    `monad:debug-oracle`. Note what the oracle can and cannot mean now that
+    both modes are located: it checks that `--debug` adds `!dbg` and nothing
+    else. The transparency gate for a change like this one is instead
+    **`--release` IR byte-identical before vs after** (13/13 examples here).
+    **Also landed, because the silence was half the problem:**
+    `elaborate_module_decls_reporting` (`lang/module.mo`) returns the names
+    of decls best-effort elaboration gave up on, and `--verbose` prints the
+    count and first few. On the self-compile that is exactly one --
+    `prelude::Lens` -- which had been invisible the whole time.
+    **The cost is real and was accepted deliberately:** one located parse
+    instead of one plain parse on every path. Interleaved A/B, two rounds,
+    machine idle: `check lang/main.mo` **57.5s -> 86.8s (+51%)**;
+    `load_file_modules` 45.3s -> 75.4s. The debug compile got FASTER (it
+    stops parsing twice: 172.1s -> ~157s). Do not attribute the delta to
+    `build_loc_table`'s `I64.to_string` keying without profiling it -- a
+    located tree has roughly twice the nodes, and every downstream pass
+    walks all of them, which is at least as likely the bulk. Unmeasured
+    either way.
+
 ## Committing Changes
 
 ### Commit Message Format
