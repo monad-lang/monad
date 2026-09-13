@@ -2757,7 +2757,13 @@ def extend_env_with_ctor_fields (env : List LocalTypeBinding) (owner_params : Li
 /// no field-type env enrichment, same as before this fix.
 #[partial]
 def scrutinee_type_args (env : List LocalTypeBinding) (scrutinee : Term) : List Term :=
-    match scrutinee {
+    // Peels. A match scrutinee IS located (`lower_parse.mo`'s
+    // `Literal.match_` lowers it with `lower_parse_term`, not `_bare`), so
+    // without this every located scrutinee fell to the `List.empty` arm
+    // below and match arms silently lost their field-type enrichment --
+    // which `Map.insert k v acc`-shaped calls in an arm depend on to find
+    // their carrier.
+    match term_peel scrutinee {
         Term.var _ dbg =>
             match dbg {
                 DebugName.named id =>
@@ -2925,7 +2931,26 @@ def carrier_var (name : String) : Term :=
 /// rather than guessing.
 #[partial]
 def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (t : Term) : Option Term :=
-    match t {
+    // Peels. This reads a CALL'S ARGUMENTS, and placement rule R3
+    // (`lang/parser/lower_parse.mo`) keeps wrappers out of a spine's HEAD
+    // but deliberately puts one on every argument -- so every arm below
+    // was dead for located input and every argument returned
+    // `Option.none`, i.e. "no carrier", i.e. "no matching instance".
+    //
+    // That is how `monad compile lang/main.mo` -- the default invocation,
+    // debug info being on by default -- died at `no instance found for
+    // `Append.append``: `"lit" ++ e` offered no carrier, so nothing chose
+    // `instance Append String`, the call kept its class-method name, and
+    // `validate_no_unresolved_class_calls` reported it. It also cost two
+    // reachable defs (the promoted instance method and its dictionary),
+    // since an unresolved call names no `Def` the reachability walk can
+    // follow.
+    //
+    // Worth knowing: the `Term.app` arm below was ADDED to fix exactly
+    // this bug once before (see its own comment), and the wrapper made it
+    // unreachable, reintroducing it. The type-checker cannot cover for
+    // this shape -- that arm's comment says so explicitly.
+    match term_peel t {
         // `Literal.if_`'s own two branches are the operand shape the
         // self-hosted test driver's own synthesized summary line
         // ACTUALLY produces (`synth_sum_expr`, lang/codegen/test_driver.mo:
@@ -3091,13 +3116,29 @@ def id_in_list (id : Identifier) (ids : List Identifier) : Bool :=
 /// (Var "I64")`) via ordinary structural recursion.
 #[partial]
 def term_matches_carrier (wildcard_names : List Identifier) (ins_term : Term) (carrier : Term) : Bool :=
-    match ins_term {
+    // Peels BOTH sides. The instance side is R1-bare by construction
+    // (`Instance.args` lowers through `lower_parse_term_bare`), but the
+    // CARRIER is not always: `class_default_carrier` takes it from a class
+    // parameter's `default`, and a param default lowers as a VALUE
+    // (`lower_parse_opt` -> `lower_parse_term`), so it is located.
+    //
+    // Unpeeled, a located carrier fell to the `_ => false` arms below and
+    // matched nothing. That broke `class FromListLiteral (L : Type := List)`
+    // (`init/prelude.mo`) -- i.e. EVERY list literal and `Map.empty`, since
+    // those desugar to `FromListLiteral.cons`/`.empty` and have no argument
+    // to infer a carrier from, so the class default is the only source.
+    // Surfaced as `no instance found for `FromListLiteral.empty`` the moment
+    // located terms reached every path.
+    //
+    // Peeling at entry also covers the `Term.app` recursion below, whose
+    // sub-terms can be wrapped on the carrier side for the same reason.
+    match term_peel ins_term {
         Term.var _ dbg =>
             match dbg {
                 DebugName.named id =>
                     if id_in_list id wildcard_names
                     then true
-                    else match carrier {
+                    else match term_peel carrier {
                         Term.var _ cdbg =>
                             match cdbg {
                                 DebugName.named cid => Similar.similar id cid,
@@ -3108,7 +3149,7 @@ def term_matches_carrier (wildcard_names : List Identifier) (ins_term : Term) (c
                 DebugName.unnamed => false,
             },
         Term.app if_ ia =>
-            match carrier {
+            match term_peel carrier {
                 Term.app cf ca => term_matches_carrier wildcard_names if_ cf && term_matches_carrier wildcard_names ia ca,
                 _ => false,
             },
