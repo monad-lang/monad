@@ -194,6 +194,7 @@ def lit_has_struct_lit (l : Literal) : Bool := match l {
     Literal.num _n _suffix => false,
     Literal.flt _text _suffix => false,
     Literal.str _s => false,
+    Literal.char _c => false,
     Literal.if_ cond then_ else_ =>
         term_has_struct_lit cond || term_has_struct_lit then_ || term_has_struct_lit else_,
     Literal.match_ scrutinee cases =>

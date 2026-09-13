@@ -203,6 +203,28 @@ def test_show_literal_str : Bool :=
     let result : String := show_term term in
     String.beq result "\"hello\""
 
+/// A char literal round-trips through `Char` -- `'M'` in, `Char.of_bytes`
+/// holding its UTF-8 byte, `'M'` back out. The parser's own char tests
+/// only assert that `'M'` PARSES; this one pins the payload.
+#[test]
+def test_show_literal_char : Bool :=
+    let lit : Literal := Literal.char (Char.of_bytes (String.to_list "M")) in
+    let term : Term := Term.lit lit in
+    let result : String := show_term term in
+    String.beq result "'M'"
+
+/// Multi-byte codepoint: `Char` holds all of its UTF-8 bytes, so a
+/// non-ASCII char survives the round trip too. Written as a raw
+/// character on purpose -- `escape_replacement` (`lang/parser/string.mo`)
+/// has no `\u{...}` escape, so the self-hosted parser would reject one
+/// here even though the Rust host accepts it.
+#[test]
+def test_show_literal_char_multibyte : Bool :=
+    let lit : Literal := Literal.char (Char.of_bytes (String.to_list "λ")) in
+    let term : Term := Term.lit lit in
+    let result : String := show_term term in
+    String.beq result "'λ'"
+
 #[test]
 def test_show_literal_num_i64 : Bool :=
     let lit : Literal := Literal.num 42 NumSuffix.i64 in

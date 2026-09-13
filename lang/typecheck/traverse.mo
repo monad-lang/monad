@@ -53,6 +53,7 @@ def term_map_children (f : Term -> Term) (t : Term) : Term :=
 def literal_map_children (f : Term -> Term) (l : Literal) : Literal :=
     match l {
         Literal.str v => Literal.str v,
+        Literal.char v => Literal.char v,
         Literal.num n suf => Literal.num n suf,
         Literal.flt t suf => Literal.flt t suf,
         Literal.if_ a b c => Literal.if_ (f a) (f b) (f c),
@@ -152,6 +153,7 @@ def term_map_children_at_depth (f : I64 -> Term -> Term) (t : Term) : Term :=
 def literal_map_children_at_depth (f : I64 -> Term -> Term) (l : Literal) : Literal :=
     match l {
         Literal.str v => Literal.str v,
+        Literal.char v => Literal.char v,
         Literal.num n suf => Literal.num n suf,
         Literal.flt t suf => Literal.flt t suf,
         Literal.if_ a b c => Literal.if_ (f 0 a) (f 0 b) (f 0 c),

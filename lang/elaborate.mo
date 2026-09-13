@@ -42,6 +42,7 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
             union_ids (free_vars fun_ known_names) (free_vars arg known_names),
         Term.lit lit_val => match lit_val {
             Literal.str _ => List.empty,
+            Literal.char _ => List.empty,
             Literal.num _ _ => List.empty,
             Literal.flt _ _ => List.empty,
             Literal.if_ one two three =>

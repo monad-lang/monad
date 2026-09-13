@@ -768,6 +768,26 @@ def test_class_method_type : Bool :=
         err _ => false,
     }
 
+/// A char literal types as `Char`, the same way a string literal types as
+/// `String` -- `def c : Char := 'M'` used to be untypeable because
+/// `type_check_lit` had no `Literal.char` arm at all (a runtime
+/// non-exhaustive-match crash, not a diagnostic).
+#[test]
+def test_char_literal_types_as_char : Bool :=
+    let t : Term := Term.lit (Literal.char (Char.of_bytes (String.to_list "M"))) in
+    match type_check t Term.hole test_scope empty_local_types empty_locals {
+        ok tt =>
+            match tt.typ {
+                Term.var _idx dbg =>
+                    match dbg {
+                        DebugName.named n => Similar.similar n (Identifier.id "Char"),
+                        DebugName.unnamed => false,
+                    },
+                _ => false,
+            },
+        err _ => false,
+    }
+
 // --- Duplicate bare type names across modules (`find_inductive_by_type_
 // head_or_scan`) -------------------------------------------------------
 //

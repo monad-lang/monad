@@ -349,6 +349,12 @@ def type_check_lit (value : Literal) (expected_type : Term) (scope : Scope) (loc
         // elsewhere, e.g. the Sort/Pred tests).
         Literal.str s =>
             ok (mk_typed (Term.lit value) (named_type_ref "String")),
+        // Same shape as the `String` arm above -- a char literal's own
+        // REAL type, so `def c : Char := 'M'` checks. `Char` has no
+        // operations at all (AGENTS.md item 29), so nothing consumes the
+        // result yet; this only stops the literal from being untypeable.
+        Literal.char c =>
+            ok (mk_typed (Term.lit value) (named_type_ref "Char")),
         Literal.num n suffix =>
             ok (mk_typed (Term.lit value) (named_type_ref (num_suffix_type_name suffix))),
         Literal.flt text suffix =>

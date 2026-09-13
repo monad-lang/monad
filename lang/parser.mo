@@ -6,7 +6,8 @@ use lang.types {
   bind_s, class_d, con, custom, def_d, expr_s, forall, hole, id, if_,
   inductive_d, infix_d, instance_d, lam, let_s, list_reverse, lit, match_,
   mc, mk, mp, name, named, nid, nmp, ntv, open_all, open_d, open_only,
-  operator, parse_param_many, parse_param_with_mult, pi, ret_s, scoped_open_d, show_identifier,
+  operator, parse_param_many, parse_param_with_mult, pi, ret_s, scoped_open_d,
+  char_to_string, show_identifier,
   struct_d, type_, use_bare, use_d, use_glob, use_items, use_name,
   use_rename, use_sub, use_sub_rename, var,
 }
@@ -9454,17 +9455,56 @@ def test_lambda_typed_linear_prefix : Bool :=
 
 // --- Char literals (gap §2) ---
 
+/// Asserts the PAYLOAD, not just that it parses: `'M'` must lower to a
+/// `ParseLiteral.char` holding a real `Char` whose bytes are `M`. The
+/// "does it parse" form of this test is what let `Literal.char` ship
+/// unhandled by a dozen exhaustive matches.
 #[test]
 def test_char_literal_simple : Bool :=
     match expression "'M'" {
-        success rem out => String.beq rem "",
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.lit l =>
+                    match l {
+                        ParseLiteral.char c => String.beq (char_to_string c) "M",
+                        _ => false
+                    },
+                _ => false
+            },
+        fail _ => false
+    }
+
+/// A multi-byte codepoint keeps all of its UTF-8 bytes.
+#[test]
+def test_char_literal_multibyte : Bool :=
+    match expression "'λ'" {
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.lit l =>
+                    match l {
+                        ParseLiteral.char c => String.beq (char_to_string c) "λ",
+                        _ => false
+                    },
+                _ => false
+            },
         fail _ => false
     }
 
 #[test]
 def test_char_literal_escape_newline : Bool :=
     match expression "'\\n'" {
-        success rem out => String.beq rem "",
+        success rem out =>
+            String.beq rem "" &&
+            match out.kind {
+                ParseTermKind.lit l =>
+                    match l {
+                        ParseLiteral.char c => String.beq (char_to_string c) "\n",
+                        _ => false
+                    },
+                _ => false
+            },
         fail _ => false
     }
 

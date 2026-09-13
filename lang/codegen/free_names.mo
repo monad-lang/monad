@@ -60,6 +60,7 @@ def free_names_of_lit (bound : List Identifier) (lit_ : Literal) : List Identifi
     Literal.num _n _s => List.empty,
     Literal.flt _t _s => List.empty,
     Literal.str _s => List.empty,
+    Literal.char _c => List.empty,
     Literal.if_ cond then_ else_ =>
         List.append (free_names_of_term bound cond)
             (List.append (free_names_of_term bound then_) (free_names_of_term bound else_)),
@@ -176,6 +177,7 @@ def collect_referenced_names_lit (l : Literal) (acc : List String) : List String
     Literal.num _n _suffix => acc,
     Literal.flt _text _suffix => acc,
     Literal.str _s => acc,
+    Literal.char _c => acc,
     Literal.if_ cond then_ else_ => collect_referenced_names else_ (collect_referenced_names then_ (collect_referenced_names cond acc)),
     Literal.match_ scrutinee cases => collect_referenced_names_cases cases (collect_referenced_names scrutinee acc),
     Literal.struct_lit fields _type_name => collect_referenced_names_struct_fields fields acc,

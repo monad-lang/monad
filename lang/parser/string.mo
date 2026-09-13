@@ -234,9 +234,15 @@ def char_literal_escape (input : String) : ParseResult ParseTerm :=
 			Option.none => fail (ParseError.custom "unknown escape sequence" input)
 		}
 
+/// `value` is the ONE codepoint `char_literal`/`char_literal_escape`
+/// sliced out (by `utf8_char_width`, or an escape's replacement); its
+/// UTF-8 bytes become the `Char` -- `Char`'s own declared shape
+/// (`init/prelude.mo`, `of_bytes (List U8)`). No native beyond the
+/// already-wired `string_to_list` is needed, and `IrLit.ir_char`
+/// (`lang/core_ir.mo`) takes the result as-is.
 #[partial]
 def char_literal_close (r : ParseResult String) (value : String) : ParseResult ParseTerm :=
 	match r {
-		success rem _ => success rem (pt_lit  (ParseLiteral.char value)),
+		success rem _ => success rem (pt_lit  (ParseLiteral.char (Char.of_bytes (String.to_list value)))),
 		fail e => fail e
 	}

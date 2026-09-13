@@ -578,6 +578,9 @@ def lower_match (ctx : LowerCtx) (value : Term) (cases : List MatchCase) (acc : 
 def lower_literal (ctx : LowerCtx) (l : Literal) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
   match l {
     Literal.str s => lower_ok (CoreIr.lit (IrLit.ir_str s)) acc,
+    // `IrLit.ir_char` has always taken a `Char` (`lang/core_ir.mo`), and
+    // `Literal.char` now carries one -- straight through, no conversion.
+    Literal.char c => lower_ok (CoreIr.lit (IrLit.ir_char c)) acc,
     Literal.num n suffix => lower_ok (CoreIr.lit (IrLit.ir_num n suffix)) acc,
     Literal.if_ cond then_ else_ => lower_if ctx cond then_ else_ acc,
     Literal.match_ value cases => lower_match ctx value cases acc,

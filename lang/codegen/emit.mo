@@ -15,7 +15,7 @@ use lang.types {
   LoadedModules, LocalScope, Location, MatchCase, ModulePath, Native, Operator,
   Multiplicity, Param, Scope, ScopeData, Struct, StructField, StructLitField,
   Term, TypeConstraint, UseFilter, UseItem, Visibility, sentinel,
-  show_identifier, show_module_path, term_peel,
+  char_to_string, show_identifier, show_module_path, term_peel,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, lam,
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
   param_many, pi, str, type_, unnamed, var,
@@ -437,37 +437,19 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
     // support something that isn't there yet; nothing in the corpus
     // reaches this arm today.
     Literal.flt text suffix => CompileResult.ok c List.empty (LLVMValue.int_ 0) List.empty List.empty List.empty,
-    Literal.str s =>
-        match fresh_label c "str" {
-            CtxStrPair.mk ctx1 name =>
-                // Add 1 to byte length for the null terminator \00 appended in the LLVM IR
-                let byte_len := String.length s + 1 in
-                let global := LLVMGlobal.mk name s byte_len true in
-                match fresh_temp ctx1 {
-                    CtxStrPair.mk ctx2 temp =>
-                        // Normalize to i64 immediately, matching every
-                        // COMPUTED String's own representation
-                        // (`String.concat`/`monad_string_eq`/... are all
-                        // i64-typed). Without this, a bare literal used
-                        // directly as a `phi`/match-merge branch value
-                        // (e.g. `if b then String.concat " " x else ""`)
-                        // keeps its raw `ptr i8_` type while the OTHER
-                        // branch is `i64`, and `llc` rejects the
-                        // resulting phi outright ("global variable
-                        // reference must have pointer type") -- `phi` is
-                        // the one construct here with zero tolerance for
-                        // this; ordinary calls already type each argument
-                        // independently (`show_llvm_value_typed`) and
-                        // tolerate it via `llc`'s own lenient callee-
-                        // pointer-bitcast handling, so this is the only
-                        // site that actually needs the cast. See
-                        // plans/implementations/2026-08-28-string-value-
-                        // representation-unification.md.
-                        let cast_val := LLVMValue.ptrtoint (LLVMValue.global_ name) (ptr i8_) i64_ in
-                        let cast_instr := LLVMInstruction.assign temp cast_val in
-                        CompileResult.ok ctx2 (List.cons cast_instr List.empty) (LLVMValue.var_ temp) List.empty List.empty (List.cons global List.empty),
-                },
-        },
+    // `Char` and `String` have structurally IDENTICAL declared shapes
+    // (`init/prelude.mo`: both are `of_bytes (List U8)`), and a
+    // `Literal.char` carries exactly one codepoint's UTF-8 bytes -- so a
+    // char literal compiles as those bytes, via the `String` arm below.
+    // This is a representation CHOICE, not a placeholder: nothing can
+    // observe it today (`Char` has no operations and no `BEq` anywhere,
+    // AGENTS.md item 29). It does diverge from the Rust host, whose
+    // `string_get_char` native yields a SCALAR `Value::Lit(IrLit::Char)`
+    // rather than an `of_bytes` constructor -- a pre-existing split that
+    // item 29 already documents, and that any future `Char` operation
+    // has to settle for BOTH runtimes at once.
+    Literal.char ch => compile_str_lit_ir c (char_to_string ch),
+    Literal.str s => compile_str_lit_ir c s,
     Literal.if_ cond then_ else_ => compile_db_if_ir c cond then_ else_,
     Literal.match_ scrutinee cases => compile_match_ir c scrutinee cases,
     // Both struct arms funnel into `crash_struct_lit_reached_codegen`
@@ -477,6 +459,42 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
     Literal.struct_lit _fields _type_name => crash_struct_lit_reached_codegen c,
     Literal.struct_update _base _fields => crash_struct_lit_reached_codegen c,
 }
+
+/// The `String`-constant half of `compile_lit_ir`, split out so the
+/// `Literal.char` arm can reuse it without a self-call the termination
+/// checker can't see through (`char` is not a structural subterm of
+/// `str`).
+def compile_str_lit_ir (c : CodegenCtx) (s : String) : CompileResult :=
+    match fresh_label c "str" {
+        CtxStrPair.mk ctx1 name =>
+            // Add 1 to byte length for the null terminator \00 appended in the LLVM IR
+            let byte_len := String.length s + 1 in
+            let global := LLVMGlobal.mk name s byte_len true in
+            match fresh_temp ctx1 {
+                CtxStrPair.mk ctx2 temp =>
+                    // Normalize to i64 immediately, matching every
+                    // COMPUTED String's own representation
+                    // (`String.concat`/`monad_string_eq`/... are all
+                    // i64-typed). Without this, a bare literal used
+                    // directly as a `phi`/match-merge branch value
+                    // (e.g. `if b then String.concat " " x else ""`)
+                    // keeps its raw `ptr i8_` type while the OTHER
+                    // branch is `i64`, and `llc` rejects the
+                    // resulting phi outright ("global variable
+                    // reference must have pointer type") -- `phi` is
+                    // the one construct here with zero tolerance for
+                    // this; ordinary calls already type each argument
+                    // independently (`show_llvm_value_typed`) and
+                    // tolerate it via `llc`'s own lenient callee-
+                    // pointer-bitcast handling, so this is the only
+                    // site that actually needs the cast. See
+                    // plans/implementations/2026-08-28-string-value-
+                    // representation-unification.md.
+                    let cast_val := LLVMValue.ptrtoint (LLVMValue.global_ name) (ptr i8_) i64_ in
+                    let cast_instr := LLVMInstruction.assign temp cast_val in
+                    CompileResult.ok ctx2 (List.cons cast_instr List.empty) (LLVMValue.var_ temp) List.empty List.empty (List.cons global List.empty),
+            },
+    }
 
 /// Fail-fast backstop for `compile_lit_ir`'s struct arms: reachable
 /// only when a struct literal survived BOTH desugaring passes

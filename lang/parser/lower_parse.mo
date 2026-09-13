@@ -373,6 +373,7 @@ def collect_lit_rems (l : ParseLiteral) (acc : List I64) : List I64 := match l {
     ParseLiteral.struct_lit fields _tn => collect_litfield_rems fields acc,
     ParseLiteral.struct_update base fields => collect_litfield_rems fields (collect_term_rems base acc),
     ParseLiteral.str _ => acc,
+    ParseLiteral.char _ => acc,
     ParseLiteral.num _ _ => acc,
     ParseLiteral.flt _ _ => acc,
 }

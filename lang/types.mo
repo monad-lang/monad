@@ -141,6 +141,14 @@ def show_identifier (id : Identifier) : String := match id {
     Identifier.id s => s,
 }
 
+/// A `Char`'s source text -- its UTF-8 bytes back as a `String`.
+/// `Char` is `of_bytes (List U8)` (`init/prelude.mo`) and carries one
+/// codepoint's worth of them, so this is total and round-trips whatever
+/// `char_literal` (`lang/parser/string.mo`) sliced out.
+def char_to_string (c : Char) : String := match c {
+    Char.of_bytes bytes => String.from_list bytes,
+}
+
 def show_operator (op : Operator) : String := match op {
     Operator.operator s => s,
 }
@@ -334,7 +342,14 @@ type NumSuffix {
 // Canonical Literal uses de Bruijn Term; `ParseLiteral` is the parser's.
 type Literal {
     str (value: String),
-    char (value: String),
+    /// A `'c'` literal. Carries a real `Char` -- one Unicode codepoint,
+    /// mirroring the Rust reference's `Literal::Char(char)` and feeding
+    /// `IrLit.ir_char` (`lang/core_ir.mo`), which has always wanted a
+    /// `Char`, unchanged. NOT the source text: `Char`'s own declared
+    /// shape (`init/prelude.mo`, `of_bytes (List U8)`) holds the
+    /// codepoint's UTF-8 bytes, and the parser slices exactly one
+    /// codepoint (`utf8_char_width`) before building it.
+    char (value: Char),
     num (value: I64) (suffix: NumSuffix),
     /// A literal written with a decimal point (`3.0`, `3.14f32`). Kept as
     /// the exact source text rather than a numeric value: self-hosted
@@ -833,7 +848,9 @@ struct ParseMatchCase {
 
 type ParseLiteral {
     str (value: String),
-    char (value: String),
+    /// Parse-level sibling of `Literal.char` -- same `Char` payload, see
+    /// its doc comment there.
+    char (value: Char),
     num (value: I64) (suffix: NumSuffix),
     flt (text: String) (suffix: NumSuffix),
     if_ (one: ParseTerm) (two: ParseTerm) (three: ParseTerm),

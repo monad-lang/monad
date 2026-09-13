@@ -1669,6 +1669,7 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
 def resolve_open_alias_literal_scoped (names : HashMap String String) (bound : List String) (l : Literal) : Literal :=
     match l {
         Literal.str v => Literal.str v,
+        Literal.char v => Literal.char v,
         Literal.num n suf => Literal.num n suf,
         Literal.flt txt suf => Literal.flt txt suf,
         Literal.if_ a b c =>
@@ -2269,6 +2270,7 @@ def def_references_class (cls_str : String) (t : Term) : Bool :=
 def literal_references_class (cls_str : String) (l : Literal) : Bool :=
     match l {
         Literal.str _ => false,
+        Literal.char _ => false,
         Literal.num _ _ => false,
         Literal.flt _ _ => false,
         Literal.if_ a b c => def_references_class cls_str a || def_references_class cls_str b || def_references_class cls_str c,
@@ -3974,6 +3976,7 @@ def find_unresolved_class_calls_lit (classes : List Class) (l : Literal) (acc : 
     Literal.num _n _suffix => acc,
     Literal.flt _text _suffix => acc,
     Literal.str _s => acc,
+    Literal.char _c => acc,
     Literal.if_ cond then_ else_ => find_unresolved_class_calls_term classes else_ (find_unresolved_class_calls_term classes then_ (find_unresolved_class_calls_term classes cond acc)),
     Literal.match_ scrutinee cases => find_unresolved_class_calls_cases classes cases (find_unresolved_class_calls_term classes scrutinee acc),
     Literal.struct_lit fields _type_name => find_unresolved_class_calls_struct_fields classes fields acc,

@@ -1,5 +1,6 @@
 use lang.types {
   Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor,
+  char_to_string,
   Inductive, Instance, Literal, MatchCase, ModulePath, Multiplicity, Native,
   NumSuffix, OpenFilter, Operator, Param, Struct, StructField, Term,
   UseFilter, UseItem, affine, app, class_d, con, def_d, f32, f64,
@@ -121,7 +122,7 @@ def show_literal (lit : Literal) : String := match lit {
         let lhs := String.concat "\"" value in
         String.concat lhs "\"",
     char value =>
-        let lhs := String.concat "'" value in
+        let lhs := String.concat "'" (char_to_string value) in
         String.concat lhs "'",
     num value suffix =>
         let num_str := I64.to_string value in
