@@ -208,79 +208,88 @@ def location_of_remaining_len (original : String) (remaining_len : I64) : Locati
 // has none) or an index (there is no `Array`, and no `Hashable I64` for a
 // map keyed by offset).
 //
-// The divide-and-conquer split is kept for the same reason
-// `line_col_scan` has it: the interpreter overflows its stack somewhere
-// around 1000-1500 frames, and a whole-file linear walk is one frame per
-// character. But unlike `line_col_scan` this needs no `combine` step --
-// threading the running `Location` left-to-right through the halves means
-// the right half simply starts where the left one ended.
+// This walks the OFFSETS, not the characters. An earlier version walked
+// every character of the file, threading a running `Location`, with a
+// divide-and-conquer split to keep the recursion depth off the
+// interpreter's ~1000-1500 frame ceiling. It was correct and it was 88%
+// of what locating every term costs: measured by
+// `bench/parser_locate_cost.mo` on `lang/types.mo` (73000 bytes, 1469
+// spans), 652ms of a 739ms overhead, about 8.9us per character. The cost
+// was not the loop's shape -- per character it called `utf8_char_width`,
+// which is `match String.get s 0`, and `string_get` returns a
+// `Value::Con`, so the walk allocated an `Option` PER CHARACTER.
+//
+// Only 1469 of those 73000 characters are positions anyone asked for.
+// The walk existed solely to count newlines and columns in between, so
+// counting is what got pushed into a native: one step per SPAN, each
+// step asking `String.count_newlines`/`String.trailing_chars`
+// (`init/string.mo`) about the segment since the previous span. Total
+// bytes scanned is still O(n) -- every byte falls in exactly one
+// segment -- but the interpreted step count drops by ~50x.
+//
+// Two things here are load-bearing rather than stylistic, and both are
+// about the COMPILED runtime, where this file also runs:
+//   * the natives take a LENGTH, and nothing is sliced. Compiled
+//     `monad_string_slice` does a `strlen` plus a malloc plus a memcpy
+//     per call (`lang/codegen/runtime.c`), so a slice per span would be
+//     quadratic -- and note the old per-character `String.slice s 0
+//     width` was exactly that, quadratic, on every compiled build.
+//   * `String.length source` is taken ONCE, outside the walk, for the
+//     same reason: compiled, it is `strlen`.
+// The recursion is one frame per offset with an accumulator, the same
+// shape (and the same scale) `merge_asc` below already relies on.
 
-/// A bulk resolution in progress.
-struct ResolveState {
-    /// Position at the start of the not-yet-scanned remainder. `offset`
-    /// is absolute within the whole file, which is what `pending` is
-    /// measured against.
-    loc : Location,
-    /// Offsets still to resolve, ascending. Consumed from the head as the
-    /// walk passes each one.
-    pending : List I64,
-    /// Resolved pairs, in reverse order of resolution.
-    out : List (Pair I64 Location),
-}
-
-/// Emit every pending offset the walk has now reached or passed.
+/// Advance `loc` across the first `len` bytes of `rest`, with two native
+/// scans rather than a per-character walk.
 ///
-/// `>=` rather than `==` deliberately: an offset that does not land on a
-/// character boundary (which a real span always does, but a corrupted or
-/// synthesized one might not) must still be consumed, or it would block
-/// every later offset behind it and silently lose the rest of the file.
+/// The two cases are the whole of the line:column rule. If the range
+/// holds a newline, the column restarts and `trailing_chars` is already
+/// measured from the last one; if it holds none, the range is all
+/// "trailing" and the column simply grows by it. That is the same split
+/// `combine_line_col_scan` makes, which is why `LineColScan`'s field is
+/// also called `trailing`.
+///
+/// CHARACTERS, not bytes, for the column -- `String.trailing_chars` skips
+/// UTF-8 continuation bytes, which is what
+/// `test_resolve_offsets_column_counts_characters` pins down. The byte
+/// `offset` still advances by `len`, since offsets are byte-measured.
 #[partial]
-def resolve_emit_reached (st : ResolveState) : ResolveState := match st.pending {
-    List.empty => st,
-    List.cons off rest =>
-        if I64.lt st.loc.offset off
-        then st
-        else resolve_emit_reached
-                { loc := st.loc,
-                  pending := rest,
-                  out := List.cons (Pair.pair off st.loc) st.out },
-}
+def resolve_advance (rest : String) (len : I64) (loc : Location) : Location :=
+    let nl : I64 := String.count_newlines rest len in
+    let trail : I64 := String.trailing_chars rest len in
+    if I64.gt nl 0
+    then Location.mk (I64.add loc.offset len) (I64.add loc.line nl) (I64.add trail 1)
+    else Location.mk (I64.add loc.offset len) loc.line (I64.add loc.column trail)
 
-/// Advance one character. Mirrors `line_col_scan_direct`'s stepping
-/// exactly -- byte offset by the character's WIDTH, column by one
-/// character -- which is the distinction that makes a column after a
-/// multi-byte character correct.
+/// Resolve each offset in turn, carrying the remaining source and the
+/// position it starts at.
+///
+/// `limit` is the file's byte length, passed in because computing it is
+/// `strlen` on the compiled runtime and it does not change. Clamping each
+/// offset to it is what gives offsets at or past end-of-file the file's
+/// final position rather than dropping them -- end-of-input is a real
+/// position, and a dropped entry would leave a term with no location for
+/// no visible reason. The pair keeps the offset the CALLER asked for as
+/// its key, not the clamped one, so a lookup by the original offset still
+/// finds it.
+///
+/// A negative step cannot happen for ascending input, but is clamped to
+/// zero rather than trusted: a descending pair would otherwise hand the
+/// natives a negative length, and `resolve_offsets_in_file` sorts
+/// precisely because callers have been wrong about ascendingness before.
 #[partial]
-def resolve_step_loc (loc : Location) (ch : String) (width : I64) : Location :=
-    if String.beq "\n" ch
-    then Location.mk (I64.add loc.offset width) (I64.add loc.line 1) 1
-    else Location.mk (I64.add loc.offset width) loc.line (I64.add loc.column 1)
-
-/// Walk a chunk one character at a time, resolving offsets as it passes
-/// them. Only ever called on chunks already under `dc_threshold`, so the
-/// recursion stays well inside the interpreter's frame ceiling.
-#[partial]
-def resolve_direct (s : String) (st : ResolveState) : ResolveState :=
-    if String.is_empty s
-    then st
-    else
-        let st1 : ResolveState := resolve_emit_reached st in
-        let width : I64 := utf8_char_width s in
-        let ch : String := String.slice s 0 width in
-        resolve_direct (String.drop width s)
-            { loc := resolve_step_loc st1.loc ch width, pending := st1.pending, out := st1.out }
-
-/// Resolve every pending offset falling inside `s`, threading the running
-/// position left to right. O(n) total work, O(log n) recursion depth.
-#[partial]
-def resolve_offsets (s : String) (st : ResolveState) : ResolveState :=
-    if I64.lt (String.length s) dc_threshold
-    then resolve_direct s st
-    else
-        let mid : I64 := safe_split_offset s (I64.div (String.length s) 2) in
-        // Left first, then right from wherever left ended -- this
-        // sequencing is what replaces `combine_line_col_scan`.
-        resolve_offsets (String.drop mid s) (resolve_offsets (String.slice s 0 mid) st)
+def resolve_walk (rest : String) (loc : Location) (limit : I64) (offsets : List I64)
+                 (out : List (Pair I64 Location)) : List (Pair I64 Location) :=
+    match offsets {
+        List.empty => out,
+        List.cons off more =>
+            let target : I64 := if I64.gt off limit then limit else off in
+            let raw : I64 := I64.sub target loc.offset in
+            let step : I64 := if I64.lt raw 0 then 0 else raw in
+            let loc1 : Location := resolve_advance rest step loc in
+            resolve_walk (String.drop step rest) loc1 limit more
+                (List.cons (Pair.pair off loc1) out),
+    }
 
 /// Resolve `offsets` (ascending, absolute byte offsets) against `source`.
 ///
@@ -413,21 +422,18 @@ def is_ascending_from (prev : I64) (offsets : List I64) : Bool := match offsets 
     List.cons b rest => if I64.lt b prev then false else is_ascending_from b rest,
 }
 
+/// `String.length` is taken ONCE here rather than inside `resolve_walk`:
+/// it is `strlen` on the compiled runtime, so per-offset it would put the
+/// quadratic term back that this whole rewrite removed.
+///
+/// `resolve_walk` accumulates in reverse, hence the reverse at the end --
+/// the same accumulator-passing shape, and for the same
+/// recursion-depth reason, as `merge_asc` above.
 #[partial]
 def resolve_ascending (source : String) (offsets : List I64) : List (Pair I64 Location) :=
-    let done : ResolveState :=
-        resolve_offsets source { loc := Location.mk 0 1 1, pending := offsets, out := List.empty } in
-    // `resolve_emit_reached` cannot fire for an offset past the end during
-    // the walk (the walk stops at EOF), so flush them here.
-    let flushed : ResolveState := resolve_flush done in
-    list_reverse_pairs flushed.out List.empty
-
-#[partial]
-def resolve_flush (st : ResolveState) : ResolveState := match st.pending {
-    List.empty => st,
-    List.cons off rest =>
-        resolve_flush { loc := st.loc, pending := rest, out := List.cons (Pair.pair off st.loc) st.out },
-}
+    list_reverse_pairs
+        (resolve_walk source (Location.mk 0 1 1) (String.length source) offsets List.empty)
+        List.empty
 
 #[partial]
 def list_reverse_pairs (xs : List (Pair I64 Location)) (acc : List (Pair I64 Location)) : List (Pair I64 Location) :=
@@ -498,11 +504,9 @@ def test_resolve_offsets_agrees_with_single : Bool :=
 /// Every offset here is a real character BOUNDARY, which is the only kind a
 /// span ever holds -- every scanner in the parser steps by
 /// `utf8_char_width` or by byte predicates that no UTF-8 lead or
-/// continuation byte satisfies. The two paths deliberately differ on a
-/// non-boundary offset: this one advances to the next boundary, while
-/// `location_of_remaining_len` slices mid-character. Neither is meaningful
-/// there, and consuming the offset is the safer of the two -- blocking on
-/// it would stall every later offset behind it.
+/// continuation byte satisfies. For the non-boundary case, which the two
+/// paths used to disagree about, see
+/// `test_resolve_offsets_mid_character_offset` below.
 #[test]
 def test_resolve_offsets_agrees_over_utf8 : Bool :=
     let src : String := "// — x\ndef y : I64 := 1\n" in
@@ -522,9 +526,37 @@ def test_resolve_offsets_column_counts_characters : Bool :=
         Option.none => false,
     }
 
-/// Long enough to force the divide-and-conquer split (`dc_threshold` is
-/// 400 bytes), so the split path is exercised rather than only the direct
-/// walk -- and so a wrong split would show up as a wrong line.
+/// An offset landing INSIDE a multi-byte character. A real span never
+/// holds one -- every scanner steps by `utf8_char_width` -- but a
+/// synthesized or corrupted offset can, so this pins what happens rather
+/// than leaving it to chance.
+///
+/// Byte 4 is the middle of the 3-byte em dash at bytes 3-5. The walk stops
+/// exactly at the byte asked for, and the partial character counts as one
+/// (its lead byte is not a continuation byte), giving column 5 and
+/// `offset` 4 -- the offset requested, not the boundary after it.
+///
+/// This is deliberately NOT an `agrees_at` check, and that is the
+/// interesting part. `single_location_at` cannot answer here at all: it
+/// works by `String.slice source 0 off`, and a slice that would split a
+/// character yields the EMPTY string (`string_slice`'s
+/// `get(start..end).unwrap_or("")` semantics, kept by
+/// `SharedStr::subslice`), so it collapses to the zero location 0/1/1 for
+/// any non-boundary offset. Verified, not assumed. The two paths differed
+/// here before this rewrite too -- the old character walk consumed such an
+/// offset at the NEXT boundary -- so the change is which meaningless
+/// answer the bulk path gives, and it now gives the predictable one.
+#[test]
+def test_resolve_offsets_mid_character_offset : Bool :=
+    match lookup_resolved (resolve_offsets_in_file "// — x\ndef y : I64 := 1\n" [4]) 4 {
+        Option.some loc => I64.beq loc.line 1 && I64.beq loc.column 5 && I64.beq loc.offset 4,
+        Option.none => false,
+    }
+
+/// Long enough (648 bytes, 12 identical lines) that a resolver getting its
+/// line accounting wrong only some of the time would show up, and long
+/// enough to matter back when this path split at `dc_threshold`. The
+/// offsets deliberately straddle line boundaries and land mid-line.
 #[test]
 def test_resolve_offsets_across_split : Bool :=
     let line : String := "def padding_definition_for_length : I64 := 1234567890\n" in
