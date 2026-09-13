@@ -5,7 +5,7 @@ use lang.types {
   StructLitField, Term, TypeConstraint, TypeError,
   app, con, custom, forall, hole, id, id_eq, if_, lam, list_rev_loop,
   list_reverse, lit, many, match_, mc, mk, mp, name, named, nid, not_a_type,
-  ntv, num, pi, sentinel, show_identifier, show_module_path, str, type_,
+  ntv, num, pi, sentinel, show_identifier, show_module_path, str, term_peel, type_,
   unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
 use lang.scope {
@@ -582,8 +582,24 @@ def find_inductive_by_call_return_type_or_scan (cases : List MatchCase) (scrutin
 /// is a named global reference (`Term.var _ (DebugName.named id)`) --
 /// mirrors `type_head_name`'s own identical unwrap just above, over the
 /// scrutinee TERM (the call itself) instead of its inferred TYPE.
+/// Peels, at entry and therefore through the `Term.app` recursion too. A
+/// match SCRUTINEE is located (`lower_parse.mo` lowers `Literal.match_`'s
+/// scrutinee with `lower_parse_term`, not `_bare`), so without this every
+/// `match <bare call> { .. }` lost the "resolve the inductive from the
+/// call's declared return type" path and fell through to
+/// `find_inductive_for_cases_by_constructor`, which reports a genuine
+/// ambiguity rather than guessing -- `ambiguous constructor `cons`: could
+/// resolve to either `Vec` or `List`` on `init/tests.mo`, caught by
+/// `slow_tests/typecheck_init_tests.mo` once located terms reached the
+/// checker on every path.
+///
+/// `#[terminating]`: peeling at entry means `f` is a structural subterm of
+/// `term_peel t` rather than of `t`, which the checker cannot see through.
+/// It is well-founded -- `term_peel` strictly removes wrappers, and the
+/// `Term.app` recursion strictly descends.
+#[terminating]
 def call_head_def_name (t : Term) : Option Identifier :=
-    match t {
+    match term_peel t {
         Term.var _ dbg =>
             match dbg {
                 DebugName.named id => Option.some id,
@@ -650,8 +666,19 @@ def dotted_qualifier (s : String) : Option String :=
 /// true } }` (no outer annotation) used to resolve the shared `cons`
 /// name to `List` (declared first in `init/prelude.mo`) instead of
 /// `Vec`, via the ambiguous scan this check now gets a chance to bypass.
+/// Peels, for the same reason `call_head_def_name` above does: a match
+/// SCRUTINEE is located, and a bare constructor application like
+/// `Vec.cons 42 Vec.nil` is exactly the shape this arm-chain exists to
+/// recognise. Unpeeled it fell to `_ => Option.none` and the resolution
+/// dropped to the constructor-name scan, which reports the collision this
+/// function was added to fix: `ambiguous constructor `cons`: could resolve
+/// to either `Vec` or `List``, on `init/tests.mo`.
+///
+/// `#[terminating]` for the same reason as `call_head_def_name`: peeling at
+/// entry hides `f`'s structural descent from the checker.
+#[terminating]
 def con_owner_name (t : Term) : Option ModulePath :=
-    match t {
+    match term_peel t {
         Term.con c => match c { Con.mk _ typ_name _ _ => Option.some typ_name },
         Term.app f _ => con_owner_name f,
         Term.var _ dbg =>
@@ -2766,8 +2793,16 @@ def struct_lit_param_declares (params : List Param) (name : Identifier) : Bool :
             }
     }
 
+/// Peels. This reads a call's ARGUMENT, and placement rule R3
+/// (`lang/parser/lower_parse.mo`) puts a wrapper on every argument -- so
+/// without this a located `f { x := 1 }` fell to `_ => Option.none`, the
+/// named-call spread silently declined, and the call compiled as an
+/// ordinary positional application. `slow_tests/
+/// codegen_named_call_string_param_tests.mo` and
+/// `codegen_named_call_field_access_tests.mo` are what caught it, once
+/// located terms reached every path rather than only `compile --debug`.
 def named_call_fields_of (a : Term) : Option (List StructLitField) :=
-    match a {
+    match term_peel a {
         Term.lit lit_val =>
             match lit_val {
                 Literal.struct_lit fields type_name =>
