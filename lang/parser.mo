@@ -32,7 +32,7 @@ use lang.parser.combinators {
 }
 use lang.parser.number {number, numeric_literal}
 use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
-use lang.parser.position {consume_span, location_of_remaining, location_of_remaining_len, new_span, resolve_offsets_in_file, span_fragment, span_location}
+use lang.parser.position {consume_span, location_of_remaining, new_span, resolve_offsets_in_file, span_fragment, span_location}
 use lang.parser.identifier {identifier}
 use lang.parser.string {char_literal, raw_string_parse, string_parse}
 use lang.parser.diagnostic {render_parse_error}
@@ -3592,9 +3592,11 @@ def decl_parsers : List (String -> ParseResult ParseDecl) :=
 
 /// `input` is the exact text the declaration starts at -- `decls_skip`
 /// has already skipped the whitespace and docstrings ahead of it -- so
-/// this stamp is what `decls_parser_with_locs` later projects a
-/// `Location` out of, and what replaced its separate re-derivation of
-/// each declaration's position.
+/// this stamp is where a declaration's real starting position comes
+/// from, rather than anything re-deriving it by rescanning.
+/// `test_decl_span_second_decl_starts_at_itself` is the check that it
+/// lands on the declaration's own text and not on the previous one's
+/// resting point.
 #[partial]
 def decl_parser (input : String) : ParseResult ParseDecl :=
 	decl_at input (decl_fail_to_unknown (alt_fold decl_parsers input) input)
@@ -3623,7 +3625,7 @@ def decl_fail_to_unknown (r : ParseResult ParseDecl) (input : String) : ParseRes
 // THE lowering boundary. The grammar builds `ParseDecl` throughout -- named,
 // not de Bruijn -- and these entry points are where it becomes the canonical
 // `Decl` everything downstream consumes. `lang/module.mo` imports only
-// `decls_parser`, `decls_parser_strict` and `decls_parser_with_locs`, so
+// `decls_parser`, `decls_parser_strict` and `decls_parser_located`, so
 // this is the complete surface: nothing outside `lang/parser*` ever sees a
 // `Parse*` type.
 
@@ -3711,57 +3713,6 @@ def rekey_one (total : I64) (p : Pair I64 Location) (acc : HashMap String Locati
 #[partial]
 def decls_skip (input : String) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
 	decls_try (decl_parser input) input acc
-
-/// `decls_parser`'s own doc comment applies identically here (same
-/// lenient truncate-on-failure behavior) -- this twin additionally
-/// records each declaration's own start `Location`, purely for DWARF
-/// debug info (plans/bootstrapping/debug-info.md, v1: one location per
-/// top-level def).
-///
-/// This is now a PROJECTION over `decls_skip`, not a second parser.
-/// Every `ParseDecl` carries the span `decl_parser` stamped on it, so
-/// the position is read back out of the parse rather than re-derived by
-/// a parallel `decls_skip_with_locs` threading the whole file alongside
-/// a shrinking input. The arithmetic is unchanged -- `location_of_span`
-/// below performs exactly the diff `location_of_remaining` did -- but
-/// there is one traversal of the grammar instead of two, and no way for
-/// the two to disagree about where a declaration starts.
-#[partial]
-def decls_parser_with_locs (input : String) : ParseResult (List (Pair Decl Location)) :=
-	locate_decls_result input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
-
-#[partial]
-def locate_decls_result (whole_file : String) (r : ParseResult (List ParseDecl)) : ParseResult (List (Pair Decl Location)) :=
-	match r {
-		success rem ds => success rem (locate_decls whole_file ds),
-		fail e => fail e,
-	}
-
-#[partial]
-def locate_decls (whole_file : String) (ds : List ParseDecl) : List (Pair Decl Location) :=
-	match ds {
-		List.empty => List.empty,
-		List.cons d rest =>
-			List.cons
-				(Pair.pair (lower_parse_decl lower_ctx_bare d) (location_of_span whole_file d.span))
-				(locate_decls whole_file rest),
-	}
-
-/// A recorded span's start, as a `Location` in `whole_file`. `whole_file`
-/// is the UNCHANGED original source text -- never the shrinking input a
-/// parse step consumes from -- because a `ParseSpan` stores remaining-
-/// input LENGTHS and only the full text can turn one back into an
-/// offset (see `ParseSpan`'s own doc comment, lang/types.mo).
-///
-/// A declaration reaching here without a span would be a bug in
-/// `decl_parser`'s stamping rather than bad input, so the unknown case
-/// reports the start of the file instead of inventing a position from
-/// the placeholder's `-1`.
-#[partial]
-def location_of_span (whole_file : String) (sp : ParseSpan) : Location :=
-	if parse_span_is_unknown sp
-	then Location.mk 0 1 1
-	else location_of_remaining_len whole_file sp.start_rem
 
 #[partial]
 def decls_try (r : ParseResult ParseDecl) (orig : String) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
@@ -4402,42 +4353,6 @@ def test_location_of_remaining_multi_line : Bool :=
 		mk off line col => I64.beq off 11 && I64.beq line 2 && I64.beq col 3
 	}
 
-/// `decls_parser_with_locs` end to end: two top-level defs, the second
-/// preceded by a blank line and a comment -- exercises that each
-/// def's own captured `Location` lands on the `def` keyword itself,
-/// not on the parser's post-skip_spaces/skip_docstrings resting point
-/// from the PREVIOUS declaration.
-#[test]
-def test_decls_parser_with_locs_two_defs : Bool :=
-	let src := "def foo : I64 := 1\n\n// a comment\ndef bar : I64 := 2\n" in
-	match decls_parser_with_locs src {
-		success _ pairs => decls_with_locs_two_defs_check pairs,
-		fail _ => false,
-	}
-
-#[partial]
-def decls_with_locs_two_defs_check (pairs : List (Pair Decl Location)) : Bool := match pairs {
-	List.cons first rest1 => match rest1 {
-		List.cons second rest2 => match rest2 {
-			List.empty => decls_with_locs_two_defs_check_go first second,
-			_ => false,
-		},
-		List.empty => false,
-	},
-	List.empty => false,
-}
-
-#[partial]
-def decls_with_locs_two_defs_check_go (first : Pair Decl Location) (second : Pair Decl Location) : Bool := match first {
-	Pair.pair _ loc1 => match second {
-		Pair.pair _ loc2 => match loc1 {
-			mk _ line1 col1 => match loc2 {
-				mk _ line2 col2 => I64.beq line1 1 && I64.beq col1 1 && I64.beq line2 4 && I64.beq col2 1
-			}
-		}
-	}
-}
-
 /// `location_of_remaining` must correctly account for a multi-byte
 /// character already consumed when computing the column of what's left
 /// — the same UTF-8 codepoint-vs-byte distinction `utf8_char_width`
@@ -4711,9 +4626,10 @@ def test_decl_span_covers_declaration : Bool :=
 	}
 
 /// The second of two declarations: its span must start at its own text,
-/// not at the file. This is the same fact `test_decls_parser_with_locs_
-/// two_defs` asserts as a `Location`, checked here at the span the
-/// projection now reads.
+/// not at the file. A `Location`-level twin of this used to exist over
+/// `decls_parser_with_locs`; when that dead projection was removed this
+/// became the sole guard, which is the right level anyway -- the span is
+/// what `build_loc_table` actually reads.
 #[test]
 def test_decl_span_second_decl_starts_at_itself : Bool :=
 	let src : String := "def a : I64 := 1\n\ndef b : I64 := 2" in

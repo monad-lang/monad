@@ -502,8 +502,9 @@ type Visibility {
 /// INPUT at the start and end of the construct.
 ///
 /// Not an absolute offset, because no parser def sees the whole file --
-/// each one is handed only the unconsumed remainder, and `whole_file`
-/// exists nowhere in the grammar except `decls_parser_with_locs`. Both
+/// each one is handed only the unconsumed remainder, and the whole file
+/// exists nowhere in the grammar at all -- only `build_loc_table`, which
+/// runs after the parse, ever holds it. Both
 /// numbers here are available locally and for free: `String.length input`
 /// before a parser runs and `String.length rem` after it succeeds, each
 /// an O(1) read on the `SharedStr` window the remainder actually is.
@@ -706,12 +707,12 @@ struct ParseStruct {
 
 /// A declaration plus the span it was parsed from.
 ///
-/// The span is what collapses the two parallel top-level parsers into
-/// one. `decls_parser_with_locs` used to re-derive each declaration's
-/// position with a parallel `decls_skip_with_locs` that threaded the
-/// whole file alongside the shrinking input; it is now a projection over
-/// the span recorded here -- at the top level the total length IS
-/// available, so `offset = total_length - span.start_rem`, then
+/// The span is what collapsed the two parallel top-level parsers into
+/// one. A second parser (`decls_skip_with_locs`) used to re-derive each
+/// declaration's position by threading the whole file alongside the
+/// shrinking input; positions became a projection over the span recorded
+/// here instead -- at the top level the total length IS available, so
+/// `offset = total_length - span.start_rem`, then
 /// `lang/parser/position.mo`'s scan for line/column. Same arithmetic,
 /// one parser instead of two, and no way for the two to disagree about
 /// where a declaration starts.

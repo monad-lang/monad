@@ -2,7 +2,7 @@
 ///
 /// Fully wired: `lang/parser.mo` builds `ParseDecl`/`ParseTerm`
 /// throughout and lowers here at its three entry points
-/// (`decls_parser`, `decls_parser_strict`, `decls_parser_with_locs`).
+/// (`decls_parser`, `decls_parser_strict`, `decls_parser_located`).
 /// Nothing outside `lang/parser*` ever sees a `Parse*` type.
 ///
 /// This is the stage the compiler did not have. The parser used to
