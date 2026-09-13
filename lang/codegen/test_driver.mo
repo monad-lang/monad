@@ -34,7 +34,7 @@ use lang.types {
 }
 use lang.codegen.emit {
   bare_modpath, collect_all_decls_from_modules, compile_db_module,
-  filter_reachable_decls, module_path_to_str,
+  desugar_struct_lits_decls, filter_reachable_decls, module_path_to_str,
   qualified_def_name_str, qualify_modules,
 }
 use lang.codegen.ir {LLVMModule}
@@ -345,7 +345,16 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     let scope_data : ScopeData := build_scope_from_decls target_mp dict_param_spliced;
                     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
                     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-                    let elaborated := elaborate_module_decls_best_effort scope dict_param_spliced empty_locs;
+                    // Same pre-elaborate struct-literal desugaring as the
+                    // compile pipeline (`compile_loaded_modules_to_ir_with_
+                    // debug`): this path calls `compile_db_module` directly
+                    // with NO `validate_no_undesugared_struct_lits` gate
+                    // afterwards, so an un-desugared literal here would
+                    // otherwise hit `crash_struct_lit_reached_codegen` (or,
+                    // before that backstop existed, silently compile to
+                    // `void_val` and corrupt the test's own output).
+                    let desugared_spliced := desugar_struct_lits_decls scope dict_param_spliced;
+                    let elaborated := elaborate_module_decls_best_effort scope desugared_spliced empty_locs;
                     let dispatched_spliced := resolve_class_calls_decls elaborated;
                     // The root has to match the branch actually taken
                     // above: on the fallback the decls are still

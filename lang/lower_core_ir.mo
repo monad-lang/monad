@@ -141,6 +141,16 @@ type LowerError {
   /// referenced stdlib defs) still names which specific def it was in,
   /// not just the underlying error kind.
   le_in_def (path: ModulePath) (inner: LowerError),
+  /// A `Literal.struct_lit`/`Literal.struct_update` survived all
+  /// desugaring and reached lowering -- the type checker's
+  /// `type_check_struct_lit` (`lang/typecheck/infer.mo`) and codegen's
+  /// `desugar_struct_lits_decls` pass (`lang/codegen/emit.mo`) should
+  /// both have turned it into a `Term.con` before here. The eval-path
+  /// (`lower_root`/`meta_eval`) counterpart of `lang/codegen/emit.mo`'s
+  /// `validate_no_undesugared_struct_lits` compile gate: this used to
+  /// be a bare missing arm, i.e. a non-exhaustive-match crash with no
+  /// named cause.
+  le_struct_lit_survived,
 }
 
 /// Accumulates whole-program global discovery + lowering. See this
@@ -571,6 +581,12 @@ def lower_literal (ctx : LowerCtx) (l : Literal) (acc : LowerAcc) : Pair (Result
     Literal.num n suffix => lower_ok (CoreIr.lit (IrLit.ir_num n suffix)) acc,
     Literal.if_ cond then_ else_ => lower_if ctx cond then_ else_ acc,
     Literal.match_ value cases => lower_match ctx value cases acc,
+    // Backstop, not codegen: see `le_struct_lit_survived`'s own doc
+    // comment. A struct literal reaching here used to be a bare
+    // non-exhaustive-match crash; now it diagnoses like every other
+    // lower failure (wrapped in `le_in_def` by `lower_one_global`).
+    Literal.struct_lit _fields _type_name => lower_err LowerError.le_struct_lit_survived acc,
+    Literal.struct_update _base _fields => lower_err LowerError.le_struct_lit_survived acc,
   }
 
 // ─── Con / Native (both share the same sparse-args shape) ──────────────

@@ -15,7 +15,7 @@ use lang.types {
   LoadedModules, LocalScope, Location, MatchCase, ModulePath, Native, Operator,
   Multiplicity, Param, Scope, ScopeData, Struct, StructField, StructLitField,
   Term, TypeConstraint, UseFilter, UseItem, Visibility, sentinel,
-  show_identifier, show_module_path,
+  show_identifier, show_module_path, term_peel,
   app, con, ctx, def_d, forall, hole, id, if_, inductive_d, lam,
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
   param_many, pi, str, type_, unnamed, var,
@@ -75,12 +75,20 @@ use lang.module {
 use lang.scope {
   add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
   alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
-  modpath_eq,
+  modpath_eq, scope_find_inductive,
   resolve_open_alias_decls,
   collect_infixes, promote_instance_defs, resolve_class_calls_decls,
   resolve_infix_decls, strip_all_leading_binders,
   validate_no_unresolved_class_calls,
 }
+// Shared with the type checker's own struct-literal path
+// (`type_check_struct_lit`): reusing its head-name/param-order helpers
+// here keeps this pass's resolution identical to the checker's rather
+// than a parallel reimplementation that can drift. No module-graph
+// cost: `lang.module` (already imported above) already pulls
+// `lang.typecheck.infer`, and nothing in `lang.typecheck.*` imports
+// codegen, so this adds no cycle.
+use lang.typecheck.infer {type_head_name, struct_lit_build_args, struct_lit_con_name}
 // `--verbose` stage-start trace + the red "FAILED at stage" lines
 // (`lang/log` -- helpers gate on `verbose` themselves; the fail lines
 // are ungated, printing in both modes as they did before).
@@ -409,13 +417,17 @@ def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : LLVMValue :=
         NativeOp.op_gt => LLVMValue.bool_ (n1 > n2),
     }
 
-/// Now total (no `#[partial]`): every `Literal` variant is handled,
-/// including `struct_lit`/`struct_update` — see their own doc comment
-/// below for why they're unreachable-in-practice placeholders rather
-/// than real codegen, and `lang/typecheck/infer.mo`'s
-/// `type_check_struct_lit`/`type_check_struct_update` for where the
-/// REAL work happens (both desugar into `Term.con`, which
-/// `compile_db_term_ir`/`compile_con_ir` above already handle).
+/// Total over every `Literal` variant, but the two struct arms are
+/// DELIBERATE fail-fast backstops, not codegen: an annotated struct
+/// literal is rewritten to a real `Term.con` twice over before here
+/// (`desugar_struct_lits_decls` in this file, then the type checker's
+/// own `type_check_struct_lit` on any def elaboration succeeds on),
+/// and `validate_no_undesugared_struct_lits` rejects any survivor on
+/// the main pipeline BEFORE codegen. Reaching these arms therefore
+/// means a caller that skips the gate (a direct `compile_db_module`
+/// user) -- and the previous behavior, emitting `void_val`, silently
+/// miscompiled (see `validate_no_undesugared_struct_lits`'s own doc
+/// comment for the bootstrap rung that cost).
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
     Literal.num n suffix => CompileResult.ok c List.empty (LLVMValue.int_ n) List.empty List.empty List.empty,
     // No LLVMValue float-constant variant exists yet (codegen has no
@@ -458,21 +470,34 @@ def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match li
         },
     Literal.if_ cond then_ else_ => compile_db_if_ir c cond then_ else_,
     Literal.match_ scrutinee cases => compile_match_ir c scrutinee cases,
-    // `Literal.struct_lit`/`Literal.struct_update` are effectively
-    // unreachable HERE: `lang/typecheck/infer.mo`'s
-    // `type_check_struct_lit` ALWAYS desugars a struct literal into a
-    // real `Term.con` (never leaves a `struct_lit` Literal behind), and
-    // `type_check_struct_update` does the same for struct updates
-    // except in the rare case where `base`'s type can't be resolved to
-    // a registered struct at all — a placeholder is emitted here rather
-    // than crashing on a non-exhaustive match (which is what used to
-    // happen: this whole match was `#[partial]` and simply had no case
-    // for either variant at all), matching `Literal.flt`'s own
-    // "keep the match total, nothing in the corpus reaches this today"
-    // convention just above.
-    Literal.struct_lit _fields _type_name => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
-    Literal.struct_update _base _fields => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
+    // Both struct arms funnel into `crash_struct_lit_reached_codegen`
+    // -- see its own doc comment for why a named crash beats either
+    // the old silent `void_val` placeholder or an unnamed
+    // non-exhaustive-match abort.
+    Literal.struct_lit _fields _type_name => crash_struct_lit_reached_codegen c,
+    Literal.struct_update _base _fields => crash_struct_lit_reached_codegen c,
 }
+
+/// Fail-fast backstop for `compile_lit_ir`'s struct arms: reachable
+/// only when a struct literal survived BOTH desugaring passes
+/// (`desugar_struct_lits_decls` here, `type_check_struct_lit` in the
+/// checker) and every validate gate (i.e. a direct `compile_db_module`
+/// caller that skips `validate_no_undesugared_struct_lits`). The
+/// match is deliberately non-exhaustive (`Bool.false` never matches
+/// `Bool.true`), so evaluating it aborts the self-hosted compile with
+/// "non-exhaustive match" naming this function -- grep the name to
+/// find the pipeline hole. `CompileResult` has no error constructor
+/// to thread through the term compiler (and retrofitting one means an
+/// arm at every `CompileResult.ok` site, each a fresh silent-bug
+/// opportunity), and a silent `void_val` placeholder is exactly the
+/// miscompile class `validate_no_undesugared_struct_lits` exists to
+/// fail fast on. The dummy `ok` arm exists only so the match
+/// typechecks and is never evaluated.
+#[partial]
+def crash_struct_lit_reached_codegen (c : CodegenCtx) : CompileResult :=
+    match Bool.false {
+        Bool.true => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
+    }
 
 /// Compile a match expression to LLVM IR: compiles the scrutinee once,
 /// reads its runtime tag (@monad_get_tag), and generates a chain of
@@ -4475,6 +4500,180 @@ def module_file_pairs (mods : List ModuleInfo) (acc : List (Pair String String))
     List.cons m rest => module_file_pairs rest (List.append acc (List.cons (Pair.pair (show_module_path m.path) m.file_path) List.empty)),
 }
 
+/// Post-load Term→Term pass: rewrite every ANNOTATED
+/// `Literal.struct_lit` (`{ field := value, ... : StructName }`) whose
+/// annotation resolves to a registered inductive into a real `Term.con`
+/// BEFORE elaboration. This is the same rewrite
+/// `type_check_struct_lit` (`lang/typecheck/infer.mo`) performs on its
+/// success path -- and it still will, for every def elaboration
+/// succeeds on. This pass exists for the defs elaboration FAILS on:
+/// `elaborate_module_decls_best_effort` (`lang/module.mo`) keeps the
+/// ORIGINAL un-desugared decl on failure, and `compile`/`check` only
+/// typecheck the TARGET file, so an annotated literal in a DEPENDENCY
+/// module whose def fails elaborate for an unrelated reason survives
+/// all the way to codegen, where `compile_lit_ir`'s struct arm is (at
+/// best) a fail-fast crash and (at worst, historically) a silent
+/// `void_val` miscompile. Un-annotated literals are LEFT alone (no way
+/// to know the struct without an expected type) and stay caught by
+/// `validate_no_undesugared_struct_lits` with its actionable message;
+/// `struct_update` is left too (it needs the base's type, which only
+/// the checker's expected-type context supplies).
+///
+/// Runs on def BODIES only (`Decl.def_d`), mirroring exactly what
+/// `validate_no_undesugared_struct_lits` walks (`extract_defs`) -- the
+/// gate this pass feeds. Scope rebuild afterwards is unnecessary: the
+/// pass rewrites only term bodies, never decl shapes, so the scope
+/// built from the pre-pass decls is bit-identical.
+#[partial]
+def desugar_struct_lits_decls (scope : Scope) (decl_list : List Decl) : List Decl := match decl_list {
+    List.empty => List.empty,
+    List.cons d rest =>
+        List.cons (desugar_struct_lit_decl scope d) (desugar_struct_lits_decls scope rest),
+}
+
+#[partial]
+def desugar_struct_lit_decl (scope : Scope) (d : Decl) : Decl := match d {
+    Decl.def_d def_ => Decl.def_d (desugar_struct_lit_def scope def_),
+    _ => d,
+}
+
+#[partial]
+def desugar_struct_lit_def (scope : Scope) (d : Def) : Def := match d {
+    Def.mk name typ term_ constraints attrs vis =>
+        Def.mk name typ (desugar_struct_lit_term scope term_) constraints attrs vis,
+}
+
+/// The term-level rewrite. Structural traversal mirrors
+/// `term_has_struct_lit` (`lang/codegen/validate.mo`) -- the same
+/// positions, but rebuilding instead of probing. `Term.ctx` wrappers
+/// are recursed into and PRESERVED (located `--debug` decls are
+/// wrapped; "every site that rebuilds preserves", per Term.ctx's own
+/// doc comment). Replacing a `Term.lit (Literal.struct_lit ...)`
+/// node with `Term.con` moves the field-value terms in place inside
+/// the same binder context, so de Bruijn indices are untouched -- no
+/// shifting.
+#[partial]
+def desugar_struct_lit_term (scope : Scope) (t : Term) : Term := match t {
+    Term.lam dbg typ body => Term.lam dbg (desugar_struct_lit_term scope typ) (desugar_struct_lit_term scope body),
+    Term.forall dbg kind body => Term.forall dbg (desugar_struct_lit_term scope kind) (desugar_struct_lit_term scope body),
+    Term.pi arg_ ret_ => Term.pi (desugar_struct_lit_term scope arg_) (desugar_struct_lit_term scope ret_),
+    Term.app fun_ arg_ => Term.app (desugar_struct_lit_term scope fun_) (desugar_struct_lit_term scope arg_),
+    Term.ntv native => Term.ntv (desugar_struct_lit_native scope native),
+    Term.con con_ => Term.con (desugar_struct_lit_con_node scope con_),
+    Term.lit lit_ => desugar_struct_lit_lit scope lit_,
+    Term.ctx loc inner => Term.ctx loc (desugar_struct_lit_term scope inner),
+    _ => t,
+}
+
+/// The literal-level rewrite. Returns a `Term` (not a `Literal`)
+/// because the whole point is that a resolvable struct literal stops
+/// being a literal: `Term.lit (Literal.struct_lit ...)` in, `Term.con`
+/// out. Non-struct literals recurse into their term children and are
+/// rewrapped unchanged. A literal this pass can't resolve is rewrapped
+/// too -- but its FIELD VALUES are still walked, so a resolvable
+/// nested literal never rides an unresolvable outer one into codegen.
+#[partial]
+def desugar_struct_lit_lit (scope : Scope) (l : Literal) : Term := match l {
+    Literal.struct_lit fields type_name =>
+        match type_name {
+            Option.some tn =>
+                match desugar_struct_lit_con scope fields tn {
+                    Option.some c => Term.con c,
+                    Option.none => Term.lit (Literal.struct_lit (desugar_struct_lit_fields scope fields) type_name),
+                },
+            Option.none => Term.lit (Literal.struct_lit (desugar_struct_lit_fields scope fields) type_name),
+        },
+    Literal.struct_update base fields =>
+        Term.lit (Literal.struct_update (desugar_struct_lit_term scope base) (desugar_struct_lit_fields scope fields)),
+    Literal.if_ cond then_ else_ =>
+        Term.lit (Literal.if_ (desugar_struct_lit_term scope cond) (desugar_struct_lit_term scope then_) (desugar_struct_lit_term scope else_)),
+    Literal.match_ value cases =>
+        Term.lit (Literal.match_ (desugar_struct_lit_term scope value) (desugar_struct_lit_cases scope cases)),
+    _ => Term.lit l,
+}
+
+/// Try to resolve one annotated struct literal to its `Con`: head name
+/// from the annotation, `scope_find_inductive`, first constructor's
+/// params, `struct_lit_build_args` (which also substitutes declared
+/// Param DEFAULTS for omitted fields), `Con.mk` -- mirroring
+/// `type_check_struct_lit`'s success path minus the per-arg type
+/// CHECK, which the subsequent elaborate pass performs on the Con
+/// exactly as it would for a hand-written `Point.mk 1 2`.
+/// `Option.none` = unresolvable (no head name / not registered / no
+/// constructors): leave the literal for the checker and the
+/// `validate_no_undesugared_struct_lits` gate. `term_peel` on the
+/// annotation: under `--debug` the located parser wraps it in
+/// `Term.ctx`, and `type_head_name` is ctx-blind.
+#[partial]
+def desugar_struct_lit_con (scope : Scope) (fields : List StructLitField) (tn : Term) : Option Con :=
+    match type_head_name (term_peel tn) {
+        Option.none => Option.none,
+        Option.some sname =>
+            let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
+            match scope_find_inductive typ_mp scope {
+                Result.err _ => Option.none,
+                Result.ok ind =>
+                    match ind {
+                        Inductive.mk _ _ _ ctors _ _ =>
+                            match ctors {
+                                List.empty => Option.none,
+                                List.cons ctor _ =>
+                                    match ctor {
+                                        InductConstructor.mk con_name params _ =>
+                                            let args : List (Option Term) := struct_lit_build_args params fields in
+                                            Option.some (Con.mk (struct_lit_con_name con_name) typ_mp (List.length params) (desugar_opt_terms scope args)),
+                                    },
+                            },
+                    },
+            },
+}
+
+/// A struct literal's own FIELD VALUES may themselves hold struct
+/// literals -- always walk them, even on the leave-the-literal-alone
+/// fallback paths.
+#[partial]
+def desugar_struct_lit_fields (scope : Scope) (fields : List StructLitField) : List StructLitField := match fields {
+    List.empty => List.empty,
+    List.cons f rest =>
+        match f {
+            StructLitField.mk fname fvalue =>
+                List.cons (StructLitField.mk fname (desugar_struct_lit_term scope fvalue)) (desugar_struct_lit_fields scope rest),
+        },
+}
+
+#[partial]
+def desugar_struct_lit_cases (scope : Scope) (cases : List MatchCase) : List MatchCase := match cases {
+    List.empty => List.empty,
+    List.cons c rest =>
+        match c {
+            MatchCase.mc cname cargs cbody cfp =>
+                List.cons (MatchCase.mc cname cargs (desugar_struct_lit_term scope cbody) cfp) (desugar_struct_lit_cases scope rest),
+        },
+}
+
+#[partial]
+def desugar_struct_lit_native (scope : Scope) (n : Native) : Native := match n {
+    Native.mk native_name num_args args => Native.mk native_name num_args (desugar_opt_terms scope args),
+}
+
+/// A `Con`'s own args can hold struct literals (a literal nested as
+/// one ctor argument of another) -- walk filled slots, keep holes.
+#[partial]
+def desugar_struct_lit_con_node (scope : Scope) (c : Con) : Con := match c {
+    Con.mk cname ctyp_name cnum_args cargs =>
+        Con.mk cname ctyp_name cnum_args (desugar_opt_terms scope cargs),
+}
+
+#[partial]
+def desugar_opt_terms (scope : Scope) (args : List (Option Term)) : List (Option Term) := match args {
+    List.empty => List.empty,
+    List.cons opt_ rest =>
+        match opt_ {
+            Option.some t => List.cons (Option.some (desugar_struct_lit_term scope t)) (desugar_opt_terms scope rest),
+            Option.none => List.cons Option.none (desugar_opt_terms scope rest),
+        },
+}
+
 /// `compile_loaded_modules_to_ir`, with DWARF debug info (one location
 /// per top-level def, from the `Term.ctx` wrapper on its body).
 /// `source_path` is passed straight through to
@@ -4631,8 +4830,10 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
     let t_scope : I64 <- bench_step verbose "  elaborate_class: build_scope_from_decls" t_elab (List.length scope_data.classes);
     let scope : Scope := { module_id := target_mp, scope := scope_data, parent := Option.none };
     let empty_locs : LocalScope := { vars := List.empty, parent := Option.none };
-    let elaborated := elaborate_module_decls_best_effort scope dict_param_decls empty_locs;
-    let t_best_effort : I64 <- bench_step verbose "  elaborate_class: elaborate_module_decls_best_effort" t_scope (List.length elaborated);
+    let desugared_decls := desugar_struct_lits_decls scope dict_param_decls;
+    let t_desugar : I64 <- bench_step verbose "  elaborate_class: desugar_struct_lits" t_scope (List.length desugared_decls);
+    let elaborated := elaborate_module_decls_best_effort scope desugared_decls empty_locs;
+    let t_best_effort : I64 <- bench_step verbose "  elaborate_class: elaborate_module_decls_best_effort" t_desugar (List.length elaborated);
     let dispatched_decls := resolve_class_calls_decls elaborated;
     let _t_dispatch : I64 <- bench_step verbose "  elaborate_class: resolve_class_calls_decls" t_best_effort (List.length dispatched_decls);
     if verbose then do {

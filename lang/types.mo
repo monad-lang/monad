@@ -348,6 +348,15 @@ type Literal {
     flt (text: String) (suffix: NumSuffix),
     if_ (one: Term) (two: Term) (three: Term),
     match_ (value: Term) (cases: List MatchCase),
+    /// DEPRECATED: never constructed on purpose. Both typechecking
+    /// (`type_check_struct_lit`, `lang/typecheck/infer.mo`) and codegen
+    /// (`desugar_struct_lits_decls`, `lang/codegen/emit.mo`) rewrite an
+    /// annotated struct literal to a real `Term.con` before use; this
+    /// variant survives only when best-effort elaboration fails, and
+    /// every survivor is rejected fail-fast by
+    /// `validate_no_undesugared_struct_lits` (compile path) or
+    /// `lower_literal`'s `le_struct_lit_survived` (eval path). New code
+    /// should not add consumers for it.
     /// A struct-literal expression (`{ field := value, ... }`),
     /// optionally self-annotated with which struct it builds
     /// (`{ field := value, ... : StructName }`) — lets the checker
@@ -356,6 +365,14 @@ type Literal {
     /// one, e.g. passed to a generic function). Mirrors the Rust
     /// reference's `CoreLit::StructLit` (core/src/core_term.rs).
     struct_lit (fields: List StructLitField) (type_name: Option Term),
+    /// DEPRECATED: never constructed on purpose. Both typechecking
+    /// (`type_check_struct_update`, `lang/typecheck/infer.mo`) and
+    /// codegen (`desugar_struct_lits_decls`, `lang/codegen/emit.mo`)
+    /// rewrite a struct update away before use; this variant survives
+    /// only when best-effort elaboration fails, and every survivor is
+    /// rejected fail-fast by `validate_no_undesugared_struct_lits`
+    /// (compile path) or `lower_literal`'s `le_struct_lit_survived`
+    /// (eval path). New code should not add consumers for it.
     /// `{ base with field := value, ... }` — a copy of `base` (an
     /// existing struct VALUE, not a type name) with the listed fields
     /// replaced. `base` is a resolved `Term` (typically `Term.var`) here

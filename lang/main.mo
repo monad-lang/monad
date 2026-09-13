@@ -458,6 +458,7 @@ def show_lower_error (e : LowerError) : String :=
         LowerError.le_unknown_native name => String.concat "unknown native " (show_identifier name),
         LowerError.le_type_level_term => "type-level term reached lowering",
         LowerError.le_con_hole_before_filled_arg => "constructor hole before a filled arg",
+        LowerError.le_struct_lit_survived => "struct literal reached lowering un-desugared (give the literal an explicit `: StructName` annotation, or bind it to an annotated local)",
         LowerError.le_in_def path inner => String.concat "in def " (String.concat (show_module_path path) (String.concat ": " (show_lower_error inner))),
     }
 
