@@ -2860,15 +2860,56 @@ Key patterns when writing self-hosted Monad code:
     predicted ~61s, but only 61% of the real regression came back. Item 37
     again -- a share at one scale does not carry to another, so measure the
     whole thing rather than scaling the microbenchmark.
-    **(c) Do not delete the oracle you are testing against.**
+    **(c) Do not delete the oracle you are testing against -- DEMOTE it.**
     `line_col_scan`/`single_location_at` are an independent second
     implementation of the same arithmetic, and `agrees_at_all` cross-checks the
-    resolver against them. Rewiring both through the new natives was tempting
-    and would have left the rewrite unverifiable. It is a follow-up.
+    resolver against them. Rewiring both through the new natives at the same
+    time would have left the rewrite unverifiable, so it was deferred. When it
+    was then done, the way to keep the check was to make the slow
+    character-at-a-time scanner (`line_col_scan_direct`) a TEST-ONLY reference
+    implementation rather than deleting it, and add
+    `test_line_col_scan_matches_reference` comparing the two. That preserves
+    the independence where it matters -- the reference decides "what is a
+    character" by stepping `utf8_char_width` over lead bytes, the natives by
+    counting non-continuation bytes, so the two derivations agreeing is a real
+    property and not a tautology. The general move: when a slow
+    implementation is the only thing proving a fast one correct, its
+    replacement should turn it into a test fixture, not remove it.
+    Converting it was worth doing on its own merits even though its only live
+    caller is cold: rendering a parse error in a 76KB source went **311.92ms
+    -> 4.19ms** (74x), which is latency a user eats on every syntax error in a
+    big file.
     A related fact worth knowing, found while writing the mid-character test:
     `String.slice` on a range that would SPLIT a UTF-8 character returns the
     EMPTY string (`get(start..end).unwrap_or("")`), so `single_location_at`
     silently answers 0/1/1 for any non-boundary offset. Verified, not assumed.
+
+44. **A `\u{XXXX}` escape passes `monad-rs check` and `monad-rs test`, then
+    kills the self-compile (2026-09-13).**
+    The Rust reference string parser accepts unicode escapes; the self-hosted
+    one (`escape_replacement`, `lang/parser/string.mo`) deliberately does not,
+    for want of a hex-to-codepoint native. Its doc comment says so and adds
+    "zero known corpus impact since no `\u{}` escape appears anywhere in the
+    current corpus" -- which is an INVARIANT, not an observation. One
+    `"\u{00e9}"` in a test fixture in `lang/parser/position.mo` broke it.
+    **What makes this expensive is the failure shape.** Everything that goes
+    through the Rust host is clean: `monad-rs check` reports 0 errors,
+    `monad-rs test` passes, the corpus passes 1481/1481, and `--release` IR
+    stays byte-identical. The self-hosted parse rejects the WHOLE module, so
+    the first symptom is a self-compile dying at
+    `compile_loaded_modules_to_ir` with `call to undefined symbol(s):
+    location_of_remaining; resolve_offsets_in_file` -- the names of defs that
+    plainly exist, in a file that plainly compiles. Same shape as item 40, and
+    the same fast reproducer (~60s, not a full self-compile):
+    `monad-rs run lang/main.mo check <file>`, which reports
+    `did not fully parse (stopped before end of file)` and prints the
+    offending text.
+    Write the literal character instead. And note what found it: the
+    `elaborate_module_decls_reporting` line added in item 42 went from 1
+    un-elaborated decl to 15 and NAMED them -- `render_parse_error`,
+    `build_loc_table`, `location_of_span`, all consumers of the broken
+    module. Before that line existed this would have been a silent symbol
+    error with nothing pointing at the cause.
 
 ## Committing Changes
 
