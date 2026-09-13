@@ -2802,11 +2802,73 @@ Key patterns when writing self-hosted Monad code:
     instead of one plain parse on every path. Interleaved A/B, two rounds,
     machine idle: `check lang/main.mo` **57.5s -> 86.8s (+51%)**;
     `load_file_modules` 45.3s -> 75.4s. The debug compile got FASTER (it
-    stops parsing twice: 172.1s -> ~157s). Do not attribute the delta to
-    `build_loc_table`'s `I64.to_string` keying without profiling it -- a
-    located tree has roughly twice the nodes, and every downstream pass
-    walks all of them, which is at least as likely the bulk. Unmeasured
-    either way.
+    stops parsing twice: 172.1s -> ~157s).
+    **Where that delta goes was then measured, and my own guess above about
+    it was wrong.** I had written that a located tree has ~2x the nodes and
+    every downstream pass walks them, so that was "at least as likely the
+    bulk". It is not. An interleaved `--verbose` phase-table A/B at load
+    0.21 puts the ENTIRE +29.8s inside `load_file_modules` (45721-46276ms ->
+    75718-75878ms) with every downstream phase flat (`resolve_infix_decls`
+    +4%, `build_scope_from_decls` and `names_of_decls` unchanged). The cost
+    is in PRODUCING the tree, not consuming it. Decomposed in one process by
+    `bench/parser_locate_cost.mo` on `lang/types.mo` (73000 bytes, 1469
+    spans): of 739ms of located overhead on a 1255ms baseline,
+    `resolve_offsets_in_file` is **652ms (88%)** and `build_loc_table`'s
+    `I64.to_string` rekeying -- my first suspect -- is 54ms.
+    The reason that one function is slow is worth keeping: it walked EVERY
+    character of the file, and per character `utf8_char_width`
+    (`lang/parser/combinators.mo`) is `match String.get s 0`, where
+    `string_get` returns a `Value::Con` -- **an `Option` allocation per
+    character**. This also explains a rewrite that failed: recasting the
+    loop as a byte-index scan assumed item 28's pathology (`String.slice`/
+    `String.drop` allocating), which `SharedStr` had already made false --
+    they are O(1) views -- so the "fix" swapped a free slice for another
+    `String.get` and could not have won. Its end-to-end comparison was taken
+    at load 9.4 against an hour-old baseline, so it did not even measure
+    that; see item 24, which forbids exactly that mistake.
+
+43. **In a self-hosted compiler, a hot loop's cost is whichever primitive it
+    calls per step -- and the SAME primitive costs differently on the two
+    runtimes (2026-09-13).**
+    `resolve_offsets_in_file` (`lang/parser/position.mo`) was 88% of what
+    locating every term cost. It walked every character of the file to turn
+    byte offsets into line:column. Three separate lessons came out of fixing
+    it, and the first two are corrections to my own reasoning:
+    **(a) The per-step primitive, not the loop shape, was the cost.** Per
+    character the walk called `utf8_char_width`, which is
+    `match String.get s 0` -- and `string_get` returns a `Value::Con`, so the
+    walk allocated an `Option` PER CHARACTER, ~8.9us each. Rearranging the loop
+    could not help; a first attempt rewrote it as a byte-index scan on the
+    theory that `String.slice`/`String.drop` allocate (item 28's pathology),
+    which `SharedStr` had already made false -- they are O(1) views -- so the
+    "fix" swapped a free slice for another `String.get`. **Check what the
+    primitive does TODAY before reusing an old profile's conclusion about it.**
+    **(b) The same call has different asymptotics interpreted vs compiled, and
+    `lang/` runs BOTH ways.** Host `string_slice` is an O(1) `SharedStr` view;
+    compiled `monad_string_slice` (`lang/codegen/runtime.c`) does a `strlen`
+    plus a malloc plus a memcpy per call. So the old per-character
+    `String.slice s 0 width` was O(1) interpreted and QUADRATIC in every
+    self-compiled build -- invisible to any host-side profile. `String.length`
+    is the same trap (`strlen`, compiled), so hoist it out of loops.
+    The fix takes one step per SPAN instead of per character, with two natives
+    (`String.count_newlines`/`String.trailing_chars`) that take a LENGTH and
+    scan in place, so nothing is sliced on either runtime: 652ms -> 70ms,
+    measured on `lang/types.mo` by `bench/parser_locate_cost.mo`, and
+    `check lang/main.mo` 87.1-88.1s -> 69.2s end to end (interleaved, three
+    rounds, load 1.06-1.66). Note the gap between those two numbers: the
+    652ms was 88% of the located overhead on ONE file, and extrapolating it
+    predicted ~61s, but only 61% of the real regression came back. Item 37
+    again -- a share at one scale does not carry to another, so measure the
+    whole thing rather than scaling the microbenchmark.
+    **(c) Do not delete the oracle you are testing against.**
+    `line_col_scan`/`single_location_at` are an independent second
+    implementation of the same arithmetic, and `agrees_at_all` cross-checks the
+    resolver against them. Rewiring both through the new natives was tempting
+    and would have left the rewrite unverifiable. It is a follow-up.
+    A related fact worth knowing, found while writing the mid-character test:
+    `String.slice` on a range that would SPLIT a UTF-8 character returns the
+    EMPTY string (`get(start..end).unwrap_or("")`), so `single_location_at`
+    silently answers 0/1/1 for any non-boundary offset. Verified, not assumed.
 
 ## Committing Changes
 
