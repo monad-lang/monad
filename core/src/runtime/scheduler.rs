@@ -40,7 +40,19 @@ fn worker_loop(
   let n = all_locals.len();
 
   loop {
-    if let Some(task) = local.lock().unwrap().pop_back() {
+    // Pop into a local FIRST, so the queue's `MutexGuard` is dropped before
+    // the task runs. Written as `if let Some(task) = local.lock().unwrap()
+    // .pop_back()`, the temporary guard lives until the end of the `if let`
+    // BODY -- so the worker held the queue lock for the whole duration of
+    // `f()`. Every other worker blocks on that same lock the moment its own
+    // local queue runs dry, so one long task serialised the pool and one
+    // BLOCKING task (waiting on a channel, a condvar, another fiber) stalled
+    // it outright: the remaining workers could not even look at the queue.
+    // `test_scheduler_parallel_execution` had been failing ~6 runs in 10
+    // because of this; the steal path below never had the bug, because its
+    // guard `q` is a named binding that drops at the end of the loop body.
+    let task = local.lock().unwrap().pop_back();
+    if let Some(task) = task {
       match task {
         Task::Run(f) => f(),
         Task::Shutdown => return,
@@ -48,7 +60,8 @@ fn worker_loop(
       continue;
     }
 
-    if let Some(task) = global.lock().unwrap().pop_front() {
+    let task = global.lock().unwrap().pop_front();
+    if let Some(task) = task {
       match task {
         Task::Run(f) => f(),
         Task::Shutdown => return,
@@ -224,6 +237,7 @@ impl Drop for Scheduler {
 mod tests {
   use super::*;
   use std::collections::HashSet;
+  use std::time::Instant;
 
   #[test]
   fn test_scheduler_spawn_and_await() {
@@ -274,28 +288,61 @@ mod tests {
 
   /// The scheduler really does spread work across its workers.
   ///
-  /// Each fiber holds its worker long enough that a single worker cannot
-  /// plausibly drain the whole queue before the OS schedules the others.
-  /// At 50us x 100 fibers the batch was ~5ms of work, which is well inside
-  /// the noise of starting four threads on a loaded machine -- so this
-  /// failed intermittently, and only ever inside the full suite, where
-  /// `cargo test`'s own parallelism saturates the box. In isolation it
-  /// passed in 0.01s every time, which is exactly the shape of a test whose
-  /// margin is too thin rather than one finding a real defect.
+  /// This is a real handshake, not a timing margin. Every earlier version
+  /// asserted that a *sleep* was long enough for the OS to get a second
+  /// worker running -- 50us x 100 fibers, then 5ms x 40 -- and both failed
+  /// intermittently under `cargo test`'s own parallelism, because no fixed
+  /// sleep is long enough on a saturated box. Measured at 6 failures in 10
+  /// runs on an 8-core machine at load ~4.
   ///
-  /// Deliberately NOT a barrier or a "wait until 2 threads arrive" handshake:
-  /// those turn a serial scheduler from a failing assertion into a hang.
+  /// The previous comment here rejected a handshake on the grounds that it
+  /// turns a serial scheduler from a failing assertion into a hang. That is
+  /// true of a bare barrier, and it is what the SHARED DEADLINE below fixes:
+  /// each fiber waits for a second worker only until `deadline`, an absolute
+  /// instant fixed before any fiber is spawned. So a scheduler that cannot
+  /// run two fibers at once still FAILS, and does so after one timeout in
+  /// total rather than one per fiber -- once the deadline passes, every
+  /// remaining fiber computes a zero remaining wait and returns immediately.
+  ///
+  /// In the passing case no fiber sleeps at all: the second worker's insert
+  /// wakes the first through the condvar in microseconds, so this is also
+  /// far faster than the sleep-based version it replaces.
+  ///
+  /// Safe because `spawn` only ENQUEUES -- it never runs a fiber body inline
+  /// on the calling thread -- so blocking inside a fiber can never stall the
+  /// loop that spawns the rest.
   #[test]
   fn test_scheduler_parallel_execution() {
+    // Only ever paid when the assertion is about to fail; the passing path
+    // never reaches it. Generous so a heavily loaded CI box cannot be the
+    // reason two workers failed to overlap.
+    const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
     let sched = Scheduler::with_workers(4);
-    let thread_ids = Arc::new(Mutex::new(HashSet::new()));
+    // `.0` is the set of worker thread IDs seen so far; `.1` signals the
+    // moment it reaches two.
+    let seen = Arc::new((Mutex::new(HashSet::new()), Condvar::new()));
+    let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
 
     let mut fibers = Vec::new();
     for _ in 0..40 {
-      let ids = Arc::clone(&thread_ids);
+      let seen = Arc::clone(&seen);
       fibers.push(sched.spawn(move || {
-        ids.lock().unwrap().insert(thread::current().id());
-        thread::sleep(Duration::from_millis(5));
+        let (lock, cvar) = &*seen;
+        let ids = lock.lock().unwrap();
+        let mut ids = ids;
+        ids.insert(thread::current().id());
+        if ids.len() >= 2 {
+          // Release the waiter(s) -- the property under test is now proven.
+          cvar.notify_all();
+          return;
+        }
+        // First worker in: block until a SECOND one arrives, so the test
+        // observes real overlap rather than inferring it from elapsed time.
+        // `saturating_duration_since` yields zero once the deadline has
+        // passed, which is what bounds the serial case to one timeout.
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let _ = cvar.wait_timeout_while(ids, remaining, |ids| ids.len() < 2);
       }));
     }
 
@@ -303,7 +350,7 @@ mod tests {
       f.wait();
     }
 
-    let ids = thread_ids.lock().unwrap();
+    let ids = seen.0.lock().unwrap();
     assert!(
       ids.len() >= 2,
       "expected at least 2 distinct thread IDs, got {:?}",
