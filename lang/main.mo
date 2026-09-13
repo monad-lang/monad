@@ -1,8 +1,8 @@
 use io {IO}
 open IO {println, read_file, write_file}
 use std.process {exec_cmd, process_id}
-use std.bench {now, report, report_since, since}
-use lang.types {Decl, LocalScope, ModulePath, Identifier, Term, show_module_path, show_identifier}
+use std.bench {now, report_since}
+use lang.types {Decl, LocalScope, ModulePath, show_module_path, show_identifier}
 use lang.codegen.ir {LLVMModule, emit_module}
 use lang.codegen.emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
 use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
@@ -17,7 +17,7 @@ use lang.log {debug_module_line, fail_line, ok_line, stage}
 use lang.lower_core_ir {lower_ctx_from_decls, lower_root, LowerError}
 use lang.core_ir {CoreIr}
 use lang.core_eval {eval, basic_native_table}
-use lang.core_value {Env, GlobalCache, GlobalTable, Value, global_cache_new, global_table_len}
+use lang.core_value {GlobalTable, global_cache_new, global_table_len}
 use lang.typecheck.meta_eval {show_value_debug, show_core_eval_error_debug}
 
 #[native "build_commit"]
