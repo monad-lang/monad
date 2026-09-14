@@ -2127,31 +2127,35 @@ def def_explicit_attrs (r : ParseResult (List Attribute)) (close_rem : String) (
 #[partial]
 def def_explicit_try_destructured (r : ParseResult FieldPattern) (orig : String) (close_rem : String) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
 	match r {
-		success rem fp => def_explicit_destructured_colon (tag ":" (skip_spaces rem)) close_rem fp params attrs,
+		success rem fp => def_explicit_destructured_colon (tag ":" (skip_spaces rem)) close_rem fp params attrs mult,
 		fail _ => def_explicit_param (identifier orig) close_rem params attrs mult
 	}
 
 #[partial]
-def def_explicit_destructured_colon (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
+def def_explicit_destructured_colon (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
 	match r {
 		success rem _ =>
-			def_explicit_destructured_type (type_expression rem) close_rem fp params attrs,
+			def_explicit_destructured_type (type_expression rem) close_rem fp params attrs mult,
 		fail e => fail e
 	}
 
 #[partial]
-def def_explicit_destructured_type (r : ParseResult ParseTerm) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
+def def_explicit_destructured_type (r : ParseResult ParseTerm) (close_rem : String) (fp : FieldPattern) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
 	match r {
-		success rem typ => def_explicit_destructured_close (tag ")" rem) close_rem fp typ params attrs,
+		success rem typ => def_explicit_destructured_close (tag ")" rem) close_rem fp typ params attrs mult,
 		fail e => fail e
 	}
 
 #[partial]
-def def_explicit_destructured_close (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (typ : ParseTerm) (params : List ParsedParam) (attrs : List Attribute) : ParseResult (List ParsedParam) :=
+def def_explicit_destructured_close (r : ParseResult String) (close_rem : String) (fp : FieldPattern) (typ : ParseTerm) (params : List ParsedParam) (attrs : List Attribute) (mult : Multiplicity) : ParseResult (List ParsedParam) :=
 	match r {
 		success rem _ =>
 			let none : Option ParseTerm := Option.none in
-			let p : ParseParam := ParseParam.mk (Identifier.id "__struct_param") typ Multiplicity.many none attrs in
+			// `mult`, not a hardcoded `Multiplicity.many`: `def_explicit_attrs`
+			// parses a `!`/`?`/`%` prefix for BOTH param forms, and the
+			// destructured branch used to accept one and silently discard it,
+			// so `(!{x, y} : P)` compiled as an unrestricted param.
+			let p : ParseParam := ParseParam.mk (Identifier.id "__struct_param") typ mult none attrs in
 			let pp : ParsedParam := ParsedParam.destructured p fp in
 			def_params_loop (skip_spaces rem) (List.cons pp params),
 		fail e => fail e
@@ -9409,6 +9413,66 @@ def test_is_space_newline : Bool :=
   is_space "\n"
 
 // --- Multiplicity prefix on def/lambda params (gap §1) ---
+
+/// The multiplicity a single explicit param group actually carries, via
+/// `def_params_loop` -- the level the prefix is PARSED at. `def_parser`
+/// cannot be used to observe this: `build_param_pi_chain` and
+/// `lam_parsed_params_loop` both drop `ParseParam.mult` on the floor
+/// (`Term.pi`/`Term.lam` have no multiplicity field at all), so every
+/// def-param multiplicity is erased by lowering regardless of form. The
+/// `def_parser` tests below can therefore only assert that the prefix
+/// PARSES -- which is exactly why a dropped `mult` went unnoticed in the
+/// destructured branch.
+#[partial]
+def parsed_param_mult (pp : ParsedParam) : Multiplicity := match pp {
+    ParsedParam.plain p => p.mult,
+    ParsedParam.destructured p _fp => p.mult,
+}
+
+#[partial]
+def first_param_mult (input : String) : Option Multiplicity :=
+    match def_params_loop input List.empty {
+        success _ params =>
+            match list_reverse params {
+                List.cons pp _ => Option.some (parsed_param_mult pp),
+                List.empty => Option.none,
+            },
+        fail _ => Option.none,
+    }
+
+def mult_is_linear (m : Option Multiplicity) : Bool := match m {
+    Option.some mm => match mm { Multiplicity.linear => true, _ => false },
+    Option.none => false,
+}
+
+def mult_is_many (m : Option Multiplicity) : Bool := match m {
+    Option.some mm => match mm { Multiplicity.many => true, _ => false },
+    Option.none => false,
+}
+
+/// Plain explicit param: `!` reaches `ParseParam.mult`.
+#[test]
+def test_explicit_param_keeps_linear_mult : Bool :=
+    mult_is_linear (first_param_mult "(!x : I64)")
+
+/// DESTRUCTURED explicit param: `!` reaches `ParseParam.mult` too. This
+/// branch used to hardcode `Multiplicity.many` in
+/// `def_explicit_destructured_close`, silently discarding a prefix that
+/// `def_explicit_attrs` had already parsed -- so `(!{x, y} : P)` compiled
+/// as an unrestricted param.
+#[test]
+def test_destructured_param_keeps_linear_mult : Bool :=
+    mult_is_linear (first_param_mult "(!{x, y} : P)")
+
+/// No prefix still means `many`, both forms.
+#[test]
+def test_explicit_param_defaults_to_many_mult : Bool :=
+    mult_is_many (first_param_mult "(x : I64)")
+
+#[test]
+def test_destructured_param_defaults_to_many_mult : Bool :=
+    mult_is_many (first_param_mult "({x, y} : P)")
+
 
 #[test]
 def test_def_param_linear_prefix : Bool :=
