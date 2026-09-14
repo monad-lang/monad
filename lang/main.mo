@@ -450,36 +450,23 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
         };
     match res {
         Result.ok loaded => do {
-            // Under `--debug` EVERY loaded module is re-parsed with
-            // positions recorded, and the located decls replace the plain
-            // ones. Same grammar, same expansion -- the only difference is
-            // `Term.ctx` wrappers.
-            // Timed, because this was the single largest cost in the whole
-            // compiler and nothing measured it. A `--verbose` self-compile
-            // WITHOUT `--release` ran 28035824ms (7h48m) against 275424ms with
-            // it, every other phase within noise -- i.e. ~7h44m, 99.4% of the
-            // run, is this second read+parse of the whole dependency graph.
-            // The FIRST parse of the same 66 files (`load_file_modules`) is
-            // 45685ms, so this is ~615x slower for the same work.
-            // Gated on `debug` as well as `verbose`: with `--release` the span
-            // legitimately measures nothing, and a 0ms span is exactly what
-            // AGENTS.md item 25 says to treat as a broken span -- so don't
-            // print one rather than train a reader to ignore it.
-            do {
-                let source_path : Option String := if debug then Option.some file_path else Option.none;
-                // `verbose` thread-through: previously this branch dumped the
-                // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
-                // walking every loaded module's full content) on every
-                // successful compile -- pure noise on a working build AND a
-                // real perf hit. Now `verbose` is forwarded to
-                // `compile_loaded_modules_to_ir_with_debug`, whose own
-                // `--verbose`-gated stage trace (its per-stage printlns, plus
-                // the `Loaded N modules` count it prints on entry) is the one
-                // place that progress is reported -- a count printed here too
-                // would duplicate it two calls later.
-                let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path;
-                link_compiled_module mod_result output_dir output_name verbose
-            }
+            // `source_path` is only set under `--debug`: it is what the debug
+            // info names as the compile's source file. `parse_all_decls`
+            // (`lang/module.mo`) locates every term on every path now, so
+            // there is no debug-only re-parse to gate on anything.
+            let source_path : Option String := if debug then Option.some file_path else Option.none;
+            // `verbose` thread-through: previously this branch dumped the
+            // ENTIRE `loaded : LoadedModules` struct (`Show.show loaded`,
+            // walking every loaded module's full content) on every
+            // successful compile -- pure noise on a working build AND a
+            // real perf hit. Now `verbose` is forwarded to
+            // `compile_loaded_modules_to_ir_with_debug`, whose own
+            // `--verbose`-gated stage trace (its per-stage printlns, plus
+            // the `Loaded N modules` count it prints on entry) is the one
+            // place that progress is reported -- a count printed here too
+            // would duplicate it two calls later.
+            let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path;
+            link_compiled_module mod_result output_dir output_name verbose
         },
         Result.err e => do {
             println ("Failed to parse dependencies: " ++ e);
