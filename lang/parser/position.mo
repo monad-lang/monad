@@ -251,6 +251,36 @@ def resolve_advance (rest : String) (len : I64) (loc : Location) : Location :=
 /// zero rather than trusted: a descending pair would otherwise hand the
 /// natives a negative length, and `resolve_offsets_in_file` sorts
 /// precisely because callers have been wrong about ascendingness before.
+///
+/// **The reported position and the carried cursor are not the same byte,
+/// and that is the point.** `at_off` answers at exactly the byte asked
+/// for. The cursor advances to the next character BOUNDARY at or after it
+/// (`boundary_at_or_after`), because `String.drop` at a non-boundary
+/// returns the EMPTY string on the Rust host -- `SharedStr::subslice`
+/// falls back to empty rather than splitting a character. Dropping by the
+/// raw step would therefore hand the rest of the walk an empty remainder,
+/// and every offset behind the offending one would resolve against it:
+/// `count_newlines`/`trailing_chars` both answer 0, so `line` and `column`
+/// FREEZE while `offset` keeps climbing. One bad offset, every later
+/// position silently wrong.
+///
+/// It also kept the two runtimes from agreeing, which is the shape
+/// `runtime.c`'s own comment warns reads like a codegen bug and is not
+/// one: compiled, `monad_string_drop` is `return s + n` with no boundary
+/// check, so a self-compiled binary kept walking the real remainder while
+/// the host sat on `""`. Advancing on boundaries only makes both runtimes
+/// take the same step.
+///
+/// A real span never holds a non-boundary offset -- every scanner in the
+/// parser steps by `utf8_char_width` or by byte predicates no UTF-8 byte
+/// satisfies -- so this is a latent case, not a live one. It is still the
+/// case the file claims to handle, and
+/// `test_resolve_offsets_mid_character_batch` is what holds it to the
+/// claim for a BATCH rather than for one offset in isolation.
+///
+/// On the normal path `safe` equals `step` and `loc1` is `at_off`, so the
+/// boundary handling costs one `String.get` per OFFSET (not per character,
+/// which is the cost this rewrite removed) and nothing else.
 #[partial]
 def resolve_walk (rest : String) (loc : Location) (limit : I64) (offsets : List I64)
                  (out : List (Pair I64 Location)) : List (Pair I64 Location) :=
@@ -260,9 +290,36 @@ def resolve_walk (rest : String) (loc : Location) (limit : I64) (offsets : List 
             let target : I64 := if I64.gt off limit then limit else off in
             let raw : I64 := I64.sub target loc.offset in
             let step : I64 := if I64.lt raw 0 then 0 else raw in
-            let loc1 : Location := resolve_advance rest step loc in
-            resolve_walk (String.drop step rest) loc1 limit more
-                (List.cons (Pair.pair off loc1) out),
+            // What this offset resolves to: the byte the caller asked for.
+            let at_off : Location := resolve_advance rest step loc in
+            // Where the walk stands afterwards: the next boundary at or
+            // after it, so the `String.drop` below never splits a character.
+            let safe : I64 := boundary_at_or_after rest step in
+            let loc1 : Location :=
+                if I64.beq safe step then at_off else resolve_advance rest safe loc in
+            resolve_walk (String.drop safe rest) loc1 limit more
+                (List.cons (Pair.pair off at_off) out),
+    }
+
+/// The first UTF-8 character boundary at or after byte `i` in `s`.
+///
+/// Nudges at most 3 times -- the longest a UTF-8 sequence runs past its
+/// lead byte -- since only a continuation byte (0x80-0xBF) is a
+/// non-boundary. `String.get` past the end answers `Option.none`, which is
+/// already a boundary (end-of-input), so `i` stands.
+///
+/// This is the `safe_split_offset` the divide-and-conquer scanner used to
+/// need to keep a split off the middle of a character. The split is gone;
+/// the requirement is not, because `resolve_walk` still has to hand
+/// `String.drop` a boundary.
+#[partial]
+def boundary_at_or_after (s : String) (i : I64) : I64 :=
+    match String.get s i {
+        Option.some byte =>
+            if is_utf8_continuation_byte byte
+            then boundary_at_or_after s (I64.add i 1)
+            else i,
+        Option.none => i,
     }
 
 /// Resolve `offsets` (ascending, absolute byte offsets) against `source`.
@@ -592,10 +649,50 @@ def test_resolve_offsets_column_counts_characters : Bool :=
 /// here before this rewrite too -- the old character walk consumed such an
 /// offset at the NEXT boundary -- so the change is which meaningless
 /// answer the bulk path gives, and it now gives the predictable one.
+///
+/// One offset in isolation is NOT enough, though: see
+/// `test_resolve_offsets_mid_character_batch` just below, which is the
+/// half of this case that was actually broken.
 #[test]
 def test_resolve_offsets_mid_character_offset : Bool :=
     match lookup_resolved (resolve_offsets_in_file "// — x\ndef y : I64 := 1\n" [4]) 4 {
         Option.some loc => I64.beq loc.line 1 && I64.beq loc.column 5 && I64.beq loc.offset 4,
+        Option.none => false,
+    }
+
+/// A non-boundary offset must not disturb the offsets BEHIND it, which is
+/// the part a single-offset test cannot see.
+///
+/// Offset 10 is the `e` of `def` on line 2, column 2. Asking for it alone
+/// and asking for it after the mid-character offset 4 must give the same
+/// answer -- and asserted absolutely, not just for agreement, so that two
+/// equally wrong answers cannot pass.
+///
+/// This failed before `resolve_walk` advanced its cursor on boundaries:
+/// `String.drop 4` at the middle of the em dash returned `""` on the Rust
+/// host, so offset 10 resolved against an empty remainder and read
+/// `line 1 col 5` -- the position frozen at offset 4, with only the byte
+/// `offset` still climbing. Every offset after the first bad one was
+/// affected, not just the bad one.
+#[test]
+def test_resolve_offsets_mid_character_batch : Bool :=
+    let src : String := "// — x\ndef y : I64 := 1\n" in
+    match lookup_resolved (resolve_offsets_in_file src [4, 10]) 10 {
+        Option.some loc =>
+            I64.beq loc.line 2 && I64.beq loc.column 2 && I64.beq loc.offset 10
+                && loc_eq_opt (lookup_resolved (resolve_offsets_in_file src [10]) 10) loc,
+        Option.none => false,
+    }
+
+/// `Option.some loc` equal to `expect` on all three fields; `Option.none`
+/// is never equal, so a missing entry fails rather than passing vacuously.
+#[partial]
+def loc_eq_opt (got : Option Location) (expect : Location) : Bool :=
+    match got {
+        Option.some l =>
+            I64.beq l.line expect.line
+                && I64.beq l.column expect.column
+                && I64.beq l.offset expect.offset,
         Option.none => false,
     }
 
