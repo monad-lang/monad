@@ -143,11 +143,24 @@
   # must reproduce the `--release` build byte for byte.
   #
   # It existed, unwired, while the bug it describes was live. Cheap: two
-  # compiles per example file.
+  # compiles per example file, against the SELF-HOSTED BINARY rather than
+  # the Rust host interpreting lang/main.mo -- the binary is what ships,
+  # and it is ~40x faster per file besides.
   tasks."monad:debug-oracle" = {
     exec = ''
       set -euo pipefail
-      ${config.devenv.root}/tools/debug_transparency_oracle.sh ${config.devenv.root}/examples/*.mo
+      out="''${TMPDIR:-/tmp}/monad-bootstrap-ci"
+      # Reuse the binary `monad:bootstrap-compile` just built -- in CI that
+      # is the step immediately before this one, in the same job. Rebuild
+      # when it is missing or older than any lang/ source: a stale binary
+      # reports failures that are really its own age (one here predated
+      # two examples' syntax and could not parse them at all), which would
+      # be indistinguishable from the transparency break this looks for.
+      if [ ! -x "$out/monad" ] || [ -n "$(find ${config.devenv.root}/lang -name '*.mo' -newer "$out/monad" -print -quit)" ]; then
+        mkdir -p "$out"
+        cargo run --release -- run lang/main.mo compile lang/main.mo -o "$out/monad" --release
+      fi
+      MONAD_BIN="$out/monad" ${config.devenv.root}/tools/debug_transparency_oracle.sh ${config.devenv.root}/examples/*.mo
     '';
   };
 
