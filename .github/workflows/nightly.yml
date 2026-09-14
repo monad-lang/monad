@@ -28,7 +28,7 @@ jobs:
           mkdir -p dist
           nix develop --no-pure-eval --accept-flake-config -c \
             cargo run --release -- run lang/main.mo compile lang/main.mo \
-              "$(pwd)/dist/monad-nightly-x86_64-linux" --verbose
+              "$(pwd)/dist/monad-nightly-x86_64-linux" --verbose --release
 
       - name: Verify binary and record commit
         run: |
