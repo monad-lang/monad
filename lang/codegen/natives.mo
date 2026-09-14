@@ -196,8 +196,8 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // here the call compiles to the generic "return Unit" stub
             // that silently discards its arguments, and without the
             // `mk_decl` in `runtime_declarations` below it fails as
-            // `call to undefined symbol(s): monad_...` out of
-            // `validate_all_call_targets_defined`.
+            // `call to undefined symbol(s): monad_...` out of the
+            // call-target gate (`gate_result`, `lang/codegen/emit.mo`).
             else if String.beq target "string_count_newlines" then Option.some (NativeWrapKind.passthrough "monad_string_count_newlines")
             else if String.beq target "string_trailing_chars" then Option.some (NativeWrapKind.passthrough "monad_string_trailing_chars")
             // `std/array.mo`. Plain passthroughs: every value in this
@@ -491,9 +491,9 @@ def runtime_declarations : List LLVMDeclaration :=
     let d39 := mk_decl "monad_process_id" List.empty "i64" in
     let d40 := mk_decl "monad_build_commit" List.empty "i64" in
     // `std/array.mo`'s six (runtime.c). Same "no implicit declare"
-    // requirement as every native above -- without these,
-    // `validate_all_call_targets_defined` rejects the module with
-    // "call to undefined symbol(s): monad_array_new".
+    // requirement as every native above -- without these, the
+    // call-target gate (`gate_result`, `lang/codegen/emit.mo`) rejects
+    // the module with "call to undefined symbol(s): monad_array_new".
     let d41 := mk_decl "monad_array_new" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d42 := mk_decl "monad_array_len" (List.cons "i64" List.empty) "i64" in
     let d43 := mk_decl "monad_array_get" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in

@@ -33,8 +33,8 @@ use lang.codegen.ir {
 use lang.codegen.runtime {runtime_native_functions}
 use lang.codegen.validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
-  validate_all_call_targets_defined, validate_no_colliding_def_symbols,
-  validate_no_undesugared_struct_lits, validate_no_unwired_natives,
+  validate_no_colliding_def_symbols, validate_no_undesugared_struct_lits,
+  validate_no_unwired_natives,
 }
 use lang.codegen.ctors {
   build_constructor_arity_map, build_constructor_tag_map, constructor_arity,
@@ -3649,8 +3649,8 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
         // LLVM function "Option.get_or_default" while every CALL to it
         // emitted "Option_get_or_default": an "undefined value" link
         // error the first time a real program called a dotted def name.
-        // `validate_all_call_targets_defined` now catches that class
-        // before `llc` ever sees it.
+        // The call-target gate (`gate_result`, this file) now catches that
+        // class before `llc` ever sees it.
         let fn_name := def_symbol_name name in
         let params := collect_db_params term_ in
         let llvm_params := build_llvm_params_db params in
@@ -4709,11 +4709,11 @@ def desugar_opt_terms (scope : Scope) (args : List (Option Term)) : List (Option
         },
 }
 
-/// `validate_all_call_targets_defined`'s verdict, from the `missing` list
-/// the sub-timed steps above already computed. Calling that function again
-/// here would re-walk the whole module and re-probe every target -- it ran
-/// the gate TWICE while the sub-timing was being read, which is visible in
-/// this plan's own numbers as a 314280ms self-compile.
+/// The call-target gate's verdict, from the `missing` list the sub-timed
+/// steps above already computed. (This gate used to live in
+/// `validate_all_call_targets_defined`, `lang/codegen/validate.mo`, whose
+/// second call re-walked the whole module and re-probed every target --
+/// running the gate TWICE, visible as a 314280ms self-compile.)
 #[partial]
 def gate_result (missing : List String) (m : LLVMModule) : Result String LLVMModule :=
     match missing {
@@ -4769,7 +4769,7 @@ def gate_set_probe (m : HashMap String Bool) : I64 :=
         Option.none => 0,
     }
 
-/// Forces `validate_all_call_targets_defined`'s result inside its own
+/// Forces the call-target gate's (`gate_result`) result inside its own
 /// `bench_step` span -- the `forced` argument's whole purpose (see
 /// `bench_step`, `lang/module.mo`). Its own declared parameter type is what
 /// pins `Result.ok`/`Result.err` here: this file also exports an `ok`
@@ -5056,7 +5056,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
                     let gate_missing : List String := missing_call_targets gate_targets gate_defined;
                     let _t_gate_probe : I64 <- bench_step verbose "  gate: missing_call_targets" t_gate_set (List.length gate_missing);
                     let closed : Result String LLVMModule := gate_result gate_missing mod_;
-                    let _t_closed : I64 <- bench_step verbose "validate_all_call_targets_defined" t_closed (call_target_gate_probe closed);
+                    let _t_closed : I64 <- bench_step verbose "call-target gate" t_closed (call_target_gate_probe closed);
                     if verbose then do {
                         Bench.report_since "compile_loaded_modules_to_ir total" total_start;
                         return unit
