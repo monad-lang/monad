@@ -1,0 +1,13 @@
+# A minimal mote used as a live fixture for `use lib.*` -- the
+# self-reference alias (package-system.md's `lib`, Rust's `crate`).
+# Deliberately NOT at the workspace top level: that is what makes it
+# exercise manifest-driven self-resolution rather than the
+# directory-name convention.
+
+[mote]
+name = "demo"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"

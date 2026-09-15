@@ -249,6 +249,20 @@ fn augment_mote_paths(mote_path: &mut Vec<PathBuf>, manifest_path: Option<&PathB
       mote_path.push(src_dir);
     }
 
+    // A mote must be able to name ITSELF: `use lib.x` inside mote `demo`
+    // resolves to `demo.x`, which is `demo/src/x.mo` -- reachable only from
+    // the directory holding the mote. That is free in the monad workspace
+    // (every mote sits directly under the CWD) and not otherwise. Skipped
+    // for a virtual workspace root, which is not itself a mote.
+    if manifest.mote.is_some() {
+      if let Some(parent) = root.parent() {
+        let parent = parent.to_path_buf();
+        if parent.is_dir() && !mote_path.contains(&parent) {
+          mote_path.push(parent);
+        }
+      }
+    }
+
     match Resolver::resolve(&manifest, &root, None) {
       Ok(resolved) => {
         for mote in &resolved.motes {

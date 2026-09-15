@@ -1937,11 +1937,13 @@ fn load_module_files_impl(
   Ok(loaded)
 }
 
-pub fn load_decls(
-  path: &ModulePath,
-  search_paths: &SearchPaths,
-) -> Result<Vec<SourceContext<Decl>>, String> {
-  let file_path = path
+/// The single file-resolution chain for a module path: search paths first,
+/// then the bare literal join, then the mote reading (`<mote>/src/...`).
+/// Exposed so callers that need the FILE (to find which mote it belongs to,
+/// say) do not re-derive an order that could drift from the one `load_decls`
+/// actually uses.
+pub fn resolve_module_file(path: &ModulePath, search_paths: &SearchPaths) -> Option<PathBuf> {
+  path
     .resolve_file_path(search_paths)
     .or_else(|| {
       let p = path.to_file_path();
@@ -1951,7 +1953,58 @@ pub fn load_decls(
       let p = path.to_mote_file_path();
       if p.exists() { Some(p) } else { None }
     })
-    .ok_or_else(|| format!("module not found: {path}"))?;
+}
+
+/// The mote a file belongs to: walk up for its `mote.toml` and read the
+/// declared name. `None` for a file outside any mote (script mode --
+/// `examples/`, a one-off file) or under a virtual workspace root, which
+/// has `[workspace]` but no `[mote]`.
+pub fn mote_name_of_file(file: &std::path::Path) -> Option<String> {
+  let dir = file.parent()?;
+  let (_manifest_path, manifest) = crate::term::mote::Manifest::discover(dir)?;
+  manifest.mote.map(|m| m.name)
+}
+
+/// Rewrite `use lib.rest` to `use <this file's mote>.rest` (see
+/// `ModulePath::resolve_lib_alias`). Does nothing -- and does not even look
+/// for a manifest -- unless a `lib` use is actually present, so files
+/// without one cost nothing.
+fn resolve_lib_alias_uses(
+  decls: Vec<SourceContext<Decl>>,
+  file: &std::path::Path,
+) -> Vec<SourceContext<Decl>> {
+  let has_lib_use = decls.iter().any(|ctx| match ctx.value() {
+    Decl::Use(u) => u.module_path.first().map(|i| i.as_str()) == Some("lib"),
+    _ => false,
+  });
+  if !has_lib_use {
+    return decls;
+  }
+  let Some(mote) = mote_name_of_file(file) else {
+    return decls;
+  };
+  decls
+    .into_iter()
+    .map(|ctx| {
+      ctx.map(|decl| match decl {
+        Decl::Use(mut u) => {
+          if let Some(resolved) = u.module_path.resolve_lib_alias(&mote) {
+            u.module_path = resolved;
+          }
+          Decl::Use(u)
+        }
+        other => other,
+      })
+    })
+    .collect()
+}
+
+pub fn load_decls(
+  path: &ModulePath,
+  search_paths: &SearchPaths,
+) -> Result<Vec<SourceContext<Decl>>, String> {
+  let file_path =
+    resolve_module_file(path, search_paths).ok_or_else(|| format!("module not found: {path}"))?;
   let text = read_to_string(&file_path).map_err(|e| e.to_string())?;
   load_decls_from_text_with_path(
     &text,
@@ -1971,7 +2024,13 @@ pub fn load_decls_from_text_with_path(
   context: &ModuleContext,
 ) -> Result<Vec<SourceContext<Decl>>, String> {
   let parsed = parse_file_with_path(text, &context).map_err(|e| format!("{e}"))?;
-  Ok(parsed.decls)
+  // Here rather than in `load_decls`, because the file the user names on
+  // the command line never goes through `load_decls` -- only its
+  // dependencies do -- and `use lib.x` has to work in it too.
+  Ok(match &context.file {
+    Some(file) => resolve_lib_alias_uses(parsed.decls, file),
+    None => parsed.decls,
+  })
 }
 
 fn filter_cfg_test_decls(
@@ -1996,7 +2055,22 @@ pub fn load_module_from_text(
   path: &ModulePath,
   loaded: &mut LoadedModules,
 ) -> Result<(), LoadingError> {
-  let file_path = path.to_file_path();
+  load_module_from_text_at(text, path, None, loaded)
+}
+
+/// `load_module_from_text` for a caller that knows the REAL file `text` came
+/// from. Worth passing whenever it is known: a `ModulePath` cannot represent
+/// an absolute path (`From<PathBuf>` drops the root component), so the
+/// `path.to_file_path()` fallback turns `/tmp/x/a.mo` into `tmp/x/a.mo` --
+/// a path that resolves to nothing. `use lib.x` needs the real one to find
+/// which mote the file belongs to.
+pub fn load_module_from_text_at(
+  text: &str,
+  path: &ModulePath,
+  file: Option<PathBuf>,
+  loaded: &mut LoadedModules,
+) -> Result<(), LoadingError> {
+  let file_path = file.unwrap_or_else(|| path.to_file_path());
   let module_context = ModuleContext::new(path.clone(), Some(file_path));
   let parse_start = Instant::now();
   let init_decls = load_decls_from_text_with_path(text, &module_context)
@@ -2061,7 +2135,18 @@ pub fn load_module_from_text_typed(
   path: &ModulePath,
   loaded: &mut LoadedModules,
 ) -> Result<(), LoadingError> {
-  let file_path = path.to_file_path();
+  load_module_from_text_typed_at(text, path, None, loaded)
+}
+
+/// `load_module_from_text_typed` for a caller that knows the real file --
+/// see `load_module_from_text_at` for why that matters.
+pub fn load_module_from_text_typed_at(
+  text: &str,
+  path: &ModulePath,
+  file: Option<PathBuf>,
+  loaded: &mut LoadedModules,
+) -> Result<(), LoadingError> {
+  let file_path = file.unwrap_or_else(|| path.to_file_path());
   let module_context = ModuleContext::new(path.clone(), Some(file_path));
   let init_decls = load_decls_from_text_with_path(text, &module_context)
     .map_err(|e| format!("parse error for {}: {e}", path))?;

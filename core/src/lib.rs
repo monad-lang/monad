@@ -27,7 +27,7 @@ use crate::term::module::ParsedModule;
 use crate::term::module::module;
 use crate::term::module::{
   LoadedModules, default_module_source_files, default_modules, load_module_files,
-  load_module_from_text, module_warnings,
+  load_module_from_text, load_module_from_text_at, module_warnings,
 };
 use crate::term::{
   InductiveVariant, ModulePath, Named, SearchPaths, SourceContext, SourceRange, mpt,
@@ -261,7 +261,8 @@ pub fn load_module(
   mut loaded: LoadedModules,
 ) -> Result<LoadedModules, String> {
   let text = fs::read_to_string(file).map_err(|e| format!("{e}"))?;
-  load_module_from_text(&text, path, &mut loaded).map_err(|e| format!("{e}"))?;
+  load_module_from_text_at(&text, path, Some(file.clone()), &mut loaded)
+    .map_err(|e| format!("{e}"))?;
   Ok(loaded)
 }
 
@@ -493,7 +494,8 @@ pub fn run(
   loaded.config.benchmark = options.benchmark;
   let search_paths = build_default_search_paths(&input, &extra_mote_paths);
   loaded.set_search_paths(search_paths);
-  load_module_from_text(&source, &path, &mut loaded).map_err(|e| format!("{e}"))?;
+  load_module_from_text_at(&source, &path, Some(input.clone()), &mut loaded)
+    .map_err(|e| format!("{e}"))?;
   let module = loaded
     .get_module(&path)
     .ok_or_else(|| format!("Module {path} not loaded"))?;
@@ -510,8 +512,11 @@ pub fn run(
     println!("{global}");
   }
 
-  let decls = term::module::load_decls_from_text_with_path(&source, &Default::default())
-    .map_err(|e| format!("parse {path}: {e}"))?;
+  let decls = term::module::load_decls_from_text_with_path(
+    &source,
+    &crate::parser::ModuleContext::new(path.clone(), Some(input.clone())),
+  )
+  .map_err(|e| format!("parse {path}: {e}"))?;
   let program = build_core_program(&loaded, &[(path.clone(), decls)]).map_err(|e| match e {
     BuildCoreProgramError::Check(e) => {
       render_type_error_with_source(&source, &e, options.use_colors, Some(&input))
@@ -962,7 +967,7 @@ fn evaluate_one_test_file(
   };
 
   let mut loaded = base_loaded.clone();
-  if let Err(e) = load_module_from_text(&source, &path, &mut loaded) {
+  if let Err(e) = load_module_from_text_at(&source, &path, Some(file_path.clone()), &mut loaded) {
     fail_file!(format!("failed to compile {}: {e}", file_path.display()));
   }
 
@@ -1033,7 +1038,10 @@ fn evaluate_one_test_file(
     };
   }
 
-  let decls = match term::module::load_decls_from_text_with_path(&source, &Default::default()) {
+  let decls = match term::module::load_decls_from_text_with_path(
+    &source,
+    &crate::parser::ModuleContext::new(path.clone(), Some(file_path.clone())),
+  ) {
     Ok(d) => d,
     Err(e) => fail_file!(format!("parse {}: {e}", file_path.display())),
   };
@@ -1485,7 +1493,12 @@ pub fn organize_imports_for_files(
       }
       Ok(text) => text,
     };
-    match crate::term::module::load_module_from_text_typed(&text, &path, &mut master_loaded) {
+    match crate::term::module::load_module_from_text_typed_at(
+      &text,
+      &path,
+      Some(file.clone()),
+      &mut master_loaded,
+    ) {
       Ok(()) => {
         let module = master_loaded
           .get_module(&path)
@@ -1643,7 +1656,12 @@ fn check_one_source(
   module_path: &ModulePath,
   mut loaded: LoadedModules,
 ) -> (Vec<crate::diag::Diagnostic>, LoadedModules) {
-  match crate::term::module::load_module_from_text_typed(source, module_path, &mut loaded) {
+  match crate::term::module::load_module_from_text_typed_at(
+    source,
+    module_path,
+    Some(path.clone()),
+    &mut loaded,
+  ) {
     Ok(()) => {
       let warnings = loaded
         .get_module(module_path)

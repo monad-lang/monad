@@ -157,6 +157,27 @@ the mote's library root — `use std` is `std/src/lib.mo`.
 Directory arguments to `check`/`test` are unaffected (`test init std lang`
 recurses), but a path argument names the real file: `test init/src/tests.mo`.
 
+### `lib` is the mote's self-reference
+
+`use lib.x` names the current mote's own `src/x.mo`, the way Rust's
+`crate::x` does -- root-relative *within* the mote, so `use
+lib.parser.core` from `lang/src/codegen/emit.mo` is unambiguous where a
+bare `parser.core` would first try `lang/src/codegen/parser/core.mo`.
+
+It is rewritten to the canonical mote-qualified path (`lang.parser.core`)
+at load time, in both compilers, and never resolved as a file path
+directly: a module path is also a module's IDENTITY, so `lib.parser.core`
+left alone would be a second module distinct from the same file loaded
+under its real name -- two copies in scope, and `lib.parser.core::f`
+symbols out of codegen. See `resolve_lib_alias_decls` (`lang/src/module.mo`)
+and `ModulePath::resolve_lib_alias` (`core/src/term.rs`).
+
+`lib` is reserved: no mote may be named `lib`. A mote's directory name
+should match its declared name -- resolution finds other motes by
+directory convention (`<name>/src/...`), and only a mote's reference to
+ITSELF is resolved through the manifest (`Mote.discover`,
+`lang/src/mote.mo`), which is what lets `motes/demo` work.
+
 ## Building and Running
 
 ```bash

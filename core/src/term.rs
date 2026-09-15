@@ -2391,6 +2391,9 @@ impl ModulePath {
   pub fn last(&self) -> &Identifier {
     self.0.last().unwrap()
   }
+  pub fn first(&self) -> Option<&Identifier> {
+    self.0.first()
+  }
   pub fn to_file_path(&self) -> PathBuf {
     let mut p = PathBuf::new();
     let mut iter = self.0.iter().peekable();
@@ -2402,6 +2405,27 @@ impl ModulePath {
       }
     }
     p
+  }
+
+  /// `lib` names the mote a file belongs to, the way Rust's `crate::`
+  /// names its crate: inside `lang`, `use lib.codegen.emit` is
+  /// `lang.codegen.emit`. Rewritten to the canonical mote-qualified path
+  /// here, at load time -- NOT resolved as a file path directly -- because
+  /// a module path is also a module's IDENTITY. Left as `lib.codegen.emit`
+  /// it would be a second module distinct from the same file loaded under
+  /// its real name, and codegen would emit `lib.codegen.emit::f` symbols.
+  ///
+  /// A one-segment `lib` (bare `use lib`) becomes the mote name itself,
+  /// which resolves to the mote's `src/lib.mo` like any other bare mote
+  /// reference.
+  pub fn resolve_lib_alias(&self, mote: &str) -> Option<ModulePath> {
+    let first = self.0.first()?;
+    if first.as_str() != "lib" {
+      return None;
+    }
+    let mut segments = vec![Identifier::new(mote.to_string())];
+    segments.extend(self.0.iter().skip(1).cloned());
+    Some(ModulePath::new(segments))
   }
 
   /// The same path read as a *mote*-relative one: the first segment names a

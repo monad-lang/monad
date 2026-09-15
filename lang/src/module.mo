@@ -14,6 +14,7 @@ use lang.types {
 use lang.parser {decls_parser, decls_parser_located, decls_parser_strict, module_path_to_string}
 use lang.parser.core {ParseResult, fail, mk, success}
 use lang.parser.diagnostic {render_parse_error}
+use lang.mote {MoteManifest, Mote}
 use lang.pretty {show_term}
 use lang.typecheck.macro_apply {expand_decl_gen_call}
 use lang.typecheck.macro_queue {DeclGenEntry, build_decl_gen_registry, expand_decls, lookup_decl_gen}
@@ -327,10 +328,65 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
     then first_existing ["init/src/lib.mo"]
     else if String.beq mp_str "std"
     then first_existing ["std/src/lib.mo"]
-    else first_existing [
-        relative_path, direct_path, mote_path, init_path, std_path, lang_path, examples_path,
-    ]
+    else do {
+        let found : Option String <- first_existing [
+            relative_path, direct_path, mote_path, init_path, std_path, lang_path, examples_path,
+        ];
+        match found {
+            Option.some p => return (Option.some p),
+            // Only when the convention above missed: ask the manifest.
+            // `mote_path` assumes a mote's directory is its name, sitting
+            // at the working directory -- true for every mote in this
+            // workspace, and false for one anywhere else (`motes/demo`
+            // declaring `name = "demo"`, say). Discovering the importing
+            // file's own mote costs a manifest read, so it happens here,
+            // on the miss, and never on the path everything else takes.
+            Option.none => resolve_via_manifest base_dir mp
+        }
+    }
 }
+
+/// Resolve `mp` against the importing file's OWN mote: if the first segment
+/// names that mote, the rest is a path under its `src/`.
+///
+/// This is the self-reference case (`use demo.x` from inside mote `demo`),
+/// which is also what a `lib` alias becomes once rewritten. Dependencies on
+/// OTHER motes still go through the directory convention -- resolving those
+/// from the manifest is the mote table (package-system.md 5c), which needs
+/// the declared paths, not just the names.
+#[partial]
+def resolve_via_manifest (base_dir : String) (mp : ModulePath) : IO (Option String) := do {
+    let mote : Option MoteManifest <- Mote.discover base_dir;
+    match mote {
+        Option.none => return Option.none,
+        Option.some m =>
+            match mote_path_within m mp {
+                Option.none => return Option.none,
+                Option.some candidate => first_existing [candidate]
+            }
+    }
+}
+
+/// `<mote>.a.b` -> `<mote dir>/src/a/b.mo`, and a bare `<mote>` -> its
+/// `src/lib.mo`. `Option.none` when the path does not name this mote.
+def mote_path_within (m : MoteManifest) (mp : ModulePath) : Option String :=
+    match mp {
+        ModulePath.mp ids =>
+            match ids {
+                List.empty => Option.none,
+                List.cons hd rest =>
+                    if String.beq (identifier_to_string hd) m.name
+                    then
+                        let root := String.concat (MoteManifest.src_root m) "/" in
+                        match rest {
+                            List.empty => Option.some (String.concat root "lib.mo"),
+                            List.cons _ _ =>
+                                Option.some (String.concat root
+                                    (String.concat (module_path_to_file (ModulePath.mp rest)) ".mo"))
+                        }
+                    else Option.none
+            }
+    }
 
 /// Try to read a module file from disk, relative to a base directory
 #[partial]
@@ -540,8 +596,34 @@ struct InfosAndCache {
     cache : ModuleInfoCache,
 }
 
+/// One queued dependency, paired with the directory it must be resolved
+/// FROM -- its importer's own directory.
+///
+/// The walk used to thread a single `base_dir` through a flat worklist and
+/// replace it with each module's directory as it went, so a queued module
+/// was resolved from wherever the PREVIOUSLY loaded module happened to
+/// live. That is only ever right when the worklist is a straight chain.
+/// It went unnoticed because every mote-qualified path in this workspace
+/// resolves from the working directory regardless of `base_dir`; a mote
+/// found through its own manifest (`motes/demo`) does not, and the
+/// dependency silently failed to load -- surfacing much later as an
+/// "unknown variable" in the importing file.
+struct PendingModule {
+    path : ModulePath,
+    base_dir : String,
+}
+
+/// Queue every one of `paths` against the same importer directory.
+def pending_from (base_dir : String) (paths : List ModulePath) : List PendingModule :=
+    match paths {
+        List.empty => List.empty,
+        List.cons p rest =>
+            let entry : PendingModule := { path := p, base_dir := base_dir } in
+            List.cons entry (pending_from base_dir rest)
+    }
+
 #[partial]
-def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (visiting : List ModulePath) (visited : List ModuleInfo) (cache : ModuleInfoCache) (verbose : Bool) : IO InfosAndCache :=
+def collect_dep_module_infos (to_visit : List PendingModule) (visiting : List ModulePath) (visited : List ModuleInfo) (cache : ModuleInfoCache) (verbose : Bool) : IO InfosAndCache :=
     match to_visit {
         List.empty => do {
             // Annotated local, never a bare literal in `return` position
@@ -553,13 +635,14 @@ def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (v
             let out : InfosAndCache := { infos := visited, cache := cache };
             return out
         },
-        List.cons head tail =>
+        List.cons pending tail =>
+            let head : ModulePath := pending.path in
             if list_contains visiting head then
                 // Circular dependency - skip to avoid infinite loop
-                collect_dep_module_infos base_dir tail visiting visited cache verbose
+                collect_dep_module_infos tail visiting visited cache verbose
             else if list_contains_module_info visited head then
                 // Already loaded - skip
-                collect_dep_module_infos base_dir tail visiting visited cache verbose
+                collect_dep_module_infos tail visiting visited cache verbose
             else do {
                 let new_visiting : List ModulePath := List.cons head visiting;
                 // Printed BEFORE the load, not after: the read + parse is
@@ -574,18 +657,25 @@ def collect_dep_module_infos (base_dir : String) (to_visit : List ModulePath) (v
                 // dependency is reached once per importing file, and
                 // re-reading + re-parsing it each time is the dominant
                 // cross-file cost (see `ModuleInfoCache`'s own note).
-                let loaded : InfoAndCache <- load_module_with_info_cached base_dir head cache;
+                let loaded : InfoAndCache <- load_module_with_info_cached pending.base_dir head cache;
                 match loaded.info {
                     Option.some info => do {
-                        let new_base_dir : String := extract_directory info.file_path;
+                        // This module's OWN directory is what its own
+                        // dependencies resolve from -- the shadowing fix
+                        // (`lang/src/parser/string.mo` vs
+                        // `init/src/string.mo`) lives here, now carried
+                        // per queued entry instead of in one rolling
+                        // variable.
+                        let dep_base_dir : String := extract_directory info.file_path;
                         let dep_decls : List Decl := info.decl_list;
                         let dep_deps : List ModulePath := extract_use_decls dep_decls;
-                        let new_to_visit : List ModulePath := List.append dep_deps tail;
-                        collect_dep_module_infos new_base_dir new_to_visit new_visiting (List.cons info visited) loaded.cache verbose
+                        let new_to_visit : List PendingModule :=
+                            List.append (pending_from dep_base_dir dep_deps) tail;
+                        collect_dep_module_infos new_to_visit new_visiting (List.cons info visited) loaded.cache verbose
                     },
                     Option.none =>
                         // Module not found, skip but continue with tail
-                        collect_dep_module_infos base_dir tail new_visiting visited loaded.cache verbose
+                        collect_dep_module_infos tail new_visiting visited loaded.cache verbose
                 }
             }
     }
@@ -2018,6 +2108,91 @@ def resolve_open_aliases_in_modules_go (known_names : List String) (root_aliases
             List.cons (resolve_open_aliases_in_module_info known_names root_aliases m) (resolve_open_aliases_in_modules_go known_names root_aliases rest),
     }
 
+/// `lib` names the mote a file belongs to, the way Rust's `crate::` names
+/// its crate: inside `lang`, `use lib.codegen.emit` IS `lang.codegen.emit`.
+///
+/// Rewritten to the canonical mote-qualified path here, at load time, and
+/// not resolved as a file path directly -- because a module path is also a
+/// module's IDENTITY. Left as `lib.codegen.emit` it would be a second
+/// module distinct from the same file loaded under its real name, scope
+/// would hold both, and codegen would emit `lib.codegen.emit::f` symbols.
+///
+/// Reads no manifest unless a `lib` use is actually present, so files
+/// without one cost nothing.
+#[partial]
+def resolve_lib_alias_decls (base_dir : String) (decls : List Decl) : IO (List Decl) := do {
+    if has_lib_use decls
+    then do {
+        let mote : Option MoteManifest <- Mote.discover base_dir;
+        match mote {
+            Option.some m => return (rewrite_lib_uses m.name decls),
+            // Outside any mote (script mode): `lib` names nothing, and the
+            // use is left alone to fail as an ordinary missing module.
+            Option.none => return decls
+        }
+    }
+    else return decls
+}
+
+def has_lib_use (decls : List Decl) : Bool :=
+    match decls {
+        List.empty => false,
+        List.cons d rest =>
+            match d {
+                Decl.use_d path _ _ =>
+                    if is_lib_alias path then true else has_lib_use rest,
+                _ => has_lib_use rest
+            }
+    }
+
+def is_lib_alias (mp : ModulePath) : Bool :=
+    match mp {
+        ModulePath.mp ids =>
+            match ids {
+                List.empty => false,
+                List.cons hd _ => String.beq (identifier_to_string hd) "lib"
+            }
+    }
+
+def rewrite_lib_uses (mote : String) (decls : List Decl) : List Decl :=
+    match decls {
+        List.empty => List.empty,
+        List.cons d rest =>
+            List.cons (rewrite_lib_use_decl mote d) (rewrite_lib_uses mote rest)
+    }
+
+def rewrite_lib_use_decl (mote : String) (d : Decl) : Decl :=
+    match d {
+        Decl.use_d path filter public =>
+            Decl.use_d (lib_alias_path mote path) filter public,
+        _ => d
+    }
+
+/// `lib.a.b` -> `<mote>.a.b`; a bare `lib` -> `<mote>`, which resolves to
+/// that mote's `src/lib.mo` like any other one-segment mote reference.
+def lib_alias_path (mote : String) (mp : ModulePath) : ModulePath :=
+    match mp {
+        ModulePath.mp ids =>
+            match ids {
+                List.empty => mp,
+                List.cons hd rest =>
+                    if String.beq (identifier_to_string hd) "lib"
+                    then ModulePath.mp (List.cons (Identifier.id mote) rest)
+                    else mp
+            }
+    }
+
+#[partial]
+def resolve_lib_alias_decls_opt (base_dir : String) (decls : Option (List Decl)) : IO (Option (List Decl)) := do {
+    match decls {
+        Option.none => return Option.none,
+        Option.some dl => do {
+            let rewritten : List Decl <- resolve_lib_alias_decls base_dir dl;
+            return (Option.some rewritten)
+        }
+    }
+}
+
 #[partial]
 def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option ModuleInfo) {
     let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
@@ -2026,7 +2201,8 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option Mod
             Option.some fp => extract_directory fp,
             Option.none => base_dir
         };
-    let decl_list : Option (List Decl) <- load_module_decls actual_base_dir mp;
+    let raw_decls : Option (List Decl) <- load_module_decls actual_base_dir mp;
+    let decl_list : Option (List Decl) <- resolve_lib_alias_decls_opt actual_base_dir raw_decls;
     return match decl_list {
         Option.some decl_list =>
             let file_path : String :=
@@ -2110,7 +2286,7 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) (ver
                     let direct_deps_with_prelude : List ModulePath := List.append [prelude_module_path, init_module_path, std_module_path] direct_deps;
                     let no_visited : List ModuleInfo := List.empty;
                     let no_visiting : List ModulePath := List.empty;
-                    let walked : InfosAndCache <- collect_dep_module_infos main_base_dir direct_deps_with_prelude no_visiting no_visited cache verbose;
+                    let walked : InfosAndCache <- collect_dep_module_infos (pending_from main_base_dir direct_deps_with_prelude) no_visiting no_visited cache verbose;
                     let all_modules : List ModuleInfo := List.cons main_module walked.infos;
                     // Each level bound with an explicit annotation
                     // rather than inlined as `Result.ok { ... }` inside

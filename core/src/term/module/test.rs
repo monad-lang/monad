@@ -147,6 +147,61 @@ fn test_unused_use_name_warning() {
   assert!(!warnings[0].message.contains("used_name,"));
 }
 
+/// `lib` is the mote self-reference (Rust's `crate`). It is rewritten to
+/// the canonical mote-qualified path at load time, because a module path is
+/// also a module's identity -- `lib.helper` left alone would be a second
+/// module distinct from `demo.helper`, the same file under two names.
+#[test]
+fn test_lib_alias_rewrites_to_the_mote_name() {
+  let path = ModulePath::new(vec![
+    Identifier::new("lib".to_string()),
+    Identifier::new("helper".to_string()),
+  ]);
+  let resolved = path.resolve_lib_alias("demo").expect("lib head rewrites");
+  assert_eq!(resolved.to_string(), "demo.helper");
+}
+
+/// A bare `use lib` is the mote itself, which resolves to its `src/lib.mo`
+/// like any other one-segment mote reference.
+#[test]
+fn test_bare_lib_alias_is_the_mote_itself() {
+  let path = ModulePath::top("lib");
+  let resolved = path.resolve_lib_alias("demo").expect("bare lib rewrites");
+  assert_eq!(resolved.to_string(), "demo");
+}
+
+#[test]
+fn test_lib_alias_only_fires_on_the_head_segment() {
+  let path = ModulePath::new(vec![
+    Identifier::new("demo".to_string()),
+    Identifier::new("lib".to_string()),
+  ]);
+  assert!(
+    path.resolve_lib_alias("demo").is_none(),
+    "`lib` is only an alias in head position"
+  );
+}
+
+/// A mote path reads as `<mote>/src/<rest>.mo`, which is what makes
+/// `use lang.codegen.emit` find `lang/src/codegen/emit.mo`.
+#[test]
+fn test_mote_file_path_puts_sources_under_src() {
+  let path = ModulePath::new(vec![
+    Identifier::new("lang".to_string()),
+    Identifier::new("codegen".to_string()),
+    Identifier::new("emit".to_string()),
+  ]);
+  assert_eq!(
+    path.to_mote_file_path(),
+    std::path::PathBuf::from("lang/src/codegen/emit.mo")
+  );
+  assert_eq!(
+    ModulePath::top("std").to_mote_file_path(),
+    std::path::PathBuf::from("std/src/lib.mo"),
+    "a one-segment path is the mote's library root"
+  );
+}
+
 #[test]
 fn test_pub_use_reexport_is_never_unused() {
   // A `pub use` is a re-export -- a mote's `lib.mo` hub is made entirely of
