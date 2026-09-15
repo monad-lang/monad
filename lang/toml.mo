@@ -10,10 +10,13 @@
 /// exactly one definition of each corpus-wide.
 /// Supported grammar (MVP, per plan): `[table]` / `[dotted.nested.table]` headers
 /// (including empty tables), `key = value`, double-quoted strings with the escape
-/// subset `\" \\ \n \t \r`, integers, booleans, and single-line arrays of scalars.
+/// subset `\" \\ \n \t \r`, integers, booleans, single-line arrays of scalars, and
+/// `#` comments (whole-line or trailing). A `#` inside a quoted string is ordinary
+/// text -- comment stripping happens at the line level, after the value parser has
+/// consumed its string, never as a pre-pass over the raw source.
 /// Explicitly unsupported (parse error, not silent misparse): floats, dates/times,
-/// multi-line/literal strings, inline tables, arrays-of-tables (`[[x]]`), dotted
-/// keys outside headers, and `#` comments.
+/// multi-line/literal strings, inline tables, arrays-of-tables (`[[x]]`), and dotted
+/// keys outside headers.
 // NOTE: a blank `///` line in this leading module doc-comment (used as a paragraph
 // break) was found to break the following `use` imports entirely — every symbol
 // they bring in resolves as "unbound variable" throughout the rest of the file, a
@@ -376,9 +379,29 @@ def Toml.parse_line (input : String) : ParseResult Toml.Line :=
 
 // ─── Parser: document (blank-line skipping, one line at a time) ───
 
+/// Everything from a `#` to the end of the line is a comment. Only ever reached
+/// once the line's own content has been consumed (or on a line that starts with
+/// `#`), so a `#` inside a quoted value was already eaten by the string parser
+/// and never looks like a comment here.
+def toml_is_not_newline (c : String) : Bool :=
+  not (String.beq "\n" c)
+
+def toml_drop_comment_result (r : ParseResult String) : String :=
+  match r {
+    success rem _ => rem,
+    fail _ => ""
+  }
+
+/// Consume a `#` comment's text, leaving the newline (if any) in place for the
+/// caller's own end-of-line handling.
+def toml_drop_comment (rem : String) : String :=
+  toml_drop_comment_result (take_while toml_is_not_newline rem)
+
+#[partial]
 def toml_one_line_eol (rem : String) (line : Toml.Line) : ParseResult (Option Toml.Line) :=
   if is_empty rem then success rem (Option.some line)
   else if String.starts_with "\n" rem then success (String.drop 1 rem) (Option.some line)
+  else if String.starts_with "#" rem then toml_one_line_eol (toml_drop_comment rem) line
   else fail (ParseError.custom "expected newline after line" rem)
 
 def toml_one_line_trailing_ws (r : ParseResult String) (line : Toml.Line) : ParseResult (Option Toml.Line) :=
@@ -409,7 +432,13 @@ def toml_one_line_parse (rem : String) : ParseResult (Option Toml.Line) :=
 def toml_one_line_check_blank (rem : String) : ParseResult (Option Toml.Line) :=
   if is_empty rem then fail (ParseError.custom "no more lines" rem)
   else if String.starts_with "\n" rem then success (String.drop 1 rem) Option.none
+  else if String.starts_with "#" rem then toml_comment_line (toml_drop_comment rem)
   else toml_one_line_parse rem
+
+/// A whole-line comment yields no `Toml.Line`, exactly like a blank line.
+def toml_comment_line (rem : String) : ParseResult (Option Toml.Line) :=
+  if String.starts_with "\n" rem then success (String.drop 1 rem) Option.none
+  else success rem Option.none
 
 def toml_one_line_hws (r : ParseResult String) : ParseResult (Option Toml.Line) :=
   match r {
@@ -790,6 +819,52 @@ def test_parse_empty_table_header : Bool :=
         some v => match v { table sub => List.is_empty (BTreeMap.to_list sub), _ => false },
         none => false
       },
+    err _ => false
+  }
+
+// ─── Tests: parser — comments ───
+
+#[test]
+def test_parse_whole_line_comment : Bool :=
+  match Toml.parse "# the mote's own name\nname = \"example\"" {
+    ok t => toml_table_lookup_eq "name" t (string "example"),
+    err _ => false
+  }
+
+#[test]
+def test_parse_trailing_comment : Bool :=
+  match Toml.parse "name = \"example\" # trailing\nversion = \"0.1.0\"" {
+    ok t =>
+      if toml_table_lookup_eq "name" t (string "example")
+      then toml_table_lookup_eq "version" t (string "0.1.0")
+      else false,
+    err _ => false
+  }
+
+#[test]
+def test_parse_comment_after_header : Bool :=
+  match Toml.parse "[mote] # who we are\nname = \"example\"" {
+    ok t =>
+      match Map.lookup "mote" t {
+        some v => match v { table sub => toml_table_lookup_eq "name" sub (string "example"), _ => false },
+        none => false
+      },
+    err _ => false
+  }
+
+/// A `#` inside a quoted value is ordinary text, not a comment -- the string
+/// parser consumes it before the line ever looks for a comment.
+#[test]
+def test_parse_hash_inside_string_is_not_a_comment : Bool :=
+  match Toml.parse "colour = \"#ff00ff\"" {
+    ok t => toml_table_lookup_eq "colour" t (string "#ff00ff"),
+    err _ => false
+  }
+
+#[test]
+def test_parse_comment_only_document : Bool :=
+  match Toml.parse "# nothing but a comment\n" {
+    ok t => Toml.table_beq t BTreeMap.empty,
     err _ => false
   }
 
