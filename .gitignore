@@ -18,3 +18,7 @@ plans
 
 # Agents
 .opencode
+
+# Python bytecode from the one-off migration scripts in scripts/
+__pycache__/
+*.pyc
