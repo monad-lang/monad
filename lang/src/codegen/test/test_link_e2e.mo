@@ -48,7 +48,7 @@ def main : IO I64 {
     let llc_args := args4 "-filetype=obj" ir_path "-o" obj_path;
     exec_cmd "llc" llc_args;
 
-    let rt_args := args4 "-c" "lang/codegen/runtime.c" "-o" runtime_obj;
+    let rt_args := args4 "-c" "lang/src/codegen/runtime.c" "-o" runtime_obj;
     exec_cmd "clang" rt_args;
 
     let ld_args := List.cons obj_path (List.cons runtime_obj (List.cons "-lgc" (List.cons "-o" (List.cons output_path List.empty))));

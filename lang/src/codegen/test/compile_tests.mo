@@ -50,7 +50,7 @@ def test_compile_42 : IO Bool := do {
         return false
     } else do {
 
-        let rt_result <- exec_cmd "clang" ["-c" "lang/codegen/runtime.c" "-o" runtime_obj];
+        let rt_result <- exec_cmd "clang" ["-c" "lang/src/codegen/runtime.c" "-o" runtime_obj];
         if not (rt_result == 0) then do {
             println <| "compiling runtime failed";
             return false
@@ -102,7 +102,7 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
         println <| basename ++ ": llc failed";
         return false
     } else do {
-        let rt_result <- exec_cmd "clang" ["-c", "lang/codegen/runtime.c", "-o", runtime_obj];
+        let rt_result <- exec_cmd "clang" ["-c", "lang/src/codegen/runtime.c", "-o", runtime_obj];
         if not (rt_result == 0) then do {
             println <| basename ++ ": compiling runtime failed";
             return false
@@ -366,7 +366,7 @@ def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (e
         println <| basename ++ ": llc failed";
         return false
     } else do {
-        let rt_result <- exec_cmd "clang" ["-c", "lang/codegen/runtime.c", "-o", runtime_obj];
+        let rt_result <- exec_cmd "clang" ["-c", "lang/src/codegen/runtime.c", "-o", runtime_obj];
         if not (rt_result == 0) then do {
             println <| basename ++ ": compiling runtime failed";
             return false

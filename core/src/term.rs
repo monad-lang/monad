@@ -2404,9 +2404,50 @@ impl ModulePath {
     p
   }
 
+  /// The same path read as a *mote*-relative one: the first segment names a
+  /// mote, whose sources live under its `src/`, and the rest is the module
+  /// path within it. `std.list` -> `std/src/list.mo`; a lone `std` -> the
+  /// mote's library root, `std/src/lib.mo`.
+  ///
+  /// This is the only thing that makes `use lang::codegen::ir` find
+  /// `lang/src/codegen/ir.mo` after the repo became a mote workspace --
+  /// `to_file_path` joins segments literally and knows nothing about motes.
+  /// The Rust host stays permissive: this is a resolution mapping only, with
+  /// no check that the importing file declared the mote (see
+  /// `plans/packaging/package-system.md` §5d -- enforcement is the
+  /// self-hosted compiler's job).
+  pub fn to_mote_file_path(&self) -> PathBuf {
+    let mut p = PathBuf::new();
+    let mut iter = self.0.iter().peekable();
+    let Some(mote) = iter.next() else {
+      return p;
+    };
+    p.push(mote.as_str());
+    p.push("src");
+    if iter.peek().is_none() {
+      p.push("lib.mo");
+      return p;
+    }
+    while let Some(i) = iter.next() {
+      if iter.peek().is_some() {
+        p.push(i.as_str())
+      } else {
+        p.push(i.as_str().to_string() + ".mo");
+      }
+    }
+    p
+  }
+
   pub fn resolve_file_path(&self, search_paths: &SearchPaths) -> Option<PathBuf> {
     for dir in &search_paths.0 {
+      // Literal join first, so a search root that already points *into* a
+      // mote's `src/` (what `augment_mote_paths` pushes) keeps resolving its
+      // own modules by bare name.
       let candidate = dir.join(self.to_file_path());
+      if candidate.exists() {
+        return Some(candidate);
+      }
+      let candidate = dir.join(self.to_mote_file_path());
       if candidate.exists() {
         return Some(candidate);
       }

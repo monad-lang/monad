@@ -130,8 +130,8 @@ def run_locate_cost (path : String) : IO Bool := do {
 
 /// A mid-size real file: 73 KB, ~1469 located spans.
 #[test]
-def bench_locate_cost_types : IO Bool := run_locate_cost "lang/types.mo"
+def bench_locate_cost_types : IO Bool := run_locate_cost "lang/src/types.mo"
 
 /// A small one, for the ratio (AGENTS.md item 37: compare two sizes).
 #[test]
-def bench_locate_cost_id : IO Bool := run_locate_cost "init/id.mo"
+def bench_locate_cost_id : IO Bool := run_locate_cost "init/src/id.mo"

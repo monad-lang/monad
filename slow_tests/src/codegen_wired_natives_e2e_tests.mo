@@ -56,8 +56,8 @@ def test_generated_to_list_reverse_round_trip : IO Bool :=
 #[test]
 def test_generated_ends_with : IO Bool :=
     let source := r#"def main (args : List String) : IO I64 := do {
-    let yes := String.ends_with "lang/main.mo" ".mo";
-    let no := String.ends_with "lang/main.rs" ".mo";
+    let yes := String.ends_with "lang/src/main.mo" ".mo";
+    let no := String.ends_with "lang/src/main.rs" ".mo";
     return (if yes && not no then 7 else 1)
 }
 "# in

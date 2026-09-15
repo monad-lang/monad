@@ -3622,41 +3622,41 @@ mod test {
   #[test]
   fn test_real_file_std_process() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../std/process.mo");
+    let source = include_str!("../../std/src/process.mo");
     let report = check_module_source(&env, source);
-    print_report("std/process.mo", &report);
+    print_report("std/src/process.mo", &report);
   }
 
   #[test]
   fn test_real_file_init_id() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../init/id.mo");
+    let source = include_str!("../../init/src/id.mo");
     let report = check_module_source(&env, source);
-    print_report("init/id.mo", &report);
+    print_report("init/src/id.mo", &report);
   }
 
   #[test]
   fn test_real_file_init_io() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../init/io.mo");
+    let source = include_str!("../../init/src/io.mo");
     let report = check_module_source(&env, source);
-    print_report("init/io.mo", &report);
+    print_report("init/src/io.mo", &report);
   }
 
   #[test]
   fn test_real_file_init_prelude() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../init/prelude.mo");
+    let source = include_str!("../../init/src/prelude.mo");
     let report = check_module_source(&env, source);
-    print_report("init/prelude.mo", &report);
+    print_report("init/src/prelude.mo", &report);
   }
 
   #[test]
   fn test_real_file_std_list() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../std/list.mo");
+    let source = include_str!("../../std/src/list.mo");
     let report = check_module_source(&env, source);
-    print_report("std/list.mo", &report);
+    print_report("std/src/list.mo", &report);
   }
 
   // -------------------------------------------------------------------
@@ -3667,17 +3667,17 @@ mod test {
   #[test]
   fn test_real_file_std_base() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../std/base.mo");
+    let source = include_str!("../../std/src/base.mo");
     let report = check_module_source(&env, source);
-    print_report("std/base.mo", &report);
+    print_report("std/src/base.mo", &report);
   }
 
   #[test]
   fn test_real_file_std_show() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../std/show.mo");
+    let source = include_str!("../../std/src/show.mo");
     let report = check_module_source(&env, source);
-    print_report("std/show.mo", &report);
+    print_report("std/src/show.mo", &report);
   }
 
   #[test]
@@ -3688,25 +3688,25 @@ mod test {
     // new checker handles the same recursive-generic-function shape
     // correctly without needing that patch at all.
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../std/map.mo");
+    let source = include_str!("../../std/src/map.mo");
     let report = check_module_source(&env, source);
-    print_report("std/map.mo", &report);
+    print_report("std/src/map.mo", &report);
   }
 
   #[test]
   fn test_real_file_std_test() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../std/test.mo");
+    let source = include_str!("../../std/src/test.mo");
     let report = check_module_source(&env, source);
-    print_report("std/test.mo", &report);
+    print_report("std/src/test.mo", &report);
   }
 
   #[test]
   fn test_real_file_std_list_tests1() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../std/list_tests1.mo");
+    let source = include_str!("../../std/src/list_tests1.mo");
     let report = check_module_source(&env, source);
-    print_report("std/list_tests1.mo", &report);
+    print_report("std/src/list_tests1.mo", &report);
   }
 
   #[test]
@@ -3792,312 +3792,312 @@ mod test {
   #[test]
   fn test_real_file_lang_types() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/types.mo");
+    let source = include_str!("../../lang/src/types.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/types.mo", &report);
+    print_report("lang/src/types.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_elaborate() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/elaborate.mo");
+    let source = include_str!("../../lang/src/elaborate.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/elaborate.mo", &report);
+    print_report("lang/src/elaborate.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_pretty() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/pretty.mo");
+    let source = include_str!("../../lang/src/pretty.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/pretty.mo", &report);
+    print_report("lang/src/pretty.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_scope() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/scope.mo");
+    let source = include_str!("../../lang/src/scope.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/scope.mo", &report);
+    print_report("lang/src/scope.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser.mo");
+    let source = include_str!("../../lang/src/parser.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser.mo", &report);
+    print_report("lang/src/parser.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_module() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/module.mo");
+    let source = include_str!("../../lang/src/module.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/module.mo", &report);
+    print_report("lang/src/module.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_main() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/main.mo");
+    let source = include_str!("../../lang/src/main.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/main.mo", &report);
+    print_report("lang/src/main.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_emit() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/codegen/emit.mo");
+    let source = include_str!("../../lang/src/codegen/emit.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/codegen/emit.mo", &report);
+    print_report("lang/src/codegen/emit.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_ir() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/codegen/ir.mo");
+    let source = include_str!("../../lang/src/codegen/ir.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/codegen/ir.mo", &report);
+    print_report("lang/src/codegen/ir.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_link() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/codegen/link.mo");
+    let source = include_str!("../../lang/src/codegen/link.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/codegen/link.mo", &report);
+    print_report("lang/src/codegen/link.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_compile_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/codegen/test/compile_tests.mo");
+    let source = include_str!("../../lang/src/codegen/test/compile_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/codegen/test/compile_tests.mo", &report);
+    print_report("lang/src/codegen/test/compile_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_e2e_typecheck_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/codegen/test/e2e_typecheck_tests.mo");
+    let source = include_str!("../../lang/src/codegen/test/e2e_typecheck_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/codegen/test/e2e_typecheck_tests.mo", &report);
+    print_report("lang/src/codegen/test/e2e_typecheck_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_ir_emission_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/codegen/test/ir_emission_tests.mo");
+    let source = include_str!("../../lang/src/codegen/test/ir_emission_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/codegen/test/ir_emission_tests.mo", &report);
+    print_report("lang/src/codegen/test/ir_emission_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_test_e2e() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/codegen/test/test_e2e.mo");
+    let source = include_str!("../../lang/src/codegen/test/test_e2e.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/codegen/test/test_e2e.mo", &report);
+    print_report("lang/src/codegen/test/test_e2e.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_codegen_test_test_link_e2e() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/codegen/test/test_link_e2e.mo");
+    let source = include_str!("../../lang/src/codegen/test/test_link_e2e.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/codegen/test/test_link_e2e.mo", &report);
+    print_report("lang/src/codegen/test/test_link_e2e.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser_char_preds() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/char_preds.mo");
+    let source = include_str!("../../lang/src/parser/char_preds.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser/char_preds.mo", &report);
+    print_report("lang/src/parser/char_preds.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser_combinators() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/combinators.mo");
+    let source = include_str!("../../lang/src/parser/combinators.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser/combinators.mo", &report);
+    print_report("lang/src/parser/combinators.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser_core() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/core.mo");
+    let source = include_str!("../../lang/src/parser/core.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser/core.mo", &report);
+    print_report("lang/src/parser/core.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser_identifier() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/identifier.mo");
+    let source = include_str!("../../lang/src/parser/identifier.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser/identifier.mo", &report);
+    print_report("lang/src/parser/identifier.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser_number() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/number.mo");
+    let source = include_str!("../../lang/src/parser/number.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser/number.mo", &report);
+    print_report("lang/src/parser/number.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser_position() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/position.mo");
+    let source = include_str!("../../lang/src/parser/position.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser/position.mo", &report);
+    print_report("lang/src/parser/position.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser_string() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/string.mo");
+    let source = include_str!("../../lang/src/parser/string.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser/string.mo", &report);
+    print_report("lang/src/parser/string.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser_tests_test_string_get() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/tests/test_string_get.mo");
+    let source = include_str!("../../lang/src/parser/tests/test_string_get.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser/tests/test_string_get.mo", &report);
+    print_report("lang/src/parser/tests/test_string_get.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_parser_whitespace() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/parser/whitespace.mo");
+    let source = include_str!("../../lang/src/parser/whitespace.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/parser/whitespace.mo", &report);
+    print_report("lang/src/parser/whitespace.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_tests_elaborate_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/elaborate_tests.mo");
+    let source = include_str!("../../lang/src/tests/elaborate_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/elaborate_tests.mo", &report);
+    print_report("lang/src/tests/elaborate_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_tests_infer_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/infer_tests.mo");
+    let source = include_str!("../../lang/src/tests/infer_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/infer_tests.mo", &report);
+    print_report("lang/src/tests/infer_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_tests_module_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/module_tests.mo");
+    let source = include_str!("../../lang/src/tests/module_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/module_tests.mo", &report);
+    print_report("lang/src/tests/module_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_slow_tests_parser_file_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../slow_tests/parser_file_tests.mo");
+    let source = include_str!("../../slow_tests/src/parser_file_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("slow_tests/parser_file_tests.mo", &report);
+    print_report("slow_tests/src/parser_file_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_tests_pretty_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/pretty_tests.mo");
+    let source = include_str!("../../lang/src/tests/pretty_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/pretty_tests.mo", &report);
+    print_report("lang/src/tests/pretty_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_slow_tests_scope_all_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../slow_tests/scope_all_tests.mo");
+    let source = include_str!("../../slow_tests/src/scope_all_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("slow_tests/scope_all_tests.mo", &report);
+    print_report("slow_tests/src/scope_all_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_tests_scope_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/scope_tests.mo");
+    let source = include_str!("../../lang/src/tests/scope_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/scope_tests.mo", &report);
+    print_report("lang/src/tests/scope_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_tests_typecheck_examples_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/typecheck_examples_tests.mo");
+    let source = include_str!("../../lang/src/tests/typecheck_examples_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/typecheck_examples_tests.mo", &report);
+    print_report("lang/src/tests/typecheck_examples_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_slow_tests_typecheck_init_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../slow_tests/typecheck_init_tests.mo");
+    let source = include_str!("../../slow_tests/src/typecheck_init_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("slow_tests/typecheck_init_tests.mo", &report);
+    print_report("slow_tests/src/typecheck_init_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_slow_tests_typecheck_lang_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../slow_tests/typecheck_lang_tests.mo");
+    let source = include_str!("../../slow_tests/src/typecheck_lang_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("slow_tests/typecheck_lang_tests.mo", &report);
+    print_report("slow_tests/src/typecheck_lang_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_slow_tests_typecheck_std_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../slow_tests/typecheck_std_tests.mo");
+    let source = include_str!("../../slow_tests/src/typecheck_std_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("slow_tests/typecheck_std_tests.mo", &report);
+    print_report("slow_tests/src/typecheck_std_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_tests_types_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/types_tests.mo");
+    let source = include_str!("../../lang/src/tests/types_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/types_tests.mo", &report);
+    print_report("lang/src/tests/types_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_tests_unify_tests() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/tests/unify_tests.mo");
+    let source = include_str!("../../lang/src/tests/unify_tests.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/tests/unify_tests.mo", &report);
+    print_report("lang/src/tests/unify_tests.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_typecheck_infer() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/typecheck/infer.mo");
+    let source = include_str!("../../lang/src/typecheck/infer.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/typecheck/infer.mo", &report);
+    print_report("lang/src/typecheck/infer.mo", &report);
   }
 
   #[test]
   fn test_real_file_lang_typecheck_unify() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/typecheck/unify.mo");
+    let source = include_str!("../../lang/src/typecheck/unify.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/typecheck/unify.mo", &report);
+    print_report("lang/src/typecheck/unify.mo", &report);
   }
 }

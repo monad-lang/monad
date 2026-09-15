@@ -138,7 +138,7 @@ def run_located_bench (path : String) : IO Bool := do {
 
 /// A small file, to establish the shape cheaply.
 #[test]
-def bench_located_parse_small : IO Bool := run_located_bench "init/id.mo"
+def bench_located_parse_small : IO Bool := run_located_bench "init/src/id.mo"
 
 
 /// A mid-size real file. The ratio between this and the small case is what
@@ -146,4 +146,4 @@ def bench_located_parse_small : IO Bool := run_located_bench "init/id.mo"
 /// item 37's rule: compare two sizes and look at the ratio, because a
 /// share measured at one scale says nothing about another.
 #[test]
-def bench_located_parse_medium : IO Bool := run_located_bench "lang/types.mo"
+def bench_located_parse_medium : IO Bool := run_located_bench "lang/src/types.mo"

@@ -1947,6 +1947,10 @@ pub fn load_decls(
       let p = path.to_file_path();
       if p.exists() { Some(p) } else { None }
     })
+    .or_else(|| {
+      let p = path.to_mote_file_path();
+      if p.exists() { Some(p) } else { None }
+    })
     .ok_or_else(|| format!("module not found: {path}"))?;
   let text = read_to_string(&file_path).map_err(|e| e.to_string())?;
   load_decls_from_text_with_path(
@@ -2085,30 +2089,36 @@ pub fn load_module_from_text_typed(
   Ok(())
 }
 
-/// Returns the path to the `init/` stdlib directory when loading from filesystem.
+/// Returns the directory holding the `init` mote's sources when loading from
+/// the filesystem — `init/src`, not `init`, since every mote keeps its modules
+/// under `src/` (`plans/packaging/package-system.md` §5a). `MONAD_STDLIB`
+/// overrides it and is likewise expected to name the *source* directory.
 #[cfg(not(feature = "embed-stdlib"))]
 fn stdlib_dir() -> std::path::PathBuf {
   if let Ok(dir) = std::env::var("MONAD_STDLIB") {
     return std::path::PathBuf::from(dir);
   }
-  // CARGO_MANIFEST_DIR is core/ — parent is the workspace root, then init/
+  // CARGO_MANIFEST_DIR is core/ — parent is the workspace root, then init/src/
   std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .parent()
     .expect("CARGO_MANIFEST_DIR has no parent")
     .join("init")
+    .join("src")
 }
 
-/// Sibling of `stdlib_dir()` for the `std/` package (see AGENTS.md's
+/// Sibling of `stdlib_dir()` for the `std` mote (see AGENTS.md's
 /// "init vs std" section) — derived as `stdlib_dir()`'s own sibling
-/// directory rather than an independent `MONAD_STDLIB`-style override,
-/// since both packages are expected to live side by side in any real
-/// deployment layout (default or `MONAD_STDLIB`-relocated alike).
+/// rather than an independent `MONAD_STDLIB`-style override, since both
+/// motes are expected to live side by side in any real deployment layout
+/// (default or `MONAD_STDLIB`-relocated alike). Two levels up, because
+/// `stdlib_dir()` now points inside `init/src`.
 #[cfg(not(feature = "embed-stdlib"))]
 fn std_dir() -> std::path::PathBuf {
   stdlib_dir()
     .parent()
-    .map(|p| p.join("std"))
-    .unwrap_or_else(|| std::path::PathBuf::from("std"))
+    .and_then(|p| p.parent())
+    .map(|p| p.join("std").join("src"))
+    .unwrap_or_else(|| std::path::PathBuf::from("std").join("src"))
 }
 
 /// `(module path, source text)` pairs for the always-loaded `init`+`std`
@@ -2134,27 +2144,30 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, String)>, LoadingError>
   #[cfg(feature = "embed-stdlib")]
   {
     let entries: [(ModulePath, &str); 12] = [
-      (mpt("'prelude"), include_str!("../../../init/prelude.mo")),
-      (mpt("id"), include_str!("../../../init/id.mo")),
-      (mpt("io"), include_str!("../../../init/io.mo")),
-      (mpt("number"), include_str!("../../../init/number.mo")),
-      (mpt("math"), include_str!("../../../init/math.mo")),
-      (mpt("string"), include_str!("../../../init/string.mo")),
-      (mpt("list"), include_str!("../../../init/list.mo")),
-      (mpt("init"), include_str!("../../../init/lib.mo")),
+      (
+        mpt("'prelude"),
+        include_str!("../../../init/src/prelude.mo"),
+      ),
+      (mpt("id"), include_str!("../../../init/src/id.mo")),
+      (mpt("io"), include_str!("../../../init/src/io.mo")),
+      (mpt("number"), include_str!("../../../init/src/number.mo")),
+      (mpt("math"), include_str!("../../../init/src/math.mo")),
+      (mpt("string"), include_str!("../../../init/src/string.mo")),
+      (mpt("list"), include_str!("../../../init/src/list.mo")),
+      (mpt("init"), include_str!("../../../init/src/lib.mo")),
       (
         ModulePath::new(vec![id("std"), id("path")]),
-        include_str!("../../../std/path.mo"),
+        include_str!("../../../std/src/path.mo"),
       ),
       (
         ModulePath::new(vec![id("std"), id("io")]),
-        include_str!("../../../std/io.mo"),
+        include_str!("../../../std/src/io.mo"),
       ),
       (
         ModulePath::new(vec![id("std"), id("process")]),
-        include_str!("../../../std/process.mo"),
+        include_str!("../../../std/src/process.mo"),
       ),
-      (mpt("std"), include_str!("../../../std/lib.mo")),
+      (mpt("std"), include_str!("../../../std/src/lib.mo")),
     ];
     return Ok(
       entries
@@ -2217,7 +2230,7 @@ pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingEr
 /// name with a default module (e.g. `lang/parser/number.mo` vs the
 /// top-level `number` default module).
 ///
-/// Not feature-gated: the `init/` directory is part of the repo regardless
+/// Not feature-gated: the `init/src` directory is part of the repo regardless
 /// of whether `embed-stdlib` baked its contents into the binary at compile
 /// time, so the same path list is valid for both build configurations.
 pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
@@ -2225,8 +2238,8 @@ pub fn default_module_source_files() -> Vec<std::path::PathBuf> {
   let root = manifest_dir
     .parent()
     .expect("CARGO_MANIFEST_DIR has no parent");
-  let init_dir = root.join("init");
-  let std_dir = root.join("std");
+  let init_dir = root.join("init").join("src");
+  let std_dir = root.join("std").join("src");
   let init_files = [
     "prelude.mo",
     "id.mo",

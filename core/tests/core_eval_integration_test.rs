@@ -63,7 +63,7 @@ fn phase4_evaluates_a_real_recursive_program_end_to_end() {
   let path = ModulePath::top("'eval_e2e_test");
   let decls = load_decls_from_text_with_path(SOURCE, &Default::default()).expect("parse");
   let prelude_path = ModulePath::top("'prelude");
-  let prelude_text = include_str!("../../init/prelude.mo");
+  let prelude_text = include_str!("../../init/src/prelude.mo");
   let prelude_decls =
     load_decls_from_text_with_path(prelude_text, &Default::default()).expect("parse prelude");
 

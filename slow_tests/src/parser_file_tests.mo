@@ -11,14 +11,14 @@ open ParseResult {fail, success}
 /// All init/ files to parse (safe - no box-drawing characters)
 #[partial]
 def init_files_safe : List String :=
-    ["init/id.mo",
-     "init/lib.mo",
-     "init/list.mo",
-     "init/io.mo",
-     "init/math.mo",
-     "init/number.mo",
-     "init/string.mo",
-     "init/tests.mo"]
+    ["init/src/id.mo",
+     "init/src/lib.mo",
+     "init/src/list.mo",
+     "init/src/io.mo",
+     "init/src/math.mo",
+     "init/src/number.mo",
+     "init/src/string.mo",
+     "init/src/tests.mo"]
 
 /// All std/ files to parse
 // `std/derive.mo` added here specifically as the real-corpus
@@ -30,7 +30,7 @@ def init_files_safe : List String :=
 // unparseable by this self-hosted parser at all.
 #[partial]
 def std_files : List String :=
-    ["std/test.mo", "std/derive.mo", "std/path.mo", "std/io.mo", "std/process.mo", "std/lib.mo"]
+    ["std/src/test.mo", "std/src/derive.mo", "std/src/path.mo", "std/src/io.mo", "std/src/process.mo", "std/src/lib.mo"]
 
 /// All examples/ files to parse (safe - no box-drawing characters)
 #[partial]
@@ -49,26 +49,26 @@ def example_files_safe : List String :=
 /// All lang/ files to parse (safe - no box-drawing characters)
 #[partial]
 def lang_files_safe : List String :=
-    ["lang/elaborate.mo",
-     "lang/main.mo",
-     "lang/module.mo",
-     "lang/pretty.mo",
-     "lang/scope.mo"]
+    ["lang/src/elaborate.mo",
+     "lang/src/main.mo",
+     "lang/src/module.mo",
+     "lang/src/pretty.mo",
+     "lang/src/scope.mo"]
 
 /// All init/ files with UTF-8 characters (previously blocked by byte indexing)
 #[partial]
 def init_files_utf8 : List String :=
-    ["init/string_profile.mo",
-     "init/optics.mo"]
+    ["init/src/string_profile.mo",
+     "init/src/optics.mo"]
 
 /// All std/ files with UTF-8 characters
 #[partial]
 def std_files_utf8 : List String :=
-    ["std/test_map_full.mo",
-     "std/list_tests3b.mo",
-     "std/map.mo",
-     "std/base.mo",
-     "std/list.mo"]
+    ["std/src/test_map_full.mo",
+     "std/src/list_tests3b.mo",
+     "std/src/map.mo",
+     "std/src/base.mo",
+     "std/src/list.mo"]
 
 /// All examples/ files with UTF-8 characters
 #[partial]
@@ -79,9 +79,9 @@ def example_files_utf8 : List String :=
 /// All lang/ files with UTF-8 characters (self hosting)
 #[partial]
 def lang_files_utf8 : List String :=
-    ["lang/parser.mo",
-     "lang/types.mo",
-     "lang/codegen/emit.mo"]
+    ["lang/src/parser.mo",
+     "lang/src/types.mo",
+     "lang/src/codegen/emit.mo"]
 
 /// Parse a single file and return success status
 #[partial]
@@ -174,11 +174,11 @@ def test_hello_fully_parses : Bool :=
 
 #[test]
 def test_string_fully_parses : Bool :=
-    file_fully_parses "init/string.mo"
+    file_fully_parses "init/src/string.mo"
 
 #[test]
 def test_scope_fully_parses : Bool :=
-    file_fully_parses "lang/scope.mo"
+    file_fully_parses "lang/src/scope.mo"
 
 // `lang/json.mo`/`lang/toml.mo`/`std/map.mo` all open with a `//`/`///`
 // comment containing an em dash (multi-byte UTF-8) before their very
@@ -195,12 +195,12 @@ def test_scope_fully_parses : Bool :=
 // these tests assert that directly instead of a conservative floor.
 #[test]
 def test_json_fully_parses : Bool :=
-    file_fully_parses "lang/json.mo"
+    file_fully_parses "lang/src/json.mo"
 
 #[test]
 def test_toml_fully_parses : Bool :=
-    file_fully_parses "lang/toml.mo"
+    file_fully_parses "lang/src/toml.mo"
 
 #[test]
 def test_map_fully_parses : Bool :=
-    file_fully_parses "std/map.mo"
+    file_fully_parses "std/src/map.mo"

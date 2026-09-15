@@ -855,8 +855,8 @@ def struct_field_default_refs (fields : List StructField) : List String := match
 #[test]
 def test_qualify_same_file_under_two_paths_is_not_ambiguous : IO Bool := do {
     let decls := List.cons (qtest_def "shared" "x") List.empty;
-    let short_ := ModuleInfo.mk (bare_modpath "string") "init/string.mo" decls;
-    let long_ := ModuleInfo.mk (bare_modpath "init.string") "init/string.mo" decls;
+    let short_ := ModuleInfo.mk (bare_modpath "string") "init/src/string.mo" decls;
+    let long_ := ModuleInfo.mk (bare_modpath "init.string") "init/src/string.mo" decls;
     let caller := qtest_module "user" (List.cons (qtest_def "caller" "shared") List.empty);
     let r <- qualify_modules false (List.cons short_ (List.cons long_ (List.cons caller List.empty)));
     match r {

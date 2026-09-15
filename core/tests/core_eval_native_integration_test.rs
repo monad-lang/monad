@@ -159,7 +159,7 @@ fn phase7_evaluates_parser_combinator_shaped_program_end_to_end() {
 
 /// Regression test for a real Phase 8 bug, found running `init`'s own
 /// real test corpus through `run_parity_tests` (`core_parity.rs`):
-/// `"a" ++ "b" == "ab"` (`init/test_constraints.mo`'s `test_append_string`)
+/// `"a" ++ "b" == "ab"` (`init/src/test_constraints.mo`'s `test_append_string`)
 /// combines two class methods, `Append.append` nested inside `BEq.beq`'s
 /// own first argument. `lower_term`'s generic `App` case (fun-then-arg,
 /// one level at a time) reaches `BEq`'s dict-projection `Match` node --
@@ -185,7 +185,7 @@ fn phase8_evaluates_nested_class_method_calls_end_to_end() {
 
 /// Regression test for a second real Phase 8 bug, found the same way as
 /// the one above but one level deeper: `test_foldr_foldl_equiv`
-/// (`init/foldable_tests.mo`, `init/foldable_tests_fold.mo`) combines
+/// (`init/src/foldable_tests.mo`, `init/src/foldable_tests_fold.mo`) combines
 /// *two separate* class-method calls, each itself needing the
 /// speculative-redo treatment (its own class param isn't pinned by any
 /// earlier argument), sequentially via nested `let`s. `try_resolve_

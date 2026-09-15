@@ -27,7 +27,7 @@ jobs:
         run: |
           mkdir -p dist
           nix develop --no-pure-eval --accept-flake-config -c \
-            cargo run --release -- run lang/main.mo compile lang/main.mo \
+            cargo run --release -- run lang/src/main.mo compile lang/src/main.mo \
               "$(pwd)/dist/monad-nightly-x86_64-linux" --verbose --release
 
       - name: Verify binary and record commit
@@ -55,7 +55,7 @@ jobs:
             Commit: ${{ github.sha }}
 
             This binary is produced by the self-hosted compiler
-            (`lang/main.mo`) compiling itself, run through the Rust
+            (`lang/src/main.mo`) compiling itself, run through the Rust
             `monad-rs` reference interpreter. Built on a self-hosted
             Linux x86_64 runner with Nix devenv.
           prerelease: true

@@ -241,7 +241,7 @@ fn test_error_position_never_zero() {
 }
 
 // ============================================================================
-// Complex module parsing tests for lang/main.mo issue
+// Complex module parsing tests for lang/src/main.mo issue
 // ============================================================================
 
 /// Test simple dotted module path
@@ -252,7 +252,7 @@ fn test_use_dotted_path_simple() {
   assert!(result.is_ok(), "Should parse: {}", input);
 }
 
-/// Test dotted module path like in lang/main.mo
+/// Test dotted module path like in lang/src/main.mo
 #[test]
 fn test_use_dotted_path_lang_types() {
   let input = "use lang.types";
@@ -300,7 +300,7 @@ fn test_main_mo_lines_1_30() {
   assert!(result.is_ok(), "Should parse lines 1-30 of main.mo");
 }
 
-/// Test parsing lang/types.mo (dependency of main.mo, might have the error)
+/// Test parsing lang/src/types.mo (dependency of main.mo, might have the error)
 #[test]
 fn test_parse_lang_types() {
   // Repo-relative (CARGO_MANIFEST_DIR's parent is the repo root, `core`'s
@@ -308,11 +308,11 @@ fn test_parse_lang_types() {
   let types_mo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
     .parent()
     .expect("core crate's manifest dir has a parent directory")
-    .join("lang/types.mo");
+    .join("lang/src/types.mo");
   let source = std::fs::read_to_string(&types_mo)
     .unwrap_or_else(|e| panic!("Failed to read {}: {e}", types_mo.display()));
   let lines: Vec<&str> = source.lines().collect();
-  println!("lang/types.mo has {} lines", lines.len());
+  println!("lang/src/types.mo has {} lines", lines.len());
 
   let result = parse_file(&source);
   if let Err(ref err) = result {
@@ -322,10 +322,13 @@ fn test_parse_lang_types() {
 
     // Check if error is at 4:16
     if line == 4 && col == 16 {
-      panic!("Error at 4:16 in lang/types.mo!");
+      panic!("Error at 4:16 in lang/src/types.mo!");
     }
   }
-  assert!(result.is_ok(), "lang/types.mo should parse successfully");
+  assert!(
+    result.is_ok(),
+    "lang/src/types.mo should parse successfully"
+  );
 }
 
 // ============================================================================
@@ -371,7 +374,7 @@ fn test_return_inside_if_with_do() {
 
 /// Test that a bare `return` as a match arm body (no enclosing `do`) is now
 /// legal, matching the same `return expr` shorthand as `if` branches above.
-/// This is the exact pattern that used to break lang/module.mo's
+/// This is the exact pattern that used to break lang/src/module.mo's
 /// `load_module_decls`: `match result { Foo _ x => return Bar.baz x, ... }`
 /// without wrapping the arm body in `do { }` -- now legal directly. AST
 /// equality with the `do { return ... }` form is covered by

@@ -26,21 +26,25 @@ a different branch and cause confusion.
 ├── cli/              # CLI entry point
 │   └── src/main.rs
 ├── wasm/             # WebAssembly bindings
-├── init/             # Pure, portable core (see "init vs std" below)
-│   ├── prelude.mo     # Basic types (Bool, List, Option, etc.)
-│   ├── io.mo         # The `IO` type + `Monad IO` instance only -- no natives
-│   ├── list.mo        # List.get and other List-specific extras
-│   ├── string.mo      # String operations
-│   ├── lib.mo          # Re-export hub (`pub use io {*}` etc.) -- bare `init` resolves here
-│   └── tests.mo       # Standard library tests
+├── init/             # Pure, portable core mote (see "init vs std" below)
+│   ├── mote.toml      # manifest -- no dependencies; dev-dep on std for its tests
+│   └── src/           # every mote keeps its modules under src/
+│       ├── prelude.mo     # Basic types (Bool, List, Option, etc.)
+│       ├── io.mo         # The `IO` type + `Monad IO` instance only -- no natives
+│       ├── list.mo        # List.get and other List-specific extras
+│       ├── string.mo      # String operations
+│       ├── lib.mo          # Re-export hub (`pub use io {*}` etc.) -- bare `init` resolves here
+│       └── tests.mo       # Standard library tests
 ├── std/              # OS-specific implementations and side effects (see below)
-│   ├── path.mo         # Path type
-│   ├── io.mo           # Path-typed file I/O natives (write_file/read_file/...)
-│   ├── process.mo       # exec_cmd
-│   ├── lib.mo           # Re-export hub -- bare `std` resolves here
-│   └── test.mo        # Test utilities (Test.assert)
+│   ├── mote.toml
+│   └── src/
+│       ├── path.mo         # Path type
+│       ├── io.mo           # Path-typed file I/O natives (write_file/read_file/...)
+│       ├── process.mo       # exec_cmd
+│       ├── lib.mo           # Re-export hub -- bare `std` resolves here
+│       └── test.mo        # Test utilities (Test.assert)
 ├── lang/             # The self-hosted compiler, written in Monad
-│   └── codegen/        # LLVM backend, split by concern (emit.mo was 8.2k lines)
+│   └── src/codegen/    # LLVM backend, split by concern (emit.mo was 8.2k lines)
 │       ├── util.mo       # shared list/instruction builders + str_map_* -- imported
 │       │                 # by every other codegen module, depends on almost nothing
 │       ├── symbols.mo    # how a Monad name becomes an LLVM symbol; def_symbol_name
@@ -79,16 +83,16 @@ a different branch and cause confusion.
 │                     #   - typecheck_init_tests.mo/typecheck_std_tests.mo/
 │                     #     typecheck_lang_tests.mo all pass `check_deps=false`
 │                     #     (target-only) to `elaborate_loaded_modules`
-│                     #     (`lang/module.mo`) -- so checking `lang/main.mo`
+│                     #     (`lang/src/module.mo`) -- so checking `lang/src/main.mo`
 │                     #     in test_typecheck_lang_main body-type-checks only
-│                     #     `lang/main.mo`'s own top-level decls, NOT its
+│                     #     `lang/src/main.mo`'s own top-level decls, NOT its
 │                     #     dependencies' bodies (dependencies only
 │                     #     contribute signatures to scope). `check_deps=true`
 │                     #     exists (see `elaborate_loaded_modules`'s own doc
 │                     #     comment) but is NOT currently used anywhere,
 │                     #     including here or by the real `check`/`compile`/
 │                     #     `test` CLI commands -- turning it on for
-│                     #     `lang/main.mo`'s own full closure (≈2200 decls,
+│                     #     `lang/src/main.mo`'s own full closure (≈2200 decls,
 │                     #     including this self-hosted compiler's own
 │                     #     richly-recursive AST types) caused unbounded
 │                     #     memory growth (28GB+ RSS and still climbing);
@@ -121,19 +125,37 @@ must work in any environment, including wasm and embedded targets.**
 **`std/` is where OS-specific implementations and side effects
 belong** — file I/O, process execution, environment variables, and
 anything else that touches the outside world. File I/O is the concrete
-example that motivated codifying this: it used to live in `init/io.mo`
-(natives included), and moved to `std/io.mo`, leaving `init/io.mo` with
+example that motivated codifying this: it used to live in `init/src/io.mo`
+(natives included), and moved to `std/src/io.mo`, leaving `init/src/io.mo` with
 only the pure `IO` monad wrapper type itself.
 
 Both `init/` and `std/` have a `lib.mo` re-export hub (`pub use
 submodule {*}` for each sibling file, mirroring the existing pattern),
 and both are **ambient** — ordinary `.mo` files never need `use init
 {...}`/`use std {...}` to reach anything either re-exports; a bare
-`init`/`std` module reference resolves straight to `init/lib.mo`/
-`std/lib.mo`, the same way Rust's own `std`/`core` crate name refers to
-that crate's root file (`lang/module.mo`'s `resolve_module_file` has an
+`init`/`std` module reference resolves straight to `init/src/lib.mo`/
+`std/src/lib.mo`, the same way Rust's own `std`/`core` crate name refers to
+that crate's root file (`lang/src/module.mo`'s `resolve_module_file` has an
 explicit special case for each, alongside the pre-existing one for
 `prelude`).
+
+### Motes keep their sources under `src/`
+
+`init/`, `std/`, `lang/`, `slow_tests/` and `bench/` are **motes** (Monad's
+packages), and a mote's modules live in its `src/` directory —
+`lang/src/codegen/emit.mo`, not `lang/codegen/emit.mo`. Module-path
+*spelling* is unchanged by this: `use lang.codegen.emit` still names that
+module, and compiled symbol names are unaffected. The first segment of a
+`use` path names the mote; the rest is the path within its `src/`.
+
+Both compilers implement that mapping: `mote_relative_file` in
+`lang/src/module.mo` and `ModulePath::to_mote_file_path` in
+`core/src/term.rs` (tried after the literal join, so a search root that
+already points into a mote's `src/` keeps working). A one-segment path is
+the mote's library root — `use std` is `std/src/lib.mo`.
+
+Directory arguments to `check`/`test` are unaffected (`test init std lang`
+recurses), but a path argument names the real file: `test init/src/tests.mo`.
 
 ## Building and Running
 
@@ -151,9 +173,9 @@ monad-rs run examples/hello.mo
 cargo run -- run examples/hello.mo -- --debug
 
 # Run #[test] annotated definitions
-cargo run -- test init/tests.mo
+cargo run -- test init/src/tests.mo
 
-# Run the bootstrapped cli in lang/main.mo
+# Run the bootstrapped cli in lang/src/main.mo
 bootstrap
 
 # Compile to native binary in devenv shell
@@ -165,18 +187,18 @@ cargo run -- repl
 
 ### Use `--release` for self-hosted-compiler workloads
 
-Running `lang/main.mo` (the self-hosted compiler) interprets a real
+Running `lang/src/main.mo` (the self-hosted compiler) interprets a real
 compiler pipeline on top of the reference compiler's own `core_eval` —
-e.g. `cargo run -- run lang/main.mo -- check lang/main.mo` (self-hosted
+e.g. `cargo run -- run lang/src/main.mo -- check lang/src/main.mo` (self-hosted
 compiler checking itself) took 223s in a debug build vs 99s
 `--release` — a 2.2x speedup here (smaller than the 10-15x speedup
 `--release` gives the reference compiler's own `check`/`run` on an
 ordinary `.mo` file, since the self-hosted path's cost is dominated by
 interpreter dispatch/allocation overhead that `-O` optimizes less
 aggressively than typical Rust control flow). Prefer
-`cargo build --release` + `target/release/monad-rs run lang/main.mo --
-...` (or `cargo run --release -- run lang/main.mo -- ...`) over a plain
-debug build for any workload that runs `lang/main.mo` against a large
+`cargo build --release` + `target/release/monad-rs run lang/src/main.mo --
+...` (or `cargo run --release -- run lang/src/main.mo -- ...`) over a plain
+debug build for any workload that runs `lang/src/main.mo` against a large
 file or corpus, rather than iterating on the reference compiler itself.
 
 ## Writing Monad Code
@@ -544,7 +566,7 @@ def path : String := r"C:\Users\monad\src\main.mo"   // backslashes literal
 
 `r` is a valid identifier, so the raw-string parser is tried ahead of the
 identifier parser in both `core/src/parser.rs` (`term_inner`/`non_app_term`)
-and `lang/parser.mo` (`atom_parsers`); a bare `r`, `regex`, or `r#` not
+and `lang/src/parser.mo` (`atom_parsers`); a bare `r`, `regex`, or `r#` not
 followed by `"` still parses as the identifier `r` / `regex`.
 
 ### Match Expressions
@@ -685,7 +707,7 @@ cargo test core_eval::
 
 ```bash
 # Run tests from a single file
-cargo run -- test init/tests.mo
+cargo run -- test init/src/tests.mo
 
 # Run tests from an entire directory (recursively finds all .mo files with #[test])
 cargo run -- test init/
@@ -730,7 +752,7 @@ When implementing a non-trivial new language feature or stdlib addition, add a c
 
 ### Creating New Types
 
-Add to `init/prelude.mo`:
+Add to `init/src/prelude.mo`:
 ```monad
 type MyType {
     constructor (field: Type)
@@ -748,19 +770,19 @@ def function_name (args: Types) : ReturnType
 
 ## Standard Library
 
-### `init/prelude.mo`
+### `init/src/prelude.mo`
 - Basic types: `Bool`, `I64`, `I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`, `String`, `Void`, `Any`, `Nat`, `List`, `Option`
 - Type classes: `Add`, `Sub`, `Mul`, `Div`, `BEq`, `BOrd`, `Functor`, `Applicative`, `Monad`, `Show`, `Append`, `FromListLiteral`, `DefaultValue`
 - Operators: `+`, `-`, `*`, `/`, `==`, `!=`, `&&`, `||`, `++`, `|>`, `<|`, `>>=`, `<*>`, `<|>`
 - Functions: `Bool.not`, `Bool.and`, `Bool.or`, `Option.get_or_default`, `List.is_empty`, `List.append`, `List.first`, `List.last`, `List.tail`, `List.flatten`, `fun_apply`, `apply_fun`
 
-### `init/string.mo`
+### `init/src/string.mo`
 - `String.concat`, `String.length`, `String.get`, `String.is_empty`
 
-### `init/init.mo`
+### `init/src/init.mo`
 - `From` class for type conversion
 
-### `std/test.mo`
+### `std/src/test.mo`
 - `Test.assert` for assertion-based testing
 
 ### Module Dependency Boundaries
@@ -769,7 +791,7 @@ def function_name (args: Types) : ReturnType
 
 - `std/` modules may `use` `init/` modules (e.g., `use io`)
 - `init/` modules must **NOT** `use` `std/` modules
-- **Tests for `std/` modules go in `std/`**, not in `init/` — `init/tests.mo` must not import from `std/`
+- **Tests for `std/` modules go in `std/`**, not in `init/` — `init/src/tests.mo` must not import from `std/`
 
 When adding a new `std/` module with tests, place the test file within `std/`:
 ```bash
@@ -808,7 +830,7 @@ to typecheck once. Concretely, in order of how often each comes up:
    `{ base with field := v }` to update one field of an existing value
    (much clearer than reconstructing every positional argument by hand
    when only one changed — see `CodegenCtx`'s `fresh_temp`/
-   `ctx_bind_local`/etc. in `lang/codegen/emit.mo` for the pattern).
+   `ctx_bind_local`/etc. in `lang/src/codegen/emit.mo` for the pattern).
    When you DO need to destructure several fields of a `struct` at once
    in a match arm, prefer the field-pattern form,
    `match v { { field1, field2, .. } => e }` (or `Ctor { field1,
@@ -847,8 +869,8 @@ to typecheck once. Concretely, in order of how often each comes up:
    an `else if`. This codebase's own `Map` typeclass has known
    instance-resolution bugs (see "Known Type Checker Issues" #3 below) —
    use the direct `str_map_empty`/`str_map_insert`/`str_map_lookup`
-   bypass helpers (`lang/codegen/emit.mo`) or the equivalent
-   `modpath_map_*` ones (`lang/scope.mo`) instead of the `Map` class
+   bypass helpers (`lang/src/codegen/emit.mo`) or the equivalent
+   `modpath_map_*` ones (`lang/src/scope.mo`) instead of the `Map` class
    directly. As with any `List`→`HashMap` swap in self-hosted code, this
    is a genuine, MEASURED win when the table is built once and looked up
    many times across a large corpus (this project's own precedent: the
@@ -900,8 +922,8 @@ at that exact point — two confirmed shapes:
     explicit type annotation first, or -- when the literal is the whole
     result -- move it into its own `def` with a DECLARED return type,
     which is what gives it an expected type (`mk_loaded_modules`/
-    `mk_module_info` in `lang/main.mo`, `rebuild_target_scope` in
-    `lang/module.mo`).
+    `mk_module_info` in `lang/src/main.mo`, `rebuild_target_scope` in
+    `lang/src/module.mo`).
 
     **TODO: the self-hosted checker should support a struct literal in
     return position.** Every workaround above exists only because it
@@ -923,15 +945,15 @@ tenth field it still typechecks fine and then aborts at RUNTIME with
 `expected 9 constructor fields, got 10` — no location, no def name, the
 whole run dead rather than a diagnostic. Adding `def_sigs` to
 `ScopeData` did exactly this to
-`scope_data_find_all_inductives_by_constructor` (`lang/scope.mo`),
-taking down the self-hosted `check` of both `lang/scope.mo` and
-`lang/module.mo`. When you add a struct field, `grep` for positional
+`scope_data_find_all_inductives_by_constructor` (`lang/src/scope.mo`),
+taking down the self-hosted `check` of both `lang/src/scope.mo` and
+`lang/src/module.mo`. When you add a struct field, `grep` for positional
 matches on that type (`grep -rnE 'mk( [a-z_][a-z_0-9]*){N,} =>'`) and
 widen them; prefer a `{ .. }` field pattern or field access for new
 code, which is immune. A test that CALLS such a function against a real
 value (not just constructs one) is what catches it.
 
-`lang/codegen/emit.mo`'s `validate_no_undesugared_struct_lits` now
+`lang/src/codegen/emit.mo`'s `validate_no_undesugared_struct_lits` now
 fails the compile fast, naming the enclosing def, for any struct literal
 that reaches codegen un-desugared — that third shape used to cost a
 whole bootstrap-ladder rung before anyone saw it (the self-compiled
@@ -978,7 +1000,7 @@ When resolving a name like `BEq.beq` or `==`:
 
 ### BEq Type Signature Bug
 
-The `BEq` class in `init/prelude.mo` originally had:
+The `BEq` class in `init/src/prelude.mo` originally had:
 ```monad
 class BEq A {
     def beq : A -> B -> Bool  // WRONG: B is unbound
@@ -1047,16 +1069,16 @@ Dot access on an arbitrary non-identifier expression (e.g. `(mk_point 1 2).x`) i
 
 **Fix**: Remove these `println!` calls before production use. They are leftover debugging aids and are not guarded by any log level.
 
-## Parser Combinator Library (init/parser.mo)
+## Parser Combinator Library (init/src/parser.mo)
 
 ### Status: In Progress
 
 Working: `tag`, `eof`, `alt`/`<|>`, `many0`, `many1`, `char_in_string`, `is_digit`, `is_alpha`, `is_alphanumeric`, `is_space`, `is_ident_char`, `satisfy`, `char`, `digit`, `alpha`, `space`, `take_while`, `opt`, `preceded`, `terminated`, `delimited`, `recognize` — 23/23 tests pass.
 
-The self-hosted parser at `lang/parser.mo` provides a self-contained copy of the foundation types (`ParseResult`, `ParseError`) and combinators (`tag`, `alt`, `many0`, `many1`, `take_while`), char predicates, keyword check, identifier parser, whitespace skimmer, and number parser — 7/7 tests pass.
+The self-hosted parser at `lang/src/parser.mo` provides a self-contained copy of the foundation types (`ParseResult`, `ParseError`) and combinators (`tag`, `alt`, `many0`, `many1`, `take_while`), char predicates, keyword check, identifier parser, whitespace skimmer, and number parser — 7/7 tests pass.
 
 Key patterns when writing self-hosted Monad code:
-1. **Avoid long `||` chains** (>10 operations) — the operator precedence climber slows down exponentially. Use nested `if/else` chains or split into helper functions (see `is_alpha_lower`/`is_alpha_lower2` pattern in `lang/parser.mo`).
+1. **Avoid long `||` chains** (>10 operations) — the operator precedence climber slows down exponentially. Use nested `if/else` chains or split into helper functions (see `is_alpha_lower`/`is_alpha_lower2` pattern in `lang/src/parser.mo`).
 2. **Avoid deep `else if` chains** (>15 levels) — the parser depth causes extreme slowdown. Split into multiple helper functions (max ~14 `if/else` per function).
 3. **Avoid `use` for `init/parser`** — module loading produces "duplicate key" warnings that break `String.starts_with` and other native functions in test contexts. Make the parser file self-contained instead.
 4. **Use `open TypeName`** — constructor names (like `success`/`fail`) are not available without opening the type.
@@ -1064,18 +1086,18 @@ Key patterns when writing self-hosted Monad code:
 
 ### Known Type Checker Issues
 
-1. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Inner opens are not applied to module exports. Functions using `open`-ed constructors must be defined inside the same module. Workaround: bind results to a typed parameter before matching (see `many0`/`many1` implementation pattern in `init/parser.mo`).
+1. **`open` doesn't propagate**: `open ParseResult` within `parser.mo` doesn't affect external modules. Inner opens are not applied to module exports. Functions using `open`-ed constructors must be defined inside the same module. Workaround: bind results to a typed parameter before matching (see `many0`/`many1` implementation pattern in `init/src/parser.mo`).
 2. **Forall inference on polymorphic combinators**: The type checker correctly instantiates implicit forall parameters on functions like `map_parse` and `bind_parse`, whether called with a concrete named function (`map_parse id_str (tag "x") "xy"`) or an inline lambda, annotated or not (`map_parse (fn s => s) (tag "x") "xy"`) — confirmed directly. If a combinator call fails with "Variable mismatch, expected ... found {B : Type} -> {A : Type} -> ...", the cause is elsewhere (e.g. a genuine type mismatch); it is not a lambda-argument limitation.
 3. **`Map.insert`/`Map.lookup` (typeclass method dispatch) can fail at
    runtime with `eval error: scope: scope: Map.lookup not found` inside
    deeply-recursive self-hosted-compiler code paths** — specifically
    observed when a self-hosted function using `Map`/`BOrd` class methods
-   (`std/map.mo`'s `instance [BOrd K] Map BTreeMap`) gets called
+   (`std/src/map.mo`'s `instance [BOrd K] Map BTreeMap`) gets called
    repeatedly through `lang.module`'s dynamic module-loading/dependency-
    walk (`load_module_with_dependencies`, exercised by
-   `slow_tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main`, the
+   `slow_tests/src/typecheck_lang_tests.mo`'s `test_typecheck_lang_main`, the
    only test that exercises that runtime path). Not reproduced when the
-   same `BTreeMap` usage is type-checked directly (e.g. `lang/json.mo`
+   same `BTreeMap` usage is type-checked directly (e.g. `lang/src/json.mo`
    alone) — the failure is specific to this recursive/dynamic-scope
    context, not to `BTreeMap`/`BOrd` in general. A workaround exists
    (bypass the `Map`/`BOrd` class methods and call
@@ -1086,7 +1108,7 @@ Key patterns when writing self-hosted Monad code:
 4. **`BTreeMap` is markedly SLOWER than a plain `List` + linear scan for
    the small collection sizes typical in this self-hosted compiler's own
    code, once everything runs through the tree-walking evaluator.**
-   Measured directly: replacing `lang/module.mo`'s `List ModulePath` +
+   Measured directly: replacing `lang/src/module.mo`'s `List ModulePath` +
    `list_contains` cycle-detection sets with `BTreeMap ModulePath Unit`
    (using the plain-function-value workaround from the item above, to
    dodge the dispatch bug) took `test_typecheck_lang_main` from 2.1s to
@@ -1100,12 +1122,12 @@ Key patterns when writing self-hosted Monad code:
    would actually win is never reached in practice. **Do not replace
    `List`+linear-scan with `BTreeMap` in self-hosted (`lang/*.mo`) code
    without measuring end-to-end wall-clock time first** (e.g.
-   `time cargo run -- test slow_tests/typecheck_lang_tests.mo`) — Big-O
+   `time cargo run -- test slow_tests/src/typecheck_lang_tests.mo`) — Big-O
    analysis alone is not a reliable guide to real performance here.
-5. **`self-hosted-compiler-perf.md` phase-timing infra**: `lang/module.mo`'s
+5. **`self-hosted-compiler-perf.md` phase-timing infra**: `lang/src/module.mo`'s
    `check_file_cached` now wraps its three phases (scope/dep resolution,
    strict parse, typecheck) with `Bench.now`/`Bench.report` calls gated
-   on `verbose` — `run lang/main.mo -- check <files> --verbose` prints
+   on `verbose` — `run lang/src/main.mo -- check <files> --verbose` prints
    `scope=`/`parse=`/`check=` timings per file, silent otherwise. This
    is distinct from the Rust-level `--benchmark` flag (which only times
    the outer per-file load, not phases *inside* the self-hosted checker
@@ -1113,12 +1135,12 @@ Key patterns when writing self-hosted Monad code:
    before touching self-hosted-checker performance, the same way item 4
    above already demonstrates for data-structure choices.
 6. **Measured, not worth it: flattening `HashMap`'s 16-way bucket
-   dispatch** (`std/map.mo`'s `HashMap.get_bucket`/`set_bucket`,
+   dispatch** (`std/src/map.mo`'s `HashMap.get_bucket`/`set_bucket`,
    originally a single 16-deep `if U64.beq N idx` chain). Splitting it
-   into two <=8-deep tiers (mirroring `lang/parser.mo`'s
+   into two <=8-deep tiers (mirroring `lang/src/parser.mo`'s
    `is_alpha_lower`/`is_alpha_lower2` pattern, itself a real, proven win
    for *parser* code) was tried and measured directly with a dedicated
-   isolated micro-benchmark (`bench/hashmap_bucket_dispatch.mo` — pure
+   isolated micro-benchmark (`bench/src/hashmap_bucket_dispatch.mo` — pure
    `get_bucket`/`set_bucket` call volume, decoupled from `HashMap`'s own
    hashing/allocation cost), reproduced across two independent runs at
    two sizes (n=50000/200000): unflattened `set_bucket` 485-489ms/
@@ -1132,21 +1154,21 @@ Key patterns when writing self-hosted Monad code:
    the comparisons saved at this chain depth (16 is apparently still
    short enough that the `>15 levels` rule's *depth*-driven slowdown
    hasn't kicked in yet; splitting adds a *call*, which is the more
-   expensive operation here). Reverted — `std/map.mo`'s `get_bucket`/
+   expensive operation here). Reverted — `std/src/map.mo`'s `get_bucket`/
    `set_bucket` remain the original single 16-way chain. Kept
-   `bench/hashmap_bucket_dispatch.mo` as standing infrastructure so this
+   `bench/src/hashmap_bucket_dispatch.mo` as standing infrastructure so this
    isn't re-investigated blind. A second data point (after item 4's
    BTreeMap regression) that a proven win in one part of this
    interpreter (parser recursion depth) doesn't automatically transfer to
    another (hot-path dispatch call count) — measure per case.
 7. **Native `string_lt`/`string_gt`/`string_hash` fast paths**
-   (`core/src/core_native.rs` + `init/string.mo`): `String.beq` already
+   (`core/src/core_native.rs` + `init/src/string.mo`): `String.beq` already
    had a native path (`string_eq`, plain `&str == &str`); `String.lt`/
    `String.gt`/`String.hash` didn't — they were self-hosted `.mo` code
    that converted both operands through `String.to_list` (materializing
    a full `List U8` linked list) before comparing/folding, even though
    `Identifier`/`ModulePath`'s `BOrd`/`Hashable` instances
-   (`lang/types.mo`) delegate to them on every scope-`HashMap` op. When a
+   (`lang/src/types.mo`) delegate to them on every scope-`HashMap` op. When a
    self-hosted function's cost is dominated by an allocation-heavy
    conversion rather than genuine self-hosted logic, check whether a
    native already exists for a sibling operation (here, `string_eq`)
@@ -1163,7 +1185,7 @@ Key patterns when writing self-hosted Monad code:
    being syntactically a tail call; `Match`'s dispatch had the identical
    shape. Every self-recursive closure application (an ordinary
    accumulator-style `.mo` loop) grew the native Rust stack by a frame
-   per iteration — confirmed by `bench/scope_lookup.mo` stack-
+   per iteration — confirmed by `bench/src/scope_lookup.mo` stack-
    overflowing at n≈1000 even under 64MB worker-thread stacks.
    `eval` is now a `loop` over owned `(cur_ir: IrRef, cur_env: EnvRef)`
    state — `App` applying to a `Closure`, and `Match` dispatching to an
@@ -1188,10 +1210,10 @@ Key patterns when writing self-hosted Monad code:
    by rebase) — both kept, since they address genuinely different parts
    of the same cost.** Item 8's phase timing found the SCOPE phase
    dominating per-file check time by up to ~90x over the CHECK phase
-   (e.g. `init/id.mo`: scope~4.3s vs. check~0.05s) — NOT the CHECK phase
-   where `union_ids`/`free_vars` (`lang/elaborate.mo`, `lang/types.mo`)
+   (e.g. `init/src/id.mo`: scope~4.3s vs. check~0.05s) — NOT the CHECK phase
+   where `union_ids`/`free_vars` (`lang/src/elaborate.mo`, `lang/src/types.mo`)
    live, confirming `union_ids` is not worth optimizing.
-   - **Fix A** (`lang/module.mo`'s `load_module_with_dependencies_and_
+   - **Fix A** (`lang/src/module.mo`'s `load_module_with_dependencies_and_
      prelude_cached`): `extract_all_dependencies_go`'s `visited`
      accumulator was seeded with `base_covered` (the shared
      `PreludeInitBase`'s already-loaded module set) so the walk would
@@ -1208,7 +1230,7 @@ Key patterns when writing self-hosted Monad code:
      equivalent "seen" sets for skip purposes, so this changes nothing
      about what gets skipped, only what gets correctly returned as
      empty/small instead of the whole base.
-   - **Fix B** (`lang/module.mo`'s `merge_scope_data`, `std/map.mo`):
+   - **Fix B** (`lang/src/module.mo`'s `merge_scope_data`, `std/src/map.mo`):
      even with Fix A landed, `merge_scope_data base_sd merged_extra`
      still merges the two `ScopeData`s' `def_refs` `HashMap`s every
      file — the original implementation did this via `HashMap.to_list
@@ -1224,10 +1246,10 @@ Key patterns when writing self-hosted Monad code:
      `[Hashable K, BOrd K]` constraint either (unlike the `to_list`+
      refold approach it replaces), so it also sidesteps the
      `[Constraint]`-annotated-function class-method-dispatch limitation
-     `std/map.mo` already documents elsewhere — and needs no empty-`sd2`
+     `std/src/map.mo` already documents elsewhere — and needs no empty-`sd2`
      short-circuit either (a fixed 16 bucket-pair appends is already
      cheap enough regardless of size).
-   - `bench/hashmap_bucket_dispatch.mo` (item 6) was tried FIRST as a
+   - `bench/src/hashmap_bucket_dispatch.mo` (item 6) was tried FIRST as a
      general "flatten `HashMap`'s dispatch" fix and found not to help;
      these two much more targeted fixes (WHERE the redundant work
      happened, and HOW one specific merge was implemented) are what
@@ -1250,8 +1272,8 @@ Key patterns when writing self-hosted Monad code:
      shape (mostly prelude+init-covered, little genuine `lang/`-internal
      `extra_deps` per file) just doesn't happen to exercise that
      saving much; files with real non-base dependencies still benefit
-     from Fix A the way its own commit measured directly (`std/show.mo`
-     scope phase 4224ms → 712ms; `lang/module.mo` 418.8s → 367.3s).
+     from Fix A the way its own commit measured directly (`std/src/show.mo`
+     scope phase 4224ms → 712ms; `lang/src/module.mo` 418.8s → 367.3s).
      Full corpus `check init std examples`: 51 files, 181 errors,
      unchanged from before either fix (confirmed via a direct isolated
      stash comparison on this exact combined commit), completing in
@@ -1265,7 +1287,7 @@ Key patterns when writing self-hosted Monad code:
      prelude+init, module-scope cache) and a natural next target for a
      future performance pass.
 10. **Whole-corpus module-scope cache** (`ModuleScopeCache`,
-    `lang/module.mo`). NOTE (2026-09-03): this item describes
+    `lang/src/module.mo`). NOTE (2026-09-03): this item describes
     `ModuleScopeCache`, which is now superseded on the live path by
     `ModuleInfoCache` (caching `ModuleInfo`, i.e. the parse, rather
     than `ScopeData`) threaded through `elaborate_loaded_modules_cached`
@@ -1281,7 +1303,7 @@ Key patterns when writing self-hosted Monad code:
     `check_file_cached`/`load_module_with_dependencies_and_prelude_
     cached` the same way `PreludeInitBase` is, except mutable rather
     than fixed. Fixes the exact redundancy item 9 measured but didn't
-    address: `lang/types.mo` was independently loaded 54 separate
+    address: `lang/src/types.mo` was independently loaded 54 separate
     times in one multi-file run (54 files `use lang.types`), now served
     from cache after the first. Keyed on `ModulePath` (grep-verified
     safe for the current corpus — only two bare, non-dotted `use`s
@@ -1299,7 +1321,7 @@ Key patterns when writing self-hosted Monad code:
     unchanged), real speedup on repeated-dependency scenarios (a 4-file
     sample's scope-phase times dropped 13-47% per file as later files
     hit the cache for shared deps). Deliberately NOT measured against
-    `slow_tests/typecheck_lang_tests.mo`'s `test_typecheck_lang_main` —
+    `slow_tests/src/typecheck_lang_tests.mo`'s `test_typecheck_lang_main` —
     that test is a single flat dependency-closure walk from one call
     site (`load_module_with_dependencies`, not the `..._and_prelude_
     cached` path this cache lives on), so it cannot exhibit cross-file
@@ -1329,17 +1351,17 @@ Key patterns when writing self-hosted Monad code:
       own, given it only fires for ~12% of module loads.
     - **Candidate 2, measured and NOT the cause — the CHECK phase's own
       per-declaration cost has grown, but not through the mechanism
-      first suspected.** `lang/typecheck/infer.mo`'s `find_inductive_
+      first suspected.** `lang/src/typecheck/infer.mo`'s `find_inductive_
       for_cases_by_constructor` (a linear scan over every inductive in
       the fully-merged scope, ~218+ `type` declarations corpus-wide)
       looked like a strong candidate by code-reading alone — the CHECK
       phase is now often 2-4x LARGER than the SCOPE phase for real
-      files (`lang/pretty.mo`: scope≈15-29s, check≈57-83s across
+      files (`lang/src/pretty.mo`: scope≈15-29s, check≈57-83s across
       several runs), the opposite of this section's own item 9
-      assumption (based on a tiny `init/id.mo` file where scope
+      assumption (based on a tiny `init/src/id.mo` file where scope
       dominated ~90x over check). Instrumented directly (temporary
       counters on both the fast path and this fallback, since
-      reverted) and ran against `lang/pretty.mo` (60 `match`
+      reverted) and ran against `lang/src/pretty.mo` (60 `match`
       expressions, the worst measured `check=` offender): **zero**
       calls to either path were logged — this function isn't even
       being reached by the self-hosted checker's current coverage for
@@ -1369,7 +1391,7 @@ Key patterns when writing self-hosted Monad code:
       was a plain owned `String` — `string_slice`/`string_drop`
       (`core/src/core_native.rs`) both did `s.get(range).unwrap_or("")
       .to_string()`, a full byte copy on every call. The self-hosted
-      parser (`lang/parser.mo`, `lang/parser/combinators.mo`) threads
+      parser (`lang/src/parser.mo`, `lang/src/parser/combinators.mo`) threads
       "the rest of the source file" through nearly every grammar
       function this way, consuming it a few bytes at a time — so parsing
       a file of length N cost `O(N)+O(N-1)+...+O(1) = O(N²)`, independent
@@ -1391,7 +1413,7 @@ Key patterns when writing self-hosted Monad code:
       `string_hash`, `string_length`, ...) needed zero changes since they
       only ever read via a derived `&str`.
     - **Track 2 (self-hosted parser, `.mo`-only)**: `take_while`/
-      `take_while_loop` (`lang/parser/combinators.mo`) used to build its
+      `take_while_loop` (`lang/src/parser/combinators.mo`) used to build its
       matched-text accumulator via per-character `String.concat acc ch`
       — an independent, compounding O(L²) cost (for a token of length L)
       on top of Track 1's fix. Rewritten to track the original input
@@ -1400,19 +1422,19 @@ Key patterns when writing self-hosted Monad code:
       accumulator concats — benefits every `take_while`-based scan
       (identifiers, numbers, whitespace/comment-skipping) at once, not
       just call sites that discard the matched text. Also: `is_digit`
-      (`lang/parser/char_preds.mo`) rewritten from a fresh-list-plus-
+      (`lang/src/parser/char_preds.mo`) rewritten from a fresh-list-plus-
       closure-plus-`List.any` scan to a plain `if/else` chain matching
       every sibling predicate in the file (the already-established,
       already-proven-faster pattern); `op_lookup_prec`/`op_lookup_rassoc`
-      (`lang/parser/core.mo`) merged into one `op_lookup_entry` scan so
-      `expr_climb_op_prec`/`expr_climb_op_rhs_ws` (`lang/parser.mo`) walk
+      (`lang/src/parser/core.mo`) merged into one `op_lookup_entry` scan so
+      `expr_climb_op_prec`/`expr_climb_op_rhs_ws` (`lang/src/parser.mo`) walk
       `op_table` once per operator token instead of twice.
     - **Track 3 (self-hosted type checker/scope/module, `.mo`-only,
-      independent of 1/2)**: `ScopeData.inductives` (`lang/types.mo`)
+      independent of 1/2)**: `ScopeData.inductives` (`lang/src/types.mo`)
       converted from `List Inductive` to `HashMap ModulePath Inductive`
       — the identical, already-proven move item 4/`def_refs` made
       (commit `532df61`). `scope_data_find_inductive`
-      (`lang/scope.mo`) was a linear scan over every inductive in the
+      (`lang/src/scope.mo`) was a linear scan over every inductive in the
       merged scope (~218+ corpus-wide) reached on the PREFERRED,
       non-fallback path added by the match-case-validation (`0dbc3f2`)
       and struct-literal (`0303aee`) commits — both landed after item 9's
@@ -1425,15 +1447,15 @@ Key patterns when writing self-hosted Monad code:
       it. Track B's `decls_have_aliasable_decls` no-op-skip guard
       (already landed, see item 11) was applied inside
       `build_scope_from_decls` but NOT at two sibling call sites in
-      `lang/module.mo` (`load_module_with_dependencies`,
+      `lang/src/module.mo` (`load_module_with_dependencies`,
       `load_module_with_dependencies_and_prelude_cached`) that
       unconditionally re-ran the identical "outer aliasing" pass — the
       FIRST of these is exactly `test_typecheck_lang_main`'s own call
       path (item 10 explicitly noted it couldn't measure that test
       against the whole-corpus module-scope cache for this reason).
       Extended the same guard to both. Also added a `ys`-empty
-      short-circuit to `list_append`/`merge_instances` (`lang/module.mo`,
-      mirrored in `lang/scope.mo`) — `merge_scope_data`'s two real call
+      short-circuit to `list_append`/`merge_instances` (`lang/src/module.mo`,
+      mirrored in `lang/src/scope.mo`) — `merge_scope_data`'s two real call
       sites always pass the large shared-base side first and the
       small/often-empty side second, the opposite of the ONLY existing
       fast path (`xs = List.empty`), so `class_defs`/`instances`/
@@ -1445,8 +1467,8 @@ Key patterns when writing self-hosted Monad code:
       `test_typecheck_lang_main` as the standing end-to-end benchmark,
       same methodology as items 8-11): parse-phase time roughly HALVED
       across every file size tried, Track 1+2 combined
-      (`init/id.mo`: 78ms→35ms; `lang/pretty.mo`: 6681ms→2827ms;
-      `lang/json.mo`: 4000ms→1901ms — a consistent ~55% reduction
+      (`init/src/id.mo`: 78ms→35ms; `lang/src/pretty.mo`: 6681ms→2827ms;
+      `lang/src/json.mo`: 4000ms→1901ms — a consistent ~55% reduction
       regardless of file size, confirmed via a real git-stash before/
       after rebuild, not just a single post-fix run). All three tracks
       combined: `test_typecheck_lang_main` (the item 8-11 regression
@@ -1462,9 +1484,9 @@ Key patterns when writing self-hosted Monad code:
       unmodified baseline — none of these are new).
     - **Follow-up (Track 4): `string_body_loop`'s O(L²) accumulator,
       confirmed and fixed — gap partially closed, not fully.** The gap
-      flagged above (parse-phase superlinearity: `init/id.mo` 28
-      lines→35ms vs. `lang/pretty.mo` 885 lines→2827ms, ~80x time for
-      ~32x lines) was traced to `lang/parser/string.mo`'s
+      flagged above (parse-phase superlinearity: `init/src/id.mo` 28
+      lines→35ms vs. `lang/src/pretty.mo` 885 lines→2827ms, ~80x time for
+      ~32x lines) was traced to `lang/src/parser/string.mo`'s
       `string_body_loop` (string-literal body scanning), which built its
       accumulator via one `String.concat acc ch` per character — the
       exact pre-Track-2 `take_while` shape, deliberately left alone at
@@ -1477,7 +1499,7 @@ Key patterns when writing self-hosted Monad code:
       character — a typical un-escaped string literal is now ONE slice,
       zero concats; a string with E escapes is O(E) concats instead of
       O(L). Measured: parse-phase time dropped further on top of Track
-      1+2 (`lang/pretty.mo` 2827ms→2045ms, `lang/json.mo`
+      1+2 (`lang/src/pretty.mo` 2827ms→2045ms, `lang/src/json.mo`
       1901ms→1706ms), and the scaling ratio improved (`id.mo` 28
       lines→33ms vs. `json.mo` 1213 lines→1706ms is now ~52x time for
       ~43x lines, close to linear — vs. `pretty.mo`'s remaining ~62x
@@ -1487,7 +1509,7 @@ Key patterns when writing self-hosted Monad code:
       (105.71s, within noise of the 105.31s Track 1-3 baseline) —
       confirms item 11's own conclusion still holds: for this benchmark
       the `check` phase dominates total cost by ~50-100x over `parse`
-      (e.g. `lang/pretty.mo`: scope=21866ms, parse=2045ms,
+      (e.g. `lang/src/pretty.mo`: scope=21866ms, parse=2045ms,
       check=97276ms), so a parse-only fix, however real, is invisible at
       the end-to-end level. Verified: full corpus
       `cargo run --release -- test init std lang examples slow_tests`
@@ -1522,7 +1544,7 @@ Key patterns when writing self-hosted Monad code:
       correct profiling target — it runs a self-hosted `#[test]` def
       through the real `CoreIr` evaluator.
     - **Rust-level, via callgrind (headline finding)**: profiled a small
-      scratch `#[test]` (`typecheck_file "std/map.mo"`, mirroring
+      scratch `#[test]` (`typecheck_file "std/src/map.mo"`, mirroring
       `typecheck_lang_tests.mo`'s own helper) two ways — once fully
       instrumented from process start, once with `--instr-atstart=no`
       plus a live `callgrind_control -i on <pid>` toggle fired exactly
@@ -1588,10 +1610,10 @@ Key patterns when writing self-hosted Monad code:
       implementation, measure the wall-time delta on
       `test_typecheck_lang_main`, revert): stubbed
       `find_class_def_in_list`, `find_instances_by_class`,
-      `scope_data_find_inductive_by_constructor` (`lang/scope.mo`),
+      `scope_data_find_inductive_by_constructor` (`lang/src/scope.mo`),
       `unify`'s `Similar.similar` structural-walk fallback
-      (`lang/typecheck/unify.mo`), and `struct_lit_find_field`
-      (`lang/typecheck/infer.mo`) all at once — every one of these was a
+      (`lang/src/typecheck/unify.mo`), and `struct_lit_find_field`
+      (`lang/src/typecheck/infer.mo`) all at once — every one of these was a
       linear-scan sibling of an already-`HashMap`-converted field
       (`class_defs`/`instances` never got the `def_refs`/`inductives`
       treatment) or an unmemoized nested scan, exactly the bug shapes
@@ -1706,7 +1728,7 @@ Key patterns when writing self-hosted Monad code:
     the single-file benchmark barely at all but the per-*def*
     `global_atom_paths` cost apparently doesn't dominate that one
     benchmark's own cost either, even though its dependency closure
-    (`lang/main.mo` pulling in essentially all of `lang/`) is large.
+    (`lang/src/main.mo` pulling in essentially all of `lang/`) is large.
     Separately: this session's baseline isolated run measured 133.16s,
     not the ~7-minute figure commit `7350f96`'s message cited for the
     same test — a large, unexplained discrepancy, not reproduced or
@@ -1730,7 +1752,7 @@ Key patterns when writing self-hosted Monad code:
     the same shape recurred twice more, see item 24.
     Prompted by a direct question ("does the self-hosted checker load
     modules once or several times?"). Found **two structurally different
-    module-graph traversals** in `lang/module.mo`:
+    module-graph traversals** in `lang/src/module.mo`:
     - `extract_all_dependencies`/`extract_all_dependencies_go` (lines
       366-419) — a correct, single-flat-list, cycle-safe walk with a
       `visited` set checked BEFORE the expensive work (disk read + parse)
@@ -1738,11 +1760,11 @@ Key patterns when writing self-hosted Monad code:
       `check` and `test_typecheck_lang_main`'s `typecheck_file` — i.e.
       everything items 13/14 measured. A module reachable via N import
       paths is loaded exactly once here; traced directly against
-      `lang/types.mo` (47/57 `lang/*.mo` files import it) to confirm.
+      `lang/src/types.mo` (47/57 `lang/*.mo` files import it) to confirm.
     - `load_dependencies_with_info` (lines 1958-1993) — backs
       `load_file_modules`, which is what `compile`, `pretty`, and `test`
       (the three self-hosted CLI subcommands OTHER than `check`) actually
-      run on — confirmed by grep, `lang/main.mo` lines 63/243/374. Despite
+      run on — confirmed by grep, `lang/src/main.mo` lines 63/243/374. Despite
       `load_file_modules` already computing the complete, deduplicated
       closure ONCE up front (line 1941), `load_dependencies_with_info`
       re-called `extract_all_dependencies` AGAIN (old line 1974, from a
@@ -1753,13 +1775,13 @@ Key patterns when writing self-hosted Monad code:
       the closure paid its own full parse-and-walk of its downward subtree
       once per ancestor that reached it in the recursion — a superlinear
       (Σ over the closure of each node's own subtree size) blowup, same
-      shape as the already-fixed "54× `lang/types.mo` reload" cross-FILE
+      shape as the already-fixed "54× `lang/src/types.mo` reload" cross-FILE
       bug (items 9-10's `ModuleScopeCache`), just a fresh instance of the
       same pattern inside an unrelated function, and entirely un-touched
       by anything in items 13/14 (which only improved `check`/
       `test_typecheck_lang_main`, both on the OTHER, already-correct
       traversal). This is the literal path `bootstrap compile <file>`
-      (`devenv.nix`'s `bootstrap` script → `lang/main.mo compile` →
+      (`devenv.nix`'s `bootstrap` script → `lang/src/main.mo compile` →
       `compile_file` → `load_file_modules`) runs on — the exact command
       named in the original "bootstrap compile takes many minutes"
       complaint, and item 14's own closing note ("the full-corpus number
@@ -1774,7 +1796,7 @@ Key patterns when writing self-hosted Monad code:
     not a leftover, since `load_file_modules` manually prepends
     `[prelude_module_path, init_module_path]` ahead of the already-flattened
     list, which can genuinely duplicate an entry. Pure `.mo`-source change,
-    `lang/module.mo` only — no Rust touched. **Also removed, while in the
+    `lang/src/module.mo` only — no Rust touched. **Also removed, while in the
     area**: 9 dead top-level defs in the same file, each verified (via
     whole-repo grep, `.mo`/`.rs`/`.md`) to have zero references anywhere
     outside their own definition — `init_module_file_path`,
@@ -1788,7 +1810,7 @@ Key patterns when writing self-hosted Monad code:
     convenience wrappers), and `get_module_info_file_path` (an unused
     `ModuleInfo` accessor — its sibling `get_module_info_decls` IS used and
     was left alone). **Measured** (`git stash` before/after, same session):
-    `bootstrap pretty lang/main.mo` (chosen because `pretty` only calls
+    `bootstrap pretty lang/src/main.mo` (chosen because `pretty` only calls
     `load_file_modules` then prints decls — no type-checking, no codegen —
     so it isolates this fix's effect from everything else) dropped from
     **746.01s to 130.21s wall (-82.5%)**, **647.47s to 127.40s CPU-seconds
@@ -1852,7 +1874,7 @@ Key patterns when writing self-hosted Monad code:
     post-`open` reference resolved to just the local name).
     **Known, accepted precision gap, found by direct testing, not
     theoretical**: a def that shares its bare name with something else
-    also in scope (e.g. `lang/module.mo`'s own `file_exists`, which
+    also in scope (e.g. `lang/src/module.mo`'s own `file_exists`, which
     wraps an `open`ed `IO.file_exists` of the identical bare name) can
     read as unused even when genuinely called, if the checker's own
     elaboration resolves same-file bare references to a DIFFERENT
@@ -1878,7 +1900,7 @@ Key patterns when writing self-hosted Monad code:
     and `check`'s self-hosted command has no whole-corpus flat `Def`
     list the way `compile`/`test` already do via `load_file_modules` —
     see the module-loading investigation (this same session) for the
-    concrete design (generalize `lang/codegen/emit.mo`'s existing
+    concrete design (generalize `lang/src/codegen/emit.mo`'s existing
     `reachable_defs_from`/`collect_referenced_names` reachability pass,
     already rooted at `main`, to also root at every `pub`/`#[test]` def;
     "unused" is the complement of the final `visited` set).
@@ -1945,23 +1967,23 @@ Key patterns when writing self-hosted Monad code:
     (2026-09-01). The general problem is still open; the two concrete
     instances named below are now FIXED (2026-09-01, Phase 1 of
     `plans/bootstrapping/self-hosted-dedup-and-pipeline-cleanup.md`).
-    Concrete confirmed instance, **FIXED**: `lang/types.mo` and
-    `lang/module.mo` EACH declared their own, DIFFERENT `struct
+    Concrete confirmed instance, **FIXED**: `lang/src/types.mo` and
+    `lang/src/module.mo` EACH declared their own, DIFFERENT `struct
     LoadedModules` (`{modules: List Module}` vs. `{main_module:
-    ModuleInfo, all_modules: List ModuleInfo}`). `lang/types.mo`'s is now
-    `ModuleRegistry`; `lang/module.mo` keeps `LoadedModules` (it is the
+    ModuleInfo, all_modules: List ModuleInfo}`). `lang/src/types.mo`'s is now
+    `ModuleRegistry`; `lang/src/module.mo` keeps `LoadedModules` (it is the
     one the real `load_file_modules` -> `elaborate_loaded_modules` ->
     codegen pipeline uses). **The collision was load-bearing, not
     harmless**: nine test files (`slow_tests/codegen_*`,
     `parser_return_prefix_identifier_tests.mo`,
-    `lang/codegen/test/test_closure_capture_e2e.mo`) imported
+    `lang/src/codegen/test/test_closure_capture_e2e.mo`) imported
     `LoadedModules` from `lang.types` while using it as
     `load_file_modules`' return type -- i.e. they only type-checked
     because the collision silently resolved their import to the OTHER
     file's struct. Renaming surfaced all nine; their imports were
     retargeted to `lang.module`. Second instance, **FIXED**:
     `string_find_last`/`string_find_last_loop` existed in both
-    `lang/parser.mo` and `lang/codegen/emit.mo`; the `parser.mo` copy had
+    `lang/src/parser.mo` and `lang/src/codegen/emit.mo`; the `parser.mo` copy had
     ZERO callers and a real bug (passing an end index where
     `String.slice`'s third argument is a LENGTH), so whichever won
     registration order decided whether a correct or broken implementation
@@ -1973,15 +1995,15 @@ Key patterns when writing self-hosted Monad code:
     `string_find_last` x3 each, ...) -- this is a broad, pre-existing
     pattern, not an isolated case. First surfaced as a real mechanism
     while investigating the `join_identifiers`/`join_id_rest` self-compile
-    hang (2026-08-31): `lang/types.mo`'s own dot-joining
-    `join_identifiers` and `lang/codegen/emit.mo`'s `"__"`-joining
+    hang (2026-08-31): `lang/src/types.mo`'s own dot-joining
+    `join_identifiers` and `lang/src/codegen/emit.mo`'s `"__"`-joining
     `join_identifiers` collide the same way, and only ONE (whichever the
     global registration order happens to favor) actually gets compiled
     into a self-compiled binary, discoverable today only by grepping the
     output `.ll` by hand. **Not fixed this session** -- flagged here per
     direct request, for a future dedicated cleanup pass. A real fix needs
     either qualifying the global name table by module path (the
-    principled fix, likely touches `lang/module.mo`'s scope-building and
+    principled fix, likely touches `lang/src/module.mo`'s scope-building and
     every name-resolution call site that currently assumes bare-name
     uniqueness) or renaming every colliding pair (mechanical but large,
     ~862+ names) -- either way, audit first which collisions are
@@ -1999,22 +2021,22 @@ Key patterns when writing self-hosted Monad code:
     exactly the right one to make:
     - **Divergent (the two definitions produce DIFFERENT results, so
       which one won was a live correctness hazard) -- all four fixed:**
-      `LoadedModules` (`lang/types.mo` `{modules}` vs `lang/module.mo`
+      `LoadedModules` (`lang/src/types.mo` `{modules}` vs `lang/src/module.mo`
       `{main_module, all_modules}`); `join_identifiers` (types joins with
       `.`, emit with `__` -- this one decided emitted LLVM SYMBOL NAMES,
       and is the pair from the 2026-08-31 self-compile hang; emit's is now
       `mangle_identifiers`); `show_identifier` (types returns text
       verbatim, emit strips `'` quotes, across 18 codegen call sites;
       emit's is now `symbol_identifier`); and `string_find_last` (the
-      `lang/parser.mo` copy passed an END INDEX where `String.slice`'s
+      `lang/src/parser.mo` copy passed an END INDEX where `String.slice`'s
       third argument is a LENGTH -- it had zero callers, so it was
       deleted rather than repaired).
     - **Identical (harmless) -- deduped:** `show_identifier`/
-      `show_operator` in `lang/parser.mo`, `list_reverse`/`list_rev_loop`
-      in `lang/typecheck/infer.mo`, `ident_start` in
-      `lang/parser/identifier.mo`.
+      `show_operator` in `lang/src/parser.mo`, `list_reverse`/`list_rev_loop`
+      in `lang/src/typecheck/infer.mo`, `ident_start` in
+      `lang/src/parser/identifier.mo`.
     - **NOT deduped, deliberately:** `list_append`/`list_append_go`
-      (`lang/module.mo` vs `lang/scope.mo`) LOOK like an obvious
+      (`lang/src/module.mo` vs `lang/src/scope.mo`) LOOK like an obvious
       duplicate but are not interchangeable -- scope's declares an
       explicit `{A : Type}` binder, module's relies on implicit
       generalization, and the four call sites are on `merge_scope_data`'s
@@ -2031,13 +2053,13 @@ Key patterns when writing self-hosted Monad code:
     `check` will not tell you (2026-09-02).** Removing a def while
     leaving its `#[partial]` attribute behind produces `#[partial]` ->
     `///` doc comment -> `#[partial]` -> `def`, and `decls_parser`
-    (`lang/parser.mo`) stops dead there: a real instance dropped 13,719
-    bytes of `lang/toml.mo` -- roughly half the file -- while
+    (`lang/src/parser.mo`) stops dead there: a real instance dropped 13,719
+    bytes of `lang/src/toml.mo` -- roughly half the file -- while
     `monad-rs check` reported **0 errors and 0 warnings**, because the
     Rust-native checker parses independently of the self-hosted parser.
     One attribute followed by a doc comment still parses; only TWO
     straddling a doc comment truncate. Only
-    `slow_tests/parser_file_tests.mo`'s `file_fully_parses` tests catch
+    `slow_tests/src/parser_file_tests.mo`'s `file_fully_parses` tests catch
     this class. **After any def deletion, grep the touched files for an
     attribute immediately followed by `///`** (`#\[[a-z_]+\]\n(?=///)`)
     and run `parser_file_tests.mo`. This is the same "attribute
@@ -2047,12 +2069,12 @@ Key patterns when writing self-hosted Monad code:
 21. **`init/` and parts of `std/` are EMBEDDED IN THE BINARY**
     (`include_str!`, `core/src/term/module.rs`, `embed-stdlib` feature):
     `prelude`, `id`, `io`, `number`, `math`, `string`, `list`, `init/
-    lib.mo`, plus `std/path.mo`, `std/io.mo`, `std/process.mo`,
-    `std/lib.mo`. Edits to any of those are INVISIBLE until
+    lib.mo`, plus `std/src/path.mo`, `std/src/io.mo`, `std/src/process.mo`,
+    `std/src/lib.mo`. Edits to any of those are INVISIBLE until
     `cargo build --release`, and the failure mode is a silent
     `unbound variable` at every call site -- not a parse error, and not
     an error naming the file you just edited. Other `std/` files
-    (`std/list.mo`, `std/base.mo`, ...) load from disk normally and need
+    (`std/src/list.mo`, `std/src/base.mo`, ...) load from disk normally and need
     no rebuild. Also note `monad-rs check <file>` SKIPS `init/` entirely
     ("0 file(s) checked"), so it cannot be used to validate an `init/`
     edit -- run a `#[test]` instead.
@@ -2062,9 +2084,9 @@ Key patterns when writing self-hosted Monad code:
     binders, but a match arm's own pattern bindings (`MatchCase.mc`'s
     `args`) bind over its BODY too: the body sits `List.length args`
     binders deeper than the enclosing `Literal.match_` node. All three
-    walkers in `lang/typecheck/subst.mo` (`term_shift_go`,
+    walkers in `lang/src/typecheck/subst.mo` (`term_shift_go`,
     `term_permute_go`, `term_subst_go`) have always handled this
-    (`cutoff + List.length args`), and `lang/typecheck/traverse.mo`'s
+    (`cutoff + List.length args`), and `lang/src/typecheck/traverse.mo`'s
     depth-aware `match_case_map_children_at_depth` now does too -- but
     its depth-AGNOSTIC sibling `match_case_map_children` deliberately
     does not (a walk that tracks no depth has nothing to adjust). Any
@@ -2076,7 +2098,7 @@ Key patterns when writing self-hosted Monad code:
     how the per-node helpers are factored.
 23. **A `.mo` file can depend on another module without importing it,
     and only breaks when the module graph changes (2026-09-02).**
-    `lang/typecheck/infer.mo` called `subst.mo`'s `term_permute` with no
+    `lang/src/typecheck/infer.mo` called `subst.mo`'s `term_permute` with no
     `use lang.typecheck.subst` anywhere -- it resolved only because
     `macro_expand.mo` happened to pull `subst` in via `macro_apply`, and
     the whole-program name table made it visible. Moving an unrelated
@@ -2098,9 +2120,9 @@ Key patterns when writing self-hosted Monad code:
     `check_module_with_scope` -- the phase whose name sounds expensive
     -- at 5ms. Two structural redundancies found and fixed there:
     - **The post-expansion scope rebuild** (`elaborate_loaded_modules_
-      cached`, `lang/module.mo`): the function built a `Scope`, ran
+      cached`, `lang/src/module.mo`): the function built a `Scope`, ran
       `expand_decls_graph`, then UNCONDITIONALLY rebuilt the `Scope`
-      from the result. Since only `std/derive.mo` genuinely invokes
+      from the result. Since only `std/src/derive.mo` genuinely invokes
       `reflect_type_info!` in this corpus, the expansion is a no-op for
       almost every file and the rebuilt scope was identical to the one
       discarded -- a second full `build_scope_from_decls` over the whole
@@ -2122,7 +2144,7 @@ Key patterns when writing self-hosted Monad code:
       an expansion (`has_decl_gen_expansion` checks registry membership,
       not just "is a macro call"), matching `decl_gen_subst_one`'s own
       "an unresolved macro name is not an error" rule.
-    - **The uncached test loop** (`lang/main.mo`): `run_check_loop` had
+    - **The uncached test loop** (`lang/src/main.mo`): `run_check_loop` had
       threaded a `ModuleInfoCache` since `b0c96a7`, but `run_test_loop`
       called the uncached `elaborate_loaded_modules`, so every file in
       one `monad test a.mo b.mo c.mo` re-read and re-parsed its whole
@@ -2150,7 +2172,7 @@ Key patterns when writing self-hosted Monad code:
     desugars to `App(Lam b, v)` (`core/src/term.rs`), so a `let`-bound
     step IS forced exactly where it is bound.
     Demonstrated directly: `elaborate_loaded_modules_cached`
-    (`lang/module.mo`) is now sub-timed by threading a `bench_step`
+    (`lang/src/module.mo`) is now sub-timed by threading a `bench_step`
     timestamp through its pure `let` chain, and every span reports a
     real number that sums correctly (see item 27). Whatever went wrong
     in the `elaborate_class` attempt -- an untaken branch, a span around
@@ -2168,9 +2190,9 @@ Key patterns when writing self-hosted Monad code:
     1482ms of `elaborate_class`'s 1857ms (80%), itself 89% of codegen.
     The name misleads -- elaboration was 7% of that span; the cost was
     building the scope's `HashMap`s. With ~349 defs over a FIXED 16
-    buckets (`std/map.mo`'s `Buckets16`), chains run ~22 deep, and
+    buckets (`std/src/map.mo`'s `Buckets16`), chains run ~22 deep, and
     `bucket_insert`/`bucket_lookup` tested equality as
-    `!lt(k1,k2) && !gt(k1,k2)`. `lang/scope.mo`'s `modpath_lt`/
+    `!lt(k1,k2) && !gt(k1,k2)`. `lang/src/scope.mo`'s `modpath_lt`/
     `modpath_gt` BOTH call `show_module_path`, which rebuilds the path
     via `List.map` + `List.intercalate` -- so each chain step built four
     strings. **The chain is not sorted** (insert appends at the end and
@@ -2202,7 +2224,7 @@ Key patterns when writing self-hosted Monad code:
 
 27. **`elaborate_loaded_modules` is dominated by READING AND PARSING,
     not by any of the whole-graph rewrite passes (2026-09-04).** Item 24
-    established the phase total but not its shape. `lang/module.mo`'s
+    established the phase total but not its shape. `lang/src/module.mo`'s
     `elaborate_loaded_modules_cached` now sub-times every step
     (`bench_step`, threaded through its pure `let` chain, gated on
     `verbose`). `check examples/hello.mo --verbose`, 12 modules, 0 cache
@@ -2228,7 +2250,7 @@ Key patterns when writing self-hosted Monad code:
     and `resolve_infix_decls`'s had begun before `collect_infixes`. Both
     now have their own spans. Re-measured with the corrected boundaries,
     the numbers above stand for this workload: the rebuild is 0ms
-    (`examples/hello.mo` triggers no expansion, as only `std/derive.mo`
+    (`examples/hello.mo` triggers no expansion, as only `std/src/derive.mo`
     invokes `reflect_type_info!`) and `collect_infixes` is 1ms. On a file
     that DOES expand, the old grouping would have silently reported
     ~1500ms of scope building as `names_of_decls`.
@@ -2252,14 +2274,14 @@ Key patterns when writing self-hosted Monad code:
     - `build_scope_from_decls` at 907ms remains the biggest single
       rewrite-family cost, and item 26 already attacked its comparator.
       Note it runs a SECOND time per `compile`, in
-      `lang/codegen/emit.mo`, because `ElaboratedModules.
+      `lang/src/codegen/emit.mo`, because `ElaboratedModules.
       elaborated_decls` has zero readers -- see that field.
 
 28. **The parser's `take_while` allocated a one-character string PER
     INPUT CHARACTER; scanning a byte index instead cut the parse phase
     30% (2026-09-04).** Item 27 put `load_file_modules` (read+parse) at
     67% of `elaborate_loaded_modules` but not what shape that cost had.
-    `take_while_loop` (`lang/parser/combinators.mo`) did, per character:
+    `take_while_loop` (`lang/src/parser/combinators.mo`) did, per character:
     `is_empty`, `utf8_char_width` (a `String.get` plus up to four
     `U8.lt`), `String.slice input 0 width` -- **an allocation** -- the
     predicate call on that fresh one-character string, and a
@@ -2273,8 +2295,8 @@ Key patterns when writing self-hosted Monad code:
     `U8.beq` range checks instead of string equality. **No new natives**
     (a deliberate constraint here); `String.get`/`slice`/`drop` and the
     `U8` ops all already existed. The `String`-taking `take_while` and
-    every original predicate are KEPT, not replaced -- `lang/json.mo`,
-    `lang/toml.mo` and the string-literal scanner have predicates of
+    every original predicate are KEPT, not replaced -- `lang/src/json.mo`,
+    `lang/src/toml.mo` and the string-literal scanner have predicates of
     their own.
     Byte-wise scanning is correct for these classes precisely because
     they are all ASCII: a UTF-8 lead byte (>= 0xC0) and a continuation
@@ -2282,7 +2304,7 @@ Key patterns when writing self-hosted Monad code:
     character boundary rather than splitting one. **A predicate that
     must ACCEPT non-ASCII cannot use this path** -- that is why the
     string-literal scanner was left alone.
-    **Measured** with `bench/parser_take_while.mo`, added as standing
+    **Measured** with `bench/src/parser_take_while.mo`, added as standing
     infrastructure. It runs both scanners in ONE process (so machine
     load cannot distort the comparison -- this box runs a CI runner and
     load ranged 1.4-17.8 the day this landed) and asserts the two
@@ -2309,7 +2331,7 @@ Key patterns when writing self-hosted Monad code:
     but was kept as consistent and harmless.
     Whole-invocation `check` only moved -3.5% (12.6s -> 12.1s): most of
     that wall time is the RUST host loading and type-checking
-    `lang/main.mo` itself before the self-hosted compiler runs at all.
+    `lang/src/main.mo` itself before the self-hosted compiler runs at all.
     Do not expect parse-phase wins to show up 1:1 in the total.
 
 
@@ -2320,7 +2342,7 @@ Key patterns when writing self-hosted Monad code:
     - **`String.get_char` is O(n) per call.** `core/src/core_native.rs`
       does `s.chars().collect::<Vec<char>>()` on every call and then
       indexes it, so a per-character loop built on it is quadratic in
-      time AND allocation. `lang/parser/combinators.mo`'s
+      time AND allocation. `lang/src/parser/combinators.mo`'s
       `utf8_char_width` already documents this and deliberately uses
       `String.get` (an O(1) byte read) instead.
     - **Its `i` is a CHARACTER index, not a byte offset**, so it cannot
@@ -2328,9 +2350,9 @@ Key patterns when writing self-hosted Monad code:
     - **`Char` has no operations at all** -- zero `Char.*` functions and
       no `BEq`/ordering instance anywhere in `init/`, `std/` or `lang/`.
       Nothing consumes a `Char` except two tests in
-      `lang/parser/tests/test_string_get.mo`.
+      `lang/src/parser/tests/test_string_get.mo`.
     - **The declared type contradicts the runtime representation.**
-      `init/prelude.mo` declares `type Char { of_bytes (List U8) }`, but
+      `init/src/prelude.mo` declares `type Char { of_bytes (List U8) }`, but
       the native produces `Value::Lit(IrLit::Char(c))` -- a scalar
       literal, not a constructor application -- so destructuring
       `Char.of_bytes bs` hits `NotAConstructor` and a comparison cannot
@@ -2339,10 +2361,10 @@ Key patterns when writing self-hosted Monad code:
     representation to a real `of_bytes (List U8)` (a heap list per
     character, far worse than what exists).
     **Worse, two of the three are not wired at all**: `string_to_chars`
-    and `string_from_chars` are declared in `init/string.mo` but absent
+    and `string_from_chars` are declared in `init/src/string.mo` but absent
     from `exec_native`'s dispatch table, so calling either fails at
     runtime -- exactly the hazard `validate_no_unwired_natives`
-    (`lang/codegen/emit.mo`) exists to catch, which never fires only
+    (`lang/src/codegen/emit.mo`) exists to catch, which never fires only
     because nothing reaches them. `String.from_chars`'s parameter type
     `Chars` is not a type that exists anywhere in the corpus either.
     **There is also no correctness gap for `Char` to close in the
@@ -2373,7 +2395,7 @@ Key patterns when writing self-hosted Monad code:
     reading of "replace `pt_` with `pt_at` at each construction site" is
     wrong, and checking why is what made this cheap:
     - **Most construction sites cannot see their own start.** Of the 57
-      `pt_*` and 20 `pd_*` sites in `lang/parser.mo`, the great majority
+      `pt_*` and 20 `pd_*` sites in `lang/src/parser.mo`, the great majority
       sit in continuation helpers (`type_dep_body`, `open_build`,
       `struct_lit_fields_end`, ...) whose own `input` parameter is
       somewhere in the MIDDLE of the construct being built. Stamping
@@ -2391,7 +2413,7 @@ Key patterns when writing self-hosted Monad code:
       Application chains and infix climbs are built bottom-up, so the
       text where they began is long consumed by the time the combined
       term exists -- but the left operand still carries its own span.
-      `pt_from left rem kind` (`lang/types.mo`) is why locating a whole
+      `pt_from left rem kind` (`lang/src/types.mo`) is why locating a whole
       expression needed no threading, which is the same threading the
       de Bruijn `ctx` removal had just deleted. It yields an unknown span
       when the operand has none: a span from an unknown start to a real
@@ -2436,7 +2458,7 @@ Key patterns when writing self-hosted Monad code:
     `type_expression (List.cons (Identifier.id name) ctx) ...` -- the one
     arrow in the grammar that BINDS -- so dropping the argument dropped
     the binder, and every use of `n` inside `(n : T) -> ... n ...`
-    resolved to `sentinel`. `init/prelude.mo`'s `Eq.rec` is a live
+    resolved to `sentinel`. `init/src/prelude.mo`'s `Eq.rec` is a live
     instance.
     **Every oracle stayed green.** The parser tests assert parse SUCCESS
     and the term parses fine with its binder unbound; `check` reports 0
@@ -2458,7 +2480,7 @@ Key patterns when writing self-hosted Monad code:
     construct that does not survive lowering at all -- nothing downstream
     of the parser has ever seen a `DoStmt`.
     Merged to one type and one traversal in
-    `lang/parser/lower_parse.mo`. The two jobs could not be cleanly
+    `lang/src/parser/lower_parse.mo`. The two jobs could not be cleanly
     separated anyway: each binder a statement introduces is in scope for
     the statements that FOLLOW it, so the desugaring's own `Term.lam`s
     ARE the context accumulation. Fusing them puts the `ctx` extension on
@@ -2486,7 +2508,7 @@ Key patterns when writing self-hosted Monad code:
     shorter. Do both, not just the first.
 
 34. **Resolving N source positions needs one pass, not N scans
-    (2026-09-06).** `location_of_remaining_len` (`lang/parser/position.mo`)
+    (2026-09-06).** `location_of_remaining_len` (`lang/src/parser/position.mo`)
     answers ONE position by scanning the consumed prefix. Per top-level
     declaration that is fine. Per TERM it is quadratic, and measurably so
     -- both paths in one process, same answers asserted equal:
@@ -2504,7 +2526,7 @@ Key patterns when writing self-hosted Monad code:
     - **The offsets arrive sorted for free.** `ParseSpan` stores REMAINING
       input length, so larger = earlier, and a pre-order left-to-right walk
       of the parse tree visits nodes in non-decreasing absolute offset. No
-      sort is needed -- which matters, because `std/list.mo` has none.
+      sort is needed -- which matters, because `std/src/list.mo` has none.
     - **No index is possible anyway.** There is no `Array` in `std/` (no
       O(1) indexing) and no `Hashable I64`, so the obvious "binary-search a
       line-start table" is not available. Check what the standard library
@@ -2525,7 +2547,7 @@ Key patterns when writing self-hosted Monad code:
     offset failed and was wrong, not the code.
 
 35. **A `let` in front of an `if` is not a guard — this evaluator is
-    strict (2026-09-07).** `lang/module.mo` had:
+    strict (2026-09-07).** `lang/src/module.mo` had:
 
         let rebuilt_scope : Scope := { ... build_scope_from_decls ... };
         let did_change : Bool := expansion.changed;
@@ -2534,7 +2556,7 @@ Key patterns when writing self-hosted Monad code:
     which READS as conditional and is not. `let` binds eagerly, so the
     rebuild ran on every elaboration and the `if` only chose which
     already-computed scope to keep. Cost: **83.9s of a 232s self-hosted
-    `check lang/main.mo`** -- 36% of the run -- duplicating a
+    `check lang/src/main.mo`** -- 36% of the run -- duplicating a
     `build_scope_from_decls` that had just done the same work.
     `if` is the one form that does not evaluate the branch it does not
     take, so the fix is to move the call inside the branch.
@@ -2548,14 +2570,14 @@ Key patterns when writing self-hosted Monad code:
     branch has no expected type to desugar against, survives to codegen as
     a `Literal.struct_lit`, and compiles to a void placeholder.
     `validate_no_undesugared_struct_lits` rejected it -- but only on a full
-    self-compile, since the offending def was in `lang/module.mo`. The
+    self-compile, since the offending def was in `lang/src/module.mo`. The
     shape that satisfies both is NOT an annotated `let ... in` inside the
     branch -- the annotation does not reach the literal from there and the
     validator still rejects (verified: two full self-compiles, same error).
     What works is a small def whose DECLARED RETURN TYPE gives the literal
     an expected type, called from inside the branch: lazy because it is a
     call in a branch, desugared because the return type is the expected
-    type. Same shape as `empty_loc_suffixes` (`lang/codegen/ir.mo`), where
+    type. Same shape as `empty_loc_suffixes` (`lang/src/codegen/ir.mo`), where
     a `let` annotation likewise failed to resolve a generic and a def's
     return annotation did.
     Corollary for perf work here: **attribute before fixing.** This looked
@@ -2566,7 +2588,7 @@ Key patterns when writing self-hosted Monad code:
 
 36. **`module cache: 0 hit(s), N miss(es)` on a single-file check is
     correct, not a bug (2026-09-07).** `collect_dep_module_infos`
-    (`lang/module.mo`) skips anything already in `visited`, so within one
+    (`lang/src/module.mo`) skips anything already in `visited`, so within one
     file's dependency walk each module loads exactly once and the
     cross-file `ModuleInfoCache` has nothing to hit BY CONSTRUCTION. It
     exists for runs over many files, where the same dependency is reached
@@ -2592,18 +2614,18 @@ Key patterns when writing self-hosted Monad code:
     is how it SCALES. Profile the workload you actually care about, and
     when you cannot, compare two sizes and look at the ratio.
     The two fixes, both verified by byte-identical LLVM IR:
-    - **`lookup_def_type` (`lang/scope.mo`)** walked a `List
+    - **`lookup_def_type` (`lang/src/scope.mo`)** walked a `List
       DefTypeEntry` linearly and fires on every `Term.app` node in the
       graph -- ~4,020 steps per application node, each rendering a
       `ModulePath` via `show_module_path`. Indexed into a `HashMap String
-      Term` (`lang/codegen/strmap.mo`'s `str_map_*` -- a leaf module, so
+      Term` (`lang/src/codegen/strmap.mo`'s `str_map_*` -- a leaf module, so
       `scope.mo` can import it with no cycle). -94%.
       Preserving the scan's exact answer is the delicate part: it matched
       full-dotted-name OR bare-last-segment, FIRST entry in decl order
       wins. So register each def under BOTH keys, earlier entries winning
       (`def_type_insert_first` -- plain `str_map_insert` replaces, giving
       last-wins, which is NOT the same function).
-    - **`modpath_map_*` (`lang/scope.mo`)** stored `ModulePath` keys, and
+    - **`modpath_map_*` (`lang/src/scope.mo`)** stored `ModulePath` keys, and
       a `ModulePath` has no cheap hash or equality: both go through
       `show_module_path` (`List.intercalate "." (List.map
       show_identifier ids)`), rebuilt per call. `bucket_*_eq` invokes the
@@ -2612,7 +2634,7 @@ Key patterns when writing self-hosted Monad code:
       step -> 2) but could not remove it, because while the STORED key is
       a `ModulePath` every comparison must re-derive it. Render once at
       the boundary, store the string, drop to `bucket_insert_str`/
-      `bucket_lookup_str`. `check lang/main.mo` 140.7s -> 82.3s (-41.5%)
+      `bucket_lookup_str`. `check lang/src/main.mo` 140.7s -> 82.3s (-41.5%)
       -- but only -3.7% on hello.mo, the same small-scale blindness.
     Also landed, and worth knowing before profiling anything here: the
     workspace had **no `[profile.release]` at all** (so `codegen-units =
@@ -2628,7 +2650,7 @@ Key patterns when writing self-hosted Monad code:
     a.wrapping_rem(b))`, and `int_binop` computes on the raw `i64`
     payload, so a signed remainder took the sign of its dividend.
     `String.hash` is djb2, which wraps, so ~half of all hashes have bit 63
-    set and read back negative -- and `HashMap.bucket_of` (`std/map.mo`) is
+    set and read back negative -- and `HashMap.bucket_of` (`std/src/map.mo`) is
     `U64.mod hash 256u64`. `Bucket16.get`'s dispatch is
     `if U64.beq 0u64 idx then b0 else ... else b15`, which does not REJECT
     a negative index, it FALLS THROUGH it into the last slot. Over the
@@ -2641,9 +2663,9 @@ Key patterns when writing self-hosted Monad code:
     `HashMap`, which compares bucket indices with `beq`, but do not assume
     the `U64` family is unsigned just because this one now is.
     **The code already recorded the divergence and dismissed it.**
-    `lang/codegen/runtime.mo`'s `emit_u64_mod` uses `urem`, and its comment
+    `lang/src/codegen/runtime.mo`'s `emit_u64_mod` uses `urem`, and its comment
     said bucketing is internal to `HashMap`, only self-consistency matters,
-    and "`std/map.mo`'s own 0-15 bucket chain is simply never entered with
+    and "`std/src/map.mo`'s own 0-15 bucket chain is simply never entered with
     a negative index". True, and the trap: not ENTERED, FALLEN THROUGH. So
     the compiled binary was always fine and only the INTERPRETER paid --
     which is the runtime CI's self-compile actually uses.
@@ -2664,7 +2686,7 @@ Key patterns when writing self-hosted Monad code:
     the walk was 387ms, i.e. the part that looked expensive was not.
     **Order-sensitivity this changes, covered but worth knowing:** bucket
     assignment changes `HashMap.to_list` order, and `scope_all_inductives`
-    (`lang/lower_core_ir.mo`) feeds `find_inductive_by_case_name`, which
+    (`lang/src/lower_core_ir.mo`) feeds `find_inductive_by_case_name`, which
     takes the FIRST inductive owning a constructor of a given name -- its
     own comment calls reordering "a miscompile, not a slower build". That
     order was ALREADY arbitrary hash order, so this re-rolls dice rather
@@ -2672,7 +2694,7 @@ Key patterns when writing self-hosted Monad code:
     (including `slow_tests`) are the gate for a bucketing change, not
     reasoning.
 39. **Bytes copied does not predict wall time when the inner operation is a
-    native memcpy (2026-09-12).** `emit_instrs` (`lang/codegen/ir.mo`) was
+    native memcpy (2026-09-12).** `emit_instrs` (`lang/src/codegen/ir.mo`) was
     the one function in its family still doing
     `String.concat a (recurse rest)`, the shape `emit_blocks`' own comment
     condemns. Quantified from the compiler's emitted module: 20,389 basic
@@ -2695,12 +2717,12 @@ Key patterns when writing self-hosted Monad code:
     obvious because the file you broke is not the file that complains: it
     surfaces as `unknown variable '<some other def in that file>'` in an
     unrelated IMPORTING file. Landing a helper between `#[partial]` and
-    `def compile_loaded_modules_to_ir_with_debug` (`lang/codegen/emit.mo`)
+    `def compile_loaded_modules_to_ir_with_debug` (`lang/src/codegen/emit.mo`)
     produced `unknown variable 'compile_db_module_with_debug'` and
-    `'compile_loaded_modules_to_ir_with_debug'` in `lang/main.mo`, while
-    `monad-rs check lang/codegen/emit.mo` stayed clean -- the Rust host and
+    `'compile_loaded_modules_to_ir_with_debug'` in `lang/src/main.mo`, while
+    `monad-rs check lang/src/codegen/emit.mo` stayed clean -- the Rust host and
     the self-hosted parser are different code paths.
-    **Fast reproducer: `monad-rs run lang/main.mo check lang/main.mo`
+    **Fast reproducer: `monad-rs run lang/src/main.mo check lang/src/main.mo`
     (~60s), not a self-compile.** The tell is the self-hosted checker
     echoing your doc-comment lines back as content. When adding a def by
     script, anchor above the whole doc-comment + attribute + `def` group,
@@ -2708,31 +2730,31 @@ Key patterns when writing self-hosted Monad code:
 41. **A `--release` profile says nothing about the DEFAULT path, and the
     default path had a 164x pathology nobody had ever profiled
     (2026-09-12).** Debug info is on by default (`--release` opts out,
-    `lang/main.mo`), but every recorded profile -- including CI's
+    `lang/src/main.mo`), but every recorded profile -- including CI's
     `monad:bootstrap-compile` -- is a `--release` run. A `--verbose`
     self-compile WITHOUT `--release` took **28035824ms (7h48m)** against
     275424ms with it, every timed phase within noise, so ~7h44m (99.4%)
-    sat in the one untimed span: `with_located_decls` (`lang/main.mo`),
+    sat in the one untimed span: `with_located_decls` (`lang/src/main.mo`),
     which re-reads and re-parses the whole dependency graph to attach
     `Term.ctx` position wrappers. It then FAILED
     (`no instance found for Append.append`), so the default path did not
     even work -- unnoticed because nobody waits eight hours.
-    Root cause: `resolve_offsets_in_file` (`lang/parser/position.mo`)
+    Root cause: `resolve_offsets_in_file` (`lang/src/parser/position.mo`)
     checked `is_ascending offsets` and otherwise fell back to
     `resolve_one_by_one`, its own doc comment calling it "the
     correct-but-quadratic path" -- a whole-file rescan per offset, taken
-    silently. `build_loc_table` (`lang/parser.mo`) asserted pre-order
+    silently. `build_loc_table` (`lang/src/parser.mo`) asserted pre-order
     collection yields ascending offsets. **It does not, and the
     counterexample is every infix expression in the language:** `a + b`
     parses to `app (app (+) a) b`, so a pre-order walk reaches the operator
     node -- whose span starts at the `+` -- before the operand `a` that
-    precedes it in the source. Measured with `bench/parser_located.mo`
+    precedes it in the source. Measured with `bench/src/parser_located.mo`
     (kept as the standing guard, and it runs in seconds rather than hours):
-      init/id.mo      675 B,   30 spans  ascending YES   27ms ->     36ms
-      lang/types.mo 73000 B, 1469 spans  ascending NO  1753ms -> 287766ms
+      init/src/id.mo      675 B,   30 spans  ascending YES   27ms ->     36ms
+      lang/src/types.mo 73000 B, 1469 spans  ascending NO  1753ms -> 287766ms
     first inversion at span index 244. Fixed by SORTING
     (`sort_offsets_asc`, a local merge sort -- there is no `List.sort` in
-    `std/`) and **deleting the fallback**: located parse of `lang/types.mo`
+    `std/`) and **deleting the fallback**: located parse of `lang/src/types.mo`
     287766ms -> 2012ms (-99.3%). An unreachable-by-hope slow path that
     nothing exercises is how this hid. Two rules: profile the mode users
     actually get, not only the one CI measures; and a "slow beats wrong"
@@ -2743,12 +2765,12 @@ Key patterns when writing self-hosted Monad code:
     so argument-reading shape probes were the exposed `Term.ctx` surface --
     and the fix was to delete the debug/release divergence, not to patch it
     (2026-09-13).**
-    `monad compile lang/main.mo` WITHOUT `--release` -- the default
+    `monad compile lang/src/main.mo` WITHOUT `--release` -- the default
     invocation -- failed with `no instance found for `Append.append``.
     Mechanism: `a ++ b` lowers to `app (app (var "++") a) b` with a bare
     callee and LOCATED operands, so recognition worked (`flatten_call_spine`
     peels, `class_method_ref` takes an `Identifier`) but `infer_carrier_type`
-    (`lang/scope.mo`) -- which reads the ARGUMENTS to pick the instance --
+    (`lang/src/scope.mo`) -- which reads the ARGUMENTS to pick the instance --
     had no `Term.ctx` arm, returned `Option.none` for every argument, and
     the call was left unresolved. **It was a regression of a bug already
     fixed once:** that function's `Term.app` arm says in its own comment it
@@ -2760,7 +2782,7 @@ Key patterns when writing self-hosted Monad code:
     the reachability worklist. Both symptoms closed together, and the two
     modes now report an identical reachable count -- which is the check to
     use, since it is independent of the error message.
-    **The fix was structural.** `parse_all_decls` (`lang/module.mo`) now
+    **The fix was structural.** `parse_all_decls` (`lang/src/module.mo`) now
     uses `decls_parser_located` on EVERY path, so `check`, `test` and
     `compile` all see one term shape and `--release`/`--debug` gates only
     whether DWARF is EMITTED. `with_located_decls`/`locate_module_info*`
@@ -2769,18 +2791,18 @@ Key patterns when writing self-hosted Monad code:
     **Five probes needed `term_peel`, and the order they surfaced in is the
     lesson** -- each was found by a different gate, and no single gate found
     more than two:
-      `infer_carrier_type`, `term_matches_carrier`  (`lang/scope.mo`)
+      `infer_carrier_type`, `term_matches_carrier`  (`lang/src/scope.mo`)
           -- the SELF-COMPILE only. `term_matches_carrier` broke
-          `class FromListLiteral (L : Type := List)` (`init/prelude.mo`),
+          `class FromListLiteral (L : Type := List)` (`init/src/prelude.mo`),
           i.e. every list literal and `Map.empty`, because a class param's
           `default` lowers as a VALUE and so is itself wrapped.
-      `scrutinee_type_args` (`lang/scope.mo`)      -- fixed pre-emptively.
-      `named_call_fields_of` (`lang/typecheck/infer.mo`)
+      `scrutinee_type_args` (`lang/src/scope.mo`)      -- fixed pre-emptively.
+      `named_call_fields_of` (`lang/src/typecheck/infer.mo`)
           -- `slow_tests/codegen_named_call_*_tests.mo`, 6 tests.
-      `con_owner_name` (`lang/typecheck/infer.mo`)
-          -- `slow_tests/typecheck_init_tests.mo`, as `ambiguous constructor
+      `con_owner_name` (`lang/src/typecheck/infer.mo`)
+          -- `slow_tests/src/typecheck_init_tests.mo`, as `ambiguous constructor
           `cons`: could resolve to either `Vec` or `List`` on
-          `init/tests.mo`.
+          `init/src/tests.mo`.
     Peeling at entry (`match term_peel t {`) needs `#[terminating]` when the
     function also recurses on a subterm: `f` is then a structural subterm of
     `term_peel t`, not of `t`, and the checker cannot see through it.
@@ -2789,7 +2811,7 @@ Key patterns when writing self-hosted Monad code:
     `infer_carrier_type` or `term_matches_carrier`, `examples/located_terms.mo`
     -- written specifically to contain those shapes -- still compiles clean.
     The type checker's own `resolve_class_method` is ctx-transparent for
-    them and runs first; `lang/scope.mo`'s syntactic pass is only
+    them and runs first; `lang/src/scope.mo`'s syntactic pass is only
     load-bearing for a def whose ELABORATION failed, which
     `elaborate_module_decls_best_effort` swallows silently and which needs
     self-compile scale to happen at all. So the self-compile in BOTH modes
@@ -2801,13 +2823,13 @@ Key patterns when writing self-hosted Monad code:
     else. The transparency gate for a change like this one is instead
     **`--release` IR byte-identical before vs after** (13/13 examples here).
     **Also landed, because the silence was half the problem:**
-    `elaborate_module_decls_reporting` (`lang/module.mo`) returns the names
+    `elaborate_module_decls_reporting` (`lang/src/module.mo`) returns the names
     of decls best-effort elaboration gave up on, and `--verbose` prints the
     count and first few. On the self-compile that is exactly one --
     `prelude::Lens` -- which had been invisible the whole time.
     **The cost is real and was accepted deliberately:** one located parse
     instead of one plain parse on every path. Interleaved A/B, two rounds,
-    machine idle: `check lang/main.mo` **57.5s -> 86.8s (+51%)**;
+    machine idle: `check lang/src/main.mo` **57.5s -> 86.8s (+51%)**;
     `load_file_modules` 45.3s -> 75.4s. The debug compile got FASTER (it
     stops parsing twice: 172.1s -> ~157s).
     **Where that delta goes was then measured, and my own guess above about
@@ -2818,13 +2840,13 @@ Key patterns when writing self-hosted Monad code:
     75718-75878ms) with every downstream phase flat (`resolve_infix_decls`
     +4%, `build_scope_from_decls` and `names_of_decls` unchanged). The cost
     is in PRODUCING the tree, not consuming it. Decomposed in one process by
-    `bench/parser_locate_cost.mo` on `lang/types.mo` (73000 bytes, 1469
+    `bench/src/parser_locate_cost.mo` on `lang/src/types.mo` (73000 bytes, 1469
     spans): of 739ms of located overhead on a 1255ms baseline,
     `resolve_offsets_in_file` is **652ms (88%)** and `build_loc_table`'s
     `I64.to_string` rekeying -- my first suspect -- is 54ms.
     The reason that one function is slow is worth keeping: it walked EVERY
     character of the file, and per character `utf8_char_width`
-    (`lang/parser/combinators.mo`) is `match String.get s 0`, where
+    (`lang/src/parser/combinators.mo`) is `match String.get s 0`, where
     `string_get` returns a `Value::Con` -- **an `Option` allocation per
     character**. This also explains a rewrite that failed: recasting the
     loop as a byte-index scan assumed item 28's pathology (`String.slice`/
@@ -2837,7 +2859,7 @@ Key patterns when writing self-hosted Monad code:
 43. **In a self-hosted compiler, a hot loop's cost is whichever primitive it
     calls per step -- and the SAME primitive costs differently on the two
     runtimes (2026-09-13).**
-    `resolve_offsets_in_file` (`lang/parser/position.mo`) was 88% of what
+    `resolve_offsets_in_file` (`lang/src/parser/position.mo`) was 88% of what
     locating every term cost. It walked every character of the file to turn
     byte offsets into line:column. Three separate lessons came out of fixing
     it, and the first two are corrections to my own reasoning:
@@ -2852,7 +2874,7 @@ Key patterns when writing self-hosted Monad code:
     primitive does TODAY before reusing an old profile's conclusion about it.**
     **(b) The same call has different asymptotics interpreted vs compiled, and
     `lang/` runs BOTH ways.** Host `string_slice` is an O(1) `SharedStr` view;
-    compiled `monad_string_slice` (`lang/codegen/runtime.c`) does a `strlen`
+    compiled `monad_string_slice` (`lang/src/codegen/runtime.c`) does a `strlen`
     plus a malloc plus a memcpy per call. So the old per-character
     `String.slice s 0 width` was O(1) interpreted and QUADRATIC in every
     self-compiled build -- invisible to any host-side profile. `String.length`
@@ -2860,8 +2882,8 @@ Key patterns when writing self-hosted Monad code:
     The fix takes one step per SPAN instead of per character, with two natives
     (`String.count_newlines`/`String.trailing_chars`) that take a LENGTH and
     scan in place, so nothing is sliced on either runtime: 652ms -> 70ms,
-    measured on `lang/types.mo` by `bench/parser_locate_cost.mo`, and
-    `check lang/main.mo` 87.1-88.1s -> 69.2s end to end (interleaved, three
+    measured on `lang/src/types.mo` by `bench/src/parser_locate_cost.mo`, and
+    `check lang/src/main.mo` 87.1-88.1s -> 69.2s end to end (interleaved, three
     rounds, load 1.06-1.66). Note the gap between those two numbers: the
     652ms was 88% of the located overhead on ONE file, and extrapolating it
     predicted ~61s, but only 61% of the real regression came back. Item 37
@@ -2894,11 +2916,11 @@ Key patterns when writing self-hosted Monad code:
 44. **A `\u{XXXX}` escape passes `monad-rs check` and `monad-rs test`, then
     kills the self-compile (2026-09-13).**
     The Rust reference string parser accepts unicode escapes; the self-hosted
-    one (`escape_replacement`, `lang/parser/string.mo`) deliberately does not,
+    one (`escape_replacement`, `lang/src/parser/string.mo`) deliberately does not,
     for want of a hex-to-codepoint native. Its doc comment says so and adds
     "zero known corpus impact since no `\u{}` escape appears anywhere in the
     current corpus" -- which is an INVARIANT, not an observation. One
-    `"\u{00e9}"` in a test fixture in `lang/parser/position.mo` broke it.
+    `"\u{00e9}"` in a test fixture in `lang/src/parser/position.mo` broke it.
     **What makes this expensive is the failure shape.** Everything that goes
     through the Rust host is clean: `monad-rs check` reports 0 errors,
     `monad-rs test` passes, the corpus passes 1481/1481, and `--release` IR
@@ -2908,7 +2930,7 @@ Key patterns when writing self-hosted Monad code:
     location_of_remaining; resolve_offsets_in_file` -- the names of defs that
     plainly exist, in a file that plainly compiles. Same shape as item 40, and
     the same fast reproducer (~60s, not a full self-compile):
-    `monad-rs run lang/main.mo check <file>`, which reports
+    `monad-rs run lang/src/main.mo check <file>`, which reports
     `did not fully parse (stopped before end of file)` and prints the
     offending text.
     Write the literal character instead. And note what found it: the
@@ -2993,7 +3015,7 @@ cargo test core_check_module::some_test_name
 cargo test parser
 
 # Run Monad stdlib tests (fast feedback on language semantics)
-cargo run -- test init/tests.mo
+cargo run -- test init/src/tests.mo
 
 # Run a specific example
 cargo run -- run examples/specific.mo
@@ -3072,9 +3094,9 @@ scope builder (`module.rs`) is usually the culprit.
 1. **Add a parser test** (`core/src/parser/test/`) if the bug involves syntax
 2. **Add an eval test** (`core/src/eval/test.rs`) if the bug involves evaluation
 3. **Add a Monad test** — use `#[test]` in:
-   - `init/tests.mo` for bugs involving core language semantics (prelude types, operators, etc.)
+   - `init/src/tests.mo` for bugs involving core language semantics (prelude types, operators, etc.)
    - `std/<module>_test.mo` for bugs in `std/` modules (concurrency, collections, etc.)
-   - Never add `std/`-dependent tests to `init/tests.mo` — `init/` must not depend on `std/`
+   - Never add `std/`-dependent tests to `init/src/tests.mo` — `init/` must not depend on `std/`
 4. **Test the failing case first** — confirm it fails before your fix, then
    confirm it passes after
 

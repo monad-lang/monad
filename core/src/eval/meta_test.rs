@@ -44,7 +44,7 @@ fn loaded_with_init_meta() -> LoadedModules {
     Identifier::new("init".to_string()),
     Identifier::new("meta".to_string()),
   ]);
-  let parsed = parse_file(include_str!("../../../init/meta.mo").into()).unwrap();
+  let parsed = parse_file(include_str!("../../../init/src/meta.mo").into()).unwrap();
   let checked = type_check_module_decls_new(&path, parsed.decls, &loaded).unwrap();
   loaded.add_module(module(
     path.clone(),

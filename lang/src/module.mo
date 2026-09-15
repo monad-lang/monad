@@ -216,7 +216,7 @@ def string_find_last_slash_go (s : String) (idx : I64) : I64 :=
         -1
 
 /// Extract the directory from a file path
-/// e.g., "init/process.mo" -> "init/"
+/// e.g., "init/src/process.mo" -> "init/src/"
 def extract_directory (file_path : String) : String :=
     let last_slash_idx : I64 := string_find_last_slash file_path in
     if I64.lt last_slash_idx 0 then
@@ -271,33 +271,64 @@ def first_existing (candidates : List String) : IO (Option String) := do {
     }
 }
 
+/// Read a module path as a MOTE-relative one: the first segment names a mote,
+/// whose sources live under its `src/`, and the rest is the module path within
+/// it. `lang.codegen.ir` -> `lang/src/codegen/ir.mo`; a lone `std` -> that
+/// mote's library root, `std/src/lib.mo`.
+///
+/// This is what makes `use lang.codegen.ir` find the file at all now that every
+/// mote keeps its modules under `src/` (`plans/packaging/package-system.md`
+/// §5a) -- `module_path_to_file` joins segments literally and knows nothing
+/// about motes. The mote NAMES are still a fixed list here; the manifest-driven
+/// table (and the "not a declared dependency" error that comes with it) is §5c.
+def mote_relative_file (mp : ModulePath) : String :=
+    match mp {
+        ModulePath.mp ids =>
+            match ids {
+                List.empty => "",
+                List.cons hd rest =>
+                    let mote_src : String := String.concat (identifier_to_string hd) "/src/" in
+                    match rest {
+                        List.empty => String.concat mote_src "lib.mo",
+                        List.cons _ _ =>
+                            String.concat mote_src
+                                (String.concat (module_path_to_file (ModulePath.mp rest)) ".mo")
+                    }
+            }
+    }
+
 /// Resolve a module path to a file path, trying different directories
-/// First tries relative to base_dir, then falls back to standard locations
+/// First tries relative to base_dir, then the mote layout, then falls back to
+/// the stdlib/lang/examples roots for bare (un-mote-qualified) names.
 #[partial]
 def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option String) {
     let mp_str := module_path_to_file mp;
     let with_extension := String.concat mp_str ".mo";
-    let prelude_path := "init/prelude.mo";
+    let prelude_path := "init/src/prelude.mo";
     let relative_path := path_join base_dir with_extension;
     let direct_path := with_extension;
-    let init_path := String.concat "init/" with_extension;
-    let std_path := String.concat "std/" with_extension;
-    let lang_path := String.concat "lang/" with_extension;
+    let mote_path := mote_relative_file mp;
+    let init_path := String.concat "init/src/" with_extension;
+    let std_path := String.concat "std/src/" with_extension;
+    let lang_path := String.concat "lang/src/" with_extension;
     let examples_path := String.concat "examples/" with_extension;
 
     if String.beq mp_str "prelude"
     then first_existing [prelude_path]
-    // Bare `init`/`std` are ambient re-export hubs (`init/lib.mo`/
-    // `std/lib.mo`) -- their own module NAME no longer matches their
+    // Bare `init`/`std` are ambient re-export hubs (`init/src/lib.mo`/
+    // `std/src/lib.mo`) -- their own module NAME no longer matches their
     // FILE name (unlike every other bare top-level module), so they
     // need the same kind of explicit special case `prelude` already
-    // has, ahead of the general `<dir>/<name>.mo` search below.
+    // has, ahead of the general search below. (`mote_relative_file` would
+    // reach the same two files, but only because a one-segment path means
+    // "that mote's lib root" -- spelling it out keeps the ambient trio
+    // together and independent of that rule.)
     else if String.beq mp_str "init"
-    then first_existing ["init/lib.mo"]
+    then first_existing ["init/src/lib.mo"]
     else if String.beq mp_str "std"
-    then first_existing ["std/lib.mo"]
+    then first_existing ["std/src/lib.mo"]
     else first_existing [
-        relative_path, direct_path, init_path, std_path, lang_path, examples_path,
+        relative_path, direct_path, mote_path, init_path, std_path, lang_path, examples_path,
     ]
 }
 
@@ -2979,7 +3010,7 @@ def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
 def test_elaborate_loaded_modules_resolves_file_with_no_use_decls : IO Bool := do {
     // Annotated bind -- `em.scope`/`em.target_decls` below desugar to
     // `{ .. }` field patterns, which need the matched value's own type.
-    let result : Result String ElaboratedModules <- elaborate_loaded_modules "std/test.mo" false false;
+    let result : Result String ElaboratedModules <- elaborate_loaded_modules "std/src/test.mo" false false;
     match result {
         Result.err _ => return false,
         Result.ok em => do {

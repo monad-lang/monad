@@ -53,7 +53,7 @@ pub def compile_source_run_expect (source : String) (basename : String) (expecte
                         println (basename ++ ": llc failed");
                         return false
                     } else do {
-                        let rt_result <- exec_cmd "clang" ["-c", "lang/codegen/runtime.c", "-o", runtime_obj];
+                        let rt_result <- exec_cmd "clang" ["-c", "lang/src/codegen/runtime.c", "-o", runtime_obj];
                         if not (rt_result == 0) then do {
                             println (basename ++ ": compiling runtime failed");
                             return false

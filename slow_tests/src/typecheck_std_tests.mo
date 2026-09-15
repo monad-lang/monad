@@ -9,27 +9,27 @@ open IO {println}
 // --- std/ non-test files ---
 
 #[test]
-def test_typecheck_std_test : IO Bool := typecheck_file "std/test.mo"
+def test_typecheck_std_test : IO Bool := typecheck_file "std/src/test.mo"
 
 #[test]
-def test_typecheck_std_base : IO Bool := typecheck_file "std/base.mo"
+def test_typecheck_std_base : IO Bool := typecheck_file "std/src/base.mo"
 
 #[test]
-def test_typecheck_std_bench : IO Bool := typecheck_file "std/bench.mo"
+def test_typecheck_std_bench : IO Bool := typecheck_file "std/src/bench.mo"
 
 #[test]
-def test_typecheck_std_list : IO Bool := typecheck_file "std/list.mo"
+def test_typecheck_std_list : IO Bool := typecheck_file "std/src/list.mo"
 
 #[test]
-def test_typecheck_std_map : IO Bool := typecheck_file "std/map.mo"
+def test_typecheck_std_map : IO Bool := typecheck_file "std/src/map.mo"
 
 // --- std/concurrent/ files ---
 
 #[test]
-def test_typecheck_std_concurrent_fiber : IO Bool := typecheck_file "std/concurrent/fiber.mo"
+def test_typecheck_std_concurrent_fiber : IO Bool := typecheck_file "std/src/concurrent/fiber.mo"
 
 #[test]
-def test_typecheck_std_concurrent_combine : IO Bool := typecheck_file "std/concurrent/combine.mo"
+def test_typecheck_std_concurrent_combine : IO Bool := typecheck_file "std/src/concurrent/combine.mo"
 
 // --- std/ test files ---
 //
@@ -39,19 +39,19 @@ def test_typecheck_std_concurrent_combine : IO Bool := typecheck_file "std/concu
 // Re-enabled and confirmed passing (2026-08-19).
 
 #[test]
-def test_typecheck_std_list_tests1 : IO Bool := typecheck_file "std/list_tests1.mo"
+def test_typecheck_std_list_tests1 : IO Bool := typecheck_file "std/src/list_tests1.mo"
 
 #[test]
-def test_typecheck_std_list_tests2 : IO Bool := typecheck_file "std/list_tests2.mo"
+def test_typecheck_std_list_tests2 : IO Bool := typecheck_file "std/src/list_tests2.mo"
 
 #[test]
-def test_typecheck_std_list_tests3a : IO Bool := typecheck_file "std/list_tests3a.mo"
+def test_typecheck_std_list_tests3a : IO Bool := typecheck_file "std/src/list_tests3a.mo"
 
 #[test]
-def test_typecheck_std_list_tests3b : IO Bool := typecheck_file "std/list_tests3b.mo"
+def test_typecheck_std_list_tests3b : IO Bool := typecheck_file "std/src/list_tests3b.mo"
 
 #[test]
-def test_typecheck_std_map_tests : IO Bool := typecheck_file "std/map_tests.mo"
+def test_typecheck_std_map_tests : IO Bool := typecheck_file "std/src/map_tests.mo"
 
 // Not `#[test]` -- known-broken, pre-existing, user-decided out-of-scope
 // gap (see `2026-08-27-bootstrap-compile-and-test.md`'s own "Out of
@@ -70,10 +70,10 @@ def test_typecheck_std_map_tests : IO Bool := typecheck_file "std/map_tests.mo"
 // former `test_typecheck_std_derive_tests` name as misleading in a file
 // that's otherwise entirely real `#[test]`s): this def is intentionally
 // not part of the test suite, so its name shouldn't look like it is.
-def known_broken_typecheck_std_derive_tests : IO Bool := typecheck_file "std/derive_tests.mo"
+def known_broken_typecheck_std_derive_tests : IO Bool := typecheck_file "std/src/derive_tests.mo"
 
 #[test]
-def test_typecheck_std_sha256_tests : IO Bool := typecheck_file "std/sha256_tests.mo"
+def test_typecheck_std_sha256_tests : IO Bool := typecheck_file "std/src/sha256_tests.mo"
 
 #[test]
-def test_typecheck_std_test_map_full : IO Bool := typecheck_file "std/test_map_full.mo"
+def test_typecheck_std_test_map_full : IO Bool := typecheck_file "std/src/test_map_full.mo"

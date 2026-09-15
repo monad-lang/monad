@@ -81,7 +81,7 @@ def typecheck_constructor (c : InductConstructor) (scope : Scope) : Bool :=
 
 
 #[test]
-def test_typecheck_lang_main : IO Bool := typecheck_file "lang/main.mo"
+def test_typecheck_lang_main : IO Bool := typecheck_file "lang/src/main.mo"
 
 /// Self-hosted counterpart to `lang/tests/cli_derive_tests.mo` -- bare
 /// `derive_cli!` (not `#[derive_cli]` attribute sugar), proving
@@ -90,5 +90,5 @@ def test_typecheck_lang_main : IO Bool := typecheck_file "lang/main.mo"
 /// meta-def too, not just `std/derive.mo`'s four derives (see
 /// `known_broken_typecheck_std_derive_tests`, `typecheck_std_tests.mo`).
 #[test]
-def test_typecheck_lang_cli_derive_self_hosted : IO Bool := typecheck_file "lang/tests/cli_derive_self_hosted_tests.mo"
+def test_typecheck_lang_cli_derive_self_hosted : IO Bool := typecheck_file "lang/src/tests/cli_derive_self_hosted_tests.mo"
 

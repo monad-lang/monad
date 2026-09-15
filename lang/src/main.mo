@@ -109,7 +109,7 @@ def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose
             return (String.trim raw)
         } else return "unknown";
         let commit_flag := "-DMONAD_BUILD_COMMIT=\"" ++ build_hash ++ "\"";
-        let result <- exec_cmd "clang" (List.append [ "-c", "lang/codegen/runtime.c", commit_flag, "-o", runtime_obj_s] (if verbose then ["-v"] else [""]));
+        let result <- exec_cmd "clang" (List.append [ "-c", "lang/src/codegen/runtime.c", commit_flag, "-o", runtime_obj_s] (if verbose then ["-v"] else [""]));
         if verbose then do {
             Bench.report_since "link_ir: clang runtime.c" t_rtc;
             return unit

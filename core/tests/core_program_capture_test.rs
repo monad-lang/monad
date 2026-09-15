@@ -4,7 +4,7 @@
 //!
 //! Exercises the exact scenario that motivated the design: two
 //! inductives sharing a constructor literally named `cons` (mirroring
-//! `init/prelude.mo`'s real `List`/`Vec`), each matched on unqualified —
+//! `init/src/prelude.mo`'s real `List`/`Vec`), each matched on unqualified —
 //! so re-deriving "which inductive is this match on" from constructor
 //! names alone (post-hoc, from the final `CoreTerm`) is genuinely
 //! ambiguous. This test checks that the resolved inductive `Atom`,
@@ -19,7 +19,7 @@ use monad_core::term::{ModulePath, SourceContext, mpt};
 
 /// `check_all_modules_capturing_core` only captures `Decl::Type`/`Match`
 /// resolutions for whichever modules' raw decls are explicitly passed in
-/// — a program that `use`s `init` needs `init/prelude.mo`'s own
+/// — a program that `use`s `init` needs `init/src/prelude.mo`'s own
 /// inductives (`Bool`, `BEq`, ...) captured too, or lowering anything
 /// that touches them (any `if`, any dictionary-backed operator) fails
 /// with `UnresolvedMatch`/`UnknownInductive`. `'prelude` is loaded from
@@ -28,12 +28,12 @@ use monad_core::term::{ModulePath, SourceContext, mpt};
 /// `default_modules()`'s own copy is already checked/raised `Term`, not
 /// the raw `Decl`s this driver needs as input.
 fn prelude_decls() -> Vec<SourceContext<Decl>> {
-  let text = include_str!("../../init/prelude.mo");
-  load_decls_from_text_with_path(text, &Default::default()).expect("parse init/prelude.mo")
+  let text = include_str!("../../init/src/prelude.mo");
+  load_decls_from_text_with_path(text, &Default::default()).expect("parse init/src/prelude.mo")
 }
 
 // `Stack`/`Queue` intentionally both declare a bare `cons` constructor —
-// mirrors `init/prelude.mo`'s real `List`/`Vec`, which do the same thing
+// mirrors `init/src/prelude.mo`'s real `List`/`Vec`, which do the same thing
 // (see the plan's Phase 0 section) — self-contained here so this test
 // doesn't depend on the exact current shape of the real prelude types.
 const SOURCE: &str = r#"
@@ -230,7 +230,7 @@ fn phase2_lowers_whole_program_to_ir() {
   // `match_stack_cons`/`match_queue_cons` each lower to a Lam wrapping a
   // 2-arm Match whose first arm binds 2 fields (`cons x _ => x`) and
   // second binds none (`empty`/`nil => 0`) -- matched by exact shape
-  // (not just count) since `init/prelude.mo`'s own defs (also lowered
+  // (not just count) since `init/src/prelude.mo`'s own defs (also lowered
   // here) contain plenty of other 2-arm matches too.
   let match_bodies: Vec<&CoreIr> = def_bodies
     .iter()
