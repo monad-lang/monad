@@ -69,7 +69,7 @@ def rt_tag_list_cons : I64 := 6
 /// generated stub any more -- the pair used to return 0/1 and print
 /// nothing, which silently disabled every `--verbose` timing in a
 /// compiled binary.
-def runtime_native_functions : List LLVMFunction :=
+pub def runtime_native_functions : List LLVMFunction :=
   List.append string_runtime_functions numeric_runtime_functions
 
 def string_runtime_functions : List LLVMFunction :=

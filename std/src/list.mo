@@ -11,7 +11,7 @@
 use lib::show {Show}
 
 
-class Show A {
+pub class Show A {
     def show : A -> String
 }
 
@@ -62,14 +62,14 @@ instance {A : Type} Append (List A) {
     def append (a b : List A) : List A := List.append a b
 }
 
-def List.length {A : Type} (xs : List A) : I64 :=
+pub def List.length {A : Type} (xs : List A) : I64 :=
     match xs {
         empty => 0,
         cons _ tail => 1 + List.length tail,
         _ => 0
     }
 
-def List.filter {A : Type} (pred : A -> Bool) (xs : List A) : List A :=
+pub def List.filter {A : Type} (pred : A -> Bool) (xs : List A) : List A :=
     match xs {
         empty => List.empty,
         cons a tail =>
@@ -83,7 +83,7 @@ def List.filter {A : Type} (pred : A -> Bool) (xs : List A) : List A :=
 // def List.contains [BEq A] {A : Type} (a : A) (xs : List A) : Bool :=
 //     List.any (fn x => a == x) xs
 
-def List.any {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
+pub def List.any {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
     match xs {
         empty => false,
         cons a tail =>
@@ -93,7 +93,7 @@ def List.any {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
         _ => false
     }
 
-def List.all {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
+pub def List.all {A : Type} (pred : A -> Bool) (xs : List A) : Bool :=
     match xs {
         empty => true,
         cons a tail =>
@@ -155,7 +155,7 @@ def List.find_by {A : Type} (pred : A -> Bool) (xs : List A) : Option A :=
 
 /// Map + keep only the `some`s, in one pass.
 /// Replaces `Toml.filter_some` and ~11 collect/filter defs in `lang/scope.mo`.
-def List.filter_map {A : Type} {B : Type} (f : A -> Option B) (xs : List A) : List B :=
+pub def List.filter_map {A : Type} {B : Type} (f : A -> Option B) (xs : List A) : List B :=
     match xs {
         List.empty => List.empty,
         List.cons a tail =>
@@ -173,7 +173,7 @@ def List.contains_by {A : Type} (eq : A -> A -> Bool) (target : A) (xs : List A)
 
 /// Join string pieces with a separator between them.
 /// Replaces 28 hand-rolled `*_rest` joiner pairs across 9 `lang/` files.
-def List.intercalate (sep : String) (xs : List String) : String :=
+pub def List.intercalate (sep : String) (xs : List String) : String :=
     match xs {
         List.empty => "",
         List.cons head tail => String.concat head (List.intercalate_rest sep tail),

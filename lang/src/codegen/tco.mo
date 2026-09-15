@@ -37,14 +37,14 @@ use std::map {}
 /// per how every call-argument list in this backend is built), captured
 /// BEFORE the parameter-substitution rewrite below, later rewritten the
 /// same way.
-struct SelfTailCallSite {
+pub struct SelfTailCallSite {
     site_block : String,
     ret_temp : String,
     merge_label : Option String,
     args : List LLVMValue,
 }
 
-struct SelfTcoResult {
+pub struct SelfTcoResult {
     ctx : CodegenCtx,
     blocks : List LLVMBasicBlock,
 }
@@ -368,7 +368,7 @@ def trace_phi_pair_def (fn_name : String) (arity : I64) (defs : HashMap String L
         LLVMValue.native_op _op _args => List.empty,
     }
 
-struct LoopNamesResult {
+pub struct LoopNamesResult {
     ctx : CodegenCtx,
     names : List String,
 }

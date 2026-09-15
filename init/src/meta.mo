@@ -19,12 +19,12 @@
 /// unannotated one) — bare names only, no attribute arguments, matching
 /// what `derive_cli_meta` (`cli/src/args.mo`) needs to tell a flag field from
 /// a positional one.
-type FieldInfo {
+pub type FieldInfo {
     field_info (name : String) (typ : Expr) (attrs : List String)
 }
 
 /// One constructor: its declared name, and its fields in declared order.
-type CtorInfo {
+pub type CtorInfo {
     ctor_info (name : String) (fields : List FieldInfo)
 }
 
@@ -33,7 +33,7 @@ type CtorInfo {
 /// (`Inductive.params`) or per-field defaults/multiplicity — no existing
 /// derive needs them; see the design doc for why this scope is
 /// deliberate, not an oversight.
-type TypeInfo {
+pub type TypeInfo {
     type_info (name : String) (ctors : List CtorInfo)
 }
 
@@ -45,7 +45,7 @@ type TypeInfo {
 /// derives' generated code. `e_ctor` is a deliberate ergonomic addition
 /// over the raw `Term` surface (constructor rebuild is common to every
 /// derive) rather than forcing callers to spell out nested `e_app`s.
-type Expr {
+pub type Expr {
     e_var (name : String),
     e_str (value : String),
     e_int (value : I64),
@@ -59,7 +59,7 @@ type Expr {
 
 /// One arm of an `e_match` — the constructor it matches, its bound field
 /// names (in declared order), and the arm's body.
-type MatchArm {
+pub type MatchArm {
     match_arm (ctor_name : String) (binders : List String) (body : Expr)
 }
 
@@ -80,7 +80,7 @@ type Param {
 /// short-circuiting before anything is spliced in. `derive_cli_meta`
 /// (`cli/src/args.mo`) uses this for both of its hard failure cases (zero
 /// constructors; `#[arg]` on a non-`Bool` field).
-type Decl {
+pub type Decl {
     d_def (name : String) (params : List Param) (ret_typ : Expr) (body : Expr),
     d_instance (class_name : String) (target_typ : Expr) (methods : List Decl),
     d_error (message : String),

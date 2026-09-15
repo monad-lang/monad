@@ -14,7 +14,7 @@ use std::show {Show}
 use std::map {}
 use std::list {intercalate}
 
-type Identifier {
+pub type Identifier {
     id String
 }
 
@@ -70,7 +70,7 @@ type AttrArg {
 /// `PartialEq` ignores that field anyway) — no sibling decl-level type
 /// here (`Def`, `Inductive`, ...) carries source-location data, and
 /// nothing downstream would read it.
-struct Attribute {
+pub struct Attribute {
     name: Identifier,
     args: List AttrArg,
 }
@@ -133,11 +133,11 @@ type Operator {
     operator String
 }
 
-type ModulePath {
+pub type ModulePath {
     mp (List Identifier)
 }
 
-def show_identifier (id : Identifier) : String := match id {
+pub def show_identifier (id : Identifier) : String := match id {
     Identifier.id s => s,
 }
 
@@ -153,7 +153,7 @@ def show_operator (op : Operator) : String := match op {
     Operator.operator s => s,
 }
 
-def show_module_path (mp : ModulePath) : String := match mp {
+pub def show_module_path (mp : ModulePath) : String := match mp {
     ModulePath.mp ids => join_identifiers ids,
 }
 
@@ -196,7 +196,7 @@ instance Hashable ModulePath {
     def hash (mp : ModulePath) : U64 := String.hash (show_module_path mp)
 }
 
-type NameRef {
+pub type NameRef {
     nid (Identifier),
     nmp (ModulePath),
     nop (Operator),
@@ -209,25 +209,25 @@ type Multiplicity {
     affine,
 }
 
-struct Location {
+pub struct Location {
     offset : I64,
     line : I64,
     column : I64,
 }
 
-struct SourceRange {
+pub struct SourceRange {
     start : Location,
     end : Location,
     path : Option String,
 }
 
-struct LocatedSpan {
+pub struct LocatedSpan {
     fragment : String,
     location : Location,
 }
 
 // Canonical Param uses de Bruijn Term; `ParseParam` is the parser's.
-type Param {
+pub type Param {
     mk (name: Identifier) (type_: Term) (mult: Multiplicity) (default: Option Term) (attrs: List Attribute)
 }
 
@@ -298,7 +298,7 @@ type MatchCase {
 /// `field_name` when punned (`{ x }`). `rest` is `true` when a trailing
 /// `..` is present (unlisted fields are discarded, not brought into
 /// scope).
-type FieldPattern {
+pub type FieldPattern {
     mk (fields: List FieldPatternEntry) (rest: Bool)
 }
 
@@ -307,7 +307,7 @@ type FieldPattern {
 /// `name`/`value` shape) rather than a generic `Pair`, so this file
 /// doesn't need a cross-module dependency on `init/prelude.mo`'s `Pair`
 /// for its own canonical AST.
-type FieldPatternEntry {
+pub type FieldPatternEntry {
     mk (field: Identifier) (binder: Identifier)
 }
 
@@ -411,15 +411,15 @@ type Literal {
 /// `Param` list, see `build_scope_struct`) is what determines the
 /// final constructor-argument order once `type_check_lit` resolves
 /// this into a `Term.con`.
-type StructLitField {
+pub type StructLitField {
     mk (name: Identifier) (value: Term)
 }
 
-type Con {
+pub type Con {
     mk (name: Identifier) (typ_name: ModulePath) (num_args: I64) (args: List (Option Term))
 }
 
-type Native {
+pub type Native {
     mk (native_name: Identifier) (num_args: I64) (args: List (Option Term))
 }
 
@@ -462,6 +462,17 @@ type Visibility {
     priv_,
     package_private,
 }
+
+/// Structural equality on `Visibility`. Hand-rolled rather than derived:
+/// `types.mo` has no `BEq` instances at all (it is below the class
+/// machinery in the dependency order).
+def visibility_beq (a : Visibility) (b : Visibility) : Bool :=
+    match a {
+        Visibility.pub_ => match b { Visibility.pub_ => true, _ => false },
+        Visibility.priv_ => match b { Visibility.priv_ => true, _ => false },
+        Visibility.package_private =>
+            match b { Visibility.package_private => true, _ => false }
+    }
 
 // --- ParseTerm: the parser's own output, before de Bruijn resolution --
 //
@@ -517,7 +528,7 @@ type Visibility {
 /// `lang/parser/position.mo`'s divide-and-conquer scan for line/column.
 /// Note the ordering is inverted from an offset -- a LARGER `start_rem`
 /// means EARLIER in the file.
-struct ParseSpan {
+pub struct ParseSpan {
     start_rem : I64,
     end_rem : I64,
 }
@@ -531,7 +542,7 @@ def parse_span_unknown : ParseSpan := { start_rem := -1, end_rem := -1 }
 def parse_span_is_unknown (sp : ParseSpan) : Bool :=
     I64.beq sp.start_rem -1
 
-struct ParseTerm {
+pub struct ParseTerm {
     span : ParseSpan,
     kind : ParseTermKind,
 }
@@ -636,7 +647,7 @@ def pt_hole : ParseTerm := pt_ ParseTermKind.hole
 // `ModulePath` and `Identifier`s), `Attribute`/`AttrArg` (no `Term`
 // anywhere), `Operator`, `UseFilter`, `OpenFilter`, `Visibility`.
 
-struct ParseParam {
+pub struct ParseParam {
     name : Identifier,
     type_ : ParseTerm,
     mult : Multiplicity,
@@ -644,26 +655,26 @@ struct ParseParam {
     attrs : List Attribute,
 }
 
-struct ParseStructField {
+pub struct ParseStructField {
     name : Identifier,
     typ : ParseTerm,
     default : Option ParseTerm,
     mult : Multiplicity,
 }
 
-struct ParseInductConstructor {
+pub struct ParseInductConstructor {
     name : ModulePath,
     params : List ParseParam,
     typ : ParseTerm,
 }
 
-struct ParseClassDef {
+pub struct ParseClassDef {
     name : Identifier,
     typ : ParseTerm,
     default : Option ParseTerm,
 }
 
-struct ParseDef {
+pub struct ParseDef {
     name: ModulePath,
     typ: ParseTerm,
     term: ParseTerm,
@@ -672,7 +683,7 @@ struct ParseDef {
     vis: Visibility
 }
 
-struct ParseInductive {
+pub struct ParseInductive {
     name : ModulePath,
     params : List ParseParam,
     typ : ParseTerm,
@@ -681,7 +692,7 @@ struct ParseInductive {
     vis : Visibility,
 }
 
-struct ParseClass {
+pub struct ParseClass {
     name : Identifier,
     params : List ParseParam,
     constraints : List TypeConstraint,
@@ -689,7 +700,7 @@ struct ParseClass {
     vis : Visibility,
 }
 
-struct ParseInstance {
+pub struct ParseInstance {
     name : Identifier,
     cls : ModulePath,
     constraints : List TypeConstraint,
@@ -699,7 +710,7 @@ struct ParseInstance {
     defs : List ParseDef,
 }
 
-struct ParseStruct {
+pub struct ParseStruct {
     name : Identifier,
     fields : List ParseStructField,
     vis : Visibility,
@@ -716,12 +727,12 @@ struct ParseStruct {
 /// `lang/parser/position.mo`'s scan for line/column. Same arithmetic,
 /// one parser instead of two, and no way for the two to disagree about
 /// where a declaration starts.
-struct ParseDecl {
+pub struct ParseDecl {
     span : ParseSpan,
     kind : ParseDeclKind,
 }
 
-type ParseDeclKind {
+pub type ParseDeclKind {
     def_d (ParseDef),
     inductive_d (ParseInductive),
     struct_d (ParseStruct),
@@ -798,7 +809,7 @@ def pd_decl_gen_d (name : ModulePath) (params : List ParseParam) (decl_list : Li
 def pd_macro_call_d (name : Identifier) (args : List ParseTerm) : ParseDecl :=
     pd_ (ParseDeclKind.macro_call_d name args)
 
-type ParseTermKind {
+pub type ParseTermKind {
     var (name: NameRef),
     /// Term-position `name!`. Kept a separate variant rather than a
     /// tagged `var` for the same reason `Term.var_macro` is (see its own
@@ -840,7 +851,7 @@ type ParseTermKind {
     hole,
 }
 
-struct ParseMatchCase {
+pub struct ParseMatchCase {
     name : Identifier,
     args : List Identifier,
     body : ParseTerm,
@@ -863,16 +874,16 @@ type ParseLiteral {
     struct_update (base: ParseTerm) (fields: List ParseStructLitField),
 }
 
-struct ParseStructLitField {
+pub struct ParseStructLitField {
     name : Identifier,
     value : ParseTerm,
 }
 
-type ParseCon {
+pub type ParseCon {
     mk (name: Identifier) (typ_name: ModulePath) (num_args: I64) (args: List (Option ParseTerm))
 }
 
-type ParseNative {
+pub type ParseNative {
     mk (native_name: Identifier) (num_args: I64) (args: List (Option ParseTerm))
 }
 
@@ -882,7 +893,7 @@ type ParseNative {
 // De Bruijn convention: index 0 = most recently bound variable.
 // Free variables use sentinel index (I64.max) and are resolved
 // by the type checker or module resolver.
-type Term {
+pub type Term {
     var (idx: I64) (dbg: DebugName),
     lam (dbg: DebugName) (typ: Term) (body: Term),
     forall (dbg: DebugName) (kind: Term) (body: Term),
@@ -993,12 +1004,12 @@ type EvalError {
     custom (msg: String),
 }
 
-type TypeConstraint {
+pub type TypeConstraint {
     mk (cls: ModulePath) (vars: List Identifier)
 }
 
 /// Canonical Def uses de Bruijn Term. DefV0 is the legacy V0 variant.
-struct Def {
+pub struct Def {
     name: ModulePath,
     typ: Term,
     term: Term,
@@ -1007,30 +1018,30 @@ struct Def {
     vis: Visibility
 }
 
-def Def.name (d : Def) : ModulePath := d.name
+pub def Def.name (d : Def) : ModulePath := d.name
 
 // Canonical InductConstructor uses de Bruijn Term. InductConstructorV0 is the legacy V0 variant.
-type InductConstructor {
+pub type InductConstructor {
     mk (name: ModulePath) (params: List Param) (typ: Term)
 }
 
 // Canonical Inductive uses de Bruijn Term. InductiveV0 is the legacy V0 variant.
-type Inductive {
+pub type Inductive {
     mk (name: ModulePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List Attribute) (vis: Visibility)
 }
 
 // Canonical ClassDef uses de Bruijn Term. ClassDefV0 is the legacy V0 variant.
-type ClassDef {
+pub type ClassDef {
     mk (name: Identifier) (typ: Term) (default: Option Term)
 }
 
 // Canonical Class uses de Bruijn Term. ClassV0 is the legacy V0 variant.
-type Class {
+pub type Class {
     mk (name: Identifier) (params: List Param) (constraints: List TypeConstraint) (methods: List ClassDef) (vis: Visibility)
 }
 
 // Canonical StructField uses de Bruijn Term. StructFieldV0 is the legacy V0 variant.
-type StructField {
+pub type StructField {
     /// `mult` mirrors the Rust reference's `StructField.mult`
     /// (core/src/term.rs): `!name : T` (Linear, must be consumed exactly
     /// once), `?name : T` (Affine, at most once), `%name : T` (Zero /
@@ -1041,7 +1052,7 @@ type StructField {
 
 
 // Canonical Struct uses de Bruijn Term. StructV0 is the legacy V0 variant.
-type Struct {
+pub type Struct {
     mk (name: Identifier) (fields: List StructField) (vis: Visibility)
 }
 
@@ -1070,7 +1081,7 @@ type OpenFilter {
 }
 
 // Canonical Decl uses de Bruijn Term. DeclV0 is the legacy variant.
-type Decl {
+pub type Decl {
     def_d (Def),
     inductive_d (Inductive),
     struct_d (Struct),
@@ -1116,7 +1127,7 @@ def Decl.to_name (d : Decl) : ModulePath :=
     }
 
 // Canonical Instance uses de Bruijn Term. InstanceV0 is the legacy V0 variant.
-type Instance {
+pub type Instance {
     /// `implicit_params` holds any `{Name : Type}` binders written right
     /// after `instance` (before the optional `[constraints]` and the class
     /// name), e.g. `instance {A : Type} Show A { ... }`. Mirrors the Rust
@@ -1639,28 +1650,36 @@ def test_term_hole : Bool :=
 // --- Phase 2: Scope types ---
 
 // Infix operator binding. Maps an operator symbol to a definition path.
-struct Infix {
+pub struct Infix {
     operator : Operator,
     name : ModulePath,
 }
 
 // Instance lookup key.
-struct InstanceKey {
+pub struct InstanceKey {
     cls : ModulePath,
     constraints : List TypeConstraint,
     args : List Param,
 }
 
 // A resolved definition entry in scope.
-struct ScopeDef {
+//
+// `vis` is the declaration's own visibility, carried here so scope
+// construction can act on it: a `priv` def is dropped when the module
+// being scoped is not the one that declared it (`build_scope_from_one_
+// module`, lang/src/scope.mo). Constructors and class methods inherit the
+// visibility of the type or class they belong to, which is why they are
+// built with the parent's `vis` rather than one of their own.
+pub struct ScopeDef {
     name : ModulePath,
     module : ModulePath,
     sig : Term,
     body : Term,
+    vis : Visibility,
 }
 
 // A class method entry in scope.
-struct ScopeClassDef {
+pub struct ScopeClassDef {
     class_name : ModulePath,
     full_name : ModulePath,
     name : Identifier,
@@ -1668,19 +1687,19 @@ struct ScopeClassDef {
 }
 
 // Instance entries grouped by class name.
-struct ScopeInstance {
+pub struct ScopeInstance {
     class_name : ModulePath,
     instances : List Instance,
 }
 
 // Conflicting name resolution entry.
-struct ScopeConflict {
+pub struct ScopeConflict {
     name : ModulePath,
     candidates : List ModulePath,
 }
 
 // Local variable in the scope chain.
-struct LocalVar {
+pub struct LocalVar {
     name : Identifier,
     typ : Term,
     multiplicity : Multiplicity,
@@ -1703,7 +1722,7 @@ struct LocalVar {
 // fills a missing field from its own declared default, same as any other
 // struct literal) -- only POSITIONAL `mk`/pattern-match destructuring
 // sites need updating for the new arity.
-struct ScopeData {
+pub struct ScopeData {
     def_refs : HashMap String ScopeDef,
     class_defs : List ScopeClassDef,
     instances : List ScopeInstance,
@@ -1766,14 +1785,14 @@ struct ScopeData {
 }
 
 // A scope node in the linked list.
-struct Scope {
+pub struct Scope {
     module_id : ModulePath,
     scope : ScopeData,
     parent : Option Scope,
 }
 
 // Compiled or loaded module entry.
-struct Module {
+pub struct Module {
     path : ModulePath,
     inductives : List Inductive,
     defs : List ScopeDef,
@@ -1795,12 +1814,12 @@ struct Module {
 // Renaming this one -- the narrower of the two, reached only by
 // `build_scope_from_modules` -- resolves it. See AGENTS.md item 18 for
 // the broader ~862-name duplicate-name sweep this is one instance of.
-struct ModuleRegistry {
+pub struct ModuleRegistry {
     modules : List Module,
 }
 
 // Scope for local bindings (let expressions, case arms, lambda vars).
-struct LocalScope {
+pub struct LocalScope {
     vars : List LocalVar,
     parent : Option LocalScope,
 }

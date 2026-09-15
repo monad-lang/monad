@@ -19,12 +19,12 @@ use lib::codegen::symbols {def_symbol_name}
 use lib::codegen::util {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {}
 
-struct LocalBinding {
+pub struct LocalBinding {
     name : Identifier,
     val : LLVMValue,
 }
 
-struct CodegenCtx {
+pub struct CodegenCtx {
     locals : List LocalBinding,
     next_temp : I64,
     next_label : I64,
@@ -58,7 +58,7 @@ struct CodegenCtx {
     current_loc : Option DbgLoc,
 }
 
-struct CtxStrPair {
+pub struct CtxStrPair {
     ctx : CodegenCtx,
     str : String,
 }

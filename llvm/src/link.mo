@@ -20,14 +20,14 @@ use std::log {fail_line, ok_line, stage}
 
 /// `llc -filetype=obj`. Returns llc's exit code.
 #[partial]
-def compile_ir_to_obj (ir_path : String) (obj_path : String) : IO I64 := do {
+pub def compile_ir_to_obj (ir_path : String) (obj_path : String) : IO I64 := do {
     exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path]
 }
 
 /// `clang -c` on the runtime. `extra_flags` carries anything the caller
 /// wants defined at compile time (the build-commit define, `-v`).
 #[partial]
-def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (obj_path : String) : IO I64 := do {
+pub def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (obj_path : String) : IO I64 := do {
     exec_cmd "clang" (List.append ["-c", runtime_c] (List.append extra_flags ["-o", obj_path]))
 }
 
@@ -37,7 +37,7 @@ def compile_runtime_obj (runtime_c : String) (extra_flags : List String) (obj_pa
 /// The include and library search paths come from the nix cc-wrapper via
 /// `boehmgc` in devenv.nix, so nothing here hardcodes a store path.
 #[partial]
-def link_objects (objs : List String) (output : String) (extra_flags : List String) : IO I64 := do {
+pub def link_objects (objs : List String) (output : String) (extra_flags : List String) : IO I64 := do {
     exec_cmd "clang" (List.append objs (List.append ["-lgc"] (List.append extra_flags ["-o", output])))
 }
 
@@ -65,7 +65,7 @@ def build_commit_hash : IO String := do {
 /// where the "compile_file total minus compile_loaded_modules_to_ir total"
 /// remainder actually goes, before guessing at a fix.
 #[partial]
-def link_ir (runtime_c : String) (ir_text : String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 {
+pub def link_ir (runtime_c : String) (ir_text : String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 {
     // `Path.join` here is THE fix for the mangled-double-slash bug this
     // whole `Path` type exists to prevent: if `output_name` is already
     // absolute, it replaces `output_dir` outright instead of naively

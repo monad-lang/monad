@@ -95,7 +95,7 @@ type GlobalDef {
   gd_unresolved (path: ModulePath),
 }
 
-type GlobalTable {
+pub type GlobalTable {
   global_table (globals: List GlobalDef),
 }
 
@@ -104,7 +104,7 @@ def global_table_get (table : GlobalTable) (idx : I64) : Option GlobalDef :=
     GlobalTable.global_table globals => List.get idx globals,
   }
 
-def global_table_len (table : GlobalTable) : I64 :=
+pub def global_table_len (table : GlobalTable) : I64 :=
   match table {
     GlobalTable.global_table globals => List.length globals,
   }
@@ -174,7 +174,7 @@ def list_replicate (n : I64) (v : Slot) : List Slot :=
   then List.empty
   else List.cons v (list_replicate (n - 1) v)
 
-def global_cache_new (len : I64) : GlobalCache :=
+pub def global_cache_new (len : I64) : GlobalCache :=
   GlobalCache.global_cache (list_replicate len Slot.slot_empty)
 
 /// Already-forced value for `idx`, if any -- never a re-evaluation.

@@ -32,7 +32,7 @@ def all_aux (fibers : List (Fiber A)) (acc : List A) : IO (List A) :=
         all_aux rest (List.cons head acc))
   }
 
-def all {A : Type} (fibers : List (Fiber A)) : IO (List A) :=
+pub def all {A : Type} (fibers : List (Fiber A)) : IO (List A) :=
   all_aux fibers List.empty
 
 #[partial]

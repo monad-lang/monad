@@ -178,6 +178,32 @@ directory convention (`<name>/src/...`), and only a mote's reference to
 ITSELF is resolved through the manifest (`Mote.discover`,
 `lang/src/mote.mo`), which is what lets `motes/demo` work.
 
+
+### Visibility: `pub`, `priv`, and the default
+
+```monad
+pub def exported : I64 := 1    // visible everywhere
+def package_private : I64 := 2 // visible inside this mote (the default)
+priv def module_only : I64 := 3 // visible only in this file's module
+```
+
+`priv` is **enforced**: a `priv` declaration is dropped from every other
+module's scope, in both compilers (`scope_def_visible_to` in
+`lang/src/scope.mo`; the `Visibility::Priv` filter in
+`core/src/term/module.rs`). Visibility is declared on a type, class or
+instance as a whole -- constructors and methods inherit it, never carry
+their own.
+
+The default is **package-private**, which today still resolves across
+mote boundaries but **warns**: `check` reports every cross-mote reference
+to an unmarked declaration. The corpus is clean, so a new warning means a
+new cross-mote edge -- either mark the declaration `pub` or reconsider the
+import. `scripts/mark-cross-mote-exports-pub.py` does the marking in bulk,
+reading the corpus's own `use` filters to decide what actually crosses a
+boundary. Turning the warning into an error is a follow-up; until then,
+`pub` documents intent and keeps that flip cheap.
+
+
 ## Building and Running
 
 ```bash

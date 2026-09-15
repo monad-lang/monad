@@ -32,10 +32,10 @@
 use std::map {}
 
 #[partial]
-def str_map_empty {V : Type} : HashMap String V := HashMap.map HashMap.empty_buckets
+pub def str_map_empty {V : Type} : HashMap String V := HashMap.map HashMap.empty_buckets
 
 #[partial]
-def str_map_insert {V : Type} (key : String) (val : V) (m : HashMap String V) : HashMap String V :=
+pub def str_map_insert {V : Type} (key : String) (val : V) (m : HashMap String V) : HashMap String V :=
     match m {
         HashMap.map buckets =>
             let idx := HashMap.bucket_of (String.hash key) in
@@ -45,7 +45,7 @@ def str_map_insert {V : Type} (key : String) (val : V) (m : HashMap String V) : 
     }
 
 #[partial]
-def str_map_lookup {V : Type} (key : String) (m : HashMap String V) : Option V :=
+pub def str_map_lookup {V : Type} (key : String) (m : HashMap String V) : Option V :=
     match m {
         HashMap.map buckets =>
             let idx := HashMap.bucket_of (String.hash key) in

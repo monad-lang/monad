@@ -215,6 +215,7 @@ def test_scope_resolve_name_found : Bool :=
         module := mod_path,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.package_private,
     } in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via `scope_data_add_def` on top of
@@ -325,6 +326,7 @@ def test_build_from_modules_one_def : Bool :=
         module := mod_path,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.package_private,
     } in
     let empty_instances : List ScopeInstance := List.empty in
     let empty_infixes : List Infix := List.empty in
@@ -357,6 +359,62 @@ def test_build_from_modules_one_def : Bool :=
         ok found => true,
         err _ => false
     }
+
+// --- priv visibility ---
+
+/// `priv` is module-private: the declaring module sees it, no one else
+/// does. Built as a pair of tests over the same two-module fixture so the
+/// only difference between them is WHICH module is being scoped.
+def priv_fixture (vis : Visibility) : ModuleRegistry :=
+    let owner : ModulePath := ModulePath.mp [Identifier.id "Owner"] in
+    let def_name : ModulePath := ModulePath.mp [Identifier.id "secret"] in
+    let def_entry : ScopeDef := {
+        name := def_name,
+        module := owner,
+        sig := Term.hole,
+        body := Term.hole,
+        vis := vis,
+    } in
+    let m : Module := {
+        path := owner,
+        inductives := ([] : List Inductive),
+        defs := List.cons def_entry List.empty,
+        infixs := ([] : List Infix),
+        instances := ([] : List ScopeInstance),
+    } in
+    { modules := List.cons m List.empty }
+
+def priv_fixture_resolves_from (vis : Visibility) (consumer : ModulePath) : Bool :=
+    let sd : ScopeData := build_scope_from_modules consumer (priv_fixture vis) in
+    let s : Scope := {
+        module_id := consumer,
+        scope := sd,
+        parent := Option.none,
+    } in
+    let locals : LocalScope := { vars := List.empty, parent := (Option.none : Option LocalScope) } in
+    let nref : NameRef := NameRef.nmp (ModulePath.mp [Identifier.id "secret"]) in
+    match scope_resolve_name nref s locals {
+        ok _ => true,
+        err _ => false
+    }
+
+#[test]
+def test_priv_def_is_visible_in_its_own_module : Bool :=
+    priv_fixture_resolves_from Visibility.priv_ (ModulePath.mp [Identifier.id "Owner"])
+
+#[test]
+def test_priv_def_is_hidden_from_other_modules : Bool :=
+    not (priv_fixture_resolves_from Visibility.priv_ (ModulePath.mp [Identifier.id "Other"]))
+
+/// The default (package-private) still crosses module boundaries -- only
+/// `priv` is enforced today, and the mote boundary is a later step.
+#[test]
+def test_package_private_def_still_crosses_modules : Bool :=
+    priv_fixture_resolves_from Visibility.package_private (ModulePath.mp [Identifier.id "Other"])
+
+#[test]
+def test_pub_def_crosses_modules : Bool :=
+    priv_fixture_resolves_from Visibility.pub_ (ModulePath.mp [Identifier.id "Other"])
 
 // --- scope_resolve_instance found ---
 
@@ -524,7 +582,7 @@ def test_build_scope_then_resolve_constructor : Bool :=
     match result {
         ok d =>
             match d {
-                mk name _ _ _ => Similar.similar name true_name
+                mk name _ _ _ _ => Similar.similar name true_name
             },
         err _ => false
     }

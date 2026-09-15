@@ -122,7 +122,7 @@ def eval_args
 /// `globals`/`natives`, memoizing any global references forced along the
 /// way into the returned cache.
 #[partial]
-def eval
+pub def eval
     (ir : CoreIr) (env : Env) (globals : GlobalTable) (natives : NativeTable)
     (cache : GlobalCache)
     : Pair (Result CoreEvalError Value) GlobalCache :=
@@ -479,7 +479,7 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
 /// `derive_cli_meta` transitively call exactly `String.concat`/
 /// `String.beq`/`String.to_lowercase` among natives (everything else
 /// they use is ordinary Monad-defined code, no native involved).
-def basic_native_table : NativeTable :=
+pub def basic_native_table : NativeTable :=
   NativeTable.native_table
     [Identifier.id "i64_add", Identifier.id "i64_sub", Identifier.id "i64_mul",
      Identifier.id "i64_eq", Identifier.id "i64_lt",

@@ -396,7 +396,7 @@ def utf8_char_width_of_byte (byte : U8) : I64 :=
 // not just call sites that discard the matched text.
 
 #[partial]
-def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
+pub def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
 	take_while_loop pred input input
 
 
@@ -463,7 +463,7 @@ def take_while_done (original : String) (remaining : String) : ParseResult Strin
 // anything else costs a real stack frame per character in a compiled
 // binary. `byte_at` (`char_preds.mo`) absorbs the `Option`.
 #[partial]
-def take_while_byte (pred : U8 -> Bool) (input : String) : ParseResult String :=
+pub def take_while_byte (pred : U8 -> Bool) (input : String) : ParseResult String :=
 	take_while_byte_at pred input 0 (String.length input)
 
 

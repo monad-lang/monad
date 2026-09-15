@@ -51,7 +51,7 @@ def span_fragment (span : LocatedSpan) : String :=
 // (`init/string.mo`) do the whole accounting in one pass each without
 // building a frame per character. `line_col_scan_direct` below survives
 // as the REFERENCE implementation the tests check the natives against.
-struct LineColScan {
+pub struct LineColScan {
 	newlines : I64,
 	/// Characters since the last newline -- or, if there is no newline at
 	/// all, the character count of the whole string.
@@ -366,7 +366,7 @@ def boundary_at_or_after (s : String) (i : I64) : I64 :=
 /// dropped entry would leave a term with no location for no visible
 /// reason.
 #[partial]
-def resolve_offsets_in_file (source : String) (offsets : List I64) : List (Pair I64 Location) :=
+pub def resolve_offsets_in_file (source : String) (offsets : List I64) : List (Pair I64 Location) :=
     if is_ascending offsets
     then resolve_ascending source offsets
     else resolve_ascending source (sort_offsets_asc offsets)
@@ -442,7 +442,7 @@ def reverse_offsets (xs : List I64) (acc : List I64) : List I64 :=
     }
 
 #[partial]
-def is_ascending (offsets : List I64) : Bool := match offsets {
+pub def is_ascending (offsets : List I64) : Bool := match offsets {
     List.empty => true,
     List.cons a rest => is_ascending_from a rest,
 }

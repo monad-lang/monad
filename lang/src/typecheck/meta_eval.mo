@@ -108,7 +108,7 @@ def apply_to_value (f : Value) (arg : Value) (globals : GlobalTable) : Result St
             },
     }
 
-def show_value_debug (v : Value) : String :=
+pub def show_value_debug (v : Value) : String :=
     match v {
         Value.v_lit l => show_irlit_debug l,
         Value.v_con tag args => String.concat "v_con#" (String.concat (I64.to_string tag) (String.concat "/" (I64.to_string (List.length args)))),
@@ -125,7 +125,7 @@ def show_irlit_debug (l : IrLit) : String :=
         IrLit.ir_sort lvl => String.concat "Sort " (I64.to_string lvl),
     }
 
-def show_core_eval_error_debug (e : CoreEvalError) : String :=
+pub def show_core_eval_error_debug (e : CoreEvalError) : String :=
     match e {
         CoreEvalError.ce_unbound_local idx => String.concat "ce_unbound_local " (I64.to_string idx),
         CoreEvalError.ce_unknown_global idx => String.concat "ce_unknown_global " (I64.to_string idx),

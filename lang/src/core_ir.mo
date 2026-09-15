@@ -43,7 +43,7 @@ type MatchArm {
   arm (bind_count: I64) (body: CoreIr),
 }
 
-type CoreIr {
+pub type CoreIr {
   /// De Bruijn index into the *runtime* environment (an `Env`, built by
   /// the evaluator as it descends into `lam`/`match_` bodies) — same
   /// numbering convention as `Term.var`'s de Bruijn index (0 = innermost/

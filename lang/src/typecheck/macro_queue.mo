@@ -265,7 +265,7 @@ def expand_decls_terms_only (lookup : Identifier -> Option Term) (decl_list : Li
 /// this file's own doc comment already flags for nested decl-position
 /// calls.
 #[partial]
-def expand_decls (decl_list : List Decl) : List Decl :=
+pub def expand_decls (decl_list : List Decl) : List Decl :=
     let term_registry : List TermMacroEntry := build_term_macro_registry decl_list in
     let decl_gen_registry : List DeclGenEntry := build_decl_gen_registry decl_list in
     let lookup : Identifier -> Option Term := fn id => lookup_term_macro term_registry id in

@@ -227,7 +227,7 @@ def synthesize_test_driver_source (names : List String) : String :=
 /// target file's own tests still resolve everything those tests
 /// themselves call, transitively, the normal way.
 #[partial]
-def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result String LLVMModule) := do {
+pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result String LLVMModule) := do {
     let target_mi : ModuleInfo := get_loaded_main loaded;
     let target_decls := target_mi.decl_list;
     if has_top_level_main target_decls then do {

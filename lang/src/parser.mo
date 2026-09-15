@@ -3659,7 +3659,7 @@ def lower_decls_result (r : ParseResult (List ParseDecl)) : ParseResult (List De
 
 
 #[partial]
-def decls_parser (input : String) : ParseResult (List Decl) :=
+pub def decls_parser (input : String) : ParseResult (List Decl) :=
 	lower_decls_result (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
 
 
@@ -3677,7 +3677,7 @@ def decls_parser (input : String) : ParseResult (List Decl) :=
 // lookups.
 
 #[partial]
-def decls_parser_located (input : String) : ParseResult (List Decl) :=
+pub def decls_parser_located (input : String) : ParseResult (List Decl) :=
 	locate_and_lower input (decls_skip (skip_docstrings (skip_spaces input)) List.empty)
 
 #[partial]
@@ -3705,7 +3705,7 @@ def locate_and_lower (whole_file : String) (r : ParseResult (List ParseDecl)) : 
 /// now sorts instead; see its own doc comment for the measurements. Nothing
 /// here needs to change, but do not re-derive the false invariant.
 #[partial]
-def build_loc_table (whole_file : String) (ds : List ParseDecl) : HashMap String Location :=
+pub def build_loc_table (whole_file : String) (ds : List ParseDecl) : HashMap String Location :=
 	let total : I64 := String.length whole_file in
 	let rems : List I64 := list_reverse (collect_decl_rems ds List.empty) in
 	let resolved : List (Pair I64 Location) :=
@@ -3713,13 +3713,13 @@ def build_loc_table (whole_file : String) (ds : List ParseDecl) : HashMap String
 	rekey_by_rem total resolved str_map_empty
 
 #[partial]
-def rems_to_offsets (total : I64) (rems : List I64) (acc : List I64) : List I64 := match rems {
+pub def rems_to_offsets (total : I64) (rems : List I64) (acc : List I64) : List I64 := match rems {
 	List.empty => list_reverse acc,
 	List.cons r rest => rems_to_offsets total rest (List.cons (total - r) acc),
 }
 
 #[partial]
-def rekey_by_rem (total : I64) (pairs : List (Pair I64 Location)) (acc : HashMap String Location) : HashMap String Location :=
+pub def rekey_by_rem (total : I64) (pairs : List (Pair I64 Location)) (acc : HashMap String Location) : HashMap String Location :=
 	match pairs {
 		List.empty => acc,
 		List.cons p rest => rekey_by_rem total rest (rekey_one total p acc),
@@ -3732,7 +3732,7 @@ def rekey_one (total : I64) (p : Pair I64 Location) (acc : HashMap String Locati
 	}
 
 #[partial]
-def decls_skip (input : String) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
+pub def decls_skip (input : String) (acc : List ParseDecl) : ParseResult (List ParseDecl) :=
 	decls_try (decl_parser input) input acc
 
 #[partial]
@@ -4711,7 +4711,7 @@ def literal_parser (input: String) : ParseResult ParseTerm :=
 // resync fix) silently truncated the rest of the file's decl_list. Matching
 // on `"//"` (a prefix of `"///"` too) skips both forms uniformly.
 #[partial]
-def skip_docstrings (input : String) : String :=
+pub def skip_docstrings (input : String) : String :=
 	skip_docstrings_block_try (skip_docstrings_try (tag "//" input) input) input
 
 #[partial]

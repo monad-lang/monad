@@ -104,13 +104,13 @@ def is_alphanumeric (c : String) : Bool :=
 
 
 #[partial]
-def is_ident_char (c : String) : Bool :=
+pub def is_ident_char (c : String) : Bool :=
 	if is_alphanumeric c then true
 	else String.beq "_" c
 
 
 #[partial]
-def is_space (c : String) : Bool :=
+pub def is_space (c : String) : Bool :=
 	if String.beq " " c then true
 	else if String.beq "\t" c then true
 	else if String.beq "\n" c then true
@@ -203,7 +203,7 @@ def byte_at (s : String) (i : I64) : U8 :=
 
 /// `' '`, `'\t'`, `'\n'`, `'\r'` -- byte-wise `is_space`.
 #[partial]
-def is_space_byte (c : U8) : Bool :=
+pub def is_space_byte (c : U8) : Bool :=
 	if U8.beq c 32u8 then true
 	else if U8.beq c 10u8 then true
 	else if U8.beq c 9u8 then true
@@ -236,7 +236,7 @@ def is_alphanumeric_byte (c : U8) : Bool :=
 
 /// Byte-wise `is_ident_char`: alphanumeric or `'_'` (95).
 #[partial]
-def is_ident_char_byte (c : U8) : Bool :=
+pub def is_ident_char_byte (c : U8) : Bool :=
 	if is_alphanumeric_byte c then true
 	else U8.beq c 95u8
 

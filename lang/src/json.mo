@@ -729,7 +729,7 @@ def Json.deserialize_field {A : Type} (deserialize_elem : Json -> Result String 
 
 // ─── Serde: worked example (Person) ───
 
-struct Person {
+pub struct Person {
   name : String,
   age : I64,
 }

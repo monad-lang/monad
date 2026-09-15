@@ -188,7 +188,7 @@ def modpath_str_eq (a : ModulePath) (b : ModulePath) : Bool :=
 
 def scope_data_add_def (sd : ScopeData) (d : ScopeDef) : ScopeData :=
     match d {
-        mk dname _ _ _ => { sd with def_refs := modpath_map_insert dname d sd.def_refs }
+        mk dname _ _ _ _ => { sd with def_refs := modpath_map_insert dname d sd.def_refs }
     }
 
 // --- Helper: add an Inductive to ScopeData ---
@@ -229,7 +229,7 @@ def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
 // non-test `.mo` file in the corpus was found using `scoped_open_d`'s
 // real scoping semantics (only `lang/parser.mo`'s own unit tests and
 // `lang/pretty.mo`'s round-trip fixture construct one directly).
-def build_scope_from_decls (path : ModulePath) (decl_list : List Decl) : ScopeData :=
+pub def build_scope_from_decls (path : ModulePath) (decl_list : List Decl) : ScopeData :=
     let empty : ScopeData := scope_data_empty in
     let with_decls : ScopeData := build_scope_from_decls_go decl_list path empty in
     let with_builtins : ScopeData := add_builtins with_decls in
@@ -290,13 +290,16 @@ def alias_def (acc : ScopeData) (real_path : ModulePath) (alias_name : Identifie
     match scope_data_find_def acc real_path {
         Option.some sd =>
             match sd {
-                mk _ module_ sig body =>
+                mk _ module_ sig body vis =>
                     let alias_mp : ModulePath := ModulePath.mp (List.cons alias_name List.empty) in
                     let aliased : ScopeDef := {
                         name := alias_mp,
                         module := module_,
                         sig := sig,
                         body := body,
+                        // An alias is the same declaration under another
+                        // key, so it carries the same visibility.
+                        vis := vis,
                     } in
                     scope_data_add_def acc aliased
             },
@@ -376,12 +379,13 @@ def build_scope_one_decl (d : Decl) (path : ModulePath) (acc : ScopeData) : Scop
 
 def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     match df {
-        mk defname typ term_ _ _ _ =>
+        mk defname typ term_ _ _ vis =>
             let sd : ScopeDef := {
                 name := defname,
                 module := path,
                 sig := Term.hole,
                 body := Term.hole,
+                vis := vis,
             } in
             let with_def : ScopeData := scope_data_add_def acc sd in
             // Additional, side-table registration -- `plans/
@@ -494,21 +498,25 @@ def scope_data_add_def_sig (sd : ScopeData) (name : ModulePath) (sig : Term) : S
 def build_scope_inductive (ind : Inductive) (path : ModulePath) (acc : ScopeData) : ScopeData :=
     let with_ind : ScopeData := scope_data_add_inductive acc ind in
     match ind {
-        mk name _ _ constructors _ _ =>
+        mk name _ _ constructors _ vis =>
             let type_sd : ScopeDef := {
                 name := name,
                 module := path,
                 sig := Term.hole,
                 body := Term.hole,
+                vis := vis,
             } in
             let with_type_def : ScopeData := scope_data_add_def with_ind type_sd in
-            add_constructors_as_defs with_type_def constructors path
+            // Constructors are as visible as the type they belong to --
+            // visibility is declared on the inductive, never per
+            // constructor (visibility-declarations.md).
+            add_constructors_as_defs with_type_def constructors path vis
     }
 
-def add_constructors_as_defs (acc : ScopeData) (cns : List InductConstructor) (path : ModulePath) : ScopeData :=
-    add_constructors_go acc cns path
+def add_constructors_as_defs (acc : ScopeData) (cns : List InductConstructor) (path : ModulePath) (vis : Visibility) : ScopeData :=
+    add_constructors_go acc cns path vis
 
-def add_constructors_go (acc : ScopeData) (cns : List InductConstructor) (path : ModulePath) : ScopeData :=
+def add_constructors_go (acc : ScopeData) (cns : List InductConstructor) (path : ModulePath) (vis : Visibility) : ScopeData :=
     match cns {
         List.empty => acc,
         List.cons cn rest =>
@@ -519,9 +527,10 @@ def add_constructors_go (acc : ScopeData) (cns : List InductConstructor) (path :
                         module := path,
                         sig := Term.hole,
                         body := Term.hole,
+                        vis := vis,
                     } in
                     let new_acc : ScopeData := scope_data_add_def acc sd in
-                    add_constructors_go new_acc rest path
+                    add_constructors_go new_acc rest path vis
             }
     }
 
@@ -557,6 +566,7 @@ def build_scope_struct (s : Struct) (path : ModulePath) (acc : ScopeData) : Scop
                 module := path,
                 sig := Term.hole,
                 body := Term.hole,
+                vis := vis,
             } in
             let with_type_def : ScopeData := scope_data_add_def acc type_sd in
             let mk_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty) in
@@ -819,7 +829,7 @@ def find_local_in_list (vars : List LocalVar) (name : Identifier) (parent : Opti
 
 // --- scope_resolve_name ---
 
-def scope_resolve_name (nref : NameRef) (s : Scope) (locals : LocalScope) : Result ScopeError ScopeDef :=
+pub def scope_resolve_name (nref : NameRef) (s : Scope) (locals : LocalScope) : Result ScopeError ScopeDef :=
     let local_result : Option ScopeDef := resolve_name_in_locals nref locals in
     match local_result {
         Option.some d => ok d,
@@ -843,6 +853,10 @@ def resolve_name_in_locals (nref : NameRef) (locals : LocalScope) : Option Scope
                                 module := empty_mp,
                                 sig := lvtyp,
                                 body := Term.hole,
+                                // A local binding, not a declaration --
+                                // it never crosses a module boundary for
+                                // visibility to mean anything.
+                                vis := Visibility.package_private,
                             } in
                             Option.some sd
                     }
@@ -1007,6 +1021,7 @@ def add_builtin_type (sd : ScopeData) : ScopeData :=
         module := ModulePath.mp empty_id_list,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.pub_,
     } in
     let sd1 : ScopeData := scope_data_add_inductive sd type_ind in
     scope_data_add_def sd1 type_sd
@@ -1024,6 +1039,7 @@ def add_builtin_prop (sd : ScopeData) : ScopeData :=
         module := ModulePath.mp empty_id_list,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.pub_,
     } in
     let sd1 : ScopeData := scope_data_add_inductive sd prop_ind in
     scope_data_add_def sd1 prop_sd
@@ -1041,6 +1057,7 @@ def add_builtin_sort (sd : ScopeData) : ScopeData :=
         module := ModulePath.mp empty_id_list,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.pub_,
     } in
     let sd1 : ScopeData := scope_data_add_inductive sd sort_ind in
     scope_data_add_def sd1 sort_sd
@@ -1058,42 +1075,58 @@ def add_builtin_pred (sd : ScopeData) : ScopeData :=
         module := ModulePath.mp empty_id_list,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.pub_,
     } in
     let sd1 : ScopeData := scope_data_add_inductive sd pred_ind in
     scope_data_add_def sd1 pred_sd
 
 // --- build_scope_from_modules: build ScopeData from loaded modules ---
 
+/// `path` is the module being scoped -- the consumer. Every other
+/// module's `priv` declarations are dropped on the way in.
 def build_scope_from_modules (path : ModulePath) (loaded : ModuleRegistry) : ScopeData :=
     match loaded {
         mk modules =>
             let empty : ScopeData := scope_data_empty in
-            build_scope_from_modules_go modules empty
+            build_scope_from_modules_go modules path empty
     }
 
-def build_scope_from_modules_go (modules : List Module) (acc : ScopeData) : ScopeData :=
+def build_scope_from_modules_go (modules : List Module) (consumer : ModulePath) (acc : ScopeData) : ScopeData :=
     match modules {
         List.empty => acc,
         List.cons m rest =>
-            let with_mod : ScopeData := build_scope_from_one_module m acc in
-            build_scope_from_modules_go rest with_mod
+            let with_mod : ScopeData := build_scope_from_one_module m consumer acc in
+            build_scope_from_modules_go rest consumer with_mod
     }
 
-def build_scope_from_one_module (m : Module) (acc : ScopeData) : ScopeData :=
+def build_scope_from_one_module (m : Module) (consumer : ModulePath) (acc : ScopeData) : ScopeData :=
     match m {
         mk _path _inductives defs infxs _instances =>
-            let with_defs : ScopeData := add_module_defs acc defs in
+            let with_defs : ScopeData := add_module_defs acc consumer defs in
             let with_inds : ScopeData := add_module_inductives with_defs _inductives in
             let with_inst : ScopeData := add_module_instances with_inds _instances in
             add_module_infixes with_inst infxs
     }
 
-def add_module_defs (acc : ScopeData) (defs : List ScopeDef) : ScopeData :=
+/// `priv` means module-private: visible where it is declared and nowhere
+/// else. The check is on the DEF's own owning module rather than on the
+/// module currently being folded in, because a re-export can carry a def
+/// from one module into another's entry list.
+def scope_def_visible_to (consumer : ModulePath) (d : ScopeDef) : Bool :=
+    match d.vis {
+        Visibility.priv_ => String.beq (show_module_path d.module) (show_module_path consumer),
+        _ => true
+    }
+
+def add_module_defs (acc : ScopeData) (consumer : ModulePath) (defs : List ScopeDef) : ScopeData :=
     match defs {
         List.empty => acc,
         List.cons d rest =>
-            let new_acc : ScopeData := scope_data_add_def acc d in
-            add_module_defs new_acc rest
+            if scope_def_visible_to consumer d
+            then
+                let new_acc : ScopeData := scope_data_add_def acc d in
+                add_module_defs new_acc consumer rest
+            else add_module_defs acc consumer rest
     }
 
 def add_module_inductives (acc : ScopeData) (inds : List Inductive) : ScopeData :=
@@ -1419,7 +1452,7 @@ def resolve_infix_decls (infixes : List Infix) (decl_list : List Decl) : List De
 // already accepts, low in practice: none of `file_exists`/`is_dir`/
 // `list_dir`/`read_file`/`write_file` collide with any local variable
 // name anywhere in this corpus).
-struct OpenAlias {
+pub struct OpenAlias {
     bare_name : String,
     qualified_name : String,
 }
@@ -2426,7 +2459,7 @@ def add_constraint_dict_params_decls (decl_list : List Decl) : List Decl :=
 /// binding site (a `Term.lam`'s own `typ` field) -- threaded down
 /// through the walk so a later reference to that variable can recover
 /// its type for carrier inference.
-type LocalTypeBinding {
+pub type LocalTypeBinding {
     mk (var_id : Identifier) (declared_type : Term),
 }
 
@@ -2434,14 +2467,14 @@ type LocalTypeBinding {
 /// its own class -- threaded down the same way, extended whenever the
 /// walk descends into one of Phase 3's own dict-binding `Term.lam`s
 /// (recognized by `dict_param_name`'s own naming scheme).
-type DictBinding {
+pub type DictBinding {
     mk (cls : ModulePath) (dict_id : Identifier),
 }
 
 /// One 0-arg constructor's own owning inductive type -- e.g. `true`/
 /// `false` both owned by `Bool` -- needed for carrier inference on a
 /// bare constructor reference like `true` in `true == false`.
-type CtorOwner {
+pub type CtorOwner {
     mk (ctor_name : Identifier) (owner : ModulePath),
 }
 
@@ -2464,7 +2497,7 @@ type CtorOwner {
 /// can't recover a real return type for an ordinary function call in
 /// pure-infer mode. This syntactic pass, unlike the type checker, reads
 /// straight from the parsed decl list and isn't affected by that gap.
-type DefTypeEntry {
+pub type DefTypeEntry {
     mk (name : ModulePath) (typ : Term),
 }
 
@@ -2602,7 +2635,7 @@ def type_head_name_local (t : Term) : Option Identifier :=
 /// String Json`'s `fst`/`snd` are declared `A`/`B` in `Pair`'s own decl,
 /// not `String`/`Json`) -- `match_arm_env` below substitutes using the
 /// scrutinee's own concrete type args once it has both pieces.
-type CtorFieldTypes {
+pub type CtorFieldTypes {
     mk (ctor_name : Identifier) (owner_params : List Identifier) (field_types : List Term),
 }
 
@@ -3246,7 +3279,7 @@ def first_instance_matching (instances : List Instance) (carrier : Term) : Optio
 /// to this pass (emit.mo's own `AppSpine` isn't reachable from here
 /// without a circular module dependency, since emit.mo itself already
 /// `use`s this module).
-type CallSpine {
+pub type CallSpine {
     mk (head : Term) (args : List Term),
 }
 
@@ -3304,7 +3337,7 @@ def class_method_ref (classes : List Class) (id : Identifier) : Option ClassMeth
             },
     }
 
-type ClassMethodRef {
+pub type ClassMethodRef {
     mk (cls : Class) (method_name : Identifier),
 }
 
@@ -3883,7 +3916,7 @@ def dict_binding_class_of (id : Identifier) : Option ModulePath :=
 /// never contains a class-method CALL to resolve, only Phase 3's own
 /// dict-parameter Pi's, which this pass doesn't touch).
 #[partial]
-def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
+pub def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
     let classes := collect_classes decl_list in
     let instances := collect_instances decl_list in
     let ctor_owners := collect_ctor_owners decl_list in
@@ -4071,7 +4104,7 @@ def find_unresolved_class_calls_opt_list (classes : List Class) (args : List (Op
 /// is the call-site half of the same mechanism, needed for genuine
 /// polymorphism (D5) to have anything to actually supply at a call
 /// site in the first place.
-type DefConstraintEntry {
+pub type DefConstraintEntry {
     mk (name : ModulePath) (constraints : List TypeConstraint),
 }
 

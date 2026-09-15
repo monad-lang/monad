@@ -234,7 +234,7 @@ def bare_ctor_tag (c : CodegenCtx) (bare : String) : I64 :=
 /// to it), its declared FIELD COUNT (how the composite key
 /// disambiguates colliders), and its owner-QUALIFIED name
 /// ("TypeName.ctorName" -- how a value-position reference is written).
-struct CtorClaim {
+pub struct CtorClaim {
     bare : String,
     arity : I64,
     qualified : String,
@@ -273,7 +273,7 @@ def collect_ctor_claims_inds (inds : List Inductive) (acc : List CtorClaim) : Li
 /// claimed at a DIFFERENT arity too (the ambiguity marker -- a bare
 /// name with several arities cannot answer an arity-unknown lookup and
 /// gets the -1 sentinel in the tag map).
-struct BareArityScan {
+pub struct BareArityScan {
     first : HashMap String I64,
     multi : HashMap String Bool,
 }
@@ -295,7 +295,7 @@ def scan_ctor_bare_arities (claims : List CtorClaim) (st : BareArityScan) : Bare
         },
 }
 
-struct CtorTagBuildState {
+pub struct CtorTagBuildState {
     next_tag : I64,
     tags : HashMap String I64,
 }

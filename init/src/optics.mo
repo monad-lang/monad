@@ -4,7 +4,7 @@
 // --- Lens ---
 
 /// A lens focuses on a part A within a whole S.
-type Lens S A {
+pub type Lens S A {
     mkLens (view : S -> A) (set : A -> S -> S)
 }
 
@@ -13,15 +13,15 @@ def lens (get : S -> A) (put : A -> S -> S) : Lens S A :=
     Lens.mkLens get put
 
 /// Extract the focused value from a structure.
-def view (ln : Lens S A) (s : S) : A :=
+pub def view (ln : Lens S A) (s : S) : A :=
     match ln { mkLens v _ => v s }
 
 /// Replace the focused value within a structure.
-def set (ln : Lens S A) (a : A) (s : S) : S :=
+pub def set (ln : Lens S A) (a : A) (s : S) : S :=
     match ln { mkLens _ st => st a s }
 
 /// Modify the focused value within a structure.
-def over (ln : Lens S A) (g : A -> A) (s : S) : S :=
+pub def over (ln : Lens S A) (g : A -> A) (s : S) : S :=
     let a := view ln s in
     set ln (g a) s
 

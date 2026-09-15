@@ -4,13 +4,13 @@
 use math {}
 
 #[native string_eq]
-def String.beq (a b : String) : Bool
+pub def String.beq (a b : String) : Bool
 
 #[native string_concat]
-def String.concat (a b : String) : String
+pub def String.concat (a b : String) : String
 
 #[native string_length]
-def String.length (s : String) : I64
+pub def String.length (s : String) : I64
 
 /// Number of `'\n'` bytes among the first `len` bytes of `s`.
 ///
@@ -44,13 +44,13 @@ def String.trailing_chars (s : String) (len : I64) : I64
 def String.to_lowercase (s : String) : String
 
 #[native string_slice]
-def String.slice (s : String) (start : I64) (len : I64) : String
+pub def String.slice (s : String) (start : I64) (len : I64) : String
 
 #[native string_drop]
-def String.drop (n : I64) (s : String) : String
+pub def String.drop (n : I64) (s : String) : String
 
 #[native string_starts_with]
-def String.starts_with (prefix : String) (s : String) : Bool
+pub def String.starts_with (prefix : String) (s : String) : Bool
 
 #[native string_get]
 def String.get (s : String) (i : I64) : Option U8
@@ -66,7 +66,7 @@ def String.get (s : String) (i : I64) : Option U8
 def String.get_char (s : String) (i : I64) : Option Char
 
 #[native string_to_list]
-def String.to_list (s : String) : List U8
+pub def String.to_list (s : String) : List U8
 
 #[native string_from_list]
 def String.from_list (bytes : List U8) : String
@@ -124,7 +124,7 @@ def String.hash_selfhosted (s : String) : U64 :=
 #[native string_hash]
 def String.hash (s : String) : U64
 
-instance BEq String {
+pub instance BEq String {
 	def beq (a b : String) : Bool := String.beq a b
 }
 
@@ -163,14 +163,14 @@ def String.gt_selfhosted (a b : String) : Bool := bytes_gt_selfhosted (String.to
 def String.lt (a b : String) : Bool
 
 #[native string_gt]
-def String.gt (a b : String) : Bool
+pub def String.gt (a b : String) : Bool
 
-instance BOrd String {
+pub instance BOrd String {
 	def lt (a b : String) : Bool := String.lt a b
 	def gt (a b : String) : Bool := String.gt a b
 }
 
-instance ToString String {
+pub instance ToString String {
 	def to_string (s : String) : String := s
 }
 
@@ -186,7 +186,7 @@ instance Hashable String {
   def hash (s : String) : U64 := String.hash s
 }
 
-def String.is_empty (s : String) : Bool :=
+pub def String.is_empty (s : String) : Bool :=
 	I64.beq (String.length s) 0
 
 // ── List helpers (polymorphic) ──
@@ -293,7 +293,7 @@ def String.find_last (haystack : String) (needle : String) : I64 :=
 /// Moved here from `lang/json.mo`, which declared this `String` method
 /// inside a compiler module; `cli/src/args.mo`'s `cli_concat_all` and
 /// `lang/toml.mo`'s `toml_concat_list_body` were further copies.
-def String.concat_all (ss : List String) : String :=
+pub def String.concat_all (ss : List String) : String :=
 	match ss {
 		empty => "",
 		cons hd tl => String.concat hd (String.concat_all tl)

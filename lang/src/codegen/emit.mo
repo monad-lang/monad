@@ -104,7 +104,7 @@ open LLVMValue {
   phi, ptrtoint, sdiv, sub, trunc, var_, void_val, zext,
 }
 
-type CompileResult {
+pub type CompileResult {
     ok (ctx : CodegenCtx) (instrs : List LLVMInstruction) (val : LLVMValue) (blocks : List LLVMBasicBlock) (funcs : List LLVMFunction) (globals : List LLVMGlobal),
 }
 
@@ -260,7 +260,7 @@ def build_partial_apply_shim_func (shim_name : String) (real_name : String) (cap
     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
     LLVMFunction.mk shim_name params LLVMType.i64_ (List.cons entry_block List.empty) false Option.none
 
-struct ShimEnvGets {
+pub struct ShimEnvGets {
     instrs : List LLVMInstruction,
     vals : List LLVMValue,
 }
@@ -576,7 +576,7 @@ def compile_match_ir (c : CodegenCtx) (scrutinee : Term) (cases : List MatchCase
             },
     }
 
-struct MatchChainResult {
+pub struct MatchChainResult {
     ctx : CodegenCtx,
     blocks : List LLVMBasicBlock,
     funcs : List LLVMFunction,
@@ -639,7 +639,7 @@ def build_match_chain (c : CodegenCtx) (tag_val : LLVMValue) (scrutinee_val : LL
             },
     }
 
-struct FieldBindResult {
+pub struct FieldBindResult {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
 }
@@ -666,7 +666,7 @@ def bind_match_fields (c : CodegenCtx) (scrutinee_val : LLVMValue) (args : List 
             },
     }
 
-struct RetargetResult {
+pub struct RetargetResult {
     blocks : List LLVMBasicBlock,
     label : String,
 }
@@ -811,7 +811,7 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
 /// constructor`/`monad_set_field` calls landed after the `if`'s branch,
 /// unreachable, while the `if`'s own merge block's placeholder `ret`
 /// became the constructor's wrong, early "value").
-struct NtvArgs {
+pub struct NtvArgs {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
     vals : List LLVMValue,
@@ -879,7 +879,7 @@ def compile_ntv_args_go (c : CodegenCtx) (args : List (Option Term)) (acc_instrs
 def compile_ntv_args (c : CodegenCtx) (args : List (Option Term)) (acc_instrs : List LLVMInstruction) (acc_vals : List LLVMValue) : NtvArgs :=
     compile_ntv_args_go c args acc_instrs List.empty List.empty List.empty acc_vals LLVMValue.void_val
 
-struct MaterializedVal {
+pub struct MaterializedVal {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
     val : LLVMValue,
@@ -973,7 +973,7 @@ def materialize_native_bool_arg (c : CodegenCtx) (t : Term) (v : LLVMValue) : Ma
         }
     else { ctx := c, instrs := List.empty, val := v }
 
-struct BranchMaterializeResult {
+pub struct BranchMaterializeResult {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
     val : LLVMValue,
@@ -1107,7 +1107,7 @@ def compile_con_ir (c : CodegenCtx) (con : Con) : CompileResult :=
             },
     }
 
-struct SetFieldResult {
+pub struct SetFieldResult {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
 }
@@ -1131,7 +1131,7 @@ def build_set_field_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : 
             },
     }
 
-struct IfLabels {
+pub struct IfLabels {
     ctx_after : CodegenCtx,
     then_label : String,
     else_label : String,
@@ -1216,7 +1216,7 @@ def is_terminator_instr (instr : LLVMInstruction) : Bool := match instr {
 // behavior whenever `a` isn't itself branching, i.e. the overwhelming
 // majority of real code — this changes nothing about ordinary,
 // non-branching compilation.
-struct Triple {
+pub struct Triple {
     instrs : List LLVMInstruction,
     blocks : List LLVMBasicBlock,
     val : LLVMValue,
@@ -1470,7 +1470,7 @@ def captures_to_vals (captures : List LocalBinding) : List LLVMValue := match ca
         },
 }
 
-struct GetEnvResult {
+pub struct GetEnvResult {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
 }
@@ -1519,7 +1519,7 @@ def build_get_env_instrs (c : CodegenCtx) (captures : List LocalBinding) (idx : 
         },
 }
 
-struct SetEnvResult {
+pub struct SetEnvResult {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
 }
@@ -1756,7 +1756,7 @@ def compile_db_if_ir (c : CodegenCtx) (cond : Term) (then_ : Term) (else_ : Term
             },
     }
 
-struct BoolCondResult {
+pub struct BoolCondResult {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
     blocks : List LLVMBasicBlock,
@@ -1935,7 +1935,7 @@ def build_merge_phi_pairs (then_reaches : Bool) (then_val : LLVMValue) (then_lab
 /// accounting for `retarget_terminal_ret` -- see `build_merge_result`'s
 /// own doc comment for why a branch not directly reaching
 /// `merge_label` doesn't mean it never reaches it at all.
-struct BranchMergeInfo {
+pub struct BranchMergeInfo {
     reaches : Bool,
     label : String,
     blocks : List LLVMBasicBlock,
@@ -2753,7 +2753,7 @@ def compile_native_app_db (c : CodegenCtx) (op : NativeOp) (arg2 : Term) (arg : 
             },
     }
 
-struct AppSpine {
+pub struct AppSpine {
     head : Term,
     args : List Term,
 }
@@ -2783,7 +2783,7 @@ def flatten_app_spine_go (t : Term) (acc : List Term) : AppSpine :=
 /// spine's own caller (`compile_general_db_call`) can keep correctly
 /// splicing after it too, instead of losing track once the args are
 /// fully combined.
-struct SpineArgs {
+pub struct SpineArgs {
     ctx : CodegenCtx,
     instrs : List LLVMInstruction,
     blocks : List LLVMBasicBlock,
@@ -3271,7 +3271,7 @@ def param_name_db (p : Param) : Identifier := match p {
     Param.mk name typ_ mult default _attrs => name,
 }
 
-struct DefResult {
+pub struct DefResult {
     ctx : CodegenCtx,
     funcs : List LLVMFunction,
     globals : List LLVMGlobal,
@@ -3584,7 +3584,7 @@ def parm_values_for_go (params : List Param) (idx : I64) : List LLVMValue :=
         List.cons _ rest => List.cons (LLVMValue.parm_ idx) (parm_values_for_go rest (idx + 1)),
     }
 
-struct TerminalBlocks {
+pub struct TerminalBlocks {
     ctx : CodegenCtx,
     blocks : List LLVMBasicBlock,
 }
@@ -3832,7 +3832,7 @@ def compile_db_module (decl_list : List Decl) : LLVMModule :=
 /// `compile_db_decls_ir_with_debug`'s own doc comment for why this is a
 /// sibling function rather than new params on `compile_db_module`.
 #[partial]
-def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_files : List (Pair String String)) : LLVMModule :=
+pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Option String) (debug_files : List (Pair String String)) : LLVMModule :=
     let defs := extract_defs decl_list in
     let inds := extract_inductives decl_list in
     let ctor_tags := build_constructor_tag_map inds in
@@ -4520,7 +4520,7 @@ def check_contains (text : String) (needle : String) : Bool :=
 /// (`cli/src/main.mo`'s own compile-file progress markers, link failures,
 /// the user's program output) in low-value noise.
 #[partial]
-def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result String LLVMModule) :=
+pub def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result String LLVMModule) :=
     compile_loaded_modules_to_ir_with_debug loaded verbose Option.none
 
 /// One `(module path string, file path)` pair per loaded module -- the
@@ -4791,7 +4791,7 @@ def call_target_gate_probe (r : Result String LLVMModule) : I64 := match r {
 /// callers (`main.mo`, `test_closure_capture_e2e.mo`) don't need to
 /// change for a feature they don't exercise.
 #[partial]
-def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) : IO (Result String LLVMModule) := do {
+pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : Bool) (source_path : Option String) : IO (Result String LLVMModule) := do {
     let total_start : I64 <- Bench.now;
 
     let all_mods := get_loaded_all loaded;

@@ -34,7 +34,7 @@ def parse_error_remaining (e : ParseError) : String :=
 	}
 
 
-type ParseResult O {
+pub type ParseResult O {
 	success (remaining: String) (output: O),
 	fail (error: ParseError)
 	}
@@ -42,7 +42,7 @@ type ParseResult O {
 
 
 
-type OpEntry {
+pub type OpEntry {
 	mk (op_str: String) (prec: I64) (right_assoc: Bool)
 	}
 

@@ -13,7 +13,7 @@
 use lib::path {Path}
 
 #[native print_str]
-def IO.println (s: String) : IO Unit
+pub def IO.println (s: String) : IO Unit
 
 #[native "write_file"]
 def IO.write_file_native (path : String) (content : String) : IO Unit
@@ -49,16 +49,16 @@ def IO.current_time : IO I64
 def IO.write_file (path : Path) (content : String) : IO Unit :=
     IO.write_file_native (Path.to_string path) content
 
-def IO.read_file (path : Path) : IO String :=
+pub def IO.read_file (path : Path) : IO String :=
     IO.read_file_native (Path.to_string path)
 
-def IO.file_exists (path : Path) : IO Bool :=
+pub def IO.file_exists (path : Path) : IO Bool :=
     IO.file_exists_native (Path.to_string path)
 
-def IO.is_dir (path : Path) : IO Bool :=
+pub def IO.is_dir (path : Path) : IO Bool :=
     IO.is_dir_native (Path.to_string path)
 
-def IO.list_dir (path : Path) : IO (List String) :=
+pub def IO.list_dir (path : Path) : IO (List String) :=
     IO.list_dir_native (Path.to_string path)
 
 // TODO support constraints

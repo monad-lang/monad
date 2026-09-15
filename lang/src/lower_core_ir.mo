@@ -121,7 +121,7 @@ def find_def (defs : List Def) (path : ModulePath) : Option Def :=
       },
   }
 
-type LowerError {
+pub type LowerError {
   le_unresolved_name (name: Identifier),
   le_unresolved_module_path (path: ModulePath),
   le_unknown_inductive (path: ModulePath),
@@ -213,7 +213,7 @@ def lower_then
 
 def lower_resolved_name (sdef : ScopeDef) (acc : LowerAcc) : Pair (Result LowerError CoreIr) LowerAcc :=
   match sdef {
-    ScopeDef.mk name _module _sig _body =>
+    ScopeDef.mk name _module _sig _body _vis =>
       match intern_path name acc {
         Pair.pair idx acc1 => lower_ok (CoreIr.global idx) acc1,
       },
@@ -847,7 +847,7 @@ def process_pending (ctx : LowerCtx) (acc : LowerAcc) : Result LowerError LowerA
 /// into `lang/core_eval.mo`'s `eval` (together with
 /// `lang.core_eval.basic_native_table`).
 #[partial]
-def lower_root (ctx : LowerCtx) (root : ModulePath) : Result LowerError (Pair CoreIr GlobalTable) :=
+pub def lower_root (ctx : LowerCtx) (root : ModulePath) : Result LowerError (Pair CoreIr GlobalTable) :=
   match find_def_body (ctx_defs ctx) root {
     Option.none => Result.err (LowerError.le_unresolved_module_path root),
     Option.some body =>
@@ -878,7 +878,7 @@ def natives : NativeTable := basic_native_table
 /// Build a `LowerCtx` from a flat `List Decl` -- pulls `Def`s out
 /// directly (for `find_def_body`) and builds a `Scope` from the same
 /// decl_list (for `scope_resolve_name`/`scope_find_inductive`).
-def lower_ctx_from_decls (path : ModulePath) (decl_list : List Decl) : LowerCtx :=
+pub def lower_ctx_from_decls (path : ModulePath) (decl_list : List Decl) : LowerCtx :=
   LowerCtx.lower_ctx (Scope.mk path (build_scope_from_decls path decl_list) Option.none) (decls_to_defs decl_list)
 
 #[partial]

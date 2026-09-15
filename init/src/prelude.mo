@@ -36,7 +36,7 @@ class HMul A B C {
 }
 
 /// Subtraction
-class Sub A {
+pub class Sub A {
 	def sub : A -> A -> A
 }
 
@@ -68,7 +68,7 @@ infix (>>=) := Monad.bind
 /// Single-param class (M only) — S is an implicit forall variable,
 /// like Map's K/V, so `KnownInstances` can key on the monad's concrete
 /// head (e.g. `State`), not a variable.
-class MonadState (M : Type -> Type) {
+pub class MonadState (M : Type -> Type) {
     def get : M S
     def set (s : S) : M Unit
     def modify_get (f : S -> Pair S A) : M A
@@ -111,7 +111,7 @@ type Char {
 	of_bytes (List U8)
 }
 
-class ToString A {
+pub class ToString A {
 	def to_string (a : A) : String
 }
 
@@ -169,11 +169,11 @@ def Eq.rec (A : Sort 1) (a : A) (P : (b : A) -> Eq A a b -> Sort 1)
     (h : P a (Eq.refl a)) (b : A) (e : Eq A a b) : P b e
 
 /// Equals
-class BEq A {
+pub class BEq A {
 	def beq : A -> A -> Bool
 }
 
-instance BEq Bool {
+pub instance BEq Bool {
 	def beq (a b : Bool) : Bool :=
 		if a then b
 		else (Bool.not b)
@@ -186,7 +186,7 @@ infix (==) := BEq.beq
 // infix (!=) := BEq.not_beq
 
 /// Ordered comparison
-class BOrd A {
+pub class BOrd A {
   def lt (a b : A) : Bool
   def gt (a b : A) : Bool
 	// TODO fix default implementations
@@ -202,7 +202,7 @@ infix (<) := BOrd.lt
 
 infix (>) := BOrd.gt
 
-instance BOrd Bool {
+pub instance BOrd Bool {
   def lt (a b : Bool) : Bool :=
     if a then false
     else b
@@ -266,7 +266,7 @@ def Nat.add (a b : Nat) : Nat :=
 		succ n => Nat.succ (Nat.add n b)
 	}
 
-def Nat.sub (a b : Nat) : Nat :=
+pub def Nat.sub (a b : Nat) : Nat :=
 	match b {
 		zero => a,
 		succ n => match a {
@@ -295,7 +295,7 @@ def Nat.eq (a b : Nat) : Bool :=
 
 
 
-instance BEq Nat {
+pub instance BEq Nat {
 	def beq (a b : Nat) : Bool := Nat.eq a b
 }
 
@@ -303,11 +303,11 @@ instance Add Nat {
 	def add (a b : Nat) : Nat := Nat.add a b
 }
 
-instance Sub Nat {
+pub instance Sub Nat {
 	def sub (a b : Nat) : Nat := Nat.sub a b
 }
 
-def Lens [Functor F] {F : Type -> Type} (S: Type) (T: Type) (A: Type) (B : Type) : Type :=
+pub def Lens [Functor F] {F : Type -> Type} (S: Type) (T: Type) (A: Type) (B : Type) : Type :=
 	(A -> F B) -> S -> F T
 
 type List A {
@@ -320,7 +320,7 @@ instance FromListLiteral List {
 	def empty : List A := List.empty
 }
 
-def List.is_empty (self : List A) : Bool :=
+pub def List.is_empty (self : List A) : Bool :=
 	match self {
 		empty => true,
 		cons a tail => false,
@@ -440,7 +440,7 @@ instance {I : Type} [IndexedMonad M] Monad (M I I) {
 /// sequenced in any position without changing the protocol state.
 /// Single-param class (M only) — S is implicit forall, same as
 /// `MonadState` above.
-class IndexedMonadState (M : Type -> Type -> Type -> Type) {
+pub class IndexedMonadState (M : Type -> Type -> Type -> Type) {
     def get : M I I S
     def set (s : S) : M I I Unit
     def modify_get (f : S -> Pair S A) : M I I A

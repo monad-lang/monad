@@ -22,7 +22,7 @@ use io {IO}
 /// edge, and this corpus has no lib/test target split to enforce it
 /// against yet (`init/src/tests.mo` is an ordinary module). Merging keeps
 /// `init` pure in its manifest, which is the part that documents intent.
-struct MoteManifest {
+pub struct MoteManifest {
     name : String,
     dir : String,
     deps : List String,

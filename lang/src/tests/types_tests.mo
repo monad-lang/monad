@@ -31,10 +31,11 @@ instance Similar InstanceKey {
 instance Similar ScopeDef {
     def similar (a : ScopeDef) (b : ScopeDef) : Bool :=
         match a {
-            mk nm1 mod1 sig1 body1 => match b {
-                mk nm2 mod2 sig2 body2 =>
+            mk nm1 mod1 sig1 body1 vis1 => match b {
+                mk nm2 mod2 sig2 body2 vis2 =>
                     Similar.similar nm1 nm2 && Similar.similar mod1 mod2
                     && Similar.similar sig1 sig2 && Similar.similar body1 body2
+                    && visibility_beq vis1 vis2
             }
         }
 }
@@ -132,9 +133,10 @@ def test_scope_def_construct : Bool :=
         module := expected_module,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.package_private,
     } in
     match sd {
-        mk nm modl sig body => Similar.similar nm expected_name && Similar.similar modl expected_module
+        mk nm modl sig body vis => Similar.similar nm expected_name && Similar.similar modl expected_module
     }
 
 #[test]
@@ -207,6 +209,7 @@ def test_scope_data_construct : Bool :=
         module := dummy_module,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.package_private,
     } in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via scope_data_add_def/
@@ -236,6 +239,7 @@ def test_scope_construct : Bool :=
         module := dummy_module,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.package_private,
     } in
     // `def_refs` is a `std.map` `HashMap` (see `lang/scope.mo`'s own `use
     // std.map {}` doc comment) — built via scope_data_add_def/
@@ -259,6 +263,7 @@ def test_module_construct : Bool :=
         module := dummy_module,
         sig := Term.hole,
         body := Term.hole,
+        vis := Visibility.package_private,
     } in
     let modu : Module := {
         path := expected_path,

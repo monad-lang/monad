@@ -100,14 +100,14 @@ def std_module_path : ModulePath := ModulePath.mp [Identifier.id "std"]
 /// (`try_parse_decls_strict` is still on the PLAIN parser: it only feeds
 /// rendered parse-error diagnostics on a cold path, so it has no reason
 /// to build wrappers. Locating it would be harmless, not useful.)
-def parse_all_decls (input : String) : ParseResult (List Decl) :=
+pub def parse_all_decls (input : String) : ParseResult (List Decl) :=
     match decls_parser_located input {
         ParseResult.success rem decl_list => ParseResult.success rem (expand_decls decl_list),
         ParseResult.fail e => ParseResult.fail e,
     }
 
 /// Parse source text, returning the parsed declarations or none on parse error.
-def try_parse_decls (input : String) : Option (List Decl) :=
+pub def try_parse_decls (input : String) : Option (List Decl) :=
     let result : ParseResult (List Decl) := parse_all_decls input in
     match result {
         ParseResult.success _ decl_list => Option.some decl_list,
@@ -133,7 +133,7 @@ def try_parse_decls (input : String) : Option (List Decl) :=
 /// per-decl typecheck walk (`check_file`/`check_file_cached` via
 /// `check_module_with_scope`), so `expand_decls` runs here too, same
 /// as `parse_all_decls` above.
-def try_parse_decls_strict (input : String) (path : Option String) : Result String (List Decl) :=
+pub def try_parse_decls_strict (input : String) (path : Option String) : Result String (List Decl) :=
     match decls_parser_strict input {
         ParseResult.success _ decl_list => Result.ok (expand_decls decl_list),
         ParseResult.fail e => Result.err (render_parse_error input path e),
@@ -222,13 +222,13 @@ def string_find_last_slash_go (s : String) (idx : I64) : I64 :=
 /// Delegates to `std.path`'s `raw_parent_dir` rather than keeping its own
 /// backwards scan: `llvm/src/link.mo` needs the same operation to create a
 /// compile target's directory, and llvm cannot depend on lang.
-def extract_directory (file_path : String) : String :=
+pub def extract_directory (file_path : String) : String :=
     raw_parent_dir file_path
 
 /// Derive a module name from a file path — e.g. "examples/foo.mo" -> "foo".
 /// Factored out of `load_file_modules` (below) so `check_file` can reuse
 /// the exact same convention without a caller-supplied `mod_name`.
-def module_name_from_path (file_path : String) : String :=
+pub def module_name_from_path (file_path : String) : String :=
     let last_slash : I64 := string_find_last_slash file_path in
     let file_name_only : String :=
         if I64.lt last_slash 0 then
@@ -586,12 +586,12 @@ def list_contains_module_info (xs : List ModuleInfo) (x : ModulePath) : Bool :=
 /// fatal -- the canonical pipeline surfaces genuine "module not found"
 /// failures via `elaborate_loaded_modules`'s own `Result` path.
 /// The walk's result plus the (extended) cache it built along the way.
-struct LoadedAndCache {
+pub struct LoadedAndCache {
     loaded : Result String LoadedModules,
     cache : ModuleInfoCache,
 }
 
-struct InfosAndCache {
+pub struct InfosAndCache {
     infos : List ModuleInfo,
     cache : ModuleInfoCache,
 }
@@ -608,7 +608,7 @@ struct InfosAndCache {
 /// found through its own manifest (`motes/demo`) does not, and the
 /// dependency silently failed to load -- surfacing much later as an
 /// "unknown variable" in the importing file.
-struct PendingModule {
+pub struct PendingModule {
     path : ModulePath,
     base_dir : String,
 }
@@ -1118,7 +1118,7 @@ def locals_with_inductive_params ({ params, .. } : Inductive) (scope : Scope) (l
 /// purely to allow that `println`; the accumulation logic itself is
 /// unchanged.
 #[partial]
-def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
+pub def check_module_with_scope (scope : Scope) (decl_list : List Decl) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match decl_list {
         List.empty => do { return List.empty },
         List.cons d rest => do {
@@ -1389,7 +1389,7 @@ def elaborate_module_decls (scope : Scope) (decl_list : List Decl) (locals : Loc
 /// same as always. Never fails; always returns as much elaborated as
 /// possible.
 #[partial]
-def elaborate_module_decls_best_effort (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : List Decl :=
+pub def elaborate_module_decls_best_effort (scope : Scope) (decl_list : List Decl) (locals : LocalScope) : List Decl :=
     best_effort_decls (elaborate_module_decls_reporting scope decl_list locals)
 
 /// A decl's own name, for the `--verbose` report below. Only `Decl.def_d`
@@ -1415,7 +1415,7 @@ def decl_display_name (d : Decl) : String :=
 /// between. Now `--verbose` says how many decls this pass gave up on, and
 /// names the first few, so the next one starts with a location instead of a
 /// bisect.
-struct BestEffortElab {
+pub struct BestEffortElab {
     decls : List Decl,
     failed : List String,
 }
@@ -1495,7 +1495,7 @@ def check_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals
         }
     }
 
-struct FileCheckResult {
+pub struct FileCheckResult {
     path : String,
     diagnostics : List String,
 }
@@ -1503,7 +1503,7 @@ struct FileCheckResult {
 /// `check_file_cached`'s own result bundled with the (possibly updated)
 /// `ModuleInfoCache`, so `run_check_loop` can thread it forward to the
 /// next file in the same run.
-struct FileCheckAndCache {
+pub struct FileCheckAndCache {
     result : FileCheckResult,
     cache : ModuleInfoCache,
 }
@@ -1534,7 +1534,7 @@ struct FileCheckAndCache {
 /// killed) — root cause under investigation, see
 /// `bootstrapping/check-deps-memory-blowup.md`.
 #[partial]
-def check_file_cached (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
+pub def check_file_cached (cache : ModuleInfoCache) (file_path : String) (verbose : Bool) : IO FileCheckAndCache {
     let exists : Bool <- file_exists (Path.path file_path);
     if exists then do {
         if verbose then println ("checking " ++ file_path) else do { return unit };
@@ -1612,7 +1612,7 @@ def collect_mo_files_entries (dir : String) (entries : List String) : IO (List S
 /// doesn't end in `.mo`, matching `check`'s existing behavior of
 /// trusting an explicit file argument literally).
 #[partial]
-def expand_check_paths (paths : List String) : IO (List String) :=
+pub def expand_check_paths (paths : List String) : IO (List String) :=
     match paths {
         List.empty => do { return List.empty },
         List.cons p rest => do {
@@ -1878,7 +1878,7 @@ def test_try_parse_decls_strict_err_includes_path : Bool :=
 
 // === Multi-module loading with boundary preservation ===
 
-struct ModuleInfo {
+pub struct ModuleInfo {
     path : ModulePath,
     file_path : String,
     decl_list : List Decl,
@@ -1906,13 +1906,13 @@ struct ModuleInfo {
 // param/expansion passes all run over decls, not over a prebuilt
 // `ScopeData`. An earlier `ModuleScopeCache` cached `ScopeData` instead
 // and has been removed.
-struct ModuleInfoCache {
+pub struct ModuleInfoCache {
     entries : HashMap String ModuleInfo,
     hits : I64,
     misses : I64,
 }
 
-def module_info_cache_empty : ModuleInfoCache := {
+pub def module_info_cache_empty : ModuleInfoCache := {
     entries := modpath_map_empty,
     hits := 0,
     misses := 0,
@@ -1928,7 +1928,7 @@ def module_info_cache_insert (key : ModulePath) (info : ModuleInfo) (cache : Mod
     { cache with entries := modpath_map_insert key info cache.entries, misses := cache.misses + 1 }
 
 /// A `load_module_with_info` that consults (and extends) the cache.
-struct InfoAndCache {
+pub struct InfoAndCache {
     info : Option ModuleInfo,
     cache : ModuleInfoCache,
 }
@@ -1974,7 +1974,7 @@ instance Show ModuleInfo {
 // This is THE `LoadedModules` -- `lang/types.mo`'s former same-named
 // struct was renamed to `ModuleRegistry` (2026-09-01) to resolve the
 // name collision the two used to have; see that type's own comment.
-struct LoadedModules {
+pub struct LoadedModules {
     main_module : ModuleInfo,
     all_modules : List ModuleInfo,
 }
@@ -2194,7 +2194,7 @@ def resolve_lib_alias_decls_opt (base_dir : String) (decls : Option (List Decl))
 }
 
 #[partial]
-def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option ModuleInfo) {
+pub def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option ModuleInfo) {
     let resolved_path_opt : Option String <- resolve_module_file base_dir mp;
     let actual_base_dir : String :=
         match resolved_path_opt {
@@ -2430,7 +2430,7 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) (ver
 /// Every caller that isn't threading a whole-run cache uses this.
 /// `verbose` forwards to the per-module trace (`std/src/log.mo`).
 #[partial]
-def load_file_modules (file_path : String) (verbose : Bool) : IO (Result String LoadedModules) := do {
+pub def load_file_modules (file_path : String) (verbose : Bool) : IO (Result String LoadedModules) := do {
     let r : LoadedAndCache <- load_file_modules_cached file_path module_info_cache_empty verbose;
     return r.loaded
 }
@@ -2454,7 +2454,7 @@ def load_file_modules (file_path : String) (verbose : Bool) : IO (Result String 
 /// `elaborate_loaded_modules` total that `cli/src/main.mo` already prints.
 /// If they do not, the spans are wrong -- do not reason about which.
 #[partial]
-def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : IO I64 :=
+pub def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : IO I64 :=
     if verbose then do {
         // `timing_line` (std/src/log.mo): the same "<label> <ms>ms" content
         // `Bench.report_since` printed, dim-colored so the sub-times
@@ -2475,7 +2475,7 @@ def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : IO 
 // type-checked anything; `check`/`slow_tests` type-checked but never ran
 // dictionary-passing setup at all. `elaborate_loaded_modules` is the one
 // canonical version, used identically by all of them from here on.
-struct ElaboratedModules {
+pub struct ElaboratedModules {
     scope : Scope,
     target_decls : List Decl,
     elaborated_decls : List Decl,
@@ -2491,7 +2491,7 @@ struct ElaboratedModules {
     loaded : LoadedModules,
 }
 
-struct ElaboratedAndCache {
+pub struct ElaboratedAndCache {
     elaborated : Result String ElaboratedModules,
     cache : ModuleInfoCache,
 }
@@ -2698,7 +2698,7 @@ def has_decl_gen_expansion (registry : List DeclGenEntry) (decls : List Decl) : 
 /// expands (only `std/derive.mo` genuinely invokes `reflect_type_info!`
 /// in this corpus), so `changed = false` lets the caller keep the scope
 /// it already built instead of rebuilding an identical one.
-struct GraphExpansion {
+pub struct GraphExpansion {
     graph : List Decl,
     target : List Decl,
     changed : Bool,
@@ -2770,7 +2770,7 @@ def rebuild_target_scope (target_mp : ModulePath) (decls : List Decl) : Scope :=
 
 
 #[partial]
-def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) (verbose : Bool) : IO ElaboratedAndCache := do {
+pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) (verbose : Bool) : IO ElaboratedAndCache := do {
     let t_load : I64 <- Bench.now;
     let lc : LoadedAndCache <- load_file_modules_cached file_path cache verbose;
     // Declared-dependency enforcement (package-system.md 5d) before any
@@ -2930,7 +2930,7 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
 
 /// Backwards-compatible wrapper: elaborate with a fresh cache.
 #[partial]
-def elaborate_loaded_modules (file_path : String) (check_deps : Bool) (verbose : Bool) : IO (Result String ElaboratedModules) := do {
+pub def elaborate_loaded_modules (file_path : String) (check_deps : Bool) (verbose : Bool) : IO (Result String ElaboratedModules) := do {
     let r : ElaboratedAndCache <- elaborate_loaded_modules_cached file_path check_deps module_info_cache_empty verbose;
     return r.elaborated
 }

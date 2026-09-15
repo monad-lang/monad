@@ -5,7 +5,7 @@ use lib::strmap {str_map_empty, str_map_insert, str_map_lookup}
 // For the `HashMap` type itself, which the `loc_suffixes` field names.
 use std::map {}
 
-type LLVMType {
+pub type LLVMType {
     void,
     i1_,
     i8_,
@@ -16,22 +16,22 @@ type LLVMType {
     struct_ (name : String),
 }
 
-type ParamPair {
+pub type ParamPair {
     mk (param_name : String) (param_ty : LLVMType),
 }
 
-type PhiPair {
+pub type PhiPair {
     mk (val : LLVMValue) (label : String),
 }
 
-type NativeOp {
+pub type NativeOp {
     op_add, op_sub, op_mul, op_sdiv, op_eq, op_lt, op_gt, op_ne,
     op_print_str, op_read_file, op_write_file, op_file_exists,
     op_is_dir, op_string_hash,
     op_i64_to_string,
 }
 
-type LLVMValue {
+pub type LLVMValue {
     int_ (n : I64),
     int32_ (n : I32),
     bool_ (b : Bool),
@@ -112,7 +112,7 @@ type LLVMValue {
     native_op (op : NativeOp) (args : List LLVMValue),
 }
 
-type LLVMInstruction {
+pub type LLVMInstruction {
     assign (target : String) (value : LLVMValue),
     branch (cond : LLVMValue) (then_label : String) (else_label : String),
     jump (label : String),
@@ -153,7 +153,7 @@ type LLVMInstruction {
     loc_marker (loc : DbgLoc),
 }
 
-type LLVMBasicBlock {
+pub type LLVMBasicBlock {
     mk (label : String) (instructions : List LLVMInstruction),
 }
 
@@ -163,7 +163,7 @@ type LLVMBasicBlock {
 /// just line/column, not a full `lang.types.SourceRange`/`Location`
 /// (this file has no dependency on `lang.types` today; keeping it that
 /// way avoids introducing one just for two integers).
-struct DbgLoc {
+pub struct DbgLoc {
     line : I64,
     column : I64,
 }
@@ -172,7 +172,7 @@ struct DbgLoc {
 /// every compiled Monad def, false for the `runtime/src/natives.mo`
 /// generated natives, which are ordinary ccc functions called from
 /// cc-9 wrapper bodies.
-struct LLVMFunction {
+pub struct LLVMFunction {
     name : String,
     params : List ParamPair,
     ret_ty : LLVMType,
@@ -181,15 +181,15 @@ struct LLVMFunction {
     dbg_loc : Option DbgLoc,
 }
 
-type LLVMGlobal {
+pub type LLVMGlobal {
     mk (name : String) (value : String) (byte_len : I64) (constant : Bool),
 }
 
-type LLVMDeclaration {
+pub type LLVMDeclaration {
     mk (name : String) (params : List String) (ret_ty : String),
 }
 
-type LLVMModule {
+pub type LLVMModule {
     mk (target_triple : String)
        (globals : List LLVMGlobal)
        (functions : List LLVMFunction)
@@ -227,7 +227,7 @@ def show_bool (b : Bool) : String := match b {
 }
 
 #[partial]
-def show_llvm_type (ty : LLVMType) : String := match ty {
+pub def show_llvm_type (ty : LLVMType) : String := match ty {
     void => "void",
     i1_ => "i1",
     i8_ => "i8",
@@ -277,7 +277,7 @@ def show_args_typed (args : List LLVMValue) : String :=
 /// fallback for anything outside that grammar (a primed `foo'`, say),
 /// which would otherwise render as silently invalid IR.
 #[partial]
-def llvm_symbol_ref (name : String) : String :=
+pub def llvm_symbol_ref (name : String) : String :=
     let escaped := escape_reserved_symbol name in
     if llvm_name_is_bare_safe escaped
     then String.concat "@" escaped
@@ -674,7 +674,7 @@ def emit_instrs_step (i : LLVMInstruction) (rest : List LLVMInstruction) (refs :
 /// function shares the same one). Confirmed the hard way: an earlier
 /// version attached only `instr_suffix` and produced a `.o` with zero
 /// `.debug_line` entries despite `llc` exiting 0.
-struct DbgFuncRefs {
+pub struct DbgFuncRefs {
     define_suffix : String,
     /// The function's own location -- what an instruction gets when no
     /// `loc_marker` has been seen yet, and the whole of v1's behaviour.
@@ -1014,7 +1014,7 @@ def module_file_ref (file_refs : HashMap String I64) (fn_name : String) : I64 :=
 /// `!N = !DIFile(...)` lines, and one past the last id assigned -- built
 /// in one pass so the three cannot drift apart, same property as
 /// `build_dbg_refs` below.
-struct ModuleFileTable {
+pub struct ModuleFileTable {
     refs : HashMap String I64,
     text : String,
     next_id : I64,
@@ -1164,7 +1164,7 @@ def emit_debug_metadata (source_path : String) (files : List (Pair String String
     }
 
 #[partial]
-def emit_module (module_ : LLVMModule) : String := match module_ {
+pub def emit_module (module_ : LLVMModule) : String := match module_ {
     LLVMModule.mk target_triple globals functions declarations debug_source debug_files =>
         let h1 := String.concat "; ModuleID = 'monad'\ntarget triple = \"" (String.concat target_triple "\"\n\n") in
         let h2 := String.concat h1 "; === Type Definitions ===\n%Header = type { i64, i16, i16 }\n%Closure = type { %Header, i8*, i64, i64, [0 x i8*] }\n%Constructor = type { %Header, i64, i64, [0 x i8*] }\n%StringObj = type { %Header, i64, [0 x i8] }\n\n" in

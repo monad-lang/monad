@@ -55,7 +55,7 @@ type ArrayBuilder A {
 def Array.new (n : I64) (fill : A) : Array A
 
 #[native array_len]
-def Array.length (a : Array A) : I64
+pub def Array.length (a : Array A) : I64
 
 /// `Option`, not a panic: an out-of-range read must not be undefined
 /// behaviour in the compiled backend, and `String.get`

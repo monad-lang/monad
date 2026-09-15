@@ -28,32 +28,32 @@ use lib::typecheck::unify {unify}
 use std::list {length}
 
 /// A type-checked term paired with its type.
-struct TypedTerm {
+pub struct TypedTerm {
     term : Term,
     typ : Term,
 }
 
 /// A type-checked match case with inferred body type.
-struct CheckedCase {
+pub struct CheckedCase {
     case_ : MatchCase,
     body_typ_ : Term,
 }
 
 /// Accumulator for processing match cases: the unified body
 /// type and the checked cases in reverse order.
-struct CaseAcc {
+pub struct CaseAcc {
     body_typ : Term,
     cases : List MatchCase,
 }
 
 /// Empty local scope (no local bindings).
-def empty_locals : LocalScope := {
+pub def empty_locals : LocalScope := {
     vars := List.empty,
     parent := Option.none,
 }
 
 /// Empty list of local types (no de Bruijn bindings).
-def empty_local_types : List Term := List.empty
+pub def empty_local_types : List Term := List.empty
 
 /// Type check a term bidirectionally.
 ///
@@ -66,7 +66,7 @@ def empty_local_types : List Term := List.empty
 /// crash risk (no `#[partial]` on this def) if a macro ever expanded to
 /// another macro call without fully resolving it. A clean `TypeError`
 /// is safer than a raw interpreter crash either way.
-def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
+pub def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_types : List Term) (locals : LocalScope) : Result TypeError TypedTerm :=
     match term {
         Term.lit value => type_check_lit value expected_type scope local_types locals,
         Term.var idx dbg => type_check_var idx dbg expected_type scope local_types locals,
@@ -885,7 +885,7 @@ def type_check_match_case (case_ : MatchCase) (scrutinee_term : Term) (scrutinee
 /// to the pattern's own written fields: `written_to_declared[w]` is the
 /// declared-order position written slot `w` fills) -- what
 /// `term_permute` needs to retarget the ALREADY-PARSED body.
-struct ResolvedFieldPattern {
+pub struct ResolvedFieldPattern {
     resolved_name : Identifier,
     declared_names : List Identifier,
     declared_types : List Term,
@@ -1626,7 +1626,7 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                     // arguments get no expected type ("cannot infer
                     // struct type"). One root cause, ~70 sites in the
                     // compiler's own closure.
-                    mk resolved_name _ sig _ =>
+                    mk resolved_name _ sig _ _ =>
                         match scope_find_def_sig resolved_name scope {
                             Option.some real_sig => ok (mk_typed (Term.var sentinel dbg) real_sig),
                             // No registered signature. For an ordinary def
@@ -1895,7 +1895,7 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                     err _ => Option.none,
                                     ok sd =>
                                         match sd {
-                                            mk resolved_name _ _ _ =>
+                                            mk resolved_name _ _ _ _ =>
                                                 match scope_find_def_sig resolved_name scope {
                                                     Option.none => Option.none,
                                                     Option.some sig =>
@@ -1972,7 +1972,7 @@ def rebuild_pi_chain (params : List Term) (ret : Term) : Term :=
         List.cons p rest => Term.pi p (rebuild_pi_chain rest ret),
     }
 
-struct DccPair {
+pub struct DccPair {
     elab_args : List Term,
     subst : List (Pair Identifier Term),
 }
@@ -2058,7 +2058,7 @@ def def_call_continue (arg : Term) (a_tt : TypedTerm) (param_ty : Term) (rest : 
 /// forall-wraps them only AFTER the scope (and its `def_sigs` entries)
 /// is built -- and `solve_typevars` records every free-var match it
 /// finds, no precomputed name set required.
-struct SigInfo {
+pub struct SigInfo {
     params : List Term,
     ret : Term,
 }
@@ -2949,7 +2949,7 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (expected_ty
                                 err _ => ok Option.none,
                                 ok sd =>
                                     match sd {
-                                        mk resolved_name _ _ _ =>
+                                        mk resolved_name _ _ _ _ =>
                                             match scope_find_def_params resolved_name scope {
                                                 Option.none => ok Option.none,
                                                 Option.some params =>

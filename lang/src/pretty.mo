@@ -434,7 +434,7 @@ def show_decl (d : Decl) : String := match d {
 /// a `Show.show`-derived debug dump of the internal `LoadedModules`
 /// structure).
 #[partial]
-def show_decls (decl_list : List Decl) : String :=
+pub def show_decls (decl_list : List Decl) : String :=
     match decl_list {
         List.empty => "",
         List.cons d rest =>

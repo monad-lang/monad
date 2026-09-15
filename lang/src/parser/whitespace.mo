@@ -33,7 +33,7 @@ def ws1_body (r : ParseResult String) (input : String) : ParseResult String :=
 
 
 #[partial]
-def skip_spaces (input : String) : String :=
+pub def skip_spaces (input : String) : String :=
 	skip_spaces_match (take_while_byte is_space_byte input) input
 
 

@@ -75,7 +75,7 @@ use std::map {}
 /// byte-identical to what they were before locations existed. The phase
 /// this would otherwise slow down is 67% of elaboration (AGENTS.md item
 /// 27), so the gate is structural rather than a matter of discipline.
-struct ParseLowerCtx {
+pub struct ParseLowerCtx {
     binders : List Identifier,
     /// Absolute start offset (as a decimal string, since there is no
     /// `Hashable I64`) -> resolved position. Built once per file by
@@ -92,12 +92,12 @@ struct ParseLowerCtx {
 /// once when the table is built beats doing it at each of the ~10^4
 /// lookups.
 #[partial]
-def lower_ctx_locating (table : HashMap String Location) : ParseLowerCtx :=
+pub def lower_ctx_locating (table : HashMap String Location) : ParseLowerCtx :=
     { binders := List.empty, locs := Option.some table }
 
 /// A context that records no positions -- what every non-debug caller uses.
 #[partial]
-def lower_ctx_bare : ParseLowerCtx := { binders := List.empty, locs := Option.none }
+pub def lower_ctx_bare : ParseLowerCtx := { binders := List.empty, locs := Option.none }
 
 /// Bind one name, innermost-first (de Bruijn index 0 at the head).
 #[partial]
@@ -270,7 +270,7 @@ def field_access_chain (scrutinee : Term) (fields : List Identifier) : Term :=
 // lookup misses and the term is silently left unlocated.
 
 #[partial]
-def collect_decl_rems (ds : List ParseDecl) (acc : List I64) : List I64 := match ds {
+pub def collect_decl_rems (ds : List ParseDecl) (acc : List I64) : List I64 := match ds {
     List.empty => acc,
     List.cons d rest => collect_decl_rems rest (collect_decl_kind_rems d.kind acc),
 }
@@ -920,7 +920,7 @@ def lower_parse_decl_kind (ctx : ParseLowerCtx) (k : ParseDeclKind) : Decl :=
 /// The single entry point. The grammar's three top-level parsers call
 /// this with an empty context; everything downstream keeps seeing `Decl`.
 #[partial]
-def lower_parse_decls (ctx : ParseLowerCtx) (ds : List ParseDecl) : List Decl :=
+pub def lower_parse_decls (ctx : ParseLowerCtx) (ds : List ParseDecl) : List Decl :=
     match ds {
         List.empty => List.empty,
         List.cons d rest => List.cons (lower_parse_decl ctx d) (lower_parse_decls ctx rest),

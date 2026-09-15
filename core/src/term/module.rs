@@ -2990,6 +2990,92 @@ pub fn unused_def_warnings(loaded: &LoadedModules) -> Vec<(ModulePath, Diagnosti
     .collect()
 }
 
+/// Names imported from ANOTHER mote that are not marked `pub`.
+///
+/// Visibility defaults to package-private: visible inside the mote that
+/// declared it, and (one day) not outside. This is the warn-first half of
+/// that -- the reference still resolves, but every site that would break
+/// when it becomes an error is named now. `scripts/mark-cross-mote-exports-pub.py`
+/// is what clears them in bulk.
+///
+/// Reported per importing FILE rather than per declaration, because that
+/// is where the fix usually is: either the import is wrong or the
+/// declaration should be `pub`.
+pub fn cross_mote_package_private_warnings(
+  module: &Module,
+  loaded: &LoadedModules,
+  path: Option<&std::path::PathBuf>,
+) -> Vec<Diagnostic> {
+  let Some(here) = path.and_then(|p| mote_name_of_file(p)) else {
+    // Script mode: a file outside any mote crosses no mote boundary.
+    return Vec::new();
+  };
+  module
+    .get_uses()
+    .iter()
+    .filter_map(|ctx| {
+      let u = ctx.value();
+      let target = loaded.get_module(&u.module_path)?;
+      // The first segment of a module path names a mote only if there IS
+      // such a mote -- `use io {IO}` names a MODULE of the init mote, and
+      // crosses no boundary that `io` itself defines.
+      let target_mote = target
+        .path()
+        .first()
+        .map(|i| i.as_str().to_string())
+        .filter(|m| m != &here)
+        .filter(|m| std::path::Path::new(m).join("mote.toml").is_file())?;
+      let UseFilter::Items(items) = &u.filter else {
+        return None;
+      };
+      // Only the names this `use` actually asks for -- a glob is
+      // deliberately skipped: it names nothing specific, so there is no
+      // actionable list to report.
+      let requested: Set<&str> = items
+        .iter()
+        .filter_map(|item| match item {
+          UseItem::Name(n) => Some(n.as_str()),
+          UseItem::Rename(n, _) => Some(n.as_str()),
+          _ => None,
+        })
+        .collect();
+      if requested.is_empty() {
+        return None;
+      }
+      let hidden: Vec<String> = target
+        .get_def_refs(&Vec::new(), loaded.test_mode())
+        .into_iter()
+        .filter(|d| d.vis() == Visibility::PackagePrivate)
+        .map(|d| d.name().last().as_str().to_string())
+        .filter(|name| requested.contains(name.as_str()))
+        .collect();
+      if hidden.is_empty() {
+        return None;
+      }
+      Some(Diagnostic {
+        severity: Severity::Warning,
+        message: format!(
+          "`{}` from mote `{target_mote}` is not marked `pub`",
+          hidden.join(", ")
+        ),
+        location: Some(u.source_location.clone()),
+        path: path.cloned(),
+        suggestions: vec![Suggestion {
+          message: format!(
+            "mark {} `pub` in `{target_mote}` -- package-private will stop crossing mote boundaries",
+            hidden
+              .iter()
+              .map(|n| format!("`{n}`"))
+              .collect::<Vec<_>>()
+              .join(", ")
+          ),
+        }],
+        ..Default::default()
+      })
+    })
+    .collect()
+}
+
 /// All non-fatal, style/deprecation-level warnings for a successfully
 /// loaded module, combined: bare `use`, bare `open`, and unused
 /// `use`-filter names (`unused_use_name_warnings`). This is the single
@@ -3007,6 +3093,19 @@ pub fn module_warnings(module: &Module, path: Option<&std::path::PathBuf>) -> Ve
     &collect_referenced_names(module),
     path,
   ));
+  warnings
+}
+
+/// `module_warnings` plus the warnings that need the whole loaded set to
+/// decide (today: cross-mote package-private references). Separate because
+/// `module_warnings`'s callers do not all have a `LoadedModules` to hand.
+pub fn module_warnings_with_loaded(
+  module: &Module,
+  loaded: &LoadedModules,
+  path: Option<&std::path::PathBuf>,
+) -> Vec<Diagnostic> {
+  let mut warnings = module_warnings(module, path);
+  warnings.extend(cross_mote_package_private_warnings(module, loaded, path));
   warnings
 }
 
