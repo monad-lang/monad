@@ -11,9 +11,9 @@
 /// responsible for building that lookup from a real set of registered
 /// `Decl.def_macro_d`s and threading the whole thing through the
 /// pipeline.
-use lang.types {Con, Identifier, Literal, MatchCase, Native, StructLitField, Term, id_eq}
-use lang.typecheck.macro_apply {apply_term_macro}
-use lang.typecheck.traverse {con_map_children, literal_map_children, match_case_map_children, match_cases_map_children, native_map_children, opt_term_map_children, opt_terms_map_children, struct_field_map_children, struct_fields_map_children, term_map_children}
+use lib::types {Con, Identifier, Literal, MatchCase, Native, StructLitField, Term, id_eq}
+use lib::typecheck::macro_apply {apply_term_macro}
+use lib::typecheck::traverse {con_map_children, literal_map_children, match_case_map_children, match_cases_map_children, native_map_children, opt_term_map_children, opt_terms_map_children, struct_field_map_children, struct_fields_map_children, term_map_children}
 
 // ─── Application-spine helpers ─────────────────────────────────────
 //

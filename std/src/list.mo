@@ -8,7 +8,7 @@
 ///   - List.length, List.filter, List.sum
 ///   - list_show helper (explicit show function, for concrete call sites)
 
-use std.show {Show}
+use lib::show {Show}
 
 
 class Show A {

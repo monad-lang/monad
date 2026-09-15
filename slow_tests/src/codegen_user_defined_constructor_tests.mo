@@ -23,7 +23,7 @@
 /// type prefix -- the map lookups here would all have failed without it.
 use io {IO}
 open IO {println}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// The exact `Item.present`/`Item.absent` repro from the filed gap doc:

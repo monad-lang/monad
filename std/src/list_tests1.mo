@@ -1,5 +1,5 @@
-use std.show {Show}
-use std.list {Show, list_show}
+use lib::show {Show}
+use lib::list {Show, list_show}
 
 // Show tests
 

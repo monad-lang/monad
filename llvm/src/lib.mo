@@ -6,5 +6,5 @@
 // linked binary (`llvm.link`). Nothing in this mote knows what a Monad
 // term is -- that is `lang`'s side of the seam.
 
-pub use llvm.ir {LLVMModule, emit_module}
-pub use llvm.link {compile_ir_to_obj, compile_runtime_obj, link_ir, link_objects}
+pub use lib::ir {LLVMModule, emit_module}
+pub use lib::link {compile_ir_to_obj, compile_runtime_obj, link_ir, link_objects}

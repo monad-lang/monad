@@ -11,8 +11,8 @@
 /// `lang/tests/`, in two spellings of the same value.
 use io {IO}
 open IO {println}
-use lang.types {LocalScope}
-use lang.module {elaborate_loaded_modules, typecheck_module_with_scope}
+use lang::types {LocalScope}
+use lang::module {elaborate_loaded_modules, typecheck_module_with_scope}
 
 pub def empty_local_scope : LocalScope := {
     vars := List.empty,

@@ -15,8 +15,8 @@
 /// makes that explicit and gives the substitution walkers
 /// ([[lang/typecheck/name_subst.mo]], [[lang/typecheck/subst.mo]]) a
 /// home to build on rather than re-deriving the same ~10 helpers each.
-use lang.types {Con, Literal, MatchCase, Native, StructLitField, Term}
-use std.list {length}
+use lib::types {Con, Literal, MatchCase, Native, StructLitField, Term}
+use std::list {length}
 
 // ─── Generic structural recursion ──────────────────────────────────
 //

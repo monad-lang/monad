@@ -5,6 +5,6 @@
 // Qualified (not bare `pub use path {*}`/etc): see std/io.mo's own doc
 // comment for why -- the Rust reference registers these siblings under
 // their full `std.<name>` path, with no base-dir-relative fallback.
-pub use std.path {*}
-pub use std.io {*}
-pub use std.process {*}
+pub use lib::path {*}
+pub use lib::io {*}
+pub use lib::process {*}

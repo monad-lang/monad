@@ -1,12 +1,12 @@
-use lang.types {
+use lib::types {
   Attribute, DebugName, Decl, FieldPattern, FieldPatternEntry, Identifier,
   InductConstructor, Inductive, MatchCase, ModulePath, Param,
   Scope, ScopeClassDef, ScopeData, Similar, Term, TypeError,
   app, forall, hole, id, if_, inductive_d, lam, lit, match_, mc, mk, mp, named,
   not_a_type, pi, type_, unknown_var, unnamed, var,
 }
-use lang.scope {build_scope_from_decls, scope_find_inductive}
-use lang.typecheck.infer {
+use lib::scope {build_scope_from_decls, scope_find_inductive}
+use lib::typecheck::infer {
   TypedTerm, empty_local_types, empty_locals, mk, sentinel, type_check,
   type_check_match_case,
 }

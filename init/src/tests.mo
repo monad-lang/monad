@@ -1,4 +1,4 @@
-use init {IO, add, drop, get, id, io, is_empty, length, run, slice, starts_with, sub}
+use lib {IO, add, drop, get, id, io, is_empty, length, run, slice, starts_with, sub}
 use io {IO, io}
 open IO {io}
 

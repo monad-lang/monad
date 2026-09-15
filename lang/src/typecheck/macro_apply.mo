@@ -11,10 +11,10 @@
 /// applying them produce" — the caller (a future `expand_term`/outer
 /// work-queue) is responsible for finding which macro a given call
 /// site's name actually refers to.
-use lang.types {Decl, Identifier, Param, Term}
-use lang.typecheck.subst {beta_reduce}
-use lang.typecheck.name_subst {name_subst_decls}
-use std.list {length}
+use lib::types {Decl, Identifier, Param, Term}
+use lib::typecheck::subst {beta_reduce}
+use lib::typecheck::name_subst {name_subst_decls}
+use std::list {length}
 
 // ─── Term-macro application (`defmacro name params := <term>`) ───────
 

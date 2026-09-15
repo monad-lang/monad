@@ -1,4 +1,4 @@
-use lang.types {Identifier, ModulePath, NumSuffix, id_eq, show_module_path}
+use lib::types {Identifier, ModulePath, NumSuffix, id_eq, show_module_path}
 
 /// `CoreIr` — the compiled, evaluator-facing IR this evaluator reduces,
 /// mirroring `core/src/core_ir.rs`'s `CoreIr` (Rust). See that file's own

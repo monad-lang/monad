@@ -1,11 +1,11 @@
 use io {IO}
 open IO {println, write_file}
-use std.process {exec_cmd}
-use lang.types {Def, i64, id, lit, mk, mp, num, type_}
-use llvm.ir {emit_module, mk}
-use llvm.link {compile_ir_to_obj, compile_runtime_obj, link_objects}
+use std::process {exec_cmd}
+use lib::types {Def, i64, id, lit, mk, mp, num, type_}
+use llvm::ir {emit_module, mk}
+use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
-use lang.codegen.emit {compile_db_decls_ir, mk}
+use lib::codegen::emit {compile_db_decls_ir, mk}
 
 open Term {lit, type_}
 open Literal {num}

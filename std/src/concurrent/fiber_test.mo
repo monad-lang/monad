@@ -1,7 +1,7 @@
 // Fiber concurrency tests
 // Tests for forkIO, await_fiber, cancel_fiber
 
-use std.concurrent.fiber {await_fiber, fiber, forkIO}
+use lib::concurrent::fiber {await_fiber, fiber, forkIO}
 
 def io_42_action (_ : Unit) : IO I64 := IO.pure 42
 

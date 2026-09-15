@@ -12,8 +12,8 @@
 /// `lang.codegen.qualify` for where the `module::name` form comes from,
 /// and `def_symbol_name` for why nothing is mangled into underscores
 /// any more.
-use lang.types {Identifier, ModulePath, show_module_path}
-use std.map {}
+use lib::types {Identifier, ModulePath, show_module_path}
+use std::map {}
 
 /// A genuine, previously-undiscovered bug lived here (and in
 /// `string_find_last_loop` below) until this session: `String.slice`'s

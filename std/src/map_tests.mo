@@ -9,8 +9,8 @@
 // via the same always-on mechanism that lets any top-level type/def
 // resolve without being explicitly `use`d. Fix properly and restore an
 // explicit name list once the underlying bug is fixed.
-use std.map {}
-use std.list {all, length}
+use lib::map {}
+use lib::list {all, length}
 
 #[test]
 def test_empty_to_list : Bool :=

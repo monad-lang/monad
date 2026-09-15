@@ -1,7 +1,7 @@
 /// Self-hosted Monad grammar parser core types and constants.
 
-use lang.types {mk}
-use std.list {length}
+use lib::types {mk}
+use std::list {length}
 
 
 /// Every `fail` value carries not just a message but the input

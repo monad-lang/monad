@@ -211,7 +211,29 @@ const MAX_LINE_WIDTH: usize = 80;
 /// Render `keyword module_path {names...}`, wrapping the name list across
 /// multiple 2-space-indented lines once the compact single-line form
 /// would exceed `MAX_LINE_WIDTH`.
+/// A `use` path renders with `::`, an `open` path with `.` -- `open`
+/// operates on names, not files, and the separator is what tells the two
+/// apart on sight (plans/implementations/qualified-names.md).
+///
+/// Deliberately not a change to `Display for ModulePath`: that rendering
+/// also builds compiled symbol names (`lang.types::show_term`), and
+/// flipping it would rename every symbol the backend emits.
+fn render_path(keyword: &str, module_path: &ModulePath) -> String {
+  if keyword == "use" {
+    module_path
+      .clone()
+      .to_vec()
+      .iter()
+      .map(|i| i.as_str())
+      .collect::<Vec<_>>()
+      .join("::")
+  } else {
+    module_path.to_string()
+  }
+}
+
 fn format_import_decl(keyword: &str, module_path: &ModulePath, names: &[Identifier]) -> String {
+  let module_path = render_path(keyword, module_path);
   let compact = format!(
     "{keyword} {module_path} {{{}}}",
     names

@@ -190,7 +190,7 @@ pub(crate) fn dep_closure_loaded(
   let init_paths: crate::Set<ModulePath> = crate::term::module::init_package_sources()
     .map_err(|e| MacroError::Generic(format!("meta: loading init package: {e}")))?
     .into_iter()
-    .map(|(p, _)| p)
+    .map(|(p, _, _)| p)
     .collect();
 
   // BFS the transitive `use`-closure of the file being expanded.

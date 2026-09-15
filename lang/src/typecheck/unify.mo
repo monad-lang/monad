@@ -1,4 +1,4 @@
-use lang.types {Similar, Term, TypeError, forall, hole, mismatch, pi, term_peel, type_}
+use lib::types {Similar, Term, TypeError, forall, hole, mismatch, pi, term_peel, type_}
 
 /// Structural type unification. Returns the unified type.
 /// Holes match anything. Pi matches Pi structurally.

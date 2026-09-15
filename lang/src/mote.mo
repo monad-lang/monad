@@ -11,9 +11,9 @@
 /// pattern: own types, own glue over `Toml.parse`, no shared
 /// serialize/deserialize class machinery.
 
-use lang.toml {}
-use std.io {file_exists, read_file}
-use std.map {}
+use lib::toml {}
+use std::io {file_exists, read_file}
+use std::map {}
 use io {IO}
 
 /// What resolution needs from a `mote.toml`: who this mote is, where it

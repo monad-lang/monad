@@ -35,7 +35,7 @@
 /// never executing) rather than an IR-shape mismatch.
 use io {IO}
 open IO {println}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// The exact failing shape: first parameter typed `String`. Pre-fix the

@@ -30,7 +30,7 @@
 /// exercises the bug this test guards.
 use io {IO}
 open IO {println}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// `Bool.not (I64.lt a b)` where `a > b`: `I64.lt` is false, `Bool.not`

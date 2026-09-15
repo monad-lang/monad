@@ -36,7 +36,7 @@
 /// `module_path_to_string` body under a different name. Not a symbol
 /// collision, so it is left alone here; unifying them means deciding
 /// which module owns dotted-path rendering, which is a separate change.
-use lang.types {
+use lib::types {
   Class, ClassDef, Con, DebugName, Decl, Def, DoStmt, Identifier,
   InductConstructor, Inductive, Instance, Literal, MatchCase, ModulePath,
   NameRef, Native, Param, ParseClass, ParseClassDef, ParseCon, ParseDecl,
@@ -50,12 +50,12 @@ use lang.types {
 // the duplicate-top-level-name collision item 18 records). The grammar no
 // longer resolves names at all, so nothing flows the other way: it
 // imports `lower_parse_do` from here and that is the only edge.
-use lang.types {FieldPattern, FieldPatternEntry, Location, ParseSpan, parse_span_is_unknown, show_operator}
+use lib::types {FieldPattern, FieldPatternEntry, Location, ParseSpan, parse_span_is_unknown, show_operator}
 // The monomorphic string map, from the leaf module -- never `Map.lookup`,
 // whose generic dispatch can resolve to the wrong instance
 // (`lang/codegen/util.mo` documents the live bug).
-use llvm.strmap {str_map_lookup}
-use std.map {}
+use llvm::strmap {str_map_lookup}
+use std::map {}
 
 
 /// What lowering carries down the tree.

@@ -39,8 +39,8 @@
 /// newly-found, not-yet-filed bug, unrelated to `write_file`'s own arity-2
 /// dispatch gap -- out of scope here.
 use io {IO}
-use std.process {process_id}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use std::process {process_id}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// `IO.write_file path content;` as a bare do-block statement (exactly

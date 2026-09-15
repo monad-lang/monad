@@ -1,11 +1,11 @@
-use lang.types {
+use lib::types {
   Identifier, InductConstructor, Inductive, Infix, InstanceKey,
   LocalVar, Module, ModulePath, ModuleRegistry, Multiplicity, Operator, Param,
   Scope, ScopeClassDef, ScopeConflict, ScopeData, ScopeDef, ScopeError,
   ScopeInstance, Similar, Term, hole, id, many, mk, mp,
   name_not_found, nid, nmp, nop, operator, type_,
 }
-use lang.scope {scope_data_add_def, scope_data_add_inductive, scope_data_empty}
+use lib::scope {scope_data_add_def, scope_data_add_inductive, scope_data_empty}
 
 // --- Similar instances for scope types ---
 

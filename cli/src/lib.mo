@@ -4,4 +4,4 @@
 // entry point, not part of the library API: it is what `monad` runs, and
 // nothing should `use` it except its own tests.
 
-pub use cli.args {*}
+pub use lib::args {*}

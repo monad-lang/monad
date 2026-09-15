@@ -2,7 +2,7 @@
 
 use io {}
 open IO {println}
-use std.sha256 {}
+use std::sha256 {}
 
 #[test]
 def test_sha256_hello : Bool :=

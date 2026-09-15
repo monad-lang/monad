@@ -33,8 +33,8 @@
 /// below remains available regardless via the same always-on mechanism
 /// that lets any top-level type/def resolve without being explicitly
 /// `use`d.
-use std.map {}
-use std.bench {now, report_since}
+use std::map {}
+use std::bench {now, report_since}
 
 // --- List: build via repeated cons (matches `scope_data_add_def`'s
 // real access pattern), lookup via linear scan (matches

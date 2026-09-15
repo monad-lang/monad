@@ -28,7 +28,7 @@
 /// well-formed integer.
 use io {IO}
 open IO {println}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// The minimal shape: the SAME field access, once as an ordinary

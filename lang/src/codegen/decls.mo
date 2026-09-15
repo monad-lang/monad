@@ -11,12 +11,12 @@
 /// (`cli.main::main`), so the literal `"main"` this used to assume
 /// names nothing, and a wrapper supplying it would quietly return an
 /// empty closure.
-use lang.types {Decl, Def, Inductive, Term}
-use lang.module {ModuleInfo}
-use lang.codegen.symbols {def_symbol_name}
-use lang.codegen.free_names {collect_referenced_names}
-use lang.codegen.util {str_map_empty, str_map_insert, str_map_lookup}
-use std.map {}
+use lib::types {Decl, Def, Inductive, Term}
+use lib::module {ModuleInfo}
+use lib::codegen::symbols {def_symbol_name}
+use lib::codegen::free_names {collect_referenced_names}
+use lib::codegen::util {str_map_empty, str_map_insert, str_map_lookup}
+use std::map {}
 
 /// Extract def_d entries from a list of Decl. A def wrapped in
 /// Decl.scoped_open_d is intentionally invisible to codegen for now

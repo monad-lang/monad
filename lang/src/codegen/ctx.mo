@@ -11,13 +11,13 @@
 /// (`lang.codegen.symbols`); `ctor_tags`/`ctor_arities` are keyed in
 /// CONSTRUCTOR space, which is a different namespace -- see
 /// `constructor_tag` in `emit` for the three key shapes it uses.
-use lang.types {
+use lib::types {
   DebugName, Def, Identifier, Location, ModulePath, Param, Term, param_many,
 }
-use llvm.ir {DbgLoc, LLVMValue}
-use lang.codegen.symbols {def_symbol_name}
-use lang.codegen.util {str_map_empty, str_map_insert, str_map_lookup}
-use std.map {}
+use llvm::ir {DbgLoc, LLVMValue}
+use lib::codegen::symbols {def_symbol_name}
+use lib::codegen::util {str_map_empty, str_map_insert, str_map_lookup}
+use std::map {}
 
 struct LocalBinding {
     name : Identifier,

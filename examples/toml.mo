@@ -6,8 +6,8 @@
 // deliberately NOT listed here — see the matching TODO in
 // std/map_tests.mo for why (a pre-existing latent instance/dictionary-
 // resolution bug this explicit filter exposes).
-use std.map {}
-use lang.toml {ParseError, Value, parse, to_string}
+use std::map {}
+use lang::toml {ParseError, Value, parse, to_string}
 
 def print_parse_error (e : Toml.ParseError) : IO Unit :=
   IO.println (String.concat "Parse error: " (Toml.ParseError.to_string e))

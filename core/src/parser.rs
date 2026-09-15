@@ -1331,6 +1331,36 @@ fn operator<X: Clone>(input: Span<X>) -> Res<NameRef, X> {
   .parse(input)
 }
 
+/// A `use` path. `::` is the spelling; `.` is still accepted so the corpus
+/// can migrate file by file with no flag day.
+///
+/// `use` is the ONLY form that takes `::`. `open` operates on names, not
+/// files, and dotted names in expressions (`List.cons`, `x.field`,
+/// `String.length`) stay dotted forever -- the separator is what tells a
+/// module path apart from a name path at parse time, with no scope
+/// knowledge needed. See plans/implementations/qualified-names.md.
+///
+/// `::` first in the alternation so a path is never mis-split at the first
+/// `:`; whitespace handling matches `path_expression` so `lang . types` and
+/// `lang::types` both parse.
+fn use_path_expression<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
+  map(
+    separated_pair(
+      terminated(identifier, ws0),
+      alt((tag("::"), tag("."))),
+      preceded(
+        ws0,
+        alt((
+          use_path_expression,
+          map(identifier, |i| ModulePath::new(vec![i])),
+        )),
+      ),
+    ),
+    |(left, right)| ModulePath::new(vec![left]).extend(right),
+  )
+  .parse(input)
+}
+
 fn path_expression<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
   map(
     separated_pair(
@@ -2311,7 +2341,7 @@ fn use_parser(input: Span) -> Res<Use> {
   let (input, _) = tag("use")(input)?;
   let (input, _) = ws1(input)?;
   let (input, module_path) =
-    alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
+    alt((use_path_expression, map(identifier, ModulePath::single))).parse(input)?;
   let (input, filter) = use_opt_filter(input)?;
   let (input, end) = info(input)?;
   let source_location = SourceRange::new(start.into(), end.into());

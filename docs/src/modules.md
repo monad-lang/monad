@@ -16,11 +16,32 @@ Use `use` to bring a module into scope, listing exactly the names you want in
 
 ```monad
 use io {IO}
-use std.path {Path}
+use std::path {Path}
 
 def p : Option Path := none
 def io_unit : Option (IO Unit) := none
 ```
+
+### `::` separates module path segments
+
+A `use` path uses `::` between its segments, the way Rust does. `::` is only
+for `use`: `open` paths name a namespace rather than a file, and dotted
+definition names (`String.length`), member access (`x.field`) and constructor
+paths (`List.cons`) all keep `.`. The separator is what tells a module path
+apart from a name path on sight.
+
+The dotted spelling still parses, so older code keeps working, but everything
+in this repository has moved to `::`.
+
+Inside a mote, `lib` names that mote's own library root — Rust's `crate`:
+
+```monad,ignore
+use lib::parser::core {ParseResult}   // this mote's own src/parser/core.mo
+```
+
+That block is tagged `ignore` because `lib` only means something *inside* a
+mote, and the examples here are checked standing alone. `lib` is
+root-relative within its mote, so it reads the same from any file in it.
 
 An empty `{}` still loads the module — for qualified access, and for its
 instances — without binding any bare names:

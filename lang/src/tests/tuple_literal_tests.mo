@@ -3,11 +3,11 @@
 /// `desugar_tuple_literal`, core/src/parser.rs:831-840). `Pair` is the
 /// inductive in `init/prelude.mo:204`; `(x,)` and `(x)` both yield just `x`.
 
-use lang.types {Identifier, ParseTerm}
-use lang.parser {expression}
-use lang.parser.lower_parse {lower_parse_term, lower_ctx_bare}
-use lang.parser.core {ParseResult}
-use lang.pretty {show_term}
+use lib::types {Identifier, ParseTerm}
+use lib::parser {expression}
+use lib::parser::lower_parse {lower_parse_term, lower_ctx_bare}
+use lib::parser::core {ParseResult}
+use lib::pretty {show_term}
 
 open ParseResult {fail, success}
 

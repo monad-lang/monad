@@ -53,7 +53,7 @@
 /// either way, and a skipped case proves nothing.
 use io {IO}
 open IO {println}
-use std.list {sum}
+use std::list {sum}
 
 /// `++` with a computed left operand.
 def concat_computed (x : I64) (suffix : String) : String :=

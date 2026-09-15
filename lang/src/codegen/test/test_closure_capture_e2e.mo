@@ -29,7 +29,7 @@
 /// why every test below uses `<-`, not `:=`.
 use io {IO}
 open IO {println, write_file}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lib::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// Primary regression test: `b`'s own bind-continuation transitively

@@ -1,9 +1,9 @@
 /// String literal parser for the self-hosted parser
 /// Extracted from parser.mo as part of Phase C
 
-use lang.types {ParseLiteral, ParseTerm, Term, lit, pt_lit, str}
-use lang.parser.core {ParseResult, custom, fail, is_empty, success, tag}
-use lang.parser.combinators {tag, take_while, utf8_char_width}
+use lib::types {ParseLiteral, ParseTerm, Term, lit, pt_lit, str}
+use lib::parser::core {ParseResult, custom, fail, is_empty, success, tag}
+use lib::parser::combinators {tag, take_while, utf8_char_width}
 
 open ParseResult {fail, success}
 

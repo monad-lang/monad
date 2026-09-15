@@ -14,9 +14,9 @@
 
 use io {IO}
 open IO {println}
-use std.process {exec_cmd, process_id}
-use std.bench {now, report_since}
-use std.log {fail_line, ok_line, stage}
+use std::process {exec_cmd, process_id}
+use std::bench {now, report_since}
+use std::log {fail_line, ok_line, stage}
 
 /// `llc -filetype=obj`. Returns llc's exit code.
 #[partial]

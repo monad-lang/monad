@@ -1,7 +1,7 @@
 // Structured concurrency tests: all, race, scoped, sleepIO, cancel_all
 
-use std.concurrent.fiber {Fiber, await_fiber, cancel_fiber, forkIO}
-use std.concurrent.combine {Scope, scope_fork, scoped, sleepIO}
+use lib::concurrent::fiber {Fiber, await_fiber, cancel_fiber, forkIO}
+use lib::concurrent::combine {Scope, scope_fork, scoped, sleepIO}
 
 // Helper thunks
 

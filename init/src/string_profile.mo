@@ -1,5 +1,5 @@
 
-use std.bench {now, report, since}
+use std::bench {now, report, since}
 
 // ── Bridge overhead ──
 

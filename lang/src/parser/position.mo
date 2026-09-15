@@ -1,8 +1,8 @@
 /// Position tracking utilities for the self-hosted parser
 /// Extracted from parser.mo as part of Phase C
 
-use lang.types {LocatedSpan, Location, mk}
-use lang.parser.combinators {utf8_char_width}
+use lib::types {LocatedSpan, Location, mk}
+use lib::parser::combinators {utf8_char_width}
 
 /// Create a new LocatedSpan starting at offset 0, line 1, column 1
 #[partial]

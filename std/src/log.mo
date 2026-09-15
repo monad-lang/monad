@@ -36,8 +36,8 @@ open IO {println}
 // comment on `Ansi.fail` for why a bare `def fail` there poisoned the
 // whole loaded set (parser's bare ParseResult `fail` ctor got rewritten
 // to it by qualify's `resolve_owner` rule 3, which knows defs only).
-use std.ansi {bold, colors_enabled, dim, fail, pass}
-use std.bench {since}
+use lib::ansi {bold, colors_enabled, dim, fail, pass}
+use lib::bench {since}
 
 /// `wrap s` (a pure `String -> String` ANSI wrapper from `std.ansi`,
 /// e.g. `bold`/`dim`/`pass`/`fail`) applied only when colors are on.

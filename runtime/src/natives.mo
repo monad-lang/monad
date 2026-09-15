@@ -33,8 +33,8 @@
 ///   known gap), so plain i64 arithmetic IS the matching semantics.
 /// - `monad_string_length` (C, already declared in
 ///   `runtime_declarations`) is the NUL-terminated strlen.
-use llvm.ir {LLVMFunction, LLVMInstruction, LLVMValue, ParamPair}
-use std.list {List}
+use llvm::ir {LLVMFunction, LLVMInstruction, LLVMValue, ParamPair}
+use std::list {List}
 
 open LLVMType {i1_, i8_, i64_, ptr}
 open LLVMValue {

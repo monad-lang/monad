@@ -34,7 +34,7 @@
 /// can't alias the success value).
 use io {IO}
 open IO {println}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// The always-true whole-input scan: pre-fix this is exactly the
@@ -44,7 +44,7 @@ use lang.codegen.test.e2e_harness {compile_source_run_expect}
 def test_take_while_tco_large_scan : IO Bool :=
     let source := r#"use io {IO}
 open IO {println}
-use lang.parser.combinators {take_while}
+use lang::parser::combinators {take_while}
 
 def always_true (s : String) : Bool := I64.beq (String.length s) (String.length s)
 

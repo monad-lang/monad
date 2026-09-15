@@ -26,9 +26,9 @@
 /// `filter_reachable_decls` before the check ever saw it, silently
 /// passing for the wrong reason.
 use io {IO}
-use std.process {exec_cmd, process_id}
-use lang.module {LoadedModules, load_file_modules}
-use lang.codegen.emit {compile_loaded_modules_to_ir}
+use std::process {exec_cmd, process_id}
+use lang::module {LoadedModules, load_file_modules}
+use lang::codegen::emit {compile_loaded_modules_to_ir}
 
 #[test]
 def test_unwired_native_fails_fast : IO Bool := do {

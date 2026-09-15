@@ -14,7 +14,7 @@
 /// per-param `#[...]` attributes yet, so this file is only ever run through
 /// the Rust host (`cargo run -- test cli/src/tests/cli_derive_tests.mo`),
 /// which does.
-use cli.args {*}
+use lib::args {*}
 
 #[derive_cli]
 type DemoCommand {

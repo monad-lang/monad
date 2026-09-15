@@ -1,26 +1,26 @@
 use io {IO}
 open IO {println, read_file, write_file}
-use std.process {exec_cmd, process_id}
-use std.bench {now, report_since}
-use lang.types {Decl, LocalScope, ModulePath, show_module_path, show_identifier}
-use llvm.ir {LLVMModule, emit_module}
-use llvm.link {link_ir}
+use std::process {exec_cmd, process_id}
+use std::bench {now, report_since}
+use lang::types {Decl, LocalScope, ModulePath, show_module_path, show_identifier}
+use llvm::ir {LLVMModule, emit_module}
+use llvm::link {link_ir}
 use runtime {}
-use lang.codegen.emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
-use lang.scope {resolve_class_calls_decls}
-use std.map {}
-use lang.pretty {show_decls}
-use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
-use cli.args {*}
+use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
+use lang::module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang::scope {resolve_class_calls_decls}
+use std::map {}
+use lang::pretty {show_decls}
+use lang::codegen::test_driver {compile_loaded_modules_to_test_ir}
+use lib::args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`std/src/log.mo` -- its own header documents the gating rules).
-use std.log {fail_line, stage}
-use lang.lower_core_ir {lower_ctx_from_decls, lower_root, LowerError}
-use lang.core_ir {CoreIr}
-use lang.core_eval {eval, basic_native_table}
-use lang.core_value {GlobalTable, global_cache_new, global_table_len}
-use lang.typecheck.meta_eval {show_value_debug, show_core_eval_error_debug}
+use std::log {fail_line, stage}
+use lang::lower_core_ir {lower_ctx_from_decls, lower_root, LowerError}
+use lang::core_ir {CoreIr}
+use lang::core_eval {eval, basic_native_table}
+use lang::core_value {GlobalTable, global_cache_new, global_table_len}
+use lang::typecheck::meta_eval {show_value_debug, show_core_eval_error_debug}
 
 #[native "build_commit"]
 def build_commit : String

@@ -24,8 +24,8 @@
 /// compiles, links and executes rather than inspecting IR text.
 use io {IO}
 open IO {println}
-use std.process {process_id}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use std::process {process_id}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// The safe form, and the one every site in `lang/` now uses: bind the

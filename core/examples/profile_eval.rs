@@ -42,9 +42,12 @@ fn main() {
   let mut modules: Vec<_> = init_package_sources()
     .expect("init_package_sources")
     .into_iter()
-    .map(|(p, text)| {
-      let d = load_decls_from_text_with_path(&text, &Default::default())
-        .unwrap_or_else(|e| panic!("parse {p}: {e}"));
+    .map(|(p, file, text)| {
+      let d = load_decls_from_text_with_path(
+        &text,
+        &monad_core::parser::ModuleContext::new(p.clone(), Some(file)),
+      )
+      .unwrap_or_else(|e| panic!("parse {p}: {e}"));
       (p, d)
     })
     .collect();

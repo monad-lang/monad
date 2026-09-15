@@ -10,7 +10,7 @@
 // self-hosted loader does -- a bare `use path {...}` here resolves
 // fine self-hosted but fails "module not found: path" under `cargo
 // run`. Qualified works identically on both sides.
-use std.path {Path}
+use lib::path {Path}
 
 #[native print_str]
 def IO.println (s: String) : IO Unit

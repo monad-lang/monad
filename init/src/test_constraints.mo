@@ -1,4 +1,4 @@
-use init {is_empty, to_string}
+use lib {is_empty, to_string}
 
 // ============================================
 // Constraint Solver Tests

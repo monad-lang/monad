@@ -6,7 +6,7 @@
 // copied into each call site -- which is what it was before, in four
 // places that all had to be found by hand when the file moved.
 
-pub use runtime.natives {runtime_native_functions}
+pub use lib::natives {runtime_native_functions}
 
 /// Path to the C runtime source, relative to the repository root.
 ///

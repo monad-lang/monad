@@ -1,7 +1,7 @@
 use io {IO}
-use slow_tests.typecheck_harness {typecheck_file}
-use lang.types {}
-use lang.module {}
+use lib::typecheck_harness {typecheck_file}
+use lang::types {}
+use lang::module {}
 
 open IO {println}
 

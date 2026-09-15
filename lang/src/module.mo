@@ -2,24 +2,24 @@
 /// Parses source text and builds scope data from declarations.
 
 use io {IO}
-use std.io {file_exists, is_dir, list_dir, println, read_file}
-use std.bench {now, report, report_since, since}
-use lang.elaborate {free_vars, names_of_decls, elaborate_def}
-use lang.types {
+use std::io {file_exists, is_dir, list_dir, println, read_file}
+use std::bench {now, report, report_since, since}
+use lib::elaborate {free_vars, names_of_decls, elaborate_def}
+use lib::types {
   Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
   LoadedModules, LocalScope, LocalVar, ModulePath, NameRef, Scope,
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id, id_eq,
   inductive_d, list_reverse, mk, mp, name, nid, to_name, union_ids, use_d,
 }
-use lang.parser {decls_parser, decls_parser_located, decls_parser_strict, module_path_to_string}
-use lang.parser.core {ParseResult, fail, mk, success}
-use lang.parser.diagnostic {render_parse_error}
-use lang.mote {MoteManifest, Mote}
-use lang.pretty {show_term}
-use lang.typecheck.macro_apply {expand_decl_gen_call}
-use lang.typecheck.macro_queue {DeclGenEntry, build_decl_gen_registry, expand_decls, lookup_decl_gen}
-use lang.typecheck.meta_eval {meta_eval_invoke}
-use lang.typecheck.meta_reflect {
+use lib::parser {decls_parser, decls_parser_located, decls_parser_strict, module_path_to_string}
+use lib::parser::core {ParseResult, fail, mk, success}
+use lib::parser::diagnostic {render_parse_error}
+use lib::mote {MoteManifest, Mote}
+use lib::pretty {show_term}
+use lib::typecheck::macro_apply {expand_decl_gen_call}
+use lib::typecheck::macro_queue {DeclGenEntry, build_decl_gen_registry, expand_decls, lookup_decl_gen}
+use lib::typecheck::meta_eval {meta_eval_invoke}
+use lib::typecheck::meta_reflect {
   build_type_info_value, collect_inductives, find_inductive_by_bare_name,
   reify_decls_value_to_decls, term_free_var_name,
 }
@@ -28,7 +28,7 @@ use lang.typecheck.meta_reflect {
 // two are not interchangeable -- scope's takes an explicit `{A : Type}`
 // binder, and both sit on `merge_scope_data`'s measured hot path.
 // Importing it here as well made which one won a coin flip.
-use lang.scope {
+use lib::scope {
   OpenAlias,
   add_constraint_dict_params_decls, build_scope_from_decls,
   collect_classes, collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
@@ -40,18 +40,18 @@ use lang.scope {
   scope_find_inductive, scope_push_local, scope_resolve_name,
   validate_no_unresolved_class_calls,
 }
-use lang.typecheck.diagnostic {render_type_error}
-use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
+use lib::typecheck::diagnostic {render_type_error}
+use lib::typecheck::infer {empty_local_types, empty_locals, mk, type_check}
 // `--verbose` per-module/per-stage trace (see `std/src/log.mo`'s own header
 // for why the helpers gate themselves and why `bench_step` below prints
 // through `timing_line`).
-use std.log {module_line, timing_line}
-use std.list {Show, all, length}
-use std.show {Show}
+use std::log {module_line, timing_line}
+use std::list {Show, all, length}
+use std::show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
 // `lang/scope.mo`'s own `use std.map {}` doc comment for why the import
 // is empty).
-use std.map {}
+use std::map {}
 
 open IO {file_exists, is_dir, list_dir, println, read_file}
 open ParseResult {fail, success}

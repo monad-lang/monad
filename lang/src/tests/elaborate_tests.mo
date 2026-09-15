@@ -1,9 +1,9 @@
-use lang.types {
+use lib::types {
   Class, ClassDef, Decl, Def, Identifier, ModulePath, Param, Term, TypeConstraint,
   class_d, def_d, forall, hole, id, id_eq, id_member, many, mk, mp, named, pi,
   type_, unnamed, use_bare, use_d, var,
 }
-use lang.elaborate {
+use lib::elaborate {
   elaborate_class, elaborate_decls, elaborate_def, elaborate_type, free_vars,
   names_of_decl, names_of_decls, sentinel,
 }

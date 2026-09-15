@@ -1,5 +1,5 @@
-use std.test {}
-use init.foldable {Foldable}
+use std::test {}
+use lib::foldable {Foldable}
 
 def multiply (x : I64) (y : I64) : I64 := x * y
 

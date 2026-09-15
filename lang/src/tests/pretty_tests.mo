@@ -1,4 +1,4 @@
-use lang.types {
+use lib::types {
   Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor, Inductive,
   Instance, Literal, MatchCase, ModulePath, Native, Operator, Param, Struct,
   StructField, Term, TypeConstraint, affine, app, class_d, con, def_d, f64,
@@ -7,7 +7,7 @@ use lang.types {
   show_identifier, show_module_path, str, struct_d, type_, u32, unnamed, use_bare,
   use_d, var, zero,
 }
-use lang.pretty {
+use lib::pretty {
   show_decl, show_instance, show_match_case, show_multiplicity, show_num_suffix,
   show_term, show_universe,
 }

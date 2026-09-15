@@ -3,9 +3,9 @@
 // clang, the runtime object -- is `llvm/src/link.mo`, in the llvm mote; this
 // file stays in lang because it speaks Term.
 
-use lang.types {Def, app, i64, id, lam, lit, mk, mp, named, num, type_, var}
-use llvm.ir {emit_module, mk}
-use lang.codegen.emit {check_contains, compile_db_decls_ir, mk}
+use lib::types {Def, app, i64, id, lam, lit, mk, mp, named, num, type_, var}
+use llvm::ir {emit_module, mk}
+use lib::codegen::emit {check_contains, compile_db_decls_ir, mk}
 
 open Term {app, lam, lit, type_, var}
 open Literal {num}

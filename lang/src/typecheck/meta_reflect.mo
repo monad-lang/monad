@@ -33,11 +33,11 @@
 /// index 0 (innermost), matching `lang/core_eval.mo`'s own
 /// `extend_env_with_fields`/`dispatch_arm` runtime behavior exactly.
 /// `push_locals` below is the one place that convention is applied.
-use lang.core_eval {value_as_i64, value_as_str}
-use lang.core_ir {IrLit}
-use lang.core_value {Value}
-use lang.scope {struct_fields_to_params}
-use lang.types {
+use lib::core_eval {value_as_i64, value_as_str}
+use lib::core_ir {IrLit}
+use lib::core_value {Value}
+use lib::scope {struct_fields_to_params}
+use lib::types {
   Attribute, Decl, Def, Identifier, InductConstructor,
   Inductive, MatchCase, ModulePath, Param, Struct,
   Term, TypeConstraint, sentinel, show_module_path,

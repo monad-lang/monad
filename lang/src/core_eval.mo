@@ -1,12 +1,12 @@
-use lang.core_ir {CoreIr, IrLit, MatchArm}
-use lang.core_value {
+use lib::core_ir {CoreIr, IrLit, MatchArm}
+use lib::core_value {
   CoreEvalCycle, Env, GlobalCache, GlobalDef, GlobalTable, NativeTable, Value,
   env_extend, env_get, global_cache_begin, global_cache_fail, global_cache_get,
   global_cache_new, global_cache_store, global_table_get, native_table_arity,
   native_table_name,
 }
-use lang.types {Identifier, ModulePath}
-use std.list {length}
+use lib::types {Identifier, ModulePath}
+use std::list {length}
 
 /// The evaluator core loop, mirroring `core/src/core_eval.rs` (Rust).
 ///

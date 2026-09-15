@@ -3,7 +3,7 @@
 // listed here; explicitly naming any of `std.map`'s `Map`-class-instance-
 // related exports exposes the same pre-existing latent instance/
 // dictionary-resolution bug.
-use std.map {}
+use lib::map {}
 
 /// Verify Map.empty and Map.insert type-check and evaluate.
 #[test]

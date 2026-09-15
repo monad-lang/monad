@@ -365,6 +365,54 @@ fn test_organize_imports_deletes_fully_unused_use() {
   assert!(parse_file(new_source.as_str().into()).is_ok());
 }
 
+/// organize-imports emits the `::` spelling for `use` and keeps `.` for
+/// `open` -- and what it emits must re-parse, which is what makes the two
+/// separators a round trip rather than just a rendering choice.
+#[test]
+fn test_organize_imports_emits_colon_colon_for_use_only() {
+  let loaded = default_modules().unwrap();
+
+  let path_a = ModulePath::new(vec![
+    Identifier::new("colonmod".to_string()),
+    Identifier::new("inner".to_string()),
+  ]);
+  let parsed_a = parse_file("def used_fn : I64 := 1\ndef unused_fn : I64 := 2\n".into()).unwrap();
+  let decls_a = type_check_module_decls(&path_a, parsed_a.decls, &loaded).unwrap();
+  let mut loaded = loaded;
+  loaded.add_module(module(
+    path_a.clone(),
+    ParsedModule {
+      decls: decls_a,
+      module_doc: None,
+    },
+  ));
+
+  let path_b = ModulePath::top("colon_consumer");
+  // Bare `use` (no filter) is what organize-imports rewrites into an
+  // explicit one -- which is where the rendering happens.
+  let source_b = "use colonmod.inner\n\ndef f : I64 := used_fn\n";
+  let parsed_b = parse_file(source_b.into()).unwrap();
+  let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded).unwrap();
+  loaded.add_module(module(
+    path_b.clone(),
+    ParsedModule {
+      decls: decls_b,
+      module_doc: None,
+    },
+  ));
+
+  let module_b = loaded.get_module(&path_b).unwrap();
+  let edits = compute_organize_import_edits(module_b, &loaded);
+  let new_source = apply_text_edits(source_b, edits);
+  assert!(
+    new_source.contains("use colonmod::inner {used_fn}"),
+    "a use path renders with `::`: {new_source:?}"
+  );
+  // What it emits has to parse -- the `::` spelling is accepted, so this
+  // is a real round trip and not just a prettier string.
+  assert!(parse_file(new_source.as_str().into()).is_ok());
+}
+
 #[test]
 fn test_organize_imports_open_and_use_together() {
   let loaded = default_modules().unwrap();

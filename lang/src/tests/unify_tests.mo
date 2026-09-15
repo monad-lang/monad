@@ -1,8 +1,8 @@
-use lang.types {
+use lib::types {
   Term, app, forall, hole, id, lit, named, pi, result_is_ok, str, type_, unnamed,
   var,
 }
-use lang.typecheck.unify {unify}
+use lib::typecheck::unify {unify}
 
 def run_unify (a : Term) (b : Term) : Bool :=
     result_is_ok (unify a b)

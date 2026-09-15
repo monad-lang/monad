@@ -1,4 +1,4 @@
-use lang.types {
+use lib::types {
   Con, DebugName, Identifier, Inductive, InductConstructor,
   Literal, LocalScope, LocalVar, MatchCase, ModulePath, NameRef, NumSuffix,
   Native, Param, Scope, ScopeClassDef, ScopeDef, ScopeError, Similar,
@@ -8,7 +8,7 @@ use lang.types {
   ntv, num, pi, sentinel, show_identifier, show_module_path, str, term_peel, type_,
   unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
-use lang.scope {
+use lib::scope {
   DictBinding, build_dict_field_projection_checked, build_scope_def,
   dict_binding_class_of, dict_param_name, find_constructor_in_inductive,
   find_matching_instance, flatten_call_spine, inductive_has_constructor, list_append,
@@ -22,10 +22,10 @@ use lang.scope {
   scope_find_local, scope_globals, scope_instance_candidates, scope_push_local,
   scope_resolve_name,
 }
-use lang.typecheck.name_subst {name_subst_term}
-use lang.typecheck.subst {term_permute, term_subst}
-use lang.typecheck.unify {unify}
-use std.list {length}
+use lib::typecheck::name_subst {name_subst_term}
+use lib::typecheck::subst {term_permute, term_subst}
+use lib::typecheck::unify {unify}
+use std::list {length}
 
 /// A type-checked term paired with its type.
 struct TypedTerm {

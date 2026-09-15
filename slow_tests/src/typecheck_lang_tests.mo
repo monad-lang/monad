@@ -1,9 +1,9 @@
 use io {IO}
-use slow_tests.typecheck_harness {typecheck_file}
-use lang.types {Decl, Def, Identifier, InductConstructor, Inductive, ModulePath, Scope, ScopeData, Term, def_d, hole, id, inductive_d, mk, mp}
-use lang.module {mk}
-use lang.parser.core {mk}
-use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
+use lib::typecheck_harness {typecheck_file}
+use lang::types {Decl, Def, Identifier, InductConstructor, Inductive, ModulePath, Scope, ScopeData, Term, def_d, hole, id, inductive_d, mk, mp}
+use lang::module {mk}
+use lang::parser::core {mk}
+use lang::typecheck::infer {empty_local_types, empty_locals, mk, type_check}
 
 open IO {println}
 

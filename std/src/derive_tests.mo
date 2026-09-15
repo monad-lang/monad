@@ -6,9 +6,9 @@
 /// are `use`d here (not redefined), proving decl-gen macros now resolve
 /// cross-module.
 
-use std.derive {derive_lens, derive_debug, derive_beq, derive_bord}
-use init.optics {Lens, over, set, view}
-use std.debug {Debug}
+use lib::derive {derive_lens, derive_debug, derive_beq, derive_bord}
+use init::optics {Lens, over, set, view}
+use lib::debug {Debug}
 
 struct Point {
     x : I64,

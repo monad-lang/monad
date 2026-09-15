@@ -1,4 +1,4 @@
-use lang.types {
+use lib::types {
   Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor,
   char_to_string,
   Inductive, Instance, Literal, MatchCase, ModulePath, Multiplicity, Native,
@@ -11,7 +11,7 @@ use lang.types {
   use_d, use_glob, use_items, use_name, use_rename, use_sub, use_sub_rename, var,
   zero,
 }
-use std.list {intercalate}
+use std::list {intercalate}
 
 open Term {app, con, forall, hole, lam, lit, ntv, pi, type_, var}
 open Literal {char, flt, if_, match_, num, str}
@@ -394,6 +394,20 @@ def show_infix_decl (op : Operator) (path : ModulePath) (vis : Visibility) : Str
 def show_use_pub_prefix (public : Bool) : String :=
     if public then "pub " else ""
 
+/// A `use` path renders with `::`. Only `use`: `open` operates on names
+/// and keeps `.`, as do dotted def names and member access -- the
+/// separator is what distinguishes a module path from a name path on
+/// sight. See plans/implementations/qualified-names.md.
+///
+/// Deliberately NOT a change to `show_module_path`: that rendering is
+/// also what `lang.codegen.qualify` builds symbol names out of
+/// (`lang.types::show_term`, dot-joined module then `::` then name), and
+/// flipping it would rename every compiled symbol.
+def show_use_path (path : ModulePath) : String :=
+    match path {
+        ModulePath.mp ids => List.intercalate "::" (List.map show_identifier ids)
+    }
+
 #[partial]
 def show_decl (d : Decl) : String := match d {
     def_d def_ => show_def def_,
@@ -403,7 +417,7 @@ def show_decl (d : Decl) : String := match d {
     instance_d ins => show_instance ins,
     infix_d op path vis => show_infix_decl op path vis,
     use_d path filter public =>
-        let path_str := show_module_path path in
+        let path_str := show_use_path path in
         String.concat (String.concat (show_use_pub_prefix public) (String.concat "use " path_str)) (show_use_filter filter),
     open_d path filter =>
         let path_str := show_module_path path in

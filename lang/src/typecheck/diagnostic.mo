@@ -13,8 +13,8 @@
 /// real spans through `Term` construction across the whole grammar
 /// would be a much larger project and isn't attempted here.
 
-use lang.types {NameRef, TypeError, show_identifier, show_module_path, show_operator}
-use lang.pretty {show_term}
+use lib::types {NameRef, TypeError, show_identifier, show_module_path, show_operator}
+use lib::pretty {show_term}
 
 /// `NameRef` (`lang/types.mo`) has no `Show`/to-string helper of its
 /// own yet — the three variants wrap `Identifier`/`ModulePath`/

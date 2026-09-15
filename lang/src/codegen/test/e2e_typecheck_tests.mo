@@ -1,9 +1,9 @@
-use lang.types {
+use lib::types {
   app, con, forall, hole, i64, id, if_, lam, lit, match_, mc, mk, mp, named, num,
   pi, str, type_, unnamed, var, zero,
 }
-use llvm.ir {emit_module, mk}
-use lang.codegen.emit {check_contains, compile_db_decls_ir, mk}
+use llvm::ir {emit_module, mk}
+use lib::codegen::emit {check_contains, compile_db_decls_ir, mk}
 
 open Term {app, con, forall, hole, lam, lit, pi, type_, var}
 open Literal {if_, match_, num, str}

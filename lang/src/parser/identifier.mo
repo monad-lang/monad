@@ -1,10 +1,10 @@
 /// Identifier parser for the self-hosted parser
 /// Extracted from parser.mo as part of Phase C
 
-use lang.types {custom}
-use lang.parser.core {ParseResult, custom, fail, is_empty, success}
-use lang.parser.char_preds {ident_start, is_ident_char_byte, is_keyword}
-use lang.parser.combinators {take_while_byte}
+use lib::types {custom}
+use lib::parser::core {ParseResult, custom, fail, is_empty, success}
+use lib::parser::char_preds {ident_start, is_ident_char_byte, is_keyword}
+use lib::parser::combinators {take_while_byte}
 
 open ParseResult {fail, success}
 

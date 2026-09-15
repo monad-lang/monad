@@ -916,6 +916,55 @@ fn test_use_bare_source_location_excludes_trailing_whitespace() {
   assert_eq!(res.source_location.end.column, 13); // just past "use std.show"
 }
 
+/// `::` and `.` in a `use` path produce the same `ModulePath` -- the
+/// separator is surface syntax, and the path it denotes is identical. The
+/// dotted spelling stays accepted through the corpus migration.
+#[test]
+fn test_use_accepts_colon_colon_separator() {
+  let colons = "use std::string::trim {x}".into();
+  let (_, colon_use) = use_parser(colons).unwrap();
+  let dots = "use std.string.trim {x}".into();
+  let (_, dot_use) = use_parser(dots).unwrap();
+  assert_eq!(colon_use.module_path, dot_use.module_path);
+  assert_eq!(
+    colon_use.module_path,
+    ModulePath::new(vec![
+      Identifier::new("std".to_string()),
+      Identifier::new("string".to_string()),
+      Identifier::new("trim".to_string()),
+    ])
+  );
+}
+
+#[test]
+fn test_pub_use_accepts_colon_colon_separator() {
+  let s = "pub use lang::codegen::emit {compile}".into();
+  let (_, res) = use_parser(s).unwrap();
+  assert!(res.public);
+  assert_eq!(
+    res.module_path,
+    ModulePath::new(vec![
+      Identifier::new("lang".to_string()),
+      Identifier::new("codegen".to_string()),
+      Identifier::new("emit".to_string()),
+    ])
+  );
+}
+
+/// `open` operates on NAMES, not files, so it keeps `.`. A `::` there is
+/// not a path separator and must not be absorbed into the path.
+#[test]
+fn test_open_does_not_take_colon_colon() {
+  // Takes the path itself, not the `open` keyword before it.
+  let s = "Bool::and".into();
+  let (rest, res) = open_module_path_and_filter(s).unwrap();
+  assert_eq!(res.0, mpt("Bool"));
+  assert!(
+    !rest.is_empty(),
+    "`::and` must be left unconsumed, not parsed as another path segment"
+  );
+}
+
 #[test]
 fn test_use_glob() {
   use crate::term::{UseFilter, UseItem};

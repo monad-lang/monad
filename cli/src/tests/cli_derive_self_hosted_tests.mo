@@ -14,7 +14,7 @@
 /// Listed in `slow_tests/typecheck_lang_tests.mo` (self-hosted
 /// type-check corpus) -- unlike `cli_derive_tests.mo`, which is
 /// deliberately Rust-host-only.
-use cli.args {*}
+use lib::args {*}
 
 type DemoCommand {
     compile (path : String) (#[arg] verbose : Bool),

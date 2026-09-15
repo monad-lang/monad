@@ -1,11 +1,11 @@
-use lang.types {
+use lib::types {
   Decl, Def, Identifier, InductConstructor, Inductive, Infix, Instance,
   InstanceKey, LocalScope, LocalVar, Module, ModulePath, ModuleRegistry, NameRef,
   Param, Scope, ScopeData, ScopeDef, ScopeError, ScopeInstance, Similar, Term,
   TypeConstraint, def_d, hole, id, inductive_d, many, mk, mp, name, nmp,
   param_many, type_,
 }
-use lang.scope {
+use lib::scope {
   add_constraint_dict_params, build_scope_from_decls, build_scope_from_modules,
   list_append, modpath_eq, resolve_def_in_scope_by_name, scope_data_add_def,
   scope_data_add_inductive, scope_data_add_instance, scope_data_empty,

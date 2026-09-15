@@ -1,9 +1,9 @@
-use std.list {intercalate}
+use std::list {intercalate}
 // The leaf string-map module, NOT `lang.codegen.util` -- that file imports
 // this one, so the dependency cannot run both ways. See `strmap.mo`'s head.
-use llvm.strmap {str_map_empty, str_map_insert, str_map_lookup}
+use lib::strmap {str_map_empty, str_map_insert, str_map_lookup}
 // For the `HashMap` type itself, which the `loc_suffixes` field names.
-use std.map {}
+use std::map {}
 
 type LLVMType {
     void,

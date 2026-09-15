@@ -31,18 +31,18 @@
 // resolution bug: naming any of `std.map`'s `Map`-class-instance-related
 // exports in a non-empty `use` filter breaks `Map.insert`/etc. at runtime,
 // even though type-checking succeeds).
-use std.map {}
-use std.list {Show, filter, intercalate}
-use init.string {beq, concat, drop, is_empty, slice, starts_with, to_list}
-use init.number {beq, sub, to_string}
-use lang.parser.core {
+use std::map {}
+use std::list {Show, filter, intercalate}
+use init::string {beq, concat, drop, is_empty, slice, starts_with, to_list}
+use init::number {beq, sub, to_string}
+use lib::parser::core {
   ParseError, ParseResult, custom, fail, is_empty, parse_error_remaining, success, tag,
 }
-use lang.parser.char_preds {is_ident_char}
-use lang.parser.combinators {
+use lib::parser::char_preds {is_ident_char}
+use lib::parser::combinators {
   alt, alt_fold, delimited_by, many0, map_parse, separated_by, tag, take_while,
 }
-use lang.parser.number {number}
+use lib::parser::number {number}
 
 open ParseResult {fail, success}
 open Toml.Value {array, boolean, integer, string, table}

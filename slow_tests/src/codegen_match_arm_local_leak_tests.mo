@@ -23,7 +23,7 @@
 /// leak), and `check` says nothing -- only compiling and running finds
 /// it, hence the full compile/link/execute round trip here.
 use io {IO}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// `resolve_branch_merge_info`'s own shape, reduced: the `some` arm

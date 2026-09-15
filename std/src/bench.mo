@@ -1,7 +1,7 @@
 /// Benchmark utilities.
 
 use io {IO}
-use std.io {current_time, println}
+use lib::io {current_time, println}
 open IO {current_time, println}
 
 /// Milliseconds from an arbitrary fixed origin. Only differences between

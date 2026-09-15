@@ -28,22 +28,22 @@
 /// `detect_test_result_value`, `core/src/lib.rs`) are explicitly out
 /// of scope for this file — not silently unsupported, just not yet
 /// needed by any real corpus file.
-use lang.types {
+use lib::types {
   Attribute, Decl, Def, LoadedModules, LocalScope, ModulePath, Scope, ScopeData,
   has_attr,
 }
-use lang.codegen.emit {
+use lib::codegen::emit {
   bare_modpath, collect_all_decls_from_modules, compile_db_module,
   desugar_struct_lits_decls, filter_reachable_decls, module_path_to_str,
   qualified_def_name_str, qualify_modules,
 }
-use llvm.ir {LLVMModule}
-use lang.module {
+use llvm::ir {LLVMModule}
+use lib::module {
   elaborate_module_decls_best_effort,
   get_loaded_all, get_loaded_main, resolve_open_aliases_in_modules,
   try_parse_decls,
 }
-use lang.scope {
+use lib::scope {
   add_constraint_dict_params_decls, build_scope_from_decls, collect_classes,
   collect_infixes, promote_instance_defs, resolve_class_calls_decls,
   resolve_infix_decls, validate_no_unresolved_class_calls,

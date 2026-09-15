@@ -25,7 +25,7 @@
 /// desugaring needs to run to reach the actual bug shape.
 use io {IO}
 open IO {println}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// The exact minimal repro from the plan doc: a recursive `if` whose

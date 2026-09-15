@@ -615,12 +615,25 @@ infix:20 (++) := List.append
 ### Module Imports
 
 ```monad
-// Load a module, listing exactly the names needed
+// Load a module, listing exactly the names needed.
+// `::` separates module path segments -- `use` only.
+use std::list {intercalate}
 use io {IO}
 
-// Open namespace. Make defs available without given prefix.
+// This mote's own library root (Rust's `crate`), root-relative
+// within the mote.
+use lib::codegen::emit {compile_db_module}
+
+// Open a namespace: make defs available without their prefix.
+// `open` names a NAMESPACE, not a file, so it keeps `.`.
 open IO {println}
 ```
+
+`::` is for `use` paths and nothing else. Dotted def names
+(`String.length`), member access (`x.field`), constructor paths
+(`List.cons`) and `open` paths all stay dotted -- the separator is what
+tells a module path apart from a name path on sight. Dotted `use` paths
+still parse, but everything in this corpus has migrated.
 
 `{*}` imports/opens everything explicitly; a bare `use`/`open` (no braces) still parses but is deprecated in favor of an explicit filter.
 

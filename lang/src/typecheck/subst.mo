@@ -24,11 +24,11 @@
 /// Bruijn index. That form needs a separate, NAME-based substitution
 /// (mirroring the reference's own `subst_macro`/`subst_decl_var` much
 /// more directly) — a different module, not this one.
-use lang.types {
+use lib::types {
   Con, Literal, MatchCase, Native, StructLitField, Term,
 }
 
-use lang.typecheck.traverse {term_map_children_at_depth}
+use lib::typecheck::traverse {term_map_children_at_depth}
 
 // ─── Shift ───────────────────────────────────────────────────────────
 //

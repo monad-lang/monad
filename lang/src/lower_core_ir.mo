@@ -1,16 +1,16 @@
-use lang.core_eval {basic_native_table}
-use lang.core_ir {CoreIr, IrLit, MatchArm}
-use lang.core_value {GlobalDef, GlobalTable, NativeTable}
-use lang.scope {
+use lib::core_eval {basic_native_table}
+use lib::core_ir {CoreIr, IrLit, MatchArm}
+use lib::core_value {GlobalDef, GlobalTable, NativeTable}
+use lib::scope {
   build_scope_from_decls, modpath_eq, scope_data_empty, scope_find_inductive,
   scope_find_inductive_by_constructor, scope_globals, scope_resolve_name,
 }
-use lang.types {
+use lib::types {
   AttrArg, Attribute, Con, Decl, Def, DebugName, Identifier, Inductive,
   InductConstructor, Literal, MatchCase, ModulePath, Native, Scope, ScopeDef,
   Term, id_eq, sentinel, show_module_path,
 }
-use lang.typecheck.infer {empty_locals, last_dotted_segment}
+use lib::typecheck::infer {empty_locals, last_dotted_segment}
 
 /// Lowers Monad's checked, de-Bruijn `Term` (`lang/types.mo`) to
 /// `CoreIr` (`lang/core_ir.mo`), mirroring `core/src/lower_core_ir.rs`

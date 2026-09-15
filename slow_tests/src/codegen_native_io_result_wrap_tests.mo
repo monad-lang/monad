@@ -23,8 +23,8 @@
 /// `implementations/2026-08-29-native-bind-result-use-crash.md`, then
 /// root-caused and fixed here.
 use io {IO}
-use std.process {process_id}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use std::process {process_id}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// Binds `IO.read_file`'s result via `<-` and then ACTUALLY USES it

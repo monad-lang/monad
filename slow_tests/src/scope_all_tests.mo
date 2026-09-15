@@ -1,10 +1,10 @@
 use io {io}
-use lang.types {
+use lang::types {
   LocalScope, ModulePath, NameRef, Scope, ScopeData, id, mp, name, nid,
 }
-use lang.module {parse_all_decls}
-use lang.parser.core {fail, success}
-use lang.scope {build_scope_from_decls, scope_resolve_name}
+use lang::module {parse_all_decls}
+use lang::parser::core {fail, success}
+use lang::scope {build_scope_from_decls, scope_resolve_name}
 
 open IO {io}
 

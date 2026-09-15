@@ -1,6 +1,6 @@
 /// Self-hosted Monad grammar parser.
 /// Split into modules for maintainability.
-use lang.types {
+use lib::types {
   Decl, DoStmt, term_loc, Identifier, InductConstructor, LocatedSpan, Location, ModulePath,
   NameRef, OpenFilter, Param, Term, TypeConstraint, UseFilter, UseItem, app,
   bind_s, class_d, con, custom, def_d, expr_s, forall, hole, id, if_,
@@ -11,31 +11,31 @@ use lang.types {
   struct_d, type_, use_bare, use_d, use_glob, use_items, use_name,
   use_rename, use_sub, use_sub_rename, var,
 }
-use std.list {filter, intercalate, length}
+use std::list {filter, intercalate, length}
 // For `HashMap` (the located parser's position table) and the monomorphic
 // helpers over it -- never `Map.insert`/`Map.lookup`, whose generic
 // dispatch can resolve to the wrong instance.
-use std.map {}
-use llvm.strmap {str_map_empty, str_map_insert}
-use lang.parser.lower_parse {
+use std::map {}
+use llvm::strmap {str_map_empty, str_map_insert}
+use lib::parser::lower_parse {
   collect_decl_rems, lower_ctx_bare, lower_ctx_bind_all, lower_ctx_locating,
   lower_parse_decl, lower_parse_decls, lower_parse_term, name_ref_to_string,
 }
-use lang.parser.core {
+use lib::parser::core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
   op_lookup_prec, op_table, parse_error_remaining, success, tag,
 }
-use lang.parser.char_preds {is_ident_char_byte, is_space_byte}
-use lang.parser.combinators {
+use lib::parser::char_preds {is_ident_char_byte, is_space_byte}
+use lib::parser::combinators {
   alt, alt_fold, bind_parse, delimited_by, many1, map_parse, opt,
   preceded_by, separated_by, tag, tag_keyword, take_while_byte, terminated_by,
 }
-use lang.parser.number {number, numeric_literal}
-use lang.parser.whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
-use lang.parser.position {consume_span, location_of_remaining, new_span, resolve_offsets_in_file, span_fragment, span_location}
-use lang.parser.identifier {identifier}
-use lang.parser.string {char_literal, raw_string_parse, string_parse}
-use lang.parser.diagnostic {render_parse_error}
+use lib::parser::number {number, numeric_literal}
+use lib::parser::whitespace {skip_spaces, skip_spaces_match, ws0, ws1}
+use lib::parser::position {consume_span, location_of_remaining, new_span, resolve_offsets_in_file, span_fragment, span_location}
+use lib::parser::identifier {identifier}
+use lib::parser::string {char_literal, raw_string_parse, string_parse}
+use lib::parser::diagnostic {render_parse_error}
 open lang.parser.core {
   ParseResult, custom, fail, is_empty, mk, op_char_member, op_chars,
   op_lookup_prec, op_table, success, tag,
@@ -386,6 +386,27 @@ def ids_to_module_path (ids : List String) : ModulePath :=
 #[partial]
 def module_path_parser (input : String) : ParseResult ModulePath :=
 	map_parse ids_to_module_path dotted_identifier input
+
+/// The separator in a `use` path. `::` is the spelling; `.` is still
+/// accepted so the corpus can migrate file by file with no flag day.
+///
+/// `use` is the ONLY form that takes `::`. `open` operates on names, not
+/// files, and dotted names in expressions (`List.cons`, `x.field`,
+/// `String.length`) stay dotted forever -- the separator is what tells a
+/// module path apart from a name path at parse time, with no scope
+/// knowledge needed. See plans/implementations/qualified-names.md.
+///
+/// `::` first in the alternation so a path is never mis-split at the
+/// first `:`.
+def use_path_sep (input : String) : ParseResult String :=
+	alt (tag "::") (tag ".") input
+
+def use_path_identifier (input : String) : ParseResult (List String) :=
+	dotted_identifier_require_nonempty (separated_by use_path_sep identifier input) input
+
+#[partial]
+def use_path_parser (input : String) : ParseResult ModulePath :=
+	map_parse ids_to_module_path use_path_identifier input
 
 // use module.path
 
@@ -878,7 +899,7 @@ def use_pub_require_ws (rem : String) (orig : String) : ParseResult ParseDecl :=
 #[partial]
 def use_kw (r : ParseResult String) (public : Bool) : ParseResult ParseDecl :=
 	match r {
-		success rem _ => match module_path_parser (skip_spaces rem) {
+		success rem _ => match use_path_parser (skip_spaces rem) {
 			success rem2 path => use_after_path path public rem2,
 			fail e => fail e
 		},
@@ -8464,6 +8485,58 @@ def test_use_parser : Bool :=
                 _ => false
             },
         fail _ => false
+    }
+
+/// `::` and `.` in a `use` path produce the same `ModulePath` -- the
+/// separator is surface syntax, and the path it denotes is identical.
+/// The dotted spelling stays accepted through the corpus migration.
+#[test]
+def test_use_parser_accepts_colon_colon : Bool :=
+    match use_parser "use lang::codegen::emit {compile_db_module}" {
+        success rem out =>
+            match out.kind {
+                use_d path _filter _pub =>
+                    (String.beq rem "") &&
+                    String.beq (module_path_to_string path) "lang.codegen.emit",
+                _ => false
+            },
+        fail _ => false
+    }
+
+#[test]
+def test_use_parser_dotted_and_colon_colon_agree : Bool :=
+    match use_parser "use std::list {intercalate}" {
+        success _ colon_out =>
+            match use_parser "use std.list {intercalate}" {
+                success _ dot_out =>
+                    match colon_out.kind {
+                        use_d colon_path _f1 _p1 =>
+                            match dot_out.kind {
+                                use_d dot_path _f2 _p2 =>
+                                    String.beq (module_path_to_string colon_path)
+                                               (module_path_to_string dot_path),
+                                _ => false
+                            },
+                        _ => false
+                    },
+                fail _ => false
+            },
+        fail _ => false
+    }
+
+/// `open` operates on NAMES, not files, so it keeps `.` -- `::` there is
+/// not a path separator and must not parse as one.
+#[test]
+def test_open_parser_does_not_take_colon_colon : Bool :=
+    match open_parser "open Bool::and" {
+        success rem out =>
+            match out.kind {
+                // The path stops at `Bool`; the `::and` is left unconsumed
+                // rather than absorbed as another segment.
+                open_d path _filter => not (String.beq rem ""),
+                _ => false
+            },
+        fail _ => true
     }
 
 #[test]

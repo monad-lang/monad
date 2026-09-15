@@ -1,7 +1,7 @@
 // Structured concurrency combinators: all, race, scoped, sleepIO, Duration.
 // Builds on forkIO/await_fiber/cancel_fiber from std.concurrent.fiber.
 
-use std.concurrent.fiber {Fiber, await_fiber, cancel_fiber}
+use lib::concurrent::fiber {Fiber, await_fiber, cancel_fiber}
 
 struct Duration {
     millis : I64,

@@ -1,5 +1,5 @@
 use io {IO}
-use std.bench {now, report, report_since, since}
+use std::bench {now, report, report_since, since}
 // `str_map_*` below is a `std.map` `HashMap String V`. Empty import:
 // naming any of `std.map`'s `Map`-class-instance exports explicitly hits
 // a pre-existing latent instance/dictionary-resolution bug (same
@@ -8,9 +8,9 @@ use std.bench {now, report, report_since, since}
 // already use) -- everything remains available regardless via the same
 // always-on mechanism that lets any top-level type/def resolve without
 // being explicitly `use`d.
-use std.map {}
-use std.list {intercalate}
-use lang.types {
+use std::map {}
+use std::list {intercalate}
+use lib::types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
   LoadedModules, LocalScope, Location, MatchCase, ModulePath, Native, Operator,
   Multiplicity, Param, Scope, ScopeData, Struct, StructField, StructLitField,
@@ -20,7 +20,7 @@ use lang.types {
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
   param_many, pi, str, type_, unnamed, var,
 }
-use llvm.ir {
+use llvm::ir {
   DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMInstruction,
   LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair, PhiPair, add, alloc_closure,
   alloc_constructor, assign, bitcast, bool_, branch, call, comment, emit_module,
@@ -30,51 +30,51 @@ use llvm.ir {
   op_mul, op_ne, op_print_str, op_read_file, op_sdiv, op_sub, op_write_file,
   parm_, phi, ptr, ptrtoint, ret, sdiv, show_llvm_type, sub, trunc, var_, void_val, zext,
 }
-use runtime.natives {runtime_native_functions}
-use lang.codegen.validate {
+use runtime::natives {runtime_native_functions}
+use lib::codegen::validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
   validate_no_colliding_def_symbols, validate_no_undesugared_struct_lits,
   validate_no_unwired_natives,
 }
-use lang.codegen.ctors {
+use lib::codegen::ctors {
   build_constructor_arity_map, build_constructor_tag_map, constructor_arity,
   constructor_tag, is_constructor_var,
 }
-use lang.codegen.natives {
+use lib::codegen::natives {
   NativeWrapKind, lookup_native, lookup_native_any, native_attr_target_name,
   native_op_table, native_runtime_fn_name, runtime_declarations,
 }
-use lang.codegen.decls {
+use lib::codegen::decls {
   build_def_name_map, collect_all_decls_from_modules, def_name_str, extract_defs,
   extract_inductives, filter_reachable_decls, reachable_defs_from,
 }
-use lang.codegen.tco {apply_self_tco}
-use lang.codegen.qualify {qtest_def, qualified_def_name_str, qualify_modules}
-use lang.codegen.free_names {collect_referenced_names, free_names_of_term}
-use lang.codegen.ctx {
+use lib::codegen::tco {apply_self_tco}
+use lib::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
+use lib::codegen::free_names {collect_referenced_names, free_names_of_term}
+use lib::codegen::ctx {
   CodegenCtx, CtxStrPair, LocalBinding, build_arity_table,
   collect_db_params, ctx_bind_local, ctx_lookup_arity, ctx_lookup_ctor_arity,
   ctx_lookup_ctor_tag, ctx_lookup_local, ctx_reset_locals, ctx_restore_locals,
   dbg_loc_of_location, empty_ctx, fresh_label, fresh_temp,
   lookup_binding, mk,
 }
-use lang.codegen.symbols {
+use lib::codegen::symbols {
   bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
   mangle_identifiers, module_path_to_str, ref_symbol_name,
   replace_dots_with_underscores, string_find_last, symbol_identifier,
   unqualify_def_name,
 }
-use lang.codegen.util {
+use lib::codegen::util {
   dedup_idents, dedup_idents_go, dedup_strs, dedup_strs_go, drop_last_instr,
   ident_in_list, identifier_eq, join_semicolon_msgs,
   rev_vals, str_map_empty, str_map_insert, str_map_lookup,
 }
-use lang.module {
+use lib::module {
   LoadedModules, ModuleInfo, bench_step, best_effort_decls, best_effort_failed,
   elaborate_module_decls_best_effort, elaborate_module_decls_reporting,
   get_loaded_all, get_loaded_main, mk, resolve_open_aliases_in_modules,
 }
-use lang.scope {
+use lib::scope {
   add_constraint_dict_params_decls, alias_map_empty, alias_map_insert,
   alias_map_lookup, build_scope_from_decls, collect_classes, collect_open_aliases,
   modpath_eq, scope_find_inductive,
@@ -90,11 +90,11 @@ use lang.scope {
 // cost: `lang.module` (already imported above) already pulls
 // `lang.typecheck.infer`, and nothing in `lang.typecheck.*` imports
 // codegen, so this adds no cycle.
-use lang.typecheck.infer {type_head_name, struct_lit_build_args, struct_lit_con_name}
+use lib::typecheck::infer {type_head_name, struct_lit_build_args, struct_lit_con_name}
 // `--verbose` stage-start trace + the red "FAILED at stage" lines
 // (`lang/log` -- helpers gate on `verbose` themselves; the fail lines
 // are ungated, printing in both modes as they did before).
-use std.log {fail_line, stage}
+use std::log {fail_line, stage}
 
 open IO {println}
 open LLVMType {i32_, i64_, i8_, ptr}

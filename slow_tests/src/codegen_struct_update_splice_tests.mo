@@ -29,7 +29,7 @@
 /// just an IR-shape mismatch.
 use io {IO}
 open IO {println}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// The minimal repro shape: `{ c with b := c.b + 1 }` -- the `+ 1`'s

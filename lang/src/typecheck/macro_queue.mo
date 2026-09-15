@@ -30,13 +30,13 @@
 /// `reflect_type_info!` call and nothing nests inside it. Flagged
 /// here, not silently assumed sufficient forever — genuine fixpoint
 /// requeuing is a follow-up if a real template ever needs it.
-use lang.types {
+use lib::types {
   Attribute, Class, ClassDef, Decl, Def, Identifier, InductConstructor,
   Inductive, Instance, ModulePath, Param, Struct, StructField, Term,
   TypeConstraint, id_eq,
 }
-use lang.typecheck.macro_apply {expand_decl_gen_call}
-use lang.typecheck.macro_expand {expand_term}
+use lib::typecheck::macro_apply {expand_decl_gen_call}
+use lib::typecheck::macro_expand {expand_term}
 
 // ─── Registry ───────────────────────────────────────────────────────
 

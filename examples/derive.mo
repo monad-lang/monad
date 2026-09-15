@@ -13,9 +13,9 @@
 // checker's "unused import" analysis flags this line as a false
 // positive — confirmed by removing it: `#[derive BEq]` then fails with
 // "macro `derive_beq` not found". Keep this import despite the warning.
-use std.derive {derive_beq, derive_bord, derive_debug, derive_lens}
-use init.optics {Lens, set, view}
-use std.debug {Debug}
+use std::derive {derive_beq, derive_bord, derive_debug, derive_lens}
+use init::optics {Lens, set, view}
+use std::debug {Debug}
 
 #[derive BEq BOrd Debug Lens]
 struct Point {

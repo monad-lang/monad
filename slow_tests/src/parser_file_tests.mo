@@ -3,8 +3,8 @@
 
 use io {io}
 open IO {io}
-use lang.parser {decls_parser}
-use lang.parser.core {fail, success}
+use lang::parser {decls_parser}
+use lang::parser::core {fail, success}
 
 open ParseResult {fail, success}
 

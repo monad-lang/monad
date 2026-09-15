@@ -19,12 +19,12 @@
 /// repo root).
 use io {IO}
 open IO {println}
-use std.process {exec_cmd, process_id}
-use lang.module {LoadedModules, load_file_modules}
-use llvm.ir {emit_module}
-use llvm.link {compile_ir_to_obj, compile_runtime_obj, link_objects}
+use std::process {exec_cmd, process_id}
+use lib::module {LoadedModules, load_file_modules}
+use llvm::ir {emit_module}
+use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
-use lang.codegen.emit {compile_loaded_modules_to_ir}
+use lib::codegen::emit {compile_loaded_modules_to_ir}
 
 #[partial]
 pub def compile_source_run_expect (source : String) (basename : String) (expected : I64) : IO Bool := do {

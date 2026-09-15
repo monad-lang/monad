@@ -4,19 +4,19 @@
 // `map`/`to_list` are all used throughout this file but are deliberately
 // NOT listed here; the same pre-existing latent instance/dictionary-
 // resolution bug.
-use std.map {}
-use std.list {Show, intercalate, length}
-use init.string {beq, concat, drop, gt, is_empty, length, slice, to_list}
-use init.number {beq, gt, to_string}
-use lang.parser.core {
+use std::map {}
+use std::list {Show, intercalate, length}
+use init::string {beq, concat, drop, gt, is_empty, length, slice, to_list}
+use init::number {beq, gt, to_string}
+use lib::parser::core {
   ParseError, ParseResult, custom, fail, is_empty, mk, parse_error_remaining, success, tag,
 }
-use lang.parser.char_preds {is_space}
-use lang.parser.combinators {
+use lib::parser::char_preds {is_space}
+use lib::parser::combinators {
   alt, alt_fold, delimited_by, many0, map_parse, opt, separated_by, tag,
   take_while, terminated_by,
 }
-use lang.parser.number {number}
+use lib::parser::number {number}
 
 open ParseResult {fail, success}
 open Json {

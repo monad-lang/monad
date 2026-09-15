@@ -2225,39 +2225,81 @@ fn std_dir() -> std::path::PathBuf {
 /// which tries a bare name against `init/` before `std/`), unlike
 /// `init/*.mo` files, which stay addressed by their bare name. See
 /// AGENTS.md's "init vs std" section.
-pub fn init_package_sources() -> Result<Vec<(ModulePath, String)>, LoadingError> {
+pub fn init_package_sources() -> Result<Vec<(ModulePath, PathBuf, String)>, LoadingError> {
   #[cfg(feature = "embed-stdlib")]
   {
-    let entries: [(ModulePath, &str); 12] = [
+    // The path each entry was baked in FROM. Carried even though nothing
+    // reads it off disk here: it is how the loader knows which mote a
+    // default module belongs to, which `use lib::x` inside init/ and std/
+    // depends on. ABSOLUTE, via CARGO_MANIFEST_DIR -- a repo-relative path
+    // resolves against the CWD, and a test binary's CWD is its own package
+    // directory, where `init/mote.toml` is not.
+    let entries: [(ModulePath, &str, &str); 12] = [
       (
         mpt("'prelude"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/prelude.mo"),
         include_str!("../../../init/src/prelude.mo"),
       ),
-      (mpt("id"), include_str!("../../../init/src/id.mo")),
-      (mpt("io"), include_str!("../../../init/src/io.mo")),
-      (mpt("number"), include_str!("../../../init/src/number.mo")),
-      (mpt("math"), include_str!("../../../init/src/math.mo")),
-      (mpt("string"), include_str!("../../../init/src/string.mo")),
-      (mpt("list"), include_str!("../../../init/src/list.mo")),
-      (mpt("init"), include_str!("../../../init/src/lib.mo")),
+      (
+        mpt("id"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/id.mo"),
+        include_str!("../../../init/src/id.mo"),
+      ),
+      (
+        mpt("io"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/io.mo"),
+        include_str!("../../../init/src/io.mo"),
+      ),
+      (
+        mpt("number"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/number.mo"),
+        include_str!("../../../init/src/number.mo"),
+      ),
+      (
+        mpt("math"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/math.mo"),
+        include_str!("../../../init/src/math.mo"),
+      ),
+      (
+        mpt("string"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/string.mo"),
+        include_str!("../../../init/src/string.mo"),
+      ),
+      (
+        mpt("list"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/list.mo"),
+        include_str!("../../../init/src/list.mo"),
+      ),
+      (
+        mpt("init"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../init/src/lib.mo"),
+        include_str!("../../../init/src/lib.mo"),
+      ),
       (
         ModulePath::new(vec![id("std"), id("path")]),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/path.mo"),
         include_str!("../../../std/src/path.mo"),
       ),
       (
         ModulePath::new(vec![id("std"), id("io")]),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/io.mo"),
         include_str!("../../../std/src/io.mo"),
       ),
       (
         ModulePath::new(vec![id("std"), id("process")]),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/process.mo"),
         include_str!("../../../std/src/process.mo"),
       ),
-      (mpt("std"), include_str!("../../../std/src/lib.mo")),
+      (
+        mpt("std"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../std/src/lib.mo"),
+        include_str!("../../../std/src/lib.mo"),
+      ),
     ];
     return Ok(
       entries
         .into_iter()
-        .map(|(path, text)| (path, text.to_string()))
+        .map(|(path, file, text)| (path, PathBuf::from(file), text.to_string()))
         .collect(),
     );
   }
@@ -2293,15 +2335,15 @@ pub fn init_package_sources() -> Result<Vec<(ModulePath, String)>, LoadingError>
     for (path, file) in entries {
       let text = std::fs::read_to_string(&file)
         .map_err(|e| LoadingError::Generic(format!("failed to read {}: {}", file.display(), e)))?;
-      sources.push((path, text));
+      sources.push((path, file, text));
     }
     Ok(sources)
   }
 }
 
 pub fn init_module(mut loaded: LoadedModules) -> Result<LoadedModules, LoadingError> {
-  for (path, text) in init_package_sources()? {
-    load_module_from_text(&text, &path, &mut loaded)?;
+  for (path, file, text) in init_package_sources()? {
+    load_module_from_text_at(&text, &path, Some(file), &mut loaded)?;
   }
   Ok(loaded)
 }

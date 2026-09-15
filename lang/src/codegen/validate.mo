@@ -17,22 +17,22 @@
 ///
 /// All four run on the REACHABLE decls, so a bug in dead code cannot
 /// block a build that never touches it.
-use lang.types {Con, Decl, Def, Literal, MatchCase, Native, Term}
-use llvm.ir {
+use lib::types {Con, Decl, Def, Literal, MatchCase, Native, Term}
+use llvm::ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
   LLVMValue, PhiPair,
 }
-use lang.codegen.decls {def_name_str, extract_defs}
-use runtime.natives {runtime_native_functions}
-use lang.codegen.natives {
+use lib::codegen::decls {def_name_str, extract_defs}
+use runtime::natives {runtime_native_functions}
+use lib::codegen::natives {
   lookup_native_any, native_attr_target_name, native_runtime_fn_name,
   runtime_declarations,
 }
-use lang.codegen.symbols {module_path_to_str}
-use lang.codegen.util {
+use lib::codegen::symbols {module_path_to_str}
+use lib::codegen::util {
   dedup_strs, join_semicolon_msgs, str_map_empty, str_map_insert, str_map_lookup,
 }
-use std.map {}
+use std::map {}
 
 /// A bodyless `#[native X]` def compiles to a "return Unit" stub unless
 /// X is wired into the native backend somewhere -- a

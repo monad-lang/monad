@@ -322,13 +322,16 @@ pub(crate) fn build_core_program(
 ) -> Result<core_program::CoreProgram, BuildCoreProgramError> {
   let init_sources = term::module::init_package_sources()
     .map_err(|e| BuildCoreProgramError::Setup(format!("{e}")))?;
-  let init_paths: Set<ModulePath> = init_sources.iter().map(|(p, _)| p.clone()).collect();
+  let init_paths: Set<ModulePath> = init_sources.iter().map(|(p, _, _)| p.clone()).collect();
   let mut capture_modules: Vec<(ModulePath, Vec<SourceContext<Decl>>)> = init_sources
     .into_iter()
-    .map(|(p, text)| {
-      term::module::load_decls_from_text_with_path(&text, &Default::default())
-        .map(|d| (p.clone(), d))
-        .map_err(|e| BuildCoreProgramError::Setup(format!("parse {p}: {e}")))
+    .map(|(p, file, text)| {
+      term::module::load_decls_from_text_with_path(
+        &text,
+        &crate::parser::ModuleContext::new(p.clone(), Some(file)),
+      )
+      .map(|d| (p.clone(), d))
+      .map_err(|e| BuildCoreProgramError::Setup(format!("parse {p}: {e}")))
     })
     .collect::<Result<Vec<_>, _>>()?;
 

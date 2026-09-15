@@ -1,5 +1,5 @@
-use std.test {}
-use init.foldable {Monoid, Semigroup}
+use std::test {}
+use lib::foldable {Monoid, Semigroup}
 
 #[test]
 def test_semigroup_string : Bool :=

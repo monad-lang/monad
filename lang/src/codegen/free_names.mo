@@ -13,13 +13,13 @@
 /// * `collect_referenced_names` is binder-BLIND, and deliberately so:
 ///   reachability may safely over-approximate, and cheaply. Do not
 ///   reach for it where precision matters -- that is the other one.
-use lang.types {
+use lib::types {
   Con, DebugName, FieldPattern, FieldPatternEntry, Identifier, Literal, MatchCase,
   Native, StructLitField, Term,
 }
-use lang.codegen.symbols {symbol_identifier}
-use lang.codegen.util {ident_in_list, identifier_eq}
-use std.map {}
+use lib::codegen::symbols {symbol_identifier}
+use lib::codegen::util {ident_in_list, identifier_eq}
+use std::map {}
 
 #[partial]
 def free_names_of_term (bound : List Identifier) (t : Term) : List Identifier := match t {

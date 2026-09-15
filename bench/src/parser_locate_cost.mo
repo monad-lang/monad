@@ -27,14 +27,14 @@
 /// Run: `cargo run --release -- test bench/parser_locate_cost.mo`
 use io {IO}
 open IO {println, read_file}
-use std.bench {now, report_since}
-use lang.types {Decl, Location}
-use lang.parser.core {ParseResult}
-use lang.parser.lower_parse {ParseDecl, collect_decl_rems, lower_ctx_bare, lower_ctx_locating, lower_parse_decls}
-use lang.parser {build_loc_table, decls_skip, rekey_by_rem, rems_to_offsets, skip_docstrings, skip_spaces}
-use lang.parser.position {resolve_offsets_in_file}
-use lang.typecheck.macro_queue {expand_decls}
-use std.map {}
+use std::bench {now, report_since}
+use lang::types {Decl, Location}
+use lang::parser::core {ParseResult}
+use lang::parser::lower_parse {ParseDecl, collect_decl_rems, lower_ctx_bare, lower_ctx_locating, lower_parse_decls}
+use lang::parser {build_loc_table, decls_skip, rekey_by_rem, rems_to_offsets, skip_docstrings, skip_spaces}
+use lang::parser::position {resolve_offsets_in_file}
+use lang::typecheck::macro_queue {expand_decls}
+use std::map {}
 
 
 #[partial]

@@ -1,4 +1,4 @@
-use lang.types {
+use lib::types {
   Class, ClassDef, Con, Decl, Def, DebugName, FieldPattern, FieldPatternEntry,
   Identifier, InductConstructor, Inductive,
   Infix, Instance, InstanceKey, Literal, LocalScope, LocalVar, MatchCase, Module, ModuleRegistry,
@@ -8,7 +8,7 @@ use lang.types {
   instance_d, instance_not_found, mk, mp, name, name_not_found, nid, nmp, nop,
   open_d, scoped_open_d, struct_d, type_, use_d,
 }
-use lang.typecheck.traverse {con_map_children, native_map_children, term_map_children}
+use lib::typecheck::traverse {con_map_children, native_map_children, term_map_children}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` — see
 // `bench/scope_lookup.mo`. Empty import: naming any of `std.map`'s
 // `Map`-class-instance exports explicitly hits a pre-existing latent
@@ -16,9 +16,9 @@ use lang.typecheck.traverse {con_map_children, native_map_children, term_map_chi
 // and `std/map_tests.mo` already use) — everything remains available
 // regardless via the same always-on mechanism that lets any top-level
 // type/def resolve without being explicitly `use`d.
-use std.map {}
-use std.list {filter, filter_map}
-use llvm.strmap {str_map_empty, str_map_insert, str_map_lookup}
+use std::map {}
+use std::list {filter, filter_map}
+use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 // --- ModulePath-keyed HashMap ops, bypassing `Map`'s typeclass dispatch ---
 //

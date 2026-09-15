@@ -8,7 +8,7 @@
 /// stale. Kept testing `Command.from_args` directly anyway (isolating
 /// argv-parsing from everything downstream is still the more precise
 /// unit of test coverage, real end-to-end runs notwithstanding).
-use cli.main {*}
+use lib::main {*}
 
 #[test]
 def test_from_args_compile_positional_name : Bool :=

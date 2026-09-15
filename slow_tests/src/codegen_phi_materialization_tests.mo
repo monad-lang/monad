@@ -18,7 +18,7 @@
 /// condition.
 use io {IO}
 open IO {println}
-use lang.codegen.test.e2e_harness {compile_source_run_expect}
+use lang::codegen::test::e2e_harness {compile_source_run_expect}
 
 
 /// `I64.beq` used directly as an `if`'s own condition and as an

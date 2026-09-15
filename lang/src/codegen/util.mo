@@ -10,8 +10,8 @@
 /// Deliberately dependency-light -- `lang.types` and `llvm.ir`
 /// only -- so that every other backend module can import this one
 /// without creating a cycle.
-use lang.types {Decl, Identifier}
-use llvm.ir {
+use lib::types {Decl, Identifier}
+use llvm::ir {
   LLVMBasicBlock, LLVMFunction, LLVMGlobal, LLVMInstruction, LLVMValue, ParamPair,
 }
 // Re-exported, not redefined. They moved to a leaf module so `ir.mo` can use
@@ -20,7 +20,7 @@ use llvm.ir {
 // `use lang.codegen.util {str_map_*}` importers working unchanged; a second
 // copy here would be two definitions of one bare LLVM symbol (AGENTS.md
 // item 18).
-pub use llvm.strmap {str_map_empty, str_map_insert, str_map_lookup}
+pub use llvm::strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 #[partial]
 def identifier_eq (a : Identifier) (b : Identifier) : Bool := match a {

@@ -12,23 +12,23 @@
 /// `inductive_bare_name`, `-> String` in one module and `-> Identifier`
 /// in another -- put a raw `char*` into a `DebugName.named` slot and
 /// crashed the self-compiled compiler. See AGENTS.md items 18/19.
-use lang.types {
+use lib::types {
   Decl, Def, Identifier, ModulePath, StructField, TypeConstraint,
   sentinel, show_identifier, show_module_path,
 }
-use lang.module {ModuleInfo, bench_step, mk}
-use lang.scope {
+use lib::module {ModuleInfo, bench_step, mk}
+use lib::scope {
   OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
   collect_open_aliases, modpath_eq, resolve_open_alias_decls,
 }
-use lang.codegen.free_names {free_names_of_term}
-use lang.codegen.symbols {bare_modpath, symbol_identifier, unqualify_def_name}
-use lang.codegen.util {
+use lib::codegen::free_names {free_names_of_term}
+use lib::codegen::symbols {bare_modpath, symbol_identifier, unqualify_def_name}
+use lib::codegen::util {
   join_semicolon_msgs, list_contains_str, str_map_empty, str_map_insert,
   str_map_lookup,
 }
-use std.map {}
-use std.list {intercalate}
+use std::map {}
+use std::list {intercalate}
 
 /// A decl's own declared def name, if it is a `Decl.def_d`. The name may
 /// itself contain dots (`def String.beq` parses as a SINGLE-segment

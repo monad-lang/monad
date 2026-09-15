@@ -1,4 +1,4 @@
-use std.list {filter, sum}
+use lib::list {filter, sum}
 
 
 // Filter tests (continued)

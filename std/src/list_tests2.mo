@@ -1,4 +1,4 @@
-use std.list {list_show}
+use lib::list {list_show}
 
 def double (x : I64) : I64 := x * 2
 

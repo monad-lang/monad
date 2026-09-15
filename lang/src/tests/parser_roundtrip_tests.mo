@@ -5,11 +5,11 @@
 /// parses -- they were just sitting outside the fast pre-commit sweep for
 /// no reason.
 
-use lang.types {Decl}
-use lang.parser {open_parser, use_parser}
-use lang.parser.lower_parse {lower_parse_decl, lower_ctx_bare}
-use lang.parser.core {ParseResult, fail, success}
-use lang.pretty {show_decl}
+use lib::types {Decl}
+use lib::parser {open_parser, use_parser}
+use lib::parser::lower_parse {lower_parse_decl, lower_ctx_bare}
+use lib::parser::core {ParseResult, fail, success}
+use lib::pretty {show_decl}
 
 open ParseResult {fail, success}
 

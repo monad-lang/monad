@@ -12,11 +12,11 @@
 /// once put 283 constructors on one tag at seven arities and sized
 /// allocations wrongly; the builtin tiers are checked for a matching
 /// arity for the same reason.
-use lang.types {InductConstructor, Inductive}
-use lang.codegen.ctx {CodegenCtx, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag}
-use lang.codegen.symbols {extract_base_name, module_path_to_str}
-use lang.codegen.util {str_map_empty, str_map_insert, str_map_lookup}
-use std.map {}
+use lib::types {InductConstructor, Inductive}
+use lib::codegen::ctx {CodegenCtx, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag}
+use lib::codegen::symbols {extract_base_name, module_path_to_str}
+use lib::codegen::util {str_map_empty, str_map_insert, str_map_lookup}
+use std::map {}
 
 /// The ~16 builtin constructors' tags (0-15), keyed by BOTH their
 /// qualified ("IO.io") and base ("io") name forms -- built once, looked

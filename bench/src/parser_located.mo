@@ -38,13 +38,13 @@
 /// Run: `cargo run --release -- test bench/parser_located.mo`
 use io {IO}
 open IO {println, read_file}
-use std.bench {now, report_since}
-use lang.types {Decl}
-use lang.parser.core {ParseResult}
-use lang.parser.position {is_ascending}
-use lang.parser.lower_parse {ParseDecl, collect_decl_rems}
-use lang.parser {decls_parser, decls_parser_located, decls_skip, rems_to_offsets, skip_docstrings, skip_spaces}
-use std.map {}
+use std::bench {now, report_since}
+use lang::types {Decl}
+use lang::parser::core {ParseResult}
+use lang::parser::position {is_ascending}
+use lang::parser::lower_parse {ParseDecl, collect_decl_rems}
+use lang::parser {decls_parser, decls_parser_located, decls_skip, rems_to_offsets, skip_docstrings, skip_spaces}
+use std::map {}
 
 
 /// How many decls a parse produced. Forces the result inside the span it

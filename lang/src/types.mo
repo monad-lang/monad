@@ -1,4 +1,4 @@
-use std.show {Show}
+use std::show {Show}
 // `ScopeData.def_refs` below is a `std.map` `HashMap ModulePath ScopeDef`.
 // This import is required here (not just at `scope_data_empty`'s own
 // call sites in `lang/scope.mo`) — a real, isolated evaluator
@@ -11,8 +11,8 @@ use std.show {Show}
 // import: naming any of `std.map`'s `Map`-class-instance exports
 // explicitly hits a separate, pre-existing latent instance/dictionary-
 // resolution bug (`std/map_tests.mo`'s own documented workaround).
-use std.map {}
-use std.list {intercalate}
+use std::map {}
+use std::list {intercalate}
 
 type Identifier {
     id String
