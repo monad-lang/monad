@@ -1,0 +1,13 @@
+# OS-specific implementations and side effects: file I/O, processes,
+# environment. Everything portable lives in init.
+
+[mote]
+name = "std"
+version = "0.1.2"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[dependencies.init]
+path = "../init"

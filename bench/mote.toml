@@ -1,0 +1,13 @@
+# Test-only mote: #[test]-driven micro-benchmarks (Bench.now/Bench.report),
+# for occasional manual measurement rather than every-commit correctness.
+
+[mote]
+name = "bench"
+version = "0.1.2"
+edition = "2026"
+
+[dependencies.std]
+path = "../std"
+
+[dependencies.lang]
+path = "../lang"

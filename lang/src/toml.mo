@@ -921,6 +921,77 @@ def toml_check_mote_table (v : Toml.Value) : Bool :=
     _ => false
   }
 
+/// Verbatim shape of a workspace member's manifest (lang/mote.toml): comments,
+/// a [lib] target, and dependencies as SUB-TABLE headers rather than inline
+/// tables -- which is exactly why the repo's manifests are written that way,
+/// since this parser has headers and not inline tables.
+def member_mote_toml_fixture : String :=
+  "# The self-hosted compiler, as a library.\n\n[mote]\nname = \"lang\"\nversion = \"0.1.2\"\nedition = \"2026\"\n\n[lib]\npath = \"src/lib.mo\"\n\n[dependencies.init]\npath = \"../init\"\n\n[dependencies.std]\npath = \"../std\"\n"
+
+#[test]
+def test_parse_member_mote_fixture : Bool :=
+  match Toml.parse member_mote_toml_fixture {
+    ok t =>
+      toml_check_member_mote (Toml.table_get "mote" t) &&
+      toml_check_member_lib (Toml.table_get "lib" t) &&
+      toml_check_member_deps (Toml.table_get "dependencies" t),
+    err _ => false
+  }
+
+def toml_check_member_mote (found : Option Toml.Value) : Bool :=
+  match found {
+    some v => match v {
+      table sub =>
+        toml_table_lookup_eq "name" sub (string "lang") &&
+        toml_table_lookup_eq "version" sub (string "0.1.2") &&
+        toml_table_lookup_eq "edition" sub (string "2026"),
+      _ => false
+    },
+    none => false
+  }
+
+def toml_check_member_lib (found : Option Toml.Value) : Bool :=
+  match found {
+    some v => match v {
+      table sub => toml_table_lookup_eq "path" sub (string "src/lib.mo"),
+      _ => false
+    },
+    none => false
+  }
+
+/// Each dependency is its own sub-table, so `dependencies.init.path` is the
+/// declared source location.
+def toml_check_member_deps (found : Option Toml.Value) : Bool :=
+  match found {
+    some v => match v {
+      table deps =>
+        toml_check_dep_path (Toml.table_get "init" deps) "../init" &&
+        toml_check_dep_path (Toml.table_get "std" deps) "../std",
+      _ => false
+    },
+    none => false
+  }
+
+def toml_check_dep_path (found : Option Toml.Value) (expected : String) : Bool :=
+  match found {
+    some v => match v {
+      table dep => toml_table_lookup_eq "path" dep (string expected),
+      _ => false
+    },
+    none => false
+  }
+
+#[test]
+def test_roundtrip_member_mote_fixture : Bool :=
+  match Toml.parse member_mote_toml_fixture {
+    ok t =>
+      match Toml.parse (Toml.to_string t) {
+        ok t2 => Toml.table_beq t t2,
+        err _ => false
+      },
+    err _ => false
+  }
+
 /// Modeled after root Cargo.toml's [workspace] / [workspace.package] sections:
 /// a multi-key table, an array-of-strings (members), and a nested dotted header.
 def cargo_workspace_toml_fixture : String :=

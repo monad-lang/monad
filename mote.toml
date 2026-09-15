@@ -1,0 +1,18 @@
+# Virtual workspace root for the monad repository: no [mote] of its own,
+# just the list of motes it contains. See plans/packaging/package-system.md
+# section 5a.
+#
+# Manifests in this repo are written with sub-table headers
+# ([dependencies.std]) rather than inline tables ({ path = "../std" }),
+# because the self-hosted reader (lang/src/toml.mo) supports headers and
+# not inline tables. Both spellings mean the same thing to the Rust host.
+
+[workspace]
+members = [
+  "init",
+  "std",
+  "lang",
+  "slow_tests",
+  "bench",
+  "motes/*",
+]

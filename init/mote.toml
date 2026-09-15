@@ -1,0 +1,15 @@
+# The pure, portable core. Depends on nothing: it must work in any
+# environment, wasm and embedded targets included (AGENTS.md, "init vs
+# std"). Its own test files are what need std -- hence the dev-dependency,
+# which a lib or bin target can never resolve through.
+
+[mote]
+name = "init"
+version = "0.1.2"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[dev-dependencies.std]
+path = "../std"

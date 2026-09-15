@@ -602,6 +602,77 @@ edition = "2026"
     assert_eq!(mote.edition.as_deref(), Some("2026"));
   }
 
+  /// The monad repo's own manifests, parsed from disk. These are the first
+  /// real workspace (plans/packaging/package-system.md Phase 5), so a typo in
+  /// one of them should fail here rather than surfacing as a module that
+  /// mysteriously stops resolving.
+  fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .parent()
+      .expect("core crate's manifest dir has a parent directory")
+      .to_path_buf()
+  }
+
+  #[test]
+  fn test_repo_root_manifest_is_a_virtual_workspace() {
+    let root = repo_root();
+    let manifest = Manifest::parse(&root.join("mote.toml")).unwrap();
+    assert!(
+      manifest.mote.is_none(),
+      "the repo root is a virtual workspace: it has [workspace] but no [mote]"
+    );
+    let workspace = manifest.workspace.expect("root manifest has [workspace]");
+    for expected in ["init", "std", "lang", "slow_tests", "bench"] {
+      assert!(
+        workspace.members.iter().any(|m| m == expected),
+        "workspace is missing member {expected}"
+      );
+    }
+    let members = workspace.resolve_members(&root).unwrap();
+    for expected in ["init", "std", "lang", "slow_tests", "bench"] {
+      assert!(
+        members.iter().any(|m| m.ends_with(expected)),
+        "member {expected} did not resolve to a directory with a mote.toml"
+      );
+    }
+  }
+
+  #[test]
+  fn test_repo_member_manifests_declare_their_real_edges() {
+    let root = repo_root();
+    let init = Manifest::parse(&root.join("init/mote.toml")).unwrap();
+    assert_eq!(init.mote.as_ref().unwrap().name, "init");
+    assert!(
+      init.dependencies.is_empty(),
+      "init must stay pure -- no production dependencies"
+    );
+    assert!(
+      init.dev_dependencies.contains_key("std"),
+      "init's own test files use std.test, so std is a dev-dependency"
+    );
+
+    let std_mote = Manifest::parse(&root.join("std/mote.toml")).unwrap();
+    assert!(std_mote.dependencies.contains_key("init"));
+
+    let lang = Manifest::parse(&root.join("lang/mote.toml")).unwrap();
+    for dep in ["init", "std"] {
+      assert!(lang.dependencies.contains_key(dep), "lang depends on {dep}");
+    }
+  }
+
+  /// Every declared path dependency must actually resolve -- this is what
+  /// catches a `path = "../foo"` pointing at a directory with no manifest.
+  #[test]
+  fn test_repo_workspace_members_resolve_their_dependencies() {
+    let root = repo_root();
+    for member in ["std", "lang", "slow_tests", "bench"] {
+      let dir = root.join(member);
+      let manifest = Manifest::parse(&dir.join("mote.toml")).unwrap();
+      Resolver::resolve(&manifest, &dir, None)
+        .unwrap_or_else(|e| panic!("{member}'s dependencies do not resolve: {e}"));
+    }
+  }
+
   #[test]
   fn test_parse_dev_dependencies_are_separate_from_dependencies() {
     // Sub-table form (`[dependencies.x]`), not the inline-table form: this is

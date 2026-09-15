@@ -1,0 +1,17 @@
+# Test-only mote: no lib or bin target, just #[test] defs that are too
+# expensive for the pre-commit sweep (they are ~91% of total test runtime).
+# `monad test slow_tests` is what runs them.
+
+[mote]
+name = "slow_tests"
+version = "0.1.2"
+edition = "2026"
+
+[dependencies.init]
+path = "../init"
+
+[dependencies.std]
+path = "../std"
+
+[dependencies.lang]
+path = "../lang"
