@@ -665,7 +665,20 @@ edition = "2026"
   #[test]
   fn test_repo_workspace_members_resolve_their_dependencies() {
     let root = repo_root();
-    for member in ["std", "lang", "slow_tests", "bench"] {
+    // Every member that declares dependencies, the four this workspace
+    // gained included -- the whole point of the test is to catch a
+    // `path = "../x"` that points nowhere, and a manifest not in this list
+    // is a manifest the test does not check.
+    for member in [
+      "std",
+      "lang",
+      "cli",
+      "llvm",
+      "runtime",
+      "slow_tests",
+      "bench",
+      "motes/demo",
+    ] {
       let dir = root.join(member);
       let manifest = Manifest::parse(&dir.join("mote.toml")).unwrap();
       Resolver::resolve(&manifest, &dir, None)

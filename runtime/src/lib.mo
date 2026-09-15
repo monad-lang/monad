@@ -14,4 +14,4 @@ pub use lib::natives {runtime_native_functions}
 /// harnesses, `monad compile`, the devenv bootstrap task). Making this
 /// absolute or store-resolved is part of the build-system work, not this
 /// mote's job -- see plans/library-ideas/monad-build.md.
-def Runtime.c_path : String := "runtime/src/runtime.c"
+pub def Runtime.c_path : String := "runtime/src/runtime.c"

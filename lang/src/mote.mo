@@ -51,10 +51,29 @@ def list_contains_string (needle : String) (xs : List String) : Bool :=
 /// a one-off file) or under a virtual workspace root, which declares
 /// `[workspace]` and no `[mote]`.
 ///
-/// Bounded by `depth` rather than by reaching the filesystem root: the
-/// walk is `parent_dir` on a string, and a relative path bottoms out at
-/// `""` while an absolute one bottoms out at `"/"` -- a bound is the one
-/// termination argument that holds for both.
+/// Bounded by `depth` as well as by the root, because the walk is string
+/// surgery on a path: a relative path bottoms out at `""`, an absolute one
+/// at `"/"`, and `depth` is the argument that holds for both.
+/// The `mote.toml` inside `dir`, with `""` meaning the working directory
+/// and `"/"` the filesystem root.
+def mote_toml_in (dir : String) : String :=
+    if String.beq dir "" then "mote.toml"
+    else if String.beq dir "/" then "/mote.toml"
+    else String.concat dir "/mote.toml"
+
+/// The parent of `dir`, keeping an absolute path absolute.
+///
+/// `raw_parent_dir "/home"` is `""` -- a root child's parent is the ROOT,
+/// and `""` here means the WORKING DIRECTORY. Without this distinction the
+/// walk-up of an absolute path outside any mote would end by probing
+/// `mote.toml` relative to the CWD and adopt whatever mote happens to live
+/// there, rewriting that file's `use lib::x` to an unrelated mote's name.
+def parent_of (dir : String) : String :=
+    let parent := raw_parent_dir dir in
+    if String.beq parent "" && String.starts_with "/" dir
+    then "/"
+    else parent
+
 #[partial]
 def Mote.discover (dir : String) : IO (Option MoteManifest) :=
     Mote.discover_go dir 32
@@ -64,7 +83,7 @@ def Mote.discover_go (dir : String) (depth : I64) : IO (Option MoteManifest) := 
     if I64.lt depth 1
     then return Option.none
     else do {
-        let candidate := if String.beq dir "" then "mote.toml" else String.concat dir "/mote.toml";
+        let candidate := mote_toml_in dir;
         let exists <- IO.file_exists (Path.path candidate);
         if exists
         then do {
@@ -79,7 +98,7 @@ def Mote.discover_go (dir : String) (depth : I64) : IO (Option MoteManifest) := 
         }
         else if String.beq dir "" || String.beq dir "/"
         then return Option.none
-        else Mote.discover_go (raw_parent_dir dir) (depth - 1)
+        else Mote.discover_go (parent_of dir) (depth - 1)
     }
 }
 
@@ -179,6 +198,30 @@ def test_dev_dependencies_count_as_declared : Bool :=
         Option.none => false,
         Option.some m => MoteManifest.declares m "std"
     }
+
+/// The walk-up must keep an absolute path absolute. `raw_parent_dir` of a
+/// root child is `""`, which means the WORKING DIRECTORY -- so without
+/// `parent_of` a file outside any mote would end up adopting whatever mote
+/// happens to sit in the CWD.
+#[test]
+def test_parent_of_root_child_is_the_root : Bool :=
+    String.beq (parent_of "/home") "/"
+
+#[test]
+def test_parent_of_relative_bottoms_out_at_the_cwd : Bool :=
+    String.beq (parent_of "init") ""
+
+#[test]
+def test_parent_of_keeps_walking_an_absolute_path : Bool :=
+    String.beq (parent_of "/home/u/proj") "/home/u"
+
+#[test]
+def test_mote_toml_in_names_the_root_and_the_cwd : Bool :=
+    if String.beq (mote_toml_in "") "mote.toml"
+    then if String.beq (mote_toml_in "/") "/mote.toml"
+        then String.beq (mote_toml_in "lang") "lang/mote.toml"
+        else false
+    else false
 
 /// A virtual workspace root has `[workspace]` and no `[mote]` -- it is not
 /// itself a mote, and nothing belongs to it.

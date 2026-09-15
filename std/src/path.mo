@@ -78,15 +78,29 @@ def raw_parent_dir (s : String) : String :=
     then ""
     else String.slice s 0 last_slash
 
+/// `/` as a byte -- ASCII 47.
+def slash_byte : U8 := 47u8
+
 /// Scan backwards for `/`, returning -1 when absent. Walks from the end so
 /// the FIRST hit is the last separator.
+///
+/// Compares BYTES via `String.get`, not one-character `String.slice`es: a
+/// slice is a strlen + allocation + copy per character, which turns a scan
+/// over a path into a quadratic, allocating one. This runs per module load
+/// and per dependency in the loader's walk, so that cost is on the hot
+/// path. (The byte comparison is also what the loader's own
+/// `string_find_last_slash` did before it delegated here.)
 #[partial]
 def raw_find_last_slash (s : String) (i : I64) : I64 :=
     if I64.lt i 1
     then -1
-    else if String.beq (String.slice s (i - 1) 1) "/"
-        then i - 1
-        else raw_find_last_slash s (i - 1)
+    else match (String.get s (i - 1) : Option U8) {
+        Option.some byte_val =>
+            if U8.beq byte_val slash_byte
+            then i - 1
+            else raw_find_last_slash s (i - 1),
+        Option.none => -1
+    }
 
 def Path.parent (p : Path) : String :=
     raw_parent_dir (Path.to_string p)

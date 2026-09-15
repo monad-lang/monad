@@ -2521,6 +2521,16 @@ def flatten_module_decls (modules : List ModuleInfo) (acc : List Decl) : List De
 /// one list first and builds scope from THAT, where each decl's owning
 /// module is no longer recoverable. The filter therefore has to happen
 /// here, at the flatten, while `ModuleInfo.path` still says who owns what.
+///
+/// Two consequences worth knowing before changing this:
+///
+///   - It is skipped when `check_deps` is on (see the call site). One
+///     shared scope cannot hide a module's internals from others AND show
+///     them to itself, and checking a dependency's bodies needs the latter.
+///   - CODEGEN does not go through it: `compile_loaded_modules_to_ir_with_debug`
+///     re-flattens from `loaded`. That is deliberate -- `priv` is a scoping
+///     rule, not a linking one, so a `pub` def calling its own `priv` helper
+///     must still compile. Do not "fix" codegen to match.
 #[partial]
 def flatten_visible_module_decls (target : ModulePath) (modules : List ModuleInfo) (acc : List Decl) : List Decl :=
     match modules {
@@ -2862,9 +2872,21 @@ pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool)
             // `priv` declarations from OTHER modules are dropped here --
             // see `flatten_visible_module_decls` for why the filter lives
             // at the flatten rather than in the scope builder.
+            //
+            // Only when `check_deps` is off, which is every real
+            // `check`/`compile`. This list is ONE scope, shared by the
+            // target and by every dependency whose bodies are being
+            // checked -- so with `check_deps` on, dropping a dependency's
+            // `priv` helper would hide it from that dependency's own `pub`
+            // defs, enforcing the rule against the module allowed to break
+            // it. Per-consumer resolution is what would do both;
+            // visibility-declarations.md tracks it.
             let target_module : ModuleInfo := get_loaded_main loaded;
             let target_path : ModulePath := target_module.path;
-            let all_decls : List Decl := flatten_visible_module_decls target_path (get_loaded_all loaded) List.empty;
+            let all_decls : List Decl :=
+                if check_deps
+                then flatten_module_decls (get_loaded_all loaded) List.empty
+                else flatten_visible_module_decls target_path (get_loaded_all loaded) List.empty;
             let t_flat : I64 <- bench_step verbose "  elab: flatten_module_decls" t0 (List.length all_decls);
             let infixes : List Infix := collect_infixes all_decls;
             let t_collect : I64 <- bench_step verbose "  elab: collect_infixes" t_flat (List.length infixes);

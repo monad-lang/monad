@@ -162,11 +162,13 @@
       out="''${TMPDIR:-/tmp}/monad-bootstrap-ci"
       # Reuse the binary `monad:bootstrap-compile` just built -- in CI that
       # is the step immediately before this one, in the same job. Rebuild
-      # when it is missing or older than any lang/ source: a stale binary
-      # reports failures that are really its own age (one here predated
-      # two examples' syntax and could not parse them at all), which would
-      # be indistinguishable from the transparency break this looks for.
-      if [ ! -x "$out/monad" ] || [ -n "$(find ${config.devenv.root}/lang -name '*.mo' -newer "$out/monad" -print -quit)" ]; then
+      # when it is missing or older than any source compiled INTO it: a
+      # stale binary reports failures that are really its own age (one here
+      # predated two examples' syntax and could not parse them at all),
+      # which would be indistinguishable from the transparency break this
+      # looks for. All four motes, not just lang/ -- cli/ holds the compile
+      # target itself, and llvm/ and runtime/ hold the backend.
+      if [ ! -x "$out/monad" ] || [ -n "$(find ${config.devenv.root}/lang ${config.devenv.root}/cli ${config.devenv.root}/llvm ${config.devenv.root}/runtime -name '*.mo' -newer "$out/monad" -print -quit)" ]; then
         mkdir -p "$out"
         cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$out/monad" --release
       fi
@@ -201,7 +203,7 @@
     monad-check = {
       enable = true;
       entry = ''
-        cargo run --release -- check init std examples lang cli llvm runtime
+        cargo run --release -- check init std examples lang cli llvm runtime motes
       '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";

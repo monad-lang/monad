@@ -12,10 +12,10 @@
 // the corpus still has).
 
 pub use lib::types {Decl, ModulePath, LocalScope}
-pub use lib::parser {parse_all_decls}
 pub use lib::module {
   ElaboratedModules, LoadedModules, ModuleInfo,
   check_file_cached, elaborate_loaded_modules, expand_check_paths, load_file_modules,
+  parse_all_decls,
 }
 pub use lib::pretty {show_decls}
 pub use lib::codegen::emit {compile_loaded_modules_to_ir_with_debug}

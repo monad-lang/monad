@@ -17,4 +17,4 @@
 # dep-closure of the file being expanded. It now passes (0 errors) and
 # gates the hook like the `test init std examples` line above.
 set -euo pipefail
-cargo run --release -- test init std examples lang cli llvm runtime slow_tests
+cargo run --release -- test init std examples lang cli llvm runtime motes slow_tests
