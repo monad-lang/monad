@@ -83,16 +83,16 @@ a different branch and cause confusion.
 │                     #   - typecheck_init_tests.mo/typecheck_std_tests.mo/
 │                     #     typecheck_lang_tests.mo all pass `check_deps=false`
 │                     #     (target-only) to `elaborate_loaded_modules`
-│                     #     (`lang/src/module.mo`) -- so checking `lang/src/main.mo`
+│                     #     (`lang/src/module.mo`) -- so checking `cli/src/main.mo`
 │                     #     in test_typecheck_lang_main body-type-checks only
-│                     #     `lang/src/main.mo`'s own top-level decls, NOT its
+│                     #     `cli/src/main.mo`'s own top-level decls, NOT its
 │                     #     dependencies' bodies (dependencies only
 │                     #     contribute signatures to scope). `check_deps=true`
 │                     #     exists (see `elaborate_loaded_modules`'s own doc
 │                     #     comment) but is NOT currently used anywhere,
 │                     #     including here or by the real `check`/`compile`/
 │                     #     `test` CLI commands -- turning it on for
-│                     #     `lang/src/main.mo`'s own full closure (≈2200 decls,
+│                     #     `cli/src/main.mo`'s own full closure (≈2200 decls,
 │                     #     including this self-hosted compiler's own
 │                     #     richly-recursive AST types) caused unbounded
 │                     #     memory growth (28GB+ RSS and still climbing);
@@ -175,7 +175,7 @@ cargo run -- run examples/hello.mo -- --debug
 # Run #[test] annotated definitions
 cargo run -- test init/src/tests.mo
 
-# Run the bootstrapped cli in lang/src/main.mo
+# Run the bootstrapped cli in cli/src/main.mo
 bootstrap
 
 # Compile to native binary in devenv shell
@@ -187,18 +187,18 @@ cargo run -- repl
 
 ### Use `--release` for self-hosted-compiler workloads
 
-Running `lang/src/main.mo` (the self-hosted compiler) interprets a real
+Running `cli/src/main.mo` (the self-hosted compiler) interprets a real
 compiler pipeline on top of the reference compiler's own `core_eval` —
-e.g. `cargo run -- run lang/src/main.mo -- check lang/src/main.mo` (self-hosted
+e.g. `cargo run -- run cli/src/main.mo -- check cli/src/main.mo` (self-hosted
 compiler checking itself) took 223s in a debug build vs 99s
 `--release` — a 2.2x speedup here (smaller than the 10-15x speedup
 `--release` gives the reference compiler's own `check`/`run` on an
 ordinary `.mo` file, since the self-hosted path's cost is dominated by
 interpreter dispatch/allocation overhead that `-O` optimizes less
 aggressively than typical Rust control flow). Prefer
-`cargo build --release` + `target/release/monad-rs run lang/src/main.mo --
-...` (or `cargo run --release -- run lang/src/main.mo -- ...`) over a plain
-debug build for any workload that runs `lang/src/main.mo` against a large
+`cargo build --release` + `target/release/monad-rs run cli/src/main.mo --
+...` (or `cargo run --release -- run cli/src/main.mo -- ...`) over a plain
+debug build for any workload that runs `cli/src/main.mo` against a large
 file or corpus, rather than iterating on the reference compiler itself.
 
 ## Writing Monad Code
@@ -922,7 +922,7 @@ at that exact point — two confirmed shapes:
     explicit type annotation first, or -- when the literal is the whole
     result -- move it into its own `def` with a DECLARED return type,
     which is what gives it an expected type (`mk_loaded_modules`/
-    `mk_module_info` in `lang/src/main.mo`, `rebuild_target_scope` in
+    `mk_module_info` in `cli/src/main.mo`, `rebuild_target_scope` in
     `lang/src/module.mo`).
 
     **TODO: the self-hosted checker should support a struct literal in
@@ -1127,7 +1127,7 @@ Key patterns when writing self-hosted Monad code:
 5. **`self-hosted-compiler-perf.md` phase-timing infra**: `lang/src/module.mo`'s
    `check_file_cached` now wraps its three phases (scope/dep resolution,
    strict parse, typecheck) with `Bench.now`/`Bench.report` calls gated
-   on `verbose` — `run lang/src/main.mo -- check <files> --verbose` prints
+   on `verbose` — `run cli/src/main.mo -- check <files> --verbose` prints
    `scope=`/`parse=`/`check=` timings per file, silent otherwise. This
    is distinct from the Rust-level `--benchmark` flag (which only times
    the outer per-file load, not phases *inside* the self-hosted checker
@@ -1728,7 +1728,7 @@ Key patterns when writing self-hosted Monad code:
     the single-file benchmark barely at all but the per-*def*
     `global_atom_paths` cost apparently doesn't dominate that one
     benchmark's own cost either, even though its dependency closure
-    (`lang/src/main.mo` pulling in essentially all of `lang/`) is large.
+    (`cli/src/main.mo` pulling in essentially all of `lang/`) is large.
     Separately: this session's baseline isolated run measured 133.16s,
     not the ~7-minute figure commit `7350f96`'s message cited for the
     same test — a large, unexplained discrepancy, not reproduced or
@@ -1764,7 +1764,7 @@ Key patterns when writing self-hosted Monad code:
     - `load_dependencies_with_info` (lines 1958-1993) — backs
       `load_file_modules`, which is what `compile`, `pretty`, and `test`
       (the three self-hosted CLI subcommands OTHER than `check`) actually
-      run on — confirmed by grep, `lang/src/main.mo` lines 63/243/374. Despite
+      run on — confirmed by grep, `cli/src/main.mo` lines 63/243/374. Despite
       `load_file_modules` already computing the complete, deduplicated
       closure ONCE up front (line 1941), `load_dependencies_with_info`
       re-called `extract_all_dependencies` AGAIN (old line 1974, from a
@@ -1781,7 +1781,7 @@ Key patterns when writing self-hosted Monad code:
       by anything in items 13/14 (which only improved `check`/
       `test_typecheck_lang_main`, both on the OTHER, already-correct
       traversal). This is the literal path `bootstrap compile <file>`
-      (`devenv.nix`'s `bootstrap` script → `lang/src/main.mo compile` →
+      (`devenv.nix`'s `bootstrap` script → `cli/src/main.mo compile` →
       `compile_file` → `load_file_modules`) runs on — the exact command
       named in the original "bootstrap compile takes many minutes"
       complaint, and item 14's own closing note ("the full-corpus number
@@ -1810,7 +1810,7 @@ Key patterns when writing self-hosted Monad code:
     convenience wrappers), and `get_module_info_file_path` (an unused
     `ModuleInfo` accessor — its sibling `get_module_info_decls` IS used and
     was left alone). **Measured** (`git stash` before/after, same session):
-    `bootstrap pretty lang/src/main.mo` (chosen because `pretty` only calls
+    `bootstrap pretty cli/src/main.mo` (chosen because `pretty` only calls
     `load_file_modules` then prints decls — no type-checking, no codegen —
     so it isolates this fix's effect from everything else) dropped from
     **746.01s to 130.21s wall (-82.5%)**, **647.47s to 127.40s CPU-seconds
@@ -2144,7 +2144,7 @@ Key patterns when writing self-hosted Monad code:
       an expansion (`has_decl_gen_expansion` checks registry membership,
       not just "is a macro call"), matching `decl_gen_subst_one`'s own
       "an unresolved macro name is not an error" rule.
-    - **The uncached test loop** (`lang/src/main.mo`): `run_check_loop` had
+    - **The uncached test loop** (`cli/src/main.mo`): `run_check_loop` had
       threaded a `ModuleInfoCache` since `b0c96a7`, but `run_test_loop`
       called the uncached `elaborate_loaded_modules`, so every file in
       one `monad test a.mo b.mo c.mo` re-read and re-parsed its whole
@@ -2331,7 +2331,7 @@ Key patterns when writing self-hosted Monad code:
     but was kept as consistent and harmless.
     Whole-invocation `check` only moved -3.5% (12.6s -> 12.1s): most of
     that wall time is the RUST host loading and type-checking
-    `lang/src/main.mo` itself before the self-hosted compiler runs at all.
+    `cli/src/main.mo` itself before the self-hosted compiler runs at all.
     Do not expect parse-phase wins to show up 1:1 in the total.
 
 
@@ -2556,7 +2556,7 @@ Key patterns when writing self-hosted Monad code:
     which READS as conditional and is not. `let` binds eagerly, so the
     rebuild ran on every elaboration and the `if` only chose which
     already-computed scope to keep. Cost: **83.9s of a 232s self-hosted
-    `check lang/src/main.mo`** -- 36% of the run -- duplicating a
+    `check cli/src/main.mo`** -- 36% of the run -- duplicating a
     `build_scope_from_decls` that had just done the same work.
     `if` is the one form that does not evaluate the branch it does not
     take, so the fix is to move the call inside the branch.
@@ -2634,7 +2634,7 @@ Key patterns when writing self-hosted Monad code:
       step -> 2) but could not remove it, because while the STORED key is
       a `ModulePath` every comparison must re-derive it. Render once at
       the boundary, store the string, drop to `bucket_insert_str`/
-      `bucket_lookup_str`. `check lang/src/main.mo` 140.7s -> 82.3s (-41.5%)
+      `bucket_lookup_str`. `check cli/src/main.mo` 140.7s -> 82.3s (-41.5%)
       -- but only -3.7% on hello.mo, the same small-scale blindness.
     Also landed, and worth knowing before profiling anything here: the
     workspace had **no `[profile.release]` at all** (so `codegen-units =
@@ -2719,10 +2719,10 @@ Key patterns when writing self-hosted Monad code:
     unrelated IMPORTING file. Landing a helper between `#[partial]` and
     `def compile_loaded_modules_to_ir_with_debug` (`lang/src/codegen/emit.mo`)
     produced `unknown variable 'compile_db_module_with_debug'` and
-    `'compile_loaded_modules_to_ir_with_debug'` in `lang/src/main.mo`, while
+    `'compile_loaded_modules_to_ir_with_debug'` in `cli/src/main.mo`, while
     `monad-rs check lang/src/codegen/emit.mo` stayed clean -- the Rust host and
     the self-hosted parser are different code paths.
-    **Fast reproducer: `monad-rs run lang/src/main.mo check lang/src/main.mo`
+    **Fast reproducer: `monad-rs run cli/src/main.mo check cli/src/main.mo`
     (~60s), not a self-compile.** The tell is the self-hosted checker
     echoing your doc-comment lines back as content. When adding a def by
     script, anchor above the whole doc-comment + attribute + `def` group,
@@ -2730,11 +2730,11 @@ Key patterns when writing self-hosted Monad code:
 41. **A `--release` profile says nothing about the DEFAULT path, and the
     default path had a 164x pathology nobody had ever profiled
     (2026-09-12).** Debug info is on by default (`--release` opts out,
-    `lang/src/main.mo`), but every recorded profile -- including CI's
+    `cli/src/main.mo`), but every recorded profile -- including CI's
     `monad:bootstrap-compile` -- is a `--release` run. A `--verbose`
     self-compile WITHOUT `--release` took **28035824ms (7h48m)** against
     275424ms with it, every timed phase within noise, so ~7h44m (99.4%)
-    sat in the one untimed span: `with_located_decls` (`lang/src/main.mo`),
+    sat in the one untimed span: `with_located_decls` (`cli/src/main.mo`),
     which re-reads and re-parses the whole dependency graph to attach
     `Term.ctx` position wrappers. It then FAILED
     (`no instance found for Append.append`), so the default path did not
@@ -2765,7 +2765,7 @@ Key patterns when writing self-hosted Monad code:
     so argument-reading shape probes were the exposed `Term.ctx` surface --
     and the fix was to delete the debug/release divergence, not to patch it
     (2026-09-13).**
-    `monad compile lang/src/main.mo` WITHOUT `--release` -- the default
+    `monad compile cli/src/main.mo` WITHOUT `--release` -- the default
     invocation -- failed with `no instance found for `Append.append``.
     Mechanism: `a ++ b` lowers to `app (app (var "++") a) b` with a bare
     callee and LOCATED operands, so recognition worked (`flatten_call_spine`
@@ -2829,7 +2829,7 @@ Key patterns when writing self-hosted Monad code:
     `prelude::Lens` -- which had been invisible the whole time.
     **The cost is real and was accepted deliberately:** one located parse
     instead of one plain parse on every path. Interleaved A/B, two rounds,
-    machine idle: `check lang/src/main.mo` **57.5s -> 86.8s (+51%)**;
+    machine idle: `check cli/src/main.mo` **57.5s -> 86.8s (+51%)**;
     `load_file_modules` 45.3s -> 75.4s. The debug compile got FASTER (it
     stops parsing twice: 172.1s -> ~157s).
     **Where that delta goes was then measured, and my own guess above about
@@ -2883,7 +2883,7 @@ Key patterns when writing self-hosted Monad code:
     (`String.count_newlines`/`String.trailing_chars`) that take a LENGTH and
     scan in place, so nothing is sliced on either runtime: 652ms -> 70ms,
     measured on `lang/src/types.mo` by `bench/src/parser_locate_cost.mo`, and
-    `check lang/src/main.mo` 87.1-88.1s -> 69.2s end to end (interleaved, three
+    `check cli/src/main.mo` 87.1-88.1s -> 69.2s end to end (interleaved, three
     rounds, load 1.06-1.66). Note the gap between those two numbers: the
     652ms was 88% of the located overhead on ONE file, and extrapolating it
     predicted ~61s, but only 61% of the real regression came back. Item 37
@@ -2930,7 +2930,7 @@ Key patterns when writing self-hosted Monad code:
     location_of_remaining; resolve_offsets_in_file` -- the names of defs that
     plainly exist, in a file that plainly compiles. Same shape as item 40, and
     the same fast reproducer (~60s, not a full self-compile):
-    `monad-rs run lang/src/main.mo check <file>`, which reports
+    `monad-rs run cli/src/main.mo check <file>`, which reports
     `did not fully parse (stopped before end of file)` and prints the
     offending text.
     Write the literal character instead. And note what found it: the

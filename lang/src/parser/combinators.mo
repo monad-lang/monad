@@ -27,7 +27,7 @@ def tag (s : String) (input : String) : ParseResult String :=
 /// elsewhere): `check` (which never calls `return_shorthand_parser`/
 /// `do_stmt_return` on that reference position) accepts it, but `compile`
 /// hit `unknown variable '_foo'`, and the self-hosted compiler's own
-/// `bootstrap compile lang/main.mo monad` self-compile hit the identical
+/// `bootstrap compile cli/src/main.mo monad` self-compile hit the identical
 /// class of bug on `lang/scope.mo`'s own `return_type_after_n_args`
 /// (compiled to a call to undefined `@_type_after_n_args` plus a spurious
 /// `@Monad_pure` wrap) -- see `implementations/2026-08-29-return-
@@ -410,7 +410,7 @@ def take_while (pred : String -> Bool) (input : String) : ParseResult String :=
 // input char and a ~225KB file blew the 8MB stack at ~11K chars
 // (measured: backtrace of 22.7K alternating frames, rsp pinned at the
 // stack guard page -- /tmp probe over lang/scope.mo's own text, the
-// `check lang/main.mo` rung-2 blocker). Merging the predicate check
+// `check cli/src/main.mo` rung-2 blocker). Merging the predicate check
 // into the loop body puts the recursive call in the same Def, where
 // `apply_self_tco` turns it into a `br` back-edge: constant stack for
 // any input length. The interpreted side is unaffected (same

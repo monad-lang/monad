@@ -1,5 +1,5 @@
 /// Regression tests for the native `take_while` scan pathology that
-/// blocked rung 2 (`v29 check lang/main.mo`): the parser's scanner was
+/// blocked rung 2 (`v29 check cli/src/main.mo`): the parser's scanner was
 /// MUTUAL tail recursion (`take_while_loop`/`take_while_check`), which
 /// the self-hosted backend's `apply_self_tco` can not rewrite (self-
 /// recursion only -- mutual would need LLVM `musttail`), so every
@@ -8,7 +8,7 @@
 /// 22.7K-frame alternating backtrace, rsp pinned at the stack guard
 /// page). At the same time `monad_string_drop` malloc-copied the whole
 /// REMAINING input on every step -- O(n^2) copies, ~2.4GB leaked for
-/// one whole-file pass -- which is what OOM-killed `check lang/main.mo`
+/// one whole-file pass -- which is what OOM-killed `check cli/src/main.mo`
 /// at 30GB.
 ///
 /// Fixes under test (all three only matter once the program is

@@ -166,7 +166,7 @@ def op_lookup_entry (op_str : String) (table : List OpEntry) : Option OpEntry :=
 /// `pub`/`priv` as a bogus extra argument -- the exact same failure
 /// mode `c1ed034`/this session's own `expr_climb_op` fix already cover
 /// for other triggers, just never closed for these two specific words.
-/// Confirmed live via the full `lang/main.mo` self-compile:
+/// Confirmed live via the full `cli/src/main.mo` self-compile:
 /// `lang/parser/core.mo`'s own `op_chars : List String := [...]`
 /// (immediately followed by `pub def op_table : List OpEntry := ...`,
 /// no comment, nothing unusual) got its list literal miscompiled into

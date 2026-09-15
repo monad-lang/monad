@@ -13,7 +13,7 @@
 /// "unknown variable" or "undefined symbol" failure far from the actual
 /// bug -- confirmed via `compile`'s own explicit typecheck gate
 /// (`unknown variable '_foo'`) and, independently, via
-/// `bootstrap compile lang/main.mo monad`'s self-compile hitting the
+/// `bootstrap compile cli/src/main.mo monad`'s self-compile hitting the
 /// identical class of bug on `lang/scope.mo`'s own real
 /// `return_type_after_n_args` (`llc: use of undefined value
 /// '@Monad_pure'`, `lang/scope.mo:2189`'s call to it compiled to a call
@@ -46,7 +46,7 @@ def main (args : List String) : IO I64 := do {
 /// Same shape as a bare do-block STATEMENT (not `let`-bound) -- exercises
 /// `do_stmt_return`'s own `tag_keyword` call, not just
 /// `return_shorthand_parser`'s. `return_marker` must be `IO`-typed to be
-/// a valid bare statement (mirrors `lang/main.mo`'s own established
+/// a valid bare statement (mirrors `cli/src/main.mo`'s own established
 /// `IO.write_file path content;` bare-statement idiom).
 #[test]
 def test_return_prefixed_def_name_bare_statement : IO Bool :=

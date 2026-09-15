@@ -11,8 +11,8 @@
 /// arithmetic/comparison `NativeOp` variants, panicking the RUST HOST
 /// INTERPRETER with `non-exhaustive match: NativeOp.op_write_file was
 /// constructed but not covered by this match` the moment a real call
-/// (`lang/main.mo`'s own `link_ir`: `IO.write_file ir_path ir_text;`) was
-/// reached -- this blocked `bootstrap compile lang/main.mo monad`'s
+/// (`cli/src/main.mo`'s own `link_ir`: `IO.write_file ir_path ir_text;`) was
+/// reached -- this blocked `bootstrap compile cli/src/main.mo monad`'s
 /// self-compile, filed as `implementations/2026-08-29-native-io-op-non-
 /// exhaustive-match-crash.md`.
 ///

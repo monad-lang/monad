@@ -291,7 +291,7 @@ def String.find_last (haystack : String) (needle : String) : I64 :=
 /// (For a separator, use `List.intercalate` in `std/list.mo`.)
 ///
 /// Moved here from `lang/json.mo`, which declared this `String` method
-/// inside a compiler module; `lang/cli.mo`'s `cli_concat_all` and
+/// inside a compiler module; `cli/src/args.mo`'s `cli_concat_all` and
 /// `lang/toml.mo`'s `toml_concat_list_body` were further copies.
 def String.concat_all (ss : List String) : String :=
 	match ss {

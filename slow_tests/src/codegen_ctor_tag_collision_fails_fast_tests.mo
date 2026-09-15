@@ -116,7 +116,7 @@ def main (args : List String) : IO I64 := do {
 /// 1-field `Result.ok` left a raw unboxed `1` where an `Identifier`'s
 /// `char*` belonged, SIGSEGV in `__strcmp_avx2` via
 /// `Similar_Identifier_similar` <- `term_matches_carrier`, ~45s into
-/// `check lang/main.mo`.
+/// `check cli/src/main.mo`.
 ///
 /// Asserted on the IR rather than an exit code, deliberately: in a
 /// SMALL program every site picks the same wrong tag consistently, so

@@ -7,14 +7,14 @@
 /// DemoCommand` parser, dispatching on subcommand name, `#[arg]`-marked
 /// `Bool` fields as `--flag`s, everything else as required positionals.
 ///
-/// Deliberately **not** `use`d by `lang/main.mo` or listed in any
+/// Deliberately **not** `use`d by `cli/src/main.mo` or listed in any
 /// self-hosted parse/scope/typecheck test file (`parser_file_tests.mo`,
 /// `scope_all_tests.mo`, `typecheck_lang_tests.mo`) — the self-hosted
 /// compiler (`lang/parser.mo`) has no concept of `#[derive_cli]` or
 /// per-param `#[...]` attributes yet, so this file is only ever run through
-/// the Rust host (`cargo run -- test lang/tests/cli_derive_tests.mo`),
+/// the Rust host (`cargo run -- test cli/src/tests/cli_derive_tests.mo`),
 /// which does.
-use lang.cli {*}
+use cli.args {*}
 
 #[derive_cli]
 type DemoCommand {

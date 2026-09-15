@@ -2,7 +2,7 @@ mod lsp;
 mod mcp;
 
 /// The default system allocator is the wrong fit for this binary's
-/// dominant workload. Interpreting `lang/main.mo` (the self-hosted
+/// dominant workload. Interpreting `cli/src/main.mo` (the self-hosted
 /// compiler) is allocation-bound by construction: `core_value.rs`'s
 /// `Env::extend` allocates an `Arc` frame per beta reduction, and every
 /// constructor is an `Arc<ConArgs>` -- a callgrind profile put allocator
@@ -964,7 +964,7 @@ fn execute(command: Commands) -> Result<(), String> {
       );
       match result {
         // The program's own exit code becomes this process's exit code.
-        // Without this a failed `monad-rs run lang/main.mo compile ...`
+        // Without this a failed `monad-rs run cli/src/main.mo compile ...`
         // -- a gate rejecting the build and emitting no binary -- still
         // exited 0 and read as success to any caller.
         Ok(code) => {

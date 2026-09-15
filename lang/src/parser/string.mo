@@ -26,7 +26,7 @@ open ParseResult {fail, success}
 /// `lang/parser/position.mo`; the fix is to write the literal character.
 /// The fast reproducer, ~60s instead of a full self-compile:
 ///
-///     monad-rs run lang/main.mo check <the file>
+///     monad-rs run cli/src/main.mo check <the file>
 ///
 /// which reports `did not fully parse (stopped before end of file)` and
 /// prints the offending text, where plain `monad-rs check <the file>`

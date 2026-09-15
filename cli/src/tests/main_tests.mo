@@ -1,6 +1,6 @@
-/// Smoke tests for `lang/main.mo`'s `Command.from_args` argv parser.
+/// Smoke tests for `cli/src/main.mo`'s `Command.from_args` argv parser.
 ///
-/// This used to say `cargo run -- run lang/main.mo ...` (actually
+/// This used to say `cargo run -- run cli/src/main.mo ...` (actually
 /// executing `main`) hit a separate, pre-existing `instance-Monad-IO
 /// not found` failure — no longer reproduces (confirmed via many real
 /// `compile`/`check`/`pretty`/`test` invocations, 2026-08-19); whatever
@@ -8,7 +8,7 @@
 /// stale. Kept testing `Command.from_args` directly anyway (isolating
 /// argv-parsing from everything downstream is still the more precise
 /// unit of test coverage, real end-to-end runs notwithstanding).
-use lang.main {*}
+use cli.main {*}
 
 #[test]
 def test_from_args_compile_positional_name : Bool :=

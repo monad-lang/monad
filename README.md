@@ -60,7 +60,7 @@ The compiler is written in Monad and compiles itself. The Rust crate is the
 **bootstrap host** that produces the first binary:
 
 ```bash
-cargo run --release -- run lang/main.mo compile lang/main.mo -o "$PWD/monad" --release
+cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$PWD/monad" --release
 ```
 
 The `-o` must be **absolute**: a relative output name is resolved against the
@@ -134,10 +134,10 @@ Once built, the compiler builds its own successor, and the binary that falls out
 does the job it was built for. CI runs exactly this on every push.
 
 ```bash
-./monad compile lang/main.mo -o "$PWD/monad-next" --release
+./monad compile cli/src/main.mo -o "$PWD/monad-next" --release
 
 # Then make the result type-check the compiler's own source
-./monad-next check lang/main.mo
+./monad-next check cli/src/main.mo
 ```
 
 The self-hosted compiler's own subcommands are `compile`, `run`, `eval`,
@@ -147,7 +147,7 @@ The self-hosted compiler's own subcommands are `compile`, `run`, `eval`,
 
 | Component | Location | Description |
 |-----------|----------|-------------|
-| **Rust compiler** | `core/`, `cli/` | Parser, type checker, evaluator, constraint solver, LSP + MCP servers |
+| **Rust compiler** | `core/`, `rust-cli/` | Parser, type checker, evaluator, constraint solver, LSP + MCP servers |
 | **Self-hosted codegen** | `lang/codegen/` | Monad-in-Monad LLVM IR emitter + linker |
 | **C runtime** | `lang/codegen/runtime.c` | Heap allocation (Boehm GC), constructor/string objects |
 | **Standard library** | `init/`, `std/` | Prelude types, type classes, native-backed operations |

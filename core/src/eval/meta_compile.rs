@@ -104,7 +104,7 @@ impl MetaEvalContext {
     // `check lang` (the self-hosted `test` path resolves the same names
     // through its own scope mechanism and was unaffected). `derive_cli`
     // is the only macro actually invoked in `lang/`, and its
-    // `derive_cli_meta` only depends on `lang.cli` (→ `std.list`,
+    // `derive_cli_meta` only depends on `cli.args` (→ `std.list`,
     // `init.meta`), so the closure excludes the colliding compiler
     // modules and the meta-eval ends up seeing exactly the `loaded` set
     // the Rust `derive_cli_test` harness already builds — which passes.

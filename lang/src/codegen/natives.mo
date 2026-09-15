@@ -54,7 +54,7 @@ def lookup_native (name : String) : Option NativeOp := str_map_lookup name nativ
 /// under the tree-walking interpreter, which doesn't go through this
 /// codegen path at all -- invisible to `test`/`check`). `IO.write_file`/
 /// `read_file`/`file_exists` have the identical wrapper/native name
-/// collision and are called throughout `lang/main.mo`/`lang/module.mo`/
+/// collision and are called throughout `cli/src/main.mo`/`lang/module.mo`/
 /// `lang/codegen/link.mo` -- this was silently corrupting the self-
 /// compile's own compiled-and-run behavior. `IO.list_dir` was never
 /// given a bare key at all and was never affected -- confirms the fix:
@@ -269,7 +269,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "write_file" then Option.some (NativeWrapKind.io_write_file "monad_write_file")
             // ─── The compiler's own remaining closure ───────────────
             // Exactly the set `validate_no_unwired_natives` reported for
-            // a self-compile of `lang/main.mo` -- wired together so the
+            // a self-compile of `cli/src/main.mo` -- wired together so the
             // bootstrap ladder advances in ONE step (each self-compile
             // costs ~14 minutes, so a partial wiring just relocates the
             // fail-fast error rather than making progress).

@@ -14,7 +14,7 @@
 /// The wrong temp is defined in a basic block the later arm is not
 /// dominated by, so the module does not even verify: `llc` rejects it
 /// with "Instruction does not dominate all uses!". That is what the
-/// `lang/main.mo` self-compile hit in `resolve_branch_merge_info`,
+/// `cli/src/main.mo` self-compile hit in `resolve_branch_merge_info`,
 /// whose `Option.none` arm built its result out of the `Option.some`
 /// arm's `result.label`/`result.blocks` temps instead of its own
 /// `label`/`blocks` parameters.

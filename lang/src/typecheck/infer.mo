@@ -520,7 +520,7 @@ def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_term
                 // un-elaborated decl and `validate_no_undesugared_struct_
                 // lits` rejecting the struct literal it still contained.
                 // Which `Decl` won flipped purely on an unrelated `use` list
-                // change in `lang/main.mo`.
+                // change in `cli/src/main.mo`.
                 //
                 // Falling through instead reaches the constructor-name scan
                 // (`find_inductive_for_cases_by_constructor`), which keys on
@@ -1750,7 +1750,7 @@ def type_check_lam (dbg : DebugName) (t : Term) (body : Term) (expected_type : T
             // to `Term.hole` even though `T` was written right there,
             // breaking downstream precision (e.g. match-case validation
             // needing `x`'s real type to disambiguate a constructor
-            // collision -- confirmed via lang/main.mo's own `main`, see
+            // collision -- confirmed via cli/src/main.mo's own `main`, see
             // plans/bootstrapping/self-hosted-compiler.md's changelog).
             let bound_typ : Term := if is_hole t then arg_typ else t in
             let extended_types : List Term := List.cons bound_typ local_types in

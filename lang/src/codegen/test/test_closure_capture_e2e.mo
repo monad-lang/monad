@@ -13,7 +13,7 @@
 /// undefined value`.
 ///
 /// These tests write real `.mo` source to disk and drive it through the
-/// SAME pipeline `lang/main.mo`'s own `compile_file_codegen` uses
+/// SAME pipeline `cli/src/main.mo`'s own `compile_file_codegen` uses
 /// (`load_file_modules` -> `compile_loaded_modules_to_ir` -> `emit_module`
 /// -> `llc`/`clang`), rather than hand-building a `Term`/`Def` AST --
 /// do-notation desugaring, dictionary-passing promotion, and typeclass
@@ -84,7 +84,7 @@ def test_bind_capture_3level : IO Bool :=
 /// `llc: use of undefined value '@n'`). This exact shape --
 /// `compile_loaded_modules_to_ir`'s own `if verbose then do {...}
 /// else return unit;` pattern, repeated across several successive
-/// stages -- is what blocked `bootstrap compile lang/main.mo monad`'s
+/// stages -- is what blocked `bootstrap compile cli/src/main.mo monad`'s
 /// own self-compile. Expect 5 (verbose=false, so `n` survives
 /// untouched through the discarded `if`/`else` branch).
 #[test]

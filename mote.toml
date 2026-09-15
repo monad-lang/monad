@@ -12,6 +12,7 @@ members = [
   "init",
   "std",
   "lang",
+  "cli",
   "slow_tests",
   "bench",
   "motes/*",

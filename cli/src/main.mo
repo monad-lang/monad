@@ -10,7 +10,7 @@ use lang.scope {resolve_class_calls_decls}
 use std.map {}
 use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
-use lang.cli {*}
+use cli.args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`lang/log.mo` -- its own header documents the gating rules).
 use lang.log {fail_line, ok_line, stage}
@@ -220,7 +220,7 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_nam
 /// unrelated, pre-existing gap somewhere in prelude/init — `check_deps=true`
 /// exists (see `elaborate_loaded_modules`'s own doc comment) but is not
 /// yet safe to default to anywhere: it caused unbounded memory growth
-/// checking `lang/main.mo`'s own full closure, root cause under
+/// checking `cli/src/main.mo`'s own full closure, root cause under
 /// investigation (`bootstrapping/check-deps-memory-blowup.md`).
 /// `compile_loaded_modules_to_ir` (`lang.codegen.emit`) separately attempts
 /// whole-graph elaboration on its own, with its own graceful fallback,
@@ -754,11 +754,11 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
 // this file stays free of any macro/attribute-derive syntax on purpose: the
 // self-hosted compiler's own parser/typechecker (lang/parser.mo,
 // lang/typecheck/infer.mo) doesn't understand `#[derive_cli]` yet, and
-// lang/main.mo is one of the files the self-hosted parse/scope/typecheck
+// cli/src/main.mo is one of the files the self-hosted parse/scope/typecheck
 // test suite (slow_tests/parser_file_tests.mo, scope_all_tests.mo,
 // typecheck_lang_tests.mo) re-parses with that self-hosted pipeline. It
-// does share `lang/cli.mo`'s small runtime helpers with the macro-derived
-// demo in lang/tests/cli_derive_tests.mo, though — same argv-munging
+// does share `cli/src/args.mo`'s small runtime helpers with the macro-derived
+// demo in cli/src/tests/cli_derive_tests.mo, though — same argv-munging
 // primitives either way.
 type Command {
     compile (file: Path) (out_name: Path) (verbose: Bool) (debug: Bool),

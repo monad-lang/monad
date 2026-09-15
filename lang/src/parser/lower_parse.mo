@@ -755,7 +755,7 @@ def lower_parse_do_stmt (ctx : ParseLowerCtx) (s : DoStmt) (ss : List DoStmt) (r
 /// which would silently replace it with the block's default
 /// `Monad.pure hole`. Mirrors the reference's `DoStatement::Expr { value
 /// } => value` for the last statement. Confirmed as a real bug through
-/// the full `lang/main.mo` self-compile: a do-block ending in a bare
+/// the full `cli/src/main.mo` self-compile: a do-block ending in a bare
 /// `match`/`if` containing its own `return`s had its value replaced by
 /// Unit.
 ///

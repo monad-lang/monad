@@ -54,7 +54,7 @@
   '';
 
   scripts.bootstrap.exec = ''
-    cargo run --release -- run lang/src/main.mo $@
+    cargo run --release -- run cli/src/main.mo $@
   '';
 
   scripts.monad-re.exec = ''
@@ -93,7 +93,7 @@
   # The second step is the one with teeth. `compile` succeeding only says
   # llc and clang were happy with the emitted IR; it says nothing about
   # whether the binary works, and a compiler that builds but miscompiles
-  # is worse than one that fails to build. Running `check lang/src/main.mo`
+  # is worse than one that fails to build. Running `check cli/src/main.mo`
   # through it costs ~12s and exercises the whole front end -- parser,
   # scope, elaboration, typechecker -- on the largest input in the tree.
   #
@@ -119,12 +119,12 @@
       # genuinely wedged run shows exactly which stage stalled.
       # --release: debug info is on by default; DWARF emission costs ~30s
       # on this workload and the binary this job tests does not need it.
-      cargo run --release -- run lang/src/main.mo compile lang/src/main.mo -o "$out/monad" --verbose --release
+      cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$out/monad" --verbose --release
       test -x "$out/monad"
-      "$out/monad" check lang/src/main.mo
+      "$out/monad" check cli/src/main.mo
       # And again WITHOUT --release, which is the DEFAULT invocation and was
       # broken for an unknown length of time precisely because nothing ran
-      # it: `monad compile lang/src/main.mo` died at `no instance found for
+      # it: `monad compile cli/src/main.mo` died at `no instance found for
       # `Append.append``, and the only signal was a self-compile nobody
       # waited for (it took 7h48m before the located-parse fix).
       #
@@ -137,9 +137,9 @@
       # header for why, verified rather than assumed).
       dbg="''${TMPDIR:-/tmp}/monad-bootstrap-ci-debug"
       rm -rf "$dbg"; mkdir -p "$dbg"
-      cargo run --release -- run lang/src/main.mo compile lang/src/main.mo -o "$dbg/monad" --verbose
+      cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$dbg/monad" --verbose
       test -x "$dbg/monad"
-      "$dbg/monad" check lang/src/main.mo
+      "$dbg/monad" check cli/src/main.mo
     '';
   };
 
@@ -154,7 +154,7 @@
   #
   # It existed, unwired, while the bug it describes was live. Cheap: two
   # compiles per example file, against the SELF-HOSTED BINARY rather than
-  # the Rust host interpreting lang/src/main.mo -- the binary is what ships,
+  # the Rust host interpreting cli/src/main.mo -- the binary is what ships,
   # and it is ~40x faster per file besides.
   tasks."monad:debug-oracle" = {
     exec = ''
@@ -168,7 +168,7 @@
       # be indistinguishable from the transparency break this looks for.
       if [ ! -x "$out/monad" ] || [ -n "$(find ${config.devenv.root}/lang -name '*.mo' -newer "$out/monad" -print -quit)" ]; then
         mkdir -p "$out"
-        cargo run --release -- run lang/src/main.mo compile lang/src/main.mo -o "$out/monad" --release
+        cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$out/monad" --release
       fi
       MONAD_BIN="$out/monad" ${config.devenv.root}/tools/debug_transparency_oracle.sh ${config.devenv.root}/examples/*.mo
     '';
@@ -201,7 +201,7 @@
     monad-check = {
       enable = true;
       entry = ''
-        cargo run --release -- check init std examples lang
+        cargo run --release -- check init std examples lang cli
       '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";

@@ -6,7 +6,7 @@
 /// -- so a NULLARY call like `Map.empty` (no args to infer a carrier
 /// from at all) can still resolve via
 /// `resolve_class_method_call_d4_default_carrier` (`lang/scope.mo`)
-/// instead of giving up. Confirmed via `bootstrap compile lang/main.mo
+/// instead of giving up. Confirmed via `bootstrap compile cli/src/main.mo
 /// monad`: `lang/module.mo`'s `module_scope_cache_empty`'s own struct-
 /// literal field `entries := Map.empty` (declared field type `HashMap
 /// ModulePath ScopeData`, `ModuleScopeCache`) hit exactly this -- that

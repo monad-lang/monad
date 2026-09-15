@@ -29,7 +29,7 @@
 ///     `con_owner_name` (`slow_tests/codegen_named_call_*_tests.mo` and
 ///     `typecheck_init_tests.mo` each caught one);
 ///   - **the self-compile, in BOTH modes, is the only gate for the
-///     carrier-inference gaps.** `monad compile lang/main.mo` without
+///     carrier-inference gaps.** `monad compile cli/src/main.mo` without
 ///     `--release` is what found `Append.append`, and the `--release` one
 ///     found `FromListLiteral.empty`.
 ///

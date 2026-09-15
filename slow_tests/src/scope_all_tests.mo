@@ -190,7 +190,7 @@ def test_scope_lang_parser : Bool := build_scope_for_file "lang/src/parser.mo" "
 def test_scope_lang_elaborate : Bool := build_scope_for_file "lang/src/elaborate.mo" "elaborate"
 
 #[test]
-def test_scope_lang_main : Bool := build_scope_for_file "lang/src/main.mo" "main"
+def test_scope_lang_main : Bool := build_scope_for_file "cli/src/main.mo" "main"
 
 #[test]
 def test_scope_lang_module : Bool := build_scope_for_file "lang/src/module.mo" "module"

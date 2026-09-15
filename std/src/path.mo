@@ -5,7 +5,7 @@
 /// this codebase's existing newtype idiom (`Identifier`/`Operator`/
 /// `ModulePath`, `lang/types.mo`). Construct via `Path.of` (validating);
 /// the bare `Path.path` constructor is only for compile-time literals
-/// already known non-empty (see `default_output_dir` in `lang/main.mo`).
+/// already known non-empty (see `default_output_dir` in `cli/src/main.mo`).
 type Path {
     path String
 }
@@ -48,7 +48,7 @@ def raw_path_join (a : String) (b : String) : String :=
 /// THE fix for the bug this type was introduced to prevent: an
 /// absolute `b` replaces `a` entirely instead of naively concatenating
 /// (`os.path.join`-style semantics) -- exactly the case that produced
-/// a mangled `/tmp//tmp/monad_v2.ll` when `lang/main.mo`'s own
+/// a mangled `/tmp//tmp/monad_v2.ll` when `cli/src/main.mo`'s own
 /// `link_ir` joined a hardcoded `/tmp` output directory with an
 /// already-absolute user-supplied output name via plain `++`. Operates
 /// on already-validated `Path` values, so the non-empty invariant

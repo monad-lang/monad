@@ -2700,8 +2700,9 @@ pub fn referenced_contains_name(
     || referenced.iter().any(|p| p.last() == name)
 }
 
-/// Unused names in `use`-filter selections: for every `UseFilter::Items`
-/// filter, flags any `UseItem::Name`/`Rename` entry never referenced in
+/// Unused names in `use`-filter selections: for every non-`pub`
+/// `UseFilter::Items` filter, flags any `UseItem::Name`/`Rename` entry never
+/// referenced in
 /// `referenced` (checked both bare and fully-qualified) — see
 /// `collect_referenced_names` for how `referenced` is built and its
 /// conservative-approximation tradeoff. `UseFilter::Bare` (no explicit
@@ -2718,6 +2719,14 @@ pub fn unused_use_name_warnings(
     .iter()
     .flat_map(|ctx| {
       let u = ctx.value();
+      // A `pub use` is a re-export: naming something IS the point, and the
+      // importers that consume it are in other files this pass cannot see.
+      // Flagging one as unused would be wrong on its face, and acting on the
+      // suggestion would delete the re-export -- exactly what a mote's
+      // `lib.mo` hub is made of.
+      if u.public {
+        return Vec::new();
+      }
       let UseFilter::Items(items) = &u.filter else {
         return Vec::new();
       };

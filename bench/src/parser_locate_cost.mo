@@ -1,7 +1,7 @@
 /// Where the located parse's extra time actually goes.
 ///
 /// Locating every term on every path (`parse_all_decls`, `lang/module.mo`)
-/// cost `check lang/main.mo` 57.5s -> 86.8s. An interleaved A/B of the
+/// cost `check cli/src/main.mo` 57.5s -> 86.8s. An interleaved A/B of the
 /// `--verbose` phase table showed **all** of it inside `load_file_modules`
 /// (45.7-46.3s -> 75.7-75.9s) with every downstream phase flat --
 /// `resolve_infix_decls` +4%, `build_scope_from_decls` and `names_of_decls`

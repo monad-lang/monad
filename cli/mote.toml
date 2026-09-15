@@ -1,0 +1,24 @@
+# The self-hosted compiler's command-line front end -- the binary target.
+# `lang` is the compiler itself, as a library; everything here is argv
+# handling and the `compile`/`run`/`check`/`test` drivers on top of it.
+
+[mote]
+name = "cli"
+version = "0.1.2"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[bin]
+name = "monad"
+path = "src/main.mo"
+
+[dependencies.init]
+path = "../init"
+
+[dependencies.std]
+path = "../std"
+
+[dependencies.lang]
+path = "../lang"

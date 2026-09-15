@@ -148,6 +148,24 @@ fn test_unused_use_name_warning() {
 }
 
 #[test]
+fn test_pub_use_reexport_is_never_unused() {
+  // A `pub use` is a re-export -- a mote's `lib.mo` hub is made entirely of
+  // them, and its consumers live in other files. Nothing in this module
+  // references the names, and that is not a defect.
+  let modu = module_of(
+    r#"
+    pub use fakemod {reexported_name}
+    "#,
+  );
+  let referenced = collect_referenced_names(&modu);
+  let warnings = unused_use_name_warnings(modu.get_uses(), &referenced, None);
+  assert!(
+    warnings.is_empty(),
+    "a pub use re-export must not be reported as unused: {warnings:?}"
+  );
+}
+
+#[test]
 fn test_qualified_reference_counts_as_used() {
   // `fakemod.q_name` (qualified) should count as a use of `q_name`, even
   // though `q_name` is never referenced as a bare name.

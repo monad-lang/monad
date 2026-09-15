@@ -1,9 +1,9 @@
 /// A `monad test` subcommand for the self-hosted compiler's own CLI
-/// (`lang/main.mo`), analogous to `cargo test`: discover every
+/// (`cli/src/main.mo`), analogous to `cargo test`: discover every
 /// `#[test]`-attributed `def` in a target file, synthesize a driver
 /// program that calls each of them and reports PASS/FAIL, compile that
 /// driver via the existing native codegen pipeline
-/// (`lang.codegen.emit`), and hand the result back to `lang/main.mo`
+/// (`lang.codegen.emit`), and hand the result back to `cli/src/main.mo`
 /// to link and run.
 ///
 /// Kept as its own file rather than folded into the already-1857-line
@@ -14,7 +14,7 @@
 /// `.mo` SOURCE TEXT (string-templated), not a hand-built de-Bruijn
 /// `Term` AST — then fed through the already-proven
 /// `lang.module.try_parse_decls`, the same entry point
-/// `lang/main.mo`'s own `compile_file` fallback path already uses.
+/// `cli/src/main.mo`'s own `compile_file` fallback path already uses.
 /// Hand-building a correct de-Bruijn-indexed `Term.lam`/`Term.app`/
 /// `Term.var` tree with numerically-correct relative indices for N
 /// sequential test calls is real, avoidable risk — string-templating a
@@ -116,13 +116,13 @@ def test_def_names (defs : List Def) : List String :=
 // only way a compiled/run binary's results reach a human here), a
 // final "<passed>/<total> tests passed" summary line, and evaluates to
 // `0` if every test passed, `1` otherwise (the sole signal the PARENT
-// process — `lang/main.mo`'s own `test_file`, a later step — can
+// process — `cli/src/main.mo`'s own `test_file`, a later step — can
 // observe via `exec_cmd`'s exit code).
 //
 // **`main`'s type is bare `I64`, NOT `IO I64`, and the body is a plain
 // `let ... in ...` expression chain, NOT a `{ ... }` do-block.** This
 // was NOT the original design (an `IO I64`-typed `{ ... }` do-block,
-// mirroring `lang/main.mo`'s own established style, was tried first)
+// mirroring `cli/src/main.mo`'s own established style, was tried first)
 // -- confirmed via direct standalone repro during this feature's own
 // implementation that the native-compile pipeline's `runtime.c` own
 // `int main(...) { return (int)main_monad(args); }` casts whatever
@@ -467,7 +467,7 @@ def count_main_defs (decl_list : List Decl) : I64 :=
 def test_synthesize_test_driver_source_no_tests_still_parses : Bool :=
     // Zero discovered tests -- a valid, parseable (if degenerate)
     // driver, matching the letter of the architecture decision even
-    // in the empty case (`lang/main.mo`'s own caller is expected to
+    // in the empty case (`cli/src/main.mo`'s own caller is expected to
     // special-case this into a "no tests" report before ever calling
     // this function, but this function itself shouldn't crash on it).
     let source : String := synthesize_test_driver_source List.empty in

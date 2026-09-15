@@ -908,6 +908,6 @@ def test_qualify_dotted_and_underscored_names_stay_distinct : IO Bool := do {
 def test_unqualify_recovers_the_source_name : Bool :=
     if String.beq (unqualify_def_name "init.string::String.beq") "String.beq"
     then if String.beq (unqualify_def_name "plain_name") "plain_name"
-        then String.beq (unqualify_def_name "lang.main::main") "main"
+        then String.beq (unqualify_def_name "cli.main::main") "main"
         else false
     else false

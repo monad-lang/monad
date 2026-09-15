@@ -83,7 +83,7 @@ def std_module_path : ModulePath := ModulePath.mp [Identifier.id "std"]
 ///     `test` never built a wrapper at all. `infer_carrier_type`
 ///     (`lang/scope.mo`) had no `Term.ctx` arm, so under `--debug` every
 ///     `++` on a String failed to resolve its `Append` instance and
-///     `monad compile lang/main.mo` -- the DEFAULT invocation -- died at
+///     `monad compile cli/src/main.mo` -- the DEFAULT invocation -- died at
 ///     `no instance found for `Append.append``.
 /// With one shape, the 1467-test corpus exercises wrapper transparency
 /// continuously, and `--release`/`--debug` goes back to meaning what it
@@ -945,7 +945,7 @@ def locals_with_inductive_params ({ params, .. } : Inductive) (scope : Scope) (l
     let candidates : List Identifier := param_names params in
     bind_unresolved_as_local_typevars candidates scope locals
 
-// --- `check`: multi-error typecheck pass (lang/main.mo's `check` command) ---
+// --- `check`: multi-error typecheck pass (cli/src/main.mo's `check` command) ---
 //
 // Same per-decl walk `typecheck_module_with_scope` above now itself
 // wraps, but rendering and *accumulating* every failing declaration's
@@ -1438,7 +1438,7 @@ struct FileCheckAndCache {
 /// function's own doc comment for the two-mode rationale. `check_deps=true`
 /// (checking the whole dependency closure a file pulls in, not just its
 /// own top-level decls) is NOT yet safe to default to here: turning it on
-/// for `lang/main.mo` (whose closure reaches ≈2200 decls, including this
+/// for `cli/src/main.mo` (whose closure reaches ≈2200 decls, including this
 /// self-hosted compiler's own richly-recursive AST types) caused unbounded
 /// memory growth (28GB+ RSS and still climbing after ~9 minutes, had to be
 /// killed) — root cause under investigation, see
@@ -1922,7 +1922,7 @@ def get_loaded_all (loaded : LoadedModules) : List ModuleInfo :=
 /// since `resolve_open_alias_term` (like the pre-existing `resolve_
 /// infix_term` it mirrors) does a blind, name-only rewrite with no
 /// per-module or local-binder-shadowing awareness at all. Confirmed as
-/// a real regression via the full `lang/main.mo` self-compile: `Reach
+/// a real regression via the full `cli/src/main.mo` self-compile: `Reach
 /// able decl_list` collapsed from 1925 to 181 the moment the (then-
 /// global) pass landed, starving `resolve_class_calls_decls` of
 /// instances that used to be reachable.
@@ -2094,9 +2094,9 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) (ver
                     let direct_deps : List ModulePath := extract_use_decls decl_list;
                     // `++` (`Append.append`) needs an `Append (List A)`
                     // instance -- only defined in `std/list.mo`, which
-                    // isn't in `lang/main.mo`'s own dependency closure
+                    // isn't in `cli/src/main.mo`'s own dependency closure
                     // (`lang.module` itself never `use`s `std.list`).
-                    // Compiling `lang/main.mo` through itself then hits
+                    // Compiling `cli/src/main.mo` through itself then hits
                     // an unresolvable `Append.append` class-method call
                     // (no matching instance in scope), which
                     // `resolve_class_calls_decls`'s own documented
@@ -2157,7 +2157,7 @@ def load_file_modules (file_path : String) (verbose : Bool) : IO (Result String 
 /// around a `let` measures nothing); whatever caused that measurement to
 /// print nothing, laziness is not it. The check that matters either way
 /// is arithmetic: these sub-times must add up to the enclosing
-/// `elaborate_loaded_modules` total that `lang/main.mo` already prints.
+/// `elaborate_loaded_modules` total that `cli/src/main.mo` already prints.
 /// If they do not, the spans are wrong -- do not reason about which.
 #[partial]
 def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : IO I64 :=
@@ -2171,7 +2171,7 @@ def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : IO 
 
 // --- elaborate_loaded_modules: THE unified check/compile/test front end ---
 //
-// `check` (via `check_file_cached`), `compile`/`test` (via `lang/main.mo`'s
+// `check` (via `check_file_cached`), `compile`/`test` (via `cli/src/main.mo`'s
 // `compile_file`/test-loop, `lang/codegen/emit.mo`/`test_driver.mo`), and
 // `slow_tests` used to each hand-roll their own version of this pipeline,
 // independently, and had quietly drifted apart -- `check` seeded prelude/
@@ -2576,7 +2576,7 @@ def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (ca
                     //
                     // It was not a small waste: `build_scope_from_decls` is
                     // the single most expensive phase, and a self-hosted
-                    // `check lang/main.mo` spent 83.9s of 232s here -- 36% of
+                    // `check cli/src/main.mo` spent 83.9s of 232s here -- 36% of
                     // the run -- duplicating the 81.9s the first build had
                     // already done, for a graph that had not changed.
                     // The annotated local moves INSIDE the branch rather

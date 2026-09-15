@@ -19,7 +19,7 @@
 /// that needed a real fix.
 ///
 /// These tests write real `.mo` source to disk and drive it through the
-/// SAME pipeline `lang/main.mo`'s own `compile_file_codegen` uses,
+/// SAME pipeline `cli/src/main.mo`'s own `compile_file_codegen` uses,
 /// following `test_closure_capture_e2e.mo`'s `compile_source_run_expect`
 /// convention (reused verbatim below) -- real parsing/typechecking/
 /// desugaring needs to run to reach the actual bug shape.

@@ -17,7 +17,7 @@
 /// code, e.g. a lens's `Lens T field_typ` type), and its own attribute
 /// names (e.g. `["arg"]` for a `#[arg] verbose : Bool` field, `[]` for an
 /// unannotated one) — bare names only, no attribute arguments, matching
-/// what `derive_cli_meta` (`lang/cli.mo`) needs to tell a flag field from
+/// what `derive_cli_meta` (`cli/src/args.mo`) needs to tell a flag field from
 /// a positional one.
 type FieldInfo {
     field_info (name : String) (typ : Expr) (attrs : List String)
@@ -78,7 +78,7 @@ type Param {
 /// `reflect_type_info!` invocation fail with `message` as a normal
 /// macro-expansion-time error (see `meta_reflect.rs::reify_decl_value`),
 /// short-circuiting before anything is spliced in. `derive_cli_meta`
-/// (`lang/cli.mo`) uses this for both of its hard failure cases (zero
+/// (`cli/src/args.mo`) uses this for both of its hard failure cases (zero
 /// constructors; `#[arg]` on a non-`Bool` field).
 type Decl {
     d_def (name : String) (params : List Param) (ret_typ : Expr) (body : Expr),

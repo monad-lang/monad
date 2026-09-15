@@ -11,7 +11,7 @@
 /// constructor field, ...) -- this backend tracks no real per-register
 /// type (`llvm_value_type (var_ x)` is hardcoded `i64_`), so nothing
 /// downstream could tell "this `var_` is secretly `i1`" apart from a
-/// genuine `i64`. Found via `bootstrap compile lang/main.mo monad`'s own
+/// genuine `i64`. Found via `bootstrap compile cli/src/main.mo monad`'s own
 /// self-compile reaching (for the first time, after the string-phi fix)
 /// `lang/parser/diagnostic.mo`'s `line_end_after_go`, whose `not (a < b)`
 /// produced `call i64 @Bool_not(i64 %tN)` where `%tN` was actually
@@ -68,7 +68,7 @@ def main (args : List String) : IO I64 := do {
 /// binds the let's compiled RHS value directly with no boxing step of
 /// its own, so every later reference is just `Term.var name`, losing the
 /// "this came from a native comparison" term-shape signal
-/// `ensure_i1_cond` needs -- found via `bootstrap compile lang/main.mo
+/// `ensure_i1_cond` needs -- found via `bootstrap compile cli/src/main.mo
 /// monad`'s own self-compile (`render_source_context`, `lang/parser/
 /// diagnostic.mo`): a let-bound comparison reused as a LATER `if`'s own
 /// condition hit `ensure_i1_cond`'s "needs unboxing" branch (correctly,

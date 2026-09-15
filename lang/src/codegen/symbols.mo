@@ -200,7 +200,7 @@ def replace_dots_loop (s : String) (acc : String) : String :=
 /// Check if a function name is a main function (handles both "main" and module_main)
 #[partial]
 def ends_with_main (name : String) : Bool :=
-    // On the UNQUALIFIED tail: a symbol is `lang.main::main` now, which
+    // On the UNQUALIFIED tail: a symbol is `cli.main::main` now, which
     // ends in neither `main`-the-whole-string nor `_main`.
     let src := unqualify_def_name name in
     if String.beq src "main" then true

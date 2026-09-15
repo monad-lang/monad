@@ -16,7 +16,7 @@
 # changes the emitted instruction text, so the diff points straight at the
 # offending function.
 #
-# What is gated is the SELF-HOSTED BINARY, not `monad-rs run lang/main.mo`
+# What is gated is the SELF-HOSTED BINARY, not `monad-rs run cli/src/main.mo`
 # -- the compiler interpreted by the Rust host. The binary is the artifact
 # that ships, so it is the artifact that should be held to this property,
 # and it is also ~40x faster per file (0.4s against ~18s), which is the
@@ -47,7 +47,7 @@ cd "$HERE" || exit 1
 MONAD_BIN="${MONAD_BIN:-${TMPDIR:-/tmp}/monad-bootstrap-ci/monad}"
 if [ ! -x "$MONAD_BIN" ]; then
   echo "no self-hosted compiler at $MONAD_BIN"
-  echo "build one:  cargo run --release -- run lang/main.mo compile lang/main.mo -o \"$MONAD_BIN\" --release"
+  echo "build one:  cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o \"$MONAD_BIN\" --release"
   echo "or point MONAD_BIN at an existing binary."
   exit 1
 fi

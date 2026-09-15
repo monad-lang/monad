@@ -1,5 +1,5 @@
 /// Regression tests for a family of related codegen gaps found while
-/// chasing `bootstrap compile lang/main.mo monad`'s self-compile past the
+/// chasing `bootstrap compile cli/src/main.mo monad`'s self-compile past the
 /// string phi-merge fix: values that reach a `phi` (an `if`/`match`
 /// merge point) or a bare `ret` need the SAME materialization call
 /// arguments already get (`materialize_void`/`materialize_native_bool_

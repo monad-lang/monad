@@ -526,7 +526,7 @@ fn lam_param_destructurable<X: Clone>(input: Span<X>) -> Res<ParsedParam, X> {
 
 /// `#[arg]`-style attributes on a single named constructor parameter, e.g.
 /// `compile (#[arg] verbose : Bool)` — consumed by `#[derive_cli]`
-/// generation (`lang/cli.mo`'s `derive_cli_meta`). Only meaningful ahead of the
+/// generation (`cli/src/args.mo`'s `derive_cli_meta`). Only meaningful ahead of the
 /// named-identifiers-with-type-annotation form below; the bare-type-only
 /// form (`some (A)`) has no name to attach per-field metadata to.
 fn cons_param<X: Clone>(input: Span<X>) -> Res<Vec<Param>, X> {

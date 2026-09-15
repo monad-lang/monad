@@ -3840,9 +3840,9 @@ mod test {
   #[test]
   fn test_real_file_lang_main() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/src/main.mo");
+    let source = include_str!("../../cli/src/main.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/src/main.mo", &report);
+    print_report("cli/src/main.mo", &report);
   }
 
   #[test]

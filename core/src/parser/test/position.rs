@@ -241,7 +241,7 @@ fn test_error_position_never_zero() {
 }
 
 // ============================================================================
-// Complex module parsing tests for lang/src/main.mo issue
+// Complex module parsing tests for cli/src/main.mo issue
 // ============================================================================
 
 /// Test simple dotted module path
@@ -252,7 +252,7 @@ fn test_use_dotted_path_simple() {
   assert!(result.is_ok(), "Should parse: {}", input);
 }
 
-/// Test dotted module path like in lang/src/main.mo
+/// Test dotted module path like in cli/src/main.mo
 #[test]
 fn test_use_dotted_path_lang_types() {
   let input = "use lang.types";

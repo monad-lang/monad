@@ -318,7 +318,7 @@ type FieldPatternEntry {
 /// bind `x`/`y` from the fixed-name `Param` this variant also carries.
 /// Mirrors the Rust reference's own `ParsedParam` (`core/src/parser.rs`)
 /// exactly, adapted to a fixed binder name (`__struct_param`) instead of
-/// a gensym -- `lang/` has no gensym facility (see `lang/cli.mo`'s own
+/// a gensym -- `lang/` has no gensym facility (see `cli/src/args.mo`'s own
 /// header comment for the established precedent of a fixed, prefixed
 /// name standing in for one here). Kept as a thin wrapper (rather than
 /// adding a pattern slot to `Param` itself) so every OTHER `Param`
@@ -1160,7 +1160,7 @@ type Instance {
 // downstream typecheck precision for that binding (e.g. match-case
 // validation on a do-block-bound value whose real type WAS written down,
 // just never threaded through -- see plans/bootstrapping/
-// self-hosted-compiler.md's changelog for the lang/main.mo `main` repro
+// self-hosted-compiler.md's changelog for the cli/src/main.mo `main` repro
 // this was found from).
 type DoStmt {
     bind_s (name: Identifier) (typ: ParseTerm) (expr: ParseTerm),
@@ -1790,7 +1790,7 @@ struct Module {
 // `elaborate_loaded_modules` -> codegen). Since this compiler's global
 // name table is not module-scoped, two same-named top-level types across
 // files silently collide -- whichever registers last wins for every
-// caller project-wide. `lang/main.mo` imported BOTH (one from
+// caller project-wide. `cli/src/main.mo` imported BOTH (one from
 // `lang.types`, one from `lang.module`), so the collision was live.
 // Renaming this one -- the narrower of the two, reached only by
 // `build_scope_from_modules` -- resolves it. See AGENTS.md item 18 for

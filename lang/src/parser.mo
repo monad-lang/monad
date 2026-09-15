@@ -2090,7 +2090,7 @@ def def_params_try_explicit (r : ParseResult String) (orig : String) (params : L
 		// one real per-param attribute shape (`#[arg]`, e.g.
 		// `(#[arg] verbose : Bool)` in a #[derive_cli]-annotated type's
 		// constructor) is on a CONSTRUCTOR field, not a `def` param
-		// (see lang/tests/cli_derive_tests.mo, deliberately Rust-host-
+		// (see cli/src/tests/cli_derive_tests.mo, deliberately Rust-host-
 		// only per its own doc comment) -- so this specific path has no
 		// in-scope real corpus target, unlike every other piece of this
 		// plan. Lower-confidence, hand-repro-only per
@@ -3754,7 +3754,7 @@ def decls_try (r : ParseResult ParseDecl) (orig : String) (acc : List ParseDecl)
 /// encountered constructs, and a real diagnostic on failure is worth
 /// having independent of any specific file's current status. Used only
 /// where a real diagnostic is actually wanted: `lang.module`'s
-/// `try_parse_decls_strict`, wired into `lang/main.mo`'s CLI
+/// `try_parse_decls_strict`, wired into `cli/src/main.mo`'s CLI
 /// compile-failure path.
 #[partial]
 def decls_parser_strict (input : String) : ParseResult (List Decl) :=
@@ -5401,7 +5401,7 @@ def atom_parsers : List (String -> ParseResult ParseTerm) :=
     // never as a nested expression (an if/then/else branch, a match-arm
     // body, or an explicit `:= do { ... }` def body) -- see
     // `plans/bootstrapping/self-hosted-compiler.md` for the corpus impact
-    // this had (137 real `do {` usages across lang/main.mo and
+    // this had (137 real `do {` usages across cli/src/main.mo and
     // lang/module.mo, all previously unparseable).
     [raw_string_parse, char_literal, quote_term_parser, macro_call_term, variable, literal_parser, match_parser, if_parser, do_parser, let_term_parser, list_literal_parser, struct_lit_parser]
 
@@ -6173,7 +6173,7 @@ def expr_climb_rest_next (r: ParseResult ParseTerm) (input: String) (lhs: ParseT
 /// comment line sitting between two lines of a multi-line operator
 /// chain (`lhs\n  // comment\n  && rhs`, `lhs\n  // comment\n  |> rhs`)
 /// no longer silently ends the climb right there. Confirmed live via
-/// the full `lang/main.mo` self-compile: `std/list.mo`'s `|> List.any
+/// the full `cli/src/main.mo` self-compile: `std/list.mo`'s `|> List.any
 /// (...)` and `lang/core_eval.mo`'s `&& is_num (...)`, each preceded by
 /// exactly this shape, both truncated the rest of their own file before
 /// this fix.
@@ -8379,7 +8379,7 @@ def test_macro_call_decl_two_consecutive_not_swallowed : Bool :=
 // --- Tests for per-def-param #[arg] attribute capture ---
 //
 // Lower-confidence/lower-priority per the plan -- the real corpus
-// #[arg] usage (lang/tests/cli_derive_tests.mo) is on a constructor
+// #[arg] usage (cli/src/tests/cli_derive_tests.mo) is on a constructor
 // field, not a `def` param, and is deliberately Rust-host-only. These
 // are hand-written repros only.
 
@@ -9244,7 +9244,7 @@ def test_decls_parser_strict_succeeds_on_clean_input : Bool :=
 /// through `location_of_remaining`/`render_parse_error` end to end,
 /// with the correct message and position — this is the exact shape
 /// `lang.module`'s `try_parse_decls_strict` (and, through it,
-/// `lang/main.mo`'s CLI error path) reports on a genuine parse failure.
+/// `cli/src/main.mo`'s CLI error path) reports on a genuine parse failure.
 #[test]
 def test_decls_parser_strict_error_renders_with_position : Bool :=
     let source : String := "use prelude\n\ngarbage here" in

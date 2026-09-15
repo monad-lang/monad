@@ -8,7 +8,7 @@
 ///
 /// `filter_reachable_decls` takes its root symbol EXPLICITLY. There is
 /// no sensible default: every def carries its module now
-/// (`lang.main::main`), so the literal `"main"` this used to assume
+/// (`cli.main::main`), so the literal `"main"` this used to assume
 /// names nothing, and a wrapper supplying it would quietly return an
 /// empty closure.
 use lang.types {Decl, Def, Inductive, Term}
@@ -76,7 +76,7 @@ def extract_inductives_go (decl_list : List Decl) (acc : List Inductive) : List 
 ///
 /// `root` is the entry point's own qualified symbol. There is no
 /// sensible default any more: every def carries its module
-/// (`lang.main::main`), so the literal `"main"` this used to root at
+/// (`cli.main::main`), so the literal `"main"` this used to root at
 /// names nothing at all, and a wrapper supplying it would silently
 /// return the empty closure. The caller knows which module is the
 /// program's entry point (`get_loaded_main`) and has to say.

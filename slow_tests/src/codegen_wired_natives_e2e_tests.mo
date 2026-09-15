@@ -3,7 +3,7 @@
 /// Monad itself) and the C-shaped ones (`lang/codegen/runtime.c`).
 ///
 /// Each compiles real `.mo` source through the same pipeline
-/// `lang/main.mo`'s own `compile_file_codegen` uses, links it against
+/// `cli/src/main.mo`'s own `compile_file_codegen` uses, links it against
 /// the real runtime, RUNS the binary, and asserts its exit code --
 /// following `codegen_string_repr_tests.mo`'s
 /// `compile_source_run_expect` convention (reused verbatim).
@@ -56,7 +56,7 @@ def test_generated_to_list_reverse_round_trip : IO Bool :=
 #[test]
 def test_generated_ends_with : IO Bool :=
     let source := r#"def main (args : List String) : IO I64 := do {
-    let yes := String.ends_with "lang/src/main.mo" ".mo";
+    let yes := String.ends_with "cli/src/main.mo" ".mo";
     let no := String.ends_with "lang/src/main.rs" ".mo";
     return (if yes && not no then 7 else 1)
 }

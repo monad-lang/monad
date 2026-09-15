@@ -475,7 +475,7 @@ def exec_native_by_name (s : String) (args : List Value) : Result CoreEvalError 
 /// `NativeTable`s from. The 3 string natives (ids 5/6/7) exist to
 /// support self-hosted `reflect_type_info!` evaluation
 /// (`lang/typecheck/meta_eval.mo`) -- `std/derive.mo`'s
-/// `derive_lens_meta`/`derive_beq_meta`/etc and `lang/cli.mo`'s
+/// `derive_lens_meta`/`derive_beq_meta`/etc and `cli/src/args.mo`'s
 /// `derive_cli_meta` transitively call exactly `String.concat`/
 /// `String.beq`/`String.to_lowercase` among natives (everything else
 /// they use is ordinary Monad-defined code, no native involved).

@@ -42,7 +42,7 @@ use lang.codegen.strmap {str_map_empty, str_map_insert, str_map_lookup}
 // against): a minimal 2-file repro -- a dependency module defining a
 // couple of plain dotted defs, a caller `use`-ing it with an empty
 // filter and referencing them by qualified name -- fails with `unknown
-// variable` when checked through `lang/main.mo`'s own `check` command
+// variable` when checked through `cli/src/main.mo`'s own `check` command
 // (exercising the real dynamic dependency-walk), even though the exact
 // same insert-then-lookup round-trip works fine in a shallow, directly-
 // run `#[test]`. `scope_data_find_def`'s own PRIOR doc comment claimed
@@ -219,7 +219,7 @@ def scope_data_add_inductive (sd : ScopeData) (ind : Inductive) : ScopeData :=
 // open_all`/`UseFilter.use_items` containing `UseItem.use_glob`) is not
 // expanded -- doing so needs enumerating every entry under a path prefix
 // (a `HashMap.to_list`-shaped walk), which no confirmed real corpus case
-// currently needs (the one real glob, `lang/main.mo`'s `use lang.cli
+// currently needs (the one real glob, `cli/src/main.mo`'s `use cli.args
 // {*}`, is only ever referenced through its own already-qualified
 // `Command.*` names, not bare) -- left for future work if that changes.
 // `scoped_open_d` (`open X in <decl>`, meant to scope its alias to just
@@ -1401,7 +1401,7 @@ def resolve_infix_decls (infixes : List Infix) (decl_list : List Decl) : List De
 // producing a call to a global that was never actually compiled (the
 // real one compiled under its qualified, mangled name instead) --
 // `llc: undefined value '@file_exists'`, confirmed live compiling
-// `lang/main.mo` itself (`lang/module.mo`'s own `open IO {file_exists,
+// `cli/src/main.mo` itself (`lang/module.mo`'s own `open IO {file_exists,
 // is_dir, list_dir, read_file}`, used bare throughout). `println` never
 // exposed this: it's ALSO separately registered as a native fast-path
 // name (`native_op_table`'s bare "println" key), so its bare calls are
@@ -1581,7 +1581,7 @@ def filter_valid_open_aliases (known_names : List String) (aliases : List OpenAl
 /// named ...)`, uses a placeholder index regardless of true binder
 /// depth, so `idx` can't discriminate "genuinely local" from "genuinely
 /// free" here either). Confirmed as a real regression from the
-/// non-shadowing-aware version: the full `lang/main.mo` self-compile's
+/// non-shadowing-aware version: the full `cli/src/main.mo` self-compile's
 /// own `Reachable decl_list` collapsed from ~1925 to ~181 even after
 /// alias collection/resolution was correctly scoped per-module --
 /// because a `use`/`open` alias in one FUNCTION was still incorrectly
@@ -2538,7 +2538,7 @@ def collect_def_types_go (decl_list : List Decl) (acc : HashMap String Term) : H
 /// case (looking up a called def's own declared return type to infer a
 /// class-method carrier from it, e.g. `String.length a - String.length
 /// b`'s own `Sub.sub`/`HAdd.add`) silently never fired for any QUALIFIED
-/// dotted call -- confirmed via `bootstrap compile lang/main.mo monad`:
+/// dotted call -- confirmed via `bootstrap compile cli/src/main.mo monad`:
 /// `lang/parser.mo`'s `string_find_last` hit exactly this
 /// (`String.length haystack - String.length needle`). Try the FULL
 /// dotted text first (`show_module_path`/`show_identifier`, both
@@ -2937,7 +2937,7 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
     // was dead for located input and every argument returned
     // `Option.none`, i.e. "no carrier", i.e. "no matching instance".
     //
-    // That is how `monad compile lang/main.mo` -- the default invocation,
+    // That is how `monad compile cli/src/main.mo` -- the default invocation,
     // debug info being on by default -- died at `no instance found for
     // `Append.append``: `"lit" ++ e` offered no carrier, so nothing chose
     // `instance Append String`, the call kept its class-method name, and
@@ -3707,7 +3707,7 @@ def resolve_class_method_call_d4_from_args (classes : List Class) (instances : L
     // whose FIRST arg(s) are ELEMENT types, not the container the class
     // is actually parameterized over: `FromListLiteral.cons (a : A) (L
     // A) : L A`'s `[1, 2, 3]` desugar (confirmed via `bootstrap compile
-    // lang/main.mo monad`: `lang/parser/core.mo`'s `op_chars : List
+    // cli/src/main.mo monad`: `lang/parser/core.mo`'s `op_chars : List
     // String := [...]`) and, once `match_arm_env` (above) could recover
     // `k`'s own type inside `match p { Pair.pair k v => Map.insert k v
     // acc }`, `Map.insert (key:K) (val:V) (m:M K V) : M K V` too --
@@ -3911,7 +3911,7 @@ def resolve_class_calls_decls (decl_list : List Decl) : List Decl :=
 /// reachability filtering, so validating its own output directly would
 /// fail a compile over a bug in dead code the program never actually
 /// uses (confirmed via a direct repro: `std/list.mo`'s own unreachable
-/// `test_length` def blocked `bootstrap compile lang/main.mo monad`,
+/// `test_length` def blocked `bootstrap compile cli/src/main.mo monad`,
 /// exactly the "any codegen bug anywhere in the whole standard library,
 /// reached or not, blocked compiling any program at all" problem
 /// `filter_reachable_decls`'s own doc comment says THAT pass exists to

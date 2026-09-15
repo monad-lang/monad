@@ -11,7 +11,7 @@
 /// same function had always used its own elaborated args; only the
 /// ordinary-def target discarded them.
 ///
-/// This was live in `lang/main.mo`'s own
+/// This was live in `cli/src/main.mo`'s own
 /// `compile_file_codegen { ..., preloaded := Option.some em.loaded }`:
 /// `em.loaded` is `ElaboratedModules`' FOURTH field compiled as its
 /// first, so codegen was handed a `Scope` where a `LoadedModules`

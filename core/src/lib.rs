@@ -476,7 +476,7 @@ fn exit_code_of(v: &core_value::Value, well_known: &lower_core_ir::WellKnownCtor
 }
 
 /// Returns the program's own exit code. Previously returned `Ok(())`,
-/// discarding whatever `main` produced -- so `monad-rs run lang/main.mo
+/// discarding whatever `main` produced -- so `monad-rs run cli/src/main.mo
 /// compile ...` exited 0 even when the compile FAILED at a gate and
 /// emitted no binary. Any script or CI treating that as success would
 /// have been silently wrong; it is exactly how a broken build slips
@@ -535,7 +535,7 @@ pub fn run(
   // `core_eval`'s own recursion depth can exceed the OS default
   // main-thread stack (commonly 8MB on Linux, see `ulimit -s`) for
   // large/deeply-nested programs -- e.g. self-hosted-checking
-  // `lang/main.mo` (whose dependency closure pulls in `lang/parser.mo`
+  // `cli/src/main.mo` (whose dependency closure pulls in `lang/parser.mo`
   // at 5,563 lines) reliably stack-overflows here, at a consistent
   // wall-clock point regardless of `RUST_MIN_STACK`, since that only
   // affects threads spawned with an explicit `stack_size` -- never the

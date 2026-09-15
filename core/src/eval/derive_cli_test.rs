@@ -1,4 +1,4 @@
-// `#[derive_cli]` tests — see `lang/cli.mo`'s `derive_cli_meta`/`derive_cli`
+// `#[derive_cli]` tests — see `cli/src/args.mo`'s `derive_cli_meta`/`derive_cli`
 // for the generator (an ordinary `TypeInfo -> List Decl` Monad function
 // invoked via `reflect_type_info!`, the same reflection-as-data
 // metaprogramming kernel `std/derive.mo`'s four derives use — see
@@ -12,10 +12,10 @@ use crate::term::{Identifier, ModulePath, SearchPaths, mpt};
 
 /// Load `source` as a module (running the full elaborate -> expand_macros ->
 /// type-check pipeline, exactly like the real CLI's `test`/`run` commands),
-/// with the real `lang/cli.mo` pre-loaded (via `load_module_files`, its
+/// with the real `cli/src/args.mo` pre-loaded (via `load_module_files`, its
 /// REAL on-disk path — not a synthetic name loaded from an `include_str!`
 /// snippet, which the reflection-as-data port made insufficient here: since
-/// `#[derive_cli]` now invokes `lang/cli.mo`'s own `derive_cli_meta`
+/// `#[derive_cli]` now invokes `cli/src/args.mo`'s own `derive_cli_meta`
 /// through `reflect_type_info!`/`MetaEvalContext`, that whole-program
 /// capture pass RE-READS every non-`init` loaded module's source from disk
 /// via search paths — `lib.rs::build_core_program`'s documented
@@ -24,10 +24,10 @@ use crate::term::{Identifier, ModulePath, SearchPaths, mpt};
 /// `meta_test.rs`'s own `std/derive.mo` fixture) so generated
 /// `#[derive_cli]` code can resolve `Cli.take_flag`/`Cli.take_positional`
 /// (and `#[derive_cli]`'s own dispatch can resolve the `derive_cli`
-/// decl-gen macro `lang/cli.mo` now defines).
+/// decl-gen macro `cli/src/args.mo` now defines).
 fn load(source: &str) -> Result<(crate::term::module::LoadedModules, ModulePath), String> {
   let mut loaded = default_modules().map_err(|e| e.to_string())?;
-  // `lang/cli.mo` does `use std.list`/`use init.meta` — point search paths
+  // `cli/src/args.mo` does `use std.list`/`use init.meta` — point search paths
   // at the repo root (via `CARGO_MANIFEST_DIR`, which is `core/`, so
   // `std/`/`init/`/`lang/` are one level up) rather than relying on
   // `cargo test`'s CWD.
@@ -38,15 +38,15 @@ fn load(source: &str) -> Result<(crate::term::module::LoadedModules, ModulePath)
   loaded.set_search_paths(SearchPaths::new(vec![repo_root]));
   let loaded = crate::term::module::load_module_files(
     &ModulePath::new(vec![
-      Identifier::new("lang".to_string()),
       Identifier::new("cli".to_string()),
+      Identifier::new("args".to_string()),
     ]),
     loaded,
   )
   .map_err(|e| e.to_string())?;
 
   let path = ModulePath::top("test_derive_cli");
-  let full_source = format!("use lang.cli {{*}}\n\n{source}");
+  let full_source = format!("use cli.args {{*}}\n\n{source}");
   let parsed = parse_file(full_source.as_str().into()).map_err(|e| e.to_string())?;
   let decls = type_check_module_decls(&path, parsed.decls, &loaded).map_err(|e| e.to_string())?;
   let mut loaded = loaded;
@@ -74,8 +74,8 @@ fn load(source: &str) -> Result<(crate::term::module::LoadedModules, ModulePath)
 // beyond this pass, not a mechanical port. The tests below that only
 // check TYPE-CHECKING (not evaluating) `#[derive_cli]`-generated code
 // are unaffected and still give real coverage of the generator itself
-// (`lang/cli.mo`'s `derive_cli_meta`) — and the actual end-to-end,
-// argv-evaluating proof lives in `lang/tests/cli_derive_tests.mo`, run
+// (`cli/src/args.mo`'s `derive_cli_meta`) — and the actual end-to-end,
+// argv-evaluating proof lives in `cli/src/tests/cli_derive_tests.mo`, run
 // through the real `test` command (see that file's own header comment).
 
 const DEMO_SRC: &str = r#"
@@ -154,7 +154,7 @@ fn test_derive_cli_non_bool_arg_field_rejected() {
 fn test_derive_cli_zero_arg_constructor_alone() {
   // Regression for the `ok()`/`err()` raw-`Con` bug `derive_cli_meta`'s
   // own doc comment inherits from the Rust generator it replaced (search
-  // "narrow gap" in `lang/cli.mo`): a single zero-param constructor
+  // "narrow gap" in `cli/src/args.mo`): a single zero-param constructor
   // wrapped in `Result.ok` is the minimal case that reproduced it.
   let src = r#"
     #[derive_cli]

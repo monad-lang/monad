@@ -4,7 +4,7 @@
 /// Exists because a `--verbose` self-compile WITHOUT `--release` ran
 /// 28035824ms (7h48m) against 275424ms with it, and every timed phase was
 /// within noise of the fast run. Subtracting them leaves ~7h44m — 99.4% of
-/// the run — in `with_located_decls` (`lang/main.mo`), which re-reads and
+/// the run — in `with_located_decls` (`cli/src/main.mo`), which re-reads and
 /// re-parses the whole dependency graph to attach `Term.ctx` position
 /// wrappers. The FIRST parse of those same 66 files is 45685ms, so the
 /// located parse is ~615x slower for the same work. Debug info is ON by

@@ -469,14 +469,14 @@ pub fn expand_macros(
       Decl::Type(induct) => {
         let mut generated: Vec<Decl> = Vec::new();
         // `#[derive_cli]` — dispatches to the `derive_cli` decl-gen macro
-        // (`lang/cli.mo`), the same reflection-as-data mechanism every
+        // (`cli/src/args.mo`), the same reflection-as-data mechanism every
         // other derive uses (via `derive_cli_meta`, an ordinary
         // `TypeInfo -> List Decl` function invoked through
         // `reflect_type_info!`), through ordinary macro-call synthesis —
         // same spirit as, and now literally the same code shape as, the
         // `#[derive BEq BOrd Debug Lens]` loop just below. Requires the
-        // file to `use lang.cli {derive_cli}` (or a superset, e.g.
-        // `use lang.cli {*}`), same convention as any other cross-module
+        // file to `use cli.args {derive_cli}` (or a superset, e.g.
+        // `use cli.args {*}`), same convention as any other cross-module
         // decl-gen macro call.
         if induct.has_attr("derive_cli") {
           let call_args = vec![mpvar(induct.name().clone())];

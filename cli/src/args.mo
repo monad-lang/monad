@@ -1,14 +1,14 @@
 /// Small runtime helper library for CLI argument parsing over `List String`.
 ///
 /// Used two ways:
-/// - by hand, from `lang/main.mo` (which stays free of any macro/attribute
+/// - by hand, from `cli/src/main.mo` (which stays free of any macro/attribute
 ///   syntax so the self-hosted parser/typechecker — which doesn't know
-///   about `#[derive_cli]` — can still parse it; see `lang/main.mo`'s own
+///   about `#[derive_cli]` — can still parse it; see `cli/src/main.mo`'s own
 ///   header comment and the self-hosted parse/scope/typecheck tests in
 ///   `lang/tests/`);
 /// - by generated code, from `#[derive_cli]`-annotated types — see
 ///   `derive_cli_meta`/`derive_cli` below, and the demo in
-///   `lang/tests/cli_derive_tests.mo`.
+///   `cli/src/tests/cli_derive_tests.mo`.
 ///
 /// Each operation returns a dedicated, non-generic result type
 /// (`Cli.FlagResult`/`Cli.PosResult`/`Cli.OptResult`) rather than a generic
@@ -26,7 +26,7 @@ use std.list {length, filter, any}
 // meta-evaluated during `#[derive_cli]` expansion, and that closure is
 // scoped to the module's own declared dependencies -- without this the
 // expansion fails with `unbound variable String.concat_all`, taking
-// `lang/main.mo` and four test files down with it. `lang/json.mo`
+// `cli/src/main.mo` and four test files down with it. `lang/json.mo`
 // imports from `init.string` the same way.
 use init.string {concat_all}
 use init.meta {TypeInfo, CtorInfo, FieldInfo, Expr, Decl}
@@ -82,7 +82,7 @@ def Cli.take_positional (args : List String) : Cli.PosResult :=
 /// tokens if present and returning `value`; falls back to `default` if
 /// absent. Pass `""` for `short` to only recognize the long form.
 /// (v1 scope: space-separated `<flag> <value>` only — no `--<long>=<value>`
-/// combined form, see `lang/cli.mo`'s plan note on `String.split` not
+/// combined form, see `cli/src/args.mo`'s plan note on `String.split` not
 /// existing yet.)
 def Cli.take_opt (long : String) (short : String) (default : String) (args : List String) : Cli.OptResult :=
     match args {

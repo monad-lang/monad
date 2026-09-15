@@ -753,7 +753,7 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
                             // dominated by, so `llc` rejects the whole
                             // module ("Instruction does not dominate all
                             // uses!"). Confirmed live: this was the
-                            // `lang/main.mo` self-compile's own failure
+                            // `cli/src/main.mo` self-compile's own failure
                             // in `resolve_branch_merge_info`, whose
                             // `Option.none` arm built its result from
                             // the `Option.some` arm's `result.label`/
@@ -804,7 +804,7 @@ def build_match_case_block (c : CodegenCtx) (scrutinee_val : LLVMValue) (case_ :
 /// branching (an `if`/`match`) had its OWN alloc/set-field/call
 /// instructions appended as dead code after that argument's own branch
 /// instead of spliced into its merge block -- confirmed live via the
-/// full `lang/main.mo` self-compile as malformed PHI nodes at `llc`'s
+/// full `cli/src/main.mo` self-compile as malformed PHI nodes at `llc`'s
 /// own IR-verification stage (`lang/typecheck/meta_reflect.mo`'s
 /// `reify_e_bool`: `Term.var sentinel (DebugName.named (Identifier.id
 /// (if b then "true" else "false")))` -- `Identifier.id`'s own `alloc_
@@ -898,7 +898,7 @@ struct MaterializedVal {
 /// `Monad.pure`'s own call argument list unchanged
 /// (`compile_spine_args_go`/`compile_ntv_args_go`), producing invalid
 /// LLVM (`call i64 @Monad_IO_pure(void void)`, confirmed via a real
-/// `bootstrap compile lang/main.mo monad` failure) whenever a do-block's
+/// `bootstrap compile cli/src/main.mo monad` failure) whenever a do-block's
 /// LAST statement was a bare expression (not `return`/`let`) -- e.g.
 /// `if verbose then do { ...; println (...) } else return unit` as its
 /// own do-block's final statement, exactly the shape
@@ -938,7 +938,7 @@ def materialize_void (c : CodegenCtx) (v : LLVMValue) : MaterializedVal := match
 /// downstream can tell "this `var_` is secretly `i1`" apart from a
 /// genuine `i64`, so the raw i1 register ends up passed to a callee
 /// call verbatim, declared `i64` in the call's own text. Confirmed as a
-/// real gap via `bootstrap compile lang/main.mo monad`'s own self-compile
+/// real gap via `bootstrap compile cli/src/main.mo monad`'s own self-compile
 /// (`lang/parser/diagnostic.mo`'s `line_end_after_go`, `not (a < b)`):
 /// `call i64 @Bool_not(i64 %tN)` where `%tN` was actually declared `i1`
 /// -- `llc: '%tN' defined with type 'i1' but expected 'i64'`.
@@ -988,7 +988,7 @@ struct BranchMaterializeResult {
 /// own PhiPair construction (`build_merge_result`/`build_match_case_
 /// block`) used `then_val`/`else_val`/`val_r` completely unmaterialized
 /// until this fix. Confirmed as a real gap via `bootstrap compile
-/// lang/main.mo monad`'s own self-compile (`line_col_scan_direct`,
+/// cli/src/main.mo monad`'s own self-compile (`line_col_scan_direct`,
 /// `lang/parser/diagnostic.mo`): an `if`'s `then` branch compiling to a
 /// bare `void_val` (a `Term.hole`-shaped body) merged against the `else`
 /// branch's real `i64` result -- `llc: void type only allowed for
@@ -1821,8 +1821,8 @@ def ensure_i1_cond (c : CodegenCtx) (instrs : List LLVMInstruction) (blocks : Li
 /// `i1` as a boxed pointer. This is exactly the shape the self-hosted
 /// PARSER's own `furthest_error` (`lang/parser/combinators.mo`) uses
 /// (`if I64.lt (String.length ...) (String.length ...) then ...`),
-/// which blocked `bootstrap compile lang/main.mo monad`'s own
-/// self-compile (`lang/main.mo` depends on the parser).
+/// which blocked `bootstrap compile cli/src/main.mo monad`'s own
+/// self-compile (`cli/src/main.mo` depends on the parser).
 /// `term_peel` at the entry, not a shape match on `t` directly: since
 /// stage 6 locates EVERY module's decls under debug, a dep module's
 /// def body is routinely `Term.ctx _ (I64.beq a b)` -- e.g.
@@ -1964,7 +1964,7 @@ def resolve_branch_merge_info (reaches : Bool) (val : LLVMValue) (label : String
 /// ret` (`resolve_branch_merge_info`). An earlier version of this
 /// function instead contributed NO phi entry at all for such a branch,
 /// on the theory that it "never actually reaches `merge_label`" --
-/// confirmed wrong live via the full `lang/main.mo` self-compile:
+/// confirmed wrong live via the full `cli/src/main.mo` self-compile:
 /// malformed PHI nodes at `llc`'s own IR-verification stage. Mirrors
 /// `build_match_case_block`'s own identical fix for match arms.
 #[partial]
@@ -2272,7 +2272,7 @@ def try_compile_let_beta_db (c : CodegenCtx) (fun : Term) (arg : Term) : Option 
                     // let-bound comparison's raw `i1` must be boxed NOW,
                     // not deferred to whichever later use-site happens to
                     // re-derive it (most of them can't). Confirmed as a
-                    // real gap via `bootstrap compile lang/main.mo
+                    // real gap via `bootstrap compile cli/src/main.mo
                     // monad`'s own self-compile (`render_source_context`,
                     // `lang/parser/diagnostic.mo`): a `let`-bound
                     // comparison reused as a LATER `if`'s own condition
@@ -2681,11 +2681,11 @@ def native_op_to_fn_name (op : NativeOp) : String := match op {
 /// head resolves via `lookup_native_any` -- not just the 8 arithmetic/
 /// comparison ops. `NativeOp.op_write_file` is the one IO op with arity 2
 /// (`IO.write_file path content`, `init/io.mo`), so a real call like
-/// `lang/main.mo`'s own `link_ir`'s `IO.write_file ir_path ir_text` reaches
+/// `cli/src/main.mo`'s own `link_ir`'s `IO.write_file ir_path ir_text` reaches
 /// here too -- `compile_native_val`/`fold_native_const` (only 8 arms, no IO
 /// ops) used to be called UNCONDITIONALLY, panicking the Rust host
 /// interpreter with a non-exhaustive match on `NativeOp.op_write_file`
-/// (confirmed blocking `bootstrap compile lang/main.mo monad`'s self-
+/// (confirmed blocking `bootstrap compile cli/src/main.mo monad`'s self-
 /// compile -- see `implementations/2026-08-29-native-io-op-non-exhaustive-
 /// match-crash.md`). Route non-arithmetic ops to `emit_native_call2_instr`
 /// instead, which calls the real runtime function.
@@ -2927,7 +2927,7 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
                     // argument -- `llc: void type only allowed for
                     // function results`, `call i64 @apply_closure3(void
                     // void, ...)`. Confirmed blocking `bootstrap compile
-                    // lang/main.mo monad`'s self-compile once it got past
+                    // cli/src/main.mo monad`'s self-compile once it got past
                     // the write_file/user-defined-constructor fixes.
                     match materialize_branch_val ctx_h_raw head instrs_h_raw val_h_raw {
                         { ctx := ctx_h, instrs := instrs_h, val := val_h } =>
@@ -3971,7 +3971,7 @@ def build_fields_from (count : I64) (idx : I64) : List LLVMValue :=
 /// be some earlier def's OWN pattern-bound field name) silently resolves
 /// to that stale, cross-function SSA value instead of its own intended
 /// meaning. Confirmed as a real, previously-undiagnosed bug via
-/// `bootstrap compile lang/main.mo monad`'s own self-compile
+/// `bootstrap compile cli/src/main.mo monad`'s own self-compile
 /// (`init/lib.mo`'s `List.get`, ~1700 defs into the reachable set):
 /// its own `empty => none` match arm resolved to a `%tN` SSA value left
 /// over from an entirely different, much-earlier-compiled def
@@ -4517,7 +4517,7 @@ def check_contains (text : String) (needle : String) : Bool :=
 /// flag) gates the per-stage progress printlns inside this function —
 /// the module-count / def-count / reachable-count numbers were
 /// unconditionally printed on every compile before, drowning real output
-/// (`lang/main.mo`'s own compile-file progress markers, link failures,
+/// (`cli/src/main.mo`'s own compile-file progress markers, link failures,
 /// the user's program output) in low-value noise.
 #[partial]
 def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO (Result String LLVMModule) :=
@@ -5082,7 +5082,7 @@ def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbose : 
 // `build_def_name_map` (reachability) and `dedup_funcs_by_name` (shim
 // collapsing) then silently keep exactly ONE of any same-named pair.
 // 19 top-level names are declared by two or more non-test modules in
-// this corpus; 16 are live in `lang/main.mo`'s own closure. One of them
+// this corpus; 16 are live in `cli/src/main.mo`'s own closure. One of them
 // crashed the self-compiled compiler: `inductive_bare_name` exists in
 // both `lang/typecheck/meta_reflect.mo` (`-> String`) and
 // `lang/typecheck/infer.mo` (`-> Identifier`), the String one won, and

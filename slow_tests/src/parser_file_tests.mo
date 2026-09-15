@@ -50,7 +50,7 @@ def example_files_safe : List String :=
 #[partial]
 def lang_files_safe : List String :=
     ["lang/src/elaborate.mo",
-     "lang/src/main.mo",
+     "cli/src/main.mo",
      "lang/src/module.mo",
      "lang/src/pretty.mo",
      "lang/src/scope.mo"]
