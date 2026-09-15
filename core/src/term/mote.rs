@@ -9,6 +9,10 @@ pub struct Manifest {
   /// `None` for a virtual workspace root (a manifest with `[workspace]` but no `[mote]`).
   pub mote: Option<MoteMeta>,
   pub dependencies: BTreeMap<String, Dependency>,
+  /// Test-only dependencies. Visible to a mote's own test code, never used to
+  /// resolve its lib or bin targets -- this is what lets `init` stay pure
+  /// (it depends on nothing) while its test files still `use std::test`.
+  pub dev_dependencies: BTreeMap<String, Dependency>,
   pub workspace: Option<Workspace>,
 }
 
@@ -100,6 +104,8 @@ struct RawManifest {
   mote: Option<RawMoteMeta>,
   #[serde(default)]
   dependencies: BTreeMap<String, RawDependency>,
+  #[serde(default, rename = "dev-dependencies")]
+  dev_dependencies: BTreeMap<String, RawDependency>,
   workspace: Option<RawWorkspace>,
 }
 
@@ -158,6 +164,20 @@ struct RawLockedModule {
   artifact_hash: Option<String>,
 }
 
+fn convert_dependencies(raw: BTreeMap<String, RawDependency>) -> BTreeMap<String, Dependency> {
+  raw
+    .into_iter()
+    .map(|(name, dep)| {
+      let dep = match dep {
+        RawDependency::Version(v) => Dependency::Registry(v),
+        RawDependency::Path { path } => Dependency::Path(PathBuf::from(path)),
+        RawDependency::Git { git, tag, rev } => Dependency::Git { url: git, tag, rev },
+      };
+      (name, dep)
+    })
+    .collect()
+}
+
 impl Manifest {
   pub fn discover(start_dir: &Path) -> Option<(PathBuf, Self)> {
     let mut current = start_dir.to_path_buf();
@@ -193,18 +213,8 @@ impl Manifest {
         edition: m.edition,
       }),
       workspace: raw.workspace.map(|w| Workspace { members: w.members }),
-      dependencies: raw
-        .dependencies
-        .into_iter()
-        .map(|(name, dep)| {
-          let dep = match dep {
-            RawDependency::Version(v) => Dependency::Registry(v),
-            RawDependency::Path { path } => Dependency::Path(PathBuf::from(path)),
-            RawDependency::Git { git, tag, rev } => Dependency::Git { url: git, tag, rev },
-          };
-          (name, dep)
-        })
-        .collect(),
+      dependencies: convert_dependencies(raw.dependencies),
+      dev_dependencies: convert_dependencies(raw.dev_dependencies),
     })
   }
 }
@@ -590,6 +600,30 @@ edition = "2026"
     let mote = raw.mote.unwrap();
     assert_eq!(mote.name, "my-mote");
     assert_eq!(mote.edition.as_deref(), Some("2026"));
+  }
+
+  #[test]
+  fn test_parse_dev_dependencies_are_separate_from_dependencies() {
+    // Sub-table form (`[dependencies.x]`), not the inline-table form: this is
+    // what the self-hosted `lang/toml.mo` reader supports, so the repo's own
+    // manifests are written this way and must parse identically here.
+    let toml_str = r#"
+[mote]
+name = "init"
+version = "0.1.0"
+
+[dev-dependencies.std]
+path = "../std"
+"#;
+    let manifest = Manifest::parse_str(toml_str).unwrap();
+    assert!(
+      manifest.dependencies.is_empty(),
+      "a dev-dependency must not leak into [dependencies]"
+    );
+    match &manifest.dev_dependencies["std"] {
+      Dependency::Path(p) => assert_eq!(p, &PathBuf::from("../std")),
+      other => panic!("Expected Path, got {:?}", other),
+    }
   }
 
   #[test]
