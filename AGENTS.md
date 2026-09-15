@@ -21,9 +21,9 @@ a different branch and cause confusion.
 │   │   │   ├── type.rs    # Type checker
 │   │   │   ├── native.rs  # Native function implementations
 │   │   │   └── constraint.rs # Constraint solver
-│   │   └── main.rs     # CLI entry point (deprecated, use cli/)
+│   │   └── main.rs     # CLI entry point (deprecated, use rust-cli/)
 │   └── Cargo.toml
-├── cli/              # CLI entry point
+├── rust-cli/         # Rust bootstrap CLI crate -- the `monad-rs` binary
 │   └── src/main.rs
 ├── wasm/             # WebAssembly bindings
 ├── init/             # Pure, portable core mote (see "init vs std" below)
@@ -3035,7 +3035,7 @@ on the parser — it saves minutes per iteration.
 | Term representation / new AST node | `core/src/term.rs` — add new `Term` variants here |
 | Constraint solving / instance resolution | `core/src/eval/constraint.rs` |
 | Module loading / use/open | `core/src/term/module.rs` |
-| CLI flags / command handling | `cli/src/main.rs` |
+| CLI flags / command handling | `rust-cli/src/main.rs` |
 
 Use `rg` (ripgrep) to search — it respects `.gitignore` and is fast:
 

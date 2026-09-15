@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "cli", "wasm"]
+members = ["core", "rust-cli", "wasm"]
 
 [workspace.package]
 version = "0.1.2"

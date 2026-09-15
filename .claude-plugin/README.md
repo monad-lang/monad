@@ -1,6 +1,6 @@
 # Monad Tools — Claude Code plugin
 
-Exposes the `monad-rs mcp` server (`cli/src/mcp.rs`) as an MCP tool set for
+Exposes the `monad-rs mcp` server (`rust-cli/src/mcp.rs`) as an MCP tool set for
 Claude Code, so Claude can call `check`/`symbols`/`hover`/`definition`/
 `organize_imports`/`test` directly instead of shelling out to `monad-rs
 check --json ...`. `check`, `symbols`, `organize_imports`, and `test` are
@@ -13,7 +13,7 @@ the queried file (e.g. something imported via `use OtherMote {name}`).
 ## Setup
 
 The plugin runs a **prebuilt release binary**, not `cargo run` — build it
-once before first use, and again after pulling changes that touch `cli/`
+once before first use, and again after pulling changes that touch `rust-cli/`
 or `core/`:
 
 ```sh
@@ -49,7 +49,7 @@ immediately, no reinstall needed.
 Bundling a prebuilt binary *inside* the plugin package (for distributing
 to people who haven't cloned/built this repo) and a companion Skill/
 slash-command wrapper are both out of scope for this first pass — see
-`cli/src/mcp.rs`'s own module doc comment for what the MCP server itself
+`rust-cli/src/mcp.rs`'s own module doc comment for what the MCP server itself
 does and doesn't cover (e.g. `run` isn't a tool yet — executing a
 program's `main` is a fundamentally different, still-unstructured
 problem than running `#[test]` defs, which `test` now covers).
