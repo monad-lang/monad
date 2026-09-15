@@ -166,7 +166,7 @@ def mangle_identifiers (ids : List Identifier) : String :=
 /// corpus (4271 distinct def names, checked), but qualifying every def
 /// with its module path multiplies the opportunities, and conflating
 /// two distinct names is precisely the bug class this whole change
-/// exists to remove. `lang.codegen.ir`'s `llvm_symbol_ref` quotes every
+/// exists to remove. `llvm.ir`'s `llvm_symbol_ref` quotes every
 /// emitted `@` reference so a dotted name needs no escaping.
 #[partial]
 def def_symbol_name (name : ModulePath) : String :=

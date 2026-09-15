@@ -20,7 +20,7 @@ use lang.types {
   lit, match_, mc, mk, mp, name, named, ntv, num, operator,
   param_many, pi, str, type_, unnamed, var,
 }
-use lang.codegen.ir {
+use llvm.ir {
   DbgLoc, LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMGlobal, LLVMInstruction,
   LLVMModule, LLVMType, LLVMValue, NativeOp, ParamPair, PhiPair, add, alloc_closure,
   alloc_constructor, assign, bitcast, bool_, branch, call, comment, emit_module,
@@ -30,7 +30,7 @@ use lang.codegen.ir {
   op_mul, op_ne, op_print_str, op_read_file, op_sdiv, op_sub, op_write_file,
   parm_, phi, ptr, ptrtoint, ret, sdiv, show_llvm_type, sub, trunc, var_, void_val, zext,
 }
-use lang.codegen.runtime {runtime_native_functions}
+use runtime.natives {runtime_native_functions}
 use lang.codegen.validate {
   build_defined_symbol_set, collect_call_targets, missing_call_targets,
   validate_no_colliding_def_symbols, validate_no_undesugared_struct_lits,
@@ -94,7 +94,7 @@ use lang.typecheck.infer {type_head_name, struct_lit_build_args, struct_lit_con_
 // `--verbose` stage-start trace + the red "FAILED at stage" lines
 // (`lang/log` -- helpers gate on `verbose` themselves; the fail lines
 // are ungated, printing in both modes as they did before).
-use lang.log {fail_line, stage}
+use std.log {fail_line, stage}
 
 open IO {println}
 open LLVMType {i32_, i64_, i8_, ptr}
@@ -112,7 +112,7 @@ type CompileResult {
 def empty_arities : HashMap String I64 := str_map_empty
 
 /// The `entry` text `alloc_closure` needs (see `LLVMValue.alloc_closure`'s
-/// own IR emission, `lang/codegen/ir.mo`) to box a bare reference to
+/// own IR emission, `llvm/src/ir.mo`) to box a bare reference to
 /// `llvm_name` as a callable value: every top-level def in this backend
 /// is compiled with the uniform `(i64, i64, ..., i64) -> i64` signature
 /// (`build_llvm_params_db`/`LLVMFunction.mk`), so this is always a
@@ -1422,7 +1422,7 @@ def llvm_value_eq (a : LLVMValue) (b : LLVMValue) : Bool := match a {
 // body references that isn't its own parameter must be explicitly
 // CAPTURED (read out of its own closure instance's env array at
 // runtime, see `monad_closure_get_env`/`monad_closure_set_env`,
-// `lang/codegen/runtime.c`) rather than referenced directly, which
+// `runtime/src/runtime.c`) rather than referenced directly, which
 // would produce a dangling cross-function SSA reference (`llc: use of
 // undefined value`) the moment it referred to anything bound in the
 // ENCLOSING function. `free_names_of_term` computes exactly the set of
@@ -1527,7 +1527,7 @@ struct SetEnvResult {
 /// One `@monad_closure_set_env` call per captured value, in order --
 /// mirrors `build_set_field_instrs` (above) exactly, just against the
 /// closure's own distinct env-array layout (`monad_closure_set_env`,
-/// `lang/codegen/runtime.c`).
+/// `runtime/src/runtime.c`).
 #[partial]
 def build_set_env_instrs (obj_val : LLVMValue) (vals : List LLVMValue) (idx : I64) (c : CodegenCtx) : SetEnvResult := match vals {
     // See `build_get_env_instrs`'s own doc comment above -- this trailing
@@ -2438,7 +2438,7 @@ def try_compile_inline_native_db (c : CodegenCtx) (fun : Term) (arg : Term) : Op
     }
 
 // `print_str`/`write_file` are declared `void` on the C side
-// (`lang/codegen/runtime.c`) -- their LLVM `declare` says so (`mk_decl
+// (`runtime/src/runtime.c`) -- their LLVM `declare` says so (`mk_decl
 // "monad_print_str" ... "void"`), but every native CALL here is always
 // emitted `i64`-typed (`LLVMType.i64_`) regardless, so the call itself
 // produces an i64 "result" that's really just whatever garbage the C
@@ -2903,7 +2903,7 @@ def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
                                 // function name (not a local SSA
                                 // register that merely happens to hold
                                 // a runtime value) -- see `fn_ref`'s own
-                                // doc comment, `lang/codegen/ir.mo`.
+                                // doc comment, `llvm/src/ir.mo`.
                                 CompileResult.ok c List.empty (LLVMValue.fn_ref llvm_name) List.empty List.empty List.empty,
                     },
                 DebugName.unnamed => compile_db_term_ir c head,
@@ -2956,7 +2956,7 @@ def compile_general_db_call (c : CodegenCtx) (fun : Term) (arg : Term) : Compile
                                         // position bypass -- means the
                                         // callee is a statically-known
                                         // global function; see its own
-                                        // doc comment (`lang/codegen/ir.mo`)
+                                        // doc comment (`llvm/src/ir.mo`)
                                         // for why `var_` (an SSA local
                                         // register that may itself hold a
                                         // runtime closure value) must NOT
@@ -3180,7 +3180,7 @@ def emit_arith_instr (c : CodegenCtx) (op : NativeOp) (lhs : LLVMValue) (rhs : L
 /// already-compiled operand values in call order (`arg1_val` first).
 ///
 /// `NativeOp.op_write_file` needs special handling: `monad_write_file`'s
-/// real C signature is `(path, data, len)` (`lang/codegen/runtime.c`), but
+/// real C signature is `(path, data, len)` (`runtime/src/runtime.c`), but
 /// the mo-level call (`IO.write_file path content`, `init/io.mo`) only
 /// supplies 2 args -- `len` must be computed here via `monad_string_length`
 /// first, or the runtime call reads a garbage length from an unset
@@ -4526,7 +4526,7 @@ def compile_loaded_modules_to_ir (loaded : LoadedModules) (verbose : Bool) : IO 
 /// One `(module path string, file path)` pair per loaded module -- the
 /// `!DIFile` attribution table (`LLVMModule.debug_files`). Keyed by the
 /// same `show_module_path` string a function name's `<module>::<def>`
-/// prefix uses, which is what `lang.codegen.ir`'s `module_file_ref`
+/// prefix uses, which is what `llvm.ir`'s `module_file_ref`
 /// looks up. Built in module order so `!DIFile` id assignment is
 /// reproducible run to run.
 #[partial]

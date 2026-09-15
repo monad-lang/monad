@@ -28,7 +28,7 @@ use lang.codegen.test.e2e_harness {compile_source_run_expect}
 use std.process {process_id, exec_cmd}
 use lang.module {LoadedModules, load_file_modules}
 use lang.codegen.emit {compile_loaded_modules_to_ir}
-use lang.codegen.ir {emit_module}
+use llvm.ir {emit_module}
 
 
 /// Two types both declaring `mk`, at arities 1 and 3, both constructed

@@ -18,12 +18,12 @@
 /// All four run on the REACHABLE decls, so a bug in dead code cannot
 /// block a build that never touches it.
 use lang.types {Con, Decl, Def, Literal, MatchCase, Native, Term}
-use lang.codegen.ir {
+use llvm.ir {
   LLVMBasicBlock, LLVMDeclaration, LLVMFunction, LLVMInstruction, LLVMModule,
   LLVMValue, PhiPair,
 }
 use lang.codegen.decls {def_name_str, extract_defs}
-use lang.codegen.runtime {runtime_native_functions}
+use runtime.natives {runtime_native_functions}
 use lang.codegen.natives {
   lookup_native_any, native_attr_target_name, native_runtime_fn_name,
   runtime_declarations,

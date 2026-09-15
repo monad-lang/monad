@@ -18,7 +18,7 @@ def Bench.now : IO I64 := current_time
 ///
 /// Written in Monad and typed `IO Unit`, NOT a native: as a native it
 /// was a generated stub that returned `1` and dropped both arguments
-/// (`emit_bench_report`, `lang/codegen/runtime.mo`), so every
+/// (`emit_bench_report`, `runtime/src/natives.mo`), so every
 /// `--verbose` timing this codebase emits printed nothing at all from a
 /// COMPILED binary -- the instrumentation existed only under the Rust
 /// host. Printing is IO, so the type says so, and the compiled compiler

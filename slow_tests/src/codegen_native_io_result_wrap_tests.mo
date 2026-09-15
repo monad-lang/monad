@@ -50,7 +50,7 @@ def main (args : List String) : IO I64 := do {
 // NOTE: an equivalent `IO.file_exists` test was attempted here (same
 // shape, `Bool`-producing instead of `String`-producing, to exercise
 // `needs_io_wrap` for a different inner type) but found a SEPARATE,
-// pre-existing, deeper bug: `monad_file_exists` (`lang/codegen/runtime.c`)
+// pre-existing, deeper bug: `monad_file_exists` (`runtime/src/runtime.c`)
 // returns a raw C string literal ("1" or NULL), not a real heap-allocated
 // Bool constructor via `alloc_constructor` -- so `if exists then ... else
 // ...` (which reads the value's TAG via `monad_get_tag`, expecting a

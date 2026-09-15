@@ -1,0 +1,17 @@
+# The LLVM IR data model, its .ll text rendering, and the llc/clang glue
+# that turns that text into a linked binary. Compiler-agnostic: nothing
+# here knows what a Monad term is.
+
+[mote]
+name = "llvm"
+version = "0.1.2"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[dependencies.init]
+path = "../init"
+
+[dependencies.std]
+path = "../std"

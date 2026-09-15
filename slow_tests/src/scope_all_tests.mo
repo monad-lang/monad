@@ -202,7 +202,7 @@ def test_scope_lang_pretty : Bool := build_scope_for_file "lang/src/pretty.mo" "
 def test_scope_lang_scope : Bool := build_scope_for_file "lang/src/scope.mo" "scope"
 
 #[test]
-def test_scope_lang_codegen_ir : Bool := build_scope_for_file "lang/src/codegen/ir.mo" "codegen_ir"
+def test_scope_lang_codegen_ir : Bool := build_scope_for_file "llvm/src/ir.mo" "codegen_ir"
 
 #[test]
 def test_scope_lang_codegen_emit : Bool := build_scope_for_file "lang/src/codegen/emit.mo" "codegen_emit"

@@ -1,7 +1,7 @@
 use lang.types {
   Def, Identifier, TypeConstraint, i64, id, lam, lit, mk, mp, named, num, type_,
 }
-use lang.codegen.ir {emit_module, mk}
+use llvm.ir {emit_module, mk}
 use lang.codegen.emit {check_contains, compile_db_decls_ir, empty_attrs, mk}
 
 open Term {lam, lit, type_}
@@ -97,7 +97,7 @@ def test_e2e_io_main_unwraps_before_return : Bool :=
     // (`runtime_declarations`) regardless of whether anything calls it
     // -- checking for the bare name would pass even without the fix.
     // The actual CALL renders as `call i64 @monad_get_field(...)`
-    // (`LLVMValue.call`'s own text form, `lang/codegen/ir.mo`), which
+    // (`LLVMValue.call`'s own text form, `llvm/src/ir.mo`), which
     // only appears if `main`'s own body was actually rewritten.
     check_contains text "call i64 @monad_get_field"
 

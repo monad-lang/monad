@@ -703,7 +703,7 @@ fn string_count_newlines(args: &[Value]) -> Result<Value, CoreEvalError> {
 /// the whole range when it has none. A character is a byte that is not a
 /// UTF-8 continuation byte -- `(b & 0xC0) != 0x80`, the same 0x80-0xBF
 /// range `is_utf8_continuation_byte` (`lang/parser/position.mo`) tests
-/// for. `lang/codegen/runtime.c`'s `monad_string_trailing_chars` must
+/// for. `runtime/src/runtime.c`'s `monad_string_trailing_chars` must
 /// agree with this byte for byte: a disagreement surfaces as the host and
 /// a self-compiled binary reporting different columns.
 fn string_trailing_chars(args: &[Value]) -> Result<Value, CoreEvalError> {

@@ -15,7 +15,7 @@
 /// the natives work on both runtimes without monomorphisation. The Rust
 /// host holds a value as `Value::Con { tag, args: Vec<Value> }` and the
 /// compiled backend as `Constructor { header, tag, field_count,
-/// fields[] }` (`lang/codegen/runtime.c`); both are already
+/// fields[] }` (`runtime/src/runtime.c`); both are already
 /// GC-managed, indexable, boxed-element vectors with a runtime length,
 /// and neither records element types. So `array_*` is generic in `A`
 /// for free.

@@ -13,3 +13,9 @@ path = "../init"
 
 [dependencies.std]
 path = "../std"
+
+[dependencies.llvm]
+path = "../llvm"
+
+[dependencies.runtime]
+path = "../runtime"

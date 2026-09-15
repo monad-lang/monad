@@ -22,3 +22,9 @@ path = "../std"
 
 [dependencies.lang]
 path = "../lang"
+
+[dependencies.llvm]
+path = "../llvm"
+
+[dependencies.runtime]
+path = "../runtime"

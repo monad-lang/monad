@@ -2,9 +2,10 @@ use io {IO}
 open IO {println, write_file}
 use std.process {exec_cmd}
 use lang.types {Def, i64, id, lit, mk, mp, num, type_}
-use lang.codegen.ir {emit_module, mk}
+use llvm.ir {emit_module, mk}
+use llvm.link {compile_ir_to_obj, compile_runtime_obj, link_objects}
+use runtime {}
 use lang.codegen.emit {compile_db_decls_ir, mk}
-use lang.codegen.link {args4}
 
 open Term {lit, type_}
 open Literal {num}
@@ -40,19 +41,14 @@ def main : IO I64 {
     let defs := build_main42;
 
     let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
-    let ir_text := lang.codegen.ir.emit_module mod_;
+    let ir_text := llvm.ir.emit_module mod_;
 
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
     IO.write_file (Path.path ir_path) ir_text;
 
-    let llc_args := args4 "-filetype=obj" ir_path "-o" obj_path;
-    exec_cmd "llc" llc_args;
-
-    let rt_args := args4 "-c" "lang/src/codegen/runtime.c" "-o" runtime_obj;
-    exec_cmd "clang" rt_args;
-
-    let ld_args := List.cons obj_path (List.cons runtime_obj (List.cons "-lgc" (List.cons "-o" (List.cons output_path List.empty))));
-    exec_cmd "clang" ld_args;
+    let _llc <- compile_ir_to_obj ir_path obj_path;
+    let _rt <- compile_runtime_obj Runtime.c_path [] runtime_obj;
+    let _link <- link_objects [obj_path, runtime_obj] output_path [];
 
     let bin_args := List.empty;
     let exit_code <- exec_cmd output_path bin_args;

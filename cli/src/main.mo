@@ -3,7 +3,9 @@ open IO {println, read_file, write_file}
 use std.process {exec_cmd, process_id}
 use std.bench {now, report_since}
 use lang.types {Decl, LocalScope, ModulePath, show_module_path, show_identifier}
-use lang.codegen.ir {LLVMModule, emit_module}
+use llvm.ir {LLVMModule, emit_module}
+use llvm.link {link_ir}
+use runtime {}
 use lang.codegen.emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
 use lang.module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
 use lang.scope {resolve_class_calls_decls}
@@ -12,8 +14,8 @@ use lang.pretty {show_decls}
 use lang.codegen.test_driver {compile_loaded_modules_to_test_ir}
 use cli.args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
-// (`lang/log.mo` -- its own header documents the gating rules).
-use lang.log {fail_line, ok_line, stage}
+// (`std/src/log.mo` -- its own header documents the gating rules).
+use std.log {fail_line, stage}
 use lang.lower_core_ir {lower_ctx_from_decls, lower_root, LowerError}
 use lang.core_ir {CoreIr}
 use lang.core_eval {eval, basic_native_table}
@@ -29,118 +31,6 @@ def build_commit : String
 /// binary paths.
 def default_output_dir : Path := Path.path ("/tmp/monad_out_" ++ I64.to_string process_id)
 
-
-/// Write LLVM IR to disk and link it into a native binary via llc + clang.
-/// Shared by `compile_file`'s primary path and its module-loading-failure
-/// fallback (`compile_parsed_decls`) — both produce an `ir_text : String`
-/// by different routes and then need the identical llc/clang/link steps.
-#[partial]
-def link_ir (ir_text : String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 {
-    // `Path.join` here is THE fix for the mangled-double-slash bug this
-    // whole `Path` type exists to prevent: if `output_name` is already
-    // absolute, it replaces `output_dir` outright instead of naively
-    // concatenating (`os.path.join`-style semantics).
-    let target := Path.join output_dir output_name;
-    let ir_path := Path.with_suffix target ".ll";
-    let obj_path := Path.with_suffix target ".o";
-    // Beside the other artifacts (i.e. next to `target`), NOT in
-    // `output_dir` -- an absolute or directory-bearing `output_name`
-    // makes those two different places, and only the former is created
-    // below.
-    let runtime_obj := Path.with_suffix target "_runtime.o";
-    let output_path := target;
-    let ir_path_s := Path.to_string ir_path;
-    let obj_path_s := Path.to_string obj_path;
-    let runtime_obj_s := Path.to_string runtime_obj;
-    let output_path_s := Path.to_string output_path;
-
-    // Per-stage `Bench.report` timing, gated on `--verbose` (same
-    // convention as `lang.codegen.emit`'s `compile_loaded_modules_to_ir`)
-    // -- added to measure where the plan's own "compile_file total minus
-    // compile_loaded_modules_to_ir total" ~255s inferred remainder
-    // (write .ll / llc / clang runtime.c / clang link, previously
-    // entirely unbenched) actually goes, before guessing at a fix.
-    // Nothing creates the directory these artifacts are written into.
-    // `default_output_dir` is `/tmp/monad_out_<pid>` -- a fresh path
-    // every single run -- so `clang -o .../monad_runtime.o` failed with
-    // "unable to open output file ... No such file or directory" AFTER a
-    // full ~18-minute codegen had already succeeded. Derived from the
-    // JOINED target rather than `output_dir` alone, because `Path.join`
-    // lets an absolute `output_name` replace `output_dir` outright (its
-    // own `os.path.join` semantics), and because a relative name like
-    // `out/hello` puts the real directory inside the NAME. An empty
-    // result means "current directory", which needs no mkdir.
-    let target_dir : String := extract_directory (Path.to_string target);
-    let _mkdir <- (if String.beq target_dir ""
-        then return 0
-        else exec_cmd "mkdir" ["-p", target_dir]);
-
-    let t_write : I64 <- Bench.now;
-    IO.write_file ir_path ir_text;
-    if verbose then do {
-        Bench.report_since "link_ir: write .ll" t_write;
-        return unit
-    } else return unit;
-
-    // Stage trace (`lang.log`): each line prints BEFORE its `Bench.now`
-    // start, so a user watching a long stage sees life before it ends.
-    stage verbose "link: llc";
-    let t_llc : I64 <- Bench.now;
-    let result <- exec_cmd "llc" [ "-filetype=obj", ir_path_s, "-o", obj_path_s];
-    if verbose then do {
-        Bench.report_since "link_ir: llc" t_llc;
-        return unit
-    } else return unit;
-    if not (result == 0) then do {
-        fail_line ("Compiling ir " ++ ir_path_s ++ " with llc failed");
-        return 1
-    } else do {
-        stage verbose "link: clang runtime.c";
-        let t_rtc : I64 <- Bench.now;
-        // Get the git commit hash to bake into the binary as a build-time
-        // constant. exec_cmd doesn't capture stdout, so redirect to a temp
-        // file and read it.
-        let hash_path := "/tmp/monad_build_hash_" ++ I64.to_string process_id;
-        let _ <- exec_cmd "sh" ["-c", "git rev-parse --short HEAD 2>/dev/null > " ++ hash_path];
-        let hash_exists <- IO.file_exists (Path.path hash_path);
-        let build_hash <- if hash_exists then do {
-            let raw <- IO.read_file (Path.path hash_path);
-            let _ <- exec_cmd "rm" ["-f", hash_path];
-            return (String.trim raw)
-        } else return "unknown";
-        let commit_flag := "-DMONAD_BUILD_COMMIT=\"" ++ build_hash ++ "\"";
-        let result <- exec_cmd "clang" (List.append [ "-c", "lang/src/codegen/runtime.c", commit_flag, "-o", runtime_obj_s] (if verbose then ["-v"] else [""]));
-        if verbose then do {
-            Bench.report_since "link_ir: clang runtime.c" t_rtc;
-            return unit
-        } else return unit;
-        if not (result == 0) then do {
-            fail_line "compiling runtime failed";
-            return 1
-        } else do {
-            stage verbose "link: clang link";
-            let t_link : I64 <- Bench.now;
-            // `-lgc`: the generated runtime's heap is collected (see
-            // `monad_alloc` in lang/codegen/runtime.c, and
-            // plans/bootstrapping/linear-types-memory.md for why that is
-            // temporary). The include and library search paths come from
-            // the nix cc-wrapper via `boehmgc` in devenv.nix, so nothing
-            // here hardcodes a store path.
-            let result <- exec_cmd "clang" (List.append [ obj_path_s, runtime_obj_s, "-lgc", "-o", output_path_s] (if verbose then ["-v"] else [""]));
-            if verbose then do {
-                Bench.report_since "link_ir: clang link" t_link;
-                return unit
-            } else return unit;
-            if not (result == 0) then do {
-                fail_line "linking failed";
-                return 1
-            } else do {
-                ok_line "Compilation finished";
-                return 0
-            }
-        }
-    }
-}
 
 /// `compile_loaded_modules_to_ir` can now fail cleanly -- either
 /// `resolve_class_calls_decls` found a `ClassName.method` call with no
@@ -171,7 +61,7 @@ def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : P
             let t_emit : I64 <- Bench.now;
             let ir_text : String := emit_module mod_;
             let _t_emit : I64 <- bench_step verbose "emit_module (render .ll)" t_emit (String.length ir_text);
-            link_ir ir_text output_dir output_name verbose
+            link_ir Runtime.c_path ir_text output_dir output_name verbose
         },
     }
 
@@ -189,7 +79,7 @@ def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_nam
     let mod_ := compile_db_module_with_debug decl_list source_path List.empty;
     let ir_text := emit_module mod_;
     println <| "Writing LLVM IR to: " ++ Path.to_string (Path.with_suffix (Path.join output_dir output_name) ".ll");
-    link_ir ir_text output_dir output_name verbose
+    link_ir Runtime.c_path ir_text output_dir output_name verbose
 }
 
 // (The v1 per-def location table this section used to build --
@@ -729,7 +619,7 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                             // `out_dir` (see `run_test`'s own caller) and
                             // `bin_name` (a literal prefix + counter) --
                             // `Path.path` directly, not `Path.of`.
-                            let link_result <- link_ir ir_text (Path.path out_dir) (Path.path bin_name) verbose;
+                            let link_result <- link_ir Runtime.c_path ir_text (Path.path out_dir) (Path.path bin_name) verbose;
                             if not (link_result == 0) then do {
                                 println ("FAIL  " ++ f ++ " (compilation failed)");
                                 run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed, failed := failed + 1, skipped := skipped, verbose := verbose, cache := cache }

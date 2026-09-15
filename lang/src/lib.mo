@@ -19,4 +19,4 @@ pub use lang.module {
 }
 pub use lang.pretty {show_decls}
 pub use lang.codegen.emit {compile_loaded_modules_to_ir_with_debug}
-pub use lang.codegen.ir {LLVMModule, emit_module}
+pub use llvm.ir {LLVMModule, emit_module}

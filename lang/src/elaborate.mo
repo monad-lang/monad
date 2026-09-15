@@ -10,7 +10,7 @@ use lang.types {
 // own `use std.map {}` relies on (see the comment there for why the
 // `Map`-class-instance exports must not be named explicitly).
 use std.map {}
-use lang.codegen.strmap {str_map_empty, str_map_insert, str_map_lookup}
+use llvm.strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 
 /// Collect all free type variables from a Term.

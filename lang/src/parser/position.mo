@@ -100,7 +100,7 @@ def line_col_scan (s : String) : LineColScan :=
 ///
 /// This is the executable statement of the rule `String.trailing_chars`
 /// counts by on BOTH runtimes -- `core/src/core_native.rs` and
-/// `lang/codegen/runtime.c` each test `(b & 0xC0) != 0x80`, which is
+/// `runtime/src/runtime.c` each test `(b & 0xC0) != 0x80`, which is
 /// this same range. `test_trailing_chars_matches_continuation_byte_rule`
 /// holds the native to it directly, rather than leaving the agreement to
 /// a comment.
@@ -205,7 +205,7 @@ def location_of_remaining_len (original : String) (remaining_len : I64) : Locati
 // about the COMPILED runtime, where this file also runs:
 //   * the natives take a LENGTH, and nothing is sliced. Compiled
 //     `monad_string_slice` does a `strlen` plus a malloc plus a memcpy
-//     per call (`lang/codegen/runtime.c`), so a slice per span would be
+//     per call (`runtime/src/runtime.c`), so a slice per span would be
 //     quadratic -- and note the old per-character `String.slice s 0
 //     width` was exactly that, quadratic, on every compiled build.
 //   * `String.length source` is taken ONCE, outside the walk, for the

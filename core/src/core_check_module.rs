@@ -3856,9 +3856,9 @@ mod test {
   #[test]
   fn test_real_file_lang_codegen_ir() {
     let env = ModuleCheckEnv::new();
-    let source = include_str!("../../lang/src/codegen/ir.mo");
+    let source = include_str!("../../llvm/src/ir.mo");
     let report = check_module_source(&env, source);
-    print_report("lang/src/codegen/ir.mo", &report);
+    print_report("llvm/src/ir.mo", &report);
   }
 
   #[test]

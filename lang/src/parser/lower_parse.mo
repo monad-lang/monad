@@ -54,7 +54,7 @@ use lang.types {FieldPattern, FieldPatternEntry, Location, ParseSpan, parse_span
 // The monomorphic string map, from the leaf module -- never `Map.lookup`,
 // whose generic dispatch can resolve to the wrong instance
 // (`lang/codegen/util.mo` documents the live bug).
-use lang.codegen.strmap {str_map_lookup}
+use llvm.strmap {str_map_lookup}
 use std.map {}
 
 

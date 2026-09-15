@@ -20,7 +20,7 @@
 /// `emit_native_call2_instr`, which calls the real `monad_write_file`
 /// runtime function -- special-cased to first compute the byte length via
 /// `monad_string_length` (the C function's real signature is `(path, data,
-/// len)`, `lang/codegen/runtime.c`, but the mo-level call only supplies 2
+/// len)`, `runtime/src/runtime.c`, but the mo-level call only supplies 2
 /// args), since a missing/garbage length silently corrupts the write
 /// (reads whatever the register happened to hold) rather than crashing.
 ///

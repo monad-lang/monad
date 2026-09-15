@@ -15,7 +15,7 @@
     lld
     llvm
     clang
-    # Conservative GC for the GENERATED runtime (lang/codegen/runtime.c),
+    # Conservative GC for the GENERATED runtime (runtime/src/runtime.c),
     # not for anything in this repo's Rust host. The nix cc-wrapper puts
     # its include/lib paths on clang's search path, which is why
     # `link_ir` can just say `-lgc` and `runtime.c` can just say
@@ -115,7 +115,7 @@
       # build phase is ~10 min cold (fat-LTO profile; CI's ephemeral job
       # containers never have a warm target/). A fixed `timeout` here was
       # killing healthy runs. Progress is visible instead: --verbose
-      # streams a per-module and per-stage trace (lang/log.mo), so a
+      # streams a per-module and per-stage trace (std/src/log.mo), so a
       # genuinely wedged run shows exactly which stage stalled.
       # --release: debug info is on by default; DWARF emission costs ~30s
       # on this workload and the binary this job tests does not need it.
@@ -201,7 +201,7 @@
     monad-check = {
       enable = true;
       entry = ''
-        cargo run --release -- check init std examples lang cli
+        cargo run --release -- check init std examples lang cli llvm runtime
       '';
       pass_filenames = false;
       files = "\\.(rs|mo)$";

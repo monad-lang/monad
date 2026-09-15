@@ -18,7 +18,7 @@ use lang.typecheck.traverse {con_map_children, native_map_children, term_map_chi
 // type/def resolve without being explicitly `use`d.
 use std.map {}
 use std.list {filter, filter_map}
-use lang.codegen.strmap {str_map_empty, str_map_insert, str_map_lookup}
+use llvm.strmap {str_map_empty, str_map_insert, str_map_lookup}
 
 // --- ModulePath-keyed HashMap ops, bypassing `Map`'s typeclass dispatch ---
 //

@@ -1,5 +1,10 @@
+// Term -> LLVM IR *text*, for callers that have a bare `List Def` and want
+// a module's worth of .ll out of it. The toolchain half of "linking" -- llc,
+// clang, the runtime object -- is `llvm/src/link.mo`, in the llvm mote; this
+// file stays in lang because it speaks Term.
+
 use lang.types {Def, app, i64, id, lam, lit, mk, mp, named, num, type_, var}
-use lang.codegen.ir {emit_module, mk}
+use llvm.ir {emit_module, mk}
 use lang.codegen.emit {check_contains, compile_db_decls_ir, mk}
 
 open Term {app, lam, lit, type_, var}
@@ -9,11 +14,6 @@ open NumSuffix {i64}
 open Param {mk}
 open Def {mk}
 open ModulePath {mp}
-
-/// Build a List String from four strings.
-#[partial]
-def args4 (a : String) (b : String) (c : String) (d : String) : List String :=
-    List.cons a (List.cons b (List.cons c (List.cons d List.empty)))
 
 /// Generate LLVM IR text from a list of Defs.
 #[partial]

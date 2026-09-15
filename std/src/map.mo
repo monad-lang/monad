@@ -490,7 +490,7 @@ def HashMap.bucket_lookup_eq {K V : Type} (eq: K -> K -> Bool) (key: K) (bucket:
 /// ~20x worse compiled than interpreted rather than the usual ~4x.
 ///
 /// `String` because that is what every hot map in the compiler is keyed
-/// by: `lang/codegen/strmap.mo`'s `str_map_*` (re-exported by
+/// by: `llvm/src/strmap.mo`'s `str_map_*` (re-exported by
 /// `lang/codegen/util.mo`, where they used to live) and `lang/scope.mo`'s
 /// `alias_map_*`.
 #[terminating]

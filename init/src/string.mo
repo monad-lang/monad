@@ -18,7 +18,7 @@ def String.length (s : String) : I64
 /// (`resolve_ascending`, lang/parser/position.mo) asks about one segment
 /// between two source spans and then moves on, so it would otherwise
 /// have to `String.slice` a fresh string per span -- and the compiled
-/// `monad_string_slice` (lang/codegen/runtime.c) does a `strlen` plus a
+/// `monad_string_slice` (runtime/src/runtime.c) does a `strlen` plus a
 /// malloc plus a memcpy per call, which would make that walk quadratic.
 /// Scanning in place keeps it O(len) on both runtimes and allocates
 /// nothing. `len` past the end of `s` is clamped, not an error.

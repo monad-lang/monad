@@ -480,7 +480,7 @@ def decls_referenced_names_go (decls : List Decl) (acc : HashMap String Bool) : 
 
 /// Binder-AWARE, unlike `collect_referenced_names` (which over-collects
 /// on purpose, because reachability may safely over-approximate). Here
-/// it may not: `lang/codegen/ir.mo` binds a match field named
+/// it may not: `llvm/src/ir.mo` binds a match field named
 /// `param_name`, and two unrelated modules happen to declare a def by
 /// that name -- counting the binder as a reference reported an
 /// ambiguity that does not exist and failed the whole compile. The

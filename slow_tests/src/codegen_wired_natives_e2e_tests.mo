@@ -1,6 +1,6 @@
 /// End-to-end tests for the natives wired in the bootstrap-ladder pass:
-/// the GENERATED ones (`lang/codegen/runtime.mo` -- LLVM IR built in
-/// Monad itself) and the C-shaped ones (`lang/codegen/runtime.c`).
+/// the GENERATED ones (`runtime/src/natives.mo` -- LLVM IR built in
+/// Monad itself) and the C-shaped ones (`runtime/src/runtime.c`).
 ///
 /// Each compiles real `.mo` source through the same pipeline
 /// `cli/src/main.mo`'s own `compile_file_codegen` uses, links it against
@@ -109,7 +109,7 @@ def test_c_lowercase_and_unsigned_to_string : IO Bool :=
     compile_source_run_expect source "c_lowercase_to_string" 7
 
 /// The C `monad_exec_cmd` -- THE load-bearing native for the bootstrap
-/// ladder (`lang/codegen/link.mo` invokes `llc`/`clang` through it, so
+/// ladder (`llvm/src/link.mo` invokes `llc`/`clang` through it, so
 /// a self-compiled compiler cannot run its own `compile` command
 /// without it). Asserts real exit-code passthrough from a real child
 /// process, including a non-zero code and a nonexistent binary.

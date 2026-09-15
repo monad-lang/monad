@@ -1,9 +1,9 @@
 /// Monad-generated runtime natives -- the Phase-1 proof of concept for
 /// plans/bootstrapping/self-hosted-runtime.md: instead of adding every
-/// new native to `lang/codegen/runtime.c` as C, the SIMPLE ones (pure
+/// new native to `runtime/src/runtime.c` as C, the SIMPLE ones (pure
 /// byte-loop String ops, single-`icmp` U8/U64 comparisons, zero-arg
 /// stubs) are built here as `LLVMFunction` values straight from the
-/// `lang.codegen.ir` ADTs and merged into every compiled module by
+/// `llvm.ir` ADTs and merged into every compiled module by
 /// `compile_db_module_with_debug` (`lang.codegen.emit`).
 ///
 /// Integration is uniform with the C runtime: a native's
@@ -33,7 +33,7 @@
 ///   known gap), so plain i64 arithmetic IS the matching semantics.
 /// - `monad_string_length` (C, already declared in
 ///   `runtime_declarations`) is the NUL-terminated strlen.
-use lang.codegen.ir {LLVMFunction, LLVMInstruction, LLVMValue, ParamPair}
+use llvm.ir {LLVMFunction, LLVMInstruction, LLVMValue, ParamPair}
 use std.list {List}
 
 open LLVMType {i1_, i8_, i64_, ptr}

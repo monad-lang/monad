@@ -11,7 +11,7 @@
 /// `runtime_declarations` lives here too: it is the `declare` list for
 /// exactly the C functions these tables dispatch to.
 use lang.types {AttrArg, Attribute}
-use lang.codegen.ir {LLVMDeclaration, NativeOp, mk}
+use llvm.ir {LLVMDeclaration, NativeOp, mk}
 use lang.codegen.symbols {extract_base_name, replace_dots_with_underscores, unqualify_def_name}
 use lang.codegen.util {str_map_empty, str_map_insert, str_map_lookup}
 use std.map {}
@@ -55,7 +55,7 @@ def lookup_native (name : String) : Option NativeOp := str_map_lookup name nativ
 /// codegen path at all -- invisible to `test`/`check`). `IO.write_file`/
 /// `read_file`/`file_exists` have the identical wrapper/native name
 /// collision and are called throughout `cli/src/main.mo`/`lang/module.mo`/
-/// `lang/codegen/link.mo` -- this was silently corrupting the self-
+/// `llvm/src/link.mo` -- this was silently corrupting the self-
 /// compile's own compiled-and-run behavior. `IO.list_dir` was never
 /// given a bare key at all and was never affected -- confirms the fix:
 /// with no bare key, `IO.X_native`'s own call still dispatches
@@ -170,7 +170,7 @@ type NativeWrapKind {
 /// real gap: `String.concat`'s own compiled body was this stub,
 /// producing a do-block that printed nothing meaningful). Whitelisted
 /// to the natives this backend actually has a real C implementation
-/// for (`lang/codegen/runtime.c`) -- anything else still falls through
+/// for (`runtime/src/runtime.c`) -- anything else still falls through
 /// to the unchanged stub behavior below, so this can never newly break
 /// a native this backend doesn't implement yet.
 #[partial]
@@ -242,7 +242,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // own `BOrd.lt`/`BOrd.gt` calls always took the SAME branch
             // regardless of input, corrupting every `BTreeMap String _`
             // built through this backend -- see `monad_string_lt`/`_gt`'s
-            // own doc comment (`lang/codegen/runtime.c`) for the full
+            // own doc comment (`runtime/src/runtime.c`) for the full
             // story. `bool_result`, not `passthrough` -- same wrap kind
             // `string_eq` uses, for the same reason (a real `i1`-shaped
             // comparison result needs boxing into a tagged `Bool`, not a
@@ -253,7 +253,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // previously-unwired-wrapper gap as `string_length`/`string_
             // hash` above, but with a DEEPER root cause underneath it:
             // `monad_string_slice`/`monad_string_drop` didn't exist in
-            // `lang/codegen/runtime.c` AT ALL (confirmed live via a real
+            // `runtime/src/runtime.c` AT ALL (confirmed live via a real
             // self-compiled binary calling itself: `remove_quotes_loop`'s
             // own `String.slice s 1 (String.length s - 1)` recursion
             // never actually shrank `s`, looping until the native stack
@@ -274,8 +274,8 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // costs ~14 minutes, so a partial wiring just relocates the
             // fail-fast error rather than making progress).
             //
-            // Most are backed by GENERATED IR (`lang/codegen/runtime.mo`,
-            // built in Monad itself from the `lang.codegen.ir` ADTs);
+            // Most are backed by GENERATED IR (`runtime/src/natives.mo`,
+            // built in Monad itself from the `llvm.ir` ADTs);
             // the rest are C in `runtime.c`. Which one a symbol is makes
             // no difference here -- an entry just names a symbol, and
             // `compile_native_def_wrapper_ir` emits the same wrapper
@@ -318,7 +318,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "u8_to_string" then Option.some (NativeWrapKind.passthrough "monad_u8_to_string")
             else if String.beq target "u64_to_string" then Option.some (NativeWrapKind.passthrough "monad_u64_to_string")
             // `exec_cmd` is THE load-bearing one for the ladder:
-            // `lang/codegen/link.mo` shells out to `llc`/`clang` through
+            // `llvm/src/link.mo` shells out to `llc`/`clang` through
             // it, so without it a self-compiled compiler can never run
             // its own `compile` command at all.
             else if String.beq target "exec_cmd" then Option.some (NativeWrapKind.io_passthrough "monad_exec_cmd")
@@ -330,7 +330,7 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // `io_passthrough` (IO.io-wrap only) like `list_dir`. Wired
             // because `std/ansi.mo`'s `colors_enabled` reads
             // NO_COLOR/FORCE_COLOR/TERM through it, and the compiler's
-            // own `--verbose` stage trace (lang/log.mo) colorizes through
+            // own `--verbose` stage trace (std/src/log.mo) colorizes through
             // that.
             else if String.beq target "get_env" then Option.some (NativeWrapKind.io_passthrough "monad_get_env")
             else Option.none,
@@ -474,7 +474,7 @@ def runtime_declarations : List LLVMDeclaration :=
     let d31 := mk_decl "monad_string_gt" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     // The remaining genuinely-C-shaped natives (`runtime.c`): they need
     // libc (fork/exec, opendir, qsort) or growable buffers, which the
-    // GENERATED natives (`lang/codegen/runtime.mo`) have no way to
+    // GENERATED natives (`runtime/src/natives.mo`) have no way to
     // express yet. Note the asymmetry: only these get a `declare` --
     // a generated native is `define`d in this same module, and a
     // `declare` alongside a `define` of one name is an invalid

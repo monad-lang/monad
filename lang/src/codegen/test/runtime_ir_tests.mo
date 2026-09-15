@@ -1,5 +1,5 @@
 /// IR-shape tests for the Monad-generated runtime natives
-/// (`lang/codegen/runtime.mo`) -- the per-phase test pattern
+/// (`runtime/src/natives.mo`) -- the per-phase test pattern
 /// plans/bootstrapping/self-hosted-runtime.md's Phase 1 specifies.
 ///
 /// These assert the emitted text's own distinctive instructions, which
@@ -13,12 +13,12 @@
 /// Behavior beyond shape (byte loops actually walking a `char*`, the
 /// `List.cons` chain `monad_string_to_list` builds, `Option` tags) was
 /// verified separately by linking the generated `.o` against the real
-/// `lang/codegen/runtime.c` and calling each native from C -- see the
+/// `runtime/src/runtime.c` and calling each native from C -- see the
 /// module's own doc comment for the representation facts that makes
 /// possible.
-use lang.codegen.ir {emit_module}
+use llvm.ir {emit_module}
 use lang.codegen.emit {check_contains}
-use lang.codegen.runtime {runtime_native_functions}
+use runtime.natives {runtime_native_functions}
 
 #[partial]
 def runtime_ir_text : String :=

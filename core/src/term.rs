@@ -2410,7 +2410,7 @@ impl ModulePath {
   /// mote's library root, `std/src/lib.mo`.
   ///
   /// This is the only thing that makes `use lang::codegen::ir` find
-  /// `lang/src/codegen/ir.mo` after the repo became a mote workspace --
+  /// `llvm/src/ir.mo` after the repo became a mote workspace --
   /// `to_file_path` joins segments literally and knows nothing about motes.
   /// The Rust host stays permissive: this is a resolution mapping only, with
   /// no check that the importing file declared the mote (see

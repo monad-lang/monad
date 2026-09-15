@@ -17,11 +17,11 @@
 ///   1. `take_while_loop` restructured to self-recursion
 ///      (`lang/parser/combinators.mo`) -- now `apply_self_tco` turns
 ///      it into a loop back-edge, constant stack for any input.
-///   2. `monad_string_drop` zero-copy (`lang/codegen/runtime.c`) -- a
+///   2. `monad_string_drop` zero-copy (`runtime/src/runtime.c`) -- a
 ///      pointer bump, O(1) and leak-free per step.
 ///   3. `is_empty` via `String.get s 0` + `monad_string_get`'s
 ///      `i == 0` fast path (`lang/parser/core.mo`,
-///      `lang/codegen/runtime.mo`) -- without it every step ran a
+///      `runtime/src/natives.mo`) -- without it every step ran a
 ///      full `strlen` of the remaining input, O(n^2) pure CPU.
 ///
 /// The test scans a 33,805-byte string (~3x the measured pre-fix

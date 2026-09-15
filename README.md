@@ -148,8 +148,9 @@ The self-hosted compiler's own subcommands are `compile`, `run`, `eval`,
 | Component | Location | Description |
 |-----------|----------|-------------|
 | **Rust compiler** | `core/`, `rust-cli/` | Parser, type checker, evaluator, constraint solver, LSP + MCP servers |
-| **Self-hosted codegen** | `lang/codegen/` | Monad-in-Monad LLVM IR emitter + linker |
-| **C runtime** | `lang/codegen/runtime.c` | Heap allocation (Boehm GC), constructor/string objects |
-| **Standard library** | `init/`, `std/` | Prelude types, type classes, native-backed operations |
-| **Self-hosted compiler** | `lang/` | Parser, evaluator, lowering pass (Monad-in-Monad) |
+| **Self-hosted codegen** | `lang/src/codegen/` | Monad terms -> LLVM IR |
+| **LLVM backend** | `llvm/src/` | The IR data model, its `.ll` rendering, llc/clang glue |
+| **C runtime** | `runtime/src/runtime.c` | Heap allocation (Boehm GC), constructor/string objects |
+| **Standard library** | `init/src/`, `std/src/` | Prelude types, type classes, native-backed operations |
+| **Self-hosted compiler** | `lang/src/` | Parser, evaluator, lowering pass (Monad-in-Monad) |
 

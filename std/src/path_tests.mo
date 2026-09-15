@@ -53,3 +53,22 @@ def test_path_beq : Bool :=
             ok b => a == b,
         },
     }
+
+// `Path.parent` -- the directory half, with "" meaning "no directory"
+// (which callers must NOT pass to `mkdir -p`).
+
+#[test]
+def test_path_parent_of_nested_path : Bool :=
+    String.beq (Path.parent (Path.path "/tmp/out/monad")) "/tmp/out"
+
+#[test]
+def test_path_parent_of_bare_filename_is_empty : Bool :=
+    String.beq (Path.parent (Path.path "hello.mo")) ""
+
+#[test]
+def test_path_parent_of_root_child : Bool :=
+    String.beq (Path.parent (Path.path "/monad")) ""
+
+#[test]
+def test_path_parent_keeps_relative_prefix : Bool :=
+    String.beq (Path.parent (Path.path "out/bin/monad")) "out/bin"

@@ -271,7 +271,7 @@ fn test_multiple_use_open_statements() {
 /// Test lines 1-5 from main.mo
 #[test]
 fn test_main_mo_lines_1_5() {
-  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse lang.codegen.ir";
+  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse llvm.ir";
   let result = parse_file(input);
   assert!(result.is_ok(), "Should parse lines 1-5 of main.mo");
 }
@@ -279,7 +279,7 @@ fn test_main_mo_lines_1_5() {
 /// Test lines 1-10 from main.mo
 #[test]
 fn test_main_mo_lines_1_10() {
-  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse lang.codegen.ir\nuse lang.codegen.emit\nuse lang.module\nuse lang.parser\nuse lang.pretty\nuse lang.parser.core";
+  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse llvm.ir\nuse lang.codegen.emit\nuse lang.module\nuse lang.parser\nuse lang.pretty\nuse lang.parser.core";
   let result = parse_file(input);
   assert!(result.is_ok(), "Should parse lines 1-10 of main.mo");
 }
@@ -287,7 +287,7 @@ fn test_main_mo_lines_1_10() {
 /// Test lines 1-20 from main.mo (adds more uses and opens)
 #[test]
 fn test_main_mo_lines_1_20() {
-  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse lang.codegen.ir\nuse lang.codegen.emit\nuse lang.module\nuse lang.parser\nuse lang.pretty\nuse lang.parser.core\nuse lang.parser.combinators\nuse lang.typecheck.infer\nuse lang.scope\nuse std.list\n\nopen LLVMType\nopen LLVMValue\nopen Term\nopen Literal";
+  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse llvm.ir\nuse lang.codegen.emit\nuse lang.module\nuse lang.parser\nuse lang.pretty\nuse lang.parser.core\nuse lang.parser.combinators\nuse lang.typecheck.infer\nuse lang.scope\nuse std.list\n\nopen LLVMType\nopen LLVMValue\nopen Term\nopen Literal";
   let result = parse_file(input);
   assert!(result.is_ok(), "Should parse lines 1-20 of main.mo");
 }
@@ -295,7 +295,7 @@ fn test_main_mo_lines_1_20() {
 /// Test lines 1-30 from main.mo (adds first definition)
 #[test]
 fn test_main_mo_lines_1_30() {
-  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse lang.codegen.ir\nuse lang.codegen.emit\nuse lang.module\nuse lang.parser\nuse lang.pretty\nuse lang.parser.core\nuse lang.parser.combinators\nuse lang.typecheck.infer\nuse lang.scope\nuse std.list\n\nopen LLVMType\nopen LLVMValue\nopen Term\nopen Literal\nopen DebugName\nopen ParseResult\nopen NumSuffix\nopen Param\nopen Def\nopen ModulePath\nopen TypeError\n\n#[partial]\ndef empty_str_list : List String := []";
+  let input = "use io\nopen IO\nuse process\nuse lang.types\nuse llvm.ir\nuse lang.codegen.emit\nuse lang.module\nuse lang.parser\nuse lang.pretty\nuse lang.parser.core\nuse lang.parser.combinators\nuse lang.typecheck.infer\nuse lang.scope\nuse std.list\n\nopen LLVMType\nopen LLVMValue\nopen Term\nopen Literal\nopen DebugName\nopen ParseResult\nopen NumSuffix\nopen Param\nopen Def\nopen ModulePath\nopen TypeError\n\n#[partial]\ndef empty_str_list : List String := []";
   let result = parse_file(input);
   assert!(result.is_ok(), "Should parse lines 1-30 of main.mo");
 }
@@ -459,7 +459,7 @@ fn test_error_position_many_decls() {
 open IO
 use process
 use lang.types
-use lang.codegen.ir
+use llvm.ir
 use lang.codegen.emit
 use lang.module
 use lang.parser

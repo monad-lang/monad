@@ -2,7 +2,9 @@ use std.process {exec_cmd, process_id}
 use lang.types {
   Decl, Def, Term, TypeConstraint, i64, id, lit, mk, mp, name, num, type_,
 }
-use lang.codegen.ir {emit_module, mk}
+use llvm.ir {emit_module, mk}
+use llvm.link {compile_ir_to_obj, compile_runtime_obj, link_objects}
+use runtime {}
 use lang.codegen.emit {compile_db_decls_ir, compile_db_module, mk}
 use lang.scope {add_constraint_dict_params_decls, collect_classes, promote_instance_defs, resolve_class_calls_decls, validate_no_unresolved_class_calls}
 
@@ -38,26 +40,25 @@ def test_compile_42 : IO Bool := do {
     exec_cmd "mkdir" ["-p", output_dir];
 
     let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
-    let ir_text := lang.codegen.ir.emit_module mod_;
+    let ir_text := llvm.ir.emit_module mod_;
     // `ir_path` is always non-empty by construction (built from
     // non-empty literal fragments above) -- `Path.path` directly.
     IO.write_file (Path.path ir_path) ir_text;
     println ("wrote ir to: " ++ ir_path);
 
-    let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
+    let llc_result <- compile_ir_to_obj ir_path obj_path;
     if not (llc_result == 0) then do {
         println <| "llc failed";
         return false
     } else do {
 
-        let rt_result <- exec_cmd "clang" ["-c" "lang/src/codegen/runtime.c" "-o" runtime_obj];
+        let rt_result <- compile_runtime_obj Runtime.c_path [] runtime_obj;
         if not (rt_result == 0) then do {
             println <| "compiling runtime failed";
             return false
         } else do {
 
-            let link_args := [obj_path, runtime_obj, "-lgc"];
-            let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
+            let link_result <- link_objects [obj_path, runtime_obj] output_path [];
             if not (link_result == 0) then do {
                 println <| "clang linker failed";
                 return false
@@ -93,22 +94,21 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
     exec_cmd "mkdir" ["-p", output_dir];
 
     let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
-    let ir_text := lang.codegen.ir.emit_module mod_;
+    let ir_text := llvm.ir.emit_module mod_;
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
     IO.write_file (Path.path ir_path) ir_text;
 
-    let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
+    let llc_result <- compile_ir_to_obj ir_path obj_path;
     if not (llc_result == 0) then do {
         println <| basename ++ ": llc failed";
         return false
     } else do {
-        let rt_result <- exec_cmd "clang" ["-c", "lang/src/codegen/runtime.c", "-o", runtime_obj];
+        let rt_result <- compile_runtime_obj Runtime.c_path [] runtime_obj;
         if not (rt_result == 0) then do {
             println <| basename ++ ": compiling runtime failed";
             return false
         } else do {
-            let link_args := [obj_path, runtime_obj, "-lgc"];
-            let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
+            let link_result <- link_objects [obj_path, runtime_obj] output_path [];
             if not (link_result == 0) then do {
                 println <| basename ++ ": clang linker failed";
                 return false
@@ -319,7 +319,7 @@ def test_compile_i64_to_string_native : IO Bool := do {
 }
 
 /// Regression test for the LLVM string-constant escaping bug
-/// (`lang/codegen/ir.mo`'s `show_llvm_global`/`llvm_escape_string`,
+/// (`llvm/src/ir.mo`'s `show_llvm_global`/`llvm_escape_string`,
 /// fixed 2026-08-25): a string literal containing an embedded `"` and
 /// `\` used to splice those raw bytes straight into the LLVM `c"..."`
 /// constant with no escaping, producing textually-invalid IR (`llc`
@@ -357,22 +357,21 @@ def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (e
     exec_cmd "mkdir" ["-p", output_dir];
 
     let mod_ := lang.codegen.emit.compile_db_module decl_list;
-    let ir_text := lang.codegen.ir.emit_module mod_;
+    let ir_text := llvm.ir.emit_module mod_;
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
     IO.write_file (Path.path ir_path) ir_text;
 
-    let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
+    let llc_result <- compile_ir_to_obj ir_path obj_path;
     if not (llc_result == 0) then do {
         println <| basename ++ ": llc failed";
         return false
     } else do {
-        let rt_result <- exec_cmd "clang" ["-c", "lang/src/codegen/runtime.c", "-o", runtime_obj];
+        let rt_result <- compile_runtime_obj Runtime.c_path [] runtime_obj;
         if not (rt_result == 0) then do {
             println <| basename ++ ": compiling runtime failed";
             return false
         } else do {
-            let link_args := [obj_path, runtime_obj, "-lgc"];
-            let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
+            let link_result <- link_objects [obj_path, runtime_obj] output_path [];
             if not (link_result == 0) then do {
                 println <| basename ++ ": clang linker failed";
                 return false

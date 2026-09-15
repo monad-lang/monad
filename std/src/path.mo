@@ -63,6 +63,34 @@ def Path.join (a : Path) (b : Path) : Path :=
 def Path.with_suffix (p : Path) (suffix : String) : Path :=
     Path.path (String.concat (Path.to_string p) suffix)
 
+/// The directory part of a path, or `""` when there is none ("hello.mo"
+/// has no directory, and `""` means "the current one" to every caller --
+/// notably `mkdir -p`, which must not be run on it).
+///
+/// Total and unvalidated for the same reason `raw_path_join` is: callers
+/// rely on the empty result, which the validating constructor rejects.
+/// `lang/src/module.mo`'s `extract_directory` delegates here rather than
+/// keeping its own copy, exactly as `path_join` delegates to
+/// `raw_path_join`.
+def raw_parent_dir (s : String) : String :=
+    let last_slash : I64 := raw_find_last_slash s (String.length s) in
+    if I64.lt last_slash 0
+    then ""
+    else String.slice s 0 last_slash
+
+/// Scan backwards for `/`, returning -1 when absent. Walks from the end so
+/// the FIRST hit is the last separator.
+#[partial]
+def raw_find_last_slash (s : String) (i : I64) : I64 :=
+    if I64.lt i 1
+    then -1
+    else if String.beq (String.slice s (i - 1) 1) "/"
+        then i - 1
+        else raw_find_last_slash s (i - 1)
+
+def Path.parent (p : Path) : String :=
+    raw_parent_dir (Path.to_string p)
+
 def Path.beq (a b : Path) : Bool :=
     String.beq (Path.to_string a) (Path.to_string b)
 

@@ -1,0 +1,23 @@
+# The language runtime: the C file linked into every compiled binary, plus
+# the natives that are generated as LLVM IR rather than written in C.
+#
+# A top-level mote rather than a compiler internal because it is a build
+# input to every binary the compiler produces -- compiled per target and
+# cached as its own derivation once the build system lands.
+
+[mote]
+name = "runtime"
+version = "0.1.2"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[dependencies.init]
+path = "../init"
+
+[dependencies.std]
+path = "../std"
+
+[dependencies.llvm]
+path = "../llvm"

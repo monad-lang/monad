@@ -37,7 +37,7 @@ use lang.codegen.emit {
   desugar_struct_lits_decls, filter_reachable_decls, module_path_to_str,
   qualified_def_name_str, qualify_modules,
 }
-use lang.codegen.ir {LLVMModule}
+use llvm.ir {LLVMModule}
 use lang.module {
   elaborate_module_decls_best_effort,
   get_loaded_all, get_loaded_main, resolve_open_aliases_in_modules,

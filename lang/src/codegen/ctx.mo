@@ -14,7 +14,7 @@
 use lang.types {
   DebugName, Def, Identifier, Location, ModulePath, Param, Term, param_many,
 }
-use lang.codegen.ir {DbgLoc, LLVMValue}
+use llvm.ir {DbgLoc, LLVMValue}
 use lang.codegen.symbols {def_symbol_name}
 use lang.codegen.util {str_map_empty, str_map_insert, str_map_lookup}
 use std.map {}
@@ -73,7 +73,7 @@ def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (c
     { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none }
 
 /// Convert a captured source position to the minimal
-/// `lang.codegen.ir.DbgLoc` shape `LLVMFunction.dbg_loc` expects.
+/// `llvm.ir.DbgLoc` shape `LLVMFunction.dbg_loc` expects.
 /// (The v1 name-keyed fallback table this used to serve --
 /// `dbg_loc_for`/`dbg_loc_for_unqualified`, keyed by bare source name
 /// -- is gone: since stage 6 a function's own location is the

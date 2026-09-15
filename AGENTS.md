@@ -2577,7 +2577,7 @@ Key patterns when writing self-hosted Monad code:
     What works is a small def whose DECLARED RETURN TYPE gives the literal
     an expected type, called from inside the branch: lazy because it is a
     call in a branch, desugared because the return type is the expected
-    type. Same shape as `empty_loc_suffixes` (`lang/src/codegen/ir.mo`), where
+    type. Same shape as `empty_loc_suffixes` (`llvm/src/ir.mo`), where
     a `let` annotation likewise failed to resolve a generic and a def's
     return annotation did.
     Corollary for perf work here: **attribute before fixing.** This looked
@@ -2618,7 +2618,7 @@ Key patterns when writing self-hosted Monad code:
       DefTypeEntry` linearly and fires on every `Term.app` node in the
       graph -- ~4,020 steps per application node, each rendering a
       `ModulePath` via `show_module_path`. Indexed into a `HashMap String
-      Term` (`lang/src/codegen/strmap.mo`'s `str_map_*` -- a leaf module, so
+      Term` (`llvm/src/strmap.mo`'s `str_map_*` -- a leaf module, so
       `scope.mo` can import it with no cycle). -94%.
       Preserving the scan's exact answer is the delicate part: it matched
       full-dotted-name OR bare-last-segment, FIRST entry in decl order
@@ -2663,7 +2663,7 @@ Key patterns when writing self-hosted Monad code:
     `HashMap`, which compares bucket indices with `beq`, but do not assume
     the `U64` family is unsigned just because this one now is.
     **The code already recorded the divergence and dismissed it.**
-    `lang/src/codegen/runtime.mo`'s `emit_u64_mod` uses `urem`, and its comment
+    `runtime/src/natives.mo`'s `emit_u64_mod` uses `urem`, and its comment
     said bucketing is internal to `HashMap`, only self-consistency matters,
     and "`std/src/map.mo`'s own 0-15 bucket chain is simply never entered with
     a negative index". True, and the trap: not ENTERED, FALLEN THROUGH. So
@@ -2694,7 +2694,7 @@ Key patterns when writing self-hosted Monad code:
     (including `slow_tests`) are the gate for a bucketing change, not
     reasoning.
 39. **Bytes copied does not predict wall time when the inner operation is a
-    native memcpy (2026-09-12).** `emit_instrs` (`lang/src/codegen/ir.mo`) was
+    native memcpy (2026-09-12).** `emit_instrs` (`llvm/src/ir.mo`) was
     the one function in its family still doing
     `String.concat a (recurse rest)`, the shape `emit_blocks`' own comment
     condemns. Quantified from the compiler's emitted module: 20,389 basic
@@ -2874,7 +2874,7 @@ Key patterns when writing self-hosted Monad code:
     primitive does TODAY before reusing an old profile's conclusion about it.**
     **(b) The same call has different asymptotics interpreted vs compiled, and
     `lang/` runs BOTH ways.** Host `string_slice` is an O(1) `SharedStr` view;
-    compiled `monad_string_slice` (`lang/src/codegen/runtime.c`) does a `strlen`
+    compiled `monad_string_slice` (`runtime/src/runtime.c`) does a `strlen`
     plus a malloc plus a memcpy per call. So the old per-character
     `String.slice s 0 width` was O(1) interpreted and QUADRATIC in every
     self-compiled build -- invisible to any host-side profile. `String.length`

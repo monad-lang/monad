@@ -13,6 +13,8 @@ members = [
   "std",
   "lang",
   "cli",
+  "llvm",
+  "runtime",
   "slow_tests",
   "bench",
   "motes/*",

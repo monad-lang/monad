@@ -8,7 +8,12 @@
 /// distinct hashes, but diffing them showed the only differences were
 /// `println` vs `IO.println` and two comments. They are unified here.
 ///
-/// Lives under `lang/codegen/test/` rather than `slow_tests/` because
+/// The llc/clang/link steps themselves are NOT reimplemented here: they
+/// come from `llvm.link`, which the compiler's own CLI uses too. This file
+/// had its own inlined copy of them until the llvm mote was extracted, and
+/// the two had already drifted apart on flags.
+///
+/// Lives under `lang/src/codegen/test/` rather than `slow_tests/` because
 /// both directories consume it and this is codegen test infrastructure;
 /// cross-directory `use` resolves fine (search paths are anchored at the
 /// repo root).
@@ -16,7 +21,9 @@ use io {IO}
 open IO {println}
 use std.process {exec_cmd, process_id}
 use lang.module {LoadedModules, load_file_modules}
-use lang.codegen.ir {emit_module}
+use llvm.ir {emit_module}
+use llvm.link {compile_ir_to_obj, compile_runtime_obj, link_objects}
+use runtime {}
 use lang.codegen.emit {compile_loaded_modules_to_ir}
 
 #[partial]
@@ -48,18 +55,17 @@ pub def compile_source_run_expect (source : String) (basename : String) (expecte
                     let ir_text := emit_module mod_;
                     IO.write_file (Path.path ir_path) ir_text;
 
-                    let llc_result <- exec_cmd "llc" ["-filetype=obj", ir_path, "-o", obj_path];
+                    let llc_result <- compile_ir_to_obj ir_path obj_path;
                     if not (llc_result == 0) then do {
                         println (basename ++ ": llc failed");
                         return false
                     } else do {
-                        let rt_result <- exec_cmd "clang" ["-c", "lang/src/codegen/runtime.c", "-o", runtime_obj];
+                        let rt_result <- compile_runtime_obj Runtime.c_path [] runtime_obj;
                         if not (rt_result == 0) then do {
                             println (basename ++ ": compiling runtime failed");
                             return false
                         } else do {
-                            let link_args := [obj_path, runtime_obj, "-lgc"];
-                            let link_result <- exec_cmd "clang" (List.append link_args ["-o", output_path]);
+                            let link_result <- link_objects [obj_path, runtime_obj] output_path [];
                             if not (link_result == 0) then do {
                                 println (basename ++ ": clang linker failed");
                                 return false

@@ -15,3 +15,6 @@ path = "../std"
 
 [dependencies.lang]
 path = "../lang"
+
+[dependencies.llvm]
+path = "../llvm"

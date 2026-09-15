@@ -2,7 +2,7 @@
 ///
 /// A leaf module: it imports `std.map` and nothing else. That is the whole
 /// reason it exists separately from `lang/codegen/util.mo`, which is where
-/// these lived. `util.mo` imports `lang.codegen.ir` (for `LLVMInstruction`
+/// these lived. `util.mo` imports `llvm.ir` (for `LLVMInstruction`
 /// and friends), so `ir.mo` cannot import `util.mo` back -- and `ir.mo`
 /// needs a string map of its own for the per-function debug-metadata table
 /// (`find_dbg_refs` was a linear assoc-list scan, O(F^2) module-wide).

@@ -16,7 +16,7 @@ use std.list {filter, intercalate, length}
 // helpers over it -- never `Map.insert`/`Map.lookup`, whose generic
 // dispatch can resolve to the wrong instance.
 use std.map {}
-use lang.codegen.strmap {str_map_empty, str_map_insert}
+use llvm.strmap {str_map_empty, str_map_insert}
 use lang.parser.lower_parse {
   collect_decl_rems, lower_ctx_bare, lower_ctx_bind_all, lower_ctx_locating,
   lower_parse_decl, lower_parse_decls, lower_parse_term, name_ref_to_string,
@@ -1634,7 +1634,7 @@ def type_cons_group_close_try (r : ParseResult String) (orig : String) (name : I
 /// After a group closes: another curried `(...)` group, or done.
 /// `skip_docstrings` (not just `skip_spaces`) before probing for the next
 /// `(` -- a `///` doc comment sitting BETWEEN two curried param groups
-/// (e.g. `lang/codegen/ir.mo`'s `LLVMModule.mk`, which documents its own
+/// (e.g. `llvm/src/ir.mo`'s `LLVMModule.mk`, which documents its own
 /// `debug_source` field this way) otherwise makes `tag "("` fail here,
 /// falls through to `type_cons_try_return_type`'s own `tag ":"` probe
 /// (which fails too, on the same unskipped comment text), and the
@@ -1644,7 +1644,7 @@ def type_cons_group_close_try (r : ParseResult String) (orig : String) (name : I
 /// top-level loop treats any decl failure as "no more decls" rather than
 /// a hard error, silently truncates the REST OF THE FILE from the decls
 /// list. Confirmed via a minimal repro (`type Foo { mk (a : I64) (b :
-/// I64) /// comment\n (c : I64), }`) and directly on `lang/codegen/ir.mo`
+/// I64) /// comment\n (c : I64), }`) and directly on `llvm/src/ir.mo`
 /// itself (`decls_parser` stopped at exactly 11 decls, right before
 /// `type LLVMModule`, matching `LLVMModule.mk`'s own mid-param-list
 /// doc comment) -- this was `test_typecheck_lang_main`'s actual root

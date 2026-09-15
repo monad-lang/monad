@@ -1,7 +1,7 @@
 use std.list {intercalate}
 // The leaf string-map module, NOT `lang.codegen.util` -- that file imports
 // this one, so the dependency cannot run both ways. See `strmap.mo`'s head.
-use lang.codegen.strmap {str_map_empty, str_map_insert, str_map_lookup}
+use llvm.strmap {str_map_empty, str_map_insert, str_map_lookup}
 // For the `HashMap` type itself, which the `loc_suffixes` field names.
 use std.map {}
 
@@ -169,7 +169,7 @@ struct DbgLoc {
 }
 
 /// `ghc_cc` selects LLVM's `cc 9` (GHC calling convention) -- true for
-/// every compiled Monad def, false for the `lang/codegen/runtime.mo`
+/// every compiled Monad def, false for the `runtime/src/natives.mo`
 /// generated natives, which are ordinary ccc functions called from
 /// cc-9 wrapper bodies.
 struct LLVMFunction {
@@ -278,9 +278,59 @@ def show_args_typed (args : List LLVMValue) : String :=
 /// which would otherwise render as silently invalid IR.
 #[partial]
 def llvm_symbol_ref (name : String) : String :=
-    if llvm_name_is_bare_safe name
-    then String.concat "@" name
-    else String.concat "@\"" (String.concat name "\"")
+    let escaped := escape_reserved_symbol name in
+    if llvm_name_is_bare_safe escaped
+    then String.concat "@" escaped
+    else String.concat "@\"" (String.concat escaped "\"")
+
+/// LLVM reserves every name beginning with `llvm.` for intrinsics, and a
+/// DEFINITION carrying that prefix fails module verification outright:
+/// "llvm intrinsics cannot be defined". Quoting does not help -- the
+/// reservation is on the name, not its spelling.
+///
+/// Monad module paths are ordinary source names, and defs are qualified as
+/// `module::name` (`lang.codegen.qualify`), so any module inside a mote
+/// named `llvm` produces exactly that prefix. This repo has one: the `llvm`
+/// mote's own `llvm.ir::emit_module` and friends turned the whole
+/// self-compiled binary into unverifiable IR the moment those modules moved
+/// there.
+///
+/// Escaped with a leading `$`, legal in LLVM's unquoted identifier grammar
+/// (so the name still needs no quoting) and impossible for a Monad
+/// identifier to contain -- an escaped name can never collide with a real
+/// one. This is deliberately the LAST thing that happens to a name, here at
+/// the emission boundary where every `@`-reference is spelled -- definition
+/// headers, declares, globals, call targets and value refs all funnel
+/// through `llvm_symbol_ref`. Escaping earlier, in `def_symbol_name`, looks
+/// equivalent and is not: the symbol name is also the key of the
+/// reachability and arity tables, so escaping there made the llvm mote's
+/// defs unreachable from their own (unescaped) source-name references, and
+/// codegen dropped every one of them while still emitting calls to them.
+#[partial]
+def escape_reserved_symbol (name : String) : String :=
+    if String.starts_with "llvm." name
+    then String.concat "$" name
+    else name
+
+// A module-qualified name always comes out QUOTED: `:` is outside LLVM's
+// bare identifier grammar, so `::` alone forces the quoted form. Quoting is
+// not what makes the escape unnecessary -- the intrinsic reservation is on
+// the name, and `@"llvm.ir::f"` is rejected exactly like the bare spelling.
+#[test]
+def test_llvm_symbol_ref_escapes_the_reserved_intrinsic_prefix : Bool :=
+    String.beq (llvm_symbol_ref "llvm.ir::emit_module") "@\"$llvm.ir::emit_module\""
+
+#[test]
+def test_llvm_symbol_ref_leaves_other_names_alone : Bool :=
+    if String.beq (llvm_symbol_ref "lang.types::show_term") "@\"lang.types::show_term\""
+    then String.beq (llvm_symbol_ref "llvmish.x::f") "@\"llvmish.x::f\""
+    else false
+
+/// The escape only fires on the reserved prefix, and an unqualified name
+/// that needs no quoting still gets none.
+#[test]
+def test_llvm_symbol_ref_keeps_bare_names_unquoted : Bool :=
+    String.beq (llvm_symbol_ref "monad_alloc") "@monad_alloc"
 
 /// LLVM's unquoted identifier grammar, verbatim from the LangRef:
 /// `[-a-zA-Z$._][-a-zA-Z$._0-9]*` -- note a digit is legal after the

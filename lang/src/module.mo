@@ -41,10 +41,10 @@ use lang.scope {
 }
 use lang.typecheck.diagnostic {render_type_error}
 use lang.typecheck.infer {empty_local_types, empty_locals, mk, type_check}
-// `--verbose` per-module/per-stage trace (see `lang/log.mo`'s own header
+// `--verbose` per-module/per-stage trace (see `std/src/log.mo`'s own header
 // for why the helpers gate themselves and why `bench_step` below prints
 // through `timing_line`).
-use lang.log {module_line, timing_line}
+use std.log {module_line, timing_line}
 use std.list {Show, all, length}
 use std.show {Show}
 // `ScopeData.def_refs` is a `std.map` `HashMap ModulePath ScopeDef` (see
@@ -216,13 +216,13 @@ def string_find_last_slash_go (s : String) (idx : I64) : I64 :=
         -1
 
 /// Extract the directory from a file path
-/// e.g., "init/src/process.mo" -> "init/src/"
+/// e.g., "init/src/process.mo" -> "init/src"
+///
+/// Delegates to `std.path`'s `raw_parent_dir` rather than keeping its own
+/// backwards scan: `llvm/src/link.mo` needs the same operation to create a
+/// compile target's directory, and llvm cannot depend on lang.
 def extract_directory (file_path : String) : String :=
-    let last_slash_idx : I64 := string_find_last_slash file_path in
-    if I64.lt last_slash_idx 0 then
-        ""
-    else
-        String.slice file_path 0 last_slash_idx
+    raw_parent_dir file_path
 
 /// Derive a module name from a file path — e.g. "examples/foo.mo" -> "foo".
 /// Factored out of `load_file_modules` (below) so `check_file` can reuse
@@ -273,10 +273,10 @@ def first_existing (candidates : List String) : IO (Option String) := do {
 
 /// Read a module path as a MOTE-relative one: the first segment names a mote,
 /// whose sources live under its `src/`, and the rest is the module path within
-/// it. `lang.codegen.ir` -> `lang/src/codegen/ir.mo`; a lone `std` -> that
+/// it. `llvm.ir` -> `llvm/src/ir.mo`; a lone `std` -> that
 /// mote's library root, `std/src/lib.mo`.
 ///
-/// This is what makes `use lang.codegen.ir` find the file at all now that every
+/// This is what makes `use llvm.ir` find the file at all now that every
 /// mote keeps its modules under `src/` (`plans/packaging/package-system.md`
 /// §5a) -- `module_path_to_file` joins segments literally and knows nothing
 /// about motes. The mote NAMES are still a fixed list here; the manifest-driven
@@ -361,7 +361,7 @@ def try_read_module_file (base_dir : String) (mp : ModulePath) : IO (Option Stri
 /// (not just the target file) goes through, so it's exactly where that
 /// leniency turns into silent, hard-to-find data loss -- confirmed live:
 /// a `///` doc comment the self-hosted parser choked on partway through
-/// `lang/codegen/ir.mo` (91 real declarations) silently truncated it to
+/// `llvm/src/ir.mo` (91 real declarations) silently truncated it to
 /// 11, and every name declared after that point (including `LLVMModule`/
 /// `emit_module`) simply vanished from scope for every file that
 /// depended on it, surfacing many calls later as a confusing "unknown
@@ -2059,7 +2059,7 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option Mod
 /// multi-file caller (`run_check_loop`) can reuse it for the next file.
 /// Pass `module_info_cache_empty` for a standalone load.
 ///
-/// `verbose` gates the per-module trace (`lang/log.mo`): the target
+/// `verbose` gates the per-module trace (`std/src/log.mo`): the target
 /// module line here, and every dependency's line down in
 /// `collect_dep_module_infos`. This used to print the target
 /// unconditionally and nothing else -- the whole "only the main module
@@ -2134,7 +2134,7 @@ def load_file_modules_cached (file_path : String) (cache : ModuleInfoCache) (ver
 
 /// Backwards-compatible wrapper: a standalone load with a fresh cache.
 /// Every caller that isn't threading a whole-run cache uses this.
-/// `verbose` forwards to the per-module trace (`lang/log.mo`).
+/// `verbose` forwards to the per-module trace (`std/src/log.mo`).
 #[partial]
 def load_file_modules (file_path : String) (verbose : Bool) : IO (Result String LoadedModules) := do {
     let r : LoadedAndCache <- load_file_modules_cached file_path module_info_cache_empty verbose;
@@ -2162,7 +2162,7 @@ def load_file_modules (file_path : String) (verbose : Bool) : IO (Result String 
 #[partial]
 def bench_step (verbose : Bool) (label : String) (t0 : I64) (forced : I64) : IO I64 :=
     if verbose then do {
-        // `timing_line` (lang/log.mo): the same "<label> <ms>ms" content
+        // `timing_line` (std/src/log.mo): the same "<label> <ms>ms" content
         // `Bench.report_since` printed, dim-colored so the sub-times
         // group visually under their `stage` line.
         timing_line label t0;

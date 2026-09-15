@@ -11,7 +11,7 @@
 /// file: 40 of its 41 defs are private to the rewrite, and the whole
 /// pass has exactly ONE entry point, `apply_self_tco`.
 use lang.types {Identifier}
-use lang.codegen.ir {
+use llvm.ir {
   LLVMBasicBlock, LLVMInstruction, LLVMType, LLVMValue, PhiPair,
 }
 use lang.codegen.ctx {CodegenCtx, CtxStrPair, fresh_label, fresh_temp}
