@@ -2230,6 +2230,124 @@ def load_module_with_info (base_dir : String) (mp : ModulePath) : IO (Option Mod
     }
 }
 
+// --- Declared-dependency enforcement (package-system.md 5d) ---------
+//
+// A mote may only use motes it declared. Checked as ONE pass over the
+// already-loaded set rather than inside `resolve_module_file`, for two
+// reasons: a manifest is then read once per MODULE instead of once per
+// `use` line, and a pass returns real errors where the resolver can only
+// return `Option.none` and let the failure resurface later as an unknown
+// variable.
+//
+// Scope of the check: a `use` whose first segment names a mote sitting at
+// the working directory -- which is every mote in this workspace. A mote
+// found some other way (`motes/demo`, reached through its own manifest)
+// is not flagged; enforcing those needs the full mote table with each
+// dependency's declared PATH, not just its name.
+
+/// The ambient trio, which every file may use without declaring anything:
+/// `prelude` is the language's own, and `init`/`std` are re-export hubs
+/// seeded into every file's closure by the loader itself.
+def is_ambient_mote (name : String) : Bool :=
+    if String.beq name "prelude" then true
+    else if String.beq name "init" then true
+    else String.beq name "std"
+
+#[partial]
+def validate_declared_deps (infos : List ModuleInfo) : IO (List String) :=
+    match infos {
+        List.empty => do { return List.empty },
+        List.cons info rest => do {
+            let here : List String <- validate_module_deps info;
+            let later : List String <- validate_declared_deps rest;
+            return (List.append here later)
+        }
+    }
+
+#[partial]
+def validate_module_deps (info : ModuleInfo) : IO (List String) := do {
+    let mote : Option MoteManifest <- Mote.discover (extract_directory info.file_path);
+    match mote {
+        // Script mode -- a file outside any mote (examples/, a one-off).
+        // Nothing declared anything, so nothing is undeclared.
+        Option.none => return List.empty,
+        Option.some m => check_uses_declared m info (extract_use_decls info.decl_list)
+    }
+}
+
+#[partial]
+def check_uses_declared (m : MoteManifest) (info : ModuleInfo) (uses : List ModulePath) : IO (List String) :=
+    match uses {
+        List.empty => do { return List.empty },
+        List.cons u rest => do {
+            let here : List String <- check_one_use_declared m info u;
+            let later : List String <- check_uses_declared m info rest;
+            return (List.append here later)
+        }
+    }
+
+#[partial]
+def check_one_use_declared (m : MoteManifest) (info : ModuleInfo) (u : ModulePath) : IO (List String) := do {
+    match use_head_mote u {
+        // A one-segment path is a module name, not a mote reference.
+        Option.none => return List.empty,
+        Option.some head =>
+            if is_ambient_mote head then return List.empty
+            else if MoteManifest.declares m head then return List.empty
+            else do {
+                // Only complain about names that really are motes -- a
+                // head segment naming nothing is an ordinary
+                // module-not-found, reported where it happens.
+                let is_mote <- IO.file_exists (Path.path (String.concat head "/mote.toml"));
+                if is_mote
+                then return [undeclared_mote_error m info u head]
+                else return List.empty
+            }
+    }
+}
+
+/// The first segment of a multi-segment use path -- the only position a
+/// mote name can occupy.
+def use_head_mote (u : ModulePath) : Option String :=
+    match u {
+        ModulePath.mp ids =>
+            match ids {
+                List.empty => Option.none,
+                List.cons hd rest =>
+                    match rest {
+                        List.empty => Option.none,
+                        List.cons _ _ => Option.some (identifier_to_string hd)
+                    }
+            }
+    }
+
+def undeclared_mote_error (m : MoteManifest) (info : ModuleInfo) (u : ModulePath) (head : String) : String :=
+    String.concat "error: mote `" (String.concat head
+    (String.concat "` is not a declared dependency of `" (String.concat m.name
+    (String.concat "`\n  `use " (String.concat (module_path_to_string u)
+    (String.concat "` in " (String.concat info.file_path
+    (String.concat " requires mote `" (String.concat head
+    (String.concat "`\n  hint: add [dependencies." (String.concat head
+    (String.concat "] path = \"../" (String.concat head
+    (String.concat "\" to " (String.concat m.dir "/mote.toml")))))))))))))))
+
+/// Turn the first undeclared-mote error, if any, into the load's own
+/// failure. One error, not all of them: the loader's `Result` carries a
+/// single message, and the first one names a real manifest fix.
+#[partial]
+def gate_declared_deps (r : Result String LoadedModules) : IO (Result String LoadedModules) := do {
+    match r {
+        Result.err e => return (Result.err e),
+        Result.ok loaded => do {
+            let errs : List String <- validate_declared_deps (get_loaded_all loaded);
+            match errs {
+                List.empty => return (Result.ok loaded),
+                List.cons e _ => return (Result.err e)
+            }
+        }
+    }
+}
+
 /// `cache` carries `ModuleInfo`s already loaded earlier in this same
 /// run; the returned `LoadedAndCache` hands back the extended one so a
 /// multi-file caller (`run_check_loop`) can reuse it for the next file.
@@ -2655,7 +2773,11 @@ def rebuild_target_scope (target_mp : ModulePath) (decls : List Decl) : Scope :=
 def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool) (cache : ModuleInfoCache) (verbose : Bool) : IO ElaboratedAndCache := do {
     let t_load : I64 <- Bench.now;
     let lc : LoadedAndCache <- load_file_modules_cached file_path cache verbose;
-    let loaded_result : Result String LoadedModules := lc.loaded;
+    // Declared-dependency enforcement (package-system.md 5d) before any
+    // elaboration work: a mote reaching into one it never declared is a
+    // manifest error, and saying so beats letting it surface as whatever
+    // name happens to go missing first.
+    let loaded_result : Result String LoadedModules <- gate_declared_deps lc.loaded;
     let out_cache : ModuleInfoCache := lc.cache;
     let _t_load_done : I64 <- bench_step verbose "  elab: load_file_modules (read+parse)" t_load 0;
     // Annotated local, never a bare literal in `return` position -- see
