@@ -926,7 +926,7 @@ def toml_check_mote_table (v : Toml.Value) : Bool :=
 /// tables -- which is exactly why the repo's manifests are written that way,
 /// since this parser has headers and not inline tables.
 def member_mote_toml_fixture : String :=
-  "# The self-hosted compiler, as a library.\n\n[mote]\nname = \"lang\"\nversion = \"0.1.2\"\nedition = \"2026\"\n\n[lib]\npath = \"src/lib.mo\"\n\n[dependencies.init]\npath = \"../init\"\n\n[dependencies.std]\npath = \"../std\"\n"
+  "# The self-hosted compiler, as a library.\n\n[mote]\nname = \"lang\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[lib]\npath = \"src/lib.mo\"\n\n[dependencies.init]\npath = \"../init\"\n\n[dependencies.std]\npath = \"../std\"\n"
 
 #[test]
 def test_parse_member_mote_fixture : Bool :=
@@ -943,7 +943,7 @@ def toml_check_member_mote (found : Option Toml.Value) : Bool :=
     some v => match v {
       table sub =>
         toml_table_lookup_eq "name" sub (string "lang") &&
-        toml_table_lookup_eq "version" sub (string "0.1.2") &&
+        toml_table_lookup_eq "version" sub (string "0.1.0") &&
         toml_table_lookup_eq "edition" sub (string "2026"),
       _ => false
     },

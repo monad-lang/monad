@@ -4,7 +4,7 @@
 
 [mote]
 name = "slow_tests"
-version = "0.1.2"
+version = "0.1.0"
 edition = "2026"
 
 [dependencies.init]

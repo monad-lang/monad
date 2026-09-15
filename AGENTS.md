@@ -187,12 +187,21 @@ def package_private : I64 := 2 // visible inside this mote (the default)
 priv def module_only : I64 := 3 // visible only in this file's module
 ```
 
-`priv` is **enforced**: a `priv` declaration is dropped from every other
-module's scope, in both compilers (`scope_def_visible_to` in
-`lang/src/scope.mo`; the `Visibility::Priv` filter in
-`core/src/term/module.rs`). Visibility is declared on a type, class or
-instance as a whole -- constructors and methods inherit it, never carry
-their own.
+`priv` is **enforced by the self-hosted compiler**: a `priv` declaration
+is dropped from every other module's view, at the flatten that feeds scope
+construction (`flatten_visible_module_decls`, `lang/src/module.mo`).
+Visibility is declared on a type, class or instance as a whole --
+constructors and methods inherit it, never carry their own.
+
+The Rust host enforces `priv` only in `GlobalScopeData::from_module` /
+`GlobalScope::from_decls` (`core/src/term/module.rs`), which the LSP and
+`Scope` use but `monad-rs check` does NOT: `check` goes through
+`core_check_module`'s `GroundTruth`, which flattens every loaded module
+into one ungated namespace and enforces neither `priv` nor `use` filters
+(its own doc comment says so). So a `priv` violation is caught by the
+self-hosted `check` and by the LSP, and slips past `monad-rs check` --
+closing that needs real per-module scoping in that checker, which is
+tracked in `plans/implementations/visibility-declarations.md`.
 
 The default is **package-private**, which today still resolves across
 mote boundaries but **warns**: `check` reports every cross-mote reference

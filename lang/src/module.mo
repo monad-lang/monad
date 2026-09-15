@@ -2511,6 +2511,79 @@ def flatten_module_decls (modules : List ModuleInfo) (acc : List Decl) : List De
             flatten_module_decls rest (list_append (mod_.decl_list) acc),
     }
 
+/// `flatten_module_decls`, minus every `priv` declaration belonging to a
+/// module other than `target`.
+///
+/// This is where `priv` is actually enforced for a real `check`/`compile`.
+/// The scope builder has its own filter (`scope_def_visible_to`,
+/// lang/src/scope.mo) but only on the `build_scope_from_modules` path,
+/// which the pipeline does not take: it flattens every module's decls into
+/// one list first and builds scope from THAT, where each decl's owning
+/// module is no longer recoverable. The filter therefore has to happen
+/// here, at the flatten, while `ModuleInfo.path` still says who owns what.
+#[partial]
+def flatten_visible_module_decls (target : ModulePath) (modules : List ModuleInfo) (acc : List Decl) : List Decl :=
+    match modules {
+        List.empty => acc,
+        List.cons mod_ rest =>
+            let visible : List Decl :=
+                if String.beq (show_module_path mod_.path) (show_module_path target)
+                then mod_.decl_list
+                else drop_priv_decls mod_.decl_list in
+            flatten_visible_module_decls target rest (list_append visible acc),
+    }
+
+#[partial]
+def drop_priv_decls (decls : List Decl) : List Decl :=
+    match decls {
+        List.empty => List.empty,
+        List.cons d rest =>
+            if decl_is_priv d
+            then drop_priv_decls rest
+            else List.cons d (drop_priv_decls rest)
+    }
+
+/// Visibility lives on the declaration itself for defs, types, structs,
+/// classes and instances; constructors and methods inherit the visibility
+/// of the block that declares them, so dropping the block drops them too.
+def decl_is_priv (d : Decl) : Bool :=
+    match d {
+        Decl.def_d df => visibility_beq df.vis Visibility.priv_,
+        Decl.inductive_d ind => visibility_beq ind.vis Visibility.priv_,
+        Decl.struct_d s => visibility_beq s.vis Visibility.priv_,
+        Decl.class_d c => visibility_beq c.vis Visibility.priv_,
+        Decl.instance_d i => visibility_beq i.vis Visibility.priv_,
+        _ => false
+    }
+
+// --- Tests: priv filtering at the flatten ---
+
+def priv_module_info : ModuleInfo :=
+    let owner : ModulePath := ModulePath.mp [Identifier.id "Owner"] in
+    let hidden : Def := Def.mk (ModulePath.mp [Identifier.id "hidden"]) Term.hole Term.hole
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.priv_ in
+    let shown : Def := Def.mk (ModulePath.mp [Identifier.id "shown"]) Term.hole Term.hole
+        ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private in
+    { path := owner,
+      file_path := "Owner.mo",
+      decl_list := [Decl.def_d hidden, Decl.def_d shown] }
+
+def priv_flatten_names (target : ModulePath) : List String :=
+    List.map (fn (d : Decl) => show_module_path (Decl.to_name d))
+        (flatten_visible_module_decls target [priv_module_info] List.empty)
+
+#[test]
+def test_flatten_drops_priv_from_other_modules : Bool :=
+    let names : List String := priv_flatten_names (ModulePath.mp [Identifier.id "Other"]) in
+    if List.any (fn (n : String) => String.beq n "shown") names
+    then not (List.any (fn (n : String) => String.beq n "hidden") names)
+    else false
+
+#[test]
+def test_flatten_keeps_priv_in_its_own_module : Bool :=
+    let names : List String := priv_flatten_names (ModulePath.mp [Identifier.id "Owner"]) in
+    List.any (fn (n : String) => String.beq n "hidden") names
+
 /// Forall-wrap each `def_d`'s declared type via `elaborate_def`
 /// (`lang.elaborate`), using the WHOLE-GRAPH name set as `known_names` so
 /// genuine globals (`String`, `I64`, `List`, ...) are filtered out and
@@ -2786,7 +2859,12 @@ pub def elaborate_loaded_modules_cached (file_path : String) (check_deps : Bool)
         Result.err e => return (Result.err e),
         Result.ok loaded => do {
             let t0 : I64 <- Bench.now;
-            let all_decls : List Decl := flatten_module_decls (get_loaded_all loaded) List.empty;
+            // `priv` declarations from OTHER modules are dropped here --
+            // see `flatten_visible_module_decls` for why the filter lives
+            // at the flatten rather than in the scope builder.
+            let target_module : ModuleInfo := get_loaded_main loaded;
+            let target_path : ModulePath := target_module.path;
+            let all_decls : List Decl := flatten_visible_module_decls target_path (get_loaded_all loaded) List.empty;
             let t_flat : I64 <- bench_step verbose "  elab: flatten_module_decls" t0 (List.length all_decls);
             let infixes : List Infix := collect_infixes all_decls;
             let t_collect : I64 <- bench_step verbose "  elab: collect_infixes" t_flat (List.length infixes);
