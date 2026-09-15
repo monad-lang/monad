@@ -1010,6 +1010,37 @@ to typecheck once. Concretely, in order of how often each comes up:
    to justify converting; a table that's rebuilt from scratch on every
    call (rather than built once and reused) is a different, much riskier
    shape — measure that one directly before converting.
+7. **Don't wrap a standard-library function in a local one-off shim — call
+   the standard directly.** A monomorphic forwarder such as
+   `def empty_vals : List LLVMValue := List.empty`, a `cons_func` that only
+   forwards to `List.cons`, or a hand-rolled `append_funcs` that
+   re-implements `List.append` gives one operation a second name: the reader
+   has to go look the shim up to learn that it adds nothing, and a one-line
+   pass-through is dressed up as an abstraction — the misleading shape rule 5
+   already asks you to delete. Write `List.empty`, `List.cons`,
+   `List.append`, `List.map`, `List.any`, `List.filter_map`,
+   `List.intercalate` where you need them. The element type infers from the
+   expected type wherever a declared field, parameter, or constructor pins
+   one — `lang/src/codegen/emit.mo` writes `List.cons entry_block
+   List.empty` and `globals := List.empty` in the same record literal a
+   shim was once added beside. If a position genuinely has no expected
+   type, pin it with a LOCAL annotation
+   (`let xs : List Foo := List.empty in`) or annotate the lambda parameter
+   (`List.any (fn (a : AttrArg) => ...) ext_args`) — never by adding a
+   top-level helper, which only moves the inference problem one name away
+   and makes the shim look like part of the API. `std/src/list.mo`'s
+   own doc comments record this direction: `dedup_by` "Replaces
+   `union_ids`/`dedup_idents`/`dedup_funcs_by_name`", `filter_map` "Replaces
+   `Toml.filter_some` and ~11 collect/filter defs", and the `*_by`
+   combinators exist because "the compiler (lang/*.mo) re-rolled them ad
+   hoc". A wrapper IS justified when it names a concept of its own rather
+   than restating the standard library's (`llvm/src/link.mo`'s `map_dash_l`
+   names the `-l<name>` flag shape, not `List.map`), when it enforces an
+   invariant, when it is genuinely polymorphic, or when it is measured to
+   matter on a hot path.
+   _(TODO: this should eventually be a `check` warning — "a monomorphic
+   forwarder to a standard def" — rather than something to remember by
+   convention. Not implemented yet.)_
 
 **A known pitfall when applying rule 1 to an *existing* type with many
 call sites**: the type-checker doesn't always desugar a bare struct

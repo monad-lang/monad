@@ -2439,6 +2439,68 @@ def gate_declared_deps (r : Result String LoadedModules) : IO (Result String Loa
     }
 }
 
+// --- Native link libraries (package-system.md 2a, `[link] libs`) -----
+
+/// The C libraries a whole program links against: the union of every
+/// loaded module's mote's `[link] libs`, deduplicated, first-declared
+/// order preserved.
+///
+/// Collected over the DEPENDENCY CLOSURE, not just the root mote: if a
+/// mote you depend on calls into libm, your binary needs `-lm`, and you
+/// should not have to restate that mote's build details in your own
+/// manifest. The loaded set already IS the closure, so walking it is all
+/// that is needed.
+///
+/// This is why `#[extern "c"]` carries no `lib := "..."`. Which C symbol
+/// a def binds to is a property of the declaration (`link_name`); what
+/// the linker is handed is a property of the package, and belongs in the
+/// manifest the same way Cargo keeps `-l` flags out of `extern "C"`.
+#[partial]
+pub def collect_link_libs (infos : List ModuleInfo) : IO (List String) := do {
+    let all : List String <- link_libs_of_modules infos;
+    return (dedup_link_libs all List.empty)
+}
+
+#[partial]
+def link_libs_of_modules (infos : List ModuleInfo) : IO (List String) :=
+    match infos {
+        List.empty => do { return List.empty },
+        List.cons info rest => do {
+            let here : List String <- link_libs_of_module info;
+            let later : List String <- link_libs_of_modules rest;
+            return (List.append here later)
+        }
+    }
+
+#[partial]
+def link_libs_of_module (info : ModuleInfo) : IO (List String) := do {
+    let mote : Option MoteManifest <- Mote.discover (extract_directory info.file_path);
+    match mote {
+        Option.none => return List.empty,
+        Option.some m => return m.link_libs
+    }
+}
+
+/// Order-preserving dedup. `seen` accumulates in reverse, but membership
+/// is all it is used for, so the order that matters -- the output's -- is
+/// the order of first declaration.
+#[partial]
+def dedup_link_libs (xs : List String) (seen : List String) : List String :=
+    match xs {
+        List.empty => List.empty,
+        List.cons hd tl =>
+            if link_lib_seen hd seen
+            then dedup_link_libs tl seen
+            else List.cons hd (dedup_link_libs tl (List.cons hd seen))
+    }
+
+#[partial]
+def link_lib_seen (needle : String) (xs : List String) : Bool :=
+    match xs {
+        List.empty => false,
+        List.cons hd tl => if String.beq hd needle then true else link_lib_seen needle tl
+    }
+
 /// `cache` carries `ModuleInfo`s already loaded earlier in this same
 /// run; the returned `LoadedAndCache` hands back the extended one so a
 /// multi-file caller (`run_check_loop`) can reuse it for the next file.

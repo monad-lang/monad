@@ -41,6 +41,17 @@ pub def link_objects (objs : List String) (output : String) (extra_flags : List 
     exec_cmd "clang" (List.append objs (List.append ["-lgc"] (List.append extra_flags ["-o", output])))
 }
 
+/// Maps library names (e.g. `["m"]` from a mote's `[link] libs`) to the
+/// `clang` flags that link them (`["-lm"]`). Lives here rather
+/// than in the compiler because `link_objects` above is what knows the
+/// linker's argv shape -- codegen collects the names and deliberately
+/// does not translate them.
+#[partial]
+pub def map_dash_l (libs : List String) : List String := match libs {
+    List.empty => List.empty,
+    List.cons hd tl => List.cons (String.concat "-l" hd) (map_dash_l tl),
+}
+
 /// The git commit hash, to bake into the binary as a build-time constant.
 /// `exec_cmd` doesn't capture stdout, so this redirects to a temp file and
 /// reads it back.
@@ -60,12 +71,18 @@ def build_commit_hash : IO String := do {
 /// Returns 0 on success, 1 on any tool failure (each reported on the way
 /// out).
 ///
+/// `link_libs` is the deduplicated union of `[link] libs` across every mote
+/// in the program's dependency closure (`lang.module`'s `collect_link_libs`);
+/// each becomes a `-l<lib>` on the final link, which is what makes a mote
+/// declaring `libs = ["m"]` actually link libm. Empty preserves the original
+/// no-extra-flags behaviour.
+///
 /// Per-stage `Bench.report` timing is gated on `verbose`, same convention as
 /// `lang.codegen.emit`'s `compile_loaded_modules_to_ir` -- added to measure
 /// where the "compile_file total minus compile_loaded_modules_to_ir total"
 /// remainder actually goes, before guessing at a fix.
 #[partial]
-pub def link_ir (runtime_c : String) (ir_text : String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 {
+pub def link_ir (runtime_c : String) (ir_text : String) (output_dir : Path) (output_name : Path) (link_libs : List String) (verbose : Bool) : IO I64 {
     // `Path.join` here is THE fix for the mangled-double-slash bug this
     // whole `Path` type exists to prevent: if `output_name` is already
     // absolute, it replaces `output_dir` outright instead of naively
@@ -133,7 +150,12 @@ pub def link_ir (runtime_c : String) (ir_text : String) (output_dir : Path) (out
         } else do {
             stage verbose "link: clang link";
             let t_link : I64 <- Bench.now;
-            let result <- link_objects [obj_path_s, runtime_obj_s] output_path_s (if verbose then ["-v"] else [""]);
+            // `-l<lib>` for every library the program's motes declared,
+            // ahead of the verbose flag. An empty `link_libs` leaves the
+            // argv exactly as it was.
+            let dash_l : List String := map_dash_l link_libs;
+            let link_flags : List String := List.append dash_l (if verbose then ["-v"] else [""]);
+            let result <- link_objects [obj_path_s, runtime_obj_s] output_path_s link_flags;
             if verbose then do {
                 Bench.report_since "link_ir: clang link" t_link;
                 return unit

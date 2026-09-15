@@ -54,11 +54,11 @@ use lib::codegen::tco {apply_self_tco}
 use lib::codegen::qualify {qtest_def, qualified_def_name_str, qualify_modules}
 use lib::codegen::free_names {collect_referenced_names, free_names_of_term}
 use lib::codegen::ctx {
-  CodegenCtx, CtxStrPair, LocalBinding, build_arity_table,
+  CodegenCtx, CtxInstrsVal, CtxInstrsVals, CtxStrPair, LocalBinding, build_arity_table,
   collect_db_params, ctx_bind_local, ctx_lookup_arity, ctx_lookup_ctor_arity,
   ctx_lookup_ctor_tag, ctx_lookup_local, ctx_reset_locals, ctx_restore_locals,
   dbg_loc_of_location, empty_ctx, fresh_label, fresh_temp,
-  lookup_binding, mk,
+  lookup_binding, mk, resolve_call_name,
 }
 use lib::codegen::symbols {
   bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
@@ -100,11 +100,11 @@ use lib::typecheck::infer {type_head_name, struct_lit_build_args, struct_lit_con
 use std::log {fail_line, stage}
 
 open IO {println}
-open LLVMType {i32_, i64_, i8_, ptr}
+open LLVMType {i1_, i8_, i32_, i64_, f32_, f64_, ptr, void}
 open LLVMValue {
   add, alloc_closure, alloc_constructor, bitcast, bool_, call, gep, global_,
-  icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, load, mul, native_op, parm_,
-  phi, ptrtoint, sdiv, sub, trunc, var_, void_val, zext,
+  icmp_eq, icmp_ne, icmp_sgt, icmp_slt, int32_, int_, inttoptr, load, mul, native_op,
+  parm_, phi, ptrtoint, sdiv, sext, sub, trunc, typed, var_, void_val, zext,
 }
 
 pub type CompileResult {
@@ -2256,7 +2256,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                                     if I64.beq arity 0 then
                                         match fresh_temp c {
                                             CtxStrPair.mk ctx_t temp =>
-                                                let call_val := LLVMValue.call llvm_name LLVMType.i64_ List.empty false in
+                                                let call_val := LLVMValue.call (resolve_call_name c llvm_name) LLVMType.i64_ List.empty false in
                                                 let assign_instr := LLVMInstruction.assign temp call_val in
                                                 CompileResult.ok ctx_t (List.cons assign_instr List.empty) (LLVMValue.var_ temp) List.empty List.empty List.empty,
                                         }
@@ -2294,7 +2294,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                                         match fresh_temp c {
                                             CtxStrPair.mk ctx_t temp =>
                                                 let shim_name := String.concat llvm_name "_closure_shim" in
-                                                let shim_func := build_closure_shim_func shim_name llvm_name arity in
+                                                let shim_func := build_closure_shim_func shim_name (resolve_call_name c llvm_name) arity in
                                                 let entry_text := global_fn_ptr_text shim_name (arity + 1) in
                                                 let box_val := LLVMValue.alloc_closure entry_text arity List.empty in
                                                 let assign_instr := LLVMInstruction.assign temp box_val in
@@ -2310,7 +2310,7 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
                                 Option.none =>
                                     match fresh_temp c {
                                         CtxStrPair.mk ctx_t temp =>
-                                            let call_val := LLVMValue.call llvm_name LLVMType.i64_ List.empty false in
+                                            let call_val := LLVMValue.call (resolve_call_name c llvm_name) LLVMType.i64_ List.empty false in
                                             let assign_instr := LLVMInstruction.assign temp call_val in
                                             CompileResult.ok ctx_t (List.cons assign_instr List.empty) (LLVMValue.var_ temp) List.empty List.empty List.empty,
                                     },
@@ -3048,7 +3048,7 @@ def compile_call_head (c : CodegenCtx) (head : Term) : CompileResult :=
                                 // register that merely happens to hold
                                 // a runtime value) -- see `fn_ref`'s own
                                 // doc comment, `llvm/src/ir.mo`.
-                                CompileResult.ok c List.empty (LLVMValue.fn_ref llvm_name) List.empty List.empty List.empty,
+                                CompileResult.ok c List.empty (LLVMValue.fn_ref (resolve_call_name c llvm_name)) List.empty List.empty List.empty,
                     },
                 DebugName.unnamed => compile_db_term_ir c head,
             },
@@ -3376,6 +3376,7 @@ def extract_lit_from_val (val : LLVMValue) : Option I64 := match val {
     LLVMValue.void_val => Option.none,
     LLVMValue.var_ name => Option.none,
     LLVMValue.parm_ idx => Option.none,
+    LLVMValue.typed v ty => Option.none,
     LLVMValue.global_ name => Option.none,
     LLVMValue.fn_ref name => Option.none,
     LLVMValue.call fn_name ret_ty args tail => Option.none,
@@ -3397,13 +3398,14 @@ def extract_lit_from_val (val : LLVMValue) : Option I64 := match val {
     LLVMValue.icmp_ult lhs rhs => Option.none,
     LLVMValue.icmp_ugt lhs rhs => Option.none,
     LLVMValue.zext val from_ty to_ty => Option.none,
+    LLVMValue.sext val from_ty to_ty => Option.none,
     LLVMValue.trunc val from_ty to_ty => Option.none,
     LLVMValue.ptrtoint val from_ty to_ty => Option.none,
     LLVMValue.inttoptr val from_ty to_ty => Option.none,
     LLVMValue.phi pairs => Option.none,
     LLVMValue.gep base indices => Option.none,
     LLVMValue.load _ty _pty ptr => Option.none,
-    LLVMValue.bitcast val ty => Option.none,
+    LLVMValue.bitcast val _from_ty _to_ty => Option.none,
     LLVMValue.alloc_closure entry arity env_size => Option.none,
     LLVMValue.alloc_constructor tag field_count => Option.none,
     LLVMValue.native_op op args => Option.none,
@@ -3424,11 +3426,253 @@ pub struct DefResult {
     ctx : CodegenCtx,
     funcs : List LLVMFunction,
     globals : List LLVMGlobal,
+    externs : List ExternInfo,
+}
+
+/// Per-def FFI descriptor for `#[extern "c" ...]` defs. `ext_link_name`
+/// is the symbol name to call/declare (defaults to the def's own
+/// unqualified base name when no `link_name := "..."` override was
+/// given); `ext_param_tys`/`ext_ret_ty` are the true ABI types (NOT the
+/// uniform boxed-i64 convention every other def uses) — Phase 5 wrapper
+/// emits `declare <ret> @<link>(<param tys>);` and a wrapper
+/// `define <ret> @<def>(<param tys>) { ... call <ret> @<link>(<args>) ... ret <ret> }`.
+///
+/// Deliberately carries NO library name. Which C symbol this def binds to
+/// is a property of the declaration; which libraries the linker is handed
+/// is a property of the PACKAGE, and lives in `mote.toml`'s `[link] libs`
+/// (`lang.module`'s `collect_link_libs`).
+struct ExternInfo {
+    ext_link_name : String,
+    ext_param_tys : List LLVMType,
+    ext_ret_ty : LLVMType,
+}
+
+/// Maps each `#[extern "c" ...]` def's `llvm_name` to its wrapper's
+/// distinct LLVM function name (`monad_extern_<llvm_name>`) -- see
+/// `CodegenCtx.extern_wrappers`'s own doc comment for why the wrapper
+/// must not share the def's name. `extern_attr_info` (the same check
+/// `compile_db_def_ir` uses to dispatch an extern def) decides
+/// membership; non-extern defs are simply absent from the table.
+#[partial]
+def build_extern_wrapper_table (defs : List Def) : HashMap String String := build_extern_wrapper_table_go defs str_map_empty
+
+#[partial]
+def build_extern_wrapper_table_go (defs : List Def) (acc : HashMap String String) : HashMap String String := match defs {
+    List.empty => acc,
+    List.cons d rest =>
+        match d {
+            Def.mk name _typ term_ _constraints _attrs _vis =>
+                let llvm_name := def_symbol_name name in
+                let params := collect_db_params term_ in
+                match extern_attr_info d params {
+                    Option.some _ => build_extern_wrapper_table_go rest (str_map_insert llvm_name (String.concat "monad_extern_" llvm_name) acc),
+                    Option.none => build_extern_wrapper_table_go rest acc,
+                },
+        },
 }
 
 #[partial]
 def build_llvm_params_db (params : List Param) : List ParamPair :=
     build_llvm_params_from_db params 0
+
+/// Looks up the *named* argument of an `#[extern "c" { key := value, ... }]`
+/// attribute — `find_named_arg "link_name" attrs` returns `Option.some s`
+/// for the first `AttrArg.named (Identifier.id "link_name") (AttrArg.str s)`
+/// it sees, and `Option.none` otherwise. Mirrors `lang.types.attr_arg_eq`'s
+/// own pattern (structural shape walk).
+#[partial]
+def find_named_arg (key : String) (args : List AttrArg) : Option String := match args {
+    List.empty => Option.none,
+    List.cons hd tl =>
+        match hd {
+            AttrArg.named n v =>
+                if id_eq n (Identifier.id key)
+                then match v { AttrArg.str s => Option.some s, _ => Option.none }
+                else find_named_arg key tl,
+            // `lang/parser.mo`'s `attr_arg_named_close` wraps a
+            // `{name := value, ...}` block in a single `AttrArg.group`
+            // (deliberately NOT flattened onto the enclosing attribute's
+            // own arg list — see its doc comment), so a parsed
+            // `#[extern "c" {link_name := "puts"}]` carries the pair
+            // nested one level down. Recurse into the group; without
+            // this, every named arg reads as absent and the override is
+            // silently ignored.
+            AttrArg.group items =>
+                match find_named_arg key items {
+                    Option.some s => Option.some s,
+                    Option.none => find_named_arg key tl,
+                },
+            _ => find_named_arg key tl,
+        },
+}
+
+/// Parses a `#[extern "c" ...]` attribute (if `attrs` contains one) into
+/// an `ExternInfo`. Returns `Option.none` for any def lacking the
+/// attribute — `compile_db_def_ir`'s own dispatch treats that as "not an
+/// extern, fall through to ordinary body/native compilation". The first
+/// positional `AttrArg.str "c"` confirms the ABI is C (rather than, e.g.,
+/// a future `#[extern "rust"]`); without it we reject the def even if
+/// the attribute name matches.
+#[partial]
+def extern_attr_info (def_ : Def) (params : List Param) : Option ExternInfo :=
+    match def_ {
+        Def.mk name typ _term _constraints attrs _vis => build_extern_info name typ params attrs,
+    }
+
+/// Splits `extern_attr_info` into a separate top-level def so the
+/// `Option.some x => if ... then ... else ...` nested-in-match-arm
+/// shape is parseable (the self-hosted parser disallows an `if-then-
+/// else` whose `then` branch opens a multi-line `let` sequence directly
+/// inside an `Option.some` arm body).
+#[partial]
+def build_extern_info (name : NamePath) (typ : Term) (params : List Param) (attrs : List Attribute) : Option ExternInfo :=
+    match extern_attr_target attrs {
+        Option.none => Option.none,
+        Option.some ext_args => build_extern_info_some name typ params ext_args,
+    }
+
+#[partial]
+def build_extern_info_some (name : NamePath) (typ : Term) (params : List Param) (ext_args : List AttrArg) : Option ExternInfo :=
+    // The positional `AttrArg.str "c"` is what confirms the ABI is
+    // really C rather than, e.g., a future `#[extern "rust"]` — see
+    // `extern_attr_info`'s own doc comment. Any other `AttrArg` shape is
+    // not the ABI marker.
+    let is_c_abi := List.any (fn (a : AttrArg) => match a { AttrArg.str v => String.beq v "c", _ => false }) ext_args in
+    match is_c_abi {
+        true =>
+            let link_name := extern_link_name_from_args ext_args name in
+            let param_tys := param_llvm_types params in
+            let ret_ty := return_llvm_type typ in
+            Option.some (ExternInfo.mk link_name param_tys ret_ty),
+        false => Option.none,
+    }
+
+/// Helper for `extern_attr_info`: extracts the C-link symbol name from
+/// an `#[extern "c" ...]` attribute's args. Returns the explicit
+/// `link_name := "..."` value if present, else falls back to the last
+/// segment of the def's own name — with `unqualify_def_name` applied to
+/// it, which is what makes that fallback name the C symbol rather than
+/// the Monad one: by the time codegen runs, `qualify_modules` has
+/// rewritten every def's name to `qualified_def_name modpath n` =
+/// `bare_modpath "<modpath>::<n>"`. Note `bare_modpath`: the result is a
+/// SINGLE segment whose text happens to contain `"::"`, so
+/// `last_segment_of_name_path` hands back the whole `"ffi_example::sin"`
+/// and the program failed to link with `undefined reference to
+/// 'ffi_example::sin'`. A name that was never qualified comes back
+/// whole, which is what the direct `compile_db_decls_ir` callers that
+/// skip qualification need.
+///
+/// `unqualify_def_name` splits on the FIRST `"::"` rather than the last,
+/// which is the same split here: a def name never carries more than one
+/// (module paths render with `.`, so `qualified_def_name_str` is the
+/// only thing that introduces `"::"` at all).
+#[partial]
+def extern_link_name_from_args (ext_args : List AttrArg) (fallback_np : NamePath) : String :=
+    match find_named_arg "link_name" ext_args {
+        Option.some n => n,
+        Option.none => unqualify_def_name (last_segment_of_name_path fallback_np),
+    }
+
+/// Helper for `extern_attr_info`: scans `attrs` for `Attribute.mk
+/// (Identifier.id "extern") args` and returns those `args`. Mirrors
+/// `native_attr_target_name` exactly — same shape, different attribute
+/// name. Returns `Option.none` if no `#[extern ...]` attribute is found.
+#[partial]
+def extern_attr_target (attrs : List Attribute) : Option (List AttrArg) :=
+    match attrs {
+        List.empty => Option.none,
+        List.cons a rest =>
+            match a {
+                Attribute.mk aname aargs =>
+                    if id_eq aname (Identifier.id "extern")
+                    then Option.some aargs
+                    else extern_attr_target rest,
+            },
+    }
+
+/// Extracts the LAST identifier from a (possibly qualified) decl name
+/// — used to strip `ffi_example.libc.` off `ffi_example.libc.puts` when
+/// no explicit `link_name := "..."` override was given. A `NamePath`,
+/// not a `ModulePath`: this is the name half (`Def.name`), not the file
+/// path a `use ... ::` names.
+#[partial]
+def last_segment_of_name_path (np : NamePath) : String := match np {
+    NamePath.npath ids => last_segment_of_id_list ids,
+}
+
+#[partial]
+def last_segment_of_id_list (ids : List Identifier) : String := match ids {
+    List.empty => "",
+    List.cons hd rest =>
+        match rest {
+            List.empty => match hd { Identifier.id s => s },
+            List.cons _ _ => last_segment_of_id_list rest,
+        },
+}
+
+/// Maps a `Param`'s own declared `type_` Term to its LLVMType at the FFI
+/// boundary — `String` → `i8*` (matches runtime.c's existing raw-`char*`
+/// convention; no boxing wrapper required), `I32` → `i32`, `F64` →
+/// `double`/`f64_`, anything else (including `I64`) → `i64` (the uniform
+/// boxed-i64 calling convention every non-extern def uses too). `TypeName`
+/// lookup: a `Term.var` whose `DebugName.named` carries the type name.
+#[partial]
+def param_llvm_types (params : List Param) : List LLVMType := match params {
+    List.empty => List.empty,
+    List.cons p rest => List.cons (term_to_llvm_type (param_type_ p)) (param_llvm_types rest),
+}
+
+#[partial]
+def param_type_ (p : Param) : Term := match p {
+    Param.mk _name type_ _mult _default _attrs => type_,
+}
+
+/// `term_peel` at the entry: since every term carries a `Term.ctx`
+/// source-location wrapper on every path (`lang/src/module.mo`'s
+/// `parse_all_decls`), a raw shape match here sees `Term.ctx` and falls
+/// through to the `i64` default. That is how an `F64` extern came out
+/// declared `i64`.
+#[partial]
+def term_to_llvm_type (t : Term) : LLVMType := match term_peel t {
+    Term.var _idx dbg =>
+        match dbg {
+            DebugName.named id =>
+                let s := show_identifier id in
+                if String.beq s "String" then LLVMType.ptr LLVMType.i8_
+                else if String.beq s "I32" then LLVMType.i32_
+                else if String.beq s "F32" then LLVMType.f32_
+                else if String.beq s "F64" then LLVMType.f64_
+                else if String.beq s "I8" then LLVMType.i8_
+                else if String.beq s "Bool" then LLVMType.i1_
+                else LLVMType.i64_,
+            DebugName.unnamed => LLVMType.i64_,
+        },
+    Term.app fun_ _arg => term_to_llvm_type fun_,
+    _ => LLVMType.i64_,
+}
+
+/// Maps the def's own declared return `typ` to its LLVMType at the FFI
+/// boundary. For a `Unit`-typed extern (rare — typically externs return
+/// `I64` or `F64`), falls back to `i64` rather than emitting a literal
+/// `void` (LLVM's `void` is a real IR type but the backend's `i64`-returning
+/// wrapper convention needs `void` callers explicitly handle the absence
+/// of a return value, which is a separate, larger fix). One in-tree
+/// counterexample is `IO` — but externs are never `IO`-typed at this point.
+///
+/// The def's `typ` field is the FULL pi type (`Term.pi` per param, e.g.
+/// `(x : F64) -> F64`), not the bare return expression — peel the pi
+/// chain to reach the actual return type. Without this, `sin : F64 ->
+/// F64` would map to `i64` (the `_ =>` fallback in `term_to_llvm_type`)
+/// and emit `declare i64 @sin(double)` / `call i64 @sin(...)`.
+///
+/// `term_peel` before the pi match, for the same reason
+/// `term_to_llvm_type` needs it: a located `Term.ctx(Term.pi ...)` is
+/// not a `Term.pi`, so the chain would never be peeled at all.
+#[partial]
+def return_llvm_type (typ : Term) : LLVMType := match term_peel typ {
+    Term.pi _ body => return_llvm_type body,
+    _ => term_to_llvm_type typ,
+}
 
 #[partial]
 def build_llvm_params_from_db (params : List Param) (idx : I64) : List ParamPair := match params {
@@ -3627,7 +3871,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                     let entry_instrs := List.cons assign_instr (List.cons (LLVMInstruction.ret (LLVMValue.var_ temp)) List.empty) in
                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                     let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) true Option.none in
-                    { ctx := ctx_t, funcs := (List.cons native_func List.empty), globals := List.empty }
+                    { ctx := ctx_t, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty }
             },
         NativeWrapKind.bool_result rt_fn_name =>
             match fresh_temp c {
@@ -3650,7 +3894,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                     let entry_instrs := List.cons raw_instr (List.cons tag_instr (List.cons con_instr (List.cons (LLVMInstruction.ret (LLVMValue.var_ con_temp)) List.empty))) in
                                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                                     let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) true Option.none in
-                                    { ctx := ctx3, funcs := (List.cons native_func List.empty), globals := List.empty }
+                                    { ctx := ctx3, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty }
                             },
                     },
             },
@@ -3668,7 +3912,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                     let entry_instrs := List.cons raw_instr (List.cons alloc_instr (List.append set_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ io_temp)) List.empty))) in
                                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                                     let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) true Option.none in
-                                    { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty }
+                                    { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty }
                             },
                     },
             },
@@ -3688,7 +3932,7 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                             let entry_instrs := List.cons raw_instr (List.append bool_instrs (List.cons alloc_instr (List.append set_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ io_temp)) List.empty)))) in
                                             let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                                             let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) true Option.none in
-                                            { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty }
+                                            { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty }
                                     },
                             },
                     },
@@ -3715,12 +3959,274 @@ def compile_native_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_para
                                                     let entry_instrs := List.cons len_instr (List.cons write_instr (List.cons unit_instr (List.cons alloc_instr (List.append set_instrs (List.cons (LLVMInstruction.ret (LLVMValue.var_ io_temp)) List.empty))))) in
                                                     let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
                                                     let native_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) true Option.none in
-                                                    { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty }
+                                                    { ctx := ctx_set, funcs := (List.cons native_func List.empty), globals := List.empty, externs := List.empty }
                                             },
                                     },
                             },
                     },
             },
+    }
+
+/// Emits the per-def LLVM wrapper for an `#[extern "c" ...]` def and
+/// records its `ExternInfo` in the result. Two artifacts:
+///
+/// 1. The wrapper function (`define i64 @<fn>(i64, i64, ...)`) —
+///    `i64`-returning to match Monad's uniform boxed-i64 caller
+///    convention. Each `i64`-typed wrapper parameter is cast to the
+///    extern's true ABI type before being passed to the inner `call`
+///    (`inttoptr` for pointers, `trunc` for narrower ints, `bitcast`
+///    for same-width floats), and the call's result is cast back to
+///    `i64` for the wrapper's `ret` (`sext` for C's signed `i32`/`i8`,
+///    `bitcast` for doubles, `ptrtoint` for pointers). `ghc_cc = false`
+///    so the call uses LLVM's platform-default C ABI (the cc 9 GHC
+///    convention `compile_native_def_wrapper_ir` uses is wrong for C).
+///
+/// 2. An `ExternInfo` (returned via `DefResult.externs`) so
+///    `compile_db_decls_ir`/`compile_db_module`
+///    can emit per-def `declare <ret> @<link>(<params>)`
+///    into the module's `declarations` field (which `emit_module` prints
+///    in the `declare` block alongside the hard-coded `runtime_declarations`).
+#[partial]
+def compile_extern_def_wrapper_ir (c : CodegenCtx) (fn_name : String) (llvm_params : List ParamPair) (ext : ExternInfo) : DefResult :=
+    match ext {
+        ExternInfo.mk link_name param_tys ret_ty =>
+            // Each true-typed arg: cast the i64 param to the extern's
+            // true ABI type in its OWN instruction(s), then call with the
+            // cast temps. For the common case where true type IS i64
+            // (strlen → i64), no cast is needed and the param passes
+            // through directly. (An inline cast in a call argument
+            // is invalid LLVM -- `llc: expected '(' after constantexpr
+            // cast` -- so the casts must be separate instructions.)
+            match extern_call_args c llvm_params param_tys 0 {
+                CtxInstrsVals.mk ctx1 cast_instrs call_args =>
+                    match fresh_temp ctx1 {
+                        CtxStrPair.mk ctx2 call_temp =>
+                            let call_val := LLVMValue.call link_name ret_ty call_args false in
+                            let call_instr := LLVMInstruction.assign call_temp call_val in
+                            match emit_extern_return_cast ctx2 (LLVMValue.var_ call_temp) ret_ty {
+                                CtxInstrsVal.mk ctx3 ret_cast_instrs ret_val =>
+                                    let ret_instr := LLVMInstruction.ret ret_val in
+                                    let entry_instrs := List.append cast_instrs (List.cons call_instr (List.append ret_cast_instrs (List.cons ret_instr List.empty))) in
+                                    let entry_block := LLVMBasicBlock.mk "entry" entry_instrs in
+                                    // The wrapper MUST NOT be named `fn_name` itself:
+                                    // its inner `call @<link_name>` (which defaults to
+                                    // `fn_name` when no `link_name :=` override is
+                                    // given) would then collide with the wrapper's own
+                                    // definition -- `llc: invalid redefinition of
+                                    // function 'sin'`. `monad_extern_<fn_name>` keeps
+                                    // the wrapper distinct from the C symbol; every
+                                    // Monad call site reaches it via
+                                    // `resolve_call_name`/`CodegenCtx.extern_wrappers`.
+                                    let wrapper_name := String.concat "monad_extern_" fn_name in
+                                    let wrapper := LLVMFunction.mk wrapper_name llvm_params LLVMType.i64_ (List.cons entry_block List.empty) false Option.none in
+                                    { ctx := ctx3, funcs := (List.cons wrapper List.empty), globals := List.empty, externs := (List.cons ext List.empty) }
+                            },
+                    },
+            },
+    }
+
+/// Builds the call-argument values AND the per-param ABI-cast
+/// instructions for the inner `call <link_name>` of an extern wrapper —
+/// pairs each `i64`-typed wrapper parameter (`%p0`, `%p1`, ...) with the
+/// extern's true ABI type from `param_tys`. A param whose true type
+/// differs (e.g. `double` for `sin`, `i8*` for `puts`, `i32` for `abs`)
+/// is cast to that type in its OWN one-or-two instructions
+/// (`emit_extern_param_cast`) and the final temp is the call argument —
+/// an inline cast in a call argument is invalid LLVM (`llc:
+/// expected '(' after constantexpr cast`). When the types already match
+/// (the common case, e.g. `strlen`
+/// → `i64`), the param passes through directly with no cast at all.
+#[partial]
+def extern_call_args (c : CodegenCtx) (llvm_params : List ParamPair) (param_tys : List LLVMType) (idx : I64) : CtxInstrsVals :=
+    match llvm_params {
+        List.empty => CtxInstrsVals.mk c List.empty List.empty,
+        List.cons hd tl =>
+            match hd {
+                ParamPair.mk pname pty =>
+                    let param_val := LLVMValue.parm_ idx in
+                    let true_ty := nth_llvm_type param_tys idx in
+                    if llvm_type_eq pty true_ty then
+                        match extern_call_args c tl param_tys (idx + 1) {
+                            CtxInstrsVals.mk ctx_rest instrs_rest vals_rest =>
+                                CtxInstrsVals.mk ctx_rest instrs_rest (List.cons param_val vals_rest),
+                        }
+                    else
+                        match emit_extern_param_cast c param_val pty true_ty {
+                            CtxInstrsVal.mk ctx_cast cast_instrs cast_arg =>
+                                match extern_call_args ctx_cast tl param_tys (idx + 1) {
+                                    CtxInstrsVals.mk ctx_rest instrs_rest vals_rest =>
+                                        CtxInstrsVals.mk ctx_rest (List.append cast_instrs instrs_rest) (List.cons cast_arg vals_rest),
+                                },
+                        },
+            },
+    }
+
+/// Structural equality for `LLVMType` — used by `extern_call_args` to
+/// decide whether a wrapper param needs an ABI bitcast at all (the
+/// `i64`/`i64` case passes through directly).
+#[partial]
+def llvm_type_eq (a : LLVMType) (b : LLVMType) : Bool := match a {
+    LLVMType.void => match b { LLVMType.void => true, _ => false },
+    LLVMType.i1_ => match b { LLVMType.i1_ => true, _ => false },
+    LLVMType.i8_ => match b { LLVMType.i8_ => true, _ => false },
+    LLVMType.i32_ => match b { LLVMType.i32_ => true, _ => false },
+    LLVMType.i64_ => match b { LLVMType.i64_ => true, _ => false },
+    LLVMType.f32_ => match b { LLVMType.f32_ => true, _ => false },
+    LLVMType.f64_ => match b { LLVMType.f64_ => true, _ => false },
+    LLVMType.ptr inner_a => match b { LLVMType.ptr inner_b => llvm_type_eq inner_a inner_b, _ => false },
+    LLVMType.fn_ params_a ret_a => match b { LLVMType.fn_ params_b ret_b => llvm_type_eq ret_a ret_b && list_llvm_type_eq params_a params_b, _ => false },
+    LLVMType.struct_ name_a => match b { LLVMType.struct_ name_b => String.beq name_a name_b, _ => false },
+}
+
+#[partial]
+def list_llvm_type_eq (a : List LLVMType) (b : List LLVMType) : Bool := match a {
+    List.empty => match b { List.empty => true, _ => false },
+    List.cons ha ta => match b { List.cons hb tb => llvm_type_eq ha hb && list_llvm_type_eq ta tb, _ => false },
+}
+
+/// `Option`-less nth for `List LLVMType` — `idx`-th element, defaulting
+/// to `i64_` if the index is past the end (a malformed def's signature
+/// would land here; matching `llvm_value_type`'s own i64 fallback).
+#[partial]
+def nth_llvm_type (xs : List LLVMType) (idx : I64) : LLVMType :=
+    match xs {
+        List.empty => LLVMType.i64_,
+        List.cons hd tl => if I64.beq idx 0 then hd else nth_llvm_type tl (idx - 1),
+    }
+
+/// Emits the cast chain turning a wrapper parameter (always the uniform
+/// boxed `i64`) into the extern's true ABI type, as one or two
+/// instructions whose final temp is the call argument. `wrapper_ty` is
+/// the source type; the true type picks the opcode:
+///
+/// - pointer (`i8*` for `String`) -> `inttoptr` — LLVM's `bitcast`
+///   explicitly disallows ptr<->int
+/// - `i32`/`i8`/`i1` -> `trunc` — `bitcast` requires equal bit widths,
+///   so the old `%t = bitcast i64 %p0 to i32` was rejected outright by
+///   `llc` (invalid cast opcode for cast from 'i64' to 'i32')
+/// - `f64` -> `bitcast` (same 64 bits, same register)
+/// - `f32` -> `trunc i64 -> i32` then `bitcast i32 -> float` — LLVM has
+///   no direct int64-to-float bitcast, and the f32 rides in the low
+///   32 bits of the boxed `i64`
+///
+/// The final value carries the cast temp's ACTUAL SSA type (`true_ty`,
+/// e.g. `double` for `sin`) via `typed` so `show_args_typed` emits
+/// `call double @sin(double %t3)` — a bare `var_` would hardcode `i64`
+/// and `llc` would reject the mismatch.
+#[partial]
+def emit_extern_param_cast (c : CodegenCtx) (param_val : LLVMValue) (wrapper_ty : LLVMType) (true_ty : LLVMType) : CtxInstrsVal :=
+    match true_ty {
+        LLVMType.f32_ =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 t32 =>
+                    let trunc_instr := LLVMInstruction.assign t32 (LLVMValue.trunc param_val wrapper_ty LLVMType.i32_) in
+                    match fresh_temp ctx1 {
+                        CtxStrPair.mk ctx2 t_f =>
+                            let cast_instr := LLVMInstruction.assign t_f (LLVMValue.bitcast (LLVMValue.var_ t32) LLVMType.i32_ LLVMType.f32_) in
+                            CtxInstrsVal.mk ctx2 (List.cons trunc_instr (List.cons cast_instr List.empty)) (LLVMValue.typed (LLVMValue.var_ t_f) LLVMType.f32_),
+                    },
+            },
+        LLVMType.i32_ => emit_trunc_param c param_val wrapper_ty true_ty,
+        LLVMType.i8_ => emit_trunc_param c param_val wrapper_ty true_ty,
+        LLVMType.i1_ => emit_trunc_param c param_val wrapper_ty true_ty,
+        LLVMType.ptr _ =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 temp =>
+                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.inttoptr param_val wrapper_ty true_ty) in
+                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.typed (LLVMValue.var_ temp) true_ty),
+            },
+        _ =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 temp =>
+                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.bitcast param_val wrapper_ty true_ty) in
+                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.typed (LLVMValue.var_ temp) true_ty),
+            },
+    }
+
+/// `emit_extern_param_cast`'s one-step narrow-int arm — `trunc` picks up
+/// whatever `i64`'s low bits hold. (`LLVMValue.trunc`'s own doc: LLVM's
+/// textual casts carry the source type explicitly.)
+#[partial]
+def emit_trunc_param (c : CodegenCtx) (param_val : LLVMValue) (wrapper_ty : LLVMType) (true_ty : LLVMType) : CtxInstrsVal :=
+    match fresh_temp c {
+        CtxStrPair.mk ctx1 temp =>
+            let cast_instr := LLVMInstruction.assign temp (LLVMValue.trunc param_val wrapper_ty true_ty) in
+            CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.typed (LLVMValue.var_ temp) true_ty),
+    }
+
+/// Emits the cast chain widening the extern call's raw result (typed as
+/// the extern's `ret_ty`, e.g. `i32` for `puts`, `f64` for `sin`) back to
+/// the wrapper's uniform `i64`, as zero-to-two instructions plus the
+/// value the wrapper's `ret` should use:
+///
+/// - `i64` -> no-op `bitcast` (uniform emission; folded by `llc`)
+/// - `i32`/`i8` -> `sext` — C integers are SIGNED (`puts` returns
+///   EOF = -1 on error); `zext` would turn every negative value into a
+///   huge positive one
+/// - `i1` -> `zext` — a C `Bool` binds a 0/1 flag, never negative
+/// - `f64` -> `bitcast` (the boxed-double convention: same 64 bits)
+/// - `f32` -> `bitcast float -> i32` then `zext` to `i64` (the low
+///   bits; a direct float-to-int64 bitcast does not exist)
+/// - pointer/function/struct -> `ptrtoint` (`bitcast` disallows
+///   ptr<->int)
+/// - `void` -> the constant `0`, no instruction
+#[partial]
+def emit_extern_return_cast (c : CodegenCtx) (val : LLVMValue) (ret_ty : LLVMType) : CtxInstrsVal :=
+    match ret_ty {
+        LLVMType.i64_ =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 temp =>
+                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.bitcast val ret_ty LLVMType.i64_) in
+                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
+            },
+        LLVMType.i32_ => emit_sext_return c val ret_ty,
+        LLVMType.i8_ => emit_sext_return c val ret_ty,
+        LLVMType.i1_ =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 temp =>
+                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.zext val ret_ty LLVMType.i64_) in
+                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
+            },
+        LLVMType.f64_ =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 temp =>
+                    let cast_instr := LLVMInstruction.assign temp (LLVMValue.bitcast val ret_ty LLVMType.i64_) in
+                    CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
+            },
+        LLVMType.f32_ =>
+            match fresh_temp c {
+                CtxStrPair.mk ctx1 t32 =>
+                    let cast_instr := LLVMInstruction.assign t32 (LLVMValue.bitcast val ret_ty LLVMType.i32_) in
+                    match fresh_temp ctx1 {
+                        CtxStrPair.mk ctx2 temp =>
+                            let wide_instr := LLVMInstruction.assign temp (LLVMValue.zext (LLVMValue.var_ t32) LLVMType.i32_ LLVMType.i64_) in
+                            CtxInstrsVal.mk ctx2 (List.cons cast_instr (List.cons wide_instr List.empty)) (LLVMValue.var_ temp),
+                    },
+            },
+        LLVMType.ptr _ => emit_ptrtoint_return c val ret_ty,
+        LLVMType.fn_ _ _ => emit_ptrtoint_return c val ret_ty,
+        LLVMType.struct_ _ => emit_ptrtoint_return c val ret_ty,
+        LLVMType.void => CtxInstrsVal.mk c List.empty (LLVMValue.int_ 0),
+    }
+
+/// `emit_extern_return_cast`'s signed-int arm — sign-extend `i32`/`i8`
+/// C returns to the wrapper's `i64`.
+#[partial]
+def emit_sext_return (c : CodegenCtx) (val : LLVMValue) (ret_ty : LLVMType) : CtxInstrsVal :=
+    match fresh_temp c {
+        CtxStrPair.mk ctx1 temp =>
+            let cast_instr := LLVMInstruction.assign temp (LLVMValue.sext val ret_ty LLVMType.i64_) in
+            CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
+    }
+
+/// `emit_extern_return_cast`'s pointer arm — a pointer result
+/// (`i8*` for `strlen`'s `String`-returning cousins) narrows to `i64`.
+#[partial]
+def emit_ptrtoint_return (c : CodegenCtx) (val : LLVMValue) (ret_ty : LLVMType) : CtxInstrsVal :=
+    match fresh_temp c {
+        CtxStrPair.mk ctx1 temp =>
+            let cast_instr := LLVMInstruction.assign temp (LLVMValue.ptrtoint val ret_ty LLVMType.i64_) in
+            CtxInstrsVal.mk ctx1 (List.cons cast_instr List.empty) (LLVMValue.var_ temp),
     }
 
 #[partial]
@@ -3803,9 +4309,18 @@ def compile_db_def_ir (c : CodegenCtx) (def_ : Def) : DefResult := match def_ {
         let fn_name := def_symbol_name name in
         let params := collect_db_params term_ in
         let llvm_params := build_llvm_params_db params in
-        match native_runtime_fn_name attrs {
-            Option.some wrap_kind => compile_native_def_wrapper_ir c fn_name llvm_params wrap_kind params,
-            Option.none => compile_db_def_ir_body c fn_name typ term_ params llvm_params,
+        // `#[extern "c" ...]` takes precedence over `#[native ...]` -- a
+        // def with both would be unambiguous (the C ABI is the one the
+        // user explicitly named), and checking extern first keeps the
+        // dispatch symmetric: native and extern are both "no body, real
+        // wrapper" branches, and extern is the newer / more specific one.
+        match extern_attr_info def_ params {
+            Option.some ext => compile_extern_def_wrapper_ir c fn_name llvm_params ext,
+            Option.none =>
+                match native_runtime_fn_name attrs {
+                    Option.some wrap_kind => compile_native_def_wrapper_ir c fn_name llvm_params wrap_kind params,
+                    Option.none => compile_db_def_ir_body c fn_name typ term_ params llvm_params,
+                },
         },
 }
 
@@ -3878,7 +4393,7 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                                 let tco_blocks := tco.blocks in
                                 let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
                                 let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_of_body body) in
-                                { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r }
+                                { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r, externs := List.empty }
                         },
                     _ =>
                         // A def whose whole (stripped-of-params) body is
@@ -3927,7 +4442,7 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
                         let tco_blocks := tco.blocks in
                         let all_blocks := if needs_io_unwrap then unwrap_io_return_blocks tco_blocks 0 else tco_blocks in
                         let main_func := LLVMFunction.mk fn_name llvm_params LLVMType.i64_ all_blocks true (dbg_loc_of_body body) in
-                        { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r }
+                        { ctx := tco_ctx, funcs := (List.cons main_func funcs_r), globals := globals_r, externs := List.empty }
                 },
         }
 
@@ -3936,13 +4451,13 @@ def compile_db_def_ir_body (c : CodegenCtx) (fn_name : String) (typ : Term) (ter
 def compile_db_def_list (c : CodegenCtx) (defs : List Def) : DefResult := match defs {
     // Trailing comma load-bearing -- see `build_get_env_instrs`'s doc
     // comment above for why.
-    List.empty => { ctx := c, funcs := List.empty, globals := List.empty },
+    List.empty => { ctx := c, funcs := List.empty, globals := List.empty, externs := List.empty },
     List.cons d rest =>
         match compile_db_def_ir c d {
-            { ctx := ctx_d, funcs := funcs_d, globals := globals_d } =>
+            { ctx := ctx_d, funcs := funcs_d, globals := globals_d, externs := externs_d } =>
                 match compile_db_def_list ctx_d rest {
-                    { ctx := ctx_rest, funcs := funcs_rest, globals := globals_rest } =>
-                        { ctx := ctx_rest, funcs := (List.append funcs_d funcs_rest), globals := (List.append globals_d globals_rest) }
+                    { ctx := ctx_rest, funcs := funcs_rest, globals := globals_rest, externs := externs_rest } =>
+                        { ctx := ctx_rest, funcs := (List.append funcs_d funcs_rest), globals := (List.append globals_d globals_rest), externs := (List.append externs_d externs_rest) }
                 },
         },
 }
@@ -3965,10 +4480,13 @@ def compile_db_decls_ir (defs : List Def) : LLVMModule :=
 #[partial]
 def compile_db_decls_ir_with_debug (defs : List Def) (source_path : Option String) (debug_files : List (Pair String String)) : LLVMModule :=
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty) defs {
-        { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
+    let extern_wrappers := build_extern_wrapper_table defs in
+    match compile_db_def_list (empty_ctx arities str_map_empty str_map_empty extern_wrappers) defs {
+        { ctx := _, funcs := compiled_funcs, globals := compiled_globals, externs := compiled_exts } =>
             let funcs := ren_main_and_wrap compiled_funcs in
-            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path debug_files,
+            let extra_decls := extern_declarations compiled_exts in
+            let all_decls := List.append runtime_declarations extra_decls in
+            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs all_decls source_path debug_files,
     }
 
 /// Compile a list of Decl to a complete LLVM module.
@@ -3993,8 +4511,9 @@ pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Opti
     let ctor_arities := build_constructor_arity_map_with_structs inds (extract_structs decl_list) in
     let ctor_funcs := compile_db_inductive_decls inds ctor_tags in
     let arities := build_arity_table defs in
-    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities) defs {
-        { ctx := _, funcs := compiled_funcs, globals := compiled_globals } =>
+    let extern_wrappers := build_extern_wrapper_table defs in
+    match compile_db_def_list (empty_ctx arities ctor_tags ctor_arities extern_wrappers) defs {
+        { ctx := _, funcs := compiled_funcs, globals := compiled_globals, externs := compiled_exts } =>
             // Prepend the GENERATED runtime natives (`lang/codegen/
             // runtime.mo`) -- ordinary `define`s in this same module,
             // called by the native wrappers `native_runtime_fn_name`
@@ -4003,7 +4522,33 @@ pub def compile_db_module_with_debug (decl_list : List Decl) (source_path : Opti
             // error that would cause).
             let all_funcs := List.append runtime_native_functions (List.append ctor_funcs compiled_funcs) in
             let funcs := ren_main_and_wrap all_funcs in
-            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs runtime_declarations source_path debug_files,
+            let extra_decls := extern_declarations compiled_exts in
+            let all_decls := List.append runtime_declarations extra_decls in
+            LLVMModule.mk "x86_64-unknown-linux-gnu" compiled_globals funcs all_decls source_path debug_files,
+    }
+
+/// Builds the per-extern `declare <ret> @<link>(<param types>)` entries
+/// for every `ExternInfo` the per-def wrapper emitted. Each entry feeds
+/// `LLVMModule.declarations`, which `emit_module` prints in the
+/// `declare` block alongside the hard-coded `runtime_declarations`.
+/// Defs whose true ABI matches `runtime.c`'s already-declared symbols
+/// (e.g. `String.concat` → `monad_string_concat`) double-declare
+/// harmlessly — `llc` accepts duplicate `declare`s and dedups them
+/// during linking.
+#[partial]
+def extern_declarations (exts : List ExternInfo) : List LLVMDeclaration :=
+    match exts {
+        List.empty => List.empty,
+        List.cons hd tl => List.cons (extern_declaration_one hd) (extern_declarations tl),
+    }
+
+#[partial]
+def extern_declaration_one (ext : ExternInfo) : LLVMDeclaration :=
+    match ext {
+        ExternInfo.mk link_name param_tys ret_ty =>
+            let ret_str := show_llvm_type ret_ty in
+            let param_strs := List.map show_llvm_type param_tys in
+            LLVMDeclaration.mk link_name param_strs ret_str,
     }
 
 /// Compile a list of canonical InductConstructors to LLVM constructor wrapper functions.
@@ -4385,7 +4930,7 @@ def test_ctor_tag_map_qualified_name_lookup : Bool :=
     let ind_name := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name List.empty (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons ind List.empty) in
-    let c := empty_ctx empty_arities tag_map str_map_empty in
+    let c := empty_ctx empty_arities tag_map str_map_empty str_map_empty in
     is_constructor_var c "Option.Some" && is_constructor_var c "Option.None"
 
 /// A hand-built single-field Param -- the fixture shape for the
@@ -4417,7 +4962,7 @@ def unit_test_struct (type_name : String) (field_names : List String) : Struct :
 def test_struct_ctor_reference_is_arity_known : Bool :=
     let structs : List Struct := List.cons (unit_test_struct "Point" ["x", "y"]) List.empty in
     let arity_map := build_constructor_arity_map_with_structs List.empty structs in
-    let c := empty_ctx empty_arities str_map_empty arity_map in
+    let c := empty_ctx empty_arities str_map_empty arity_map str_map_empty in
     is_constructor_var c "Point.mk"
         && I64.beq (constructor_arity c "Point.mk") 2
 
@@ -4437,7 +4982,7 @@ def test_struct_ctor_reference_shares_the_literals_tag : Bool :=
         List.empty (Term.type_ 1) (List.cons slim_mk List.empty) empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim List.empty) in
     let arity_map := build_constructor_arity_map_with_structs (List.cons slim List.empty) (List.cons (unit_test_struct "Point" ["x", "y"]) List.empty) in
-    let c := empty_ctx empty_arities tag_map arity_map in
+    let c := empty_ctx empty_arities tag_map arity_map str_map_empty in
     let by_reference : I64 := constructor_tag_at c "Point.mk" 2 in
     let by_literal : I64 := constructor_tag_at c "mk" 2 in
     I64.gt by_reference 15
@@ -4467,7 +5012,7 @@ def test_ctor_tags_distinguish_same_name_differing_arity : Bool :=
         List.empty (Term.type_ 1) (List.cons wide_mk List.empty) empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim (List.cons wide List.empty)) in
     let arity_map := build_constructor_arity_map (List.cons slim (List.cons wide List.empty)) in
-    let c := empty_ctx empty_arities tag_map arity_map in
+    let c := empty_ctx empty_arities tag_map arity_map str_map_empty in
     let slim_at := constructor_tag_at c "mk" 1 in
     let wide_at := constructor_tag_at c "mk" 3 in
     Bool.not (I64.beq slim_at wide_at)
@@ -4504,8 +5049,8 @@ def native_def_fixture (name : String) (target : String) : Def :=
 
 #[partial]
 def compile_native_def_fixture_text (name : String) (target : String) : String :=
-    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty) (native_def_fixture name target) {
-        { ctx := _, funcs := funcs, globals := _ } =>
+    match compile_db_def_ir (empty_ctx empty_arities str_map_empty str_map_empty str_map_empty) (native_def_fixture name target) {
+        { ctx := _, funcs := funcs, globals := _, .. } =>
             emit_module (LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none List.empty),
     }
 
@@ -5307,7 +5852,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                     // Stage 6: compile the reachable, infix-resolved declarations to LLVM IR
                     stage verbose "emit LLVM IR";
                     let t_llvm : I64 <- Bench.now;
-                    let mod_ := compile_db_module_with_debug reachable_decls source_path debug_files;
+                    let mod_ : LLVMModule := compile_db_module_with_debug reachable_decls source_path debug_files;
                     if verbose then do {
                         Bench.report_since "compile_db_module" t_llvm;
                         return unit
@@ -5332,6 +5877,12 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
                     // 266178ms compile (18%) is worth knowing the shape of
                     // before deciding whether to make it cheap or to defer
                     // it to llc's own failure path.
+                    //
+                    // `#[extern "c"]` targets need no special case here:
+                    // each one emits a `declare <ret> @<link>(...)` into
+                    // `module_decls`, and `build_defined_symbol_set` folds
+                    // those in (`add_decl_symbols`, `lang/codegen/validate.mo`),
+                    // so an extern call is already a defined symbol.
                     let t_closed : I64 <- Bench.now;
                     let gate_targets : List String := collect_call_targets (module_funcs mod_);
                     let t_gate_walk : I64 <- bench_step verbose "  gate: collect_call_targets" t_closed (List.length gate_targets);

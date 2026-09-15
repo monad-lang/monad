@@ -26,6 +26,12 @@ pub struct MoteManifest {
     name : String,
     dir : String,
     deps : List String,
+    /// C libraries this mote links against, from `[link] libs = [...]`.
+    /// A LINK-time property of the package, not of any one declaration:
+    /// which C functions a module calls is `#[extern "c"]`'s business,
+    /// but what the linker is handed is the mote's, the same way Cargo
+    /// keeps `-l` flags out of `extern "C"` blocks.
+    link_libs : List String,
 }
 
 /// The mote's source root -- `<dir>/src`, always.
@@ -235,8 +241,40 @@ def Mote.manifest_of_table (dir : String) (root : BTreeMap String Toml.Value) : 
             let deps := List.append
                 (Mote.table_keys (Toml.table_get "dependencies" root))
                 (Mote.table_keys (Toml.table_get "dev-dependencies" root)) in
-            let m : MoteManifest := { name := name, dir := dir, deps := deps } in
+            let libs := Mote.table_string_array (Toml.table_get "link" root) "libs" in
+            let m : MoteManifest := { name := name, dir := dir, deps := deps, link_libs := libs } in
             Option.some m
+    }
+
+/// A string-array field of a sub-table (`[link] libs = ["m", "pthread"]`),
+/// empty when the table, the key, or the array is absent. Non-string
+/// entries are skipped rather than failing the whole manifest: a bad
+/// `libs` entry should not stop the mote from resolving.
+def Mote.table_string_array (found : Option Toml.Value) (key : String) : List String :=
+    match found {
+        Option.none => List.empty,
+        Option.some v => match v {
+            Toml.Value.table sub => Mote.string_array_value (Toml.table_get key sub),
+            _ => List.empty
+        }
+    }
+
+def Mote.string_array_value (found : Option Toml.Value) : List String :=
+    match found {
+        Option.none => List.empty,
+        Option.some v => match v {
+            Toml.Value.array items =>
+                // The local annotation is load-bearing: `List.filter_map`
+                // is polymorphic in its result, and nothing else in this
+                // position pins `B` to `String`.
+                let as_string : Toml.Value -> Option String :=
+                    fn item => match item {
+                        Toml.Value.string str => Option.some str,
+                        _ => Option.none,
+                    } in
+                List.filter_map as_string items,
+            _ => List.empty
+        }
     }
 
 /// A string field of a sub-table, if both the table and the field are there.
@@ -304,6 +342,35 @@ def test_manifest_rejects_undeclared_mote : Bool :=
     match Mote.parse_manifest "lang" mote_manifest_fixture {
         Option.none => false,
         Option.some m => not (MoteManifest.declares m "llvm")
+    }
+
+/// `[link] libs` is what hands the linker `-lm`. Declared by the MOTE
+/// rather than by the `#[extern "c"]` def, because it is a property of
+/// the package's build, not of the function being declared.
+def link_manifest_fixture : String :=
+  "[mote]\nname = \"ffi\"\nversion = \"0.1.0\"\n\n[link]\nlibs = [\"m\", \"pthread\"]\n"
+
+#[test]
+def test_manifest_reads_link_libs : Bool :=
+    match Mote.parse_manifest "ffi" link_manifest_fixture {
+        Option.none => false,
+        Option.some m =>
+            match m.link_libs {
+                List.empty => false,
+                List.cons a rest => match rest {
+                    List.empty => false,
+                    List.cons b _ => String.beq a "m" && String.beq b "pthread",
+                },
+            }
+    }
+
+/// A mote with no `[link]` table links nothing extra -- the overwhelmingly
+/// common case, and the one that must not regress the argv.
+#[test]
+def test_manifest_without_link_table_has_no_libs : Bool :=
+    match Mote.parse_manifest "lang" mote_manifest_fixture {
+        Option.none => false,
+        Option.some m => match m.link_libs { List.empty => true, List.cons _ _ => false }
     }
 
 /// A dev-dependency counts as declared -- this is how `init` stays free of

@@ -7,4 +7,4 @@
 // term is -- that is `lang`'s side of the seam.
 
 pub use lib::ir {LLVMModule, emit_module}
-pub use lib::link {compile_ir_to_obj, compile_runtime_obj, link_ir, link_objects}
+pub use lib::link {compile_ir_to_obj, compile_runtime_obj, link_ir, link_objects, map_dash_l}

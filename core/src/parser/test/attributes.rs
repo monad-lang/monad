@@ -528,3 +528,75 @@ fn test_multiple_attributes_stacked() {
     _ => panic!("expected Def"),
   }
 }
+
+#[test]
+fn test_extern_c_basic() {
+  // FFI is a self-hosted-compiler-only feature: the Rust host keeps no C
+  // bridge, so `#[extern "c"]` parses to an ordinary `Term::Ntv` under
+  // the def's OWN name, exactly like `#[export "c"]`. The attribute stays
+  // on the def — that is what `module_warnings`' `extern_attr_warnings`
+  // scans for — and evaluating the def fails with `unknown native: puts`.
+  let s = r#"#[extern "c"]
+    def puts (s : String) : I64
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  let native = unwrap_ntv_body(res.value());
+  assert_eq!(native.native_name, id("puts"));
+  assert_eq!(native.num_args, 1);
+  match res.value() {
+    Decl::Def(d) => assert_eq!(d.attributes[0].name, id("extern")),
+    _ => panic!("expected Def"),
+  }
+}
+
+#[test]
+fn test_extern_c_with_lib_and_link_name() {
+  // `link_name`/`lib`/`nullable` are interpreted only by the self-hosted
+  // codegen (lang/codegen/emit.mo). The Rust host parses the attribute
+  // args without acting on them, so the native keeps the def's own name
+  // — `link_name := "puts"` does NOT rename it to `puts`.
+  let s = r#"#[extern "c" {lib := "m", link_name := "puts", nullable := true}]
+    def puts_ (s : String) : I64
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  let native = unwrap_ntv_body(res.value());
+  assert_eq!(native.native_name, id("puts_"));
+  assert_eq!(native.num_args, 1);
+}
+
+/// Peel `Lam`s off the def body to reach the inner `Term::Ntv`.
+fn unwrap_ntv_body(decl: &Decl) -> &Native {
+  let mut term = match decl {
+    Decl::Def(d) => &d.term,
+    _ => panic!("expected Def"),
+  };
+  loop {
+    match term {
+      Term::Lam { body, .. } => term = body,
+      Term::Ntv { native } => return native,
+      _ => panic!("expected Ntv at body core, got {:?}", term),
+    }
+  }
+}
+
+#[test]
+fn test_extern_c_plus_plus_parses() {
+  // ABI validation now belongs to the self-hosted compiler, which is the
+  // only thing that lowers externs. The Rust host no longer inspects the
+  // ABI string at all, so `#[extern "c++"]` parses like any other
+  // codegen-only attribute instead of being a parse error.
+  //
+  // (The pre-removal version of this test wrote the def as `def f () : I64`
+  // and asserted only `is_err()`. That passed for the wrong reason: empty
+  // parens are a syntax error in any def, extern or not, so the assertion
+  // never actually exercised the ABI check it named.)
+  let s = r#"#[extern "c++"]
+    def f (x : I64) : I64
+    "#
+  .into();
+  let (_, res) = decl_parser(s).unwrap();
+  let native = unwrap_ntv_body(res.value());
+  assert_eq!(native.native_name, id("f"));
+}

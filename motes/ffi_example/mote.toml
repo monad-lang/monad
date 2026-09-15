@@ -1,0 +1,26 @@
+# The FFI fixture mote: `#[extern "c"]` declarations against libc/libm,
+# plus the end-to-end test that compiles them through the self-hosted
+# LLVM path and runs the resulting binary.
+#
+# Dependencies are declared because `validate_declared_deps`
+# (lang/src/module.mo) enforces them: `prelude`/`init`/`std` are ambient
+# and need no entry, but the e2e test reaches into the compiler itself.
+[mote]
+name = "ffi_example"
+version = "0.1.0"
+edition = "2026"
+
+[dependencies.lang]
+path = "../../lang"
+
+[dependencies.llvm]
+path = "../../llvm"
+
+[dependencies.runtime]
+path = "../../runtime"
+
+# The C libraries this mote links against. A build property of the
+# PACKAGE: `sin` lives in libm, and that is true of the mote, not of the
+# `#[extern "c"]` declaration naming the symbol.
+[link]
+libs = ["m"]

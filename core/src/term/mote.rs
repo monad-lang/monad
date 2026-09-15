@@ -8,6 +8,8 @@ use std::{
 pub struct Manifest {
   /// `None` for a virtual workspace root (a manifest with `[workspace]` but no `[mote]`).
   pub mote: Option<MoteMeta>,
+  /// `[link] libs` -- C libraries this mote links against. Empty unless declared.
+  pub link_libs: Vec<String>,
   pub dependencies: BTreeMap<String, Dependency>,
   /// Test-only dependencies. Visible to a mote's own test code, never used to
   /// resolve its lib or bin targets -- this is what lets `init` stay pure
@@ -102,11 +104,24 @@ pub struct LockedModule {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct RawManifest {
   mote: Option<RawMoteMeta>,
+  link: Option<RawLink>,
   #[serde(default)]
   dependencies: BTreeMap<String, RawDependency>,
   #[serde(default, rename = "dev-dependencies")]
   dev_dependencies: BTreeMap<String, RawDependency>,
   workspace: Option<RawWorkspace>,
+}
+
+/// `[link] libs = ["m"]` -- the C libraries this mote links against.
+/// A build property of the PACKAGE, not of any one `#[extern "c"]` def:
+/// the declaration names the symbol, the manifest names the library.
+/// The Rust host has no C bridge and never links anything, so it only
+/// carries this through for parity with the self-hosted reader
+/// (`lang/src/mote.mo`) and for tooling that reads manifests.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RawLink {
+  #[serde(default)]
+  libs: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -212,6 +227,7 @@ impl Manifest {
         version: m.version,
         edition: m.edition,
       }),
+      link_libs: raw.link.map(|l| l.libs).unwrap_or_default(),
       workspace: raw.workspace.map(|w| Workspace { members: w.members }),
       dependencies: convert_dependencies(raw.dependencies),
       dev_dependencies: convert_dependencies(raw.dev_dependencies),

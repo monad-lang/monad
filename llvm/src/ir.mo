@@ -11,6 +11,8 @@ pub type LLVMType {
     i8_,
     i32_,
     i64_,
+    f32_,
+    f64_,
     ptr (inner : LLVMType),
     fn_ (params : List LLVMType) (ret : LLVMType),
     struct_ (name : String),
@@ -38,6 +40,17 @@ pub type LLVMValue {
     void_val,
     var_ (name : String),
     parm_ (idx : I64),
+    /// A value with an explicit LLVM type override. Produced only by the
+    /// extern wrapper's inner call (`extern_call_args` in emit.mo) to
+    /// pass an ABI-cast temp (`%t = bitcast i64 %p0 to double`) with its
+    /// ACTUAL SSA type (`double`) — `llvm_value_type`'s `var_` arm
+    /// hardcodes `i64` (correct for Monad's uniform boxed-i64
+    /// convention, wrong for a cast temp inside an extern wrapper, where
+    /// `show_args_typed` would otherwise emit `call double @sin(i64
+    /// %t3)` and `llc` rejects the type mismatch). Renders identically
+    /// to the wrapped value; only `llvm_value_type` consults the
+    /// override.
+    typed (val : LLVMValue) (ty : LLVMType),
     global_ (name : String),
     /// A direct reference to a top-level def's own compiled LLVM
     /// function, by its literal `@name` -- distinct from `var_` (an SSA
@@ -77,6 +90,12 @@ pub type LLVMValue {
     icmp_ult (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_ugt (lhs : LLVMValue) (rhs : LLVMValue),
     zext (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
+    /// Sign-extended integer widening (`sext <from> <val> to <to>`) --
+    /// `trunc`'s inverse for SIGNED values. C integers return signed
+    /// (`puts` yields EOF = -1), so an `i32`/`i8` extern result widened
+    /// back to the wrapper's uniform `i64` must be sign-extended or
+    /// every negative value corrupts: `zext` would give 4294967295.
+    sext (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     trunc (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     /// Pointer-to-integer cast -- LLVM's ONLY legal conversion from a
     /// pointer value to an integer (`bitcast` explicitly disallows
@@ -98,7 +117,11 @@ pub type LLVMValue {
     /// comment): this backend holds every pointer in an `i64` (Strings
     /// are raw `char*`, runtime.c:539-543), so reaching a loadable
     /// `i8*` first takes `inttoptr`. Used by the `lang/runtime.mo`
-    /// generated-IR natives (plans/bootstrapping/self-hosted-runtime.md).
+    /// generated-IR natives (plans/bootstrapping/self-hosted-runtime.md),
+    /// and by the extern wrapper's param cast (`extern_param_cast` in
+    /// emit.mo) to turn a wrapper's uniform `i64` param into the C ABI's
+    /// `i8*` for a `String`-typed extern -- `bitcast` explicitly
+    /// disallows ptr<->int, so it is the ONLY legal conversion here.
     inttoptr (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     phi (pairs : List PhiPair),
     gep (base : LLVMValue) (indices : List I64),
@@ -115,7 +138,11 @@ pub type LLVMValue {
     /// operand can't be inlined into the load (non-constant inttoptr is
     /// an instruction, not a constant expression).
     load (ty : LLVMType) (ptr_ty : LLVMType) (ptr : LLVMValue),
-    bitcast (val : LLVMValue) (to_ty : LLVMType),
+    /// `from_ty` is EXPLICIT for the same reason `load`'s `ptr_ty` is:
+    /// LLVM's textual `bitcast` requires the source type spelled out,
+    /// and this backend's `var_`s are `i64` by convention regardless of
+    /// what they actually hold (`llvm_value_type`'s own `var_` arm).
+    bitcast (val : LLVMValue) (from_ty : LLVMType) (to_ty : LLVMType),
     alloc_closure (entry : String) (arity : I64) (env : List LLVMValue),
     alloc_constructor (tag : I64) (fields : List LLVMValue),
     native_op (op : NativeOp) (args : List LLVMValue),
@@ -218,12 +245,12 @@ pub type LLVMModule {
        (debug_files : List (Pair String String)),
 }
 
-open LLVMType {fn_, i1_, i32_, i64_, i8_, ptr, struct_, void}
+open LLVMType {fn_, f32_, f64_, i1_, i32_, i64_, i8_, ptr, struct_, void}
 open LLVMValue {
-  add, alloc_closure, alloc_constructor, and_, bitcast, bool_, call, fn_ref, gep,
-  global_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, icmp_ult, icmp_ugt, int32_, int_,
-  inttoptr, load, lshr_, mul, native_op, or_, parm_, phi, ptrtoint, sdiv, shl_, sub,
-  trunc, udiv, urem, var_, void_val, xor_, zext,
+  add, alloc_closure, alloc_constructor, and_, bitcast, bool_, call, fn_ref,
+  gep, global_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, icmp_ult, icmp_ugt, int32_,
+  int_, inttoptr, load, lshr_, mul, native_op, or_, parm_, phi, ptrtoint, sdiv,
+  sext, shl_, sub, trunc, udiv, urem, var_, void_val, xor_, zext,
 }
 open LLVMInstruction {assign, branch, comment, jump, ret, store}
 open ParamPair {mk}
@@ -242,6 +269,8 @@ pub def show_llvm_type (ty : LLVMType) : String := match ty {
     i8_ => "i8",
     i32_ => "i32",
     i64_ => "i64",
+    f32_ => "float",
+    f64_ => "double",
     ptr inner => String.concat (show_llvm_type inner) "*",
     fn_ params ret => show_llvm_type_fn params ret,
     struct_ name => String.concat "%" name,
@@ -394,6 +423,7 @@ def show_llvm_value (val : LLVMValue) : String := match val {
     void_val => "void",
     var_ name => String.concat "%" name,
     parm_ idx => String.concat "%p" (I64.to_string idx),
+    typed v ty => show_llvm_value v,
     global_ name => llvm_symbol_ref name,
     fn_ref name => llvm_symbol_ref name,
     call fn_name ret_ty args tail => show_call fn_name ret_ty args tail,
@@ -415,6 +445,7 @@ def show_llvm_value (val : LLVMValue) : String := match val {
     icmp_ult lhs rhs => show_arith "icmp ult" lhs rhs,
     icmp_ugt lhs rhs => show_arith "icmp ugt" lhs rhs,
     zext v from_ty to_ty => show_ext "zext" v from_ty to_ty,
+    sext v from_ty to_ty => show_ext "sext" v from_ty to_ty,
     trunc v from_ty to_ty => show_ext "trunc" v from_ty to_ty,
     ptrtoint v from_ty to_ty => show_ext "ptrtoint" v from_ty to_ty,
     inttoptr v from_ty to_ty => show_ext "inttoptr" v from_ty to_ty,
@@ -424,9 +455,10 @@ def show_llvm_value (val : LLVMValue) : String := match val {
         String.concat "load " (String.concat (show_llvm_type ty)
             (String.concat ", " (String.concat (show_llvm_type ptr_ty)
             (String.concat " " (show_llvm_value ptr_))))),
-    bitcast v to_ty =>
-        String.concat "bitcast " (String.concat (show_llvm_value v)
-            (String.concat " to " (show_llvm_type to_ty))),
+    bitcast v from_ty to_ty =>
+        String.concat "bitcast " (String.concat (show_llvm_type from_ty)
+            (String.concat " " (String.concat (show_llvm_value v)
+                (String.concat " to " (show_llvm_type to_ty))))),
     alloc_closure entry arity env =>
         String.concat "call i64 @alloc_closure(i8* " (String.concat entry
             (String.concat ", i64 " (String.concat (I64.to_string arity)
@@ -459,6 +491,7 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     void_val => void,
     var_ x => i64_,
     parm_ x => i64_,
+    typed v ty => ty,
     global_ x => ptr i8_,
     fn_ref x => ptr i8_,
     call x ret_ty y z => ret_ty,
@@ -480,6 +513,7 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     icmp_ult x y => i1_,
     icmp_ugt x y => i1_,
     zext x y to_ty => to_ty,
+    sext x y to_ty => to_ty,
     trunc x y to_ty => to_ty,
     ptrtoint x y to_ty => to_ty,
     inttoptr x y to_ty => to_ty,
@@ -495,7 +529,7 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     phi pairs => phi_pairs_type pairs,
     gep x y => ptr i8_,
     load ty x y => ty,
-    bitcast x to_ty => to_ty,
+    bitcast x from_ty to_ty => to_ty,
     alloc_closure x y z => ptr i8_,
     alloc_constructor x y => ptr i8_,
     native_op x y => i64_,
@@ -1435,3 +1469,20 @@ def test_value_urem_ult : Bool :=
         && String.beq (show_llvm_value (icmp_ult (parm_ 0) (parm_ 1))) "icmp ult i64 %p0, %p1"
         && String.beq (show_llvm_value (icmp_ugt (parm_ 0) (parm_ 1))) "icmp ugt i64 %p0, %p1"
         && String.beq (show_llvm_value (udiv (parm_ 0) (parm_ 1))) "udiv i64 %p0, %p1"
+
+#[test]
+def test_type_f32_display : Bool :=
+    String.beq (show_llvm_type f32_) "float"
+
+#[test]
+def test_type_f64_display : Bool :=
+    String.beq (show_llvm_type f64_) "double"
+
+#[test]
+def test_type_f64_in_fn_signature : Bool :=
+    let sig := fn_ (List.cons f64_ List.empty) f64_ in
+    String.beq (show_llvm_type sig) "double (double)"
+
+#[test]
+def test_type_f64_ptr : Bool :=
+    String.beq (show_llvm_type (ptr f64_)) "double*"

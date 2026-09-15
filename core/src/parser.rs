@@ -1683,6 +1683,33 @@ fn def_parser(input: Span) -> Res<Def> {
 
   let is_native = attrs.iter().any(|a| a.name.as_str() == "native");
 
+  // `#[export "c"]` / `#[extern "c" ...]` — codegen-only declarations.
+  // Only the self-hosted compiler lowers these: `#[extern]` into a C-ABI
+  // wrapper plus link flags (lang/codegen/emit.mo, lang/main.mo's
+  // link_libs), `#[export]` into a C-export symbol. The Rust host has no
+  // C bridge at all, so it records the attribute and parses the def as an
+  // ordinary `Term::Ntv` under the def's own name — enough for
+  // ffi_example-style motes to LOAD and type-check (`module_warnings`
+  // emits `extern_attr_warnings` for each one at load time), while
+  // actually evaluating such a def fails with `unknown native: <name>`
+  // from `exec_native`'s fallback arm.
+  let is_codegen_attr = attrs
+    .iter()
+    .any(|a| a.name.as_str() == "export" || a.name.as_str() == "extern");
+  if is_codegen_attr {
+    let plain_params: Vec<Param> = params.iter().map(parsed_param_as_param).collect();
+    let native_name = name.last().clone();
+    let mut def = def_with_native(native_name, name.clone(), plain_params, return_typ, attrs)
+      .map_err(|e| {
+        nom::Err::Failure(ParseError::new(
+          input.clone(),
+          error::ParseErrorKind::Native(e),
+        ))
+      })?;
+    def.vis = vis;
+    return Ok((input, def));
+  }
+
   let (input, term) = if is_native {
     let native_name = attrs
       .iter()

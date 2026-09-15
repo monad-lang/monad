@@ -811,7 +811,7 @@ impl<'a> GlobalScope<'a> {
       .map(|u| {
         let m = loaded
           .get_module(&u.module_path)
-          .expect("uses unloaded module");
+          .unwrap_or_else(|| panic!("uses unloaded module: {}", u.module_path));
         (m.path(), m)
       })
       .collect();
@@ -2634,6 +2634,46 @@ pub fn bare_open_warnings(
     .collect()
 }
 
+/// `#[extern "c" ...]` FFI declarations are lowered ONLY by the
+/// self-hosted compiler's LLVM path (the `monad_extern_*` C-ABI wrappers
+/// in `lang/codegen/emit.mo`, plus `lang/main.mo`'s link-libs plumbing).
+/// The Rust host has no C bridge: the parser accepts the attribute and
+/// lowers the def to an ordinary native under its own name, so a mote
+/// declaring externs still LOADS and type-checks here — but forcing such
+/// a def fails at runtime with `unknown native: <name>` from
+/// `core_native::exec_native`'s fallback arm. This warns at load time so
+/// that failure isn't the first sign something is off. One warning per
+/// attributed def, located on the `#[...]` block itself.
+pub fn extern_attr_warnings(module: &Module, path: Option<&std::path::PathBuf>) -> Vec<Diagnostic> {
+  module
+    .defs()
+    .into_iter()
+    .filter_map(|ctx| {
+      let def = ctx.value();
+      let attr = def
+        .attributes
+        .iter()
+        .find(|a| a.name.as_str() == "extern")?;
+      Some(Diagnostic {
+        severity: Severity::Warning,
+        message: format!(
+          "`#[extern]` on `{}` is ignored by the Rust host; FFI is only supported by the \
+           self-hosted compiler",
+          def.name
+        ),
+        location: Some(attr.source_location.clone()),
+        path: path.cloned(),
+        suggestions: vec![Suggestion {
+          message: "compile this program with the self-hosted compiler (lang/main.mo) to call \
+                    this C function"
+            .into(),
+        }],
+        ..Default::default()
+      })
+    })
+    .collect()
+}
+
 /// `open Module {}` — an explicit but empty name filter — is a hard error,
 /// not just a deprecation warning like `bare_open_warnings` above: unlike
 /// a bare `open Module`, there's no non-empty spelling to suggest instead,
@@ -3189,8 +3229,9 @@ pub fn cross_mote_package_private_warnings(
 }
 
 /// All non-fatal, style/deprecation-level warnings for a successfully
-/// loaded module, combined: bare `use`, bare `open`, and unused
-/// `use`-filter names (`unused_use_name_warnings`). This is the single
+/// loaded module, combined: bare `use`, bare `open`, `#[extern]`
+/// declarations the Rust host can't lower (`extern_attr_warnings`), and
+/// unused `use`-filter names (`unused_use_name_warnings`). This is the single
 /// entry point every warning-surfacing call site (`run`, the test runner,
 /// `check_files`/`check_source`, the LSP) should call, so new warning
 /// kinds only need wiring in once. Does NOT include `unused_def_warnings`
@@ -3205,6 +3246,7 @@ pub fn module_warnings(module: &Module, path: Option<&std::path::PathBuf>) -> Ve
     &collect_referenced_names(module),
     path,
   ));
+  warnings.extend(extern_attr_warnings(module, path));
   warnings
 }
 

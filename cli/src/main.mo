@@ -7,7 +7,7 @@ use llvm::ir {LLVMModule, emit_module}
 use llvm::link {link_ir}
 use runtime {}
 use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
-use lang::module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
+use lang::module {ElaboratedAndCache, collect_link_libs, get_loaded_all, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
 use lang::scope {resolve_class_calls_decls}
 use lang::mote {MoteManifest}
 use std::map {}
@@ -46,7 +46,7 @@ def default_output_dir : Path := Path.path ("/tmp/monad_out_" ++ I64.to_string p
 /// is enough here (the `--verbose` compile pipeline prints the precise
 /// stage names too).
 #[partial]
-def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 :=
+def link_compiled_module (mod_result : Result String LLVMModule) (link_libs : List String) (output_dir : Path) (output_name : Path) (verbose : Bool) : IO I64 :=
     match mod_result {
         Result.err e => do {
             println ("FAILED at stage: compile_loaded_modules_to_ir (" ++ e ++ ")");
@@ -63,7 +63,7 @@ def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : P
             let t_emit : I64 <- Bench.now;
             let ir_text : String := emit_module mod_;
             let _t_emit : I64 <- bench_step verbose "emit_module (render .ll)" t_emit (String.length ir_text);
-            link_ir Runtime.c_path ir_text output_dir output_name verbose
+            link_ir Runtime.c_path ir_text output_dir output_name link_libs verbose
         },
     }
 
@@ -78,10 +78,14 @@ def link_compiled_module (mod_result : Result String LLVMModule) (output_dir : P
 /// exist on `llc`, unlike `clang`'s own C-source `-g`).
 #[partial]
 def compile_parsed_decls (decl_list : List Decl) (output_dir : Path) (output_name : Path) (verbose: Bool) (source_path : Option String) : IO I64 {
-    let mod_ := compile_db_module_with_debug decl_list source_path List.empty;
+    let mod_ : LLVMModule := compile_db_module_with_debug decl_list source_path List.empty;
     let ir_text := emit_module mod_;
+    // This is the module-loading-FAILURE fallback: there is no
+    // `LoadedModules`, so no manifest closure to read `[link] libs`
+    // from. A program that needs `-l` flags cannot reach here anyway --
+    // its `use` lines are what failed to load.
     println <| "Writing LLVM IR to: " ++ Path.to_string (Path.with_suffix (Path.join output_dir output_name) ".ll");
-    link_ir Runtime.c_path ir_text output_dir output_name verbose
+    link_ir Runtime.c_path ir_text output_dir output_name List.empty verbose
 }
 
 // (The v1 per-def location table this section used to build --
@@ -387,7 +391,11 @@ def compile_file_codegen (file_path : String) (output_dir : Path) (output_name :
             // place that progress is reported -- a count printed here too
             // would duplicate it two calls later.
             let mod_result <- compile_loaded_modules_to_ir_with_debug loaded verbose source_path;
-            link_compiled_module mod_result output_dir output_name verbose
+            // `[link] libs` from every mote in the dependency closure --
+            // a package-level build property, read from the manifests
+            // rather than from any `#[extern "c"]` attribute.
+            let link_libs : List String <- collect_link_libs (get_loaded_all loaded);
+            link_compiled_module mod_result link_libs output_dir output_name verbose
         },
         Result.err e => do {
             println ("Failed to parse dependencies: " ++ e);
@@ -857,7 +865,21 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                             // `out_dir` (see `run_test`'s own caller) and
                             // `bin_name` (a literal prefix + counter) --
                             // `Path.path` directly, not `Path.of`.
-                            let link_result <- link_ir Runtime.c_path ir_text (Path.path out_dir) (Path.path bin_name) verbose;
+                            //
+                            // The mote's `[link] libs` travel with the
+                            // loaded set here exactly as they do on the
+                            // compile path (`compile_file_codegen`): the
+                            // set holds the TEST file's own module
+                            // (`load_module_with_info` conses it onto its
+                            // dependency closure), so `collect_link_libs`
+                            // discovers this file's mote the same way. A
+                            // test calling an `#[extern "c"]` binding
+                            // whose symbol lives in a declared library
+                            // (libm, say) gets the same `-l<name>` the
+                            // `run`/`compile` path passes, instead of an
+                            // `undefined reference` at link.
+                            let link_libs : List String <- collect_link_libs (get_loaded_all loaded);
+                            let link_result <- link_ir Runtime.c_path ir_text (Path.path out_dir) (Path.path bin_name) link_libs verbose;
                             if not (link_result == 0) then do {
                                 // A file-level failure, counted as such:
                                 // no test in it ever ran, so folding it

@@ -375,7 +375,9 @@ def call_targets_in_value (v : LLVMValue) : List String := match v {
     LLVMValue.trunc v2 _f _t => call_targets_in_value v2,
     LLVMValue.ptrtoint v2 _f _t => call_targets_in_value v2,
     LLVMValue.inttoptr v2 _f _t => call_targets_in_value v2,
-    LLVMValue.bitcast v2 _t => call_targets_in_value v2,
+    LLVMValue.bitcast v2 _f _t => call_targets_in_value v2,
+    LLVMValue.sext v2 _f _t => call_targets_in_value v2,
+    LLVMValue.typed v2 _t => call_targets_in_value v2,
     LLVMValue.gep base _idxs => call_targets_in_value base,
     LLVMValue.load _ty _pty p => call_targets_in_value p,
     // `entry` is an already-rendered text fragment (`global_fn_ptr_text`'s

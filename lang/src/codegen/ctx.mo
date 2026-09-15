@@ -14,7 +14,7 @@
 use lib::types {
   DebugName, Def, Identifier, Location, ModulePath, Param, Term, param_many,
 }
-use llvm::ir {DbgLoc, LLVMValue}
+use llvm::ir {DbgLoc, LLVMInstruction, LLVMValue}
 use lib::codegen::symbols {def_symbol_name}
 use lib::codegen::util {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {}
@@ -56,6 +56,17 @@ pub struct CodegenCtx {
     ///
     /// Read at instruction emission, where it becomes a `loc_marker`.
     current_loc : Option DbgLoc,
+    /// Maps each `#[extern "c" ...]` def's own `llvm_name` (the same
+    /// keying as `arities`) to the distinct LLVM function name of its
+    /// ABI-adapting wrapper (`monad_extern_<llvm_name>`). The wrapper
+    /// MUST NOT share the def's name: the C symbol the wrapper calls
+    /// (the extern's `link_name`, which defaults to the def's own name)
+    /// would otherwise collide with the wrapper's own definition. Built
+    /// once per module compile (`build_extern_wrapper_table`) and
+    /// consulted by every call site that references a top-level def by
+    /// name (`resolve_call_name`), so Monad calls reach the wrapper while
+    /// the wrapper's inner call reaches the real C symbol.
+    extern_wrappers : HashMap String String,
 }
 
 pub struct CtxStrPair {
@@ -63,14 +74,49 @@ pub struct CtxStrPair {
     str : String,
 }
 
+/// `(ctx, instrs, vals)` triple for helpers that must thread the ctx
+/// while producing both instructions and a value list -- e.g.
+/// `extern_call_args`, which emits each extern wrapper param's ABI
+/// bitcast as its own instruction AND returns the call-argument values.
+struct CtxInstrsVals {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
+    vals : List LLVMValue,
+}
+
+/// `(ctx, instrs, val)` for a cast CHAIN -- one or two instructions whose
+/// last temp is the value to use. The extern ABI casts need this shape:
+/// some conversions are two-step (`f32` params: `trunc i64 -> i32` then
+/// `bitcast i32 -> float`), and LLVM allows no inline cast in a call
+/// argument or a `ret`.
+struct CtxInstrsVal {
+    ctx : CodegenCtx,
+    instrs : List LLVMInstruction,
+    val : LLVMValue,
+}
+
+/// The LLVM function name a call site should target for a top-level def
+/// referenced by `llvm_name` -- the def's own name for ordinary defs,
+/// the ABI-adapting wrapper's distinct name (`monad_extern_<llvm_name>`)
+/// for `#[extern "c" ...]` defs. Every call site that emits a call/reference
+/// to a top-level def by name must go through this, or an extern def's call
+/// would target the C symbol directly (wrong ABI) instead of the wrapper
+/// that adapts it.
+#[partial]
+def resolve_call_name (c : CodegenCtx) (llvm_name : String) : String :=
+    match str_map_lookup llvm_name c.extern_wrappers {
+        Option.some wrapper_name => wrapper_name,
+        Option.none => llvm_name,
+    }
+
 /// `arities` -- see `CodegenCtx`'s own doc comment. Callers with a real
 /// `List Def` in scope should build one via `build_arity_table` instead
 /// of passing `empty_arities` (an empty table just means every bare
 /// global reference falls back to today's eager-0-arg-call behavior --
 /// correct only for genuinely 0-arity defs).
 #[partial]
-def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) : CodegenCtx :=
-    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none }
+def empty_ctx (arities : HashMap String I64) (ctor_tags : HashMap String I64) (ctor_arities : HashMap String I64) (extern_wrappers : HashMap String String) : CodegenCtx :=
+    { locals := List.empty, next_temp := 0, next_label := 0, arities := arities, ctor_tags := ctor_tags, ctor_arities := ctor_arities, current_loc := Option.none, extern_wrappers := extern_wrappers }
 
 /// Convert a captured source position to the minimal
 /// `llvm.ir.DbgLoc` shape `LLVMFunction.dbg_loc` expects.
