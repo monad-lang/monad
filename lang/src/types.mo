@@ -1924,6 +1924,20 @@ pub struct ScopeData {
     // `build_scope_def`, consumed by `type_check_app`'s signature-driven
     // path (`lang/typecheck/infer.mo`).
     def_sigs : HashMap String Term := HashMap.map HashMap.empty_buckets,
+    // A def's own BODY (`Def.term`), kept for DELTA REDUCTION --
+    // unfolding a global reference during conversion checking
+    // (`lang/typecheck/whnf.mo`). Without it there is no name -> body
+    // lookup reachable from inference at all: `build_scope_def` stores
+    // `Term.hole` in `ScopeDef.body` unconditionally, and that sentinel
+    // is load-bearing for dozens of call sites, so this follows the
+    // same side-table pattern as `def_params`/`def_return_types`/
+    // `def_sigs` above rather than filling the hole in.
+    //
+    // Note what is stored is the body as `build_scope_def` sees it --
+    // PRE-elaboration, and still `Term.lam`-chain shaped for a def with
+    // parameters, which is exactly what beta reduction then consumes
+    // one argument at a time.
+    def_bodies : HashMap String Term := HashMap.map HashMap.empty_buckets,
 }
 
 // A scope node in the linked list.

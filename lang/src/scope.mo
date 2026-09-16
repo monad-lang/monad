@@ -502,7 +502,13 @@ def build_scope_def (df : Def) (path : ModulePath) (acc : ScopeData) : ScopeData
             // implicit-binder and parameter types, not just the final
             // return type, to check arguments against their real
             // declared types and solve the signature's type variables.
-            scope_data_add_def_sig with_ret defname typ
+            let with_sig : ScopeData := scope_data_add_def_sig with_ret defname typ in
+            // ... and the BODY, for delta reduction during conversion
+            // checking (`ScopeData.def_bodies`, consumed by
+            // `lang/typecheck/whnf.mo`). `term_` is the same value
+            // `def_params_of_term` walked just above -- still fully in
+            // hand here even though `sd.body` discards it.
+            scope_data_add_def_body with_sig defname term_
     }
 
 /// FALLBACK only, now that `Def.params` carries the real declared list:
@@ -565,6 +571,9 @@ def scope_data_add_def_return_type (sd : ScopeData) (name : NamePath) (ret_typ :
 /// `sd.def_sigs` -- see `ScopeData.def_sigs`'s own doc comment.
 def scope_data_add_def_sig (sd : ScopeData) (name : NamePath) (sig : Term) : ScopeData :=
     { sd with def_sigs := npath_map_insert name sig sd.def_sigs }
+
+def scope_data_add_def_body (sd : ScopeData) (name : ModulePath) (body : Term) : ScopeData :=
+    { sd with def_bodies := modpath_map_insert name body sd.def_bodies }
 
 /// Registers `ind` two ways: into `.inductives` (constructor/arity
 /// lookups — `scope_find_inductive` and friends) *and*, like
@@ -786,12 +795,12 @@ def find_inductive_by_constructor_in_pairs (pairs : List (Pair String Inductive)
 
 def scope_data_find_all_inductives_by_constructor (sd : ScopeData) (con_name : NamePath) : List Inductive :=
     match sd {
-        // 10 binders, one per ScopeData field (def_sigs, the
-        // side-table behind `scope_find_def_sig`, is the newest) --
+        // 11 binders, one per ScopeData field (def_bodies, the
+        // side-table behind `scope_find_def_body`, is the newest) --
         // a positional match here must track the struct's field
         // count exactly or matching a real ScopeData value fails at
         // runtime with an arity mismatch.
-        mk _ _ _ inds _ _ _ _ _ _ => find_all_inductives_by_constructor_in_pairs (HashMap.to_list inds) con_name
+        mk _ _ _ inds _ _ _ _ _ _ _ => find_all_inductives_by_constructor_in_pairs (HashMap.to_list inds) con_name
     }
 
 def scope_find_all_inductives_by_constructor (con_name : NamePath) (s : Scope) : List Inductive :=
@@ -1189,6 +1198,18 @@ def scope_find_def_return_type (name : NamePath) (s : Scope) : Option Term :=
 
 def scope_data_find_def_sig (sd : ScopeData) (name : NamePath) : Option Term :=
     npath_map_lookup name sd.def_sigs
+
+// --- ScopeData: a def's BODY (delta reduction) ---
+
+def scope_data_find_def_body (sd : ScopeData) (name : ModulePath) : Option Term :=
+    modpath_map_lookup name sd.def_bodies
+
+/// Top-level `Scope`-based wrapper, same shape as `scope_find_def_sig`.
+/// Globals only (`scope_globals`), which is the point: delta unfolds
+/// top-level `def`s, never local bindings.
+pub def scope_find_def_body (name : ModulePath) (s : Scope) : Option Term :=
+    let g : ScopeData := scope_globals s in
+    scope_data_find_def_body g name
 
 /// Top-level `Scope`-based wrapper, same shape as
 /// `scope_find_def_return_type`.
@@ -7434,13 +7455,13 @@ def test_scope_data_empty_lookup_misses : Bool :=
 
 // Regression test for `scope_data_find_all_inductives_by_constructor`'s
 // POSITIONAL `ScopeData` pattern: it binds one variable per field, so
-// adding a field to `ScopeData` (`def_sigs` was the most recent) without
+// adding a field to `ScopeData` (`def_bodies` was the most recent) without
 // widening that pattern makes every call fail at RUNTIME with "expected
 // N constructor fields, got N+1" -- an abort with no location and no
 // def name, which took down the whole self-hosted `check lang/scope.mo`
 // (and `lang/module.mo`) run rather than reporting a diagnostic. No
-// static arity check catches it: `mk _ _ _ x _ _ _ _ _` typechecks fine
-// against a 10-field struct. This test calls the function against a
+// static arity check catches it: `mk _ _ _ x _ _ _ _ _ _` typechecks fine
+// against an 11-field struct. This test calls the function against a
 // REAL `ScopeData` (not just constructing one), which is exactly what
 // the crashing path did.
 #[test]
