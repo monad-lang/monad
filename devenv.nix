@@ -30,6 +30,7 @@
     # locally (`docs-serve`) before it ships, and so `mdbook build` is
     # available to check that SUMMARY.md still resolves.
     mdbook
+    file
   ];
 
   # https://devenv.sh/languages/
@@ -85,6 +86,27 @@
   tasks."monad:test" = {
     exec = ''
       ${config.devenv.root}/scripts/check-monad-tests.sh
+    '';
+  };
+  # The nightly release artifact (.github/workflows/nightly.yml), built and
+  # verified by scripts/nightly-release.sh (`devenv tasks run monad:nightly`).
+  #
+  # The workflow itself calls the script directly inside one `nix develop -c`
+  # rather than through this task, for a reason specific to that job:
+  # devenv-tasks captures a task's stdout and only shows it when the task
+  # FAILS, and the nightly's log is the evidence of what got published (the
+  # `file` line, the recorded commit, the compile's --verbose stage trace).
+  # This task is the local equivalent -- same script, same dev shell, just
+  # quieter on success.
+  #
+  # Either way the point is the same as every step in ci.yml: commands run
+  # bare in a `run:` get the RUNNER HOST's PATH, not this shell's, so a tool
+  # is only a declared dependency when it comes through `nix develop`. (The
+  # `file` line that used to live in that workflow is exactly how that goes
+  # wrong: present in this devenv, "command not found" on the runner.)
+  tasks."monad:nightly" = {
+    exec = ''
+      ${config.devenv.root}/scripts/nightly-release.sh
     '';
   };
   # The self-hosted compiler compiles ITSELF, and then the binary that

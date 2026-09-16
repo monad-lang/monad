@@ -23,32 +23,33 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Bootstrap-compile the monad binary
+      # The whole build -- compile, verification, staged artifacts and the
+      # `tag`/`date` outputs the release step below reads -- happens inside
+      # this one dev-shell entry. Two things drive the shape of it:
+      #
+      #   * a bare `run:` gets the RUNNER HOST's PATH, not the devenv's,
+      #     which is how `file` went missing here while devenv.nix listed it;
+      #   * entering the shell re-runs devenv's shell-entry tasks (a full
+      #     `prek run -a` of the pre-commit suite), so the tag step's own
+      #     `nix develop` would cost minutes and add a second way to fail.
+      #
+      # The script is called directly rather than through
+      # `devenv tasks run monad:nightly` (which is the local equivalent):
+      # devenv-tasks captures a task's stdout and shows it only on failure,
+      # which would swallow the `file` output, the recorded commit and the
+      # compile's --verbose stage trace -- the evidence that says what got
+      # published.
+      - name: Build and verify the nightly binary
+        id: nightly
         run: |
-          mkdir -p dist
           nix develop --no-pure-eval --accept-flake-config -c \
-            cargo run --release -- run cli/src/main.mo compile cli/src/main.mo \
-              "$(pwd)/dist/monad-nightly-x86_64-linux" --verbose --release
-
-      - name: Verify binary and record commit
-        run: |
-          file dist/monad-nightly-x86_64-linux
-          chmod +x dist/monad-nightly-x86_64-linux
-          ./dist/monad-nightly-x86_64-linux version > dist/commit.txt
-          cat dist/commit.txt
-
-      - name: Compute nightly tag
-        id: tag
-        run: |
-          DATE=$(date -u +%Y-%m-%d)
-          echo "tag=nightly-${DATE}" >> "$GITHUB_OUTPUT"
-          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+            scripts/nightly-release.sh
 
       - name: Create nightly prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: Nightly ${{ steps.tag.outputs.date }}
+          tag_name: ${{ steps.nightly.outputs.tag }}
+          name: Nightly ${{ steps.nightly.outputs.date }}
           body: |
             Automated nightly build of the bootstrapped `monad` binary from `main`.
 
