@@ -114,12 +114,12 @@ The host also carries the LSP and MCP servers, the REPL, and the package system
 # Rust unit tests
 cargo test
 
-# Monad standard library tests
-cargo run -- test init std
+# The full .mo sweep, through the SELF-HOSTED runner -- builds the
+# compiled binary first if needed. This is what CI runs.
+scripts/check-monad-tests.sh
 
-# Self-hosted compiler tests (via the bootstrap host -- `monad test` cannot
-# yet handle more than one #[test] per file)
-cargo run -- test lang
+# Or via the Rust host, which is handy while debugging the runner itself
+cargo run -- test init std lang
 
 # Type-check without running
 cargo run -- check init std examples lang

@@ -4187,7 +4187,7 @@ def resolve_class_calls_decls_go (classes : List Class) (instances : List Instan
 /// `full_return_carrier`'s do-notation fallback (see
 /// `resolve_class_call_term`'s doc comment).
 #[partial]
-def strip_all_leading_binders (typ : Term) : Term :=
+pub def strip_all_leading_binders (typ : Term) : Term :=
     match typ {
         Term.forall _ _ body => strip_all_leading_binders body,
         Term.pi _ ret => strip_all_leading_binders ret,

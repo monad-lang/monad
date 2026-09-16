@@ -233,6 +233,12 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // stub, called for real from `IO_is_dir`'s own compiled body.
             else if String.beq target "string_hash" then Option.some (NativeWrapKind.passthrough "monad_string_hash")
             else if String.beq target "current_time" then Option.some (NativeWrapKind.io_passthrough "monad_current_time")
+            // Raw nanoseconds, same CLOCK_MONOTONIC origin as
+            // `current_time` (std/io.mo). The test runner's synthesized
+            // driver times each test with this and does every unit
+            // conversion itself, in Monad -- see
+            // `lang/codegen/test_driver.mo`.
+            else if String.beq target "current_time_nano" then Option.some (NativeWrapKind.io_passthrough "monad_current_time_nano")
             // `String.lt`/`String.gt` (`init/string.mo`, `instance BOrd
             // String`'s own backing natives) -- same previously-unwired
             // gap as `string_length`/`string_hash` above (a `#[native]`
@@ -390,6 +396,7 @@ def runtime_declarations : List LLVMDeclaration :=
     let d7b := mk_decl "monad_is_dir" (List.cons "i64" List.empty) "i64" in
     let d7c := mk_decl "monad_string_hash" (List.cons "i64" List.empty) "i64" in
     let d7d := mk_decl "monad_current_time" List.empty "i64" in
+    let d7e := mk_decl "monad_current_time_nano" List.empty "i64" in
     let d8 := mk_decl "alloc_closure" (List.cons "i64" (List.cons "i64" (List.cons "i64" List.empty))) "i64" in
     let d9 := mk_decl "alloc_constructor" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
     let d10 := mk_decl "alloc_string" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
@@ -503,7 +510,7 @@ def runtime_declarations : List LLVMDeclaration :=
     // `IO.get_env` (runtime.c) -- same "no implicit declare" requirement
     // as every native above; see its `native_runtime_fn_name` entry.
     let d47 := mk_decl "monad_get_env" (List.cons "i64" List.empty) "i64" in
-    [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d8, d9, d10, d11, d12, d13,
+    [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
      d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47]
 

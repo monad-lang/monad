@@ -1,20 +1,34 @@
 #!/usr/bin/env bash
-# Fast pre-commit .mo sweep (run by the `monad-tests` hook in devenv.nix).
-# Splits the old single `test init std lang examples` into a fast
-# `test init std examples` (the lang/ test suite is the slow part -- it
-# runs the self-hosted checker over its own test files) plus a cheaper
-# `check lang` (type-check lang/ without running its tests). prek does
-# not invoke a shell, so a hook entry can't use `&&`/newlines to chain
-# two commands -- hence this wrapper script.
+# The full .mo test sweep, run by `tasks."monad:test"` in devenv.nix
+# (which CI's `test` job invokes). prek does not invoke a shell, so a
+# hook entry cannot chain commands -- hence this wrapper script.
 #
-# `check lang` runs the Rust host's checker over the whole lang/ tree.
-# It used to fail on a bare-key collision in the meta-eval's whole-program
-# capture (`init/meta.mo`'s `MatchArm`/`Decl`/`Param` overwritten by
-# `lang/core_ir.mo`'s `MatchArm` and `lang/types.mo`'s `Decl`/`Param` in
-# the flat bare-key `program.inductives` map), surfacing as
-# `unresolved global: MatchArm.match_arm`; fixed by scoping
-# `MetaEvalContext::build` and `collect_loaded_inductives` to the
-# dep-closure of the file being expanded. It now passes (0 errors) and
-# gates the hook like the `test init std examples` line above.
+# Runs the SELF-HOSTED test runner (`monad test`, implemented in
+# lang/src/codegen/test_driver.mo + cli/src/main.mo), not the Rust
+# evaluator: that runner is what the project ships, and until this
+# switched, nothing in CI exercised it over the whole corpus. It
+# compiles a driver binary per test file and runs it, so a test failure
+# here is a failure of real compiled code.
+#
+# The binary has to be built in this job: CI's `test` and `bootstrap`
+# jobs run in separate ephemeral containers, so neither can borrow the
+# other's artifacts. The staleness check mirrors
+# `tasks."monad:debug-oracle"` -- reuse an existing binary, but rebuild
+# when any source compiled INTO it is newer, since a stale compiler
+# reports failures that are really its own age. All four motes, not
+# just lang/: cli/ holds the compile target, llvm/ and runtime/ the
+# backend.
+#
+# Known gap: `std/src/concurrent/fiber_test.mo` and `combine_test.mo`
+# are SKIPped, not run -- their tests reach concurrency natives that the
+# native backend does not wire, so the driver cannot be compiled at all.
+# They are deferred until a self-hosted async runtime exists; the runner
+# reports them as skips with that reason rather than failing.
 set -euo pipefail
-cargo run --release -- test init std examples lang cli llvm runtime motes slow_tests
+out="${TMPDIR:-/tmp}/monad-bootstrap-ci"
+if [ ! -x "$out/monad" ] || [ -n "$(find lang cli llvm runtime -name '*.mo' -newer "$out/monad" -print -quit)" ]; then
+  mkdir -p "$out"
+  cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$out/monad" --release
+fi
+test -x "$out/monad"
+"$out/monad" test init std examples lang cli llvm runtime motes slow_tests

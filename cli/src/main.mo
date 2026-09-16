@@ -11,7 +11,7 @@ use lang::module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, Load
 use lang::scope {resolve_class_calls_decls}
 use std::map {}
 use lang::pretty {show_decls}
-use lang::codegen::test_driver {compile_loaded_modules_to_test_ir}
+use lang::codegen::test_driver {TestIrResult, compile_loaded_modules_to_test_ir}
 use lib::args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
 // (`std/src/log.mo` -- its own header documents the gating rules).
@@ -508,18 +508,48 @@ def run_check (files : List String) (verbose : Bool) : IO I64 := do {
 /// unlike calling `compile_loaded_modules_to_test_ir` directly, which
 /// is scoped to a single already-loaded file.
 ///
-/// A file with no `#[test]`s, or one that already defines its own
-/// top-level `main` (can't have a synthesized driver `main` spliced in
-/// — `compile_loaded_modules_to_test_ir`'s own `has_top_level_main`
-/// check), is reported as `SKIP`, not `FAIL` — neither is a real
-/// problem with that file.
+/// A file with no `#[test]`s is reported as `SKIP`, not `FAIL` — not a
+/// real problem with that file. A file that defines its own top-level
+/// `main` alongside its tests runs normally: the driver renames that
+/// `main` out of its way (`rename_user_main`, test_driver.mo).
+///
+/// Counts are per TEST, not per file, matching the Rust runner. Each
+/// driver binary reports its own failure count through its exit code,
+/// which is the only channel available (`exec_cmd` returns a code and
+/// nothing else).
 #[partial]
 def run_test (files : List String) (out_dir : String) (verbose : Bool) : IO I64 := do {
     let expanded : List String <- expand_check_paths files;
-    run_test_loop { files := expanded, out_dir := out_dir, bin_idx := 0, passed := 0, failed := 0, skipped := 0, verbose := verbose, cache := module_info_cache_empty }
+    let total_files : I64 := List.length expanded;
+    run_test_loop { files := expanded, out_dir := out_dir, bin_idx := 0, tests_passed := 0, tests_failed := 0, files_failed := 0, skipped := 0, file_idx := 0, total_files := total_files, verbose := verbose, cache := module_info_cache_empty }
 }
 
-/// `tested`/`passed`/`failed`/`skipped` accumulate across all files.
+/// Whether a driver-compile error is the async-runtime gap rather than a
+/// real problem with the file.
+///
+/// The concurrency natives are declared in `std/` but wired into neither
+/// the native backend's own table (`lang/codegen/natives.mo`) nor
+/// `runtime.c`, so `validate_no_unwired_natives` fails the driver
+/// compile for any test that reaches one. That is a known, documented
+/// gap -- `std/src/concurrent/fiber_test.mo` and `combine_test.mo` --
+/// and not something a test run should report as a failure.
+///
+/// TODO: delete this, and the SKIP it produces, once a self-hosted async
+/// runtime exists and those natives are wired.
+#[partial]
+def is_async_gap_error (e : String) : Bool :=
+    String.contains e "fork_io" || String.contains e "await_fiber"
+        || String.contains e "cancel_fiber" || String.contains e "sleep_io"
+        || String.contains e "scope_new" || String.contains e "scope_fork"
+        || String.contains e "scope_drop"
+
+/// `tests_passed`/`tests_failed` count individual TESTS across all
+/// files; `files_failed` counts files whose driver never produced usable
+/// results (compile failure, or a driver that died), and `skipped`
+/// counts files that had no runnable tests to begin with. The three are
+/// kept apart deliberately: a file that failed to compile contributed no
+/// test results either way, so folding it into the per-test totals would
+/// invent results that do not exist.
 /// `bin_idx` names each compiled test binary uniquely
 /// (`monad_test_bin_<N>`, `out_dir`) so running `test` against several
 /// files in one invocation doesn't have each file's driver binary
@@ -533,30 +563,48 @@ def run_test (files : List String) (out_dir : String) (verbose : Bool) : IO I64 
 /// 5-file `check` run over `lang/`, the same cache serves 69 of 92
 /// dependency loads (75%) from an earlier file's work.
 #[partial]
-def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (passed : I64) (failed : I64) (skipped : I64) (verbose : Bool) (cache : ModuleInfoCache) : IO I64 :=
+def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (tests_passed : I64) (tests_failed : I64) (files_failed : I64) (skipped : I64) (file_idx : I64) (total_files : I64) (verbose : Bool) (cache : ModuleInfoCache) : IO I64 :=
     match files {
         List.empty => do {
-            let tested := passed + failed;
-            println (I64.to_string tested ++ " file(s) tested, " ++ I64.to_string passed ++ " passed, " ++ I64.to_string failed ++ " failed, " ++ I64.to_string skipped ++ " skipped");
-            // Same whole-run cache visibility `run_check_loop` prints --
-            // `hits` counts dependency loads served from an earlier
-            // file's own load in this same run.
-            if verbose then
-                match cache {
-                    ModuleInfoCache.mk _ hits misses =>
-                        println ("module cache: " ++ I64.to_string hits ++ " hit(s), " ++ I64.to_string misses ++ " miss(es)")
-                }
-            else do { return unit };
-            return (if I64.gt failed 0 then 1 else 0)
+            let total_tests := tests_passed + tests_failed;
+            // `No tests found` + a failing exit, matching the Rust
+            // runner: a sweep that silently found nothing is a broken
+            // invocation, not a pass.
+            if I64.beq total_tests 0 then do {
+                println "No tests found";
+                return 1
+            } else do {
+                let color : String := if I64.gt tests_failed 0 then "[31m" else "[32m";
+                println (color ++ I64.to_string tests_passed ++ "/" ++ I64.to_string total_tests ++ " total tests passed" ++ "[0m");
+                // Skips are reported separately rather than folded into
+                // the ratio above -- a skipped file contributed no tests
+                // to either side of it, and hiding that in a denominator
+                // would misreport both.
+                if I64.gt skipped 0 then
+                    println (I64.to_string skipped ++ " file(s) skipped")
+                else do { return unit };
+                // Same whole-run cache visibility `run_check_loop` prints --
+                // `hits` counts dependency loads served from an earlier
+                // file's own load in this same run.
+                if verbose then
+                    match cache {
+                        ModuleInfoCache.mk _ hits misses =>
+                            println ("module cache: " ++ I64.to_string hits ++ " hit(s), " ++ I64.to_string misses ++ " miss(es)")
+                    }
+                else do { return unit };
+                return (if I64.gt tests_failed 0 || I64.gt files_failed 0 then 1 else 0)
+            }
         },
         List.cons f rest => do {
+            // The per-file header goes out BEFORE the typecheck gate, so
+            // a file that ends up skipped still shows which file it was.
+            println ("[33m[" ++ I64.to_string (file_idx + 1) ++ "/" ++ I64.to_string total_files ++ "] Testing " ++ f ++ "...[0m");
             // Stage 3 gate (see `compile_file`'s own identical doc
             // comment for the full rationale, including `check_deps`):
             // a file whose own decls don't type-check cleanly is reported
-            // `SKIP`, not `FAIL` -- matching the existing "no #[test]s"/
-            // "already defines its own main" SKIP convention just below
-            // (a pre-existing problem with the file, not a new test
-            // failure this run introduced).
+            // `SKIP`, not `FAIL` -- matching the existing "no #[test]s"
+            // SKIP convention just below (a pre-existing problem with the
+            // file, not a new test failure this run introduced).
             let ec : ElaboratedAndCache <- elaborate_loaded_modules_cached f false cache verbose;
             // `out_cache`, not `cache`: this file's load extended it, and
             // every later file in the run needs the extended one.
@@ -564,7 +612,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
             match ec.elaborated {
                 Result.err e => do {
                     println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose, cache := out_cache }
+                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := out_cache }
                 },
                 Result.ok em =>
                     do {
@@ -574,9 +622,9 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
                                 List.cons _ _ => do {
                                     print_diagnostics diags;
                                     println ("SKIP  " ++ f ++ " (does not typecheck)");
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose, cache := out_cache }
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := out_cache }
                                 },
-                                List.empty => run_test_loop_codegen { f := f, rest := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped, verbose := verbose, preloaded := Option.some em.loaded, cache := out_cache },
+                                List.empty => run_test_loop_codegen { f := f, rest := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, file_idx := file_idx, total_files := total_files, verbose := verbose, preloaded := Option.some em.loaded, cache := out_cache },
                             }
                     },
             }
@@ -587,7 +635,7 @@ def run_test_loop (files : List String) (out_dir : String) (bin_idx : I64) (pass
 /// own loading + compile + run pipeline, reached only once the gate
 /// above has confirmed `f` itself checks cleanly.
 #[partial]
-def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (bin_idx : I64) (passed : I64) (failed : I64) (skipped : I64) (verbose : Bool) (preloaded : Option LoadedModules) (cache : ModuleInfoCache) : IO I64 := do {
+def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (bin_idx : I64) (tests_passed : I64) (tests_failed : I64) (files_failed : I64) (skipped : I64) (file_idx : I64) (total_files : I64) (verbose : Bool) (preloaded : Option LoadedModules) (cache : ModuleInfoCache) : IO I64 := do {
             // Reuses the module set `run_test_loop`'s typecheck gate
             // already loaded -- see `compile_file_codegen`'s own
             // `preloaded` comment for the redundancy this removes.
@@ -603,17 +651,26 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
             match res {
                 err e => do {
                     println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose, cache := cache }
+                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                 },
                 ok loaded => do {
-                    let ir_res : Result String LLVMModule <- compile_loaded_modules_to_test_ir loaded;
+                    let ir_res : Result String TestIrResult <- compile_loaded_modules_to_test_ir loaded;
                     match ir_res {
                         err e => do {
-                            println ("SKIP  " ++ f ++ " (" ++ e ++ ")");
-                            run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, passed := passed, failed := failed, skipped := skipped + 1, verbose := verbose, cache := cache }
+                            // The async-runtime gap gets its own message
+                            // so it reads as a known deferral rather than
+                            // a mysterious compile error. See
+                            // `is_async_gap_error`.
+                            let msg : String :=
+                                if is_async_gap_error e
+                                then "[33mSKIP  " ++ f ++ " (async runtime not self-hostable yet: " ++ e ++ " -- TODO: self-hosted async runtime)[0m"
+                                else "SKIP  " ++ f ++ " (" ++ e ++ ")";
+                            println msg;
+                            run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                         },
-                        ok llvm_mod => do {
-                            let ir_text := emit_module llvm_mod;
+                        ok ir_result => do {
+                            let total : I64 := ir_result.total_tests;
+                            let ir_text := emit_module ir_result.mod_;
                             let bin_name := "monad_test_bin_" ++ I64.to_string bin_idx;
                             // Both always non-empty by construction --
                             // `out_dir` (see `run_test`'s own caller) and
@@ -621,17 +678,29 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                             // `Path.path` directly, not `Path.of`.
                             let link_result <- link_ir Runtime.c_path ir_text (Path.path out_dir) (Path.path bin_name) verbose;
                             if not (link_result == 0) then do {
-                                println ("FAIL  " ++ f ++ " (compilation failed)");
-                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed, failed := failed + 1, skipped := skipped, verbose := verbose, cache := cache }
+                                // A file-level failure, counted as such:
+                                // no test in it ever ran, so folding it
+                                // into the per-test totals would invent
+                                // results that do not exist.
+                                println ("[31mFAIL  " ++ f ++ " (compilation failed)[0m");
+                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                             } else do {
                                 let bin_path := out_dir ++ "/" ++ bin_name;
+                                // The driver's exit code IS its failure
+                                // count (see test_driver.mo). Anything
+                                // outside 0..total means the driver did
+                                // not finish normally -- a signal death
+                                // reaches us as -1 from `exec_cmd`, and a
+                                // count above the file's own total can
+                                // only be a crash or an 8-bit wrap -- so
+                                // the whole file is reported failed
+                                // rather than trusting the number.
                                 let exit_code <- exec_cmd bin_path [];
-                                if exit_code == 0 then do {
-                                    println ("ok    " ++ f);
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed + 1, failed := failed, skipped := skipped, verbose := verbose, cache := cache }
+                                if I64.lt exit_code 0 || I64.gt exit_code total then do {
+                                    println ("[31mFAIL  " ++ f ++ " (driver exited " ++ I64.to_string exit_code ++ ")[0m");
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                                 } else do {
-                                    println ("FAIL  " ++ f);
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, passed := passed, failed := failed + 1, skipped := skipped, verbose := verbose, cache := cache }
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed + (total - exit_code), tests_failed := tests_failed + exit_code, files_failed := files_failed, skipped := skipped, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                                 }
                             }
                         }
@@ -860,7 +929,7 @@ def print_help : IO I64 {
     println "         --verbose/-v prints a per-declaration progress trace while checking";
     println "       monad test <path>... [--verbose/-v]  Compile and run each file's own #[test] defs as a native binary";
     println "         Any <path> that's a directory is recursively expanded to its *.mo files";
-    println "         A file with no #[test]s (or that already defines its own main) is skipped, not failed";
+    println "         A file with no #[test]s is skipped, not failed";
     println "       monad version  Print the git commit this binary was built from";
     return 0
 }

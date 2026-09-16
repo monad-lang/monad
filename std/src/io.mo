@@ -46,6 +46,21 @@ def IO.get_env (s : String) : IO (Option String)
 #[native current_time]
 def IO.current_time : IO I64
 
+// Nanoseconds from the same arbitrary `CLOCK_MONOTONIC` origin as
+// `IO.current_time` above -- same caveats (differences only, not an
+// epoch, not comparable across processes), just finer.
+//
+// Exists because per-test timing needs sub-millisecond resolution: the
+// self-hosted test runner reports each test's duration the way the Rust
+// runner's `format_duration` does (`core/src/lib.rs`), and most tests
+// finish well inside one millisecond, where `current_time` can only
+// ever say "0ms". The native hands over RAW NANOSECONDS and nothing
+// else -- every unit conversion and all the ns/us/ms/s formatting is
+// done in Monad, by the driver this runner synthesizes
+// (`lang/codegen/test_driver.mo`).
+#[native current_time_nano]
+def IO.current_time_nano : IO I64
+
 def IO.write_file (path : Path) (content : String) : IO Unit :=
     IO.write_file_native (Path.to_string path) content
 

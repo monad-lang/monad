@@ -276,7 +276,9 @@ IR directly for thirteen simple operations.
   `ulimit -s` when compiling large inputs.
 - `monad eval` reaches only eight natives (above), so it is not a substitute for
   `monad run`.
-- `monad test` cannot handle more than one test per file (above).
+- `monad test` compiles one driver binary per test file and runs it; a file
+  whose tests reach a native the backend does not wire (the concurrency ones
+  especially) is skipped with that reason rather than run.
 - A relative `-o` lands in `/tmp/monad_out_<pid>` (above).
 - A struct literal the checker cannot give a type to — most often one written
   directly under `return` — is rejected with *"cannot infer struct type"*.

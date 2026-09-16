@@ -3312,7 +3312,7 @@ def build_llvm_params_from_db (params : List Param) (idx : I64) : List ParamPair
 /// pointer reaches the C runtime's plain-`int` `main()` and the process
 /// exits a garbage code with no output at all.
 #[partial]
-def emit_type_head_is_io (t : Term) : Bool :=
+pub def emit_type_head_is_io (t : Term) : Bool :=
     emit_type_head_is_io_go (strip_all_leading_binders t)
 
 #[partial]

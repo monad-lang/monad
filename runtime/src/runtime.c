@@ -917,6 +917,15 @@ int64_t monad_exec_cmd(char* cmd, void* args) {
     }
     argv[i] = NULL;
 
+    /* The child inherits this process's stdout. When that stdout is a
+       pipe or a file rather than a terminal, libc block-buffers it, so
+       anything this process has printed but not yet flushed would be
+       written AFTER the child's own output -- which made `monad test`
+       print each file's "[i/n] Testing ..." header below the results it
+       introduces. Flush before forking so the interleaving matches the
+       order the writes were made in. */
+    fflush(NULL);
+
     pid_t pid = fork();
     if (pid < 0) { free(argv); return -1; }
     if (pid == 0) {
@@ -942,6 +951,24 @@ int64_t monad_current_time(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+}
+
+/* `#[native current_time_nano]` (std/io.mo's `IO.current_time_nano`) --
+   the same monotonic clock as `monad_current_time` above, read at full
+   resolution and handed over RAW. No unit conversion happens here on
+   purpose: the caller that needs it (the synthesized test driver, see
+   `lang/codegen/test_driver.mo`) does all of its own ns/us/ms/s
+   arithmetic in Monad.
+
+   Per-test timings are almost all sub-millisecond, which `current_time`
+   can only ever report as "0ms" -- that is what this exists to fix.
+
+   i64 nanoseconds from a monotonic origin overflow after ~292 years of
+   uptime, so the multiplication below needs no range check. */
+int64_t monad_current_time_nano(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 }
 
 /* `#[native "process_id"]` (std/process.mo's `process_id : I64`) -- returns

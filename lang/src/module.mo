@@ -1585,6 +1585,24 @@ def collect_mo_files (dir : String) : IO (List String) := do {
     collect_mo_files_entries dir entries
 }
 
+/// Join a directory to one of its own entry names with exactly one
+/// separator, whatever the caller's own trailing slash looked like.
+///
+/// `dir` comes straight off the command line, and `monad test lang/`
+/// is at least as natural to type as `monad test lang` -- shell tab
+/// completion produces the trailing slash on its own. A plain
+/// `dir ++ "/" ++ name` then builds `lang//src`, which recursion
+/// compounds into `lang//src//codegen//emit.mo`: still a working path
+/// (POSIX collapses repeated slashes) but wrong in every line of
+/// output that echoes it back, which is the whole of `check`'s and
+/// `test`'s per-file reporting.
+///
+/// One slash is stripped, not all: `//` is genuinely
+/// implementation-defined at the START of a POSIX path, and nothing
+/// else here normalizes `.`/`..` either -- arguments stay as typed.
+pub def join_path_dir (dir : String) (name : String) : String :=
+    if String.ends_with dir "/" then dir ++ name else dir ++ "/" ++ name
+
 /// Walk `dir`'s own entries (as returned by `IO.list_dir`), recursing
 /// into subdirectories and keeping `.mo`-suffixed files.
 #[partial]
@@ -1592,7 +1610,7 @@ def collect_mo_files_entries (dir : String) (entries : List String) : IO (List S
     match entries {
         List.empty => do { return List.empty },
         List.cons name rest => do {
-            let path : String := dir ++ "/" ++ name;
+            let path : String := join_path_dir dir name;
             let is_directory : Bool <- is_dir (Path.path path);
             let here : List String <- if is_directory then
                     collect_mo_files path
@@ -1622,6 +1640,24 @@ pub def expand_check_paths (paths : List String) : IO (List String) :=
             return (list_append here there)
         }
     }
+
+/// `join_path_dir` collapses the caller's trailing slash rather than
+/// doubling it -- `monad test lang/` used to report every file it found
+/// as `lang//src//...`.
+#[test]
+def test_join_path_dir_no_trailing_slash : Bool :=
+    String.beq (join_path_dir "lang" "src") "lang/src"
+
+#[test]
+def test_join_path_dir_strips_trailing_slash : Bool :=
+    String.beq (join_path_dir "lang/" "src") "lang/src"
+
+/// The fix has to hold at every directory level, not just the first:
+/// `collect_mo_files_entries` recurses on its own output, so a doubled
+/// slash that survived one join would compound at each one below it.
+#[test]
+def test_join_path_dir_nested_stays_single : Bool :=
+    String.beq (join_path_dir (join_path_dir "lang/" "src") "codegen") "lang/src/codegen"
 
 #[test]
 def test_parse_all_decls_empty : Bool :=

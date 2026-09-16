@@ -35,16 +35,18 @@ The self-hosted compiler has `run` (compile, then execute) and `eval`, but
 The host's interpreter runs the whole language, and skips `llc` and `clang`, so
 it is still the faster way to iterate on an effectful program.
 
-### A test runner that handles more than one test per file
+### A test runner with machine-readable output and parallelism
 
 ```bash
 monad-rs test init std
 monad-rs test lang --json -j 8 --timeout 30
 ```
 
-This matters: the self-hosted `monad test` **fails on any file with two or more
-`#[test]`s**, whatever their results. Until that is fixed, the host is the only
-way to run a real test suite. It is also what CI's test sweep uses.
+The self-hosted `monad test` now runs the whole corpus (CI's sweep uses it),
+but it runs files one at a time and has no `--json`, `-j`, or `--timeout`. It
+also cannot run tests whose bodies reach a native the compiled backend does not
+wire — the concurrency ones above all — where the host's interpreter can. For
+those, and for tooling that wants to parse results, use the host.
 
 ### Editor and agent tooling
 

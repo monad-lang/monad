@@ -78,7 +78,7 @@ commit this book ships with, not inferred from intent.
 | Distribution | **Partial** | A nightly prerelease is published on every push to `main`, and `scripts/monadup` installs and switches between them. One artifact only — Linux x86_64 — and it is built inside the Nix devenv, so it links store paths and does **not** run on a plain machine. |
 | Packages | **Planned** | No manifest parsing, no dependency resolution, no search-path flag. The host has a package system (*motes*); the self-hosted compiler has none. |
 | Editor tooling | **Host only** | The LSP server, MCP server, REPL, and `organize-imports` all live in the host. No syntax highlighting for any editor, and no tree-sitter grammar. |
-| CI | **Working** | Build, lint, full test sweep, and a self-hosting bootstrap check on every push. Note the test sweep uses the host, so the `monad test` bug above is not CI-covered. |
+| CI | **Working** | Build, lint, full test sweep, and a self-hosting bootstrap check on every push. The sweep runs the **self-hosted** runner against a freshly self-compiled binary, so `monad test` itself is covered. |
 | Documentation | **Partial** | This book. Every code block is type-checked; prose is not. |
 | Formatter | **Planned** | `organize-imports`, in the host, is the only codemod. |
 | Package registry | **Planned** | |
@@ -94,7 +94,7 @@ For context on what "alpha" means here:
 | Monad source (`.mo`) | ~66,100 lines, of which `lang/` is ~55,500 |
 | Rust source (bootstrap host) | ~54,200 lines |
 | Monad tests (`#[test]`) | 1,720 |
-| Native functions | 134 declared in `init/`+`std/`; 3 unimplemented everywhere; the backend wires a subset |
+| Native functions | 137 declared in `init/`+`std/`; 3 unimplemented everywhere; the backend wires a subset |
 | Standard library | ~440 public defs, 35 classes, 132 instances (excluding test modules) |
 
 ## The Short Version
@@ -107,7 +107,9 @@ What it is not yet: **safe by construction** (neither termination nor linearity
 is checked in the self-hosted compiler — the multiplicity syntax parses
 everywhere now, and means nothing), **parallel** (concurrency is a simulation
 that cannot even be compiled), or **distributable** (nightly binaries exist, a
-package system does not). Its test runner cannot handle a file with two tests.
+package system does not). Its test runner compiles and runs a driver binary
+per test file; files whose tests reach an unwired native (the concurrency
+ones, and a few numeric ones) are skipped rather than run.
 
 The single largest gap is linear types — and because deterministic memory
 management is meant to be built on them, that gap is also why compiled binaries

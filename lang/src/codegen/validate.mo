@@ -60,7 +60,7 @@ use std::map {}
 /// itself to compile a wrapper, not a validator; left alone here rather
 /// than false-positive-ing every program that only ever calls it directly.
 #[partial]
-def validate_no_unwired_natives (decl_list : List Decl) : Result String (List Decl) :=
+pub def validate_no_unwired_natives (decl_list : List Decl) : Result String (List Decl) :=
     let msgs := find_unwired_native_defs (extract_defs decl_list) in
     match msgs {
         List.empty => Result.ok decl_list,

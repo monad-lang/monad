@@ -154,7 +154,8 @@ const PURE_NATIVES: &[&str] = &[
 
 /// Explicitly excluded (for documentation/grep-ability, not consulted by
 /// `is_pure_native` — the allowlist above is authoritative): `print_str`
-/// (IO), `current_time`/`bench_report` (non-deterministic timing),
+/// (IO), `current_time`/`current_time_nano`/`bench_report`
+/// (non-deterministic timing),
 /// `read_file`/`write_file`/`file_exists`/`is_dir`/`list_dir`/`get_env`/
 /// `exec_cmd` (filesystem/process IO), `fork_io`/`cancel_fiber`/
 /// `sleep_io`/`scope_new`/`scope_fork`/`scope_drop`/`await_fiber`
@@ -282,6 +283,7 @@ pub fn exec_native(
     "string_to_list" => string_to_list(args, natives),
     "string_from_list" => string_from_list(args, natives),
     "current_time" => current_time(natives),
+    "current_time_nano" => current_time_nano(natives),
     "bench_report" => bench_report(args, natives),
     "read_file" => read_file(args, natives),
     "write_file" => write_file(args, natives),
@@ -1248,6 +1250,13 @@ fn exec_cmd(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalErro
   }
   let cmd = extract_string(&args[0])?;
   let cmd_args = extract_string_list(&args[1], natives)?;
+  // The child inherits our stdout; flush first so our own pending
+  // output does not land after the child's. Same reason
+  // `monad_exec_cmd` (runtime/src/runtime.c) calls `fflush(NULL)`.
+  {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+  }
   let status = std::process::Command::new(cmd)
     .args(&cmd_args)
     .status()
@@ -1267,6 +1276,20 @@ fn current_time(natives: &NativeTable) -> Result<Value, CoreEvalError> {
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap_or_default()
     .as_millis() as i64;
+  io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
+}
+
+/// `IO.current_time_nano` (std/io.mo) -- raw nanoseconds, `IO.io`-wrapped
+/// for the same reason `current_time` above is.
+///
+/// Deliberately no unit conversion: the only caller is the synthesized
+/// test driver (`lang/codegen/test_driver.mo`), which does all of its
+/// ns/us/ms/s arithmetic in Monad so both runtimes format identically.
+fn current_time_nano(natives: &NativeTable) -> Result<Value, CoreEvalError> {
+  let now = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_nanos() as i64;
   io_wrap(natives, Value::Lit(IrLit::Num(now, NumSuffix::I64)))
 }
 

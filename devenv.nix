@@ -71,14 +71,16 @@
 
   # https://devenv.sh/tasks/
   # Full "run everything" sweep for CI (see .github/workflows/ci.yml).
-  # Reuses the git-hooks below (rustfmt, clippy, cargo test --release, and the
-  # fast `init std lang examples` .mo sweep) via `prek` (the Rust pre-commit
-  # runner this devenv's git-hooks.nix installs) so there's a single source
-  # of truth, then adds slow_tests/ -- deliberately excluded from the hooks'
-  # own sweep since it's ~91% of total test runtime, but something CI should
-  # still cover on every push. `tasks."monad:bootstrap-compile"` below is
-  # the self-hosted self-compile, run from `.github/workflows/ci.yml`
-  # alongside this one.
+  # `tasks."monad:bootstrap-compile"` below is the self-hosted
+  # self-compile, run from `.github/workflows/ci.yml` alongside this one.
+  #
+  # The script this calls now builds and uses the SELF-HOSTED binary
+  # rather than `cargo run -- test` (the Rust evaluator). The self-hosted
+  # runner is what the project ships and what a user gets from `monad
+  # test`; running the Rust one here left it untested over the corpus,
+  # which is how it went a long time unable to handle more than one
+  # `#[test]` per file. See scripts/check-monad-tests.sh for the
+  # staleness rules and the async-runtime gap it skips.
   #
   # slow_tests/ now passes (107/107 as of the self-hosted parser fixes that
   # unblocked `test_typecheck_lang_main`), so it runs unwrapped here and a
