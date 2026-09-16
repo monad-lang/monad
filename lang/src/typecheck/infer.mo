@@ -27,7 +27,7 @@ use lib::scope {
 }
 use lib::typecheck::name_subst {name_subst_term}
 use lib::typecheck::subst {term_permute, term_subst}
-use lib::typecheck::unify {unify}
+use lib::typecheck::unify {unify, unify_structural}
 use std::list {length}
 
 /// A type-checked term paired with its type.
@@ -1048,7 +1048,7 @@ def type_check_cases (cases : List MatchCase) (scrutinee_term : Term) (scrutinee
         ok acc =>
             match acc {
                 mk body_typ checked_cases =>
-                    match unify body_typ expected_type {
+                    match unify body_typ expected_type scope locals {
                         ok unified_typ =>
                             let lit_val : Literal := Literal.match_ scrutinee_term checked_cases in
                             ok (mk_typed (Term.lit lit_val) unified_typ),
@@ -1074,7 +1074,7 @@ def type_check_cases_accum (cases : List MatchCase) (scrutinee_term : Term) (scr
                                 Term.hole =>
                                     type_check_cases_accum rest scrutinee_term scrutinee_typ maybe_ind expected_type scope local_types locals body_typ new_cases,
                                 _ =>
-                                    match unify acc_typ body_typ {
+                                    match unify acc_typ body_typ scope locals {
                                         ok unified_typ =>
                                             type_check_cases_accum rest scrutinee_term scrutinee_typ maybe_ind expected_type scope local_types locals unified_typ new_cases,
                                         err e => err e,
@@ -2309,7 +2309,7 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                                                                                         solve_typevars scope subst_ret expected_type List.empty in
                                                                                     let refined_ret : Term := subst_typevars_term subst_ret ret_subst in
                                                                                     let result_typ : Term :=
-                                                                                        match unify refined_ret expected_type {
+                                                                                        match unify_structural refined_ret expected_type scope locals {
                                                                                             ok u => u,
                                                                                             err _ => refined_ret,
                                                                                         } in

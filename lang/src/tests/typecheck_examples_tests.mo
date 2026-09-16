@@ -178,6 +178,42 @@ def test_typecheck_hole_arg_does_not_poison_sig : Bool :=
 def test_typecheck_concrete_param_name_not_solved : Bool :=
     typecheck_source "type P { p0 }\ntype Box (A : Type) { be, bc (h : A) (t : Box A) }\ndef cp (x : P) : Box P := Box.bc x Box.be\ndef use (q : P) : Box P := cp q"
 
+// --- definitional equality / conversion checking
+// (`lang/typecheck/whnf.mo`, wired into `lang/typecheck/unify.mo`) ---
+//
+// A type written as an unreduced application must compare equal to what
+// it REDUCES to, not only to something spelled the same way. `idt P.p0`
+// beta/delta-reduces to `P`, so a def declared to return `idt P.p0` may
+// return a `P`.
+//
+// These go through a MATCH deliberately. `unify` is reached from only
+// three places in the self-hosted checker, two of them match-arm type
+// joins (`type_check_cases`/`type_check_cases_accum`,
+// `lang/typecheck/infer.mo`); `type_check_app` documents that it
+// deliberately does NOT unify an argument's type against its
+// parameter's. So the conversion-checking plan's own repro shape
+// (`foo3 Bool foo identity_type foo`, an ARGUMENT whose declared type
+// is an unreduced app) never reaches `unify` here at all and passes
+// with or without reduction -- it exercises the Rust core's gap, not
+// this one. Both tests below were confirmed to FAIL before the WHNF
+// retry landed and to pass after.
+
+#[test]
+def test_typecheck_conversion_match_arm_against_unreduced_ret : Bool :=
+    typecheck_source "type P { p0 }\ndef idt (x : P) : Type := P\ndef f (h : P) : idt P.p0 := match h { P.p0 => h }"
+
+#[test]
+def test_typecheck_conversion_two_arms_against_unreduced_ret : Bool :=
+    typecheck_source "type P { p0, p1 }\ndef idt (x : P) : Type := P\ndef g (h : P) : idt P.p0 := match h { P.p0 => h, P.p1 => h }"
+
+// A genuine mismatch must still be rejected after reduction: `idt`
+// reduces to `P`, and `Q` is not `P`. Without this, "conversion
+// checking works" would be indistinguishable from "unify accepts
+// everything".
+#[test]
+def test_typecheck_conversion_still_rejects_real_mismatch : Bool :=
+    not (typecheck_source "type P { p0 }\ntype Q { q0 }\ndef idt (x : P) : Type := P\ndef f (h : Q) : idt P.p0 := match h { Q.q0 => h }")
+
 // --- examples/ non-test files ---
 
 // These examples depend on external modules (io, init, math, etc.) and require module loading.
