@@ -9,17 +9,19 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 17 entries here are what a full `monad test --workspace` sweep
+/// The 26 entries here are what a full corpus sweep
 /// actually reports, not a guess: six distinct causes, none of them a
 /// problem with the test files themselves. In rough order of how much
 /// they cost to close:
 ///
-///   * ~105 legacy dotted-path call sites (mechanical, 2 files here);
-///   * two self-hosted checker gaps -- type-variable instantiation, and
-///     instance resolution through an applied head or with no
-///     carrier-revealing argument (8 files);
+///   * ~105 legacy dotted-path call sites (mechanical, 6 files here);
+///   * self-hosted checker gaps -- type-variable instantiation, named-
+///     call defaults, and instance resolution through an applied head
+///     (`Show`/`BEq (List A)`, `Map`) or with no carrier-revealing
+///     argument at all (`Bounded.max_bound`, `Monad.pure`) -- 12 files;
 ///   * two codegen bugs -- the generic `Add` dict self-recursion and
 ///     `BEq (List A)`'s tail dictionary (3 files);
+///   * `#[derive]`, unsupported by the self-hosted parser (1 file);
 ///   * `Pred` in value position (1 file);
 ///   * floating point, which does not exist in the backend (2 files);
 ///   * the async runtime, which does not exist either (1 file).
@@ -56,7 +58,16 @@ pub def gap_paths : List String :=
      "lang/src/codegen/test/compile_tests.mo",
      "lang/src/codegen/test/e2e_typecheck_tests.mo",
      "std/src/sha256.mo",
-     "std/src/concurrent/combine_test.mo"]
+     "std/src/concurrent/combine_test.mo",
+     "lang/src/codegen/test/test_e2e.mo",
+     "lang/src/codegen/test/test_link_e2e.mo",
+     "lang/src/json.mo",
+     "cli/src/tests/cli_derive_tests.mo",
+     "examples/test_mote.mo",
+     "examples/derive.mo",
+     "examples/structs.mo",
+     "examples/indexed_monads.mo",
+     "examples/state_monad.mo"]
 
 /// The distinguishing substring of each file's own known error.
 ///
@@ -83,7 +94,16 @@ pub def gap_causes : List String :=
      "does not typecheck",
      "does not typecheck",
      "does not typecheck",
-     "does not typecheck"]
+     "does not typecheck",
+     "does not typecheck",
+     "does not typecheck",
+     "does not typecheck",
+     "does not typecheck",
+     "does not typecheck",
+     "Failed to load",
+     "does not typecheck",
+     "no instance found for `Monad.pure`",
+     "no instance found for `MonadState.modify_get`"]
 
 /// Why each gap is open, and what closes it.
 pub def gap_reasons : List String :=
@@ -143,7 +163,36 @@ pub def gap_reasons : List String :=
      // `expected (IO A), found (IO (List I64))`), which the Rust host
      // accepts -- so the files are fine and the checker is not.
      "self-hosted checker does not instantiate a type variable",
-     "self-hosted checker does not instantiate a type variable"]
+     "self-hosted checker does not instantiate a type variable",
+     // Same legacy dotted-path family as compile_tests.mo above: both
+     // spell `lang.codegen.emit.compile_db_decls_ir` inline instead of
+     // importing it.
+     "legacy dotted-path call sites name no import",
+     "legacy dotted-path call sites name no import",
+     // Same type-variable instantiation family as sha256.mo above:
+     // `Json.Deserializer.deserialize` returns `Result String A`, and
+     // the ascriptions on the call (`: Result String Bool`, `: Result
+     // String Person`) report `expected A, found <concrete>` -- which
+     // also leaves the match scrutinee's type unknown, so the bare `mk`
+     // pattern then reports a constructor ambiguity downstream of the
+     // SAME unknown. The Rust host runs all of the file's tests.
+     "self-hosted checker does not instantiate a type variable",
+     // Same legacy dotted-path family as compile_tests.mo above.
+     "legacy dotted-path call sites name no import",
+     "legacy dotted-path call sites name no import",
+     // Closed by: `#[derive ...]` in the self-hosted PARSER. The
+     // attribute is not recognised, so the file stops parsing at the
+     // first derive -- decl-generating macros run on the host only.
+     "#[derive] is not supported by the self-hosted parser",
+     // Closed by: named-call argument defaults in the self-hosted
+     // checker -- it demands a field the callee declares a default for.
+     "named-call defaults are not applied by the self-hosted checker",
+     // Same applied-head instance-resolution family as the Map/Show
+     // entries above: `Monad.pure`'s only argument is the monad's
+     // ELEMENT type, and `MonadState`'s carrier is likewise not
+     // recoverable from the call's own arguments.
+     "no carrier-revealing argument to infer an instance from",
+     "no carrier-revealing argument to infer an instance from"]
 
 #[partial]
 def gap_len (xs : List String) : I64 :=

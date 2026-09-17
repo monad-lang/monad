@@ -111,6 +111,15 @@ gap_files=(
   lang/src/codegen/test/e2e_typecheck_tests.mo
   std/src/sha256.mo
   std/src/concurrent/combine_test.mo
+  lang/src/codegen/test/test_e2e.mo
+  lang/src/codegen/test/test_link_e2e.mo
+  lang/src/json.mo
+  cli/src/tests/cli_derive_tests.mo
+  examples/test_mote.mo
+  examples/derive.mo
+  examples/structs.mo
+  examples/indexed_monads.mo
+  examples/state_monad.mo
 )
 
 out="${TMPDIR:-/tmp}/monad-bootstrap-ci"
