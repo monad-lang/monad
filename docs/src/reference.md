@@ -545,6 +545,8 @@ monad eval file.mo                   # interpret (pure programs only)
 monad check file.mo                  # type-check, no execution
 monad check init std lang            # directories are expanded recursively
 monad test file.mo                   # compile and run this file's #[test] defs
+monad test                           # the mote containing the working directory
+monad test --workspace               # every mote in the enclosing workspace
 monad pretty file.mo                 # parse and pretty-print
 monad version                        # the git commit this binary was built from
 ```

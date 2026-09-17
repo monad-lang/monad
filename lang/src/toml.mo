@@ -315,14 +315,83 @@ def toml_parse_array_result (r : ParseResult (List Toml.Value)) : ParseResult To
     fail e => fail e
   }
 
+/// Whitespace INSIDE an array: horizontal space, newlines, and whole
+/// comment lines. Outside an array a newline ends the item
+/// (`toml_ws`/`Toml.is_hspace` stop at one, and must keep doing so --
+/// the line parser relies on it); between `[` and `]` TOML explicitly
+/// allows an array to span lines, which is how this repo's own root
+/// `mote.toml` writes `[workspace] members`. Without this the whole
+/// manifest failed to parse.
+#[partial]
+def toml_array_ws (input : String) : ParseResult String :=
+  toml_array_ws_go input
+
+/// One pass of "skip blanks, then skip a comment if one starts here",
+/// repeated until neither consumes anything. Two-phase rather than one
+/// character class because a comment runs to end-of-line and so cannot
+/// be expressed as a predicate on a single character.
+#[partial]
+def toml_array_ws_go (input : String) : ParseResult String :=
+  match take_while Toml.is_array_space input {
+    success rem1 _ =>
+      if String.starts_with "#" rem1
+      then
+        match take_while Toml.is_not_newline rem1 {
+          success rem2 _ => toml_array_ws_go rem2,
+          fail e => fail e,
+        }
+      else success rem1 "",
+    fail e => fail e,
+  }
+
+/// Space, tab, CR or LF -- the character class that may appear between
+/// an array's own brackets.
+def Toml.is_array_space (c : String) : Bool :=
+  if Toml.is_hspace c then true
+  else if String.beq "\n" c then true
+  else String.beq "\r" c
+
+def Toml.is_not_newline (c : String) : Bool :=
+  Bool.not (String.beq "\n" c)
+
+/// A comma inside an array, with newlines and comments allowed on both
+/// sides of it.
+#[partial]
+def toml_array_comma (input : String) : ParseResult String :=
+  delimited_by toml_array_ws (tag ",") toml_array_ws input
+
 #[partial]
 def toml_parse_array_body (input : String) : ParseResult (List Toml.Value) :=
-  delimited_by toml_ws (separated_by toml_comma Toml.parse_scalar) toml_ws input
+  delimited_by toml_array_ws (separated_by toml_array_comma Toml.parse_scalar) toml_array_ws input
 
-/// Parse a single-line array of scalars, e.g. `["a", "b"]` or `[1, 2, 3]`.
+/// Parse an array of scalars, on one line (`["a", "b"]`, `[1, 2, 3]`) or
+/// spread across several with an optional trailing comma and comments,
+/// as this repo's own root `mote.toml` writes its workspace members.
+///
+/// The trailing comma falls out of the grammar rather than needing a
+/// case of its own: `separated_by` stops after the last element it can
+/// parse, and the `toml_array_ws` before `]` then consumes the dangling
+/// comma's surrounding blanks -- so the body is followed by an optional
+/// comma and more whitespace before the bracket.
 #[partial]
 def Toml.parse_array (input : String) : ParseResult Toml.Value :=
-  toml_parse_array_result (delimited_by (tag "[") toml_parse_array_body (tag "]") input)
+  toml_parse_array_result (delimited_by (tag "[") toml_parse_array_trailing (tag "]") input)
+
+/// The array body plus an optional trailing comma (and whatever blanks
+/// or comments follow it) before the closing bracket.
+#[partial]
+def toml_parse_array_trailing (input : String) : ParseResult (List Toml.Value) :=
+  match toml_parse_array_body input {
+    success rem elems =>
+      if String.starts_with "," rem
+      then
+        match toml_array_ws (String.drop 1 rem) {
+          success rem2 _ => success rem2 elems,
+          fail e => fail e,
+        }
+      else success rem elems,
+    fail e => fail e,
+  }
 
 /// Parse any TOML value that can appear on the right-hand side of `key = value`.
 #[partial]
@@ -1119,3 +1188,72 @@ def test_toml_table_manipulation : Bool :=
   toml_table_lookup_eq "a" t1 (integer 1) &&
   toml_table_lookup_missing "a" t3 &&
   toml_table_lookup_eq "b" t3 (integer 2)
+
+// ─── Multi-line arrays ──────────────────────────────────────────────
+//
+// TOML allows an array to span lines between its brackets. This repo's
+// own root `mote.toml` writes `[workspace] members` that way, so before
+// these the self-hosted reader could not parse the workspace manifest at
+// all.
+
+#[test]
+def test_parse_multiline_array : Bool :=
+  match Toml.parse "members = [\n  \"init\",\n  \"std\"\n]" {
+    ok t => toml_table_lookup_eq "members" t (array [string "init", string "std"]),
+    err _ => false
+  }
+
+#[test]
+def test_parse_multiline_array_trailing_comma : Bool :=
+  match Toml.parse "members = [\n  \"init\",\n  \"std\",\n]" {
+    ok t => toml_table_lookup_eq "members" t (array [string "init", string "std"]),
+    err _ => false
+  }
+
+#[test]
+def test_parse_multiline_array_with_comment : Bool :=
+  match Toml.parse "members = [\n  # the compiler itself\n  \"lang\",\n  \"cli\",\n]" {
+    ok t => toml_table_lookup_eq "members" t (array [string "lang", string "cli"]),
+    err _ => false
+  }
+
+#[test]
+def test_parse_single_line_array_still_works : Bool :=
+  match Toml.parse "xs = [1, 2, 3]" {
+    ok t => toml_table_lookup_eq "xs" t (array [integer 1, integer 2, integer 3]),
+    err _ => false
+  }
+
+#[test]
+def test_parse_single_line_array_trailing_comma : Bool :=
+  match Toml.parse "xs = [1, 2,]" {
+    ok t => toml_table_lookup_eq "xs" t (array [integer 1, integer 2]),
+    err _ => false
+  }
+
+// A newline still ENDS an ordinary key/value line -- the array-aware
+// whitespace must apply only between brackets, or every key would
+// swallow the next line.
+#[test]
+def test_newline_still_separates_plain_values : Bool :=
+  match Toml.parse "a = 1\nb = 2" {
+    ok t => toml_table_lookup_eq "a" t (integer 1) && toml_table_lookup_eq "b" t (integer 2),
+    err _ => false
+  }
+
+#[test]
+def test_parse_multiline_array_after_header : Bool :=
+  match Toml.parse "[workspace]\nmembers = [\n  \"init\",\n  \"motes/*\",\n]\n" {
+    ok t =>
+      match Toml.table_get "workspace" t {
+        some v => toml_check_workspace_members v,
+        none => false
+      },
+    err _ => false
+  }
+
+def toml_check_workspace_members (v : Toml.Value) : Bool :=
+  match v {
+    table sub => toml_table_lookup_eq "members" sub (array [string "init", string "motes/*"]),
+    _ => false
+  }

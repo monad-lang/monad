@@ -97,8 +97,10 @@ monad check <path>... [--verbose/-v]
         Parse and type-check; no execution.
         Any <path> that is a directory is expanded recursively to its *.mo files.
 
-monad test <path>... [--verbose/-v]
+monad test [<path>...] [--workspace/-w] [--verbose/-v]
         Compile each file's own #[test] defs into a native binary and run it.
+        With no <path>, tests the mote containing the working directory;
+        --workspace tests every mote in the enclosing workspace.
         A file with no #[test]s is skipped rather than failed. A file that
         defines its own main is fine: that main is renamed out of the way
         and the generated test driver becomes the entry point.
@@ -112,6 +114,12 @@ Running `monad` with no arguments prints this usage.
 Flags are position-independent — `monad compile -v hello.mo` and
 `monad compile hello.mo -v` are the same command. `--output`/`-o` takes its value
 as a **separate argument**: `--output=NAME` is not recognised.
+
+`monad test` with no paths enumerates motes, so it covers only directories that
+have a `mote.toml` — `examples/` has none, and its files are reached by naming
+them. Run mote- and workspace-wide invocations **from the workspace root**:
+dependency resolution is relative to the working directory, so from inside
+`llvm/` the `std` and `init` motes do not resolve.
 
 > **`monad test` reports a failure COUNT through its driver's exit code**, so a
 > single file may hold at most 255 tests; the runner refuses a larger file

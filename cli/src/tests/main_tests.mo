@@ -96,15 +96,45 @@ def test_from_args_check : Bool :=
 #[test]
 def test_from_args_test : Bool :=
     match Command.from_args ["test", "a.mo", "b.mo", "-v"] {
-        Command.test files verbose =>
-            files == ["a.mo", "b.mo"] && verbose == true,
+        Command.test files verbose workspace =>
+            files == ["a.mo", "b.mo"] && verbose == true && workspace == false,
         _ => false,
     }
 
 #[test]
-def test_from_args_test_help_on_no_files : Bool :=
+def test_from_args_test_workspace_flag : Bool :=
+    match Command.from_args ["test", "--workspace"] {
+        Command.test files verbose workspace =>
+            List.is_empty files && workspace == true && verbose == false,
+        _ => false,
+    }
+
+#[test]
+def test_from_args_test_workspace_short_flag : Bool :=
+    match Command.from_args ["test", "-w", "-v"] {
+        Command.test files verbose workspace =>
+            List.is_empty files && workspace == true && verbose == true,
+        _ => false,
+    }
+
+// The flag must be PEELED, not left among the paths -- otherwise it is
+// handed to the path expander as a filename.
+#[test]
+def test_from_args_test_workspace_flag_not_a_path : Bool :=
+    match Command.from_args ["test", "--workspace", "a.mo"] {
+        Command.test files verbose workspace =>
+            files == ["a.mo"] && workspace == true,
+        _ => false,
+    }
+
+// A bare `monad test` no longer means "print help": it means "test the
+// mote containing the working directory" (and only falls back to help,
+// at RUN time, when there is no such mote).
+#[test]
+def test_from_args_test_no_files_is_a_test_command : Bool :=
     match Command.from_args ["test"] {
-        Command.help => true,
+        Command.test files verbose workspace =>
+            List.is_empty files && workspace == false && verbose == false,
         _ => false,
     }
 

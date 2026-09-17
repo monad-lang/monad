@@ -102,6 +102,125 @@ def Mote.discover_go (dir : String) (depth : I64) : IO (Option MoteManifest) := 
     }
 }
 
+// ─── Workspace members ──────────────────────────────────────────────
+
+/// Every mote directory belonging to the workspace rooted at `dir`.
+///
+/// Mirrors the Rust reference's `Workspace::resolve_members`
+/// (`core/src/term/mote.rs`): each `[workspace] members` entry is a
+/// directory relative to the root, except a trailing `/*`, which
+/// expands ONE level to those children that are themselves motes (a
+/// directory containing a `mote.toml`). `IO.list_dir` already returns
+/// entries sorted, so the expansion needs no sort of its own.
+///
+/// `List.empty` when `dir` holds no manifest, or one with no
+/// `[workspace] members` -- a single-mote checkout is not an error,
+/// just a workspace of one, and the caller decides what to do about
+/// that.
+///
+/// A member that does not exist is DROPPED rather than reported: the
+/// Rust reference errors, but this is the test runner's path
+/// enumeration, where a stale entry should not stop the other members
+/// from being tested. The caller sees a shorter list, and the manifest
+/// is checked by the Rust host in CI anyway.
+#[partial]
+def Mote.workspace_members (dir : String) : IO (List String) := do {
+    let candidate := mote_toml_in dir;
+    let exists <- IO.file_exists (Path.path candidate);
+    if Bool.not exists then do { return List.empty }
+    else do {
+        let text <- IO.read_file (Path.path candidate);
+        match Toml.parse text {
+            err _ => do { return List.empty },
+            ok root =>
+                match Mote.workspace_member_patterns root {
+                    List.empty => do { return List.empty },
+                    List.cons p rest => Mote.expand_members dir (List.cons p rest),
+                }
+        }
+    }
+}
+
+/// The raw `[workspace] members` strings, before glob expansion.
+def Mote.workspace_member_patterns (root : BTreeMap String Toml.Value) : List String :=
+    match Toml.table_get "workspace" root {
+        Option.none => List.empty,
+        Option.some v => match v {
+            Toml.Value.table sub => Mote.string_list (Toml.table_get "members" sub),
+            _ => List.empty
+        }
+    }
+
+def Mote.string_list (found : Option Toml.Value) : List String :=
+    match found {
+        Option.none => List.empty,
+        Option.some v => match v {
+            Toml.Value.array xs => Mote.strings_of_values xs,
+            _ => List.empty
+        }
+    }
+
+def Mote.strings_of_values (xs : List Toml.Value) : List String :=
+    match xs {
+        List.empty => List.empty,
+        List.cons v rest =>
+            match v {
+                Toml.Value.string sv => List.cons sv (Mote.strings_of_values rest),
+                _ => Mote.strings_of_values rest
+            }
+    }
+
+#[partial]
+def Mote.expand_members (root_dir : String) (patterns : List String) : IO (List String) :=
+    match patterns {
+        List.empty => do { return List.empty },
+        List.cons pat rest => do {
+            let here <- Mote.expand_one_member root_dir pat;
+            let tail <- Mote.expand_members root_dir rest;
+            return (List.append here tail)
+        }
+    }
+
+/// One member pattern: a `/*` suffix expands one level, anything else
+/// is a single directory, kept only if it really is a mote.
+#[partial]
+def Mote.expand_one_member (root_dir : String) (pat : String) : IO (List String) :=
+    if String.ends_with pat "/*"
+    then do {
+        // `String.slice` takes a LENGTH, not an end index.
+        let prefix := String.slice pat 0 (String.length pat - 2);
+        let parent := Mote.member_path root_dir prefix;
+        let is_there <- IO.is_dir (Path.path parent);
+        if Bool.not is_there then do { return List.empty }
+        else do {
+            let entries <- IO.list_dir (Path.path parent);
+            Mote.keep_mote_dirs parent entries
+        }
+    }
+    else do {
+        let d := Mote.member_path root_dir pat;
+        let ok <- IO.file_exists (Path.path (mote_toml_in d));
+        if ok then do { return (List.cons d List.empty) } else do { return List.empty }
+    }
+
+/// A member directory, relative to the workspace root -- `""` (the
+/// working directory) leaves the member path as written, so a
+/// workspace root discovered as `""` yields `init`, not `/init`.
+def Mote.member_path (root_dir : String) (name : String) : String :=
+    if String.beq root_dir "" then name else raw_path_join root_dir name
+
+#[partial]
+def Mote.keep_mote_dirs (parent : String) (entries : List String) : IO (List String) :=
+    match entries {
+        List.empty => do { return List.empty },
+        List.cons name rest => do {
+            let path := raw_path_join parent name;
+            let is_mote <- IO.file_exists (Path.path (mote_toml_in path));
+            let tail <- Mote.keep_mote_dirs parent rest;
+            return (if is_mote then List.cons path tail else tail)
+        }
+    }
+
 /// Parse a manifest's text into the resolution-relevant fields.
 def Mote.parse_manifest (dir : String) (text : String) : Option MoteManifest :=
     match Toml.parse text {
@@ -231,3 +350,59 @@ def test_virtual_workspace_root_is_not_a_mote : Bool :=
         Option.none => true,
         Option.some _ => false
     }
+
+// ─── Workspace member expansion ─────────────────────────────────────
+//
+// `Mote.workspace_members` itself is IO (it reads a manifest and lists
+// directories), so these cover the pure half: pulling the patterns out
+// of a parsed manifest, and the glob/plain distinction.
+//
+// Nested constructor patterns do not parse in this grammar, hence the
+// `two_strings_are` helper rather than a `List.cons a (List.cons b ...)`
+// pattern.
+
+def two_strings_are (xs : List String) (a : String) (b : String) : Bool :=
+    match xs {
+        List.cons x rest =>
+            match rest {
+                List.cons y tail =>
+                    match tail {
+                        List.empty => String.beq x a && String.beq y b,
+                        List.cons _ _ => false,
+                    },
+                List.empty => false,
+            },
+        List.empty => false,
+    }
+
+#[test]
+def test_workspace_member_patterns_reads_members : Bool :=
+    match Toml.parse "[workspace]\nmembers = [\"init\", \"std\"]\n" {
+        ok root => two_strings_are (Mote.workspace_member_patterns root) "init" "std",
+        err _ => false
+    }
+
+// The shape this repo's own root manifest actually uses: multi-line,
+// trailing comma, and a `motes/*` glob among plain entries.
+#[test]
+def test_workspace_member_patterns_multiline_with_glob : Bool :=
+    match Toml.parse "[workspace]\nmembers = [\n  \"init\",\n  \"motes/*\",\n]\n" {
+        ok root => two_strings_are (Mote.workspace_member_patterns root) "init" "motes/*",
+        err _ => false
+    }
+
+#[test]
+def test_workspace_member_patterns_empty_without_workspace_table : Bool :=
+    match Toml.parse "[mote]\nname = \"solo\"\n" {
+        ok root => List.is_empty (Mote.workspace_member_patterns root),
+        err _ => false
+    }
+
+#[test]
+def test_member_path_leaves_root_relative_names_alone : Bool :=
+    String.beq (Mote.member_path "" "init") "init"
+    && String.beq (Mote.member_path "/repo" "init") "/repo/init"
+
+#[test]
+def test_strings_of_values_drops_non_strings : Bool :=
+    two_strings_are (Mote.strings_of_values [Toml.Value.string "a", Toml.Value.integer 1, Toml.Value.string "b"]) "a" "b"
