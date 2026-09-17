@@ -61,6 +61,15 @@ pub type LLVMValue {
     sdiv (lhs : LLVMValue) (rhs : LLVMValue),
     udiv (lhs : LLVMValue) (rhs : LLVMValue),
     urem (lhs : LLVMValue) (rhs : LLVMValue),
+    // Bitwise and shifts. `lshr` (not `ashr`) because every fixed-width
+    // integer native that uses these is UNSIGNED -- the u32/u8 family in
+    // runtime/src/natives.mo, which masks to width either side of the
+    // operation the way `mask_to_suffix` (core/src/core_native.rs) does.
+    and_ (lhs : LLVMValue) (rhs : LLVMValue),
+    or_ (lhs : LLVMValue) (rhs : LLVMValue),
+    xor_ (lhs : LLVMValue) (rhs : LLVMValue),
+    shl_ (lhs : LLVMValue) (rhs : LLVMValue),
+    lshr_ (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_eq (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_ne (lhs : LLVMValue) (rhs : LLVMValue),
     icmp_slt (lhs : LLVMValue) (rhs : LLVMValue),
@@ -211,10 +220,10 @@ pub type LLVMModule {
 
 open LLVMType {fn_, i1_, i32_, i64_, i8_, ptr, struct_, void}
 open LLVMValue {
-  add, alloc_closure, alloc_constructor, bitcast, bool_, call, fn_ref, gep, global_,
-  icmp_eq, icmp_ne, icmp_sgt, icmp_slt, icmp_ult, icmp_ugt, int32_, int_, inttoptr,
-  load, mul, native_op, parm_, phi, ptrtoint, sdiv, sub, trunc, udiv, urem, var_,
-  void_val, zext,
+  add, alloc_closure, alloc_constructor, and_, bitcast, bool_, call, fn_ref, gep,
+  global_, icmp_eq, icmp_ne, icmp_sgt, icmp_slt, icmp_ult, icmp_ugt, int32_, int_,
+  inttoptr, load, lshr_, mul, native_op, or_, parm_, phi, ptrtoint, sdiv, shl_, sub,
+  trunc, udiv, urem, var_, void_val, xor_, zext,
 }
 open LLVMInstruction {assign, branch, comment, jump, ret, store}
 open ParamPair {mk}
@@ -394,6 +403,11 @@ def show_llvm_value (val : LLVMValue) : String := match val {
     sdiv lhs rhs => show_arith "sdiv" lhs rhs,
     udiv lhs rhs => show_arith "udiv" lhs rhs,
     urem lhs rhs => show_arith "urem" lhs rhs,
+    and_ lhs rhs => show_arith "and" lhs rhs,
+    or_ lhs rhs => show_arith "or" lhs rhs,
+    xor_ lhs rhs => show_arith "xor" lhs rhs,
+    shl_ lhs rhs => show_arith "shl" lhs rhs,
+    lshr_ lhs rhs => show_arith "lshr" lhs rhs,
     icmp_eq lhs rhs => show_arith "icmp eq" lhs rhs,
     icmp_ne lhs rhs => show_arith "icmp ne" lhs rhs,
     icmp_slt lhs rhs => show_arith "icmp slt" lhs rhs,
@@ -454,6 +468,11 @@ def llvm_value_type (val : LLVMValue) : LLVMType := match val {
     sdiv x y => i64_,
     udiv x y => i64_,
     urem x y => i64_,
+    and_ x y => i64_,
+    or_ x y => i64_,
+    xor_ x y => i64_,
+    shl_ x y => i64_,
+    lshr_ x y => i64_,
     icmp_eq x y => i1_,
     icmp_ne x y => i1_,
     icmp_slt x y => i1_,
@@ -1238,6 +1257,30 @@ def test_value_bool_false : Bool :=
 #[test]
 def test_value_var : Bool :=
     String.beq (show_llvm_value (var_ "t0")) "%t0"
+
+/// The bitwise/shift family renders as plain LLVM binary operators, the
+/// same shape `add`/`udiv` use. They exist for the fixed-width unsigned
+/// natives in runtime/src/natives.mo, which mask to width with `and`.
+#[test]
+def test_value_and : Bool :=
+    String.beq (show_llvm_value (and_ (var_ "a") (int_ 255))) "and i64 %a, 255"
+
+#[test]
+def test_value_or : Bool :=
+    String.beq (show_llvm_value (or_ (var_ "a") (var_ "b"))) "or i64 %a, %b"
+
+#[test]
+def test_value_xor : Bool :=
+    String.beq (show_llvm_value (xor_ (var_ "a") (var_ "b"))) "xor i64 %a, %b"
+
+#[test]
+def test_value_shl : Bool :=
+    String.beq (show_llvm_value (shl_ (var_ "a") (var_ "b"))) "shl i64 %a, %b"
+
+/// `lshr`, not `ashr`: every caller is unsigned.
+#[test]
+def test_value_lshr : Bool :=
+    String.beq (show_llvm_value (lshr_ (var_ "a") (var_ "b"))) "lshr i64 %a, %b"
 
 #[test]
 def test_value_parm : Bool :=

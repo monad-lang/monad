@@ -305,6 +305,23 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "u8_div" then Option.some (NativeWrapKind.passthrough "monad_u8_div")
             else if String.beq target "u64_mod" then Option.some (NativeWrapKind.passthrough "monad_u64_mod")
             else if String.beq target "u64_div" then Option.some (NativeWrapKind.passthrough "monad_u64_div")
+            // The fixed-width unsigned family, unlike the u8 ops above:
+            // these DO mask to width, on both operands and the result,
+            // matching `mask_to_suffix` (core/src/core_native.rs). They
+            // exist because std/src/sha256.mo is written against `U32`
+            // and could not be compiled at all without them.
+            else if String.beq target "u8_add" then Option.some (NativeWrapKind.passthrough "monad_u8_add")
+            else if String.beq target "u32_add" then Option.some (NativeWrapKind.passthrough "monad_u32_add")
+            else if String.beq target "u32_sub" then Option.some (NativeWrapKind.passthrough "monad_u32_sub")
+            else if String.beq target "u32_and" then Option.some (NativeWrapKind.passthrough "monad_u32_and")
+            else if String.beq target "u32_or" then Option.some (NativeWrapKind.passthrough "monad_u32_or")
+            else if String.beq target "u32_xor" then Option.some (NativeWrapKind.passthrough "monad_u32_xor")
+            else if String.beq target "u32_shl" then Option.some (NativeWrapKind.passthrough "monad_u32_shl")
+            else if String.beq target "u32_shr" then Option.some (NativeWrapKind.passthrough "monad_u32_shr")
+            else if String.beq target "u32_eq" then Option.some (NativeWrapKind.bool_result "monad_u32_eq")
+            else if String.beq target "u8_to_u32" then Option.some (NativeWrapKind.passthrough "monad_u8_to_u32")
+            else if String.beq target "i64_to_u32" then Option.some (NativeWrapKind.passthrough "monad_i64_to_u32")
+            else if String.beq target "u32_to_u8" then Option.some (NativeWrapKind.passthrough "monad_u32_to_u8")
             // Generated IR: documented stubs (0 / true). `Bench` is a
             // measurement API, never load-bearing for correctness, and
             // the compiled runtime has no clock wired yet -- a typed

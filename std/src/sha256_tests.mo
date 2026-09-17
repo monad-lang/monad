@@ -36,6 +36,18 @@ def test_u32_xor : Bool :=
 def test_u32_not : Bool :=
   U32.not 0u32 == 4294967295u32
 
+/// Width masking, which is the property that makes these natives match
+/// `mask_to_suffix` (core/src/core_native.rs) rather than merely looking
+/// plausible: an unmasked i64 op would leave high bits set and produce a
+/// wrong digest instead of a loud failure.
+#[test]
+def test_u32_shl_masks_out_high_bits : Bool :=
+  U32.shl 4294967295u32 4u32 == 4294967280u32
+
+#[test]
+def test_u32_add_masks_to_width : Bool :=
+  U32.add 4294967295u32 2u32 == 1u32
+
 #[test]
 def test_u32_add_wraps : Bool :=
   U32.add 4000000000u32 4000000000u32 == 3705032704u32

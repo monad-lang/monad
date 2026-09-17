@@ -38,8 +38,9 @@ use std::list {List}
 
 open LLVMType {i1_, i8_, i64_, ptr}
 open LLVMValue {
-  add, alloc_constructor, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
-  int_, inttoptr, load, mul, parm_, phi, sdiv, sub, udiv, urem, var_, zext,
+  add, alloc_constructor, and_, call, icmp_eq, icmp_ne, icmp_sgt, icmp_slt,
+  int_, inttoptr, load, lshr_, mul, or_, parm_, phi, sdiv, shl_, sub, udiv,
+  urem, var_, xor_, zext,
 }
 open LLVMInstruction {assign, branch, jump, ret}
 
@@ -77,7 +78,10 @@ def string_runtime_functions : List LLVMFunction :=
 
 def numeric_runtime_functions : List LLVMFunction :=
   [emit_u8_eq, emit_u8_lt, emit_u8_gt, emit_u64_eq,
-   emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod, emit_u64_div]
+   emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod, emit_u64_div,
+   emit_u8_add, emit_u8_to_u32, emit_i64_to_u32, emit_u32_to_u8,
+   emit_u32_add, emit_u32_sub, emit_u32_and, emit_u32_or, emit_u32_xor,
+   emit_u32_shl, emit_u32_shr, emit_u32_eq]
 
 // ─── Shared emitter helpers ─────────────────────────────────────────
 
@@ -355,6 +359,110 @@ def emit_guarded_native (name : String) (op : LLVMValue) : LLVMFunction :=
     blocks := [entry, zero, calc],
     ghc_cc := false,
     dbg_loc := Option.none }
+
+// ─── Fixed-width unsigned integer natives (u8 / u32) ────────────────
+//
+// SHA-256 (std/src/sha256.mo) is written against `U32`, so every one of
+// these has to exist before it can be compiled at all -- that single
+// dependency is why they land together.
+//
+// **Every operation masks to its width, on the inputs AND the result.**
+// That is what `mask_to_suffix` (core/src/core_native.rs) does for the
+// Rust host -- `v as u32 as i64` -- and the two runtimes must agree
+// bit-for-bit or sha256 produces a plausible-looking wrong digest
+// rather than failing loudly. `emit_u8_sub` above predates this rule
+// and is deliberately unmasked (its own comment says so); do not copy
+// that shape here.
+//
+// Values are boxed as i64 throughout, so a "u32" is an i64 whose top 32
+// bits are zero. `lshr`, never `ashr`: these are unsigned.
+
+/// `0xFFFFFFFF` -- the u32 width mask.
+def u32_mask : LLVMValue := int_ 4294967295
+
+/// `0xFF` -- the u8 width mask.
+def u8_mask : LLVMValue := int_ 255
+
+/// A two-argument native that masks both operands to `mask`, applies
+/// `op` to the masked temporaries `%a`/`%b`, then masks the result.
+/// `op` is built from `var_ "a"`/`var_ "b"` by the caller.
+def emit_masked_binop (name : String) (mask : LLVMValue) (op : LLVMValue) : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "a" (and_ (parm_ 0) mask),
+       assign "b" (and_ (parm_ 1) mask),
+       assign "r" op,
+       assign "m" (and_ (var_ "r") mask),
+       ret (var_ "m")] in
+  { name := name,
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+/// A one-argument width conversion: mask the operand and return it.
+/// Covers every `uN_to_uM`/`i64_to_uN` in the set, since the boxed
+/// representation is i64 either way and the conversion IS the mask.
+def emit_mask_convert (name : String) (mask : LLVMValue) : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "m" (and_ (parm_ 0) mask), ret (var_ "m")] in
+  { name := name,
+    params := (i64_params 1),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+def emit_u8_add : LLVMFunction :=
+  emit_masked_binop "monad_u8_add" u8_mask (add (var_ "a") (var_ "b"))
+
+def emit_u32_add : LLVMFunction :=
+  emit_masked_binop "monad_u32_add" u32_mask (add (var_ "a") (var_ "b"))
+
+def emit_u32_sub : LLVMFunction :=
+  emit_masked_binop "monad_u32_sub" u32_mask (sub (var_ "a") (var_ "b"))
+
+def emit_u32_and : LLVMFunction :=
+  emit_masked_binop "monad_u32_and" u32_mask (and_ (var_ "a") (var_ "b"))
+
+def emit_u32_or : LLVMFunction :=
+  emit_masked_binop "monad_u32_or" u32_mask (or_ (var_ "a") (var_ "b"))
+
+def emit_u32_xor : LLVMFunction :=
+  emit_masked_binop "monad_u32_xor" u32_mask (xor_ (var_ "a") (var_ "b"))
+
+/// Shifts mask the RESULT, which is what makes an overshift wrap the way
+/// the reference does rather than leaving high bits set.
+def emit_u32_shl : LLVMFunction :=
+  emit_masked_binop "monad_u32_shl" u32_mask (shl_ (var_ "a") (var_ "b"))
+
+def emit_u32_shr : LLVMFunction :=
+  emit_masked_binop "monad_u32_shr" u32_mask (lshr_ (var_ "a") (var_ "b"))
+
+/// `monad_u32_eq(a, b) -> raw 0/1` (wired `bool_result`), comparing the
+/// MASKED operands -- `icmp eq` on unmasked i64s would call `0x1_0000_0000`
+/// and `0` different when both are zero as u32.
+def emit_u32_eq : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "a" (and_ (parm_ 0) u32_mask),
+       assign "b" (and_ (parm_ 1) u32_mask),
+       assign "c" (icmp_eq (var_ "a") (var_ "b")),
+       assign "r" (zext (var_ "c") i1_ i64_),
+       ret (var_ "r")] in
+  { name := "monad_u32_eq",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+def emit_u8_to_u32 : LLVMFunction := emit_mask_convert "monad_u8_to_u32" u8_mask
+def emit_i64_to_u32 : LLVMFunction := emit_mask_convert "monad_i64_to_u32" u32_mask
+def emit_u32_to_u8 : LLVMFunction := emit_mask_convert "monad_u32_to_u8" u8_mask
+
 
 // ─── Bench stubs ────────────────────────────────────────────────────
 
