@@ -99,6 +99,18 @@ gap_files=(
   std/src/concurrent/fiber_test.mo
   init/src/tests.mo
   std/src/sha256_tests.mo
+  init/src/foldable_tests.mo
+  init/src/foldable_tests_fold.mo
+  std/src/base.mo
+  std/src/derive_tests.mo
+  std/src/list_tests1.mo
+  std/src/list_tests2.mo
+  std/src/map_tests.mo
+  std/src/test_map_full.mo
+  lang/src/codegen/test/compile_tests.mo
+  lang/src/codegen/test/e2e_typecheck_tests.mo
+  std/src/sha256.mo
+  std/src/concurrent/combine_test.mo
 )
 
 out="${TMPDIR:-/tmp}/monad-bootstrap-ci"

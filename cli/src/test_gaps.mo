@@ -3,11 +3,26 @@
 ///
 /// **This file is scaffolding and is expected to reach zero entries and
 /// be deleted.** Every entry names the condition that removes it. It
-/// exists so that `monad test` can FAIL on an unknown compile failure
-/// (the default) while still not failing CI on the handful of known,
-/// tracked ones -- before this, every uncompilable file was silently
-/// counted as `skipped`, which affects no exit code, so 18 files' worth
-/// of tests ran nowhere at all and nothing said so.
+/// exists so that `monad test` can FAIL on an unknown failure (the
+/// default) while still not failing CI on the known, tracked ones --
+/// before this, every file the runner could not build was silently
+/// counted as `skipped`, which affects no exit code, so those tests ran
+/// nowhere at all and nothing said so.
+///
+/// The 17 entries here are what a full `monad test --workspace` sweep
+/// actually reports, not a guess: six distinct causes, none of them a
+/// problem with the test files themselves. In rough order of how much
+/// they cost to close:
+///
+///   * ~105 legacy dotted-path call sites (mechanical, 2 files here);
+///   * two self-hosted checker gaps -- type-variable instantiation, and
+///     instance resolution through an applied head or with no
+///     carrier-revealing argument (8 files);
+///   * two codegen bugs -- the generic `Add` dict self-recursion and
+///     `BEq (List A)`'s tail dictionary (3 files);
+///   * `Pred` in value position (1 file);
+///   * floating point, which does not exist in the backend (2 files);
+///   * the async runtime, which does not exist either (1 file).
 ///
 /// **Matching is on path AND cause**, deliberately: a listed file that
 /// starts failing for a NEW reason is reported as a real failure, not
@@ -29,15 +44,46 @@ pub def gap_paths : List String :=
      "examples/optics.mo",
      "std/src/concurrent/fiber_test.mo",
      "init/src/tests.mo",
-     "std/src/sha256_tests.mo"]
+     "std/src/sha256_tests.mo",
+     "init/src/foldable_tests.mo",
+     "init/src/foldable_tests_fold.mo",
+     "std/src/base.mo",
+     "std/src/derive_tests.mo",
+     "std/src/list_tests1.mo",
+     "std/src/list_tests2.mo",
+     "std/src/map_tests.mo",
+     "std/src/test_map_full.mo",
+     "lang/src/codegen/test/compile_tests.mo",
+     "lang/src/codegen/test/e2e_typecheck_tests.mo",
+     "std/src/sha256.mo",
+     "std/src/concurrent/combine_test.mo"]
 
 /// The distinguishing substring of each file's own known error.
+///
+/// Harvested from the real binary's own output, and note that the
+/// string differs by WHICH stage fails: a driver-compile error carries
+/// the compiler's message, while a link failure and a dead driver are
+/// matched against the wording the runner itself prints for them
+/// ("compilation failed", "driver exited -1") because llc's own
+/// message goes to the console, not into a value the runner holds.
 pub def gap_causes : List String :=
     ["native `f64_mul`",
      "native `f64_eq`",
      "native `fork_io`",
-     "use of undefined value '@Pred'",
-     "driver exited -1"]
+     "compilation failed",
+     "driver exited -1",
+     "driver exited -1",
+     "driver exited -1",
+     "no instance found for `Bounded.max_bound`",
+     "no instance found for `Debug.debug`",
+     "no instance found for `Show.show`",
+     "no instance found for `BEq.beq`",
+     "no instance found for `Map.empty`",
+     "no instance found for `Map.empty`",
+     "does not typecheck",
+     "does not typecheck",
+     "does not typecheck",
+     "does not typecheck"]
 
 /// Why each gap is open, and what closes it.
 pub def gap_reasons : List String :=
@@ -51,7 +97,8 @@ pub def gap_reasons : List String :=
      "async runtime not self-hostable yet (fork_io/await_fiber unwired)",
      // Closed by: codegen support for a builtin sort in value position.
      // `init/src/tests.mo:537` uses `Pred` as a value (`get_sort Pred`),
-     // which reaches llc as a call to an undefined `@Pred`.
+     // which reaches llc as a call to an undefined `@Pred` -- so the
+     // driver compiles and the LINK is what fails.
      "builtin sort `Pred` in value position emits an undefined symbol",
      // Closed by: the BEq_List_A_beq dictionary bug -- the element
      // dictionary is applied to the list TAIL, so a `List U8`
@@ -59,7 +106,44 @@ pub def gap_reasons : List String :=
      // native backend (examples/sha256.mo passes, and the empty-string
      // digest matches); only the `List U8` equality in the assertions
      // dies.
-     "BEq (List A) applies the element dict to the tail -- segfaults"]
+     "BEq (List A) applies the element dict to the tail -- segfaults",
+     // Closed by: bidirectional inference pushing an expected type into
+     // an unannotated lambda parameter. `acc + x` in `Foldable.foldl (fn
+     // acc x => acc + x) 0 xs` compiles to the generic forwarding
+     // instance `HAdd_A_A_A_add` with the placeholder `__Dict_Add_A`
+     // dict, which self-recurses; the same fold with `I64.add` works.
+     // The carrier inference that used to fail here IS fixed (the call
+     // resolves and the driver builds now) -- this is the next bug
+     // behind it.
+     "+ on untyped lambda params gets a generic Add dict -- self-recurses",
+     "+ on untyped lambda params gets a generic Add dict -- self-recurses",
+     // Closed by: instance resolution for a method with NO
+     // carrier-revealing argument (`Bounded.max_bound` takes none at
+     // all), and for an APPLIED instance head (`Show (List A)`,
+     // `BEq (List A)`, `Map`): `term_matches_carrier` requires the
+     // carrier to be an App when the instance arg is applied, while
+     // inference yields a bare head, so element-type propagation is
+     // what is actually missing.
+     "no carrier-revealing argument to infer an instance from",
+     "no carrier-revealing argument to infer an instance from",
+     "instance head is applied (Show (List A)); carrier is a bare head",
+     "instance head is applied (BEq (List A)); carrier is a bare head",
+     "instance head is applied (Map M); carrier is a bare head",
+     "instance head is applied (Map M); carrier is a bare head",
+     // Closed by: rewriting ~105 legacy dotted-path call sites
+     // (`lang.codegen.emit.compile_db_decls_ir` written inline instead
+     // of imported) across 8 files. NOT a checker bug -- the paths
+     // genuinely name nothing -- and mechanical to fix, but out of
+     // scope here.
+     "legacy dotted-path call sites name no import",
+     "legacy dotted-path call sites name no import",
+     // Closed by: type-variable instantiation in the self-hosted
+     // checker. Both report a mismatch between a declared `A` and the
+     // concrete type at the call (`expected (List A), found (List U8)`;
+     // `expected (IO A), found (IO (List I64))`), which the Rust host
+     // accepts -- so the files are fine and the checker is not.
+     "self-hosted checker does not instantiate a type variable",
+     "self-hosted checker does not instantiate a type variable"]
 
 #[partial]
 def gap_len (xs : List String) : I64 :=

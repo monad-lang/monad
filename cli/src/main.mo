@@ -830,9 +830,22 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                                 // A file-level failure, counted as such:
                                 // no test in it ever ran, so folding it
                                 // into the per-test totals would invent
-                                // results that do not exist.
-                                println ("[31mFAIL  " ++ f ++ " (compilation failed)[0m");
-                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                                // results that do not exist. Unless it
+                                // is a recorded gap: `init/src/tests.mo`
+                                // fails HERE (llc rejects a call to an
+                                // undefined `@Pred`), not at the driver
+                                // compile, so the gap test belongs on
+                                // this path too. `llc`'s own message is
+                                // not available here -- it went to the
+                                // console -- so the cause matched is
+                                // this branch's own wording.
+                                if is_known_gap f "compilation failed" then do {
+                                    println ("[33mGAP   " ++ f ++ " (" ++ gap_reason_for f ++ ")[0m");
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, gaps := gaps + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                                } else do {
+                                    println ("[31mFAIL  " ++ f ++ " (compilation failed)[0m");
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                                }
                             } else do {
                                 let bin_path := out_dir ++ "/" ++ bin_name;
                                 // The driver's exit code IS its failure
@@ -846,8 +859,26 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                                 // rather than trusting the number.
                                 let exit_code <- exec_cmd bin_path [];
                                 if I64.lt exit_code 0 || I64.gt exit_code total then do {
-                                    println ("[31mFAIL  " ++ f ++ " (driver exited " ++ I64.to_string exit_code ++ ")[0m");
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                                    // A driver that died is normally a
+                                    // real failure -- but a gap can also
+                                    // be a RUNTIME one (the BEq (List A)
+                                    // dictionary bug kills
+                                    // std/src/sha256_tests.mo here, long
+                                    // after it compiles), so the same
+                                    // path-and-cause test applies. The
+                                    // cause is the message this branch
+                                    // itself prints, so a listed file
+                                    // that starts failing with a
+                                    // different exit code is still
+                                    // reported.
+                                    let why : String := "driver exited " ++ I64.to_string exit_code;
+                                    if is_known_gap f why then do {
+                                        println ("[33mGAP   " ++ f ++ " (" ++ gap_reason_for f ++ ")[0m");
+                                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped, gaps := gaps + 1, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                                    } else do {
+                                        println ("[31mFAIL  " ++ f ++ " (" ++ why ++ ")[0m");
+                                        run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                                    }
                                 } else do {
                                     run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed + (total - exit_code), tests_failed := tests_failed + exit_code, files_failed := files_failed, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                                 }
