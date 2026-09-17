@@ -6225,12 +6225,23 @@ def expr_climb_op_prec (input: String) (lhs: ParseTerm) (op: String) (rem: Strin
             else expr_climb_op_rhs_ws (take_while_byte is_space_byte rem) lhs op prec (op_entry_rassoc entry) min_prec
     }
 
+/// `rem` is the operator's own trailing whitespace; a comment before the
+/// RHS (`lhs &&\n    // why the RHS is what it is\n    rhs`) is skipped
+/// too, for exactly the reason `expr_climb_op`'s doc comment gives for
+/// skipping BEFORE the operator: an explicit operator token obligates
+/// an RHS, so nothing after it can be a sibling construct's opening
+/// token -- the ambiguity that keeps `expr_climb_rest_ws` whitespace-only
+/// can't arise here. Confirmed live: `lang/tests/tuple_literal_tests.mo`'s
+/// `String.trim rem == "" &&\n// sanity comment\n String.length ... > 0`
+/// ended the climb at the comment, the match arm failed, and the whole
+/// decl (and everything after it in the file) silently truncated --
+/// while the Rust host parses the same file fine.
 #[partial]
 def expr_climb_op_rhs_ws (r: ParseResult String) (lhs: ParseTerm) (op: String) (prec: I64) (rassoc: Bool) (min_prec: I64) : ParseResult ParseTerm :=
     match r {
         success rem _ =>
             let next_min : I64 := if rassoc then prec else (prec + 1) in
-            expr_climb_op_rhs_expr (expr_climb rem next_min) lhs op min_prec,
+            expr_climb_op_rhs_expr (expr_climb (skip_docstrings rem) next_min) lhs op min_prec,
         fail e => fail e
     }
 
