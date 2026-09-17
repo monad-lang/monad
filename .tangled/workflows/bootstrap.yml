@@ -1,0 +1,39 @@
+# The `bootstrap` job from .github/workflows/ci.yml: the self-hosted compiler
+# compiles itself, and then the binary that falls out has to do the job it was
+# built for.
+#
+# These two steps MUST stay in one workflow file. `monad:debug-oracle` reuses
+# the binary `monad:bootstrap-compile` just wrote to
+# ${TMPDIR:-/tmp}/monad-bootstrap-ci/monad, and only steps *within* a workflow
+# share a machine -- every workflow in a Spindle pipeline runs in its own
+# microVM. Splitting them into two files would leave the oracle to rebuild the
+# binary itself (its staleness check handles that case, by design) or, worse,
+# to run against a stale one, which reports failures that are really its own
+# age.
+#
+# The other half of that job's value is the pair of compiles: `--release` and
+# then the default invocation, which is what users actually type and was broken
+# for an unknown length of time precisely because nothing ran it. Both live in
+# the task, so both still run here -- see devenv.nix's `monad:bootstrap-compile`
+# for why each one is worth its own compile.
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main"]
+  - event: ["manual"]
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - git
+
+steps:
+  - name: Bootstrap compiler
+    command: |
+      nix develop --no-pure-eval --accept-flake-config -c \
+        devenv tasks run monad:bootstrap-compile
+
+  - name: Debug transparency oracle
+    command: |
+      nix develop --no-pure-eval --accept-flake-config -c \
+        devenv tasks run monad:debug-oracle

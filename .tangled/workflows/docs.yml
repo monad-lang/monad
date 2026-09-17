@@ -1,0 +1,41 @@
+# The `build` job of .github/workflows/mdbook.yml, and only that job.
+#
+# The GitHub workflow's second job deploys to Pages via
+# actions/configure-pages + actions/deploy-pages. Tangled has no upload-an-
+# artifact equivalent -- a Tangled site serves files straight out of a branch
+# and a deploy directory -- so porting that job would mean building the book and
+# committing it back to a branch with a push credential. That is a publishing
+# decision with a secret attached, not an obvious mirror of what the GitHub
+# workflow does, so this file stops at the check.
+#
+# Which is the half that catches defects anyway: a broken SUMMARY.md, a chapter
+# that no longer resolves, a book.toml that `mdbook build` rejects. (The
+# ```monad blocks in the book are checked separately, by
+# scripts/check-docs.sh, which the pre-commit sweep already runs.)
+#
+# mdbook comes from the devenv here, not from the GitHub workflow's
+# `cargo install mdbook 0.4.36` -- devenv.nix already lists it so a docs change
+# can be previewed locally with `docs-serve`, and pinning one version in two
+# places is how the two copies drift.
+#
+# The `paths` filter is the one trigger difference from the file it mirrors:
+# this is the cheapest workflow in the directory and it cannot be affected by
+# anything outside docs/, so it does not need to run on every push. (Spindle
+# takes `paths` per constraint, alongside branch and tag.)
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main"]
+    paths:
+      - "docs/**"
+  - event: ["manual"]
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - git
+
+steps:
+  - name: Build the book
+    command: |
+      nix develop --no-pure-eval --accept-flake-config -c mdbook build docs

@@ -1,0 +1,41 @@
+# The build-and-verify half of .github/workflows/nightly.yml.
+#
+# IT PUBLISHES NOTHING. Read that twice before treating a green run here as a
+# release: the GitHub job's last step hands the artifact to
+# softprops/action-gh-release, and there is no equivalent here -- Spindle has no
+# `uses:`, and Tangled's own release mechanism (an `sh.tangled.repo.artifact`
+# record built from a PDS blob upload) is deliberately not wired up yet.
+# `scripts/monadup` still resolves nightlies through the GitHub releases API, so
+# GitHub remains the release channel and this workflow is a check, not a
+# publisher. Its `dist/` directory dies with the microVM when the workflow ends.
+#
+# scripts/nightly-release.sh needs no changes to run here: its `tag`/`date`
+# outputs are already guarded on $GITHUB_OUTPUT being set, so that block is
+# simply skipped, and the same script called locally through
+# `devenv tasks run monad:nightly` behaves the same way.
+#
+# It is called directly rather than through `devenv tasks run monad:nightly`,
+# for the reason that job's own comment gives: devenv-tasks captures a task's
+# stdout and shows it only on failure, which would swallow the evidence of what
+# got built -- the `file` line, the recorded commit, the compile's --verbose
+# stage trace.
+#
+# The GitHub job also guards on `github.repository == 'monad-lang/monad'` so
+# forks can't publish. There is nothing to port: a pipeline only runs on a repo
+# whose settings list this spindle.
+when:
+  - event: ["push"]
+    branch: ["main"]
+  - event: ["manual"]
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - git
+
+steps:
+  - name: Build and verify the nightly binary
+    command: |
+      nix develop --no-pure-eval --accept-flake-config -c \
+        scripts/nightly-release.sh

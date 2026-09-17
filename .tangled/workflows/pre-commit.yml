@@ -1,0 +1,35 @@
+# The `pre-commit-checks` job from .github/workflows/ci.yml.
+#
+# Same task, same dev shell: `devenv:git-hooks` is what `prek run -a` runs, so
+# rustfmt, clippy, `cargo test --release`, shellcheck, the fast `init std lang
+# examples` .mo sweep and `scripts/check-docs.sh` all come along for free and
+# stay defined in exactly one place (devenv.nix).
+#
+# Two things are worth knowing about the shape of this file on Spindle:
+#
+#   * There is no `concurrency:` block to port. Actions cancelled in-progress
+#     runs per ref; Spindle queues workflows through its resource scheduler
+#     instead, and has no cancel-in-progress to configure.
+#
+#   * Entering the dev shell runs devenv's shell-entry tasks, which includes a
+#     full `prek run -a`. So every `nix develop -c` step anywhere in this
+#     directory pays for this sweep first, whether or not it asks for it. That
+#     is already true of the GitHub workflows (the same `nix develop -c`
+#     wrappers), and it is why `test.yml` and this file overlap more than their
+#     step names suggest.
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main"]
+  - event: ["manual"]
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - git
+
+steps:
+  - name: Run pre commit checks
+    command: |
+      nix develop --no-pure-eval --accept-flake-config -c \
+        devenv tasks run devenv:git-hooks

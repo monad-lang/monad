@@ -1,0 +1,30 @@
+# The `build-rust` gate from .github/workflows/ci.yml.
+#
+# Read the header of that file before reading this one: the job it mirrors
+# exists so the three jobs after it don't race to build the same crates, and
+# every one of them `needs: build-rust`. Neither half of that survives the
+# port -- Spindle has no `needs:` (every workflow in a pipeline runs in
+# parallel, each in its own microVM with its own cold cargo cache), so the
+# gate orders nothing and shares nothing.
+#
+# It is kept for parity, not for signal. It can be deleted outright without
+# losing coverage: the `cargo test --release` inside the pre-commit sweep
+# already compiles every workspace member, monad-wasm included. The only thing
+# that would go with it is `--release`'s fat-LTO profile being exercised by a
+# job whose *only* job is to exercise it.
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main"]
+  - event: ["manual"]
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - git
+
+steps:
+  - name: Build release binary
+    command: |
+      nix develop --no-pure-eval --accept-flake-config -c \
+        cargo build --release --workspace

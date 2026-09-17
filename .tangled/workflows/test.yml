@@ -1,0 +1,27 @@
+# The `test` job from .github/workflows/ci.yml.
+#
+# One step, because the task already is one: `monad:test` runs
+# scripts/check-monad-tests.sh, which sweeps every mote plus slow_tests/.
+#
+# The GitHub job carries `timeout-minutes: 120` as a hang guard. Spindle has no
+# per-workflow timeout field -- the spindle operator sets one default
+# (SPINDLE_MICROVM_PIPELINES_WORKFLOW_TIMEOUT) that applies to every workflow it
+# runs, and the value it ships with is 5m, far under this job's needs. That
+# raise is a host prerequisite, not something this file can express; see
+# monad-nixos-modules/modules/spindle.nix.
+when:
+  - event: ["push", "pull_request"]
+    branch: ["main"]
+  - event: ["manual"]
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - git
+
+steps:
+  - name: Run tests
+    command: |
+      nix develop --no-pure-eval --accept-flake-config -c \
+        devenv tasks run monad:test
