@@ -100,7 +100,7 @@ type Option A {
         induct_constructor(
           npt("Option"),
           id("some"),
-          pi(typ("A"), option_typ.clone()),
+          pi_var(id("a"), typ("A"), option_typ.clone()),
           vec![dpar("a", typ("A"))]
         ),
         induct_constructor(npt("Option"), id("none"), option_typ, vec![])

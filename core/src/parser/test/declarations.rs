@@ -434,7 +434,10 @@ fn test_inductive() {
         induct_constructor(
           npt("Result"),
           id("ok"),
-          pi(typ("A"), res_t.clone()),
+          // Named binder: a constructor's parameter list is a dependent
+          // telescope, so `a` must actually bind (a later field's type
+          // may mention it).
+          pi_var(id("a"), typ("A"), res_t.clone()),
           vec![dpar("a", typ("A"))]
         ),
         induct_constructor(

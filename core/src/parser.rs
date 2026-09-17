@@ -2246,10 +2246,38 @@ fn constructor_parser<'a>(
       induct_constructor(extra.induct_name.clone().into(), name, return_typ, params),
     ))
   } else {
-    let mut full_typ = pi_typs(
-      params.iter().map(|p| *p.typ.clone()).collect::<Vec<Term>>(),
-      return_typ,
-    );
+    // Named Pi binders, the same fold `def_parser` uses above -- NOT
+    // `pi_typs`, whose binders are anonymous (`arg_name: None`).
+    //
+    // A constructor's parameter list is a dependent telescope: a later
+    // field's type may mention an earlier field, as in `Sigma`'s
+    // `mk (fst : A) (snd : B fst)`. With an anonymous binder `fst` is
+    // not bound at all, so `free_vars` reports it free and
+    // `elaborate_inductive` silently generalizes it into a bogus
+    // `forall (fst : Sort 1)` unrelated to the first field. The
+    // constructor then type-checks and means nothing: `Sigma.mk t0 f0`
+    // fails with `Fam vs. (_ _)` even though it is well typed.
+    // A positional field (`err E`) has no name to bind, and binding it
+    // as `Some("")` would put an empty identifier into scope; keep those
+    // anonymous, exactly as before.
+    let mut full_typ = return_typ;
+    for param in params.iter().rev() {
+      full_typ = if param.name.as_str().is_empty() {
+        Term::Pi {
+          arg_name: None,
+          arg: Box::new((*param.typ).clone()),
+          ret: Box::new(full_typ),
+          mult: param.mult.clone(),
+        }
+      } else {
+        pi_named_with_mult(
+          param.name.clone(),
+          (*param.typ).clone(),
+          full_typ,
+          param.mult.clone(),
+        )
+      };
+    }
     if !implicit_params.is_empty() {
       full_typ = foralls(implicit_params, full_typ);
     }

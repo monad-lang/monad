@@ -3583,6 +3583,47 @@ mod test {
     );
   }
 
+  // ---------------------------------------------------------------
+  // Dependent constructor telescopes: a constructor's parameter list
+  // binds, so a later field's type may mention an earlier field.
+  // `constructor_parser` used to build the chain with `pi_typs`, whose
+  // binders are anonymous, which left the mention DANGLING --
+  // `elaborate_inductive` then silently generalized it into a bogus
+  // `forall (t : Sort 1)` unrelated to the field, and the checker
+  // solved that fresh implicit from whatever was passed. The result
+  // was unsound, not merely imprecise.
+  // ---------------------------------------------------------------
+
+  #[test]
+  fn test_dependent_constructor_field_accepts_well_typed_value() {
+    let env = ModuleCheckEnv::new();
+    let source = "type Two { t0, t1 }\n\
+                  type Dep { mk (t : Type) (v : t) }\n\
+                  def d : Dep := Dep.mk Two Two.t0\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.passed(), 1, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_dependent_constructor_field_rejects_ill_typed_value() {
+    // `v` is declared `t`, and `t` is given as `Two`, so an `Other`
+    // must be rejected. Before constructor binders were named this was
+    // ACCEPTED: `t` had become a free implicit the checker cheerfully
+    // solved to `Other`.
+    let env = ModuleCheckEnv::new();
+    let source = "type Two { t0, t1 }\n\
+                  type Other { o0 }\n\
+                  type Dep { mk (t : Type) (v : t) }\n\
+                  def d : Dep := Dep.mk Two Other.o0\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_err(),
+      "an ill-typed dependent field must be rejected, got {:?}",
+      report.defs[0].result
+    );
+  }
+
   #[test]
   fn test_field_pattern_duplicate_field_is_an_error() {
     let env = ModuleCheckEnv::new();
