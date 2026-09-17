@@ -35,9 +35,21 @@ def IO.list_dir_native (path : String) : IO (List String)
 #[native "get_env"]
 def IO.get_env (s : String) : IO (Option String)
 
-// Milliseconds from an arbitrary fixed origin (CLOCK_MONOTONIC). Only
-// DIFFERENCES between two readings mean anything -- the origin is not an
-// epoch and is not comparable across processes.
+// Milliseconds since the Unix epoch, from the system WALL clock
+// (`SystemTime::now`, core/src/core_native.rs). Use it for differences
+// between two readings; because it is the wall clock and not a
+// monotonic one, a clock adjustment (NTP, a manual set, a suspend) can
+// make a later reading SMALLER than an earlier one, so a computed
+// interval can come out negative -- callers that render a duration
+// must handle that (`fmt_dur_ns`, lang/codegen/test_driver.mo, clamps
+// it to zero).
+//
+// TODO: back this with a genuinely monotonic source
+// (`Instant`/`CLOCK_MONOTONIC`), which is what an interval timer
+// actually wants; the epoch-based reading would then move to a
+// separate `IO.current_time_epoch` for the callers that want a real
+// timestamp. Documented as the wall clock rather than quietly changed
+// because the two natives must agree across BOTH runtimes at once.
 //
 // `IO` because reading a clock is a side effect in the same sense
 // reading a file is: two calls in one expression may legitimately differ,
@@ -46,9 +58,9 @@ def IO.get_env (s : String) : IO (Option String)
 #[native current_time]
 def IO.current_time : IO I64
 
-// Nanoseconds from the same arbitrary `CLOCK_MONOTONIC` origin as
-// `IO.current_time` above -- same caveats (differences only, not an
-// epoch, not comparable across processes), just finer.
+// Nanoseconds since the Unix epoch, from the same system WALL clock as
+// `IO.current_time` above -- same caveats (a backwards clock step can
+// make an interval negative), just finer.
 //
 // Exists because per-test timing needs sub-millisecond resolution: the
 // self-hosted test runner reports each test's duration the way the Rust

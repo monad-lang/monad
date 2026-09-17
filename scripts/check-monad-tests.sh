@@ -19,92 +19,118 @@
 # just lang/: cli/ holds the compile target, llvm/ and runtime/ the
 # backend.
 #
-# Known gap: `std/src/concurrent/fiber_test.mo` and `combine_test.mo`
-# are SKIPped, not run -- their tests reach concurrency natives that the
-# native backend does not wire, so the driver cannot be compiled at all.
-# They are deferred until a self-hosted async runtime exists; the runner
-# reports them as skips with that reason rather than failing.
+# Two runners, one corpus. Every .mo file is tested by exactly one of
+# them, and none is left untested by both: the SELF-HOSTED runner takes
+# the whole corpus except `host_only` below, and the RUST runner takes
+# `host_only` plus any file the self-hosted runner reports as a GAP
+# (`cli/src/test_gaps.mo` -- unwired f64 natives, the async runtime, and
+# two codegen bugs). A GAP does not fail the sweep; an unrecognised
+# compile failure does.
 set -euo pipefail
 
-# Files the self-hosted runner cannot build a working driver for today,
-# each for a separate PRE-EXISTING backend bug -- none of them a problem
-# with the test file or with the runner:
+# The 13 files the self-hosted runner cannot build a working driver for
+# today. Each is a PRE-EXISTING backend bug -- none is a problem with the
+# test file or with the runner -- and each stays covered by the Rust
+# runner at the bottom of this script, so excluding it here costs no
+# coverage. Four groups:
 #
-#   lang/src/parser/position.mo
-#   cli/src/tests/cli_derive_self_hosted_tests.mo
-#       `llc` rejects the emitted IR ("instruction forward referenced
-#       with type 'i64'"): an `icmp` result reaches a `phi i64` from a
-#       block emitted after its own use. The bad IR is in a user test's
-#       own body -- a `match` arm that reads a struct field -- not in
-#       anything the driver generates.
+# 1. `llc` rejects the emitted IR ("instruction forward referenced with
+#    type 'i64'"): an `icmp` result reaches a `phi i64` from a block
+#    emitted after its own use. The bad IR is in a user test's own body
+#    -- a `match` arm that reads a struct field -- not in anything the
+#    driver generates.
+#        lang/src/parser/position.mo
+#        cli/src/tests/cli_derive_self_hosted_tests.mo
 #
-#   cli/src/tests/main_tests.mo
-#   std/src/list_tests3a.mo
-#   std/src/list_tests3b.mo
-#   std/src/array.mo
-#   examples/iteration_advanced.mo
-#       The driver dies by signal. In the emitted `BEq_List_A_beq` the
-#       recursive tail comparison applies the ELEMENT dictionary to two
-#       lists, dereferencing list cells as scalars.
+# 2. The driver dies by signal. In the emitted `BEq_List_A_beq` the
+#    recursive tail comparison applies the ELEMENT dictionary to two
+#    lists, dereferencing list cells as scalars.
+#        cli/src/tests/main_tests.mo
+#        std/src/list_tests3a.mo
+#        std/src/list_tests3b.mo
+#        std/src/array.mo
+#        examples/iteration_advanced.mo
+#        std/src/list.mo
+#        lang/src/core_eval.mo
+#        lang/src/typecheck/meta_eval.mo
+#        lang/src/tests/core_eval_lang_tests.mo
 #
-#   lang/src/toml.mo
-#       The driver allocates without bound -- OOM-killed at ~30 GB RSS,
-#       and no progress in 10 minutes under a 4 GB cap. Its 34 tests pass
-#       in milliseconds on the host. This is the no-free-runtime memory
-#       pathology (plans/bootstrapping/rung3-oom-no-free-runtime.md),
-#       reached by whichever toml test allocates hardest. EXCLUDED FOR
-#       THE RUNNER'S SAKE, not just for speed: 30 GB is enough to disturb
-#       everything else on a CI machine.
+# 3. Unbounded allocation -- OOM-killed at ~30 GB RSS, no progress in 10
+#    minutes under a 4 GB cap, while its 34 tests pass in milliseconds on
+#    the host. The no-free-runtime memory pathology
+#    (plans/bootstrapping/rung3-oom-no-free-runtime.md). EXCLUDED FOR THE
+#    RUNNER'S SAKE, not just for speed: 30 GB disturbs everything else on
+#    a CI machine.
+#        lang/src/toml.mo
 #
-# They are NOT dropped from CI: the Rust runner executes them below, so a
-# real regression in any of them still fails this script. Delete the
-# exclusion (and the second invocation) once the two codegen bugs are
-# fixed -- see plans/implementations/2026-09-16-self-hosted-test-runner-parity.md.
+# 4. More tests than a driver's 8-bit exit code can report (288 > 255),
+#    so the runner refuses it by design -- see the guard in
+#    cli/src/main.mo. Not a bug to fix here; the file needs splitting, or
+#    the driver needs a richer result channel than an exit code.
+#        lang/src/parser.mo
+#
+# ONE list, used by both the sweep and the Rust fallback -- they were two
+# hand-maintained copies of the same 13 paths, which is one edit away
+# from a file that runs in neither.
+host_only=(
+  lang/src/parser/position.mo
+  cli/src/tests/cli_derive_self_hosted_tests.mo
+  cli/src/tests/main_tests.mo
+  std/src/list_tests3a.mo
+  std/src/list_tests3b.mo
+  std/src/array.mo
+  examples/iteration_advanced.mo
+  lang/src/toml.mo
+  lang/src/parser.mo
+  std/src/list.mo
+  lang/src/core_eval.mo
+  lang/src/typecheck/meta_eval.mo
+  lang/src/tests/core_eval_lang_tests.mo
+)
+
+# The files the self-hosted runner reports as GAPs (cli/src/test_gaps.mo).
+# Handed to the Rust runner for the same reason `host_only` is: a gap
+# means those tests do not run self-hosted, and a test that runs nowhere
+# is worse than one that runs slowly. This list is expected to shrink to
+# nothing alongside cli/src/test_gaps.mo itself.
+gap_files=(
+  init/src/optics_tests.mo
+  examples/optics.mo
+  std/src/concurrent/fiber_test.mo
+  init/src/tests.mo
+  std/src/sha256_tests.mo
+)
+
 out="${TMPDIR:-/tmp}/monad-bootstrap-ci"
-if [ ! -x "$out/monad" ] || [ -n "$(find lang cli llvm runtime -name '*.mo' -newer "$out/monad" -print -quit)" ]; then
+# Staleness: every input that ends up INSIDE the binary. `init` and `std`
+# are compiled into it just as `lang`/`cli`/`llvm`/`runtime` are, and
+# runtime.c/.h are linked into it -- omitting them meant an edit to any
+# of them left a stale binary in place, so CI tested the previous
+# compiler and reported its results as this commit's.
+if [ ! -x "$out/monad" ] || [ -n "$(find init std lang cli llvm runtime \
+      \( -name '*.mo' -o -name '*.c' -o -name '*.h' \) \
+      -newer "$out/monad" -print -quit)" ]; then
   mkdir -p "$out"
   cargo run --release -- run cli/src/main.mo compile cli/src/main.mo -o "$out/monad" --release
 fi
 test -x "$out/monad"
 
-# The self-hosted sweep: everything except the three files above. They sit
-# in directories with many healthy files, so the excluded files are named
+# The self-hosted sweep: the whole corpus except `host_only`. Those files
+# sit in directories with many healthy files, so they are named
 # individually rather than by pruning their parent directory.
 self_hosted_targets=()
 while IFS= read -r f; do
-  case "$f" in
-    lang/src/parser/position.mo) continue ;;
-    cli/src/tests/cli_derive_self_hosted_tests.mo) continue ;;
-    cli/src/tests/main_tests.mo) continue ;;
-    std/src/list_tests3a.mo) continue ;;
-    std/src/list_tests3b.mo) continue ;;
-    std/src/array.mo) continue ;;
-    examples/iteration_advanced.mo) continue ;;
-    lang/src/toml.mo) continue ;;
-    lang/src/parser.mo) continue ;;
-    std/src/list.mo) continue ;;
-    lang/src/core_eval.mo) continue ;;
-    lang/src/typecheck/meta_eval.mo) continue ;;
-    lang/src/tests/core_eval_lang_tests.mo) continue ;;
-  esac
+  for skip in "${host_only[@]}"; do
+    if [ "$f" = "$skip" ]; then
+      continue 2
+    fi
+  done
   self_hosted_targets+=("$f")
 done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.mo' | sort)
 
 "$out/monad" test "${self_hosted_targets[@]}"
 
-# And every excluded file through the Rust runner, so each stays covered:
-# a real regression in any of them still fails this script.
-cargo run --release -- test \
-  lang/src/parser/position.mo \
-  cli/src/tests/cli_derive_self_hosted_tests.mo \
-  cli/src/tests/main_tests.mo \
-  std/src/list_tests3a.mo \
-  std/src/list_tests3b.mo \
-  std/src/array.mo \
-  examples/iteration_advanced.mo \
-  lang/src/toml.mo \
-  lang/src/parser.mo \
-  std/src/list.mo \
-  lang/src/core_eval.mo \
-  lang/src/typecheck/meta_eval.mo \
-  lang/src/tests/core_eval_lang_tests.mo
+# Everything the self-hosted runner could not run, through the Rust
+# runner, so each file stays covered and a real regression in any of them
+# still fails this script.
+cargo run --release -- test "${host_only[@]}" "${gap_files[@]}"

@@ -99,8 +99,9 @@ monad check <path>... [--verbose/-v]
 
 monad test <path>... [--verbose/-v]
         Compile each file's own #[test] defs into a native binary and run it.
-        A file with no #[test]s, or that already defines its own main, is
-        skipped rather than failed.
+        A file with no #[test]s is skipped rather than failed. A file that
+        defines its own main is fine: that main is renamed out of the way
+        and the generated test driver becomes the entry point.
 
 monad version
         Print the git commit this binary was built from.
@@ -112,10 +113,12 @@ Flags are position-independent — `monad compile -v hello.mo` and
 `monad compile hello.mo -v` are the same command. `--output`/`-o` takes its value
 as a **separate argument**: `--output=NAME` is not recognised.
 
-> **`monad test` is currently limited.** It fails on any file containing two or
-> more `#[test]` definitions, whatever their results. Until that is fixed, use
-> the [bootstrap host](./bootstrap-host.md#a-test-runner-that-handles-more-than-one-test-per-file)
-> to run a real test suite.
+> **`monad test` reports a failure COUNT through its driver's exit code**, so a
+> single file may hold at most 255 tests; the runner refuses a larger file
+> rather than reporting a number that wrapped. A handful of files still cannot
+> be run self-hosted at all (unwired `f64` natives, the async runtime, two
+> codegen bugs) — those are listed in `cli/src/test_gaps.mo`, reported as `GAP`,
+> and covered by the [bootstrap host](./bootstrap-host.md) in CI instead.
 
 > **`monad eval` is not a general interpreter.** Eight natives are wired into it
 > — `i64_add`, `i64_sub`, `i64_mul`, `i64_eq`, `i64_lt`, `string_concat`,

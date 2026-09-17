@@ -157,11 +157,18 @@ def display_prefix_of (mp : ModulePath) : String :=
 /// user's `main` would win and the driver would never run, silently
 /// reporting nothing.
 ///
-/// The user's `main` is renamed rather than dropped: dropping it would
-/// break any test that calls it. It is NOT invoked (the Rust runner
-/// never invokes it either, and calling it would both pollute
-/// reachability and run the program's real side effects during a test
-/// run).
+/// The user's `main` is renamed rather than dropped, which keeps the
+/// def reachable for anything that refers to it by its NEW name. It
+/// does NOT preserve a test that calls `main`: renaming rewrites the
+/// definition only, never the call sites, so such a call is left
+/// naming a `main` that no longer exists. Latent today -- no corpus
+/// file has a test that calls its own `main` -- and the honest fix if
+/// one appears is to rewrite the call sites too, not to keep the
+/// original name.
+///
+/// The renamed `main` is NOT invoked (the Rust runner never invokes it
+/// either, and calling it would both pollute reachability and run the
+/// program's real side effects during a test run).
 ///
 /// The new name avoids `__user_main` deliberately: `ends_with_main`
 /// (`lang/codegen/symbols.mo`) has a latent `String.slice` length bug,
@@ -308,19 +315,64 @@ def synth_all_test_stmts (specs : List TestSpec) (idx : I64) (esc : String) : St
 /// the two-digit fraction are computed here, so both runners format
 /// identically. There is no `I64.mod` (`init/src/number.mo`), hence the
 /// explicit `d - w * unit` remainder arithmetic.
+///
+/// **Rounding.** The reference is `{:.2}` on a float, which rounds
+/// half-away-from-zero and CARRIES into the whole part; the ms/s
+/// branches therefore compute total HUNDREDTHS first (`(d + half) /
+/// unit_per_hundredth`) and only then split off whole and fraction.
+/// Rounding the fraction alone cannot carry: `1999996ns` gave
+/// `1.99ms` where the reference gives `2.00ms`, and `999999999ns` has
+/// to become `1000.00ms`, whole part included.
+///
+/// The µs branch deliberately does NOT round: the reference is
+/// `{:.0}` applied to `as_micros()`, an integer count that has already
+/// truncated, so truncation IS the matching semantics there.
+///
+/// The `d < 0` clamp exists because the host clock is the wall clock
+/// (`SystemTime::now`, see `std/src/io.mo`), so a backwards step can
+/// make an interval negative; a negative duration has no sensible
+/// rendering and would otherwise print a `-` with a padded fraction.
+///
+/// Kept as SOURCE TEXT that the driver embeds, with `fmt_dur_ns` below
+/// as a real-code twin for testing. The duplication is deliberate: the
+/// driver is a standalone program that cannot call back into the
+/// compiler, so the logic has to exist as text; `test_fmt_dur_source_
+/// rounds_half_up` guards the two against drifting apart.
 def fmt_dur_source : String :=
     "def __pad2 (n : I64) : String :=\n" ++
     "    if I64.lt n 10 then \"0\" ++ I64.to_string n else I64.to_string n\n" ++
     "\n" ++
     "def __fmt_dur (d : I64) : String :=\n" ++
-    "    if I64.lt d 1000 then I64.to_string d ++ \"ns\"\n" ++
+    "    if I64.lt d 0 then \"0ns\"\n" ++
+    "    else if I64.lt d 1000 then I64.to_string d ++ \"ns\"\n" ++
     "    else if I64.lt d 1000000 then I64.to_string (I64.div d 1000) ++ \"µs\"\n" ++
     "    else if I64.lt d 1000000000 then\n" ++
-    "        let __w : I64 := I64.div d 1000000 in\n" ++
-    "        I64.to_string __w ++ \".\" ++ __pad2 (I64.div (I64.sub d (I64.mul __w 1000000)) 10000) ++ \"ms\"\n" ++
+    "        let __h : I64 := I64.div (I64.add d 5000) 10000 in\n" ++
+    "        I64.to_string (I64.div __h 100) ++ \".\" ++ __pad2 (I64.sub __h (I64.mul (I64.div __h 100) 100)) ++ \"ms\"\n" ++
     "    else\n" ++
-    "        let __w : I64 := I64.div d 1000000000 in\n" ++
-    "        I64.to_string __w ++ \".\" ++ __pad2 (I64.div (I64.sub d (I64.mul __w 1000000000)) 10000000) ++ \"s\"\n"
+    "        let __h : I64 := I64.div (I64.add d 5000000) 10000000 in\n" ++
+    "        I64.to_string (I64.div __h 100) ++ \".\" ++ __pad2 (I64.sub __h (I64.mul (I64.div __h 100) 100)) ++ \"s\"\n"
+
+/// A real-code twin of the `__fmt_dur` that `fmt_dur_source` above
+/// embeds as text, kept identical to it line for line so the
+/// formatting can actually be unit-tested -- the embedded copy only
+/// ever exists inside a generated driver, which no test can call.
+/// Any change to one MUST be made to the other; see that def's own
+/// doc comment for why the duplication is structural rather than
+/// laziness.
+pub def fmt_dur_ns (d : I64) : String :=
+    if I64.lt d 0 then "0ns"
+    else if I64.lt d 1000 then I64.to_string d ++ "ns"
+    else if I64.lt d 1000000 then I64.to_string (I64.div d 1000) ++ "µs"
+    else if I64.lt d 1000000000 then
+        let h : I64 := I64.div (I64.add d 5000) 10000 in
+        I64.to_string (I64.div h 100) ++ "." ++ fmt_dur_pad2 (I64.sub h (I64.mul (I64.div h 100) 100)) ++ "ms"
+    else
+        let h : I64 := I64.div (I64.add d 5000000) 10000000 in
+        I64.to_string (I64.div h 100) ++ "." ++ fmt_dur_pad2 (I64.sub h (I64.mul (I64.div h 100) 100)) ++ "s"
+
+def fmt_dur_pad2 (n : I64) : String :=
+    if I64.lt n 10 then "0" ++ I64.to_string n else I64.to_string n
 
 #[partial]
 pub def synthesize_test_driver_source (specs : List TestSpec) (file_path : String) : String :=
@@ -363,6 +415,25 @@ pub def synthesize_test_driver_source (specs : List TestSpec) (file_path : Strin
 
 // ─── Full pipeline ──────────────────────────────────────────────────
 
+/// The exact error `compile_loaded_modules_to_test_ir` returns for a
+/// file with no `#[test]` defs at all -- a benign, expected outcome
+/// (most library files have no tests), NOT a failure.
+///
+/// A named constant with a matching predicate because the caller has to
+/// tell this case apart from a real compile failure, and the obvious
+/// cheap test does not work: this message and an unresolved-instance
+/// error (``no instance found for `Foldable.foldl` ``) BOTH start with
+/// `no `, so a prefix test silently treats every instance failure as
+/// "this file has no tests" -- exactly the misclassification that let
+/// broken files pass as skipped.
+pub def no_tests_error_message : String := "no #[test] defs found"
+
+/// Whether an error from `compile_loaded_modules_to_test_ir` is the
+/// benign no-tests case. Full-string equality, never a prefix -- see
+/// `no_tests_error_message`.
+pub def is_no_tests_error (e : String) : Bool :=
+    String.beq e no_tests_error_message
+
 /// Discover -> synthesize -> parse -> collision-check -> splice into
 /// the decl list -> reachability-filter -> compile. Mirrors
 /// `lang.codegen.emit.compile_loaded_modules_to_ir`'s own body, but
@@ -396,7 +467,7 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result 
     let target_decls := target_mi.decl_list;
     let test_defs := discover_test_defs target_decls;
     if List.is_empty test_defs then do {
-        return Result.err "no #[test] defs found"
+        return Result.err no_tests_error_message
     } else do {
         let prefix_ : String := display_prefix_of target_mi.path;
         let specs : List TestSpec := classify_test_defs prefix_ test_defs;
@@ -781,3 +852,78 @@ def count_main_defs (decl_list : List Decl) : I64 :=
             } in
             here + count_main_defs rest,
     }
+
+// ─── Duration formatting ────────────────────────────────────────────
+//
+// Reference: `format_duration` (core/src/lib.rs) -- `{nanos}ns`,
+// `{:.0}µs` on `as_micros()`, `{:.2}ms`, `{:.2}s`.
+
+#[test]
+def test_fmt_dur_ns_below_microsecond_is_raw_nanos : Bool :=
+    String.beq (fmt_dur_ns 0) "0ns" && String.beq (fmt_dur_ns 999) "999ns"
+
+#[test]
+def test_fmt_dur_ns_microseconds_truncate : Bool :=
+    // `{:.0}` on `as_micros()` -- an integer count that has ALREADY
+    // truncated, so 1999ns is 1µs, not 2µs.
+    String.beq (fmt_dur_ns 1000) "1µs" && String.beq (fmt_dur_ns 1999) "1µs"
+
+// The case the old whole-part-first shape could not express: the
+// fraction rounds up to 100 hundredths and has to CARRY into the whole
+// part. Red before the rounding fix (it printed "1.99ms").
+#[test]
+def test_fmt_dur_ns_milliseconds_round_half_up_with_carry : Bool :=
+    String.beq (fmt_dur_ns 1999996) "2.00ms"
+
+#[test]
+def test_fmt_dur_ns_milliseconds_round_half_up : Bool :=
+    // 1.235ms -> 1.24ms (half rounds away from zero, as `{:.2}` does).
+    String.beq (fmt_dur_ns 1235000) "1.24ms"
+
+#[test]
+def test_fmt_dur_ns_milliseconds_pad_fraction : Bool :=
+    String.beq (fmt_dur_ns 1000000) "1.00ms" && String.beq (fmt_dur_ns 1050000) "1.05ms"
+
+// The largest value still in the ms branch: rounds up past the branch's
+// own nominal ceiling, so the whole part is 1000, not 1.
+#[test]
+def test_fmt_dur_ns_milliseconds_top_of_range_carries_to_1000 : Bool :=
+    String.beq (fmt_dur_ns 999999999) "1000.00ms"
+
+#[test]
+def test_fmt_dur_ns_seconds : Bool :=
+    String.beq (fmt_dur_ns 1000000000) "1.00s"
+    && String.beq (fmt_dur_ns 1500000000) "1.50s"
+    && String.beq (fmt_dur_ns 2345000000) "2.35s"
+
+// The host clock is the wall clock (`SystemTime::now`), so an interval
+// can come back negative if it steps backwards mid-test.
+#[test]
+def test_fmt_dur_ns_negative_clamps_to_zero : Bool :=
+    String.beq (fmt_dur_ns (0 - 5)) "0ns"
+
+// Drift guard: `fmt_dur_source` embeds a TEXT copy of `fmt_dur_ns` that
+// no test can call directly. If the rounding is ever reverted there, the
+// generated driver silently goes back to truncating while `fmt_dur_ns`
+// above keeps passing -- so assert the rounding constants are present in
+// the emitted source too.
+#[test]
+def test_fmt_dur_source_carries_the_rounding_constants : Bool :=
+    String.contains fmt_dur_source "I64.add d 5000"
+    && String.contains fmt_dur_source "I64.add d 5000000"
+    && String.contains fmt_dur_source "if I64.lt d 0 then"
+
+#[test]
+def test_is_no_tests_error_true_for_the_sentinel : Bool :=
+    is_no_tests_error no_tests_error_message
+
+// The `no `-prefix hazard this predicate exists for: an unresolved
+// instance error starts with the same two words and must NOT be read as
+// "this file has no tests".
+#[test]
+def test_is_no_tests_error_false_for_instance_failure : Bool :=
+    Bool.not (is_no_tests_error "no instance found for `Foldable.foldl` (needed in `m::t`)")
+
+#[test]
+def test_is_no_tests_error_false_for_native_failure : Bool :=
+    Bool.not (is_no_tests_error "native `f64_mul` is not wired into the native backend")

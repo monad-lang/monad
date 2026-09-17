@@ -63,7 +63,7 @@ commit this book ships with, not inferred from intent.
 | `monad run` | **Working** | Compiles the file and executes the binary in one step. The binary is always named `run_out`, so there is no `-o`. |
 | `monad eval` | **Partial** | A self-hosted interpreter, but only **8 pure natives** are wired into it (`i64_add/sub/mul/eq/lt`, `string_concat/eq/to_lowercase`). Anything else, `println` included, fails with `unknown native` — so it cannot run a hello-world. |
 | `monad version` | **Working** | Prints the git commit baked in at link time. |
-| `monad test` | **Stub** | **Fails on any file with two or more `#[test]`s**, whatever their results. One-test files work. Use the host to run a real suite. |
+| `monad test` | **Working** | Runs the whole corpus: a compiled driver per file, per-test timing, `module::test_name` names, and a failure COUNT as the driver's exit code (so at most 255 tests per file — larger files are refused, not miscounted). A short list of files still cannot be run self-hosted (`cli/src/test_gaps.mo`: unwired `f64` natives, the async runtime, two codegen bugs); they report as `GAP` and CI runs them on the host. |
 | `monad pretty` | **Working** | Parses and pretty-prints. |
 | Memory management | **Partial** | Compiled binaries use the Boehm conservative GC, explicitly a stopgap. `monad_retain`/`monad_release` are declared but never emitted; the refcount field is vestigial. Deterministic freeing is blocked on linear types. |
 | [Concurrency](./concurrency.md) | **Experimental** | Cooperative and lazy: `forkIO` defers, `await_fiber` runs it synchronously. No parallelism. **Cannot be compiled** — reachable only under the host's interpreter. |
@@ -108,8 +108,10 @@ is checked in the self-hosted compiler — the multiplicity syntax parses
 everywhere now, and means nothing), **parallel** (concurrency is a simulation
 that cannot even be compiled), or **distributable** (nightly binaries exist, a
 package system does not). Its test runner compiles and runs a driver binary
-per test file; files whose tests reach an unwired native (the concurrency
-ones, and a few numeric ones) are skipped rather than run.
+per test file; a handful of files whose tests reach a genuinely missing
+feature (floating point, the async runtime) or a known codegen bug are
+reported as gaps and run on the host instead — they are listed, with what
+closes each, in `cli/src/test_gaps.mo`.
 
 The single largest gap is linear types — and because deterministic memory
 management is meant to be built on them, that gap is also why compiled binaries
