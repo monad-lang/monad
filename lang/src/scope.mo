@@ -2847,7 +2847,6 @@ def collect_ctor_owners (decl_list : List Decl) : List CtorOwner :=
             },
     }
 
-#[partial]
 /// Collects EVERY constructor's owner, not just the 0-arg ones: a
 /// carrier must be inferable from a constructor APPLICATION in
 /// argument position too (`Foldable.foldl f 0 (some 42)` -- `some`
