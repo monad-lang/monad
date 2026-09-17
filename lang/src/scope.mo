@@ -2848,19 +2848,75 @@ def collect_ctor_owners (decl_list : List Decl) : List CtorOwner :=
     }
 
 #[partial]
+/// Collects EVERY constructor's owner, not just the 0-arg ones: a
+/// carrier must be inferable from a constructor APPLICATION in
+/// argument position too (`Foldable.foldl f 0 (some 42)` -- `some`
+/// takes a param, so the old params-only-empty filter left it out and
+/// the whole `Option` carrier went missing, failing resolution with
+/// "no instance found for Foldable.foldl"; confirmed via direct
+/// repro, `init/src/foldable_tests.mo`'s `test_foldl_option_some`).
+/// Keyed by the ctor's bare name component (`bare_ctor_name` below,
+/// which also strips a dotted/`::`-qualified prefix) -- the same shape
+/// `lookup_ctor_owner`'s callers pass after normalizing a call-site
+/// reference.
+#[partial]
 def ctor_owners_of (owner : ModulePath) (constructors : List InductConstructor) : List CtorOwner :=
     match constructors {
         List.empty => List.empty,
         List.cons c rest =>
             match c {
-                InductConstructor.mk cname params _ =>
-                    match params {
-                        List.empty =>
-                            List.cons (CtorOwner.mk (last_segment cname) owner) (ctor_owners_of owner rest),
-                        List.cons _ _ => ctor_owners_of owner rest,
-                    },
+                InductConstructor.mk cname _params _ =>
+                    // `last_segment` first: `cname` is a `ModulePath`,
+                    // and for a single-segment dotted name ("Option.some")
+                    // that split is what isolates "some"; `bare_ctor_name`
+                    // then strips any '::' prefix the same segment carries.
+                    List.cons (CtorOwner.mk (bare_ctor_name (last_segment cname)) owner) (ctor_owners_of owner rest),
             },
     }
+
+/// The bare component of a possibly-qualified name -- `some`,
+/// `Option.some`, `prelude::Option::some` all give `some`. A
+/// constructor's OWNER is what a carrier inference needs, and a
+/// call-site reference may spell the ctor with any prefix its module
+/// chain allows; `lookup_ctor_owner` compares the WHOLE identifier
+/// string (`Similar.similar` on `Identifier` is a full `String.beq`),
+/// so an unnormalized qualified reference matches nothing. Splits at
+/// the last `.` and at the last `::` -- the two joiners this codebase
+/// mints (`qualified_def_name_str` uses `::`, source-dotted names
+/// like `Option.some` keep their `.`).
+#[partial]
+def bare_ctor_name (id : Identifier) : Identifier :=
+    Identifier.id (text_after_last_sep (show_identifier id) 0 (0 - 1) (0 - 1))
+
+/// Scan for the last separator: `dot`/`colon` track the index AFTER the
+/// most recent `.` (single byte) or `::` (two bytes) seen so far,
+/// `-1` meaning none. Bytes, not chars -- identifiers are ASCII here
+/// by construction (parser-generated or `::`-joined), matching the
+/// byte-level `last_dot_index` scan beside it.
+#[partial]
+def text_after_last_sep (s : String) (i : I64) (dot : I64) (colon : I64) : String :=
+    if i < String.length s then
+        match String.get s i {
+            Option.some b =>
+                if U8.beq b 46u8 then text_after_last_sep s (i + 1) (i + 1) colon
+                else if U8.beq b 58u8 then
+                    // ':' is only a separator as a "::" PAIR -- check the
+                    // next byte before claiming it.
+                    match String.get s (i + 1) {
+                        Option.some b2 =>
+                            if U8.beq b2 58u8 then text_after_last_sep s (i + 2) dot (i + 2)
+                            else text_after_last_sep s (i + 1) dot colon,
+                        Option.none => finish_after_last_sep s dot colon,
+                    }
+                else text_after_last_sep s (i + 1) dot colon,
+            Option.none => finish_after_last_sep s dot colon,
+        }
+    else finish_after_last_sep s dot colon
+
+#[partial]
+def finish_after_last_sep (s : String) (dot : I64) (colon : I64) : String :=
+    let cut := if colon > dot then colon else dot in
+    if cut < 1 then s else String.drop cut s
 
 #[partial]
 def last_segment (mp : ModulePath) : Identifier :=
@@ -3043,9 +3099,40 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                                 Option.none => Option.some typ,
                             },
                         Option.none =>
-                            match lookup_ctor_owner ctor_owners id {
+                            // Normalized (`bare_ctor_name`): a 0-arg
+                            // ctor reference may be spelled qualified
+                            // (`Map.empty`) while the owners map keys
+                            // the bare component (`empty`).
+                            match lookup_ctor_owner ctor_owners (bare_ctor_name id) {
                                 Option.some owner => Option.some (carrier_var (show_module_path owner)),
-                                Option.none => Option.none,
+                                // Not a ctor either -- a bare 0-arg
+                                // DEF reference. The app arm below
+                                // already recovers a computed operand's
+                                // carrier from the called def's own
+                                // DECLARED return type; a 0-arg def has
+                                // no app to key on, so do the same
+                                // lookup here. The load-bearing case:
+                                // `[]` desugars to
+                                // `FromListLiteral.empty`, inside-out
+                                // resolution rewrites it to the
+                                // promoted `FromListLiteral_List_empty`
+                                // (whose own declared type -- the
+                                // INSTANCE body's concrete `List A`,
+                                // not the class's abstract `L A` -- is
+                                // what makes the carrier a real
+                                // `List`), and the enclosing
+                                // `Foldable.foldr f 0 []` then has no
+                                // other List-revealing arg to infer
+                                // from.
+                                Option.none =>
+                                    match lookup_def_type def_types id {
+                                        Option.some typ =>
+                                            match type_head_name_local typ {
+                                                Option.some carrier_name => Option.some (carrier_var (show_identifier carrier_name)),
+                                                Option.none => Option.none,
+                                            },
+                                        Option.none => Option.none,
+                                    },
                             },
                     },
                 DebugName.unnamed => Option.none,
@@ -3053,7 +3140,7 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
         // A constructed value's own `typ_name` names its owning type
         // directly -- more reliable than the `ctor_owners` name lookup
         // above (which only ever applies to a bare `Term.var` reference
-        // to a 0-arg constructor's own NAME, not an already-built
+        // to a constructor's own NAME, not an already-built
         // `Term.con` value like this one -- confirmed as a real gap via
         // a genuine crash: a call site passing an already-constructed
         // value (e.g. `show_twice mytrue` where `mytrue` reached this
@@ -3086,7 +3173,23 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                                                 Option.some carrier_name => Option.some (carrier_var (show_identifier carrier_name)),
                                                 Option.none => Option.none,
                                             },
-                                        Option.none => Option.none,
+                                        // The head isn't a def -- it may be
+                                        // a CONSTRUCTOR application
+                                        // (`some 42`, `Option.some 42`):
+                                        // the ctor's owning inductive IS the
+                                        // carrier (`Option`). Both spellings
+                                        // normalize via `bare_ctor_name`.
+                                        // This is the bare-ctor-in-argument-
+                                        // position case: an annotated local
+                                        // (`let o : Option I64 := ...`) and
+                                        // a `List` literal both already
+                                        // resolved, only a bare ctor
+                                        // application fell through.
+                                        Option.none =>
+                                            match lookup_ctor_owner ctor_owners (bare_ctor_name id) {
+                                                Option.some owner => Option.some (carrier_var (show_module_path owner)),
+                                                Option.none => Option.none,
+                                            },
                                     },
                                 DebugName.unnamed => Option.none,
                             },
@@ -4755,3 +4858,83 @@ def test_infer_carrier_type_if_branch_none_falls_through_to_else : Bool :=
         Option.some _ => true,
         Option.none => false,
     }
+
+#[test]
+def test_bare_ctor_name_splits_dotted_and_double_colon : Bool :=
+    Similar.similar (bare_ctor_name (Identifier.id "Option.some")) (Identifier.id "some")
+    && Similar.similar (bare_ctor_name (Identifier.id "prelude::Option::some")) (Identifier.id "some")
+    && Similar.similar (bare_ctor_name (Identifier.id "some")) (Identifier.id "some")
+
+// Regression tests for the bare-ctor-in-argument-position carrier gap
+// (`Foldable.foldl f 0 (some 42)` failed with "no instance found for
+// Foldable.foldl" while the annotated-local and List-literal forms
+// compiled -- `infer_carrier_type`'s app arm only consulted `def_types`,
+// and `ctor_owners` only held 0-arg constructors, so `some`'s `Option`
+// owner was invisible; confirmed via `init/src/foldable_tests.mo`'s
+// `test_foldl_option_some`).
+
+/// Owners list for an `Option`-like inductive with one PARAMETERIZED
+/// constructor, built through `collect_ctor_owners` so these tests
+/// cover the collection change (parameterized ctors now included), not
+/// just the lookup.
+#[partial]
+def probe_ctor_owners : List CtorOwner :=
+    collect_ctor_owners (List.cons (Decl.inductive_d (Inductive.mk
+        (ModulePath.mp (List.cons (Identifier.id "Option") List.empty))
+        List.empty (Term.type_ 0)
+        (List.cons (InductConstructor.mk
+            (ModulePath.mp (List.cons (Identifier.id "some") List.empty))
+            (List.cons (Param.mk (Identifier.id "A") (Term.type_ 0) Multiplicity.many Option.none List.empty) List.empty)
+            Term.hole) List.empty)
+        List.empty Visibility.pub_)) List.empty)
+
+/// True when `c` is the bare carrier var named `name`.
+#[partial]
+def carrier_is (c : Option Term) (name : String) : Bool :=
+    match c {
+        Option.some t =>
+            match t {
+                Term.var _ dbg =>
+                    match dbg {
+                        DebugName.named id => String.beq (show_identifier id) name,
+                        DebugName.unnamed => false,
+                    },
+                _ => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
+def test_infer_carrier_type_ctor_app_yields_owner : Bool :=
+    // `some 42` -- bare constructor application in argument position.
+    let app := Term.app (Term.var 0 (DebugName.named (Identifier.id "some")))
+        (Term.lit (Literal.num 42 NumSuffix.i64)) in
+    carrier_is (infer_carrier_type List.empty probe_ctor_owners str_map_empty app) "Option"
+
+#[test]
+def test_infer_carrier_type_qualified_ctor_head_yields_owner : Bool :=
+    // `Option.some 42` -- dotted spelling; normalization strips the
+    // prefix before the owners lookup.
+    let app := Term.app (Term.var 0 (DebugName.named (Identifier.id "Option.some")))
+        (Term.lit (Literal.num 42 NumSuffix.i64)) in
+    carrier_is (infer_carrier_type List.empty probe_ctor_owners str_map_empty app) "Option"
+
+// Regression test for the `[]`-in-argument-position gap: an empty list
+// literal desugars to `FromListLiteral.empty`, inside-out resolution
+// rewrites it to the promoted 0-arg def ref `FromListLiteral_List_empty`,
+// and a bare-var arm that never consulted `def_types` left the enclosing
+// `Foldable.foldr f 0 []` with no List-revealing argument at all.
+#[test]
+def test_infer_carrier_type_zero_arg_def_ref_yields_declared_head : Bool :=
+    let empty_typ := Term.app (Term.var 0 (DebugName.named (Identifier.id "List")))
+        (Term.var 1 (DebugName.named (Identifier.id "A"))) in
+    let d : Def := {
+        name := ModulePath.mp (List.cons (Identifier.id "FromListLiteral_List_empty") List.empty),
+        typ := empty_typ,
+        term := Term.hole,
+        constraints := List.empty,
+        attrs := List.empty,
+        vis := Visibility.package_private,
+    } in
+    let ref_ := Term.var 0 (DebugName.named (Identifier.id "FromListLiteral_List_empty")) in
+    carrier_is (infer_carrier_type List.empty List.empty (collect_def_types (List.cons (Decl.def_d d) List.empty)) ref_) "List"
