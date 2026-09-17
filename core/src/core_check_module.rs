@@ -708,6 +708,10 @@ fn register_inductive(
           param_atoms: vec![class_param_atom],
           field_names: fields.iter().map(|(name, _)| name.clone()).collect(),
           fields: fields.iter().map(|(_, ty)| ty.clone()).collect(),
+          // A dictionary's methods are a flat record, not a dependent
+          // telescope -- no method's type mentions an earlier method --
+          // so there are no field binders to substitute.
+          field_atoms: Vec::new(),
           // A class's own dictionary "constructor" is never index-
           // dependent the way a real GADT constructor can be (a class
           // like `BEq K` has no per-instance return-type INDEX to
@@ -817,10 +821,22 @@ fn register_inductive(
       ) {
         let (peeled_vars, mut current) = peel_foralls(ctor_ty_c);
         let param_atoms: Vec<Atom> = peeled_vars.iter().map(|(_, atom, _)| *atom).collect();
+        // Keep the atom each field binder is opened with, in field
+        // order. A constructor's parameter list is a dependent
+        // telescope, so field `k`'s type may mention fields `0..k`
+        // through exactly these atoms -- discarding them (which this
+        // loop used to do, opening with a throwaway `Atom::fresh()`)
+        // left a match arm binding `v : <opaque>` instead of `v : t`,
+        // so even a correct `match d { Dep.mk t v => Dep.mk t v }` was
+        // rejected. `match_case_field_types`' callers substitute the
+        // arm's own binders back in through these.
         let mut fields = Vec::new();
+        let mut field_atoms = Vec::new();
         while let CoreTerm::Pi { arg, ret, .. } = current {
           fields.push(*arg);
-          current = open_with(&ret, &CoreTerm::Free(Atom::fresh()));
+          let field_atom = Atom::fresh();
+          field_atoms.push(field_atom);
+          current = open_with(&ret, &CoreTerm::Free(field_atom));
         }
         // `ctor.params` (the un-lowered, `Term`-world declared param list)
         // is in the exact same declaration order `ctor.typ`'s Pi-chain
@@ -845,6 +861,7 @@ fn register_inductive(
           ConstructorInfo {
             param_atoms,
             fields,
+            field_atoms,
             field_names,
             return_index_expr: current,
           },
@@ -3620,6 +3637,35 @@ mod test {
     assert!(
       report.defs[0].result.is_err(),
       "an ill-typed dependent field must be rejected, got {:?}",
+      report.defs[0].result
+    );
+  }
+
+  #[test]
+  fn test_dependent_match_arm_binds_later_field_at_earlier_binder() {
+    // The arm must bind `v : t`, where `t` is the arm's OWN binder.
+    // Field binders used to be opened with a throwaway atom that was
+    // never recorded, so `v` got a type nothing could name -- and even
+    // this correct rebuild failed with `<unknown> vs. <unknown>`.
+    let env = ModuleCheckEnv::new();
+    let source = "type Dep { mk (t : Type) (v : t) }\n\
+                  def rebuild (d : Dep) : Dep := match d { Dep.mk t v => Dep.mk t v }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.passed(), 1, "report: {report:?}");
+  }
+
+  #[test]
+  fn test_dependent_match_arm_still_rejects_wrong_use_of_field() {
+    // `v : t`, not `Two` -- returning it as a `Two` stays an error.
+    let env = ModuleCheckEnv::new();
+    let source = "type Two { t0, t1 }\n\
+                  type Dep { mk (t : Type) (v : t) }\n\
+                  def bad (d : Dep) : Two := match d { Dep.mk t v => v }\n";
+    let report = check_module_source(&env, source);
+    assert_eq!(report.defs.len(), 1);
+    assert!(
+      report.defs[0].result.is_err(),
+      "got {:?}",
       report.defs[0].result
     );
   }

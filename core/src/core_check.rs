@@ -161,6 +161,14 @@ pub struct StructInfo {
 pub struct ConstructorInfo {
   pub param_atoms: Vec<Atom>,
   pub fields: Vec<CoreTerm>,
+  /// The atom each field binder was opened with, in the SAME order as
+  /// `fields`. A constructor's parameter list is a dependent telescope
+  /// (`mk (fst : A) (snd : B fst)`), so field `k`'s type may mention
+  /// fields `0..k` through these atoms. A match arm substitutes its own
+  /// pattern binders in through `substitute_field_binders`; without
+  /// that, `snd`'s type keeps an atom nothing else can ever name and
+  /// prints as `<unknown>`.
+  pub field_atoms: Vec<Atom>,
   /// Each field's declared name, in the SAME order as `fields` — added for
   /// `plans/implementations/named-field-construction.md`'s named-call
   /// resolution (`try_desugar_named_call`), which needs to match a
@@ -382,6 +390,58 @@ fn match_case_field_types(
       })
       .collect(),
   )
+}
+
+/// The atoms a constructor's own field telescope binds, in field order
+/// — the ones `match_case_field_types`' returned types still mention for
+/// earlier fields. Looked up the same way that function does.
+fn constructor_field_atoms(
+  mctx: &mut MetaContext,
+  structs: &StructFields,
+  scrutinee_ty: &CoreTerm,
+  case_name: &Identifier,
+) -> Option<Vec<Atom>> {
+  let forced = instantiate_foralls(mctx, structs, scrutinee_ty);
+  let inductive_atom = head_atom_of(mctx, &forced)?;
+  Some(
+    structs
+      .constructors
+      .get(&(inductive_atom, case_name.clone()))?
+      .field_atoms
+      .clone(),
+  )
+}
+
+/// Point each field type's references to earlier fields at the match
+/// arm's OWN pattern binders.
+///
+/// A constructor's parameter list is a dependent telescope, so
+/// `Dep.mk (t : Type) (v : t)` gives `v` the declared type `t` — where
+/// `t` is the atom the telescope bound, which no arm can name. Left
+/// alone it prints as `<unknown>` and unifies with nothing, so even a
+/// correct `match d { Dep.mk t v => Dep.mk t v }` was rejected.
+///
+/// `binders` is in DECLARED field order (the arm's own atom list runs
+/// innermost-first, so callers reverse it). Substituting every field
+/// atom rather than only the earlier ones is harmless: field `k`'s type
+/// can only mention fields before it.
+fn substitute_field_binders(
+  field_tys: Vec<CoreTerm>,
+  field_atoms: &[Atom],
+  binders: &[Atom],
+) -> Vec<CoreTerm> {
+  field_tys
+    .into_iter()
+    .map(|ty| {
+      let mut out = ty;
+      for (j, &field_atom) in field_atoms.iter().enumerate() {
+        if let Some(&binder) = binders.get(j) {
+          out = open_with(&close(&out, field_atom), &CoreTerm::Free(binder));
+        }
+      }
+      out
+    })
+    .collect()
 }
 
 /// Resolved shape of a field-pattern match case (`plans/implementations/
@@ -1183,6 +1243,20 @@ fn infer_lit(
           }
           None => match_case_field_types(mctx, structs, &scrutinee_ty, &case.name),
         };
+        // `atoms` runs innermost-first; the telescope is in declared
+        // order.
+        let declared_binders: Vec<Atom> = atoms.iter().rev().copied().collect();
+        let field_tys = match (
+          field_tys,
+          constructor_field_atoms(mctx, structs, &scrutinee_ty, &case.name),
+        ) {
+          (Some(tys), Some(field_atoms)) => Some(substitute_field_binders(
+            tys,
+            &field_atoms,
+            &declared_binders,
+          )),
+          (other, _) => other,
+        };
         let mut ctx2 = ctx.clone();
         for (i, atom) in atoms.iter().enumerate() {
           let field_ty = field_tys
@@ -1637,6 +1711,20 @@ pub fn check(
           })
         }
         None => match_case_field_types(mctx, structs, &scrutinee_ty, &case.name),
+      };
+      // `atoms` runs innermost-first; the telescope is in declared
+      // order.
+      let declared_binders: Vec<Atom> = atoms.iter().rev().copied().collect();
+      let field_tys = match (
+        field_tys,
+        constructor_field_atoms(mctx, structs, &scrutinee_ty, &case.name),
+      ) {
+        (Some(tys), Some(field_atoms)) => Some(substitute_field_binders(
+          tys,
+          &field_atoms,
+          &declared_binders,
+        )),
+        (other, _) => other,
       };
       let mut ctx2 = ctx.clone();
       for (i, atom) in atoms.iter().enumerate() {
