@@ -9,9 +9,10 @@ use runtime {}
 use lang::codegen::emit {compile_db_module_with_debug, compile_loaded_modules_to_ir_with_debug, ok}
 use lang::module {ElaboratedAndCache, ElaboratedModules, FileCheckAndCache, LoadedModules, ModuleInfo, ModuleInfoCache, bench_step, check_file_cached, check_module_with_scope, elaborate_loaded_modules, elaborate_loaded_modules_cached, elaborate_module_decls_best_effort, expand_check_paths, extract_directory, load_file_modules, load_module_with_info, module_name_from_path, module_info_cache_empty, try_parse_decls, try_parse_decls_strict}
 use lang::scope {resolve_class_calls_decls}
+use lang::mote {MoteManifest}
 use std::map {}
 use lang::pretty {show_decls}
-use lang::codegen::test_driver {TestIrResult, compile_loaded_modules_to_test_ir, is_no_tests_error}
+use lang::codegen::test_driver {TestIrResult, compile_loaded_modules_to_test_ir, is_no_tests_error, over_exit_code_limit}
 use lib::test_gaps {gap_reason_for, is_known_gap}
 use lib::args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
@@ -546,49 +547,51 @@ def run_check (files : List String) (verbose : Bool) : IO I64 := do {
 /// wall of misleading failures.
 #[partial]
 def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (verbose : Bool) : IO I64 := do {
-    match files {
-        List.cons _ _ => run_test files out_dir verbose,
-        List.empty =>
-            if workspace then do {
-                // The workspace root is where the `[workspace]` manifest
-                // is. `Mote.discover` stops AT a virtual root (returning
-                // none, since a root declares no `[mote]`), so the root
-                // is found by looking for the members list directly,
-                // walking up from here.
-                let members <- find_workspace_members "" 32;
-                match members {
-                    List.empty => do {
-                        println "monad test --workspace: no workspace manifest found (no [workspace] members above this directory)";
-                        return 1
-                    },
-                    List.cons _ _ => run_test members out_dir verbose,
-                }
-            } else do {
-                let m <- Mote.discover "";
-                match m {
-                    Option.some manifest => do {
-                        // `manifest.dir` is where the manifest was
-                        // found, RELATIVE to the working directory --
-                        // `""` when the CWD is the mote root itself.
-                        // Testing it then means testing `.`, and
-                        // dependency resolution is relative to the CWD
-                        // (see this def's own doc comment), so that
-                        // only works when the CWD is also the
-                        // workspace root.
-                        if String.beq manifest.dir "" then do {
-                            println ("Testing mote " ++ manifest.name ++ " (.)");
-                            println "note: run from the workspace root if dependencies fail to resolve";
-                            run_test (List.cons "." List.empty) out_dir verbose
-                        } else do {
-                            println ("Testing mote " ++ manifest.name ++ " (" ++ manifest.dir ++ ")");
-                            run_test (List.cons manifest.dir List.empty) out_dir verbose
-                        }
-                    },
-                    // Not inside a mote: nothing to enumerate.
-                    Option.none => print_help,
-                }
-            },
-    }
+    // `List.empty`/`List.cons` are deliberately NOT used as match
+    // patterns here: this file's test driver loads the whole compiler
+    // closure, where `BTreeMap` and `Vec` also declare `empty`/`cons`
+    // and the bare pattern names turn ambiguous.
+    if List.is_empty files then do {
+        if workspace then do {
+            // The workspace root is where the `[workspace]` manifest
+            // is. `Mote.discover` stops AT a virtual root (returning
+            // none, since a root declares no `[mote]`), so the root
+            // is found by looking for the members list directly,
+            // walking up from here.
+            let members <- find_workspace_members "" 32;
+            if List.is_empty members then do {
+                println "monad test --workspace: no workspace manifest found (no [workspace] members above this directory)";
+                return 1
+            } else run_test members out_dir verbose
+        } else do {
+            // Annotated like lang/module.mo's own `Mote.discover` call
+            // sites: the checker only knows the bind's type from the
+            // annotation, and the match below needs the scrutinee's type.
+            let m : Option MoteManifest <- Mote.discover "";
+            match m {
+                Option.some manifest => do {
+                    // `manifest.dir` is where the manifest was
+                    // found, RELATIVE to the working directory --
+                    // `""` when the CWD is the mote root itself.
+                    // Testing it then means testing `.`, and
+                    // dependency resolution is relative to the CWD
+                    // (see this def's own doc comment), so that
+                    // only works when the CWD is also the
+                    // workspace root.
+                    if String.beq manifest.dir "" then do {
+                        println ("Testing mote " ++ manifest.name ++ " (.)");
+                        println "note: run from the workspace root if dependencies fail to resolve";
+                        run_test (List.cons "." List.empty) out_dir verbose
+                    } else do {
+                        println ("Testing mote " ++ manifest.name ++ " (" ++ manifest.dir ++ ")");
+                        run_test (List.cons manifest.dir List.empty) out_dir verbose
+                    }
+                },
+                // Not inside a mote: nothing to enumerate.
+                Option.none => print_help,
+            }
+        }
+    } else run_test files out_dir verbose
 }
 
 /// Walk up looking for a manifest with `[workspace] members`, returning
@@ -598,14 +601,14 @@ def run_test_paths (files : List String) (workspace : Bool) (out_dir : String) (
 def find_workspace_members (dir : String) (depth : I64) : IO (List String) := do {
     if I64.lt depth 1 then do { return List.empty }
     else do {
-        let here <- Mote.workspace_members dir;
-        match here {
-            List.cons _ _ => do { return here },
-            List.empty =>
-                if String.beq dir "" then find_workspace_members ".." (depth - 1)
-                else if String.beq dir "/" then do { return List.empty }
-                else find_workspace_members (raw_path_join dir "..") (depth - 1),
-        }
+        let here : List String <- Mote.workspace_members dir;
+        // Same bare-pattern ambiguity as `run_test_paths` -- `List.is_empty`
+        // instead of matching on the constructors.
+        if List.is_empty here then
+            if String.beq dir "" then find_workspace_members ".." (depth - 1)
+            else if String.beq dir "/" then do { return List.empty }
+            else find_workspace_members (raw_path_join dir "..") (depth - 1)
+        else do { return here }
     }
 }
 
@@ -815,7 +818,7 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                             // NOT bumped -- nothing is built on this
                             // path, so the next file can have that
                             // number.
-                            if I64.gt total 255 then do {
+                            if over_exit_code_limit total then do {
                                 println ("[33mSKIP  " ++ f ++ " (" ++ I64.to_string total ++ " tests exceeds the 255 the driver's exit code can report)[0m");
                                 run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                             } else do {

@@ -927,3 +927,39 @@ def test_is_no_tests_error_false_for_instance_failure : Bool :=
 #[test]
 def test_is_no_tests_error_false_for_native_failure : Bool :=
     Bool.not (is_no_tests_error "native `f64_mul` is not wired into the native backend")
+
+// ─── The exit-code ceiling ──────────────────────────────────────────
+//
+// A driver reports its failure COUNT through its exit code, and a
+// process exit code is 8 bits -- so a file with more than 255 tests
+// cannot report its result at all. `cli/src/main.mo` refuses such a
+// file (before rendering its IR, which would be pure waste); these pin
+// the boundary and the wrap that motivates it.
+//
+// Not an end-to-end test on purpose: building a 256-test driver takes
+// minutes under the evaluator, and what can actually go wrong here is
+// an off-by-one in the comparison, which this catches in microseconds.
+
+/// The predicate `run_test_loop_codegen`'s guard applies to a file's
+/// own test count.
+pub def over_exit_code_limit (total : I64) : Bool := I64.gt total 255
+
+#[test]
+def test_exit_code_limit_allows_255 : Bool :=
+    Bool.not (over_exit_code_limit 255)
+
+#[test]
+def test_exit_code_limit_refuses_256 : Bool :=
+    over_exit_code_limit 256
+
+// `lang/src/parser.mo`, at 288 tests, is the one corpus file over the
+// line today.
+#[test]
+def test_exit_code_limit_refuses_the_corpus_file_over_it : Bool :=
+    over_exit_code_limit 288
+
+// Why the ceiling exists at all: 256 failures in an 8-bit exit code is
+// 0, which the runner would read as every test passing.
+#[test]
+def test_256_failures_wrap_to_a_clean_exit : Bool :=
+    I64.beq (I64.sub 256 (I64.mul (I64.div 256 256) 256)) 0
