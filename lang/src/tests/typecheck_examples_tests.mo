@@ -214,6 +214,38 @@ def test_typecheck_conversion_two_arms_against_unreduced_ret : Bool :=
 def test_typecheck_conversion_still_rejects_real_mismatch : Bool :=
     not (typecheck_source "type P { p0 }\ntype Q { q0 }\ndef idt (x : P) : Type := P\ndef f (h : Q) : idt P.p0 := match h { Q.q0 => h }")
 
+// --- Sigma types / dependent constructor telescopes
+// (init/prelude.mo `Sigma`/`Exists`; `core/parser.rs` constructor Pi
+// binders, `core/core_check.rs` field_atoms) ---
+//
+// `snd : B fst` -- a constructor field whose type mentions an EARLIER
+// field -- was unrepresentable until constructor parameter lists were
+// made to bind: `fst` dangled as a free variable and (in the Rust core)
+// was silently auto-generalized into a bogus implicit. These tests pin
+// the SELF-HOSTED checker's side of the declaration, construction and
+// first projection. Construction is tested here rather than in init/
+// because the Rust host has no conversion checking: `B a` does not
+// reduce there, while the self-hosted checker's WHNF (beta + delta,
+// lang/typecheck/whnf.mo) accepts it.
+
+#[test]
+def test_typecheck_sigma_declaration : Bool :=
+    typecheck_source "type Sigma (A : Type) (B : A -> Type) { dpair (fst : A) (snd : B fst) }"
+
+#[test]
+def test_typecheck_sigma_construct : Bool :=
+    typecheck_source "type P { p0 }\ntype Sigma (A : Type) (B : A -> Type) { dpair (fst : A) (snd : B fst) }\ndef fam (x : P) : Type := P\ndef v : Sigma P fam := Sigma.dpair P.p0 P.p0"
+
+// The non-dependent first projection, as a def body: `dpair a _` binds
+// `a : A` and the arm returns it against expected type `A`.
+#[test]
+def test_typecheck_sigma_first_projection : Bool :=
+    typecheck_source "type P { p0 }\ntype Sigma (A : Type) (B : A -> Type) { dpair (fst : A) (snd : B fst) }\ndef proj_fst {A : Type} {B : A -> Type} (p : Sigma A B) : A := match p { Sigma.dpair a _ => a }"
+
+#[test]
+def test_typecheck_exists_declaration : Bool :=
+    typecheck_source "type Exists (A : Type) (P : A -> Prop) : Prop { intro (a : A) (proof : P a) }"
+
 // --- examples/ non-test files ---
 
 // These examples depend on external modules (io, init, math, etc.) and require module loading.

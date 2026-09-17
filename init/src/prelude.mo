@@ -240,6 +240,54 @@ type Pair A B {
 	pair (first : A) (second : B)
 }
 
+/// Dependent pair: the second component's TYPE may depend on the first
+/// component's VALUE -- e.g. `Sigma Nat (fn n => Vec n A)` pairs a
+/// length with a vector of exactly that length.
+///
+/// The non-dependent `Pair A B` above is the special case
+/// `Sigma A (fn _ => B)`. Both are kept: recovering `fn _ => B` at every
+/// tuple literal would need higher-order unification, so `Pair` remains
+/// what the tuple syntax desugars to.
+///
+/// `snd`'s declared type applies `B` to the EARLIER field `fst`. That
+/// shape was unrepresentable until constructor parameter lists were made
+/// to bind; before that the mention dangled and was silently generalized
+/// into an unrelated implicit.
+type Sigma (A : Type) (B : A -> Type) {
+	dpair (fst : A) (snd : B fst)
+}
+
+/// Existential quantification -- `Sigma` restricted to a `Prop`-valued
+/// family, so the pair itself lands in `Prop`.
+///
+/// Declared separately rather than defined as a `Sigma` because there is
+/// no universe polymorphism yet: `Sigma A B` is unconditionally in
+/// `Type` (`Sort 1`), so an `Exists` built from it would lose the `Prop`
+/// discipline. Merging the two is for when universe levels become
+/// variables.
+type Exists (A : Type) (P : A -> Prop) : Prop {
+	intro (a : A) (proof : P a)
+}
+
+/// First projection. Non-dependent, so ordinary match typing suffices.
+///
+/// NOTE the prelude ships no `Sigma` VALUE and no test that builds one.
+/// Constructing `Sigma.dpair a b` requires `B a` to reduce, i.e.
+/// conversion checking: the self-hosted checker has it (beta + delta,
+/// lang/src/typecheck/whnf.mo) but the Rust host does not. Construction
+/// is covered by source-string tests in
+/// lang/src/tests/typecheck_examples_tests.mo, which run through the
+/// self-hosted checker only.
+///
+/// The second projection `Sigma.snd (p : Sigma A B) : B (Sigma.fst p)`
+/// is deliberately absent: checking it needs the arm's expected type to
+/// see `p` refined to `Sigma.dpair a b` (scrutinee refinement), and then
+/// `Sigma.fst (Sigma.dpair a b)` reduced away by iota. Neither checker
+/// does the refinement step today -- `p` stays a variable, so iota has
+/// no constructor to fire on. See plans/type-system/sigma-types.md.
+pub def Sigma.fst {A : Type} {B : A -> Type} (p : Sigma A B) : A :=
+	match p { Sigma.dpair a _ => a }
+
 open Result {err, ok}
 
 type Option A {
