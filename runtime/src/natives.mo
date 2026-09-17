@@ -74,7 +74,8 @@ pub def runtime_native_functions : List LLVMFunction :=
   List.append string_runtime_functions numeric_runtime_functions
 
 def string_runtime_functions : List LLVMFunction :=
-  [emit_string_starts_with, emit_string_to_list, emit_string_get]
+  [emit_string_starts_with, emit_string_to_list, emit_string_get,
+   emit_string_get_char]
 
 def numeric_runtime_functions : List LLVMFunction :=
   [emit_u8_eq, emit_u8_lt, emit_u8_gt, emit_u64_eq,
@@ -456,6 +457,78 @@ def emit_u32_eq : LLVMFunction :=
     params := (i64_params 2),
     ret_ty := i64_,
     blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+/// `monad_string_get_char(s, i) -> Option Char` (wired `passthrough`):
+/// `none` for `i < 0` or an out-of-range index, else `some` wrapping the
+/// character's LEAD BYTE.
+///
+/// Indexed by CHARACTER, not byte -- that is the whole difference from
+/// `monad_string_get` above, and why it needs a scan rather than a
+/// pointer offset. A UTF-8 continuation byte matches `b & 0xC0 == 0x80`,
+/// so the character at index `i` starts at the `i`-th byte that is NOT a
+/// continuation byte.
+///
+/// The payload is the lead byte rather than a decoded code point,
+/// deliberately: `Char` has no operations and no `BEq` instance anywhere
+/// in the language (`init/src/string.mo` says so at the declaration), so
+/// nothing can observe the difference -- every caller only asks whether
+/// the index was in range. Decoding the full scalar value would be dead
+/// work today. Revisit if `Char` ever grows operations.
+def emit_string_get_char : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry"
+      [assign "neg" (icmp_slt (parm_ 1) (int_ 0)),
+       branch (var_ "neg") "none_block" "null_check"] in
+  let null_check :=
+    LLVMBasicBlock.mk "null_check"
+      [assign "is_null" (icmp_eq (parm_ 0) (int_ 0)),
+       branch (var_ "is_null") "none_block" "loop"] in
+  // `bi` = byte cursor, `ci` = how many character starts seen so far.
+  let loop_ :=
+    LLVMBasicBlock.mk "loop"
+      [assign "bi" (phi [PhiPair.mk (int_ 0) "null_check", PhiPair.mk (var_ "bi_next") "advance"]),
+       assign "ci" (phi [PhiPair.mk (int_ 0) "null_check", PhiPair.mk (var_ "ci_next") "advance"]),
+       jump "read"] in
+  let read :=
+    LLVMBasicBlock.mk "read"
+      (List.append (load_byte_instrs (parm_ 0) (var_ "bi") "addr_c" "qc" "cbyte8" "cbyte")
+        [assign "at_end" (icmp_eq (var_ "cbyte") (int_ 0)),
+         branch (var_ "at_end") "none_block" "classify"]) in
+  // A continuation byte is `0b10xxxxxx`: (b & 0xC0) == 0x80.
+  let classify :=
+    LLVMBasicBlock.mk "classify"
+      [assign "masked" (and_ (var_ "cbyte") (int_ 192)),
+       assign "is_cont" (icmp_eq (var_ "masked") (int_ 128)),
+       branch (var_ "is_cont") "advance" "at_char_start"] in
+  let at_char_start :=
+    LLVMBasicBlock.mk "at_char_start"
+      [assign "found" (icmp_eq (var_ "ci") (parm_ 1)),
+       branch (var_ "found") "some_block" "advance"] in
+  let advance :=
+    LLVMBasicBlock.mk "advance"
+      [assign "bi_next" (add (var_ "bi") (int_ 1)),
+       // `masked` (set in `classify`, which dominates every path here)
+       // is `0x80` exactly on continuation bytes; a non-continuation
+       // byte starts a character, so bump the character counter.
+       assign "starts" (icmp_ne (var_ "masked") (int_ 128)),
+       assign "starts_i" (zext (var_ "starts") i1_ i64_),
+       assign "ci_next" (add (var_ "ci") (var_ "starts_i")),
+       jump "loop"] in
+  let none_block :=
+    LLVMBasicBlock.mk "none_block"
+      [assign "none_con" (alloc_constructor rt_tag_none []),
+       ret (var_ "none_con")] in
+  let some_block :=
+    LLVMBasicBlock.mk "some_block"
+      [assign "some_con" (alloc_constructor rt_tag_some [var_ "cbyte"]),
+       set_field_call (var_ "some_con") 0 (var_ "cbyte") "csf",
+       ret (var_ "some_con")] in
+  { name := "monad_string_get_char",
+    params := (i64_params 2),
+    ret_ty := i64_,
+    blocks := [entry, null_check, loop_, read, classify, at_char_start, advance, none_block, some_block],
     ghc_cc := false,
     dbg_loc := Option.none }
 

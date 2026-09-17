@@ -292,6 +292,12 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "string_starts_with" then Option.some (NativeWrapKind.bool_result "monad_string_starts_with")
             else if String.beq target "string_to_list" then Option.some (NativeWrapKind.passthrough "monad_string_to_list")
             else if String.beq target "string_get" then Option.some (NativeWrapKind.passthrough "monad_string_get")
+            // Generated IR: UTF-8 character-indexed variant of
+            // `string_get` above -- `string_get_char(s, i)` counts
+            // non-continuation bytes (`(b & 0xC0) != 0x80`), so `i`
+            // is a character index, not the byte index
+            // `string_get` takes.
+            else if String.beq target "string_get_char" then Option.some (NativeWrapKind.passthrough "monad_string_get_char")
             // Generated IR: single-instruction integer bodies. `U8`/`U64`
             // values are unboxed i64s here and the reference applies NO
             // width mask (`core_native.rs`'s own doc comment records this
