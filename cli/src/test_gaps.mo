@@ -130,19 +130,32 @@ pub def gap_reasons : List String :=
      // behind it.
      "+ on untyped lambda params gets a generic Add dict -- self-recurses",
      "+ on untyped lambda params gets a generic Add dict -- self-recurses",
-     // Closed by: instance resolution for a method with NO
-     // carrier-revealing argument (`Bounded.max_bound` takes none at
-     // all), and for an APPLIED instance head (`Show (List A)`,
-     // `BEq (List A)`, `Map`): `term_matches_carrier` requires the
-     // carrier to be an App when the instance arg is applied, while
-     // inference yields a bare head, so element-type propagation is
-     // what is actually missing.
-     "no carrier-revealing argument to infer an instance from",
-     "no carrier-revealing argument to infer an instance from",
-     "instance head is applied (Show (List A)); carrier is a bare head",
-     "instance head is applied (BEq (List A)); carrier is a bare head",
-     "instance head is applied (Map M); carrier is a bare head",
-     "instance head is applied (Map M); carrier is a bare head",
+     // Measured 2026-09-19 (P6, after the applied-head match landed):
+     // these six are NOT one bug. `find_matching_instance` now agrees on
+     // all of them -- what fails is downstream of the match, and the
+     // four names below split into two channels:
+     //
+     // * dict-arg bindings: a match binds the instance's own type
+     //   parameters NOWHERE, so the instance's own constraint (`[Show
+     //   A]` on `instance [Show A] Show (List A)`) has no carrier to
+     //   resolve against -- and neither does the carrier, which is the
+     //   bare head `List` (a list literal desugars to
+     //   `FromListLiteral.cons`, whose promoted declared type `A -> List
+     //   A -> List A` reveals `List` and drops the element type).
+     // * expected carrier: a call with no carrier-revealing argument at
+     //   all (`Map.empty`, `Bounded.max_bound`) never even reaches a
+     //   match. Annotated lets feed the CHECKER's expected type
+     //   (`Enum.from_nat`'s `let f0 : Ordering := ...` in std/src/base.mo
+     //   passes) but the codegen pass is not handed one, and an app
+     //   ARGUMENT gets no expected type from its callee's Pi domain
+     //   (`BEq.beq Bounded.max_bound gt` -- the sibling argument pins the
+     //   callee's `A` to `Ordering`; measured in isolation).
+     "`Bounded.max_bound` is nullary and `class Bounded` declares no default carrier; the enclosing call's own parameter type (`BEq.beq`'s `A`, pinned to `Ordering` by the sibling argument `gt`) is not threaded into it as an expected carrier",
+     "NOT the carrier channel at all -- a macro-DERIVED instance is invisible to this pass. MEASURED via probe: `derive_debug! Point` + `Debug.debug pt` fails identically (`needed in `t_derived``, with no module prefix on the generated def), while the same file with a hand-written `instance Debug Point` passes. Belongs to the `reflect_type_info!`/decl-gen family (P10), not P6",
+     "a list literal's carrier is the bare head `List` (the promoted `FromListLiteral.cons` declares `A -> List A -> List A`), so matching succeeds but the instance's own `[Show A]` dict argument has nothing to resolve against: nothing binds `A` to `I64`",
+     "same as list_tests1 above, one class over: matching succeeds, the `[BEq A]` dict argument has no bound `A`",
+     "`Map.empty` takes no argument, so no carrier is inferred at all, and the annotated binding (`let m : BTreeMap I64 String := Map.empty`) is not handed to it as an expected carrier; even with one, `instance [BOrd K] Map BTreeMap`'s `K` is bound only by the method's own signature (`empty : M K V`), so the `[BOrd K]` dict argument needs signature-vs-carrier bindings too",
+     "same as map_tests above: `Map.empty` in an annotated let, `[BOrd K]` unbound",
      // NOT the same mechanism, and this file is the counter-example
      // worth keeping: the instantiation work does not move it either
      // way. `all_i64`'s `IO.pure (List.empty : List I64)` loses its

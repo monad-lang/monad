@@ -1161,35 +1161,70 @@ that makes it resolve -- `List (List A)`, derived from `List.flatten`'s
 own parameter -- needs the applied-head match below. All three together
 close `std/src/sha256.mo` at both `check` and `monad test` level.
 
-**The remaining resolution gap is the applied-head match, and it is NOT
-free.** `term_matches_carrier` (`lang/src/scope.mo`) requires the
-carrier to be an `App` when the instance's declared arg is applied, and
-requires the names to be equal when it is bare -- so a bare instance arg
-(`instance FromListLiteral List`) never matches an applied carrier
+**The applied-head match landed 2026-09-19 (P6), in both directions.**
+`term_matches_carrier` (`lang/src/scope.mo`) used to require the carrier
+to be an `App` when the instance's declared arg is applied, and the bare
+names to be equal when it is bare -- so a bare instance arg (`instance
+FromListLiteral List`) never matched an applied carrier
 (`List (List U8)`), which is the only shape an expected-type-derived
-carrier has. Adding the missing arm (`Term.app chead _ =>
-term_matches_carrier wildcard_names ins_term chead`) does close
-sha256.mo -- and, on its own or combined with 2+3, turns
-`cli/src/tests/cli_derive_self_hosted_tests.mo` from `ok` into
+carrier has. Both directions now peel one level down: the applied
+carrier against the bare instance arg (`Term.app chead _ =>
+term_matches_carrier wildcard_names ins_term chead`), and its mirror,
+an applied instance arg (`Show (List A)`) against the bare head that
+`infer_carrier_type` deliberately normalizes to -- gated on the
+instance arg's own parameters being the class's wildcards, so a concrete
+`Show (Option I64)` still cannot match a bare carrier. With fixes 1-3
+this closes `std/src/sha256.mo` at both `check` and `monad test` level;
+the full self-hosted sweep is 969/969 tests with 0 FAIL.
+
+**The `ce_cycle 3` that arm used to trip was never dict recursion.** It
+showed up on `cli/src/tests/cli_derive_self_hosted_tests.mo` (minimal
+repro: `use lib::args {*}` plus a `derive_cli! DemoCommand` decl over a
+two-field `type DemoCommand`, which stays `ok` without the arm) as
 `meta_eval_invoke: applying the meta-def to its TypeInfo argument
-failed: ce_cycle 3`. That is a genuine cycle in the evaluator's global
-force guard, reached while applying `cli/src/args.mo`'s meta-def during
-`derive_cli!` expansion: the arm changes which instance some class call
-inside the macro-expansion context resolves to, and that dict
-self-recurses. Minimal repro (fails with the arm, `ok` without it):
+failed: ce_cycle 3`. The real mechanism: `List.empty`'s qualifier is the
+INDUCTIVE `List`, and the bare-name class-method fallback in
+`type_check_free_var` (`lang/src/typecheck/infer.mo`) stripped that
+qualifier and matched class `FromListLiteral`'s own `empty` method --
+"resolving" the reference to the promoted def standing inside its own
+body, a strict self-reference the evaluator's global force guard reports
+as `ce_cycle`. `ref_names_class_method` now requires the qualifier to
+name a CLASS before that fallback runs, so an inductive-qualified
+reference (`List.empty`, `Option.some`, `Bool.true`) falls through to
+the constructor path it means. Measured with both arms in place:
+`cargo run --release -- test cli/src/tests/cli_derive_self_hosted_tests.mo`
+is 5/5 PASS.
 
-```monad
-use lib::args {*}
-type DemoCommand {
-    compile (path : String) (#[arg] verbose : Bool),
-}
-derive_cli! DemoCommand
-```
+**What the match still does NOT close** (measured 2026-09-19, same day).
+Of the six remaining `no instance found` gaps, matching now succeeds for
+four -- what fails is downstream of it:
 
--- `cli/src/args.mo`/`lib.mo` alone stay `ok`; the dependency plus a
-`derive_cli!` decl is what trips it, and no `parse_democommand` call is
-needed. So the applied-head match belongs with the dict-recursion work
-(P8's `BEq (List A)` / generic `Add` family), not on its own.
+* `std/src/list_tests1.mo`/`list_tests2.mo`: a list literal's carrier is
+  the bare head `List` (its desugared `FromListLiteral.cons` declares
+  `A -> List A -> List A`), so the instance's OWN constraint (`[Show A]`
+  on `instance [Show A] Show (List A)`) has no `A` to resolve against.
+  A match has to yield bindings; nothing in the pass carries them.
+* `std/src/map_tests.mo`/`test_map_full.mo`: `Map.empty` has no
+  carrier-revealing argument at all, and the annotated binding
+  (`let m : BTreeMap I64 String := Map.empty`, reproduced in isolation)
+  is not handed to it as an expected carrier. Even with one, `instance
+  [BOrd K] Map BTreeMap`'s `K` is bound only by the method's own
+  signature (`empty : M K V`), so the `[BOrd K]` dict argument needs
+  signature-vs-carrier bindings too.
+* `std/src/base.mo`: `Bounded.max_bound` is nullary and `class Bounded`
+  declares no default carrier. The expected type exists in the enclosing
+  call -- `BEq.beq`'s `A`, pinned to `Ordering` by the sibling argument
+  `gt` -- but `type_check_app` does not push a callee's instantiated Pi
+  domain into its arguments (annotated LETS do get an expected type:
+  `Enum.from_nat`'s `let f0 : Ordering := ...` in the same file passes).
+  This is the same missing channel as the generic-`Add` gap below.
+
+`std/src/derive_tests.mo` is NOT this family at all. Measured by probe:
+`derive_debug! Point` + `Debug.debug pt` fails identically (and the
+generated def's name carries no module prefix), while the same file with
+a hand-written `instance Debug Point` passes -- a macro-DERIVED instance
+is invisible to the codegen pass, i.e. the `reflect_type_info!` /
+decl-gen family (P10), not instance resolution.
 
 A `#[test]` def carrying a direct field access is a known miscompile
 shape -- the def gets the FIELD's LLVM type as its return type (an
