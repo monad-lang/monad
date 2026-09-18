@@ -129,6 +129,58 @@ def has_attr (name : Identifier) (attrs : List Attribute) : Bool :=
         List.empty => false,
     }
 
+/// The ARGUMENTS of the first attribute named `name` -- `has_attr`'s
+/// args-reading sibling (`has_attr` matches `Attribute.mk n _` and
+/// drops them). `Option.none` when no attribute of that name is
+/// present, which is distinct from `Option.some List.empty` for an
+/// argument-less attribute like `#[partial]`.
+///
+/// Exists for `#[decreasing x]` (`lang/typecheck/termination.mo`), the
+/// one corpus attribute whose args carry meaning: the parser already
+/// produces `AttrArg.ident` for it (`attr_arg_parser`,
+/// lang/parser.mo), so what was missing was only a way to read them
+/// back out.
+def attr_args (name : Identifier) (attrs : List Attribute) : Option (List AttrArg) :=
+    match attrs {
+        List.cons hd rest =>
+            match hd {
+                Attribute.mk n args => if id_eq n name then Option.some args else attr_args name rest,
+            },
+        List.empty => Option.none,
+    }
+
+#[test]
+def test_attr_args_returns_the_named_attributes_args : Bool :=
+    let attrs : List Attribute := [
+        Attribute.mk (Identifier.id "native") [AttrArg.ident (Identifier.id "i64_add")],
+        Attribute.mk (Identifier.id "decreasing") [AttrArg.ident (Identifier.id "n")],
+    ] in
+    match attr_args (Identifier.id "decreasing") attrs {
+        Option.some args =>
+            match args {
+                List.cons a more =>
+                    List.length more == 0
+                        && match a { AttrArg.ident id => id_eq id (Identifier.id "n") },
+                List.empty => false,
+            },
+        Option.none => false,
+    }
+
+#[test]
+def test_attr_args_missing_is_none_but_argless_is_some_empty : Bool :=
+    // `#[partial]` has no arguments at all, which is a DIFFERENT answer
+    // from `#[absent]` not being there -- that distinction is the whole
+    // reason this exists alongside `has_attr`.
+    let attrs : List Attribute := [Attribute.mk (Identifier.id "partial") List.empty] in
+    match attr_args (Identifier.id "partial") attrs {
+        Option.some args => List.length args == 0,
+        Option.none => false,
+    }
+        && match attr_args (Identifier.id "absent") attrs {
+            Option.some _ => false,
+            Option.none => true,
+        }
+
 type Operator {
     operator String
 }
