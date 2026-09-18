@@ -82,7 +82,7 @@ fn test_reflect_type_info_round_trips_through_a_hand_written_meta_def() {
   let loaded = loaded_with_init_meta();
   let parsed = parse_file(
     r#"
-    use init.meta {TypeInfo, Decl, Expr}
+    use init::meta {TypeInfo, Decl, Expr}
 
     struct Point { x : I64, y : I64 }
 
@@ -120,7 +120,7 @@ fn test_reflect_type_info_blocks_impure_natives_with_a_clear_error() {
   let loaded = loaded_with_init_meta();
   let r = expand_and_type_check_with(
     r#"
-    use init.meta {TypeInfo, Decl}
+    use init::meta {TypeInfo, Decl}
 
     #[native "print_str"]
     def my_print (s : String) : I64
@@ -182,7 +182,7 @@ fn test_derive_lens_end_to_end_against_the_real_std_derive_mo() {
 
   let parsed = parse_file(
     r#"
-    use std.derive {derive_lens}
+    use std::derive {derive_lens}
 
     struct Point { x : I64, y : I64 }
 

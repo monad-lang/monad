@@ -22,7 +22,7 @@ def test_e2e_simple_literal : Bool :=
         empty_cons
         empty_attrs
         Visibility.package_private in
-    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ empty_defs) in
+    let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     check_contains text "myfunc"
 
@@ -38,13 +38,13 @@ def test_e2e_function_with_param : Bool :=
         empty_cons
         empty_attrs
         Visibility.package_private in
-    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ empty_defs) in
+    let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     check_contains text "add5"
 
 #[test]
 def test_e2e_module_structure : Bool :=
-    let mod_ := lang.codegen.emit.compile_db_decls_ir empty_defs in
+    let mod_ := compile_db_decls_ir empty_defs in
     let text := emit_module mod_ in
     if check_contains text "; ModuleID"
     then check_contains text "Type Definitions"
@@ -52,7 +52,7 @@ def test_e2e_module_structure : Bool :=
 
 #[test]
 def test_e2e_runtime_decls_present : Bool :=
-    let mod_ := lang.codegen.emit.compile_db_decls_ir empty_defs in
+    let mod_ := compile_db_decls_ir empty_defs in
     let text := emit_module mod_ in
     check_contains text "monad_alloc"
 
@@ -66,7 +66,7 @@ def test_e2e_calling_convention : Bool :=
         empty_cons
         empty_attrs
         Visibility.package_private in
-    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ empty_defs) in
+    let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     check_contains text "cc 9"
 
@@ -90,7 +90,7 @@ def test_e2e_io_main_unwraps_before_return : Bool :=
         empty_cons
         empty_attrs
         Visibility.package_private in
-    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ empty_defs) in
+    let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     // `monad_get_field` is always DECLARED at the top of every module
     // (`runtime_declarations`) regardless of whether anything calls it
@@ -114,7 +114,7 @@ def test_e2e_non_io_main_does_not_unwrap : Bool :=
         empty_cons
         empty_attrs
         Visibility.package_private in
-    let mod_ := lang.codegen.emit.compile_db_decls_ir (List.cons def_ empty_defs) in
+    let mod_ := compile_db_decls_ir (List.cons def_ empty_defs) in
     let text := emit_module mod_ in
     Bool.not (check_contains text "call i64 @monad_get_field")
 

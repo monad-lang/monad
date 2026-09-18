@@ -346,7 +346,7 @@ fn test_attr_partial() {
 #[test]
 fn test_attr_cfg_test_on_use() {
   let s = r#"#[cfg test]
-    use std.test
+    use std::test
     "#
   .into();
   let (_, res) = decl_parser(s).unwrap();
@@ -495,7 +495,7 @@ fn test_attr_hash_terminating() {
 #[test]
 fn test_attr_hash_cfg_test_on_use() {
   let s = r#"#[cfg test]
-    use std.test
+    use std::test
     "#
   .into();
   let (_, res) = decl_parser(s).unwrap();

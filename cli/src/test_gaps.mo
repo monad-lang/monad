@@ -9,12 +9,10 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 26 entries here are what a full corpus sweep
-/// actually reports, not a guess: six distinct causes, none of them a
-/// problem with the test files themselves. In rough order of how much
-/// they cost to close:
+/// The 21 entries here are what a full corpus sweep
+/// actually reports, not a guess, and none is a problem with the test
+/// files themselves. In rough order of how much they cost to close:
 ///
-///   * ~105 legacy dotted-path call sites (mechanical, 6 files here);
 ///   * self-hosted checker gaps -- type-variable instantiation, named-
 ///     call defaults, and instance resolution through an applied head
 ///     (`Show`/`BEq (List A)`, `Map`) or with no carrier-revealing
@@ -22,9 +20,14 @@
 ///   * two codegen bugs -- the generic `Add` dict self-recursion and
 ///     `BEq (List A)`'s tail dictionary (3 files);
 ///   * `#[derive]`, unsupported by the self-hosted parser (1 file);
+///   * `#[derive_cli]`, whose attribute never reaches a macro (1 file);
 ///   * `Pred` in value position (1 file);
 ///   * floating point, which does not exist in the backend (2 files);
 ///   * the async runtime, which does not exist either (1 file).
+///
+/// The legacy dotted-path family (~105 call sites across 8 files) that
+/// used to head this list is CLOSED: the call sites now import the bare
+/// name they call, and both parsers reject a dotted `use` path outright.
 ///
 /// **Matching is on path AND cause**, deliberately: a listed file that
 /// starts failing for a NEW reason is reported as a real failure, not
@@ -55,15 +58,10 @@ pub def gap_paths : List String :=
      "std/src/list_tests2.mo",
      "std/src/map_tests.mo",
      "std/src/test_map_full.mo",
-     "lang/src/codegen/test/compile_tests.mo",
-     "lang/src/codegen/test/e2e_typecheck_tests.mo",
      "std/src/sha256.mo",
      "std/src/concurrent/combine_test.mo",
-     "lang/src/codegen/test/test_e2e.mo",
-     "lang/src/codegen/test/test_link_e2e.mo",
      "lang/src/json.mo",
      "cli/src/tests/cli_derive_tests.mo",
-     "examples/test_mote.mo",
      "examples/derive.mo",
      "examples/structs.mo",
      "examples/indexed_monads.mo",
@@ -91,11 +89,6 @@ pub def gap_causes : List String :=
      "no instance found for `BEq.beq`",
      "no instance found for `Map.empty`",
      "no instance found for `Map.empty`",
-     "does not typecheck",
-     "does not typecheck",
-     "does not typecheck",
-     "does not typecheck",
-     "does not typecheck",
      "does not typecheck",
      "does not typecheck",
      "does not typecheck",
@@ -150,13 +143,6 @@ pub def gap_reasons : List String :=
      "instance head is applied (BEq (List A)); carrier is a bare head",
      "instance head is applied (Map M); carrier is a bare head",
      "instance head is applied (Map M); carrier is a bare head",
-     // Closed by: rewriting ~105 legacy dotted-path call sites
-     // (`lang.codegen.emit.compile_db_decls_ir` written inline instead
-     // of imported) across 8 files. NOT a checker bug -- the paths
-     // genuinely name nothing -- and mechanical to fix, but out of
-     // scope here.
-     "legacy dotted-path call sites name no import",
-     "legacy dotted-path call sites name no import",
      // Closed by: type-variable instantiation in the self-hosted
      // checker. Both report a mismatch between a declared `A` and the
      // concrete type at the call (`expected (List A), found (List U8)`;
@@ -164,11 +150,6 @@ pub def gap_reasons : List String :=
      // accepts -- so the files are fine and the checker is not.
      "self-hosted checker does not instantiate a type variable",
      "self-hosted checker does not instantiate a type variable",
-     // Same legacy dotted-path family as compile_tests.mo above: both
-     // spell `lang.codegen.emit.compile_db_decls_ir` inline instead of
-     // importing it.
-     "legacy dotted-path call sites name no import",
-     "legacy dotted-path call sites name no import",
      // Same type-variable instantiation family as sha256.mo above:
      // `Json.Deserializer.deserialize` returns `Result String A`, and
      // the ascriptions on the call (`: Result String Bool`, `: Result
@@ -177,12 +158,19 @@ pub def gap_reasons : List String :=
      // pattern then reports a constructor ambiguity downstream of the
      // SAME unknown. The Rust host runs all of the file's tests.
      "self-hosted checker does not instantiate a type variable",
-     // Same legacy dotted-path family as compile_tests.mo above.
-     "legacy dotted-path call sites name no import",
-     "legacy dotted-path call sites name no import",
-     // Closed by: `#[derive ...]` in the self-hosted PARSER. The
-     // attribute is not recognised, so the file stops parsing at the
-     // first derive -- decl-generating macros run on the host only.
+     // Closed by: the attribute-to-macro bridge. The file LOADS -- to
+     // the self-hosted parser `#[derive_cli]` is just another
+     // `#[name args]` -- but nothing expands it, so the defs it would
+     // generate (notably `parse_democommand`) never exist and every test
+     // body is an unknown variable. Same family as `examples/derive.mo`
+     // below, which dies a stage earlier, at load.
+     "`#[derive_cli]` expands to nothing (no attribute-to-macro bridge)",
+     // Closed by: `#[derive ...]` support in the self-hosted parser and
+     // macro system. The parse stops dead AT the attribute -- an
+     // attributed `struct` decl is not accepted, and the remaining-text
+     // dump starts on the `#[derive BEq BOrd Debug Lens]` line itself --
+     // so nothing downstream ever runs. The declaration-generating
+     // macros these attributes dispatch to exist on the host only.
      "#[derive] is not supported by the self-hosted parser",
      // Closed by: named-call argument defaults in the self-hosted
      // checker -- it demands a field the callee declares a default for.
@@ -202,7 +190,7 @@ def gap_len (xs : List String) : I64 :=
     }
 
 /// Index of `path` in `gap_paths`, or -1. Walks the list rather than
-/// using a map: five entries, and the list is expected to shrink.
+/// using a map: the list is short, and it is expected to shrink.
 #[partial]
 def gap_index_of (paths : List String) (path : String) (i : I64) : I64 :=
     match paths {

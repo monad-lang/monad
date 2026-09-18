@@ -6,8 +6,8 @@ namespace your code.
 ## Basic Module Structure
 
 Each `.mo` file is a module. The module name is derived from its path relative
-to a search-path root, with `.` separating directories: `std/concurrent/fiber.mo`
-is the module `std.concurrent.fiber`.
+to a search-path root: `std/concurrent/fiber.mo` is the module
+`std.concurrent.fiber`.
 
 ## Importing Modules
 
@@ -30,8 +30,16 @@ definition names (`String.length`), member access (`x.field`) and constructor
 paths (`List.cons`) all keep `.`. The separator is what tells a module path
 apart from a name path on sight.
 
-The dotted spelling still parses, so older code keeps working, but everything
-in this repository has moved to `::`.
+`::` is the only spelling a `use` path accepts — the corpus migration is
+complete, so a dotted `use std.list` is a parse error rather than a synonym.
+Both parsers enforce it (`use_path_sep` in `lang/src/parser.mo`,
+`use_path_expression` in `core/src/parser.rs`). The three-way rule in full:
+
+| Form | Separator | Example |
+| --- | --- | --- |
+| `use` path (names a file) | `::` | `use std::list {intercalate}` |
+| `open` path (names a namespace) | `.` | `open List {map}` |
+| term reference, decl name, field access | `.` | `List.cons`, `x.field`, `String.length` |
 
 Inside a mote, `lib` names that mote's own library root — Rust's `crate`:
 
@@ -148,7 +156,7 @@ See [The Standard Library](./stdlib.md) for what is in each.
 ## How Modules Are Found
 
 Resolution is a fixed cascade with three special cases, and no configuration.
-For a module path `a.b`, the compiler tries, in order:
+For a module path `a::b`, the compiler tries, in order:
 
 | Candidate | Notes |
 |-----------|-------|
@@ -218,7 +226,7 @@ def main (args : List String) : IO Unit :=
 
 ## Summary
 
-- Each `.mo` file is a module; paths use `.` for directories
+- Each `.mo` file is a module; a `use` path uses `::` between segments
 - `use Module {names}` loads a module; `open Module {names}` drops the prefix
 - `{*}` imports everything; bare `use`/`open` is deprecated
 - `init/` is pure and portable, `std/` is OS-specific

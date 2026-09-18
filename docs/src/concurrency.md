@@ -48,7 +48,7 @@ type Fiber (A : Type) {
 Fiber handles are opaque runtime objects — do not pattern match on them.
 
 ```monad
-use std.concurrent.fiber {await_fiber, forkIO}
+use std::concurrent::fiber {await_fiber, forkIO}
 
 def answer (_ : Unit) : IO I64 := IO.pure 42
 
@@ -81,9 +81,9 @@ which finishes first, it is deterministic — a consequence of there being no
 actual concurrency to race.
 
 ```monad
-use std.concurrent.fiber {Fiber, forkIO}
-use std.concurrent.combine {all}
-use std.list {}
+use std::concurrent::fiber {Fiber, forkIO}
+use std::concurrent::combine {all}
+use std::list {}
 
 def answer (_ : Unit) : IO I64 := IO.pure 42
 

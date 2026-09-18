@@ -39,8 +39,8 @@ def main : IO I64 {
 
     let defs := build_main42;
 
-    let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
-    let ir_text := llvm.ir.emit_module mod_;
+    let mod_ := compile_db_decls_ir defs;
+    let ir_text := emit_module mod_;
 
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
     IO.write_file (Path.path ir_path) ir_text;

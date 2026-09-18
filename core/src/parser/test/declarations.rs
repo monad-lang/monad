@@ -789,7 +789,7 @@ fn test_def() {
 #[test]
 fn module_test() {
   let s = r#"
-    use std.string.trim
+    use std::string::trim
     type Bool {
       true,
       false,
@@ -910,22 +910,21 @@ fn test_use_bare_source_location_excludes_trailing_whitespace() {
   // That's harmless for warning display but corrupts any byte-precise
   // splice (`organize_imports`'s `TextEdit`s) built from it: the edit
   // would eat the blank-line separator before the next declaration too.
-  let s = "use std.show\n\n\ndef x : I64 := 1".into();
+  let s = "use std::show\n\n\ndef x : I64 := 1".into();
   let (_, res) = use_parser(s).unwrap();
   assert_eq!(res.source_location.end.line, 1);
-  assert_eq!(res.source_location.end.column, 13); // just past "use std.show"
+  assert_eq!(res.source_location.end.column, 14); // just past "use std::show"
 }
 
-/// `::` and `.` in a `use` path produce the same `ModulePath` -- the
-/// separator is surface syntax, and the path it denotes is identical. The
-/// dotted spelling stays accepted through the corpus migration.
+/// `::` is the ONLY `use` separator. A dotted path must be rejected --
+/// `use` is the one form where `.` and `::` would otherwise mean the same
+/// thing, and accepting both is what let the corpus keep a legacy
+/// spelling alive after the migration completed. See
+/// plans/implementations/qualified-names.md.
 #[test]
-fn test_use_accepts_colon_colon_separator() {
+fn test_use_rejects_dotted_path() {
   let colons = "use std::string::trim {x}".into();
   let (_, colon_use) = use_parser(colons).unwrap();
-  let dots = "use std.string.trim {x}".into();
-  let (_, dot_use) = use_parser(dots).unwrap();
-  assert_eq!(colon_use.module_path, dot_use.module_path);
   assert_eq!(
     colon_use.module_path,
     ModulePath::new(vec![
@@ -934,6 +933,15 @@ fn test_use_accepts_colon_colon_separator() {
       Identifier::new("trim".to_string()),
     ])
   );
+
+  // The dotted spelling stops at the first segment: `std` parses as the
+  // whole path and `.string.trim {x}` is left unconsumed, so whatever
+  // follows fails to parse as a declaration -- the point is that the
+  // dotted path is never silently accepted as an equivalent.
+  let dots = "use std.string.trim {x}".into();
+  let (rest, dot_use) = use_parser(dots).unwrap();
+  assert_eq!(dot_use.module_path, mpt("std"));
+  assert_eq!(*rest.fragment(), ".string.trim {x}");
 }
 
 #[test]

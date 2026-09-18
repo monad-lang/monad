@@ -143,10 +143,12 @@ explicit special case for each, alongside the pre-existing one for
 
 `init/`, `std/`, `lang/`, `slow_tests/` and `bench/` are **motes** (Monad's
 packages), and a mote's modules live in its `src/` directory —
-`lang/src/codegen/emit.mo`, not `lang/codegen/emit.mo`. Module-path
-*spelling* is unchanged by this: `use lang.codegen.emit` still names that
-module, and compiled symbol names are unaffected. The first segment of a
-`use` path names the mote; the rest is the path within its `src/`.
+`lang/src/codegen/emit.mo`, not `lang/codegen/emit.mo`. Only the
+*shape* changed, not the identity: `use lang::codegen::emit` names that
+module, and compiled symbol names are unaffected (a module path is
+`::`-separated on a `use` line and `.`-joined everywhere it is rendered).
+The first segment of a `use` path names the mote; the rest is the path
+within its `src/`.
 
 Both compilers implement that mapping: `mote_relative_file` in
 `lang/src/module.mo` and `ModulePath::to_mote_file_path` in
@@ -159,10 +161,10 @@ recurses), but a path argument names the real file: `test init/src/tests.mo`.
 
 ### `lib` is the mote's self-reference
 
-`use lib.x` names the current mote's own `src/x.mo`, the way Rust's
+`use lib::x` names the current mote's own `src/x.mo`, the way Rust's
 `crate::x` does -- root-relative *within* the mote, so `use
-lib.parser.core` from `lang/src/codegen/emit.mo` is unambiguous where a
-bare `parser.core` would first try `lang/src/codegen/parser/core.mo`.
+lib::parser::core` from `lang/src/codegen/emit.mo` is unambiguous where a
+bare `parser::core` would first try `lang/src/codegen/parser/core.mo`.
 
 It is rewritten to the canonical mote-qualified path (`lang.parser.core`)
 at load time, in both compilers, and never resolved as a file path
@@ -337,9 +339,9 @@ type Eq (A : Sort 1) (a : A) (b : A) : Prop {
 ```
 
 When writing Monad source files:
-- Test files use `use std.test` (not `use prelude` — the prelude is auto-loaded as `'prelude`)
+- Test files use `use std::test` (not `use prelude` — the prelude is auto-loaded as `'prelude`)
 - The prelude is imported automatically — no explicit `use prelude` needed
-- Module paths for the standard library: `std.test` for testing, `io` for IO, etc.
+- Module paths for the standard library: `std::test` for testing, `io` for IO, etc.
 
 ⚠️ **Reserved keywords cannot be used as field names** in `type` constructor parameters (`(name: Type)`) or `struct` field names (`name: Type`). The parser's `identifier` combinator rejects reserved keywords. Common offenders: `class`, `type`, `match`, `if`, `def`, `let`, `in`, `use`, `open`, `struct`, `instance`, `fn`, `do`, `return`, `for`, `quote`, `with`, `infix`, `else`, `then`. Use a synonym instead (e.g., `cls` for `class`, `kind` for `type`). The reserved keyword list is in `RESERVED_KEYWORDS` at `parser.rs:60-63`.
 
@@ -667,8 +669,43 @@ open IO {println}
 `::` is for `use` paths and nothing else. Dotted def names
 (`String.length`), member access (`x.field`), constructor paths
 (`List.cons`) and `open` paths all stay dotted -- the separator is what
-tells a module path apart from a name path on sight. Dotted `use` paths
-still parse, but everything in this corpus has migrated.
+tells a module path apart from a name path on sight.
+
+`::` is also the only spelling a `use` path accepts: the corpus migration
+is complete, so a dotted `use std.list` is a **parse error**, in both
+parsers (`use_path_sep`, `lang/src/parser.mo`; `use_path_expression`,
+`core/src/parser.rs`).
+
+Mechanically that rejection is a TRUNCATED parse, not a hard failure, and
+the distinction matters if you touch either parser. `separated_by` stops
+at the first segment, so `use std.list {intercalate}` parses as the
+ONE-segment path `std` with `.list {intercalate}` left as unconsumed
+text; what makes it an error is that the file loader requires a parse to
+consume its whole input. Both parsers behave this way on purpose, and
+each has a test pinning the truncated shape
+(`test_use_parser_rejects_dotted`, `lang/src/parser.mo`;
+`test_use_rejects_dotted_path`, `core/src/parser/test/declarations.rs`).
+
+Note the difference between the two, since it bites when porting a dotted
+call site: `use std::list {intercalate}` binds the BARE name, so the call
+site is `intercalate xs`, not `std.list.intercalate` -- a
+module-qualified term reference is a separate spelling and is not what a
+`use` line gives you.
+
+That separate spelling is parsed but does NOT resolve yet in the
+self-hosted compiler: `lower_name_ref`'s `nqn` arm throws the structure
+away (`lower_name_global`), so a `std::list::intercalate` reference
+reports `unknown variable`. The Rust host resolves the pure
+`module::name` shape instead, but mis-lowers one with a dotted tail
+(`std::list::List.cons` hits "infix operator (.) has no entry in the
+lowering pass's infix table"). No corpus file needs the form, which is
+why the migration above went to bare imported names -- reach for those,
+not for a qualified term reference.
+
+A `use` path also accepts a bare module name with no mote prefix when the
+module lives under `motes/<member>/src/` -- the search path mirrors the
+Rust host's (`build_default_search_paths`, `core/src/lib.rs`; the
+self-hosted twin is `motes_src_paths`, `lang/src/module.mo`).
 
 `{*}` imports/opens everything explicitly; a bare `use`/`open` (no braces) still parses but is deprecated in favor of an explicit filter.
 

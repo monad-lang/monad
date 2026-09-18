@@ -124,9 +124,9 @@ The attribute form dispatches to those macros by name. Arguments are
 **space-separated bare names** — not `#[derive(BEq, BOrd)]`:
 
 ```monad
-use std.derive {derive_beq, derive_bord, derive_debug, derive_lens}
-use init.optics {Lens, set, view}
-use std.debug {Debug}
+use std::derive {derive_beq, derive_bord, derive_debug, derive_lens}
+use init::optics {Lens, set, view}
+use std::debug {Debug}
 
 #[derive BEq BOrd Debug Lens]
 struct Point {
@@ -164,8 +164,8 @@ def test_lens : Bool :=
 Derives work on multi-constructor types too:
 
 ```monad
-use std.derive {derive_beq, derive_bord, derive_debug}
-use std.debug {Debug}
+use std::derive {derive_beq, derive_bord, derive_debug}
+use std::debug {Debug}
 
 #[derive BEq BOrd Debug]
 type Suit {
@@ -190,7 +190,7 @@ For sum types, `init.optics` provides `Prism` instead.
 has to be in scope:
 
 ```monad,ignore
-use std.derive {derive_beq, derive_bord, derive_debug, derive_lens}
+use std::derive {derive_beq, derive_bord, derive_debug, derive_lens}
 ```
 
 The compiler's unused-import analysis does not see macro-name dispatch as a

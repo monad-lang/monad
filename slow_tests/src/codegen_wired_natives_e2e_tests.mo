@@ -115,7 +115,7 @@ def test_c_lowercase_and_unsigned_to_string : IO Bool :=
 /// process, including a non-zero code and a nonexistent binary.
 #[test]
 def test_c_exec_cmd_exit_codes : IO Bool :=
-    let source := r#"use std.process {exec_cmd}
+    let source := r#"use std::process {exec_cmd}
 def main (args : List String) : IO I64 := do {
     let ok <- exec_cmd "true" [];
     let bad <- exec_cmd "false" [];
@@ -166,7 +166,7 @@ def main (args : List String) : IO I64 := do {
 /// the O(1) length, and an in-range read.
 #[test]
 def test_array_new_len_get : IO Bool :=
-    let source := r#"use std.array {Array}
+    let source := r#"use std::array {Array}
 def main (args : List String) : IO I64 := do {
     let a : Array I64 := Array.new 3 7;
     let len_ok := I64.beq (Array.length a) 3;
@@ -181,7 +181,7 @@ def main (args : List String) : IO I64 := do {
 /// a bounds check and reading past the end of a heap object.
 #[test]
 def test_array_get_bounds : IO Bool :=
-    let source := r#"use std.array {Array}
+    let source := r#"use std::array {Array}
 def main (args : List String) : IO I64 := do {
     let a : Array I64 := Array.new 2 5;
     let below := I64.beq (Array.get_or a (0 - 1) 99) 99;
@@ -198,7 +198,7 @@ def main (args : List String) : IO I64 := do {
 /// else -- and that implementation is exactly the cheaper wrong one.
 #[test]
 def test_array_set_is_persistent : IO Bool :=
-    let source := r#"use std.array {Array}
+    let source := r#"use std::array {Array}
 def main (args : List String) : IO I64 := do {
     let a : Array I64 := Array.new 3 0;
     let b : Array I64 := Array.set a 1 42;
@@ -215,7 +215,7 @@ def main (args : List String) : IO I64 := do {
 /// wild pointer rather than a type error.
 #[test]
 def test_array_holds_strings : IO Bool :=
-    let source := r#"use std.array {Array}
+    let source := r#"use std::array {Array}
 def main (args : List String) : IO I64 := do {
     let a : Array String := Array.new 2 "x";
     let b : Array String := Array.set a 0 "hello";
@@ -230,7 +230,7 @@ def main (args : List String) : IO I64 := do {
 /// exercises the `set`-fold that builds an array from a list.
 #[test]
 def test_array_from_list_round_trip : IO Bool :=
-    let source := r#"use std.array {Array}
+    let source := r#"use std::array {Array}
 def main (args : List String) : IO I64 := do {
     let xs : List I64 := List.cons 10 (List.cons 20 (List.cons 30 List.empty));
     let a : Array I64 := Array.from_list xs;
@@ -250,7 +250,7 @@ def main (args : List String) : IO I64 := do {
 /// `freeze` is ever "optimised" into a cast.
 #[test]
 def test_array_builder_freeze_does_not_alias : IO Bool :=
-    let source := r#"use std.array {Array, ArrayBuilder}
+    let source := r#"use std::array {Array, ArrayBuilder}
 def main (args : List String) : IO I64 := do {
     let b : ArrayBuilder I64 := Array.builder 3 0;
     Array.set_in_place b 1 42;

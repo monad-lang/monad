@@ -24,8 +24,8 @@
 # the whole corpus except `host_only` below, and the RUST runner takes
 # `host_only` plus any file the self-hosted runner reports as a GAP
 # (`cli/src/test_gaps.mo` -- unwired f64 natives, the async runtime, and
-# two codegen bugs). A GAP does not fail the sweep; an unrecognised
-# compile failure does.
+# a handful of checker/codegen bugs). A GAP does not fail the sweep; an
+# unrecognised compile failure does.
 set -euo pipefail
 
 # The 13 files the self-hosted runner cannot build a working driver for
@@ -111,15 +111,10 @@ gap_files=(
   std/src/list_tests2.mo
   std/src/map_tests.mo
   std/src/test_map_full.mo
-  lang/src/codegen/test/compile_tests.mo
-  lang/src/codegen/test/e2e_typecheck_tests.mo
   std/src/sha256.mo
   std/src/concurrent/combine_test.mo
-  lang/src/codegen/test/test_e2e.mo
-  lang/src/codegen/test/test_link_e2e.mo
   lang/src/json.mo
   cli/src/tests/cli_derive_tests.mo
-  examples/test_mote.mo
   examples/derive.mo
   examples/structs.mo
   examples/indexed_monads.mo

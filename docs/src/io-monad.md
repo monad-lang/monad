@@ -128,7 +128,7 @@ A worked example using all four:
 
 ```monad
 use io {}
-use std.io {}
+use std::io {}
 open IO {println}
 
 def show_home : IO Unit {

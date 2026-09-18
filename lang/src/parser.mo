@@ -157,6 +157,11 @@ def qualified_finish (rem : String) (ids : List String) (tail : List String) : P
 			let module_part : ModulePath := ModulePath.mp (List.map Identifier.id (list_reverse rev_init)) in
 			let name_ids : List String := List.cons last_id tail in
 			let name_part : NamePath := NamePath.npath (List.map Identifier.id name_ids) in
+			// This is the ONLY use of the `QualifiedName` import. The
+			// host's unused-import analysis does not count a
+			// module-qualified CONSTRUCTOR path as a reference, so it
+			// reports `unused import 'QualifiedName'` against line 3 and
+			// advises removing it -- do not: the file stops typechecking.
 			success rem (NameRef.nqn (QualifiedName.mk module_part name_part)),
 		List.empty => fail (ParseError.custom "not a qualified name" rem)
 	}
@@ -8564,9 +8569,9 @@ def test_use_parser : Bool :=
         fail _ => false
     }
 
-/// `::` and `.` in a `use` path produce the same `ModulePath` -- the
-/// separator is surface syntax, and the path it denotes is identical.
-/// The dotted spelling stays accepted through the corpus migration.
+/// `use` takes `::` and only `::` -- the corpus is fully migrated, so a
+/// dotted path is now a parse error rather than an accepted synonym
+/// (`use_path_sep`, and `test_use_parser_rejects_dotted` below).
 #[test]
 def test_use_parser_accepts_colon_colon : Bool :=
     match use_parser "use lang::codegen::emit {compile_db_module}" {
@@ -8580,19 +8585,39 @@ def test_use_parser_accepts_colon_colon : Bool :=
         fail _ => false
     }
 
+/// The dotted spelling is REJECTED, and the `::` spelling beside it is
+/// not -- both halves matter: a regression that accepted dots silently
+/// would otherwise be indistinguishable from one that rejected `::`.
+///
+/// Rejection is a TRUNCATED parse, not a hard failure: `use_path_sep` is
+/// `::`, so `separated_by` stops after the first segment and the parser
+/// returns the one-segment path `std` with `.list {intercalate}` left
+/// unconsumed. That is what makes a dotted `use` a file-level error --
+/// the loader requires a parse to consume its whole input -- and it is
+/// the same shape the Rust host asserts (`test_use_rejects_dotted_path`,
+/// `core/src/parser/test/declarations.rs`). A hard failure would also
+/// count as rejection, so both are accepted here.
 #[test]
-def test_use_parser_dotted_and_colon_colon_agree : Bool :=
+def test_use_parser_rejects_dotted : Bool :=
     match use_parser "use std::list {intercalate}" {
         success _ colon_out =>
-            match use_parser "use std.list {intercalate}" {
-                success _ _ => false,
-                fail _ =>
-                    match colon_out.kind {
-                        use_d colon_path _f1 _p1 =>
-                            String.beq (module_path_to_string colon_path) "std::list",
-                        _ => false
-                    }
-            },
+            match colon_out.kind {
+                use_d colon_path _fc _pc =>
+                    String.beq (module_path_to_string colon_path) "std::list",
+                _ => false
+            }
+            && (match use_parser "use std.list {intercalate}" {
+                    success rem dot_out =>
+                        match dot_out.kind {
+                            use_d dot_path _fd _pd =>
+                                // Never two segments, and the tail is
+                                // left behind rather than swallowed.
+                                String.beq (module_path_to_string dot_path) "std"
+                                && String.contains rem "list",
+                            _ => false
+                        },
+                    fail _ => true
+                }),
         fail _ => false
     }
 

@@ -46,7 +46,7 @@ fn load(source: &str) -> Result<(crate::term::module::LoadedModules, ModulePath)
   .map_err(|e| e.to_string())?;
 
   let path = ModulePath::top("test_derive_cli");
-  let full_source = format!("use cli.args {{*}}\n\n{source}");
+  let full_source = format!("use cli::args {{*}}\n\n{source}");
   let parsed = parse_file(full_source.as_str().into()).map_err(|e| e.to_string())?;
   let decls = type_check_module_decls(&path, parsed.decls, &loaded).map_err(|e| e.to_string())?;
   let mut loaded = loaded;

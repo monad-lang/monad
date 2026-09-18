@@ -217,7 +217,7 @@ fn test_module_doc_with_blank_line_does_not_swallow_next_decl() {
   let s: Span<'static, ()> = r#"/// doc comment
 ///
 /// more doc
-use std.show
+use std::show
 
 def x : I64 := 1
 "#
@@ -225,6 +225,9 @@ def x : I64 := 1
   let (_, parsed) = decls_parser(s).unwrap();
   assert_eq!(parsed.decls.len(), 2, "decls: {:?}", parsed.decls);
   match parsed.decls[0].value() {
+    // `Display for ModulePath` joins with `.` (the symbol-encoding
+    // rendering); only the `use`-line writer, `module_path_to_string`,
+    // spells `::`. The decl's SURVIVAL is this test's point either way.
     Decl::Use(u) => assert_eq!(u.module_path.to_string(), "std.show"),
     other => panic!("Expected Use decl, got {other:?}"),
   }

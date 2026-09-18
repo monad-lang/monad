@@ -38,8 +38,8 @@ def test_compile_42 : IO Bool := do {
 
     exec_cmd "mkdir" ["-p", output_dir];
 
-    let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
-    let ir_text := llvm.ir.emit_module mod_;
+    let mod_ := compile_db_decls_ir defs;
+    let ir_text := emit_module mod_;
     // `ir_path` is always non-empty by construction (built from
     // non-empty literal fragments above) -- `Path.path` directly.
     IO.write_file (Path.path ir_path) ir_text;
@@ -92,8 +92,8 @@ def compile_link_run_expect (defs : List Def) (basename : String) (expected : I6
 
     exec_cmd "mkdir" ["-p", output_dir];
 
-    let mod_ := lang.codegen.emit.compile_db_decls_ir defs;
-    let ir_text := llvm.ir.emit_module mod_;
+    let mod_ := compile_db_decls_ir defs;
+    let ir_text := emit_module mod_;
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
     IO.write_file (Path.path ir_path) ir_text;
 
@@ -355,8 +355,8 @@ def compile_decls_link_run_expect (decl_list : List Decl) (basename : String) (e
 
     exec_cmd "mkdir" ["-p", output_dir];
 
-    let mod_ := lang.codegen.emit.compile_db_module decl_list;
-    let ir_text := llvm.ir.emit_module mod_;
+    let mod_ := compile_db_module decl_list;
+    let ir_text := emit_module mod_;
     // `ir_path` is always non-empty by construction -- `Path.path` directly.
     IO.write_file (Path.path ir_path) ir_text;
 

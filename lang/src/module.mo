@@ -336,17 +336,67 @@ def resolve_module_file (base_dir : String) (mp : ModulePath) : IO (Option Strin
         ];
         match found {
             Option.some p => return (Option.some p),
-            // Only when the convention above missed: ask the manifest.
+            // Still only when every convention missed: the `motes/*/src`
+            // search path, then the manifest.
+            //
             // `mote_path` assumes a mote's directory is its name, sitting
             // at the working directory -- true for every mote in this
             // workspace, and false for one anywhere else (`motes/demo`
             // declaring `name = "demo"`, say). Discovering the importing
             // file's own mote costs a manifest read, so it happens here,
             // on the miss, and never on the path everything else takes.
-            Option.none => resolve_via_manifest base_dir mp
+            Option.none => do {
+                let in_motes_cands <- motes_src_paths mp;
+                let in_motes : Option String <- first_existing in_motes_cands;
+                match in_motes {
+                    Option.some p => return (Option.some p),
+                    Option.none => resolve_via_manifest base_dir mp
+                }
+            }
         }
     }
 }
+
+/// The `motes/<member>/src/<path>.mo` candidates for `mp`, in
+/// `IO.list_dir`'s own sorted order.
+///
+/// Mirrors the Rust host's `build_default_search_paths` (`core/src/lib.rs`),
+/// which pushes `cwd/motes` AND every `cwd/motes/*/src` onto its search
+/// path -- that is the whole reason a bare `use greet` finds
+/// `motes/example/src/greet.mo` without naming its mote, and why the
+/// fixture in `examples/test_mote.mo` reads the way it does. Directory
+/// probing rather than manifest-driven member resolution, deliberately:
+/// the Rust host probes directories, so parity means probing them too.
+///
+/// `List.empty` outside a checkout with a `motes/` directory -- which is
+/// every deployment, so the walk costs one `is_dir` there.
+#[partial]
+def motes_src_paths (mp : ModulePath) : IO (List String) := do {
+    let is_there <- IO.is_dir (Path.path "motes");
+    if Bool.not is_there then do { return List.empty }
+    else do {
+        let entries <- IO.list_dir (Path.path "motes");
+        motes_src_paths_go entries (module_path_to_file mp)
+    }
+}
+
+#[partial]
+def motes_src_paths_go (entries : List String) (file_stem : String) : IO (List String) :=
+    match entries {
+        List.empty => do { return List.empty },
+        List.cons name rest => do {
+            let tail <- motes_src_paths_go rest file_stem;
+            let src := String.concat "motes/" (String.concat name "/src");
+            let is_there <- IO.is_dir (Path.path src);
+            if Bool.not is_there
+            then return tail
+            else do {
+                let candidate := String.concat src (String.concat "/" (String.concat file_stem ".mo"));
+                let exists <- IO.file_exists (Path.path candidate);
+                return (if exists then List.cons candidate tail else tail)
+            }
+        }
+    }
 
 /// Resolve `mp` against the importing file's OWN mote: if the first segment
 /// names that mote, the rest is a path under its `src/`.

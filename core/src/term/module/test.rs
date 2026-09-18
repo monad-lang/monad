@@ -397,7 +397,7 @@ fn test_organize_imports_emits_colon_colon_for_use_only() {
   let path_b = ModulePath::top("colon_consumer");
   // Bare `use` (no filter) is what organize-imports rewrites into an
   // explicit one -- which is where the rendering happens.
-  let source_b = "use colonmod.inner\n\ndef f : I64 := used_fn\n";
+  let source_b = "use colonmod::inner\n\ndef f : I64 := used_fn\n";
   let parsed_b = parse_file(source_b.into()).unwrap();
   let decls_b = type_check_module_decls(&path_b, parsed_b.decls, &loaded).unwrap();
   loaded.add_module(module(
