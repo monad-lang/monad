@@ -29,7 +29,7 @@ use crate::core_value::{Env, GlobalCache, GlobalTable, NativeTable, Value};
 use crate::lower_core_ir::lower_program;
 use crate::parser::parse_file;
 use crate::term::module::{ParsedModule, default_modules, module};
-use crate::term::{Decl, ModulePath, NumSuffix, SourceContext};
+use crate::term::{Decl, GlobalRef, ModulePath, NamePath, NumSuffix, SourceContext};
 
 /// A tiny "dependency module" — analogous to `std/derive.mo` in the real
 /// plan — loaded normally (fully parsed + type-checked, exactly as any
@@ -71,7 +71,7 @@ fn test_on_demand_core_ir_capture_and_eval_matches_expected_result() {
     .into_iter()
     .find(|m| m.path() == &helper_path)
     .expect("helper module should be loaded");
-  let bump_path = ModulePath::top("bump");
+  let bump_path = NamePath::top("bump");
   let def_ctx = module_ref.get_def(&bump_path).cloned().unwrap_or_else(|| {
     let names: Vec<String> = module_ref
       .defs()
@@ -131,7 +131,7 @@ fn test_on_demand_core_ir_capture_and_eval_matches_expected_result() {
   // normal whole-program `run`/`test` pipeline.
   let lowered = lower_program(&program).expect("lowering the captured program should succeed");
   let idx = lowered
-    .index_of(&bump_path)
+    .index_of(&GlobalRef::Local(bump_path.clone()))
     .expect("bump should have a global slot in the lowered program");
 
   let globals = GlobalTable::new(lowered.globals);

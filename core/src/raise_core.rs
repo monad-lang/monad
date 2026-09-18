@@ -59,8 +59,30 @@
 use crate::AtomPathMap;
 use crate::core_term::{CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, DebugName};
 use crate::term::{
-  self, Identifier, Literal, MatchCase, Multiplicity, NameRef, Native, Par, Param, Term,
+  self, GlobalRef, Identifier, Literal, MatchCase, Multiplicity, NameRef, Native, Par, Param, Term,
 };
+
+/// The reverse of lower_core's `GlobalRef` construction: a raised global
+/// reference's spelling is exactly what the atom table says it is —
+/// `Local` raises to a bare/dotted `Np`/`Id` var, `Qualified` to the
+/// `::`-qualified `Qn` form.
+fn raise_global_ref(path: GlobalRef) -> NameRef {
+  match path {
+    GlobalRef::Local(np) => mpvar_like(np),
+    GlobalRef::Qualified(qn) => NameRef::Qn(Box::new(qn)),
+  }
+}
+
+/// 1-segment name paths raise as bare `Id`s (the `Np` invariant holds ≥
+/// 2 segments), mirroring `term::mpvar`'s construction-side
+/// normalization.
+fn mpvar_like(np: crate::term::NamePath) -> NameRef {
+  if np.len() == 1 {
+    NameRef::Id(np.last().clone())
+  } else {
+    NameRef::Np(np)
+  }
+}
 
 /// Raise a checked `CoreTerm` back into a named `Term`. `atom_paths` must
 /// map every `Free` atom the term references back to its `ModulePath` —
@@ -231,7 +253,7 @@ impl<'p> Raiser<'p> {
           0,
           Box::new(move |_| {
             Res::Term(Term::Var {
-              name: NameRef::P(path),
+              name: raise_global_ref(path),
             })
           }),
         ));
@@ -412,7 +434,11 @@ impl<'p> Raiser<'p> {
           .iter()
           .map(|&present| present.then(|| it.next().unwrap().into_term()))
           .collect();
-        Res::Term(Term::Con(term::constructor(name, typ_name, args)))
+        Res::Term(Term::Con(term::constructor(
+          name,
+          typ_name.to_flat_name_path(),
+          args,
+        )))
       }),
     ));
     self.expand_args(&c.args, work);
@@ -530,7 +556,7 @@ impl<'p> Raiser<'p> {
               .collect();
             let type_name_t = type_name_path.map(|path| {
               Box::new(Term::Var {
-                name: NameRef::P(path),
+                name: raise_global_ref(path),
               })
             });
             Res::Term(Term::Lit {
@@ -645,8 +671,8 @@ mod test {
   use crate::core_term::AtomTable;
   use crate::lower_core::{LowerContext, lower_term};
   use crate::term::{
-    ModulePath, app, case, constructor, forall, id, if_term, lam, match_term, num, param, pi,
-    sort0, sort1, str, var,
+    NamePath, app, case, constructor, forall, id, if_term, lam, match_term, num, param, pi, sort0,
+    sort1, str, var,
   };
 
   fn lower(t: &Term, atoms: &mut AtomTable) -> CoreTerm {
@@ -664,7 +690,7 @@ mod test {
     names
       .iter()
       .map(|n| {
-        let path = ModulePath::top(n);
+        let path = GlobalRef::Local(NamePath::top(n));
         let atom = atoms.intern(path.clone());
         (atom, path)
       })
@@ -787,7 +813,7 @@ mod test {
 
   #[test]
   fn test_round_trip_con() {
-    let c = constructor(id("empty"), ModulePath::top("List"), vec![]);
+    let c = constructor(id("empty"), NamePath::top("List"), vec![]);
     assert_round_trips(&Term::Con(c));
   }
 
@@ -795,7 +821,7 @@ mod test {
   fn test_round_trip_con_with_args() {
     let c = constructor(
       id("cons"),
-      ModulePath::top("List"),
+      NamePath::top("List"),
       vec![Some(num(1)), Some(num(2))],
     );
     assert_round_trips(&Term::Con(c));
@@ -815,7 +841,7 @@ mod test {
     // recursively) too, so constructing the fixture itself can't be the
     // thing that overflows.
     let depth = 20_000;
-    let fn_path = ModulePath::top("raise_core_test_stack_fn");
+    let fn_path = GlobalRef::Local(NamePath::top("raise_core_test_stack_fn"));
     let fn_atom = AtomTable::new().intern(fn_path.clone());
     let paths: AtomPathMap = [(fn_atom, fn_path)].into_iter().collect();
     let mut term = CoreTerm::Free(fn_atom);

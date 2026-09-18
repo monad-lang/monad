@@ -17,7 +17,7 @@ use monad_core::lower_core_ir::{LoweredProgram, lower_program};
 use monad_core::term::module::{
   default_modules, init_package_sources, load_decls_from_text_with_path,
 };
-use monad_core::term::{ModulePath, mpt};
+use monad_core::term::{GlobalRef, ModulePath, NamePath};
 
 const WORKLOAD: &str = r#"
 use init
@@ -55,7 +55,9 @@ fn main() {
 
   let program = check_all_modules_capturing_core(&modules, &loaded).expect("check");
   let lowered: LoweredProgram = lower_program(&program).expect("lower");
-  let main_idx = lowered.index_of(&mpt("main")).expect("main not found");
+  let main_idx = lowered
+    .index_of(&GlobalRef::Local(NamePath::top("main")))
+    .expect("main not found");
 
   let mut acc: i64 = 0;
   for _ in 0..ITERATIONS {

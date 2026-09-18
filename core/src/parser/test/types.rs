@@ -101,15 +101,15 @@ fn test_all_type_cons() {
   let (_, res) = all_type_cons_parser(s).unwrap();
   similar!(
     res,
-    vec![type_constraint(mpt("Applicative"), vec![id("A")])]
+    vec![type_constraint(npt("Applicative"), vec![id("A")])]
   );
   let s = r#"[MyClass A B, Monad B]"#;
   let (_, res) = all_type_cons_parser(s).unwrap();
   similar!(
     res,
     vec![
-      type_constraint(mpt("MyClass"), vec![id("A"), id("B")]),
-      type_constraint(mpt("Monad"), vec![id("B")])
+      type_constraint(npt("MyClass"), vec![id("A"), id("B")]),
+      type_constraint(npt("Monad"), vec![id("B")])
     ]
   );
 }

@@ -11,7 +11,7 @@ def add (a b: I64) : I64 := a + b
   similar!(
     res,
     def(
-      mpt("add"),
+      npt("add"),
       vec![],
       pi_var(id("a"), typ("I64"), pi_var(id("b"), typ("I64"), typ("I64"))),
       lams(
@@ -35,7 +35,7 @@ class Functor (F: Type -> Type) {
   similar!(
     ctx.value(),
     &Decl::Type(class(
-      mpt("Functor"),
+      npt("Functor"),
       vec![],
       vec![dpar("F", pi(typ("Type"), typ("Type")))],
       vec![class_def(
@@ -65,7 +65,7 @@ struct Point {
   similar!(
     ctx.value(),
     &Decl::Type(stru(
-      mpt("Point"),
+      npt("Point"),
       vec![],
       vec![],
       vec![
@@ -92,18 +92,18 @@ type Option A {
   similar!(
     ctx.value(),
     &Decl::Type(inductive(
-      mpt("Option"),
+      npt("Option"),
       vec![],
       vec![par("A")],
       Hole,
       vec![
         induct_constructor(
-          mpt("Option"),
+          npt("Option"),
           id("some"),
           pi(typ("A"), option_typ.clone()),
           vec![dpar("a", typ("A"))]
         ),
-        induct_constructor(mpt("Option"), id("none"), option_typ, vec![])
+        induct_constructor(npt("Option"), id("none"), option_typ, vec![])
       ],
       vec![]
     ))
@@ -124,12 +124,12 @@ instance Functor List {
     ctx.value(),
     &Decl::Ins(instance(
       None,
-      mpt("Functor"),
+      npt("Functor"),
       vec![],
       vec![],
       vec![var("List")],
       vec![def(
-        mpt("map"),
+        npt("map"),
         vec![],
         pi_var(
           id("f"),

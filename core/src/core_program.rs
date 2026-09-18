@@ -17,7 +17,7 @@
 //! site keeps passing `None` and pays zero extra cost.
 
 use crate::core_term::{Atom, CoreTerm};
-use crate::term::{Identifier, ModulePath};
+use crate::term::{Identifier, NamePath};
 use crate::{AtomPathMap, Map};
 
 /// One checked def's pre-`raise_core` `CoreTerm` body, plus what's needed
@@ -73,8 +73,8 @@ pub struct CoreInductiveInfo {
 /// `CoreTerm::Con` for the instance itself is captured or needed here.
 #[derive(Debug, Clone)]
 pub struct CoreInstanceInfo {
-  pub class_name: ModulePath,
-  pub method_paths: Vec<ModulePath>,
+  pub class_name: NamePath,
+  pub method_paths: Vec<NamePath>,
 }
 
 /// Whole-program accumulator. See module doc comment.
@@ -86,9 +86,9 @@ pub struct CoreProgram {
   /// per instance since ordinary method `Def`s are parsed with a bare,
   /// non-instance-qualified name (`impls_map` collision risk otherwise —
   /// see the plan's Phase 0 section).
-  pub defs: Map<ModulePath, CheckedCoreDef>,
-  pub inductives: Map<ModulePath, CoreInductiveInfo>,
-  pub instances: Map<ModulePath, CoreInstanceInfo>,
+  pub defs: Map<NamePath, CheckedCoreDef>,
+  pub inductives: Map<NamePath, CoreInductiveInfo>,
+  pub instances: Map<NamePath, CoreInstanceInfo>,
   /// Each def's own `Match`/`if` resolutions, keyed by that def's
   /// capture path, **in left-to-right visitation order** — re-deriving
   /// the resolved inductive from constructor names alone is provably
@@ -108,7 +108,7 @@ pub struct CoreProgram {
   /// `MetaContext::take_match_resolutions` once per def, right after
   /// that def's own `check`/`infer` call, so entries from different defs
   /// never interleave) and `lower_core_ir.rs::lower_match`.
-  pub match_resolutions: Map<ModulePath, Vec<(Vec<Identifier>, Atom)>>,
+  pub match_resolutions: Map<NamePath, Vec<(Vec<Identifier>, Atom)>>,
 }
 
 impl CoreProgram {

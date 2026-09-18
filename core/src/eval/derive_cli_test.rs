@@ -8,7 +8,7 @@
 use crate::core_check_module::type_check_module_decls_new as type_check_module_decls;
 use crate::parser::parse_file;
 use crate::term::module::{ParsedModule, default_modules, module};
-use crate::term::{Identifier, ModulePath, SearchPaths, mpt};
+use crate::term::{Identifier, ModulePath, NamePath, SearchPaths};
 
 /// Load `source` as a module (running the full elaborate -> expand_macros ->
 /// type-check pipeline, exactly like the real CLI's `test`/`run` commands),
@@ -112,7 +112,7 @@ fn test_derive_cli_untouched_without_attribute() {
   let (loaded, path) = load(src).expect("plain type should still type check");
   let module = loaded.get_module(&path).unwrap();
   assert!(
-    module.get_def(&mpt("parse_command")).is_none(),
+    module.get_def(&NamePath::top("parse_command")).is_none(),
     "no #[derive_cli] attribute means no generated parser"
   );
 }

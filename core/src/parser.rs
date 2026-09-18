@@ -14,8 +14,8 @@ use crate::{
   term::{
     AttrArg, Attribute, ClassDef, Decl, DeclGenDef, Def, Documentation, FieldPattern, Identifier,
     InductConstructor, Inductive, Infix, Instance, LetVar, Literal, MatchCase, ModulePath,
-    Multiplicity, NameRef, NumSuffix, Open, OpenFilter, Operator, Param, SourceContext,
-    SourceRange, StructField,
+    Multiplicity, NamePath, NameRef, NumSuffix, Open, OpenFilter, Operator, Param, QualifiedName,
+    SourceContext, SourceRange, StructField,
     Term::{self, Hole, Var},
     TypeConstraint, Use, UseFilter, UseItem, Visibility, app, apps, case, case_with_field_pattern,
     class, class_def, ctx, def, def_with_native, fields_to_cons_params, float_suffix, forall,
@@ -163,8 +163,11 @@ fn doc_comment<X: Clone>(input: Span<X>) -> Res<Documentation, X> {
 
 fn variable<X: Clone>(input: Span<X>) -> Res<Term, X> {
   let (input, term) = alt((
-    map(path_expression, |p| Var {
-      name: NameRef::P(p),
+    map(qualified_name_expression, |q| Var {
+      name: NameRef::Qn(Box::new(q)),
+    }),
+    map(name_path_expression, |p| Var {
+      name: NameRef::Np(p),
     }),
     simple_var,
   ))
@@ -1361,7 +1364,10 @@ fn use_path_expression<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
   .parse(input)
 }
 
-fn path_expression<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
+/// A `.`-separated name path in expression position (`List.cons`,
+/// `x.fun`). The name half of a reference — see
+/// plans/implementations/qualified-names.md.
+fn name_path_expression<X: Clone>(input: Span<X>) -> Res<NamePath, X> {
   map(
     separated_pair(
       terminated(identifier, ws0),
@@ -1369,14 +1375,67 @@ fn path_expression<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
       preceded(
         ws0,
         alt((
-          path_expression,
-          map(identifier, |i| ModulePath::new(vec![i])),
+          name_path_expression,
+          map(identifier, |i| NamePath::new(vec![i])),
         )),
       ),
     ),
-    |(left, right)| ModulePath::new(vec![left]).extend(right),
+    |(left, right)| NamePath::new(vec![left]).extend(right),
   )
   .parse(input)
+}
+
+/// A `::`-qualified reference in expression position:
+/// `ident ("::" ident)+ ("." ident)*`. The LAST `::` is the
+/// module/name boundary — `std::list::List.cons` parses as module
+/// `[std, list]`, name `[List, cons]` with no scope knowledge.
+/// Once the `.`-separated name part begins, a further `::` is a parse
+/// error ("write `a::b::c.d`").
+fn qualified_name_expression<X: Clone>(input: Span<X>) -> Res<QualifiedName, X> {
+  let (input, first) = identifier(input)?;
+  // The `::`-chain after `first`; ≥ 1 segment (a bare identifier never
+  // reaches this parser — `variable` tries the simpler forms first).
+  let (input, chain) = many1(preceded((ws0, tag("::")), preceded(ws0, identifier))).parse(input)?;
+  let (input, dotted) = opt(preceded(
+    (ws0, tag(".")),
+    preceded(ws0, name_path_expression),
+  ))
+  .parse(input)?;
+  if dotted.is_some() {
+    // Once the name part is dotted, `::` can no longer follow.
+    if let Ok((rest, _)) = (ws0, tag("::")).parse(input.clone()) {
+      if rest
+        .fragment()
+        .trim_start()
+        .starts_with(|c: char| c.is_alphabetic() || c == '_')
+      {
+        return Err(nom::Err::Error(ParseError::new(
+          input,
+          error::ParseErrorKind::Native(
+            "once the name part begins, segments are `.`-separated — write `a::b::c.d`".into(),
+          ),
+        )));
+      }
+    }
+  }
+
+  // The module half is `first` plus every `::` segment except the last,
+  // which seeds the name half.
+  let n = chain.len();
+  let name_seed = chain.last().expect("`::` chain is nonempty").clone();
+  let name = match dotted {
+    Some(tail) => NamePath::new(vec![name_seed]).extend(tail),
+    None => NamePath::new(vec![name_seed]),
+  };
+  let mut module = vec![first];
+  module.extend(chain.into_iter().take(n - 1));
+  Ok((
+    input,
+    QualifiedName {
+      module: ModulePath::new(module),
+      name,
+    },
+  ))
 }
 
 fn quote_parser<X: Clone>(input: Span<X>) -> Res<Term, X> {
@@ -1482,8 +1541,8 @@ pub fn term<X: Clone>(input: Span<X>) -> Res<Term, X> {
   Ok((input, ctx(term, loc, module)))
 }
 
-fn def_name<X: Clone>(input: Span<X>) -> Res<ModulePath, X> {
-  alt((path_expression, map(name, ModulePath::single))).parse(input)
+fn def_name<X: Clone>(input: Span<X>) -> Res<NamePath, X> {
+  alt((name_path_expression, map(name, NamePath::single))).parse(input)
 }
 
 fn wrap_args(args: Vec<AttrArg>) -> AttrArg {
@@ -2104,7 +2163,7 @@ fn constructor_parser<'a>(
   if params.is_empty() {
     Ok((
       input,
-      induct_constructor(extra.induct_name, name, return_typ, params),
+      induct_constructor(extra.induct_name.clone().into(), name, return_typ, params),
     ))
   } else {
     let mut full_typ = pi_typs(
@@ -2116,7 +2175,7 @@ fn constructor_parser<'a>(
     }
     Ok((
       input,
-      induct_constructor(extra.induct_name, name, full_typ, params),
+      induct_constructor(extra.induct_name.clone().into(), name, full_typ, params),
     ))
   }
 }
@@ -2150,17 +2209,17 @@ pub(crate) fn inductive_parser(input: Span) -> Res<Inductive> {
   let (input, typ) = opt_type_annotation(input)?;
   let (input, _) = ws0(input)?;
   let induct_type = if params.is_empty() {
-    mpvar(name.clone())
+    mpvar(NamePath::from(name.clone()))
   } else {
     apps(
-      mpvar(name.clone()),
+      mpvar(NamePath::from(name.clone())),
       params.iter().map(|p| var_id(p.name.clone())).collect(),
     )
   };
   let (input, constructors) = set_res_extra(
     inductive_inner_parser(input.map_extra(|_| InductiveExtra {
       induct_type,
-      induct_name: name.clone(),
+      induct_name: name.clone().into(),
     })),
     (),
   )?;
@@ -2362,9 +2421,9 @@ fn use_parser(input: Span) -> Res<Use> {
 /// `open`, unlike the now-mandatory braces on `use`; a bare `open Module`
 /// still parses but is deprecated — see `bare_open_warnings` — in favor of
 /// the explicit `open Module {*}`).
-fn open_module_path_and_filter(input: Span) -> Res<(ModulePath, OpenFilter)> {
-  let (input, module_path) =
-    alt((path_expression, map(identifier, ModulePath::single))).parse(input)?;
+fn open_module_path_and_filter(input: Span) -> Res<(NamePath, OpenFilter)> {
+  let (input, path) =
+    alt((name_path_expression, map(identifier, NamePath::single))).parse(input)?;
   let (input, filter) = opt(preceded(
     ws0,
     delimited(
@@ -2381,7 +2440,7 @@ fn open_module_path_and_filter(input: Span) -> Res<(ModulePath, OpenFilter)> {
   ))
   .parse(input)?;
   let filter = filter.unwrap_or(OpenFilter::All);
-  Ok((input, (module_path, filter)))
+  Ok((input, (path, filter)))
 }
 
 /// The declaration kinds a scoped `open Module in <decl>` may wrap.
@@ -2405,7 +2464,7 @@ fn open_parser(input: Span) -> Res<Decl> {
   let (input, start) = info(input)?;
   let (input, _) = tag("open")(input)?;
   let (input, _) = ws1(input)?;
-  let (input, (module_path, filter)) = open_module_path_and_filter(input)?;
+  let (input, (path, filter)) = open_module_path_and_filter(input)?;
   let (input, scoped) =
     opt(preceded((ws1, tag("in"), ws1), scoped_open_inner_decl)).parse(input)?;
   let (input, end) = info(input)?;
@@ -2415,7 +2474,7 @@ fn open_parser(input: Span) -> Res<Decl> {
     Some(decl) => Ok((
       input,
       Decl::ScopedOpen {
-        module_path,
+        path,
         filter,
         attributes: attrs,
         decl: Box::new(decl),
@@ -2424,7 +2483,7 @@ fn open_parser(input: Span) -> Res<Decl> {
     None => Ok((
       input,
       Decl::Open(Open {
-        module_path,
+        path,
         source_location,
         filter,
         attributes: attrs,

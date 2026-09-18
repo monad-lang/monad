@@ -166,7 +166,7 @@ fn test_def_do_block_simple_expr() {
   similar!(
     res,
     def(
-      mpt("hello"),
+      npt("hello"),
       vec![],
       app2("IO", "Unit"),
       apps(var("println"), vec![str("Hello")]),
@@ -186,7 +186,7 @@ fn test_def_do_block_return() {
   similar!(
     res,
     def(
-      mpt("get_one"),
+      npt("get_one"),
       vec![],
       app2("IO", "I64"),
       app(pvar(vec!["Monad", "pure"]), num(1)),
@@ -206,7 +206,7 @@ fn test_def_do_block_with_params() {
   similar!(
     res,
     def(
-      mpt("greet"),
+      npt("greet"),
       vec![],
       pi_var(id("name"), typ("String"), app2("IO", "Unit")),
       lams(
@@ -234,7 +234,7 @@ fn test_def_do_block_bind() {
   similar!(
     res,
     def(
-      mpt("read_val"),
+      npt("read_val"),
       vec![],
       app2("IO", "I64"),
       expected_body,
@@ -263,7 +263,7 @@ fn test_def_do_block_let() {
   similar!(
     res,
     def(
-      mpt("with_let"),
+      npt("with_let"),
       vec![],
       app2("IO", "I64"),
       expected_body,
@@ -291,7 +291,7 @@ fn test_def_do_block_multiple_exprs() {
   similar!(
     res,
     def(
-      mpt("multi"),
+      npt("multi"),
       vec![],
       app2("IO", "Unit"),
       expected_body,
@@ -332,7 +332,7 @@ fn test_def_do_block_match() {
   similar!(
     res,
     def(
-      mpt("multi"),
+      npt("multi"),
       vec![],
       app2("IO", "Unit"),
       expected_body,
@@ -352,8 +352,8 @@ fn test_def_do_block_with_constraints() {
   similar!(
     res,
     def(
-      mpt("test"),
-      vec![type_constraint(mpt("Monad"), vec![id("M")])],
+      npt("test"),
+      vec![type_constraint(npt("Monad"), vec![id("M")])],
       forall(
         dpar("M", pi(typ("Type"), typ("Type"))),
         pi_var(id("arg"), app2("M", "String"), app2("M", "Unit"))

@@ -15,7 +15,7 @@ use monad_core::core_ir::CoreIr;
 use monad_core::lower_core_ir::{GlobalDef, lower_program};
 use monad_core::term::Decl;
 use monad_core::term::module::{default_modules, load_decls_from_text_with_path};
-use monad_core::term::{ModulePath, SourceContext, mpt};
+use monad_core::term::{ModulePath, NamePath, SourceContext};
 
 /// `check_all_modules_capturing_core` only captures `Decl::Type`/`Match`
 /// resolutions for whichever modules' raw decls are explicitly passed in
@@ -81,7 +81,7 @@ fn phase0_captures_whole_program_core_terms() {
   // --- defs: an ordinary top-level def is captured under its own path
   //     (a bare, unqualified name — module qualification isn't baked
   //     into `Def.name` at check time in this codebase) ---
-  let five_path = mpt("five");
+  let five_path = NamePath::top("five");
   assert!(
     program.defs.contains_key(&five_path),
     "expected a captured def at {five_path}, got keys: {:?}",
@@ -90,7 +90,7 @@ fn phase0_captures_whole_program_core_terms() {
 
   // --- inductives: Stack/Queue are registered with their constructors
   //     in declaration order (order == tag), both sharing a `cons` name ---
-  let stack_path = mpt("Stack");
+  let stack_path = NamePath::top("Stack");
   let stack_info = program.inductives.get(&stack_path).unwrap_or_else(|| {
     panic!(
       "expected Stack in inductives, got: {:?}",
@@ -106,7 +106,7 @@ fn phase0_captures_whole_program_core_terms() {
     stack_info.constructors
   );
 
-  let queue_path = mpt("Queue");
+  let queue_path = NamePath::top("Queue");
   let queue_info = program.inductives.get(&queue_path).unwrap_or_else(|| {
     panic!(
       "expected Queue in inductives, got: {:?}",
@@ -129,7 +129,7 @@ fn phase0_captures_whole_program_core_terms() {
   //     comment for why this isn't content-keyed) ---
   let stack_resolutions = program
     .match_resolutions
-    .get(&mpt("match_stack_cons"))
+    .get(&NamePath::top("match_stack_cons"))
     .expect("expected captured match resolutions for match_stack_cons");
   assert_eq!(
     stack_resolutions.len(),
@@ -141,7 +141,7 @@ fn phase0_captures_whole_program_core_terms() {
 
   let queue_resolutions = program
     .match_resolutions
-    .get(&mpt("match_queue_cons"))
+    .get(&NamePath::top("match_queue_cons"))
     .expect("expected captured match resolutions for match_queue_cons");
   assert_eq!(
     queue_resolutions.len(),

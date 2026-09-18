@@ -114,7 +114,7 @@ fn test_native_with_named_arg() {
   similar!(
     res.value(),
     &Decl::Def(def(
-      mpt("add"),
+      npt("add"),
       vec![],
       pi(typ("I64"), pi(typ("I64"), typ("I64"))),
       expected_term,

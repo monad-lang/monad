@@ -11,7 +11,7 @@ use crate::eval::macro_expand::expand_macros;
 use crate::eval::r#type::elaborate_decls;
 use crate::parser::parse_file;
 use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
-use crate::term::{Decl, Identifier, ModulePath, SearchPaths};
+use crate::term::{Decl, Identifier, ModulePath, NamePath, SearchPaths};
 
 /// Load `init/meta.mo` (the real file, embedded via `include_str!` the
 /// same way `default_modules()` embeds the always-loaded `init/*.mo`
@@ -198,7 +198,7 @@ fn test_derive_lens_end_to_end_against_the_real_std_derive_mo() {
     Err(e) => panic!("derive_lens! Point failed to expand: {e}"),
   };
   for expected in ["Point.x", "Point.y"] {
-    let expected_path = ModulePath::new(
+    let expected_path = NamePath::new(
       expected
         .split('.')
         .map(|s| Identifier::new(s.to_string()))

@@ -17,7 +17,9 @@ use crate::eval::r#type::elaborate_decls;
 use crate::parser::parse_file;
 use crate::parser::{ReplInput, repl_parser};
 use crate::term::module::{LoadedModules, ParsedModule, default_modules, module};
-use crate::term::{Decl, Hole, ModulePath, NameRef, SourceContext, Term, app, def, mpt, num, var};
+use crate::term::{
+  Decl, Hole, ModulePath, NamePath, NameRef, SourceContext, Term, app, def, num, var,
+};
 
 fn parse_term(input: &str) -> Term {
   let ReplInput::Term(e) = repl_parser(input).unwrap() else {
@@ -128,7 +130,13 @@ fn test_unquote_outside_quote_fails() {
   let loaded = default_modules().unwrap();
   let path = ModulePath::top("test_unquote");
   let t = app(var("unquote"), num(42));
-  let decl = SourceContext::no_ctx(Decl::Def(def(mpt("main"), vec![], Hole, t, vec![])));
+  let decl = SourceContext::no_ctx(Decl::Def(def(
+    NamePath::top("main"),
+    vec![],
+    Hole,
+    t,
+    vec![],
+  )));
   let r = type_check_module_decls_new(&path, vec![decl], &loaded);
   assert!(
     r.is_err(),
@@ -149,7 +157,7 @@ fn test_defmacro_parses_simple() {
   assert_eq!(parsed.decls.len(), 1);
   match &parsed.decls[0].value() {
     Decl::DefMacro(def) => {
-      assert_eq!(def.name, mpt("id"));
+      assert_eq!(def.name, NamePath::top("id"));
       // The body may be wrapped in a lambda (for params); unwrap to find Quote
       let mut body = def.term.clone();
       while let Term::Lam { param: _, body: b } = body {
@@ -178,7 +186,7 @@ fn test_defmacro_stored_in_module() {
   );
   let macro_defs = mo.get_macro_defs();
   assert_eq!(macro_defs.len(), 1);
-  assert_eq!(macro_defs[0].name, mpt("id"));
+  assert_eq!(macro_defs[0].name, NamePath::top("id"));
 }
 
 #[test]
@@ -187,7 +195,7 @@ fn test_defmacro_with_multiple_params() {
   assert_eq!(parsed.decls.len(), 1);
   match &parsed.decls[0].value() {
     Decl::DefMacro(def) => {
-      assert_eq!(def.name, mpt("pair"));
+      assert_eq!(def.name, NamePath::top("pair"));
       // With params, the body should be a lambda
       let body = unwrap_ctx(def.term.clone());
       assert!(

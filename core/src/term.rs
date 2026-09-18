@@ -148,8 +148,15 @@ impl Operator {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub enum NameRef {
-  P(ModulePath),
   Id(Identifier),
+  /// Dotted name path (`x.fun`, `List.cons`) — a NAME, resolved through
+  /// scope. Holds ≥ 2 segments; a 1-segment path normalizes to `Id` at
+  /// parse time.
+  Np(NamePath),
+  /// Module-qualified reference (`std::list::List.cons`) — the module
+  /// half `::`-joined, the name half `.`-joined. Always lowers to a
+  /// global atom, never a field chain.
+  Qn(Box<QualifiedName>),
   Op(Operator),
   Macro(Identifier),
   Index(usize),
@@ -157,21 +164,29 @@ pub enum NameRef {
 
 impl NameRef {
   pub fn is_name(&self) -> bool {
-    matches!(self, Id(_) | NameRef::P(_))
+    matches!(self, Id(_) | NameRef::Np(_) | NameRef::Qn(_))
   }
   pub fn as_id(&self) -> Option<&Identifier> {
     match self {
       Id(id) => Some(id),
-      NameRef::P(p) if p.len() == 1 => Some(p.last()),
       _ => None,
     }
   }
 
-  pub fn to_path(&self) -> Option<ModulePath> {
+  /// The name half of a non-module-qualified reference (`Id`/`Np`).
+  /// `Qn` has no single name path — use [`to_qualified`](Self::to_qualified).
+  pub fn to_name_path(&self) -> Option<NamePath> {
     match self {
-      NameRef::P(module_path) => Some(module_path.clone()),
-      Id(identifier) => Some(ModulePath::single(identifier.clone())),
-      NameRef::Macro(identifier) => Some(ModulePath::single(identifier.clone())),
+      NameRef::Np(path) => Some(path.clone()),
+      Id(identifier) => Some(NamePath::single(identifier.clone())),
+      NameRef::Macro(identifier) => Some(NamePath::single(identifier.clone())),
+      _ => None,
+    }
+  }
+
+  pub fn to_qualified(&self) -> Option<&QualifiedName> {
+    match self {
+      NameRef::Qn(q) => Some(q),
       _ => None,
     }
   }
@@ -185,9 +200,14 @@ impl NameRef {
   }
 }
 
-impl From<ModulePath> for NameRef {
-  fn from(value: ModulePath) -> Self {
-    NameRef::P(value)
+impl From<NamePath> for NameRef {
+  fn from(value: NamePath) -> Self {
+    NameRef::Np(value)
+  }
+}
+impl From<QualifiedName> for NameRef {
+  fn from(value: QualifiedName) -> Self {
+    NameRef::Qn(Box::new(value))
   }
 }
 impl From<Operator> for NameRef {
@@ -210,7 +230,8 @@ impl Display for NameRef {
       NameRef::Op(op) => write!(f, "({op})"),
       NameRef::Macro(identifier) => write!(f, "{}!", identifier),
       NameRef::Index(i) => write!(f, "#{i}"),
-      NameRef::P(module_path) => write!(f, "{module_path}"),
+      NameRef::Np(path) => write!(f, "{path}"),
+      NameRef::Qn(q) => write!(f, "{q}"),
     }
   }
 }
@@ -261,7 +282,7 @@ pub fn type_count_args(typ: &Term) -> u8 {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeConstraint {
-  class: ModulePath,
+  class: NamePath,
   vars: Vec<Identifier>,
 }
 
@@ -275,7 +296,7 @@ impl TypeConstraint {
   pub fn vars(&self) -> &Vec<Identifier> {
     &self.vars
   }
-  pub fn class(&self) -> &ModulePath {
+  pub fn class(&self) -> &NamePath {
     &self.class
   }
   /// Get the concrete type for this constraint's first var from a substitution map.
@@ -285,7 +306,7 @@ impl TypeConstraint {
   }
 }
 
-pub fn type_constraint(class: ModulePath, vars: Vec<Identifier>) -> TypeConstraint {
+pub fn type_constraint(class: NamePath, vars: Vec<Identifier>) -> TypeConstraint {
   TypeConstraint { class, vars }
 }
 
@@ -371,11 +392,8 @@ pub fn fields_to_cons_params(fields: Vec<StructField>) -> Result<Vec<Param>, Ide
     .collect()
 }
 
-fn inductive_term(name: ModulePath, params: Vec<Param>) -> Term {
-  let mut term = Var {
-    // TODO record values
-    name: name.into(),
-  };
+fn inductive_term(name: NamePath, params: Vec<Param>) -> Term {
+  let mut term = mpvar(name);
   if !params.is_empty() {
     term = lams(params, term);
   }
@@ -383,7 +401,7 @@ fn inductive_term(name: ModulePath, params: Vec<Param>) -> Term {
 }
 
 pub fn stru(
-  name: ModulePath,
+  name: NamePath,
   constraints: Vec<TypeConstraint>,
   params: Vec<Param>,
   fields: Vec<StructField>,
@@ -431,15 +449,15 @@ pub fn stru(
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InductConstructor {
-  inductive_name: ModulePath,
-  name: ModulePath,
+  inductive_name: NamePath,
+  name: NamePath,
   term: Term,
   pub(crate) typ: Term,
   pub(crate) params: Vec<Param>,
 }
 
 impl Named for InductConstructor {
-  fn name(&self) -> &ModulePath {
+  fn name(&self) -> &NamePath {
     &self.name
   }
 }
@@ -457,13 +475,13 @@ impl InductConstructor {
   pub fn params(&self) -> &Vec<Param> {
     &self.params
   }
-  pub fn inductive_name(&self) -> &ModulePath {
+  pub fn inductive_name(&self) -> &NamePath {
     &self.inductive_name
   }
 }
 
 pub fn induct_constructor(
-  inductive_name: ModulePath,
+  inductive_name: NamePath,
   name: Identifier,
   typ: Term,
   params: Vec<Param>,
@@ -478,7 +496,7 @@ pub fn induct_constructor(
   if !params.is_empty() {
     term = lam_indecies(params.clone(), term);
   }
-  let name = inductive_name.clone().extend(name.into());
+  let name = inductive_name.clone().append(vec![name]);
   InductConstructor {
     inductive_name,
     name,
@@ -503,7 +521,7 @@ fn params_to_inductive_type(params: &[Param], typ: Term) -> Term {
 }
 
 pub fn inductive(
-  name: ModulePath,
+  name: NamePath,
   constraints: Vec<TypeConstraint>,
   params: Vec<Param>,
   typ: Term,
@@ -557,7 +575,7 @@ pub fn class_def(
 }
 
 pub fn class(
-  name: ModulePath,
+  name: NamePath,
   constraints: Vec<TypeConstraint>,
   params: Vec<Param>,
   defs: Vec<ClassDef>,
@@ -614,8 +632,8 @@ pub enum Visibility {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instance {
-  name: ModulePath,
-  pub(crate) class_name: ModulePath,
+  name: NamePath,
+  pub(crate) class_name: NamePath,
   pub(crate) constraints: Vec<TypeConstraint>,
   pub(crate) params: Vec<Param>,
   pub(crate) args: Vec<Term>,
@@ -627,7 +645,7 @@ pub struct Instance {
 }
 
 impl Instance {
-  pub fn name(&self) -> &ModulePath {
+  pub fn name(&self) -> &NamePath {
     &self.name
   }
   pub fn as_constructor(&self) -> &Constructor {
@@ -740,14 +758,14 @@ fn compare_instance_term(
         true
       }
     }
-    (Term::Var { name: n1 }, Term::Var { name: n2 }) => n1.to_path() == n2.to_path(),
+    (Term::Var { name: n1 }, Term::Var { name: n2 }) => n1.to_name_path() == n2.to_name_path(),
     _ => instance_term == key_term,
   }
 }
 
 pub fn instance(
-  name: Option<ModulePath>,
-  class_name: ModulePath,
+  name: Option<NamePath>,
+  class_name: NamePath,
   constraints: Vec<TypeConstraint>,
   params: Vec<Param>,
   args: Vec<Term>,
@@ -762,7 +780,7 @@ pub fn instance(
 
   let typ = apps(mpvar(class_name.clone()), args.clone());
   let name = name.unwrap_or_else(|| {
-    mpt(&format!(
+    NamePath::top(&format!(
       "instance-{}-{}",
       class_name,
       args
@@ -809,7 +827,7 @@ pub enum InductiveVariant {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Inductive {
   variant: InductiveVariant,
-  name: ModulePath,
+  name: NamePath,
   pub(crate) constraints: Vec<TypeConstraint>,
   pub(crate) params: Vec<Param>,
   term: Term,
@@ -854,11 +872,11 @@ impl Inductive {
 }
 
 pub trait Named {
-  fn name(&self) -> &ModulePath;
+  fn name(&self) -> &NamePath;
 }
 
 impl Named for Inductive {
-  fn name(&self) -> &ModulePath {
+  fn name(&self) -> &NamePath {
     &self.name
   }
 }
@@ -1064,18 +1082,13 @@ pub fn dpar(s: &str, typ: Term) -> Param {
   param(id(s), typ)
 }
 
-pub fn mpvar(name: ModulePath) -> Term {
-  Var {
-    name: NameRef::P(name),
-  }
-}
 pub fn ivar(name: Identifier) -> Term {
   Var {
     name: NameRef::Id(name),
   }
 }
 pub fn mpv(s: &str) -> Term {
-  mpvar(mpt(s))
+  mpvar(NamePath::top(s))
 }
 
 pub fn typ(s: &str) -> Term {
@@ -1468,7 +1481,7 @@ impl Display for Literal {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Constructor {
   pub(crate) name: Identifier,
-  pub(crate) typ_name: ModulePath,
+  pub(crate) typ_name: NamePath,
   pub(crate) num_args: usize,
   pub(crate) args: Vec<Option<Term>>,
 }
@@ -1477,7 +1490,7 @@ impl Constructor {
   pub fn name(&self) -> &Identifier {
     &self.name
   }
-  pub fn typ_name(&self) -> &ModulePath {
+  pub fn typ_name(&self) -> &NamePath {
     &self.typ_name
   }
   pub fn num_args(&self) -> usize {
@@ -1488,7 +1501,7 @@ impl Constructor {
   }
 }
 
-pub fn constructor(name: Identifier, typ_name: ModulePath, args: Vec<Option<Term>>) -> Constructor {
+pub fn constructor(name: Identifier, typ_name: NamePath, args: Vec<Option<Term>>) -> Constructor {
   let num_args = args.len();
   Constructor {
     name,
@@ -1537,13 +1550,13 @@ pub enum VarRef<'a> {
   Local { typ: &'a Term },
   /// A free var ref
   Free {
-    path: ModulePath,
+    path: NamePath,
     term: &'a Term,
     typ: &'a Term,
   },
   /// Indicates that the existing ref needs to be updated
   UpdateRef {
-    new_path: &'a ModulePath,
+    new_path: &'a NamePath,
     term: &'a Term,
     typ: &'a Term,
     method_constraints: Option<&'a Vec<TypeConstraint>>,
@@ -1553,7 +1566,7 @@ pub enum VarRef<'a> {
   /// exists, but the concrete type is abstract (a type variable).
   /// The evaluator must resolve this at runtime using the env.
   ClassMethod {
-    class_name: ModulePath,
+    class_name: NamePath,
     method_name: Identifier,
     type_var: Identifier,
     typ: Term,
@@ -1586,7 +1599,7 @@ impl<'a> VarRef<'a> {
   }
 }
 
-pub fn free_var_ref<'a>(path: ModulePath, term: &'a Term, typ: &'a Term) -> VarRef<'a> {
+pub fn free_var_ref<'a>(path: NamePath, term: &'a Term, typ: &'a Term) -> VarRef<'a> {
   VarRef::Free { path, term, typ }
 }
 pub fn typed_term(term: Term, typ: Term) -> TypedTerm {
@@ -1687,7 +1700,7 @@ impl Term {
     match self {
       Term::Sort { .. } => true,
       Var { name } if name.is_name() => {
-        let path = name.to_path().unwrap();
+        let path = name.to_name_path().unwrap();
         matches!(path.as_str(), Some("Type" | "Prop" | "Sort"))
       }
       Pi {
@@ -1888,32 +1901,32 @@ impl Display for Term {
 }
 
 pub fn ok(term: Term) -> Term {
-  constructor_term(id("ok"), mpt("Result"), vec![term])
+  constructor_term(id("ok"), NamePath::top("Result"), vec![term])
 }
 
 pub fn err(term: Term) -> Term {
-  constructor_term(id("err"), mpt("Result"), vec![term])
+  constructor_term(id("err"), NamePath::top("Result"), vec![term])
 }
 
 pub fn b_true() -> Term {
-  constructor_term(id("true"), mpt("Bool"), vec![])
+  constructor_term(id("true"), NamePath::top("Bool"), vec![])
 }
 
 pub fn b_false() -> Term {
-  constructor_term(id("false"), mpt("Bool"), vec![])
+  constructor_term(id("false"), NamePath::top("Bool"), vec![])
 }
 
 pub fn none() -> Term {
-  constructor_term(id("none"), mpt("Option"), vec![])
+  constructor_term(id("none"), NamePath::top("Option"), vec![])
 }
 /// Unit.unit
 pub fn unit() -> Term {
-  constructor_term(id("unit"), mpt("Unit"), vec![])
+  constructor_term(id("unit"), NamePath::top("Unit"), vec![])
 }
 
 /// pure : A -> IO A
 pub fn io_term(term: Term) -> Term {
-  constructor_term(id("io"), mpt("IO"), vec![term])
+  constructor_term(id("io"), NamePath::top("IO"), vec![term])
 }
 
 pub fn lit_foreign(id: u64) -> Term {
@@ -1923,7 +1936,7 @@ pub fn lit_foreign(id: u64) -> Term {
 }
 
 pub fn some(term: Term) -> Term {
-  constructor_term(id("some"), mpt("Option"), vec![term])
+  constructor_term(id("some"), NamePath::top("Option"), vec![term])
 }
 
 pub fn opr(left: Term, operator: NameRef, right: Term) -> Term {
@@ -2015,7 +2028,7 @@ pub fn lams(params: Vec<Param>, body: Term) -> Term {
   body
 }
 
-pub fn constructor_term(name: Identifier, typ_name: ModulePath, args: Vec<Term>) -> Term {
+pub fn constructor_term(name: Identifier, typ_name: NamePath, args: Vec<Term>) -> Term {
   Term::Con(constructor(
     name,
     typ_name,
@@ -2024,7 +2037,7 @@ pub fn constructor_term(name: Identifier, typ_name: ModulePath, args: Vec<Term>)
 }
 
 pub fn list_empty() -> Term {
-  constructor_term(id("empty"), mpt("List"), vec![])
+  constructor_term(id("empty"), NamePath::top("List"), vec![])
 }
 pub fn list_cons(head: Term, tail: Term) -> Term {
   app(app(pvar(vec!["List", "cons"]), head), tail)
@@ -2082,9 +2095,17 @@ pub fn var_id(id: Identifier) -> Term {
   }
 }
 pub fn pvar(s: Vec<&str>) -> Term {
-  Term::Var {
-    name: NameRef::P(ModulePath::new(s.iter().map(|i| id(i)).collect())),
-  }
+  mpvar(NamePath::new(s.iter().map(|i| id(i)).collect()))
+}
+pub fn mpvar(name: NamePath) -> Term {
+  // 1-segment dotted paths normalize to `Id` at construction
+  // (`NameRef::Np` holds ≥ 2 segments).
+  let name_ref = if name.len() == 1 {
+    NameRef::Id(name.last().clone())
+  } else {
+    NameRef::Np(name)
+  };
+  Term::Var { name: name_ref }
 }
 
 pub fn bvar(index: usize) -> Term {
@@ -2136,7 +2157,7 @@ pub fn float_suffix(value: f64, suffix: NumSuffix) -> Term {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Def {
-  pub(crate) name: ModulePath,
+  pub(crate) name: NamePath,
   pub(crate) typ: Term,
   pub term: Term,
   pub(crate) type_constraints: Vec<TypeConstraint>,
@@ -2148,7 +2169,7 @@ pub struct Def {
 /// Defined with `defmacro name params := decls { ... }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeclGenDef {
-  pub name: ModulePath,
+  pub name: NamePath,
   pub params: Vec<Param>,
   pub decls: Vec<Decl>,
   pub attributes: Vec<Attribute>,
@@ -2170,7 +2191,7 @@ impl Def {
   pub fn has_partial_attr(&self) -> bool {
     self.attributes.iter().any(|a| a.name.as_str() == "partial")
   }
-  pub fn name(&self) -> &ModulePath {
+  pub fn name(&self) -> &NamePath {
     &self.name
   }
   pub fn typ(&self) -> &Term {
@@ -2187,7 +2208,7 @@ impl AsVarRef for Def {
 }
 
 pub fn def(
-  name: ModulePath,
+  name: NamePath,
   type_cons: Vec<TypeConstraint>,
   typ: Term,
   term: Term,
@@ -2263,7 +2284,7 @@ impl Native {
 /// Construct a def with a native body from attribute args
 pub fn def_with_native(
   native_name: Identifier,
-  name: ModulePath,
+  name: NamePath,
   params: Vec<Param>,
   return_typ: Term,
   attributes: Vec<Attribute>,
@@ -2331,16 +2352,245 @@ impl Display for ModulePath {
   }
 }
 
+/// `.`-separated dotted name path — def names (`String.length`),
+/// member-access chains (`x.fun`), constructor paths (`List.cons`).
+/// The "name half" of a reference, resolved through scope. Distinct from
+/// [`ModulePath`], which names a module (file) and joins with `.`
+/// today for symbol-encoding reasons.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default, serde::Serialize)]
+pub struct NamePath(Vec<Identifier>);
+
+impl Display for NamePath {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(
+      f,
+      "{}",
+      self
+        .0
+        .iter()
+        .map(|i| i.as_str())
+        .collect::<Vec<&str>>()
+        .join(".")
+    )
+  }
+}
+
+/// Boundary conversion: a module path used where a name path is
+/// expected (legacy flat refs during the qualified-names cut).
+impl From<ModulePath> for NamePath {
+  fn from(value: ModulePath) -> Self {
+    NamePath(value.to_vec())
+  }
+}
+
+/// Boundary conversion: a name path used where a module path is
+/// expected (legacy flat refs during the qualified-names cut).
+impl From<NamePath> for ModulePath {
+  fn from(value: NamePath) -> Self {
+    ModulePath::new(value.to_vec())
+  }
+}
+
+impl NamePath {
+  pub fn to_vec(self) -> Vec<Identifier> {
+    self.0
+  }
+  pub fn segments(&self) -> &[Identifier] {
+    &self.0
+  }
+  pub fn extend(mut self, mut path: NamePath) -> NamePath {
+    self.0.append(&mut path.0);
+    NamePath(self.0)
+  }
+  pub fn extend_borrowed(&self, path: &NamePath) -> NamePath {
+    let mut out = Vec::with_capacity(self.0.len() + path.0.len());
+    out.extend(self.0.iter().cloned());
+    out.extend(path.0.iter().cloned());
+    NamePath(out)
+  }
+  pub fn append(&self, mut ids: Vec<Identifier>) -> NamePath {
+    let mut path = self.0.clone();
+    path.append(&mut ids);
+    NamePath(path)
+  }
+  pub fn single(id: Identifier) -> NamePath {
+    NamePath(vec![id])
+  }
+  pub fn top(s: &str) -> NamePath {
+    NamePath(vec![id(s)])
+  }
+  pub fn new(l: Vec<Identifier>) -> Self {
+    if l.is_empty() {
+      panic!("NamePath can not be empty");
+    }
+    NamePath(l)
+  }
+  pub fn as_identifier(&self) -> Option<&Identifier> {
+    match self.0.as_slice() {
+      [i] => Some(i),
+      _ => None,
+    }
+  }
+  pub fn len(&self) -> usize {
+    self.0.len()
+  }
+  pub fn is_empty(&self) -> bool {
+    self.0.is_empty()
+  }
+  pub fn as_str(&self) -> Option<&str> {
+    self.as_identifier().map(|i| i.as_str())
+  }
+  pub fn last(&self) -> &Identifier {
+    self.0.last().unwrap()
+  }
+  pub fn first(&self) -> Option<&Identifier> {
+    self.0.first()
+  }
+
+  /// Every opened short form of this name under `opens`: an `open Foo`
+  /// makes `Foo.bar.greet` also visible as `bar.greet`/`greet`. The
+  /// `ModulePath::open` prefix logic, moved here with the qualified-names
+  /// split (`Open.path` is a `NamePath` now — `open` operates on names,
+  /// not files).
+  pub fn open(&self, opens: &Vec<&Open>) -> Vec<NamePath> {
+    opens
+      .iter()
+      .filter_map(|open| {
+        self
+          .remove_prefix(&open.path)
+          .and_then(|opened| match &open.filter {
+            OpenFilter::All | OpenFilter::Glob => Some(opened),
+            OpenFilter::Only(names) => {
+              if names.contains(opened.last()) {
+                Some(opened)
+              } else {
+                None
+              }
+            }
+          })
+      })
+      .collect()
+  }
+
+  /// Check if `self` starts with `prefix` (mirrors `ModulePath::is_prefix`).
+  pub fn is_prefix(&self, prefix: &NamePath) -> bool {
+    self.0.starts_with(prefix.segments())
+  }
+
+  /// Check if `self` starts with `prefix`, returning the remainder.
+  pub fn remove_prefix(&self, prefix: &NamePath) -> Option<NamePath> {
+    if prefix.len() >= self.len() {
+      return None;
+    }
+    if self.0.starts_with(prefix.segments()) {
+      Some(NamePath::new(self.0[prefix.len()..].to_vec()))
+    } else {
+      None
+    }
+  }
+}
+
+/// Module half + name half of a `::`-qualified reference:
+/// `std::list::List.cons` is module `[std, list]`, name `[List, cons]`.
+/// The name half is ≥ 1 segment — a bare module reference is not a
+/// legal expression, so `a::b` always means name `b` in module `a`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct QualifiedName {
+  pub module: ModulePath,
+  pub name: NamePath,
+}
+
+impl Display for QualifiedName {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    // The module half joins with `::` here even though `ModulePath`'s
+    // own Display stays `.`-joined (qualify.mo's symbol encoding depends
+    // on that): `std::list::List.cons`, not `std.list::List.cons`.
+    write!(
+      f,
+      "{}::{}",
+      self
+        .module
+        .segments()
+        .iter()
+        .map(|i| i.as_str())
+        .collect::<Vec<&str>>()
+        .join("::"),
+      self.name
+    )
+  }
+}
+
+impl QualifiedName {
+  pub fn new(module: ModulePath, name: NamePath) -> Self {
+    assert!(!name.is_empty(), "QualifiedName name half can not be empty");
+    QualifiedName { module, name }
+  }
+
+  /// The flattened dotted spelling (`std::list::List.cons` ->
+  /// `std.list.List.cons`) — the legacy `NamePath` a pre-migration dotted
+  /// reference would use.
+  pub fn to_flat_name_path(&self) -> NamePath {
+    NamePath::new(
+      self
+        .module
+        .segments()
+        .iter()
+        .cloned()
+        .chain(self.name.segments().iter().cloned())
+        .collect(),
+    )
+  }
+}
+
+/// The identity of a global reference at lowering time — what
+/// [`crate::core_term::AtomTable`] interns and `atom_paths` tables map
+/// atoms back to. `Local` is a bare or dotted name path (`cons`,
+/// `List.cons` — the `NameRef::Id`/`Np` spellings); `Qualified` is an
+/// explicitly module-qualified reference (`std::list::List.cons`, the
+/// `NameRef::Qn` spelling). The two spellings of the same def are
+/// distinct atoms, exactly as the bare and dotted spellings were
+/// distinct `ModulePath` keys before the split — resolution to a single
+/// definition happens in the scope layer, not here.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum GlobalRef {
+  Local(NamePath),
+  Qualified(QualifiedName),
+}
+
+impl Display for GlobalRef {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      GlobalRef::Local(np) => write!(f, "{np}"),
+      GlobalRef::Qualified(qn) => write!(f, "{qn}"),
+    }
+  }
+}
+
+impl GlobalRef {
+  /// The flattened dotted spelling of this reference — the legacy
+  /// `NamePath` a pre-migration dotted reference would use. Used only
+  /// by the `legacy_flat_refs` transition lookups.
+  pub fn to_flat_name_path(&self) -> NamePath {
+    match self {
+      GlobalRef::Local(np) => np.clone(),
+      GlobalRef::Qualified(qn) => qn.to_flat_name_path(),
+    }
+  }
+}
+
 impl ModulePath {
   pub fn to_name_ref(self) -> NameRef {
     if self.0.len() == 1 {
       Id(self.last().clone())
     } else {
-      NameRef::P(self)
+      NameRef::Np(NamePath::new(self.0))
     }
   }
   pub fn to_vec(self) -> Vec<Identifier> {
     self.0
+  }
+  pub fn segments(&self) -> &[Identifier] {
+    &self.0
   }
   pub fn extend(mut self, mut path: ModulePath) -> ModulePath {
     self.0.append(&mut path.0);
@@ -2479,25 +2729,6 @@ impl ModulePath {
     None
   }
 
-  pub fn open(&self, opens: &Vec<&Open>) -> Vec<ModulePath> {
-    opens
-      .iter()
-      .filter_map(|open| {
-        self
-          .remove_prefix(&open.module_path)
-          .and_then(|opened| match &open.filter {
-            OpenFilter::All | OpenFilter::Glob => Some(opened),
-            OpenFilter::Only(names) => {
-              if names.contains(opened.last()) {
-                Some(opened)
-              } else {
-                None
-              }
-            }
-          })
-      })
-      .collect()
-  }
   /// Check if ModulePath is a prefix
   /// # Examples
   /// ```rust
@@ -2722,14 +2953,14 @@ pub enum OpenFilter {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Open {
   pub source_location: SourceRange,
-  pub(crate) module_path: ModulePath,
+  pub(crate) path: NamePath,
   pub(crate) filter: OpenFilter,
   pub attributes: Vec<Attribute>,
 }
 
 impl Open {
-  pub fn module_path(&self) -> &ModulePath {
-    &self.module_path
+  pub fn path(&self) -> &NamePath {
+    &self.path
   }
   pub fn has_cfg_test_attr(&self) -> bool {
     self.attributes.iter().any(|a| {
@@ -2744,7 +2975,7 @@ impl Open {
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq, PartialOrd, Ord)]
 pub struct InstanceKey {
-  pub(crate) class: ModulePath,
+  pub(crate) class: NamePath,
   type_cons: Vec<TypeConstraint>,
   pub(crate) args: Vec<Param>,
 }
@@ -2767,7 +2998,7 @@ impl Display for InstanceKey {
 }
 
 impl InstanceKey {
-  pub fn new(class: ModulePath, type_cons: Vec<TypeConstraint>, args: Vec<Param>) -> Self {
+  pub fn new(class: NamePath, type_cons: Vec<TypeConstraint>, args: Vec<Param>) -> Self {
     Self {
       class,
       type_cons,
@@ -2838,14 +3069,14 @@ impl<V> SourceContext<V> {
 /// Class function reference
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClassDefRef<'a> {
-  full_name: ModulePath,
+  full_name: NamePath,
   pub name: &'a Identifier,
   pub typ: &'a Term,
   pub class: &'a Inductive,
 }
 
 pub fn class_def_ref<'a>(
-  full_name: ModulePath,
+  full_name: NamePath,
   name: &'a Identifier,
   typ: &'a Term,
   class: &'a Inductive,
@@ -2858,7 +3089,7 @@ pub fn class_def_ref<'a>(
   }
 }
 impl<'a> Named for ClassDefRef<'a> {
-  fn name(&self) -> &ModulePath {
+  fn name(&self) -> &NamePath {
     &self.full_name
   }
 }
@@ -2871,7 +3102,7 @@ impl<'a> ClassDefRef<'a> {
     self.class.method_constraints_for(self.name)
   }
 
-  pub fn with_path(&self, path: ModulePath) -> ClassDefRef<'_> {
+  pub fn with_path(&self, path: NamePath) -> ClassDefRef<'_> {
     ClassDefRef {
       full_name: path,
       name: self.name,
@@ -2884,8 +3115,8 @@ impl<'a> ClassDefRef<'a> {
 pub struct DefRef<'a> {
   module: &'a ModulePath,
   loc: &'a SourceRange,
-  name: ModulePath,
-  full_path: ModulePath,
+  name: NamePath,
+  full_path: NamePath,
   typ: &'a Term,
   term: &'a Term,
   /// Visibility of the declaration this ref points at — a top-level `Def`'s
@@ -2908,7 +3139,7 @@ impl<'a> DefRef<'a> {
     self.term
   }
 
-  pub fn with_name(&self, name: ModulePath) -> DefRef<'_> {
+  pub fn with_name(&self, name: NamePath) -> DefRef<'_> {
     DefRef {
       name,
       full_path: self.full_path.clone(),
@@ -2958,19 +3189,19 @@ impl<'a> AsVarRef for DefRef<'a> {
 }
 
 impl<'a> Named for DefRef<'a> {
-  fn name(&self) -> &ModulePath {
+  fn name(&self) -> &NamePath {
     &self.name
   }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Infix {
   operator: Operator,
-  name: ModulePath,
+  name: NamePath,
   pub(crate) vis: Visibility,
 }
 
 impl Infix {
-  pub fn name(&self) -> &ModulePath {
+  pub fn name(&self) -> &NamePath {
     &self.name
   }
   pub fn operator(&self) -> &Operator {
@@ -2989,7 +3220,7 @@ impl Display for Infix {
   }
 }
 
-pub fn infix(operator: Operator, name: ModulePath) -> Infix {
+pub fn infix(operator: Operator, name: NamePath) -> Infix {
   Infix {
     operator,
     name,
@@ -3005,7 +3236,7 @@ pub enum Decl {
   /// `open ModulePath [{filter}] in <declaration>` — the module is opened
   /// only for the scope of the wrapped declaration.
   ScopedOpen {
-    module_path: ModulePath,
+    path: NamePath,
     filter: OpenFilter,
     attributes: Vec<Attribute>,
     decl: Box<Decl>,
@@ -3024,22 +3255,27 @@ pub enum Decl {
 }
 
 impl Decl {
-  pub fn to_ref(&self) -> &ModulePath {
+  /// The declaration's own name — a `NamePath` for every decl except
+  /// `Use`/`ScopedOpen`-around-`Use`, where the "name" is the used
+  /// module's path (returned owned, flattened, since `Use` stores a
+  /// `ModulePath`).
+  pub fn to_ref(&self) -> std::borrow::Cow<'_, NamePath> {
+    use std::borrow::Cow;
     match self {
-      Decl::Def(def) => &def.name,
-      Decl::DefMacro(def) => &def.name,
-      Decl::Type(induct) => induct.name(),
-      Decl::Infix(i) => &i.name,
-      Decl::Use(use_) => &use_.module_path,
-      Decl::Ins(instance) => &instance.name,
-      Decl::Open(open) => &open.module_path,
+      Decl::Def(def) => Cow::Borrowed(&def.name),
+      Decl::DefMacro(def) => Cow::Borrowed(&def.name),
+      Decl::Type(induct) => Cow::Borrowed(induct.name()),
+      Decl::Infix(i) => Cow::Borrowed(&i.name),
+      Decl::Use(use_) => Cow::Owned(use_.module_path.clone().into()),
+      Decl::Ins(instance) => Cow::Borrowed(&instance.name),
+      Decl::Open(open) => Cow::Borrowed(&open.path),
       Decl::ScopedOpen { decl, .. } => decl.to_ref(),
       Decl::MacroCall { .. } => {
         use std::sync::OnceLock;
-        static PLACEHOLDER: OnceLock<ModulePath> = OnceLock::new();
-        PLACEHOLDER.get_or_init(|| ModulePath::new(vec![id("__macro_call__")]))
+        static PLACEHOLDER: OnceLock<NamePath> = OnceLock::new();
+        Cow::Borrowed(PLACEHOLDER.get_or_init(|| NamePath::top("__macro_call__")))
       }
-      Decl::DeclGen(gd) => &gd.name,
+      Decl::DeclGen(gd) => Cow::Borrowed(&gd.name),
       Decl::Generated(inner_decls) => inner_decls
         .first()
         .map(|d| d.to_ref())

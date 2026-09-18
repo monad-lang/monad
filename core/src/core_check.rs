@@ -21,7 +21,7 @@ use crate::core_term::{
   close_n, open_with, permute_binders,
 };
 use crate::core_unify::{MetaContext, UnifyError, force, instantiate, open_n, unify, zonk};
-use crate::term::{Identifier, ModulePath, Multiplicity, TypeConstraint};
+use crate::term::{GlobalRef, Identifier, Multiplicity, NamePath, TypeConstraint};
 use crate::{AtomPathMap, Map};
 use std::sync::Arc;
 
@@ -232,7 +232,7 @@ pub struct StructFields {
   /// type atom (e.g. `Foldable T` unifying `T := Option`) back into a
   /// `ModulePath` to key `known_instances` with — checked as a fallback
   /// after `atom_paths` proper, never feeding into alias computation.
-  pub inductive_paths: Map<Atom, ModulePath>,
+  pub inductive_paths: Map<Atom, GlobalRef>,
   /// A constructor's OWN atom (e.g. `circle`'s, not `Shape`'s) mapped back
   /// to `(inductive_atom, constructor_short_name)` — the reverse direction
   /// of `constructors`' own `(inductive_atom, name)` key. Added for named-
@@ -528,7 +528,7 @@ fn resolve_field_pattern_case(
 /// runtime dispatch already use).
 #[derive(Debug, Clone)]
 pub struct ClassMethodInfo {
-  pub class_path: ModulePath,
+  pub class_path: GlobalRef,
   pub class_param_name: Identifier,
   pub method_name: Identifier,
   /// The class param's own declared default (`class FromListLiteral (L :
@@ -538,7 +538,7 @@ pub struct ClassMethodInfo {
   /// arg (e.g. `[1, 2, 3]`, desugared to `FromListLiteral.cons`/`.empty`,
   /// checked with no surrounding annotation to pin `L` down to a concrete
   /// type any other way).
-  pub default_type: Option<ModulePath>,
+  pub default_type: Option<GlobalRef>,
 }
 
 /// Every class method's atom, keyed the same way `register_inductive`
@@ -559,7 +559,7 @@ pub type KnownClassMethods = Map<Atom, ClassMethodInfo>;
 /// (see `try_resolve_class_method`'s use of this).
 #[derive(Debug, Clone)]
 pub struct KnownInstanceInfo {
-  pub prefix: ModulePath,
+  pub prefix: GlobalRef,
   /// Every constraint declared on the `instance` line, regardless of
   /// whether any given method actually needs a dictionary for it — kept
   /// around for callers that want the instance's own declared constraint
@@ -596,7 +596,7 @@ pub struct KnownInstanceInfo {
 /// passing, not a competing design — see this module's sibling
 /// `desugar_struct_literals` doc comment and
 /// `plans/implementations/dictionary-passing-instance-resolution.md`.
-pub type KnownInstances = Map<(ModulePath, ModulePath), KnownInstanceInfo>;
+pub type KnownInstances = Map<(GlobalRef, GlobalRef), KnownInstanceInfo>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InferError {
@@ -1082,7 +1082,7 @@ pub fn infer(
 }
 
 fn primitive_type(mctx: &mut MetaContext, name: &str) -> Atom {
-  mctx.intern(crate::term::ModulePath::top(name))
+  mctx.intern(GlobalRef::Local(NamePath::top(name)))
 }
 
 fn infer_lit(
@@ -2304,7 +2304,7 @@ fn try_insert_dict_args(
   spine_args: &[&CoreTerm],
 ) -> Option<CoreTerm> {
   let mut residual = instantiate_foralls_only(mctx, head_typ);
-  let mut dict_slots: Vec<(ModulePath, CoreTerm)> = Vec::new();
+  let mut dict_slots: Vec<(GlobalRef, CoreTerm)> = Vec::new();
   loop {
     let CoreTerm::Pi { arg, ret, .. } = residual.clone() else {
       break;
@@ -2418,7 +2418,7 @@ fn instantiate_foralls_only(mctx: &mut MetaContext, typ: &CoreTerm) -> CoreTerm 
 /// only ever grows by cloning-and-inserting on the way IN to a dictionary
 /// `Lam`'s own body — never by mutating a shared instance — so it can't
 /// leak entries between sibling defs the way a mutable/global table would.
-pub type DictScope = Map<ModulePath, Atom>;
+pub type DictScope = Map<GlobalRef, Atom>;
 
 /// Resolve a class-method reference (`BOrd.lt`) to a field projection on
 /// whichever dictionary is currently bound in `dict_scope` for its class —
@@ -2466,7 +2466,7 @@ fn try_resolve_via_bound_dict(
 fn project_dict_field(
   mctx: &mut MetaContext,
   structs: &StructFields,
-  class_path: &ModulePath,
+  class_path: &GlobalRef,
   method_name: &Identifier,
   dict_atom: Atom,
 ) -> Option<CoreTerm> {
@@ -2474,7 +2474,7 @@ fn project_dict_field(
   let fields = &structs.structs.get(&class_atom)?.fields;
   let idx = fields.iter().position(|(name, _)| name == method_name)?;
   let bound_index = (fields.len() - 1 - idx) as u32;
-  let case_name = class_path.last().clone();
+  let case_name = class_path.to_flat_name_path().last().clone();
   // Phase 0 capture: this Match's "constructor" name is the class's own
   // name, and the inductive it dispatches on is the class-as-single-
   // constructor-inductive registered under `class_atom` — both already
@@ -2512,7 +2512,7 @@ fn resolve_constraint_dict(
   var_ty: &CoreTerm,
 ) -> Option<CoreTerm> {
   if let CoreTerm::Free(_) = force(mctx, var_ty.clone()).into_stripped_ctx()
-    && let Some(&bound) = dict_scope.get(constraint.class())
+    && let Some(&bound) = dict_scope.get(&GlobalRef::Local(constraint.class().clone()))
   {
     return Some(CoreTerm::Free(bound));
   }
@@ -2521,7 +2521,7 @@ fn resolve_constraint_dict(
     .get(&atom)
     .or_else(|| structs.inductive_paths.get(&atom))?
     .clone();
-  let instance = known_instances.get(&(constraint.class().clone(), path))?;
+  let instance = known_instances.get(&(GlobalRef::Local(constraint.class().clone()), path))?;
   Some(CoreTerm::Free(mctx.intern(instance.prefix.clone())))
 }
 
@@ -3437,7 +3437,11 @@ pub fn desugar_struct_literals(
         .get(&atom)
         .or_else(|| structs.inductive_paths.get(&atom))
         .cloned()
-        .unwrap_or_else(|| Identifier::new(format!("<unresolved-struct-{atom:?}>")).to_path());
+        .unwrap_or_else(|| {
+          crate::term::GlobalRef::Local(crate::term::NamePath::single(Identifier::new(format!(
+            "<unresolved-struct-{atom:?}>"
+          ))))
+        });
       let args: Vec<Option<CoreTerm>> = field_defs
         .iter()
         .map(|(name, field_ty)| {
@@ -3530,7 +3534,11 @@ pub fn desugar_struct_literals(
         .get(&atom)
         .or_else(|| structs.inductive_paths.get(&atom))
         .cloned()
-        .unwrap_or_else(|| Identifier::new(format!("<unresolved-struct-{atom:?}>")).to_path());
+        .unwrap_or_else(|| {
+          crate::term::GlobalRef::Local(crate::term::NamePath::single(Identifier::new(format!(
+            "<unresolved-struct-{atom:?}>"
+          ))))
+        });
       let n = field_defs.len();
       let args: Vec<Option<CoreTerm>> = field_defs
         .iter()
@@ -4134,21 +4142,28 @@ mod test {
 
   #[test]
   fn test_infer_con_returns_inductive_type_atom() {
-    use crate::term::{ModulePath, constructor};
+    use crate::term::constructor;
     let mut mctx = MetaContext::new();
-    let con = constructor(id("empty"), ModulePath::top("List"), vec![]);
+    let con = constructor(id("empty"), crate::term::NamePath::top("List"), vec![]);
     let ty = infer(
       &mut mctx,
       &empty_ctx(),
       &empty_structs(),
       &CoreTerm::Con(crate::core_term::CoreConstructor {
         name: con.name().clone(),
-        typ_name: con.typ_name().clone(),
+        typ_name: crate::term::GlobalRef::Local(con.typ_name().clone()),
         num_args: con.num_args(),
         args: vec![],
       }),
     )
     .unwrap();
-    assert_eq!(ty, CoreTerm::Free(mctx.intern(ModulePath::top("List"))));
+    assert_eq!(
+      ty,
+      CoreTerm::Free(
+        mctx.intern(crate::term::GlobalRef::Local(crate::term::NamePath::top(
+          "List"
+        )))
+      )
+    );
   }
 }

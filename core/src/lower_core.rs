@@ -28,7 +28,7 @@ use crate::core_term::{
   Atom, AtomTable, CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, DebugName,
 };
 use crate::term::{
-  FieldPattern, Identifier, Literal, ModulePath, NameRef, Operator, Par, Term, id,
+  FieldPattern, GlobalRef, Identifier, Literal, NamePath, NameRef, Operator, Par, Term, id,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,7 +57,7 @@ pub struct LowerConfig {
   /// operator reference is an unconditional `LowerError::Unsupported`
   /// (see `lower_var`). Empty by default — populated by module-level
   /// callers that scan a file's `infix` decls first.
-  pub infix: Map<Operator, ModulePath>,
+  pub infix: Map<Operator, NamePath>,
   /// Pre-bound free-name → `Atom` overrides, checked before falling back
   /// to `global_atom`. Needed when a name must resolve to one SPECIFIC
   /// atom for THIS lowering call rather than the process-wide shared
@@ -111,7 +111,7 @@ pub struct LowerContext<'a> {
   /// for why it's a parameter, not a global lookup): callers fold
   /// `into_resolved_atoms()`'s result into whatever `atom_paths` map
   /// they're building, after each `lower_term` call.
-  resolved_atoms: Map<Atom, ModulePath>,
+  resolved_atoms: Map<Atom, GlobalRef>,
 }
 
 impl<'a> LowerContext<'a> {
@@ -153,7 +153,7 @@ impl<'a> LowerContext<'a> {
   /// atom-interning call in this file goes through, so `resolved_atoms`
   /// is guaranteed complete for whatever this `LowerContext` actually
   /// resolved.
-  fn global_atom(&mut self, path: ModulePath) -> Atom {
+  fn global_atom(&mut self, path: GlobalRef) -> Atom {
     let atom = self.atoms.intern(path.clone());
     self.resolved_atoms.insert(atom, path);
     atom
@@ -162,7 +162,7 @@ impl<'a> LowerContext<'a> {
   /// Every `Atom` this context resolved to a global `ModulePath` over its
   /// lifetime (across however many `lower_term` calls used it) — see this
   /// struct's `resolved_atoms` doc comment for why callers need this.
-  pub fn resolved_atoms(&self) -> &Map<Atom, ModulePath> {
+  pub fn resolved_atoms(&self) -> &Map<Atom, GlobalRef> {
     &self.resolved_atoms
   }
 }
@@ -327,7 +327,7 @@ pub fn lower_term(ctx: &mut LowerContext, term: &Term) -> Result<CoreTerm, Lower
 
     Term::Con(c) => Ok(CoreTerm::Con(CoreConstructor {
       name: c.name().clone(),
-      typ_name: c.typ_name().clone(),
+      typ_name: GlobalRef::Local(c.typ_name().clone()),
       num_args: c.num_args(),
       args: lower_args(ctx, c.args())?,
     })),
@@ -367,7 +367,7 @@ fn resolve_free_name(ctx: &mut LowerContext, name: &Identifier) -> Atom {
   } else if let Some(atom) = ctx.config.unqualified_aliases.get(name) {
     *atom
   } else {
-    ctx.global_atom(name.clone().to_path())
+    ctx.global_atom(GlobalRef::Local(NamePath::single(name.clone())))
   }
 }
 
@@ -513,19 +513,42 @@ fn lower_var(ctx: &mut LowerContext, name: &NameRef) -> Result<CoreTerm, LowerEr
     // unchanged -- it already resolves a bare `{ fi }` pattern against
     // any single-constructor type. Otherwise (first segment isn't
     // locally bound), keep today's behavior: a global reference.
-    NameRef::P(path) => {
+    // A dotted name path (`a.fi`, `List.cons`, ...) is ambiguous at
+    // parse time between a module-qualified global and local
+    // struct-field access -- `name_path_expression` (parser.rs) always
+    // builds it as a path, since the parser has no scope information to
+    // tell `a` apart from a module name. Resolve that ambiguity here,
+    // where `ctx`'s binder stack is available: if the path's first
+    // segment is a local binding, treat the rest of the path as a chain
+    // of field accesses (`plans/implementations/
+    // struct-field-destructuring.md`'s `{ fi }` pattern, one nested
+    // `match` per remaining segment) instead of a global reference.
+    // Otherwise (first segment isn't locally bound), keep today's
+    // behavior: a global reference.
+    NameRef::Np(path) => {
       let segments = path.clone().to_vec();
       match segments.first().and_then(|first| ctx.find_bound(first)) {
         Some(idx) => Ok(lower_field_access_chain(
           CoreTerm::Bound(idx),
           &segments[1..],
         )),
-        None => Ok(CoreTerm::Free(ctx.global_atom(path.clone()))),
+        None => Ok(CoreTerm::Free(
+          ctx.global_atom(GlobalRef::Local(path.clone())),
+        )),
       }
     }
+    // An explicitly module-qualified reference (`std::list::List.cons`)
+    // ALWAYS lowers to one global atom — never a field chain: modules
+    // are not values, so the first segment can never be a local
+    // binding. This is the whole point of the `::` spelling — it
+    // disambiguates at parse time what `.` leaves ambiguous until
+    // lowering.
+    NameRef::Qn(qn) => Ok(CoreTerm::Free(
+      ctx.global_atom(GlobalRef::Qualified((**qn).clone())),
+    )),
     NameRef::Index(i) => Err(LowerError::UnexpectedIndex(*i)),
     NameRef::Op(op) => match ctx.config.infix.get(op).cloned() {
-      Some(path) => Ok(CoreTerm::Free(ctx.global_atom(path))),
+      Some(path) => Ok(CoreTerm::Free(ctx.global_atom(GlobalRef::Local(path)))),
       None => Err(LowerError::Unsupported(format!(
         "infix operator {name} has no entry in the lowering pass's infix table \
          (populate via LowerConfig::infix)"
@@ -945,10 +968,10 @@ mod test {
 
   #[test]
   fn test_lower_constructor_args() {
-    use crate::term::{ModulePath, constructor};
+    use crate::term::constructor;
     let con = constructor(
       id("cons"),
-      ModulePath::top("List"),
+      NamePath::top("List"),
       vec![Some(var("head")), Some(var("tail"))],
     );
     match lower(&Term::Con(con)) {

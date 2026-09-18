@@ -23,7 +23,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::Map;
-use crate::term::{F64Wrap, FieldPattern, Identifier, ModulePath, Multiplicity, NumSuffix};
+use crate::term::{F64Wrap, FieldPattern, GlobalRef, Identifier, Multiplicity, NumSuffix};
 
 // ---------------------------------------------------------------------------
 // DebugName — display-only, never used for identity
@@ -133,7 +133,7 @@ impl fmt::Display for MetaId {
 /// single process) and requires a lock on every single lookup for no
 /// benefit, since nothing here is actually run concurrently.
 #[derive(Debug, Clone, Default)]
-pub struct AtomTable(Map<ModulePath, Atom>);
+pub struct AtomTable(Map<GlobalRef, Atom>);
 
 impl AtomTable {
   pub fn new() -> Self {
@@ -147,16 +147,16 @@ impl AtomTable {
   /// canonical primitive-type atom (e.g. `core_check` inferring a
   /// literal's type) must go through, instead of each keeping its own
   /// private, inconsistent table.
-  pub fn intern(&mut self, path: ModulePath) -> Atom {
+  pub fn intern(&mut self, path: GlobalRef) -> Atom {
     *self.0.entry(path).or_insert_with(Atom::fresh)
   }
 
   /// Reverse lookup for error rendering only — an `Atom`'s originating
-  /// `ModulePath`, if this table interned one for it. A linear scan is
+  /// `GlobalRef`, if this table interned one for it. A linear scan is
   /// fine here: only ever called on an already-failed check's error path
   /// (rendering a handful of `Diagnostic` messages), never in the hot
   /// path of checking itself.
-  pub fn path_of(&self, atom: Atom) -> Option<&ModulePath> {
+  pub fn path_of(&self, atom: Atom) -> Option<&GlobalRef> {
     self.0.iter().find(|(_, a)| **a == atom).map(|(p, _)| p)
   }
 
@@ -170,7 +170,7 @@ impl AtomTable {
   /// `mctx` during inference — never captured by the lowering-pass-only
   /// sources an `atom_paths` map is normally built from, since nothing
   /// was lowered from source text to produce it).
-  pub fn iter(&self) -> impl Iterator<Item = (&ModulePath, &Atom)> {
+  pub fn iter(&self) -> impl Iterator<Item = (&GlobalRef, &Atom)> {
     self.0.iter()
   }
 }
@@ -219,7 +219,7 @@ pub struct CoreMatchCase {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CoreConstructor {
   pub name: Identifier,
-  pub typ_name: ModulePath,
+  pub typ_name: GlobalRef,
   pub num_args: usize,
   pub args: Vec<Option<CoreTerm>>,
 }
@@ -1619,7 +1619,7 @@ mod test {
   fn con(name: &str, args: Vec<Option<CoreTerm>>) -> CoreTerm {
     CoreTerm::Con(CoreConstructor {
       name: Identifier::new(name.to_string()),
-      typ_name: ModulePath::top("List"),
+      typ_name: GlobalRef::Local(crate::term::NamePath::top("List")),
       num_args: args.len(),
       args,
     })

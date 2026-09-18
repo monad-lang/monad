@@ -124,9 +124,9 @@ use crate::parser::{ModuleContext, parse_file};
 use crate::raise_core::raise_core;
 use crate::term::module::{LoadedModules, ScopeError, default_modules, load_module_files};
 use crate::term::{
-  Decl, Def, Identifier, Inductive, InductiveVariant, Instance, Literal, ModulePath, Multiplicity,
-  NameRef, Named, Open, Operator, SearchPaths, SourceContext, SourceRange, Term, TypeConstraint,
-  Typed, constructor, def, forall,
+  Decl, Def, GlobalRef, Identifier, Inductive, InductiveVariant, Instance, Literal, ModulePath,
+  Multiplicity, NamePath, NameRef, Named, Open, Operator, QualifiedName, SearchPaths,
+  SourceContext, SourceRange, Term, TypeConstraint, Typed, constructor, def, forall,
 };
 use crate::{AtomPathMap, Map};
 
@@ -167,11 +167,11 @@ pub struct ModuleCheckEnv {
   /// Every `default_modules()` `def`/constructor's REAL, already-elaborated
   /// type, lowered once and keyed by its atom.
   ctx: TyCtx,
-  infix: Map<Operator, ModulePath>,
-  /// Every registered name's fully-qualified path → its atom — the input
+  infix: Map<Operator, NamePath>,
+  /// Every registered name's global reference → its atom — the input
   /// `compute_unqualified_aliases` needs to work out what a file's active
   /// `open`s make reachable unqualified.
-  known_globals: Map<ModulePath, Atom>,
+  known_globals: Map<GlobalRef, Atom>,
   /// Every known struct-like inductive's field names/types — see
   /// `core_check::StructFields`'s doc comment.
   structs: StructFields,
@@ -233,8 +233,8 @@ impl ModuleCheckEnv {
 /// work, not attempted in this pass.
 pub struct GroundTruth {
   pub ctx: TyCtx,
-  pub infix: Map<Operator, ModulePath>,
-  pub known_globals: Map<ModulePath, Atom>,
+  pub infix: Map<Operator, NamePath>,
+  pub known_globals: Map<GlobalRef, Atom>,
   pub structs: StructFields,
 }
 
@@ -246,7 +246,7 @@ pub fn ground_truth_from_loaded(loaded: &LoadedModules, atoms: &mut AtomTable) -
     }
   }
   let mut ctx: TyCtx = TyCtx::new();
-  let mut known_globals: Map<ModulePath, Atom> = Map::new();
+  let mut known_globals: Map<GlobalRef, Atom> = Map::new();
   let mut structs = StructFields::new();
   let config = LowerConfig {
     infix: infix.clone(),
@@ -270,16 +270,16 @@ pub fn ground_truth_from_loaded(loaded: &LoadedModules, atoms: &mut AtomTable) -
     ("Prop", CoreTerm::Sort { level: 0 }),
     ("Pred", CoreTerm::Sort { level: 0 }),
   ] {
-    let path = ModulePath::top(name);
-    let atom = atoms.intern(path.clone());
-    known_globals.insert(path, atom);
+    let path = NamePath::top(name);
+    let atom = atoms.intern(GlobalRef::Local(path.clone()));
+    known_globals.insert(GlobalRef::Local(path), atom);
     ctx.insert(atom, sort);
   }
   for module in loaded.modules() {
     for def_ctx in module.defs() {
       let def: &Def = def_ctx;
-      let atom = atoms.intern(def.name.clone());
-      known_globals.insert(def.name.clone(), atom);
+      let atom = atoms.intern(GlobalRef::Local(def.name.clone()));
+      known_globals.insert(GlobalRef::Local(def.name.clone()), atom);
       let ty_c = lower_term(
         &mut LowerContext::with_config(config.clone(), atoms),
         &def.typ,
@@ -291,13 +291,23 @@ pub fn ground_truth_from_loaded(loaded: &LoadedModules, atoms: &mut AtomTable) -
       register_def_params(&mut structs, atom, &def.term, &config, atoms);
       // A def's own name (e.g. `greet`) may be bare, without its enclosing
       // module's path prefix, but external references still qualify it
-      // (e.g. `mylib.greet`), which `lower_term` resolves to a *different*
-      // atom (atoms are keyed by the full `ModulePath`). Register that
-      // qualified atom too so both forms type-check to the same type.
-      let qualified = module.path().extend_borrowed(&def.name);
-      if qualified != def.name {
-        let qualified_atom = atoms.intern(qualified.clone());
-        known_globals.insert(qualified, qualified_atom);
+      // (`mylib.greet` legacy-dotted, `mylib::greet` qualified), which
+      // `lower_term` resolves to *different* atoms (atoms are keyed by
+      // the full spelling, per `GlobalRef`). Register those atoms too so
+      // all forms type-check to the same type.
+      let qualified_name = QualifiedName {
+        module: module.path().clone(),
+        name: def.name.clone(),
+      };
+      let flat = qualified_name.to_flat_name_path();
+      if flat != def.name {
+        let flat_atom = atoms.intern(GlobalRef::Local(flat.clone()));
+        known_globals.insert(GlobalRef::Local(flat), flat_atom);
+        if let Some(ty_c) = &ty_c {
+          ctx.insert(flat_atom, ty_c.clone());
+        }
+        let qualified_atom = atoms.intern(GlobalRef::Qualified(qualified_name.clone()));
+        known_globals.insert(GlobalRef::Qualified(qualified_name), qualified_atom);
         if let Some(ty_c) = &ty_c {
           ctx.insert(qualified_atom, ty_c.clone());
         }
@@ -350,12 +360,14 @@ fn collect_known_class_methods(
     };
     let default_type = param.default.as_deref().and_then(term_head_path);
     for method in &cons.params {
-      let method_path = ind.name().extend_borrowed(&method.name.clone().to_path());
-      let atom = atoms.intern(method_path);
+      let method_path = ind
+        .name()
+        .extend_borrowed(&NamePath::single(method.name.clone()));
+      let atom = atoms.intern(GlobalRef::Local(method_path));
       out.insert(
         atom,
         ClassMethodInfo {
-          class_path: ind.name().clone(),
+          class_path: GlobalRef::Local(ind.name().clone()),
           class_param_name: param.name.clone(),
           method_name: method.name.clone(),
           default_type: default_type.clone(),
@@ -386,7 +398,7 @@ fn collect_known_class_methods(
 fn collect_class_method_order(
   loaded: &LoadedModules,
   expanded: &[SourceContext<Decl>],
-) -> Map<ModulePath, Vec<Identifier>> {
+) -> Map<NamePath, Vec<Identifier>> {
   let mut out = Map::new();
   let mut visit = |ind: &Inductive| {
     if *ind.variant() != InductiveVariant::Class {
@@ -426,7 +438,7 @@ fn collect_known_instances(
   expanded: &[SourceContext<Decl>],
   structs: &StructFields,
   atoms: &mut AtomTable,
-  infix: &Map<Operator, ModulePath>,
+  infix: &Map<Operator, NamePath>,
 ) -> KnownInstances {
   let mut out = KnownInstances::new();
   let mut visit = |instance: &crate::term::Instance, atoms: &mut AtomTable| {
@@ -457,9 +469,9 @@ fn collect_known_instances(
       })
       .collect();
     out.insert(
-      (instance.class_name.clone(), type_path),
+      (GlobalRef::Local(instance.class_name.clone()), type_path),
       KnownInstanceInfo {
-        prefix: instance.name().clone(),
+        prefix: GlobalRef::Local(instance.name().clone()),
         constraints: instance.constraints.clone(),
         method_constraints,
       },
@@ -481,9 +493,14 @@ fn collect_known_instances(
 /// The head `ModulePath` of a type-level application chain (`List A` ->
 /// `List`, bare `List` -> `List`) — used to match an instance's own
 /// first type argument (as written) against a concrete type's own path.
-fn term_head_path(t: &Term) -> Option<ModulePath> {
+fn term_head_path(t: &Term) -> Option<GlobalRef> {
   match t {
-    Term::Var { name } => name.clone().to_path(),
+    Term::Var { name } => match name {
+      NameRef::Qn(qn) => Some(GlobalRef::Qualified((**qn).clone())),
+      NameRef::Id(id) => Some(GlobalRef::Local(NamePath::single(id.clone()))),
+      NameRef::Np(np) => Some(GlobalRef::Local(np.clone())),
+      _ => None,
+    },
     Term::App { fun, .. } => term_head_path(fun),
     Term::Ctx { term, .. } => term_head_path(term),
     _ => None,
@@ -521,7 +538,7 @@ impl Default for ModuleCheckEnv {
 /// the module doc), not attempted here.
 fn register_inductive(
   ctx: &mut TyCtx,
-  known_globals: &mut Map<ModulePath, Atom>,
+  known_globals: &mut Map<GlobalRef, Atom>,
   structs: &mut StructFields,
   ind: &Inductive,
   config: &LowerConfig,
@@ -532,9 +549,11 @@ fn register_inductive(
       return;
     };
     for method in &cons.params {
-      let method_path = ind.name().extend_borrowed(&method.name.clone().to_path());
-      let atom = atoms.intern(method_path.clone());
-      known_globals.insert(method_path.clone(), atom);
+      let method_path = ind
+        .name()
+        .extend_borrowed(&NamePath::single(method.name.clone()));
+      let atom = atoms.intern(GlobalRef::Local(method_path.clone()));
+      known_globals.insert(GlobalRef::Local(method_path), atom);
       if let Ok(ty_c) = lower_term(
         &mut LowerContext::with_config(config.clone(), atoms),
         &method.typ,
@@ -609,14 +628,14 @@ fn register_inductive(
           fields.push((method.name.clone(), result));
         }
       }
-      let class_atom = atoms.intern(ind.name().clone());
+      let class_atom = atoms.intern(GlobalRef::Local(ind.name().clone()));
       // Unlike a method (`BEq.eq`), nothing referenced the class's own
       // BARE name before D3 — a dictionary parameter's type (`BEq K`,
       // `App(Free(class_atom), ...)`) is the first thing that does, so it
       // needs `known_globals`/`atom_paths` registered here too, or
       // `raise_core` panics the moment any def's elaborated type or body
       // embeds a `Free(class_atom)` dictionary-type reference.
-      known_globals.insert(ind.name().clone(), class_atom);
+      known_globals.insert(GlobalRef::Local(ind.name().clone()), class_atom);
       // Also register the class's dictionary shape under `structs.
       // constructors`, keyed exactly the way `project_dict_field` builds
       // its projection (`Match{scrutinee, cases: [{name: class_path.
@@ -663,8 +682,8 @@ fn register_inductive(
     }
   } else {
     for ctor in ind.constructors() {
-      let ctor_atom = atoms.intern(ctor.name().clone());
-      known_globals.insert(ctor.name().clone(), ctor_atom);
+      let ctor_atom = atoms.intern(GlobalRef::Local(ctor.name().clone()));
+      known_globals.insert(GlobalRef::Local(ctor.name().clone()), ctor_atom);
       if let Ok(ctor_ty_c) = lower_term(
         &mut LowerContext::with_config(config.clone(), atoms),
         &ctor.typ,
@@ -686,10 +705,10 @@ fn register_inductive(
     // `StructFields::inductive_paths`'s doc comment for why inserting it
     // into `known_globals` (which also feeds `open`-based unqualified-name
     // aliasing) is the wrong place for this.
-    let inductive_atom = atoms.intern(ind.name().clone());
+    let inductive_atom = atoms.intern(GlobalRef::Local(ind.name().clone()));
     structs
       .inductive_paths
-      .insert(inductive_atom, ind.name().clone());
+      .insert(inductive_atom, GlobalRef::Local(ind.name().clone()));
     // An ordinary inductive's own bare name (`I64`, `Bool`, `List`) was
     // never given a `ctx` (kind) entry either, for the same "never
     // needed before" reason as the `known_globals` gap just above — but
@@ -729,7 +748,7 @@ fn register_inductive(
     // against `ind.params()` by peel order (`elaborate_inductive` Forall-
     // wraps every constructor over the SAME declared param list, in the
     // same order, so this holds for every constructor of one inductive).
-    let inductive_atom = atoms.intern(ind.name().clone());
+    let inductive_atom = atoms.intern(GlobalRef::Local(ind.name().clone()));
     for ctor in ind.constructors() {
       if let Ok(ctor_ty_c) = lower_term(
         &mut LowerContext::with_config(config.clone(), atoms),
@@ -756,7 +775,7 @@ fn register_inductive(
         // in the sibling loop; `intern` is idempotent (see `AtomTable::
         // intern`'s doc comment), so recomputing it here is just a map
         // lookup, not a second registration.
-        let ctor_atom = atoms.intern(ctor.name().clone());
+        let ctor_atom = atoms.intern(GlobalRef::Local(ctor.name().clone()));
         structs
           .ctor_owner
           .insert(ctor_atom, (inductive_atom, ctor.name().last().clone()));
@@ -780,7 +799,7 @@ fn register_inductive(
     if let Some(cons) = ind.constructors().first()
       && ind.constructors().len() == 1
     {
-      let struct_atom = atoms.intern(ind.name().clone());
+      let struct_atom = atoms.intern(GlobalRef::Local(ind.name().clone()));
       // A generic struct's field types (e.g. `Lens S A`'s `get: S -> A`,
       // or `Any`'s constructor-level `any {A} (value: A)`) reference type
       // params that are only ever bound as part of `cons.typ`'s own
@@ -850,7 +869,7 @@ fn register_inductive(
 /// not ones the file itself declares.
 fn register_type_decls(
   ctx: &mut TyCtx,
-  known_globals: &mut Map<ModulePath, Atom>,
+  known_globals: &mut Map<GlobalRef, Atom>,
   structs: &mut StructFields,
   decls: &[SourceContext<Decl>],
   config: &LowerConfig,
@@ -891,13 +910,13 @@ fn register_def_params(
 /// last-write-wins — an acceptable simplification for a measurement
 /// harness, not a claim of fully faithful shadowing semantics.
 fn compute_unqualified_aliases(
-  known_globals: &Map<ModulePath, Atom>,
+  known_globals: &Map<GlobalRef, Atom>,
   opens: &[&Open],
 ) -> Map<Identifier, Atom> {
   let opens_vec: Vec<&Open> = opens.to_vec();
   let mut aliases = Map::new();
-  for (path, atom) in known_globals {
-    for short in path.open(&opens_vec) {
+  for (gref, atom) in known_globals {
+    for short in gref.to_flat_name_path().open(&opens_vec) {
       aliases.insert(short.last().clone(), *atom);
     }
   }
@@ -1099,8 +1118,8 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
     }
     for def_ctx in module.defs() {
       let def: &Def = def_ctx;
-      let atom = atoms.intern(def.name.clone());
-      known_globals.insert(def.name.clone(), atom);
+      let atom = atoms.intern(GlobalRef::Local(def.name.clone()));
+      known_globals.insert(GlobalRef::Local(def.name.clone()), atom);
       if let Ok(ty_c) = lower_term(
         &mut LowerContext::with_config(config_no_aliases.clone(), &mut atoms),
         &def.typ,
@@ -1137,8 +1156,8 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
   // either.
   for decl in &expanded {
     if let Decl::Def(def) = &**decl {
-      let atom = atoms.intern(def.name.clone());
-      known_globals.insert(def.name.clone(), atom);
+      let atom = atoms.intern(GlobalRef::Local(def.name.clone()));
+      known_globals.insert(GlobalRef::Local(def.name.clone()), atom);
     }
   }
 
@@ -1168,7 +1187,7 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
     if let Decl::Def(def) = &**decl
       && def.typ.is_known()
     {
-      let self_atom = atoms.intern(def.name.clone());
+      let self_atom = atoms.intern(GlobalRef::Local(def.name.clone()));
       if let Ok(typ_c) = lower_term(
         &mut LowerContext::with_config(config.clone(), &mut atoms),
         &def.typ,
@@ -1183,7 +1202,7 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
   // BODY, not its declared type.
   for decl in &expanded {
     if let Decl::Def(def) = &**decl {
-      let self_atom = atoms.intern(def.name.clone());
+      let self_atom = atoms.intern(GlobalRef::Local(def.name.clone()));
       register_def_params(&mut structs, self_atom, &def.term, &config, &mut atoms);
     }
   }
@@ -1199,7 +1218,7 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
         report.defs.push(DefOutcome { name, result });
       }
       Decl::ScopedOpen {
-        module_path,
+        path,
         filter,
         decl: inner,
         ..
@@ -1209,7 +1228,7 @@ pub fn check_module_source(env: &ModuleCheckEnv, source: &str) -> ModuleReport {
         // names, but only for checking this one wrapped `def`.
         let scoped_open_val = Open {
           source_location: SourceRange::default(),
-          module_path: module_path.clone(),
+          path: path.clone(),
           filter: filter.clone(),
           attributes: vec![],
         };
@@ -1270,28 +1289,31 @@ fn peel_foralls(typ_c: CoreTerm) -> (Vec<(Identifier, Atom, CoreTerm)>, CoreTerm
 /// deliberately doesn't try to resolve every alias-resolution edge case.
 fn term_references_class(
   term: &Term,
-  class_name: &ModulePath,
+  class_name: &NamePath,
   structs: &StructFields,
   atoms: &mut AtomTable,
-  infix: &Map<Operator, ModulePath>,
+  infix: &Map<Operator, NamePath>,
 ) -> bool {
-  let mut is_match = |path: &ModulePath| {
+  let mut is_match = |path: &NamePath| {
     path == class_name
       || path.is_prefix(class_name)
       || structs
         .structs
-        .get(&atoms.intern(class_name.clone()))
+        .get(&atoms.intern(GlobalRef::Local(class_name.clone())))
         .is_some_and(|info| info.fields.iter().any(|(name, _)| path.last() == name))
   };
   match term {
     Term::Var {
-      name: NameRef::P(path),
+      name: NameRef::Np(path),
     } => is_match(path),
+    Term::Var {
+      name: NameRef::Qn(qn),
+    } => is_match(&qn.to_flat_name_path()),
     Term::Var {
       name: NameRef::Id(id),
     } => structs
       .structs
-      .get(&atoms.intern(class_name.clone()))
+      .get(&atoms.intern(GlobalRef::Local(class_name.clone())))
       .is_some_and(|info| info.fields.iter().any(|(name, _)| name == id)),
     // An infix operator (`a == b`, parsed as `App(App(Var{Op(==)},a),b)`)
     // is how a constrained instance's own generic method most often
@@ -1346,10 +1368,10 @@ fn term_references_class(
 
 fn literal_references_class(
   lit: &Literal,
-  class_name: &ModulePath,
+  class_name: &NamePath,
   structs: &StructFields,
   atoms: &mut AtomTable,
-  infix: &Map<Operator, ModulePath>,
+  infix: &Map<Operator, NamePath>,
 ) -> bool {
   match lit {
     Literal::Str { .. } | Literal::Char { .. } | Literal::Num { .. } | Literal::Float { .. } => {
@@ -1425,7 +1447,7 @@ fn elaborate_constrained_type(
   body: &Term,
   structs: &StructFields,
   atoms: &mut AtomTable,
-  infix: &Map<Operator, ModulePath>,
+  infix: &Map<Operator, NamePath>,
 ) -> (CoreTerm, bool) {
   if type_constraints.is_empty() {
     return (typ_c, false);
@@ -1446,7 +1468,7 @@ fn elaborate_constrained_type(
     else {
       continue;
     };
-    let class_atom = atoms.intern(constraint.class().clone());
+    let class_atom = atoms.intern(GlobalRef::Local(constraint.class().clone()));
     if !is_class_atom(structs, class_atom) {
       continue;
     }
@@ -1490,7 +1512,7 @@ fn check_one_def(
   def: &Def,
   config: &LowerConfig,
 ) -> Result<(), DefFailure> {
-  let self_atom = mctx.intern(def.name.clone());
+  let self_atom = mctx.intern(GlobalRef::Local(def.name.clone()));
 
   if def.typ.is_known() {
     // `def.typ` is already fully elaborated (implicit Foralls included)
@@ -1843,8 +1865,8 @@ fn infer_error_to_type_error(e: InferError, atoms: &AtomTable) -> TypeError {
 /// checked last (unchanged from the pre-existing, accepted behavior).
 fn insert_checked_def(
   program: &mut CoreProgram,
-  capture_path: &ModulePath,
-  def_name: &ModulePath,
+  capture_path: &NamePath,
+  def_name: &NamePath,
   checked: CheckedCoreDef,
 ) {
   if capture_path != def_name {
@@ -1862,8 +1884,8 @@ fn insert_checked_def(
 /// queue.
 fn insert_match_resolutions(
   program: &mut CoreProgram,
-  capture_path: &ModulePath,
-  def_name: &ModulePath,
+  capture_path: &NamePath,
+  def_name: &NamePath,
   resolutions: Vec<(Vec<Identifier>, Atom)>,
 ) {
   if capture_path != def_name {
@@ -1898,9 +1920,9 @@ fn check_one_def_new(
   // per-instance method — see `check_one_instance_new`). `None` (every
   // pre-existing call site) costs nothing extra.
   mut core_out: Option<&mut CoreProgram>,
-  capture_path: &ModulePath,
+  capture_path: &NamePath,
 ) -> Result<Def, TypeError> {
-  let self_atom = mctx.intern(def.name.clone());
+  let self_atom = mctx.intern(GlobalRef::Local(def.name.clone()));
   let mut new_def = def.clone();
   // Starts empty: no dictionary is bound yet at the top of a def's own
   // body — `desugar_struct_literals`'s `Lam` arm extends a local copy of
@@ -1973,7 +1995,7 @@ fn check_one_def_new(
     for (name, atom, var_typ) in &peeled_vars {
       overrides.insert(name.clone(), *atom);
       ctx.insert(*atom, var_typ.clone());
-      atom_paths.insert(*atom, name.clone().to_path());
+      atom_paths.insert(*atom, GlobalRef::Local(NamePath::single(name.clone())));
     }
     let body_config = LowerConfig {
       infix: config.infix.clone(),
@@ -2090,7 +2112,7 @@ fn check_one_def_new(
     // def's own source text never captured — extend `atom_paths` with
     // `mctx`'s full table as a fallback so `raise_core` below never sees
     // an atom it can't resolve.
-    let fallback_atoms: Vec<(Atom, ModulePath)> = mctx
+    let fallback_atoms: Vec<(Atom, GlobalRef)> = mctx
       .atoms()
       .iter()
       .filter(|(_, a)| !atom_paths.contains_key(a))
@@ -2176,7 +2198,7 @@ fn check_one_def_new(
     // showing the missing atom was always `ty_generalized`'s own `Free`
     // reference, freshly interned and absent from `atom_paths` even
     // though `mctx.atoms()` already knew it.
-    let fallback_atoms: Vec<(Atom, ModulePath)> = mctx
+    let fallback_atoms: Vec<(Atom, GlobalRef)> = mctx
       .atoms()
       .iter()
       .filter(|(_, a)| !atom_paths.contains_key(a))
@@ -2219,7 +2241,7 @@ fn check_one_instance_new(
   global_atom_paths: &AtomPathMap,
   known_class_methods: &KnownClassMethods,
   known_instances: &KnownInstances,
-  class_method_order: &Map<ModulePath, Vec<Identifier>>,
+  class_method_order: &Map<NamePath, Vec<Identifier>>,
   // Phase 0 capture — see `check_one_def_new`'s doc comment. Each
   // method's OWN `Def.name` is a bare, non-instance-qualified identifier
   // (`instance_inner_parser` parses each method with an ordinary
@@ -2453,8 +2475,8 @@ pub fn type_check_module_decls_new_inner(
   let known_instances = collect_known_instances(loaded, &expanded, &structs, &mut atoms, &infix);
   for decl in &expanded {
     if let Decl::Def(def) = &**decl {
-      let atom = atoms.intern(def.name.clone());
-      known_globals.insert(def.name.clone(), atom);
+      let atom = atoms.intern(GlobalRef::Local(def.name.clone()));
+      known_globals.insert(GlobalRef::Local(def.name.clone()), atom);
     }
   }
   // An instance becomes an ordinary def too (see the `Decl::Ins` arm
@@ -2464,8 +2486,8 @@ pub fn type_check_module_decls_new_inner(
   // resolved before the instance producing its dictionary is reached).
   for decl in &expanded {
     if let Decl::Ins(instance) = &**decl {
-      let atom = atoms.intern(instance.name().clone());
-      known_globals.insert(instance.name().clone(), atom);
+      let atom = atoms.intern(GlobalRef::Local(instance.name().clone()));
+      known_globals.insert(GlobalRef::Local(instance.name().clone()), atom);
       // An instance's own generic params (`instance {A : Type} Append
       // (List A) {...}`) never go through `elaborate_decls`'s Forall-
       // elaboration the way a `Decl::Def`'s declared type does (that pass
@@ -2514,7 +2536,7 @@ pub fn type_check_module_decls_new_inner(
     if let Decl::Def(def) = &**decl
       && def.typ.is_known()
     {
-      let self_atom = atoms.intern(def.name.clone());
+      let self_atom = atoms.intern(GlobalRef::Local(def.name.clone()));
       if let Ok(typ_c) = lower_term(
         &mut LowerContext::with_config(config.clone(), &mut atoms),
         &def.typ,
@@ -2537,7 +2559,7 @@ pub fn type_check_module_decls_new_inner(
   // an inferred-type def still registers its param names here.
   for decl in &expanded {
     if let Decl::Def(def) = &**decl {
-      let self_atom = atoms.intern(def.name.clone());
+      let self_atom = atoms.intern(GlobalRef::Local(def.name.clone()));
       register_def_params(&mut structs, self_atom, &def.term, &config, &mut atoms);
     }
   }
@@ -2619,8 +2641,11 @@ pub fn type_check_module_decls_new_inner(
     for decl in &expanded {
       match &**decl {
         Decl::Def(def) => {
-          let bare_atom = mctx.atoms_mut().intern(def.name.clone());
-          global_atom_paths.insert(bare_atom, path.extend_borrowed(&def.name));
+          let bare_atom = mctx.atoms_mut().intern(GlobalRef::Local(def.name.clone()));
+          global_atom_paths.insert(
+            bare_atom,
+            GlobalRef::Local(NamePath::from(path.clone()).extend_borrowed(&def.name)),
+          );
         }
         _ => {}
       }
@@ -2632,7 +2657,7 @@ pub fn type_check_module_decls_new_inner(
       Decl::Use(ref u) => {
         if loaded.get_module(&u.module_path).is_none() {
           Err(TypeError::Scope(
-            ScopeError::PathNotFound(u.module_path.clone()),
+            ScopeError::PathNotFound(u.module_path.clone().into()),
             SourceRange::default(),
           ))
         } else {
@@ -2643,7 +2668,7 @@ pub fn type_check_module_decls_new_inner(
         // Module-qualified -- `insert_checked_def` (called from
         // `check_one_def_new`) additionally stores this under `def.name`
         // bare too, so either form finds it.
-        let capture_path = path.extend_borrowed(&def.name);
+        let capture_path = NamePath::from(path.clone()).extend_borrowed(&def.name);
         check_one_def_new(
           &mut mctx,
           &mut ctx,
@@ -2695,7 +2720,7 @@ pub fn type_check_module_decls_new_inner(
         }
       }
       Decl::ScopedOpen {
-        ref module_path,
+        ref path,
         ref filter,
         ref decl,
         ..
@@ -2709,7 +2734,7 @@ pub fn type_check_module_decls_new_inner(
         // contract stays intact; `Module::add_decl` unwraps it later.
         let scoped_open_val = Open {
           source_location: SourceRange::default(),
-          module_path: module_path.clone(),
+          path: path.clone(),
           filter: filter.clone(),
           attributes: vec![],
         };
@@ -2720,7 +2745,7 @@ pub fn type_check_module_decls_new_inner(
         scoped_config.unqualified_aliases.extend(scoped_aliases);
 
         let rewrap = |inner: Decl| Decl::ScopedOpen {
-          module_path: module_path.clone(),
+          path: path.clone(),
           filter: filter.clone(),
           attributes: vec![],
           decl: Box::new(inner),
@@ -2729,7 +2754,7 @@ pub fn type_check_module_decls_new_inner(
           Decl::Def(def) => {
             // Module-qualified -- see the identical comment at the
             // ordinary `Decl::Def` arm above.
-            let capture_path = path.extend_borrowed(&def.name);
+            let capture_path = NamePath::from(path.clone()).extend_borrowed(&def.name);
             check_one_def_new(
               &mut mctx,
               &mut ctx,
@@ -2758,7 +2783,7 @@ pub fn type_check_module_decls_new_inner(
             Decl::Def(def) => {
               // Module-qualified -- see the identical comment at the
               // ordinary `Decl::Def` arm above.
-              let capture_path = path.extend_borrowed(&def.name);
+              let capture_path = NamePath::from(path.clone()).extend_borrowed(&def.name);
               match check_one_def_new(
                 &mut mctx,
                 &mut ctx,
@@ -2793,7 +2818,7 @@ pub fn type_check_module_decls_new_inner(
     match result {
       Ok(d) => checked.push(decl_ctx.with(d)),
       Err(e) => errors.push(TypeError::Context {
-        name: Some(decl_ctx.value().to_ref().clone()),
+        name: Some(decl_ctx.value().to_ref().into_owned()),
         loc: decl_ctx.loc.clone(),
         err: Box::new(e),
         module: module_context.clone(),
@@ -3077,10 +3102,10 @@ mod test {
     let mut rectangle_short_name = None;
     for decl in &expanded {
       if let Decl::Type(ind) = &**decl {
-        shape_atom = Some(atoms.intern(ind.name().clone()));
+        shape_atom = Some(atoms.intern(GlobalRef::Local(ind.name().clone())));
         for ctor in ind.constructors() {
           if ctor.name().last().as_str() == "rectangle" {
-            rectangle_atom = Some(atoms.intern(ctor.name().clone()));
+            rectangle_atom = Some(atoms.intern(GlobalRef::Local(ctor.name().clone())));
             rectangle_short_name = Some(ctor.name().last().clone());
           }
         }
@@ -3123,11 +3148,11 @@ mod test {
     // (ordinary `def_param` parsing has no `:=` support yet — Phase 3).
     for decl in &expanded {
       if let Decl::Def(def) = &**decl {
-        let atom = atoms.intern(def.name.clone());
+        let atom = atoms.intern(GlobalRef::Local(def.name.clone()));
         register_def_params(&mut structs, atom, &def.term, &config, &mut atoms);
       }
     }
-    let make_r_atom = atoms.intern(ModulePath::top("make_r"));
+    let make_r_atom = atoms.intern(GlobalRef::Local(NamePath::top("make_r")));
     let params = structs
       .def_params
       .get(&make_r_atom)

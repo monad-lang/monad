@@ -13,6 +13,13 @@ use crate::diag::Severity;
 use crate::parser::parse_file;
 use crate::term::organize_imports::{apply_text_edits, compute_organize_import_edits};
 
+/// Term-level name shorthand — scope keys are `NamePath`s since the
+/// qualified-names split; `mpt` (glob-imported from the parent) stays the
+/// `ModulePath` (file-level) builder, still used for module-path lookups.
+fn npt(s: &str) -> crate::term::NamePath {
+  crate::term::NamePath::top(s)
+}
+
 fn uses_of(source: &str) -> Vec<SourceContext<Use>> {
   parse_file(source.into())
     .unwrap()
@@ -88,7 +95,7 @@ fn test_empty_open_filter_is_rejected() {
   let decls = parse_file("open IO {}\n".into()).unwrap().decls;
   match validate_open_filters(&decls) {
     Err(TypeError::EmptyOpenFilter { module_path, .. }) => {
-      assert_eq!(module_path, mpt("IO"));
+      assert_eq!(module_path, npt("IO"));
     }
     other => panic!("expected Err(TypeError::EmptyOpenFilter), got {other:?}"),
   }
@@ -113,7 +120,7 @@ fn test_empty_scoped_open_filter_is_rejected() {
     .decls;
   match validate_open_filters(&decls) {
     Err(TypeError::EmptyOpenFilter { module_path, .. }) => {
-      assert_eq!(module_path, mpt("IO"));
+      assert_eq!(module_path, npt("IO"));
     }
     other => panic!("expected Err(TypeError::EmptyOpenFilter), got {other:?}"),
   }
@@ -255,9 +262,9 @@ fn test_match_pattern_constructor_counts_as_used() {
     "#,
   );
   let referenced = collect_referenced_names(&modu);
-  assert!(referenced.contains(&ModulePath::single(id("red"))));
-  assert!(referenced.contains(&ModulePath::single(id("green"))));
-  assert!(referenced.contains(&ModulePath::single(id("blue"))));
+  assert!(referenced.contains(&NamePath::single(id("red"))));
+  assert!(referenced.contains(&NamePath::single(id("green"))));
+  assert!(referenced.contains(&NamePath::single(id("blue"))));
 }
 
 #[test]
@@ -571,7 +578,7 @@ fn test_simple_instance() {
   loaded.add_module(modu);
   let global = loaded.global(&path).unwrap();
   let ins_key = InstanceKey::new(
-    mpt("HAdd"),
+    npt("HAdd"),
     vec![],
     vec![
       param(id("A"), var("I64")),
@@ -611,8 +618,8 @@ fn test_loaded_scopes_builds_all_scopes() {
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path).expect("scope should exist");
 
-  assert!(global.find_ref(&mpt("my_def")).is_some());
-  assert!(global.find_inductive(&mpt("MyType")).is_some());
+  assert!(global.find_ref(&npt("my_def")).is_some());
+  assert!(global.find_inductive(&npt("MyType")).is_some());
 }
 
 #[test]
@@ -646,9 +653,9 @@ fn test_global_scope_data_includes_implicit_modules() {
   let global = loaded_scopes.global(&path).expect("scope should exist");
 
   // Should have access to prelude types
-  assert!(global.find_inductive(&mpt("Bool")).is_some());
-  assert!(global.find_inductive(&mpt("Option")).is_some());
-  assert!(global.find_inductive(&mpt("List")).is_some());
+  assert!(global.find_inductive(&npt("Bool")).is_some());
+  assert!(global.find_inductive(&npt("Option")).is_some());
+  assert!(global.find_inductive(&npt("List")).is_some());
 }
 
 #[test]
@@ -682,7 +689,7 @@ fn test_global_scope_data_applies_opens() {
   let global = loaded_scopes.global(&path).expect("scope should exist");
 
   // With open IO, println should be accessible directly
-  assert!(global.find_ref(&mpt("println")).is_some());
+  assert!(global.find_ref(&npt("println")).is_some());
 }
 
 #[test]
@@ -722,8 +729,8 @@ fn test_get_module_scope_returns_correct_scope() {
 
   let prelude_scope = prelude_scope.unwrap();
   // Prelude scope should have prelude definitions
-  assert!(prelude_scope.find_inductive(&mpt("Bool")).is_some());
-  assert!(prelude_scope.find_inductive(&mpt("Option")).is_some());
+  assert!(prelude_scope.find_inductive(&npt("Bool")).is_some());
+  assert!(prelude_scope.find_inductive(&npt("Option")).is_some());
 }
 
 #[test]
@@ -757,7 +764,7 @@ fn test_instance_resolution_module_restricted() {
   let global = loaded_scopes.global(&path).expect("scope should exist");
 
   // Should find BEq instance for I64
-  assert!(global.find_ref(&mpt("test_eq")).is_some());
+  assert!(global.find_ref(&npt("test_eq")).is_some());
 }
 
 #[test]
@@ -828,10 +835,10 @@ fn test_module_conflict_detection_bare_name_ambiguous() {
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path_c).expect("scope should exist");
 
-  let result = global.find_any_ref(&mpt("shared_name"), &sort1());
+  let result = global.find_any_ref(&npt("shared_name"), &sort1());
   assert!(result.is_err());
   if let Err(ScopeError::AmbiguousName { name, candidates }) = result {
-    assert_eq!(name, mpt("shared_name"));
+    assert_eq!(name, npt("shared_name"));
     assert_eq!(candidates.len(), 2);
     assert!(
       candidates.contains(&path_a),
@@ -845,9 +852,9 @@ fn test_module_conflict_detection_bare_name_ambiguous() {
     panic!("Expected AmbiguousName error, got: {result:?}");
   }
 
-  let prefixed_a = path_a.clone().extend(mpt("shared_name"));
+  let prefixed_a = crate::term::NamePath::from(path_a.clone()).append(vec![id("shared_name")]);
   assert!(global.find_ref(&prefixed_a).is_some());
-  let prefixed_b = path_b.clone().extend(mpt("shared_name"));
+  let prefixed_b = crate::term::NamePath::from(path_b.clone()).append(vec![id("shared_name")]);
   assert!(global.find_ref(&prefixed_b).is_some());
 }
 
@@ -913,14 +920,14 @@ fn test_priv_def_invisible_from_other_module() {
   let global_b = loaded_scopes.global(&path_b).expect("scope should exist");
 
   // Visible from within its own module...
-  assert!(global_a.find_ref(&mpt("secret_val")).is_some());
+  assert!(global_a.find_ref(&npt("secret_val")).is_some());
   // ...but not from another module, even with `use {*}`.
-  assert!(global_b.find_ref(&mpt("secret_val")).is_none());
+  assert!(global_b.find_ref(&npt("secret_val")).is_none());
 
   // `pub` and the default (package-private, currently == public) remain
   // visible from other modules.
-  assert!(global_b.find_ref(&mpt("public_val")).is_some());
-  assert!(global_b.find_ref(&mpt("default_val")).is_some());
+  assert!(global_b.find_ref(&npt("public_val")).is_some());
+  assert!(global_b.find_ref(&npt("default_val")).is_some());
 }
 
 #[test]
@@ -964,8 +971,8 @@ fn test_selective_use_only_filter() {
   let loaded_scopes = loaded.scopes();
   let global = loaded_scopes.global(&path_b).expect("scope should exist");
 
-  assert!(global.find_any_ref(&mpt("foo"), &sort1()).is_ok());
-  assert!(global.find_any_ref(&mpt("bar"), &sort1()).is_err());
+  assert!(global.find_any_ref(&npt("foo"), &sort1()).is_ok());
+  assert!(global.find_any_ref(&npt("bar"), &sort1()).is_err());
 }
 
 #[test]
@@ -1010,8 +1017,8 @@ fn test_use_glob_equivalent_to_bare() {
   let global = loaded_scopes.global(&path_b).expect("scope should exist");
 
   // `{*}` makes every name bare-accessible, same as old bare `use`.
-  assert!(global.find_any_ref(&mpt("foo"), &sort1()).is_ok());
-  assert!(global.find_any_ref(&mpt("bar"), &sort1()).is_ok());
+  assert!(global.find_any_ref(&npt("foo"), &sort1()).is_ok());
+  assert!(global.find_any_ref(&npt("bar"), &sort1()).is_ok());
 }
 
 #[test]
@@ -1069,9 +1076,9 @@ fn test_use_nested_submodule_makes_bare_name_and_qualified_access_available() {
   let global = loaded_scopes.global(&path_d).expect("scope should exist");
 
   // `read` was explicitly selected -> bare-accessible.
-  assert!(global.find_any_ref(&mpt("read"), &sort1()).is_ok());
+  assert!(global.find_any_ref(&npt("read"), &sort1()).is_ok());
   // `write` was not selected by the nested filter -> not bare-accessible.
-  assert!(global.find_any_ref(&mpt("write"), &sort1()).is_err());
+  assert!(global.find_any_ref(&npt("write"), &sort1()).is_err());
 }
 
 fn module_at(path: ModulePath, source: &str) -> Module {

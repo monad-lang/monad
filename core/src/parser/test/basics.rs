@@ -113,7 +113,7 @@ fn test_identifier() {
 fn test_infix() {
   let s = r#"infix (+) := add"#.into();
   let (_, res) = infix_parser(s).unwrap();
-  similar!(res, infix("+".into(), mpt("add")));
+  similar!(res, infix("+".into(), npt("add")));
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn test_infix_at_operator() {
   // like `+`/`++`, that library code binds via `infix (@) := ...`.
   let s = r#"infix (@) := my_append"#.into();
   let (_, res) = infix_parser(s).unwrap();
-  similar!(res, infix("@".into(), mpt("my_append")));
+  similar!(res, infix("@".into(), npt("my_append")));
 }
 
 #[test]

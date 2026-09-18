@@ -22,7 +22,7 @@ use crate::core_program::CoreProgram;
 use crate::core_value::{GlobalCache, GlobalTable, NativeTable, Value};
 use crate::lower_core_ir::{LoweredProgram, lower_program};
 use crate::term::module::{LoadedModules, Module};
-use crate::term::{Decl, ModulePath, SourceContext};
+use crate::term::{Decl, GlobalRef, ModulePath, SourceContext};
 
 use super::macro_expand::MacroError;
 
@@ -34,7 +34,7 @@ use super::macro_expand::MacroError;
 /// are reachable (`core_eval.rs`'s `fire_or_accumulate` enforces this via
 /// `core_native::is_pure_native`).
 pub struct MetaEvalContext {
-  paths: Vec<ModulePath>,
+  paths: Vec<GlobalRef>,
   globals: GlobalTable,
   natives: NativeTable,
   cache: GlobalCache,
@@ -137,7 +137,7 @@ impl MetaEvalContext {
     })
   }
 
-  fn index_of(&self, path: &ModulePath) -> Option<u32> {
+  fn index_of(&self, path: &GlobalRef) -> Option<u32> {
     self.paths.iter().position(|p| p == path).map(|i| i as u32)
   }
 
@@ -145,7 +145,7 @@ impl MetaEvalContext {
   /// — top-level Monad names are bare/single-segment, see
   /// `meta_reflect.rs`'s module doc comment) and apply it to `args` in
   /// order (ordinary curried application, one arg at a time).
-  pub fn invoke(&mut self, path: &ModulePath, args: Vec<Value>) -> Result<Value, MacroError> {
+  pub fn invoke(&mut self, path: &GlobalRef, args: Vec<Value>) -> Result<Value, MacroError> {
     let idx = self.index_of(path).ok_or_else(|| {
       MacroError::Generic(format!(
         "meta: `{path}` has no compiled definition (not `use`d, or not a top-level `def`?)"

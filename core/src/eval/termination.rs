@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::empty_set;
-use crate::term::{Def, Identifier, Literal, ModulePath, Par, SourceRange, Term, Term::*};
+use crate::term::{Def, Identifier, Literal, NamePath, Par, SourceRange, Term, Term::*};
 
 /// Tracks which variables are known subterms of which formal parameters.
 ///
@@ -13,13 +13,13 @@ type SubtermEnv = crate::Map<Identifier, crate::Set<Identifier>>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TerminationError {
   NotStructural {
-    def_name: ModulePath,
+    def_name: NamePath,
     call: String,
     suggestion: String,
     loc: SourceRange,
   },
   NoRecursiveParams {
-    def_name: ModulePath,
+    def_name: NamePath,
   },
 }
 
@@ -45,7 +45,7 @@ impl Display for TerminationError {
 }
 
 /// A set of mutually recursive function names being checked together.
-type RecursiveNames = crate::Set<ModulePath>;
+type RecursiveNames = crate::Set<NamePath>;
 
 /// A found recursive call site with collected arguments.
 #[derive(Debug, Clone)]
@@ -88,7 +88,7 @@ fn extract_params(body: &Term) -> Vec<Identifier> {
 /// Check if a term is a reference to any name in the given set.
 fn is_ref_to_any(term: &Term, names: &RecursiveNames) -> bool {
   match term {
-    Var { name } => name.to_path().map_or(false, |p| names.contains(&p)),
+    Var { name } => name.to_name_path().map_or(false, |p| names.contains(&p)),
     _ => false,
   }
 }
@@ -248,7 +248,7 @@ fn check_call_args(
 /// `recursive_names` for structural termination.
 fn check_body_termination(
   body: &Term,
-  def_name: &ModulePath,
+  def_name: &NamePath,
   recursive_names: &RecursiveNames,
   params: &[Identifier],
   env: &SubtermEnv,
@@ -310,9 +310,9 @@ fn check_body_termination(
 }
 
 /// Build a call graph from definitions: for each def, find which other
-/// defs (by ModulePath) it references in its body.
-pub fn build_call_graph(defs: &[&Def]) -> crate::Map<ModulePath, crate::Set<ModulePath>> {
-  let def_names: crate::Set<&ModulePath> = defs.iter().map(|d| d.name()).collect();
+/// defs (by NamePath) it references in its body.
+pub fn build_call_graph(defs: &[&Def]) -> crate::Map<NamePath, crate::Set<NamePath>> {
+  let def_names: crate::Set<&NamePath> = defs.iter().map(|d| d.name()).collect();
   let mut graph = crate::Map::new();
 
   for def in defs {
@@ -324,13 +324,13 @@ pub fn build_call_graph(defs: &[&Def]) -> crate::Map<ModulePath, crate::Set<Modu
 }
 
 /// Walk a term to find all Var references that match known def names.
-fn find_callees(term: &Term, known_names: &crate::Set<&ModulePath>) -> crate::Set<ModulePath> {
+fn find_callees(term: &Term, known_names: &crate::Set<&NamePath>) -> crate::Set<NamePath> {
   let mut callees = empty_set();
 
-  fn walk(term: &Term, known: &crate::Set<&ModulePath>, callees: &mut crate::Set<ModulePath>) {
+  fn walk(term: &Term, known: &crate::Set<&NamePath>, callees: &mut crate::Set<NamePath>) {
     match term {
       Var { name } => {
-        if let Some(path) = name.to_path() {
+        if let Some(path) = name.to_name_path() {
           if known.contains(&path) {
             callees.insert(path);
           }
@@ -377,24 +377,24 @@ fn find_callees(term: &Term, known_names: &crate::Set<&ModulePath>) -> crate::Se
 /// Find strongly connected components in the call graph.
 /// Returns groups of mutually recursive definitions (SCCs with size > 1).
 pub fn find_mutual_groups(
-  graph: &crate::Map<ModulePath, crate::Set<ModulePath>>,
-) -> Vec<Vec<ModulePath>> {
+  graph: &crate::Map<NamePath, crate::Set<NamePath>>,
+) -> Vec<Vec<NamePath>> {
   // Use Tarjan's algorithm for SCC detection.
-  // The four maps/sets below are keyed by `&ModulePath` so they can
+  // The four maps/sets below are keyed by `&NamePath` so they can
   // borrow straight out of `graph`/`all_nodes` rather than cloning each
   // node on every insert and every look-up. `all_nodes` itself is the
-  // one `Set<ModulePath>` that still owns its keys -- it must outlive
+  // one `Set<NamePath>` that still owns its keys -- it must outlive
   // every map that borrows from it, which it does here (it's built
   // before any Tarjan call starts and only dropped at function exit).
   let mut index_counter = 0u64;
-  let mut indices: std::collections::BTreeMap<&ModulePath, u64> = std::collections::BTreeMap::new();
-  let mut lowlink: std::collections::BTreeMap<&ModulePath, u64> = std::collections::BTreeMap::new();
-  let mut on_stack: crate::Set<&ModulePath> = empty_set();
-  let mut stack: Vec<&ModulePath> = Vec::new();
-  let mut sccs: Vec<Vec<ModulePath>> = Vec::new();
+  let mut indices: std::collections::BTreeMap<&NamePath, u64> = std::collections::BTreeMap::new();
+  let mut lowlink: std::collections::BTreeMap<&NamePath, u64> = std::collections::BTreeMap::new();
+  let mut on_stack: crate::Set<&NamePath> = empty_set();
+  let mut stack: Vec<&NamePath> = Vec::new();
+  let mut sccs: Vec<Vec<NamePath>> = Vec::new();
 
   // Collect all nodes (some may have no outgoing edges)
-  let mut all_nodes: crate::Set<ModulePath> = empty_set();
+  let mut all_nodes: crate::Set<NamePath> = empty_set();
   for node in graph.keys() {
     all_nodes.insert(node.clone());
   }
@@ -405,14 +405,14 @@ pub fn find_mutual_groups(
   }
 
   fn strongconnect<'a>(
-    v: &'a ModulePath,
-    graph: &'a crate::Map<ModulePath, crate::Set<ModulePath>>,
+    v: &'a NamePath,
+    graph: &'a crate::Map<NamePath, crate::Set<NamePath>>,
     index_counter: &mut u64,
-    indices: &mut std::collections::BTreeMap<&'a ModulePath, u64>,
-    lowlink: &mut std::collections::BTreeMap<&'a ModulePath, u64>,
-    on_stack: &mut crate::Set<&'a ModulePath>,
-    stack: &mut Vec<&'a ModulePath>,
-    sccs: &mut Vec<Vec<ModulePath>>,
+    indices: &mut std::collections::BTreeMap<&'a NamePath, u64>,
+    lowlink: &mut std::collections::BTreeMap<&'a NamePath, u64>,
+    on_stack: &mut crate::Set<&'a NamePath>,
+    stack: &mut Vec<&'a NamePath>,
+    sccs: &mut Vec<Vec<NamePath>>,
   ) {
     indices.insert(v, *index_counter);
     lowlink.insert(v, *index_counter);
@@ -541,7 +541,7 @@ pub fn check_termination_all(defs: &[&Def]) -> Result<(), TerminationError> {
   let groups = find_mutual_groups(&graph);
 
   // Collect defs that are in mutual groups
-  let mut in_group: crate::Set<ModulePath> = empty_set();
+  let mut in_group: crate::Set<NamePath> = empty_set();
   for group in &groups {
     for name in group {
       in_group.insert(name.clone());
@@ -573,15 +573,15 @@ pub fn check_termination_all(defs: &[&Def]) -> Result<(), TerminationError> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::term::{case, id, lam, lam_par, mpt, num, param, var};
+  use crate::term::{case, id, lam, lam_par, num, param, var};
 
-  fn test_def(name: &str) -> ModulePath {
-    mpt(name)
+  fn test_def(name: &str) -> NamePath {
+    NamePath::top(name)
   }
 
-  /// Helper: create a multi-segment ModulePath from string segments
-  fn mpath(segments: &[&str]) -> ModulePath {
-    ModulePath::new(segments.iter().map(|s| id(s)).collect())
+  /// Helper: create a multi-segment NamePath from string segments
+  fn mpath(segments: &[&str]) -> NamePath {
+    NamePath::new(segments.iter().map(|s| id(s)).collect())
   }
 
   // ── Unit tests for helper functions ──
@@ -1028,7 +1028,7 @@ mod tests {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].len(), 2);
     // Both f and g should be in the group
-    let group_set: crate::Set<&ModulePath> = groups[0].iter().collect();
+    let group_set: crate::Set<&NamePath> = groups[0].iter().collect();
     assert!(group_set.contains(&f));
     assert!(group_set.contains(&g));
   }

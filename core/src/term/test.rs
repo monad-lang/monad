@@ -363,9 +363,7 @@ impl Similar for Use {
 }
 impl Similar for Open {
   fn similar(&self, other: &Self) -> bool {
-    self.module_path == other.module_path
-      && self.filter == other.filter
-      && self.attributes == other.attributes
+    self.path == other.path && self.filter == other.filter && self.attributes == other.attributes
   }
 }
 impl Similar for Decl {
@@ -380,13 +378,13 @@ impl Similar for Decl {
       (Decl::Ins(i1), Decl::Ins(i2)) => i1.similar(i2),
       (
         Decl::ScopedOpen {
-          module_path: mp1,
+          path: mp1,
           filter: f1,
           decl: d1,
           ..
         },
         Decl::ScopedOpen {
-          module_path: mp2,
+          path: mp2,
           filter: f2,
           decl: d2,
           ..
@@ -423,14 +421,14 @@ pub fn decl_open(name_path: Vec<&str>) -> Decl {
   let ids = name_path.iter().map(|s| id(s)).collect();
   Decl::Open(Open {
     source_location: Default::default(),
-    module_path: ModulePath::new(ids),
+    path: NamePath::new(ids),
     filter: OpenFilter::All,
     attributes: vec![],
   })
 }
 
 pub fn decl_inductive(
-  name: ModulePath,
+  name: NamePath,
   constraints: Vec<TypeConstraint>,
   params: Vec<Param>,
   typ: Term,
@@ -447,7 +445,7 @@ pub fn decl_inductive(
 }
 
 pub fn decl_inductive_with_doc(
-  name: ModulePath,
+  name: NamePath,
   constraints: Vec<TypeConstraint>,
   params: Vec<Param>,
   typ: Term,
@@ -464,16 +462,16 @@ pub fn decl_inductive_with_doc(
   ))
 }
 
-pub fn decl_infix(operator: Operator, name: ModulePath) -> Decl {
+pub fn decl_infix(operator: Operator, name: NamePath) -> Decl {
   Decl::Infix(infix(operator, name))
 }
 
-pub fn decl_def(name: ModulePath, type_cons: Vec<TypeConstraint>, typ: Term, term: Term) -> Decl {
+pub fn decl_def(name: NamePath, type_cons: Vec<TypeConstraint>, typ: Term, term: Term) -> Decl {
   Decl::Def(def(name, type_cons, typ, term, vec![]))
 }
 
 pub fn defs_class(
-  name: ModulePath,
+  name: NamePath,
   constraints: Vec<TypeConstraint>,
   args: Vec<Param>,
   funs: Vec<ClassDef>,
@@ -482,7 +480,7 @@ pub fn defs_class(
 }
 
 pub fn defs_class_with_doc(
-  name: ModulePath,
+  name: NamePath,
   constraints: Vec<TypeConstraint>,
   args: Vec<Param>,
   funs: Vec<ClassDef>,

@@ -75,9 +75,9 @@ fn phase4_evaluates_a_real_recursive_program_end_to_end() {
 
   let lowered = monad_core::lower_core_ir::lower_program(&program).expect("lower_program");
 
-  let main_path = monad_core::term::mpt("main");
+  let main_path = monad_core::term::NamePath::top("main");
   let main_idx = lowered
-    .index_of(&main_path)
+    .index_of(&monad_core::term::GlobalRef::Local(main_path.clone()))
     .expect("expected `main` to have a global slot");
   assert!(
     !lowered.skipped.iter().any(|(p, _)| *p == main_path),

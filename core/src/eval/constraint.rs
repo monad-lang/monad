@@ -1,6 +1,6 @@
 use crate::term::module::GlobalScope;
 use crate::term::{
-  Identifier, Inductive, Instance, InstanceKey, ModulePath, Param, Term, TypeConstraint, param,
+  Identifier, Inductive, Instance, InstanceKey, NamePath, Param, Term, TypeConstraint, param,
 };
 use crate::{Map, Set};
 
@@ -127,7 +127,7 @@ impl<'a> ConstraintSolver<'a> {
   /// then recursively check that instance's constraints.
   fn resolve_constraint(
     &mut self,
-    class_name: &ModulePath,
+    class_name: &NamePath,
     concrete_types: &[(Identifier, Term)],
     visiting: &mut Set<String>,
   ) -> bool {
@@ -148,7 +148,7 @@ impl<'a> ConstraintSolver<'a> {
 /// Matches all class params to concrete types by position (the constraint var
 /// at position i maps to the class param at position i).
 fn build_constraint_key(
-  class_name: ModulePath,
+  class_name: NamePath,
   concrete_types: &[(Identifier, Term)],
   class: &Inductive,
 ) -> InstanceKey {

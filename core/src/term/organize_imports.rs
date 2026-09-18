@@ -8,7 +8,8 @@
 use super::module::{LoadedModules, Module, collect_referenced_names, referenced_contains_name};
 use crate::Set;
 use crate::term::{
-  Identifier, InductiveVariant, Location, ModulePath, Named, OpenFilter, SourceRange, UseFilter,
+  Identifier, InductiveVariant, Location, ModulePath, NamePath, Named, OpenFilter, SourceRange,
+  UseFilter,
 };
 
 /// A byte-range-equivalent (line/column, via the existing `SourceRange`
@@ -90,7 +91,7 @@ fn collect_exported_bare_names(
 fn minimal_use_names(
   target_path: &ModulePath,
   loaded: &LoadedModules,
-  referenced: &Set<ModulePath>,
+  referenced: &Set<NamePath>,
 ) -> Vec<Identifier> {
   let Some(target) = loaded.get_module(target_path) else {
     return Vec::new();
@@ -104,7 +105,7 @@ fn minimal_use_names(
 /// re-exports. A simplified stand-in for the real scope builder's
 /// "visible modules" set — enough to drive `open`'s prefix matching
 /// below without needing the full `GlobalScopeData` machinery.
-fn visible_full_paths(module: &Module, loaded: &LoadedModules) -> Vec<ModulePath> {
+fn visible_full_paths(module: &Module, loaded: &LoadedModules) -> Vec<NamePath> {
   let mut paths = Vec::new();
   let mut stack: Vec<ModulePath> = vec![module.path().clone()];
   stack.extend(
@@ -170,14 +171,15 @@ fn minimal_open_names(
   target_path: &ModulePath,
   module: &Module,
   loaded: &LoadedModules,
-  referenced: &Set<ModulePath>,
+  referenced: &Set<NamePath>,
 ) -> Vec<Identifier> {
   let mut names = Set::default();
   if let Some(target) = loaded.get_module(target_path) {
     names.extend(exported_bare_names(target, loaded));
   }
+  let target_name_path = NamePath::from(target_path.clone());
   for full_path in visible_full_paths(module, loaded) {
-    if let Some(suffix) = full_path.remove_prefix(target_path)
+    if let Some(suffix) = full_path.remove_prefix(&target_name_path)
       && suffix.len() == 1
     {
       names.insert(suffix.last().clone());
@@ -190,7 +192,7 @@ fn minimal_open_names(
 fn select_referenced(
   names: Set<Identifier>,
   target_path: &ModulePath,
-  referenced: &Set<ModulePath>,
+  referenced: &Set<NamePath>,
 ) -> Vec<Identifier> {
   let mut names: Vec<Identifier> = names
     .into_iter()
@@ -332,10 +334,11 @@ pub fn compute_organize_import_edits(module: &Module, loaded: &LoadedModules) ->
     if o.filter != OpenFilter::All {
       continue;
     }
-    let names = minimal_open_names(&o.module_path, module, loaded, &referenced);
+    let open_module_path = ModulePath::from(o.path.clone());
+    let names = minimal_open_names(&open_module_path, module, loaded, &referenced);
     edits.push(TextEdit {
       range: o.source_location.clone(),
-      replacement: format_import_decl("open", &o.module_path, &names),
+      replacement: format_import_decl("open", &open_module_path, &names),
     });
   }
 

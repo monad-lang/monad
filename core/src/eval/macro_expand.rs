@@ -1,8 +1,8 @@
 use crate::Map;
 use crate::term::module::LoadedModules;
 use crate::term::{
-  AttrArg, Constructor, Decl, DeclGenDef, Def, Identifier, Inductive, Literal, ModulePath, NameRef,
-  Named, Par, Param, SourceContext,
+  AttrArg, Constructor, Decl, DeclGenDef, Def, GlobalRef, Identifier, Inductive, Literal,
+  ModulePath, NamePath, NameRef, Named, Par, Param, SourceContext,
   Term::{self, Ann, App, Con, Ctx, Forall, Lam, Lit, Pi, Quote, Var},
   case_with_optional_field_pattern, id, instance, match_term, mpvar,
 };
@@ -33,9 +33,9 @@ fn is_builtin_intrinsic(name: &str) -> bool {
   BUILTIN_INTRINSICS.contains(&name)
 }
 
-/// Collect `Inductive` definitions from loaded modules, keyed by `ModulePath`.
+/// Collect `Inductive` definitions from loaded modules, keyed by name (`NamePath`).
 /// Mirrors `collect_loaded_macro_defs` below.
-fn collect_loaded_inductives(loaded: &LoadedModules) -> Map<ModulePath, Inductive> {
+fn collect_loaded_inductives(loaded: &LoadedModules) -> Map<NamePath, Inductive> {
   let mut all = Map::new();
   for module in loaded.modules() {
     for induct in module.inductives() {
@@ -51,10 +51,10 @@ fn collect_loaded_inductives(loaded: &LoadedModules) -> Map<ModulePath, Inductiv
 /// its `Inductive` definition.
 fn resolve_inductive<'a>(
   term: &Term,
-  inductives: &'a Map<ModulePath, Inductive>,
+  inductives: &'a Map<NamePath, Inductive>,
 ) -> Option<&'a Inductive> {
   let name = match strip_ctx(term.clone()) {
-    Var { name } => name.to_path(),
+    Var { name } => name.to_name_path(),
     _ => None,
   }?;
   inductives.get(&name)
@@ -70,7 +70,7 @@ fn term_as_identifier(term: &Term) -> Option<Identifier> {
       name: NameRef::Id(id),
     } => Some(id),
     Var {
-      name: NameRef::P(path),
+      name: NameRef::Np(path),
     } => Some(path.last().clone()),
     _ => None,
   }
@@ -133,7 +133,7 @@ pub(crate) fn derive_macro_name(target: &str) -> Option<&'static str> {
 fn expand_builtin_decl_intrinsic(
   name: &Identifier,
   args: &[Term],
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
   loaded: &LoadedModules,
   current_decls: &[SourceContext<Decl>],
   current_path: &ModulePath,
@@ -167,7 +167,7 @@ fn expand_builtin_decl_intrinsic(
 /// `decl_gen_defs`/`macro_defs` at all.
 fn expand_reflect_type_info_decl(
   args: &[Term],
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
   loaded: &LoadedModules,
   current_decls: &[SourceContext<Decl>],
   current_path: &ModulePath,
@@ -219,7 +219,10 @@ fn expand_reflect_type_info_decl(
     .cloned()
     .collect();
   let mut ctx = super::meta_compile::MetaEvalContext::build(loaded, current_path, &meta_def_decls)?;
-  let result_value = ctx.invoke(&ModulePath::single(meta_def_name), vec![type_info_value])?;
+  let result_value = ctx.invoke(
+    &GlobalRef::Local(NamePath::single(meta_def_name)),
+    vec![type_info_value],
+  )?;
   super::meta_reflect::reify_decls_value_to_decls(result_value, inductives)
 }
 
@@ -283,8 +286,8 @@ impl From<&MacroError> for crate::diag::Diagnostic {
   }
 }
 
-/// Collect macro definitions from loaded modules, keyed by ModulePath.
-fn collect_loaded_macro_defs(loaded: &LoadedModules) -> Map<ModulePath, Def> {
+/// Collect macro definitions from loaded modules, keyed by name (`NamePath`).
+fn collect_loaded_macro_defs(loaded: &LoadedModules) -> Map<NamePath, Def> {
   let mut all = Map::new();
   for module in loaded.modules() {
     for (path, ctx) in module.macro_defs_map() {
@@ -300,7 +303,7 @@ fn collect_loaded_macro_defs(loaded: &LoadedModules) -> Map<ModulePath, Def> {
 /// ones. Needed for `#[derive ...]`/`derive_lens!`-style usage: the derive
 /// macros themselves live once in `std/derive.mo`, `use`d from every file
 /// that wants to derive something, not redefined per file.
-fn collect_loaded_decl_gen_defs(loaded: &LoadedModules) -> Map<ModulePath, DeclGenDef> {
+fn collect_loaded_decl_gen_defs(loaded: &LoadedModules) -> Map<NamePath, DeclGenDef> {
   let mut all = Map::new();
   for module in loaded.modules() {
     for (path, ctx) in module.decl_gens_map() {
@@ -346,7 +349,7 @@ pub fn expand_macros(
   let current_decls = decls.clone();
 
   // Collect macros from current module
-  let mut macro_defs: Map<ModulePath, Def> = decls
+  let mut macro_defs: Map<NamePath, Def> = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
       Decl::DefMacro(def) => Some((def.name.clone(), def.clone())),
@@ -361,7 +364,7 @@ pub fn expand_macros(
   }
 
   // Collect DeclGen definitions from current module
-  let mut decl_gen_defs: Map<ModulePath, DeclGenDef> = decls
+  let mut decl_gen_defs: Map<NamePath, DeclGenDef> = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
       Decl::DeclGen(gd) => Some((gd.name.clone(), gd.clone())),
@@ -383,7 +386,7 @@ pub fn expand_macros(
   // primary use case) and from all loaded modules (cross-module derives).
   // Current module's definitions take priority, mirroring `macro_defs`
   // above.
-  let mut inductives: Map<ModulePath, Inductive> = decls
+  let mut inductives: Map<NamePath, Inductive> = decls
     .iter()
     .filter_map(|ctx| match ctx.value() {
       Decl::Type(induct) => Some((induct.name().clone(), induct.clone())),
@@ -479,7 +482,7 @@ pub fn expand_macros(
         // `use cli.args {*}`), same convention as any other cross-module
         // decl-gen macro call.
         if induct.has_attr("derive_cli") {
-          let call_args = vec![mpvar(induct.name().clone())];
+          let call_args = vec![mpvar(NamePath::from(induct.name().clone()))];
           let expanded = expand_macro_call(
             &id("derive_cli"),
             &call_args,
@@ -508,7 +511,7 @@ pub fn expand_macros(
               "unknown derive target `{target}` (expected one of: BEq, BOrd, Debug, Lens)"
             ))
           })?;
-          let call_args = vec![mpvar(induct.name().clone())];
+          let call_args = vec![mpvar(NamePath::from(induct.name().clone()))];
           let expanded = expand_macro_call(
             &id(macro_name),
             &call_args,
@@ -539,7 +542,7 @@ pub fn expand_macros(
         }
       }
       Decl::ScopedOpen {
-        module_path,
+        path,
         filter,
         attributes,
         decl,
@@ -557,7 +560,7 @@ pub fn expand_macros(
           other => other,
         };
         batch.push(ctx.map(|_| Decl::ScopedOpen {
-          module_path,
+          path,
           filter,
           attributes,
           decl: Box::new(inner),
@@ -612,8 +615,8 @@ fn flatten_generated_ctx(decls: Vec<SourceContext<Decl>>) -> Vec<SourceContext<D
 fn expand_macro_call(
   name: &Identifier,
   args: &[Term],
-  decl_gen_defs: &Map<ModulePath, DeclGenDef>,
-  inductives: &Map<ModulePath, Inductive>,
+  decl_gen_defs: &Map<NamePath, DeclGenDef>,
+  inductives: &Map<NamePath, Inductive>,
   loaded: &LoadedModules,
   current_decls: &[SourceContext<Decl>],
   current_path: &ModulePath,
@@ -628,7 +631,7 @@ fn expand_macro_call(
       current_path,
     );
   }
-  let path = ModulePath::single(name.clone());
+  let path = NamePath::single(name.clone());
   let gen_def = decl_gen_defs
     .get(&path)
     .ok_or_else(|| MacroError::MacroNotFound {
@@ -743,13 +746,13 @@ fn subst_decl_var(decl: Decl, name: &Identifier, replacement: &Term) -> Decl {
 /// only shape that can sensibly become a path segment in another
 /// declaration's name; anything else (an arbitrary computed value) leaves
 /// the path untouched.
-fn subst_path_component(path: ModulePath, name: &Identifier, replacement: &Term) -> ModulePath {
+fn subst_path_component(path: NamePath, name: &Identifier, replacement: &Term) -> NamePath {
   let replacement_path = match strip_ctx(replacement.clone()) {
     Var {
       name: NameRef::Id(id),
-    } => Some(ModulePath::single(id)),
+    } => Some(NamePath::single(id)),
     Var {
-      name: NameRef::P(p),
+      name: NameRef::Np(p),
     } => Some(p),
     _ => None,
   };
@@ -767,14 +770,14 @@ fn subst_path_component(path: ModulePath, name: &Identifier, replacement: &Term)
       }
     })
     .collect();
-  ModulePath::new(segments)
+  NamePath::new(segments)
 }
 
 /// Walk a term and expand macro calls.
 fn expand_term(
   term: Term,
-  macro_defs: &Map<ModulePath, Def>,
-  inductives: &Map<ModulePath, Inductive>,
+  macro_defs: &Map<NamePath, Def>,
+  inductives: &Map<NamePath, Inductive>,
   depth: u64,
 ) -> Result<Term, MacroError> {
   if depth > MAX_EXPANSION_DEPTH {
@@ -793,7 +796,7 @@ fn expand_term(
           let arg = expand_term(*arg, macro_defs, inductives, depth)?;
           return expand_builtin_term_intrinsic(name, &[arg]);
         }
-        let path = ModulePath::single(name.clone());
+        let path = NamePath::single(name.clone());
         if let Some(def) = macro_defs.get(&path) {
           let arg = expand_term(*arg, macro_defs, inductives, depth)?;
           return apply_macro(def, vec![arg], macro_defs, inductives, depth);
@@ -809,7 +812,7 @@ fn expand_term(
             }
             return expand_builtin_term_intrinsic(&name, &args);
           }
-          let path = ModulePath::single(name.clone());
+          let path = NamePath::single(name.clone());
           if let Some(def) = macro_defs.get(&path) {
             for a in args.iter_mut() {
               let old = std::mem::replace(a, Term::Hole);
@@ -916,8 +919,8 @@ fn expand_term(
 /// Resolve unquote calls inside a Quote body and expand any macro calls.
 fn resolve_quote(
   term: Term,
-  macro_defs: &Map<ModulePath, Def>,
-  inductives: &Map<ModulePath, Inductive>,
+  macro_defs: &Map<NamePath, Def>,
+  inductives: &Map<NamePath, Inductive>,
   depth: u64,
 ) -> Result<Term, MacroError> {
   if depth > MAX_EXPANSION_DEPTH {
@@ -947,7 +950,7 @@ fn resolve_quote(
             let arg = resolve_quote(*arg, macro_defs, inductives, depth)?;
             return expand_builtin_term_intrinsic(name, &[arg]);
           }
-          let path = ModulePath::single(name.clone());
+          let path = NamePath::single(name.clone());
           if let Some(def) = macro_defs.get(&path) {
             let arg = resolve_quote(*arg, macro_defs, inductives, depth)?;
             return apply_macro(def, vec![arg], macro_defs, inductives, depth + 1);
@@ -963,7 +966,7 @@ fn resolve_quote(
               }
               return expand_builtin_term_intrinsic(&name, &args);
             }
-            let path = ModulePath::single(name.clone());
+            let path = NamePath::single(name.clone());
             if let Some(def) = macro_defs.get(&path) {
               for a in args.iter_mut() {
                 let old = std::mem::replace(a, Term::Hole);
@@ -1096,8 +1099,8 @@ fn collect_macro_args(fun: Term, arg: Term) -> Option<(Identifier, Vec<Term>)> {
 fn apply_macro(
   def: &Def,
   args: Vec<Term>,
-  macro_defs: &Map<ModulePath, Def>,
-  inductives: &Map<ModulePath, Inductive>,
+  macro_defs: &Map<NamePath, Def>,
+  inductives: &Map<NamePath, Inductive>,
   depth: u64,
 ) -> Result<Term, MacroError> {
   if depth > MAX_EXPANSION_DEPTH {

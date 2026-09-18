@@ -7,7 +7,7 @@ use crate::{
   set_of,
   term::{
     ClassDefRef, Decl, DeclGenDef, Def, Identifier, Inductive, InductiveVariant, Instance,
-    InstanceKey, Literal, ModulePath, Multiplicity,
+    InstanceKey, Literal, ModulePath, Multiplicity, NamePath,
     NameRef::{self, Id},
     Named, Param, SourceContext, SourceRange,
     Term::{self, App, Ctx, Forall, Hole, Lit, Pi, Sort, Var},
@@ -41,7 +41,7 @@ pub enum TypeError {
   ExpectedPi(Term, SourceRange),
   ExpectedType(Term, SourceRange),
   Context {
-    name: Option<ModulePath>,
+    name: Option<NamePath>,
     loc: SourceRange,
     module: Arc<ModuleContext>,
     err: Box<TypeError>,
@@ -93,7 +93,7 @@ pub enum TypeError {
   /// works once a module is `use`d, whether or not it's also `open`ed —
   /// see `crate::term::module::validate_open_filters`.
   EmptyOpenFilter {
-    module_path: crate::term::ModulePath,
+    module_path: crate::term::NamePath,
     loc: SourceRange,
   },
   ExpectedStructName {
@@ -849,10 +849,10 @@ fn did_you_mean(name: &str, candidates: &[String]) -> Option<String> {
     .map(|(_, c)| c)
 }
 
-fn check_strict_pos(type_name: &ModulePath, typ: &Term, polarity: bool) -> Result<(), TypeError> {
+fn check_strict_pos(type_name: &NamePath, typ: &Term, polarity: bool) -> Result<(), TypeError> {
   match typ {
     Term::Var { name } => {
-      if name.to_path().as_ref() == Some(type_name) {
+      if name.to_name_path().as_ref() == Some(type_name) {
         if polarity {
           Ok(())
         } else {
@@ -1232,9 +1232,9 @@ pub fn match_determine_type_vars<'a>(
 fn resolve_def_alias(
   name: &NameRef,
   scope: Option<&Scope>,
-  visiting: &mut Set<ModulePath>,
+  visiting: &mut Set<NamePath>,
 ) -> Option<Term> {
-  let path = name.clone().to_path()?;
+  let path = name.clone().to_name_path()?;
   if !visiting.insert(path.clone()) {
     // Already visiting this path — cycle detected, stop
     return None;
@@ -1308,7 +1308,7 @@ pub fn compare_types(left: &Term, right: &Term, free_vars: &FreeVars) -> bool {
         }
       }
       if n1.is_name() {
-        n1.clone().to_path() == n2.clone().to_path()
+        n1.clone().to_name_path() == n2.clone().to_name_path()
       } else {
         n1 == n2
       }
@@ -1322,7 +1322,7 @@ fn match_resolve_type_inner<'a>(
   right: &'a Term,
   free_vars: &mut FreeVars<'a>,
   scope: Option<&Scope<'a>>,
-  visiting: &mut Set<ModulePath>,
+  visiting: &mut Set<NamePath>,
 ) -> bool {
   use FreeVar::*;
   match (left, right) {
@@ -1397,7 +1397,7 @@ fn match_resolve_type_inner<'a>(
       let name_eq = if n1.is_name() {
         match n1.as_id() {
           Some(id) if check_free_vars(id, right, free_vars) => true,
-          _ => n1.clone().to_path() == n2.clone().to_path(),
+          _ => n1.clone().to_name_path() == n2.clone().to_name_path(),
         }
       } else {
         n1 == n2
@@ -1458,7 +1458,7 @@ fn match_resolve_type_inner<'a>(
 }
 
 /// Find unknown identifiers in a type
-pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> {
+pub fn free_vars(typ: &Term, known_names: &Set<&NamePath>) -> Set<Identifier> {
   match typ {
     Pi {
       arg, ret, arg_name, ..
@@ -1466,7 +1466,7 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
       let mut a = free_vars(arg, known_names);
       if let Some(name) = arg_name {
         let mut known_names = known_names.clone();
-        let name = name.clone().to_path();
+        let name = NamePath::single(name.clone());
         known_names.insert(&name);
         let r = free_vars(ret, &known_names);
         a.extend(r);
@@ -1476,7 +1476,7 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
       }
       a
     }
-    Var { name } if name.is_name() && !known_names.contains(&name.to_path().unwrap()) => name
+    Var { name } if name.is_name() && !known_names.contains(&name.to_name_path().unwrap()) => name
       .as_id()
       .map(|id| set_of(vec![id.clone()].into_iter()))
       .unwrap_or(empty_set()),
@@ -1488,7 +1488,7 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
     }
     Forall { name, typ: _, body } => {
       let mut known_names = known_names.clone();
-      let name = ModulePath::single(name.clone());
+      let name = NamePath::single(name.clone());
       known_names.insert(&name);
       free_vars(body, &known_names)
     }
@@ -1509,7 +1509,7 @@ pub fn free_vars(typ: &Term, known_names: &Set<&ModulePath>) -> Set<Identifier> 
 pub fn elaborate_type(
   typ: Term,
   type_constraints: &[TypeConstraint],
-  known_names: &Set<&ModulePath>,
+  known_names: &Set<&NamePath>,
 ) -> Term {
   let constraint_vars: Set<Identifier> = type_constraints
     .iter()
@@ -1523,7 +1523,7 @@ pub fn elaborate_type(
 
   add_forall_to_type(typ, &free_vars_map)
 }
-pub fn elaborate_def(mut def: Def, known_names: &Set<&ModulePath>) -> Def {
+pub fn elaborate_def(mut def: Def, known_names: &Set<&NamePath>) -> Def {
   let typ = def.typ.clone();
   let typ = elaborate_type(typ, &def.type_constraints, known_names);
   def.typ = typ;
@@ -1555,7 +1555,7 @@ pub fn pi_to_vec(mut typ: Term) -> (Vec<Term>, Term) {
   (res, typ)
 }
 
-pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -> Inductive {
+pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&NamePath>) -> Inductive {
   let is_class = ind.variant() == &InductiveVariant::Class;
   let default_type = sort1();
   let params: Map<Identifier, Term> = ind
@@ -1568,8 +1568,11 @@ pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -
       )
     })
     .collect();
-  let param_paths: Set<ModulePath> = params.keys().map(|name| name.clone().to_path()).collect();
-  let known_names: Set<&ModulePath> = param_paths
+  let param_paths: Set<NamePath> = params
+    .keys()
+    .map(|name| NamePath::single(name.clone()))
+    .collect();
+  let known_names: Set<&NamePath> = param_paths
     .iter()
     .chain(known_names.iter().copied())
     .collect();
@@ -1632,7 +1635,7 @@ pub fn elaborate_inductive(mut ind: Inductive, known_names: &Set<&ModulePath>) -
   }
   ind
 }
-pub fn elaborate_instance(mut ins: Instance, known_names: &Set<&ModulePath>) -> Instance {
+pub fn elaborate_instance(mut ins: Instance, known_names: &Set<&NamePath>) -> Instance {
   for imp in ins.impls_map.values_mut() {
     let typ = imp.typ.clone();
     let free_vars = free_vars(&typ, known_names);
@@ -1643,7 +1646,7 @@ pub fn elaborate_instance(mut ins: Instance, known_names: &Set<&ModulePath>) -> 
   ins
 }
 
-pub fn elaborate_decl(decl: Decl, known_names: &Set<&ModulePath>) -> Decl {
+pub fn elaborate_decl(decl: Decl, known_names: &Set<&NamePath>) -> Decl {
   use Decl::*;
 
   match decl {
@@ -1659,10 +1662,10 @@ pub fn elaborate_decl(decl: Decl, known_names: &Set<&ModulePath>) -> Decl {
       // substitution untouched (a `Forall`'s own bound name shadows
       // `subst_macro`'s replacement) instead of resolving to the caller's
       // actual argument.
-      let param_paths: Vec<ModulePath> = gd
+      let param_paths: Vec<NamePath> = gd
         .params
         .iter()
-        .map(|p| ModulePath::single(p.name.clone()))
+        .map(|p| NamePath::single(p.name.clone()))
         .collect();
       let mut extended_known_names = known_names.clone();
       extended_known_names.extend(param_paths.iter());
@@ -1686,12 +1689,12 @@ pub fn elaborate_decl(decl: Decl, known_names: &Set<&ModulePath>) -> Decl {
     Type(ind) => Type(elaborate_inductive(ind, known_names)),
     Ins(ins) => Ins(elaborate_instance(ins, known_names)),
     ScopedOpen {
-      module_path,
+      path,
       filter,
       attributes,
       decl,
     } => ScopedOpen {
-      module_path,
+      path,
       filter,
       attributes,
       decl: Box::new(elaborate_decl(*decl, known_names)),
@@ -1706,7 +1709,7 @@ pub fn elaborate_decls(
 ) -> Vec<SourceContext<Decl>> {
   let path = mpt("_");
   let global = loaded.scope_of_decls(&path, &decls);
-  let mut known_names: Set<ModulePath> = global.all_known_names().into_iter().cloned().collect();
+  let mut known_names: Set<NamePath> = global.all_known_names().into_iter().cloned().collect();
   known_names.extend(names_of_decls(&decls));
   let known_names = known_names.iter().collect();
   decls

@@ -12,7 +12,7 @@ fn test_class() {
   similar!(
     res,
     class(
-      mpt("Functor"),
+      npt("Functor"),
       vec![],
       vec![dpar("F", pi(typ("Type"), typ("Type")))],
       vec![class_def(
@@ -37,8 +37,8 @@ fn test_class() {
   similar!(
     res,
     class(
-      mpt("Applicative"),
-      vec![type_constraint(mpt("Functor"), vec![id("F")])],
+      npt("Applicative"),
+      vec![type_constraint(npt("Functor"), vec![id("F")])],
       vec![par("F")],
       vec![
         class_def(
@@ -75,8 +75,8 @@ fn test_class() {
   similar!(
     res,
     class(
-      mpt("Monad"),
-      vec![type_constraint(mpt("Applicative"), vec![id("M")])],
+      npt("Monad"),
+      vec![type_constraint(npt("Applicative"), vec![id("M")])],
       vec![dpar("M", pi(typ("Type"), typ("Type")))],
       vec![
         class_def(
@@ -402,12 +402,12 @@ fn test_inductive() {
   similar!(
     res,
     inductive(
-      mpt("Solo"),
+      npt("Solo"),
       vec![],
       vec![],
       Hole,
       vec![induct_constructor(
-        mpt("Solo"),
+        npt("Solo"),
         id("solo"),
         mpv("Solo"),
         vec![]
@@ -426,19 +426,19 @@ fn test_inductive() {
   similar!(
     res,
     inductive(
-      mpt("Result"),
+      npt("Result"),
       vec![],
       vec![par("E"), par("A")],
       Hole,
       vec![
         induct_constructor(
-          mpt("Result"),
+          npt("Result"),
           id("ok"),
           pi(typ("A"), res_t.clone()),
           vec![dpar("a", typ("A"))]
         ),
         induct_constructor(
-          mpt("Result"),
+          npt("Result"),
           id("err"),
           pi(typ("E"), res_t),
           vec![dpar("", typ("E"))]
@@ -567,12 +567,12 @@ fn test_instance() {
     res,
     instance(
       None,
-      mpt("Functor"),
+      npt("Functor"),
       vec![],
       vec![],
       vec![var("F")],
       vec![def(
-        mpt("map"),
+        npt("map"),
         vec![],
         pi_var(
           id("f"),
@@ -605,7 +605,7 @@ fn test_struct() {
   similar!(
     res,
     stru(
-      mpt("MyData"),
+      npt("MyData"),
       vec![],
       vec![],
       vec![
@@ -627,8 +627,8 @@ fn test_struct() {
   similar!(
     res,
     stru(
-      mpt("MyData"),
-      vec![type_constraint(mpt("Serialize"), vec![id("M")])],
+      npt("MyData"),
+      vec![type_constraint(npt("Serialize"), vec![id("M")])],
       vec![dpar("M", typ("Type"))],
       vec![
         stru_field(id("data"), typ("M"), None),
@@ -671,7 +671,7 @@ fn test_native() {
   similar!(
     res.value(),
     &Decl::Def(def(
-      mpt("add"),
+      npt("add"),
       vec![],
       pi(typ("I64"), pi(typ("I64"), typ("I64"))),
       expected_term,
@@ -695,8 +695,8 @@ fn test_def() {
   similar!(
     res,
     def(
-      mpt("test"),
-      vec![type_constraint(mpt("Monad"), vec![id("M")])],
+      npt("test"),
+      vec![type_constraint(npt("Monad"), vec![id("M")])],
       forall(
         dpar("M", pi(typ("Type"), typ("Type"))),
         pi_var(id("arg"), app2("M", "String"), app2("M", "Unit"))
@@ -721,7 +721,7 @@ fn test_def() {
   similar!(
     res,
     def(
-      mpt("main"),
+      npt("main"),
       vec![],
       pi_var(id("args"), app2("List", "String"), app2("IO", "Unit")),
       lams(
@@ -740,7 +740,7 @@ fn test_def() {
   similar!(
     res,
     def(
-      mp(vec!["IO", "say", "hello"]),
+      NamePath::new(vec![id("IO"), id("say"), id("hello")]),
       vec![],
       app2("IO", "Unit"),
       apps(var("println"), vec![str("Hello, world!")]),
@@ -757,8 +757,8 @@ fn test_def() {
   similar!(
     res,
     def(
-      mpt("Lens"),
-      vec![type_constraint(mpt("Functor"), vec![id("F")])],
+      npt("Lens"),
+      vec![type_constraint(npt("Functor"), vec![id("F")])],
       pi_var(
         id("S"),
         typ("Type"),
@@ -817,25 +817,25 @@ fn module_test() {
     vec![
       decl_use(vec!["std", "string", "trim"]),
       decl_inductive(
-        mpt("Bool"),
+        npt("Bool"),
         vec![],
         vec![],
         mpv("Bool"),
         vec![
-          induct_constructor(mpt("Bool"), id("true"), mpv("Bool"), vec![]),
-          induct_constructor(mpt("Bool"), id("false"), mpv("Bool"), vec![])
+          induct_constructor(npt("Bool"), id("true"), mpv("Bool"), vec![]),
+          induct_constructor(npt("Bool"), id("false"), mpv("Bool"), vec![])
         ]
       ),
       decl_open(vec!["Bool"]),
       decl_def(
-        mpt("test"),
+        npt("test"),
         vec![],
         app2("IO", "Unit"),
         apps(var("println"), vec![str("Hello, world!")])
       ),
-      decl_def(mpt("fun2"), vec![], typ("String"), str("test")),
+      decl_def(npt("fun2"), vec![], typ("String"), str("test")),
       decl_def(
-        mpt("append"),
+        npt("append"),
         vec![],
         pi_var(
           id("a"),
@@ -847,9 +847,9 @@ fn module_test() {
           var("todo"),
         )
       ),
-      decl_infix("++".into(), mpt("append")),
+      decl_infix("++".into(), npt("append")),
       defs_class(
-        mpt("Functor"),
+        npt("Functor"),
         vec![],
         vec![dpar("F", pi(typ("Type"), typ("Type")))],
         vec![class_def(
@@ -958,7 +958,7 @@ fn test_open_does_not_take_colon_colon() {
   // Takes the path itself, not the `open` keyword before it.
   let s = "Bool::and".into();
   let (rest, res) = open_module_path_and_filter(s).unwrap();
-  assert_eq!(res.0, mpt("Bool"));
+  assert_eq!(res.0, npt("Bool"));
   assert!(
     !rest.is_empty(),
     "`::and` must be left unconsumed, not parsed as another path segment"
@@ -1051,7 +1051,7 @@ fn test_open_brace_filter() {
   let (_, res) = open_parser(s).unwrap();
   match res {
     Decl::Open(open) => {
-      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(open.path, npt("IO"));
       assert_eq!(
         open.filter,
         OpenFilter::Only(vec![id("println"), id("print")])
@@ -1068,7 +1068,7 @@ fn test_open_no_braces_still_all() {
   let (_, res) = open_parser(s).unwrap();
   match res {
     Decl::Open(open) => {
-      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(open.path, npt("IO"));
       assert_eq!(open.filter, OpenFilter::All);
     }
     other => panic!("expected Decl::Open, got {other:?}"),
@@ -1082,7 +1082,7 @@ fn test_open_glob() {
   let (_, res) = open_parser(s).unwrap();
   match res {
     Decl::Open(open) => {
-      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(open.path, npt("IO"));
       assert_eq!(open.filter, OpenFilter::Glob);
     }
     other => panic!("expected Decl::Open, got {other:?}"),
@@ -1100,7 +1100,7 @@ fn test_open_empty_brace_filter_still_parses() {
   let (_, res) = open_parser(s).unwrap();
   match res {
     Decl::Open(open) => {
-      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(open.path, npt("IO"));
       assert_eq!(open.filter, OpenFilter::Only(vec![]));
     }
     other => panic!("expected Decl::Open, got {other:?}"),
@@ -1122,7 +1122,7 @@ fn test_open_multiline_brace_filter() {
   let (_, res) = open_parser(s).unwrap();
   match res {
     Decl::Open(open) => {
-      assert_eq!(open.module_path, mpt("IO"));
+      assert_eq!(open.path, npt("IO"));
       assert_eq!(
         open.filter,
         OpenFilter::Only(vec![id("println"), id("get_env")])
@@ -1147,12 +1147,9 @@ fn test_scoped_open_def() {
   let (_, res) = open_parser(s).unwrap();
   match res {
     Decl::ScopedOpen {
-      module_path,
-      filter,
-      decl,
-      ..
+      path, filter, decl, ..
     } => {
-      assert_eq!(module_path, mpt("IO"));
+      assert_eq!(path, npt("IO"));
       assert_eq!(filter, OpenFilter::All);
       assert!(matches!(*decl, Decl::Def(_)));
     }
@@ -1167,12 +1164,9 @@ fn test_scoped_open_filtered() {
   let (_, res) = open_parser(s).unwrap();
   match res {
     Decl::ScopedOpen {
-      module_path,
-      filter,
-      decl,
-      ..
+      path, filter, decl, ..
     } => {
-      assert_eq!(module_path, mpt("IO"));
+      assert_eq!(path, npt("IO"));
       assert_eq!(filter, OpenFilter::Only(vec![id("println")]));
       assert!(matches!(*decl, Decl::Def(_)));
     }
@@ -1236,7 +1230,7 @@ fn test_parse_instance_with_forall_params() {
   assert_eq!(res.params.len(), 1);
   assert_eq!(res.params[0].name, id("R"));
   assert_eq!(*res.params[0].typ, var("Type"));
-  assert_eq!(res.class_name, mpt("Functor"));
+  assert_eq!(res.class_name, npt("Functor"));
 }
 
 #[test]

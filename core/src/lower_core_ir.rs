@@ -15,7 +15,7 @@
 use crate::core_ir::{self, CoreIr, IrLit, IrRef, MatchArm};
 use crate::core_program::CoreProgram;
 use crate::core_term::{Atom, CoreConstructor, CoreLit, CoreNative, CoreTerm};
-use crate::term::{Identifier, ModulePath, mpt};
+use crate::term::{GlobalRef, Identifier, ModulePath, NamePath};
 use crate::{AtomPathMap, Map};
 
 /// Shift every `Local` reference in `ir` that resolves OUTSIDE `ir`'s own
@@ -135,8 +135,8 @@ pub enum LowerCoreIrError {
 /// the whole-program analogue of `core_term::AtomTable`'s own pattern.
 #[derive(Debug, Default)]
 pub struct GlobalInterner {
-  indices: Map<ModulePath, u32>,
-  order: Vec<ModulePath>,
+  indices: Map<GlobalRef, u32>,
+  order: Vec<GlobalRef>,
 }
 
 impl GlobalInterner {
@@ -144,7 +144,7 @@ impl GlobalInterner {
     Self::default()
   }
 
-  pub fn intern(&mut self, path: ModulePath) -> u32 {
+  pub fn intern(&mut self, path: GlobalRef) -> u32 {
     if let Some(&idx) = self.indices.get(&path) {
       return idx;
     }
@@ -157,7 +157,7 @@ impl GlobalInterner {
   /// Every path interned so far, in index order (index `i` is at
   /// position `i`) — used by whole-program assembly to resolve each
   /// slot's actual definition.
-  pub fn paths(&self) -> &[ModulePath] {
+  pub fn paths(&self) -> &[GlobalRef] {
     &self.order
   }
 }
@@ -383,12 +383,12 @@ fn lower_if(
   then: &CoreTerm,
   els: &CoreTerm,
 ) -> Result<CoreIr, LowerCoreIrError> {
-  let bool_path = mpt("Bool");
+  let bool_path = NamePath::top("Bool");
   let info = ctx
     .program
     .inductives
     .get(&bool_path)
-    .ok_or_else(|| LowerCoreIrError::UnknownInductive(bool_path.clone()))?;
+    .ok_or_else(|| LowerCoreIrError::UnknownInductive(bool_path.clone().into()))?;
   // Order matters here, same as `lower_match`: `desugar_struct_literals`'s
   // own `If` arm (`core_check.rs`) captures any dictionary-projection
   // `Match` resolutions nested inside `cond`, THEN `then`, THEN `els`, in
@@ -414,7 +414,7 @@ fn lower_if(
       "false" => els_ir.clone(),
       other => {
         return Err(LowerCoreIrError::UnknownConstructor(
-          bool_path.clone(),
+          bool_path.clone().into(),
           Identifier::new(other.to_string()),
         ));
       }
@@ -428,7 +428,7 @@ fn lower_if(
 /// `core_check_module.rs`'s E7 registration (`ctx.insert(atom,
 /// CoreTerm::Sort { level })`) exactly — `Pred` is a plain alias for
 /// `Prop`, same level, same as that registration.
-fn builtin_sort_level(path: &ModulePath) -> Option<u64> {
+fn builtin_sort_level(path: &NamePath) -> Option<u64> {
   match path.to_string().as_str() {
     "Type" => Some(1),
     "Prop" | "Pred" => Some(0),
@@ -462,11 +462,12 @@ fn lower_match(
     .get(&atom)
     .cloned()
     .ok_or(LowerCoreIrError::UnresolvedAtom(atom))?;
+  let inductive_flat = inductive_path.to_flat_name_path();
   let info = ctx
     .program
     .inductives
-    .get(&inductive_path)
-    .ok_or_else(|| LowerCoreIrError::UnknownInductive(inductive_path.clone()))?;
+    .get(&inductive_flat)
+    .ok_or_else(|| LowerCoreIrError::UnknownInductive(inductive_flat.clone().into()))?;
   // Lower each *source* case exactly once, in order — matching
   // `check`/`infer`'s own `for case in cases` loop — rather than once
   // per constructor tag it ends up covering. A wildcard case can cover
@@ -514,7 +515,7 @@ fn lower_match(
         MatchArm {
           bind_count: ctor.arity,
           body: std::sync::Arc::new(CoreIr::MatchFail {
-            inductive: inductive_path.clone(),
+            inductive: inductive_flat.clone().into(),
             ctor: ctor.name.clone(),
           }),
         }
@@ -581,19 +582,20 @@ fn lower_match(
 /// never sparse; `SparseArgs` below is a defensive check, not an
 /// expected path.
 fn lower_con(ctx: &mut LowerCtx, c: &CoreConstructor) -> Result<CoreIr, LowerCoreIrError> {
+  let typ_flat = c.typ_name.to_flat_name_path();
   let info = ctx
     .program
     .inductives
-    .get(&c.typ_name)
-    .ok_or_else(|| LowerCoreIrError::UnknownInductive(c.typ_name.clone()))?;
+    .get(&typ_flat)
+    .ok_or_else(|| LowerCoreIrError::UnknownInductive(typ_flat.clone().into()))?;
   let tag = info
     .constructors
     .iter()
     .position(|ctor| ctor.name == c.name)
-    .ok_or_else(|| LowerCoreIrError::UnknownConstructor(c.typ_name.clone(), c.name.clone()))?
+    .ok_or_else(|| LowerCoreIrError::UnknownConstructor(typ_flat.clone().into(), c.name.clone()))?
     as u32;
   let args = lower_prefix_args(ctx, &c.args)
-    .ok_or_else(|| LowerCoreIrError::SparseArgs(c.typ_name.clone(), c.name.clone()))??;
+    .ok_or_else(|| LowerCoreIrError::SparseArgs(typ_flat.clone().into(), c.name.clone()))??;
   Ok(core_ir::con(tag, c.num_args as u32, args))
 }
 
@@ -677,23 +679,24 @@ fn lower_struct_update(
 fn build_struct_con(
   ctx: &mut LowerCtx,
   struct_atom: Atom,
-  struct_path: &ModulePath,
+  struct_path: &GlobalRef,
   fields: &Map<Identifier, CoreTerm>,
 ) -> Result<CoreIr, LowerCoreIrError> {
+  let struct_flat = struct_path.to_flat_name_path();
   let info = ctx
     .program
     .inductives
-    .get(struct_path)
-    .ok_or_else(|| LowerCoreIrError::UnknownInductive(struct_path.clone()))?;
+    .get(&struct_flat)
+    .ok_or_else(|| LowerCoreIrError::UnknownInductive(struct_flat.clone().into()))?;
   let field_names = info
     .struct_field_names
     .clone()
     .ok_or(LowerCoreIrError::UnknownStruct(struct_atom))?;
   let mut args = Vec::with_capacity(field_names.len());
   for name in &field_names {
-    let value = fields
-      .get(name)
-      .ok_or_else(|| LowerCoreIrError::UnknownStructField(struct_path.clone(), name.clone()))?;
+    let value = fields.get(name).ok_or_else(|| {
+      LowerCoreIrError::UnknownStructField(struct_flat.clone().into(), name.clone())
+    })?;
     args.push(lower_term(ctx, value)?);
   }
   Ok(core_ir::con(0, field_names.len() as u32, args))
@@ -769,7 +772,7 @@ fn is_effect_type(typ: &CoreTerm, atom_paths: &crate::AtomPathMap) -> bool {
   match head {
     CoreTerm::Free(atom) => atom_paths
       .get(atom)
-      .is_some_and(|path| !path.is_empty() && path.last().as_str() == "IO"),
+      .is_some_and(|path| path.to_flat_name_path().last().as_str() == "IO"),
     _ => false,
   }
 }
@@ -818,7 +821,7 @@ fn point_free_native_shape(term: &CoreTerm) -> Option<(&Identifier, usize)> {
   }
 }
 
-fn find_ctor(program: &CoreProgram, inductive: &ModulePath, name: &str) -> Option<CtorTag> {
+fn find_ctor(program: &CoreProgram, inductive: &NamePath, name: &str) -> Option<CtorTag> {
   let info = program.inductives.get(inductive)?;
   let (tag, ctor) = info
     .constructors
@@ -885,12 +888,12 @@ pub struct WellKnownCtors {
 
 impl WellKnownCtors {
   fn resolve(program: &CoreProgram) -> Self {
-    let bool_path = mpt("Bool");
-    let option_path = mpt("Option");
-    let list_path = mpt("List");
-    let io_path = mpt("IO");
-    let result_path = mpt("Result");
-    let array_path = mpt("Array");
+    let bool_path = NamePath::top("Bool");
+    let option_path = NamePath::top("Option");
+    let list_path = NamePath::top("List");
+    let io_path = NamePath::top("IO");
+    let result_path = NamePath::top("Result");
+    let array_path = NamePath::top("Array");
     WellKnownCtors {
       bool_true: find_ctor(program, &bool_path, "true"),
       bool_false: find_ctor(program, &bool_path, "false"),
@@ -930,11 +933,11 @@ pub struct LoweredProgram {
   /// aborts `lower_program` outright, rather than being silently
   /// collected here — this list exists to make partial progress visible
   /// and honest, not to hide unexpected bugs.
-  pub skipped: Vec<(ModulePath, LowerCoreIrError)>,
+  pub skipped: Vec<(NamePath, LowerCoreIrError)>,
   /// Every interned global path, in the same index order as `globals` —
   /// how a caller finds which slot to start evaluating from (e.g. a
   /// program's `main`), via `LoweredProgram::index_of`.
-  pub paths: Vec<ModulePath>,
+  pub paths: Vec<GlobalRef>,
   /// Constructor tags native execution (Phase 5) needs — see
   /// `WellKnownCtors`'s own doc comment for why this is resolved
   /// separately from `globals`/`paths`.
@@ -947,7 +950,7 @@ impl LoweredProgram {
   /// anything else — the common case for `main` — still gets a slot,
   /// since every captured def's own path is interned up front in
   /// `lower_program`, whether or not anything else points to it).
-  pub fn index_of(&self, path: &ModulePath) -> Option<u32> {
+  pub fn index_of(&self, path: &GlobalRef) -> Option<u32> {
     self.paths.iter().position(|p| p == path).map(|i| i as u32)
   }
 }
@@ -969,12 +972,12 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
   let mut native_order: Vec<Identifier> = Vec::new();
   let mut native_arities: Vec<u32> = Vec::new();
 
-  let mut lowered_defs: Map<ModulePath, CoreIr> = Map::new();
+  let mut lowered_defs: Map<NamePath, CoreIr> = Map::new();
   // Paths whose slot must be `GlobalDef::Effect` rather than `Def` — see
   // `is_effect_type`.
-  let mut effect_defs: std::collections::BTreeSet<ModulePath> = std::collections::BTreeSet::new();
-  let mut native_defs: Map<ModulePath, (u32, u32)> = Map::new();
-  let mut skipped: Vec<(ModulePath, LowerCoreIrError)> = Vec::new();
+  let mut effect_defs: std::collections::BTreeSet<NamePath> = std::collections::BTreeSet::new();
+  let mut native_defs: Map<NamePath, (u32, u32)> = Map::new();
+  let mut skipped: Vec<(NamePath, LowerCoreIrError)> = Vec::new();
   for (path, checked) in &program.defs {
     let match_queue = program
       .match_resolutions
@@ -998,7 +1001,7 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
     // receive its arguments.
     if let Some((native_name, num_args)) = point_free_native_shape(&checked.term) {
       let native_id = ctx.intern_native(native_name, num_args);
-      ctx.interner.intern(path.clone());
+      ctx.interner.intern(GlobalRef::Local(path.clone()));
       native_defs.insert(path.clone(), (native_id, num_args as u32));
       continue;
     }
@@ -1012,7 +1015,7 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
     // bug and will surface as `UnresolvedGlobal` at assembly time below.
     match lower_term(&mut ctx, &checked.term) {
       Ok(ir) => {
-        ctx.interner.intern(path.clone());
+        ctx.interner.intern(GlobalRef::Local(path.clone()));
         if is_effect_type(&checked.typ, &checked.atom_paths) {
           effect_defs.insert(path.clone());
         }
@@ -1044,7 +1047,7 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
         // tracked as a known Phase 8 gap rather than fixed here --
         // fixing it properly means synthesizing a runtime-error arm for
         // every genuinely-missing constructor, not skipping the def.
-        ctx.interner.intern(path.clone());
+        ctx.interner.intern(GlobalRef::Local(path.clone()));
         skipped.push((path.clone(), e));
       }
       Err(e) => return Err(e),
@@ -1052,7 +1055,7 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
   }
 
   for path in program.instances.keys() {
-    interner.intern(path.clone());
+    interner.intern(GlobalRef::Local(path.clone()));
   }
 
   // Reverse index: a constructor's full path (`List.cons`, matching
@@ -1060,7 +1063,7 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
   // per `register_inductive`'s `ctor.name()` convention) -> (tag,
   // arity) — for resolving a point-free constructor reference that
   // never appears as a `CoreTerm::Con` node at all.
-  let mut constructor_slots: Map<ModulePath, (u32, u32)> = Map::new();
+  let mut constructor_slots: Map<NamePath, (u32, u32)> = Map::new();
   for (inductive_path, info) in &program.inductives {
     for (tag, ctor) in info.constructors.iter().enumerate() {
       let ctor_path = inductive_path.clone().append(vec![ctor.name.clone()]);
@@ -1075,30 +1078,34 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
   let paths = interner.paths().to_vec();
   let mut globals = Vec::with_capacity(paths.len());
   for path in &paths {
-    if let Some(ir) = lowered_defs.get(path) {
+    // A slot's GlobalRef spelling (bare/flat/`::`-qualified) and the
+    // capture-keyed maps' flat NamePath are the same def — flatten so
+    // every lookup below speaks the capture-path spelling.
+    let flat = path.to_flat_name_path();
+    if let Some(ir) = lowered_defs.get(&flat) {
       let ir = std::sync::Arc::new(ir.clone());
-      globals.push(if effect_defs.contains(path) {
+      globals.push(if effect_defs.contains(&flat) {
         GlobalDef::Effect(ir)
       } else {
         GlobalDef::Def(ir)
       });
-    } else if let Some(&(native_id, arity)) = native_defs.get(path) {
+    } else if let Some(&(native_id, arity)) = native_defs.get(&flat) {
       globals.push(GlobalDef::Native { native_id, arity });
-    } else if let Some(info) = program.instances.get(path) {
+    } else if let Some(info) = program.instances.get(&flat) {
       let args: Vec<CoreIr> = info
         .method_paths
         .iter()
-        .map(|m| core_ir::global(interner.intern(m.clone())))
+        .map(|m| core_ir::global(interner.intern(GlobalRef::Local(m.clone()))))
         .collect();
       let dict = core_ir::con(0, info.method_paths.len() as u32, args);
       globals.push(GlobalDef::Def(std::sync::Arc::new(dict)));
-    } else if let Some(&(tag, arity)) = constructor_slots.get(path) {
+    } else if let Some(&(tag, arity)) = constructor_slots.get(&flat) {
       globals.push(GlobalDef::Constructor { tag, arity });
-    } else if program.defs.contains_key(path) {
+    } else if program.defs.contains_key(&flat) {
       // Reserved above specifically because it was skipped (a known,
       // already-diagnosed gap — see `skipped`), not a mystery reference.
-      globals.push(GlobalDef::Unresolved(path.clone()));
-    } else if let Some(level) = builtin_sort_level(path) {
+      globals.push(GlobalDef::Unresolved(flat.clone().into()));
+    } else if let Some(level) = builtin_sort_level(&flat) {
       // `Type`/`Prop`/`Pred` used as a VALUE (`get_sort Type`) — these
       // are registered as known globals purely for type-checking
       // (`core_check_module.rs`'s E7, `ctx.insert(atom, CoreTerm::Sort
@@ -1113,7 +1120,7 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
       globals.push(GlobalDef::Def(std::sync::Arc::new(CoreIr::Lit(
         IrLit::Sort(level),
       ))));
-    } else if program.inductives.contains_key(path) {
+    } else if program.inductives.contains_key(&flat) {
       // The identical gap as `builtin_sort_level` just above, for an
       // ORDINARY inductive's own bare name (`Bool`, `I64`, `List`) used
       // as a VALUE — needed once a genuinely dependent explicit Pi
@@ -1147,10 +1154,10 @@ pub fn lower_program(program: &CoreProgram) -> Result<LoweredProgram, LowerCoreI
       // is downstream of that same gap, not a separate one. Treated the
       // same way — recorded, not fatal — until that capture exists.
       skipped.push((
-        path.clone(),
-        LowerCoreIrError::UnresolvedGlobal(path.clone()),
+        flat.clone(),
+        LowerCoreIrError::UnresolvedGlobal(flat.clone().into()),
       ));
-      globals.push(GlobalDef::Unresolved(path.clone()));
+      globals.push(GlobalDef::Unresolved(flat.clone().into()));
     }
   }
 

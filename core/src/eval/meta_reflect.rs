@@ -29,17 +29,17 @@ use crate::Map;
 use crate::core_ir::IrLit;
 use crate::core_value::{ConArgs, Value};
 use crate::term::{
-  Decl, Identifier, Inductive, Literal, ModulePath, NameRef, Named, NumSuffix, Term, case, id,
-  if_term, instance, lams, match_term, mpt, param, pi_typs, pvar, str,
+  Decl, Identifier, Inductive, Literal, ModulePath, NamePath, NameRef, Named, NumSuffix, Term,
+  case, id, if_term, instance, lams, match_term, param, pi_typs, pvar, str,
 };
 
 use super::macro_expand::MacroError;
 
 fn find_inductive<'a>(
-  inductives: &'a Map<ModulePath, Inductive>,
+  inductives: &'a Map<NamePath, Inductive>,
   name: &str,
 ) -> Result<&'a Inductive, MacroError> {
-  inductives.get(&mpt(name)).ok_or_else(|| {
+  inductives.get(&NamePath::top(name)).ok_or_else(|| {
     MacroError::Generic(format!(
       "meta: type `{name}` not found — is `init.meta`/`init` loaded?"
     ))
@@ -95,7 +95,7 @@ fn expect_int(v: Value) -> Result<i64, MacroError> {
   }
 }
 
-fn expect_bool(inductives: &Map<ModulePath, Inductive>, v: Value) -> Result<bool, MacroError> {
+fn expect_bool(inductives: &Map<NamePath, Inductive>, v: Value) -> Result<bool, MacroError> {
   let induct = find_inductive(inductives, "Bool")?;
   match v {
     Value::Con { tag, .. } => {
@@ -115,7 +115,7 @@ fn expect_bool(inductives: &Map<ModulePath, Inductive>, v: Value) -> Result<bool
 }
 
 fn list_value(
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
   items: Vec<Value>,
 ) -> Result<Value, MacroError> {
   let induct = find_inductive(inductives, "List")?;
@@ -135,7 +135,7 @@ fn list_value(
 }
 
 fn value_to_list(
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
   v: Value,
 ) -> Result<Vec<Value>, MacroError> {
   let induct = find_inductive(inductives, "List")?;
@@ -172,7 +172,7 @@ fn value_to_list(
 fn name_to_string(name: &NameRef) -> String {
   match name {
     NameRef::Id(id) => id.as_str().to_string(),
-    NameRef::P(path) => path.to_string(),
+    NameRef::Np(path) => path.to_string(),
     other => other.to_string(),
   }
 }
@@ -219,7 +219,7 @@ fn strip_ctx(term: Term) -> Term {
 /// them, see `init/meta.mo`'s doc comment.
 pub fn term_to_expr_value(
   t: &Term,
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
 ) -> Result<Value, MacroError> {
   let expr_induct = find_inductive(inductives, "Expr")?;
   match strip_ctx(t.clone()) {
@@ -268,7 +268,7 @@ pub fn term_to_expr_value(
 /// directly (pure data construction, no evaluation).
 pub fn build_type_info_value(
   induct: &Inductive,
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
 ) -> Result<Value, MacroError> {
   let type_info_tag = ctor_tag(find_inductive(inductives, "TypeInfo")?, "type_info")?;
   let ctor_info_tag = ctor_tag(find_inductive(inductives, "CtorInfo")?, "ctor_info")?;
@@ -312,7 +312,7 @@ pub fn build_type_info_value(
 /// the subset `term_to_expr_value` itself produces for field types).
 pub fn reify_value_to_term(
   v: Value,
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
 ) -> Result<Term, MacroError> {
   let expr_induct = find_inductive(inductives, "Expr")?;
   match v {
@@ -409,7 +409,7 @@ fn pop_front(args: &mut Arc<ConArgs>) -> Result<Value, MacroError> {
 
 fn reify_match_arm(
   v: Value,
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
 ) -> Result<crate::term::MatchCase, MacroError> {
   let induct = find_inductive(inductives, "MatchArm")?;
   match v {
@@ -438,7 +438,7 @@ fn reify_match_arm(
 /// One `Param` value -> `(name, type Term)`.
 fn reify_param_value(
   v: Value,
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
 ) -> Result<(Identifier, Term), MacroError> {
   let induct = find_inductive(inductives, "Param")?;
   match v {
@@ -463,7 +463,7 @@ fn reify_param_value(
 /// `instance` methods (both are `d_def`-shaped).
 fn reify_def_value(
   v: Value,
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
 ) -> Result<crate::term::Def, MacroError> {
   let induct = find_inductive(inductives, "Decl")?;
   match v {
@@ -494,7 +494,7 @@ fn reify_def_value(
         lams(param_terms, body)
       };
       Ok(crate::term::def(
-        name_to_module_path(&name),
+        NamePath::from(name_to_module_path(&name)),
         vec![],
         full_typ,
         full_body,
@@ -508,7 +508,7 @@ fn reify_def_value(
 }
 
 /// One `Decl` value -> a real `core::term::Decl`.
-fn reify_decl_value(v: Value, inductives: &Map<ModulePath, Inductive>) -> Result<Decl, MacroError> {
+fn reify_decl_value(v: Value, inductives: &Map<NamePath, Inductive>) -> Result<Decl, MacroError> {
   let induct = find_inductive(inductives, "Decl")?;
   match &v {
     Value::Con { tag, .. } => {
@@ -529,7 +529,7 @@ fn reify_decl_value(v: Value, inductives: &Map<ModulePath, Inductive>) -> Result
           }
           let ins = instance(
             None,
-            mpt(&class_name),
+            NamePath::top(&class_name),
             vec![],
             vec![],
             vec![target_typ],
@@ -562,7 +562,7 @@ fn reify_decl_value(v: Value, inductives: &Map<ModulePath, Inductive>) -> Result
 /// result).
 pub fn reify_decls_value_to_decls(
   v: Value,
-  inductives: &Map<ModulePath, Inductive>,
+  inductives: &Map<NamePath, Inductive>,
 ) -> Result<Vec<Decl>, MacroError> {
   let values = value_to_list(inductives, v)?;
   let mut decls = Vec::new();

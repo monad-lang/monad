@@ -30,7 +30,7 @@ use crate::term::module::{
   load_module_from_text, load_module_from_text_at, module_warnings, module_warnings_with_loaded,
 };
 use crate::term::{
-  InductiveVariant, ModulePath, Named, SearchPaths, SourceContext, SourceRange, mpt,
+  GlobalRef, InductiveVariant, ModulePath, NamePath, Named, SearchPaths, SourceContext, SourceRange,
 };
 
 pub mod core_check;
@@ -91,7 +91,7 @@ pub type Map<K, V> = BTreeMap<K, V>;
 /// changing the general-purpose `Map<K, V>` alias above, which is used
 /// pervasively for unrelated tables that are never cloned per-def and
 /// have no equivalent hot-path pressure.
-pub type AtomPathMap = im::OrdMap<crate::core_term::Atom, ModulePath>;
+pub type AtomPathMap = im::OrdMap<crate::core_term::Atom, crate::term::GlobalRef>;
 
 /// A `Value`, formatted for REPL display. `core_value::Value` has no
 /// `Display` of its own (see its own doc comment: it's deliberately kept
@@ -128,7 +128,7 @@ fn eval_repl_term(
   term: Term,
   options: &EvalOptions,
 ) -> Result<(), String> {
-  let tmp_name = mpt("__repl_result");
+  let tmp_name = NamePath::top("__repl_result");
   let tmp_decl = SourceContext::no_ctx(Decl::Def(crate::term::def(
     tmp_name.clone(),
     vec![],
@@ -139,7 +139,8 @@ fn eval_repl_term(
   let mut extra_decls = repl_decls.to_vec();
   extra_decls.push(tmp_decl);
 
-  let full_path = module_path.extend_borrowed(&mpt("__repl_result"));
+  let full_path =
+    NamePath::from(module_path.clone()).extend_borrowed(&NamePath::top("__repl_result"));
   let program = build_core_program(loaded, &[(module_path.clone(), extra_decls)])
     .map_err(|e| format!("Type error: {e}"))?;
   let Some(checked) = program.defs.get(&full_path) else {
@@ -151,7 +152,7 @@ fn eval_repl_term(
   }
   let lowered = lower_core_ir::lower_program(&program).map_err(|e| format!("lower: {e:?}"))?;
   let idx = lowered
-    .index_of(&full_path)
+    .index_of(&GlobalRef::Local(full_path.clone()))
     .ok_or_else(|| "__repl_result not found in lowered program".to_string())?;
   let natives = core_value::NativeTable::from_lowered(&lowered);
   let globals = core_value::GlobalTable::new(lowered.globals);
@@ -425,11 +426,15 @@ fn find_main_def<'a>(
   program: &'a core_program::CoreProgram,
   path: &ModulePath,
 ) -> Option<&'a core_program::CheckedCoreDef> {
-  program.defs.get(&path.extend_borrowed(&mpt("main")))
+  program
+    .defs
+    .get(&NamePath::from(path.clone()).extend_borrowed(&NamePath::top("main")))
 }
 
 fn main_index(lowered: &lower_core_ir::LoweredProgram, path: &ModulePath) -> Option<u32> {
-  lowered.index_of(&path.extend_borrowed(&mpt("main")))
+  lowered.index_of(&GlobalRef::Local(
+    NamePath::from(path.clone()).extend_borrowed(&NamePath::top("main")),
+  ))
 }
 
 pub fn eval_core_program(path: &ModulePath, source: &str) -> Result<core_value::Value, String> {
@@ -1003,7 +1008,7 @@ fn evaluate_one_test_file(
     );
   }
 
-  let entries: Vec<(ModulePath, Arc<str>, Option<SourceRange>)> = module
+  let entries: Vec<(NamePath, Arc<str>, Option<SourceRange>)> = module
     .defs()
     .into_iter()
     .filter(|ctx| ctx.value().has_test_attr())
@@ -1083,7 +1088,9 @@ fn evaluate_one_test_file(
     // slot could belong to some OTHER loaded module's same-named def
     // instead, if one exists (see `insert_checked_def`'s own doc
     // comment); the qualified one is always THIS file's own.
-    let idx = lowered.index_of(&path.extend_borrowed(test_path));
+    let idx = lowered.index_of(&GlobalRef::Local(
+      NamePath::from(path.clone()).extend_borrowed(test_path),
+    ));
     let result = match idx {
       None => Err("not present in the lowered program (skipped)".to_string()),
       Some(idx) => match test_timeout {
@@ -2567,7 +2574,7 @@ def main : Bool :=
       },
     ] {
       let decl = SourceContext::no_ctx(Decl::Def(term::def(
-        mpt("__repl_result"),
+        NamePath::top("__repl_result"),
         vec![],
         Term::Hole,
         term,

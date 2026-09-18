@@ -33,12 +33,12 @@ fn default_source_range() -> &'static SourceRange {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScopeError {
   Type(Box<TypeError>),
-  PathNotFound(ModulePath),
+  PathNotFound(NamePath),
   IdNotFound(Identifier),
   OperatorNotDefined(Operator),
   InstanceNotFound(InstanceKey),
   AmbiguousName {
-    name: ModulePath,
+    name: NamePath,
     candidates: Vec<ModulePath>,
   },
   Generic(String),
@@ -53,8 +53,9 @@ impl From<TypeError> for ScopeError {
 fn nref_error(nref: NameRef) -> ScopeError {
   use ScopeError::*;
   match nref {
-    NameRef::P(module_path) => PathNotFound(module_path),
     Id(identifier) => IdNotFound(identifier),
+    NameRef::Np(path) => PathNotFound(path),
+    NameRef::Qn(qn) => PathNotFound(qn.to_flat_name_path()),
     NameRef::Macro(identifier) => Generic(format!("macro {identifier} not found")),
     NameRef::Op(operator) => OperatorNotDefined(operator),
     NameRef::Index(i) => Generic(format!("index var {i} not resolved")),
@@ -312,8 +313,8 @@ impl Builtins {
   fn get_sort_0(&self) -> DefRef<'_> {
     DefRef {
       module: &self.path,
-      name: mpt("Prop"),
-      full_path: mpt("Prop"),
+      name: NamePath::top("Prop"),
+      full_path: NamePath::top("Prop"),
       term: &self.sort_0,
       typ: &self.sort_0,
       loc: &self.loc,
@@ -324,8 +325,8 @@ impl Builtins {
   fn get_sort_1(&self) -> DefRef<'_> {
     DefRef {
       module: &self.path,
-      name: mpt("Type"),
-      full_path: mpt("Type"),
+      name: NamePath::top("Type"),
+      full_path: NamePath::top("Type"),
       term: &self.sort_1,
       typ: &self.sort_1,
       loc: &self.loc,
@@ -336,8 +337,8 @@ impl Builtins {
   fn get_pred(&self) -> DefRef<'_> {
     DefRef {
       module: &self.path,
-      name: mpt("Pred"),
-      full_path: mpt("Pred"),
+      name: NamePath::top("Pred"),
+      full_path: NamePath::top("Pred"),
       term: &self.sort_0,
       typ: &self.sort_0,
       loc: &self.loc,
@@ -350,13 +351,24 @@ impl Builtins {
 #[derive(Debug, Clone)]
 pub struct GlobalScopeData {
   pub module_path: ModulePath,
-  def_refs: Map<ModulePath, (Term, Term, ModulePath)>,
-  class_defs: Map<ModulePath, (Identifier, Term, ModulePath)>,
-  instances: Map<ModulePath, Vec<Instance>>,
-  inductives: Map<ModulePath, Inductive>,
-  classes: Map<ModulePath, Inductive>,
+  /// Bare / current-module def names (`cons`, `List.cons`) — dotted
+  /// `NamePath` keys, matching what a `NameRef::Np` spells.
+  def_refs: Map<NamePath, (Term, Term, ModulePath)>,
+  /// `Module::name`-qualified entries (`std::list::List.cons`) — what a
+  /// `NameRef::Qn` spells. Always the spelling's own key; resolution maps
+  /// spellings to defs, per-spelling identity is intentional.
+  qualified_refs: Map<QualifiedName, (Term, Term, ModulePath)>,
+  /// Transition-only: the pre-qualified-names flattened insert
+  /// (`std.list.cons` as one dotted path). Legacy dotted spellings still
+  /// resolve through this map until the corpus migrates to `::`
+  /// (qualified-names.md Phase 4).
+  legacy_flat_refs: Map<NamePath, (Term, Term, ModulePath)>,
+  class_defs: Map<NamePath, (Identifier, Term, ModulePath)>,
+  instances: Map<NamePath, Vec<Instance>>,
+  inductives: Map<NamePath, Inductive>,
+  classes: Map<NamePath, Inductive>,
   infixes: Map<Operator, Infix>,
-  conflicts: Map<ModulePath, Vec<ModulePath>>,
+  conflicts: Map<NamePath, Vec<ModulePath>>,
 }
 
 impl GlobalScopeData {
@@ -463,9 +475,11 @@ impl GlobalScopeData {
     }
 
     // Build def_refs from all visible modules
-    let mut def_refs: Map<ModulePath, (Term, Term, ModulePath)> = Map::new();
-    let mut bare_names: Map<ModulePath, ModulePath> = Map::new();
-    let mut conflicts: Map<ModulePath, Vec<ModulePath>> = Map::new();
+    let mut def_refs: Map<NamePath, (Term, Term, ModulePath)> = Map::new();
+    let mut qualified_refs: Map<QualifiedName, (Term, Term, ModulePath)> = Map::new();
+    let mut legacy_flat_refs: Map<NamePath, (Term, Term, ModulePath)> = Map::new();
+    let mut bare_names: Map<NamePath, ModulePath> = Map::new();
+    let mut conflicts: Map<NamePath, Vec<ModulePath>> = Map::new();
 
     for (_mod_path, modu) in &visible_modules {
       let is_current = modu.path() == module.path();
@@ -492,9 +506,26 @@ impl GlobalScopeData {
         }
 
         if !is_current && is_used {
-          let prefixed_name = modu.path().extend_borrowed(&bare_name);
-          def_refs.insert(
-            prefixed_name,
+          // New `::`-qualified spelling (`std::list::List.cons`) and the
+          // transition-only flattened spelling (`std.list.cons`), side by
+          // side — see the `qualified_refs`/`legacy_flat_refs` field docs.
+          qualified_refs.insert(
+            QualifiedName {
+              module: modu.path().clone(),
+              name: bare_name.clone(),
+            },
+            (d.typ.clone(), d.term.clone(), d.module.clone()),
+          );
+          legacy_flat_refs.insert(
+            NamePath::new(
+              modu
+                .path()
+                .segments()
+                .iter()
+                .cloned()
+                .chain(bare_name.segments().iter().cloned())
+                .collect(),
+            ),
             (d.typ.clone(), d.term.clone(), d.module.clone()),
           );
 
@@ -526,7 +557,7 @@ impl GlobalScopeData {
     }
 
     def_refs.insert(
-      mpt("Type"),
+      NamePath::top("Type"),
       (
         builtins.get_sort_1().typ.clone(),
         builtins.get_sort_1().term.clone(),
@@ -534,7 +565,7 @@ impl GlobalScopeData {
       ),
     );
     def_refs.insert(
-      mpt("Prop"),
+      NamePath::top("Prop"),
       (
         builtins.get_sort_0().typ.clone(),
         builtins.get_sort_0().term.clone(),
@@ -542,7 +573,7 @@ impl GlobalScopeData {
       ),
     );
     def_refs.insert(
-      mpt("Pred"),
+      NamePath::top("Pred"),
       (
         builtins.get_sort_0().typ.clone(),
         builtins.get_sort_0().term.clone(),
@@ -551,7 +582,7 @@ impl GlobalScopeData {
     );
 
     // Build class_defs from all visible modules
-    let class_defs: Map<ModulePath, (Identifier, Term, ModulePath)> = visible_modules
+    let class_defs: Map<NamePath, (Identifier, Term, ModulePath)> = visible_modules
       .iter()
       .flat_map(|(_path, modu)| {
         modu
@@ -568,7 +599,7 @@ impl GlobalScopeData {
       .collect();
 
     // Build instances from all visible modules
-    let instances: Map<ModulePath, Vec<Instance>> = visible_modules
+    let instances: Map<NamePath, Vec<Instance>> = visible_modules
       .iter()
       .flat_map(|(_path, modu)| {
         modu
@@ -579,7 +610,7 @@ impl GlobalScopeData {
       .fold(Map::new(), merge_push_instance);
 
     // Build inductives from all visible modules
-    let inductives: Map<ModulePath, Inductive> = visible_modules
+    let inductives: Map<NamePath, Inductive> = visible_modules
       .iter()
       .flat_map(|(_path, modu)| {
         modu
@@ -590,7 +621,7 @@ impl GlobalScopeData {
       .collect();
 
     // Build classes from all visible modules
-    let classes: Map<ModulePath, Inductive> = visible_modules
+    let classes: Map<NamePath, Inductive> = visible_modules
       .iter()
       .flat_map(|(_path, modu)| {
         modu
@@ -614,6 +645,8 @@ impl GlobalScopeData {
     GlobalScopeData {
       module_path: module.path().clone(),
       def_refs,
+      qualified_refs,
+      legacy_flat_refs,
       class_defs,
       instances,
       inductives,
@@ -687,14 +720,16 @@ pub struct GlobalScope<'a> {
   modules: Map<&'a ModulePath, &'a Module>,
   loaded: &'a LoadedModules,
   current_path: &'a ModulePath,
-  def_refs: Map<ModulePath, DefRef<'a>>,
-  pub(crate) class_defs: Map<ModulePath, ClassDefRef<'a>>,
-  pub(crate) instances: Map<&'a ModulePath, Vec<&'a Instance>>,
-  inductives: Map<&'a ModulePath, &'a Inductive>,
-  classes: Map<&'a ModulePath, &'a Inductive>,
+  def_refs: Map<NamePath, DefRef<'a>>,
+  qualified_refs: Map<QualifiedName, DefRef<'a>>,
+  legacy_flat_refs: Map<NamePath, DefRef<'a>>,
+  pub(crate) class_defs: Map<NamePath, ClassDefRef<'a>>,
+  pub(crate) instances: Map<&'a NamePath, Vec<&'a Instance>>,
+  inductives: Map<&'a NamePath, &'a Inductive>,
+  classes: Map<&'a NamePath, &'a Inductive>,
   infixes: Map<&'a Operator, &'a Infix>,
   all_scopes: Map<&'a ModulePath, &'a GlobalScopeData>,
-  conflicts: Map<ModulePath, Vec<ModulePath>>,
+  conflicts: Map<NamePath, Vec<ModulePath>>,
 }
 
 impl<'a> GlobalScope<'a> {
@@ -875,9 +910,11 @@ impl<'a> GlobalScope<'a> {
   ) -> Self {
     let builtins = &loaded.builtins;
 
-    let mut def_refs: Map<ModulePath, DefRef<'a>> = Map::new();
-    let mut bare_names: Map<ModulePath, ModulePath> = Map::new();
-    let mut conflicts: Map<ModulePath, Vec<ModulePath>> = Map::new();
+    let mut def_refs: Map<NamePath, DefRef<'a>> = Map::new();
+    let mut qualified_refs: Map<QualifiedName, DefRef<'a>> = Map::new();
+    let mut legacy_flat_refs: Map<NamePath, DefRef<'a>> = Map::new();
+    let mut bare_names: Map<NamePath, ModulePath> = Map::new();
+    let mut conflicts: Map<NamePath, Vec<ModulePath>> = Map::new();
 
     for (mp_mod, module) in &modules {
       let is_current = **mp_mod == *current_path;
@@ -892,9 +929,9 @@ impl<'a> GlobalScope<'a> {
           continue;
         }
         if is_used {
-          let prefixed_name = module.path().extend_borrowed(&d.name);
-          let prefixed_def = DefRef {
-            name: prefixed_name,
+          let bare_name = d.name.clone();
+          let qualified_def = DefRef {
+            name: bare_name.clone(),
             full_path: d.full_path.clone(),
             typ: d.typ,
             term: d.term,
@@ -902,9 +939,24 @@ impl<'a> GlobalScope<'a> {
             loc: d.loc,
             vis: d.vis,
           };
-          def_refs.insert(prefixed_def.name.clone(), prefixed_def);
+          let qualified_name = QualifiedName {
+            module: module.path().clone(),
+            name: bare_name.clone(),
+          };
+          qualified_refs.insert(qualified_name.clone(), qualified_def);
+          legacy_flat_refs.insert(
+            qualified_name.to_flat_name_path(),
+            DefRef {
+              name: qualified_name.to_flat_name_path(),
+              full_path: d.full_path.clone(),
+              typ: d.typ,
+              term: d.term,
+              module: d.module,
+              loc: d.loc,
+              vis: d.vis,
+            },
+          );
 
-          let bare_name = d.name.clone();
           match bare_names.get(&bare_name) {
             Some(prev_mod) if prev_mod != module.path() => {
               def_refs.remove(&bare_name);
@@ -925,16 +977,16 @@ impl<'a> GlobalScope<'a> {
       }
     }
 
-    def_refs.insert(mpt("Type"), builtins.get_sort_1());
-    def_refs.insert(mpt("Prop"), builtins.get_sort_0());
-    def_refs.insert(mpt("Pred"), builtins.get_pred());
+    def_refs.insert(NamePath::top("Type"), builtins.get_sort_1());
+    def_refs.insert(NamePath::top("Prop"), builtins.get_sort_0());
+    def_refs.insert(NamePath::top("Pred"), builtins.get_pred());
 
     let class_defs = modules
       .iter()
       .flat_map(|(_path, module)| module.get_class_def_refs(&opens).into_iter())
       .map(|d| (d.full_name.clone(), d))
       .collect();
-    let classes = modules
+    let classes: Map<&'a NamePath, &'a Inductive> = modules
       .iter()
       .flat_map(|(_path, module)| {
         module
@@ -943,11 +995,11 @@ impl<'a> GlobalScope<'a> {
           .map(|class| (&class.name, class))
       })
       .collect();
-    let inductives = modules
+    let inductives: Map<&'a NamePath, &'a Inductive> = modules
       .iter()
       .flat_map(|(_path, module)| module.inductives().into_iter().map(|ind| (&ind.name, ind)))
       .collect();
-    let instances = modules
+    let instances: Map<&'a NamePath, Vec<&'a Instance>> = modules
       .iter()
       .flat_map(|(_path, module)| {
         module
@@ -968,6 +1020,8 @@ impl<'a> GlobalScope<'a> {
       loaded,
       current_path,
       def_refs,
+      qualified_refs,
+      legacy_flat_refs,
       class_defs,
       instances,
       classes,
@@ -984,37 +1038,53 @@ impl<'a> GlobalScope<'a> {
     all_scopes: Map<&'a ModulePath, &'a GlobalScopeData>,
   ) -> Self {
     // Build borrowed DefRefs from owned data
-    let def_refs: Map<ModulePath, DefRef<'a>> = data
+    let from_owned = |name: &NamePath, typ: &'a Term, term: &'a Term, module: &'a ModulePath| {
+      (
+        name.clone(),
+        DefRef {
+          name: name.clone(),
+          full_path: name.clone(),
+          typ,
+          term,
+          module,
+          loc: default_source_range(),
+          // `data.def_refs` never contains `Priv` entries from other
+          // modules to begin with (filtered out in `from_module`), so
+          // any placeholder non-`Priv` value is safe here.
+          vis: Visibility::Pub,
+        },
+      )
+    };
+    let def_refs: Map<NamePath, DefRef<'a>> = data
       .def_refs
       .iter()
-      .map(|(name, (typ, term, module))| {
+      .map(|(name, (typ, term, module))| from_owned(name, typ, term, module))
+      .collect();
+    let qualified_refs: Map<QualifiedName, DefRef<'a>> = data
+      .qualified_refs
+      .iter()
+      .map(|(qn, (typ, term, module))| {
         (
-          name.clone(),
-          DefRef {
-            name: name.clone(),
-            full_path: name.clone(),
-            typ,
-            term,
-            module,
-            loc: default_source_range(),
-            // `data.def_refs` never contains `Priv` entries from other
-            // modules to begin with (filtered out in `from_module`), so
-            // any placeholder non-`Priv` value is safe here.
-            vis: Visibility::Pub,
-          },
+          qn.clone(),
+          from_owned(&qn.to_flat_name_path(), typ, term, module).1,
         )
       })
       .collect();
+    let legacy_flat_refs: Map<NamePath, DefRef<'a>> = data
+      .legacy_flat_refs
+      .iter()
+      .map(|(name, (typ, term, module))| from_owned(name, typ, term, module))
+      .collect();
 
     // Build borrowed ClassDefRefs from owned data
-    let class_defs: Map<ModulePath, ClassDefRef<'a>> = data
+    let class_defs: Map<NamePath, ClassDefRef<'a>> = data
       .class_defs
       .iter()
       .filter_map(|(name, (short_name, typ, _module_path))| {
         // Extract class name from full name (first component)
         let class_name = if name.len() > 1 {
           let ids = name.clone().to_vec();
-          ModulePath::new(ids[..1].to_vec())
+          NamePath::new(ids[..1].to_vec())
         } else {
           name.clone()
         };
@@ -1035,11 +1105,11 @@ impl<'a> GlobalScope<'a> {
       .collect();
 
     // Build borrowed references from owned data
-    let inductives: Map<&'a ModulePath, &'a Inductive> = data.inductives.iter().collect();
+    let inductives: Map<&'a NamePath, &'a Inductive> = data.inductives.iter().collect();
 
-    let classes: Map<&'a ModulePath, &'a Inductive> = data.classes.iter().collect();
+    let classes: Map<&'a NamePath, &'a Inductive> = data.classes.iter().collect();
 
-    let instances: Map<&'a ModulePath, Vec<&'a Instance>> = data
+    let instances: Map<&'a NamePath, Vec<&'a Instance>> = data
       .instances
       .iter()
       .map(|(class_name, instances)| (class_name, instances.iter().collect()))
@@ -1055,6 +1125,8 @@ impl<'a> GlobalScope<'a> {
       loaded,
       current_path,
       def_refs,
+      qualified_refs,
+      legacy_flat_refs,
       class_defs,
       instances,
       classes,
@@ -1089,7 +1161,7 @@ impl<'a> GlobalScope<'a> {
   pub fn prelude(&self) -> Option<&Module> {
     self.get_module(&self.loaded.builtins.prelude_path)
   }
-  pub fn instances(&self) -> Vec<(&ModulePath, &Vec<&Instance>)> {
+  pub fn instances(&self) -> Vec<(&NamePath, &Vec<&Instance>)> {
     self.instances.iter().map(|(c, i)| (*c, i)).collect()
   }
 
@@ -1106,9 +1178,10 @@ impl<'a> GlobalScope<'a> {
   pub fn modules(&self) -> Vec<&Module> {
     self.modules.values().copied().collect()
   }
-  pub fn all_known_names(&self) -> Set<&ModulePath> {
-    let mut names: Set<&ModulePath> = self.def_refs.keys().collect();
+  pub fn all_known_names(&self) -> Set<&NamePath> {
+    let mut names: Set<&NamePath> = self.def_refs.keys().collect();
     names.extend(self.inductives.keys().copied());
+    names.extend(self.legacy_flat_refs.keys());
     names.extend(self.class_defs.keys());
     names
   }
@@ -1121,11 +1194,11 @@ impl<'a> GlobalScope<'a> {
       .collect()
   }
 
-  pub fn find_class_def(&'_ self, name: &ModulePath) -> Option<&'_ ClassDefRef<'_>> {
+  pub fn find_class_def(&'_ self, name: &NamePath) -> Option<&'_ ClassDefRef<'_>> {
     self.class_defs.get(name)
   }
 
-  pub fn find_inductive(&self, name: &ModulePath) -> Option<&Inductive> {
+  pub fn find_inductive(&self, name: &NamePath) -> Option<&Inductive> {
     let inductive = self.inductives.get(name)?;
     Some(inductive)
   }
@@ -1155,17 +1228,32 @@ impl<'a> GlobalScope<'a> {
       .ok_or_else(|| ScopeError::OperatorNotDefined(op.clone()))?;
     Ok(infix)
   }
-  pub fn find_ref(&'_ self, name: &ModulePath) -> Option<&DefRef<'_>> {
-    self.def_refs.get(name)
+  pub fn find_ref(&'_ self, name: &NamePath) -> Option<&DefRef<'_>> {
+    self
+      .def_refs
+      .get(name)
+      // Transition fallback: the pre-qualified-names flattened insert
+      // (`std.list.cons`), so legacy dotted spellings still resolve until
+      // the corpus migrates to `::` (qualified-names.md Phase 4).
+      .or_else(|| self.legacy_flat_refs.get(name))
+  }
+  /// `Module::name`-qualified lookup (`std::list::List.cons`) — what a
+  /// `NameRef::Qn` spells.
+  pub fn find_qualified_ref(&'_ self, name: &QualifiedName) -> Option<&DefRef<'_>> {
+    self.qualified_refs.get(name)
   }
   /// Search for a term in ANY module scope (transitive dependencies).
   /// Returns the term from the def if found in any loaded module.
-  pub fn find_term_transitive(&self, name: &ModulePath) -> Option<&Term> {
-    if let Some(def) = self.def_refs.get(name) {
+  pub fn find_term_transitive(&self, name: &NamePath) -> Option<&Term> {
+    if let Some(def) = self.find_ref(name) {
       return Some(def.term);
     }
     for (_mod_path, mod_data) in self.all_scopes.iter() {
-      if let Some((_typ, term, _module)) = mod_data.def_refs.get(name) {
+      if let Some((_typ, term, _module)) = mod_data
+        .def_refs
+        .get(name)
+        .or_else(|| mod_data.legacy_flat_refs.get(name))
+      {
         return Some(term);
       }
     }
@@ -1175,7 +1263,7 @@ impl<'a> GlobalScope<'a> {
   /// Returns the instance definition reference, or an error.
   fn resolve_class_method<'s>(
     &'s self,
-    _name: &ModulePath,
+    _name: &NamePath,
     typ: &Term,
     def: &'s ClassDefRef<'s>,
   ) -> Result<VarRef<'s>, ScopeError> {
@@ -1183,7 +1271,9 @@ impl<'a> GlobalScope<'a> {
     let instance = self
       .find_instance(&key)
       .ok_or_else(|| ScopeError::InstanceNotFound(key.clone()))?;
-    let ins_def_name = instance.name.extend_borrowed(&def.name.clone().to_path());
+    let ins_def_name = instance
+      .name
+      .extend_borrowed(&NamePath::single(def.name.clone()));
     let ins_def: &'s DefRef<'s> = self
       .find_ref(&ins_def_name)
       .ok_or(ScopeError::PathNotFound(ins_def_name))?;
@@ -1196,7 +1286,7 @@ impl<'a> GlobalScope<'a> {
     })
   }
 
-  pub fn find_any_ref(&'_ self, name: &ModulePath, typ: &Term) -> Result<VarRef<'_>, ScopeError> {
+  pub fn find_any_ref(&'_ self, name: &NamePath, typ: &Term) -> Result<VarRef<'_>, ScopeError> {
     if let Some(candidates) = self.conflicts.get(name) {
       return Err(ScopeError::AmbiguousName {
         name: name.clone(),
@@ -1221,15 +1311,20 @@ impl<'a> GlobalScope<'a> {
     }
   }
   pub fn find_any_name_ref(&'_ self, nref: &NameRef, typ: &Term) -> Result<VarRef<'_>, ScopeError> {
-    if let Some(i) = nref.clone().to_path() {
+    if let Some(i) = nref.clone().to_name_path() {
       let var = self.find_any_ref(&i, typ)?;
       Ok(var)
+    } else if let Some(qn) = nref.to_qualified() {
+      let def = self
+        .find_qualified_ref(qn)
+        .ok_or_else(|| ScopeError::PathNotFound(qn.to_flat_name_path()))?;
+      Ok(def.to_var_ref())
     } else if let NameRef::Op(op) = nref {
       let infix = self.find_infix(op)?;
       let var = self.find_any_ref(&infix.name, typ)?;
       Ok(var)
     } else if let NameRef::Macro(name) = nref {
-      let path = ModulePath::single(name.clone());
+      let path = NamePath::single(name.clone());
       let var = self.find_any_ref(&path, typ)?;
       Ok(var)
     } else {
@@ -1240,7 +1335,7 @@ impl<'a> GlobalScope<'a> {
   /// Resolve a class method name to the first available instance's implementation term.
   /// Used by the evaluator when the type checker cannot resolve a class method to a
   /// concrete instance (e.g., constrained instances with abstract type variables).
-  pub fn resolve_class_method_instance(&self, name: &ModulePath) -> Option<&Term> {
+  pub fn resolve_class_method_instance(&self, name: &NamePath) -> Option<&Term> {
     let class_def = self.find_class_def(name)?;
     let class_name = class_def.class.name();
     let instances = self.instances.get(class_name)?;
@@ -1249,7 +1344,7 @@ impl<'a> GlobalScope<'a> {
         let method_name = instance
           .name
           .clone()
-          .extend(ModulePath::single(class_def.name.clone()));
+          .extend(NamePath::single(class_def.name.clone()));
         let def = self.find_ref(&method_name)?;
         return Some(def.term);
       }
@@ -1263,15 +1358,20 @@ impl<'a> GlobalScope<'a> {
     typ: &Term,
     constraints: &[TypeConstraint],
   ) -> Result<VarRef<'_>, ScopeError> {
-    if let Some(i) = nref.clone().to_path() {
+    if let Some(i) = nref.clone().to_name_path() {
       let var = self.find_any_ref_with_constraints(&i, typ, constraints)?;
       Ok(var)
+    } else if let Some(qn) = nref.to_qualified() {
+      let def = self
+        .find_qualified_ref(qn)
+        .ok_or_else(|| ScopeError::PathNotFound(qn.to_flat_name_path()))?;
+      Ok(def.to_var_ref())
     } else if let NameRef::Op(op) = nref {
       let infix = self.find_infix(op)?;
       let var = self.find_any_ref_with_constraints(&infix.name, typ, constraints)?;
       Ok(var)
     } else if let NameRef::Macro(name) = nref {
-      let path = ModulePath::single(name.clone());
+      let path = NamePath::single(name.clone());
       let var = self.find_any_ref_with_constraints(&path, typ, constraints)?;
       Ok(var)
     } else {
@@ -1281,7 +1381,7 @@ impl<'a> GlobalScope<'a> {
 
   pub fn find_any_ref_with_constraints(
     &'_ self,
-    name: &ModulePath,
+    name: &NamePath,
     typ: &Term,
     constraints: &[TypeConstraint],
   ) -> Result<VarRef<'_>, ScopeError> {
@@ -1315,7 +1415,7 @@ impl<'a> GlobalScope<'a> {
 
   fn resolve_class_method_with_constraints(
     &'_ self,
-    _name: &ModulePath,
+    _name: &NamePath,
     typ: &Term,
     def: &ClassDefRef,
     constraints: &[TypeConstraint],
@@ -1339,7 +1439,9 @@ impl<'a> GlobalScope<'a> {
             )],
           );
           if let Some(instance) = self.find_instance(&constrained_key) {
-            let ins_def_name = instance.name.extend_borrowed(&def.name.clone().to_path());
+            let ins_def_name = instance
+              .name
+              .extend_borrowed(&NamePath::single(def.name.clone()));
             let ins_def = self
               .find_ref(&ins_def_name)
               .ok_or(ScopeError::PathNotFound(ins_def_name))?;
@@ -1362,7 +1464,9 @@ impl<'a> GlobalScope<'a> {
     // No matching constraint found, try the concrete key (if it was derived)
     if let Ok(key) = maybe_key {
       if let Some(instance) = self.find_instance(&key) {
-        let ins_def_name = instance.name.extend_borrowed(&def.name.clone().to_path());
+        let ins_def_name = instance
+          .name
+          .extend_borrowed(&NamePath::single(def.name.clone()));
         let ins_def = self
           .find_ref(&ins_def_name)
           .ok_or(ScopeError::PathNotFound(ins_def_name))?;
@@ -1397,14 +1501,14 @@ impl<'a> GlobalScope<'a> {
   ) {
     match decl {
       Decl::ScopedOpen {
-        module_path,
+        path,
         filter,
         decl: inner,
         ..
       } => {
         let synthetic_open = Open {
           source_location: loc.clone(),
-          module_path: module_path.clone(),
+          path: path.clone(),
           filter: filter.clone(),
           attributes: vec![],
         };
@@ -1418,7 +1522,7 @@ impl<'a> GlobalScope<'a> {
       Decl::Def(def) | Decl::DefMacro(def) => {
         let name = &def.name;
         let names = name.open(opens);
-        let def_refs: Map<ModulePath, DefRef> = names
+        let def_refs: Map<NamePath, DefRef> = names
           .iter()
           .map(|name| DefRef {
             name: name.clone(),
@@ -1444,7 +1548,7 @@ impl<'a> GlobalScope<'a> {
       }
       Decl::Type(ind) => {
         self.inductives.insert(&ind.name, ind);
-        let def_refs: Map<ModulePath, DefRef> = ind
+        let def_refs: Map<NamePath, DefRef> = ind
           .constructors
           .iter()
           .flat_map(|cons| {
@@ -1478,7 +1582,9 @@ impl<'a> GlobalScope<'a> {
                 .params
                 .iter()
                 .flat_map(|class_def| {
-                  let def_name = ind.name.extend_borrowed(&class_def.name.clone().to_path());
+                  let def_name = ind
+                    .name
+                    .extend_borrowed(&NamePath::single(class_def.name.clone()));
                   let names = def_name.open(opens);
                   names
                     .into_iter()
@@ -1492,7 +1598,7 @@ impl<'a> GlobalScope<'a> {
                     .collect::<Vec<ClassDefRef>>()
                 })
                 .map(|c| (c.full_name.clone(), c))
-                .collect::<Vec<(ModulePath, ClassDefRef)>>();
+                .collect::<Vec<(NamePath, ClassDefRef)>>();
               self.class_defs.extend(class_refs);
               vec![]
             } else {
@@ -1519,14 +1625,11 @@ impl<'a> GlobalScope<'a> {
         } else {
           self.instances.insert(&instance.class_name, vec![instance]);
         }
-        let def_refs: Map<ModulePath, DefRef> = instance
+        let def_refs: Map<NamePath, DefRef> = instance
           .impls_map
           .iter()
           .map(|(name, imp)| {
-            let full_name = instance
-              .name
-              .clone()
-              .extend(ModulePath::single(name.clone()));
+            let full_name = instance.name.clone().extend(NamePath::single(name.clone()));
 
             DefRef {
               name: full_name.clone(),
@@ -1631,7 +1734,12 @@ impl<'a> Scope<'a> {
   /// Extract term of NameRef
   pub fn resolve_name(&self, nref: &NameRef) -> Result<&Term, ScopeError> {
     let global = self.global();
-    if let Some(name) = nref.clone().to_path() {
+    if let Some(qn) = nref.to_qualified() {
+      let def = global
+        .find_qualified_ref(qn)
+        .ok_or_else(|| ScopeError::PathNotFound(qn.to_flat_name_path()))?;
+      Ok(def.term)
+    } else if let Some(name) = nref.clone().to_name_path() {
       if let Some(def) = global.find_ref(&name) {
         Ok(def.term)
       } else if let Some(_class_def) = global.find_class_def(&name) {
@@ -1661,7 +1769,7 @@ impl<'a> Scope<'a> {
     }
   }
 
-  pub fn find_inductive(&self, name: &ModulePath) -> Result<&Inductive, ScopeError> {
+  pub fn find_inductive(&self, name: &NamePath) -> Result<&Inductive, ScopeError> {
     let ind = self
       .global()
       .find_inductive(name)
@@ -2432,11 +2540,11 @@ pub struct ParsedModule {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
   path: ModulePath,
-  inductives: Arc<Map<ModulePath, SourceContext<Inductive>>>,
+  inductives: Arc<Map<NamePath, SourceContext<Inductive>>>,
   uses: Vec<SourceContext<Use>>,
   opens: Vec<SourceContext<Open>>,
-  defs: Arc<Map<ModulePath, SourceContext<Def>>>,
-  macro_defs: Arc<Map<ModulePath, SourceContext<Def>>>,
+  defs: Arc<Map<NamePath, SourceContext<Def>>>,
+  macro_defs: Arc<Map<NamePath, SourceContext<Def>>>,
   /// Decl-gen macros (`defmacro name params := decls { ... }`) — kept
   /// alongside `macro_defs` (rather than folded into it, since
   /// `DeclGenDef` isn't a `Def`) so `use`-ing a module makes its decl-gen
@@ -2444,7 +2552,7 @@ pub struct Module {
   /// `Decl::DeclGen` was dropped entirely at module-storage time (see the
   /// historical comment in `add_decl`), which meant decl-gen macros only
   /// ever worked within the single file that declared them.
-  decl_gens: Arc<Map<ModulePath, SourceContext<DeclGenDef>>>,
+  decl_gens: Arc<Map<NamePath, SourceContext<DeclGenDef>>>,
   infix: Arc<Map<Operator, SourceContext<Infix>>>,
   instances: Arc<Vec<SourceContext<Instance>>>,
   /// Names invoked via `derive_lens! Point`-style macro calls
@@ -2457,7 +2565,7 @@ pub struct Module {
   /// *required* for `#[derive]`/`derive!` macro resolution get a spurious
   /// "unused import" warning (and `organize_imports` would wrongly strip
   /// them). Empty for modules not built through the full load pipeline.
-  macro_call_names: Set<ModulePath>,
+  macro_call_names: Set<NamePath>,
   doc: Option<Documentation>,
   /// `open Module [{filter}] in <decl>` scopes recorded for defs/types/
   /// instances that are otherwise stored normally in the maps above. The
@@ -2514,11 +2622,11 @@ pub fn bare_open_warnings(
       }
       Some(Diagnostic {
         severity: Severity::Warning,
-        message: format!("bare `open {}` without braces is deprecated", o.module_path),
+        message: format!("bare `open {}` without braces is deprecated", o.path),
         location: Some(o.source_location.clone()),
         path: path.cloned(),
         suggestions: vec![Suggestion {
-          message: format!("use `open {} {{*}}` instead", o.module_path),
+          message: format!("use `open {} {{*}}` instead", o.path),
         }],
         ..Default::default()
       })
@@ -2538,7 +2646,7 @@ pub fn bare_open_warnings(
 /// `load_module_from_text_typed`/the recursive dependency loader.
 pub fn validate_open_filters(decls: &[SourceContext<Decl>]) -> Result<(), TypeError> {
   fn check_one(
-    module_path: &ModulePath,
+    module_path: &NamePath,
     filter: &OpenFilter,
     loc: &SourceRange,
   ) -> Result<(), TypeError> {
@@ -2556,14 +2664,11 @@ pub fn validate_open_filters(decls: &[SourceContext<Decl>]) -> Result<(), TypeEr
   // `decl` recurses with for any `ScopedOpen` nested inside it too.
   fn check_decl(decl: &Decl, fallback_loc: &SourceRange) -> Result<(), TypeError> {
     match decl {
-      Decl::Open(o) => check_one(&o.module_path, &o.filter, &o.source_location),
+      Decl::Open(o) => check_one(&o.path, &o.filter, &o.source_location),
       Decl::ScopedOpen {
-        module_path,
-        filter,
-        decl,
-        ..
+        path, filter, decl, ..
       } => {
-        check_one(module_path, filter, fallback_loc)?;
+        check_one(path, filter, fallback_loc)?;
         check_decl(decl, fallback_loc)
       }
       _ => Ok(()),
@@ -2577,21 +2682,21 @@ pub fn validate_open_filters(decls: &[SourceContext<Decl>]) -> Result<(), TypeEr
 
 /// Walk a `Par` (lambda/pi parameter) for referenced names — its type, and
 /// (for explicit `Par::P` params) its default value expression, if any.
-fn collect_par_names(par: &Par, names: &mut Set<ModulePath>) {
+fn collect_par_names(par: &Par, names: &mut Set<NamePath>) {
   match par {
     Par::P(param) => collect_param_names(param, names),
     Par::I { typ, .. } => collect_term_names(typ, names),
   }
 }
 
-fn collect_param_names(param: &Param, names: &mut Set<ModulePath>) {
+fn collect_param_names(param: &Param, names: &mut Set<NamePath>) {
   collect_term_names(&param.typ, names);
   if let Some(default) = &param.default {
     collect_term_names(default, names);
   }
 }
 
-fn collect_literal_names(lit: &Literal, names: &mut Set<ModulePath>) {
+fn collect_literal_names(lit: &Literal, names: &mut Set<NamePath>) {
   match lit {
     Literal::Str { .. }
     | Literal::Char { .. }
@@ -2605,7 +2710,7 @@ fn collect_literal_names(lit: &Literal, names: &mut Set<ModulePath>) {
         // The pattern's constructor name is a bare `Identifier` here (not a
         // `Term::Var`) — this is how `open`-imported constructors used only
         // in match arms (never as a call-position reference) get counted.
-        names.insert(ModulePath::single(case.name.clone()));
+        names.insert(NamePath::single(case.name.clone()));
         collect_term_names(&case.value, names);
       }
     }
@@ -2623,7 +2728,7 @@ fn collect_literal_names(lit: &Literal, names: &mut Set<ModulePath>) {
       }
     }
     Literal::StructUpdate { base, fields } => {
-      names.insert(ModulePath::single(base.clone()));
+      names.insert(NamePath::single(base.clone()));
       for t in fields.values() {
         collect_term_names(t, names);
       }
@@ -2634,7 +2739,7 @@ fn collect_literal_names(lit: &Literal, names: &mut Set<ModulePath>) {
 /// Collect every name referenced as a free variable anywhere in `term`
 /// (its own name if it's a `Var`, plus everything nested inside it). Runs
 /// on the raw parsed AST — see `collect_referenced_names` for why.
-fn collect_term_names(term: &Term, names: &mut Set<ModulePath>) {
+fn collect_term_names(term: &Term, names: &mut Set<NamePath>) {
   match term {
     Term::Forall { typ, body, .. } => {
       collect_term_names(typ, names);
@@ -2645,8 +2750,15 @@ fn collect_term_names(term: &Term, names: &mut Set<ModulePath>) {
       collect_term_names(ret, names);
     }
     Term::Var { name } => {
-      if let Some(p) = name.to_path() {
+      // Bare `Id`/`Np` refs record their name path; a post-elaboration
+      // `Qn` ref (a bare name type-checking resolved to its defining
+      // module) records the qualified flat path — its last segment is
+      // what `referenced_contains_name` matches on either way, but
+      // keeping the full path also covers the exact-qualified check.
+      if let Some(p) = name.to_name_path() {
         names.insert(p);
+      } else if let Some(q) = name.to_qualified() {
+        names.insert(q.to_flat_name_path());
       }
     }
     Term::Lam { param, body } => {
@@ -2695,18 +2807,18 @@ fn collect_term_names(term: &Term, names: &mut Set<ModulePath>) {
 /// `derive_attribute_targets` (malformed `#[derive]` args) are ignored
 /// here — they'll be reported as real errors during expansion; this pass
 /// only needs the well-formed names for unused-import analysis.
-pub fn collect_macro_call_names(decls: &[SourceContext<Decl>]) -> Set<ModulePath> {
+pub fn collect_macro_call_names(decls: &[SourceContext<Decl>]) -> Set<NamePath> {
   let mut names = Set::default();
   for ctx in decls {
     match ctx.value() {
       Decl::MacroCall { name, .. } => {
-        names.insert(ModulePath::single(name.clone()));
+        names.insert(NamePath::single(name.clone()));
       }
       Decl::Type(ind) => {
         if let Ok(targets) = crate::eval::macro_expand::derive_attribute_targets(ind) {
           for target in targets {
             if let Some(macro_name) = crate::eval::macro_expand::derive_macro_name(&target) {
-              names.insert(ModulePath::single(Identifier::new(macro_name.to_string())));
+              names.insert(NamePath::single(Identifier::new(macro_name.to_string())));
             }
           }
         }
@@ -2744,7 +2856,7 @@ pub fn collect_macro_call_names(decls: &[SourceContext<Decl>]) -> Set<ModulePath
 /// `<module>.<name>` qualification, or they'll wrongly conclude an
 /// actually-used name is unreferenced. A fully scope-aware, pre-
 /// elaboration-only version is future work — deliberately not done here.
-pub fn collect_referenced_names(module: &Module) -> Set<ModulePath> {
+pub fn collect_referenced_names(module: &Module) -> Set<NamePath> {
   let mut names = module.macro_call_names().clone();
   for ctx in module.defs() {
     let def = ctx.value();
@@ -2816,12 +2928,12 @@ pub fn collect_referenced_names(module: &Module) -> Set<ModulePath> {
 /// harmless), never the unsafe direction (omitting a name that's
 /// genuinely needed, which would break compilation).
 pub fn referenced_contains_name(
-  referenced: &Set<ModulePath>,
+  referenced: &Set<NamePath>,
   context_path: &ModulePath,
   name: &Identifier,
 ) -> bool {
-  let bare = ModulePath::single(name.clone());
-  let qualified = context_path.append(vec![name.clone()]);
+  let bare = NamePath::single(name.clone());
+  let qualified = NamePath::from(context_path.clone()).append(vec![name.clone()]);
   referenced.contains(&bare)
     || referenced.contains(&qualified)
     || referenced.iter().any(|p| p.last() == name)
@@ -2839,7 +2951,7 @@ pub fn referenced_contains_name(
 /// same recursive flattening `UseItem::flatten` does.
 pub fn unused_use_name_warnings(
   uses: &[SourceContext<Use>],
-  referenced: &Set<ModulePath>,
+  referenced: &Set<NamePath>,
   path: Option<&std::path::PathBuf>,
 ) -> Vec<Diagnostic> {
   uses
@@ -2938,7 +3050,7 @@ pub fn unused_use_name_warnings(
 /// from.
 pub fn unused_def_warnings(loaded: &LoadedModules) -> Vec<(ModulePath, Diagnostic)> {
   let all_modules = loaded.modules();
-  let mut referenced: Set<ModulePath> = Set::default();
+  let mut referenced: Set<NamePath> = Set::default();
   for module in &all_modules {
     referenced.extend(collect_referenced_names(module));
   }
@@ -2970,7 +3082,7 @@ pub fn unused_def_warnings(loaded: &LoadedModules) -> Vec<(ModulePath, Diagnosti
           {
             return None;
           }
-          let bare = ModulePath::single(def.name.last().clone());
+          let bare = NamePath::single(def.name.last().clone());
           let used = referenced.contains(&def.name) || referenced.contains(&bare);
           if used {
             return None;
@@ -3129,14 +3241,14 @@ fn unwrap_scoped_open(
 ) -> SourceContext<Decl> {
   match ctx.value {
     Decl::ScopedOpen {
-      module_path,
+      path,
       filter,
       attributes,
       decl,
     } => {
       let open = Open {
         source_location: ctx.loc.clone(),
-        module_path,
+        path,
         filter,
         attributes,
       };
@@ -3164,10 +3276,10 @@ impl Module {
   pub fn get_macro_defs(&self) -> Vec<&SourceContext<Def>> {
     self.macro_defs.values().collect()
   }
-  pub fn macro_defs_map(&self) -> &Map<ModulePath, SourceContext<Def>> {
+  pub fn macro_defs_map(&self) -> &Map<NamePath, SourceContext<Def>> {
     &self.macro_defs
   }
-  pub fn decl_gens_map(&self) -> &Map<ModulePath, SourceContext<DeclGenDef>> {
+  pub fn decl_gens_map(&self) -> &Map<NamePath, SourceContext<DeclGenDef>> {
     &self.decl_gens
   }
   /// Convert module back to Decls again
@@ -3221,7 +3333,7 @@ impl Module {
   pub fn path(&self) -> &ModulePath {
     &self.path
   }
-  pub fn get_def(&self, name: &ModulePath) -> Option<&SourceContext<Def>> {
+  pub fn get_def(&self, name: &NamePath) -> Option<&SourceContext<Def>> {
     self.defs.get(name)
   }
 
@@ -3251,14 +3363,14 @@ impl Module {
   pub fn add_decl(&mut self, decl: Decl) {
     match decl {
       Decl::ScopedOpen {
-        module_path,
+        path,
         filter,
         attributes,
         decl,
       } => {
         let open = Open {
           source_location: Default::default(),
-          module_path,
+          path,
           filter,
           attributes,
         };
@@ -3312,10 +3424,7 @@ impl Module {
       .iter()
       .flat_map(|instance| {
         instance.impls_map.iter().map(|(name, imp)| {
-          let name = instance
-            .name
-            .clone()
-            .extend(ModulePath::single(name.clone()));
+          let name = instance.name.clone().extend(NamePath::single(name.clone()));
 
           DefRef {
             module: &self.path,
@@ -3436,7 +3545,7 @@ impl Module {
           .flat_map(|class_def| {
             let def_name = class
               .name
-              .extend_borrowed(&class_def.name.clone().to_path());
+              .extend_borrowed(&NamePath::single(class_def.name.clone()));
             let names = def_name.open(opens);
             names
               .into_iter()
@@ -3462,18 +3571,18 @@ impl Module {
   /// attributes (captured pre-expansion — see the `macro_call_names` field
   /// doc). Used by `collect_referenced_names` so required derive imports
   /// aren't flagged as unused.
-  pub fn macro_call_names(&self) -> &Set<ModulePath> {
+  pub fn macro_call_names(&self) -> &Set<NamePath> {
     &self.macro_call_names
   }
 
-  pub(crate) fn set_macro_call_names(&mut self, names: Set<ModulePath>) {
+  pub(crate) fn set_macro_call_names(&mut self, names: Set<NamePath>) {
     self.macro_call_names = names;
   }
 }
 
 pub fn extract_constructors(
   d: &SourceContext<Decl>,
-) -> Vec<(ModulePath, SourceContext<InductConstructor>)> {
+) -> Vec<(NamePath, SourceContext<InductConstructor>)> {
   match &d.value {
     Decl::Type(Inductive {
       constructors,
@@ -3524,10 +3633,10 @@ where
   }
 }
 
-pub fn names_of_decls(decls: &[SourceContext<Decl>]) -> HashSet<ModulePath> {
+pub fn names_of_decls(decls: &[SourceContext<Decl>]) -> HashSet<NamePath> {
   decls
     .iter()
-    .map(|ctx| ctx.value().to_ref().clone())
+    .map(|ctx| ctx.value().to_ref().into_owned())
     .collect()
 }
 
@@ -3635,7 +3744,7 @@ impl Display for Module {
     let opens = self
       .get_opens()
       .iter()
-      .map(|ctx| format!("{}", ctx.module_path))
+      .map(|ctx| format!("{}", ctx.path))
       .collect::<Vec<String>>()
       .join(", ");
     let classes = self
@@ -3723,16 +3832,16 @@ impl<'a> Display for Scope<'a> {
   }
 }
 
-/// Check if a ModulePath refers to an IndexedMonad class method (e.g., `IndexedMonad.bind`).
-fn is_indexed_monad_method(name: &ModulePath) -> bool {
-  let prefix = ModulePath::single(Identifier::new("IndexedMonad".to_string()));
+/// Check if a name refers to an IndexedMonad class method (e.g., `IndexedMonad.bind`).
+fn is_indexed_monad_method(name: &NamePath) -> bool {
+  let prefix = NamePath::single(Identifier::new("IndexedMonad".to_string()));
   name.is_prefix(&prefix)
 }
 
 /// Convert an IndexedMonad method name to the corresponding Monad method name.
 /// e.g., `IndexedMonad.bind` -> `Monad.bind`
-fn to_monad_name(name: &ModulePath) -> Option<ModulePath> {
-  let prefix = ModulePath::single(Identifier::new("IndexedMonad".to_string()));
+fn to_monad_name(name: &NamePath) -> Option<NamePath> {
+  let prefix = NamePath::single(Identifier::new("IndexedMonad".to_string()));
   let rest = name.remove_prefix(&prefix)?;
-  Some(ModulePath::single(Identifier::new("Monad".to_string())).extend(rest))
+  Some(NamePath::single(Identifier::new("Monad".to_string())).extend(rest))
 }

@@ -17,7 +17,7 @@ use crate::core_term::{
   Atom, AtomTable, CoreConstructor, CoreLit, CoreMatchCase, CoreNative, CoreTerm, MetaId, open_at,
   open_with,
 };
-use crate::term::{Identifier, ModulePath};
+use crate::term::{GlobalRef, Identifier};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ impl MetaContext {
   /// The `Atom` identifying a given global name, allocating one on first
   /// use and reusing it on every subsequent call through this
   /// `MetaContext`'s own table.
-  pub fn intern(&mut self, path: ModulePath) -> Atom {
+  pub fn intern(&mut self, path: GlobalRef) -> Atom {
     self.atoms.intern(path)
   }
 
@@ -1549,7 +1549,7 @@ mod test {
   fn cons(head: CoreTerm, tail: CoreTerm) -> CoreTerm {
     CoreTerm::Con(CoreConstructor {
       name: Identifier::new("cons".to_string()),
-      typ_name: crate::term::ModulePath::top("List"),
+      typ_name: crate::term::GlobalRef::Local(crate::term::NamePath::top("List")),
       num_args: 2,
       args: vec![Some(head), Some(tail)],
     })
@@ -1571,7 +1571,7 @@ mod test {
     let a = cons(sort0(), sort0());
     let b = CoreTerm::Con(CoreConstructor {
       name: Identifier::new("empty".to_string()),
-      typ_name: crate::term::ModulePath::top("List"),
+      typ_name: crate::term::GlobalRef::Local(crate::term::NamePath::top("List")),
       num_args: 0,
       args: vec![],
     });
