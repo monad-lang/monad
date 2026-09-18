@@ -4321,6 +4321,20 @@ def test_native_string_concat_calls_runtime_fn_not_unit_stub : Bool :=
     then not (check_contains text "call i64 @alloc_constructor(i64 0, i64 0)")
     else false
 
+/// `I64.to_string`'s own value-position half: the def IS reachable as an
+/// ordinary function value (`list_show I64.to_string xs`, `List.map
+/// I64.to_string ids`), and every one of those references reads the
+/// def's own compiled body -- which used to be the Unit stub, so the
+/// element rendered as the empty string. Its siblings (i32/u8/u64) were
+/// already wired here; only i64 was missed, masked by the direct-call
+/// inlining that makes the common case work.
+#[test]
+def test_native_i64_to_string_wraps_value_position_reference : Bool :=
+    let text := compile_native_def_fixture_text "I64.to_string" "i64_to_string" in
+    if check_contains text "call i64 @monad_i64_to_string"
+    then not (check_contains text "call i64 @alloc_constructor(i64 0, i64 0)")
+    else false
+
 #[test]
 def test_native_string_eq_wraps_raw_result_as_tagged_bool : Bool :=
     let text := compile_native_def_fixture_text "String.beq" "string_eq" in

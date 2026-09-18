@@ -340,6 +340,19 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             // C: libc-shaped or growable-buffer-shaped.
             else if String.beq target "string_to_lowercase" then Option.some (NativeWrapKind.passthrough "monad_string_to_lowercase")
             else if String.beq target "string_from_list" then Option.some (NativeWrapKind.passthrough "monad_string_from_list")
+            // `#[native i64_to_string]` (`I64.to_string`, init/number.mo)
+            // was the ONE member of this formatting family missing an
+            // entry -- i32/u8/u64 just below all have one. `I64_to_string`
+            // is in `native_op_table`, so every DIRECT call inlines and
+            // works; only a VALUE-position reference fell through to the
+            // "return Unit" stub and silently yielded an empty string.
+            // Measured 2026-09-19: `list_show I64.to_string [42]` printed
+            // `[]` instead of `[42]`, the emitted def's whole body being
+            // `%t4 = call i64 @alloc_constructor(i64 0, i64 0)`; the
+            // corpus repro is `std/src/list_tests1.mo`'s two
+            // `list_show I64.to_string` tests, which is also why it went
+            // unnoticed -- the direct-call path hides it.
+            else if String.beq target "i64_to_string" then Option.some (NativeWrapKind.passthrough "monad_i64_to_string")
             else if String.beq target "i32_to_string" then Option.some (NativeWrapKind.passthrough "monad_i32_to_string")
             // Unsigned formatting: a U64 near the top of its range is a
             // NEGATIVE i64 in this backend's uniform representation, so
