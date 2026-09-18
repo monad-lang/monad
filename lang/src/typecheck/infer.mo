@@ -245,10 +245,50 @@ def resolve_class_method_d4
     match scope_resolve_name (NameRef.nid mangled_id) scope locals {
         err _ => err (TypeError.custom "instance is missing its promoted method"),
         ok resolved_sd =>
-            let real_sig : Term := resolved_sd.sig in
+            // The resolved def's REAL declared signature, out of the
+            // `def_sigs` side-table -- NOT `ScopeDef.sig`, which
+            // `build_scope_def` (`lang/scope.mo`) sets to `Term.hole`
+            // unconditionally for every def (a sentinel its own doc
+            // comment calls load-bearing for dozens of call sites, so it
+            // cannot simply be filled in there). Reading `.sig` made this
+            // function's own doc comment -- "the resolved concrete def's
+            // own real signature" -- false, and typed EVERY class-method
+            // call in the checker as a hole.
+            let real_sig : Term :=
+                match scope_find_def_sig resolved_sd.name scope {
+                    Option.some s => s,
+                    Option.none => resolved_sd.sig,
+                } in
+            // A registry signature keeps its implicit type variables FREE
+            // (`List A` for `FromListLiteral_List_empty`), and an
+            // unsolved one is not a usable type: it travels upward still
+            // abstract and meets the declared return in
+            // `type_check_cases` as "type mismatch: expected (List A),
+            // found (List U8)". The ambient `expected_type` at the
+            // callee's own position is what says what those variables
+            // are -- solve the signature against it exactly as
+            // `def_call_continue` solves a def's declared parameters
+            // against its arguments. Uninformative (a hole, or a shape
+            // mismatch) records nothing, leaving the signature untouched
+            // rather than rewriting it wrongly.
+            //
+            // MEASURED: this pair (`inst_sig` here + the `pi_ret`
+            // substitution below) changes NO corpus file's verdict on
+            // its own -- `init std examples lang cli llvm runtime motes
+            // slow_tests bench` reports the same 15 errors in the same 7
+            // files with and without it. It is the precondition, not the
+            // trigger: `FromListLiteral.cons` has to RESOLVE to this
+            // promoted def before any signature is read at all, and the
+            // carrier that makes it resolve (`List (List A)` from
+            // `List.flatten`) needs the applied-head match in
+            // `term_matches_carrier` (`lang/scope.mo`) that P6 owns.
+            // Verified together: P5 + that match closes
+            // `std/src/sha256.mo` at both check and runner level.
+            let inst_sig : Term :=
+                subst_typevars_term real_sig (solve_typevars scope real_sig expected_type List.empty) in
             let mangled_ref : Term := Term.var sentinel (DebugName.named mangled_id) in
             match ins_constraints {
-                List.empty => ok (mk_typed mangled_ref real_sig),
+                List.empty => ok (mk_typed mangled_ref inst_sig),
                 List.cons _ _ =>
                     let classes := scope_data_classes (scope_globals scope) in
                     let instances := scope_instance_candidates (scope_globals scope) ins_cls_name in
@@ -265,7 +305,7 @@ def resolve_class_method_d4
                     match resolve_dict_args classes instances dict_env carrier List.empty ins_constraints {
                         Option.none => err (TypeError.custom "cannot resolve inner instance dictionary"),
                         Option.some dict_args =>
-                            let applied_typ : Term := strip_n_pis real_sig (List.length dict_args) in
+                            let applied_typ : Term := strip_n_pis inst_sig (List.length dict_args) in
                             ok (mk_typed (rebuild_call mangled_ref dict_args) applied_typ),
                     },
             },
@@ -2346,9 +2386,27 @@ def extract_pi_ret (f_term : Term) (a_term : Term) (f_typ : Term) (a_typ : Term)
             // nested pi and so was already correct, which is exactly how
             // this narrowed down. A real (non-hole) `pi_ret` is a genuine
             // signature return type and always wins.
+            //
+            // ...but a REAL signature's `pi_ret` is a POLYMORPHIC one: it
+            // keeps its implicit type variables FREE (`A -> List A -> List
+            // A`), so peeling the chain alone reports the untouched
+            // `pi_ret` (`List A -> List A`) and the variable never gets
+            // instantiated -- the type travels upward still abstract, and
+            // meets the declared return in `type_check_cases` as "type
+            // mismatch: expected (List A), found (List U8)"
+            // (`Sha256.hash_bytes`'s `List.flatten [...]`). The argument's
+            // own already-inferred type is what says what the variables
+            // are, and it is right here: solve `pi_arg` against `a_typ` the
+            // way `def_call_continue` solves a def's declared parameters
+            // against its arguments, and substitute through the WHOLE
+            // remaining chain (not just the final return -- `cons e1 e2`
+            // solves at the first argument and needs the second
+            // parameter's own `List A` rewritten too).
             if is_hole pi_ret
             then ok (mk_typed app_term (con_spine_result_typ f_term pi_ret scope))
-            else ok (mk_typed app_term pi_ret),
+            else
+                let pi_subst : List (Pair Identifier Term) := solve_typevars scope pi_arg a_typ List.empty in
+                ok (mk_typed app_term (subst_typevars_term pi_ret pi_subst)),
         Term.forall _ _ body_ =>
             extract_pi_ret f_term a_term body_ a_typ expected_type scope local_types locals,
         _ =>
@@ -3927,3 +3985,117 @@ def test_type_check_struct_update_rejects_mismatched_field_type : Bool :=
 // type`/`_desugars_to_con` above (all against `point_scope`, whose
 // fields are deliberately abstract-sort-typed) -- no separate positive
 // companion needed here.
+
+// --- Tests for extract_pi_ret's type-variable instantiation ---
+
+/// The `Scope` these three tests resolve against, deliberately with
+/// NOTHING registered: `solve_typevars` refuses to record a param-side
+/// free var whose name RESOLVES (`is_scope_type_name` -- a free var in
+/// a registered `Def.typ` is either the def's implicit type parameter or
+/// a concrete type name, and resolution is the only discriminator), so
+/// registering `A` here would make every assertion below vacuous.
+def pi_ret_test_scope : Scope := {
+    module_id := ModulePath.mp (List.cons (Identifier.id "PiRetTest") List.empty),
+    scope := scope_data_empty,
+    parent := Option.none,
+}
+
+/// `FromListLiteral.cons`'s promoted signature, exactly as
+/// `promote_methods` (`lang/scope.mo`) registers it -- `Def.typ` copied
+/// through unchanged, so the implicit `A` is still a free `sentinel`
+/// var: there is no `forall` wrapper at this point in the pipeline.
+def cons_promoted_sig : Term :=
+    let a : Term := Term.var sentinel (DebugName.named (Identifier.id "A")) in
+    let list_a : Term := Term.app (Term.var sentinel (DebugName.named (Identifier.id "List"))) a in
+    Term.pi a (Term.pi list_a list_a)
+
+/// `FromListLiteral_List_empty`'s promoted signature (`List A`) -- the
+/// other shape the failing case goes through, where the type variable
+/// sits INSIDE the first (and only) parameter rather than being it.
+def empty_promoted_sig : Term :=
+    let a : Term := Term.var sentinel (DebugName.named (Identifier.id "A")) in
+    Term.pi (Term.app (Term.var sentinel (DebugName.named (Identifier.id "List"))) a) (Term.app (Term.var sentinel (DebugName.named (Identifier.id "List"))) a)
+
+/// `List U8`, the type `cons`'s first argument infers to at the failing
+/// site (`Sha256.hash_bytes`'s `List.flatten [unpack_word a, ...]`).
+def list_u8_typ : Term :=
+    Term.app (Term.var sentinel (DebugName.named (Identifier.id "List"))) (Term.var sentinel (DebugName.named (Identifier.id "U8")))
+
+def pi_arg_of (t : Term) : Term :=
+    match t {
+        Term.pi a _ => a,
+        _ => Term.hole,
+    }
+
+def pi_ret_of (t : Term) : Term :=
+    match t {
+        Term.pi _ r => r,
+        _ => Term.hole,
+    }
+
+def app_arg_of (t : Term) : Term :=
+    match t {
+        Term.app _ a => a,
+        _ => Term.hole,
+    }
+
+def head_is (t : Term) (s : String) : Bool :=
+    match type_head_name t {
+        Option.some id => id_eq id (Identifier.id s),
+        Option.none => false,
+    }
+
+/// `extract_pi_ret` against one of the promoted signatures above,
+/// applied to an argument of type `a_typ`. `f_term`/`a_term` are holes:
+/// they are only ever read on the `is_hole pi_ret` path, and `pi_ret`
+/// here is a real one. Reads `tt.typ` through a helper rather than
+/// inline -- `#[test]` defs must not carry a direct field access (see
+/// AGENTS.md).
+def run_extract_pi_ret (sig : Term) (a_typ : Term) : Result TypeError TypedTerm :=
+    extract_pi_ret Term.hole Term.hole sig a_typ Term.hole pi_ret_test_scope empty_local_types empty_locals
+
+def extract_pi_ret_result_typ (r : Result TypeError TypedTerm) : Term :=
+    match r {
+        ok tt => tt.typ,
+        err _ => Term.hole,
+    }
+
+#[test]
+def test_extract_pi_ret_instantiates_typevars_from_argument : Bool :=
+    // The whole remaining chain is rewritten, not just the final
+    // return: `pi_arg` and `pi_ret` each go from `List A` to
+    // `List (List U8)`, so peeling one pi and two apps lands on `U8`.
+    // Before this fix the substitution did not exist at all and both
+    // halves were still `List A` (peeling to the bare var `A`).
+    let typ : Term := extract_pi_ret_result_typ (run_extract_pi_ret cons_promoted_sig list_u8_typ) in
+    head_is (app_arg_of (app_arg_of (pi_arg_of typ))) "U8"
+    && head_is (app_arg_of (app_arg_of (pi_ret_of typ))) "U8"
+
+#[test]
+def test_extract_pi_ret_instantiates_inside_an_applied_param : Bool :=
+    // The other variable position: `List A -> List A`, where `A` is
+    // nested inside the parameter rather than being it -- and where the
+    // peeled result IS the return type (`List A`), not a remaining
+    // chain, so `pi_arg_of` does not apply here. One app-peel from that
+    // reaches `U8`: `List U8`, not `A`.
+    let typ : Term := extract_pi_ret_result_typ (run_extract_pi_ret empty_promoted_sig list_u8_typ) in
+    head_is (app_arg_of typ) "U8"
+
+#[test]
+def test_extract_pi_ret_hole_argument_leaves_signature_alone : Bool :=
+    // The negative control for the gate this reuses: a `Term.hole`
+    // argument carries no type information, so nothing may be recorded
+    // and the signature must come back untouched -- still `List A`.
+    // Recording a hole here is the poisoning shape `solve_typevars`'s
+    // own doc comment describes.
+    let typ : Term := extract_pi_ret_result_typ (run_extract_pi_ret cons_promoted_sig Term.hole) in
+    head_is (app_arg_of (pi_arg_of typ)) "A"
+
+#[test]
+def test_extract_pi_ret_mismatched_shape_leaves_signature_alone : Bool :=
+    // Same gate from the other side: the parameter is an applied shape
+    // (`List A`) and the argument is not an application at all
+    // (`Term.type_ 1`, a bare sort), so the walk stops without
+    // recording and the return comes back untouched -- still `List A`.
+    let typ : Term := extract_pi_ret_result_typ (run_extract_pi_ret empty_promoted_sig (Term.type_ 1)) in
+    head_is (app_arg_of typ) "A"

@@ -14,9 +14,11 @@
 /// files themselves. In rough order of how much they cost to close:
 ///
 ///   * self-hosted checker gaps -- type-variable instantiation, named-
-///     call defaults, and instance resolution through an applied head
+///     call defaults, instance resolution through an applied head
 ///     (`Show`/`BEq (List A)`, `Map`) or with no carrier-revealing
-///     argument at all (`Bounded.max_bound`, `Monad.pure`) -- 12 files;
+///     argument at all (`Bounded.max_bound`, `Monad.pure`), and the
+///     expected-type channel the parser's discarded ascriptions leave
+///     empty (`combine_test.mo`, `json.mo`) -- 12 files;
 ///   * two codegen bugs -- the generic `Add` dict self-recursion and
 ///     `BEq (List A)`'s tail dictionary (3 files);
 ///   * `#[derive]`, unsupported by the self-hosted parser (1 file);
@@ -144,20 +146,34 @@ pub def gap_reasons : List String :=
      "instance head is applied (Map M); carrier is a bare head",
      "instance head is applied (Map M); carrier is a bare head",
      // Closed by: type-variable instantiation in the self-hosted
-     // checker. Both report a mismatch between a declared `A` and the
-     // concrete type at the call (`expected (List A), found (List U8)`;
-     // `expected (IO A), found (IO (List I64))`), which the Rust host
-     // accepts -- so the files are fine and the checker is not.
-     "self-hosted checker does not instantiate a type variable",
-     "self-hosted checker does not instantiate a type variable",
-     // Same type-variable instantiation family as sha256.mo above:
-     // `Json.Deserializer.deserialize` returns `Result String A`, and
-     // the ascriptions on the call (`: Result String Bool`, `: Result
-     // String Person`) report `expected A, found <concrete>` -- which
-     // also leaves the match scrutinee's type unknown, so the bare `mk`
+     // checker, AND the applied-head instance match it depends on. Both
+     // report a mismatch between a declared `A` and the concrete type at
+     // the call (`expected (List A), found (List U8)`), which the Rust
+     // host accepts -- so the files are fine and the checker is not.
+     // MEASURED: the instantiation half landed in P5 and moves NO
+     // corpus file on its own (`FromListLiteral.cons` has to resolve to
+     // the instantiated signature before it is ever read); the
+     // applied-head half is still open, and trying it alone breaks
+     // `cli/src/tests/cli_derive_self_hosted_tests.mo` with a dict
+     // self-recursion in the macro evaluator -- see AGENTS.md.
+     "self-hosted checker: class-method signatures are never solved against the call (P5), and an instance is not matched through an APPLIED head (open)",
+     // NOT the same mechanism, and this file is the counter-example
+     // worth keeping: the instantiation work does not move it either
+     // way. `all_i64`'s `IO.pure (List.empty : List I64)` loses its
+     // ascription -- the self-hosted parser's `paren_try_ann` parses
+     // `: T` and DROPS it (no `Term.ann` exists) -- so the call's
+     // element type is never pinned and reports `expected (IO A), found
+     // (IO (List I64))`. That is the expected-type/carrier channel P6
+     // owns, alongside `lang/src/json.mo` below.
+     "the argument's own ascription is discarded by the self-hosted parser",
+     // Same discarded-ascription channel as combine_test.mo above, not
+     // type-variable instantiation: the ascriptions on the call (`:
+     // Result String Bool`, `: Result String Person`) report `expected
+     // A, found <concrete>` because the parser dropped them, which also
+     // leaves the match scrutinee's type unknown -- the bare `mk`
      // pattern then reports a constructor ambiguity downstream of the
      // SAME unknown. The Rust host runs all of the file's tests.
-     "self-hosted checker does not instantiate a type variable",
+     "the call's own ascription is discarded by the self-hosted parser",
      // Closed by: the attribute-to-macro bridge. The file LOADS -- to
      // the self-hosted parser `#[derive_cli]` is just another
      // `#[name args]` -- but nothing expands it, so the defs it would

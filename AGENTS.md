@@ -1104,6 +1104,102 @@ When resolving a name like `BEq.beq` or `==`:
 
 **If a class method is in def_refs, step 2 returns the type signature term and instance resolution never happens.**
 
+### Self-Hosted Checker: Class-Method Signatures, Instantiation, and Applied-Head Matching
+
+Three separable things gate every class-method call in the self-hosted
+checker (`lang/src/typecheck/infer.mo`), and the reason they are easy to
+conflate is that a *class method* is not a `def`: nothing about it is
+type-checked the way a call to a named `def` is.
+
+1. **Resolution.** `type_check_free_var` errs on a dotted class-method
+   name, falls back to `scope_find_class_def_by_name` (the BARE last
+   segment, across all class defs), then `resolve_class_method` walks D5
+   (a bound dict in `dict_env`) → the carrier derived from
+   `expected_type` → `find_matching_instance` → `resolve_class_method_d4`.
+2. **The signature.** `ScopeDef.sig` is `Term.hole` for EVERY def --
+   `build_scope_def` sets it unconditionally, and that sentinel is
+   load-bearing for dozens of call sites, so it cannot simply be filled
+   in. The real declared signature lives in the `def_sigs` side-table
+   (`ScopeData.def_sigs`, written in `lang/src/scope.mo`, read with
+   `scope_find_def_sig`). `resolve_class_method_d4` read `.sig`, so it
+   typed every class-method call as a hole *while its own doc comment
+   claimed to return "the resolved concrete def's own real signature"*.
+3. **Instantiation.** A promoted method's registered `Def.typ`
+   (`promote_methods` copies it through unchanged) keeps its implicit
+   type variables FREE: `FromListLiteral_List_cons` is registered as
+   `A -> List A -> List A`, with no `forall` wrapper. Peeling that pi
+   chain therefore reports a still-abstract return, which travels
+   upward and meets the declared return in `type_check_cases` as
+   `type mismatch: expected (List A), found (List U8)`. Note the
+   direction of that message: `type_check_cases` calls
+   `unify body_typ expected_type`, so **"expected" is the ARM BODY's
+   type and "found" is the DECLARED return** -- the reverse of the
+   intuitive reading, and worth checking before blaming a declared type.
+
+Fixes 2 and 3 are `solve_typevars`-based and landed together: the
+signature is solved against the ambient `expected_type` at the callee's
+own position (`inst_sig`), and each further application solves `pi_arg`
+against the argument's already-inferred type and substitutes through the
+WHOLE remaining chain (not just the final return -- `cons e1 e2` solves
+at the first argument and needs the second parameter's own `List A`
+rewritten too). Both reuse the existing `solve_typevars` gate: a
+`Term.hole` actual, or a shape mismatch, records nothing, so an
+uninformative call leaves the signature untouched rather than rewriting
+it wrongly.
+`lang/src/typecheck/infer.mo`'s `test_extract_pi_ret_*` tests pin this
+directly (two red before / green after, two pinning the no-record
+gates), and they are deliberately unit-level rather than end-to-end:
+the corpus cannot reach the new path until the applied-head match
+lands, so an end-to-end test here would be one that cannot fail.
+
+**Fixes 2 and 3 change no corpus file's verdict on their own.** Measured
+with and without them: `check init std examples lang cli llvm runtime
+motes slow_tests bench` reports 15 errors in the same 7 files either
+way. They are a precondition, not a trigger: `FromListLiteral.cons` has
+to RESOLVE (fix 1) before any signature is read at all, and the carrier
+that makes it resolve -- `List (List A)`, derived from `List.flatten`'s
+own parameter -- needs the applied-head match below. All three together
+close `std/src/sha256.mo` at both `check` and `monad test` level.
+
+**The remaining resolution gap is the applied-head match, and it is NOT
+free.** `term_matches_carrier` (`lang/src/scope.mo`) requires the
+carrier to be an `App` when the instance's declared arg is applied, and
+requires the names to be equal when it is bare -- so a bare instance arg
+(`instance FromListLiteral List`) never matches an applied carrier
+(`List (List U8)`), which is the only shape an expected-type-derived
+carrier has. Adding the missing arm (`Term.app chead _ =>
+term_matches_carrier wildcard_names ins_term chead`) does close
+sha256.mo -- and, on its own or combined with 2+3, turns
+`cli/src/tests/cli_derive_self_hosted_tests.mo` from `ok` into
+`meta_eval_invoke: applying the meta-def to its TypeInfo argument
+failed: ce_cycle 3`. That is a genuine cycle in the evaluator's global
+force guard, reached while applying `cli/src/args.mo`'s meta-def during
+`derive_cli!` expansion: the arm changes which instance some class call
+inside the macro-expansion context resolves to, and that dict
+self-recurses. Minimal repro (fails with the arm, `ok` without it):
+
+```monad
+use lib::args {*}
+type DemoCommand {
+    compile (path : String) (#[arg] verbose : Bool),
+}
+derive_cli! DemoCommand
+```
+
+-- `cli/src/args.mo`/`lib.mo` alone stay `ok`; the dependency plus a
+`derive_cli!` decl is what trips it, and no `parse_democommand` call is
+needed. So the applied-head match belongs with the dict-recursion work
+(P8's `BEq (List A)` / generic `Add` family), not on its own.
+
+A `#[test]` def carrying a direct field access is a known miscompile
+shape -- the def gets the FIELD's LLVM type as its return type (an
+`i1`/`i64` llc failure, or an undefined `@P.mk`), visible only through
+the COMPILED self-hosted runner, never the Rust one. It is
+shape-dependent rather than absolute: this file's older tests read
+`tt.typ` inline inside a `match` arm and pass. The new tests do not bet
+on that -- they read the result type through an ordinary helper def
+(`extract_pi_ret_result_typ`) and a typed accessor.
+
 ### BEq Type Signature Bug
 
 The `BEq` class in `init/src/prelude.mo` originally had:
