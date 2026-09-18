@@ -214,6 +214,42 @@ def test_typecheck_conversion_two_arms_against_unreduced_ret : Bool :=
 def test_typecheck_conversion_still_rejects_real_mismatch : Bool :=
     not (typecheck_source "type P { p0 }\ntype Q { q0 }\ndef idt (x : P) : Type := P\ndef f (h : Q) : idt P.p0 := match h { Q.q0 => h }")
 
+// --- iota reduction (`Literal.match_`/`Literal.if_` arms of
+// `lang/typecheck/whnf.mo`) ---
+//
+// Same reachability rule as above: these go through a MATCH ARM join,
+// the only place `unify` is reliably reached. Each expected type is a
+// def application that only computes to a plain type NAME by firing a
+// `match` (or `if`) on a known constructor -- delta unfolds the def,
+// beta substitutes the argument, and then iota must dispatch the arm.
+// Without the iota arm, the reduced expected type is still a stuck
+// `match`/`if` literal and every test below fails with a mismatch --
+// each was confirmed to FAIL before the arm landed.
+
+#[test]
+def test_typecheck_iota_match_arm_against_computed_type : Bool :=
+    typecheck_source "type P { p0, p1 }\ndef f (x : P) : Type := match x { P.p0 => P, P.p1 => P }\ndef g (h : P) : f P.p0 := match h { P.p0 => h, P.p1 => h }"
+
+#[test]
+def test_typecheck_iota_if_arm_against_computed_type : Bool :=
+    typecheck_source "type Bool { true, false }\ntype P { p0 }\ndef f (b : Bool) : Type := if b then P else P\ndef g (h : P) : f true := match h { P.p0 => h }"
+
+// Two-field substitution through a projection: `proj2`'s arm body is
+// the SECOND pattern binder, so a wrong-direction substitution yields
+// the first field (`P.p0`), the outer match then finds no `Q.q0` case
+// for it, and the expected type stays stuck -- this only passes when
+// the binder ORDER is right end to end.
+#[test]
+def test_typecheck_iota_two_field_projection : Bool :=
+    typecheck_source "type P { p0 }\ntype Q { q0 }\ntype Two2 { mk2 (fst : P) (snd : Q) }\ndef proj2 (t : Two2) : Q := match t { Two2.mk2 _x b => b }\ndef f (t : Two2) : Type := match proj2 t { Q.q0 => Q }\ndef g (h : Q) : f (Two2.mk2 P.p0 Q.q0) := match h { Q.q0 => h }"
+
+// Iota must not turn conversion checking into "accepts everything":
+// with reduction the expected type computes to `P`, and an arm of type
+// `Q` must still be rejected.
+#[test]
+def test_typecheck_iota_still_rejects_real_mismatch : Bool :=
+    not (typecheck_source "type P { p0 }\ntype Q { q0 }\ndef f (x : P) : Type := match P.p0 { P.p0 => P }\ndef g (h : Q) : f P.p0 := match h { Q.q0 => h }")
+
 // --- Sigma types / dependent constructor telescopes
 // (init/prelude.mo `Sigma`/`Exists`; `core/parser.rs` constructor Pi
 // binders, `core/core_check.rs` field_atoms) ---
