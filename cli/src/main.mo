@@ -1,5 +1,5 @@
 use io {IO}
-open IO {println, read_file, write_file}
+open IO {println, read_file, write_file, file_exists}
 use std::process {exec_cmd, process_id}
 use std::bench {now, report_since}
 use lang::types {Decl, LocalScope, ModulePath, show_module_path, show_identifier}
@@ -12,7 +12,7 @@ use lang::scope {resolve_class_calls_decls}
 use lang::mote {MoteManifest}
 use std::map {}
 use lang::pretty {show_decls}
-use lang::codegen::test_driver {TestIrResult, compile_loaded_modules_to_test_ir, is_no_tests_error, over_exit_code_limit}
+use lang::codegen::test_driver {TestIrResult, compile_loaded_modules_to_test_ir, is_no_tests_error, parse_driver_result}
 use lib::test_gaps {gap_reason_for, is_known_gap}
 use lib::args {*}
 // `--verbose` stage/module trace and the colored finish/failure lines
@@ -516,9 +516,15 @@ def run_check (files : List String) (verbose : Bool) : IO I64 := do {
 /// `main` out of its way (`rename_user_main`, test_driver.mo).
 ///
 /// Counts are per TEST, not per file, matching the Rust runner. Each
-/// driver binary reports its own failure count through its exit code,
-/// which is the only channel available (`exec_cmd` returns a code and
-/// nothing else).
+/// driver binary reports its own failure count through a per-binary
+/// RESULT FILE (`__MONAD_TEST__ <failed>`, written by the driver just
+/// before it returns and read back here) -- a channel with no ceiling,
+/// unlike the exit code it replaces, which is 8 bits and wraps past 255
+/// failures (that ceiling is what used to refuse
+/// `lang/src/parser.mo`, at 288 tests). The exit code is still written
+/// by the driver for a human running the binary by hand, but is never
+/// trusted here: a missing or unparseable result file means the driver
+/// died before finishing, and is classified as a crash.
 /// Decide WHICH files `monad test` runs, then run them.
 ///
 ///   * explicit paths        -> exactly those (directories expanded);
@@ -761,7 +767,17 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                     run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                 },
                 ok loaded => do {
-                    let ir_res : Result String TestIrResult <- compile_loaded_modules_to_test_ir loaded;
+                    // The per-binary result file the driver writes its
+                    // `__MONAD_TEST__ <failed>` marker to (see
+                    // test_driver.mo's synthesis header). Unique per
+                    // linked binary (`bin_idx` is bumped only when a
+                    // binary is actually linked, so no two files ever
+                    // share one) and per process (the out dir is
+                    // pid-unique), so a driver that dies before writing
+                    // leaves either no file or its OWN missing one --
+                    // never a sibling's count.
+                    let result_path : String := out_dir ++ "/monad_test_result_" ++ I64.to_string bin_idx ++ ".txt";
+                    let ir_res : Result String TestIrResult <- compile_loaded_modules_to_test_ir loaded result_path;
                     match ir_res {
                         err e => do {
                             // Three outcomes, not two. A driver that
@@ -800,28 +816,11 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                         },
                         ok ir_result => do {
                             let total : I64 := ir_result.total_tests;
-                            // A process exit code is 8 bits, and this
-                            // driver's exit code IS its failure count
-                            // (see test_driver.mo) -- so a file with
-                            // more than 255 tests cannot report its
-                            // result at all: 256 failures would exit 0
-                            // and be read as a clean pass. Refuse the
-                            // file instead of reporting a number that
-                            // silently wrapped.
-                            //
-                            // The check sits BEFORE `emit_module`:
-                            // rendering a module this large to text is
-                            // pure waste for a file that is about to be
-                            // refused (`lang/src/parser.mo`, at 288
-                            // tests, is the one corpus file over the
-                            // line today). `bin_idx` is deliberately
-                            // NOT bumped -- nothing is built on this
-                            // path, so the next file can have that
-                            // number.
-                            if over_exit_code_limit total then do {
-                                println ("[33mSKIP  " ++ f ++ " (" ++ I64.to_string total ++ " tests exceeds the 255 the driver's exit code can report)[0m");
-                                run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed, skipped := skipped + 1, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
-                            } else do {
+                            // No exit-code ceiling any more: the count
+                            // now travels in the result FILE as decimal
+                            // text (`lang/src/parser.mo`, at 288 tests,
+                            // was the one corpus file the old 8-bit
+                            // exit-code channel had to refuse outright).
                             let ir_text := emit_module ir_result.mod_;
                             let bin_name := "monad_test_bin_" ++ I64.to_string bin_idx;
                             // Both always non-empty by construction --
@@ -851,17 +850,42 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                                 }
                             } else do {
                                 let bin_path := out_dir ++ "/" ++ bin_name;
-                                // The driver's exit code IS its failure
-                                // count (see test_driver.mo). Anything
-                                // outside 0..total means the driver did
-                                // not finish normally -- a signal death
-                                // reaches us as -1 from `exec_cmd`, and a
-                                // count above the file's own total can
-                                // only be a crash or an 8-bit wrap -- so
-                                // the whole file is reported failed
-                                // rather than trusting the number.
+                                // The driver's authoritative report is
+                                // its result FILE, not its exit code
+                                // (see test_driver.mo): it writes
+                                // `__MONAD_TEST__ <failed>` to
+                                // `result_path` right before returning.
+                                // Read it back -- but only after
+                                // checking the file EXISTS: the native
+                                // read passes a missing file's NULL
+                                // straight through as a String, and any
+                                // operation on that NULL crashes the
+                                // parent too.
                                 let exit_code <- exec_cmd bin_path [];
-                                if I64.lt exit_code 0 || I64.gt exit_code total then do {
+                                let exists : Bool <- file_exists (Path.path result_path);
+                                let parsed : Option I64 <- if exists then do {
+                                    let raw : String <- read_file (Path.path result_path);
+                                    return (parse_driver_result raw)
+                                } else do {
+                                    return Option.none
+                                };
+                                // Bad = the driver died before writing a
+                                // usable report: a signal death reaches
+                                // `exec_cmd` as -1 (never forgiven by a
+                                // parseable file -- the out dir is
+                                // pid-unique, but a pid-collision reuse
+                                // could otherwise resurrect a stale
+                                // marker), a normal exit with a
+                                // missing or unparseable file is a
+                                // driver that skipped the write, and a
+                                // count above the file's own total can
+                                // only be garbage.
+                                let unusable : Bool := match parsed {
+                                    Option.some failed => I64.gt failed total,
+                                    Option.none => true,
+                                };
+                                let bad : Bool := I64.lt exit_code 0 || unusable;
+                                if bad then do {
                                     // A driver that died is normally a
                                     // real failure -- but a gap can also
                                     // be a RUNTIME one (the BEq (List A)
@@ -883,9 +907,17 @@ def run_test_loop_codegen (f : String) (rest : List String) (out_dir : String) (
                                         run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed, tests_failed := tests_failed, files_failed := files_failed + 1, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                                     }
                                 } else do {
-                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed + (total - exit_code), tests_failed := tests_failed + exit_code, files_failed := files_failed, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
+                                    // `bad` is false, so `parsed` is
+                                    // `Option.some failed` with
+                                    // 0 <= failed <= total -- the match's
+                                    // other arm is unreachable, present
+                                    // only so the bind has a total type.
+                                    let failed : I64 := match parsed {
+                                        Option.some failed2 => failed2,
+                                        Option.none => 0,
+                                    };
+                                    run_test_loop { files := rest, out_dir := out_dir, bin_idx := bin_idx + 1, tests_passed := tests_passed + (total - failed), tests_failed := tests_failed + failed, files_failed := files_failed, skipped := skipped, gaps := gaps, file_idx := file_idx + 1, total_files := total_files, verbose := verbose, cache := cache }
                                 }
-                            }
                             }
                         }
                     }

@@ -63,10 +63,14 @@ set -euo pipefail
 #    a CI machine.
 #        lang/src/toml.mo
 #
-# 4. More tests than a driver's 8-bit exit code can report (288 > 255),
-#    so the runner refuses it by design -- see the guard in
-#    cli/src/main.mo. Not a bug to fix here; the file needs splitting, or
-#    the driver needs a richer result channel than an exit code.
+# 4. Same `llc` forward-reference family as group 1, newly EXPOSED (not
+#    newly caused): lang/src/parser.mo used to be refused outright by
+#    the runner's 255-test exit-code ceiling, so it never reached `llc`.
+#    The result-file channel removed that ceiling, and the file's first
+#    actual driver compile hits group 1's phi-vs-icmp block ordering
+#    (a `match` arm reading a struct field, same shape as
+#    position.mo's). Stays here with group 1 until that one bug is
+#    fixed; its 288 tests remain covered by the Rust runner below.
 #        lang/src/parser.mo
 #
 # ONE list, used by both the sweep and the Rust fallback -- they were two

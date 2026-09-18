@@ -21,15 +21,16 @@
 /// small ordinary program and letting the real parser produce the
 /// `Def` is how every other `Def` in this codebase gets produced.
 ///
-/// **Supported test shapes**: `Bool` and `IO Bool`, classified per def
-/// by `classify_test_def` below. Those are the only two shapes the
-/// corpus actually uses — `slow_tests/src/codegen_*_tests.mo` is almost
-/// entirely `IO Bool`. A `Result`-returning test (which the Rust
-/// reference does classify, via `detect_test_result_value`,
-/// `core/src/lib.rs`) is currently treated as `Bool` and will fail to
-/// typecheck in the synthesized driver rather than silently passing:
-/// TODO wire the `Result` shape through `TestSpec` when a corpus file
-/// needs it.
+/// **Supported test shapes**: `Bool`, `IO Bool`, `Result`, and
+/// `IO Result`, classified per def by `classify_test_def` below. A
+/// `Result`-returning test is judged by its constructor — `ok` is a
+/// pass, `err` a failure — mirroring the Rust reference's
+/// `detect_test_result_value` (`core/src/lib.rs`), which unwraps an
+/// `IO` wrapper first and then looks at the payload's constructor.
+/// (The Rust twin classifies VALUES at run time; this classifies the
+/// DECLARED TYPE at discovery time and the driver does the unwrap in
+/// source it synthesizes — the same end semantics reached from the
+/// only place a source-synthesizing runner can reach it.)
 ///
 /// **TODO -- async runtime gap**: tests whose bodies reach the
 /// concurrency natives (`fork_io`, `await_fiber`, `cancel_fiber`,
@@ -42,14 +43,16 @@
 /// `std/src/concurrent/combine_test.mo`; they stay deferred until a
 /// self-hosted async runtime exists.
 use lib::types {
-  Attribute, Decl, Def, LoadedModules, LocalScope, ModulePath, Scope, ScopeData,
-  has_attr, show_identifier,
+  Attribute, DebugName, Decl, Def, LoadedModules, LocalScope, ModulePath, Scope,
+  ScopeData, Term, has_attr, show_identifier,
 }
 use lib::codegen::emit {
   bare_modpath, collect_all_decls_from_modules, compile_db_module,
   desugar_struct_lits_decls, emit_type_head_is_io, filter_reachable_decls,
   module_path_to_str, qualified_def_name_str, qualify_modules,
 }
+use lib::codegen::symbols {symbol_identifier}
+use lib::parser::number {parse_i64}
 use lib::codegen::validate {validate_no_unwired_natives}
 use llvm::ir {LLVMModule}
 use lib::module {
@@ -109,8 +112,32 @@ def discover_test_defs (decl_list : List Decl) : List Def :=
 pub struct TestSpec {
     display: String,
     call: String,
-    io_test: Bool
+    io_test: Bool,
+    result_test: Bool
 }
+
+/// The marker prefix the driver writes into its result file (see the
+/// synthesis section header): the file's whole content is this prefix
+/// followed by the failure count in decimal. Exported so the parent
+/// (`cli/src/main.mo`) parses it with the SAME spelling the driver
+/// wrote, rather than a hand-copied literal the two could drift on.
+pub def result_file_marker : String := "__MONAD_TEST__ "
+
+/// Read back what the driver's result file carries: the failure count.
+///
+/// `Option.none` for anything the driver would not have written --
+/// empty content (the normal shape of "the driver died before writing
+/// it"), a missing/wrong marker, or a non-numeric remainder. The
+/// caller supplies `raw`; whether the file EXISTS at all is the
+/// caller's decision too (`monad_read_file` on a missing file hands a
+/// NULL straight through as the String, runtime.c, so the caller
+/// checks `IO.file_exists` first rather than reading blindly).
+pub def parse_driver_result (raw : String) : Option I64 :=
+    if I64.lt (String.length raw) (String.length result_file_marker)
+    then Option.none
+    else if String.beq (String.slice raw 0 (String.length result_file_marker)) result_file_marker
+    then parse_i64 (String.trim (String.drop (String.length result_file_marker) raw))
+    else Option.none
 
 /// Classify one `#[test]` def by its declared return type.
 ///
@@ -124,8 +151,44 @@ pub struct TestSpec {
 #[partial]
 def classify_test_def (display_prefix : String) (d : Def) : TestSpec :=
     let bare : String := module_path_to_str (Def.name d) in
-    let is_io : Bool := emit_type_head_is_io (strip_all_leading_binders d.typ) in
-    { display := display_prefix ++ bare, call := bare, io_test := is_io }
+    let typ : Term := strip_all_leading_binders d.typ in
+    let is_io : Bool := emit_type_head_is_io typ in
+    // A `Result` test is judged by its constructor, and an
+    // `IO (Result ...)` test by the payload's constructor -- same
+    // order the Rust reference checks in (`detect_test_result_value`
+    // unwraps `IO` first). The payload of `IO X` is the single
+    // argument of the `IO` application.
+    let judged : Term := if is_io then io_type_payload typ else typ in
+    let is_result : Bool := emit_type_head_is_result judged in
+    { display := display_prefix ++ bare, call := bare, io_test := is_io, result_test := is_result }
+
+/// The payload of an `IO X` application -- the single argument of the
+/// app whose head is `IO` (which `emit_type_head_is_io` peels nested
+/// apps to find). Precondition: `t`'s head IS `IO`.
+#[partial]
+def io_type_payload (t : Term) : Term :=
+    match t {
+        Term.app _f arg => arg,
+        _ => t,
+    }
+
+/// Whether `t`'s head is the builtin `Result` -- the type-shape twin
+/// of `emit_type_head_is_io` (`lang/codegen/emit.mo`), for the driver's
+/// `Result`-test classification.
+#[partial]
+def emit_type_head_is_result (t : Term) : Bool :=
+    emit_type_head_is_result_go t
+
+#[partial]
+def emit_type_head_is_result_go (t : Term) : Bool :=
+    match t {
+        Term.var _idx dbg => match dbg {
+            DebugName.named id_ => String.beq (symbol_identifier id_) "Result",
+            DebugName.unnamed => false,
+        },
+        Term.app f _arg => emit_type_head_is_result_go f,
+        _ => false,
+    }
 
 #[partial]
 def classify_test_defs (display_prefix : String) (defs : List Def) : List TestSpec :=
@@ -205,15 +268,22 @@ def renamed_entry_def (def_val : Def) : Def :=
 // PASS/FAIL line per test with its duration, prints a per-file summary,
 // and evaluates to the NUMBER OF FAILURES.
 //
-// **The exit value is a failure COUNT, not a 0/1 flag.** `exec_cmd`
-// gives the parent process an exit code and nothing else (no stdout
-// capture), so the count is the only channel through which per-TEST
-// results can reach the parent's own totals -- which is what makes the
-// parent's `X/Y total tests passed` summary count tests rather than
-// files. An exit code is one byte: a file with more than 255 failing
-// tests would wrap, and the parent treats any code above the file's own
-// test count as "the driver crashed" rather than trusting it (the
-// largest corpus file has 16 tests, so the wrap point is far away).
+// **The driver's real report is its result FILE, not its exit code.**
+// `exec_cmd` gives the parent process an exit code and nothing else (no
+// stdout capture), and an exit code is one byte: a failure COUNT of
+// more than 255 wraps, so a large file could never report through it
+// (`lang/src/parser.mo`, at 288 tests, used to be refused outright for
+// exactly that reason). The driver therefore writes
+// `__MONAD_TEST__ <failed-count>` to a per-binary result file
+// (`IO.write_file_native`, path embedded by the parent via
+// `compile_loaded_modules_to_test_ir`) right before returning, and the
+// parent reads THAT back as the authoritative per-test result -- which
+// is what makes the parent's `X/Y total tests passed` summary count
+// tests rather than files. The exit code still carries the failure
+// count (kept so a driver binary run by hand from the shell still says
+// something), but the parent treats a missing or unparseable result
+// file -- a driver that died before writing it -- as "the driver
+// crashed", never trusting the possibly-wrapped code.
 //
 // **`main` is `IO I64` with a do-block body.** An earlier version of
 // this file used a bare `I64` let-chain because an `IO I64` main was
@@ -264,18 +334,22 @@ def synth_test_stmts (spec : TestSpec) (idx : I64) (esc : String) : String :=
     // rejected, dropping the driver's whole `main`. A `.mk` pattern
     // binds each field by position and is unaffected.
     match spec {
-        TestSpec.mk display call io_test =>
-            synth_test_stmts_with display call io_test idx esc,
+        TestSpec.mk display call io_test result_test =>
+            synth_test_stmts_with display call io_test result_test idx esc,
     }
 
 #[partial]
-def synth_test_stmts_with (display : String) (call : String) (io_test : Bool) (idx : I64) (esc : String) : String :=
+def synth_test_stmts_with (display : String) (call : String) (io_test : Bool) (result_test : Bool) (idx : I64) (esc : String) : String :=
     let n_start : String := synth_idx_name "__n" (idx * 2) in
     let n_end : String := synth_idx_name "__n" (idx * 2 + 1) in
     let b : String := synth_idx_name "__b" idx in
     let dur : String := synth_idx_name "__d" idx in
     let r : String := synth_idx_name "__r" idx in
     let f : String := synth_idx_name "__f" idx in
+    // The `Result` holder. A fresh prefix rather than reusing `__r`
+    // (the report-print temporary just below): a `Result` test's
+    // verdict bind would otherwise collide with it.
+    let q : String := synth_idx_name "__q" idx in
     let bind_op : String := if io_test then " <- " else " := " in
     let green : String := esc ++ "[32m" in
     let red : String := esc ++ "[31m" in
@@ -294,8 +368,19 @@ def synth_test_stmts_with (display : String) (call : String) (io_test : Bool) (i
         then "    let " ++ f ++ " := (if " ++ b ++ " then 0 else 1);\n"
         else "    let " ++ f ++ " := I64.add " ++ synth_idx_name "__f" (idx - 1) ++
              " (if " ++ b ++ " then 0 else 1);\n" in
+    // A `Result` test binds its call to a holder and derives the
+    // verdict from the constructor (`ok` passes, `err` fails) -- the
+    // source-level twin of the Rust runner's `detect_test_result_value`.
+    // A plain test binds the call straight to the verdict local. Both
+    // use the same `bind_op`, so an `IO (Result ...)` test's holder is
+    // bound with `<-` exactly like an `IO Bool` test's verdict is.
+    let test_bind : String :=
+        if result_test
+        then "    let " ++ q ++ bind_op ++ call ++ ";\n" ++
+             "    let " ++ b ++ " := match " ++ q ++ " { Result.ok _ => true, Result.err _ => false };\n"
+        else "    let " ++ b ++ bind_op ++ call ++ ";\n" in
     "    let " ++ n_start ++ " <- IO.current_time_nano;\n" ++
-    "    let " ++ b ++ bind_op ++ call ++ ";\n" ++
+    test_bind ++
     "    let " ++ n_end ++ " <- IO.current_time_nano;\n" ++
     "    let " ++ dur ++ " := I64.sub " ++ n_end ++ " " ++ n_start ++ ";\n" ++
     report ++ fail_acc
@@ -375,7 +460,7 @@ def fmt_dur_pad2 (n : I64) : String :=
     if I64.lt n 10 then "0" ++ I64.to_string n else I64.to_string n
 
 #[partial]
-pub def synthesize_test_driver_source (specs : List TestSpec) (file_path : String) : String :=
+pub def synthesize_test_driver_source (specs : List TestSpec) (file_path : String) (result_path : String) : String :=
     let total : I64 := List.length specs in
     // A raw ESC byte in the literal, exactly as `std/src/ansi.mo` does
     // it -- the driver must not `use` that module (see the header), so
@@ -410,6 +495,15 @@ pub def synthesize_test_driver_source (specs : List TestSpec) (file_path : Strin
     " then I64.to_string __passed ++ \"/\" ++ I64.to_string __total ++ \"" ++ tail ++ "\"" ++
     " else I64.to_string __passed ++ \"/\" ++ I64.to_string __total ++ \"" ++ tail ++ ": " ++ red ++ "FAILED" ++ reset ++ "\");\n" ++
     "    let __rs := println __summary;\n" ++
+    // The result FILE is the driver's authoritative report (see the
+    // synthesis header). Written AFTER the summary so a driver that dies
+    // mid-print still leaves no file -- the parent then reads "crashed",
+    // not a stale count. No trailing newline in the content: the parent
+    // trims anyway, and keeping the payload to `marker ++ digits` means
+    // `parse_driver_result` never has to reason about which whitespace
+    // the native write may or may not have appended.
+    "    let __w <- IO.write_file_native \"" ++ result_path ++ "\" (" ++
+    "\"" ++ result_file_marker ++ "\" ++ I64.to_string " ++ last_fail ++ ");\n" ++
     "    return " ++ last_fail ++ ";\n" ++
     "}\n"
 
@@ -453,16 +547,21 @@ pub def is_no_tests_error (e : String) : Bool :=
 /// how many tests it contains.
 ///
 /// The count travels with the module because the parent
-/// (`cli/src/main.mo`) needs it to interpret the driver's exit code --
-/// which is a failure COUNT (see the synthesis header) and is only
-/// meaningful against the file's own total.
+/// (`cli/src/main.mo`) needs it to interpret the driver's report -- the
+/// failure COUNT in the result file (see the synthesis header) is only
+/// meaningful against the file's own total, which the driver itself does
+/// not restate in the file.
 pub struct TestIrResult {
     mod_: LLVMModule,
     total_tests: I64
 }
 
+/// `result_path` is where the driver writes its `__MONAD_TEST__ <failed>`
+/// marker (see the synthesis header): a per-binary file under the
+/// parent's pid-unique out dir, threaded in from `cli/src/main.mo`'s
+/// `run_test_loop_codegen`.
 #[partial]
-pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result String TestIrResult) := do {
+pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) (result_path : String) : IO (Result String TestIrResult) := do {
     let target_mi : ModuleInfo := get_loaded_main loaded;
     let target_decls := target_mi.decl_list;
     let test_defs := discover_test_defs target_decls;
@@ -471,7 +570,7 @@ pub def compile_loaded_modules_to_test_ir (loaded : LoadedModules) : IO (Result 
     } else do {
         let prefix_ : String := display_prefix_of target_mi.path;
         let specs : List TestSpec := classify_test_defs prefix_ test_defs;
-        let driver_source := synthesize_test_driver_source specs target_mi.file_path;
+        let driver_source := synthesize_test_driver_source specs target_mi.file_path result_path;
         match try_parse_decls driver_source {
             Option.some driver_decls =>
                 compile_test_driver_with loaded driver_decls (List.length specs),
@@ -769,17 +868,27 @@ def test_rename_user_main_keeps_decl_count : Bool :=
     I64.beq (List.length (rename_user_main decl_list)) 2
 
 def bool_spec (name : String) : TestSpec :=
-    { display := "m::" ++ name, call := name, io_test := false }
+    { display := "m::" ++ name, call := name, io_test := false, result_test := false }
 
 def io_spec (name : String) : TestSpec :=
-    { display := "m::" ++ name, call := name, io_test := true }
+    { display := "m::" ++ name, call := name, io_test := true, result_test := false }
+
+def result_spec (name : String) : TestSpec :=
+    { display := "m::" ++ name, call := name, io_test := false, result_test := true }
+
+def io_result_spec (name : String) : TestSpec :=
+    { display := "m::" ++ name, call := name, io_test := true, result_test := true }
+
+// Every unit test below synthesizes with the same result path -- only
+// presence in the emitted source is asserted; nothing is ever written.
+def test_result_path : String := "/tmp/__monad_test_driver_result.txt"
 
 /// The degenerate zero-test driver must still PARSE -- the caller
 /// reports "no tests" before reaching this, but a function that emits
 /// unparseable source turns that into an unrelated internal error.
 #[test]
 def test_synthesize_test_driver_source_no_tests_still_parses : Bool :=
-    match try_parse_decls (synthesize_test_driver_source List.empty "m.mo") {
+    match try_parse_decls (synthesize_test_driver_source List.empty "m.mo" test_result_path) {
         Option.some decl_list => decl_list_has_exactly_one_main decl_list,
         Option.none => false,
     }
@@ -793,7 +902,7 @@ def test_synthesize_test_driver_source_parses_and_names_main : Bool :=
     // `open IO {...}` decls and the `__pad2`/`__fmt_dur` helpers the
     // driver source also declares).
     let specs : List TestSpec := List.cons (bool_spec "test_a") (List.cons (bool_spec "test_b") List.empty) in
-    let source : String := synthesize_test_driver_source specs "m.mo" in
+    let source : String := synthesize_test_driver_source specs "m.mo" test_result_path in
     match try_parse_decls source {
         Option.some decl_list => decl_list_has_exactly_one_main decl_list,
         Option.none => false,
@@ -805,7 +914,7 @@ def test_synthesize_test_driver_source_parses_and_names_main : Bool :=
 #[test]
 def test_synthesize_test_driver_source_mixed_shapes_parse : Bool :=
     let specs : List TestSpec := List.cons (bool_spec "t_pure") (List.cons (io_spec "t_io") List.empty) in
-    match try_parse_decls (synthesize_test_driver_source specs "m.mo") {
+    match try_parse_decls (synthesize_test_driver_source specs "m.mo" test_result_path) {
         Option.some decl_list => decl_list_has_exactly_one_main decl_list,
         Option.none => false,
     }
@@ -815,15 +924,15 @@ def test_synthesize_test_driver_source_mixed_shapes_parse : Bool :=
 #[test]
 def test_synthesize_test_driver_source_embeds_display_name : Bool :=
     let specs : List TestSpec := List.cons (bool_spec "test_a") List.empty in
-    String.contains (synthesize_test_driver_source specs "m.mo") "m::test_a"
+    String.contains (synthesize_test_driver_source specs "m.mo" test_result_path) "m::test_a"
 
 /// An `IO Bool` test binds with `<-`, a `Bool` test with `:=`. Getting
 /// this backwards produces source that either fails to typecheck or
 /// (worse) tests the IO action itself rather than its result.
 #[test]
 def test_synthesize_test_driver_source_io_uses_bind : Bool :=
-    let io_src : String := synthesize_test_driver_source (List.cons (io_spec "t") List.empty) "m.mo" in
-    let pure_src : String := synthesize_test_driver_source (List.cons (bool_spec "t") List.empty) "m.mo" in
+    let io_src : String := synthesize_test_driver_source (List.cons (io_spec "t") List.empty) "m.mo" test_result_path in
+    let pure_src : String := synthesize_test_driver_source (List.cons (bool_spec "t") List.empty) "m.mo" test_result_path in
     String.contains io_src "__b0 <- t;" && String.contains pure_src "__b0 := t;"
 
 /// The failure accumulator is threaded through explicit `I64.add`
@@ -834,7 +943,7 @@ def test_synthesize_test_driver_source_io_uses_bind : Bool :=
 def test_synthesize_test_driver_source_accumulates_without_plus_chain : Bool :=
     let specs : List TestSpec :=
         List.cons (bool_spec "a") (List.cons (bool_spec "b") (List.cons (bool_spec "c") List.empty)) in
-    let src : String := synthesize_test_driver_source specs "m.mo" in
+    let src : String := synthesize_test_driver_source specs "m.mo" test_result_path in
     String.contains src "I64.add __f0" && String.contains src "I64.add __f1"
 
 #[partial]
@@ -928,38 +1037,162 @@ def test_is_no_tests_error_false_for_instance_failure : Bool :=
 def test_is_no_tests_error_false_for_native_failure : Bool :=
     Bool.not (is_no_tests_error "native `f64_mul` is not wired into the native backend")
 
-// ─── The exit-code ceiling ──────────────────────────────────────────
+// ─── The result-file protocol ────────────────────────────────────────
 //
-// A driver reports its failure COUNT through its exit code, and a
-// process exit code is 8 bits -- so a file with more than 255 tests
-// cannot report its result at all. `cli/src/main.mo` refuses such a
-// file (before rendering its IR, which would be pure waste); these pin
-// the boundary and the wrap that motivates it.
+// The old exit-code channel had a hard ceiling: a failure COUNT is 8
+// bits, so a file with more than 255 tests could not report through it
+// at all (`lang/src/parser.mo`, at 288 tests, used to be refused
+// outright). The result FILE has no ceiling -- the count is decimal
+// text -- so the boundary that needs pinning is now the PROTOCOL: the
+// marker shape `parse_driver_result` accepts, and the write's presence
+// in the emitted source. Not an end-to-end test on purpose: running a
+// real driver binary is the parent's job; what can go wrong at THIS
+// layer is a malformed marker or a synthesis that forgets the write.
+
+// The write lands right before `return`, AFTER the summary println --
+// a driver that dies mid-print leaves no file, and the parent reads
+// "crashed" rather than trusting a stale count.
+#[test]
+def test_driver_source_writes_the_result_marker : Bool :=
+    let src : String := synthesize_test_driver_source (List.cons (bool_spec "t") List.empty) "m.mo" test_result_path in
+    String.contains src ("IO.write_file_native \"" ++ test_result_path ++ "\"")
+    && String.contains src ("\"" ++ result_file_marker ++ "\" ++ I64.to_string __f0")
+
+// Zero tests still writes the file (with the literal 0) -- "no tests"
+// is reported by the caller before synthesis, but if synthesis is ever
+// reached the emitted source must not name the nonexistent `__f-1`.
+#[test]
+def test_driver_source_writes_marker_with_zero_for_no_tests : Bool :=
+    let src : String := synthesize_test_driver_source List.empty "m.mo" test_result_path in
+    String.contains src ("\"" ++ result_file_marker ++ "\" ++ I64.to_string 0")
+
+// A file the old ceiling refused outright now synthesizes a driver
+// whose last accumulator is `__f287` -- `lang/src/parser.mo`'s own
+// 288-test count, the corpus file that motivated the ceiling. This is
+// pure string synthesis (no parse, no link): the point is only that
+// nothing in the synthesis layer clamps or refuses the count.
+#[test]
+def test_driver_source_has_no_test_count_ceiling : Bool :=
+    let src : String := synthesize_test_driver_source (bool_specs_upto 288) "m.mo" test_result_path in
+    String.contains src "__f287"
+    && String.contains src ("\"" ++ result_file_marker ++ "\" ++ I64.to_string __f287")
+
+#[partial]
+def bool_specs_upto (n : I64) : List TestSpec :=
+    if I64.lt n 1
+    then List.empty
+    else List.cons (bool_spec "t") (bool_specs_upto (n - 1))
+
+// ─── `parse_driver_result` ──────────────────────────────────────────
 //
-// Not an end-to-end test on purpose: building a 256-test driver takes
-// minutes under the evaluator, and what can actually go wrong here is
-// an off-by-one in the comparison, which this catches in microseconds.
-
-/// The predicate `run_test_loop_codegen`'s guard applies to a file's
-/// own test count.
-pub def over_exit_code_limit (total : I64) : Bool := I64.gt total 255
-
-#[test]
-def test_exit_code_limit_allows_255 : Bool :=
-    Bool.not (over_exit_code_limit 255)
+// The parent's side of the protocol (`cli/src/main.mo` reads the file
+// back with these exact semantics): anything that is not
+// `__MONAD_TEST__ <digits>` -- including an empty read from a missing
+// file -- is `Option.none`, which the parent classifies as a driver
+// crash. A permissive parser here would silently resurrect the old
+// "wrapped exit code read as all-pass" failure mode.
 
 #[test]
-def test_exit_code_limit_refuses_256 : Bool :=
-    over_exit_code_limit 256
+def test_parse_driver_result_round_trips : Bool :=
+    match parse_driver_result (result_file_marker ++ "7") {
+        Option.some n => I64.beq n 7,
+        Option.none => false,
+    }
 
-// `lang/src/parser.mo`, at 288 tests, is the one corpus file over the
-// line today.
 #[test]
-def test_exit_code_limit_refuses_the_corpus_file_over_it : Bool :=
-    over_exit_code_limit 288
+def test_parse_driver_result_round_trips_the_corpus_count : Bool :=
+    match parse_driver_result (result_file_marker ++ "288") {
+        Option.some n => I64.beq n 288,
+        Option.none => false,
+    }
 
-// Why the ceiling exists at all: 256 failures in an 8-bit exit code is
-// 0, which the runner would read as every test passing.
+// The count is written with no trailing newline, but the parent trims
+// before parsing anyway -- a driver edited by hand, or a native write
+// that ever grows a newline, must still round-trip.
 #[test]
-def test_256_failures_wrap_to_a_clean_exit : Bool :=
-    I64.beq (I64.sub 256 (I64.mul (I64.div 256 256) 256)) 0
+def test_parse_driver_result_trims_whitespace : Bool :=
+    match parse_driver_result (result_file_marker ++ " 12 \n") {
+        Option.some n => I64.beq n 12,
+        Option.none => false,
+    }
+
+// A count of zero is a VALID parse, not "nothing" -- this is the all-
+// tests-passed report and must reach the parent as `Option.some 0`.
+#[test]
+def test_parse_driver_result_zero_is_some : Bool :=
+    match parse_driver_result (result_file_marker ++ "0") {
+        Option.some n => I64.beq n 0,
+        Option.none => false,
+    }
+
+// The reject tests match rather than `Bool.not`-ing the `Option`
+// directly: `parse_driver_result` returns an `Option I64`, and the
+// self-hosted checker (unlike the Rust host's) accepted
+// `Bool.not (Option ...)` silently -- these tests once "passed" that
+// way while asserting nothing.
+#[test]
+def test_parse_driver_result_rejects_a_missing_marker : Bool :=
+    match parse_driver_result "7" {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_parse_driver_result_rejects_garbage_after_the_marker : Bool :=
+    match parse_driver_result (result_file_marker ++ "x") {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+#[test]
+def test_parse_driver_result_rejects_input_shorter_than_the_marker : Bool :=
+    match parse_driver_result "" {
+        Option.some _ => false,
+        Option.none => match parse_driver_result "__MONAD" {
+            Option.some _ => false,
+            Option.none => true,
+        },
+    }
+
+#[test]
+def test_parse_driver_result_rejects_a_wrong_marker : Bool :=
+    match parse_driver_result "__MONAD_CHECK__ 7" {
+        Option.some _ => false,
+        Option.none => true,
+    }
+
+// ─── The `Result` test shape ────────────────────────────────────────
+//
+// A `Result`-typed test binds its call to a `__q<i>` holder and derives
+// the verdict from the constructor, rather than binding the call
+// straight to the `__b<i>` verdict local. Getting this wrong makes the
+// driver either fail to parse (no holder declared) or compare the
+// `Result` value itself as a Bool.
+
+#[test]
+def test_driver_source_result_test_matches_the_constructor : Bool :=
+    let src : String := synthesize_test_driver_source (List.cons (result_spec "t") List.empty) "m.mo" test_result_path in
+    String.contains src "let __q0 := t;"
+    && String.contains src "let __b0 := match __q0 { Result.ok _ => true, Result.err _ => false };"
+    // The constructor match must survive the REAL parser too: a
+    // `Result` driver whose source fails to parse is reported as a
+    // mystery internal error, not as a run of tests.
+    && match try_parse_decls src {
+        Option.some decl_list => decl_list_has_exactly_one_main decl_list,
+        Option.none => false,
+    }
+
+// An `IO (Result ...)` test combines both: the holder binds with `<-`
+// like any IO test, then the constructor match derives the verdict.
+#[test]
+def test_driver_source_io_result_test_binds_then_matches : Bool :=
+    let src : String := synthesize_test_driver_source (List.cons (io_result_spec "t") List.empty) "m.mo" test_result_path in
+    String.contains src "let __q0 <- t;"
+    && String.contains src "let __b0 := match __q0 { Result.ok _ => true, Result.err _ => false };"
+
+// A plain test must NOT grow a holder or a match -- that shape is the
+// `Result` shape's alone.
+#[test]
+def test_driver_source_bool_test_has_no_match : Bool :=
+    let src : String := synthesize_test_driver_source (List.cons (bool_spec "t") List.empty) "m.mo" test_result_path in
+    Bool.not (String.contains src "match __q0")

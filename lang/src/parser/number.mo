@@ -74,6 +74,32 @@ def parse_digits_char (ch : String) (rest : String) (acc : I64) : I64 :=
 	parse_digits_loop rest (I64.add (I64.mul acc 10) (char_to_digit ch))
 
 
+/// Decimal string -> I64, VALIDATED: `Option.none` for an empty string
+/// or one containing anything other than an ASCII digit (no sign, no
+/// separators -- same input domain as `parse_digits`, which assumes it).
+///
+/// Canonical home for callers that need to read a number back out of
+/// plain text the compiler itself wrote -- the test runner's result
+/// marker file (`lang/codegen/test_driver.mo`, parsed by
+/// `cli/src/main.mo`) -- without inheriting the parser combinator's
+/// `ParseResult` machinery: this is a plain `String` -> `Option I64`,
+/// callable from anywhere `String.slice` is.
+pub def parse_i64 (s : String) : Option I64 :=
+	if is_empty s
+	then Option.none
+	else parse_i64_loop s 0
+
+#[partial]
+def parse_i64_loop (s : String) (acc : I64) : Option I64 :=
+	if is_empty s
+	then Option.some acc
+	else
+		let ch : String := String.slice s 0 1 in
+		if is_digit ch
+		then parse_i64_loop (String.drop 1 s) (I64.add (I64.mul acc 10) (char_to_digit ch))
+		else Option.none
+
+
 // --- Hex number parser (`0xBADBEEF`, `0XFF`) ---
 //
 // No `_` digit-grouping — matches the Rust reference parser, which has
