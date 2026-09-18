@@ -1635,6 +1635,46 @@ def qualified_con_ref_typ (dbg : DebugName) (sig : Term) (scope : Scope) : Term 
         }
     else sig
 
+/// Whether an unresolved reference is eligible for the CLASS-METHOD
+/// lookup below: a reference written with a dotted qualifier
+/// (`Foldable.foldr`) is one only when that qualifier really names a
+/// class; an undotted one (a bare method name, which the very same
+/// bare-name lookup below is what resolves) keeps today's behavior.
+///
+/// Class methods are registered under their BARE method name
+/// (`add_methods_go`, `lang/scope.mo`), so `scope_find_class_def_by_name`
+/// matches on that bare name -- which is exactly why the lookup strips
+/// the qualifier first. Stripping it UNCONDITIONALLY is what makes a
+/// qualified CONSTRUCTOR reference match whichever class happens to
+/// declare a method of the same bare name: `List.empty`, whose qualifier
+/// is the INDUCTIVE `List`, matches class `FromListLiteral`'s own `empty`
+/// method, whose promoted def for `init/prelude.mo`'s `instance
+/// FromListLiteral List` is `FromListLiteral_List_empty` -- the very def
+/// whose body the reference appears in. Resolving it "successfully"
+/// rewrites that body into its own name, a strict self-reference the
+/// evaluator reports as `ce_cycle` (measured: with the applied-head arm
+/// in `lang/scope.mo`'s `term_matches_carrier` -- the carrier the wrong
+/// resolution needs to succeed at all -- but without this guard, the
+/// self-hosted meta-evaluator died with `ce_cycle 3`, which is what kept
+/// that arm out of P5). The qualifier is the only
+/// thing that tells the two kinds of reference apart, so it is required
+/// to name a class; a qualifier naming an INDUCTIVE falls through to
+/// `type_check_free_var_con`, the constructor path, which is what
+/// `List.empty`/`Option.some`/`Bool.true` mean.
+def ref_names_class_method (id : Identifier) (scope : Scope) : Bool :=
+    match id {
+        Identifier.id s =>
+            match dotted_qualifier s {
+                Option.none => true,
+                Option.some qual =>
+                    let qual_np : NamePath := NamePath.npath (List.cons (Identifier.id qual) List.empty) in
+                    match scope_find_class qual_np scope {
+                        Option.some _ => true,
+                        Option.none => false,
+                    },
+            },
+    }
+
 /// Look up a free variable by debug name in the scope.
 def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope) (locals : LocalScope) : Result TypeError TypedTerm :=
     match dbg {
@@ -1699,8 +1739,18 @@ def type_check_free_var (dbg : DebugName) (expected_type : Term) (scope : Scope)
                     // segment before looking it up, mirroring
                     // `type_check_free_var_con`'s identical existing fix
                     // just below for qualified constructor references.
+                    // Only a reference that really IS a class-method
+                    // reference gets that far (`ref_names_class_method`)
+                    // -- otherwise a qualified CONSTRUCTOR reference
+                    // (`List.empty`) matches an unrelated class's
+                    // same-named method and resolves to a promoted def
+                    // standing inside its own body, see that function's
+                    // doc comment.
                     let bare_id : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
-                    let clsd_result : Result ScopeError ScopeClassDef := scope_find_class_def_by_name bare_id scope in
+                    let clsd_result : Result ScopeError ScopeClassDef :=
+                        if ref_names_class_method id scope
+                        then scope_find_class_def_by_name bare_id scope
+                        else err (ScopeError.class_not_found (NamePath.npath (List.cons bare_id List.empty))) in
                     match clsd_result {
                         ok cd =>
                             match resolve_class_method cd expected_type scope locals {

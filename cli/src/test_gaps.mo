@@ -60,7 +60,6 @@ pub def gap_paths : List String :=
      "std/src/list_tests2.mo",
      "std/src/map_tests.mo",
      "std/src/test_map_full.mo",
-     "std/src/sha256.mo",
      "std/src/concurrent/combine_test.mo",
      "lang/src/json.mo",
      "cli/src/tests/cli_derive_tests.mo",
@@ -91,7 +90,6 @@ pub def gap_causes : List String :=
      "no instance found for `BEq.beq`",
      "no instance found for `Map.empty`",
      "no instance found for `Map.empty`",
-     "does not typecheck",
      "does not typecheck",
      "does not typecheck",
      "does not typecheck",
@@ -145,18 +143,6 @@ pub def gap_reasons : List String :=
      "instance head is applied (BEq (List A)); carrier is a bare head",
      "instance head is applied (Map M); carrier is a bare head",
      "instance head is applied (Map M); carrier is a bare head",
-     // Closed by: type-variable instantiation in the self-hosted
-     // checker, AND the applied-head instance match it depends on. Both
-     // report a mismatch between a declared `A` and the concrete type at
-     // the call (`expected (List A), found (List U8)`), which the Rust
-     // host accepts -- so the files are fine and the checker is not.
-     // MEASURED: the instantiation half landed in P5 and moves NO
-     // corpus file on its own (`FromListLiteral.cons` has to resolve to
-     // the instantiated signature before it is ever read); the
-     // applied-head half is still open, and trying it alone breaks
-     // `cli/src/tests/cli_derive_self_hosted_tests.mo` with a dict
-     // self-recursion in the macro evaluator -- see AGENTS.md.
-     "self-hosted checker: class-method signatures are never solved against the call (P5), and an instance is not matched through an APPLIED head (open)",
      // NOT the same mechanism, and this file is the counter-example
      // worth keeping: the instantiation work does not move it either
      // way. `all_i64`'s `IO.pure (List.empty : List I64)` loses its

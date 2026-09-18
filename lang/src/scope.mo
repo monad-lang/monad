@@ -3325,6 +3325,23 @@ def id_in_list (id : Identifier) (ids : List Identifier) : Bool :=
         List.cons hd rest => if Similar.similar hd id then true else id_in_list id rest,
     }
 
+/// Whether `t` is one of the class's own type parameters -- the
+/// match-anything leaves `term_matches_carrier` is built around. Used to
+/// decide whether an APPLIED instance arg stands for its head alone
+/// (`Show (List A)`: `A` is the class's parameter, so the arg constrains
+/// nothing), as opposed to a genuinely concrete one (`Show (Option I64)`,
+/// whose `I64` must not be waved through).
+#[partial]
+def term_is_wildcard (wildcard_names : List Identifier) (t : Term) : Bool :=
+    match term_peel t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => id_in_list id wildcard_names,
+                DebugName.unnamed => false,
+            },
+        _ => false,
+    }
+
 /// Structural match between one instance-declared type arg and a
 /// concrete carrier, treating any leaf `Var` in `wildcard_names` as a
 /// match-anything hole. Handles nested shapes (`Append (List A)`'s own
@@ -3360,6 +3377,23 @@ def term_matches_carrier (wildcard_names : List Identifier) (ins_term : Term) (c
                                 DebugName.named cid => Similar.similar id cid,
                                 DebugName.unnamed => false,
                             },
+                        // An APPLIED carrier against a BARE instance arg
+                        // -- `instance FromListLiteral List` (the head
+                        // alone, as `lower_parse_term_bare` lowers it)
+                        // meeting the `List (List U8)` `List.flatten`
+                        // returns. The instance's arg names the head and
+                        // says nothing about the parameters (those are
+                        // the class's own wildcards, checked at the top
+                        // of this arm), so asking the same question one
+                        // level down is exactly right: match the head,
+                        // ignore what the carrier applies it to. Without
+                        // this arm a bare-head instance can only ever
+                        // match a bare-head carrier, so `Show`/`BEq`/
+                        // `FromListLiteral` on any APPLIED type report
+                        // `no instance found` however concrete the
+                        // carrier is (live: `std/src/sha256.mo`'s
+                        // `List.flatten [Sha256.unpack_word a, ...]`).
+                        Term.app chead _ => term_matches_carrier wildcard_names ins_term chead,
                         _ => false,
                     },
                 DebugName.unnamed => false,
@@ -3367,7 +3401,23 @@ def term_matches_carrier (wildcard_names : List Identifier) (ins_term : Term) (c
         Term.app if_ ia =>
             match term_peel carrier {
                 Term.app cf ca => term_matches_carrier wildcard_names if_ cf && term_matches_carrier wildcard_names ia ca,
-                _ => false,
+                // A BARE carrier against an APPLIED instance arg -- the
+                // mirror of the arm above, and the shape the carrier
+                // guesser actually produces: `infer_carrier_type`
+                // deliberately normalizes to the bare HEAD
+                // (`type_head_name_local`, `List I64` -> `List`), because
+                // that is all the call site's own arguments reveal. So
+                // `instance [Show A] Show (List A)` never matched the
+                // carrier of `Show.show [42]`, and every class method on a
+                // list literal reported `no instance found` however
+                // concrete the list was. The instance arg's own parameters
+                // are its class's wildcards (`A` here), which constrain
+                // nothing the carrier could answer, so the arg stands for
+                // its head alone -- exactly the arm above, one level in.
+                // A CONCRETE applied arg (`Show (Option I64)`) is NOT a
+                // wildcard and must keep failing here: the bare carrier
+                // says nothing about its element type.
+                _ => term_is_wildcard wildcard_names ia && term_matches_carrier wildcard_names if_ carrier,
             },
         _ => Similar.similar ins_term carrier,
     }
