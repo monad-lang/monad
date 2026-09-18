@@ -12,7 +12,8 @@ use std::map {}
 use std::list {intercalate}
 use lib::types {
   Con, DebugName, Decl, Def, Identifier, InductConstructor, Inductive, Literal,
-  LoadedModules, LocalScope, Location, MatchCase, ModulePath, Native, Operator,
+  LoadedModules, LocalScope, Location, MatchCase, ModulePath, NamePath, Native,
+  Operator,
   Multiplicity, Param, Scope, ScopeData, Struct, StructField, StructLitField,
   Term, TypeConstraint, UseFilter, UseItem, Visibility, sentinel,
   char_to_string, show_identifier, show_module_path, term_peel,
@@ -60,7 +61,8 @@ use lib::codegen::ctx {
 }
 use lib::codegen::symbols {
   bare_modpath, def_symbol_name, ends_with_main, extract_base_name,
-  mangle_identifiers, module_path_to_str, ref_symbol_name,
+  bare_npath, mangle_identifiers, name_path_to_str, module_path_to_str,
+  ref_symbol_name,
   replace_dots_with_underscores, string_find_last, symbol_identifier,
   unqualify_def_name,
 }
@@ -2390,7 +2392,7 @@ def try_compile_constructor_app_db (c : CodegenCtx) (fun : Term) (arg : Term) : 
                             if looks_like_ctor && Bool.not also_a_real_fn
                             then
                                 let base_name := extract_base_name name in
-                                let con := Con.mk (Identifier.id base_name) (ModulePath.mp List.empty) (List.length args) (wrap_some_list args) in
+                                let con := Con.mk (Identifier.id base_name) (NamePath.npath List.empty) (List.length args) (wrap_some_list args) in
                                 Option.some (compile_con_ir c con)
                             else Option.none,
                         DebugName.unnamed => Option.none,
@@ -3883,7 +3885,7 @@ def compile_db_inductive_constructors (type_name : String) (constructors : List 
                 // any real file, which always pulls in every loaded
                 // module's declarations via compile_loaded_modules_to_ir,
                 // not just the ones actually used).
-                let name_str := module_path_to_str name in
+                let name_str := name_path_to_str name in
                 let qualified_name := type_name ++ "_" ++ name_str in
                 let field_count := count_db_params params 0 in
                 // Composite bare#arity key -- this wrapper's own param
@@ -3912,7 +3914,7 @@ def compile_db_inductive_constructors (type_name : String) (constructors : List 
 #[partial]
 def compile_db_inductive (ind : Inductive) (ctor_tags : HashMap String I64) : List LLVMFunction := match ind {
     Inductive.mk name params typ constructors attrs _vis =>
-        compile_db_inductive_constructors (module_path_to_str name) constructors ctor_tags
+        compile_db_inductive_constructors (name_path_to_str name) constructors ctor_tags
 }
 
 /// Compile a list of canonical Inductives to LLVM constructor wrapper functions.
@@ -4196,12 +4198,12 @@ def test_empty_decls_module : Bool :=
 
 #[test]
 def test_compile_db_inductive_decls : Bool :=
-    let some_name := ModulePath.mp (List.cons (Identifier.id "Some") List.empty) in
+    let some_name := NamePath.npath (List.cons (Identifier.id "Some") List.empty) in
     let some_ctor := InductConstructor.mk some_name List.empty (Term.type_ 1) in
-    let none_name := ModulePath.mp (List.cons (Identifier.id "None") List.empty) in
+    let none_name := NamePath.npath (List.cons (Identifier.id "None") List.empty) in
     let none_ctor := InductConstructor.mk none_name List.empty (Term.type_ 1) in
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
-    let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
+    let ind_name := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name List.empty (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let funcs := compile_db_inductive_decls (List.cons ind List.empty) str_map_empty in
     let mod_ := LLVMModule.mk "x86_64-unknown-linux-gnu" List.empty funcs List.empty Option.none List.empty in
@@ -4228,12 +4230,12 @@ def test_compile_db_inductive_decls : Bool :=
 /// exactly the map-building + lookup mechanism, not elaboration.
 #[test]
 def test_ctor_tag_map_qualified_name_lookup : Bool :=
-    let some_name := ModulePath.mp (List.cons (Identifier.id "Some") List.empty) in
+    let some_name := NamePath.npath (List.cons (Identifier.id "Some") List.empty) in
     let some_ctor := InductConstructor.mk some_name List.empty (Term.type_ 1) in
-    let none_name := ModulePath.mp (List.cons (Identifier.id "None") List.empty) in
+    let none_name := NamePath.npath (List.cons (Identifier.id "None") List.empty) in
     let none_ctor := InductConstructor.mk none_name List.empty (Term.type_ 1) in
     let ctors := List.cons some_ctor (List.cons none_ctor List.empty) in
-    let ind_name := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
+    let ind_name := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
     let ind := Inductive.mk ind_name List.empty (Term.type_ 1) ctors empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons ind List.empty) in
     let c := empty_ctx empty_arities tag_map str_map_empty in
@@ -4260,13 +4262,13 @@ def unit_test_param (nm : String) : Param :=
 /// exactly the map-building + lookup mechanism.
 #[test]
 def test_ctor_tags_distinguish_same_name_differing_arity : Bool :=
-    let slim_mk := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "mk") List.empty))
+    let slim_mk := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
         (List.cons (unit_test_param "only") List.empty) (Term.type_ 1) in
-    let slim := Inductive.mk (ModulePath.mp (List.cons (Identifier.id "Slim") List.empty))
+    let slim := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Slim") List.empty))
         List.empty (Term.type_ 1) (List.cons slim_mk List.empty) empty_attrs Visibility.package_private in
-    let wide_mk := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "mk") List.empty))
+    let wide_mk := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
         (List.cons (unit_test_param "a") (List.cons (unit_test_param "b") (List.cons (unit_test_param "c") List.empty))) (Term.type_ 1) in
-    let wide := Inductive.mk (ModulePath.mp (List.cons (Identifier.id "Wide") List.empty))
+    let wide := Inductive.mk (NamePath.npath (List.cons (Identifier.id "Wide") List.empty))
         List.empty (Term.type_ 1) (List.cons wide_mk List.empty) empty_attrs Visibility.package_private in
     let tag_map := build_constructor_tag_map (List.cons slim (List.cons wide List.empty)) in
     let arity_map := build_constructor_arity_map (List.cons slim (List.cons wide List.empty)) in
@@ -4302,7 +4304,7 @@ def native_attr (target : String) : List Attribute :=
 def native_def_fixture (name : String) (target : String) : Def :=
     let body := Term.lam (DebugName.named (Identifier.id "a")) Term.hole
         (Term.lam (DebugName.named (Identifier.id "b")) Term.hole Term.hole) in
-    Def.mk (ModulePath.mp (List.cons (Identifier.id name) List.empty)) Term.hole body
+    Def.mk (NamePath.npath (List.cons (Identifier.id name) List.empty)) Term.hole body
         List.empty (native_attr target) Visibility.package_private
 
 #[partial]
@@ -4361,7 +4363,7 @@ def test_native_unwhitelisted_native_still_gets_unit_stub : Bool :=
 /// `compile_db_decls_ir_with_debug` tests below.
 #[partial]
 def debug_fixture_def : Def :=
-    Def.mk (ModulePath.mp (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
+    Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
         (Term.lit (Literal.num 42 NumSuffix.i64)) List.empty empty_attrs Visibility.package_private
 
 /// A def with a source position on an INNER term, as
@@ -4383,7 +4385,7 @@ def debug_fixture_def : Def :=
 ///     constant is folded into a phi operand.
 #[partial]
 def located_fixture_def : Def :=
-    Def.mk (ModulePath.mp (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
+    Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
         (Term.ctx (Location.mk 40 9 7)
             (Term.lit (Literal.if_ (Term.lit (Literal.num 1 NumSuffix.i64))
                                    (Term.lit (Literal.num 2 NumSuffix.i64))
@@ -4394,7 +4396,7 @@ def located_fixture_def : Def :=
 /// body -- line 2, column 3, at offset 5.
 #[partial]
 def located_num_fixture_def : Def :=
-    Def.mk (ModulePath.mp (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
+    Def.mk (NamePath.npath (List.cons (Identifier.id "myfunc") List.empty)) (Term.type_ 1)
         (Term.ctx (Location.mk 5 2 3) (Term.lit (Literal.num 42 NumSuffix.i64)))
         List.empty empty_attrs Visibility.package_private
 
@@ -4481,7 +4483,7 @@ def test_compile_db_decls_ir_default_has_no_debug_info : Bool :=
 /// (`materialize_branch_val`) never runs.
 #[partial]
 def native_bool_over_branching_fixture_def : Def :=
-    Def.mk (ModulePath.mp (List.cons (Identifier.id "spbeq") List.empty)) (Term.type_ 1)
+    Def.mk (NamePath.npath (List.cons (Identifier.id "spbeq") List.empty)) (Term.type_ 1)
         (Term.lam (DebugName.named (Identifier.id "b")) (Term.type_ 1)
             (Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1)
                 (Term.lam (DebugName.named (Identifier.id "y")) (Term.type_ 1)
@@ -4649,8 +4651,8 @@ def desugar_struct_lit_con (scope : Scope) (fields : List StructLitField) (tn : 
     match type_head_name (term_peel tn) {
         Option.none => Option.none,
         Option.some sname =>
-            let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
-            match scope_find_inductive typ_mp scope {
+            let typ_np : NamePath := NamePath.npath (List.cons sname List.empty) in
+            match scope_find_inductive typ_np scope {
                 Result.err _ => Option.none,
                 Result.ok ind =>
                     match ind {
@@ -4661,7 +4663,7 @@ def desugar_struct_lit_con (scope : Scope) (fields : List StructLitField) (tn : 
                                     match ctor {
                                         InductConstructor.mk con_name params _ =>
                                             let args : List (Option Term) := struct_lit_build_args params fields in
-                                            Option.some (Con.mk (struct_lit_con_name con_name) typ_mp (List.length params) (desugar_opt_terms scope args)),
+                                            Option.some (Con.mk (struct_lit_con_name con_name) typ_np (List.length params) (desugar_opt_terms scope args)),
                                     },
                             },
                     },
@@ -4971,7 +4973,7 @@ pub def compile_loaded_modules_to_ir_with_debug (loaded : LoadedModules) (verbos
     // Bound to a local first: field access lowers only on a plain
     // identifier, not on a parenthesised call result.
     let main_mi : ModuleInfo := get_loaded_main loaded;
-    let main_root : String := qualified_def_name_str main_mi.path (bare_modpath "main");
+    let main_root : String := qualified_def_name_str main_mi.path (bare_npath "main");
     let reachable_decls := filter_reachable_decls main_root dispatched_decls;
     if verbose then do {
         let reachable_count := List.length reachable_decls;

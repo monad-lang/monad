@@ -1,6 +1,7 @@
 use lib::types {
   Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor, Inductive,
-  Instance, Literal, MatchCase, ModulePath, Native, Operator, Param, Struct,
+  Instance, Literal, MatchCase, ModulePath, NamePath, Native, Operator, Param,
+  Struct,
   StructField, Term, TypeConstraint, affine, app, class_d, con, def_d, f64,
   forall, hole, i32, i64, i8, id, if_, inductive_d, infix_d, lam, linear, lit,
   many, match_, mc, mk, mp, name, named, ntv, num, open_all, open_d, operator, pi,
@@ -273,7 +274,7 @@ def test_show_term_native : Bool :=
 
 #[test]
 def test_show_term_con_no_args : Bool :=
-    let typ_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
+    let typ_path : NamePath := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
     let con : Con := Con.mk (Identifier.id "none") typ_path 0 empty_opt_terms in
     let term : Term := Term.con con in
     let result : String := show_term term in
@@ -281,7 +282,7 @@ def test_show_term_con_no_args : Bool :=
 
 #[test]
 def test_show_term_con_with_args : Bool :=
-    let typ_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Option") List.empty) in
+    let typ_path : NamePath := NamePath.npath (List.cons (Identifier.id "Option") List.empty) in
     let arg1 : Option Term := Option.some (Term.lit (Literal.num 42 NumSuffix.i64)) in
     let args : List (Option Term) := List.cons arg1 empty_opt_terms in
     let con : Con := Con.mk (Identifier.id "some") typ_path 1 args in
@@ -293,7 +294,7 @@ def test_show_term_con_with_args : Bool :=
 
 #[test]
 def test_show_decl_def : Bool :=
-    let name : ModulePath := ModulePath.mp (List.cons (Identifier.id "id") List.empty) in
+    let name : NamePath := NamePath.npath (List.cons (Identifier.id "id") List.empty) in
     let typ : Term := Term.pi (Term.type_ 1) (Term.pi (Term.var 2 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_A))) in
     let body : Term := Term.lam (DebugName.named test_id_x) (Term.var 1 (DebugName.named test_id_A)) (Term.var 0 (DebugName.named test_id_x)) in
     let def_ : Def := Def.mk name typ body empty_constraints empty_attrs Visibility.package_private in
@@ -303,12 +304,12 @@ def test_show_decl_def : Bool :=
 
 #[test]
 def test_show_decl_inductive : Bool :=
-    let type_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Bool") List.empty) in
+    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Bool") List.empty) in
     let true_cn : InductConstructor := InductConstructor.mk
-        (ModulePath.mp (List.cons (Identifier.id "true") List.empty))
+        (NamePath.npath (List.cons (Identifier.id "true") List.empty))
         empty_params (Term.type_ 1) in
     let false_cn : InductConstructor := InductConstructor.mk
-        (ModulePath.mp (List.cons (Identifier.id "false") List.empty))
+        (NamePath.npath (List.cons (Identifier.id "false") List.empty))
         empty_params (Term.type_ 1) in
     let ctors : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
     let ind : Inductive := Inductive.mk type_name empty_params (Term.type_ 1) ctors empty_attrs Visibility.package_private in
@@ -342,7 +343,7 @@ def test_show_decl_class_simple : Bool :=
 #[test]
 def test_show_decl_infix : Bool :=
     let op : Operator := Operator.operator "++" in
-    let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "append") List.empty) in
+    let path : NamePath := NamePath.npath (List.cons (Identifier.id "append") List.empty) in
     let decl : Decl := Decl.infix_d op path Visibility.package_private in
     let result : String := show_decl decl in
     String.beq result "infix: ++ := append"
@@ -356,7 +357,7 @@ def test_show_decl_use : Bool :=
 
 #[test]
 def test_show_decl_open : Bool :=
-    let path : ModulePath := ModulePath.mp (List.cons (Identifier.id "IO") List.empty) in
+    let path : NamePath := NamePath.npath (List.cons (Identifier.id "IO") List.empty) in
     let decl : Decl := Decl.open_d path OpenFilter.open_all in
     let result : String := show_decl decl in
     String.beq result "open IO"
@@ -365,7 +366,7 @@ def test_show_decl_open : Bool :=
 
 #[test]
 def test_show_instance : Bool :=
-    let cls_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
+    let cls_path : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
     let args : List Term := List.cons (Term.type_ 1) List.empty in
     let ins : Instance := Instance.mk (Identifier.id "inst") cls_path empty_constraints args Visibility.package_private List.empty List.empty in
     let result : String := show_instance ins in

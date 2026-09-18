@@ -2,13 +2,14 @@ use lib::core_eval {basic_native_table}
 use lib::core_ir {CoreIr, IrLit, MatchArm}
 use lib::core_value {GlobalDef, GlobalTable, NativeTable}
 use lib::scope {
-  build_scope_from_decls, modpath_eq, scope_data_empty, scope_find_inductive,
+  build_scope_from_decls, modpath_eq, modpath_of, npath_eq, scope_data_empty,
+  scope_find_inductive,
   scope_find_inductive_by_constructor, scope_globals, scope_resolve_name,
 }
 use lib::types {
   AttrArg, Attribute, Con, Decl, Def, DebugName, Identifier, Inductive,
-  InductConstructor, Literal, MatchCase, ModulePath, Native, Scope, ScopeDef,
-  Term, id_eq, sentinel, show_module_path,
+  InductConstructor, Literal, MatchCase, ModulePath, NamePath, Native, Scope, ScopeDef,
+  Term, id_eq, sentinel, show_name_path,
 }
 use lib::typecheck::infer {empty_locals, last_dotted_segment}
 
@@ -93,13 +94,13 @@ def ctx_defs (ctx : LowerCtx) : List Def :=
   }
 
 #[partial]
-def find_def_body (defs : List Def) (path : ModulePath) : Option Term :=
+def find_def_body (defs : List Def) (path : NamePath) : Option Term :=
   match defs {
     List.empty => Option.none,
     List.cons d rest =>
       match d {
         Def.mk name _typ term _constraints _attrs _vis =>
-          if modpath_eq name path
+          if npath_eq name path
           then Option.some term
           else find_def_body rest path,
       },
@@ -109,13 +110,13 @@ def find_def_body (defs : List Def) (path : ModulePath) : Option Term :=
 /// `.attrs` too, to detect a `#[native ...]` stub (see its own doc
 /// comment).
 #[partial]
-def find_def (defs : List Def) (path : ModulePath) : Option Def :=
+def find_def (defs : List Def) (path : NamePath) : Option Def :=
   match defs {
     List.empty => Option.none,
     List.cons d rest =>
       match d {
         Def.mk name _typ _term _constraints _attrs _vis =>
-          if modpath_eq name path
+          if npath_eq name path
           then Option.some d
           else find_def rest path,
       },
@@ -156,7 +157,7 @@ pub type LowerError {
 /// Accumulates whole-program global discovery + lowering. See this
 /// module's doc comment.
 type LowerAcc {
-  lower_acc (seen: List ModulePath) (done: List GlobalDef),
+  lower_acc (seen: List NamePath) (done: List GlobalDef),
 }
 
 def lower_acc_empty : LowerAcc := LowerAcc.lower_acc List.empty List.empty
@@ -164,30 +165,30 @@ def lower_acc_empty : LowerAcc := LowerAcc.lower_acc List.empty List.empty
 // ─── Path interning ──────────────────────────────────────────────────
 
 #[partial]
-def modpath_index_from (i : I64) (path : ModulePath) (paths : List ModulePath) : Option I64 :=
+def npath_index_from (i : I64) (path : NamePath) (paths : List NamePath) : Option I64 :=
   match paths {
     List.empty => Option.none,
     List.cons hd rest =>
-      if modpath_eq path hd
+      if npath_eq path hd
       then Option.some i
-      else modpath_index_from (i + 1) path rest,
+      else npath_index_from (i + 1) path rest,
   }
 
-def modpath_index (path : ModulePath) (paths : List ModulePath) : Option I64 :=
-  modpath_index_from 0 path paths
+def npath_index (path : NamePath) (paths : List NamePath) : Option I64 :=
+  npath_index_from 0 path paths
 
 /// Assign (or reuse) a stable global index for `path` -- does not lower
 /// its body; that happens later, in `process_pending`.
-def intern_path (path : ModulePath) (acc : LowerAcc) : Pair I64 LowerAcc :=
+def intern_path (path : NamePath) (acc : LowerAcc) : Pair I64 LowerAcc :=
   match acc {
     LowerAcc.lower_acc seen done =>
-      match modpath_index path seen {
+      match npath_index path seen {
         Option.some idx => Pair.pair idx acc,
         Option.none => Pair.pair (List.length seen) (LowerAcc.lower_acc (List.append seen [path]) done),
       },
   }
 
-def single_segment_path (id : Identifier) : ModulePath := ModulePath.mp [id]
+def single_segment_npath (id : Identifier) : NamePath := NamePath.npath [id]
 
 // ─── The Result-plus-threaded-accumulator "monad" this module runs in ──
 
@@ -265,8 +266,8 @@ def lower_free_var_fallback (ctx : LowerCtx) (id : Identifier) (acc : LowerAcc) 
 def identifier_bare_ctor_name (id : Identifier) : String :=
   match id { Identifier.id s => last_dotted_segment s }
 
-def module_path_last_segment (path : ModulePath) : String :=
-  identifier_bare_ctor_name (single_segment_path_head path)
+def name_path_last_segment (path : NamePath) : String :=
+  identifier_bare_ctor_name (npath_last_id path)
 
 /// The named constructor's own (tag, arity), searched by BARE name
 /// alone across every inductive in scope (same "if ambiguous, first
@@ -276,7 +277,7 @@ def module_path_last_segment (path : ModulePath) : String :=
 /// variable OCCURRENCE, needs a `CoreIr`) and `lower_one_global` (a
 /// GLOBAL SLOT with no ordinary `Def`, needs a `GlobalDef`).
 def find_ctor_tag_arity (ctx : LowerCtx) (bare_name : String) : Option (Pair I64 I64) :=
-  let con_mp : ModulePath := single_segment_path (Identifier.id bare_name) in
+  let con_mp : NamePath := single_segment_npath (Identifier.id bare_name) in
   match scope_find_inductive_by_constructor con_mp (ctx_scope ctx) {
     Option.none => Option.none,
     Option.some ind =>
@@ -368,7 +369,7 @@ def inductive_pairs_values_go (pairs : List (Pair String Inductive)) (acc : List
 
 def constructor_simple_name_eq (c : InductConstructor) (name : Identifier) : Bool :=
   match c {
-    InductConstructor.mk cname _ _ => modpath_eq cname (single_segment_path name),
+    InductConstructor.mk cname _ _ => npath_eq cname (single_segment_npath name),
   }
 
 #[partial]
@@ -434,7 +435,7 @@ def lower_inductive_path_of (best : Option Inductive) (candidate : Inductive) : 
 
 #[partial]
 def inductive_path_str (ind : Inductive) : String :=
-  match ind { Inductive.mk ind_name _ _ _ _ _ => show_module_path ind_name }
+  match ind { Inductive.mk ind_name _ _ _ _ _ => show_name_path ind_name }
 
 /// A `match`'s `MatchCase`s don't carry the scrutinee's inductive path
 /// directly (`MatchCase.mc`'s `name` is a bare `Identifier`, per
@@ -483,12 +484,12 @@ def find_wildcard_case (cases : List MatchCase) : Option MatchCase :=
 
 def ctor_name (ctor : InductConstructor) : Identifier :=
   match ctor {
-    InductConstructor.mk name _ _ => single_segment_path_head name,
+    InductConstructor.mk name _ _ => npath_last_id name,
   }
 
-def single_segment_path_head (mp : ModulePath) : Identifier :=
-  match mp {
-    ModulePath.mp ids => list_last_or_empty ids,
+def npath_last_id (np : NamePath) : Identifier :=
+  match np {
+    NamePath.npath ids => list_last_or_empty ids,
   }
 
 #[partial]
@@ -507,7 +508,7 @@ def list_last_or_empty (ids : List Identifier) : Identifier :=
 /// (if any), else a synthesized `match_fail`.
 #[partial]
 def lower_one_match_arm
-    (ctx : LowerCtx) (ind_name : ModulePath) (ctor : InductConstructor) (cases : List MatchCase)
+    (ctx : LowerCtx) (ind_name : NamePath) (ctor : InductConstructor) (cases : List MatchCase)
     (acc : LowerAcc) (k : MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
   match find_case_for_ctor ctor cases {
@@ -515,7 +516,7 @@ def lower_one_match_arm
     Option.none =>
       match find_wildcard_case cases {
         Option.some wc => lower_wildcard_match_case ctx wc acc k,
-        Option.none => k (MatchArm.arm 0 (CoreIr.match_fail ind_name (ctor_name ctor))) acc,
+        Option.none => k (MatchArm.arm 0 (CoreIr.match_fail (modpath_of ind_name) (ctor_name ctor))) acc,
       },
   }
 
@@ -543,7 +544,7 @@ def lower_wildcard_match_case
 
 #[partial]
 def lower_match_arms_for_ctors
-    (ctx : LowerCtx) (ind_name : ModulePath) (ctors : List InductConstructor) (cases : List MatchCase)
+    (ctx : LowerCtx) (ind_name : NamePath) (ctors : List InductConstructor) (cases : List MatchCase)
     (acc : LowerAcc) (k : List MatchArm -> LowerAcc -> Pair (Result LowerError CoreIr) LowerAcc)
     : Pair (Result LowerError CoreIr) LowerAcc :=
   match ctors {
@@ -652,7 +653,7 @@ def lower_con_with_inductive
         Option.some tag =>
           lower_sparse_args ctx args acc (fn present_args => fn acc1 =>
             lower_ok (CoreIr.con tag num_args present_args) acc1),
-        Option.none => lower_err (LowerError.le_unknown_constructor (single_segment_path name)) acc,
+        Option.none => lower_err (LowerError.le_unknown_constructor (ModulePath.mp [name])) acc,
       },
   }
 
@@ -662,7 +663,7 @@ def lower_con (ctx : LowerCtx) (c : Con) (acc : LowerAcc) : Pair (Result LowerEr
     Con.mk name typ_name num_args args =>
       match scope_find_inductive typ_name (ctx_scope ctx) {
         Result.ok ind => lower_con_with_inductive ctx ind name num_args args acc,
-        Result.err _ => lower_err (LowerError.le_unknown_inductive typ_name) acc,
+        Result.err _ => lower_err (LowerError.le_unknown_inductive (modpath_of typ_name)) acc,
       },
   }
 
@@ -783,7 +784,7 @@ def lam_chain_arity (t : Term) : I64 :=
 /// hand-lowered via `Term.ntv` -- would always fail lowering with
 /// `le_type_level_term` the moment its own innermost `Term.hole` is
 /// reached.
-def lower_one_global (ctx : LowerCtx) (path : ModulePath) (acc : LowerAcc) : Result LowerError LowerAcc :=
+def lower_one_global (ctx : LowerCtx) (path : NamePath) (acc : LowerAcc) : Result LowerError LowerAcc :=
   match find_def (ctx_defs ctx) path {
     // Not an ordinary `Def` -- but `scope_resolve_name` already
     // resolved SOME `ScopeDef` for this path to intern it as a global
@@ -795,10 +796,10 @@ def lower_one_global (ctx : LowerCtx) (path : ModulePath) (acc : LowerAcc) : Res
     // exactly this shape. Try the SAME constructor-owner fallback
     // `lower_free_var_fallback` uses before finally giving up.
     Option.none =>
-      match find_ctor_tag_arity ctx (module_path_last_segment path) {
+      match find_ctor_tag_arity ctx (name_path_last_segment path) {
         Option.some pr =>
           match pr { Pair.pair tag arity => Result.ok (push_done acc (GlobalDef.gd_constructor tag arity)) },
-        Option.none => Result.ok (push_done acc (GlobalDef.gd_unresolved path)),
+        Option.none => Result.ok (push_done acc (GlobalDef.gd_unresolved (modpath_of path))),
       },
     Option.some def_ =>
       match def_ {
@@ -807,14 +808,14 @@ def lower_one_global (ctx : LowerCtx) (path : ModulePath) (acc : LowerAcc) : Res
             Option.some native_name =>
               match native_id_for_name (Identifier.id native_name) {
                 Option.some nid => Result.ok (push_done acc (GlobalDef.gd_native nid (lam_chain_arity term))),
-                Option.none => Result.err (LowerError.le_in_def path (LowerError.le_unknown_native (Identifier.id native_name))),
+                Option.none => Result.err (LowerError.le_in_def (modpath_of path) (LowerError.le_unknown_native (Identifier.id native_name))),
               },
             Option.none =>
               match lower_term ctx term acc {
                 Pair.pair r acc1 =>
                   match r {
                     Result.ok ir => Result.ok (push_done acc1 (GlobalDef.gd_def ir)),
-                    Result.err e => Result.err (LowerError.le_in_def path e),
+                    Result.err e => Result.err (LowerError.le_in_def (modpath_of path) e),
                   },
               },
           },
@@ -847,9 +848,9 @@ def process_pending (ctx : LowerCtx) (acc : LowerAcc) : Result LowerError LowerA
 /// into `lang/core_eval.mo`'s `eval` (together with
 /// `lang.core_eval.basic_native_table`).
 #[partial]
-pub def lower_root (ctx : LowerCtx) (root : ModulePath) : Result LowerError (Pair CoreIr GlobalTable) :=
+pub def lower_root (ctx : LowerCtx) (root : NamePath) : Result LowerError (Pair CoreIr GlobalTable) :=
   match find_def_body (ctx_defs ctx) root {
-    Option.none => Result.err (LowerError.le_unresolved_module_path root),
+    Option.none => Result.err (LowerError.le_unresolved_module_path (modpath_of root)),
     Option.some body =>
       match lower_term ctx body lower_acc_empty {
         Pair.pair r acc1 =>
@@ -895,23 +896,23 @@ def decls_to_defs (decl_list : List Decl) : List Def :=
 // ─── Tests: pure helpers only (no real Scope/Term needed) ─────────────
 
 #[test]
-def test_modpath_index_finds_existing : Bool :=
-  let a : ModulePath := ModulePath.mp [Identifier.id "A"] in
-  let b : ModulePath := ModulePath.mp [Identifier.id "B"] in
-  I64.beq (Option.get_or_default (-1) (modpath_index b [a, b])) 1
+def test_npath_index_finds_existing : Bool :=
+  let a : NamePath := NamePath.npath [Identifier.id "A"] in
+  let b : NamePath := NamePath.npath [Identifier.id "B"] in
+  I64.beq (Option.get_or_default (-1) (npath_index b [a, b])) 1
 
 #[test]
-def test_modpath_index_missing_is_none : Bool :=
-  let a : ModulePath := ModulePath.mp [Identifier.id "A"] in
-  let z : ModulePath := ModulePath.mp [Identifier.id "Z"] in
-  match modpath_index z [a] {
+def test_npath_index_missing_is_none : Bool :=
+  let a : NamePath := NamePath.npath [Identifier.id "A"] in
+  let z : NamePath := NamePath.npath [Identifier.id "Z"] in
+  match npath_index z [a] {
     Option.none => true,
     Option.some _ => false,
   }
 
 #[test]
 def test_intern_path_reuses_existing_index : Bool :=
-  let a : ModulePath := ModulePath.mp [Identifier.id "A"] in
+  let a : NamePath := NamePath.npath [Identifier.id "A"] in
   match intern_path a lower_acc_empty {
     Pair.pair idx0 acc1 =>
       match intern_path a acc1 {
@@ -921,8 +922,8 @@ def test_intern_path_reuses_existing_index : Bool :=
 
 #[test]
 def test_intern_path_assigns_fresh_indices : Bool :=
-  let a : ModulePath := ModulePath.mp [Identifier.id "A"] in
-  let b : ModulePath := ModulePath.mp [Identifier.id "B"] in
+  let a : NamePath := NamePath.npath [Identifier.id "A"] in
+  let b : NamePath := NamePath.npath [Identifier.id "B"] in
   match intern_path a lower_acc_empty {
     Pair.pair idx_a acc1 =>
       match intern_path b acc1 {
@@ -942,15 +943,15 @@ def test_list_all_none_false_when_one_filled : Bool :=
 
 #[test]
 def test_find_ctor_tag_matches_declaration_order : Bool :=
-  let none_ctor : InductConstructor := InductConstructor.mk (single_segment_path (Identifier.id "none")) List.empty Term.hole in
-  let some_ctor : InductConstructor := InductConstructor.mk (single_segment_path (Identifier.id "some")) List.empty Term.hole in
+  let none_ctor : InductConstructor := InductConstructor.mk (single_segment_npath (Identifier.id "none")) List.empty Term.hole in
+  let some_ctor : InductConstructor := InductConstructor.mk (single_segment_npath (Identifier.id "some")) List.empty Term.hole in
   let ctors : List InductConstructor := [none_ctor, some_ctor] in
   I64.beq (Option.get_or_default (-1) (find_ctor_tag ctors (Identifier.id "none"))) 0
     && I64.beq (Option.get_or_default (-1) (find_ctor_tag ctors (Identifier.id "some"))) 1
 
 #[test]
 def test_find_ctor_tag_unknown_is_none : Bool :=
-  let some_ctor : InductConstructor := InductConstructor.mk (single_segment_path (Identifier.id "some")) List.empty Term.hole in
+  let some_ctor : InductConstructor := InductConstructor.mk (single_segment_npath (Identifier.id "some")) List.empty Term.hole in
   match find_ctor_tag [some_ctor] (Identifier.id "nope") {
     Option.none => true,
     Option.some _ => false,

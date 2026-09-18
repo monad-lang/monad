@@ -137,6 +137,25 @@ pub type ModulePath {
     mp (List Identifier)
 }
 
+/// A term-level dotted name path (`Foo.bar.baz`) — a DECL name or a
+/// legacy dotted reference. Distinct from `ModulePath` (a FILE path,
+/// `use`d with `::`) since the qualified-names split; see
+/// plans/implementations/qualified-names.md. Constructor `npath`
+/// (`mp` is taken by `ModulePath.mp`).
+pub type NamePath {
+    npath (List Identifier)
+}
+
+/// A module-qualified term reference (`std::list::List.cons`) — the
+/// `::`-separated module half names a real loaded module, the
+/// `.`-separated name half a decl inside it. Rendered with the module
+/// segments `::`-joined, so the string is disjoint from any `NamePath`
+/// rendering (`:` can't occur in an identifier).
+pub struct QualifiedName {
+    qmod : ModulePath,
+    qname : NamePath,
+}
+
 pub def show_identifier (id : Identifier) : String := match id {
     Identifier.id s => s,
 }
@@ -157,6 +176,30 @@ pub def show_module_path (mp : ModulePath) : String := match mp {
     ModulePath.mp ids => join_identifiers ids,
 }
 
+/// A `NamePath` rendered `.`-joined (`Foo.bar`). The RENDERING matches
+/// `show_module_path`'s — the two types differ in role (name vs file
+/// path), not in this one spelling — while `use` module paths render
+/// `::`-joined in source (`module_path_to_string`, lang/parser.mo).
+pub def show_name_path (np : NamePath) : String := match np {
+    NamePath.npath ids => join_identifiers ids,
+}
+
+/// `std::list::List.cons` — module half `::`-joined, then `::`, then
+/// name half `.`-joined. Matches the Rust host's `Display` for
+/// `QualifiedName` (core/src/term.rs) so DebugName strings stay
+/// compiler-consistent.
+pub def show_qualified_name (qn : QualifiedName) : String :=
+    String.concat (module_path_to_string_colon qn.qmod)
+        (String.concat "::" (show_name_path qn.qname))
+
+/// The `::`-joined module-half rendering `show_qualified_name` builds
+/// on — a local helper, NOT the general `module_path_to_string`
+/// (lang/parser.mo), which exists for use-decl rendering and error
+/// messages and would make a circular parser->types import.
+def module_path_to_string_colon (mp : ModulePath) : String := match mp {
+    ModulePath.mp ids => List.intercalate "::" (List.map show_identifier ids),
+}
+
 /// Join a module path's segments with `.` (`[Foo, bar]` -> `Foo.bar`).
 /// For the LLVM symbol-name form (`Foo__bar`) see
 /// `lang/codegen/emit.mo`'s `mangle_identifiers`.
@@ -166,6 +209,14 @@ def join_identifiers (ids : List Identifier) : String :=
 
 instance Show ModulePath {
     def show (mp : ModulePath) : String := show_module_path mp
+}
+
+/// The `NamePath` twin of the `ModulePath` instance above -- mirrors the
+/// Rust host's own `impl Display for NamePath` (core/src/term.rs). The
+/// two render identically (`.`-joined); the instances exist separately
+/// because the two types are no longer interchangeable.
+instance Show NamePath {
+    def show (np : NamePath) : String := show_name_path np
 }
 
 /// Identifiers can't contain ".", so the dotted-string-join used by
@@ -196,9 +247,17 @@ instance Hashable ModulePath {
     def hash (mp : ModulePath) : U64 := String.hash (show_module_path mp)
 }
 
+instance Hashable NamePath {
+    def hash (np : NamePath) : U64 := String.hash (show_name_path np)
+}
+
 pub type NameRef {
     nid (Identifier),
-    nmp (ModulePath),
+    /// A dotted name path (`Foo.bar`) — legacy flat spelling or a
+    /// constructor-owner style name.
+    nnp (NamePath),
+    /// An explicit module-qualified reference (`std::list::List.cons`).
+    nqn (QualifiedName),
     nop (Operator),
 }
 
@@ -416,7 +475,7 @@ pub type StructLitField {
 }
 
 pub type Con {
-    mk (name: Identifier) (typ_name: ModulePath) (num_args: I64) (args: List (Option Term))
+    mk (name: Identifier) (typ_name: NamePath) (num_args: I64) (args: List (Option Term))
 }
 
 pub type Native {
@@ -663,7 +722,7 @@ pub struct ParseStructField {
 }
 
 pub struct ParseInductConstructor {
-    name : ModulePath,
+    name : NamePath,
     params : List ParseParam,
     typ : ParseTerm,
 }
@@ -675,7 +734,7 @@ pub struct ParseClassDef {
 }
 
 pub struct ParseDef {
-    name: ModulePath,
+    name: NamePath,
     typ: ParseTerm,
     term: ParseTerm,
     constraints: List TypeConstraint,
@@ -684,7 +743,7 @@ pub struct ParseDef {
 }
 
 pub struct ParseInductive {
-    name : ModulePath,
+    name : NamePath,
     params : List ParseParam,
     typ : ParseTerm,
     constructors : List ParseInductConstructor,
@@ -702,7 +761,7 @@ pub struct ParseClass {
 
 pub struct ParseInstance {
     name : Identifier,
-    cls : ModulePath,
+    cls : NamePath,
     constraints : List TypeConstraint,
     args : List ParseTerm,
     vis : Visibility,
@@ -738,12 +797,12 @@ pub type ParseDeclKind {
     struct_d (ParseStruct),
     class_d (ParseClass),
     instance_d (ParseInstance),
-    infix_d (op: Operator) (path: ModulePath) (vis: Visibility),
+    infix_d (op: Operator) (path: NamePath) (vis: Visibility),
     use_d (path: ModulePath) (filter: UseFilter) (public: Bool),
-    open_d (path: ModulePath) (filter: OpenFilter),
-    scoped_open_d (path: ModulePath) (filter: OpenFilter) (decl: ParseDecl),
+    open_d (path: NamePath) (filter: OpenFilter),
+    scoped_open_d (path: NamePath) (filter: OpenFilter) (decl: ParseDecl),
     def_macro_d (ParseDef),
-    decl_gen_d (name: ModulePath) (params: List ParseParam) (decl_list: List ParseDecl) (attrs: List Attribute),
+    decl_gen_d (name: NamePath) (params: List ParseParam) (decl_list: List ParseDecl) (attrs: List Attribute),
     macro_call_d (name: Identifier) (args: List ParseTerm),
 }
 
@@ -783,7 +842,7 @@ def pd_class_d (c : ParseClass) : ParseDecl := pd_ (ParseDeclKind.class_d c)
 def pd_instance_d (i : ParseInstance) : ParseDecl := pd_ (ParseDeclKind.instance_d i)
 
 #[partial]
-def pd_infix_d (op : Operator) (path : ModulePath) (vis : Visibility) : ParseDecl :=
+def pd_infix_d (op : Operator) (path : NamePath) (vis : Visibility) : ParseDecl :=
     pd_ (ParseDeclKind.infix_d op path vis)
 
 #[partial]
@@ -791,18 +850,18 @@ def pd_use_d (path : ModulePath) (filter : UseFilter) (public : Bool) : ParseDec
     pd_ (ParseDeclKind.use_d path filter public)
 
 #[partial]
-def pd_open_d (path : ModulePath) (filter : OpenFilter) : ParseDecl :=
+def pd_open_d (path : NamePath) (filter : OpenFilter) : ParseDecl :=
     pd_ (ParseDeclKind.open_d path filter)
 
 #[partial]
-def pd_scoped_open_d (path : ModulePath) (filter : OpenFilter) (inner : ParseDecl) : ParseDecl :=
+def pd_scoped_open_d (path : NamePath) (filter : OpenFilter) (inner : ParseDecl) : ParseDecl :=
     pd_ (ParseDeclKind.scoped_open_d path filter inner)
 
 #[partial]
 def pd_def_macro_d (d : ParseDef) : ParseDecl := pd_ (ParseDeclKind.def_macro_d d)
 
 #[partial]
-def pd_decl_gen_d (name : ModulePath) (params : List ParseParam) (decl_list : List ParseDecl) (attrs : List Attribute) : ParseDecl :=
+def pd_decl_gen_d (name : NamePath) (params : List ParseParam) (decl_list : List ParseDecl) (attrs : List Attribute) : ParseDecl :=
     pd_ (ParseDeclKind.decl_gen_d name params decl_list attrs)
 
 #[partial]
@@ -880,7 +939,7 @@ pub struct ParseStructLitField {
 }
 
 pub type ParseCon {
-    mk (name: Identifier) (typ_name: ModulePath) (num_args: I64) (args: List (Option ParseTerm))
+    mk (name: Identifier) (typ_name: NamePath) (num_args: I64) (args: List (Option ParseTerm))
 }
 
 pub type ParseNative {
@@ -1005,12 +1064,12 @@ type EvalError {
 }
 
 pub type TypeConstraint {
-    mk (cls: ModulePath) (vars: List Identifier)
+    mk (cls: NamePath) (vars: List Identifier)
 }
 
 /// Canonical Def uses de Bruijn Term. DefV0 is the legacy V0 variant.
 pub struct Def {
-    name: ModulePath,
+    name: NamePath,
     typ: Term,
     term: Term,
     constraints: List TypeConstraint,
@@ -1018,16 +1077,16 @@ pub struct Def {
     vis: Visibility
 }
 
-pub def Def.name (d : Def) : ModulePath := d.name
+pub def Def.name (d : Def) : NamePath := d.name
 
 // Canonical InductConstructor uses de Bruijn Term. InductConstructorV0 is the legacy V0 variant.
 pub type InductConstructor {
-    mk (name: ModulePath) (params: List Param) (typ: Term)
+    mk (name: NamePath) (params: List Param) (typ: Term)
 }
 
 // Canonical Inductive uses de Bruijn Term. InductiveV0 is the legacy V0 variant.
 pub type Inductive {
-    mk (name: ModulePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List Attribute) (vis: Visibility)
+    mk (name: NamePath) (params: List Param) (typ: Term) (constructors: List InductConstructor) (attrs: List Attribute) (vis: Visibility)
 }
 
 // Canonical ClassDef uses de Bruijn Term. ClassDefV0 is the legacy V0 variant.
@@ -1087,13 +1146,13 @@ pub type Decl {
     struct_d (Struct),
     class_d (Class),
     instance_d (Instance),
-    infix_d (op: Operator) (path: ModulePath) (vis: Visibility),
+    infix_d (op: Operator) (path: NamePath) (vis: Visibility),
     use_d (path: ModulePath) (filter: UseFilter) (public: Bool),
-    open_d (path: ModulePath) (filter: OpenFilter),
+    open_d (path: NamePath) (filter: OpenFilter),
     /// `open ModulePath [{filter}] in <decl>` — the module is opened only
     /// for the scope of the wrapped declaration (def/type/struct/class/
     /// instance). Mirrors Rust's `Decl::ScopedOpen`.
-    scoped_open_d (path: ModulePath) (filter: OpenFilter) (decl: Decl),
+    scoped_open_d (path: NamePath) (filter: OpenFilter) (decl: Decl),
     /// `defmacro name params := <term>` — mirrors the Rust reference's
     /// `Decl::DefMacro(Def)` (core/src/term.rs): literally reuses `Def`
     /// (`typ` forced to `Term.hole`, `term` wrapped in one lambda per
@@ -1110,7 +1169,7 @@ pub type Decl {
     /// wrapper struct) rather than introduced as its own named type.
     /// `decl_list` is the literal, unexpanded list of declarations parsed
     /// out of the `decls { ... }` body.
-    decl_gen_d (name: ModulePath) (params: List Param) (decl_list: List Decl) (attrs: List Attribute),
+    decl_gen_d (name: NamePath) (params: List Param) (decl_list: List Decl) (attrs: List Attribute),
     /// Declaration-position `name! arg1 arg2 ...` (e.g. `derive_beq!
     /// Point`, `reflect_type_info! T some_meta`). `name` is a bare
     /// `Identifier`, NOT a `ModulePath` — differs from `defmacro`'s own
@@ -1120,10 +1179,10 @@ pub type Decl {
     macro_call_d (name: Identifier) (args: List Term),
 }
 
-def Decl.to_name (d : Decl) : ModulePath :=
+def Decl.to_name (d : Decl) : NamePath :=
     match d {
         def_d def_ => Def.name def_,
-        _ => ModulePath.mp []
+        _ => NamePath.npath []
     }
 
 // Canonical Instance uses de Bruijn Term. InstanceV0 is the legacy V0 variant.
@@ -1150,7 +1209,7 @@ pub type Instance {
     /// class method's own abstract signature. See
     /// plans/bootstrapping/self-hosted-compiler.md's dictionary-passing
     /// plan (Phase 1) for the full context.
-    mk (name: Identifier) (cls: ModulePath) (constraints: List TypeConstraint) (args: List Term) (vis: Visibility) (implicit_params: List Param) (defs: List Def)
+    mk (name: Identifier) (cls: NamePath) (constraints: List TypeConstraint) (args: List Term) (vis: Visibility) (implicit_params: List Param) (defs: List Def)
 }
 
 // --- Do-notation ---
@@ -1288,26 +1347,58 @@ instance Similar ModulePath {
         }
 }
 
+/// `Similar ModulePath`'s twin, for the positions the qualified-names
+/// split moved to the def-name role (`Infix.name`, `ScopeDef.name`,
+/// `Inductive.name` ...). Delegates to `name_path_similar` below so the
+/// segment-wise rule has one home.
+instance Similar NamePath {
+    def similar (a : NamePath) (b : NamePath) : Bool :=
+        name_path_similar a b
+}
+
 instance Similar NameRef {
     def similar (a : NameRef) (b : NameRef) : Bool :=
         match a {
             NameRef.nid id1 => match b {
                 NameRef.nid id2 => Similar.similar id1 id2,
-                NameRef.nmp _ => false,
+                NameRef.nnp _ => false,
+                NameRef.nqn _ => false,
                 NameRef.nop _ => false
             },
-            NameRef.nmp mp1 => match b {
-                NameRef.nmp mp2 => Similar.similar mp1 mp2,
+            NameRef.nnp np1 => match b {
+                NameRef.nnp np2 => name_path_similar np1 np2,
                 NameRef.nid _ => false,
+                NameRef.nqn _ => false,
+                NameRef.nop _ => false
+            },
+            NameRef.nqn qn1 => match b {
+                NameRef.nqn qn2 =>
+                    Similar.similar qn1.qmod qn2.qmod
+                        && name_path_similar qn1.qname qn2.qname,
+                NameRef.nid _ => false,
+                NameRef.nnp _ => false,
                 NameRef.nop _ => false
             },
             NameRef.nop op1 => match b {
                 NameRef.nop op2 => Similar.similar op1 op2,
                 NameRef.nid _ => false,
-                NameRef.nmp _ => false
+                NameRef.nnp _ => false,
+                NameRef.nqn _ => false
             }
         }
 }
+
+/// Segment-wise `Similar` over a `NamePath` — the `NameRef.nnp`/`nqn`
+/// arms above delegate here rather than keying `ScopeData`'s maps on the
+/// rendered string (the string comparison `BOrd ModulePath` relies on
+/// would conflate nothing here, but segment-wise keeps `Similar`
+/// structural like `id_list_similar`).
+pub def name_path_similar (a : NamePath) (b : NamePath) : Bool :=
+    match a {
+        NamePath.npath ids1 => match b {
+            NamePath.npath ids2 => id_list_similar ids1 ids2
+        }
+    }
 
 instance Similar NumSuffix {
     def similar (a : NumSuffix) (b : NumSuffix) : Bool :=
@@ -1628,11 +1719,11 @@ def test_term_ntv : Bool :=
 
 #[test]
 def test_term_con : Bool :=
-    // Work around Con.mk/ModulePath.mp forall-inference bugs with List.empty
+    // Work around Con.mk/NamePath.npath forall-inference bugs with List.empty
     // by using non-empty lists
     let none_opt : Option Term := Option.none in
     let args : List (Option Term) := List.cons none_opt List.empty in
-    let mod_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Test") List.empty) in
+    let mod_path : NamePath := NamePath.npath (List.cons (Identifier.id "Test") List.empty) in
     let con_val : Con := Con.mk (Identifier.id "Bar") mod_path 0 args in
     let c : Term := Term.con con_val in
     true
@@ -1652,12 +1743,12 @@ def test_term_hole : Bool :=
 // Infix operator binding. Maps an operator symbol to a definition path.
 pub struct Infix {
     operator : Operator,
-    name : ModulePath,
+    name : NamePath,
 }
 
 // Instance lookup key.
 pub struct InstanceKey {
-    cls : ModulePath,
+    cls : NamePath,
     constraints : List TypeConstraint,
     args : List Param,
 }
@@ -1671,7 +1762,7 @@ pub struct InstanceKey {
 // visibility of the type or class they belong to, which is why they are
 // built with the parent's `vis` rather than one of their own.
 pub struct ScopeDef {
-    name : ModulePath,
+    name : NamePath,
     module : ModulePath,
     sig : Term,
     body : Term,
@@ -1680,22 +1771,22 @@ pub struct ScopeDef {
 
 // A class method entry in scope.
 pub struct ScopeClassDef {
-    class_name : ModulePath,
-    full_name : ModulePath,
+    class_name : NamePath,
+    full_name : NamePath,
     name : Identifier,
     sig : Term,
 }
 
 // Instance entries grouped by class name.
 pub struct ScopeInstance {
-    class_name : ModulePath,
+    class_name : NamePath,
     instances : List Instance,
 }
 
 // Conflicting name resolution entry.
 pub struct ScopeConflict {
-    name : ModulePath,
-    candidates : List ModulePath,
+    name : NamePath,
+    candidates : List NamePath,
 }
 
 // Local variable in the scope chain.
@@ -1827,10 +1918,10 @@ pub struct LocalScope {
 // Error type for scope resolution failures.
 type ScopeError {
     name_not_found (name : NameRef),
-    ambiguous_name (name : NameRef) (candidates : List ModulePath),
-    inductive_not_found (name : ModulePath),
+    ambiguous_name (name : NameRef) (candidates : List NamePath),
+    inductive_not_found (name : NamePath),
     instance_not_found (key : InstanceKey),
-    class_not_found (name : ModulePath),
+    class_not_found (name : NamePath),
     linear_used_twice (name : Identifier),
     affine_used_multiple (name : Identifier),
 }

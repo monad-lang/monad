@@ -26,7 +26,7 @@ use lib::core_eval {CoreEvalError, apply, basic_native_table, eval}
 use lib::core_ir {CoreIr, IrLit}
 use lib::core_value {GlobalCache, GlobalTable, Value, global_cache_new, global_table_len}
 use lib::lower_core_ir {LowerCtx, LowerError, lower_ctx_from_decls, lower_root}
-use lib::types {Decl, Identifier, ModulePath}
+use lib::types {Decl, Identifier, ModulePath, NamePath, show_name_path}
 
 def show_lower_error_debug (e : LowerError) : String :=
     match e {
@@ -47,10 +47,10 @@ def show_lower_error_debug (e : LowerError) : String :=
 /// `lang/typecheck/meta_reflect.mo`'s `build_type_info_value`), and
 /// return its result `Value` (typically a `List Decl` value, ready for
 /// `meta_reflect.reify_decls_value_to_decls`).
-def meta_eval_invoke (dispatched_decls : List Decl) (meta_def_name : ModulePath) (arg : Value) : Result String Value :=
+def meta_eval_invoke (dispatched_decls : List Decl) (meta_def_name : NamePath) (arg : Value) : Result String Value :=
     let ctx : LowerCtx := lower_ctx_from_decls meta_eval_root dispatched_decls in
     match lower_root ctx meta_def_name {
-        Result.err e => Result.err (String.concat "meta_eval_invoke: failed to lower " (String.concat (show_module_path_ meta_def_name) (String.concat ": " (show_lower_error_debug e)))),
+        Result.err e => Result.err (String.concat "meta_eval_invoke: failed to lower " (String.concat (show_name_path meta_def_name) (String.concat ": " (show_lower_error_debug e)))),
         Result.ok pr =>
             match pr {
                 Pair.pair ir globals =>
@@ -149,7 +149,7 @@ pub def show_core_eval_error_debug (e : CoreEvalError) : String :=
 
 def sentinel_ : I64 := -1
 
-def mp1 (s : String) : ModulePath := ModulePath.mp (List.cons (Identifier.id s) List.empty)
+def np1 (s : String) : NamePath := NamePath.npath (List.cons (Identifier.id s) List.empty)
 
 def named_ (s : String) : DebugName := DebugName.named (Identifier.id s)
 
@@ -158,7 +158,7 @@ def free_var_ (s : String) : Term := Term.var sentinel_ (named_ s)
 def num_ (n : I64) : Term := Term.lit (Literal.num n NumSuffix.i64)
 
 def def_decl_ (name : String) (term : Term) : Decl :=
-    Decl.def_d (Def.mk (mp1 name) Term.hole term List.empty List.empty Visibility.package_private)
+    Decl.def_d (Def.mk (np1 name) Term.hole term List.empty List.empty Visibility.package_private)
 
 def value_num_is (v : Value) (expected : I64) : Bool :=
     match v {
@@ -180,7 +180,7 @@ def const_answer_decls : List Decl := List.cons (def_decl_ "const_answer" const_
 
 #[test]
 def test_meta_eval_invoke_ignores_arg_returns_literal : Bool :=
-    match meta_eval_invoke const_answer_decls (mp1 "const_answer") (Value.v_lit (IrLit.ir_num 0 NumSuffix.i64)) {
+    match meta_eval_invoke const_answer_decls (np1 "const_answer") (Value.v_lit (IrLit.ir_num 0 NumSuffix.i64)) {
         Result.err _ => false,
         Result.ok v => value_num_is v 42,
     }
@@ -194,7 +194,7 @@ def add_one_decls : List Decl := List.cons (def_decl_ "add_one" add_one_term) Li
 
 #[test]
 def test_meta_eval_invoke_applies_arg_through_native : Bool :=
-    match meta_eval_invoke add_one_decls (mp1 "add_one") (Value.v_lit (IrLit.ir_num 41 NumSuffix.i64)) {
+    match meta_eval_invoke add_one_decls (np1 "add_one") (Value.v_lit (IrLit.ir_num 41 NumSuffix.i64)) {
         Result.err _ => false,
         Result.ok v => value_num_is v 42,
     }
@@ -214,14 +214,14 @@ def quadruple_decls : List Decl :=
 
 #[test]
 def test_meta_eval_invoke_resolves_transitive_dependency : Bool :=
-    match meta_eval_invoke quadruple_decls (mp1 "quadruple") (Value.v_lit (IrLit.ir_num 5 NumSuffix.i64)) {
+    match meta_eval_invoke quadruple_decls (np1 "quadruple") (Value.v_lit (IrLit.ir_num 5 NumSuffix.i64)) {
         Result.err _ => false,
         Result.ok v => value_num_is v 20,
     }
 
 #[test]
 def test_meta_eval_invoke_unknown_def_name_errs : Bool :=
-    match meta_eval_invoke const_answer_decls (mp1 "does_not_exist") (Value.v_lit (IrLit.ir_num 0 NumSuffix.i64)) {
+    match meta_eval_invoke const_answer_decls (np1 "does_not_exist") (Value.v_lit (IrLit.ir_num 0 NumSuffix.i64)) {
         Result.err _ => true,
         Result.ok _ => false,
     }

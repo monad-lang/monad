@@ -245,9 +245,12 @@ def elaborate_struct (s : Struct) (known_names : List Identifier) : Struct :=
     s
 
 /// Extract an identifier from a ModulePath if it has exactly one segment.
-def mp_to_maybe_id (mp : ModulePath) : Option Identifier :=
-    match mp {
-        ModulePath.mp ids => match ids {
+/// A single-segment decl NAME (`name` fields on `Def`/`Inductive` are
+/// `NamePath`s since the qualified-names split) collapses to that one
+/// `Identifier`; a multi-segment or empty name yields `Option.none`.
+def np_to_maybe_id (np : NamePath) : Option Identifier :=
+    match np {
+        NamePath.npath ids => match ids {
             List.cons x rest => match rest {
                 List.empty => Option.some x,
                 _ => Option.none,
@@ -262,7 +265,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
         Decl.def_d d =>
             match d {
                 Def.mk name _ _ _ _ _ =>
-                    match mp_to_maybe_id name {
+                    match np_to_maybe_id name {
                         Option.some id =>
                             let empty : List Identifier := List.empty in
                             List.cons id empty,
@@ -272,7 +275,7 @@ def names_of_decl (decl : Decl) : List Identifier :=
         Decl.inductive_d i =>
             match i {
                 Inductive.mk name _ _ _ _ _ =>
-                    match mp_to_maybe_id name {
+                    match np_to_maybe_id name {
                         Option.some id =>
                             let empty : List Identifier := List.empty in
                             List.cons id empty,
@@ -401,17 +404,17 @@ def elaborate_test_macro_call_decl : Decl :=
     Decl.macro_call_d name no_args
 
 def elaborate_test_def_macro_decl : Decl :=
-    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "foo") List.empty) in
+    let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
     let no_constraints : List TypeConstraint := List.empty in
     let no_attrs : List Attribute := List.empty in
-    Decl.def_macro_d (Def.mk mp Term.hole Term.hole no_constraints no_attrs Visibility.package_private)
+    Decl.def_macro_d (Def.mk np Term.hole Term.hole no_constraints no_attrs Visibility.package_private)
 
 def elaborate_test_decl_gen_decl : Decl :=
-    let mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "foo") List.empty) in
+    let np : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
     let no_params : List Param := List.empty in
     let no_decls : List Decl := List.empty in
     let no_attrs : List Attribute := List.empty in
-    Decl.decl_gen_d mp no_params no_decls no_attrs
+    Decl.decl_gen_d np no_params no_decls no_attrs
 
 #[test]
 def test_elaborate_decl_macro_call_d_passthrough : Bool :=
@@ -433,13 +436,13 @@ def test_elaborate_decl_def_macro_d_passthrough : Bool :=
 def test_elaborate_decl_decl_gen_d_passthrough : Bool :=
     let no_names : List Identifier := List.empty in
     match elaborate_decl elaborate_test_decl_gen_decl no_names {
-        Decl.decl_gen_d name _ _ _ => id_eq (Identifier.id "foo") (module_path_head name),
+        Decl.decl_gen_d name _ _ _ => id_eq (Identifier.id "foo") (name_path_head name),
         _ => false,
     }
 
 #[partial]
-def module_path_head (mp : ModulePath) : Identifier :=
-    match mp { ModulePath.mp ids => match ids { List.cons hd _ => hd } }
+def name_path_head (np : NamePath) : Identifier :=
+    match np { NamePath.npath ids => match ids { List.cons hd _ => hd } }
 
 /// Map elaborate_decl over a list of decl_list with a fixed known_names set.
 def elaborate_decls_map (decl_list : List Decl) (known_names : List Identifier) : List Decl :=

@@ -12,7 +12,7 @@
 /// `lang.codegen.qualify` for where the `module::name` form comes from,
 /// and `def_symbol_name` for why nothing is mangled into underscores
 /// any more.
-use lib::types {Identifier, ModulePath, show_module_path}
+use lib::types {Identifier, ModulePath, NamePath, show_module_path}
 use std::map {}
 
 /// A genuine, previously-undiscovered bug lived here (and in
@@ -138,6 +138,16 @@ def module_path_to_str (mp : ModulePath) : String := match mp {
     ModulePath.mp ids => mangle_identifiers ids,
 }
 
+/// `module_path_to_str`'s `NamePath` twin, for the positions where the
+/// thing being mangled is a DEF's own name rather than a file path
+/// (`lang/codegen/validate.mo`'s diagnostics naming the offending def).
+/// Same mangling, because the two are the same kind of thing to a symbol
+/// table -- only which of the two roles the path plays changed.
+#[partial]
+def name_path_to_str (np : NamePath) : String := match np {
+    NamePath.npath ids => mangle_identifiers ids,
+}
+
 /// Join a module path's segments with `__` for use in an LLVM symbol
 /// name (`Foo.bar` -> `Foo__bar`).
 ///
@@ -169,8 +179,8 @@ def mangle_identifiers (ids : List Identifier) : String :=
 /// exists to remove. `llvm.ir`'s `llvm_symbol_ref` quotes every
 /// emitted `@` reference so a dotted name needs no escaping.
 #[partial]
-def def_symbol_name (name : ModulePath) : String :=
-    show_module_path name
+def def_symbol_name (name : NamePath) : String :=
+    show_name_path name
 
 /// Reference-side counterpart to `def_symbol_name` -- see there.
 #[partial]
@@ -227,3 +237,12 @@ def string_find_qualifier_sep (s : String) (i : I64) (n : I64) : I64 :=
 #[partial]
 def bare_modpath (name : String) : ModulePath :=
     ModulePath.mp (List.cons (Identifier.id name) List.empty)
+
+/// `bare_modpath`'s `NamePath` twin: one literal text as a one-segment
+/// name path. The qualified-names split gave a `NamePath` to every place
+/// a DECL's own name is carried (`Def.name`, `Decl.def_d`,
+/// `Decl.infix_d`), and those are exactly the places that used to reach
+/// for `bare_modpath`.
+#[partial]
+def bare_npath (name : String) : NamePath :=
+    NamePath.npath (List.cons (Identifier.id name) List.empty)

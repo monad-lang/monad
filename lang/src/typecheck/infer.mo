@@ -1,11 +1,11 @@
 use lib::types {
   Con, DebugName, Identifier, Inductive, InductConstructor,
-  Literal, LocalScope, LocalVar, MatchCase, ModulePath, NameRef, NumSuffix,
+  Literal, LocalScope, LocalVar, MatchCase, ModulePath, NamePath, NameRef, NumSuffix,
   Native, Param, Scope, ScopeClassDef, ScopeDef, ScopeError, Similar,
   StructLitField, Term, TypeConstraint, TypeError,
   app, con, custom, forall, hole, id, id_eq, if_, lam, list_rev_loop,
   list_reverse, lit, many, match_, mc, mk, mp, name, named, nid, not_a_type,
-  ntv, num, pi, sentinel, show_identifier, show_module_path, str, term_peel, type_,
+  ntv, num, pi, sentinel, show_identifier, show_name_path, str, term_peel, type_,
   unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
 use lib::scope {
@@ -165,7 +165,7 @@ def is_uninformative_carrier (t : Term) : Bool :=
 /// `dict_param_name`)? D5 forwarding -- inside a still-generic
 /// constrained def's own body, the concrete instance isn't known yet,
 /// only a dict VALUE already bound as a parameter.
-def local_dict_for_class (cls_name : ModulePath) (locals : LocalScope) : Option Identifier :=
+def local_dict_for_class (cls_name : NamePath) (locals : LocalScope) : Option Identifier :=
     match scope_find_local (Identifier.id (dict_param_name cls_name)) locals {
         Option.some lv => Option.some lv.name,
         Option.none => Option.none,
@@ -236,7 +236,7 @@ def strip_n_pis (typ : Term) (n : I64) : Term :=
         }
 
 def resolve_class_method_d4
-    (prefix : String) (ins_cls_name : ModulePath) (method_name : Identifier)
+    (prefix : String) (ins_cls_name : NamePath) (method_name : Identifier)
     (ins_constraints : List TypeConstraint) (ins_args : List Term) (carrier : Term)
     (expected_type : Term) (scope : Scope) (locals : LocalScope)
     : Result TypeError TypedTerm :=
@@ -500,7 +500,7 @@ def find_inductive_for_cases (cases : List MatchCase) (scrutinee_term : Term) (s
 def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_term : Term) (scrutinee_typ : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
     match type_head_name scrutinee_typ {
         Option.some id =>
-            match scope_find_inductive (ModulePath.mp (List.cons id List.empty)) scope {
+            match scope_find_inductive (NamePath.npath (List.cons id List.empty)) scope {
                 // Cross-check the cases before committing, exactly as the
                 // `con_owner_name` path above already does -- `type_head_
                 // name` yields a BARE name and `scope_find_inductive` keys
@@ -563,11 +563,11 @@ def find_inductive_by_type_head_or_scan (cases : List MatchCase) (scrutinee_term
 def find_inductive_by_call_return_type_or_scan (cases : List MatchCase) (scrutinee_term : Term) (scope : Scope) : Result TypeError (Option Inductive) :=
     match call_head_def_name scrutinee_term {
         Option.some id =>
-            match scope_find_def_return_type (ModulePath.mp (List.cons id List.empty)) scope {
+            match scope_find_def_return_type (NamePath.npath (List.cons id List.empty)) scope {
                 Option.some ret_typ =>
                     match type_head_name ret_typ {
                         Option.some tid =>
-                            match scope_find_inductive (ModulePath.mp (List.cons tid List.empty)) scope {
+                            match scope_find_inductive (NamePath.npath (List.cons tid List.empty)) scope {
                                 ok ind => ok (Option.some ind),
                                 err _ => find_inductive_for_cases_by_constructor cases scope,
                             },
@@ -632,7 +632,7 @@ def dotted_qualifier_go (s : String) (idx : I64) : Option String :=
 def dotted_qualifier (s : String) : Option String :=
     dotted_qualifier_go s (String.length s - 1)
 
-/// Find the `ModulePath` naming a scrutinee term's owning inductive,
+/// Find the `NamePath` naming a scrutinee term's owning inductive,
 /// directly from the term itself rather than its (often uninformative,
 /// `Term.hole`-when-unannotated) inferred TYPE. Two cases:
 ///
@@ -650,7 +650,7 @@ def dotted_qualifier (s : String) : Option String :=
 ///   (`type_check_free_var_con` returns `Term.var sentinel dbg` with the
 ///   ORIGINAL, still-dotted `dbg` preserved) -- extract the dotted
 ///   qualifier ("Vec") from `id`'s own text via `dotted_qualifier` above
-///   and treat it as a one-segment `ModulePath`. This is the arm that
+///   and treat it as a one-segment `NamePath`. This is the arm that
 ///   actually fires for real qualified-constructor scrutinees.
 ///
 /// Either way, a scrutinee's own TERM still names its constructor's
@@ -677,7 +677,7 @@ def dotted_qualifier (s : String) : Option String :=
 /// `#[terminating]` for the same reason as `call_head_def_name`: peeling at
 /// entry hides `f`'s structural descent from the checker.
 #[terminating]
-def con_owner_name (t : Term) : Option ModulePath :=
+def con_owner_name (t : Term) : Option NamePath :=
     match term_peel t {
         Term.con c => match c { Con.mk _ typ_name _ _ => Option.some typ_name },
         Term.app f _ => con_owner_name f,
@@ -687,7 +687,7 @@ def con_owner_name (t : Term) : Option ModulePath :=
                     match id {
                         Identifier.id s =>
                             match dotted_qualifier s {
-                                Option.some qual => Option.some (ModulePath.mp (List.cons (Identifier.id qual) List.empty)),
+                                Option.some qual => Option.some (NamePath.npath (List.cons (Identifier.id qual) List.empty)),
                                 Option.none => Option.none,
                             }
                     },
@@ -727,7 +727,7 @@ def find_inductive_for_cases_by_constructor (cases : List MatchCase) (scope : Sc
                     if Similar.similar name wildcard_id || String.beq (show_identifier name) ""
                     then find_inductive_for_cases_by_constructor rest scope
                     else
-                        let con_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
+                        let con_mp : NamePath := NamePath.npath (List.cons name List.empty) in
                         match scope_find_all_inductives_by_constructor con_mp scope {
                             List.empty => ok Option.none,
                             List.cons only more =>
@@ -750,7 +750,7 @@ def ambiguous_constructor_message (con_name : Identifier) (ind1 : Inductive) (in
 
 def inductive_name_str (ind : Inductive) : String :=
     match ind {
-        Inductive.mk name _ _ _ _ _ => show_module_path name,
+        Inductive.mk name _ _ _ _ _ => show_name_path name,
     }
 
 /// Check that every non-wildcard case constructor exists in the
@@ -772,7 +772,7 @@ def validate_cases_against_inductive (cases : List MatchCase) (ind : Inductive) 
                             if Similar.similar name wildcard_id
                             then validate_cases_against_inductive rest ind
                             else
-                                let con_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
+                                let con_mp : NamePath := NamePath.npath (List.cons name List.empty) in
                                 if inductive_has_constructor ind con_mp
                                 then validate_cases_against_inductive rest ind
                                 else err (TypeError.custom "constructor not found in inductive"),
@@ -1018,7 +1018,7 @@ def resolve_field_pattern_case (case_name : Identifier) (fp : FieldPattern) (may
             if String.beq (show_identifier case_name) "" then
                 resolve_bare_field_pattern fp ind
             else
-                match find_constructor_in_inductive ind (ModulePath.mp (List.cons case_name List.empty)) {
+                match find_constructor_in_inductive ind (NamePath.npath (List.cons case_name List.empty)) {
                     Option.none => err (TypeError.custom "unknown constructor in field pattern"),
                     Option.some ctor => resolve_field_pattern_against_constructor case_name ctor fp,
                 },
@@ -1044,16 +1044,16 @@ def resolve_bare_field_pattern (fp : FieldPattern) (ind : Inductive) : Result Ty
     }
 
 /// The bare (last-segment) `Identifier` of a constructor's own
-/// `ModulePath` -- `InductConstructor.mk`'s `name` is never
+/// `NamePath` -- `InductConstructor.mk`'s `name` is never
 /// type-prefixed (see e.g. `arg_types_for_case`'s own doc comment).
 /// `List.last` (`init/prelude.mo`) already covers "get the last
-/// element"; `Option.none` (an empty `ModulePath`) shouldn't happen for
+/// element"; `Option.none` (an empty `NamePath`) shouldn't happen for
 /// a real constructor, handled defensively with an empty-string
 /// placeholder rather than assumed impossible.
 #[partial]
-def constructor_bare_name (mp : ModulePath) : Identifier :=
-    match mp {
-        ModulePath.mp ids =>
+def constructor_bare_name (np : NamePath) : Identifier :=
+    match np {
+        NamePath.npath ids =>
             match List.last ids {
                 Option.some last_id => last_id,
                 Option.none => Identifier.id "",
@@ -1208,7 +1208,7 @@ def index_of_identifier (target : Identifier) (names : List Identifier) (i : I64
 def arg_types_for_case (case_name : Identifier) (maybe_ind : Option Inductive) (scrutinee_typ : Term) : List Term :=
     match maybe_ind {
         Option.some ind =>
-            let con_mp : ModulePath := ModulePath.mp (List.cons case_name List.empty) in
+            let con_mp : NamePath := NamePath.npath (List.cons case_name List.empty) in
             match find_constructor_in_inductive ind con_mp {
                 Option.some ctor =>
                     match ctor { InductConstructor.mk _ params _ =>
@@ -1429,7 +1429,7 @@ def last_dotted_segment (s : String) : String :=
 /// `expected_type` is the only real type information available here.
 def type_check_free_var_con (id : Identifier) (expected_type : Term) (dbg : DebugName) (scope : Scope) : Result TypeError TypedTerm :=
     let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
-    let con_mp : ModulePath := ModulePath.mp (List.cons bare_name List.empty) in
+    let con_mp : NamePath := NamePath.npath (List.cons bare_name List.empty) in
     match scope_find_inductive_by_constructor con_mp scope {
         Option.some ind =>
             match find_constructor_in_inductive ind con_mp {
@@ -1485,7 +1485,7 @@ def con_ref_result_type (id : Identifier) (expected_type : Term) (scope : Scope)
             Identifier.id s =>
                 match dotted_qualifier s {
                     Option.some qual =>
-                        let qual_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id qual) List.empty) in
+                        let qual_mp : NamePath := NamePath.npath (List.cons (Identifier.id qual) List.empty) in
                         match scope_find_inductive qual_mp scope {
                             // The params check must be on the inductive
                             // actually being NAMED (`qual_ind`, from the
@@ -1576,8 +1576,8 @@ def qualified_con_ref_typ (dbg : DebugName) (sig : Term) (scope : Scope) : Term 
                     Identifier.id s =>
                         match dotted_qualifier s {
                             Option.some qual =>
-                                let qual_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id qual) List.empty) in
-                                let bare_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id (last_dotted_segment s)) List.empty) in
+                                let qual_mp : NamePath := NamePath.npath (List.cons (Identifier.id qual) List.empty) in
+                                let bare_mp : NamePath := NamePath.npath (List.cons (Identifier.id (last_dotted_segment s)) List.empty) in
                                 match scope_find_inductive qual_mp scope {
                                     ok qual_ind =>
                                         if inductive_has_params qual_ind then sig
@@ -1874,7 +1874,7 @@ def try_type_check_def_call (app_term : Term) (expected_type : Term) (scope : Sc
                             // not a registered signature. Without this
                             // guard `scope_resolve_name` correctly returns
                             // the LOCAL's `ScopeDef`, but its `.name` is
-                            // the same single-segment `ModulePath` the
+                            // the same single-segment `NamePath` the
                             // global is registered under -- so the
                             // `def_sigs` lookup below would hand back the
                             // GLOBAL's signature and check this call's
@@ -2472,8 +2472,8 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
     match c {
         mk cname typ_name num_args args =>
             match typ_name {
-                ModulePath.mp ids =>
-                    let full_name : ModulePath := ModulePath.mp (list_append ids (List.cons cname List.empty)) in
+                NamePath.npath ids =>
+                    let full_name : NamePath := NamePath.npath (list_append ids (List.cons cname List.empty)) in
                     match scope_find_inductive typ_name scope {
                         err _ =>
                             match check_con_args_untyped args scope local_types locals {
@@ -2482,7 +2482,7 @@ def type_check_con (c : Con) (expected_type : Term) (scope : Scope) (local_types
                             },
                         ok ind =>
                             match find_constructor_in_inductive ind full_name {
-                                Option.none => err (TypeError.unknown_constructor (NameRef.nmp full_name)),
+                                Option.none => err (TypeError.unknown_constructor (NameRef.nnp full_name)),
                                 Option.some ctor =>
                                     match ctor {
                                         InductConstructor.mk _ params _ =>
@@ -2538,8 +2538,8 @@ def con_result_type (ind : Inductive) (expected_type : Term) : Term :=
     then Term.var sentinel (DebugName.named (inductive_bare_name ind))
     else expected_type
 
-def con_arity_msg (full_name : ModulePath) (got : I64) (want : I64) : String :=
-    "constructor arity mismatch: " ++ show_module_path full_name ++ " expects "
+def con_arity_msg (full_name : NamePath) (got : I64) (want : I64) : String :=
+    "constructor arity mismatch: " ++ show_name_path full_name ++ " expects "
         ++ I64.to_string want ++ " arg(s), got " ++ I64.to_string got
 
 /// Type check a struct-literal expression (`{ field := value, ... }`).
@@ -2563,14 +2563,14 @@ def type_check_struct_lit (fields : List StructLitField) (type_name : Option Ter
         Option.none =>
             err (TypeError.custom "cannot infer struct type for struct literal (no `: StructName` annotation and no expected type from context)"),
         Option.some sname =>
-            let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
+            let typ_mp : NamePath := NamePath.npath (List.cons sname List.empty) in
             match scope_find_inductive typ_mp scope {
-                err _ => err (TypeError.unknown_type (NameRef.nmp typ_mp)),
+                err _ => err (TypeError.unknown_type (NameRef.nnp typ_mp)),
                 ok ind =>
                     match ind {
                         Inductive.mk _ _ _ ctors _ _ =>
                             match ctors {
-                                List.empty => err (TypeError.custom (String.concat "struct has no registered constructor: " (show_module_path typ_mp))),
+                                List.empty => err (TypeError.custom (String.concat "struct has no registered constructor: " (show_name_path typ_mp))),
                                 List.cons ctor _ =>
                                     match ctor {
                                         InductConstructor.mk con_name params _ =>
@@ -2603,13 +2603,13 @@ def struct_lit_head_name (type_name : Option Term) (expected_type : Term) : Opti
         Option.none => type_head_name expected_type,
     }
 
-/// `InductConstructor.mk`'s own `name` field is a full `ModulePath`
-/// (`build_scope_struct` registers it as `ModulePath.mp [mk]`) --
+/// `InductConstructor.mk`'s own `name` field is a full `NamePath`
+/// (`build_scope_struct` registers it as `NamePath.npath [mk]`) --
 /// `Con.mk` wants just the bare constructor `Identifier`, same as
 /// every other constructor-application site in this file.
-def struct_lit_con_name (con_mp : ModulePath) : Identifier :=
-    match con_mp {
-        ModulePath.mp ids =>
+def struct_lit_con_name (np : NamePath) : Identifier :=
+    match np {
+        NamePath.npath ids =>
             match list_last ids {
                 Option.some id => id,
                 Option.none => Identifier.id "mk",
@@ -2745,7 +2745,7 @@ def struct_literal_arg_matches_expected (a : Term) (a_expected : Term) (scope : 
             match type_head_name a_expected {
                 Option.none => true,
                 Option.some sname =>
-                    let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
+                    let typ_mp : NamePath := NamePath.npath (List.cons sname List.empty) in
                     match scope_find_inductive typ_mp scope {
                         err _ => true,
                         ok ind =>
@@ -2817,7 +2817,7 @@ def named_call_fields_of (a : Term) : Option (List StructLitField) :=
 
 /// `Inductive.mk`'s own `name` field, bare-last-segment only -- mirrors
 /// `struct_lit_con_name`'s identical extraction for a CONSTRUCTOR's own
-/// `ModulePath`, just applied to the owning inductive's instead. Used to
+/// `NamePath`, just applied to the owning inductive's instead. Used to
 /// build a resolved named call's own result type (`Term.var sentinel
 /// (DebugName.named ...)`), the same shape `type_check_struct_lit`
 /// returns for an explicitly-annotated literal.
@@ -2825,7 +2825,7 @@ def inductive_bare_name (ind : Inductive) : Identifier :=
     match ind {
         Inductive.mk name _ _ _ _ _ =>
             match name {
-                ModulePath.mp ids =>
+                NamePath.npath ids =>
                     match list_last ids {
                         Option.some id => id,
                         Option.none => Identifier.id "?",
@@ -2833,7 +2833,7 @@ def inductive_bare_name (ind : Inductive) : Identifier :=
             }
     }
 
-def inductive_module_path (ind : Inductive) : ModulePath :=
+def inductive_type_path (ind : Inductive) : NamePath :=
     match ind {
         Inductive.mk name _ _ _ _ _ => name,
     }
@@ -2911,7 +2911,7 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (expected_ty
             match dbg {
                 DebugName.named id =>
                     let bare_name : Identifier := match id { Identifier.id s => Identifier.id (last_dotted_segment s) } in
-                    let con_mp : ModulePath := ModulePath.mp (List.cons bare_name List.empty) in
+                    let con_mp : NamePath := NamePath.npath (List.cons bare_name List.empty) in
                     match scope_find_inductive_by_constructor con_mp scope {
                         Option.some ind =>
                             match find_constructor_in_inductive ind con_mp {
@@ -2927,7 +2927,7 @@ def type_check_named_call (f : Term) (fields : List StructLitField) (expected_ty
                                                         err e => err e,
                                                         ok elab_args =>
                                                             let mk_name : Identifier := struct_lit_con_name con_name in
-                                                            let c : Con := Con.mk mk_name (inductive_module_path ind) (List.length params) elab_args in
+                                                            let c : Con := Con.mk mk_name (inductive_type_path ind) (List.length params) elab_args in
                                                             let result_typ : Term := Term.var sentinel (DebugName.named (inductive_bare_name ind)) in
                                                             ok (Option.some (mk_typed (Term.con c) result_typ)),
                                                     }
@@ -3113,7 +3113,7 @@ def type_check_struct_update (base : Term) (fields : List StructLitField) (expec
             match type_head_name base_typ {
                 Option.none => struct_update_fallback base_term fields base_typ,
                 Option.some sname =>
-                    let typ_mp : ModulePath := ModulePath.mp (List.cons sname List.empty) in
+                    let typ_mp : NamePath := NamePath.npath (List.cons sname List.empty) in
                     match scope_find_inductive typ_mp scope {
                         err _ => struct_update_fallback base_term fields base_typ,
                         ok ind =>
@@ -3177,7 +3177,7 @@ def struct_param_names (params : List Param) : List Identifier :=
 /// `struct_update_project_field` term that reads the unchanged value
 /// straight out of `base`.
 #[terminating]
-def struct_update_build_args (params : List Param) (fields : List StructLitField) (base : Term) (con_name : ModulePath) (all_names : List Identifier) (total : I64) (idx : I64) : List (Option Term) :=
+def struct_update_build_args (params : List Param) (fields : List StructLitField) (base : Term) (con_name : NamePath) (all_names : List Identifier) (total : I64) (idx : I64) : List (Option Term) :=
     match params {
         List.empty => List.empty,
         List.cons p rest =>
@@ -3203,7 +3203,7 @@ def struct_update_build_args (params : List Param) (fields : List StructLitField
 /// arm's own args is `total - 1 - idx` (last-declared = innermost =
 /// index 0, this codebase's standard convention — see e.g.
 /// `lang/scope.mo`'s `add_constructors_go`).
-def struct_update_project_field (base : Term) (con_name : ModulePath) (all_names : List Identifier) (total : I64) (idx : I64) (pname : Identifier) : Term :=
+def struct_update_project_field (base : Term) (con_name : NamePath) (all_names : List Identifier) (total : I64) (idx : I64) (pname : Identifier) : Term :=
     let bare_name : Identifier := struct_lit_con_name con_name in
     let db_idx : I64 := (total - 1) - idx in
     let no_fp : Option FieldPattern := Option.none in
@@ -3331,9 +3331,11 @@ def type_check_ntv (n : Native) (expected_type : Term) (scope : Scope) (local_ty
 // just infer and return, ignoring `expected_type` — a literal argument
 // would trivially "pass" any declared param type, proving nothing).
 
-def box_ctor_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Box") List.empty)
+def box_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Box") List.empty)
 
-def box_ctor_full_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Box") (List.cons (Identifier.id "box") List.empty))
+def box_ctor_path : NamePath := NamePath.npath (List.cons (Identifier.id "Box") List.empty)
+
+def box_ctor_full_path : NamePath := NamePath.npath (List.cons (Identifier.id "Box") (List.cons (Identifier.id "box") List.empty))
 
 def box_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none List.empty
 
@@ -3342,7 +3344,7 @@ def box_constructor : InductConstructor := InductConstructor.mk box_ctor_full_pa
 def box_inductive : Inductive := Inductive.mk box_ctor_path List.empty (Term.type_ 3) (List.cons box_constructor List.empty) List.empty Visibility.package_private
 
 def box_scope : Scope := {
-    module_id := box_ctor_path,
+    module_id := box_module_path,
     scope := scope_data_add_inductive scope_data_empty box_inductive,
     parent := Option.none,
 }
@@ -3404,7 +3406,7 @@ def test_type_check_con_unregistered_inductive_falls_back : Bool :=
     // `typ_name` refers to an inductive that isn't in scope at all —
     // still individually checks present args (a bad one is still
     // caught), just without field-type correlation.
-    let unknown_typ : ModulePath := ModulePath.mp (List.cons (Identifier.id "NoSuchType") List.empty) in
+    let unknown_typ : NamePath := NamePath.npath (List.cons (Identifier.id "NoSuchType") List.empty) in
     let good_arg : Term := Term.type_ 1 in
     let c_ok : Con := Con.mk (Identifier.id "whatever") unknown_typ 1 (List.cons (Option.some good_arg) List.empty) in
     match type_check_con c_ok Term.hole box_scope empty_local_types empty_locals {
@@ -3420,9 +3422,11 @@ def test_type_check_con_unregistered_inductive_falls_back : Bool :=
 // y : T }` declaration (type path `[Point]`, single synthetic
 // constructor path `[mk]`).
 
-def point_type_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Point") List.empty)
+def point_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Point") List.empty)
 
-def point_mk_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty)
+def point_type_path : NamePath := NamePath.npath (List.cons (Identifier.id "Point") List.empty)
+
+def point_mk_path : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty)
 
 def point_x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 2) Multiplicity.many Option.none List.empty
 
@@ -3435,7 +3439,7 @@ def point_constructor : InductConstructor := InductConstructor.mk point_mk_path 
 def point_inductive : Inductive := Inductive.mk point_type_path List.empty Term.hole (List.cons point_constructor List.empty) List.empty Visibility.package_private
 
 def point_scope : Scope := {
-    module_id := point_type_path,
+    module_id := point_module_path,
     scope := scope_data_add_inductive scope_data_empty point_inductive,
     parent := Option.none,
 }
@@ -3548,9 +3552,11 @@ def test_type_check_struct_lit_extra_unknown_field_ignored : Bool :=
 
 def point_mk_var : Term := Term.var sentinel (DebugName.named (Identifier.id "mk"))
 
-def solo_type_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Solo") List.empty)
+def solo_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Solo") List.empty)
 
-def solo_mk_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty)
+def solo_type_path : NamePath := NamePath.npath (List.cons (Identifier.id "Solo") List.empty)
+
+def solo_mk_path : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty)
 
 def solo_n_param : Param := Param.mk (Identifier.id "n") (Term.type_ 2) Multiplicity.many Option.none List.empty
 
@@ -3559,7 +3565,7 @@ def solo_constructor : InductConstructor := InductConstructor.mk solo_mk_path (L
 def solo_inductive : Inductive := Inductive.mk solo_type_path List.empty Term.hole (List.cons solo_constructor List.empty) List.empty Visibility.package_private
 
 def solo_scope : Scope := {
-    module_id := solo_type_path,
+    module_id := solo_module_path,
     scope := scope_data_add_inductive scope_data_empty solo_inductive,
     parent := Option.none,
 }
@@ -3662,7 +3668,9 @@ def test_type_check_app_resolves_named_call_end_to_end : Bool :=
 // literal) so this exercises the actual `def_params_of_term`/`scope_
 // data_add_def_params` registration path, not just its consumer.
 
-def scale_def_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "scale") List.empty)
+def scale_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "scale") List.empty)
+
+def scale_def_name : NamePath := NamePath.npath (List.cons (Identifier.id "scale") List.empty)
 
 def scale_def_body : Term :=
     Term.lam (DebugName.named (Identifier.id "factor")) (Term.type_ 2)
@@ -3678,8 +3686,8 @@ def scale_def : Def := {
 }
 
 def scale_scope : Scope := {
-    module_id := scale_def_name,
-    scope := build_scope_def scale_def scale_def_name scope_data_empty,
+    module_id := scale_module_path,
+    scope := build_scope_def scale_def scale_module_path scope_data_empty,
     parent := Option.none,
 }
 
@@ -3879,9 +3887,11 @@ def test_type_check_struct_update_unresolvable_base_falls_back : Bool :=
 // structurally-unrelated shape (`Term.type_ 1`) has somewhere real to
 // conflict with.
 
-def wrap_type_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Wrap") List.empty)
+def wrap_module_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Wrap") List.empty)
 
-def wrap_mk_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty)
+def wrap_type_path : NamePath := NamePath.npath (List.cons (Identifier.id "Wrap") List.empty)
+
+def wrap_mk_path : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty)
 
 def wrap_v_param : Param := Param.mk (Identifier.id "v") point_type_ref Multiplicity.many Option.none List.empty
 
@@ -3890,7 +3900,7 @@ def wrap_constructor : InductConstructor := InductConstructor.mk wrap_mk_path (L
 def wrap_inductive : Inductive := Inductive.mk wrap_type_path List.empty Term.hole (List.cons wrap_constructor List.empty) List.empty Visibility.package_private
 
 def wrap_scope : Scope := {
-    module_id := wrap_type_path,
+    module_id := wrap_module_path,
     scope := scope_data_add_inductive scope_data_empty wrap_inductive,
     parent := Option.none,
 }

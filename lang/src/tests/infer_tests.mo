@@ -1,6 +1,6 @@
 use lib::types {
   Attribute, DebugName, Decl, FieldPattern, FieldPatternEntry, Identifier,
-  InductConstructor, Inductive, MatchCase, ModulePath, Param,
+  InductConstructor, Inductive, MatchCase, ModulePath, NamePath, Param,
   Scope, ScopeClassDef, ScopeData, Similar, Term, TypeError,
   app, forall, hole, id, if_, inductive_d, lam, lit, match_, mc, mk, mp, named,
   not_a_type, pi, type_, unknown_var, unnamed, var,
@@ -362,13 +362,13 @@ def test_match_case_args_bound : Bool :=
 def maybe_scope : Scope :=
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let type_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Maybe") List.empty) in
+    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Maybe") List.empty) in
     let some_cn : InductConstructor := InductConstructor.mk
-        (ModulePath.mp (List.cons (Identifier.id "some") List.empty))
+        (NamePath.npath (List.cons (Identifier.id "some") List.empty))
         List.empty
         (Term.type_ 1) in
     let none_cn : InductConstructor := InductConstructor.mk
-        (ModulePath.mp (List.cons (Identifier.id "none") List.empty))
+        (NamePath.npath (List.cons (Identifier.id "none") List.empty))
         List.empty
         (Term.type_ 1) in
     let cns : List InductConstructor := List.cons some_cn (List.cons none_cn List.empty) in
@@ -386,7 +386,7 @@ def maybe_scope : Scope :=
 
 #[test]
 def test_match_inductive_in_scope : Bool :=
-    match scope_find_inductive (ModulePath.mp (List.cons (Identifier.id "Maybe") List.empty)) maybe_scope {
+    match scope_find_inductive (NamePath.npath (List.cons (Identifier.id "Maybe") List.empty)) maybe_scope {
         ok _ => true,
         err _ => false,
     }
@@ -528,11 +528,11 @@ def test_match_branch_type_conflict : Bool :=
 /// A named single-constructor inductive with NAMED fields (`Maybe`
 /// above has none) -- needed to exercise real field-pattern resolution.
 def point_ind : Inductive :=
-    let type_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Point") List.empty) in
+    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Point") List.empty) in
     let x_param : Param := Param.mk (Identifier.id "x") (Term.type_ 1) Multiplicity.many Option.none List.empty in
     let y_param : Param := Param.mk (Identifier.id "y") (Term.type_ 1) Multiplicity.many Option.none List.empty in
     let mk_cn : InductConstructor := InductConstructor.mk
-        (ModulePath.mp (List.cons (Identifier.id "mk") List.empty))
+        (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
         (List.cons x_param (List.cons y_param List.empty))
         (Term.type_ 1) in
     let cns : List InductConstructor := List.cons mk_cn List.empty in
@@ -618,10 +618,10 @@ def test_field_pattern_bare_form_multi_constructor_is_an_error : Bool :=
     // `Option.none` short-circuiting with an unrelated error message).
     let mod_id : Identifier := Identifier.id "Test" in
     let mod_path : ModulePath := ModulePath.mp (List.cons mod_id List.empty) in
-    let type_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Shape") List.empty) in
+    let type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Shape") List.empty) in
     let r_param : Param := Param.mk (Identifier.id "r") (Term.type_ 1) Multiplicity.many Option.none List.empty in
-    let circle_cn : InductConstructor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "circle") List.empty)) (List.cons r_param List.empty) (Term.type_ 1) in
-    let square_cn : InductConstructor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "square") List.empty)) (List.cons r_param List.empty) (Term.type_ 1) in
+    let circle_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "circle") List.empty)) (List.cons r_param List.empty) (Term.type_ 1) in
+    let square_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "square") List.empty)) (List.cons r_param List.empty) (Term.type_ 1) in
     let cns : List InductConstructor := List.cons circle_cn (List.cons square_cn List.empty) in
     let empty_params : List Param := List.empty in
     let empty_attrs : List Attribute := List.empty in
@@ -727,11 +727,11 @@ def test_pi_of_pi : Bool :=
 // Scope with a single class method "beq" with type signature Type.
 def classdef_scope : Scope :=
     let beq_id : Identifier := Identifier.id "beq" in
-    let beq_class : ModulePath := ModulePath.mp (List.cons (Identifier.id "BEq") List.empty) in
-    let beq_mp : ModulePath := ModulePath.mp (List.cons beq_id List.empty) in
+    let beq_class : NamePath := NamePath.npath (List.cons (Identifier.id "BEq") List.empty) in
+    let beq_np : NamePath := NamePath.npath (List.cons beq_id List.empty) in
     let scd : ScopeClassDef := {
         class_name := beq_class,
-        full_name := beq_mp,
+        full_name := beq_np,
         name := beq_id,
         sig := Term.type_ 1,
     } in
@@ -798,17 +798,17 @@ def test_char_literal_types_as_char : Bool :=
 // `lang/types.mo`'s `Decl` and `init/meta.mo`'s `Decl` are such a pair.
 // Both orders are asserted so the fallback is exercised whichever wins.
 
-def dup_type_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Dup") List.empty)
+def dup_type_name : NamePath := NamePath.npath (List.cons (Identifier.id "Dup") List.empty)
 
 /// A `Dup` whose constructors do NOT cover the match below -- stands in
 /// for `init/meta.mo`'s `Decl` (`d_def`/`d_instance`/`d_error`).
 def dup_other_ind : Inductive :=
     let p : Param := Param.mk (Identifier.id "p") (Term.type_ 1) Multiplicity.many Option.none List.empty in
     let a_cn : InductConstructor := InductConstructor.mk
-        (ModulePath.mp (List.cons (Identifier.id "d_other_a") List.empty))
+        (NamePath.npath (List.cons (Identifier.id "d_other_a") List.empty))
         (List.cons p List.empty) (Term.type_ 1) in
     let b_cn : InductConstructor := InductConstructor.mk
-        (ModulePath.mp (List.cons (Identifier.id "d_other_b") List.empty))
+        (NamePath.npath (List.cons (Identifier.id "d_other_b") List.empty))
         (List.cons p List.empty) (Term.type_ 1) in
     let cns : List InductConstructor := List.cons a_cn (List.cons b_cn List.empty) in
     let empty_params : List Param := List.empty in
@@ -820,7 +820,7 @@ def dup_other_ind : Inductive :=
 def dup_wanted_ind : Inductive :=
     let p : Param := Param.mk (Identifier.id "p") (Term.type_ 1) Multiplicity.many Option.none List.empty in
     let w_cn : InductConstructor := InductConstructor.mk
-        (ModulePath.mp (List.cons (Identifier.id "d_wanted") List.empty))
+        (NamePath.npath (List.cons (Identifier.id "d_wanted") List.empty))
         (List.cons p List.empty) (Term.type_ 1) in
     let cns : List InductConstructor := List.cons w_cn List.empty in
     let empty_params : List Param := List.empty in

@@ -1,9 +1,10 @@
 use lib::types {
   Identifier, InductConstructor, Inductive, Infix, InstanceKey,
-  LocalVar, Module, ModulePath, ModuleRegistry, Multiplicity, Operator, Param,
+  LocalVar, Module, ModulePath, ModuleRegistry, Multiplicity, NamePath,
+  Operator, Param,
   Scope, ScopeClassDef, ScopeConflict, ScopeData, ScopeDef, ScopeError,
   ScopeInstance, Similar, Term, hole, id, many, mk, mp,
-  name_not_found, nid, nmp, nop, operator, type_,
+  name_not_found, nid, nop, operator, type_,
 }
 use lib::scope {scope_data_add_def, scope_data_add_inductive, scope_data_empty}
 
@@ -103,7 +104,7 @@ instance Similar ModuleRegistry {
 #[test]
 def test_infix_construct : Bool :=
     let expected_op : Operator := Operator.operator "+" in
-    let expected_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "add") List.empty) in
+    let expected_name : NamePath := NamePath.npath (List.cons (Identifier.id "add") List.empty) in
     let inf : Infix := {
         operator := expected_op,
         name := expected_name,
@@ -114,7 +115,7 @@ def test_infix_construct : Bool :=
 
 #[test]
 def test_instance_key_construct : Bool :=
-    let expected_cls : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
+    let expected_cls : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
     let key : InstanceKey := {
         cls := expected_cls,
         constraints := List.empty,
@@ -126,7 +127,7 @@ def test_instance_key_construct : Bool :=
 
 #[test]
 def test_scope_def_construct : Bool :=
-    let expected_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "add") List.empty) in
+    let expected_name : NamePath := NamePath.npath (List.cons (Identifier.id "add") List.empty) in
     let expected_module : ModulePath := ModulePath.mp (List.cons (Identifier.id "Prelude") List.empty) in
     let sd : ScopeDef := {
         name := expected_name,
@@ -141,9 +142,9 @@ def test_scope_def_construct : Bool :=
 
 #[test]
 def test_scope_class_def_construct : Bool :=
-    let expected_full_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "Eq") List.empty) in
+    let expected_full_name : NamePath := NamePath.npath (List.cons (Identifier.id "Eq") List.empty) in
     let expected_id : Identifier := Identifier.id "beq" in
-    let expected_class : ModulePath := ModulePath.mp (List.cons (Identifier.id "BEq") List.empty) in
+    let expected_class : NamePath := NamePath.npath (List.cons (Identifier.id "BEq") List.empty) in
     let d : ScopeClassDef := {
         class_name := expected_class,
         full_name := expected_full_name,
@@ -156,7 +157,7 @@ def test_scope_class_def_construct : Bool :=
 
 #[test]
 def test_scope_instance_construct : Bool :=
-    let expected_cn : ModulePath := ModulePath.mp (List.cons (Identifier.id "Show") List.empty) in
+    let expected_cn : NamePath := NamePath.npath (List.cons (Identifier.id "Show") List.empty) in
     let si : ScopeInstance := {
         class_name := expected_cn,
         instances := List.empty,
@@ -167,7 +168,7 @@ def test_scope_instance_construct : Bool :=
 
 #[test]
 def test_scope_conflict_construct : Bool :=
-    let expected_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "foo") List.empty) in
+    let expected_name : NamePath := NamePath.npath (List.cons (Identifier.id "foo") List.empty) in
     let sc : ScopeConflict := {
         name := expected_name,
         candidates := List.empty,
@@ -193,12 +194,12 @@ def test_local_var_construct : Bool :=
 #[test]
 def test_scope_data_construct : Bool :=
     let tcon : Identifier := Identifier.id "Bool" in
-    let tdef_mp : ModulePath := ModulePath.mp (List.cons tcon List.empty) in
+    let tdef_mp : NamePath := NamePath.npath (List.cons tcon List.empty) in
     let none_term : Option Term := Option.none in
     let dummy_params : List Param := List.cons (Param.mk tcon Term.hole Multiplicity.many none_term List.empty) List.empty in
     let empty_param_list : List Param := List.empty in
-    let true_cn : InductConstructor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "true") List.empty)) empty_param_list (Term.type_ 1) in
-    let false_cn : InductConstructor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "false") List.empty)) empty_param_list (Term.type_ 1) in
+    let true_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "true") List.empty)) empty_param_list (Term.type_ 1) in
+    let false_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "false") List.empty)) empty_param_list (Term.type_ 1) in
     let dummy_constructors : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
     let dummy_attrs : List Attribute := List.empty in
     let dummy_type : Inductive := Inductive.mk tdef_mp dummy_params (Term.type_ 1) dummy_constructors dummy_attrs Visibility.package_private in
@@ -224,12 +225,12 @@ def test_scope_data_construct : Bool :=
 def test_scope_construct : Bool :=
     let expected_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Prelude") List.empty) in
     let tcon : Identifier := Identifier.id "Bool" in
-    let tdef_mp : ModulePath := ModulePath.mp (List.cons tcon List.empty) in
+    let tdef_mp : NamePath := NamePath.npath (List.cons tcon List.empty) in
     let none_term : Option Term := Option.none in
     let dummy_params : List Param := List.cons (Param.mk tcon Term.hole Multiplicity.many none_term List.empty) List.empty in
     let empty_param_list : List Param := List.empty in
-    let true_cn : InductConstructor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "true") List.empty)) empty_param_list (Term.type_ 1) in
-    let false_cn : InductConstructor := InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "false") List.empty)) empty_param_list (Term.type_ 1) in
+    let true_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "true") List.empty)) empty_param_list (Term.type_ 1) in
+    let false_cn : InductConstructor := InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "false") List.empty)) empty_param_list (Term.type_ 1) in
     let dummy_constructors : List InductConstructor := List.cons true_cn (List.cons false_cn List.empty) in
     let dummy_attrs : List Attribute := List.empty in
     let dummy_type : Inductive := Inductive.mk tdef_mp dummy_params (Term.type_ 1) dummy_constructors dummy_attrs Visibility.package_private in
@@ -258,8 +259,9 @@ def test_scope_construct : Bool :=
 def test_module_construct : Bool :=
     let expected_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "Prelude") List.empty) in
     let dummy_module : ModulePath := ModulePath.mp (List.cons (Identifier.id "Prelude") List.empty) in
+    let expected_np : NamePath := NamePath.npath (List.cons (Identifier.id "Prelude") List.empty) in
     let dummy_def : ScopeDef := {
-        name := expected_path,
+        name := expected_np,
         module := dummy_module,
         sig := Term.hole,
         body := Term.hole,
@@ -292,7 +294,7 @@ def test_scope_error_construct : Bool :=
     match e {
         name_not_found nr => match nr {
             NameRef.nid id => Similar.similar id expected_id,
-            NameRef.nmp _ => false,
+            NameRef.nnp _ => false,
             NameRef.nop _ => false
         },
         _ => false

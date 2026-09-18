@@ -2,7 +2,7 @@ use lib::core_eval {basic_native_table, eval}
 use lib::core_ir {CoreIr, IrLit}
 use lib::core_value {GlobalTable, Value, global_cache_new, global_table_len}
 use lib::lower_core_ir {LowerCtx, lower_ctx_from_decls, lower_root}
-use lib::types {Attribute, DebugName, ModulePath, Term}
+use lib::types {Attribute, DebugName, ModulePath, NamePath, Term}
 
 /// End-to-end tests: real checked `Term` -> `LowerCtx` (built via
 /// `lang.lower_core_ir.lower_ctx_from_decls`, which itself calls
@@ -38,6 +38,8 @@ def sentinel : I64 := -1
 
 def mp1 (s : String) : ModulePath := ModulePath.mp [Identifier.id s]
 
+def np1 (s : String) : NamePath := NamePath.npath [Identifier.id s]
+
 def named (s : String) : DebugName := DebugName.named (Identifier.id s)
 
 def free_var (s : String) : Term := Term.var sentinel (named s)
@@ -45,7 +47,7 @@ def free_var (s : String) : Term := Term.var sentinel (named s)
 def num (n : I64) : Term := Term.lit (Literal.num n NumSuffix.i64)
 
 def def_decl (name : String) (term : Term) : Decl :=
-  Decl.def_d (Def.mk (mp1 name) Term.hole term List.empty List.empty Visibility.package_private)
+  Decl.def_d (Def.mk (np1 name) Term.hole term List.empty List.empty Visibility.package_private)
 
 def build_ctx (decl_list : List Decl) : LowerCtx :=
   lower_ctx_from_decls (mp1 "test") decl_list
@@ -53,7 +55,7 @@ def build_ctx (decl_list : List Decl) : LowerCtx :=
 /// Lower `root`'s body against `ctx` and evaluate it to a `Value`,
 /// against the (real, worklist-built) `GlobalTable` `lower_root` returns.
 def lower_and_run (ctx : LowerCtx) (root : String) : Option Value :=
-  match lower_root ctx (mp1 root) {
+  match lower_root ctx (np1 root) {
     Result.err _ => Option.none,
     Result.ok pr => run_lowered pr,
   }
@@ -118,10 +120,10 @@ def test_escaping_closure_captures_global_arg_end_to_end : Bool :=
 // the old evaluator (erecursor was an unevaluated stub; econst had no
 // real global table at all).
 
-def mynat_path : ModulePath := mp1 "MyNat"
+def mynat_path : NamePath := np1 "MyNat"
 
-def z_ctor : InductConstructor := InductConstructor.mk (mp1 "z") List.empty Term.hole
-def s_ctor : InductConstructor := InductConstructor.mk (mp1 "s") List.empty Term.hole
+def z_ctor : InductConstructor := InductConstructor.mk (np1 "z") List.empty Term.hole
+def s_ctor : InductConstructor := InductConstructor.mk (np1 "s") List.empty Term.hole
 
 def mynat_decl : Decl :=
   Decl.inductive_d (Inductive.mk mynat_path List.empty Term.hole [z_ctor, s_ctor] List.empty Visibility.package_private)
@@ -197,9 +199,9 @@ def test_self_recursive_match_over_custom_inductive_end_to_end : Bool :=
 // (`lower_con`), so a minimal `Bool` inductive `Decl` is still needed for
 // this specific test term to lower at all.
 
-def bool_path : ModulePath := mp1 "Bool"
-def true_ctor : InductConstructor := InductConstructor.mk (mp1 "true") List.empty Term.hole
-def false_ctor : InductConstructor := InductConstructor.mk (mp1 "false") List.empty Term.hole
+def bool_path : NamePath := np1 "Bool"
+def true_ctor : InductConstructor := InductConstructor.mk (np1 "true") List.empty Term.hole
+def false_ctor : InductConstructor := InductConstructor.mk (np1 "false") List.empty Term.hole
 
 def bool_decl : Decl :=
   Decl.inductive_d (Inductive.mk bool_path List.empty Term.hole [true_ctor, false_ctor] List.empty Visibility.package_private)
@@ -224,13 +226,13 @@ def test_if_end_to_end : Bool :=
 // `reflect_type_info!`'s meta-eval hits constantly (every real
 // `List`-processing stdlib function's own empty-case body).
 
-def mylist_path : ModulePath := mp1 "MyList"
-def mynil_ctor : InductConstructor := InductConstructor.mk (mp1 "mynil") List.empty Term.hole
+def mylist_path : NamePath := np1 "MyList"
+def mynil_ctor : InductConstructor := InductConstructor.mk (np1 "mynil") List.empty Term.hole
 def hd_param : Param := Param.mk (Identifier.id "hd") Term.hole Multiplicity.many Option.none List.empty
 def tl_param : Param := Param.mk (Identifier.id "tl") Term.hole Multiplicity.many Option.none List.empty
 
 def mycons_ctor : InductConstructor :=
-  InductConstructor.mk (mp1 "mycons") [hd_param, tl_param] Term.hole
+  InductConstructor.mk (np1 "mycons") [hd_param, tl_param] Term.hole
 
 def mylist_decl : Decl :=
   Decl.inductive_d (Inductive.mk mylist_path List.empty Term.hole [mynil_ctor, mycons_ctor] List.empty Visibility.package_private)
@@ -270,7 +272,7 @@ def is_con_with_tag_and_arity (v : Value) (expected_tag : I64) (expected_arity :
 def native_attr : List Attribute := [Attribute.mk (Identifier.id "native") [AttrArg.ident (Identifier.id "i64_add")]]
 
 def add_native_term : Term := Term.lam (named "a") Term.hole (Term.lam (named "b") Term.hole Term.hole)
-def add_native_decl : Decl := Decl.def_d (Def.mk (mp1 "add_native") Term.hole add_native_term List.empty native_attr Visibility.package_private)
+def add_native_decl : Decl := Decl.def_d (Def.mk (np1 "add_native") Term.hole add_native_term List.empty native_attr Visibility.package_private)
 
 def native_stub_main_term : Term :=
   // add_native 3 4 -- should reduce to 7 via the SAME i64_add native
@@ -316,11 +318,11 @@ def test_bare_open_aliased_constructor_reference_as_global_end_to_end : Bool :=
 // assignment is correct in general (independent of
 // `reflect_type_info!`'s own much larger call graph).
 
-def triple_path : ModulePath := mp1 "Triple"
+def triple_path : NamePath := np1 "Triple"
 def a_param : Param := Param.mk (Identifier.id "a") Term.hole Multiplicity.many Option.none List.empty
 def b_param : Param := Param.mk (Identifier.id "b") Term.hole Multiplicity.many Option.none List.empty
 def c_param : Param := Param.mk (Identifier.id "c") Term.hole Multiplicity.many Option.none List.empty
-def triple_ctor : InductConstructor := InductConstructor.mk (mp1 "triple_mk") [a_param, b_param, c_param] Term.hole
+def triple_ctor : InductConstructor := InductConstructor.mk (np1 "triple_mk") [a_param, b_param, c_param] Term.hole
 def triple_decl : Decl := Decl.inductive_d (Inductive.mk triple_path List.empty Term.hole [triple_ctor] List.empty Visibility.package_private)
 
 def triple_con (x y z : Term) : Term :=

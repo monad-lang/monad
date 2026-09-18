@@ -1,6 +1,6 @@
 use lib::types {
   Decl, Def, Identifier, InductConstructor, Inductive, LocalScope, LocalVar,
-  ModulePath, NameRef, Param, Scope, ScopeData, ScopeDef, ScopeError,
+  ModulePath, NamePath, NameRef, Param, Scope, ScopeData, ScopeDef, ScopeError,
   TypeConstraint, def_d, hole, id, inductive_d, mk, mp, nid, type_,
 }
 use lib::scope {
@@ -26,9 +26,12 @@ def make_scope (sd : ScopeData) : Scope :=
     let empty_parent : Option Scope := Option.none in
     { module_id := path, scope := sd, parent := empty_parent }
 
-def name_to_path (i : Identifier) : ModulePath :=
+/// A one-segment DECL name -- the shape `Def.name`, `Inductive.name`,
+/// `InductConstructor.name` and the name arguments of
+/// `scope_find_inductive`/`resolve_def_in_scope_by_name` all take.
+def name_to_npath (i : Identifier) : NamePath :=
     let empty_id_list : List Identifier := List.empty in
-    ModulePath.mp (List.cons i empty_id_list)
+    NamePath.npath (List.cons i empty_id_list)
 
 // Typed empty lists to avoid forall inference issues
 def empty_decls_list : List Decl := List.empty
@@ -56,7 +59,7 @@ def test_parse_empty_has_builtins : Bool :=
 #[test]
 def test_scope_def_resolves : Bool :=
     let path : ModulePath := test_module_path in
-    let defname : ModulePath := name_to_path (Identifier.id "add") in
+    let defname : NamePath := name_to_npath (Identifier.id "add") in
     let def_decl : Def := Def.mk defname (Term.type_ 1) Term.hole empty_constraints empty_attrs Visibility.package_private in
     let decl_list : List Decl := List.cons (Decl.def_d def_decl) empty_decls_list in
     let sd : ScopeData := build_scope_from_decls path decl_list in
@@ -73,8 +76,8 @@ def test_scope_def_resolves : Bool :=
 #[test]
 def test_scope_inductive_found : Bool :=
     let path : ModulePath := test_module_path in
-    let color_path : ModulePath := name_to_path (Identifier.id "Color") in
-    let red_con_name : ModulePath := name_to_path (Identifier.id "red") in
+    let color_path : NamePath := name_to_npath (Identifier.id "Color") in
+    let red_con_name : NamePath := name_to_npath (Identifier.id "red") in
     let red_con : InductConstructor := InductConstructor.mk red_con_name empty_params Term.hole in
     let constructors : List InductConstructor := List.cons red_con empty_constructors in
     let ind : Inductive := Inductive.mk color_path empty_params (Term.type_ 1) constructors empty_attrs Visibility.package_private in
@@ -91,8 +94,8 @@ def test_scope_inductive_found : Bool :=
 #[test]
 def test_scope_constructor_resolves : Bool :=
     let path : ModulePath := test_module_path in
-    let color_path : ModulePath := name_to_path (Identifier.id "Color") in
-    let red_con_name : ModulePath := name_to_path (Identifier.id "red") in
+    let color_path : NamePath := name_to_npath (Identifier.id "Color") in
+    let red_con_name : NamePath := name_to_npath (Identifier.id "red") in
     let red_con : InductConstructor := InductConstructor.mk red_con_name empty_params Term.hole in
     let constructors : List InductConstructor := List.cons red_con empty_constructors in
     let ind : Inductive := Inductive.mk color_path empty_params (Term.type_ 1) constructors empty_attrs Visibility.package_private in
@@ -127,7 +130,7 @@ def test_builtin_type_resolves : Bool :=
     let path : ModulePath := test_module_path in
     let sd : ScopeData := build_scope_from_decls path empty_decls_list in
     let scope : Scope := make_scope sd in
-    let type_name : ModulePath := name_to_path (Identifier.id "Type") in
+    let type_name : NamePath := name_to_npath (Identifier.id "Type") in
     let result : Result ScopeError ScopeDef := resolve_def_in_scope_by_name type_name scope in
     match result {
         ok _ => true,

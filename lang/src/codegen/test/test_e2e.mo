@@ -1,5 +1,5 @@
 use lib::types {
-  Def, Identifier, TypeConstraint, i64, id, lam, lit, mk, mp, named, num, type_,
+  Def, Identifier, TypeConstraint, i64, id, lam, lit, mk, named, num, type_,
 }
 use llvm::ir {emit_module, mk}
 use lib::codegen::emit {check_contains, compile_db_decls_ir, empty_attrs, mk}
@@ -11,13 +11,12 @@ open DebugName {named}
 open NumSuffix {i64}
 open Param {mk}
 open Def {mk}
-open ModulePath {mp}
 
 #[test]
 def test_e2e_simple_literal : Bool :=
     let id := Identifier.id "myfunc" in
     let def_ := Def.mk
-        (ModulePath.mp (List.cons id empty_ids))
+        (NamePath.npath (List.cons id empty_ids))
         (Term.type_ 1)
         (Term.lit (Literal.num 42 NumSuffix.i64))
         empty_cons
@@ -33,7 +32,7 @@ def test_e2e_function_with_param : Bool :=
     let body := Term.lit (Literal.num 99 NumSuffix.i64) in
     let term_ := Term.lam (DebugName.named (Identifier.id "x")) (Term.type_ 1) body in
     let def_ := Def.mk
-        (ModulePath.mp (List.cons id empty_ids))
+        (NamePath.npath (List.cons id empty_ids))
         (Term.type_ 1)
         term_
         empty_cons
@@ -61,7 +60,7 @@ def test_e2e_runtime_decls_present : Bool :=
 def test_e2e_calling_convention : Bool :=
     let id := Identifier.id "f" in
     let def_ := Def.mk
-        (ModulePath.mp (List.cons id empty_ids))
+        (NamePath.npath (List.cons id empty_ids))
         (Term.type_ 1)
         (Term.lit (Literal.num 1 NumSuffix.i64))
         empty_cons
@@ -85,7 +84,7 @@ def test_e2e_io_main_unwraps_before_return : Bool :=
     let io_type_id := DebugName.named (Identifier.id "IO") in
     let io_typ := Term.app (Term.var sentinel_idx io_type_id) (Term.type_ 1) in
     let def_ := Def.mk
-        (ModulePath.mp (List.cons main_id empty_ids))
+        (NamePath.npath (List.cons main_id empty_ids))
         io_typ
         (Term.lit (Literal.num 5 NumSuffix.i64))
         empty_cons
@@ -109,7 +108,7 @@ def test_e2e_io_main_unwraps_before_return : Bool :=
 def test_e2e_non_io_main_does_not_unwrap : Bool :=
     let main_id := Identifier.id "main" in
     let def_ := Def.mk
-        (ModulePath.mp (List.cons main_id empty_ids))
+        (NamePath.npath (List.cons main_id empty_ids))
         (Term.type_ 1)
         (Term.lit (Literal.num 5 NumSuffix.i64))
         empty_cons

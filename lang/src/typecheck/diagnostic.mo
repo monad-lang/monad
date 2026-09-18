@@ -13,17 +13,18 @@
 /// real spans through `Term` construction across the whole grammar
 /// would be a much larger project and isn't attempted here.
 
-use lib::types {NameRef, TypeError, show_identifier, show_module_path, show_operator}
+use lib::types {NameRef, TypeError, show_identifier, show_name_path, show_operator, show_qualified_name}
 use lib::pretty {show_term}
 
 /// `NameRef` (`lang/types.mo`) has no `Show`/to-string helper of its
-/// own yet — the three variants wrap `Identifier`/`ModulePath`/
+/// own yet — the variants wrap `Identifier`/`NamePath`/`QualifiedName`/
 /// `Operator`, each of which already has one.
 #[partial]
 def name_ref_to_string (n : NameRef) : String :=
 	match n {
 		NameRef.nid id => show_identifier id,
-		NameRef.nmp mp => show_module_path mp,
+		NameRef.nnp np => show_name_path np,
+		NameRef.nqn qn => show_qualified_name qn,
 		NameRef.nop op => show_operator op,
 	}
 

@@ -14,7 +14,7 @@
 /// arity for the same reason.
 use lib::types {InductConstructor, Inductive}
 use lib::codegen::ctx {CodegenCtx, ctx_lookup_ctor_arity, ctx_lookup_ctor_tag}
-use lib::codegen::symbols {extract_base_name, module_path_to_str}
+use lib::codegen::symbols {extract_base_name, name_path_to_str}
 use lib::codegen::util {str_map_empty, str_map_insert, str_map_lookup}
 use std::map {}
 
@@ -250,9 +250,9 @@ def collect_ctor_claims (owner : String) (ctors : List InductConstructor) (acc :
         match c {
             InductConstructor.mk name params _typ =>
                 let claim : CtorClaim := {
-                    bare := module_path_to_str name,
+                    bare := name_path_to_str name,
                     arity := List.length params,
-                    qualified := String.concat owner (String.concat "." (module_path_to_str name)),
+                    qualified := String.concat owner (String.concat "." (name_path_to_str name)),
                 } in
                 collect_ctor_claims owner rest (List.cons claim acc),
         },
@@ -264,7 +264,7 @@ def collect_ctor_claims_inds (inds : List Inductive) (acc : List CtorClaim) : Li
     List.cons ind rest =>
         match ind {
             Inductive.mk name _params _typ constructors _attrs _vis =>
-                collect_ctor_claims_inds rest (collect_ctor_claims (module_path_to_str name) constructors acc),
+                collect_ctor_claims_inds rest (collect_ctor_claims (name_path_to_str name) constructors acc),
         },
 }
 

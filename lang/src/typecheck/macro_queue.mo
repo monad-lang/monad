@@ -43,9 +43,12 @@ use lib::typecheck::macro_expand {expand_term}
 type TermMacroEntry { tm_entry (name: Identifier) (body: Term) }
 type DeclGenEntry { dg_entry (name: Identifier) (params: List Param) (decl_list: List Decl) }
 
+/// A decl NAME's own last segment (`Def`/`DeclGenDef` names are
+/// `NamePath`s since the qualified-names split) -- the bare name a
+/// registry entry is keyed by.
 #[partial]
-def module_path_last (mp : ModulePath) : Option Identifier :=
-    match mp { ModulePath.mp ids => List.last ids }
+def name_path_last (np : NamePath) : Option Identifier :=
+    match np { NamePath.npath ids => List.last ids }
 
 #[partial]
 def build_term_macro_registry (decl_list : List Decl) : List TermMacroEntry :=
@@ -56,7 +59,7 @@ def build_term_macro_registry (decl_list : List Decl) : List TermMacroEntry :=
                 Decl.def_macro_d d_val =>
                     match d_val {
                         Def.mk name _ term _ _ _ =>
-                            match module_path_last name {
+                            match name_path_last name {
                                 Option.some id => List.cons (TermMacroEntry.tm_entry id term) (build_term_macro_registry rest),
                                 Option.none => build_term_macro_registry rest,
                             },
@@ -72,7 +75,7 @@ def build_decl_gen_registry (decl_list : List Decl) : List DeclGenEntry :=
         List.cons d rest =>
             match d {
                 Decl.decl_gen_d name params gen_decls _attrs =>
-                    match module_path_last name {
+                    match name_path_last name {
                         Option.some id => List.cons (DeclGenEntry.dg_entry id params gen_decls) (build_decl_gen_registry rest),
                         Option.none => build_decl_gen_registry rest,
                     },
@@ -328,13 +331,13 @@ def term_type_level (t : Term) : I64 :=
     match t { Term.type_ u => u }
 
 def empty_constraints : List TypeConstraint := List.empty
-def dummy_path : ModulePath := ModulePath.mp (List.cons (Identifier.id "dummy") List.empty)
+def dummy_path : NamePath := NamePath.npath (List.cons (Identifier.id "dummy") List.empty)
 
 #[test]
 def test_expand_decls_drops_term_macro_definitions : Bool :=
     // `defmacro double x := x` on its own -- consumed into the
     // registry, produces zero output decl_list.
-    let double_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "double") List.empty) in
+    let double_name : NamePath := NamePath.npath (List.cons (Identifier.id "double") List.empty) in
     let body : Term := Term.lam DebugName.unnamed Term.hole (Term.var 0 DebugName.unnamed) in
     let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private) in
     match expand_decls (List.cons macro_def List.empty) {
@@ -347,7 +350,7 @@ def test_expand_decls_expands_term_position_macro_call_inside_a_def : Bool :=
     // `defmacro double x := x` + `def y : Hole := double! 9` --
     // ordinary def's own `term` field gets its macro call resolved,
     // and the macro definition itself is dropped from the output.
-    let double_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "double") List.empty) in
+    let double_name : NamePath := NamePath.npath (List.cons (Identifier.id "double") List.empty) in
     let body : Term := Term.lam DebugName.unnamed Term.hole (Term.var 0 DebugName.unnamed) in
     let macro_def : Decl := Decl.def_macro_d (Def.mk double_name Term.hole body empty_constraints empty_attrs Visibility.package_private) in
     let call : Term := Term.app (Term.var_macro (0 - 1) (DebugName.named (Identifier.id "double"))) (Term.type_ 9) in
@@ -378,7 +381,7 @@ def test_expand_decls_resolves_std_derive_shape_end_to_end : Bool :=
     // `reflect_type_info!` call. Only the original `macro_call_d
     // "derive_lens"` invocation itself is gone, consumed into its
     // expansion.
-    let lens_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "derive_lens") List.empty) in
+    let lens_name : NamePath := NamePath.npath (List.cons (Identifier.id "derive_lens") List.empty) in
     let t_param : Param := Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty in
     let named_t : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "T")) in
     let meta_ref : Term := Term.var (0 - 1) (DebugName.named (Identifier.id "derive_lens_meta")) in
@@ -391,7 +394,7 @@ def test_expand_decls_resolves_std_derive_shape_end_to_end : Bool :=
         List.cons first_decl rest =>
             (match first_decl {
                 Decl.decl_gen_d name _ _ _ =>
-                    match module_path_last name {
+                    match name_path_last name {
                         Option.some id => id_eq id (Identifier.id "derive_lens"),
                         Option.none => false,
                     },
@@ -438,7 +441,7 @@ def test_expand_decls_arity_mismatch_leaves_call_unresolved : Bool :=
     // (see the `decl_gen_d` arm's own doc comment) -- so the output is
     // TWO decls: the still-present template, then the still-unresolved
     // (arity-mismatched) `macro_call_d`.
-    let gen_name : ModulePath := ModulePath.mp (List.cons (Identifier.id "needs_one") List.empty) in
+    let gen_name : NamePath := NamePath.npath (List.cons (Identifier.id "needs_one") List.empty) in
     let one_param : Param := Param.mk (Identifier.id "T") Term.hole Multiplicity.many Option.none List.empty in
     let gen_def : Decl := Decl.decl_gen_d gen_name (List.cons one_param List.empty) List.empty List.empty in
     let no_args : List Term := List.empty in

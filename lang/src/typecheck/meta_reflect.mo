@@ -39,8 +39,7 @@ use lib::core_value {Value}
 use lib::scope {struct_fields_to_params}
 use lib::types {
   Attribute, Decl, Def, Identifier, InductConstructor,
-  Inductive, MatchCase, ModulePath, Param, Struct,
-  Term, TypeConstraint, sentinel, show_module_path,
+  Inductive, MatchCase, Param, Struct, Term, TypeConstraint, sentinel,
 }
 
 // ─── Value-construction helpers (host -> Value, the INPUT side) ────────
@@ -94,15 +93,15 @@ def collect_inductives (decl_list : List Decl) : List Inductive :=
 def struct_to_inductive (s : Struct) : Inductive :=
     match s {
         Struct.mk name fields vis =>
-            let type_mp : ModulePath := ModulePath.mp (List.cons name List.empty) in
-            let mk_mp : ModulePath := ModulePath.mp (List.cons (Identifier.id "mk") List.empty) in
+            let type_np : NamePath := NamePath.npath (List.cons name List.empty) in
+            let mk_np : NamePath := NamePath.npath (List.cons (Identifier.id "mk") List.empty) in
             let mk_params : List Param := struct_fields_to_params fields in
-            let mk_con : InductConstructor := InductConstructor.mk mk_mp mk_params Term.hole in
-            Inductive.mk type_mp List.empty Term.hole (List.cons mk_con List.empty) List.empty vis,
+            let mk_con : InductConstructor := InductConstructor.mk mk_np mk_params Term.hole in
+            Inductive.mk type_np List.empty Term.hole (List.cons mk_con List.empty) List.empty vis,
     }
 
 def inductive_bare_name (ind : Inductive) : String :=
-    match ind { Inductive.mk name _ _ _ _ _ => show_module_path name } // single-segment -- no dots
+    match ind { Inductive.mk name _ _ _ _ _ => show_name_path name } // single-segment -- no dots
 
 #[partial]
 def find_inductive_by_bare_name (inds : List Inductive) (name : String) : Option Inductive :=
@@ -132,7 +131,7 @@ def show_identifier_ (id : Identifier) : String := match id { Identifier.id s =>
 // ─── Input side: Inductive -> TypeInfo Value ────────────────────────────
 
 def ctor_bare_name (ctor : InductConstructor) : String :=
-    match ctor { InductConstructor.mk name _ _ => show_module_path name }
+    match ctor { InductConstructor.mk name _ _ => show_name_path name }
 
 def attr_bare_name (a : Attribute) : String :=
     match a { Attribute.mk name _ => show_identifier_ name }
@@ -694,7 +693,7 @@ def reify_d_def (args : List Value) : Result String Def :=
                                                                         Result.err e => Result.err e,
                                                                         Result.ok body_term =>
                                                                             Result.ok (Def.mk
-                                                                                (ModulePath.mp (List.cons (Identifier.id name) List.empty))
+                                                                                (NamePath.npath (List.cons (Identifier.id name) List.empty))
                                                                                 (build_pi_chain params ret_term)
                                                                                 (build_lam_chain params body_term)
                                                                                 no_constraints no_attrs Visibility.package_private),
@@ -737,7 +736,7 @@ def reify_d_instance (args : List Value) : Result String Decl :=
                                                         Result.ok defs =>
                                                             Result.ok (Decl.instance_d (Instance.mk
                                                                 (Identifier.id "_")
-                                                                (ModulePath.mp (List.cons (Identifier.id class_name) List.empty))
+                                                                (NamePath.npath (List.cons (Identifier.id class_name) List.empty))
                                                                 no_constraints
                                                                 (List.cons target_term List.empty)
                                                                 Visibility.package_private
@@ -854,11 +853,11 @@ def field_param (name : String) (typ_name : String) : Param :=
     Param.mk (Identifier.id name) (Term.var sentinel (DebugName.named (Identifier.id typ_name))) Multiplicity.many Option.none List.empty
 
 def point_ctor : InductConstructor :=
-    InductConstructor.mk (ModulePath.mp (List.cons (Identifier.id "mk") List.empty))
+    InductConstructor.mk (NamePath.npath (List.cons (Identifier.id "mk") List.empty))
         (List.cons (field_param "x" "I64") (List.cons (field_param "y" "I64") List.empty)) Term.hole
 
 def point_ind : Inductive :=
-    Inductive.mk (ModulePath.mp (List.cons (Identifier.id "Point") List.empty)) List.empty Term.hole
+    Inductive.mk (NamePath.npath (List.cons (Identifier.id "Point") List.empty)) List.empty Term.hole
         (List.cons point_ctor List.empty) List.empty Visibility.package_private
 
 #[partial]
@@ -1054,7 +1053,7 @@ def test_reify_decl_value_d_def_zero_params : Bool :=
                 Decl.def_d def_ =>
                     match def_ {
                         Def.mk name _typ _term _c _a _v =>
-                            match name { ModulePath.mp ids => match ids { List.cons id _ => id_is id "Point.x", List.empty => false } },
+                            match name { NamePath.npath ids => match ids { List.cons id _ => id_is id "Point.x", List.empty => false } },
                     },
                 _ => false,
             },
@@ -1109,7 +1108,7 @@ def test_reify_decl_value_d_instance_wraps_methods : Bool :=
                 Decl.instance_d ins =>
                     match ins {
                         Instance.mk _name cls _c _args _vis _ip defs =>
-                            (match cls { ModulePath.mp ids => match ids { List.cons id _ => id_is id "Debug", List.empty => false } })
+                            (match cls { NamePath.npath ids => match ids { List.cons id _ => id_is id "Debug", List.empty => false } })
                             && match defs { List.cons _ rest => (match rest { List.empty => true, List.cons _ _ => false }), List.empty => false },
                     },
                 _ => false,

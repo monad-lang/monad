@@ -20,7 +20,7 @@
 /// threaded through this pass instead -- one place rather than the whole
 /// grammar.
 ///
-/// Name resolution lives HERE: `find_index`, `show_module_path_dotted`,
+/// Name resolution lives HERE: `find_index`, `show_name_path_dotted`,
 /// `name_ref_to_string` and `field_access_chain` are DEFINED in this
 /// module, and `lang/parser.mo` imports `name_ref_to_string` back rather
 /// than keeping the byte-identical copy it used to carry beside that
@@ -32,14 +32,14 @@
 /// rather than to this pass, so `lang/types.mo` owns it and both modules
 /// import it from there.
 ///
-/// `show_module_path_dotted` still duplicates `lang/parser.mo`'s
-/// `module_path_to_string` body under a different name. Not a symbol
-/// collision, so it is left alone here; unifying them means deciding
-/// which module owns dotted-path rendering, which is a separate change.
+/// `show_name_path_dotted` delegates to `lang/types.mo`'s
+/// `show_name_path` rather than duplicating its body here -- the
+/// old dotted-path copy predates the qualified-names split, when
+/// name paths and module paths shared one rendering and one type.
 use lib::types {
   Class, ClassDef, Con, DebugName, Decl, Def, DoStmt, Identifier,
   InductConstructor, Inductive, Instance, Literal, MatchCase, ModulePath,
-  NameRef, Native, Param, ParseClass, ParseClassDef, ParseCon, ParseDecl,
+  NamePath, NameRef, Native, Param, ParseClass, ParseClassDef, ParseCon, ParseDecl,
   ParseDeclKind, ParseDef, ParseDoStmt, ParseInductConstructor, ParseInductive,
   ParseInstance, ParseLiteral, ParseMatchCase, ParseNative, ParseParam,
   ParseStruct, ParseStructField, ParseStructLitField, ParseTerm, ParseTermKind,
@@ -50,7 +50,7 @@ use lib::types {
 // the duplicate-top-level-name collision item 18 records). The grammar no
 // longer resolves names at all, so nothing flows the other way: it
 // imports `lower_parse_do` from here and that is the only edge.
-use lib::types {FieldPattern, FieldPatternEntry, Location, ParseSpan, parse_span_is_unknown, show_operator}
+use lib::types {FieldPattern, FieldPatternEntry, Location, ParseSpan, parse_span_is_unknown, show_name_path, show_operator, show_qualified_name}
 // The monomorphic string map, from the leaf module -- never `Map.lookup`,
 // whose generic dispatch can resolve to the wrong instance
 // (`lang/codegen/util.mo` documents the live bug).
@@ -136,14 +136,16 @@ def extend_ctx (names : List Identifier) (ctx : List Identifier) : List Identifi
 
 /// Resolve a written name against the binders in scope.
 ///
-/// A dotted path is ambiguous at parse time between a module-qualified
-/// global and a local struct-field access, and the parser has no scope
-/// information to tell them apart -- so it always builds a path and the
-/// ambiguity is settled HERE, where `ctx` is known: if the first segment
-/// is a local binding, the rest of the path is a field-access chain
-/// (mirroring the Rust reference's `lower_core.rs::lower_var`'s
-/// `NameRef::P` arm). Otherwise the whole dotted name is kept intact for
-/// the module resolver.
+/// A dotted name path is ambiguous at parse time between a
+/// module-qualified global and a local struct-field access, and the
+/// parser has no scope information to tell them apart -- so it always
+/// builds a path and the ambiguity is settled HERE, where `ctx` is
+/// known: if the first segment is a local binding, the rest of the path
+/// is a field-access chain (mirroring the Rust reference's
+/// `lower_core.rs::lower_var`'s `NameRef::Np` arm). Otherwise the whole
+/// dotted name is kept intact for the module resolver. A `nqn`
+/// (`std::list::List.cons`) is NEVER ambiguous: it always lowers to the
+/// global, never a field chain (`lower_var`'s `Qn` arm).
 #[partial]
 def lower_name_ref (ctx : ParseLowerCtx) (nref : NameRef) : Term :=
     match nref {
@@ -155,15 +157,16 @@ def lower_name_ref (ctx : ParseLowerCtx) (nref : NameRef) : Term :=
                 Option.some idx => Term.var idx (DebugName.named id),
                 Option.none => Term.var sentinel (DebugName.named id),
             },
-        NameRef.nmp mp => lower_path ctx mp nref,
+        NameRef.nnp np => lower_path ctx np nref,
+        NameRef.nqn _ => lower_name_global nref,
         NameRef.nop _ => lower_name_global nref,
     }
 
 
 #[partial]
-def lower_path (ctx : ParseLowerCtx) (mp : ModulePath) (nref : NameRef) : Term :=
-    match mp {
-        ModulePath.mp ids => lower_path_ids ctx ids nref,
+def lower_path (ctx : ParseLowerCtx) (np : NamePath) (nref : NameRef) : Term :=
+    match np {
+        NamePath.npath ids => lower_path_ids ctx ids nref,
     }
 
 
@@ -212,9 +215,7 @@ def find_index (id: Identifier) (ctx: List Identifier) (depth: I64) : Option I64
 
 
 #[partial]
-def show_module_path_dotted (mp : ModulePath) : String := match mp {
-    ModulePath.mp ids => List.intercalate "." (List.map show_identifier ids),
-}
+def show_name_path_dotted (np : NamePath) : String := show_name_path np
 
 
 /// Faithful to `lang/parser.mo`'s original, INCLUDING the `nop` arm: an
@@ -225,7 +226,8 @@ def show_module_path_dotted (mp : ModulePath) : String := match mp {
 #[partial]
 def name_ref_to_string (nref : NameRef) : Option String := match nref {
     NameRef.nid id => Option.some (show_identifier id),
-    NameRef.nmp mp => Option.some (show_module_path_dotted mp),
+    NameRef.nnp np => Option.some (show_name_path_dotted np),
+    NameRef.nqn qn => Option.some (show_qualified_name qn),
     NameRef.nop op => Option.some (show_operator op),
 }
 

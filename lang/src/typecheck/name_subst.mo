@@ -317,7 +317,7 @@ def test_name_subst_decl_def_d_substitutes_typ_and_term : Bool :=
     let empty_constraints : List TypeConstraint := List.empty in
     let empty_attrs : List Attribute := List.empty in
     let d : Decl :=
-        Decl.def_d (Def.mk (ModulePath.mp (List.cons (Identifier.id "make") List.empty)) (named_ref t_ident) (named_ref t_ident) empty_constraints empty_attrs Visibility.package_private) in
+        Decl.def_d (Def.mk (NamePath.npath (List.cons (Identifier.id "make") List.empty)) (named_ref t_ident) (named_ref t_ident) empty_constraints empty_attrs Visibility.package_private) in
     match name_subst_decl t_ident replacement d {
         Decl.def_d d_val =>
             match d_val {
@@ -334,7 +334,7 @@ def test_name_subst_decl_decl_gen_d_recurses_into_nested_decls : Bool :=
     let replacement : Term := Term.type_ 11 in
     let nested_call : Decl := Decl.macro_call_d (Identifier.id "reflect_type_info") (List.cons (named_ref t_ident) List.empty) in
     let template : Decl :=
-        Decl.decl_gen_d (ModulePath.mp (List.cons (Identifier.id "derive_lens") List.empty)) List.empty (List.cons nested_call List.empty) List.empty in
+        Decl.decl_gen_d (NamePath.npath (List.cons (Identifier.id "derive_lens") List.empty)) List.empty (List.cons nested_call List.empty) List.empty in
     match name_subst_decl t_ident replacement template {
         Decl.decl_gen_d _ _ decl_list _ =>
             match decl_list {

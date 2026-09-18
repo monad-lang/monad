@@ -2,7 +2,7 @@ use io {IO}
 open IO {println, read_file, write_file, file_exists}
 use std::process {exec_cmd, process_id}
 use std::bench {now, report_since}
-use lang::types {Decl, LocalScope, ModulePath, show_module_path, show_identifier}
+use lang::types {Decl, LocalScope, ModulePath, NamePath, show_module_path, show_identifier}
 use llvm::ir {LLVMModule, emit_module}
 use llvm::link {link_ir}
 use runtime {}
@@ -251,9 +251,14 @@ def eval_file_typechecked (em : ElaboratedModules) (verbose : Bool) : IO I64 {
     // `qualify_modules` stage, so def names are still bare -- rooting
     // at `[module_name]` failed lower with "unresolved module path
     // <module>".
+    // Two shapes of the same root, because the two calls want
+    // different ones: `lower_ctx_from_decls` carries a module identity
+    // (`ModulePath`), `lower_root` roots at a DEF name (`NamePath`).
+    // Both are the one-segment "main".
     let root_mp : ModulePath := ModulePath.mp [Identifier.id "main"];
+    let root_np : NamePath := NamePath.npath [Identifier.id "main"];
     let ctx := lower_ctx_from_decls root_mp dispatched;
-    match lower_root ctx root_mp {
+    match lower_root ctx root_np {
         Result.err e => do {
             fail_line ("FAILED at stage: lower (" ++ show_lower_error e ++ ")");
             return 1

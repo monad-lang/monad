@@ -3,7 +3,7 @@
 // clang, the runtime object -- is `llvm/src/link.mo`, in the llvm mote; this
 // file stays in lang because it speaks Term.
 
-use lib::types {Def, app, i64, id, lam, lit, mk, mp, named, num, type_, var}
+use lib::types {Def, NamePath, app, i64, id, lam, lit, mk, named, num, type_, var}
 use llvm::ir {emit_module, mk}
 use lib::codegen::emit {check_contains, compile_db_decls_ir, mk}
 
@@ -13,7 +13,6 @@ open Identifier {id}
 open NumSuffix {i64}
 open Param {mk}
 open Def {mk}
-open ModulePath {mp}
 
 /// Generate LLVM IR text from a list of Defs.
 #[partial]
@@ -30,6 +29,6 @@ def test_link_compile_defs_to_ir : Bool :=
     let add_var := Term.var 0 (DebugName.named (Identifier.id "I64_add")) in
     let body := Term.app (Term.app add_var x_var) two in
     let term_ := Term.lam (DebugName.named x_id) (Term.type_ 1) body in
-    let def_ := Def.mk (ModulePath.mp (List.cons id_val List.empty)) (Term.type_ 1) term_ List.empty List.empty Visibility.package_private in
+    let def_ := Def.mk (NamePath.npath (List.cons id_val List.empty)) (Term.type_ 1) term_ List.empty List.empty Visibility.package_private in
     let text := compile_defs_to_ir (List.cons def_ List.empty) in
     check_contains text "add i64"

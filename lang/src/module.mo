@@ -7,9 +7,10 @@ use std::bench {now, report, report_since, since}
 use lib::elaborate {free_vars, names_of_decls, elaborate_def}
 use lib::types {
   Class, ClassDef, Decl, Def, Identifier, InductConstructor, Inductive, Infix,
-  LoadedModules, LocalScope, LocalVar, ModulePath, NameRef, Scope,
+  LoadedModules, LocalScope, LocalVar, ModulePath, NamePath, NameRef, Scope,
   ScopeData, ScopeInstance, Struct, StructField, Term, def_d, hole, id, id_eq,
-  inductive_d, list_reverse, mk, mp, name, nid, to_name, union_ids, use_d,
+  inductive_d, list_reverse, mk, mp, name, nid, show_name_path, to_name, union_ids,
+  use_d,
 }
 use lib::parser {decls_parser, decls_parser_located, decls_parser_strict, module_path_to_string}
 use lib::parser::core {ParseResult, fail, mk, success}
@@ -33,7 +34,8 @@ use lib::scope {
   add_constraint_dict_params_decls, build_scope_from_decls,
   collect_classes, collect_def_names, collect_infixes, collect_open_aliases, constraint_vars,
   filter_valid_open_aliases,
-  modpath_eq, param_names, promote_instance_defs,
+  modpath_eq, npath_map_empty, npath_map_insert, npath_map_lookup, npath_of,
+  param_names, promote_instance_defs,
   alias_map_empty, build_alias_map,
   resolve_class_calls_decls, resolve_infix_decls, resolve_open_alias_decls,
   scope_data_add_def_sig, scope_data_empty, scope_data_find_def_sig,
@@ -1148,7 +1150,7 @@ def is_dict_value_def (df : Def) : Bool :=
     // which does not START with `__Dict_`. Missing that would put dict
     // values back through the type checker, and they carry a deliberate
     // `Term.var 0` sentinel convention that does not survive it.
-    String.starts_with "__Dict_" (unqualify_instance_name (module_path_to_string df.name))
+    String.starts_with "__Dict_" (unqualify_instance_name (show_name_path df.name))
 
 /// The part of a synthesized name after its `module::` qualifier, or the
 /// whole name when it has none. Mirrors `lang.codegen.emit`'s own
@@ -1266,7 +1268,7 @@ def check_class_method_with_scope (m : ClassDef) (scope : Scope) (locals : Local
 def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match df {
         Def.mk name typ body _constraints _attrs _vis => do {
-            if verbose then println ("  checking def " ++ module_path_to_string name) else do { return unit };
+            if verbose then println ("  checking def " ++ show_name_path name) else do { return unit };
             if is_term_hole body then do {
                 return List.empty
             } else do {
@@ -1284,7 +1286,7 @@ def check_def_with_scope (df : Def) (scope : Scope) (locals : LocalScope) (path 
                 // was added for; it had nothing real to carry until now.
                 return (match type_check body typ scope empty_local_types locals_ {
                     Result.ok _ => List.empty,
-                    Result.err e => [render_type_error (module_path_to_string name) path e]
+                    Result.err e => [render_type_error (show_name_path name) path e]
                 })
             }
         }
@@ -1337,7 +1339,7 @@ def elaborate_def_with_scope ({ name, typ, term := body, constraints, attrs, vis
         let locals_ : LocalScope := locals_with_def_typevars typ body scope locals in
         match type_check body typ scope empty_local_types locals_ {
             Result.ok tt => Result.ok (Def.mk name typ (tt.term) constraints attrs vis),
-            Result.err e => Result.err (render_type_error (module_path_to_string name) Option.none e),
+            Result.err e => Result.err (render_type_error (show_name_path name) Option.none e),
         }
 
 /// Elaborates every decl in `decl_list`, threading errors. Non-`def_d`
@@ -1398,8 +1400,8 @@ pub def elaborate_module_decls_best_effort (scope : Scope) (decl_list : List Dec
 #[partial]
 def decl_display_name (d : Decl) : String :=
     match d {
-        Decl.def_d def_ => match def_ { Def.mk name _ _ _ _ _ => module_path_to_string name },
-        Decl.inductive_d i => match i { Inductive.mk name _ _ _ _ _ => module_path_to_string name },
+        Decl.def_d def_ => match def_ { Def.mk name _ _ _ _ _ => show_name_path name },
+        Decl.inductive_d i => match i { Inductive.mk name _ _ _ _ _ => show_name_path name },
         _ => "<non-def decl>",
     }
 
@@ -1466,7 +1468,7 @@ def elaborate_module_decls_go (scope : Scope) (decl_list : List Decl) (locals : 
 def check_inductive_with_scope (ind : Inductive) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match ind {
         Inductive.mk name _params _typ constructors _attrs _vis => do {
-            if verbose then println ("  checking type " ++ module_path_to_string name) else do { return unit };
+            if verbose then println ("  checking type " ++ show_name_path name) else do { return unit };
             let locals_ : LocalScope := locals_with_inductive_params ind scope locals;
             check_constructors_with_scope constructors scope locals_ path verbose
         }
@@ -1487,10 +1489,10 @@ def check_constructors_with_scope (cons : List InductConstructor) (scope : Scope
 def check_constructor_with_scope (c : InductConstructor) (scope : Scope) (locals : LocalScope) (path : Option String) (verbose : Bool) : IO (List String) :=
     match c {
         InductConstructor.mk name _params typ => do {
-            if verbose then println ("    checking constructor " ++ module_path_to_string name) else do { return unit };
+            if verbose then println ("    checking constructor " ++ show_name_path name) else do { return unit };
             return (match type_check typ Term.hole scope empty_local_types locals {
                 Result.ok _ => List.empty,
-                Result.err e => [render_type_error (module_path_to_string name) path e]
+                Result.err e => [render_type_error (show_name_path name) path e]
             })
         }
     }
@@ -1684,8 +1686,8 @@ def test_parse_all_decls_empty : Bool :=
 /// literal) is what makes this catch the NEXT forgotten field too.
 #[test]
 def test_merge_scope_data_preserves_def_sigs : Bool :=
-    let name_a : ModulePath := ModulePath.mp [Identifier.id "a_def"] in
-    let name_b : ModulePath := ModulePath.mp [Identifier.id "b_def"] in
+    let name_a : NamePath := NamePath.npath [Identifier.id "a_def"] in
+    let name_b : NamePath := NamePath.npath [Identifier.id "b_def"] in
     let sig_a : Term := Term.pi Term.hole (Term.type_ 1) in
     let sig_b : Term := Term.type_ 1 in
     let sd_a : ScopeData := scope_data_add_def_sig scope_data_empty name_a sig_a in
@@ -1743,7 +1745,7 @@ def test_parse_type_resolve_inductive : Bool :=
                 scope := sd,
                 parent := no_parent,
             } in
-            let color_path : ModulePath := ModulePath.mp [Identifier.id "Color"] in
+            let color_path : NamePath := NamePath.npath [Identifier.id "Color"] in
             match scope_find_inductive color_path scope {
                 Result.ok _ => true,
                 Result.err _ => false
@@ -1949,19 +1951,19 @@ pub struct ModuleInfoCache {
 }
 
 pub def module_info_cache_empty : ModuleInfoCache := {
-    entries := modpath_map_empty,
+    entries := npath_map_empty,
     hits := 0,
     misses := 0,
 }
 
 def module_info_cache_lookup (key : ModulePath) (cache : ModuleInfoCache) : Option ModuleInfo :=
-    modpath_map_lookup key cache.entries
+    npath_map_lookup (npath_of key) cache.entries
 
 def module_info_cache_hit (cache : ModuleInfoCache) : ModuleInfoCache :=
     { cache with hits := cache.hits + 1 }
 
 def module_info_cache_insert (key : ModulePath) (info : ModuleInfo) (cache : ModuleInfoCache) : ModuleInfoCache :=
-    { cache with entries := modpath_map_insert key info cache.entries, misses := cache.misses + 1 }
+    { cache with entries := npath_map_insert (npath_of key) info cache.entries, misses := cache.misses + 1 }
 
 /// A `load_module_with_info` that consults (and extends) the cache.
 pub struct InfoAndCache {
@@ -1997,7 +1999,7 @@ def show_module_info (m : ModuleInfo) : String :=
         mk path file decl_list =>
             "module: " ++ Show.show path ++
             "\n\tpath: " ++ file ++
-            "\n\tdecls: " ++ Show.show (List.map Decl.to_name decl_list : List ModulePath)
+            "\n\tdecls: " ++ Show.show (List.map Decl.to_name decl_list : List NamePath)
     }
 
 instance Show ModuleInfo {
@@ -2606,16 +2608,16 @@ def decl_is_priv (d : Decl) : Bool :=
 
 def priv_module_info : ModuleInfo :=
     let owner : ModulePath := ModulePath.mp [Identifier.id "Owner"] in
-    let hidden : Def := Def.mk (ModulePath.mp [Identifier.id "hidden"]) Term.hole Term.hole
+    let hidden : Def := Def.mk (NamePath.npath [Identifier.id "hidden"]) Term.hole Term.hole
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.priv_ in
-    let shown : Def := Def.mk (ModulePath.mp [Identifier.id "shown"]) Term.hole Term.hole
+    let shown : Def := Def.mk (NamePath.npath [Identifier.id "shown"]) Term.hole Term.hole
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private in
     { path := owner,
       file_path := "Owner.mo",
       decl_list := [Decl.def_d hidden, Decl.def_d shown] }
 
 def priv_flatten_names (target : ModulePath) : List String :=
-    List.map (fn (d : Decl) => show_module_path (Decl.to_name d))
+    List.map (fn (d : Decl) => show_name_path (Decl.to_name d))
         (flatten_visible_module_decls target [priv_module_info] List.empty)
 
 #[test]
@@ -2750,7 +2752,7 @@ def resolve_one_reflect_call (inds : List Inductive) (dispatched : List Decl) (d
                                                     match build_type_info_value ind {
                                                         Result.err e => Result.err e,
                                                         Result.ok type_info_v =>
-                                                            match meta_eval_invoke dispatched (ModulePath.mp (List.cons (Identifier.id meta_name) List.empty)) type_info_v {
+                                                            match meta_eval_invoke dispatched (NamePath.npath (List.cons (Identifier.id meta_name) List.empty)) type_info_v {
                                                                 Result.err e => Result.err e,
                                                                 Result.ok result_v => reify_decls_value_to_decls result_v,
                                                             },
@@ -3376,7 +3378,7 @@ def decl_list_has_use_it_calling_makeempty_mybox_empty (ds : List Decl) : Bool :
         List.cons d rest =>
             (match d {
                 Decl.def_d df =>
-                    String.beq (module_path_to_string df.name) "use_it" &&
+                    String.beq (show_name_path df.name) "use_it" &&
                         String.contains (show_term df.term) "MakeEmpty_MyBox_empty",
                 _ => false,
             }) || decl_list_has_use_it_calling_makeempty_mybox_empty rest,
@@ -3389,7 +3391,7 @@ def decl_list_has_greet_calling_speak_dog_say (ds : List Decl) : Bool :=
         List.cons d rest =>
             (match d {
                 Decl.def_d df =>
-                    String.beq (module_path_to_string df.name) "greet" &&
+                    String.beq (show_name_path df.name) "greet" &&
                         String.contains (show_term df.term) "Speak_Dog_say",
                 _ => false,
             }) || decl_list_has_greet_calling_speak_dog_say rest,

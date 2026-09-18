@@ -28,7 +28,7 @@ use lib::codegen::natives {
   lookup_native_any, native_attr_target_name, native_runtime_fn_name,
   runtime_declarations,
 }
-use lib::codegen::symbols {module_path_to_str}
+use lib::codegen::symbols {name_path_to_str}
 use lib::codegen::util {
   dedup_strs, join_semicolon_msgs, str_map_empty, str_map_insert, str_map_lookup,
 }
@@ -92,7 +92,7 @@ def find_unwired_native_defs_go (defs : List Def) (acc : List String) : List Str
                                             match lookup_native_any (def_symbol_name name) {
                                                 Option.some _ => find_unwired_native_defs_go rest acc,
                                                 Option.none =>
-                                                    let def_name := module_path_to_str name in
+                                                    let def_name := name_path_to_str name in
                                                     let head := String.concat "native `" (String.concat target "`") in
                                                     let mid := String.concat " (needed by def `" (String.concat def_name "`)") in
                                                     let msg := String.concat head (String.concat mid " is not wired into the native backend -- it would silently compile to a 'return Unit' stub; add a monad_* runtime function + native_runtime_fn_name entry, or an inline native_op_table key") in
@@ -164,7 +164,7 @@ def find_undesugared_struct_lit_defs_go (defs : List Def) (acc : List String) : 
                 Def.mk name _typ term_ _constraints _attrs _vis =>
                     if term_has_struct_lit term_
                     then
-                        let def_name := module_path_to_str name in
+                        let def_name := name_path_to_str name in
                         let head := String.concat "def `" (String.concat def_name "`") in
                         let msg := String.concat head " contains a struct literal that never desugared to a constructor -- it would silently compile to a void placeholder; give the literal an explicit `: StructName` annotation, or bind it to an annotated local before passing it" in
                         find_undesugared_struct_lit_defs_go rest (List.cons msg acc)

@@ -43,13 +43,14 @@
 /// `std/src/concurrent/combine_test.mo`; they stay deferred until a
 /// self-hosted async runtime exists.
 use lib::types {
-  Attribute, DebugName, Decl, Def, LoadedModules, LocalScope, ModulePath, Scope,
+  Attribute, DebugName, Decl, Def, LoadedModules, LocalScope, ModulePath, NamePath,
+  Scope,
   ScopeData, Term, has_attr, show_identifier,
 }
 use lib::codegen::emit {
-  bare_modpath, collect_all_decls_from_modules, compile_db_module,
+  bare_npath, collect_all_decls_from_modules, compile_db_module,
   desugar_struct_lits_decls, emit_type_head_is_io, filter_reachable_decls,
-  module_path_to_str, qualified_def_name_str, qualify_modules,
+  module_path_to_str, name_path_to_str, qualified_def_name_str, qualify_modules,
 }
 use lib::codegen::symbols {symbol_identifier}
 use lib::parser::number {parse_i64}
@@ -150,7 +151,7 @@ pub def parse_driver_result (raw : String) : Option I64 :=
 /// is exactly a test codegen agrees is `IO`-headed.
 #[partial]
 def classify_test_def (display_prefix : String) (d : Def) : TestSpec :=
-    let bare : String := module_path_to_str (Def.name d) in
+    let bare : String := name_path_to_str (Def.name d) in
     let typ : Term := strip_all_leading_binders d.typ in
     let is_io : Bool := emit_type_head_is_io typ in
     // A `Result` test is judged by its constructor, and an
@@ -244,7 +245,7 @@ def rename_user_main (decls : List Decl) : List Decl :=
         List.cons d rest =>
             match d {
                 Decl.def_d def_val =>
-                    if String.beq (module_path_to_str (Def.name def_val)) "main"
+                    if String.beq (name_path_to_str (Def.name def_val)) "main"
                     then List.cons (Decl.def_d (renamed_entry_def def_val)) (rename_user_main rest)
                     else List.cons d (rename_user_main rest),
                 _ => List.cons d (rename_user_main rest),
@@ -258,7 +259,7 @@ def rename_user_main (decls : List Decl) : List Decl :=
 def renamed_entry_def (def_val : Def) : Def :=
     match def_val {
         Def.mk _name typ term constraints attrs vis =>
-            Def.mk (bare_modpath "__monad_user_entry") typ term constraints attrs vis,
+            Def.mk (bare_npath "__monad_user_entry") typ term constraints attrs vis,
     }
 
 // ─── Driver source synthesis ────────────────────────────────────────
@@ -711,7 +712,7 @@ def compile_test_driver_with (loaded : LoadedModules) (driver_decls : List Decl)
                     // empty program instead of surfacing the failure.
                     let driver_root : String :=
                         if qualified_ok
-                        then qualified_def_name_str driver_mp (bare_modpath "main")
+                        then qualified_def_name_str driver_mp (bare_npath "main")
                         else "main";
                     let reachable := filter_reachable_decls driver_root dispatched_spliced;
                     // Validate the REACHABLE decls, not the full spliced
@@ -770,10 +771,18 @@ def rename_user_main_in_modules (target_mp : ModulePath) (mods : List ModuleInfo
 // exercised here — pure discovery-function unit tests.
 
 def test_attr : List Attribute := List.cons (Attribute.mk (Identifier.id "test") List.empty) List.empty
+/// A one-segment MODULE path -- the `use`-path role
+/// (`test_discover_test_defs_ignores_non_def_decls` builds a `Decl.use_d`
+/// with it, and `Decl.use_d` is the one decl form that kept a real
+/// `ModulePath` through the qualified-names split).
 def dummy_path (name : String) : ModulePath := ModulePath.mp (List.cons (Identifier.id name) List.empty)
 
+/// The DEF-name role of the same one-segment shape -- `Def.name` is a
+/// `NamePath`, so the fixtures below cannot reuse `dummy_path`.
+def dummy_npath (name : String) : NamePath := NamePath.npath (List.cons (Identifier.id name) List.empty)
+
 def dummy_def (name : String) (attrs : List Attribute) : Def :=
-    Def.mk (dummy_path name) Term.hole (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty attrs Visibility.package_private
+    Def.mk (dummy_npath name) Term.hole (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty attrs Visibility.package_private
 
 #[test]
 def test_is_test_def_true_for_tagged : Bool :=
@@ -808,7 +817,7 @@ def test_discover_test_defs_empty_when_none_tagged : Bool :=
 /// would leave it: a bare `Term.var` head for `Bool`, and an
 /// application of the `IO` head to it for `IO Bool`.
 def typed_def (name : String) (typ : Term) : Def :=
-    Def.mk (dummy_path name) typ (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty test_attr Visibility.package_private
+    Def.mk (dummy_npath name) typ (Term.lit (Literal.num 1 NumSuffix.i64)) List.empty test_attr Visibility.package_private
 
 def ty_var (name : String) : Term := Term.var 0 (DebugName.named (Identifier.id name))
 
@@ -847,10 +856,10 @@ def test_rename_user_main_renames_only_main : Bool :=
         List.cons d1 rest =>
             match d1 {
                 Decl.def_d dv1 =>
-                    String.beq (module_path_to_str (Def.name dv1)) "__monad_user_entry" &&
+                    String.beq (name_path_to_str (Def.name dv1)) "__monad_user_entry" &&
                     match rest {
                         List.cons d2 _ => match d2 {
-                            Decl.def_d dv2 => String.beq (module_path_to_str (Def.name dv2)) "main_helper",
+                            Decl.def_d dv2 => String.beq (name_path_to_str (Def.name dv2)) "main_helper",
                             _ => false,
                         },
                         List.empty => false,
@@ -956,7 +965,7 @@ def count_main_defs (decl_list : List Decl) : I64 :=
         List.empty => 0,
         List.cons d rest =>
             let here : I64 := match d {
-                Decl.def_d def_val => if String.beq (module_path_to_str (Def.name def_val)) "main" then 1 else 0,
+                Decl.def_d def_val => if String.beq (name_path_to_str (Def.name def_val)) "main" then 1 else 0,
                 _ => 0,
             } in
             here + count_main_defs rest,

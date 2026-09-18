@@ -1,7 +1,7 @@
 use io {IO}
 open IO {println, write_file}
 use std::process {exec_cmd}
-use lib::types {Def, i64, id, lit, mk, mp, num, type_}
+use lib::types {Def, i64, id, lit, mk, num, type_}
 use llvm::ir {emit_module, mk}
 use llvm::link {compile_ir_to_obj, compile_runtime_obj, link_objects}
 use runtime {}
@@ -13,14 +13,13 @@ open Identifier {id}
 open NumSuffix {i64}
 open Param {mk}
 open Def {mk}
-open ModulePath {mp}
 
 /// Build a minimal program: def main : I64 := 42
 def build_main42 : List Def :=
     let id := Identifier.id "main" in
     let body := Term.lit (Literal.num 42 NumSuffix.i64) in
     let def_ := Def.mk
-        (ModulePath.mp (List.cons id List.empty))
+        (NamePath.npath (List.cons id List.empty))
         (Term.type_ 1)
         body
         List.empty

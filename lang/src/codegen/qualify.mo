@@ -13,16 +13,16 @@
 /// in another -- put a raw `char*` into a `DebugName.named` slot and
 /// crashed the self-compiled compiler. See AGENTS.md items 18/19.
 use lib::types {
-  Decl, Def, Identifier, ModulePath, StructField, TypeConstraint,
-  sentinel, show_identifier, show_module_path,
+  Decl, Def, Identifier, ModulePath, NamePath, StructField, TypeConstraint,
+  sentinel, show_identifier, show_module_path, show_name_path,
 }
 use lib::module {ModuleInfo, bench_step, mk}
 use lib::scope {
   OpenAlias, alias_map_empty, alias_map_insert, alias_map_lookup,
-  collect_open_aliases, modpath_eq, resolve_open_alias_decls,
+  collect_open_aliases, modpath_eq, modpath_of, resolve_open_alias_decls,
 }
 use lib::codegen::free_names {free_names_of_term}
-use lib::codegen::symbols {bare_modpath, symbol_identifier, unqualify_def_name}
+use lib::codegen::symbols {bare_modpath, bare_npath, symbol_identifier, unqualify_def_name}
 use lib::codegen::util {
   join_semicolon_msgs, list_contains_str, str_map_empty, str_map_insert,
   str_map_lookup,
@@ -32,13 +32,13 @@ use std::list {intercalate}
 
 /// A decl's own declared def name, if it is a `Decl.def_d`. The name may
 /// itself contain dots (`def String.beq` parses as a SINGLE-segment
-/// `ModulePath` whose Identifier is the literal text `"String.beq"` --
+/// `NamePath` whose Identifier is the literal text `"String.beq"` --
 /// see `dotted_def_name` in `lang/parser.mo`), so this deliberately does
 /// not care how many dots are in it: what matters is that the name is
 /// the whole of what the source declared, and qualification prepends the
 /// module path to it wholesale.
 #[partial]
-def decl_def_name (d : Decl) : Option ModulePath := match d {
+def decl_def_name (d : Decl) : Option NamePath := match d {
     Decl.def_d dd =>
         match dd {
             Def.mk name _typ _term _constraints _attrs _vis => Option.some name,
@@ -67,11 +67,11 @@ def collect_def_owners_decls (path : ModulePath) (decls : List Decl) (acc : Hash
     }
 
 #[partial]
-def add_def_owner (name : Option ModulePath) (path : ModulePath) (acc : HashMap String (List ModulePath)) : HashMap String (List ModulePath) :=
+def add_def_owner (name : Option NamePath) (path : ModulePath) (acc : HashMap String (List ModulePath)) : HashMap String (List ModulePath) :=
     match name {
         Option.none => acc,
         Option.some n =>
-            let key := show_module_path n in
+            let key := show_name_path n in
             let prev := match str_map_lookup key acc {
                 Option.some ps => ps,
                 Option.none => List.empty,
@@ -101,21 +101,33 @@ def modpath_list_contains (ps : List ModulePath) (p : ModulePath) : Bool := matc
 /// is recoverable with `unqualify_def_name` below (which the native
 /// tables need, since they are keyed on what the source wrote).
 ///
-/// The result stays a SINGLE-segment `ModulePath`, exactly the shape a
-/// def name already had -- `show_module_path`/`module_path_to_str` are
-/// the identity on it, so nothing downstream sees a new shape.
+/// The result stays a SINGLE-segment `NamePath`, exactly the shape a
+/// def name already had (a def's own name is a `NamePath` since the
+/// qualified-names split) -- `show_name_path`/`name_path_to_str` are the
+/// identity on it, so nothing downstream sees a new shape.
 #[partial]
-def qualified_def_name (modpath : ModulePath) (n : ModulePath) : ModulePath :=
-    bare_modpath (qualified_def_name_str modpath n)
+def qualified_def_name (modpath : ModulePath) (n : NamePath) : NamePath :=
+    bare_npath (qualified_def_name_str modpath n)
 
+/// The `String` half of `qualified_def_name`. The module half is a
+/// genuine `ModulePath` (a module identity) and stays rendered by
+/// `show_module_path`; only the name half is a `NamePath`.
 #[partial]
-def qualified_def_name_str (modpath : ModulePath) (n : ModulePath) : String :=
-    String.concat (show_module_path modpath) (String.concat "::" (show_module_path n))
+def qualified_def_name_str (modpath : ModulePath) (n : NamePath) : String :=
+    String.concat (show_module_path modpath) (String.concat "::" (show_name_path n))
 
 /// The module paths a module imports, in any form (`use x {..}`,
 /// `use x {}`, `open X {..}`, and the inner decl of a `scoped_open_d`).
 /// Used only to disambiguate a name several modules declare; a name with
 /// exactly one declarer never consults this.
+///
+/// `use` paths are already `ModulePath` (`Decl.use_d` -- the separator
+/// is what tells a file path from a name at parse time). `open` paths
+/// are `NamePath`s (`Decl.open_d`), and this list is only ever compared
+/// against OWNER module paths (`modpath_list_intersect`), so they cross
+/// the boundary here with `modpath_of` -- the same conversion the IR and
+/// `LowerError` payloads get, and byte-identical for every corpus `open`
+/// (which names a decl, not a file).
 #[partial]
 def module_import_paths (decls : List Decl) : List ModulePath := match decls {
     List.empty => List.empty,
@@ -125,8 +137,8 @@ def module_import_paths (decls : List Decl) : List ModulePath := match decls {
 #[partial]
 def import_paths_of_decl (d : Decl) : List ModulePath := match d {
     Decl.use_d path _filter _public => List.cons path List.empty,
-    Decl.open_d path _filter => List.cons path List.empty,
-    Decl.scoped_open_d path _filter inner => List.cons path (import_paths_of_decl inner),
+    Decl.open_d path _filter => List.cons (modpath_of path) List.empty,
+    Decl.scoped_open_d path _filter inner => List.cons (modpath_of path) (import_paths_of_decl inner),
     _ => List.empty,
 }
 
@@ -295,7 +307,7 @@ def declared_names_in_decls_go (decls : List Decl) (seen : HashMap String Bool) 
             match decl_def_name d {
                 Option.none => declared_names_in_decls_go rest seen acc,
                 Option.some n =>
-                    let key := show_module_path n in
+                    let key := show_name_path n in
                     match str_map_lookup key seen {
                         Option.some _ => declared_names_in_decls_go rest seen acc,
                         Option.none =>
@@ -317,7 +329,7 @@ def build_global_rename_map (names : List String) (owners_map : HashMap String (
             match owners_for n owners_map {
                 List.cons o orest =>
                     match orest {
-                        List.empty => build_global_rename_map rest owners_map (alias_map_insert n (qualified_def_name_str o (bare_modpath n)) acc),
+                        List.empty => build_global_rename_map rest owners_map (alias_map_insert n (qualified_def_name_str o (bare_npath n)) acc),
                         List.cons _ _ => build_global_rename_map rest owners_map acc,
                     },
                 List.empty => build_global_rename_map rest owners_map acc,
@@ -388,7 +400,7 @@ def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String)
     Decl.instance_d ins =>
         match ins {
             Instance.mk insname cls constraints args vis implicit_params defs =>
-                Decl.instance_d (Instance.mk (Identifier.id (qualified_def_name_str mpath (bare_modpath (show_identifier insname))))
+                Decl.instance_d (Instance.mk (Identifier.id (qualified_def_name_str mpath (bare_npath (show_identifier insname))))
                     cls constraints args vis implicit_params defs),
         },
     // An `infix (+) := I64.add` names its target by the SOURCE name, and
@@ -397,14 +409,20 @@ def qualify_one_decl_name (mpath : ModulePath) (renames : HashMap String String)
     // a name nothing defines any more. Map the target here, through the
     // declaring module's own rename table, so the splice lands on the
     // real symbol.
-    Decl.infix_d op path vis => Decl.infix_d op (rename_modpath renames path) vis,
+    Decl.infix_d op path vis => Decl.infix_d op (rename_npath renames path) vis,
     _ => d,
 }
 
+/// The rename table is keyed by RENDERED name (`add_def_owner` mints the
+/// keys with `show_name_path`), and `bare_npath` puts the rewritten text
+/// back into the shape a name-path carrier holds. An `infix` target is a
+/// decl NAME (`Decl.infix_d`), hence a `NamePath`; the rendering is
+/// unchanged either way (`show_module_path` and `show_name_path` are the
+/// same `.`-joined spelling).
 #[partial]
-def rename_modpath (renames : HashMap String String) (p : ModulePath) : ModulePath :=
-    match alias_map_lookup (show_module_path p) renames {
-        Option.some q => bare_modpath q,
+def rename_npath (renames : HashMap String String) (p : NamePath) : NamePath :=
+    match alias_map_lookup (show_name_path p) renames {
+        Option.some q => bare_npath q,
         Option.none => p,
     }
 
@@ -417,7 +435,7 @@ def module_rename_map (mpath : ModulePath) (own_aliases : List OpenAlias) (impor
         List.empty => acc,
         List.cons n rest =>
             match resolve_owner mpath own_aliases imports n (owners_for n owners_map) {
-                Result.ok o => module_rename_map mpath own_aliases imports owners_map rest (alias_map_insert n (qualified_def_name_str o (bare_modpath n)) acc),
+                Result.ok o => module_rename_map mpath own_aliases imports owners_map rest (alias_map_insert n (qualified_def_name_str o (bare_npath n)) acc),
                 // Unresolvable here. Leave the name out of the table
                 // rather than guessing; `unresolved_refs_in_module`
                 // decides whether this module actually cares.
@@ -679,7 +697,7 @@ def qtest_module (name : String) (decls : List Decl) : ModuleInfo :=
 /// reference, which is all these tests need to watch a reference move.
 #[partial]
 def qtest_def (name : String) (body_ref : String) : Decl :=
-    Decl.def_d (Def.mk (bare_modpath name) Term.hole
+    Decl.def_d (Def.mk (bare_npath name) Term.hole
         (Term.var sentinel (DebugName.named (Identifier.id body_ref)))
         ([] : List TypeConstraint) ([] : List Attribute) Visibility.package_private)
 
@@ -695,7 +713,7 @@ def qtest_names_of_decls (decls : List Decl) : List String := match decls {
     List.empty => List.empty,
     List.cons d rest =>
         match decl_def_name d {
-            Option.some n => List.cons (show_module_path n) (qtest_names_of_decls rest),
+            Option.some n => List.cons (show_name_path n) (qtest_names_of_decls rest),
             Option.none => qtest_names_of_decls rest,
         },
 }
