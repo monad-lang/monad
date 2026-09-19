@@ -107,7 +107,6 @@ gap_files=(
   init/src/foldable_tests_fold.mo
   std/src/base.mo
   std/src/derive_tests.mo
-  std/src/list_tests1.mo
   std/src/list_tests2.mo
   std/src/map_tests.mo
   std/src/test_map_full.mo

@@ -3091,6 +3091,52 @@ def numsuffix_carrier_name (suffix : NumSuffix) : String :=
 def carrier_var (name : String) : Term :=
     Term.var 0 (DebugName.named (Identifier.id name))
 
+/// `typ` with its head replaced by the bare `carrier_var` naming it --
+/// the same normalization every branch of `infer_carrier_type` does, but
+/// keeping the ARGUMENTS the head is applied to (`BTreeMap I64 I64`
+/// stays applied: those arguments are the information
+/// `method_sig_bindings`/`carrier_bindings` bind a class's own type
+/// variables from, and dropping them is what left `Map`'s `[BOrd K]`
+/// with nothing to resolve against).
+///
+/// A qualified head (`map::BTreeMap`) is normalized to its bare spelling
+/// the same way the bare-carrier branch already did: an instance's own
+/// declared arg is bare, and `Similar.similar` does not see through a
+/// qualifier.
+#[partial]
+def carrier_with_normalized_head (head_name : String) (typ : Term) : Term :=
+    match typ {
+        Term.app f a => Term.app (carrier_with_normalized_head head_name f) a,
+        Term.var _ _ => carrier_var head_name,
+        _ => typ,
+    }
+
+/// The carrier of a `(value : T)` ASCRIPTION, which the self-hosted
+/// parser desugars to the identity function at `T` applied to `value`
+/// (`paren_ann_value`, `lang/parser.mo`). `T` is the value's type --
+/// WITH its arguments, which is the point (`(List.empty : List I64)`
+/// must answer `List I64`, so that `BEq.beq`'s own `A` binds to `I64`).
+///
+/// The IDENTITY test is what keeps this from swallowing the language's
+/// other `app (lam ...) value` shape, an annotated binding (`let x : T :=
+/// value in body`, `DoStmt.let_s`): that application's result type is
+/// `body`'s, not `T`, so reading `T` for it would hand a call site a
+/// carrier its argument does not have.
+#[partial]
+def ann_lambda_carrier (dbg : DebugName) (typ : Term) (body : Term) : Option Term :=
+    match dbg {
+        DebugName.named id =>
+            match body {
+                Term.var _ bdbg =>
+                    match bdbg {
+                        DebugName.named bid => if Similar.similar id bid then expected_carrier_of typ else Option.none,
+                        DebugName.unnamed => Option.none,
+                    },
+                _ => Option.none,
+            },
+        DebugName.unnamed => Option.none,
+    }
+
 /// Narrow, deliberately conservative syntactic carrier-type guesser --
 /// see this section's own top doc comment. Returns `Option.none` for
 /// any shape not covered below (a nested `App` not a literal/known-
@@ -3151,31 +3197,40 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
                         // A local's own DECLARED type is often a fully-
                         // APPLIED type (e.g. `acc : BTreeMap String Json`,
                         // an App chain), not the bare type-constructor
-                        // name a class carrier actually is (`BTreeMap`) --
-                        // every OTHER branch here already normalizes to a
-                        // bare `carrier_var` (via `show_module_path`/
-                        // `show_identifier`), this was the one outlier
-                        // still returning the raw declared type verbatim.
-                        // `term_matches_carrier` (this file) compares an
-                        // instance's own bare declared carrier
-                        // structurally, so a fully-applied carrier from
-                        // here NEVER matched (a `Term.var` instance head
-                        // only matches another bare `Term.var`, never a
-                        // `Term.app`) -- confirmed as a real, live gap via
-                        // `examples/json.mo`'s `Map.insert k v acc`
-                        // (`acc : BTreeMap String Json`): the carrier
-                        // inferred from `acc` was the full applied type,
-                        // silently failed to match `instance [BOrd K] Map
-                        // BTreeMap`, and (since the args-inferred carrier
-                        // wasn't `Option.none`) the class's own default-
-                        // carrier fallback was never even attempted,
-                        // leaving `Map.insert` completely unresolved.
-                        // `type_head_name_local` reduces to just the head
-                        // identifier, matching every other branch's own
-                        // convention.
+                        // name a class carrier actually is (`BTreeMap`).
+                        //
+                        // This arm used to collapse that to the bare head,
+                        // and had to: `term_matches_carrier` compared an
+                        // instance's own bare declared arg structurally,
+                        // so a fully-applied carrier NEVER matched a bare
+                        // instance arg, and `examples/json.mo`'s
+                        // `Map.insert k v acc` (`acc : BTreeMap String
+                        // Json`) resolved nothing at all. The applied shape
+                        // matches now (the bare-instance-arg-vs-applied-
+                        // carrier arm), and collapsing to the head throws
+                        // away the only thing that can answer a class's own
+                        // PARAMETERS: `instance [BOrd K] Map BTreeMap`'s
+                        // `K`/`V` come from `acc`'s `String`/`Json` (via
+                        // `method_sig_bindings`), so a bare-head carrier
+                        // leaves `[BOrd K]` unresolvable. MEASURED on
+                        // `std/src/map_tests.mo`'s `int_map_has_all_keys`
+                        // (`Map.lookup k m`, `m : BTreeMap I64 I64`, `k` an
+                        // untyped lambda param with nothing to say): carrier
+                        // inference contributed only `[<placeholder>;
+                        // BTreeMap]`, no binding could be made from the
+                        // bare head, and the call died at `no instance
+                        // found for `Map.lookup_DICT__T_BTreeMap``.
+                        //
+                        // The head is still normalized (`carrier_with_
+                        // normalized_head`), matching every other branch's
+                        // own convention; only the arguments are kept.
                         Option.some typ =>
                             match type_head_name_local typ {
-                                Option.some head_name => Option.some (carrier_var (show_identifier head_name)),
+                                Option.some head_name =>
+                                    match term_peel typ {
+                                        Term.app _ _ => Option.some (carrier_with_normalized_head (show_identifier head_name) typ),
+                                        _ => Option.some (carrier_var (show_identifier head_name)),
+                                    },
                                 Option.none => Option.some typ,
                             },
                         Option.none =>
@@ -3244,14 +3299,39 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
             match flatten_call_spine t {
                 CallSpine.mk head args =>
                     match head {
+                        // `(value : T)` -- the parser's identity-lambda
+                        // desugaring of an ascription (`ann_lambda_carrier`
+                        // above). Checked BEFORE the def/ctor lookups below
+                        // because the head here is a lambda, which none of
+                        // them can key on: without this the whole argument
+                        // reported no carrier, and `std/src/list_tests2.mo`'s
+                        // `BEq.beq ([] : List I64) ([] : List I64)` had
+                        // nothing to infer `BEq (List A)`'s own `A := I64`
+                        // from (both args are ascribed empties).
+                        Term.lam ldbg ltyp lbody => ann_lambda_carrier ldbg ltyp lbody,
                         Term.var _ dbg =>
                             match dbg {
                                 DebugName.named id =>
                                     match lookup_def_type def_types id {
                                         Option.some typ =>
-                                            match type_head_name_local (return_type_after_n_args typ (List.length args)) {
-                                                Option.some carrier_name => Option.some (carrier_var (show_identifier carrier_name)),
-                                                Option.none => Option.none,
+                                            // Try the callee's own binders
+                                            // first: with an argument that
+                                            // reveals a carrier, the
+                                            // instantiated return type
+                                            // (`List I64`) says strictly more
+                                            // than its bare head (`List`) --
+                                            // see `instantiate_def_carrier`'s
+                                            // own section comment. Falling
+                                            // back keeps every call whose
+                                            // arguments determine nothing on
+                                            // today's behavior verbatim.
+                                            match instantiate_def_carrier env ctor_owners def_types typ args {
+                                                Option.some carrier => Option.some carrier,
+                                                Option.none =>
+                                                    match type_head_name_local (return_type_after_n_args typ (List.length args)) {
+                                                        Option.some carrier_name => Option.some (carrier_var (show_identifier carrier_name)),
+                                                        Option.none => Option.none,
+                                                    },
                                             },
                                         // The head isn't a def -- it may be
                                         // a CONSTRUCTOR application
@@ -3469,6 +3549,529 @@ def term_contains_wildcard (wildcards : List Identifier) (t : Term) : Bool :=
         _ => false,
     }
 
+/// The type-variable bindings a MATCHED instance's own head implies for
+/// the call site: walk the instance's declared args against the carrier
+/// the call resolved with, recording every position where the instance's
+/// arg is one of its own class's wildcards (`instance_wildcard_names` --
+/// `A` in `instance [Show A] Show (List A)`) and the carrier has a
+/// concrete subterm there (`List I64` binds `A := I64`).
+///
+/// This is the piece `resolve_dict_arg`'s own doc comment says was
+/// missing: the instance's constraint (`[Show A]`) names its WILDCARD,
+/// and with no binding the only carrier that resolution had was the
+/// whole call-site carrier (`List I64`), which matches the very instance
+/// being expanded (`Show (List A)`) -- so the element dict came back as
+/// the instance's OWN dictionary (`__Dict_Show_List_A`, a self-
+/// reference) and was applied to each element instead of the element
+/// instance's (`__Dict_Show_I64`).
+///
+/// Every arg is walked against the SAME carrier, mirroring
+/// `all_args_match`'s own convention: a multi-param class's instance
+/// (`instance [Add A] HAdd A A A`) names its wildcard in several
+/// positions, all of which the one carrier answers.
+#[partial]
+def carrier_bindings (wildcards : List Identifier) (ins_args : List Term) (carrier : Term) : List (Pair Identifier Term) :=
+    match ins_args {
+        List.empty => List.empty,
+        List.cons a rest =>
+            bind_term_vars wildcards a carrier (carrier_bindings wildcards rest carrier),
+    }
+
+/// Record `wildcards`-named leaves of an instance's declared arg `shape`
+/// against the concrete `actual` carrier subterm at that position.
+/// Structural, mirroring `term_matches_carrier`'s own walk: a bare
+/// wildcard leaf binds the whole `actual` subterm, an applied shape
+/// descends into the matching applied carrier (so
+/// `(List A)` against `List I64` binds `A := I64`), and anything else
+/// records nothing -- a non-wildcard leaf (`List` in `instance
+/// FromListLiteral List`) constrains no variable of its own.
+#[partial]
+def bind_term_vars (wildcards : List Identifier) (shape : Term) (actual : Term) (bindings : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match term_peel shape {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id =>
+                    if id_in_list id wildcards
+                    then List.cons (Pair.pair id actual) bindings
+                    else bindings,
+                DebugName.unnamed => bindings,
+            },
+        Term.app sf sa =>
+            match term_peel actual {
+                Term.app af aa => bind_term_vars wildcards sf af (bind_term_vars wildcards sa aa bindings),
+                _ => bindings,
+            },
+        _ => bindings,
+    }
+
+/// What `id` was bound to by `carrier_bindings`, if anything.
+#[partial]
+def lookup_binding (bindings : List (Pair Identifier Term)) (id : Identifier) : Option Term :=
+    match bindings {
+        List.empty => Option.none,
+        List.cons b rest =>
+            match b {
+                Pair.pair bid bterm =>
+                    if Similar.similar bid id
+                    then Option.some bterm
+                    else lookup_binding rest id,
+            },
+    }
+
+/// The carrier a single constraint's own type VARIABLE is bound to by
+/// the matched instance's head -- `[Show A]` with `A := I64`. `Option.
+/// none` when no variable this constraint names was bound (the `Map`
+/// case: `instance [BOrd K] Map BTreeMap`'s `K` comes from the method's
+/// own signature, not from the instance's args), which leaves the caller
+/// on the pre-existing whole-carrier order.
+#[partial]
+def bound_constraint_carrier (bindings : List (Pair Identifier Term)) (vars : List Identifier) : Option Term :=
+    match vars {
+        List.empty => Option.none,
+        List.cons v rest =>
+            match lookup_binding bindings v {
+                Option.some t => Option.some t,
+                Option.none => bound_constraint_carrier bindings rest,
+            },
+    }
+
+/// The carrier candidate list a constraint resolves its dict against:
+/// the bound variable's own concrete type FIRST (that is what the
+/// constraint is actually about), then the whole call-site carrier
+/// (the pre-existing behavior, kept as the fallback so an instance whose
+/// binding doesn't itself have the constrained instance still resolves
+/// exactly as it used to).
+#[partial]
+def constraint_carriers (bindings : List (Pair Identifier Term)) (vars : List Identifier) (carrier : Term) : List Term :=
+    match bound_constraint_carrier bindings vars {
+        Option.some bound => List.cons bound (List.cons carrier List.empty),
+        Option.none => List.cons carrier List.empty,
+    }
+
+// ─── Callee-signature instantiation ─────────────────────────────────
+//
+// `infer_carrier_type`'s `Term.app` arm reduces the called def's own
+// DECLARED return type to its bare HEAD (`return_type_after_n_args`
+// then `type_head_name_local`) -- all a call site's arguments were
+// assumed to be able to justify. That is enough to PICK an instance but
+// not enough to say what the instance's own type parameters are: a list
+// literal desugars to `FromListLiteral.cons`, whose promoted declared
+// type `A -> List A -> List A` reveals `List` and drops the element type
+// entirely, so `Show.show [1, 2, 3]` matched `instance [Show A] Show
+// (List A)` and then had no `A` to resolve the instance's own `[Show A]`
+// dictionary against (see `carrier_bindings`' own doc comment) -- the
+// self-referential `__Dict_Show_List_A` applied to each element.
+//
+// The fix is to instantiate the callee's own binders against the
+// carriers its ARGUMENTS reveal, exactly as a type checker would:
+// `FromListLiteral.cons`'s `A` meets the literal `1`'s own carrier
+// `I64`, and the applied return type becomes `List I64` -- precise
+// enough both to match and to bind (`carrier_bindings (List I64)`
+// against `(List A)` is what turns `[Show A]` into `__Dict_Show_I64`).
+//
+// Deliberately conservative in three ways, each of which leaves the
+// pre-existing bare-head behavior completely untouched:
+//
+//   * only Forall-bound names are bindable (`collect_forall_names`), so
+//     a monomorphic def's declared type (`I64.add`'s) records nothing
+//     and this path is skipped for it;
+//   * nothing bound at all (`List.empty` bindings) means `Option.none`,
+//     and the caller falls back to today's head reduction verbatim;
+//   * an argument whose own carrier is `Option.none` records nothing
+//     for its position, so an under-determined call resolves as before.
+//
+// An APPLIED carrier is a strictly better answer than a bare head
+// wherever both are available -- `term_matches_carrier` accepts either
+// shape against an applied instance arg (its bare-head mirror arm) --
+// so the only dispatches that can move are ones that were resolving
+// with a carrier that said strictly less.
+
+/// The names a declared type's own leading `Forall` binders introduce --
+/// exactly the set `bind_params_against_args` may bind. `wrap_forall`
+/// (`lang/elaborate.mo`) puts every free type variable at the FRONT, so
+/// this only ever needs to walk binders, but it keeps walking defensively
+/// rather than assuming.
+#[partial]
+def collect_forall_names (typ : Term) : List Identifier :=
+    match term_peel typ {
+        Term.forall dbg _ body =>
+            match dbg {
+                DebugName.named id => List.cons id (collect_forall_names body),
+                DebugName.unnamed => collect_forall_names body,
+            },
+        _ => List.empty,
+    }
+
+/// The names a declared type with NO `Forall` binder at all still leaves
+/// standing for its own parameters -- the mirror `collect_forall_names`
+/// needs for the one shape `elaborate_def` (`lang/elaborate.mo`) never
+/// runs on: a promoted INSTANCE METHOD.
+///
+/// `instance FromListLiteral List { def cons (a : A) (l : List A) : List A }`
+/// registers `FromListLiteral_List_cons` with the type `A -> List A -> List A`
+/// (`promote_methods` copies the instance method's own `Def` verbatim), and
+/// `A` is bound by the instance HEAD, not by the def -- so no Forall is ever
+/// added and `collect_forall_names` correctly reports that the def's own
+/// type binds nothing. Left at that, the ONE call shape whose whole point
+/// is the element type -- `[42]`, `[1, 2, 3]` -- is exactly the one that
+/// never gets instantiated: its carrier stays the bare head `List`, the
+/// `Show (List A)` instance matches, and its `[Show A]` dictionary has no
+/// `A` to resolve against.
+///
+/// Both halves of the set are load-bearing, and each rules out a real
+/// misbinding rather than a hypothetical one:
+///
+///   * a name must appear as a STANDALONE parameter type (`A` in
+///     `A -> List A -> List A`) -- the position a caller's own argument
+///     determines directly. A name that only ever appears inside an
+///     application (`I64` in `I64.add`'s `I64 -> I64 -> I64`, itself
+///     reached here because a concrete type names no free variable either)
+///     is a type being NAMED, not a parameter, and binding it would rewrite
+///     the return type of every call to that def -- `I64.add x 1` would
+///     stop reporting `I64` and start reporting whatever the first
+///     argument's own carrier inference said.
+///   * a name must ALSO appear as an application's own argument (`A` in
+///     `List A`) -- i.e. somewhere a type VARIABLE legitimately stands.
+///     Without this, `instance Foo Bar { def m (x : Bar) : Bar }` registers
+///     `Bar -> Bar`, whose only name is the very type being dispatched on:
+///     binding it would replace a correct carrier with an inferred one.
+///
+/// No ordinary def is reachable: `elaborate_def` wraps every free type
+/// variable in Forall by construction, so `collect_forall_names` is
+/// non-empty for it and this set is never consulted (`instantiate_def_carrier`
+/// only falls back here when that set is empty).
+#[partial]
+def collect_free_param_names (typ : Term) : List Identifier :=
+    keep_ids_present (collect_bare_param_names typ) (collect_app_arg_names typ)
+
+/// Names standing alone as a Pi chain's own parameter types -- see
+/// `collect_free_param_names`.
+#[partial]
+def collect_bare_param_names (typ : Term) : List Identifier :=
+    match term_peel typ {
+        Term.forall _ _ body => collect_bare_param_names body,
+        Term.pi ptyp ret => List.append (bare_type_var_name ptyp) (collect_bare_param_names ret),
+        _ => List.empty,
+    }
+
+/// Every name sitting in an application's own argument position anywhere
+/// in a type (`A` in `List A`) -- see `collect_free_param_names`.
+#[partial]
+def collect_app_arg_names (t : Term) : List Identifier :=
+    match term_peel t {
+        Term.app f a => List.append (bare_type_var_name a) (List.append (collect_app_arg_names f) (collect_app_arg_names a)),
+        Term.lam _ _ body => collect_app_arg_names body,
+        Term.forall _ _ body => collect_app_arg_names body,
+        Term.pi ptyp ret => List.append (collect_app_arg_names ptyp) (collect_app_arg_names ret),
+        _ => List.empty,
+    }
+
+/// A bare `Term.var` type's own name, if it has one.
+#[partial]
+def bare_type_var_name (t : Term) : List Identifier :=
+    match term_peel t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => List.cons id List.empty,
+                DebugName.unnamed => List.empty,
+            },
+        _ => List.empty,
+    }
+
+/// `ids` filtered down to those that also occur in `keep` -- the
+/// intersection `collect_free_param_names` needs. (`types.mo`'s own
+/// `union_ids`/`id_member` are the union/membership pair; nothing there
+/// intersects, and `filter_known` is the difference, not this.)
+#[partial]
+def keep_ids_present (ids : List Identifier) (keep : List Identifier) : List Identifier :=
+    match ids {
+        List.cons hd rest =>
+            if id_member hd keep
+            then List.cons hd (keep_ids_present rest keep)
+            else keep_ids_present rest keep,
+        List.empty => List.empty,
+    }
+
+/// A class's own declared type parameters, as names -- the wildcard set
+/// `bind_term_vars`/`concrete_hint` may treat as variables inside that
+/// class's own method signatures.
+///
+/// A class's methods are written in terms of its parameters (`def beq : A
+/// -> A -> Bool` for `class [BEq A] BEq A`), so the declaration itself is
+/// exactly the set of names in them that stand for a TYPE VARIABLE rather
+/// than a type being named -- and it is read off the declaration because
+/// shape cannot tell the two apart: `I64 -> I64 -> I64` (`I64.add`) and `A
+/// -> A -> Bool` (`BEq.beq`) have the same shape, and a PROMOTED instance
+/// method is fully monomorphic -- `number::BEq_I64_beq`, what an infix
+/// `==` against an `I64` sibling is rewritten to before this walk even
+/// runs (`promote_instance_defs`), has domains that ARE the concrete
+/// `I64`, written as a bare name.
+///
+/// MEASURED, not reasoned: reading the names off the SIGNATURE instead (a
+/// union of `collect_bare_param_names`/`collect_app_arg_names`) bound `I64
+/// := DefaultValue` while solving `Default.default == 1i64` against the
+/// promoted `number::BEq_I64_beq : I64 -> I64 -> Bool`, which turned that
+/// call's own first parameter -- concretely `I64` -- into the expected
+/// carrier `DefaultValue`: the one carrier no `Default` instance has. (For
+/// `A -> A -> Bool` the same union is correct, which is why the class-side
+/// branch of the hint channel keeps it; there `A` really is a parameter.)
+///
+/// An over-inclusive set here is worse than useless, because a name is
+/// only ever used to read a sibling argument's carrier into a candidate
+/// list the ordinary resolution then tries and rejects on its own
+/// (`sig_arg_bindings`, `concrete_hint`): it adds no authority, it just
+/// renames the type it was supposed to reveal.
+#[partial]
+def class_param_names (cls : Class) : List Identifier :=
+    match cls {
+        Class.mk _name params _constraints _methods _vis => param_names params,
+    }
+
+/// The variable names of a CLASS's own method signature: the class's
+/// declared parameters (`class_param_names`) plus every name standing as
+/// an argument to one of them -- the method's own implicit parameters.
+///
+/// A class parameter can itself be a type-level FUNCTION, and its
+/// signature's own Pi binds the arguments applied to it:
+/// `class Map (M : (K : Type) -> (V : Type) -> Type := HashMap)` declares
+/// `empty : M K V`, so `K` and `V` are variables too -- bound by `M`'s
+/// declared Pi, not by the parameter list -- and `instance [BOrd K] Map
+/// BTreeMap`'s `[BOrd K]` can only be resolved against the call's carrier
+/// (a `BTreeMap I64 String` pins `K := I64`) if this set contains `K`.
+///
+/// MEASURED, not reasoned: with the class's parameters alone, `let m :
+/// BTreeMap I64 String := Map.empty` matched its instance (the expected
+/// carrier reached it -- the annotated binding's own channel) and then
+/// failed with only `M` bound (`..._DICT_M=BTreeMap,_BTreeMap_I64_String`
+/// under a temporary diagnostic), i.e. exactly the `[BOrd K]` dict
+/// argument the class-side signature is here to answer for.
+///
+/// Restricted to names applied to a CLASS PARAMETER deliberately, rather
+/// than every name in argument position anywhere (`collect_app_arg_names`,
+/// the wider half of `collect_free_param_names`): a class-side signature
+/// can also mention a concrete type inside an application (`def bar (x :
+/// List I64) : A`), and that `I64` names a TYPE, not a variable. The
+/// class param's own Pi is what makes its arguments variables.
+#[partial]
+def class_method_var_names (cls : Class) (sig : Term) : List Identifier :=
+    let params := class_param_names cls in
+    union_ids params (collect_param_app_arg_names params sig)
+
+/// Every name standing as an argument to an application whose own head
+/// chain bottoms out in one of `params` -- see `class_method_var_names`.
+#[partial]
+def collect_param_app_arg_names (params : List Identifier) (t : Term) : List Identifier :=
+    match term_peel t {
+        Term.app f a =>
+            let here := if app_head_is_param params f then bare_type_var_name a else List.empty in
+            union_ids here (union_ids (collect_param_app_arg_names params f) (collect_param_app_arg_names params a)),
+        Term.pi p r => union_ids (collect_param_app_arg_names params p) (collect_param_app_arg_names params r),
+        Term.forall _ _ body => collect_param_app_arg_names params body,
+        Term.lam _ ty body => union_ids (collect_param_app_arg_names params ty) (collect_param_app_arg_names params body),
+        _ => List.empty,
+    }
+
+/// Does this application head chain bottom out in one of `params`?
+#[partial]
+def app_head_is_param (params : List Identifier) (t : Term) : Bool :=
+    match term_peel t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => id_in_list id params,
+                DebugName.unnamed => false,
+            },
+        Term.app f _ => app_head_is_param params f,
+        _ => false,
+    }
+
+/// Strip every leading `Term.forall` binder -- the shape a signature's
+/// own body has to be in before anything can be matched against a
+/// carrier (`term_peel` itself only ever peels `Term.ctx`, so a bare
+/// `bind_term_vars` on a `Forall`-wrapped type would match nothing).
+#[partial]
+def strip_foralls (typ : Term) : Term :=
+    match term_peel typ {
+        Term.forall _ _ body => strip_foralls body,
+        _ => term_peel typ,
+    }
+
+/// A class's own declared signature for one of its methods -- `ClassDef.
+/// typ` (`M K V` for `Map.empty`, wrapped in the class's own type-param
+/// binders by `elaborate_class_def`, `lang/elaborate.mo`). This is the
+/// CLASS-SIDE answer to "what shape is this method's carrier", and it
+/// says things no call site's arguments can: `Map.empty` has no
+/// arguments at all.
+#[partial]
+def class_method_declared_type (cls : Class) (method_name : Identifier) : Option Term :=
+    match cls {
+        Class.mk _name _params _constraints methods_ _vis => class_defs_type_of methods_ method_name,
+    }
+
+#[partial]
+def class_defs_type_of (defs : List ClassDef) (method_name : Identifier) : Option Term :=
+    match defs {
+        List.empty => Option.none,
+        List.cons d rest =>
+            match d {
+                ClassDef.mk name typ _default =>
+                    if Similar.similar name method_name then Option.some typ else class_defs_type_of rest method_name,
+            },
+    }
+
+/// What a matched instance's CLASS METHOD SIGNATURE binds for the call
+/// site -- the one family the instance's own head cannot answer.
+///
+/// `instance [BOrd K] Map BTreeMap` names `K` NOWHERE in its head (the
+/// head argument is the bare constructor `BTreeMap`), so its `[BOrd K]`
+/// constraint has nothing to resolve against, and `Map.empty` -- which
+/// has no argument of its own either -- stays unresolved even once the
+/// call's carrier is known. The call site does know what `K` is: the
+/// method's own declared signature (`empty : M K V`, `ClassDef.typ`)
+/// matched against the carrier the call resolved with reads it straight
+/// off (`BTreeMap I64 String` binds `M := BTreeMap`, `K := I64`,
+/// `V := String`).
+///
+/// Appended AFTER `carrier_bindings`' own result at the call site, and
+/// `lookup_binding` is first-match, so a name the instance's head already
+/// bound keeps that binding: this only ever ADDS an answer where nothing
+/// else had one.
+///
+/// Only the signature's APPLIED shapes are walked
+/// (`carrier_shape_candidates`): `Map.lookup`'s own first parameter is
+/// the bare `K`, and a bare wildcard shape "binds" against anything at
+/// all -- walking it would record `K := BTreeMap I64 I64`, the whole
+/// carrier, which is exactly the answer `constraint_carriers` falls back
+/// to when there is no binding to be had. The applied `m : M K V` is
+/// what actually says `K := I64`.
+#[partial]
+def method_sig_bindings (classes : List Class) (cls_name : NamePath) (method_name : Identifier) (carrier : Term) : List (Pair Identifier Term) :=
+    match find_class_by_name classes cls_name {
+        Option.none => List.empty,
+        Option.some cls =>
+            match class_method_declared_type cls method_name {
+                Option.none => List.empty,
+                Option.some typ =>
+                    bind_shape_candidates (class_method_var_names cls typ) (carrier_shape_candidates typ) carrier List.empty,
+            },
+    }
+
+/// The applied shapes inside a declared signature that can describe a
+/// CARRIER: every Pi domain that is an application, then the return type
+/// if it is one. See `method_sig_bindings` on why a bare domain is
+/// skipped.
+#[partial]
+def carrier_shape_candidates (typ : Term) : List Term :=
+    match term_peel typ {
+        Term.pi dom ret =>
+            let here := match term_peel dom {
+                Term.app _ _ => List.cons dom List.empty,
+                _ => List.empty,
+            } in
+            List.append here (carrier_shape_candidates ret),
+        Term.forall _ _ body => carrier_shape_candidates body,
+        Term.app _ _ => List.cons typ List.empty,
+        _ => List.empty,
+    }
+
+#[partial]
+def bind_shape_candidates (names : List Identifier) (shapes : List Term) (carrier : Term) (acc : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match shapes {
+        List.empty => acc,
+        List.cons s rest => bind_shape_candidates names rest carrier (bind_term_vars names s carrier acc),
+    }
+
+/// Walk a declared signature's Pi chain in lockstep with a call's own
+/// argument list, recording what each parameter's declared SHAPE binds
+/// against the carrier that argument reveals: `A -> List A -> List A`
+/// against `[42]` records `A := I64` at the first Pi, and stops at the
+/// end of the (usually shorter) argument list -- so a def applied to
+/// fewer arguments than it declares still instantiates everything the
+/// written arguments determine.
+///
+/// The arguments' carriers come from `infer_carrier_type` itself, which
+/// is what makes this mutual: an argument that is itself a call has its
+/// own signature instantiated first, so `[[1]]` binds `A := List I64`
+/// rather than `List`. The recursion is structural on the argument's own
+/// subterm, so it terminates.
+#[partial]
+def bind_params_against_args (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (wildcards : List Identifier) (typ : Term) (args : List Term) (bindings : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match term_peel typ {
+        Term.forall _ _ body => bind_params_against_args env ctor_owners def_types wildcards body args bindings,
+        Term.pi ptyp ret =>
+            match args {
+                List.empty => bindings,
+                List.cons a rest =>
+                    let inner := match infer_carrier_type env ctor_owners def_types a {
+                        Option.some actual => bind_term_vars wildcards ptyp actual bindings,
+                        Option.none => bindings,
+                    } in
+                    bind_params_against_args env ctor_owners def_types wildcards ret rest inner,
+            },
+        _ => bindings,
+    }
+
+/// Substitute a binding list throughout a type -- the same walk
+/// `lang.typecheck.name_subst`'s `name_subst_term` does (that module
+/// isn't reachable from here: `lang.typecheck.infer` imports THIS file,
+/// not the reverse), built on the `term_map_children` this file already
+/// imports. A bound name is replaced wholesale with the concrete carrier
+/// recorded for it, and everything else is ordinary structural
+/// recursion -- including `Term.ctx` wrappers, which `term_map_children`
+/// rebuilds. Names are matched by string equality (`lookup_binding`'s
+/// `Similar.similar`), the same convention `bind_term_vars` records them
+/// with.
+#[partial]
+def subst_carrier_bindings (bindings : List (Pair Identifier Term)) (t : Term) : Term :=
+    match t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match lookup_binding bindings id {
+                        Option.some bound => bound,
+                        Option.none => t,
+                    },
+                DebugName.unnamed => t,
+            },
+        _ => term_map_children (subst_carrier_bindings bindings) t,
+    }
+
+/// A called def's declared return type with its own binders instantiated
+/// from the call's arguments -- `FromListLiteral.cons` applied to a
+/// literal and an empty list yields `List I64`, not `List A`.
+///
+/// `Option.none` means "this def's arguments determine nothing" (no
+/// Forall binders at all, or none of them met a carrier-revealing
+/// argument), which is exactly the case the caller's bare-head fallback
+/// still handles. Also `Option.none` when the instantiated type's own
+/// head isn't a plain name (a `Term.hole`-headed type, say): a carrier
+/// nothing can match is worse than the head reduction, which at least
+/// says `Option.none` itself and fails clean.
+#[partial]
+def instantiate_def_carrier (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (typ : Term) (args : List Term) : Option Term :=
+    // The def's binders: its own `Forall` names when it has any (every
+    // ordinary def -- `elaborate_def` wraps free type variables), and
+    // otherwise the names a promoted instance method's forall-free
+    // signature still leaves standing (`collect_free_param_names`'s own
+    // doc comment: `FromListLiteral_List_cons`'s `A`). The second set is
+    // never consulted for a def that has the first, so no def that
+    // instantiates today changes behavior here.
+    let binders := collect_forall_names typ in
+    let wildcards :=
+        match binders {
+            List.empty => collect_free_param_names typ,
+            List.cons _ _ => binders,
+        } in
+    let bindings := bind_params_against_args env ctor_owners def_types wildcards typ args List.empty in
+    match bindings {
+        List.empty => Option.none,
+        List.cons _ _ =>
+            let substituted := subst_carrier_bindings bindings (return_type_after_n_args typ (List.length args)) in
+            match type_head_name_local substituted {
+                Option.some _ => Option.some substituted,
+                Option.none => Option.none,
+            },
+    }
+
 /// Finds the best-matching instance for `cls_name` against a concrete
 /// `carrier` -- fully-concrete candidates preferred over wildcard-
 /// matching ones (specificity preference), first-match-wins within each
@@ -3649,13 +4252,24 @@ def find_matching_instance_carrier_any (instances : List Instance) (cls_name : N
 /// primary `carrier` fails, preserving the existing, already-correct
 /// behavior for the common same-type-variable case.
 #[partial]
-def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (carrier : Term) (extra_carriers : List Term) (c : TypeConstraint) : Option Term :=
+def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (bindings : List (Pair Identifier Term)) (carrier : Term) (extra_carriers : List Term) (c : TypeConstraint) : Option Term :=
     match c {
-        TypeConstraint.mk cls_name _ =>
+        TypeConstraint.mk cls_name vars =>
             match lookup_dict_binding dict_env cls_name {
                 Option.some bound_id => Option.some (Term.var 0 (DebugName.named bound_id)),
                 Option.none =>
-                    let found := match find_matching_instance instances cls_name carrier {
+                    // The constraint's own type VARIABLE (`[Show A]`'s
+                    // `A`), bound by the matched instance's head against
+                    // the carrier (`instance [Show A] Show (List A)` with
+                    // `A := I64`), is the RIGHT carrier for this dict --
+                    // the whole call-site carrier (`List I64`) resolves
+                    // straight back to the instance being expanded, which
+                    // is how the self-referential `__Dict_Show_List_A`
+                    // element dict was born. `constraint_carriers` keeps
+                    // the old order (whole carrier, then `extra_carriers`)
+                    // as its fallback for a constraint whose variable the
+                    // instance head does not bind.
+                    let found := match find_matching_instance_any instances cls_name (constraint_carriers bindings vars carrier) {
                         Option.some ins => Option.some ins,
                         Option.none => find_matching_instance_any instances cls_name extra_carriers,
                     } in
@@ -3676,14 +4290,14 @@ def resolve_dict_arg (classes : List Class) (instances : List Instance) (dict_en
     }
 
 #[partial]
-def resolve_dict_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (carrier : Term) (extra_carriers : List Term) (constraints : List TypeConstraint) : Option (List Term) :=
+def resolve_dict_args (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (bindings : List (Pair Identifier Term)) (carrier : Term) (extra_carriers : List Term) (constraints : List TypeConstraint) : Option (List Term) :=
     match constraints {
         List.empty => Option.some List.empty,
         List.cons c rest =>
-            match resolve_dict_arg classes instances dict_env carrier extra_carriers c {
+            match resolve_dict_arg classes instances dict_env bindings carrier extra_carriers c {
                 Option.none => Option.none,
                 Option.some arg =>
-                    match resolve_dict_args classes instances dict_env carrier extra_carriers rest {
+                    match resolve_dict_args classes instances dict_env bindings carrier extra_carriers rest {
                         Option.none => Option.none,
                         Option.some rest_args => Option.some (List.cons arg rest_args),
                     },
@@ -3783,9 +4397,41 @@ def build_dict_field_projection_checked (cls : Class) (dict_id : Identifier) (me
 /// but its continuation's trailing `Monad.pure unit`/`Monad.pure 0`
 /// still failed (`undefined @Monad_pure` at link time) -- exactly this
 /// gap.
+///
+/// `expect` is the carrier this very term is EXPECTED to have, handed
+/// down from the one place the source itself pins one: the argument of an
+/// annotated binding's own desugared lambda (`Term.app (Term.lam _dbg T
+/// _) value` -- see `lam_param_hints`). It is threaded as an EXTRA
+/// candidate carrier, after the ones the call's own arguments reveal, so
+/// a call that already resolves keeps resolving exactly as it did; it
+/// only gets consulted where nothing else did (`Map.empty`'s nullary
+/// shape, `Bounded.max_bound`), which is precisely the family of
+/// calls the args-only channel can never resolve. This is the channel
+/// `lang/typecheck/infer.mo`'s `carrier_from_expected_type` gives the
+/// checker, and here it is deliberately NARROWER than that one: it
+/// comes from a syntactic annotation on the binding itself, never from
+/// "the enclosing term's expected type", which in a def body is the
+/// def's declared RETURN type and has nothing to do with a carrier
+/// (measured: `def t1 : Bool := Show.show [42]` dispatched to
+/// `Show_Bool_show`).
 #[partial]
-def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
+def resolve_class_call_term_go (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (expect : Option Term) (t : Term) : Term :=
     match t {
+        // R3 (`lang/parser/lower_parse.mo`) puts a position wrapper on
+        // every call ARGUMENT, and the expected carrier threaded here is
+        // a property of the argument's own VALUE -- so it passes straight
+        // through the wrapper, which is data and not structure
+        // (`term_map_children`'s own `Term.ctx` arm, same rebuilding
+        // shape). Falling through to the generic `_` arm instead -- which
+        // is what this function did when the channel was first wired --
+        // still traverses the wrapper but DISCARDS the hint one level
+        // above the call it was meant for, because that arm's partial
+        // application is the no-expectation wrapper. MEASURED: this is
+        // exactly why `let e : List I64 := Monoid.mempty unit` (and every
+        // `let m : BTreeMap K V := Map.empty`) stayed unresolved while
+        // the identical unwrapped shape resolved.
+        Term.ctx loc inner =>
+            Term.ctx loc (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier expect inner),
         Term.lam dbg typ body =>
             match dbg {
                 DebugName.named id =>
@@ -3795,16 +4441,17 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                         Option.some cls_name => List.cons (DictBinding.mk cls_name id) dict_env,
                         Option.none => dict_env,
                     } in
-                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier typ)
-                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types new_env new_dict_env def_carrier body),
+                    Term.lam dbg (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none typ)
+                        (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types new_env new_dict_env def_carrier Option.none body),
                 DebugName.unnamed =>
-                    Term.lam dbg (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier typ)
-                        (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier body),
+                    Term.lam dbg (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none typ)
+                        (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none body),
             },
         Term.app _ _ =>
             match flatten_call_spine t {
                 CallSpine.mk head args =>
-                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier args in
+                    let hints := call_arg_hints classes def_types env ctor_owners head args in
+                    let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hints args in
                     match head {
                         Term.var _ dbg =>
                             match dbg {
@@ -3813,13 +4460,13 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                                         Option.some ref =>
                                             match ref {
                                                 ClassMethodRef.mk cls method_name =>
-                                                    resolve_class_method_call classes instances dict_env def_types cls method_name resolved_args head args def_carrier env ctor_owners,
+                                                    resolve_class_method_call classes instances dict_env def_types cls method_name resolved_args head args def_carrier env ctor_owners expect,
                                             },
                                         Option.none => resolve_ordinary_constrained_call classes instances dict_env def_constraints def_types id head resolved_args env ctor_owners,
                                     },
                                 DebugName.unnamed => rebuild_call head resolved_args,
                             },
-                        _ => rebuild_call (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier head) resolved_args,
+                        _ => rebuild_call (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none head) resolved_args,
                     },
             },
         // A NULLARY class method reference (e.g. `FromListLiteral.empty`,
@@ -3840,7 +4487,7 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
                         Option.some ref =>
                             match ref {
                                 ClassMethodRef.mk cls method_name =>
-                                    resolve_class_method_call classes instances dict_env def_types cls method_name List.empty t List.empty def_carrier env ctor_owners,
+                                    resolve_class_method_call classes instances dict_env def_types cls method_name List.empty t List.empty def_carrier env ctor_owners expect,
                             },
                         Option.none => t,
                     },
@@ -3861,19 +4508,258 @@ def resolve_class_call_term (classes : List Class) (instances : List Instance) (
         Term.lit lit_ =>
             match lit_ {
                 Literal.match_ scrutinee cases =>
-                    let resolved_scrutinee := resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee in
+                    let resolved_scrutinee := resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none scrutinee in
                     Term.lit (Literal.match_ resolved_scrutinee (resolve_class_call_cases classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier scrutinee cases)),
                 _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier) t,
             },
         _ => term_map_children (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier) t,
     }
 
+/// The no-expectation entry point every OTHER caller in this file uses --
+/// `resolve_class_call_terms`/`resolve_class_call_cases`'s own
+/// `term_map_children` partial applications, and
+/// `resolve_class_calls_decls_go`'s top-level per-def walk. A thin
+/// wrapper rather than a second parameter at those ~10 sites: the only
+/// terms that ever HAVE an expectation are the arguments of an annotated
+/// binding's desugared lambda, and those are reached through `_go`
+/// directly (the app arm's own `lam_param_hints`).
 #[partial]
-def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (args : List Term) : List Term :=
+def resolve_class_call_term (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (t : Term) : Term :=
+    resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none t
+
+/// Is `t` unusable as an expected carrier? A hole, or a bare universe
+/// placeholder (`Term.type_ 1`, what a literal reports when it is checked
+/// in pure-infer mode) -- the same two shapes `is_uninformative_carrier`
+/// (`lang/typecheck/infer.mo`) rejects. An un-annotated binding's
+/// desugared lambda carries one of these as its parameter type and says
+/// nothing about the value's carrier, so it must not be handed down as if
+/// it did.
+def expected_carrier_of (t : Term) : Option Term :=
+    match t {
+        Term.hole => Option.none,
+        Term.type_ _ => Option.none,
+        _ => Option.some t,
+    }
+
+/// `Option Term` as a 0/1-element candidate list, for appending to the
+/// args-derived carriers `find_matching_instance_carrier_any` and
+/// `resolve_dict_arg` already search.
+def carrier_hint_list (hint : Option Term) : List Term :=
+    match hint {
+        Option.some t => List.cons t List.empty,
+        Option.none => List.empty,
+    }
+
+/// One expected-carrier hint per argument of a call spine, read off the
+/// spine's own HEAD when it is a lambda. `Term.app (Term.lam _dbg T body)
+/// value` is exactly what an annotated binding desugars to (`let x : T :=
+/// value in body`, and its do-block equivalent), so `T` is the value's
+/// expected carrier -- the same shape, read the same way, as
+/// `app_arg_expected_type` reads it in the checker
+/// (`lang/typecheck/infer.mo`). A curried head lines the hints up
+/// positionally; anything else gets no hint at all, leaving every
+/// existing resolution path exactly as it was.
+#[partial]
+def lam_param_hints (head : Term) (args : List Term) : List (Option Term) :=
+    match args {
+        List.empty => List.empty,
+        List.cons _ rest =>
+            match head {
+                Term.lam _dbg typ body => List.cons (expected_carrier_of typ) (lam_param_hints body rest),
+                _ => List.empty,
+            },
+    }
+
+/// Every argument's own inferred carrier, POSITIONALLY -- index-aligned
+/// with `args`, unlike `infer_all_carriers_from_args_go`, which DROPS the
+/// ones that reveal nothing. The callee-signature channel below has to
+/// know WHICH argument said nothing, because that is the one it answers
+/// for.
+#[partial]
+def infer_carriers_each (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (args : List Term) : List (Option Term) :=
     match args {
         List.empty => List.empty,
         List.cons a rest =>
-            List.cons (resolve_class_call_term classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier rest),
+            List.cons (infer_carrier_type env ctor_owners def_types a) (infer_carriers_each env ctor_owners def_types rest),
+    }
+
+/// Pass 1 of the callee-signature channel: walk a declared signature's Pi
+/// chain in lockstep with the call's own argument carriers, recording what
+/// each parameter's declared SHAPE binds. `BEq.beq`'s `A -> A -> Bool`
+/// against `[<nothing>; Ordering]` binds `A := Ordering` -- off the
+/// SIBLING argument, which is the whole point: the call's own
+/// `Bounded.max_bound` argument has no argument list at all, so nothing
+/// inside it can ever say what it is.
+#[partial]
+def sig_arg_bindings (sig : Term) (names : List Identifier) (each : List (Option Term)) (acc : List (Pair Identifier Term)) : List (Pair Identifier Term) :=
+    match term_peel sig {
+        Term.forall _ _ body => sig_arg_bindings body names each acc,
+        Term.pi ptyp ret =>
+            match each {
+                List.empty => acc,
+                List.cons c rest =>
+                    let inner := match c {
+                        Option.some carrier => bind_term_vars names ptyp carrier acc,
+                        Option.none => acc,
+                    } in
+                    sig_arg_bindings ret names rest inner,
+            },
+        _ => acc,
+    }
+
+/// Pass 2: one hint per declared parameter, in order -- that parameter's
+/// own declared type with the pass-1 bindings substituted.
+#[partial]
+def sig_arg_hints (sig : Term) (names : List Identifier) (bindings : List (Pair Identifier Term)) : List (Option Term) :=
+    match term_peel sig {
+        Term.forall _ _ body => sig_arg_hints body names bindings,
+        Term.pi ptyp ret => List.cons (concrete_hint ptyp names bindings) (sig_arg_hints ret names bindings),
+        _ => List.empty,
+    }
+
+/// A declared parameter type as an expected carrier: substituted, and only
+/// if it is CONCRETE afterwards -- no name the signature itself could bind
+/// survives in it. An unbound `A` handed down as an expected carrier would
+/// match the first instance whose head is a wildcard, which is a guess
+/// dressed up as an inference. `Bounded.max_bound`'s parameter type here
+/// is the bare `A`, and it is the sibling's `Ordering` being substituted in
+/// that turns it into a hint at all; this check is what stops every OTHER
+/// still-generic parameter from becoming one.
+def concrete_hint (ptyp : Term) (names : List Identifier) (bindings : List (Pair Identifier Term)) : Option Term :=
+    let sub := subst_carrier_bindings bindings ptyp in
+    if type_mentions_any names sub then Option.none else expected_carrier_of sub
+
+/// Does any bare name in `names` occur anywhere in `t`?
+#[partial]
+def type_mentions_any (names : List Identifier) (t : Term) : Bool :=
+    match term_peel t {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => id_member id names,
+                DebugName.unnamed => false,
+            },
+        Term.app f a => if type_mentions_any names f then true else type_mentions_any names a,
+        Term.pi p ret => if type_mentions_any names p then true else type_mentions_any names ret,
+        Term.forall _ _ body => type_mentions_any names body,
+        Term.lam _ ty body => if type_mentions_any names ty then true else type_mentions_any names body,
+        _ => false,
+    }
+
+/// Expected-carrier hints for a call's arguments, read off the CALLEE's
+/// own declared signature. The signature's own variables are solved
+/// against the arguments that DO reveal a carrier (`sig_arg_bindings`),
+/// and only then handed back to the arguments that do not
+/// (`sig_arg_hints`) -- the source the checker has
+/// (`lang/typecheck/infer.mo` solves a class method's signature against
+/// the call site the same way) and the only one that can answer a
+/// nullary method inside an argument position, e.g. `BEq.beq
+/// Bounded.max_bound gt`: the call's carrier is pinned to `Ordering` by
+/// `gt`, and the sibling that reveals nothing is the one that needs it.
+///
+/// `names` is the wildcard set this signature's own variables are drawn
+/// from -- supplied by the caller, because WHICH names are variables
+/// depends on where the signature came from and not on its shape at all:
+/// a class method's from the class declaration (`class_param_names`), a
+/// def's from its own `Forall` binders (`collect_forall_names`). See
+/// `class_param_names` for the measured failure that shape-reading caused.
+def sig_hints (names : List Identifier) (sig : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (args : List Term) : List (Option Term) :=
+    match sig {
+        Option.none => List.empty,
+        Option.some typ =>
+            // Only when the signature's own arity matches the call's, so
+            // parameter i of the signature is always argument i of the
+            // call. A constrained def's registered type carries Phase 3's
+            // PREPENDED dict parameters (`Dict_Show_A -> A -> Bool` for
+            // `def f [Show A] (x : A)`), which would shift every hint one
+            // position left and hand an argument the parameter type of
+            // the one after it. Fewer written arguments than declared
+            // parameters is the same hazard in reverse, so the guard is
+            // exact equality, not a bound.
+            if I64.beq (pi_arity typ) (arg_count args) then
+                let each := infer_carriers_each env ctor_owners def_types args in
+                let bindings := sig_arg_bindings typ names each List.empty in
+                sig_arg_hints typ names bindings
+            else List.empty,
+    }
+
+/// The number of value parameters a declared signature takes (its own
+/// Pi chain, `Forall` binders skipped -- they bind types, not values).
+#[partial]
+def pi_arity (sig : Term) : I64 :=
+    match term_peel sig {
+        Term.forall _ _ body => pi_arity body,
+        Term.pi _ ret => 1 + pi_arity ret,
+        _ => 0,
+    }
+
+#[partial]
+def arg_count (args : List Term) : I64 :=
+    match args {
+        List.empty => 0,
+        List.cons _ rest => 1 + arg_count rest,
+    }
+
+/// One expected carrier per argument of a call spine, from whichever
+/// source actually has one: the annotated-binding lambda the spine's head
+/// is (`lam_param_hints`), or the callee's own declared signature
+/// (`sig_hints`). Anything else yields no hint at all, which leaves every
+/// existing resolution path exactly as it was.
+#[partial]
+def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (head : Term) (args : List Term) : List (Option Term) :=
+    match head {
+        Term.lam _ _ _ => lam_param_hints head args,
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id =>
+                    match class_method_ref classes id {
+                        Option.some ref =>
+                            // A class method's variables are its class's own
+                            // parameters plus the arguments applied to them
+                            // (`class_method_var_names`); the class-side
+                            // signature is written entirely in those, so its
+                            // `Forall` binder -- when it has one -- names the
+                            // same set the shape walk would find anyway.
+                            match ref {
+                                ClassMethodRef.mk cls method_name =>
+                                    match class_method_declared_type cls method_name {
+                                        Option.none => List.empty,
+                                        Option.some typ => sig_hints (class_method_var_names cls typ) (Option.some typ) env ctor_owners def_types args,
+                                    },
+                            },
+                        Option.none =>
+                            // A def's own variables are its `Forall` binders
+                            // (`elaborate_def` wraps every free type variable
+                            // in one by construction), so a foraller-free
+                            // signature -- a promoted instance method, whose
+                            // domains are the concrete types themselves -- has
+                            // NO variables, and its parameter types are handed
+                            // down as they are. See `class_method_var_names`
+                            // for the measured failure shape-reading caused.
+                            match lookup_def_type def_types id {
+                                Option.some typ => sig_hints (collect_forall_names typ) (Option.some typ) env ctor_owners def_types args,
+                                Option.none => List.empty,
+                            },
+                    },
+                DebugName.unnamed => List.empty,
+            },
+        _ => List.empty,
+    }
+
+#[partial]
+def resolve_class_call_terms (classes : List Class) (instances : List Instance) (ctor_owners : List CtorOwner) (def_constraints : List DefConstraintEntry) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (env : List LocalTypeBinding) (dict_env : List DictBinding) (def_carrier : Option Term) (hints : List (Option Term)) (args : List Term) : List Term :=
+    match args {
+        List.empty => List.empty,
+        List.cons a rest =>
+            // A shorter (or absent) hint list is not an error: it means
+            // the spine's head had nothing to say about the remaining
+            // arguments (`lam_param_hints`), so they resolve exactly as
+            // they did before this channel existed.
+            match hints {
+                List.cons h hs =>
+                    List.cons (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier h a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hs rest),
+                List.empty =>
+                    List.cons (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none a) (resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier List.empty rest),
+            },
     }
 
 #[partial]
@@ -3899,7 +4785,7 @@ def resolve_class_call_case (classes : List Class) (instances : List Instance) (
 /// resolved via ordinary recursion, per this pass's own "leave
 /// unresolved rather than guess" style, matching `resolve_infix_term`).
 #[partial]
-def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) : Term :=
+def resolve_class_method_call (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (def_types : HashMap String Term) (cls : Class) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (orig_args : List Term) (def_carrier : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (expected : Option Term) : Term :=
     let cls_name := class_own_name cls in
     match lookup_dict_binding dict_env cls_name {
         Option.some dict_id => build_dict_field_projection cls dict_id method_name resolved_args,
@@ -3909,7 +4795,16 @@ def resolve_class_method_call (classes : List Class) (instances : List Instance)
             // threaded unchanged through the whole D4 chain down to
             // `resolve_dict_arg`'s own `extra_carriers` fallback -- see
             // that function's doc comment for why this exists.
-            let extra_carriers := infer_all_carriers_from_args_go env ctor_owners def_types resolved_args in
+            //
+            // The call's OWN expected carrier (`expected`, the annotated
+            // binding this call is the value of) is APPENDED, not
+            // prepended: every candidate the arguments already revealed is
+            // tried first, so a call that resolved before this channel
+            // existed resolves to exactly the same instance it did. The
+            // hint is only consulted where the args revealed nothing at
+            // all -- `Map.empty`'s nullary shape, `Bounded.max_bound` --
+            // which is the family that could never resolve.
+            let extra_carriers := List.append (infer_all_carriers_from_args_go env ctor_owners def_types resolved_args) (carrier_hint_list expected) in
             resolve_class_method_call_d4 classes instances dict_env def_types cls_name method_name resolved_args orig_head orig_args def_carrier env ctor_owners extra_carriers,
     }
 
@@ -3993,7 +4888,13 @@ def resolve_class_method_call_d4_from_args (classes : List Class) (instances : L
     // ever falling back to the class's own default -- `k`'s "String"
     // candidate is tried and correctly rejected (no `instance Map
     // String`), and `acc`'s "BTreeMap" candidate (tried next) succeeds.
-    match find_matching_instance_carrier_any instances cls_name (infer_all_carriers_from_args_go env ctor_owners def_types resolved_args) {
+    // `extra_carriers` is the args-derived candidate list with the call's
+    // own expected carrier (if any) appended -- computed once by
+    // `resolve_class_method_call`, which is also the only reason this
+    // function no longer recomputes it here. Same candidates, same
+    // order: with no expectation in hand this is byte-for-byte the
+    // previous behavior.
+    match find_matching_instance_carrier_any instances cls_name extra_carriers {
         Option.some found =>
             match found {
                 Pair.pair carrier ins => resolve_class_method_call_with_instance classes instances dict_env method_name resolved_args orig_head carrier ins extra_carriers,
@@ -4067,12 +4968,68 @@ def resolve_class_method_call_with_carrier (classes : List Class) (instances : L
 def resolve_class_method_call_with_instance (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins : Instance) (extra_carriers : List Term) : Term :=
     match ins {
         Instance.mk insname ins_cls_name ins_constraints ins_args _ _ _ =>
-            resolve_class_method_call_with_dict_args (instance_module_prefix insname) classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier ins_constraints ins_args extra_carriers,
+            // What the matched instance's own head binds: the carrier the
+            // call resolved with, walked against the instance's declared
+            // args (`List I64` against `(List A)` binds `A := I64`).
+            // `resolve_dict_args` needs it to resolve the instance's own
+            // constraint against the BOUND variable rather than the whole
+            // carrier -- see `carrier_bindings`' own doc comment. The
+            // method's own declared signature is appended for the
+            // instances whose head names no variable at all
+            // (`method_sig_bindings`).
+            let bindings := List.append (carrier_bindings (instance_wildcard_names ins) ins_args carrier) (method_sig_bindings classes ins_cls_name method_name carrier) in
+            resolve_class_method_call_with_dict_args (instance_module_prefix insname) classes instances dict_env ins_cls_name method_name resolved_args orig_head carrier bindings (emitted_dict_constraints ins method_name) ins_args extra_carriers,
+    }
+
+/// The instance constraints whose dictionary parameter the EMITTED
+/// method actually carries -- `qualifying_dict_constraints` applied to
+/// the very body `add_constraint_dict_params_decls` filters, so that the
+/// dict arguments this call site prepends (one per constraint, in
+/// constraint order -- `resolve_dict_args`) line up with the mangled
+/// def's own leading parameters, count and order both.
+///
+/// MEASURED: without this, `std/src/map.mo`'s `instance [BOrd K] Map
+/// BTreeMap` resolved `let m : BTreeMap I64 String := Map.empty` to
+/// `apply_closure1(Map_BTreeMap_empty(), __Dict_BOrd_I64)` -- the
+/// instance HAS a constraint, so the call site prepended a dict, but
+/// `Map.empty`'s body (`BTreeMap.empty`) references no `BOrd.` and so
+/// was emitted with no dict parameter at all. Applying a dict to a
+/// nullary constructor segfaults (the driver died with -1), which is how
+/// this was found. The same mismatch is systematic, not Map-specific:
+/// `instance [BEq K, BEq V] BEq BTreeMap K V`'s own `beq` body is
+/// `BTreeMap.beq a b` -- two constraints, no `BEq.` reference, no dict
+/// parameters emitted.
+///
+/// `promote_methods` copies a method's `term` VERBATIM out of the
+/// instance decl into the promoted `Def` (only the name and the
+/// concatenated constraint list change), and `promote_instance_defs` is
+/// non-destructive -- the original `Decl.instance_d` stays in the list
+/// scope data is built from -- so reading the body back out of the
+/// instance here reads the same term the emission pass scanned, whether
+/// or not an earlier pass rewrote infix operators inside it.
+///
+/// `Option.none` (the instance does not implement this method at all)
+/// keeps the unfiltered list: nothing was promoted in that case
+/// (`build_dict_fields` fails and `promote_instance` returns
+/// `Option.none`), so the mangled name is a dangling global either way --
+/// a loud link-time undefined symbol, not a silent miscompile.
+#[partial]
+def emitted_dict_constraints (ins : Instance) (method_name : Identifier) : List TypeConstraint :=
+    match ins {
+        Instance.mk _ _ ins_constraints _ _ _ defs =>
+            match find_instance_method defs method_name {
+                Option.none => ins_constraints,
+                Option.some d =>
+                    match d {
+                        Def.mk _ _ body own_constraints _ _ =>
+                            qualifying_dict_constraints (List.append ins_constraints own_constraints) body,
+                    },
+            },
     }
 
 #[partial]
-def resolve_class_method_call_with_dict_args (prefix : String) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (ins_constraints : List TypeConstraint) (ins_args : List Term) (extra_carriers : List Term) : Term :=
-    match resolve_dict_args classes instances dict_env carrier extra_carriers ins_constraints {
+def resolve_class_method_call_with_dict_args (prefix : String) (classes : List Class) (instances : List Instance) (dict_env : List DictBinding) (cls_name : NamePath) (method_name : Identifier) (resolved_args : List Term) (orig_head : Term) (carrier : Term) (bindings : List (Pair Identifier Term)) (ins_constraints : List TypeConstraint) (ins_args : List Term) (extra_carriers : List Term) : Term :=
+    match resolve_dict_args classes instances dict_env bindings carrier extra_carriers ins_constraints {
         Option.none => rebuild_call orig_head resolved_args,
         Option.some dict_args =>
             let mangled := mangle_instance_method_name prefix cls_name ins_args method_name in
@@ -4390,7 +5347,9 @@ def resolve_ordinary_constrained_call (classes : List Class) (instances : List I
             match infer_carrier_from_args_go env ctor_owners def_types resolved_args {
                 Option.none => rebuild_call head resolved_args,
                 Option.some carrier =>
-                    match resolve_dict_args classes instances dict_env carrier (infer_all_carriers_from_args_go env ctor_owners def_types resolved_args) constraints {
+                    // No instance head here (an ordinary constrained DEF call), so no
+                    // bindings: `List.empty` keeps the pre-existing whole-carrier order.
+                    match resolve_dict_args classes instances dict_env List.empty carrier (infer_all_carriers_from_args_go env ctor_owners def_types resolved_args) constraints {
                         Option.none => rebuild_call head resolved_args,
                         Option.some dict_args => rebuild_call head (List.append dict_args resolved_args),
                     },

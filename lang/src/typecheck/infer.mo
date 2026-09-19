@@ -10,8 +10,9 @@ use lib::types {
 }
 use lib::scope {
   DictBinding, build_dict_field_projection_checked, build_scope_def,
-  dict_binding_class_of, dict_param_name, find_constructor_in_inductive,
-  find_matching_instance, flatten_call_spine, inductive_has_constructor, list_append,
+  carrier_bindings, dict_binding_class_of, dict_param_name, find_constructor_in_inductive,
+  find_matching_instance, flatten_call_spine, inductive_has_constructor,
+  instance_wildcard_names, list_append,
   instance_module_prefix, mangle_instance_method_name, mangled_to_identifier,
   rebuild_call,
   resolve_dict_args, scope_data_add_inductive, scope_data_classes,
@@ -131,12 +132,53 @@ def mk_typed (a : Term) (b : Term) : TypedTerm :=
 /// resolution -- heterogeneous/multi-param classes (`Map`, `From`,
 /// `IndexedMonad`) fall through to the abstract-signature fallback below,
 /// same as they do today.
+///
+/// The fallback to the WHOLE `t` applies only when `t` is not a Pi at all
+/// -- a bare expected type with no application to answer, the
+/// `Default.default` shape above. It used to be reachable THROUGH a Pi
+/// chain too (an uninformative domain recursed into the enclosing
+/// expected type), and that is unsound: for `K.k [42]` as a def's whole
+/// body, the Pi domain is the argument's own type and the enclosing
+/// expected type is the DEF'S DECLARED RETURN TYPE, which has nothing to
+/// do with the carrier. MEASURED (probe, 2026-09-19): `def t1 : Bool :=
+/// K.k [42]` with instances at `Bool`/`String`/`List A` dispatched to
+/// `K_Bool_k`, and `def t6 : String := K.k [true]` to `K_String_k` --
+/// the return type winning over the argument, in the one position where
+/// the enclosing expectation is a return type rather than an argument's
+/// unknown. Everywhere else (the call nested as an `if` condition, an
+/// `==` operand, a let-bound value) the domain IS informative and the
+/// argument's own `List I64` wins, which is what makes this a
+/// position- dependent bug and not a missing feature.
+///
+/// So an uninformative domain now searches only the REST OF THE PI CHAIN
+/// (`carrier_from_pi_chain`) and reports `Option.none` at the end of it
+/// rather than reaching the enclosing type. `Option.none` is the honest
+/// answer -- the checker then falls back to the class method's abstract
+/// signature (`type_check_free_var`'s own `err _ =>` arm, which
+/// documented itself as covering exactly the shapes this checker can't
+/// recover) and leaves the call for `lang.scope`'s syntactic pass, which
+/// derives the carrier from the call's ARGUMENTS -- the source that was
+/// right all along here.
 def carrier_from_expected_type (t : Term) : Option Term :=
     match t {
         Term.pi arg_typ ret_typ =>
-            if is_uninformative_carrier arg_typ then carrier_from_expected_type ret_typ else Option.some arg_typ,
+            if is_uninformative_carrier arg_typ then carrier_from_pi_chain ret_typ else Option.some arg_typ,
         Term.hole => Option.none,
         _ => Option.some t,
+    }
+
+/// The rest of a Pi chain after an uninformative domain: the next
+/// informative domain, if any. Sibling of `carrier_from_expected_type`,
+/// which cannot recurse into itself for this -- that recursion is the
+/// enclosing-expected-type leak its own doc comment describes. Never
+/// returns the chain's final codomain: a codomain is a RETURN type, and
+/// a carrier is never a return type.
+#[partial]
+def carrier_from_pi_chain (t : Term) : Option Term :=
+    match t {
+        Term.pi arg_typ ret_typ =>
+            if is_uninformative_carrier arg_typ then carrier_from_pi_chain ret_typ else Option.some arg_typ,
+        _ => Option.none,
     }
 
 /// `is_hole` alone isn't enough: a bare literal checked in pure-infer
@@ -238,6 +280,7 @@ def strip_n_pis (typ : Term) (n : I64) : Term :=
 def resolve_class_method_d4
     (prefix : String) (ins_cls_name : NamePath) (method_name : Identifier)
     (ins_constraints : List TypeConstraint) (ins_args : List Term) (carrier : Term)
+    (bindings : List (Pair Identifier Term))
     (expected_type : Term) (scope : Scope) (locals : LocalScope)
     : Result TypeError TypedTerm :=
     let mangled := mangle_instance_method_name prefix ins_cls_name ins_args method_name in
@@ -302,7 +345,28 @@ def resolve_class_method_d4
                     // method's abstract signature, `type_check_free_var`),
                     // and every codegen path re-resolves this same call
                     // later via the now-fixed `lang.scope` pass regardless.
-                    match resolve_dict_args classes instances dict_env carrier List.empty ins_constraints {
+                    //
+                    // The BINDINGS are not optional, though: what the
+                    // matched instance's own head binds for the call site
+                    // (`List I64` against `(List A)` binds `A := I64`) is
+                    // the only thing that makes a nested constraint
+                    // resolvable. Without it `[Show A]` resolves against
+                    // the WHOLE carrier `List I64`, which matches the very
+                    // instance being expanded -- `Show (List A)` -- so the
+                    // dict argument came back as the instance's own
+                    // dictionary, a self-reference applied to each element.
+                    // MEASURED (probe, 2026-09-19): every class call with a
+                    // list-literal argument that this checker resolved
+                    // (an `if` condition, an `==` operand, a let-bound
+                    // value -- anywhere the enclosing expectation is not a
+                    // return type) compiled to
+                    // `<Cls>_List_A_m(__Dict_<Cls>_List_A, ...)` -- the
+                    // same `lang.scope` codegen pass's own
+                    // `carrier_bindings`/`resolve_dict_arg` pair fixes on
+                    // its side. The bindings themselves are computed at
+                    // the CALL SITE (`resolve_class_method`), which is
+                    // where the matched `Instance` is in hand.
+                    match resolve_dict_args classes instances dict_env bindings carrier List.empty ins_constraints {
                         Option.none => err (TypeError.custom "cannot resolve inner instance dictionary"),
                         Option.some dict_args =>
                             let applied_typ : Term := strip_n_pis inst_sig (List.length dict_args) in
@@ -345,7 +409,9 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
                             match find_matching_instance candidates class_name carrier {
                                 Option.none => err (TypeError.custom "no matching instance found"),
                                 Option.some ins =>
-                                    resolve_class_method_d4 (instance_module_prefix ins.name) ins.cls method_name ins.constraints ins.args carrier expected_type scope locals,
+                                    let bindings : List (Pair Identifier Term) :=
+                                        carrier_bindings (instance_wildcard_names ins) ins.args carrier in
+                                    resolve_class_method_d4 (instance_module_prefix ins.name) ins.cls method_name ins.constraints ins.args carrier bindings expected_type scope locals,
                             },
                     },
             },

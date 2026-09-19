@@ -5932,17 +5932,31 @@ def paren_tuple_end (r : ParseResult String) (acc : List ParseTerm) : ParseResul
     }
 
 /// Optional `: Type` type ascription inside parens (`(List.empty : List
-/// String)`) — parsed and discarded, not attached to the returned term:
-/// this self-hosted `Term` has no `Ann` variant (unlike the Rust
-/// reference's `Term::Ann`, core/src/parser.rs's `ann_parser`), so
-/// there's nowhere to attach it even if kept. Matches the established
-/// "parse for correctness, discard since nothing downstream needs it"
-/// pattern already used by `def_implicit_close` for implicit param
-/// clauses. Real usage — `List.intercalate "," (List.empty : List
-/// String)` in `lang/json.mo` — needs the ascription to disambiguate an
-/// otherwise type-unconstrained polymorphic empty list, but only the
-/// self-hosted parser's own AST loses that information; the Rust
-/// reference retains and uses it during typecheck.
+/// String)`) — DESUGARED, not discarded (`paren_ann_value`). This
+/// self-hosted `Term` has no `Ann` variant (unlike the Rust reference's
+/// `Term::Ann`, core/src/parser.rs's `ann_parser`), so an ascription
+/// that is merely *kept* has nowhere to live; it previously parsed the
+/// type and threw it away, matching `def_implicit_close`'s "parse for
+/// correctness, discard" pattern for implicit param clauses. That is
+/// wrong here, because downstream genuinely needs this type.
+///
+/// Measured cost of the discard (2026-09-19): `std/src/map_tests.mo`
+/// writes `(Map.empty : BTreeMap String I64)`, and with the ascription
+/// dropped the codegen's syntactic class-call pass has no carrier for
+/// `Map.empty` — it falls to `class_default_carrier` and emits the class
+/// DEFAULT instance `Map_HashMap_empty`. The IR showed `%t124 = call i64
+/// @"std.map::Map_HashMap_empty"()` immediately followed by `%t125 =
+/// call i64 @"std.map::BTreeMap.to_list"(i64 %t124)` — a HashMap handed
+/// to `BTreeMap.to_list`, and the driver crashed (exit 139). The same
+/// shape is what `lang/json.mo`'s `(List.empty : List String)` relies on
+/// to disambiguate an unconstrained polymorphic empty list.
+///
+/// So the type is threaded through as a term instead — see
+/// `paren_ann_value` for the desugaring and why it needs no de Bruijn
+/// shift. As in the Rust reference, the ascription is only reached in
+/// EXPRESSION position: a `(name : typ)` written in a TYPE position is
+/// consumed earlier by `type_dep_arrow_tag` (`type_try_dep` runs before
+/// `type_plain`), so this arm cannot corrupt a type expression.
 #[partial]
 def paren_try_ann (input : String) (out : ParseTerm) : ParseResult ParseTerm :=
     match tag ":" input {
@@ -5953,9 +5967,35 @@ def paren_try_ann (input : String) (out : ParseTerm) : ParseResult ParseTerm :=
 #[partial]
 def paren_ann_type (r : ParseResult ParseTerm) (out : ParseTerm) : ParseResult ParseTerm :=
     match r {
-        success rem _ => paren_close (tag ")" (skip_spaces rem)) out,
+        success rem typ => paren_close (tag ")" (skip_spaces rem)) (paren_ann_value typ out),
         fail e => fail e
     }
+
+/// `(e : T)` desugars to `(fn __ann_asc (x : T) => x) e` — the identity
+/// function at `T`, applied to `e`. Chosen because it is exactly the
+/// shape an ANNOTATED BINDING already lowers to (`DoStmt.let_s` in
+/// `lang/parser/lower_parse.mo`: `Term.app (Term.lam name T body)
+/// value`), so every consumer that already reads an expected type off a
+/// binding reads it off an ascription for free: the checker's
+/// `app_arg_expected_type` checks `e` against `T`, and the codegen's
+/// syntactic class-call pass takes the carrier from `lam_param_hints`.
+///
+/// No de Bruijn shift is needed, and this is the one place the identity
+/// trick is cheaper than the binding shape it copies: the bound value
+/// sits OUTSIDE the binder here (`app (lam x T x) e`), whereas a `let`
+/// splices its continuation INSIDE the binder (which is what forces
+/// `lower_parse_do_inner` to shift). Nothing under the lambda refers to
+/// anything but the lambda's own parameter.
+///
+/// The synthesised `lam`/`app`/`var` leave their span unrecorded, like
+/// the other grammar-synthesised nodes (`pt_lam`'s doc comment,
+/// `lang/types.mo`). The name `__ann_asc` needs no hygiene pass: its
+/// binder's scope is the lambda's own body, a bare `var` referring to
+/// that binder and nothing else, and the applied `value` is outside it
+/// -- so no user name can capture it and it can capture no user name.
+#[partial]
+def paren_ann_value (typ : ParseTerm) (value : ParseTerm) : ParseTerm :=
+    pt_app (pt_lam (Identifier.id "__ann_asc") typ (pt_var (NameRef.nid (Identifier.id "__ann_asc")))) value
 
 #[partial]
 def paren_close (r: ParseResult String) (out: ParseTerm) : ParseResult ParseTerm :=
@@ -7349,13 +7389,46 @@ def test_t_parens : Bool :=
 	}
 
 /// Regression test for `paren_try_ann`: a type ascription inside parens
-/// (`(x : List I64)`) — previously unparseable, blocking real corpus
-/// usage like `lang/json.mo`'s `(List.empty : List String)` (needed to
-/// disambiguate an otherwise type-unconstrained polymorphic value).
+/// (`(x : List I64)`) parses on its own — previously unparseable,
+/// blocking real corpus usage like `lang/json.mo`'s `(List.empty : List
+/// String)`.
 #[test]
 def test_t_paren_type_ascription : Bool :=
 	match expression "(x : List I64)" {
 		success rem out => String.beq rem "",
+		fail _ => false
+	}
+
+/// Pins the ASSCRIPTION'S DESUGARING (`paren_ann_value`), which the
+/// `String.beq rem ""` test above cannot see: `(x : List I64)` must
+/// parse to `app (lam __ann_asc (List I64) (var __ann_asc)) x`, not to a
+/// bare `x`. A regression here is silent at parse time and only shows up
+/// much later as a wrong instance (`Map.empty` falling to the class
+/// default — see `paren_try_ann`'s doc comment for the measured IR), so
+/// asserting the shape is the only cheap place to catch it.
+#[test]
+def test_t_paren_type_ascription_desugars : Bool :=
+	match expression "(x : List I64)" {
+		success _ out =>
+			match out.kind {
+				app f a =>
+					match f.kind {
+						// The parameter type is `List I64`, an app, not a
+						// hole or a bare var: the ascription's TYPE is
+						// what the desugaring has to carry.
+						lam _name typ body =>
+							match typ.kind {
+								app _ _ =>
+									match body.kind {
+										var _nref => true,
+										_ => false
+									},
+								_ => false
+							},
+						_ => false
+					},
+				_ => false
+			},
 		fail _ => false
 	}
 

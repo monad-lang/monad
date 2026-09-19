@@ -9,21 +9,23 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 21 entries here are what a full corpus sweep
+/// The 19 entries here are what a full corpus sweep
 /// actually reports, not a guess, and none is a problem with the test
 /// files themselves. In rough order of how much they cost to close:
 ///
-///   * self-hosted checker gaps -- type-variable instantiation, named-
-///     call defaults, instance resolution through an applied head
-///     (`Show`/`BEq (List A)`, `Map`) or with no carrier-revealing
-///     argument at all (`Bounded.max_bound`, `Monad.pure`), and the
-///     expected-type channel the parser's discarded ascriptions leave
-///     empty (`combine_test.mo`, `json.mo`) -- 12 files;
-///   * two codegen bugs -- the generic `Add` dict self-recursion and
-///     `BEq (List A)`'s tail dictionary (3 files);
-///   * `#[derive]`, unsupported by the self-hosted parser (1 file);
-///   * `#[derive_cli]`, whose attribute never reaches a macro (1 file);
-///   * `Pred` in value position (1 file);
+///   * self-hosted checker gaps -- instance resolution with no carrier-
+///     revealing argument to infer one from (`Monad.pure`,
+///     `MonadState.modify_get`), the expected-type channel the parser's
+///     discarded ascriptions leave empty (`combine_test.mo`, `json.mo`),
+///     and named-call defaults, which the checker does not apply
+///     (`structs.mo`) -- 5 files;
+///   * codegen bugs the checker used to hide -- the generic `Add` dict
+///     self-recursion, `BEq (List A)`'s tail dictionary, and `Pred` in
+///     value position -- 5 files;
+///   * natives the backend never wired -- `i64_to_u64` and the F64/U16/I8
+///     comparison families (3 files);
+///   * `#[derive]`/`#[derive_cli]`, whose attributes never reach a macro
+///     (3 files);
 ///   * floating point, which does not exist in the backend (2 files);
 ///   * the async runtime, which does not exist either (1 file).
 ///
@@ -56,7 +58,6 @@ pub def gap_paths : List String :=
      "init/src/foldable_tests_fold.mo",
      "std/src/base.mo",
      "std/src/derive_tests.mo",
-     "std/src/list_tests1.mo",
      "std/src/list_tests2.mo",
      "std/src/map_tests.mo",
      "std/src/test_map_full.mo",
@@ -84,12 +85,11 @@ pub def gap_causes : List String :=
      "driver exited -1",
      "driver exited -1",
      "driver exited -1",
-     "no instance found for `Bounded.max_bound`",
-     "no instance found for `Debug.debug`",
-     "no instance found for `Show.show`",
+     "native `f64_eq`",
      "no instance found for `BEq.beq`",
-     "no instance found for `Map.empty`",
-     "no instance found for `Map.empty`",
+     "driver exited -1",
+     "native `i64_to_u64`",
+     "native `i64_to_u64`",
      "does not typecheck",
      "does not typecheck",
      "does not typecheck",
@@ -130,32 +130,53 @@ pub def gap_reasons : List String :=
      // behind it.
      "+ on untyped lambda params gets a generic Add dict -- self-recurses",
      "+ on untyped lambda params gets a generic Add dict -- self-recurses",
-     // Measured 2026-09-19 (P6, after the applied-head match landed):
-     // these six are NOT one bug. `find_matching_instance` now agrees on
-     // all of them -- what fails is downstream of the match, and the
-     // four names below split into two channels:
+     // Measured 2026-09-19 (P6): after the applied-head match AND the
+     // callee-signature instantiation both landed, `find_matching_instance`
+     // agrees on all of these -- what fails is downstream of the match.
      //
-     // * dict-arg bindings: a match binds the instance's own type
-     //   parameters NOWHERE, so the instance's own constraint (`[Show
-     //   A]` on `instance [Show A] Show (List A)`) has no carrier to
-     //   resolve against -- and neither does the carrier, which is the
-     //   bare head `List` (a list literal desugars to
-     //   `FromListLiteral.cons`, whose promoted declared type `A -> List
-     //   A -> List A` reveals `List` and drops the element type).
+     // * dict-arg bindings -- CLOSED for list literals, which is what took
+     //   `std/src/list_tests1.mo` off this list and moved
+     //   `std/src/list_tests2.mo` onto the codegen bug above. That half was
+     //   two bugs: the carrier of a list literal used to be the bare head
+     //   `List` (a list literal desugars to `FromListLiteral.cons`, whose
+     //   promoted declared type is `A -> List A -> List A` with no Forall
+     //   binder at all, so a signature instantiation that only reads
+     //   Forall binders found nothing to bind), and a match bound the
+     //   instance's own type parameters nowhere. The carrier is now the
+     //   instantiated `List I64` and `carrier_bindings` binds the
+     //   instance's `A`, so `[Show A]`/`[BEq A]` resolve to the element
+     //   dictionary (`__Dict_Show_I64` / `__Dict_BEq_I64`, verified in the
+     //   emitted IR).
      // * expected carrier: a call with no carrier-revealing argument at
      //   all (`Map.empty`, `Bounded.max_bound`) never even reaches a
-     //   match. Annotated lets feed the CHECKER's expected type
-     //   (`Enum.from_nat`'s `let f0 : Ordering := ...` in std/src/base.mo
-     //   passes) but the codegen pass is not handed one, and an app
-     //   ARGUMENT gets no expected type from its callee's Pi domain
-     //   (`BEq.beq Bounded.max_bound gt` -- the sibling argument pins the
-     //   callee's `A` to `Ordering`; measured in isolation).
-     "`Bounded.max_bound` is nullary and `class Bounded` declares no default carrier; the enclosing call's own parameter type (`BEq.beq`'s `A`, pinned to `Ordering` by the sibling argument `gt`) is not threaded into it as an expected carrier",
-     "NOT the carrier channel at all -- a macro-DERIVED instance is invisible to this pass. MEASURED via probe: `derive_debug! Point` + `Debug.debug pt` fails identically (`needed in `t_derived``, with no module prefix on the generated def), while the same file with a hand-written `instance Debug Point` passes. Belongs to the `reflect_type_info!`/decl-gen family (P10), not P6",
-     "a list literal's carrier is the bare head `List` (the promoted `FromListLiteral.cons` declares `A -> List A -> List A`), so matching succeeds but the instance's own `[Show A]` dict argument has nothing to resolve against: nothing binds `A` to `I64`",
-     "same as list_tests1 above, one class over: matching succeeds, the `[BEq A]` dict argument has no bound `A`",
-     "`Map.empty` takes no argument, so no carrier is inferred at all, and the annotated binding (`let m : BTreeMap I64 String := Map.empty`) is not handed to it as an expected carrier; even with one, `instance [BOrd K] Map BTreeMap`'s `K` is bound only by the method's own signature (`empty : M K V`), so the `[BOrd K]` dict argument needs signature-vs-carrier bindings too",
-     "same as map_tests above: `Map.empty` in an annotated let, `[BOrd K]` unbound",
+     //   match -- CLOSED for the annotated-let shape (`let m : BTreeMap
+     //   I64 I64 := Map.empty` now resolves; that is what took the
+     //   checker failure off `std/src/map_tests.mo` and
+     //   `std/src/test_map_full.mo`, and off base.mo's `Bounded.max_bound`
+     //   -- all three now stop on a native instead; see their own entries
+     //   below). What still has no channel is a call whose carrier comes
+     //   from neither an argument nor an annotation, which is what
+     //   `Monad.pure`/`MonadState.modify_get` below are left on: the
+     //   enclosing def's own declared return type is consulted for `Monad`
+     //   only, and an app ARGUMENT gets no expected type from its callee's
+     //   Pi domain (`BEq.beq Bounded.max_bound gt` -- the sibling argument
+     //   pins the callee's `A` to `Ordering`; measured in isolation).
+     "NOT the carrier channel at all: `Bounded.max_bound` used to be the reported first error here, and the carrier work moved it, but the file's own gap is the native backend. Measured 2026-09-19: the driver now builds and the compile stops in `validate_no_unwired_natives` on `f64_eq`/`f64_lt`/`u16_eq`/`u16_lt`/`i8_eq`/`i8_lt` (`std/src/number.mo`'s F64/U16/I8 families). Same unwired-native family as `std/src/map_tests.mo` below; P9",
+     "NOT the carrier channel either -- a macro-DERIVED instance is invisible to this pass. MEASURED via probe: `derive_debug! Point` + `Debug.debug pt` fails identically (`needed in `t_derived``, with no module prefix on the generated def), while the same file with a hand-written `instance Debug Point` passes. The reported first error moved from `Debug.debug` to `BEq.beq` (`test_derive_beq_equal`'s `p1 == p2` on the `derive_beq!`-generated instance) when the carrier work landed, which is the same finding one class over: a derived instance is invisible, whichever class is asked first. Belongs to the `reflect_type_info!`/decl-gen family (P10), not P6",
+     // The resolution half of this file is CLOSED (the element type of a
+     // list literal is now instantiated from the arguments: the carrier is
+     // `List I64`, so `carrier_bindings` binds the instance's `A` and the
+     // element dictionary resolves to `__Dict_BEq_I64` -- verified in the
+     // emitted IR). What is left is a CODEGEN bug, the same one
+     // `std/src/sha256_tests.mo` above dies of: `BEq (List A)`'s body
+     // forwards the element dictionary to the comparison of the list
+     // TAILS (`apply_closure2 __Dict_BEq_I64 tail_x tail_y`) instead of
+     // recursing into the instance's own method, so `[1,2,3] == [1,2,3]`
+     // answers false (measured on a two-def repro; the empty-vs-empty case
+     // never reaches the tail, which is why it still answers true). P8.
+     "BEq (List A) applies the element dict to the tail -- wrong answer, then a dead driver",
+     "CARRIER HALF CLOSED, file still gapped on the native backend. `Map.empty`'s `no instance found` is gone: the applied-carrier + signature-instantiation work resolves it (verified on `std/src/list_tests1.mo`, which came off this list, and by the failure moving off the checker entirely). What the compile reaches now is `validate_no_unwired_natives` on `i64_to_u64` (`std/src/number.mo`'s `I64.to_u64`, reached from the file's own `U64` conversions). Same family as `std/src/base.mo` above; P9",
+     "Same as map_tests above: the checker failure is CLOSED and what stops the compile now is the unwired `i64_to_u64` native. P9",
      // NOT the same mechanism, and this file is the counter-example
      // worth keeping: the instantiation work does not move it either
      // way. `all_i64`'s `IO.pure (List.empty : List I64)` loses its
