@@ -34,11 +34,18 @@
 # error counts are held fixed.
 set -euo pipefail
 
-# The 10 files the self-hosted runner cannot build a working driver for
+# The 5 files the self-hosted runner cannot build a working driver for
 # today. Each is a PRE-EXISTING backend bug -- none is a problem with the
 # test file or with the runner -- and each stays covered by the Rust
 # runner at the bottom of this script, so excluding it here costs no
-# coverage. Five groups:
+# coverage. Four groups:
+#
+# This list was 10 entries when P10 landed. Five of the ten had stopped
+# being true, and were re-measured file by file on 2026-09-19: each flip
+# is recorded at the group it left. Removing an entry whose file now
+# PASSES is as load-bearing as removing a stale GAP -- a file left here
+# silently loses its self-hosted coverage, and the Rust runner (a
+# different implementation) is what tests it instead.
 #
 # 1. `llc` rejects the emitted IR with an ill-typed or forward-referenced
 #    `icmp`. Two shapes, both in a user test's own body -- a `match` arm
@@ -66,13 +73,17 @@ set -euo pipefail
 #
 #    Diagnosed with a 20-line IR scan (icmp temps used later in an
 #    `i64` position, with the use/def line numbers): 16 hits in
-#    `position.mo`, 1 in `parser.mo`, 0 in the file that group 5 moved
-#    here -- i.e. the scan reproduces exactly what `llc` reports, so it
-#    is a usable progress oracle for this bug.
+#    `position.mo`, 1 in `parser.mo`, 0 in the file group 5's closed note
+#    is about -- i.e. the scan reproduces exactly what `llc` reports, so
+#    it is a usable progress oracle for this bug.
 #        lang/src/parser/position.mo
 #
-# 2. Still no working driver, but no longer one bug -- three of this
-#    group's four bugs are now closed:
+# 2. Driver dies by signal, for a cause other than the dict doubling --
+#    and nothing else is left of this group. Two of its four bugs closed
+#    earlier (`BEq_List_A_beq`'s dictionary doubling, a checker D4
+#    rewrite the codegen class-call pass re-applied; and a lifted
+#    lambda's unboxed `ret`), and the rest closed with P8/P10, measured
+#    again on 2026-09-19:
 #
 #      * the `BEq_List_A_beq` dictionary doubling that used to be the
 #        whole of this group is FIXED (the checker's own D4 rewrite is no
@@ -81,7 +92,10 @@ set -euo pipefail
 #        this list entirely (17/17 and 5/5 self-hosted) and turned three
 #        files from a dead driver into real, non-crashing test FAILURES:
 #        `lang/src/core_eval.mo` 15/17, `lang/src/typecheck/meta_eval.mo`
-#        2/4, `lang/src/tests/core_eval_lang_tests.mo` 6/7.
+#        2/4, `lang/src/tests/core_eval_lang_tests.mo` 6/7. Those three
+#        are GREEN now -- 17/17, 4/4, 7/7 -- so they left this list too,
+#        and the sweep runs their tests through the shipped runner
+#        instead of the Rust one.
 #
 #      * `llc` used to reject the emitted IR ("'%tN' defined with type
 #        'i1' but expected 'i64'"), because a LIFTED LAMBDA whose body is
@@ -95,18 +109,14 @@ set -euo pipefail
 #        a def body does, which took `std/src/list.mo` off this list
 #        entirely (13/13 self-hosted).
 #
-#    What remains:
+#      * `examples/iteration_advanced.mo` was the third file on this
+#        group's signal list; it is 6/6 self-hosted now and has left it.
 #
-#      * driver dies by signal, for a cause other than the dict doubling
-#        -- the emitted `BEq_List_A_beq` calls are arity-3 and correct
-#        now, and two of the three contain no `BEq_List_A_beq` call at
-#        all (measured after the fix, same signal before and after):
+#    What remains -- the same signal, still unexplained, and the emitted
+#    `BEq_List_A_beq` calls are arity-3 and correct (measured after the
+#    fix, same signal before and after):
 #        std/src/list_tests3a.mo
 #        std/src/array.mo
-#        examples/iteration_advanced.mo
-#
-#      * the three real test failures named above (each is its own bug;
-#        they keep this list until their own file is green).
 #
 # 3. Unbounded allocation -- OOM-killed at ~30 GB RSS, no progress in 10
 #    minutes under a 4 GB cap, while its 41 tests pass in milliseconds on
@@ -126,33 +136,26 @@ set -euo pipefail
 #    fixed; its 288 tests remain covered by the Rust runner below.
 #        lang/src/parser.mo
 #
-# 5. `llc` rejects the emitted IR ("use of undefined value
-#    '@parse_democommand'"): the bare `derive_cli!` decl-macro's own
-#    generated defs never reach codegen at all. The driver's IR holds
-#    five `call i64 @parse_democommand(...)` and NO definition of it
-#    under any name -- so this is not a qualification or mangling
-#    mismatch but an absence, the same finding `cli/src/test_gaps.mo`
-#    records for the `#[derive_cli]`/`#[derive]` family (P10). It used to
-#    be recorded under group 1: `llc` hit an ill-typed `icmp` earlier in
-#    the module and reported that first, and the lifted-lambda fix
-#    removed it, exposing this. Coverage is unchanged either way -- the
-#    Rust runner below still runs all five of the file's tests.
-#        cli/src/tests/cli_derive_self_hosted_tests.mo
+# Group 5 (CLOSED, entry removed). `llc` used to reject the emitted IR
+#    with "use of undefined value '@parse_democommand'": the bare
+#    `derive_cli!` decl-macro's own generated defs never reached codegen
+#    at all -- the driver's IR held five `call i64 @parse_democommand(...)`
+#    and NO definition of it under any name, an absence rather than a
+#    mangling mismatch, which is the same finding `cli/src/test_gaps.mo`
+#    recorded for the `#[derive_cli]`/`#[derive]` family. The bridge that
+#    closed that family (P10, 707bbd7) closes this one: re-measured, the
+#    file is 5/5 self-hosted, so it has left `host_only` and the sweep
+#    now runs its tests through the shipped runner.
 #
 # ONE list, used by both the sweep and the Rust fallback -- they were two
 # hand-maintained copies of the same paths, which is one edit away
 # from a file that runs in neither.
 host_only=(
   lang/src/parser/position.mo
-  cli/src/tests/cli_derive_self_hosted_tests.mo
   std/src/list_tests3a.mo
   std/src/array.mo
-  examples/iteration_advanced.mo
   lang/src/toml.mo
   lang/src/parser.mo
-  lang/src/core_eval.mo
-  lang/src/typecheck/meta_eval.mo
-  lang/src/tests/core_eval_lang_tests.mo
 )
 
 # The files the self-hosted runner reports as GAPs (cli/src/test_gaps.mo).
@@ -229,6 +232,13 @@ done < <(find init std examples lang cli llvm runtime motes slow_tests -name '*.
 # comment on `gap_files` above records what closed them -- all three now
 # report 0 errors (`cli/src/tests/cli_derive_tests.mo` was 7,
 # `examples/derive.mo` and `std/src/derive_tests.mo` 1 each).
+# `std/src/derive_tests.mo`'s own entry survived that commit even though
+# by then the file reported 0 errors, and is removed here, in lockstep
+# with the flip: an entry left behind for a file that has become clean is
+# exactly what would excuse a NEW failure in it, since this list is
+# matched by path first, count second. Measured before removing: `monad
+# check std/src/derive_tests.mo` -> 0 error(s), and the corpus-wide check
+# log holds no `FAIL` line for it.
 #
 # Excluding by path alone would hide a NEW check failure in any of them,
 # so each carries its measured error COUNT: a file whose count changes
@@ -239,7 +249,6 @@ check_gap_files=(
   examples/structs.mo:1
   lang/src/json.mo:3
   std/src/concurrent/combine_test.mo:1
-  std/src/derive_tests.mo:1
 )
 
 check_targets=()
