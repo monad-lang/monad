@@ -1,0 +1,35 @@
+# Proofs and checker self-verification.
+#
+# Two jobs, deliberately kept apart by directory:
+#
+#   src/*.mo           MATHEMATICAL proofs -- ordinary `#[test]`-typed
+#                      theorems about the library (Nat, List, Vec, Path).
+#                      These depend on `init` alone and are cheap to check.
+#   src/checker/*.mo   CHECKER SELF-VERIFICATION -- pins on the type
+#                      checker's own rules. These import the compiler
+#                      itself (`lang`), which is the 179-file closure the
+#                      test sweep spends most of its ~500s on.
+#
+# That split is load-bearing, not cosmetic: a proof-only edit must not
+# pay the compiler closure. It is also why `src/lib.mo` -- the ambient
+# hub every `use lib` in this mote goes through -- must never re-export
+# anything from `src/checker/`. See the doc comment there.
+#
+# `proofs/` is NOT in `devenv.nix`'s `monad-check` directory list (that
+# task is the RUST checker, which has no path types and no level
+# variables). It gates CI through `scripts/check-monad-tests.sh`, which
+# sweeps it with the SELF-HOSTED runner -- the one this project ships.
+
+[mote]
+name = "proofs"
+version = "0.1.0"
+edition = "2026"
+
+[lib]
+path = "src/lib.mo"
+
+[dependencies.init]
+path = "../init"
+
+[dependencies.lang]
+path = "../lang"

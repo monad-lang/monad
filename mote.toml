@@ -17,5 +17,6 @@ members = [
   "runtime",
   "slow_tests",
   "bench",
+  "proofs",
   "motes/*",
 ]

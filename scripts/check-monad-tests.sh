@@ -337,7 +337,7 @@ test -x "$out/monad"
 self_hosted_targets=()
 while IFS= read -r f; do
   self_hosted_targets+=("$f")
-done < <(find init std examples lang cli llvm runtime motes slow_tests bench -name '*.mo' | sort)
+done < <(find init std examples lang cli llvm runtime motes slow_tests bench proofs -name '*.mo' | sort)
 
 self_hosted_rc=0
 "$out/monad" test "${self_hosted_targets[@]}" || self_hosted_rc=$?
@@ -351,7 +351,8 @@ if [ "$self_hosted_rc" -ne 0 ]; then
 fi
 
 # The self-hosted `check` over the SAME corpus as the sweep above -- the
-# two `find` lists agree exactly as of Phase 13, `bench` included in both.
+# two `find` lists agree exactly as of Phase 13, `bench` and `proofs`
+# included in both.
 # The sweep proves each file's tests RUN, this proves each file TYPECHECKS
 # under the checker the shipped compiler actually uses. The pre-commit
 # hook's `monad check` is the RUST host -- a different implementation --
@@ -427,7 +428,7 @@ fi
 check_targets=()
 while IFS= read -r f; do
   check_targets+=("$f")
-done < <(find init std examples lang cli llvm runtime motes slow_tests bench -name '*.mo' | sort)
+done < <(find init std examples lang cli llvm runtime motes slow_tests bench proofs -name '*.mo' | sort)
 
 check_log="$out/check.log"
 check_rc=0
