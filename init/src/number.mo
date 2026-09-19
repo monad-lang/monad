@@ -578,6 +578,26 @@ pub def F64.gt (a b : F64) : Bool
 #[native f64_to_string]
 pub def F64.to_string (a : F64) : String
 
+/// Text -> the double's own bit pattern: the decimal parser this backend
+/// needs to lower a FLOAT LITERAL, since `Literal.flt` carries a
+/// literal's source text rather than a value (`lang/types.mo`: there is
+/// no native bridge from a decimal string to a float bit pattern on the
+/// self-hosted side, which is why the literal keeps its text at all).
+/// `lang/codegen/emit.mo`'s `compile_lit_ir` calls this to turn `5.0`
+/// into the constant it emits, so the route is the ordinary one:
+/// a `#[native]` def, wired like the rest of this family.
+///
+/// `I64`, not `F64`, because the result IS the bit pattern and an `F64`
+/// is nothing else here -- a codegen caller wants it as the integer it
+/// has to emit, with no further conversion in between. The C side is
+/// `strtod` (`runtime/src/runtime.c`) and the Rust host's equivalent is
+/// `f64::from_str` (`core/src/core_native.rs`), which agree on every
+/// spelling the number parser can produce; text that parses to nothing
+/// gives 0.0 rather than failing, so a malformed literal is a wrong
+/// constant instead of a compiler crash.
+#[native f64_of_string]
+pub def F64.bits_of_string (text : String) : I64
+
 instance Add F64 {
 	def add (a b : F64) : F64 := F64.add a b
 }

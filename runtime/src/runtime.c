@@ -889,6 +889,142 @@ char* monad_u64_to_string(int64_t n) {
     return out;
 }
 
+/* ─── F64 ────────────────────────────────────────────────────────────
+   `init/number.mo`'s `F64` family: `#[native f64_add]`/`f64_sub`/
+   `f64_mul`/`f64_div`/`f64_eq`/`f64_lt`/`f64_gt`, plus `f64_to_string`
+   and `f64_of_string` below.
+
+   An F64 value here is its IEEE-754 double BIT PATTERN held in the same
+   uniform unboxed i64 payload every other number uses: this backend's
+   value flow has no float in it at all, which is why every operation
+   below is memcpy-in / compute / memcpy-out rather than a real float
+   type. `Literal.flt`'s own doc comment (`lang/types.mo`) describes the
+   same choice from the source end, and `lang/codegen/emit.mo`'s
+   `compile_lit_ir` lowers a float literal to one of these bit patterns
+   as a plain i64 constant.
+
+   The SEMANTICS mirror `core/src/core_native.rs`'s
+   `float_binop`/`float_cmp`/`float_to_string` exactly, because that is
+   what the Rust runner and every `#[test]` in the optics files were
+   written against:
+
+   - the four arithmetic ops are plain C double arithmetic -- Rust's f64
+     IS the same hardware double, so these agree bit for bit,
+     including the rounding of a result that lands between two doubles;
+   - `eq`/`lt`/`gt` are C's `==`/`<`/`>`, which match Rust's operators in
+     the NaN cases too (all three are false for a NaN operand under
+     both languages, which is what makes `x == x` false rather than
+     true);
+   - `to_string` is the shortest decimal that round-trips, in plain
+     positional notation -- see its own comment below.
+
+   Declared `int64_t`-in/`char*`-out exactly like the to_string family
+   above: the C signature says what the function really is, while the
+   emitted IR's `declare`/call convention is the uniform i64. */
+static double monad_f64_unbits(int64_t bits) {
+    double d;
+    memcpy(&d, &bits, sizeof d);
+    return d;
+}
+static int64_t monad_f64_bits(double d) {
+    int64_t bits;
+    memcpy(&bits, &d, sizeof bits);
+    return bits;
+}
+int64_t monad_f64_add(int64_t a, int64_t b) { return monad_f64_bits(monad_f64_unbits(a) + monad_f64_unbits(b)); }
+int64_t monad_f64_sub(int64_t a, int64_t b) { return monad_f64_bits(monad_f64_unbits(a) - monad_f64_unbits(b)); }
+int64_t monad_f64_mul(int64_t a, int64_t b) { return monad_f64_bits(monad_f64_unbits(a) * monad_f64_unbits(b)); }
+int64_t monad_f64_div(int64_t a, int64_t b) { return monad_f64_bits(monad_f64_unbits(a) / monad_f64_unbits(b)); }
+int64_t monad_f64_eq(int64_t a, int64_t b) { return monad_f64_unbits(a) == monad_f64_unbits(b) ? 1 : 0; }
+int64_t monad_f64_lt(int64_t a, int64_t b) { return monad_f64_unbits(a) < monad_f64_unbits(b) ? 1 : 0; }
+int64_t monad_f64_gt(int64_t a, int64_t b) { return monad_f64_unbits(a) > monad_f64_unbits(b) ? 1 : 0; }
+
+/* The decimal -> double conversion. `Literal.flt` carries the literal's
+   SOURCE TEXT, not a value (`lang/types.mo`: self-hosted Monad has no
+   native bridge to parse a decimal into a float bit pattern), so the
+   compiler needs exactly this to lower a float literal -- and it reaches
+   it the ordinary way, as a `#[native f64_of_string]` call from
+   `lang/codegen/emit.mo`'s `compile_lit_ir`, rather than by growing an
+   IEEE-754 decimal parser inside the compiler. `strtod` is the same
+   parse the Rust host does with `f64::from_str` for the forms a Monad
+   float literal can take (digits with an optional fraction and exponent;
+   the lexer produces nothing else). A NULL or unparsable string gives
+   0.0 rather than a crash -- a wrong value is a test failure, not a
+   segfault in the compiler. */
+int64_t monad_f64_of_string(char* s) {
+    return monad_f64_bits(s ? strtod(s, NULL) : 0.0);
+}
+
+/* Rust's `f64::to_string` -- what `F64.to_string` means on the host --
+   prints the SHORTEST decimal that round-trips, in plain positional
+   notation, and never in exponent form: "100" for 100.0, "0.1" for 0.1,
+   "100000000000000000000" for 1e20, "0.0000001" for 1e-7. `%g` cannot
+   do that on its own: at its default precision it prints 3.14's
+   neighbours badly, and it switches to exponent form whenever the
+   exponent is outside [1, precision) -- "1e+20" where Rust spells the
+   number out in full.
+
+   So this finds the digit count the same way the Rust formatter's own
+   shortest-round-trip search does -- the first `%.*e` precision that
+   `strtod`s back to the identical bits -- and then renders those digits
+   positionally around the decimal point `%e` reports. 17 significant
+   digits always suffice for a double, so the search is bounded and
+   short. Rust's spellings for the non-finite values ("NaN", "inf",
+   "-inf") come out of the no-digits exit below. */
+char* monad_f64_to_string(int64_t v) {
+    double d = monad_f64_unbits(v);
+    char mant[64];
+    int prec = 0;
+    for (; prec <= 16; prec++) {
+        snprintf(mant, sizeof(mant), "%.*e", prec, d);
+        if (strtod(mant, NULL) == d) break;
+    }
+    if (prec > 16) snprintf(mant, sizeof(mant), "%.16e", d);
+
+    char digits[24];
+    int ndig = 0;
+    int exp10 = 0;
+    int neg = 0;
+    const char* p = mant;
+    if (*p == '-') { neg = 1; p++; }
+    for (; *p && *p != 'e' && *p != 'E'; p++) {
+        if (*p >= '0' && *p <= '9') { if (ndig < 23) digits[ndig++] = *p; }
+    }
+    if (*p == 'e' || *p == 'E') exp10 = (int)strtol(p + 1, NULL, 10);
+
+    char out[400];
+    int n = 0;
+    /* The sign goes first, for every finite value and for an infinity --
+       `-0` and `-inf` are both real Rust spellings. A NaN is the one
+       value that prints without one (`d == d` is false exactly there),
+       which is why this is a guard rather than a plain `if (neg)`. */
+    if (neg && d == d) out[n++] = '-';
+    if (ndig == 0) {
+        /* No digits at all from `%e`: a NaN or an infinity, the only
+           values that produce none. Same spelling as the Rust host's
+           Display, which is what the two runners have to agree on. */
+        const char* word = (d != d) ? "NaN" : "inf";
+        while (*word && n < 399) out[n++] = *word++;
+    } else if (exp10 >= 0) {
+        int before = exp10 + 1;
+        for (int i = 0; i < ndig && n < 399; i++) {
+            if (i == before) out[n++] = '.';
+            out[n++] = digits[i];
+        }
+        for (int i = ndig; i < before && n < 399; i++) out[n++] = '0';
+    } else {
+        out[n++] = '0';
+        out[n++] = '.';
+        for (int i = 0; i < -exp10 - 1 && n < 399; i++) out[n++] = '0';
+        for (int i = 0; i < ndig && n < 399; i++) out[n++] = digits[i];
+    }
+    out[n] = '\0';
+
+    char* res = (char*)monad_alloc_atomic((size_t)n + 1);
+    if (res) memcpy(res, out, (size_t)n + 1);
+    return res;
+}
+
 /* `#[native "exec_cmd"]` (std/process.mo, `exec_cmd : String -> List
    String -> IO I64`). THE load-bearing native for the bootstrap ladder:
    lang/codegen/link.mo shells out to `llc` and `clang` through this, so

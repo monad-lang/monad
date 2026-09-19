@@ -434,13 +434,17 @@ def fold_native_const (op : NativeOp) (n1 : I64) (n2 : I64) : LLVMValue :=
 /// comment for the bootstrap rung that cost).
 def compile_lit_ir (c : CodegenCtx) (lit_ : Literal) : CompileResult := match lit_ {
     Literal.num n suffix => CompileResult.ok c List.empty (LLVMValue.int_ n) List.empty List.empty List.empty,
-    // No LLVMValue float-constant variant exists yet (codegen has no
-    // float support at all currently — a separate, unstarted piece of
-    // work; see Literal.flt's doc comment in lang/types.mo). Emitting a
-    // zero placeholder keeps this match total without pretending to
-    // support something that isn't there yet; nothing in the corpus
-    // reaches this arm today.
-    Literal.flt text suffix => CompileResult.ok c List.empty (LLVMValue.int_ 0) List.empty List.empty List.empty,
+    // A float literal compiles as the double's BIT PATTERN in an ordinary
+    // i64 constant -- the same shape every other number has here, and the
+    // reason no `LLVMValue` float variant is needed (there is none, and
+    // nothing wants one: the F64 natives in runtime.c read these bits
+    // back with a memcpy). The literal carries its source TEXT, not a
+    // value, so the text has to be parsed into a double at COMPILE time
+    // by `F64.bits_of_string` -- a native call made while this compiler
+    // itself runs, whose result is folded into the emitted constant.
+    // `suffix` is deliberately unused: an `F32` literal has no separate
+    // representation here (F32 is unwired, `lang/codegen/natives.mo`).
+    Literal.flt text suffix => CompileResult.ok c List.empty (LLVMValue.int_ (F64.bits_of_string text)) List.empty List.empty List.empty,
     // `Char` and `String` have structurally IDENTICAL declared shapes
     // (`init/prelude.mo`: both are `of_bytes (List U8)`), and a
     // `Literal.char` carries exactly one codepoint's UTF-8 bytes -- so a

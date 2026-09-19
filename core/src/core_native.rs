@@ -127,6 +127,10 @@ const PURE_NATIVES: &[&str] = &[
   "u64_to_string",
   "f32_to_string",
   "f64_to_string",
+  // The decimal -> bit-pattern conversion the compiler uses to lower a
+  // float literal (`lang/codegen/emit.mo`). Pure: a function of its own
+  // argument text, no IO and no clock, so it is foldable like the rest.
+  "f64_of_string",
   "string_eq",
   "string_concat",
   "string_concat_list",
@@ -258,6 +262,12 @@ pub fn exec_native(
     "u64_to_string" => int_to_string(args, |v| (v as u64).to_string()),
     "i64_to_u64" | "u8_to_u64" => int_to_int(args, NumSuffix::U64),
     "f32_to_string" | "f64_to_string" => float_to_string(args),
+    // `f64_of_string` is the one F64 native with no F32 twin and no
+    // `F64`-typed result: it is the decimal -> bit-pattern conversion the
+    // COMPILER calls to lower a float literal (`lang/codegen/emit.mo`'s
+    // `compile_lit_ir`), so its result is the i64 the emitted constant
+    // has to be. See `float_of_string`'s own note on the parse.
+    "f64_of_string" => float_of_string(args),
     "string_eq" => string_eq(args, natives),
     "string_lt" => string_lt(args, natives),
     "string_gt" => string_gt(args, natives),
@@ -561,6 +571,28 @@ fn float_to_string(args: &[Value]) -> Result<Value, CoreEvalError> {
   }
   let v = extract_float(&args[0])?;
   Ok(Value::Lit(IrLit::Str(v.to_string().into())))
+}
+
+/// The decimal -> double conversion behind `F64.bits_of_string`
+/// (`init/number.mo`), returned as the `I64` bit pattern the compiled
+/// backend stores in an `F64` slot. `f64::from_str` is what the parser
+/// already uses for a float LITERAL (`core/src/term.rs`), so a literal
+/// compiled by this host and one converted by the self-hosted compiler's
+/// `strtod` (`runtime/src/runtime.c`) produce the same double.
+///
+/// Unparsable text yields 0.0 rather than an error, matching the C side:
+/// this exists so a float literal can be lowered at all, and a wrong
+/// constant is a test failure while a hard error here would be a
+/// compiler that cannot compile its own corpus.
+fn float_of_string(args: &[Value]) -> Result<Value, CoreEvalError> {
+  if args.is_empty() {
+    return Err(CoreEvalError::NativeArgError(
+      "float_of_string needs 1 arg".into(),
+    ));
+  }
+  let s = extract_string(&args[0])?;
+  let v: f64 = s.trim().parse().unwrap_or(0.0);
+  Ok(Value::Lit(IrLit::Num(v.to_bits() as i64, NumSuffix::I64)))
 }
 
 fn string_eq(args: &[Value], natives: &NativeTable) -> Result<Value, CoreEvalError> {

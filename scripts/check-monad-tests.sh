@@ -23,8 +23,8 @@
 # them, and none is left untested by both: the SELF-HOSTED runner takes
 # the whole corpus except `host_only` below, and the RUST runner takes
 # `host_only` plus any file the self-hosted runner reports as a GAP
-# (`cli/src/test_gaps.mo` -- unwired f64 natives, the async runtime, and
-# a handful of checker/codegen bugs). A GAP does not fail the sweep; an
+# (`cli/src/test_gaps.mo` -- the async runtime, and a handful of
+# checker/codegen bugs). A GAP does not fail the sweep; an
 # unrecognised compile failure does.
 #
 # Then the same binary CHECKS the same corpus, which is the one gate here
@@ -159,13 +159,13 @@ host_only=(
 # Handed to the Rust runner for the same reason `host_only` is: a gap
 # means those tests do not run self-hosted, and a test that runs nowhere
 # is worse than one that runs slowly. This list is expected to shrink to
-# nothing alongside cli/src/test_gaps.mo itself.
+# nothing alongside cli/src/test_gaps.mo itself -- the f64 family
+# (`init/src/optics_tests.mo`, `examples/optics.mo`, `std/src/base.mo`)
+# left it when P9 wired the backend, so those three now run self-hosted
+# (11/11, 9/9 and 45/45) and are passed to the RUST runner no longer.
 gap_files=(
-  init/src/optics_tests.mo
-  examples/optics.mo
   std/src/concurrent/fiber_test.mo
   init/src/tests.mo
-  std/src/base.mo
   std/src/derive_tests.mo
   std/src/concurrent/combine_test.mo
   lang/src/json.mo

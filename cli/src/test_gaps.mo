@@ -9,7 +9,7 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 13 entries here are what a full corpus sweep actually reports,
+/// The 10 entries here are what a full corpus sweep actually reports,
 /// not a guess, and none is a problem with the test files themselves. In
 /// rough order of how much they cost to close:
 ///
@@ -23,21 +23,29 @@
 ///     1 file;
 ///   * `#[derive]`/`#[derive_cli]`, whose attributes never reach a macro
 ///     (3 files);
-///   * floating point, which does not exist in the backend (2 files);
-///   * the async runtime, which does not exist either (1 file).
+///   * the async runtime, which does not exist (1 file).
 ///
-/// The native-wiring family that used to hold three files is CLOSED as
-/// far as the backend's TABLE is concerned: `i64_to_u64`/`u8_to_u64` are
-/// identity conversions and the U16/I8 comparison families are unmasked
-/// `icmp`, both matching the Rust reference's own semantics, and that is
-/// what took `std/src/map_tests.mo` and `std/src/test_map_full.mo` off
-/// this list (12/12 and 6/6 self-hosted). Closing them exposed a second,
-/// independent bug the missing native had been masking -- a chained
-/// un-annotated `let m2 := Map.insert ... m1` took its carrier from
-/// `Map`'s DEFAULT instead of from `m1`'s own BTreeMap -- now fixed in
-/// `lang/src/scope.mo`'s `let_binder_type`. `std/src/base.mo` keeps a
-/// `native` cause, but it is the f64 family, which is the missing FEATURE
-/// below rather than a missing entry.
+/// FLOATING POINT is CLOSED, and with it the whole native-wiring family:
+/// `i64_to_u64`/`u8_to_u64` are identity conversions and the U16/I8
+/// comparison families are unmasked `icmp`, both matching the Rust
+/// reference's own semantics, and the F64 family (`f64_add`/`sub`/`mul`/
+/// `div`/`eq`/`lt`/`gt`/`to_string`, plus the `f64_of_string` the
+/// compiler itself calls to lower a float literal into its bit pattern)
+/// is wired in `runtime/src/runtime.c` and `lang/src/codegen/natives.mo`.
+/// That is what took `std/src/map_tests.mo`, `std/src/test_map_full.mo`,
+/// `init/src/optics_tests.mo`, `examples/optics.mo` and `std/src/base.mo`
+/// off this list -- three of them on the strength of a native that was
+/// missing, two on the strength of a FEATURE that was.
+///
+/// Two independent bugs surfaced while closing it, both recorded where
+/// they live rather than here: a chained un-annotated `let m2 :=
+/// Map.insert ... m1` took its carrier from `Map`'s DEFAULT instead of
+/// from `m1`'s own `BTreeMap` (`lang/src/scope.mo`'s `let_binder_type`),
+/// and a float literal's text was REBUILT from the parser's `I64`
+/// accumulator, which wraps past `i64::MAX`, so
+/// `100000000000000000000.0` compiled to a different double
+/// (`lang/src/parser/number.mo`'s `numeric_literal_try_dot` now slices
+/// the source text instead).
 ///
 /// The legacy dotted-path family (~105 call sites across 8 files) that
 /// used to head this list is CLOSED: the call sites now import the bare
@@ -70,11 +78,8 @@
 /// Paths, exactly as the runner reports them (repo-relative; identical
 /// whether the user passes a directory or explicit files).
 pub def gap_paths : List String :=
-    ["init/src/optics_tests.mo",
-     "examples/optics.mo",
-     "std/src/concurrent/fiber_test.mo",
+    ["std/src/concurrent/fiber_test.mo",
      "init/src/tests.mo",
-     "std/src/base.mo",
      "std/src/derive_tests.mo",
      "std/src/concurrent/combine_test.mo",
      "lang/src/json.mo",
@@ -93,11 +98,8 @@ pub def gap_paths : List String :=
 /// ("compilation failed", "driver exited -1") because llc's own
 /// message goes to the console, not into a value the runner holds.
 pub def gap_causes : List String :=
-    ["native `f64_mul`",
-     "native `f64_eq`",
-     "native `fork_io`",
+    ["native `fork_io`",
      "driver exited -1",
-     "native `f64_eq`",
      "no instance found for `BEq.beq`",
      "does not typecheck",
      "does not typecheck",
@@ -109,14 +111,9 @@ pub def gap_causes : List String :=
 
 /// Why each gap is open, and what closes it.
 pub def gap_reasons : List String :=
-    // Closed by: float support in the backend. Values are boxed i64
-    // end to end and there is no f64 anywhere in codegen, so this is a
-    // genuine feature, not a wiring gap like the u32/u8 family was.
-    ["no floating-point support in the native backend",
-     "no floating-point support in the native backend",
-     // Closed by: a self-hosted async runtime. Tracked in
-     // plans/bootstrapping/self-hosted-async-runtime.md.
-     "async runtime not self-hostable yet (fork_io/await_fiber unwired)",
+    // Closed by: a self-hosted async runtime. Tracked in
+    // plans/bootstrapping/self-hosted-async-runtime.md.
+    ["async runtime not self-hostable yet (fork_io/await_fiber unwired)",
      // NOT the `Pred` gap any more -- that one is CLOSED (codegen emits a
      // boxed constant for the four builtin sort names, so `get_sort Pred`
      // no longer reaches llc as an undefined `@Pred`), and the failure
@@ -175,15 +172,15 @@ pub def gap_reasons : List String :=
      //   I64 I64 := Map.empty` now resolves; that is what took the
      //   checker failure off `std/src/map_tests.mo` and
      //   `std/src/test_map_full.mo`, and off base.mo's `Bounded.max_bound`
-     //   -- all three now stop on a native instead; see their own entries
-     //   below). What still has no channel is a call whose carrier comes
+     //   -- all three then stopped on a native, and P9 has since wired
+     //   the whole f64 family, so all three are off this list entirely).
+     //   What still has no channel is a call whose carrier comes
      //   from neither an argument nor an annotation, which is what
      //   `Monad.pure`/`MonadState.modify_get` below are left on: the
      //   enclosing def's own declared return type is consulted for `Monad`
      //   only, and an app ARGUMENT gets no expected type from its callee's
      //   Pi domain (`BEq.beq Bounded.max_bound gt` -- the sibling argument
      //   pins the callee's `A` to `Ordering`; measured in isolation).
-     "NOT the carrier channel at all: `Bounded.max_bound` used to be the reported first error here, and the carrier work moved it, but the file's own gap is the native backend. Measured 2026-09-19: the driver now builds and the compile stops in `validate_no_unwired_natives` on `f64_eq`/`f64_lt`. The U16/I8 comparison families and the integer conversions that used to be named alongside them here ARE now wired (`emit_identity_native`, `emit_icmp_native` -- `std/src/number.mo`'s other families typecheck through them, and that wiring is what took `std/src/map_tests.mo` and `std/src/test_map_full.mo` off this registry entirely). What is left on this file is floating point, which is a missing backend FEATURE rather than a missing table entry; P9",
      "NOT the carrier channel either -- a macro-DERIVED instance is invisible to this pass. MEASURED via probe: `derive_debug! Point` + `Debug.debug pt` fails identically (`needed in `t_derived``, with no module prefix on the generated def), while the same file with a hand-written `instance Debug Point` passes. The reported first error moved from `Debug.debug` to `BEq.beq` (`test_derive_beq_equal`'s `p1 == p2` on the `derive_beq!`-generated instance) when the carrier work landed, which is the same finding one class over: a derived instance is invisible, whichever class is asked first. Belongs to the `reflect_type_info!`/decl-gen family (P10), not P6",
      // (list_tests2.mo's own entry was here: the resolution half was
      // CLOSED by the applied-carrier + signature-instantiation work, and
@@ -307,17 +304,28 @@ def test_gap_lists_are_aligned : Bool :=
 
 #[test]
 def test_is_known_gap_matches_listed_file_with_its_cause : Bool :=
-    is_known_gap "examples/optics.mo" "native `f64_eq` (needed by def `number::F64.beq`) is not wired"
+    is_known_gap "std/src/concurrent/fiber_test.mo" "native `fork_io` (needed by def `io::fork_io`) is not wired"
 
 #[test]
 def test_is_known_gap_rejects_unknown_cause_on_listed_path : Bool :=
     // The whole point of matching on cause as well as path: this file
     // is listed, but THIS failure is not the one it is listed for.
-    Bool.not (is_known_gap "examples/optics.mo" "parse error: unexpected token at 12:3")
+    Bool.not (is_known_gap "std/src/concurrent/fiber_test.mo" "parse error: unexpected token at 12:3")
 
 #[test]
 def test_is_known_gap_rejects_unlisted_path : Bool :=
-    Bool.not (is_known_gap "std/src/list.mo" "native `f64_eq` is not wired")
+    Bool.not (is_known_gap "std/src/list.mo" "driver exited -1")
+
+/// The f64 family's three files are off the registry (P9), and this
+/// pins that: if a later change makes one of them fail again, that
+/// failure must be REPORTED -- a stale entry would be exactly the thing
+/// that hides it. `is_known_gap` matches on path first, so a path that
+/// is no longer listed cannot be excused by any cause string at all.
+#[test]
+def test_closed_f64_gaps_are_no_longer_listed : Bool :=
+    Bool.not (is_known_gap "init/src/optics_tests.mo" "native `f64_mul`")
+    && Bool.not (is_known_gap "examples/optics.mo" "native `f64_eq`")
+    && Bool.not (is_known_gap "std/src/base.mo" "native `f64_eq`")
 
 #[test]
 def test_gap_reason_for_listed_path : Bool :=

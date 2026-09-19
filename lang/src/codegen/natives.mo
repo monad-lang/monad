@@ -346,6 +346,33 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "i8_eq" then Option.some (NativeWrapKind.bool_result "monad_i8_eq")
             else if String.beq target "i8_lt" then Option.some (NativeWrapKind.bool_result "monad_i8_lt")
             else if String.beq target "i8_gt" then Option.some (NativeWrapKind.bool_result "monad_i8_gt")
+            // `F64` (`init/number.mo`): the family that used to be named
+            // here only as the reason this backend had no floating point
+            // at all. An F64 value is its IEEE-754 BIT PATTERN in an
+            // ordinary i64 payload, so every one of these is an ordinary
+            // i64-in/i64-out C call and the `NativeWrapKind`s are the
+            // same ones the integer families use -- `passthrough` for the
+            // arithmetic and the two conversions, `bool_result` for the
+            // comparisons (`F64.beq`/`blt`/`bgt` really are `Bool`).
+            // runtime.c's F64 section is where the bit patterns are
+            // unpacked; its own comment records why the semantics there
+            // are C arithmetic rather than something hand-rolled.
+            else if String.beq target "f64_add" then Option.some (NativeWrapKind.passthrough "monad_f64_add")
+            else if String.beq target "f64_sub" then Option.some (NativeWrapKind.passthrough "monad_f64_sub")
+            else if String.beq target "f64_mul" then Option.some (NativeWrapKind.passthrough "monad_f64_mul")
+            else if String.beq target "f64_div" then Option.some (NativeWrapKind.passthrough "monad_f64_div")
+            else if String.beq target "f64_eq" then Option.some (NativeWrapKind.bool_result "monad_f64_eq")
+            else if String.beq target "f64_lt" then Option.some (NativeWrapKind.bool_result "monad_f64_lt")
+            else if String.beq target "f64_gt" then Option.some (NativeWrapKind.bool_result "monad_f64_gt")
+            else if String.beq target "f64_to_string" then Option.some (NativeWrapKind.passthrough "monad_f64_to_string")
+            // `f64_of_string` is the one member of this family with no
+            // `#[native]` def behind it in `init/number.mo`: the COMPILER
+            // calls it, to lower a float literal (`lang/codegen/emit.mo`'s
+            // `compile_lit_ir`), so its call site is a compiler-internal
+            // def rather than a number.mo one. Same convention, same
+            // table -- a native reached from a def the compiler compiles
+            // is an ordinary native.
+            else if String.beq target "f64_of_string" then Option.some (NativeWrapKind.passthrough "monad_f64_of_string")
             // Generated IR: documented stubs (0 / true). `Bench` is a
             // measurement API, never load-bearing for correctness, and
             // the compiled runtime has no clock wired yet -- a typed
@@ -564,9 +591,24 @@ def runtime_declarations : List LLVMDeclaration :=
     // `IO.get_env` (runtime.c) -- same "no implicit declare" requirement
     // as every native above; see its `native_runtime_fn_name` entry.
     let d47 := mk_decl "monad_get_env" (List.cons "i64" List.empty) "i64" in
+    // `init/number.mo`'s F64 family (runtime.c). Same "no implicit
+    // declare" requirement as every native above; `monad_f64_to_string`
+    // and `monad_f64_of_string` are the binary<->text pair, both i64->i64
+    // like `monad_i64_to_string` (d22) -- a `char*` and a bit pattern are
+    // both just i64 here.
+    let d48 := mk_decl "monad_f64_add" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d49 := mk_decl "monad_f64_sub" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d50 := mk_decl "monad_f64_mul" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d51 := mk_decl "monad_f64_div" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d52 := mk_decl "monad_f64_eq" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d53 := mk_decl "monad_f64_lt" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d54 := mk_decl "monad_f64_gt" (List.cons "i64" (List.cons "i64" List.empty)) "i64" in
+    let d55 := mk_decl "monad_f64_to_string" (List.cons "i64" List.empty) "i64" in
+    let d56 := mk_decl "monad_f64_of_string" (List.cons "i64" List.empty) "i64" in
     [d1, d2, d3, d4, d5, d6, d7, d7b, d7c, d7d, d7e, d8, d9, d10, d11, d12, d13,
      d14, d15, d16, d17, d18, d19, d20, d21, d22, d23, d23a, d23b, d24, d24b, d25, d26, d27, d28, d29, d30, d31,
-     d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47]
+     d32, d33, d34, d35, d36, d37, d38, d39, d40, d41, d42, d43, d44, d45, d46, d47,
+     d48, d49, d50, d51, d52, d53, d54, d55, d56]
 
 /// `apply_closureN`'s own declared param list: the closure value itself
 /// plus `n` ordinary args, all i64 (matches every def's own uniform

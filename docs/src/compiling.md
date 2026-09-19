@@ -121,12 +121,12 @@ them. Run mote- and workspace-wide invocations **from the workspace root**:
 dependency resolution is relative to the working directory, so from inside
 `llvm/` the `std` and `init` motes do not resolve.
 
-> **`monad test` reports a failure COUNT through its driver's exit code**, so a
-> single file may hold at most 255 tests; the runner refuses a larger file
-> rather than reporting a number that wrapped. A handful of files still cannot
-> be run self-hosted at all (unwired `f64` natives, the async runtime, two
-> codegen bugs) — those are listed in `cli/src/test_gaps.mo`, reported as `GAP`,
-> and covered by the [bootstrap host](./bootstrap-host.md) in CI instead.
+> **`monad test` reads each driver's failure count from a result file the
+> driver itself writes**, not from its exit code, so a file's test count is no
+> longer capped at 255. A handful of files still cannot be run self-hosted at
+> all (the async runtime, `#[derive]`, and a few checker/codegen bugs) — those
+> are listed in `cli/src/test_gaps.mo`, reported as `GAP`, and covered by the
+> [bootstrap host](./bootstrap-host.md) in CI instead.
 
 > **`monad eval` is not a general interpreter.** Eight natives are wired into it
 > — `i64_add`, `i64_sub`, `i64_mul`, `i64_eq`, `i64_lt`, `string_concat`,

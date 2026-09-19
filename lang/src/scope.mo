@@ -3373,6 +3373,18 @@ def infer_carrier_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwn
 def literal_carrier_type (v : Literal) : Option Term :=
     match v {
         Literal.num _ suffix => Option.some (carrier_var (numsuffix_carrier_name suffix)),
+        // A FLOAT literal's carrier comes from its suffix exactly as an
+        // integer's does. This arm was missing until the F64 backend
+        // landed, and the consequence was the class default: measured on
+        // `let s : F64 := 0.1 + 0.2 in ...` and `(5.0 * 2.0) + 0.5 ==
+        // 10.5`, both of which resolved `Add`/`BEq` to `I64` and
+        // reported "type mismatch: `F64` vs. `I64`". Nothing could have
+        // depended on the old outcome -- a float literal in a class-call
+        // position was an error before this, not a resolution -- and it
+        // only ever changes the carrier of an expression whose own
+        // literal says `F32`/`F64` outright. The suffix is read rather
+        // than assumed `f64`, so an `F32` literal keeps its own answer.
+        Literal.flt _ suffix => Option.some (carrier_var (numsuffix_carrier_name suffix)),
         Literal.str _ => Option.some (carrier_var "String"),
         _ => Option.none,
     }

@@ -322,7 +322,7 @@ def numeric_literal_try_hex_upper (r : ParseResult String) (orig : String) (nega
 // _try_dot / _frac / etc.).
 #[partial]
 def numeric_literal_decimal_digits (input : String) (negative : Bool) : ParseResult ParseTerm :=
-	numeric_literal_digits_done (number input) negative
+	numeric_literal_digits_done (number input) negative input
 
 
 // Hex path -- integers only, no float-dot try (no `0x1.8p3` hex floats).
@@ -349,27 +349,63 @@ def numeric_literal_hex_int_suffix (input : String) (n : I64) (negative : Bool) 
 	}
 
 #[partial]
-def numeric_literal_digits_done (r : ParseResult I64) (negative : Bool) : ParseResult ParseTerm :=
+def numeric_literal_digits_done (r : ParseResult I64) (negative : Bool) (src : String) : ParseResult ParseTerm :=
 	match r {
-		success rem n => numeric_literal_try_dot rem n negative,
+		success rem n => numeric_literal_try_dot rem n negative src,
 		fail e => fail e
 	}
 
+/// The float literal's own text is taken from the SOURCE (`src`), not
+/// rebuilt from the integer accumulator `n` -- which is what this used
+/// to do (`I64.to_string n`), and which is wrong for any integer part
+/// that doesn't fit in an `I64`: `100000000000000000000.0` has no
+/// `I64` value, so `number` WRAPS (`parse_digits` is a plain
+/// `acc * 10 + digit` fold) and the text came out as the wrapped
+/// integer's digits, e.g. `7766279631452241920.0`. The literal's text is
+/// what `Literal.flt` carries and what the backend parses into the
+/// double (`F64.bits_of_string`), so that wrap silently became a
+/// different constant -- measured self-hosted, where the same source
+/// parses to the right double on the Rust host (whose parser keeps the
+/// source text). Slicing the source cannot go wrong the same way: the
+/// text IS the literal, whatever its magnitude.
+///
+/// `int_len` is what `number` consumed = the whole `src` minus what the
+/// digits left behind (`rem`), and the sign is re-attached here because
+/// the `-` was consumed a level up (see `numeric_literal_decimal_digits`
+/// and its hex siblings).
 #[partial]
-def numeric_literal_try_dot (input : String) (n : I64) (negative : Bool) : ParseResult ParseTerm :=
+def numeric_literal_try_dot (input : String) (n : I64) (negative : Bool) (src : String) : ParseResult ParseTerm :=
 	match tag "." input {
-		success rem _ => numeric_literal_frac (take_while_byte is_digit_byte rem) n negative,
+		success rem _ =>
+			let int_len : I64 := I64.sub (String.length src) (String.length input) in
+			let sign_text : String := if negative then "-" else "" in
+			let int_text : String := String.concat sign_text (strip_underscores (String.slice src 0 int_len) 0 "") in
+			numeric_literal_frac (take_while_byte is_digit_byte rem) int_text,
 		fail _ => numeric_literal_int_suffix input n negative
 	}
 
+/// `s` without its `_` digit-group separators, which the number lexer
+/// accepts between digits (`is_digit_or_underscore_byte`) but no decimal
+/// parser does -- `strtod` stops at one. (The integer path has the same
+/// lexer extension and does not handle it: `parse_digits_char` sends
+/// `_` through `char_to_digit`, whose fall-through answers 9. Left alone
+/// here -- the float text is the only thing this file hands to a decimal
+/// parser.)
 #[partial]
-def numeric_literal_frac (r : ParseResult String) (n : I64) (negative : Bool) : ParseResult ParseTerm :=
+def strip_underscores (s : String) (i : I64) (acc : String) : String :=
+	if I64.beq i (String.length s)
+	then acc
+	else
+		let ch : String := String.slice s i 1 in
+		if String.beq "_" ch
+		then strip_underscores s (I64.add i 1) acc
+		else strip_underscores s (I64.add i 1) (String.concat acc ch)
+
+#[partial]
+def numeric_literal_frac (r : ParseResult String) (int_text : String) : ParseResult ParseTerm :=
 	match r {
 		success rem frac =>
-			let sign_text : String := if negative then "-" else "" in
-			let int_text : String := String.concat sign_text (I64.to_string n) in
-			let dot_text : String := String.concat int_text "." in
-			let text : String := String.concat dot_text frac in
+			let text : String := String.concat (String.concat int_text ".") frac in
 			numeric_literal_float_suffix rem text,
 		fail e => fail e
 	}
