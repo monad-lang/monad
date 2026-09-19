@@ -367,3 +367,83 @@ def test_typecheck_exists_declaration : Bool :=
 // def test_typecheck_examples_test_mote : Bool := typecheck_file "examples/test_mote.mo" "test_mote"
 
 // Note: Some examples require module loading (io, init, math, etc.) and are skipped for now.
+
+// ─── W1.1b: `Prop`/`Pred`/`Type`/`Sort N` are real sort forms ─────────
+//
+// Before W1.1b none of these was syntax: each was a `Term.hole`
+// -signatured global, so `Sort 1` was an ordinary APPLICATION and the
+// universe rules below never ran. FOUR of these pins are fail-first
+// against the pre-change tree, and the distinction is measured rather
+// than assumed. The first two were read directly before the change. The
+// third (`Pred`) was measured after it, by a temporary probe that
+// reconstructs the pre-change shape: bare `Sort` still takes the old
+// hole-typed-global path, and `def bad : Sort := Sort` is ACCEPTED, so
+// `def bad : Pred := Pred` was too. The fourth
+// (`test_sort_cumulativity_is_directional`) is fail-first by that same
+// measured mechanism and not by a separate probe -- both its sides were
+// applications of a hole-typed global, and hole accepts hole. The
+// remaining three are pins on behaviour that is correct both before and
+// after, included so that the change cannot overshoot (a rule that
+// rejects everything, or a keyword rule that eats ordinary identifiers,
+// fails them).
+//
+// `Type` is level 1 and `Prop`/`Pred` are level 0 -- the same table the
+// Rust reference uses (`known_sort_keyword_level`, core/src/core_unify.rs),
+// so `Pred`, which is a plain alias for `Prop` there, is pinned as one here
+// too rather than left as the only hole-typed member of the four.
+//
+// Deliberately NOT pinned here: that `Type.foo` still parses as a dotted
+// PATH rather than `Type` followed by `.foo`. A typecheck-level pin for it
+// would be vacuous -- a hijacked parse ALSO fails to typecheck, so
+// `not (typecheck_source ...)` cannot tell the two apart. It is protected
+// structurally instead: `variable_try_path` asks `path_variable` FIRST and
+// only reaches the keyword rule when a dotted path has declined.
+
+#[test]
+def test_sort_1_is_not_its_own_type : Bool :=
+    not (typecheck_source "def bad : Sort 1 := Sort 1")
+
+#[test]
+def test_prop_is_not_its_own_type : Bool :=
+    not (typecheck_source "def bad : Prop := Prop")
+
+#[test]
+def test_pred_is_not_its_own_type : Bool :=
+    not (typecheck_source "def bad : Pred := Pred")
+
+#[test]
+def test_sort_hierarchy_is_inhabited_upward : Bool :=
+    typecheck_source "def u : Sort 2 := Sort 1"
+
+/// Directional subsumption, asserted in both directions in one pin: the
+/// UPWARD case must be accepted (`Sort 0` has type `Sort 1`, and `Sort 1 <=
+/// Sort 3`), and the downward converse must be refused. An equality rule,
+/// or a symmetric `<=`, fails one half or the other.
+#[test]
+def test_sort_cumulativity_is_directional : Bool :=
+    if typecheck_source "def cum : Sort 3 := Sort 0"
+    then not (typecheck_source "def bad : Sort 0 := Sort 1")
+    else false
+
+/// `tag_keyword`'s word boundary: identifiers that merely START with a
+/// sort keyword are still variables. Without the boundary these parse as
+/// `Type`/`Sort`/`Prop` applied to a trailing identifier, which is a parse
+/// error, not a type error.
+#[test]
+def test_keyword_prefix_is_not_hijacked : Bool :=
+    typecheck_source "def TypeAlias : Sort 2 := Sort 1\ndef Sortish : Sort 2 := TypeAlias\ndef Proper : Sort 2 := TypeAlias"
+
+/// The `: Kind` position before a type decl's `{`
+/// (`type_kind_or_brace`/`type_try_kind`/`type_kind_expr`, lang/parser.mo)
+/// is reached through `type_expression`, whose `type_plain` arm bottoms
+/// out in the general `expression` parser -- so it lands in `variable`
+/// and gets the new forms the same way a term position does. This pin is
+/// the REGRESSION GUARD for that route, and it is deliberately not
+/// claimed as fail-first: nothing validates an inductive's declared type
+/// (`lower_parse_inductive` only lowers it into `Inductive.typ`), so the
+/// pre-change reading of `Sort 1` here -- an APPLICATION of the
+/// hole-typed `Sort` global -- was accepted as well. Both spellings are
+/// inert; what this catches is the kind position ceasing to parse.
+#[test]
+def test_type_decl_kind_position_accepts_the_sort_forms : Bool :=
+    typecheck_source "type Foo : Sort 1 { mk }\ntype Bar { mk2 }"

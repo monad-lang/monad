@@ -4850,6 +4850,109 @@ def second_decl_span_is (src : String) (rest : List ParseDecl) : Bool :=
 		List.empty => false,
 	}
 
+// ─── Sort forms: `Prop`, `Pred`, `Type`, `Sort N` (W1.1b) ──────────────
+//
+// Before this, none of these were syntax: `Sort`/`Prop`/`Type`/`Pred` were
+// registered as `Term.hole`-signatured free variables (`add_builtin_*`,
+// lang/scope.mo), so `Sort 1` parsed as an ordinary APPLICATION of the
+// global `Sort` to the literal `1`, checked by `type_check_app` --
+// permissive by construction, because the callee's signature is
+// `Term.hole`. That made the Type-in-Type hole W1.0/W1.2 closed
+// UNREACHABLE from source: the same shape built internally as
+// `Term.type_ 1` is rejected, but `def bad : Sort 1 := Sort 1` in text was
+// accepted. Measured fail-first, before this change:
+//   `def bad : Sort 1 := Sort 1`  -> ACCEPTED (must be refused)
+//   `def bad2 : Prop := Prop`     -> ACCEPTED (must be refused)
+//   `def u : Sort 2 := Sort 1`    -> accepted (correct, must stay)
+//
+// The levels mirror the Rust reference's own keyword table exactly
+// (`known_sort_keyword_level`, core/src/core_unify.rs: `"Prop" | "Pred" =>
+// Some(0)`, `"Type" => Some(1)`), so the two compilers cannot disagree
+// about what `Type` denotes even though only the self-hosted one
+// implements the rest of universe polymorphism.
+//
+// `Sort N` requires the numeral; a bare `Sort` -- and `Sort u`, the level
+// variable -- FALLS THROUGH to the ordinary-variable path below and keeps
+// today's behaviour. That is deliberate rather than incomplete: `Sort u`
+// is exactly the form W1.3 needs, and it wants its own arm (a
+// `SortLevel.var` payload `pt_type_` cannot carry) rather than a
+// half-built one here.
+//
+// WHERE the hook sits is load-bearing. These parsers are deliberately NOT
+// entries in `atom_parsers` (whose own comment records that its
+// alternation order is correctness-critical); they are reached from
+// `variable_try_path`'s failure branch, after `path_variable` has already
+// declined. Three things fall out of that:
+//   - `Type.foo`/`Sort.foo` stay dotted PATH references, because
+//     `path_variable` is tried first and succeeds on them, so the keyword
+//     rule never sees them. Rejecting a following `.` in the boundary
+//     check would be the wrong fix: the dotted path is the more specific
+//     reading of the two.
+//   - every position that already calls `variable` gets the new forms,
+//     with NO alternation-order change anywhere. There are three:
+//     `atom_parsers`, `macro_call_decl_arg_alt`, and `struct_update_try`.
+//   - `tag_keyword` (not `tag`) supplies the word boundary, so an ordinary
+//     identifier that merely STARTS with a keyword -- `TypeAlias`,
+//     `Sortish`, `Proper` -- still parses as a variable. It also means
+//     these stay out of `kw_list` (lang/parser/core.mo), which is what
+//     keeps them usable as plain names.
+#[partial]
+def sort_form_parser (input : String) : ParseResult ParseTerm :=
+	alt_fold [sort_form_prop, sort_form_pred, sort_form_type, sort_form_sort] input
+
+#[partial]
+def sort_form_prop (input : String) : ParseResult ParseTerm :=
+	sort_form_prop_kw (tag_keyword "Prop" input)
+
+#[partial]
+def sort_form_prop_kw (r : ParseResult String) : ParseResult ParseTerm :=
+	match r {
+		success rem _ => success rem (pt_type_ 0),
+		fail e => fail e
+	}
+
+/// `Pred` is a plain alias for `Prop` -- level 0, same as the Rust
+/// reference's own table.
+#[partial]
+def sort_form_pred (input : String) : ParseResult ParseTerm :=
+	sort_form_pred_kw (tag_keyword "Pred" input)
+
+#[partial]
+def sort_form_pred_kw (r : ParseResult String) : ParseResult ParseTerm :=
+	match r {
+		success rem _ => success rem (pt_type_ 0),
+		fail e => fail e
+	}
+
+#[partial]
+def sort_form_type (input : String) : ParseResult ParseTerm :=
+	sort_form_type_kw (tag_keyword "Type" input)
+
+#[partial]
+def sort_form_type_kw (r : ParseResult String) : ParseResult ParseTerm :=
+	match r {
+		success rem _ => success rem (pt_type_ 1),
+		fail e => fail e
+	}
+
+#[partial]
+def sort_form_sort (input : String) : ParseResult ParseTerm :=
+	sort_form_sort_kw (tag_keyword "Sort" input)
+
+#[partial]
+def sort_form_sort_kw (r : ParseResult String) : ParseResult ParseTerm :=
+	match r {
+		success rem _ => sort_form_sort_num (number (skip_spaces rem)),
+		fail e => fail e
+	}
+
+#[partial]
+def sort_form_sort_num (r : ParseResult I64) : ParseResult ParseTerm :=
+	match r {
+		success rem n => success rem (pt_type_ n),
+		fail e => fail e
+	}
+
 #[partial]
 def variable (input: String) : ParseResult ParseTerm :=
     variable_try_qualified (qualified_variable input) input
@@ -4865,6 +4968,20 @@ def variable_try_qualified (r: ParseResult NameRef) (input: String) : ParseResul
 def variable_try_path (r: ParseResult NameRef) (input: String) : ParseResult ParseTerm :=
     match r {
         success rem nref => success rem (pt_var nref),
+		fail _ => variable_try_sort input
+	}
+
+/// The fallback once a dotted path has declined: one of the four sort
+/// forms, else an ordinary identifier (which is what every one of them
+/// was before W1.1b).
+#[partial]
+def variable_try_sort (input : String) : ParseResult ParseTerm :=
+	variable_try_sort_alt (sort_form_parser input) input
+
+#[partial]
+def variable_try_sort_alt (r : ParseResult ParseTerm) (input : String) : ParseResult ParseTerm :=
+	match r {
+		success rem t => success rem t,
         fail _ => variable_got (identifier input)
     }
 
