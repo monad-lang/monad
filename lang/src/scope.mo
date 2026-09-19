@@ -5329,6 +5329,73 @@ def lookup_def_constraints (entries : List DefConstraintEntry) (name : NamePath)
             },
     }
 
+/// Does this already-resolved call's FIRST argument name a dictionary?
+/// A true answer means the call's dictionary arguments are ALREADY in
+/// its argument list, and `resolve_ordinary_constrained_call` must not
+/// supply them a second time.
+///
+/// There are exactly two names a promoted dictionary is ever bound to --
+/// `dict_param_name`'s own `__dict_<Cls>` forwarding parameter (Phase
+/// 3/4's D5) and `mangle_instance_dict_name`'s `__Dict_<Cls>_<args>`
+/// value (D4) -- and the source language can write NEITHER of them, so
+/// a leading argument of that shape can only have been put there by the
+/// compiler. The one producer that reaches this pass is the checker's
+/// own D4 rewrite (`resolve_class_method_d4`, `lang.typecheck.infer`),
+/// which returns `mangled_ref` applied to its resolved dict arguments;
+/// every codegen path then runs `resolve_class_calls_decls` over those
+/// already-rewritten terms. MEASURED: `std/src/list.mo`'s `BEq (List A)`
+/// body -- the checker rewrote its recursive `BEq.beq x_tail y_tail` to
+/// `BEq_List_A_beq __dict_BEq_A x_tail y_tail` (correct: the element
+/// dictionary, two lists the instance is FOR), and this pass then
+/// prepended a SECOND `__dict_BEq_A`, giving the arity-3 def four
+/// arguments and handing the tail comparison the element dictionary --
+/// `driver exited -1` on the probe, where the un-rewritten p64 build at
+/// least answered the empty-list case.
+///
+/// A source-written call to a constrained def never starts with a
+/// dictionary argument -- the dicts are implicit in source and are
+/// exactly what this pass exists to add -- so the check costs that case
+/// nothing.
+///
+/// The name is read AFTER its `module::` qualifier: a D4 dict value is
+/// minted as `lang.types::__Dict_Similar_Identifier` (`with_module_prefix`
+/// in `mangle_instance_dict_name`), so a bare `starts_with "__Dict_"` on
+/// the qualified name misses exactly the values this guard exists for --
+/// MEASURED: the first version of this guard did, and `sha256_tests.mo`'s
+/// `hex_bytes_of_byte 255u8 == [102u8, 102u8]` kept its doubled dictionary.
+#[partial]
+def arg_is_dict (args : List Term) : Bool :=
+    match args {
+        List.empty => false,
+        List.cons a _ =>
+            match term_peel a {
+                Term.var _ dbg =>
+                    match dbg {
+                        DebugName.named id =>
+                            let text := unqualify_minted_name (show_identifier id) in
+                            Bool.or (String.starts_with "__dict_" text) (String.starts_with "__Dict_" text),
+                        DebugName.unnamed => false,
+                    },
+                _ => false,
+            },
+    }
+
+/// The part of a compiler-MINTED name after its `module::` qualifier, or
+/// the whole name when it has none. Mirrors `lang.module`'s own
+/// `unqualify_instance_name` (and `lang.codegen.emit`'s
+/// `unqualify_def_name`); kept here rather than imported because
+/// `lang.module` is a DEPENDENCY of this file, not the other way round.
+#[partial]
+pub def unqualify_minted_name (s : String) : String :=
+    let idx := find_minted_name_sep s 0 (String.length s) in
+    if I64.beq idx (0 - 1) then s else String.slice s (idx + 2) (String.length s - idx - 2)
+
+#[partial]
+def find_minted_name_sep (s : String) (i : I64) (n : I64) : I64 :=
+    if I64.gt (i + 2) n then (0 - 1)
+    else if String.beq (String.slice s i 2) "::" then i
+    else find_minted_name_sep s (i + 1) n
+
 /// Resolves a call to an ORDINARY (non-class-method) global whose own
 /// def carries constraints (registered in `def_constraints`) -- if
 /// found, resolves and prepends the same dict argument(s)
@@ -5336,7 +5403,8 @@ def lookup_def_constraints (entries : List DefConstraintEntry) (name : NamePath)
 /// for, using a carrier inferred from this call's own (already-
 /// resolved) args, checking `dict_env` first (D5 forwarding) same as
 /// any other dict resolution. A def with no registered constraints (the
-/// overwhelmingly common case) or one whose dict args can't be resolved
+/// overwhelmingly common case), one that ALREADY carries its dict
+/// arguments (`arg_is_dict`), or one whose dict args can't be resolved
 /// passes through completely unchanged -- this must never touch an
 /// ordinary, unconstrained call.
 #[partial]
@@ -5344,7 +5412,9 @@ def resolve_ordinary_constrained_call (classes : List Class) (instances : List I
     match lookup_def_constraints def_constraints (NamePath.npath (List.cons id List.empty)) {
         Option.none => rebuild_call head resolved_args,
         Option.some constraints =>
-            match infer_carrier_from_args_go env ctor_owners def_types resolved_args {
+            if arg_is_dict resolved_args
+            then rebuild_call head resolved_args
+            else match infer_carrier_from_args_go env ctor_owners def_types resolved_args {
                 Option.none => rebuild_call head resolved_args,
                 Option.some carrier =>
                     // No instance head here (an ordinary constrained DEF call), so no

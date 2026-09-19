@@ -28,7 +28,7 @@
 # unrecognised compile failure does.
 set -euo pipefail
 
-# The 13 files the self-hosted runner cannot build a working driver for
+# The 11 files the self-hosted runner cannot build a working driver for
 # today. Each is a PRE-EXISTING backend bug -- none is a problem with the
 # test file or with the runner -- and each stays covered by the Rust
 # runner at the bottom of this script, so excluding it here costs no
@@ -42,18 +42,36 @@ set -euo pipefail
 #        lang/src/parser/position.mo
 #        cli/src/tests/cli_derive_self_hosted_tests.mo
 #
-# 2. The driver dies by signal. In the emitted `BEq_List_A_beq` the
-#    recursive tail comparison applies the ELEMENT dictionary to two
-#    lists, dereferencing list cells as scalars.
-#        cli/src/tests/main_tests.mo
+# 2. Still no working driver, but no longer one bug. The
+#    `BEq_List_A_beq` dictionary doubling that used to be the whole of
+#    this group is FIXED (the checker's own D4 rewrite is no longer
+#    re-applied by the codegen class-call pass), which took
+#    `cli/src/tests/main_tests.mo` and `std/src/list_tests3b.mo` off this
+#    list entirely (17/17 and 5/5 self-hosted) and turned three files
+#    from a dead driver into real, non-crashing test FAILURES:
+#    `lang/src/core_eval.mo` 15/17, `lang/src/typecheck/meta_eval.mo`
+#    2/4, `lang/src/tests/core_eval_lang_tests.mo` 6/7. What remains:
+#
+#      * driver dies by signal, for a cause other than the dict doubling
+#        -- the emitted `BEq_List_A_beq` calls are arity-3 and correct
+#        now, and two of the three contain no `BEq_List_A_beq` call at
+#        all (measured after the fix, same signal before and after):
 #        std/src/list_tests3a.mo
-#        std/src/list_tests3b.mo
 #        std/src/array.mo
 #        examples/iteration_advanced.mo
+#
+#      * `llc` rejects the emitted IR ("'%tN' defined with type 'i1' but
+#        expected 'i64'"): a LIFTED LAMBDA whose body is a native
+#        comparison returns a raw `i1` from an `i64` function --
+#        `compile_db_lam_ir` appends `ret val_r` without the boxing
+#        (`materialize_native_bool_arg`) the top-level def path already
+#        applies. Measured in the IR: `lambda_69` = `icmp eq i64 %p1, 9;
+#        ret i64 %t164`, reached from `list::test_find_by_missing`'s
+#        `List.find_by (fn x => x == 9)`.
 #        std/src/list.mo
-#        lang/src/core_eval.mo
-#        lang/src/typecheck/meta_eval.mo
-#        lang/src/tests/core_eval_lang_tests.mo
+#
+#      * the three real test failures listed above (each is its own bug;
+#        they keep this list until their own file is green).
 #
 # 3. Unbounded allocation -- OOM-killed at ~30 GB RSS, no progress in 10
 #    minutes under a 4 GB cap, while its 34 tests pass in milliseconds on
@@ -74,14 +92,12 @@ set -euo pipefail
 #        lang/src/parser.mo
 #
 # ONE list, used by both the sweep and the Rust fallback -- they were two
-# hand-maintained copies of the same 13 paths, which is one edit away
+# hand-maintained copies of the same paths, which is one edit away
 # from a file that runs in neither.
 host_only=(
   lang/src/parser/position.mo
   cli/src/tests/cli_derive_self_hosted_tests.mo
-  cli/src/tests/main_tests.mo
   std/src/list_tests3a.mo
-  std/src/list_tests3b.mo
   std/src/array.mo
   examples/iteration_advanced.mo
   lang/src/toml.mo
@@ -102,12 +118,10 @@ gap_files=(
   examples/optics.mo
   std/src/concurrent/fiber_test.mo
   init/src/tests.mo
-  std/src/sha256_tests.mo
   init/src/foldable_tests.mo
   init/src/foldable_tests_fold.mo
   std/src/base.mo
   std/src/derive_tests.mo
-  std/src/list_tests2.mo
   std/src/map_tests.mo
   std/src/test_map_full.mo
   std/src/concurrent/combine_test.mo

@@ -9,7 +9,7 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 19 entries here are what a full corpus sweep
+/// The 17 entries here are what a full corpus sweep
 /// actually reports, not a guess, and none is a problem with the test
 /// files themselves. In rough order of how much they cost to close:
 ///
@@ -20,8 +20,7 @@
 ///     and named-call defaults, which the checker does not apply
 ///     (`structs.mo`) -- 5 files;
 ///   * codegen bugs the checker used to hide -- the generic `Add` dict
-///     self-recursion, `BEq (List A)`'s tail dictionary, and `Pred` in
-///     value position -- 5 files;
+///     self-recursion and `Pred` in value position -- 3 files;
 ///   * natives the backend never wired -- `i64_to_u64` and the F64/U16/I8
 ///     comparison families (3 files);
 ///   * `#[derive]`/`#[derive_cli]`, whose attributes never reach a macro
@@ -53,12 +52,10 @@ pub def gap_paths : List String :=
      "examples/optics.mo",
      "std/src/concurrent/fiber_test.mo",
      "init/src/tests.mo",
-     "std/src/sha256_tests.mo",
      "init/src/foldable_tests.mo",
      "init/src/foldable_tests_fold.mo",
      "std/src/base.mo",
      "std/src/derive_tests.mo",
-     "std/src/list_tests2.mo",
      "std/src/map_tests.mo",
      "std/src/test_map_full.mo",
      "std/src/concurrent/combine_test.mo",
@@ -84,10 +81,8 @@ pub def gap_causes : List String :=
      "compilation failed",
      "driver exited -1",
      "driver exited -1",
-     "driver exited -1",
      "native `f64_eq`",
      "no instance found for `BEq.beq`",
-     "driver exited -1",
      "native `i64_to_u64`",
      "native `i64_to_u64`",
      "does not typecheck",
@@ -113,13 +108,6 @@ pub def gap_reasons : List String :=
      // which reaches llc as a call to an undefined `@Pred` -- so the
      // driver compiles and the LINK is what fails.
      "builtin sort `Pred` in value position emits an undefined symbol",
-     // Closed by: the BEq_List_A_beq dictionary bug -- the element
-     // dictionary is applied to the list TAIL, so a `List U8`
-     // comparison segfaults. Hashing itself is correct through the
-     // native backend (examples/sha256.mo passes, and the empty-string
-     // digest matches); only the `List U8` equality in the assertions
-     // dies.
-     "BEq (List A) applies the element dict to the tail -- segfaults",
      // Closed by: bidirectional inference pushing an expected type into
      // an unannotated lambda parameter. `acc + x` in `Foldable.foldl (fn
      // acc x => acc + x) 0 xs` compiles to the generic forwarding
@@ -163,18 +151,13 @@ pub def gap_reasons : List String :=
      //   pins the callee's `A` to `Ordering`; measured in isolation).
      "NOT the carrier channel at all: `Bounded.max_bound` used to be the reported first error here, and the carrier work moved it, but the file's own gap is the native backend. Measured 2026-09-19: the driver now builds and the compile stops in `validate_no_unwired_natives` on `f64_eq`/`f64_lt`/`u16_eq`/`u16_lt`/`i8_eq`/`i8_lt` (`std/src/number.mo`'s F64/U16/I8 families). Same unwired-native family as `std/src/map_tests.mo` below; P9",
      "NOT the carrier channel either -- a macro-DERIVED instance is invisible to this pass. MEASURED via probe: `derive_debug! Point` + `Debug.debug pt` fails identically (`needed in `t_derived``, with no module prefix on the generated def), while the same file with a hand-written `instance Debug Point` passes. The reported first error moved from `Debug.debug` to `BEq.beq` (`test_derive_beq_equal`'s `p1 == p2` on the `derive_beq!`-generated instance) when the carrier work landed, which is the same finding one class over: a derived instance is invisible, whichever class is asked first. Belongs to the `reflect_type_info!`/decl-gen family (P10), not P6",
-     // The resolution half of this file is CLOSED (the element type of a
-     // list literal is now instantiated from the arguments: the carrier is
-     // `List I64`, so `carrier_bindings` binds the instance's `A` and the
-     // element dictionary resolves to `__Dict_BEq_I64` -- verified in the
-     // emitted IR). What is left is a CODEGEN bug, the same one
-     // `std/src/sha256_tests.mo` above dies of: `BEq (List A)`'s body
-     // forwards the element dictionary to the comparison of the list
-     // TAILS (`apply_closure2 __Dict_BEq_I64 tail_x tail_y`) instead of
-     // recursing into the instance's own method, so `[1,2,3] == [1,2,3]`
-     // answers false (measured on a two-def repro; the empty-vs-empty case
-     // never reaches the tail, which is why it still answers true). P8.
-     "BEq (List A) applies the element dict to the tail -- wrong answer, then a dead driver",
+     // (list_tests2.mo's own entry was here: the resolution half was
+     // CLOSED by the applied-carrier + signature-instantiation work, and
+     // the codegen half -- `BEq (List A)` forwarding the element dict to
+     // the comparison of the list TAILS -- was closed by P8's D5/D4
+     // override plus the already-dict-args guard. Both halves are now
+     // verified in the emitted IR: the recursive tail comparison is
+     // `BEq_List_A_beq __Dict_BEq_I64 x_tail y_tail`, arity 3.)
      "CARRIER HALF CLOSED, file still gapped on the native backend. `Map.empty`'s `no instance found` is gone: the applied-carrier + signature-instantiation work resolves it (verified on `std/src/list_tests1.mo`, which came off this list, and by the failure moving off the checker entirely). What the compile reaches now is `validate_no_unwired_natives` on `i64_to_u64` (`std/src/number.mo`'s `I64.to_u64`, reached from the file's own `U64` conversions). Same family as `std/src/base.mo` above; P9",
      "Same as map_tests above: the checker failure is CLOSED and what stops the compile now is the unwired `i64_to_u64` native. P9",
      // NOT the same mechanism, and this file is the counter-example

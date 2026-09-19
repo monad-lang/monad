@@ -3,14 +3,16 @@ use lib::types {
   Literal, LocalScope, LocalVar, MatchCase, ModulePath, NamePath, NameRef, NumSuffix,
   Native, Param, Scope, ScopeClassDef, ScopeDef, ScopeError, Similar,
   StructLitField, Term, TypeConstraint, TypeError,
-  app, con, custom, forall, hole, id, id_eq, if_, lam, list_rev_loop,
+  app, con, custom, forall, hole, id, id_eq, id_member, if_, lam, list_rev_loop,
   list_reverse, lit, many, match_, mc, mk, mp, name, named, nid, not_a_type,
   ntv, num, pi, sentinel, show_identifier, show_name_path, str, term_peel, type_,
   unknown_constructor, unknown_type, unknown_var, unnamed, var,
 }
 use lib::scope {
   DictBinding, build_dict_field_projection_checked, build_scope_def,
-  carrier_bindings, dict_binding_class_of, dict_param_name, find_constructor_in_inductive,
+  carrier_bindings, class_method_declared_type, class_method_var_names,
+  class_param_names, dict_binding_class_of, dict_param_name,
+  find_constructor_in_inductive,
   find_matching_instance, flatten_call_spine, inductive_has_constructor,
   instance_wildcard_names, list_append,
   instance_module_prefix, mangle_instance_method_name, mangled_to_identifier,
@@ -391,30 +393,106 @@ def resolve_class_method ({ class_name, name := method_name, .. } : ScopeClassDe
         Option.some cls =>
             match local_dict_for_class class_name locals {
                 Option.some dict_id =>
-                    // `_checked` sibling, not `build_dict_field_projection`
-                    // itself -- this result gets re-typechecked (this
-                    // resolution happens while `elaborate_loaded_modules`'
-                    // rewritten decls are later re-checked by `check_
-                    // module_with_scope`), so it needs the checker's
-                    // by-name free-var convention, not codegen's raw
-                    // de-Bruijn-index-0 one. See both functions' own doc
-                    // comments (`lang/scope.mo`) for the full D5 story.
-                    let term := build_dict_field_projection_checked cls dict_id method_name List.empty in
-                    ok (mk_typed term expected_type),
+                    match dict_forwarding_override class_name cls method_name expected_type scope {
+                        // `_checked` sibling, not `build_dict_field_projection`
+                        // itself -- this result gets re-typechecked (this
+                        // resolution happens while `elaborate_loaded_modules`'
+                        // rewritten decls are later re-checked by `check_
+                        // module_with_scope`), so it needs the checker's
+                        // by-name free-var convention, not codegen's raw
+                        // de-Bruijn-index-0 one. See both functions' own doc
+                        // comments (`lang/scope.mo`) for the full D5 story.
+                        Option.none =>
+                            let term := build_dict_field_projection_checked cls dict_id method_name List.empty in
+                            ok (mk_typed term expected_type),
+                        Option.some carrier =>
+                            resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
+                    },
                 Option.none =>
                     match carrier_from_expected_type expected_type {
                         Option.none => err (TypeError.custom "cannot infer carrier type for class method"),
                         Option.some carrier =>
-                            let candidates := scope_instance_candidates (scope_globals scope) class_name in
-                            match find_matching_instance candidates class_name carrier {
-                                Option.none => err (TypeError.custom "no matching instance found"),
-                                Option.some ins =>
-                                    let bindings : List (Pair Identifier Term) :=
-                                        carrier_bindings (instance_wildcard_names ins) ins.args carrier in
-                                    resolve_class_method_d4 (instance_module_prefix ins.name) ins.cls method_name ins.constraints ins.args carrier bindings expected_type scope locals,
-                            },
+                            resolve_class_method_carrier class_name method_name carrier expected_type scope locals,
                     },
             },
+    }
+
+/// D4 (instance-lookup) resolution of a class method call at an already
+/// known `carrier`. Factored out of `resolve_class_method` so both of its
+/// non-forwarding paths share it verbatim.
+def resolve_class_method_carrier (class_name : NamePath) (method_name : Identifier) (carrier : Term) (expected_type : Term) (scope : Scope) (locals : LocalScope) : Result TypeError TypedTerm :=
+    let candidates := scope_instance_candidates (scope_globals scope) class_name in
+    match find_matching_instance candidates class_name carrier {
+        Option.none => err (TypeError.custom "no matching instance found"),
+        Option.some ins =>
+            let bindings : List (Pair Identifier Term) :=
+                carrier_bindings (instance_wildcard_names ins) ins.args carrier in
+            resolve_class_method_d4 (instance_module_prefix ins.name) ins.cls method_name ins.constraints ins.args carrier bindings expected_type scope locals,
+    }
+
+/// The carrier a call INSIDE a dictionary-carrying scope must be resolved
+/// against instead of forwarding to the enclosing `__dict_<Cls>`, or
+/// `Option.none` when forwarding IS the right answer.
+///
+/// Forwarding is the norm and the whole point of D5: `instance [BEq A]
+/// BEq (List A)`'s body is written at the ELEMENT type, so its own
+/// `x == y` is `BEq.beq x y` with `x : A`, and the instance's `__dict_BEq`
+/// parameter -- the dictionary for `A`, handed in by whoever called
+/// `BEq (List A)` -- is exactly the dictionary that comparison needs.
+///
+/// It is wrong for the same body's OTHER call, the recursive
+/// `BEq.beq x_tail y_tail` (both tails are `List A`, the type the
+/// instance is FOR): that one must reach the instance itself
+/// (`BEq_List_A_beq __dict_BEq x_tail y_tail`). Forwarding instead hands
+/// the ELEMENT dictionary two lists, which dies at the first list cell
+/// read as a scalar -- MEASURED as `driver exited -1` on
+/// `std/src/sha256_tests.mo` and eight more files, and as a wrong answer
+/// (`[1,2,3] == [1,2,3]` is false) in the one place the crash is
+/// survivable.
+///
+/// What tells the two apart is the call's own argument type, and the
+/// checker already has it: `type_check_app_ordinary` checks the callee
+/// against `Term.pi <argument type> <enclosing expectation>`, so
+/// `carrier_from_expected_type` reads it off that domain. A carrier
+/// written in the CLASS'S OWN parameter names (the bare `A` whose
+/// dictionary the local is) means forwarding; a concrete carrier that
+/// MATCHES an instance of this class means the instance wins.
+///
+/// `Option.none` -- forward -- is the answer for everything these two
+/// tests cannot decide (an uninformative domain, a carrier no instance
+/// matches), so every call that forwards correctly today forwards exactly
+/// as it did.
+def dict_forwarding_override (cls_name : NamePath) (cls : Class) (method_name : Identifier) (expected_type : Term) (scope : Scope) : Option Term :=
+    match carrier_from_expected_type expected_type {
+        Option.none => Option.none,
+        Option.some carrier =>
+            if carrier_is_class_param cls method_name carrier
+            then Option.none
+            else match find_matching_instance (scope_instance_candidates (scope_globals scope) cls_name) cls_name carrier {
+                Option.none => Option.none,
+                Option.some _ => Option.some carrier,
+            },
+    }
+
+/// Is `carrier` written AT the class's own dictionary type -- a bare
+/// `Term.var` naming one of the class's own parameters (or of the
+/// parameters its method signature applies, `M K V` for `Map`)? An
+/// APPLIED carrier is not: `List A` inside `instance [BEq A] BEq (List
+/// A)` names a type the instance is for, not the `A` its dictionary is
+/// the dictionary of. See `dict_forwarding_override`.
+def carrier_is_class_param (cls : Class) (method_name : Identifier) (carrier : Term) : Bool :=
+    let names :=
+        match class_method_declared_type cls method_name {
+            Option.some sig => class_method_var_names cls sig,
+            Option.none => class_param_names cls,
+        } in
+    match term_peel carrier {
+        Term.var _ dbg =>
+            match dbg {
+                DebugName.named id => id_member id names,
+                DebugName.unnamed => false,
+            },
+        _ => false,
     }
 
 /// Type check a literal value.
