@@ -328,6 +328,24 @@ def native_runtime_fn_name (attrs : List Attribute) : Option NativeWrapKind :=
             else if String.beq target "u8_to_u32" then Option.some (NativeWrapKind.passthrough "monad_u8_to_u32")
             else if String.beq target "i64_to_u32" then Option.some (NativeWrapKind.passthrough "monad_i64_to_u32")
             else if String.beq target "u32_to_u8" then Option.some (NativeWrapKind.passthrough "monad_u32_to_u8")
+            // `U64` widening (`I64.to_u64`, `std/src/number.mo`) is the
+            // IDENTITY: the reference's `int_to_int(args, U64)` masks to
+            // `v as u64 as i64`, which changes nothing about an i64
+            // payload. It is here rather than in `native_op_table`
+            // because the table's entries are all `NativeOp`s and a
+            // conversion has nothing to fold -- `I64_to_u32` is wired the
+            // same way, by this chain alone.
+            else if String.beq target "i64_to_u64" then Option.some (NativeWrapKind.passthrough "monad_i64_to_u64")
+            else if String.beq target "u8_to_u64" then Option.some (NativeWrapKind.passthrough "monad_u8_to_u64")
+            // The `U16`/`I8` comparisons, same unmasked-i64 family as the
+            // `U8` entries above (the reference sends every width except
+            // `U32` through one generic `int_cmp`).
+            else if String.beq target "u16_eq" then Option.some (NativeWrapKind.bool_result "monad_u16_eq")
+            else if String.beq target "u16_lt" then Option.some (NativeWrapKind.bool_result "monad_u16_lt")
+            else if String.beq target "u16_gt" then Option.some (NativeWrapKind.bool_result "monad_u16_gt")
+            else if String.beq target "i8_eq" then Option.some (NativeWrapKind.bool_result "monad_i8_eq")
+            else if String.beq target "i8_lt" then Option.some (NativeWrapKind.bool_result "monad_i8_lt")
+            else if String.beq target "i8_gt" then Option.some (NativeWrapKind.bool_result "monad_i8_gt")
             // Generated IR: documented stubs (0 / true). `Bench` is a
             // measurement API, never load-bearing for correctness, and
             // the compiled runtime has no clock wired yet -- a typed

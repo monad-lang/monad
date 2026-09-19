@@ -167,8 +167,6 @@ gap_files=(
   init/src/tests.mo
   std/src/base.mo
   std/src/derive_tests.mo
-  std/src/map_tests.mo
-  std/src/test_map_full.mo
   std/src/concurrent/combine_test.mo
   lang/src/json.mo
   cli/src/tests/cli_derive_tests.mo

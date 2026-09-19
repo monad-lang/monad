@@ -82,7 +82,10 @@ def numeric_runtime_functions : List LLVMFunction :=
    emit_u8_sub, emit_u8_mul, emit_u8_div, emit_u64_mod, emit_u64_div,
    emit_u8_add, emit_u8_to_u32, emit_i64_to_u32, emit_u32_to_u8,
    emit_u32_add, emit_u32_sub, emit_u32_and, emit_u32_or, emit_u32_xor,
-   emit_u32_shl, emit_u32_shr, emit_u32_eq]
+   emit_u32_shl, emit_u32_shr, emit_u32_eq,
+   emit_i64_to_u64, emit_u8_to_u64,
+   emit_u16_eq, emit_u16_lt, emit_u16_gt,
+   emit_i8_eq, emit_i8_lt, emit_i8_gt]
 
 // ─── Shared emitter helpers ─────────────────────────────────────────
 
@@ -535,6 +538,40 @@ def emit_string_get_char : LLVMFunction :=
 def emit_u8_to_u32 : LLVMFunction := emit_mask_convert "monad_u8_to_u32" u8_mask
 def emit_i64_to_u32 : LLVMFunction := emit_mask_convert "monad_i64_to_u32" u32_mask
 def emit_u32_to_u8 : LLVMFunction := emit_mask_convert "monad_u32_to_u8" u8_mask
+
+/// A one-argument conversion that changes nothing: return the operand.
+/// The reference sends BOTH `i64_to_u64` and `u8_to_u64` through
+/// `int_to_int(args, NumSuffix::U64)`, and that helper's mask is
+/// `v as u64 as i64` -- a no-op on the uniform i64 payload this backend
+/// carries end to end. So unlike `emit_mask_convert`, there is no mask
+/// to apply, and `u8_to_u64` must NOT narrow first either: `U8` values
+/// are unmasked i64s here too (the reference's own documented known
+/// gap, `core_native.rs`'s `int_cmp` group).
+def emit_identity_native (name : String) : LLVMFunction :=
+  let entry :=
+    LLVMBasicBlock.mk "entry" [ret (parm_ 0)] in
+  { name := name,
+    params := (i64_params 1),
+    ret_ty := i64_,
+    blocks := [entry],
+    ghc_cc := false,
+    dbg_loc := Option.none }
+
+def emit_i64_to_u64 : LLVMFunction := emit_identity_native "monad_i64_to_u64"
+def emit_u8_to_u64 : LLVMFunction := emit_identity_native "monad_u8_to_u64"
+
+/// The `U16`/`I8` comparison families, wired as plain unmasked i64
+/// comparisons for the same reason `emit_u8_eq`/`_lt`/`_gt` are: the
+/// reference routes all three widths through the SAME generic
+/// `int_cmp` group (`a == b` / `a < b` / `a > b` on the raw payload),
+/// with no width mask. `U32` is the only width that masks, and it has
+/// its own masked emitters.
+def emit_u16_eq : LLVMFunction := emit_icmp_native "monad_u16_eq" (icmp_eq (parm_ 0) (parm_ 1))
+def emit_u16_lt : LLVMFunction := emit_icmp_native "monad_u16_lt" (icmp_slt (parm_ 0) (parm_ 1))
+def emit_u16_gt : LLVMFunction := emit_icmp_native "monad_u16_gt" (icmp_sgt (parm_ 0) (parm_ 1))
+def emit_i8_eq : LLVMFunction := emit_icmp_native "monad_i8_eq" (icmp_eq (parm_ 0) (parm_ 1))
+def emit_i8_lt : LLVMFunction := emit_icmp_native "monad_i8_lt" (icmp_slt (parm_ 0) (parm_ 1))
+def emit_i8_gt : LLVMFunction := emit_icmp_native "monad_i8_gt" (icmp_sgt (parm_ 0) (parm_ 1))
 
 
 // ─── Bench stubs ────────────────────────────────────────────────────

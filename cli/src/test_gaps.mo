@@ -9,7 +9,7 @@
 /// counted as `skipped`, which affects no exit code, so those tests ran
 /// nowhere at all and nothing said so.
 ///
-/// The 15 entries here are what a full corpus sweep actually reports,
+/// The 13 entries here are what a full corpus sweep actually reports,
 /// not a guess, and none is a problem with the test files themselves. In
 /// rough order of how much they cost to close:
 ///
@@ -21,12 +21,23 @@
 ///     parser (`structs.mo`) -- 5 files;
 ///   * a codegen bug the checker used to hide (`init/src/tests.mo`) --
 ///     1 file;
-///   * natives the backend never wired -- `i64_to_u64` and the F64/U16/I8
-///     comparison families (3 files);
 ///   * `#[derive]`/`#[derive_cli]`, whose attributes never reach a macro
 ///     (3 files);
 ///   * floating point, which does not exist in the backend (2 files);
 ///   * the async runtime, which does not exist either (1 file).
+///
+/// The native-wiring family that used to hold three files is CLOSED as
+/// far as the backend's TABLE is concerned: `i64_to_u64`/`u8_to_u64` are
+/// identity conversions and the U16/I8 comparison families are unmasked
+/// `icmp`, both matching the Rust reference's own semantics, and that is
+/// what took `std/src/map_tests.mo` and `std/src/test_map_full.mo` off
+/// this list (12/12 and 6/6 self-hosted). Closing them exposed a second,
+/// independent bug the missing native had been masking -- a chained
+/// un-annotated `let m2 := Map.insert ... m1` took its carrier from
+/// `Map`'s DEFAULT instead of from `m1`'s own BTreeMap -- now fixed in
+/// `lang/src/scope.mo`'s `let_binder_type`. `std/src/base.mo` keeps a
+/// `native` cause, but it is the f64 family, which is the missing FEATURE
+/// below rather than a missing entry.
 ///
 /// The legacy dotted-path family (~105 call sites across 8 files) that
 /// used to head this list is CLOSED: the call sites now import the bare
@@ -65,8 +76,6 @@ pub def gap_paths : List String :=
      "init/src/tests.mo",
      "std/src/base.mo",
      "std/src/derive_tests.mo",
-     "std/src/map_tests.mo",
-     "std/src/test_map_full.mo",
      "std/src/concurrent/combine_test.mo",
      "lang/src/json.mo",
      "cli/src/tests/cli_derive_tests.mo",
@@ -90,8 +99,6 @@ pub def gap_causes : List String :=
      "driver exited -1",
      "native `f64_eq`",
      "no instance found for `BEq.beq`",
-     "native `i64_to_u64`",
-     "native `i64_to_u64`",
      "does not typecheck",
      "does not typecheck",
      "does not typecheck",
@@ -176,7 +183,7 @@ pub def gap_reasons : List String :=
      //   only, and an app ARGUMENT gets no expected type from its callee's
      //   Pi domain (`BEq.beq Bounded.max_bound gt` -- the sibling argument
      //   pins the callee's `A` to `Ordering`; measured in isolation).
-     "NOT the carrier channel at all: `Bounded.max_bound` used to be the reported first error here, and the carrier work moved it, but the file's own gap is the native backend. Measured 2026-09-19: the driver now builds and the compile stops in `validate_no_unwired_natives` on `f64_eq`/`f64_lt`/`u16_eq`/`u16_lt`/`i8_eq`/`i8_lt` (`std/src/number.mo`'s F64/U16/I8 families). Same unwired-native family as `std/src/map_tests.mo` below; P9",
+     "NOT the carrier channel at all: `Bounded.max_bound` used to be the reported first error here, and the carrier work moved it, but the file's own gap is the native backend. Measured 2026-09-19: the driver now builds and the compile stops in `validate_no_unwired_natives` on `f64_eq`/`f64_lt`. The U16/I8 comparison families and the integer conversions that used to be named alongside them here ARE now wired (`emit_identity_native`, `emit_icmp_native` -- `std/src/number.mo`'s other families typecheck through them, and that wiring is what took `std/src/map_tests.mo` and `std/src/test_map_full.mo` off this registry entirely). What is left on this file is floating point, which is a missing backend FEATURE rather than a missing table entry; P9",
      "NOT the carrier channel either -- a macro-DERIVED instance is invisible to this pass. MEASURED via probe: `derive_debug! Point` + `Debug.debug pt` fails identically (`needed in `t_derived``, with no module prefix on the generated def), while the same file with a hand-written `instance Debug Point` passes. The reported first error moved from `Debug.debug` to `BEq.beq` (`test_derive_beq_equal`'s `p1 == p2` on the `derive_beq!`-generated instance) when the carrier work landed, which is the same finding one class over: a derived instance is invisible, whichever class is asked first. Belongs to the `reflect_type_info!`/decl-gen family (P10), not P6",
      // (list_tests2.mo's own entry was here: the resolution half was
      // CLOSED by the applied-carrier + signature-instantiation work, and
@@ -185,8 +192,6 @@ pub def gap_reasons : List String :=
      // override plus the already-dict-args guard. Both halves are now
      // verified in the emitted IR: the recursive tail comparison is
      // `BEq_List_A_beq __Dict_BEq_I64 x_tail y_tail`, arity 3.)
-     "CARRIER HALF CLOSED, file still gapped on the native backend. `Map.empty`'s `no instance found` is gone: the applied-carrier + signature-instantiation work resolves it (verified on `std/src/list_tests1.mo`, which came off this list, and by the failure moving off the checker entirely). What the compile reaches now is `validate_no_unwired_natives` on `i64_to_u64` (`std/src/number.mo`'s `I64.to_u64`, reached from the file's own `U64` conversions). Same family as `std/src/base.mo` above; P9",
-     "Same as map_tests above: the checker failure is CLOSED and what stops the compile now is the unwired `i64_to_u64` native. P9",
      // NOT the same mechanism, and this file is the counter-example
      // worth keeping: the instantiation work does not move it either
      // way. `all_i64`'s `IO.pure (List.empty : List I64)` loses its

@@ -4615,8 +4615,18 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
         Term.app _ _ =>
             match flatten_call_spine t {
                 CallSpine.mk head args =>
-                    let hints := call_arg_hints classes def_types env ctor_owners ctor_field_types head args in
+                    let hints := call_arg_hints classes def_types env ctor_owners ctor_field_types head args expect in
                     let resolved_args := resolve_class_call_terms classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier hints args in
+                    // `App(Lam(id, typ, body), value)` -- the parser's
+                    // desugaring of EVERY `let`, annotated or not -- gets its
+                    // binder's type from the resolved VALUE when the source
+                    // wrote none (`let_binder_rewrite`, whose own comment
+                    // carries the measured failure). Only the head of the
+                    // spine is touched, and only for the one-argument shape:
+                    // two or more arguments is a curried `lambda`
+                    // application, whose binders the hint channel already
+                    // answers (`lam_binder_type`'s own `expect`).
+                    let dispatch_head : Term := let_binder_rewrite env ctor_owners def_types ctor_field_types head resolved_args in
                     match head {
                         Term.var _ dbg =>
                             match dbg {
@@ -4631,7 +4641,7 @@ def resolve_class_call_term_go (classes : List Class) (instances : List Instance
                                     },
                                 DebugName.unnamed => rebuild_call head resolved_args,
                             },
-                        _ => rebuild_call (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none head) resolved_args,
+                        _ => rebuild_call (resolve_class_call_term_go classes instances ctor_owners def_constraints def_types ctor_field_types env dict_env def_carrier Option.none dispatch_head) resolved_args,
                     },
             },
         // A NULLARY class method reference (e.g. `FromListLiteral.empty`,
@@ -4743,6 +4753,75 @@ def lam_binder_type (written : Term) (expect : Option Term) : Term :=
                     },
                 Option.none => written,
             },
+    }
+
+/// The type to bind a `let`'s OWN binder at when the source wrote none.
+///
+/// `let x := e in body` desugars to `Term.app (Term.lam x _ body) e` --
+/// `try_compile_let_beta_db`'s own comment describes that shape -- so the
+/// un-annotated spelling reaches the lambda arm with the parser's
+/// `Term.type_ 1` placeholder and binds the placeholder into the body's
+/// own `env`. Every class call in that body which reads `x`'s carrier
+/// (`infer_carrier_type`'s `Term.var` arm) then finds nothing usable and
+/// falls back to the class's DEFAULT carrier -- silently, since the
+/// default is a legal pick for the class, just not for this value.
+///
+/// MEASURED (2026-09-19) on `std/src/map_tests.mo`'s
+/// `test_insert_avl_drop_repro`: `let m1 : BTreeMap String I64 :=
+/// Map.insert "d" 4 Map.empty in let m2 := Map.insert "c" 3 m1 in
+/// let m3 := ... m2 in let m4 := ... m3 in` -- one annotated binding and
+/// three chained un-annotated ones. `m1` and `m2` emitted
+/// `Map_BTreeMap_insert`; `m3` and `m4` emitted `Map_HashMap_insert`,
+/// `Map`'s declared default, on BTreeMap values, and the driver died in
+/// `monad_get_tag` reading the wrong constructor. No amount of argument
+/// inspection recovers the carrier there: the argument IS `m2`, a bare
+/// local, and its own declared type was a placeholder.
+///
+/// So the binder's type comes from the VALUE it is bound to, read the
+/// same way the app arm already reads a computed operand's carrier: for a
+/// class-method call that is the promoted instance method's own declared
+/// return type (the concrete `BTreeMap K V`, not the class's abstract
+/// `M K V`), which is exactly what makes the ANNOTATED chain work one
+/// binding up. This is not a guess -- it is the resolution's own
+/// conclusion, one step earlier.
+///
+/// A written type always wins, informative or not -- `expected_carrier_of`
+/// is the same test `lam_binder_type` applies -- so every annotated `let`
+/// is emitted exactly as it was.
+#[partial]
+def let_binder_type (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (written : Term) (value : Term) : Term :=
+    match expected_carrier_of written {
+        Option.some _ => written,
+        Option.none =>
+            match infer_carrier_type env ctor_owners def_types ctor_field_types value {
+                Option.some carrier => carrier,
+                Option.none => written,
+            },
+    }
+
+/// A call spine's HEAD as the lambda arm should see it: a single-argument
+/// `Term.lam` head -- the shape `let x := e in body` desugars to -- has its
+/// written binder type replaced by `let_binder_type`'s reading of the one
+/// RESOLVED argument. Every other head, and every other arity, is returned
+/// unchanged, so this is a no-op for all input the old pass already
+/// resolved.
+#[partial]
+def let_binder_rewrite (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (head : Term) (args : List Term) : Term :=
+    match head {
+        Term.lam ldbg ltyp lbody =>
+            match ldbg {
+                DebugName.named _ =>
+                    match args {
+                        List.cons v rest =>
+                            match rest {
+                                List.empty => Term.lam ldbg (let_binder_type env ctor_owners def_types ctor_field_types ltyp v) lbody,
+                                List.cons _ _ => head,
+                            },
+                        List.empty => head,
+                    },
+                DebugName.unnamed => head,
+            },
+        _ => head,
     }
 
 /// The expected type for a lambda's BODY, given the expected type for the
@@ -4881,7 +4960,7 @@ def type_mentions_any (names : List Identifier) (t : Term) : Bool :=
 /// a class method's from the class declaration (`class_param_names`), a
 /// def's from its own `Forall` binders (`collect_forall_names`). See
 /// `class_param_names` for the measured failure that shape-reading caused.
-def sig_hints (names : List Identifier) (sig : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (args : List Term) : List (Option Term) :=
+def sig_hints (names : List Identifier) (sig : Option Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (def_types : HashMap String Term) (ctor_field_types : List CtorFieldTypes) (args : List Term) (expect : Option Term) : List (Option Term) :=
     match sig {
         Option.none => List.empty,
         Option.some typ =>
@@ -4896,9 +4975,60 @@ def sig_hints (names : List Identifier) (sig : Option Term) (env : List LocalTyp
             // exact equality, not a bound.
             if I64.beq (pi_arity typ) (arg_count args) then
                 let each := infer_carriers_each env ctor_owners def_types ctor_field_types args in
-                let bindings := sig_arg_bindings typ names each List.empty in
+                // Pass 0 (`sig_expect_bindings`) is the SEED, so every
+                // binding the arguments themselves reveal still wins
+                // (`sig_arg_bindings` prepends, and `lookup_binding`
+                // scans from the head): this only answers the variables
+                // the arguments said nothing about.
+                let bindings := sig_arg_bindings typ names each (sig_expect_bindings typ names expect) in
                 sig_arg_hints typ names bindings
             else List.empty,
+    }
+
+/// Pass 0 of the callee-signature channel: what the call's OWN expected
+/// carrier binds of the signature's variables, recorded before the
+/// arguments are walked so `sig_arg_bindings` can leave those variables
+/// to the arguments wherever an argument has something to say.
+///
+/// This is the same binding `sig_arg_bindings` performs, one position
+/// over: the signature's RESULT type (`M K V` for `Map.insert`) against
+/// the type the call site expects the whole call to have
+/// (`BTreeMap String I64` from `let m : BTreeMap String I64 := Map.insert
+/// ...`), which binds `M := BTreeMap`, `K := String`, `V := I64`.
+///
+/// MEASURED (2026-09-19) -- this is what `std/src/map_tests.mo`'s
+/// `test_insert_avl_drop_repro` needs, and it is the one channel the
+/// arguments cannot supply: `Map.insert "d" 4 Map.empty`'s own carrier
+/// is pinned by the ARGUMENT `Map.empty` -- which, with no expectation
+/// in hand, resolves to the class's declared DEFAULT (`HashMap`) and so
+/// presents the outer call with `HashMap` as its strongest carrier
+/// evidence. The annotation is then only a hint APPENDED after it, tried
+/// second and never reached, so the compiled call is
+/// `Map_HashMap_insert` on a value the annotation says is a `BTreeMap`
+/// -- one constructor read as the other, corrupting the tree
+/// (`BTreeMap.to_list_asc` segfaulting on a bogus field read, `driver
+/// exited -1`). Seeding the channel fixes the INNER call first
+/// (`Map.empty`'s own hint is now the concrete `BTreeMap String I64`),
+/// which is what makes the outer call's argument-derived carrier right
+/// as well -- no ordering change in `find_matching_instance_carrier_any`
+/// and so no change at all for a call whose arguments already reveal a
+/// concrete carrier.
+///
+/// The seed can never CONTRADICT a well-typed call: the checker has
+/// already unified the method's own result type with the expected type,
+/// so a variable bound here is bound to what the checker itself
+/// instantiated it to. Ill-typed programs are rejected before codegen
+/// (`expected_carrier_of` additionally drops a hole or a bare universe
+/// placeholder, which say nothing).
+#[partial]
+def sig_expect_bindings (typ : Term) (names : List Identifier) (expect : Option Term) : List (Pair Identifier Term) :=
+    match expect {
+        Option.none => List.empty,
+        Option.some e =>
+            match expected_carrier_of e {
+                Option.none => List.empty,
+                Option.some carrier => bind_term_vars names (final_result_type typ) carrier List.empty,
+            },
     }
 
 /// The number of value parameters a declared signature takes (its own
@@ -4924,7 +5054,7 @@ def arg_count (args : List Term) : I64 :=
 /// (`sig_hints`). Anything else yields no hint at all, which leaves every
 /// existing resolution path exactly as it was.
 #[partial]
-def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (ctor_field_types : List CtorFieldTypes) (head : Term) (args : List Term) : List (Option Term) :=
+def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env : List LocalTypeBinding) (ctor_owners : List CtorOwner) (ctor_field_types : List CtorFieldTypes) (head : Term) (args : List Term) (expect : Option Term) : List (Option Term) :=
     match head {
         Term.lam _ _ _ => lam_param_hints head args,
         Term.var _ dbg =>
@@ -4943,7 +5073,7 @@ def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env
                                 ClassMethodRef.mk cls method_name =>
                                     match class_method_declared_type cls method_name {
                                         Option.none => List.empty,
-                                        Option.some typ => sig_hints (class_method_var_names cls typ) (Option.some typ) env ctor_owners def_types ctor_field_types args,
+                                        Option.some typ => sig_hints (class_method_var_names cls typ) (Option.some typ) env ctor_owners def_types ctor_field_types args expect,
                                     },
                             },
                         Option.none =>
@@ -4956,7 +5086,7 @@ def call_arg_hints (classes : List Class) (def_types : HashMap String Term) (env
                             // down as they are. See `class_method_var_names`
                             // for the measured failure shape-reading caused.
                             match lookup_def_type def_types id {
-                                Option.some typ => sig_hints (collect_forall_names typ) (Option.some typ) env ctor_owners def_types ctor_field_types args,
+                                Option.some typ => sig_hints (collect_forall_names typ) (Option.some typ) env ctor_owners def_types ctor_field_types args expect,
                                 Option.none => List.empty,
                             },
                     },
