@@ -25,7 +25,7 @@
 /// (mirroring the reference's own `subst_macro`/`subst_decl_var` much
 /// more directly) — a different module, not this one.
 use lib::types {
-  Con, Literal, MatchCase, Native, StructLitField, Term,
+  Con, Literal, MatchCase, Native, StructLitField, Term, level_const, sentinel,
 }
 
 use lib::typecheck::traverse {term_map_children_at_depth}
@@ -188,7 +188,16 @@ def term_var_idx (t : Term) : I64 :=
 
 #[partial]
 def term_type_level (t : Term) : I64 :=
-    match t { Term.type_ u => u }
+    match t {
+        Term.type_ u => u,
+        // A sort with an unresolved level (a `var`, or a `succ`/`max` over
+        // one) has no I64 to report, so it answers the free-variable
+        // sentinel rather than a guessed level.
+        Term.sort l => match level_const l {
+            Option.some n => n,
+            Option.none => sentinel,
+        },
+    }
 
 #[test]
 def test_term_shift_free_var_shifted : Bool :=

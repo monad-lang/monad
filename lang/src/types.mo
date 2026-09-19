@@ -1025,6 +1025,25 @@ pub type ParseNative {
     mk (native_name: Identifier) (num_args: I64) (args: List (Option ParseTerm))
 }
 
+// The universe level of a sort. `Prop`/`Type`/`Sort n` are `concrete n`; a
+// level variable is `var name`; `max`/`succ` are the structure that makes a
+// Pi's universe and cumulativity computable without solving anything.
+//
+// NAME-KEYED, not de Bruijn. A level variable can only be introduced at a
+// def boundary, so it is free by construction -- the same discipline
+// `solve_typevars`/`subst_typevars_term` (`lang/typecheck/infer.mo`) already
+// use for type variables. Keeping it free is what spares
+// `term_shift`/`term_subst`/`term_permute`/`term_map_children_at_depth` any
+// change at all: there is no second index space to carry, and no second
+// depth counter to keep in step (the trap `lang/typecheck/whnf.mo` records
+// for its many-at-once binder shift).
+pub type SortLevel {
+    concrete (level: I64),
+    var (name: Identifier),
+    max (left: SortLevel) (right: SortLevel),
+    succ (inner: SortLevel),
+}
+
 // The canonical de Bruijn term IR — what everything after the parser
 // works on. `ParseTerm` above is lowered into this.
 //
@@ -1100,6 +1119,18 @@ pub type Term {
     /// Constructed ONLY by the located parser entry point, so `check`,
     /// `test` and a non-debug `compile` never see one.
     ctx (loc: Location) (term: Term),
+    /// A sort whose level is not a plain literal. `Term.type_ n` remains the
+    /// concrete-level spelling -- the checker still builds it, and every
+    /// `#[test]` fixture in the tree writes it -- while this carries the
+    /// structure (`var`/`max`/`succ`) the universe rules need. `sort_level_of`
+    /// below absorbs the two, so no shape-inspecting site needs to know there
+    /// are two spellings.
+    ///
+    /// Declared LAST on purpose. Adding a variant leaves every existing
+    /// constructor tag where it is; putting it beside `Term.type_` would
+    /// shift `hole`, `quote_`, `var_macro` and `ctx`. A FIELD would be worse
+    /// still -- see `ctx` above for the arity breakage that causes.
+    sort (level: SortLevel),
 }
 
 /// Strip location wrappers, exposing the term a shape test wants.
@@ -1678,6 +1709,90 @@ instance Similar DebugName {
         }
 }
 
+// ─── Sort levels ────────────────────────────────────────────────────
+//
+// Elementary operations only. The normalizing comparison and the
+// substitution machinery land with `lang/typecheck/levels.mo` (W1.5); these
+// live here rather than there because `Similar Term` below needs level
+// equality, and a `levels` module would have to import this one -- a cycle.
+
+/// The larger of two `I64`s. `I64.max` is not a function in this tree (the
+/// sentinel comment that mentions it means `I64`'s maximum value), so the
+/// two-line version is spelled out.
+def level_i64_max (a: I64) (b: I64) : I64 := if I64.gt a b then a else b
+
+/// The concrete value of a level, when it has one.
+///
+/// `succ`/`max` of concrete levels ARE evaluated -- `succ (concrete 1)` is
+/// `2`. That is load-bearing rather than tidy: `type_check_sort_full` infers
+/// the type of a sort at level `l` as the sort at `succ l`, so a Pi's
+/// universe or a cumulativity check routinely meets a `succ` that has to
+/// count as a number.
+///
+/// A level variable answers `Option.none`, and so does any `succ`/`max`
+/// containing one. An unresolved level is deliberately NOT given a number --
+/// the comparisons below all refuse it, which is the sound direction (an
+/// unresolved level costs completeness, never soundness), and W1.5's
+/// normalizing comparison is what resolves these structurally.
+def level_const (l: SortLevel) : Option I64 := match l {
+    SortLevel.concrete n => Option.some n,
+    SortLevel.var _ => Option.none,
+    SortLevel.succ inner => match level_const inner {
+        Option.some n => Option.some (n + 1),
+        Option.none => Option.none,
+    },
+    SortLevel.max left right => match level_const left {
+        Option.some a => match level_const right {
+            Option.some b => Option.some (level_i64_max a b),
+            Option.none => Option.none,
+        },
+        Option.none => Option.none,
+    },
+}
+
+/// Level equality, for `Similar`. Concrete-valued levels compare by value, so
+/// a `succ`/`max` that happens to be concrete still matches a literal. A
+/// variable equals only the same name; anything partially unresolved is NOT
+/// equal, again refusing rather than guessing.
+def level_eq (l: SortLevel) (r: SortLevel) : Bool := match level_const l {
+    Option.some a => match level_const r {
+        Option.some b => I64.beq a b,
+        Option.none => false,
+    },
+    Option.none => match l {
+        SortLevel.var n1 => match r {
+            SortLevel.var n2 => Similar.similar n1 n2,
+            _ => false,
+        },
+        _ => false,
+    },
+}
+
+/// `l <= r` -- cumulativity. Both sides must be concrete; an unresolved
+/// level answers FALSE (see `level_const`).
+def level_le (l: SortLevel) (r: SortLevel) : Bool := match level_const l {
+    Option.some a => match level_const r {
+        Option.some b => not (I64.gt a b),
+        Option.none => false,
+    },
+    Option.none => false,
+}
+
+/// `l < r` -- the sort rule, and exactly `succ l <= r`. Spelling it this way
+/// is not a shortcut: it is what makes `Sort n : Sort n` false by the same
+/// relation that makes `Sort n : Sort (n+1)` true, which is the shape the
+/// check had before W1.0's fix and the reason that fix was a one-line
+/// deletion rather than a special case.
+def level_lt (l: SortLevel) (r: SortLevel) : Bool := level_le (SortLevel.succ l) r
+
+/// The sort level of a term, if that term is a sort -- in EITHER spelling.
+#[partial]
+def sort_level_of (t: Term) : Option SortLevel := match term_peel t {
+    Term.sort level => Option.some level,
+    Term.type_ n => Option.some (SortLevel.concrete n),
+    _ => Option.none,
+}
+
 instance Similar Term {
     /// Peels BOTH sides before comparing, so a location wrapper never
     /// makes two otherwise-identical terms compare unequal. Without this,
@@ -1686,12 +1801,19 @@ instance Similar Term {
     /// here on instance-carrier matching, so the effect would be a
     /// silently unresolved instance.
     ///
-    /// Peeling also fixes a pre-existing gap: `similar_go`'s inner matches
-    /// below enumerate ten variants, omitting `quote_` and `var_macro`, so
-    /// comparing either was already a non-exhaustive-match crash waiting
-    /// on a caller that constructs one. Adding a thirteenth variant would
-    /// have made that live; routing through one entry point that peels
-    /// first keeps the arm count where it is.
+    /// A pre-existing gap it does NOT fix: the inner matches below omit
+    /// `quote_` and `var_macro`, so comparing either is a
+    /// non-exhaustive-match crash waiting on a caller that constructs one.
+    /// `term_peel` does not strip those two, so routing through one entry
+    /// point that peels only keeps that gap at one place instead of eleven.
+    ///
+    /// `Term.sort` had to be added to EVERY inner match below, not just to a
+    /// new outer arm: a sort compared against a non-sort lands in the other
+    /// arm's inner match, and an unlisted variant there is a runtime
+    /// non-exhaustive-match crash, not a type error. Sorts also compare equal
+    /// ACROSS the two spellings -- `Term.sort (concrete 0)` is similar to
+    /// `Term.type_ 0` -- because that is the one thing `sort_level_of`
+    /// exists to absorb.
     def similar (a : Term) (b : Term) : Bool :=
         similar_term_go (term_peel a) (term_peel b)
 }
@@ -1703,52 +1825,68 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 var i2 d2 => I64.beq i1 i2 && Similar.similar d1 d2,
                 lam _ _ _ => false, forall _ _ _ => false, pi _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false
+                con _ => false, type_ _ => false, hole => false,
+                sort _ => false
             },
             lam d1 t1 bd1 => match b {
                 lam d2 t2 bd2 => Similar.similar d1 d2 && Similar.similar t1 t2 && Similar.similar bd1 bd2,
                 var _ _ => false, forall _ _ _ => false, pi _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false
+                con _ => false, type_ _ => false, hole => false,
+                sort _ => false
             },
             forall d1 k1 bd1 => match b {
                 forall d2 k2 bd2 => Similar.similar d1 d2 && Similar.similar k1 k2 && Similar.similar bd1 bd2,
                 var _ _ => false, lam _ _ _ => false, pi _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false
+                con _ => false, type_ _ => false, hole => false,
+                sort _ => false
             },
             pi a1 r1 => match b {
                 pi a2 r2 => Similar.similar a1 a2 && Similar.similar r1 r2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 app _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false
+                con _ => false, type_ _ => false, hole => false,
+                sort _ => false
             },
             app f1 a1 => match b {
                 app f2 a2 => Similar.similar f1 f2 && Similar.similar a1 a2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, lit _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false
+                con _ => false, type_ _ => false, hole => false,
+                sort _ => false
             },
             lit v1 => match b {
                 lit v2 => Similar.similar v1 v2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, ntv _ => false,
-                con _ => false, type_ _ => false, hole => false
+                con _ => false, type_ _ => false, hole => false,
+                sort _ => false
             },
             ntv n1 => match b {
                 ntv n2 => Similar.similar n1 n2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, lit _ => false,
-                con _ => false, type_ _ => false, hole => false
+                con _ => false, type_ _ => false, hole => false,
+                sort _ => false
             },
             con c1 => match b {
                 con c2 => Similar.similar c1 c2,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, type_ _ => false, hole => false
+                ntv _ => false, type_ _ => false, hole => false,
+                sort _ => false
             },
             type_ u1 => match b {
                 type_ u2 => I64.beq u1 u2,
+                sort l2 => level_eq (SortLevel.concrete u1) l2,
+                var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
+                pi _ _ => false, app _ _ => false, lit _ => false,
+                ntv _ => false, con _ => false, hole => false
+            },
+            sort l1 => match b {
+                sort l2 => level_eq l1 l2,
+                type_ u2 => level_eq l1 (SortLevel.concrete u2),
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, lit _ => false,
                 ntv _ => false, con _ => false, hole => false
@@ -1757,7 +1895,8 @@ def similar_term_go (a : Term) (b : Term) : Bool :=
                 hole => true,
                 var _ _ => false, lam _ _ _ => false, forall _ _ _ => false,
                 pi _ _ => false, app _ _ => false, lit _ => false,
-                ntv _ => false, con _ => false, type_ _ => false
+                ntv _ => false, con _ => false, type_ _ => false,
+                sort _ => false
             }
         }
 

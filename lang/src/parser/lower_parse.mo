@@ -567,7 +567,22 @@ def lower_parse_kind (ctx : ParseLowerCtx) (k : ParseTermKind) : Term :=
         ParseTermKind.lit l => Term.lit (lower_parse_literal ctx l),
         ParseTermKind.ntv n => Term.ntv (lower_parse_native ctx n),
         ParseTermKind.con c => Term.con (lower_parse_con ctx c),
-        ParseTermKind.type_ u => Term.type_ u,
+        // The one-line flip that makes `Term.sort` reachable corpus-wide:
+        // every level the grammar produces -- `Prop`/`Type`/`Sort n` in
+        // source, and the implicit-parameter and lambda defaults it
+        // hardcodes -- lowers through here. It is what makes the ~26 new
+        // `Term.sort` arms in the checker and codegen LIVE, which is the
+        // only thing that can catch a missed one (there is no
+        // exhaustiveness check, so a missing arm is a runtime crash).
+        //
+        // Verified corpus-neutral, not assumed: a HEAD-binary-vs-W1.1
+        // per-file diff over the whole 169-target sweep shows identical
+        // outcomes for every file (the `Term.sort` arms are behaviour
+        // -identical to their `Term.type_` siblings, so nothing observable
+        // moves). A real `Prop`/`Type`/`Sort N` SURFACE form is a separate,
+        // later change (W1.1b) -- `Sort n` today still parses as an
+        // application of the `Sort` global.
+        ParseTermKind.type_ u => Term.sort (SortLevel.concrete u),
         ParseTermKind.quote_ inner => Term.quote_ (lower_parse_term ctx inner),
         // Desugared HERE, not in the grammar -- this is the whole reason
         // the parse stage can drop `ctx`.

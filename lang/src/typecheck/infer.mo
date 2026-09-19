@@ -79,7 +79,13 @@ pub def type_check (term : Term) (expected_type : Term) (scope : Scope) (local_t
         Term.pi arg ret => type_check_pi arg ret scope local_types locals,
         Term.con c => type_check_con c expected_type scope local_types locals,
         Term.ntv ntv => type_check_ntv ntv expected_type scope local_types locals,
-        Term.type_ level => type_check_sort_full level expected_type,
+        // The two sort spellings, dispatched to the same rule: `Term.type_ n`
+        // is the concrete-level form the checker and every fixture still
+        // write, `Term.sort l` is what the parser produces for `Prop`/`Type`/
+        // `Sort n`. Each is handed back as what it is rather than normalized,
+        // so neither spelling's inferred type moves.
+        Term.type_ level => type_check_sort_full (Term.type_ level) (SortLevel.concrete level) expected_type,
+        Term.sort level => type_check_sort_full (Term.sort level) level expected_type,
         // Struct literals in ctor-arg position must be bound to an
         // annotated local first (AGENTS.md): a bare `{ ... }` reaching
         // `ok`'s argument gets no expected type (constructor sigs are
@@ -201,6 +207,8 @@ def is_uninformative_carrier (t : Term) : Bool :=
     match t {
         Term.hole => true,
         Term.type_ _ => true,
+        // A sort is a universe placeholder in either spelling.
+        Term.sort _ => true,
         _ => false,
     }
 
@@ -2903,28 +2911,40 @@ def type_check_pi (arg : Term) (ret : Term) (scope : Scope) (local_types : List 
 
 /// Type check a sort universe level.
 ///
-/// `Sort n : Sort m` holds exactly when `n < m`, so the check against an
-/// expected sort is `expected_level > level` — which is the same
-/// relation as `succ level <= expected_level`.
+/// `Sort n : Sort m` holds exactly when `n < m`, which `level_lt` spells as
+/// `succ level <= expected_level` — so those are one relation, and neither
+/// is a special case.
 ///
-/// There used to be an `I64.beq expected_level level` arm before that
-/// test, accepting `Sort n` against `Sort n` — a Type-in-Type hole. The
-/// Rust core never had it: `infer(Sort{level})` gives `Sort (level+1)`,
+/// The expected side is read through `sort_level_of`, so it is accepted in
+/// EITHER spelling and is seen past a location wrapper. That second part is
+/// a real fix, not a tidy-up: the old arm matched the expected term
+/// directly, so a `--debug` build's `Term.ctx`-wrapped expected sort fell
+/// through to the error arm while the non-debug build accepted it — exactly
+/// the kind of decision the debug-transparency oracle forbids.
+///
+/// There used to be an `I64.beq expected_level level` arm before the
+/// comparison, accepting `Sort n` against `Sort n` — a Type-in-Type hole.
+/// The Rust core never had it: `infer(Sort{level})` gives `Sort (level+1)`,
 /// which then fails `level+1 <= level`. Removed so the two agree.
-def type_check_sort_full (level : I64) (expected_type : Term) : Result TypeError TypedTerm :=
-    match expected_type {
-        Term.hole =>
-            let sort_term : Term := Term.type_ level in
-            ok (mk_typed sort_term (Term.type_ (level + 1))),
-        Term.type_ expected_level =>
-            let sort_term : Term := Term.type_ level in
-            if expected_level > level then
+def type_check_sort_full (sort_term : Term) (level : SortLevel) (expected_type : Term) : Result TypeError TypedTerm :=
+    // A sort's own type is the sort one level up. For a concrete level that
+    // stays the `Term.type_` spelling it has always been, so no existing
+    // fixture's inferred type moves; only an unresolved level -- which has no
+    // `I64` to write -- needs the `Term.sort`/`succ` form.
+    let inferred : Term := match level_const level {
+        Option.some n => Term.type_ (n + 1),
+        Option.none => Term.sort (SortLevel.succ level),
+    } in
+    match sort_level_of expected_type {
+        Option.some expected_level =>
+            if level_lt level expected_level then
                 ok (mk_typed sort_term expected_type)
             else
                 err (TypeError.not_a_type sort_term),
-        _ =>
-            let sort_term : Term := Term.type_ level in
-            err (TypeError.not_a_type sort_term),
+        Option.none => match expected_type {
+            Term.hole => ok (mk_typed sort_term inferred),
+            _ => err (TypeError.not_a_type sort_term),
+        },
     }
 
 /// Type check a constructor application: verifies the referenced
@@ -4349,7 +4369,12 @@ def test_type_check_struct_update_unchanged_field_is_projection : Bool :=
 #[partial]
 def is_type_arg (arg : Option Term) : Bool :=
     match arg {
-        Option.some t => match t { Term.type_ _ => true, _ => false },
+        Option.some t => match t {
+            Term.type_ _ => true,
+            // A sort IS a type, in either spelling.
+            Term.sort _ => true,
+            _ => false,
+        },
         Option.none => false,
     }
 

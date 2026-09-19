@@ -2404,6 +2404,8 @@ def compile_db_term_ir (c : CodegenCtx) (term_ : Term) : CompileResult := match 
     Term.forall dbg kind body => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.pi arg ret => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.type_ universe => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
+    // A sort emits nothing, exactly like `Term.type_` above.
+    Term.sort _level => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.hole => CompileResult.ok c List.empty LLVMValue.void_val List.empty List.empty List.empty,
     Term.ctx loc inner => compile_located_term_ir c loc inner,
 }

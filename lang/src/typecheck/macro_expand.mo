@@ -11,7 +11,7 @@
 /// responsible for building that lookup from a real set of registered
 /// `Decl.def_macro_d`s and threading the whole thing through the
 /// pipeline.
-use lib::types {Con, Identifier, Literal, MatchCase, Native, StructLitField, Term, id_eq}
+use lib::types {Con, Identifier, Literal, MatchCase, Native, StructLitField, Term, id_eq, level_const, sentinel}
 use lib::typecheck::macro_apply {apply_term_macro}
 use lib::typecheck::traverse {con_map_children, literal_map_children, match_case_map_children, match_cases_map_children, native_map_children, opt_term_map_children, opt_terms_map_children, struct_field_map_children, struct_fields_map_children, term_map_children}
 
@@ -160,7 +160,16 @@ def double_ident : Identifier := Identifier.id "double"
 
 #[partial]
 def term_type_level (t : Term) : I64 :=
-    match t { Term.type_ u => u }
+    match t {
+        Term.type_ u => u,
+        // A sort with an unresolved level (a `var`, or a `succ`/`max` over
+        // one) has no I64 to report, so it answers the free-variable
+        // sentinel rather than a guessed level.
+        Term.sort l => match level_const l {
+            Option.some n => n,
+            Option.none => sentinel,
+        },
+    }
 
 /// `defmacro double x := x` -- the one real `lang/parser.mo` test
 /// fixture shape this whole module is built to expand correctly.

@@ -37,6 +37,8 @@ def free_names_of_term (bound : List Identifier) (t : Term) : List Identifier :=
     Term.ntv native => free_names_of_native bound native,
     Term.con c => free_names_of_con bound c,
     Term.type_ _universe => List.empty,
+    // A sort has no free names.
+    Term.sort _level => List.empty,
     Term.hole => List.empty,
     Term.quote_ inner => free_names_of_term bound inner,
     // Transparent: a location binds nothing and references nothing.
@@ -160,6 +162,8 @@ def collect_referenced_names (t : Term) (acc : List String) : List String := mat
     Term.con con_ => collect_referenced_names_con con_ acc,
     Term.lit lit_ => collect_referenced_names_lit lit_ acc,
     Term.type_ _universe => acc,
+    // A sort references no names.
+    Term.sort _level => acc,
     Term.hole => acc,
     // MUST recurse. Missing this arm makes `filter_reachable_decls` blind
     // to everything under a located term: the def count silently drops and

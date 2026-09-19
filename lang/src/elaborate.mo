@@ -70,6 +70,8 @@ def free_vars (typ : Term) (known_names : List Identifier) : List Identifier :=
             },
         Term.ntv _ => List.empty,
         Term.type_ _ => List.empty,
+        // A sort has no free vars.
+        Term.sort _level => List.empty,
         Term.hole => List.empty,
         // A location binds nothing, so the names free under it are the
         // names free in it.

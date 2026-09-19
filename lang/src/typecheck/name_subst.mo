@@ -42,7 +42,7 @@ use lib::types {
   Attribute, Class, ClassDef, Con, Decl, Def, Identifier, InductConstructor,
   Inductive, Instance, Literal, MatchCase, ModulePath, Native, Param, Struct,
   StructField, StructLitField, Term, TypeConstraint,
-  id_eq,
+  id_eq, level_const, sentinel,
 }
 use lib::typecheck::traverse {con_map_children, native_map_children, opt_term_map_children, opt_terms_map_children, term_map_children}
 
@@ -254,7 +254,16 @@ def named_ref (id : Identifier) : Term := Term.var (0 - 1) (DebugName.named id)
 
 #[partial]
 def term_type_level (t : Term) : I64 :=
-    match t { Term.type_ u => u }
+    match t {
+        Term.type_ u => u,
+        // A sort with an unresolved level (a `var`, or a `succ`/`max` over
+        // one) has no I64 to report, so it answers the free-variable
+        // sentinel rather than a guessed level.
+        Term.sort l => match level_const l {
+            Option.some n => n,
+            Option.none => sentinel,
+        },
+    }
 
 #[test]
 def test_name_subst_term_replaces_matching_named_var : Bool :=

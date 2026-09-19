@@ -83,15 +83,8 @@ def unify_go (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (reduce
             Term.forall _dbg _kind body2 => unify a body2 scope locals,
             _ => unify_stuck a b scope locals reduce,
         },
-        Term.type_ l1 => match b {
-            Term.hole => ok a,
-            Term.type_ l2 =>
-                if I64.gt l1 l2 then
-                    err (TypeError.mismatch a b)
-                else
-                    ok a,
-            _ => unify_stuck a b scope locals reduce,
-        },
+        Term.type_ l1 => unify_sort a (SortLevel.concrete l1) b scope locals reduce,
+        Term.sort l1 => unify_sort a l1 b scope locals reduce,
         Term.forall _dbg _kind body1 => unify body1 b scope locals,
         _ => match b {
             Term.hole => ok a,
@@ -101,6 +94,39 @@ def unify_go (a : Term) (b : Term) (scope : Scope) (locals : LocalScope) (reduce
                     ok a
                 else
                     unify_stuck a b scope locals reduce,
+        },
+    }
+
+/// The sort arm, shared by both spellings of a sort term.
+///
+/// Cumulativity: `Sort l1 <= Sort l2` holds exactly when `l1 <= l2`, and the
+/// comparison is DIRECTIONAL — `a` is the actual, `b` the expected, so
+/// `Type` checked against `Prop` must fail while `Prop` against `Type`
+/// succeeds. `unify` is the only place subsumption belongs; a call site
+/// instantiating a level is solving, not subsuming.
+///
+/// `b` is read through `sort_level_of`, so `Term.type_ n` and
+/// `Term.sort (concrete n)` compare as the same sort. That is what lets the
+/// parser emit one spelling and the checker's own constructions use the
+/// other without every comparison between them turning into a mismatch.
+/// `#[terminating]`: this def rejoins the `unify_go`/`unify_stuck` cycle
+/// through `unify_stuck`'s reduce-once path, and that bound is the cluster's
+/// existing one -- `unify_stuck` clears the `reduce` flag before it recurses,
+/// so a second failure in the nested pass reports the mismatch instead of
+/// reducing again. It is the same argument that makes `unify` itself carry
+/// the attribute (see its note above); it is a bound we can argue, not a
+/// structural subterm the checker can see.
+#[terminating]
+def unify_sort (a : Term) (l1 : SortLevel) (b : Term) (scope : Scope) (locals : LocalScope) (reduce : Bool) : Result TypeError Term :=
+    match b {
+        Term.hole => ok a,
+        _ => match sort_level_of b {
+            Option.some l2 =>
+                if level_le l1 l2 then
+                    ok a
+                else
+                    err (TypeError.mismatch a b),
+            Option.none => unify_stuck a b scope locals reduce,
         },
     }
 

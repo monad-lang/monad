@@ -137,8 +137,14 @@ def whnf_go (fuel : I64) (scope : Scope) (locals : LocalScope) (t0 : Term) : Ter
                     // struct forms are rigid. Already in WHNF.
                     _ => t,
                 },
-            // Rigid heads: `pi`, `forall`, `type_`, `ntv`, `con`,
+            // Rigid heads: `pi`, `forall`, `type_`, `sort`, `ntv`, `con`,
             // `hole`, and the two macro-only forms. Already in WHNF.
+            //
+            // `sort` is listed rather than matched: it is a leaf like
+            // `type_`, so it belongs to this fallback. Nothing here
+            // normalizes a LEVEL -- `level_le`/`level_normalize` handle
+            // levels, and they are never reached through `whnf` (W1 is
+            // built so that stays true; see `unify_sort`).
             _ => t,
         }
 

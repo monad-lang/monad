@@ -33,7 +33,7 @@
 use lib::types {
   AttrArg, Attribute, Class, ClassDef, Decl, Def, Identifier,
   InductConstructor, Inductive, Instance, ModulePath, Param, Struct,
-  StructField, Term, TypeConstraint, id_eq,
+  StructField, Term, TypeConstraint, id_eq, level_const, sentinel,
 }
 use lib::typecheck::macro_apply {expand_decl_gen_call}
 use lib::typecheck::macro_expand {expand_term}
@@ -537,7 +537,16 @@ pub def derive_bridge_decls (registry : List DeclGenEntry) (d : Decl) : List Dec
 
 #[partial]
 def term_type_level (t : Term) : I64 :=
-    match t { Term.type_ u => u }
+    match t {
+        Term.type_ u => u,
+        // A sort with an unresolved level (a `var`, or a `succ`/`max` over
+        // one) has no I64 to report, so it answers the free-variable
+        // sentinel rather than a guessed level.
+        Term.sort l => match level_const l {
+            Option.some n => n,
+            Option.none => sentinel,
+        },
+    }
 
 def empty_constraints : List TypeConstraint := List.empty
 def dummy_path : NamePath := NamePath.npath (List.cons (Identifier.id "dummy") List.empty)

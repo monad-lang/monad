@@ -2,10 +2,12 @@ use lib::types {
   AttrArg, Attribute,
   Class, ClassDef, Con, DebugName, Decl, Def, Identifier, InductConstructor,
   char_to_string,
-  Inductive, Instance, Literal, MatchCase, ModulePath, Multiplicity, Native, NamePath,
-  NumSuffix, OpenFilter, Operator, Param, Struct, StructField, Term,
+  Inductive, Instance, Literal, MatchCase, ModulePath, Multiplicity, Native,
+  NamePath, NumSuffix, OpenFilter, Operator, Param, SortLevel, Struct,
+  StructField, Term,
   UseFilter, UseItem, affine, app, class_d, con, def_d, f32, f64,
   forall, hole, i16, i32, i64, i8, id, if_, inductive_d, infix_d, instance_d, lam,
+  level_const,
   linear, lit, many, match_, mc, mk, mp, name, named, ntv, num, open_all, open_d,
   open_only, operator, pi, scoped_open_d, show_identifier, show_module_path,
   show_name_path, show_operator, str, struct_d, type_, u16, u32, u64, u8, unnamed, use_bare,
@@ -53,6 +55,15 @@ def show_universe (level : I64) : String :=
     if level == 0 then "Prop"
     else if level == 1 then "Type"
     else String.concat "Type " (I64.to_string (level - 1))
+
+/// Rendering for a sort whose level is not a plain literal. A level
+/// that evaluates to a concrete number renders exactly as it did
+/// before; one containing an unresolved variable has no concrete
+/// rendering yet, so it prints the bare keyword.
+def show_sort_level (l : SortLevel) : String := match level_const l {
+    Option.some n => show_universe n,
+    Option.none => "Sort",
+}
 
 #[partial]
 def show_param (p : Param) : String := match p {
@@ -111,6 +122,7 @@ def show_term (t : Term) : String := match t {
     ntv native => show_native native,
     con c => show_con c,
     type_ universe => show_universe universe,
+    sort level => show_sort_level level,
     hole => "_",
     // Transparent: a position is not part of what a term IS, and printing
     // one would break every `show_term` assertion in the test suite.

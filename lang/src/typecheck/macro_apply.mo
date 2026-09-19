@@ -11,7 +11,7 @@
 /// applying them produce" — the caller (a future `expand_term`/outer
 /// work-queue) is responsible for finding which macro a given call
 /// site's name actually refers to.
-use lib::types {Decl, Identifier, Param, Term}
+use lib::types {Decl, Identifier, Param, Term, level_const, sentinel}
 use lib::typecheck::subst {beta_reduce}
 use lib::typecheck::name_subst {name_subst_decls}
 use std::list {length}
@@ -103,7 +103,16 @@ def y_ident : Identifier := Identifier.id "y"
 
 #[partial]
 def term_type_level (t : Term) : I64 :=
-    match t { Term.type_ u => u }
+    match t {
+        Term.type_ u => u,
+        // A sort with an unresolved level (a `var`, or a `succ`/`max` over
+        // one) has no I64 to report, so it answers the free-variable
+        // sentinel rather than a guessed level.
+        Term.sort l => match level_const l {
+            Option.some n => n,
+            Option.none => sentinel,
+        },
+    }
 
 #[test]
 def test_apply_term_macro_single_param_substitutes : Bool :=

@@ -39,6 +39,8 @@ def term_map_children (f : Term -> Term) (t : Term) : Term :=
         Term.ntv n => Term.ntv (native_map_children f n),
         Term.con c => Term.con (con_map_children f c),
         Term.type_ u => Term.type_ u,
+        // A leaf: a level is data, not a child, so `f` is not applied to it.
+        Term.sort level => Term.sort level,
         Term.hole => Term.hole,
         Term.quote_ inner => Term.quote_ (f inner),
         // PRESERVING, not transparent. This is the generic rebuild every
@@ -141,6 +143,8 @@ def term_map_children_at_depth (f : I64 -> Term -> Term) (t : Term) : Term :=
         Term.ntv n => Term.ntv (native_map_children (f 0) n),
         Term.con c => Term.con (con_map_children (f 0) c),
         Term.type_ u => Term.type_ u,
+        // A leaf: a level is data, not a child, so `f` is not applied to it.
+        Term.sort level => Term.sort level,
         Term.hole => Term.hole,
         Term.quote_ inner => Term.quote_ (f 0 inner),
         // Depth 0: a wrapper introduces no binder, so the term inside it

@@ -1986,6 +1986,8 @@ def resolve_open_alias_term_scoped (names : HashMap String String) (bound : List
         Term.ntv n => Term.ntv (native_map_children (resolve_open_alias_term_scoped names bound) n),
         Term.con c => Term.con (con_map_children (resolve_open_alias_term_scoped names bound) c),
         Term.type_ u => Term.type_ u,
+        // Identity: a sort names nothing to resolve.
+        Term.sort level => Term.sort level,
         Term.hole => Term.hole,
         Term.quote_ inner => Term.quote_ (resolve_open_alias_term_scoped names bound inner),
         Term.var_macro idx dbg => Term.var_macro idx dbg,
@@ -2656,6 +2658,8 @@ def def_references_class (cls_str : String) (t : Term) : Bool :=
         Term.ntv n =>
             match n { Native.mk _ _ args => opt_terms_reference_class cls_str args },
         Term.type_ _ => false,
+        // A sort references no class.
+        Term.sort _level => false,
         Term.hole => false,
         Term.quote_ inner => def_references_class cls_str inner,
         Term.ctx _loc inner => def_references_class cls_str inner,
@@ -7103,6 +7107,8 @@ def find_unresolved_class_calls_term (classes : List Class) (t : Term) (acc : Li
     Term.con con_ => find_unresolved_class_calls_con classes con_ acc,
     Term.lit lit_ => find_unresolved_class_calls_lit classes lit_ acc,
     Term.type_ _universe => acc,
+    // A sort holds no class call.
+    Term.sort _level => acc,
     Term.hole => acc,
     // Must recurse: an unresolved class call under a located term is still
     // unresolved, and this is what reports it.
